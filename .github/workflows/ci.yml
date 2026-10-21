@@ -1,4 +1,4 @@
-name: AliX Phase 0 CI
+name: AliX Continuous Integration
 
 on:
   push:
@@ -33,15 +33,15 @@ jobs:
       - name: Validate pre-commit configuration
         run: pre-commit validate-config
       - name: Compile source
-        run: python -m compileall -q connectivity services user_data/strategies tests scripts
+        run: python -m compileall -q connectivity services integrations user_data/strategies tests scripts
       - name: Ruff lint
-        run: ruff check connectivity services user_data/strategies tests scripts
+        run: ruff check connectivity services integrations user_data/strategies tests scripts
       - name: Ruff format check
-        run: ruff format --check connectivity services user_data/strategies tests scripts
+        run: ruff format --check connectivity services integrations user_data/strategies tests scripts
       - name: Strict type check
         run: mypy --config-file mypy.ini
       - name: Security scan
-        run: bandit -r connectivity services user_data/strategies scripts -ll
+        run: bandit -r connectivity services integrations user_data/strategies scripts -ll
       - name: Runtime and tooling dependency resolution (dry run)
         run: python -m pip install --dry-run --report /tmp/alix-dependency-resolution.json -r requirements.txt
       - name: Verify transitive dependency lock
@@ -54,8 +54,10 @@ jobs:
       - name: Architecture contracts
         run: lint-imports
       - name: Complexity gate
-        run: xenon --max-absolute B --max-modules B --max-average A connectivity services user_data/strategies scripts
+        run: xenon --max-absolute B --max-modules B --max-average A connectivity services integrations user_data/strategies scripts
       - name: Unit tests and coverage (mock-only)
-        run: pytest --cov=connectivity --cov=services --cov=user_data/strategies --cov-report=term-missing --cov-fail-under=90 -q
+        run: pytest --cov=connectivity --cov=services --cov=integrations.nobitex --cov=user_data/strategies --cov-report=term-missing --cov-fail-under=90 -q
+      - name: Phase 1 safety and dependency contracts
+        run: pytest tests/unit/test_phase1_contracts.py -q
       - name: Starter Kit integrity and documentation validation
         run: python scripts/validate_project_docs.py
