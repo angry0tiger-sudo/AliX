@@ -14,5 +14,5 @@ pandas-stubs==2.3.2.250926
 bandit==1.8.6
 pip-audit==2.9.0
 import-linter==2.3
-radon==6.0.1
+xenon==0.9.3
 pre-commit==4.3.0
