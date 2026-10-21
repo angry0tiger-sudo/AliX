@@ -73,6 +73,7 @@ def test_failover_tries_tunnel_after_probe_exception_and_activation_failure() ->
 def test_failover_does_not_probe_unallowlisted_routes() -> None:
     probed: list[str] = []
     route = VpnRouteDriver("unlisted", activate=lambda: True)
+
     def probe(route_id: str) -> bool:
         probed.append(route_id)
         return True
@@ -90,6 +91,7 @@ def test_failover_does_not_probe_unallowlisted_routes() -> None:
 
 def test_failover_skips_disabled_routes_and_fails_closed_if_none_work() -> None:
     probed: list[str] = []
+
     def probe(route_id: str) -> bool:
         probed.append(route_id)
         return False
