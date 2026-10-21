@@ -5,11 +5,14 @@ paper/backtest-only until later phase gates explicitly approve otherwise.
 """
 from __future__ import annotations
 
+from typing import Any
+
 from pandas import DataFrame
 
 try:
     from freqtrade.strategy import IStrategy
 except ImportError:  # Allows lightweight static checks outside the Freqtrade runtime.
+
     class IStrategy:  # type: ignore[no-redef]
         pass
 
@@ -24,16 +27,22 @@ class AliXStrategy(IStrategy):
     process_only_new_candles = True
     startup_candle_count = 100
 
-    def populate_indicators(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
+    def populate_indicators(
+        self, dataframe: DataFrame, metadata: dict[str, Any]
+    ) -> DataFrame:
         # Phase 0 intentionally does not infer or fabricate indicators/signals.
         return dataframe
 
-    def populate_entry_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
+    def populate_entry_trend(
+        self, dataframe: DataFrame, metadata: dict[str, Any]
+    ) -> DataFrame:
         dataframe["enter_long"] = 0
         dataframe["enter_tag"] = None
         return dataframe
 
-    def populate_exit_trend(self, dataframe: DataFrame, metadata: dict) -> DataFrame:
+    def populate_exit_trend(
+        self, dataframe: DataFrame, metadata: dict[str, Any]
+    ) -> DataFrame:
         dataframe["exit_long"] = 0
         dataframe["exit_tag"] = None
         return dataframe
