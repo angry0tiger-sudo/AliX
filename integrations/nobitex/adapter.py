@@ -124,9 +124,11 @@ def _currency(value: object) -> str:
 def _optional_int(value: object) -> int | None:
     if value is None:
         return None
+    if isinstance(value, bool) or not isinstance(value, (str, int)):
+        raise MarketMappingError("invalid precision metadata")
     try:
         result = int(value)
-    except (TypeError, ValueError) as exc:
+    except ValueError as exc:
         raise MarketMappingError("invalid precision metadata") from exc
     if result < 0:
         raise MarketMappingError("precision must be non-negative")
