@@ -66,7 +66,6 @@ def test_reporting_is_disabled_by_default() -> None:
     assert not engine.deliver(report)
 
 
-
 def test_strategy_scaffold_generates_no_entry_or_exit_signals() -> None:
     strategy = AliXStrategy()
     dataframe = pd.DataFrame(
