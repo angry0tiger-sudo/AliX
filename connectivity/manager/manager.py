@@ -31,7 +31,9 @@ class ConnectivityManager:
     """
 
     def __init__(
-        self, allowed_routes: set[str], probe: Callable[[str], bool]
+        self,
+        allowed_routes: set[str],
+        probe: Callable[[str], bool],
     ) -> None:
         self._allowed_routes = frozenset(route.strip() for route in allowed_routes)
         self._probe = probe
