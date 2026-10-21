@@ -1,18 +1,25 @@
-"""Small deterministic Data Quality Gate; intentionally independent of exchange APIs."""
+"""Small deterministic Data Quality Gate; independent of exchange APIs."""
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Iterable
+
 
 @dataclass(frozen=True)
 class QualityResult:
     passed: bool
     reasons: tuple[str, ...]
 
+
 REQUIRED_COLUMNS = ("date", "open", "high", "low", "close", "volume")
 
-def validate_candles(rows: Iterable[dict], *, max_age_seconds: int | None = None,
-                     now_epoch: float | None = None) -> QualityResult:
+
+def validate_candles(
+    rows: Iterable[dict],
+    *,
+    max_age_seconds: int | None = None,
+    now_epoch: float | None = None,
+) -> QualityResult:
     data = list(rows)
     reasons: list[str] = []
     if not data:
@@ -28,8 +35,15 @@ def validate_candles(rows: Iterable[dict], *, max_age_seconds: int | None = None
                 reasons.append(f"row_{index}_invalid_{column}")
             elif value != value or value in (float("inf"), float("-inf")):
                 reasons.append(f"row_{index}_non_finite_{column}")
-        if all(isinstance(row.get(c), (int, float)) for c in ("open","high","low","close","volume")):
-            if row["low"] > min(row["open"], row["close"]) or row["high"] < max(row["open"], row["close"]):
+        numeric = all(
+            isinstance(row.get(column), (int, float))
+            and not isinstance(row.get(column), bool)
+            for column in ("open", "high", "low", "close", "volume")
+        )
+        if numeric:
+            if row["low"] > min(row["open"], row["close"]) or row["high"] < max(
+                row["open"], row["close"]
+            ):
                 reasons.append(f"row_{index}_invalid_ohlc_range")
             if row["volume"] < 0:
                 reasons.append(f"row_{index}_negative_volume")
