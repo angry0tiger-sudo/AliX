@@ -1,6 +1,9 @@
+import pandas as pd
+
 from connectivity.manager.manager import ConnectivityManager
 from services.data_quality.gate import validate_candles
 from services.reporting.engine import DailyReport, ReportingEngine
+from user_data.strategies.AliXStrategy import AliXStrategy
 
 
 def candle(ts: int = 1000) -> dict[str, object]:
@@ -59,3 +62,23 @@ def test_reporting_is_disabled_by_default() -> None:
     report = DailyReport("2026-10-21", "mock only", {"trades": 0.0})
     assert "mock only" in engine.render_text(report)
     assert not engine.deliver(report)
+
+
+
+def test_strategy_scaffold_generates_no_entry_or_exit_signals() -> None:
+    strategy = AliXStrategy()
+    dataframe = pd.DataFrame(
+        {
+            "open": [10.0, 11.0],
+            "high": [12.0, 12.0],
+            "low": [9.0, 10.0],
+            "close": [11.0, 11.5],
+            "volume": [5.0, 6.0],
+        }
+    )
+    metadata: dict[str, object] = {}
+    enriched = strategy.populate_indicators(dataframe.copy(), metadata)
+    entries = strategy.populate_entry_trend(enriched.copy(), metadata)
+    exits = strategy.populate_exit_trend(enriched.copy(), metadata)
+    assert entries["enter_long"].eq(0).all()
+    assert exits["exit_long"].eq(0).all()
