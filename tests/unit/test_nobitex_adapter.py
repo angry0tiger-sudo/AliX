@@ -149,3 +149,41 @@ def test_known_order_statuses_map_and_unknown_state_blocks() -> None:
     assert map_order_status("inactive") == OrderStatus.REJECTED
     with pytest.raises(UnknownOrderStatus):
         map_order_status("new-state")
+
+
+def test_exchange_market_symbol_resolution_matches_novaryn_spot_contract() -> None:
+    transport = FakeReadOnlyTransport(
+        {
+            "stats": {
+                "BTCUSDT": {},
+                "ETH-USDT": {},
+                "BTCIRT": {},
+                "1M_PEPEUSDT": {},
+            }
+        }
+    )
+
+    resolved = NobitexAdapter(transport).get_exchange_market_symbols()
+
+    assert resolved == {
+        "1MPEPEUSDT": "1M_PEPEUSDT",
+        "BTCUSDT": "BTCUSDT",
+        "ETHUSDT": "ETHUSDT",
+    }
+    assert transport.calls == [("/market/stats", None)]
+
+
+def test_exchange_market_symbol_resolution_rejects_ambiguous_or_invalid_payload() -> None:
+    ambiguous = FakeReadOnlyTransport(
+        {"stats": {"1M_PEPEUSDT": {}, "1MPEPEUSDT": {}}}
+    )
+    with pytest.raises(MarketMappingError, match="ambiguous"):
+        NobitexAdapter(ambiguous).get_exchange_market_symbols()
+
+    invalid_payload = FakeReadOnlyTransport({"status": "ok"})
+    with pytest.raises(ValueError, match="invalid market stats"):
+        NobitexAdapter(invalid_payload).get_exchange_market_symbols()
+
+    no_usdt = FakeReadOnlyTransport({"stats": {"BTCIRT": {}}})
+    with pytest.raises(ValueError, match="no USDT"):
+        NobitexAdapter(no_usdt).get_exchange_market_symbols()
