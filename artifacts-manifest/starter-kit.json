@@ -1,0 +1,6 @@
+{
+  "artifact": "AliX_GitHub_Starter_Kit.zip",
+  "sha256": "PLACEHOLDER_SHA256_MUST_BE_COMPUTED_IN_GITHUB_CI",
+  "source": "Preserved original archive in repository root",
+  "verification": "CI computes SHA-256 and compares this value; replace placeholder only after establishing the original archive checksum."
+}
