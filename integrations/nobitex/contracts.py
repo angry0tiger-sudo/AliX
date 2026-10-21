@@ -13,7 +13,6 @@ from typing import Any
 
 from integrations.nobitex.adapter import (
     MarketMappingError,
-    OrderStatus,
     SpotMarketMetadata,
     map_order_status,
     normalize_spot_pair,
