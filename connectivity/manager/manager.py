@@ -1,4 +1,5 @@
 """Connectivity policy boundary. Network probes are injected; no real connection is made here."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -13,9 +14,7 @@ class ConnectivityStatus:
 
 
 class ConnectivityManager:
-    def __init__(
-        self, allowed_routes: set[str], probe: Callable[[str], bool]
-    ) -> None:
+    def __init__(self, allowed_routes: set[str], probe: Callable[[str], bool]) -> None:
         self._allowed_routes = frozenset(allowed_routes)
         self._probe = probe
 
