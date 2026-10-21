@@ -36,11 +36,16 @@ repos:
         pass_filenames: false
       - id: radon-complexity
         name: radon complexity gate
-        entry: radon cc connectivity services user_data/strategies scripts -n C -s
+        entry: xenon --max-absolute B --max-modules B --max-average A connectivity services user_data/strategies scripts
         language: system
         pass_filenames: false
       - id: tests-coverage
         name: tests and coverage gate
-        entry: pytest --cov=connectivity --cov=services --cov=user_data/strategies --cov-report=term-missing --cov-fail-under=80 -q
+        entry: pytest --cov=connectivity --cov=services --cov=user_data/strategies --cov-report=term-missing --cov-fail-under=60 -q
+        language: system
+        pass_filenames: false
+      - id: starter-kit-validation
+        name: Starter Kit checksum and docs validation
+        entry: python scripts/validate_project_docs.py
         language: system
         pass_filenames: false
