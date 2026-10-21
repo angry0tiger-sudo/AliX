@@ -236,7 +236,10 @@ def normalize_spot_order(
 
 
 def _decimal_places(value: Decimal) -> int:
-    return max(0, -value.normalize().as_tuple().exponent)
+    exponent = value.normalize().as_tuple().exponent
+    if not isinstance(exponent, int):
+        raise MarketMappingError("decimal precision requires a finite value")
+    return max(0, -exponent)
 
 
 def validate_order_against_market(
