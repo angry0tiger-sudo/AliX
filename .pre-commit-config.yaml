@@ -1,0 +1,46 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-yaml
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.14.0
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+  - repo: local
+    hooks:
+      - id: mypy-strict
+        name: mypy strict type checking
+        entry: mypy --config-file mypy.ini
+        language: system
+        types: [python]
+        pass_filenames: false
+      - id: bandit
+        name: bandit security scan
+        entry: bandit -r connectivity services user_data/strategies scripts -ll
+        language: system
+        pass_filenames: false
+      - id: pip-audit
+        name: pip-audit dependency scan
+        entry: pip-audit -r requirements.txt
+        language: system
+        pass_filenames: false
+      - id: architecture-contracts
+        name: import-linter architecture contracts
+        entry: lint-imports
+        language: system
+        pass_filenames: false
+      - id: radon-complexity
+        name: radon complexity gate
+        entry: radon cc connectivity services user_data/strategies scripts -n C -s
+        language: system
+        pass_filenames: false
+      - id: tests-coverage
+        name: tests and coverage gate
+        entry: pytest --cov=connectivity --cov=services --cov=user_data/strategies --cov-report=term-missing --cov-fail-under=80 -q
+        language: system
+        pass_filenames: false
