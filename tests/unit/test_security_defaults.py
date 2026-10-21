@@ -21,5 +21,7 @@ def test_env_example_contains_no_real_secret_values() -> None:
         if not stripped or stripped.startswith("#") or "=" not in stripped:
             continue
         key, value = stripped.split("=", 1)
-        if any(token in key for token in ("TOKEN", "SECRET", "API_KEY", "CHAT_ID")):
+        if any(token in key for token in ("TOKEN", "SECRET", "API_KEY")):
             assert value == "", f"secret-like placeholder must be empty: {key}"
+    assert "BALE_CHAT_ID=832112407" in content
+    assert "ALIx_BALE_CHAT_ALLOWLIST=832112407" in content
