@@ -13,7 +13,8 @@ def test_data_quality_fails_closed_for_empty_data():
     assert not result.passed and "empty_dataset" in result.reasons
 
 def test_data_quality_rejects_bad_ohlc_and_order():
-    bad = candle(1000); bad["high"] = 8
+    bad = candle(1000)
+    bad["high"] = 8
     result = validate_candles([candle(1000), bad])
     assert not result.passed
     assert any("invalid_ohlc_range" in reason for reason in result.reasons)
