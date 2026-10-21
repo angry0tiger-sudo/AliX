@@ -7,7 +7,7 @@
 
 ## Local-only market whitelist verification
 - Status: NEEDS LOCAL SYSTEM REVIEW.
-- The sample schema is in `config/environments/market-whitelist.sample.json`.
+- The sample data is in `config/environments/market-whitelist.sample.json`; its structural contract is in `config/environments/market-whitelist.schema.json`.
 - The sample has no enabled markets and is not an approved trading whitelist.
 - Before any later phase can enable a market, verify official exchange market metadata, symbol precision/limits, quote/base currencies, and trading availability from an authorized environment; record evidence and review date.
 - GitHub CI must remain mock-only and must not contact the live Nobitex API.
