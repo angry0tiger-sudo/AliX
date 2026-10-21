@@ -2,5 +2,6 @@
   "artifact": "AliX_GitHub_Starter_Kit.zip",
   "git_blob_sha1": "042d9d7f5fd2a1a1c8bb2d98c20384a2d5d3e05d",
   "source": "GitHub blob SHA for the preserved original archive",
-  "verification": "Validator recomputes the Git blob object hash from the archive bytes and separately prints SHA-256."
+  "verification": "Validator recomputes the Git blob object hash from the archive bytes and separately prints SHA-256.",
+  "sha256": "718e44f7c282937cad131753cb9c9d6ff87811d169e46a6193b65e5f34d4ab19"
 }
