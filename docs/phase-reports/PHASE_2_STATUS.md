@@ -1,6 +1,6 @@
 # AliX Phase 2 Status Report
 
-Status: **IN PROGRESS / CONTRACT-ONLY IMPLEMENTATION / LIVE EXECUTION BLOCKED**
+Status: **CONTRACT AND CI FOUNDATION PASS / EXTERNAL DEPLOYMENT GATES OPEN / LIVE EXECUTION BLOCKED**
 
 Owner approval: Phase 1 accepted; Phase 2 authorized.
 
@@ -24,6 +24,28 @@ create a second order lifecycle.
   idempotent read requests only.
 - All validation functions are pure; CI fixtures and mocks do not call Nobitex.
 
+## CI evidence
+
+The implementation candidate SHA `8743469f5f072ea482e5d016859ebd7e8d32a92c`
+passed [GitHub Actions run 39669097682](https://github.com/angry0tiger-sudo/AliX/actions/runs/39669097682).
+The same SHA also passed the PR-triggered run
+[39669102977](https://github.com/angry0tiger-sudo/AliX/actions/runs/39669102977).
+
+Observed results from the quality-job log:
+
+- Strict Mypy: no issues in 30 source files.
+- Ruff lint and formatter, Bandit, dependency resolution, lock consistency,
+  pip-audit, import-linter and Xenon: passed.
+- Unit suite: **70 passed**, coverage **92.30%** (required minimum 90%).
+- Separate Phase 1 safety/dependency contract suite: **4 passed**.
+- Starter Kit checksum/ZIP/documentation validation passed.
+- Freqtrade 2026.7 runtime smoke and safe-config assertions passed without
+  requesting an exchange connection.
+
+The final documentation/template commit is re-run through CI; its result must
+be matched to its own HEAD SHA in the Actions history before calling that
+revision verified.
+
 ## Safety state
 
 - No real API request, order submission or cancellation has been performed.
@@ -37,7 +59,7 @@ create a second order lifecycle.
 
 ## Open acceptance gates
 
-1. Successful CI on the final Phase 2 candidate SHA.
+1. Re-confirm all CI gates on the final documentation/template-updated Phase 2 candidate SHA.
 2. Validate current official Nobitex response schemas and actual USDT symbols,
    precision and limits using an authorized read-only environment.
 3. Exercise candle, balance, open-order, status, fills/fees, pagination and

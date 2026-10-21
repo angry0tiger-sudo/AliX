@@ -1,5 +1,21 @@
 # Phase 1 Open Tasks and Deployment Verification
 
+## Phase 2 contract/CI checkpoint
+
+- Contract implementation commit `8743469f5f072ea482e5d016859ebd7e8d32a92c`
+  passed push CI run [39669097682](https://github.com/angry0tiger-sudo/AliX/actions/runs/39669097682)
+  and pull-request CI run [39669102977](https://github.com/angry0tiger-sudo/AliX/actions/runs/39669102977).
+- Evidence: 70 unit tests passed, 92.30% coverage, 4 separate Phase 1 safety/
+  dependency contract tests passed; strict Mypy, security, dependency, architecture,
+  complexity, and Freqtrade safe-config gates passed.
+- The PR's docs/template-updated SHA must pass its own workflow before this
+  checkpoint is considered current for that exact SHA.
+- The gates for live schema/market verification, authorized read-only account
+  reads, Freqtrade boundary compatibility, reconciliation/recovery, and
+  Novaryn license/provenance remain open.
+
+
+
 ## Phase 2 — Spot/USDT contract integration (in progress)
 
 - AliX Phase 2 has started from the owner-approved Phase 1 HEAD.
