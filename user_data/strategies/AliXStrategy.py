@@ -11,14 +11,14 @@ from typing import Any
 from pandas import DataFrame
 
 try:
-    from freqtrade.strategy import IStrategy
+    from freqtrade.strategy import IStrategy  # type: ignore[import-not-found]
 except ImportError:  # Allows lightweight static checks outside the Freqtrade runtime.
 
     class IStrategy:  # type: ignore[no-redef]
         pass
 
 
-class AliXStrategy(IStrategy):
+class AliXStrategy(IStrategy):  # type: ignore[misc]
     INTERFACE_VERSION = 3
     timeframe = "1h"
     can_short = False
