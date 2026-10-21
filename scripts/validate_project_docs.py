@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Validate the preserved Starter Kit archive and key project documentation."""
+
 from __future__ import annotations
 
 import hashlib
@@ -37,8 +38,7 @@ def main() -> int:
     expected_blob = manifest.get("git_blob_sha1")
     if not expected_blob or git_blob_sha1 != expected_blob:
         errors.append(
-            f"Git blob SHA-1 mismatch: expected {expected_blob!r}, "
-            f"got {git_blob_sha1}"
+            f"Git blob SHA-1 mismatch: expected {expected_blob!r}, got {git_blob_sha1}"
         )
 
     try:
@@ -71,8 +71,7 @@ def main() -> int:
         print("\n".join(errors), file=sys.stderr)
         return 1
     print(
-        f"Starter Kit validation passed; git_blob_sha1={git_blob_sha1}; "
-        f"sha256={sha256}"
+        f"Starter Kit validation passed; git_blob_sha1={git_blob_sha1}; sha256={sha256}"
     )
     return 0
 
