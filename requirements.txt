@@ -3,7 +3,7 @@
 # checks independent from heavyweight runtime integrations.
 freqtrade==2026.9
 deepalpha-freqai==1.1.4
-transformers==5.10.0
+transformers==5.20.2
 pandas==2.3.3
 
 # Tests and quality/security/architecture gates
