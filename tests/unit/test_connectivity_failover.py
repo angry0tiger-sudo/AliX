@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from connectivity.manager.manager import ConnectivityManager
 from connectivity.routes import ProxyRouteDriver, TunnelRouteDriver, VpnRouteDriver
 
@@ -7,7 +9,7 @@ from connectivity.routes import ProxyRouteDriver, TunnelRouteDriver, VpnRouteDri
 def test_failover_selects_first_healthy_route_by_priority() -> None:
     activated: list[str] = []
 
-    def activate(route_id: str):
+    def activate(route_id: str) -> Callable[[], bool]:
         def callback() -> bool:
             activated.append(route_id)
             return True
@@ -36,7 +38,7 @@ def test_failover_selects_first_healthy_route_by_priority() -> None:
 def test_failover_tries_tunnel_after_probe_exception_and_activation_failure() -> None:
     activated: list[str] = []
 
-    def activation(name: str, outcome: bool):
+    def activation(name: str, outcome: bool) -> Callable[[], bool]:
         def callback() -> bool:
             activated.append(name)
             return outcome
@@ -71,9 +73,11 @@ def test_failover_tries_tunnel_after_probe_exception_and_activation_failure() ->
 def test_failover_does_not_probe_unallowlisted_routes() -> None:
     probed: list[str] = []
     route = VpnRouteDriver("unlisted", activate=lambda: True)
-    manager = ConnectivityManager(
-        {"approved"}, lambda route_id: probed.append(route_id) or True
-    )
+    def probe(route_id: str) -> bool:
+        probed.append(route_id)
+        return True
+
+    manager = ConnectivityManager({"approved"}, probe)
 
     result = manager.select_route([route])
 
@@ -86,10 +90,11 @@ def test_failover_does_not_probe_unallowlisted_routes() -> None:
 
 def test_failover_skips_disabled_routes_and_fails_closed_if_none_work() -> None:
     probed: list[str] = []
-    manager = ConnectivityManager(
-        {"vpn-disabled", "proxy-broken"},
-        lambda route_id: probed.append(route_id) or False,
-    )
+    def probe(route_id: str) -> bool:
+        probed.append(route_id)
+        return False
+
+    manager = ConnectivityManager({"vpn-disabled", "proxy-broken"}, probe)
     result = manager.select_route(
         [
             VpnRouteDriver("vpn-disabled", activate=lambda: True, enabled=False),
