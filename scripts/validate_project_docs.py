@@ -17,19 +17,15 @@ REQUIRED_MEMBERS = (
     "docs/ROADMAP.md",
     "scripts/validate_project_docs.py",
 )
+REQUIRED_PROJECT_FILES = (
+    "docs/knowledge_base/PROJECT_RULES.md",
+    "docs/knowledge_base/PHASE_0_ACCEPTANCE.md",
+    ".pre-commit-config.yaml",
+    ".github/workflows/ci.yml",
+)
 
 
-def main() -> int:
-    errors: list[str] = []
-    if not ARCHIVE.is_file():
-        errors.append(f"Missing archive: {ARCHIVE.relative_to(ROOT)}")
-    if not MANIFEST.is_file():
-        errors.append(f"Missing manifest: {MANIFEST.relative_to(ROOT)}")
-    if errors:
-        print("\n".join(errors), file=sys.stderr)
-        return 1
-
-    content = ARCHIVE.read_bytes()
+def _validate_archive(content: bytes, errors: list[str]) -> tuple[str, str]:
     sha256 = hashlib.sha256(content).hexdigest()
     git_blob_sha1 = hashlib.sha1(
         b"blob " + str(len(content)).encode("ascii") + b"\0" + content,
@@ -41,7 +37,6 @@ def main() -> int:
         errors.append(
             f"Git blob SHA-1 mismatch: expected {expected_blob!r}, got {git_blob_sha1}"
         )
-
     try:
         with zipfile.ZipFile(ARCHIVE) as archive:
             bad_member = archive.testzip()
@@ -57,17 +52,27 @@ def main() -> int:
                 errors.append(f"Required archive members missing: {missing}")
     except (OSError, zipfile.BadZipFile) as exc:
         errors.append(f"Invalid ZIP archive: {exc}")
+    return git_blob_sha1, sha256
 
-    required_project_files = (
-        "docs/knowledge_base/PROJECT_RULES.md",
-        "docs/knowledge_base/PHASE_0_ACCEPTANCE.md",
-        ".pre-commit-config.yaml",
-        ".github/workflows/ci.yml",
-    )
-    for rel in required_project_files:
-        if not (ROOT / rel).is_file():
-            errors.append(f"Missing required project file: {rel}")
 
+def _validate_project_files(errors: list[str]) -> None:
+    for relative_path in REQUIRED_PROJECT_FILES:
+        if not (ROOT / relative_path).is_file():
+            errors.append(f"Missing required project file: {relative_path}")
+
+
+def main() -> int:
+    errors: list[str] = []
+    if not ARCHIVE.is_file():
+        errors.append(f"Missing archive: {ARCHIVE.relative_to(ROOT)}")
+    if not MANIFEST.is_file():
+        errors.append(f"Missing manifest: {MANIFEST.relative_to(ROOT)}")
+    if errors:
+        print("\n".join(errors), file=sys.stderr)
+        return 1
+
+    git_blob_sha1, sha256 = _validate_archive(ARCHIVE.read_bytes(), errors)
+    _validate_project_files(errors)
     if errors:
         print("\n".join(errors), file=sys.stderr)
         return 1
