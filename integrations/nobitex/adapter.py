@@ -61,35 +61,64 @@ class SpotMarketMetadata:
     supported_sides: tuple[str, ...]
 
     def __post_init__(self) -> None:
-        required = (
+        _validate_market_identity(
             self.exchange_symbol,
             self.normalized_symbol,
             self.base,
             self.quote,
             self.settlement,
             self.market_type,
+            self.supported_order_types,
+            self.supported_sides,
         )
-        if not all(value.strip() for value in required):
-            raise MarketMappingError("required market identity is missing")
-        if self.market_type.lower() != "spot":
-            raise MarketMappingError("only spot market metadata is supported")
-        if self.base == self.quote:
-            raise MarketMappingError("market base and quote must differ")
-        if not self.supported_order_types or not self.supported_sides:
-            raise MarketMappingError("supported order types and sides are required")
-        for value in (
-            self.min_amount,
-            self.max_amount,
-            self.min_price,
-            self.max_price,
-        ):
-            if value is not None and (not value.is_finite() or value < 0):
-                raise MarketMappingError(
-                    "market limits must be finite and non-negative"
-                )
-        for precision in (self.price_precision, self.amount_precision):
-            if precision is not None and precision < 0:
-                raise MarketMappingError("precision must be non-negative")
+        _validate_market_limits(
+            (self.min_amount, self.max_amount, self.min_price, self.max_price),
+            (self.price_precision, self.amount_precision),
+        )
+
+
+def _validate_market_identity(
+    exchange_symbol: str,
+    normalized_symbol: str,
+    base: str,
+    quote: str,
+    settlement: str,
+    market_type: str,
+    order_types: tuple[str, ...],
+    sides: tuple[str, ...],
+) -> None:
+    required = (
+        exchange_symbol,
+        normalized_symbol,
+        base,
+        quote,
+        settlement,
+        market_type,
+    )
+    if not all(value.strip() for value in required):
+        raise MarketMappingError("required market identity is missing")
+    if market_type.lower() != "spot":
+        raise MarketMappingError("only spot market metadata is supported")
+    if base == quote:
+        raise MarketMappingError("market base and quote must differ")
+    if not order_types or not sides:
+        raise MarketMappingError("supported order types and sides are required")
+
+
+def _validate_market_limits(
+    limits: tuple[Decimal | None, ...],
+    precisions: tuple[int | None, ...],
+) -> None:
+    for value in limits:
+        if value is not None and not _valid_nonnegative_decimal(value):
+            raise MarketMappingError("market limits must be finite and non-negative")
+    for precision in precisions:
+        if precision is not None and precision < 0:
+            raise MarketMappingError("precision must be non-negative")
+
+
+def _valid_nonnegative_decimal(value: Decimal) -> bool:
+    return value.is_finite() and value >= 0
 
 
 class OrderStatus:
@@ -147,34 +176,45 @@ def _optional_decimal(value: object) -> Decimal | None:
     return result
 
 
-def normalize_spot_market(payload: Mapping[str, Any]) -> SpotMarketMetadata:
-    """Normalize exchange metadata following Novaryn's strict spot-market contract."""
+def _market_identity(
+    payload: Mapping[str, Any],
+) -> tuple[str, str, str]:
     exchange_symbol = _text(payload.get("symbol") or payload.get("market")).upper()
     base = _currency(payload.get("base") or payload.get("srcCurrency"))
     quote = _currency(payload.get("quote") or payload.get("dstCurrency"))
     if not exchange_symbol or not base or not quote:
         raise MarketMappingError("exchange symbol, base and quote are required")
+    return exchange_symbol, base, quote
 
+
+def _market_capabilities(
+    payload: Mapping[str, Any],
+) -> tuple[str, tuple[str, ...], tuple[str, ...]]:
     market_type = _text(
         payload.get("marketType") or payload.get("type") or "spot"
     ).lower()
     if market_type not in {"spot", "spotmarket"}:
         raise MarketMappingError(f"unsupported market type: {market_type}")
-
     order_types = _normalize_strings(
         payload.get("supportedOrderTypes") or payload.get("orderTypes")
     )
     sides = _normalize_strings(payload.get("supportedSides") or payload.get("sides"))
     if not order_types or not sides:
         raise MarketMappingError("missing supported order types or sides")
+    return "spot", order_types, sides
 
+
+def normalize_spot_market(payload: Mapping[str, Any]) -> SpotMarketMetadata:
+    """Normalize exchange metadata following Novaryn's strict spot-market contract."""
+    exchange_symbol, base, quote = _market_identity(payload)
+    market_type, order_types, sides = _market_capabilities(payload)
     return SpotMarketMetadata(
         exchange_symbol=exchange_symbol,
         normalized_symbol=f"{base}/{quote}",
         base=base,
         quote=quote,
         settlement=quote,
-        market_type="spot",
+        market_type=market_type,
         price_precision=_optional_int(payload.get("pricePrecision")),
         amount_precision=_optional_int(payload.get("amountPrecision")),
         min_amount=_optional_decimal(payload.get("minAmount")),
@@ -184,7 +224,6 @@ def normalize_spot_market(payload: Mapping[str, Any]) -> SpotMarketMetadata:
         supported_order_types=order_types,
         supported_sides=sides,
     )
-
 
 def _normalize_strings(value: object) -> tuple[str, ...]:
     if not isinstance(value, (list, tuple)):
