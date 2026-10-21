@@ -1,4 +1,5 @@
 """Deterministic reporting boundary; outbound delivery is injected and disabled by default."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
