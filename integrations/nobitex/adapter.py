@@ -276,6 +276,39 @@ def _decimal(value: object, field_name: str) -> Decimal:
     return number
 
 
+def _validated_fill_amounts(
+    matched_amount: object | None, amount: object | None
+) -> tuple[Decimal, Decimal] | None:
+    if matched_amount is None or amount is None:
+        return None
+    try:
+        matched = Decimal(str(matched_amount))
+        total = Decimal(str(amount))
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise UnknownOrderStatus("invalid matched or total order amount") from exc
+    if not matched.is_finite() or not total.is_finite():
+        raise UnknownOrderStatus("matched or total order amount is not finite")
+    if matched < 0 or total <= 0 or matched > total:
+        raise UnknownOrderStatus("matched order amount is outside valid bounds")
+    return matched, total
+
+
+def _apply_fill_amounts(
+    mapped_status: str, fill_amounts: tuple[Decimal, Decimal] | None
+) -> str:
+    if fill_amounts is None or mapped_status not in {
+        OrderStatus.SUBMITTED,
+        OrderStatus.OPEN,
+    }:
+        return mapped_status
+    matched, total = fill_amounts
+    if matched == total:
+        return OrderStatus.FILLED
+    if matched > 0:
+        return OrderStatus.PARTIALLY_FILLED
+    return mapped_status
+
+
 def map_order_status(
     status: str, *, matched_amount: object | None = None, amount: object | None = None
 ) -> str:
@@ -285,28 +318,8 @@ def map_order_status(
         mapped = _STATUS_MAP[normalized]
     except KeyError as exc:
         raise UnknownOrderStatus(f"unknown Nobitex order status: {status}") from exc
-
-    if matched_amount is None or amount is None:
-        return mapped
-    try:
-        matched = Decimal(str(matched_amount))
-        total = Decimal(str(amount))
-    except (InvalidOperation, TypeError, ValueError) as exc:
-        raise UnknownOrderStatus("invalid matched or total order amount") from exc
-    if (
-        not matched.is_finite()
-        or not total.is_finite()
-        or matched < 0
-        or total <= 0
-        or matched > total
-    ):
-        raise UnknownOrderStatus("matched order amount is outside valid bounds")
-    if mapped in {OrderStatus.SUBMITTED, OrderStatus.OPEN}:
-        if matched == total:
-            return OrderStatus.FILLED
-        if matched > 0:
-            return OrderStatus.PARTIALLY_FILLED
-    return mapped
+    fill_amounts = _validated_fill_amounts(matched_amount, amount)
+    return _apply_fill_amounts(mapped, fill_amounts)
 
 
 class NobitexAdapter:

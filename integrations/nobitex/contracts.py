@@ -158,26 +158,31 @@ def _order_pair(order: Mapping[str, Any]) -> str:
     return normalize_spot_pair(f"{_currency(parts[0])}/{_currency(parts[1])}")
 
 
-def normalize_spot_order(
-    payload: Mapping[str, Any], *, fallback_order_id: str | None = None
-) -> SpotOrderSnapshot:
-    """Normalize a Nobitex-like order response and fail closed on ambiguity."""
+def _unwrap_order(payload: Mapping[str, Any]) -> Mapping[str, Any]:
     raw_order: object = payload.get("order", payload)
     if not isinstance(raw_order, Mapping):
         raise MarketMappingError("order response must contain an order object")
-    order = raw_order
+    return raw_order
 
+
+def _order_identity(
+    order: Mapping[str, Any], fallback_order_id: str | None
+) -> tuple[str, str, str, str]:
     order_id = str(order.get("id") or fallback_order_id or "").strip()
     if not order_id or not order_id.isdigit():
         raise MarketMappingError("order ID must be numeric and non-empty")
     status = str(order.get("status") or "").strip()
     if not status:
         raise MarketMappingError("order status is required")
-
     side = str(order.get("type") or "").strip().lower()
     if side not in {"buy", "sell"}:
         raise MarketMappingError("order side must be buy or sell")
-    pair = _order_pair(order)
+    return order_id, status, side, _order_pair(order)
+
+
+def _order_amounts(
+    order: Mapping[str, Any], status: str
+) -> tuple[Decimal, Decimal, str]:
     amount = _decimal(order.get("amount"), "order.amount", allow_zero=False)
     matched_amount = _decimal(
         order.get("matchedAmount", "0"),
@@ -189,35 +194,62 @@ def normalize_spot_order(
     canonical_status = map_order_status(
         status, matched_amount=matched_amount, amount=amount
     )
+    return amount, matched_amount, canonical_status
 
+
+def _order_prices(
+    order: Mapping[str, Any],
+) -> tuple[Decimal | None, Decimal | None, Decimal]:
     raw_price = order.get("price")
-    price: Decimal | None
     if raw_price is None or str(raw_price).strip().lower() in {"", "market"}:
         price = None
     else:
         price = _decimal(raw_price, "order.price", allow_zero=False)
-
-    raw_average = order.get("averagePrice", "0")
-    average = _decimal(raw_average, "order.averagePrice", allow_zero=True)
+    average = _decimal(
+        order.get("averagePrice", "0"), "order.averagePrice", allow_zero=True
+    )
     average_price = average if average > 0 else None
     total_price = _decimal(
         order.get("totalPrice", "0"), "order.totalPrice", allow_zero=True
     )
-    fee_cost = _decimal(order.get("fee", "0"), "order.fee", allow_zero=True)
+    return price, average_price, total_price
 
+
+def _order_fees(order: Mapping[str, Any]) -> tuple[Decimal, str | None]:
+    fee_cost = _decimal(order.get("fee", "0"), "order.fee", allow_zero=True)
+    raw_fee_currency = order.get("feeCurrency")
+    fee_currency = _currency(raw_fee_currency) if raw_fee_currency else None
+    return fee_cost, fee_currency
+
+
+def _order_client_id(order: Mapping[str, Any]) -> str | None:
     raw_client_id = order.get("clientOrderId")
     client_order_id = str(raw_client_id).strip() if raw_client_id is not None else None
     if client_order_id == "":
         client_order_id = None
     if client_order_id is not None and len(client_order_id) > 32:
         raise MarketMappingError("client order ID exceeds 32 characters")
+    return client_order_id
 
-    raw_fee_currency = order.get("feeCurrency")
-    fee_currency = _currency(raw_fee_currency) if raw_fee_currency else None
+
+def _order_execution(order: Mapping[str, Any]) -> str:
     execution = str(order.get("execution") or "").strip().lower()
     if execution not in {"limit", "market"}:
         raise MarketMappingError("order execution type is missing or unsupported")
+    return execution
 
+
+def normalize_spot_order(
+    payload: Mapping[str, Any], *, fallback_order_id: str | None = None
+) -> SpotOrderSnapshot:
+    """Normalize a Nobitex-like order response and fail closed on ambiguity."""
+    order = _unwrap_order(payload)
+    order_id, status, side, pair = _order_identity(order, fallback_order_id)
+    amount, matched_amount, canonical_status = _order_amounts(order, status)
+    price, average_price, total_price = _order_prices(order)
+    fee_cost, fee_currency = _order_fees(order)
+    client_order_id = _order_client_id(order)
+    execution = _order_execution(order)
     return SpotOrderSnapshot(
         exchange_order_id=order_id,
         status=canonical_status,
@@ -242,6 +274,58 @@ def _decimal_places(value: Decimal) -> int:
     return max(0, -exponent)
 
 
+def _validate_market_identity(market: SpotMarketMetadata, pair: str) -> None:
+    normalized_pair = normalize_spot_pair(pair)
+    if market.market_type.lower() != "spot" or market.quote.upper() != "USDT":
+        raise MarketMappingError("only normalized Spot/USDT metadata is accepted")
+    if normalize_spot_pair(market.normalized_symbol) != normalized_pair:
+        raise MarketMappingError("order pair does not match market metadata")
+
+
+def _validate_supported_order(
+    market: SpotMarketMetadata, side: str, order_type: str
+) -> str:
+    normalized_side = side.strip().lower()
+    if normalized_side not in {value.lower() for value in market.supported_sides}:
+        raise MarketMappingError("order side is not supported by the market")
+    normalized_type = order_type.strip().lower()
+    if normalized_type not in {value.lower() for value in market.supported_order_types}:
+        raise MarketMappingError("order type is not supported by the market")
+    return normalized_type
+
+
+def _validate_amount(market: SpotMarketMetadata, amount: object) -> None:
+    normalized_amount = _decimal(amount, "order.amount", allow_zero=False)
+    if market.min_amount is not None and normalized_amount < market.min_amount:
+        raise MarketMappingError("order amount is below market minimum")
+    if market.max_amount is not None and normalized_amount > market.max_amount:
+        raise MarketMappingError("order amount exceeds market maximum")
+    if (
+        market.amount_precision is not None
+        and _decimal_places(normalized_amount) > market.amount_precision
+    ):
+        raise MarketMappingError("order amount exceeds market precision")
+
+
+def _validate_price(
+    market: SpotMarketMetadata, order_type: str, price: object | None
+) -> None:
+    if order_type == "limit" and price is None:
+        raise MarketMappingError("limit order requires a price")
+    if price is None:
+        return
+    normalized_price = _decimal(price, "order.price", allow_zero=False)
+    if market.min_price is not None and normalized_price < market.min_price:
+        raise MarketMappingError("order price is below market minimum")
+    if market.max_price is not None and normalized_price > market.max_price:
+        raise MarketMappingError("order price exceeds market maximum")
+    if (
+        market.price_precision is not None
+        and _decimal_places(normalized_price) > market.price_precision
+    ):
+        raise MarketMappingError("order price exceeds market precision")
+
+
 def validate_order_against_market(
     market: SpotMarketMetadata,
     *,
@@ -255,40 +339,7 @@ def validate_order_against_market(
 
     This performs no network or order-write operation; it validates a candidate.
     """
-    normalized_pair = normalize_spot_pair(pair)
-    if market.market_type.lower() != "spot" or market.quote.upper() != "USDT":
-        raise MarketMappingError("only normalized Spot/USDT metadata is accepted")
-    if normalize_spot_pair(market.normalized_symbol) != normalized_pair:
-        raise MarketMappingError("order pair does not match market metadata")
-
-    normalized_side = side.strip().lower()
-    if normalized_side not in {value.lower() for value in market.supported_sides}:
-        raise MarketMappingError("order side is not supported by the market")
-    normalized_type = order_type.strip().lower()
-    if normalized_type not in {value.lower() for value in market.supported_order_types}:
-        raise MarketMappingError("order type is not supported by the market")
-
-    normalized_amount = _decimal(amount, "order.amount", allow_zero=False)
-    if market.min_amount is not None and normalized_amount < market.min_amount:
-        raise MarketMappingError("order amount is below market minimum")
-    if market.max_amount is not None and normalized_amount > market.max_amount:
-        raise MarketMappingError("order amount exceeds market maximum")
-    if (
-        market.amount_precision is not None
-        and _decimal_places(normalized_amount) > market.amount_precision
-    ):
-        raise MarketMappingError("order amount exceeds market precision")
-
-    if normalized_type == "limit" and price is None:
-        raise MarketMappingError("limit order requires a price")
-    if price is not None:
-        normalized_price = _decimal(price, "order.price", allow_zero=False)
-        if market.min_price is not None and normalized_price < market.min_price:
-            raise MarketMappingError("order price is below market minimum")
-        if market.max_price is not None and normalized_price > market.max_price:
-            raise MarketMappingError("order price exceeds market maximum")
-        if (
-            market.price_precision is not None
-            and _decimal_places(normalized_price) > market.price_precision
-        ):
-            raise MarketMappingError("order price exceeds market precision")
+    _validate_market_identity(market, pair)
+    normalized_type = _validate_supported_order(market, side, order_type)
+    _validate_amount(market, amount)
+    _validate_price(market, normalized_type, price)
