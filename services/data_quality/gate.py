@@ -49,15 +49,13 @@ def _price_values(
     return values, reasons
 
 
-def _price_relationship_reasons(
-    index: int, values: Mapping[str, float]
-) -> list[str]:
+def _price_relationship_reasons(index: int, values: Mapping[str, float]) -> list[str]:
     if len(values) != len(PRICE_COLUMNS):
         return []
     reasons: list[str] = []
-    if values["low"] > min(values["open"], values["close"]) or values[
-        "high"
-    ] < max(values["open"], values["close"]):
+    if values["low"] > min(values["open"], values["close"]) or values["high"] < max(
+        values["open"], values["close"]
+    ):
         reasons.append(f"row_{index}_invalid_ohlc_range")
     if values["volume"] < 0:
         reasons.append(f"row_{index}_negative_volume")
