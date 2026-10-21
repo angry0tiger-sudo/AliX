@@ -33,7 +33,7 @@ jobs:
       - name: Ruff lint
         run: ruff check connectivity services user_data/strategies tests scripts
       - name: Ruff format check
-        run: ruff format --check connectivity services user_data/strategies tests scripts
+        run: ruff format --diff connectivity services user_data/strategies tests scripts
       - name: Strict type check
         run: mypy --config-file mypy.ini
       - name: Security scan
