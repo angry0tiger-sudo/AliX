@@ -1,6 +1,6 @@
 {
   "artifact": "AliX_GitHub_Starter_Kit.zip",
-  "sha256": "PLACEHOLDER_SHA256_MUST_BE_COMPUTED_IN_GITHUB_CI",
-  "source": "Preserved original archive in repository root",
-  "verification": "CI computes SHA-256 and compares this value; replace placeholder only after establishing the original archive checksum."
+  "git_blob_sha1": "042d9d7f5fd2a1a1c8bb2d98c20384a2d5d3e05d",
+  "source": "GitHub blob SHA for the preserved original archive",
+  "verification": "Validator recomputes the Git blob object hash from the archive bytes and separately prints SHA-256."
 }
