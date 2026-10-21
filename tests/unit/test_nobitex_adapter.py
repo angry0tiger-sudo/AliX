@@ -10,6 +10,7 @@ from integrations.nobitex.adapter import (
     LiveExecutionDisabled,
     MarketMappingError,
     NobitexAdapter,
+    NobitexAdapterError,
     OrderStatus,
     ReadOnlyTransportUnavailable,
     UnknownOrderStatus,
@@ -181,9 +182,87 @@ def test_exchange_market_symbol_resolution_rejects_ambiguous_or_invalid_payload(
         NobitexAdapter(ambiguous).get_exchange_market_symbols()
 
     invalid_payload = FakeReadOnlyTransport({"status": "ok"})
-    with pytest.raises(ValueError, match="invalid market stats"):
+    with pytest.raises(NobitexAdapterError, match="invalid market stats"):
         NobitexAdapter(invalid_payload).get_exchange_market_symbols()
 
     no_usdt = FakeReadOnlyTransport({"stats": {"BTCIRT": {}}})
-    with pytest.raises(ValueError, match="no USDT"):
+    with pytest.raises(NobitexAdapterError, match="no USDT"):
         NobitexAdapter(no_usdt).get_exchange_market_symbols()
+
+
+
+def test_market_mapper_rejects_invalid_precision_limits_and_equal_currencies() -> None:
+    cases = [
+        {"pricePrecision": -1},
+        {"amountPrecision": True},
+        {"minAmount": "-0.1"},
+        {"maxPrice": "NaN"},
+        {"base": "BTC", "quote": "BTC"},
+        {"symbol": ""},
+    ]
+    for changes in cases:
+        with pytest.raises(MarketMappingError):
+            normalize_spot_market(market_payload() | changes)
+
+
+def test_market_mapper_accepts_missing_optional_limits_and_precision() -> None:
+    payload = market_payload()
+    for key in (
+        "pricePrecision",
+        "amountPrecision",
+        "minAmount",
+        "maxAmount",
+        "minPrice",
+        "maxPrice",
+    ):
+        payload.pop(key, None)
+    market = normalize_spot_market(payload)
+    assert market.price_precision is None
+    assert market.amount_precision is None
+    assert market.min_amount is None
+    assert market.max_price is None
+
+
+def test_market_stats_rejects_non_mapping_response() -> None:
+    class InvalidResponseTransport:
+        def get_json(
+            self, path: str, params: Mapping[str, str] | None = None
+        ) -> Any:
+            return []
+
+    with pytest.raises(NobitexAdapterError, match="must be an object"):
+        NobitexAdapter(InvalidResponseTransport()).market_stats("BTC/USDT")
+
+
+def test_symbol_normalizers_reject_empty_values_and_pair_rejects_unsafe_chars() -> None:
+    from integrations.nobitex.adapter import (
+        _compact_market_symbol,
+        _exchange_market_symbol,
+    )
+
+    with pytest.raises(MarketMappingError, match="empty Nobitex"):
+        _exchange_market_symbol(" ")
+    with pytest.raises(MarketMappingError, match="empty market symbol"):
+        _compact_market_symbol("")
+    with pytest.raises(ValueError, match="unsupported characters"):
+        normalize_spot_pair("BTC_$ /USDT")
+
+
+def test_order_payload_rejects_bad_side_and_nonpositive_price() -> None:
+    with pytest.raises(ValueError, match="side"):
+        NobitexAdapter.build_order_payload(
+            pair="BTC/USDT",
+            side="hold",
+            order_type="market",
+            amount="1",
+            client_order_id="test",
+        )
+    with pytest.raises(ValueError, match="positive and finite"):
+        NobitexAdapter.build_order_payload(
+            pair="BTC/USDT",
+            side="buy",
+            order_type="limit",
+            amount="1",
+            client_order_id="test",
+            price="0",
+        )
