@@ -31,7 +31,7 @@ REQUIRED_PROJECT_FILES = (
 )
 
 
-def _validate_archive(content: bytes, errors: list[str]) -> tuple[str, str]:
+def _validate_checksums(content: bytes, errors: list[str]) -> tuple[str, str]:
     sha256 = hashlib.sha256(content).hexdigest()
     git_blob_sha1 = hashlib.sha1(
         b"blob " + str(len(content)).encode("ascii") + b"\0" + content,
@@ -46,22 +46,34 @@ def _validate_archive(content: bytes, errors: list[str]) -> tuple[str, str]:
     expected_sha256 = manifest.get("sha256")
     if not expected_sha256 or sha256 != expected_sha256:
         errors.append(f"SHA-256 mismatch: expected {expected_sha256!r}, got {sha256}")
+    return git_blob_sha1, sha256
+
+
+def _missing_archive_members(names: set[str]) -> list[str]:
+    return [
+        suffix
+        for suffix in REQUIRED_MEMBERS
+        if not any(name.endswith(suffix) for name in names)
+    ]
+
+
+def _validate_zip(errors: list[str]) -> None:
     try:
         with zipfile.ZipFile(ARCHIVE) as archive:
             bad_member = archive.testzip()
             if bad_member:
                 errors.append(f"Corrupt archive member: {bad_member}")
-            names = set(archive.namelist())
-            missing = [
-                suffix
-                for suffix in REQUIRED_MEMBERS
-                if not any(name.endswith(suffix) for name in names)
-            ]
+            missing = _missing_archive_members(set(archive.namelist()))
             if missing:
                 errors.append(f"Required archive members missing: {missing}")
     except (OSError, zipfile.BadZipFile) as exc:
         errors.append(f"Invalid ZIP archive: {exc}")
-    return git_blob_sha1, sha256
+
+
+def _validate_archive(content: bytes, errors: list[str]) -> tuple[str, str]:
+    checksums = _validate_checksums(content, errors)
+    _validate_zip(errors)
+    return checksums
 
 
 def _validate_project_files(errors: list[str]) -> None:
