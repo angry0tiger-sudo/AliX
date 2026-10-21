@@ -53,9 +53,7 @@ class ConnectivityManager:
     def may_proceed(self, route: str) -> bool:
         return self.check(route).healthy
 
-    def select_route(
-        self, routes: Iterable[BaseRouteDriver]
-    ) -> FailoverResult:
+    def select_route(self, routes: Iterable[BaseRouteDriver]) -> FailoverResult:
         """Probe and activate routes in priority order, failing closed if none work."""
         candidates = sorted(
             (route for route in routes if route.enabled),
