@@ -1,7 +1,9 @@
 """Connectivity policy boundary. Network probes are injected; no real connection is made here."""
 from __future__ import annotations
+
 from dataclasses import dataclass
 from typing import Callable
+
 
 @dataclass(frozen=True)
 class ConnectivityStatus:
@@ -9,8 +11,11 @@ class ConnectivityStatus:
     healthy: bool
     reason: str
 
+
 class ConnectivityManager:
-    def __init__(self, allowed_routes: set[str], probe: Callable[[str], bool]):
+    def __init__(
+        self, allowed_routes: set[str], probe: Callable[[str], bool]
+    ) -> None:
         self._allowed_routes = frozenset(allowed_routes)
         self._probe = probe
 
@@ -21,7 +26,9 @@ class ConnectivityManager:
             healthy = bool(self._probe(route))
         except Exception:
             return ConnectivityStatus(route, False, "probe_failed")
-        return ConnectivityStatus(route, healthy, "ok" if healthy else "route_unhealthy")
+        return ConnectivityStatus(
+            route, healthy, "ok" if healthy else "route_unhealthy"
+        )
 
     def may_proceed(self, route: str) -> bool:
         return self.check(route).healthy
