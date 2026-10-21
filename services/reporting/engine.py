@@ -22,9 +22,12 @@ class DailyReport:
 
 class ReportingEngine:
     def __init__(self, default_chat_id: str | None = None) -> None:
-        self.default_chat_id = (
-            default_chat_id or os.getenv("BALE_CHAT_ID", DEFAULT_BALE_CHAT_ID)
-        ).strip()
+        resolved_chat_id = (
+            default_chat_id
+            if default_chat_id is not None
+            else os.getenv("BALE_CHAT_ID", DEFAULT_BALE_CHAT_ID)
+        )
+        self.default_chat_id = resolved_chat_id.strip()
 
     def render_text(self, report: DailyReport) -> str:
         metrics = ", ".join(
