@@ -174,10 +174,10 @@ def test_exchange_market_symbol_resolution_matches_novaryn_spot_contract() -> No
     assert transport.calls == [("/market/stats", None)]
 
 
-def test_exchange_market_symbol_resolution_rejects_ambiguous_or_invalid_payload() -> None:
-    ambiguous = FakeReadOnlyTransport(
-        {"stats": {"1M_PEPEUSDT": {}, "1MPEPEUSDT": {}}}
-    )
+def test_exchange_market_symbol_resolution_rejects_ambiguous_or_invalid_payload() -> (
+    None
+):
+    ambiguous = FakeReadOnlyTransport({"stats": {"1M_PEPEUSDT": {}, "1MPEPEUSDT": {}}})
     with pytest.raises(MarketMappingError, match="ambiguous"):
         NobitexAdapter(ambiguous).get_exchange_market_symbols()
 
@@ -188,7 +188,6 @@ def test_exchange_market_symbol_resolution_rejects_ambiguous_or_invalid_payload(
     no_usdt = FakeReadOnlyTransport({"stats": {"BTCIRT": {}}})
     with pytest.raises(NobitexAdapterError, match="no USDT"):
         NobitexAdapter(no_usdt).get_exchange_market_symbols()
-
 
 
 def test_market_mapper_rejects_invalid_precision_limits_and_equal_currencies() -> None:
@@ -225,9 +224,7 @@ def test_market_mapper_accepts_missing_optional_limits_and_precision() -> None:
 
 def test_market_stats_rejects_non_mapping_response() -> None:
     class InvalidResponseTransport:
-        def get_json(
-            self, path: str, params: Mapping[str, str] | None = None
-        ) -> Any:
+        def get_json(self, path: str, params: Mapping[str, str] | None = None) -> Any:
             return []
 
     with pytest.raises(NobitexAdapterError, match="must be an object"):
