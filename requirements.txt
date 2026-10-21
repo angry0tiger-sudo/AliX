@@ -3,11 +3,11 @@
 # checks independent from heavyweight runtime integrations.
 freqtrade==2026.9
 deepalpha-freqai==1.1.4
-transformers==4.57.1
+transformers==5.10.0
 pandas==2.3.3
 
 # Tests and quality/security/architecture gates
-pytest==8.4.2
+pytest==9.0.3
 pytest-cov==7.0.0
 ruff==0.14.0
 mypy==1.18.2
