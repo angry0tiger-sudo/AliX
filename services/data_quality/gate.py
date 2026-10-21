@@ -67,17 +67,12 @@ def validate_candles(
             reasons.append(f"row_{index}_invalid_date")
         else:
             if previous_timestamp is not None and timestamp <= previous_timestamp:
-                reasons.append(
-                    f"row_{index}_timestamp_not_strictly_increasing"
-                )
+                reasons.append(f"row_{index}_timestamp_not_strictly_increasing")
             previous_timestamp = timestamp
 
     if max_age_seconds is not None and now_epoch is not None:
         last_timestamp = _finite_number(data[-1].get("date"))
-        if (
-            last_timestamp is None
-            or now_epoch - last_timestamp > max_age_seconds
-        ):
+        if last_timestamp is None or now_epoch - last_timestamp > max_age_seconds:
             reasons.append("stale_latest_candle")
 
     return QualityResult(not reasons, tuple(reasons))
