@@ -305,7 +305,9 @@ class NobitexAdapter:
         payload = self._transport.get_json("/market/stats")
         raw_stats = payload.get("stats")
         if not isinstance(raw_stats, Mapping):
-            raise NobitexAdapterError("invalid market stats response while resolving symbols")
+            raise NobitexAdapterError(
+                "invalid market stats response while resolving symbols"
+            )
 
         resolved: dict[str, str] = {}
         for raw_symbol in raw_stats:
@@ -320,7 +322,9 @@ class NobitexAdapter:
                 )
             resolved[canonical] = exchange_symbol
         if not resolved:
-            raise NobitexAdapterError("no USDT Nobitex markets available for symbol resolution")
+            raise NobitexAdapterError(
+                "no USDT Nobitex markets available for symbol resolution"
+            )
         return dict(sorted(resolved.items()))
 
     def market_stats(self, pair: str) -> Mapping[str, Any]:
