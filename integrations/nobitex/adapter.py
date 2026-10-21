@@ -225,6 +225,7 @@ def normalize_spot_market(payload: Mapping[str, Any]) -> SpotMarketMetadata:
         supported_sides=sides,
     )
 
+
 def _normalize_strings(value: object) -> tuple[str, ...]:
     if not isinstance(value, (list, tuple)):
         return ()
