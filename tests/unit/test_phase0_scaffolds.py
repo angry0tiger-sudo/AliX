@@ -83,3 +83,25 @@ def test_strategy_scaffold_generates_no_entry_or_exit_signals() -> None:
     exits = strategy.populate_exit_trend(enriched.copy(), metadata)
     assert entries["enter_long"].eq(0).all()
     assert exits["exit_long"].eq(0).all()
+
+
+def test_data_quality_rejects_missing_columns_and_invalid_numbers() -> None:
+    missing = validate_candles([{"date": 1000}])
+    assert not missing.passed
+    assert any("missing_columns" in reason for reason in missing.reasons)
+
+    invalid = candle(1000)
+    invalid["open"] = float("nan")
+    invalid["volume"] = -1.0
+    result = validate_candles([invalid])
+    assert not result.passed
+    assert any("non_finite_open" in reason for reason in result.reasons)
+    assert any("negative_volume" in reason for reason in result.reasons)
+
+
+def test_data_quality_rejects_stale_candles() -> None:
+    result = validate_candles(
+        [candle(1000)], max_age_seconds=60, now_epoch=2000
+    )
+    assert not result.passed
+    assert "stale_latest_candle" in result.reasons
