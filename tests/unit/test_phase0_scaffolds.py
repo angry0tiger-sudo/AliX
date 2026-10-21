@@ -3,7 +3,7 @@ from services.data_quality.gate import validate_candles
 from services.reporting.engine import DailyReport, ReportingEngine
 
 
-def candle(ts: int = 1000) -> dict[str, int | float]:
+def candle(ts: int = 1000) -> dict[str, object]:
     return {
         "date": ts,
         "open": 10.0,
@@ -36,17 +36,21 @@ def test_data_quality_rejects_bad_ohlc_and_order() -> None:
 
 def test_connectivity_rejects_unlisted_route_without_probe() -> None:
     called: list[str] = []
-    manager = ConnectivityManager(
-        {"approved"}, lambda route: called.append(route) or True
-    )
+
+    def probe(route: str) -> bool:
+        called.append(route)
+        return True
+
+    manager = ConnectivityManager({"approved"}, probe)
     assert not manager.may_proceed("unknown")
     assert called == []
 
 
 def test_connectivity_fails_closed_on_probe_exception() -> None:
-    manager = ConnectivityManager(
-        {"approved"}, lambda route: (_ for _ in ()).throw(RuntimeError())
-    )
+    def broken_probe(_route: str) -> bool:
+        raise RuntimeError("mock probe failure")
+
+    manager = ConnectivityManager({"approved"}, broken_probe)
     assert not manager.may_proceed("approved")
 
 
