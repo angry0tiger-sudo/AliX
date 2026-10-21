@@ -21,7 +21,7 @@ repos:
         pass_filenames: false
       - id: bandit
         name: bandit security scan
-        entry: bandit -r connectivity services user_data/strategies scripts -ll
+        entry: bandit -r connectivity services integrations user_data/strategies scripts -ll
         language: system
         pass_filenames: false
       - id: pip-audit
@@ -36,12 +36,12 @@ repos:
         pass_filenames: false
       - id: radon-complexity
         name: radon complexity gate
-        entry: xenon --max-absolute B --max-modules B --max-average A connectivity services user_data/strategies scripts
+        entry: xenon --max-absolute B --max-modules B --max-average A connectivity services integrations user_data/strategies scripts
         language: system
         pass_filenames: false
       - id: tests-coverage
         name: tests and coverage gate
-        entry: pytest --cov=connectivity --cov=services --cov=user_data/strategies --cov-report=term-missing --cov-fail-under=90 -q
+        entry: pytest --cov=connectivity --cov=services --cov=integrations.nobitex --cov=user_data/strategies --cov-report=term-missing --cov-fail-under=90 -q
         language: system
         pass_filenames: false
       - id: starter-kit-validation
