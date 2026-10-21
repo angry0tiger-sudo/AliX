@@ -100,8 +100,6 @@ def test_data_quality_rejects_missing_columns_and_invalid_numbers() -> None:
 
 
 def test_data_quality_rejects_stale_candles() -> None:
-    result = validate_candles(
-        [candle(1000)], max_age_seconds=60, now_epoch=2000
-    )
+    result = validate_candles([candle(1000)], max_age_seconds=60, now_epoch=2000)
     assert not result.passed
     assert "stale_latest_candle" in result.reasons
