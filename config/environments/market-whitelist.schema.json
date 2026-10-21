@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AliX Market Whitelist",
+  "description": "Schema only. Actual market symbols require authorized local verification. Live trading must remain disabled until separately approved.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "exchange", "markets"],
+  "properties": {
+    "status": {
+      "type": "string",
+      "const": "NEEDS_LOCAL_REVIEW"
+    },
+    "exchange": {
+      "type": "string",
+      "const": "nobitex"
+    },
+    "verified_at_utc": {
+      "type": ["string", "null"],
+      "format": "date-time"
+    },
+    "markets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["symbol", "enabled", "verification_status"],
+        "properties": {
+          "symbol": {"type": "string", "minLength": 1},
+          "enabled": {"type": "boolean", "const": false},
+          "verification_status": {
+            "type": "string",
+            "const": "UNVERIFIED"
+          },
+          "notes": {"type": "string"}
+        }
+      }
+    }
+  }
+}
