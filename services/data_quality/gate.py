@@ -1,4 +1,5 @@
 """Small deterministic Data Quality Gate; independent of exchange APIs."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
