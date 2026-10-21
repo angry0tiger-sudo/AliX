@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import importlib
 import os
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol, cast
 
