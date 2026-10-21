@@ -150,6 +150,22 @@ def _currency(value: object) -> str:
     return currency
 
 
+def _exchange_market_symbol(value: object) -> str:
+    """Normalize separators used by Nobitex market keys without merging underscores."""
+    symbol = _text(value).upper()
+    if not symbol:
+        raise MarketMappingError("empty Nobitex market symbol")
+    return symbol.replace("-", "").replace("/", "")
+
+
+def _compact_market_symbol(value: object) -> str:
+    """Build the canonical separator-free key used for market-resolution lookups."""
+    symbol = _text(value).upper()
+    if not symbol:
+        raise MarketMappingError("empty market symbol")
+    return symbol.replace("-", "").replace("/", "").replace("_", "")
+
+
 def _optional_int(value: object) -> int | None:
     if value is None:
         return None
@@ -279,6 +295,33 @@ class NobitexAdapter:
 
     def __init__(self, transport: ReadOnlyTransport | None = None) -> None:
         self._transport = transport
+
+    def get_exchange_market_symbols(self) -> dict[str, str]:
+        """Resolve canonical USDT pairs from the Novaryn public market-stats contract."""
+        if self._transport is None:
+            raise ReadOnlyTransportUnavailable(
+                "no read-only transport is installed; Phase 1 never opens a live connection"
+            )
+        payload = self._transport.get_json("/market/stats")
+        raw_stats = payload.get("stats")
+        if not isinstance(raw_stats, Mapping):
+            raise NobitexAdapterError("invalid market stats response while resolving symbols")
+
+        resolved: dict[str, str] = {}
+        for raw_symbol in raw_stats:
+            exchange_symbol = _exchange_market_symbol(raw_symbol)
+            canonical = _compact_market_symbol(exchange_symbol)
+            if not canonical.endswith("USDT"):
+                continue
+            previous = resolved.get(canonical)
+            if previous is not None and previous != exchange_symbol:
+                raise MarketMappingError(
+                    f"ambiguous Nobitex market symbol mapping for {canonical}"
+                )
+            resolved[canonical] = exchange_symbol
+        if not resolved:
+            raise NobitexAdapterError("no USDT Nobitex markets available for symbol resolution")
+        return dict(sorted(resolved.items()))
 
     def market_stats(self, pair: str) -> Mapping[str, Any]:
         normalized = normalize_spot_pair(pair)
