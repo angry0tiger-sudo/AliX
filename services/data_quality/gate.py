@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import math
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from typing import Iterable
 
 
 @dataclass(frozen=True)
@@ -13,10 +14,18 @@ class QualityResult:
 
 
 REQUIRED_COLUMNS = ("date", "open", "high", "low", "close", "volume")
+PRICE_COLUMNS = ("open", "high", "low", "close", "volume")
+
+
+def _finite_number(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    numeric = float(value)
+    return numeric if math.isfinite(numeric) else None
 
 
 def validate_candles(
-    rows: Iterable[dict],
+    rows: Iterable[Mapping[str, object]],
     *,
     max_age_seconds: int | None = None,
     now_epoch: float | None = None,
@@ -25,33 +34,50 @@ def validate_candles(
     reasons: list[str] = []
     if not data:
         return QualityResult(False, ("empty_dataset",))
+
+    previous_timestamp: float | None = None
     for index, row in enumerate(data):
         missing = [column for column in REQUIRED_COLUMNS if column not in row]
         if missing:
             reasons.append(f"row_{index}_missing_columns:{','.join(missing)}")
             continue
-        for column in ("open", "high", "low", "close", "volume"):
+
+        numbers: dict[str, float] = {}
+        for column in PRICE_COLUMNS:
             value = row[column]
-            if not isinstance(value, (int, float)) or isinstance(value, bool):
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
                 reasons.append(f"row_{index}_invalid_{column}")
-            elif value != value or value in (float("inf"), float("-inf")):
+                continue
+            numeric = float(value)
+            if not math.isfinite(numeric):
                 reasons.append(f"row_{index}_non_finite_{column}")
-        numeric = all(
-            isinstance(row.get(column), (int, float))
-            and not isinstance(row.get(column), bool)
-            for column in ("open", "high", "low", "close", "volume")
-        )
-        if numeric:
-            if row["low"] > min(row["open"], row["close"]) or row["high"] < max(
-                row["open"], row["close"]
-            ):
+                continue
+            numbers[column] = numeric
+
+        if len(numbers) == len(PRICE_COLUMNS):
+            if numbers["low"] > min(numbers["open"], numbers["close"]) or numbers[
+                "high"
+            ] < max(numbers["open"], numbers["close"]):
                 reasons.append(f"row_{index}_invalid_ohlc_range")
-            if row["volume"] < 0:
+            if numbers["volume"] < 0:
                 reasons.append(f"row_{index}_negative_volume")
-        if index and row.get("date") <= data[index - 1].get("date"):
-            reasons.append(f"row_{index}_timestamp_not_strictly_increasing")
+
+        timestamp = _finite_number(row.get("date"))
+        if timestamp is None:
+            reasons.append(f"row_{index}_invalid_date")
+        else:
+            if previous_timestamp is not None and timestamp <= previous_timestamp:
+                reasons.append(
+                    f"row_{index}_timestamp_not_strictly_increasing"
+                )
+            previous_timestamp = timestamp
+
     if max_age_seconds is not None and now_epoch is not None:
-        last = data[-1].get("date")
-        if not isinstance(last, (int, float)) or now_epoch - last > max_age_seconds:
+        last_timestamp = _finite_number(data[-1].get("date"))
+        if (
+            last_timestamp is None
+            or now_epoch - last_timestamp > max_age_seconds
+        ):
             reasons.append("stale_latest_candle")
+
     return QualityResult(not reasons, tuple(reasons))
