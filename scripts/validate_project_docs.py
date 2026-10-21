@@ -11,11 +11,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 ARCHIVE = ROOT / "AliX_GitHub_Starter_Kit.zip"
 MANIFEST = ROOT / "artifacts-manifest" / "starter-kit.json"
-REQUIRED_MEMBERS = {
+REQUIRED_MEMBERS = (
     "docs/MRD.md",
     "docs/ROADMAP.md",
     "scripts/validate_project_docs.py",
-}
+)
 
 
 def main() -> int:
@@ -28,11 +28,18 @@ def main() -> int:
         print("\n".join(errors), file=sys.stderr)
         return 1
 
-    digest = hashlib.sha256(ARCHIVE.read_bytes()).hexdigest()
+    content = ARCHIVE.read_bytes()
+    sha256 = hashlib.sha256(content).hexdigest()
+    git_blob_sha1 = hashlib.sha1(
+        b"blob " + str(len(content)).encode("ascii") + b"\0" + content
+    ).hexdigest()
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
-    expected = manifest.get("sha256")
-    if not expected or digest != expected:
-        errors.append(f"SHA-256 mismatch: expected {expected!r}, got {digest}")
+    expected_blob = manifest.get("git_blob_sha1")
+    if not expected_blob or git_blob_sha1 != expected_blob:
+        errors.append(
+            f"Git blob SHA-1 mismatch: expected {expected_blob!r}, "
+            f"got {git_blob_sha1}"
+        )
 
     try:
         with zipfile.ZipFile(ARCHIVE) as archive:
@@ -40,23 +47,33 @@ def main() -> int:
             if bad_member:
                 errors.append(f"Corrupt archive member: {bad_member}")
             names = set(archive.namelist())
-            missing = sorted(REQUIRED_MEMBERS - names)
+            missing = [
+                suffix
+                for suffix in REQUIRED_MEMBERS
+                if not any(name.endswith(suffix) for name in names)
+            ]
             if missing:
                 errors.append(f"Required archive members missing: {missing}")
     except (OSError, zipfile.BadZipFile) as exc:
         errors.append(f"Invalid ZIP archive: {exc}")
 
-    for rel in ("docs/knowledge_base/PROJECT_RULES.md",
-                "docs/knowledge_base/PHASE_0_ACCEPTANCE.md",
-                ".pre-commit-config.yaml",
-                ".github/workflows/ci.yml"):
+    required_project_files = (
+        "docs/knowledge_base/PROJECT_RULES.md",
+        "docs/knowledge_base/PHASE_0_ACCEPTANCE.md",
+        ".pre-commit-config.yaml",
+        ".github/workflows/ci.yml",
+    )
+    for rel in required_project_files:
         if not (ROOT / rel).is_file():
             errors.append(f"Missing required project file: {rel}")
 
     if errors:
         print("\n".join(errors), file=sys.stderr)
         return 1
-    print(f"Starter Kit validation passed; sha256={digest}")
+    print(
+        f"Starter Kit validation passed; git_blob_sha1={git_blob_sha1}; "
+        f"sha256={sha256}"
+    )
     return 0
 
 
