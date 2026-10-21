@@ -134,7 +134,7 @@ def test_order_payload_rejects_invalid_amount_order_and_client_id() -> None:
         {"price": None},
     ):
         with pytest.raises(ValueError):
-            NobitexAdapter.build_order_payload(**(base | updates))  # type: ignore[arg-type]
+            NobitexAdapter.build_order_payload(**(base | updates))
 
 
 def test_known_order_statuses_map_and_unknown_state_blocks() -> None:
