@@ -1,9 +1,11 @@
 import json
 from pathlib import Path
 
+
 ROOT = Path(__file__).resolve().parents[2]
 
-def test_config_is_dry_run_and_has_no_enabled_live_trading():
+
+def test_config_is_dry_run_and_has_no_enabled_live_trading() -> None:
     config = json.loads((ROOT / "config.json").read_text())
     assert config["dry_run"] is True
     assert config["max_open_trades"] == 0
@@ -11,7 +13,8 @@ def test_config_is_dry_run_and_has_no_enabled_live_trading():
     assert config["exchange"]["secret"] == ""
     assert config["exchange"]["pair_whitelist"] == []
 
-def test_env_example_contains_no_real_secret_values():
+
+def test_env_example_contains_no_real_secret_values() -> None:
     content = (ROOT / ".env.example").read_text()
     for line in content.splitlines():
         stripped = line.strip()
