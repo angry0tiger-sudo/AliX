@@ -1,0 +1,10 @@
+[importlinter]
+root_package = services
+include_external_packages = True
+
+[importlinter:contract:data-quality-reporting-independence]
+name = Data quality and reporting remain independent
+type = independence
+modules =
+    services.data_quality
+    services.reporting
