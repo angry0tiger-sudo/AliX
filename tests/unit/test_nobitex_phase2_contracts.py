@@ -138,9 +138,7 @@ def test_order_snapshot_fails_closed_on_unknown_state_and_bad_amounts() -> None:
 
 def test_order_snapshot_rejects_non_spot_quote_and_ambiguous_identity() -> None:
     with pytest.raises(ValueError):
-        normalize_spot_order(
-            order_payload(srcCurrency="Bitcoin", dstCurrency="IRT")
-        )
+        normalize_spot_order(order_payload(srcCurrency="Bitcoin", dstCurrency="IRT"))
     with pytest.raises(MarketMappingError):
         normalize_spot_order(order_payload(id=None, market=None))
 

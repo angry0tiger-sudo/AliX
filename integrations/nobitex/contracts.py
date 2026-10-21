@@ -206,9 +206,7 @@ def normalize_spot_order(
     fee_cost = _decimal(order.get("fee", "0"), "order.fee", allow_zero=True)
 
     raw_client_id = order.get("clientOrderId")
-    client_order_id = (
-        str(raw_client_id).strip() if raw_client_id is not None else None
-    )
+    client_order_id = str(raw_client_id).strip() if raw_client_id is not None else None
     if client_order_id == "":
         client_order_id = None
     if client_order_id is not None and len(client_order_id) > 32:
@@ -264,9 +262,7 @@ def validate_order_against_market(
     if normalized_side not in {value.lower() for value in market.supported_sides}:
         raise MarketMappingError("order side is not supported by the market")
     normalized_type = order_type.strip().lower()
-    if normalized_type not in {
-        value.lower() for value in market.supported_order_types
-    }:
+    if normalized_type not in {value.lower() for value in market.supported_order_types}:
         raise MarketMappingError("order type is not supported by the market")
 
     normalized_amount = _decimal(amount, "order.amount", allow_zero=False)
