@@ -1,0 +1,7 @@
+# Python runtime target: 3.12. Direct dependencies are pinned; transitive lock and
+# clean resolver verification remain a Phase 0 gate before release.
+freqtrade==2026.9
+deepalpha-freqai==1.1.4
+transformers==4.57.1
+pytest==8.4.2
+ruff==0.14.0
