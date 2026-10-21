@@ -191,7 +191,7 @@ def test_exchange_market_symbol_resolution_rejects_ambiguous_or_invalid_payload(
 
 
 def test_market_mapper_rejects_invalid_precision_limits_and_equal_currencies() -> None:
-    cases = [
+    cases: list[dict[str, Any]] = [
         {"pricePrecision": -1},
         {"amountPrecision": True},
         {"minAmount": "-0.1"},
