@@ -1,5 +1,21 @@
 # Phase 1 Open Tasks and Deployment Verification
 
+## Phase 2 — Spot/USDT contract integration (in progress)
+
+- AliX Phase 2 has started from the owner-approved Phase 1 HEAD.
+- The current implementation remains mock-only: typed order/balance snapshots,
+  partial-fill classification, precision/minimum/maximum validation, read retry
+  policy, and pagination checks are contract helpers, not a live Nobitex client.
+- Do not enable any order-write path or claim market metadata is verified from
+  fixtures. No order submission/cancellation or live API call is permitted in CI.
+- Open Phase 2 gates: validate current official API payloads and USDT markets in
+  an authorized read-only environment; exercise fills/fees/status/limits and rate
+  limits; test restart reconciliation and unknown submission outcomes; prove
+  the single Freqtrade -> adapter -> Nobitex execution boundary without
+  modifying Freqtrade core; resolve source license/provenance.
+
+
+
 ## Novaryn source and adapter provenance
 - Reference repository: https://github.com/angry0tiger-sudo/Novaryn
 - Inspected commit: `54e66ad40b5a7e422002619f7dad9378ecdf09f9`.

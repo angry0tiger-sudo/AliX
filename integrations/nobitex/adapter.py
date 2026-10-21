@@ -124,6 +124,7 @@ def _valid_nonnegative_decimal(value: Decimal) -> bool:
 class OrderStatus:
     SUBMITTED = "SUBMITTED"
     OPEN = "OPEN"
+    PARTIALLY_FILLED = "PARTIALLY_FILLED"
     FILLED = "FILLED"
     CANCELLED = "CANCELLED"
     REJECTED = "REJECTED"
@@ -278,15 +279,33 @@ def _decimal(value: object, field_name: str) -> Decimal:
 def map_order_status(
     status: str, *, matched_amount: object | None = None, amount: object | None = None
 ) -> str:
-    """Map known Nobitex statuses; unknown states fail closed for reconciliation."""
+    """Map known states and distinguish partial fills; ambiguity fails closed."""
     normalized = status.strip().upper()
     try:
         mapped = _STATUS_MAP[normalized]
     except KeyError as exc:
         raise UnknownOrderStatus(f"unknown Nobitex order status: {status}") from exc
-    if mapped == OrderStatus.OPEN and matched_amount is not None and amount is not None:
-        if Decimal(str(matched_amount)) == Decimal(str(amount)):
+
+    if matched_amount is None or amount is None:
+        return mapped
+    try:
+        matched = Decimal(str(matched_amount))
+        total = Decimal(str(amount))
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise UnknownOrderStatus("invalid matched or total order amount") from exc
+    if (
+        not matched.is_finite()
+        or not total.is_finite()
+        or matched < 0
+        or total <= 0
+        or matched > total
+    ):
+        raise UnknownOrderStatus("matched order amount is outside valid bounds")
+    if mapped in {OrderStatus.SUBMITTED, OrderStatus.OPEN}:
+        if matched == total:
             return OrderStatus.FILLED
+        if matched > 0:
+            return OrderStatus.PARTIALLY_FILLED
     return mapped
 
 
