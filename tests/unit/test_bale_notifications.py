@@ -81,7 +81,9 @@ def test_bale_transport_respects_disable_token_allowlist_and_message_gates() -> 
         == "recipient_not_allowlisted"
     )
     assert asyncio.run(invalid_message.send_text(" ")).reason == "invalid_message"
-    assert asyncio.run(invalid_message.send_text("x" * 4097)).reason == "invalid_message"
+    assert (
+        asyncio.run(invalid_message.send_text("x" * 4097)).reason == "invalid_message"
+    )
     assert len(transport.messages) == 0
 
 
@@ -164,11 +166,15 @@ def test_bale_sender_handles_unavailable_rejected_and_raising_transport() -> Non
     assert result_failed.reason == "transport_failed"
 
 
-def test_bale_from_environment_builds_transport_without_sending(monkeypatch: Any) -> None:
+def test_bale_from_environment_builds_transport_without_sending(
+    monkeypatch: Any,
+) -> None:
     monkeypatch.setenv("ALIx_REPORTING_ENABLED", "true")
     monkeypatch.setenv("BALE_BOT_TOKEN", "mock-token")
     monkeypatch.setenv("BALE_CHAT_ID", DEFAULT_BALE_CHAT_ID)
     monkeypatch.setenv("ALIx_BALE_CHAT_ALLOWLIST", "")
     service = BaleNotificationService.from_environment()
-    result = asyncio.run(service.send_text("no delivery because recipient is not allowlisted"))
+    result = asyncio.run(
+        service.send_text("no delivery because recipient is not allowlisted")
+    )
     assert result.reason == "recipient_not_allowlisted"
