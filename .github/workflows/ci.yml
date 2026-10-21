@@ -56,6 +56,6 @@ jobs:
       - name: Complexity gate
         run: xenon --max-absolute B --max-modules B --max-average A connectivity services user_data/strategies scripts
       - name: Unit tests and coverage (mock-only)
-        run: pytest --cov=connectivity --cov=services --cov=user_data/strategies --cov-report=term-missing --cov-fail-under=60 -q
+        run: pytest --cov=connectivity --cov=services --cov=user_data/strategies --cov-report=term-missing --cov-fail-under=90 -q
       - name: Starter Kit integrity and documentation validation
         run: python scripts/validate_project_docs.py
