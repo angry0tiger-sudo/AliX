@@ -4,6 +4,7 @@
 freqtrade==2026.9
 deepalpha-freqai==1.1.4
 transformers==4.57.1
+pandas==2.3.3
 
 # Tests and quality/security/architecture gates
 pytest==8.4.2
