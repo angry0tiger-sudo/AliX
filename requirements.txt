@@ -1,7 +1,7 @@
 # Python runtime target: 3.12. Direct dependencies and quality tools are pinned.
 # The CI workflow installs the quality-tool subset separately to keep mock-only
 # checks independent from heavyweight runtime integrations.
-freqtrade==2026.9
+freqtrade==2026.7
 deepalpha-freqai==1.1.4
 transformers==5.20.2
 pandas==2.3.3
@@ -17,5 +17,6 @@ pip-audit==2.9.0
 import-linter==2.3
 xenon==0.9.3
 pre-commit==4.3.0
+baleio @ git+https://github.com/ehsndvr/baleio.git@66be3000af6e62332e1764f227aed64847a0d9ba
 jsonschema==4.25.1
 pip-tools==7.5.0
