@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from collections.abc import Mapping
 from typing import Any
 
 import pytest
@@ -24,9 +25,9 @@ class FakeReadOnlyTransport:
         self.calls: list[tuple[str, dict[str, str] | None]] = []
 
     def get_json(
-        self, path: str, params: dict[str, str] | None = None
+        self, path: str, params: Mapping[str, str] | None = None
     ) -> dict[str, Any]:
-        self.calls.append((path, params))
+        self.calls.append((path, dict(params) if params is not None else None))
         return self.response
 
 
