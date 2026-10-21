@@ -2,9 +2,9 @@
 
 Status: **PHASE 0 QUALITY GATES GREEN / READY FOR OWNER REVIEW**
 
-Phase 0 implementation candidate: `67792cd131bab64b5943839c6baeb708e78567fc`
+Phase 0 implementation candidate: `e727a1669ac6c2d1aab73d79b8da92ec20107ab5`
 
-Successful GitHub Actions run for that candidate: [CI run 39653569992](https://github.com/angry0tiger-sudo/AliX/actions/runs/39653569992).
+Successful GitHub Actions run for that candidate: [CI run 39653856784](https://github.com/angry0tiger-sudo/AliX/actions/runs/39653856784). This run enforces the 90% coverage threshold and verifies the committed transitive lock.
 
 Phase 1 has **not** started. The owner must explicitly approve it after reviewing this report.
 
