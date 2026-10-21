@@ -9,9 +9,13 @@ import sys
 import zipfile
 from pathlib import Path
 
+import jsonschema
+
 ROOT = Path(__file__).resolve().parents[1]
 ARCHIVE = ROOT / "AliX_GitHub_Starter_Kit.zip"
 MANIFEST = ROOT / "artifacts-manifest" / "starter-kit.json"
+WHITELIST_SAMPLE = ROOT / "config" / "environments" / "market-whitelist.sample.json"
+WHITELIST_SCHEMA = ROOT / "config" / "environments" / "market-whitelist.schema.json"
 REQUIRED_MEMBERS = (
     "docs/MRD.md",
     "docs/ROADMAP.md",
@@ -22,6 +26,8 @@ REQUIRED_PROJECT_FILES = (
     "docs/knowledge_base/PHASE_0_ACCEPTANCE.md",
     ".pre-commit-config.yaml",
     ".github/workflows/ci.yml",
+    "config/environments/market-whitelist.sample.json",
+    "config/environments/market-whitelist.schema.json",
 )
 
 
@@ -59,6 +65,18 @@ def _validate_project_files(errors: list[str]) -> None:
     for relative_path in REQUIRED_PROJECT_FILES:
         if not (ROOT / relative_path).is_file():
             errors.append(f"Missing required project file: {relative_path}")
+    if WHITELIST_SAMPLE.is_file() and WHITELIST_SCHEMA.is_file():
+        try:
+            jsonschema.validate(
+                instance=json.loads(WHITELIST_SAMPLE.read_text(encoding="utf-8")),
+                schema=json.loads(WHITELIST_SCHEMA.read_text(encoding="utf-8")),
+            )
+        except (
+            json.JSONDecodeError,
+            jsonschema.SchemaError,
+            jsonschema.ValidationError,
+        ) as exc:
+            errors.append(f"Market whitelist sample/schema validation failed: {exc}")
 
 
 def main() -> int:
