@@ -32,7 +32,8 @@ def main() -> int:
     content = ARCHIVE.read_bytes()
     sha256 = hashlib.sha256(content).hexdigest()
     git_blob_sha1 = hashlib.sha1(
-        b"blob " + str(len(content)).encode("ascii") + b"\0" + content
+        b"blob " + str(len(content)).encode("ascii") + b"\0" + content,
+        usedforsecurity=False,
     ).hexdigest()
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
     expected_blob = manifest.get("git_blob_sha1")
