@@ -1,3 +1,5 @@
+from typing import Any
+
 import pandas as pd
 
 from connectivity.manager.manager import ConnectivityManager
@@ -76,7 +78,7 @@ def test_strategy_scaffold_generates_no_entry_or_exit_signals() -> None:
             "volume": [5.0, 6.0],
         }
     )
-    metadata: dict[str, object] = {}
+    metadata: dict[str, Any] = {}
     enriched = strategy.populate_indicators(dataframe.copy(), metadata)
     entries = strategy.populate_entry_trend(enriched.copy(), metadata)
     exits = strategy.populate_exit_trend(enriched.copy(), metadata)
