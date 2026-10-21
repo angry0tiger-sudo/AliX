@@ -11,6 +11,7 @@ def test_failover_selects_first_healthy_route_by_priority() -> None:
         def callback() -> bool:
             activated.append(route_id)
             return True
+
         return callback
 
     manager = ConnectivityManager(
@@ -39,6 +40,7 @@ def test_failover_tries_tunnel_after_probe_exception_and_activation_failure() ->
         def callback() -> bool:
             activated.append(name)
             return outcome
+
         return callback
 
     def probe(route_id: str) -> bool:
@@ -69,7 +71,9 @@ def test_failover_tries_tunnel_after_probe_exception_and_activation_failure() ->
 def test_failover_does_not_probe_unallowlisted_routes() -> None:
     probed: list[str] = []
     route = VpnRouteDriver("unlisted", activate=lambda: True)
-    manager = ConnectivityManager({"approved"}, lambda route_id: probed.append(route_id) or True)
+    manager = ConnectivityManager(
+        {"approved"}, lambda route_id: probed.append(route_id) or True
+    )
 
     result = manager.select_route([route])
 

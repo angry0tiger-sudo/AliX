@@ -14,19 +14,16 @@ MAX_MESSAGE_LENGTH = 4096
 
 
 class BaleBotProtocol(Protocol):
-    async def send_message(self, chat_id: int | str, text: str) -> Any:
-        ...
+    async def send_message(self, chat_id: int | str, text: str) -> Any: ...
 
-    async def close(self) -> None:
-        ...
+    async def close(self) -> None: ...
 
 
 BotFactory = Callable[[str], BaleBotProtocol]
 
 
 class BaleTransport(Protocol):
-    async def send_message(self, chat_id: str, text: str) -> bool:
-        ...
+    async def send_message(self, chat_id: str, text: str) -> bool: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,4 +140,6 @@ class BaleNotificationService:
             sent = await self._transport.send_message(chat_id, text)
         except Exception:
             return NotificationResult(False, "transport_failed", chat_id)
-        return NotificationResult(bool(sent), "sent" if sent else "transport_rejected", chat_id)
+        return NotificationResult(
+            bool(sent), "sent" if sent else "transport_rejected", chat_id
+        )

@@ -84,7 +84,9 @@ class SpotMarketMetadata:
             self.max_price,
         ):
             if value is not None and (not value.is_finite() or value < 0):
-                raise MarketMappingError("market limits must be finite and non-negative")
+                raise MarketMappingError(
+                    "market limits must be finite and non-negative"
+                )
         for precision in (self.price_precision, self.amount_precision):
             if precision is not None and precision < 0:
                 raise MarketMappingError("precision must be non-negative")
@@ -151,7 +153,9 @@ def normalize_spot_market(payload: Mapping[str, Any]) -> SpotMarketMetadata:
     if not exchange_symbol or not base or not quote:
         raise MarketMappingError("exchange symbol, base and quote are required")
 
-    market_type = _text(payload.get("marketType") or payload.get("type") or "spot").lower()
+    market_type = _text(
+        payload.get("marketType") or payload.get("type") or "spot"
+    ).lower()
     if market_type not in {"spot", "spotmarket"}:
         raise MarketMappingError(f"unsupported market type: {market_type}")
 
@@ -183,7 +187,9 @@ def normalize_spot_market(payload: Mapping[str, Any]) -> SpotMarketMetadata:
 def _normalize_strings(value: object) -> tuple[str, ...]:
     if not isinstance(value, (list, tuple)):
         return ()
-    return tuple(sorted({str(item).strip().lower() for item in value if str(item).strip()}))
+    return tuple(
+        sorted({str(item).strip().lower() for item in value if str(item).strip()})
+    )
 
 
 def normalize_spot_pair(pair: str) -> str:
@@ -193,7 +199,9 @@ def normalize_spot_pair(pair: str) -> str:
         raise ValueError("pair must use BASE/USDT notation")
     base, quote = parts
     if not base or quote != "USDT" or base == quote:
-        raise ValueError("Nobitex adapter contract is restricted to BASE/USDT spot pairs")
+        raise ValueError(
+            "Nobitex adapter contract is restricted to BASE/USDT spot pairs"
+        )
     if not all(part.isalnum() for part in (base, quote)):
         raise ValueError("pair contains unsupported characters")
     return f"{base}/{quote}"

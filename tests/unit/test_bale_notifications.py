@@ -62,9 +62,7 @@ def test_bale_mock_transport_sends_to_configured_allowlisted_chat() -> None:
     assert result.sent
     assert result.reason == "sent"
     assert result.chat_id == DEFAULT_BALE_CHAT_ID
-    assert transport.messages == [
-        (DEFAULT_BALE_CHAT_ID, "AliX phase one mock report")
-    ]
+    assert transport.messages == [(DEFAULT_BALE_CHAT_ID, "AliX phase one mock report")]
 
 
 def test_bale_transport_respects_disable_token_allowlist_and_message_gates() -> None:
@@ -82,17 +80,13 @@ def test_bale_transport_respects_disable_token_allowlist_and_message_gates() -> 
         asyncio.run(not_allowlisted.send_text("x")).reason
         == "recipient_not_allowlisted"
     )
-    assert (
-        asyncio.run(invalid_message.send_text(" ")).reason == "invalid_message"
-    )
+    assert asyncio.run(invalid_message.send_text(" ")).reason == "invalid_message"
     assert len(transport.messages) == 0
 
 
 def test_bale_transport_uses_injected_bot_factory_and_closes_client() -> None:
     bot = FakeBaleBot()
-    transport = BaleIOTransport(
-        "mock-token", bot_factory=lambda token: bot
-    )
+    transport = BaleIOTransport("mock-token", bot_factory=lambda token: bot)
 
     sent = asyncio.run(transport.send_message(DEFAULT_BALE_CHAT_ID, "mock-only"))
 
@@ -120,7 +114,9 @@ def test_reporting_engine_uses_changeable_default_chat_and_allowlist() -> None:
     assert not engine.deliver(report, enabled=True, allowlist=set(), sender=sender)
 
 
-def test_reporting_engine_default_bale_delivery_stays_disabled_without_env(monkeypatch: Any) -> None:
+def test_reporting_engine_default_bale_delivery_stays_disabled_without_env(
+    monkeypatch: Any,
+) -> None:
     monkeypatch.setenv("ALIx_REPORTING_ENABLED", "false")
     monkeypatch.delenv("BALE_BOT_TOKEN", raising=False)
     monkeypatch.delenv("ALIx_BALE_CHAT_ALLOWLIST", raising=False)

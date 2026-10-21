@@ -138,7 +138,9 @@ def test_order_payload_rejects_invalid_amount_order_and_client_id() -> None:
 
 
 def test_known_order_statuses_map_and_unknown_state_blocks() -> None:
-    assert map_order_status("ACTIVE", matched_amount="0", amount="1") == OrderStatus.OPEN
+    assert (
+        map_order_status("ACTIVE", matched_amount="0", amount="1") == OrderStatus.OPEN
+    )
     assert (
         map_order_status("ACTIVE", matched_amount="1.0", amount="1")
         == OrderStatus.FILLED

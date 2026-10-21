@@ -20,7 +20,10 @@ def test_freqtrade_configuration_is_stopped_dry_run_and_market_closed() -> None:
 def test_freqtrade_version_matches_pinned_novaryn_integration_contract() -> None:
     requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
     assert "freqtrade==2026.7" in requirements
-    assert "baleio @ git+https://github.com/ehsndvr/baleio.git@66be3000af6e62332e1764f227aed64847a0d9ba" in requirements
+    assert (
+        "baleio @ git+https://github.com/ehsndvr/baleio.git@66be3000af6e62332e1764f227aed64847a0d9ba"
+        in requirements
+    )
 
 
 def test_bale_defaults_are_changeable_and_reporting_is_disabled() -> None:
