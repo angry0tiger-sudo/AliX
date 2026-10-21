@@ -41,7 +41,7 @@ repos:
         pass_filenames: false
       - id: tests-coverage
         name: tests and coverage gate
-        entry: pytest --cov=connectivity --cov=services --cov=user_data/strategies --cov-report=term-missing --cov-fail-under=60 -q
+        entry: pytest --cov=connectivity --cov=services --cov=user_data/strategies --cov-report=term-missing --cov-fail-under=90 -q
         language: system
         pass_filenames: false
       - id: starter-kit-validation
