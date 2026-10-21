@@ -23,12 +23,12 @@
 - Confirm endpoint behavior, authentication method, timezone/schedule, recipient/chat allowlist and delivery failure behavior in an authorized environment.
 - CI uses injected senders and must not send real messages.
 
-## Runtime dependency resolution
-- Direct dependencies are pinned in `requirements.txt` and dependency vulnerabilities are audited in CI.
-- The CI resolver/audit result is evidence for package metadata resolution; a full runtime integration test with the Freqtrade stack remains a separate gate before any deployment.
-- Keep the transitive dependency set reproducible and review upgrades through CI; do not bypass a failing audit with blanket exclusions.
+## Runtime dependencies and reproducibility
+- Direct dependencies are pinned in `requirements.txt`; the transitive lock is committed in `requirements.lock`.
+- CI performs a clean resolver dry run, regenerates the lock with pinned pip/pip-tools, diffs it against the committed lock, and runs pip-audit against the locked set.
+- A full runtime integration test with the Freqtrade stack remains a separate gate before any deployment.
 
-## Starter Kit checksum
+## Starter Kit integrity
 - The original archive remains unchanged at repository root.
-- `artifacts-manifest/starter-kit.json` pins its Git blob SHA-1, which the validator recomputes using Git's object-hash format.
-- The validator also prints a conventional SHA-256 digest and checks ZIP integrity and required embedded documents.
+- `artifacts-manifest/starter-kit.json` pins both the Git blob SHA-1 and SHA-256.
+- The validator recomputes both checksums, verifies ZIP integrity and required embedded documents, and validates the market whitelist sample against its JSON Schema.
