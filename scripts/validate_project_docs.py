@@ -43,6 +43,11 @@ def _validate_archive(content: bytes, errors: list[str]) -> tuple[str, str]:
         errors.append(
             f"Git blob SHA-1 mismatch: expected {expected_blob!r}, got {git_blob_sha1}"
         )
+    expected_sha256 = manifest.get("sha256")
+    if not expected_sha256 or sha256 != expected_sha256:
+        errors.append(
+            f"SHA-256 mismatch: expected {expected_sha256!r}, got {sha256}"
+        )
     try:
         with zipfile.ZipFile(ARCHIVE) as archive:
             bad_member = archive.testzip()
