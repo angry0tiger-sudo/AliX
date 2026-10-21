@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
 from connectivity.routes.base import BaseRouteDriver
@@ -30,7 +30,9 @@ class ConnectivityManager:
     this manager never launches VPN, proxy or tunnel processes itself.
     """
 
-    def __init__(self, allowed_routes: set[str], probe) -> None:
+    def __init__(
+        self, allowed_routes: set[str], probe: Callable[[str], bool]
+    ) -> None:
         self._allowed_routes = frozenset(route.strip() for route in allowed_routes)
         self._probe = probe
         self.current_route: str | None = None
