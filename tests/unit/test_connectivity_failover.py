@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+import pytest
+
 from connectivity.manager.manager import ConnectivityManager
 from connectivity.routes import ProxyRouteDriver, TunnelRouteDriver, VpnRouteDriver
 
@@ -117,3 +119,13 @@ def test_route_driver_activation_exception_is_fail_closed() -> None:
     )
 
     assert not route.activate()
+
+
+
+def test_route_driver_rejects_empty_id_negative_priority_and_non_callable() -> None:
+    with pytest.raises(ValueError, match="route_id"):
+        VpnRouteDriver(" ", activate=lambda: True)
+    with pytest.raises(ValueError, match="priority"):
+        ProxyRouteDriver("proxy", activate=lambda: True, priority=-1)
+    with pytest.raises(TypeError, match="callback"):
+        TunnelRouteDriver("tunnel", activate=None)  # type: ignore[arg-type]
