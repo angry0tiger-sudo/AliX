@@ -9,7 +9,7 @@ import sys
 import zipfile
 from pathlib import Path
 
-import jsonschema
+import jsonschema  # type: ignore[import-untyped]
 
 ROOT = Path(__file__).resolve().parents[1]
 ARCHIVE = ROOT / "AliX_GitHub_Starter_Kit.zip"
