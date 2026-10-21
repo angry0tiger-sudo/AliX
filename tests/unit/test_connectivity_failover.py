@@ -121,7 +121,6 @@ def test_route_driver_activation_exception_is_fail_closed() -> None:
     assert not route.activate()
 
 
-
 def test_route_driver_rejects_empty_id_negative_priority_and_non_callable() -> None:
     with pytest.raises(ValueError, match="route_id"):
         VpnRouteDriver(" ", activate=lambda: True)
