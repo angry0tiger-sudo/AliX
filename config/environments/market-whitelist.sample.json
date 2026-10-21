@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AliX Market Whitelist (sample only)",
+  "description": "NEEDS LOCAL SYSTEM REVIEW. Not approved for live trading; values are illustrative and must be verified against exchange market metadata.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "exchange", "markets"],
+  "properties": {
+    "status": {
+      "type": "string",
+      "const": "NEEDS_LOCAL_REVIEW"
+    },
+    "exchange": {
+      "type": "string",
+      "const": "nobitex"
+    },
+    "verified_at_utc": {
+      "type": ["string", "null"],
+      "format": "date-time"
+    },
+    "markets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["symbol", "enabled", "verification_status"],
+        "properties": {
+          "symbol": {"type": "string", "minLength": 1},
+          "enabled": {"type": "boolean", "const": false},
+          "verification_status": {
+            "type": "string",
+            "const": "UNVERIFIED"
+          },
+          "notes": {"type": "string"}
+        }
+      }
+    }
+  }
+}
