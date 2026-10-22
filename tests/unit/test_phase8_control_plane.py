@@ -14,7 +14,6 @@ from fastapi.testclient import TestClient
 
 from control_plane.auth import AuthenticationError, Principal, SingleUserTokenAuthenticator
 from control_plane.api import create_app
-from control_plane.db import create_engine_for_url
 from control_plane.runtime_cli import (
     _container_name,
     _start_worker,
@@ -480,8 +479,13 @@ def test_runtime_cli_uses_fixed_worker_service_and_scoped_token(monkeypatch: pyt
         calls.append((path, payload))
         return None
 
-    def docker(args: list[str], timeout: float = 30.0) -> subprocess.CompletedProcess[str]:
+    def docker(
+        args: list[str],
+        timeout: float = 30.0,
+        environment: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
         del timeout
+        calls.append(("docker-env", environment))
         calls.append(("docker", args))
         return subprocess.CompletedProcess(args, 0, "container-id\n", "")
 
@@ -498,10 +502,12 @@ def test_runtime_cli_uses_fixed_worker_service_and_scoped_token(monkeypatch: pyt
     registration = calls[0][1]
     assert registration["generation"] == 4
     assert registration["credential_sha256"] == hashlib.sha256(("S" * 48).encode()).hexdigest()
-    docker_args = calls[1][1]
+    docker_environment = next(value for kind, value in calls if kind == "docker-env")
+    docker_args = next(value for kind, value in calls if kind == "docker")
     assert docker_args[-1] == "worker"
     assert "control-plane" not in " ".join(docker_args)
-    assert any("ALIx_WORKER_TOKEN=" in arg for arg in docker_args)
+    assert "ALIx_WORKER_TOKEN=" not in " ".join(docker_args)
+    assert docker_environment["ALIx_WORKER_TOKEN"] == "S" * 48
 
 
 def test_runtime_cli_container_name_is_deterministic_and_safe() -> None:

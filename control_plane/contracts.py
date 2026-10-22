@@ -29,7 +29,9 @@ class AccountCreate(StrictModel):
     exchange_id: str = Field(pattern=r"^[a-z0-9_-]{1,40}$")
     environment: LocalEnvironment
     account_alias: str = Field(min_length=1, max_length=80)
-    secret_ref_id: str | None = Field(default=None, min_length=1, max_length=200)
+    secret_ref_id: str | None = Field(
+        default=None, pattern=r"^secret://[A-Za-z0-9._/-]{1,180}$"
+    )
 
 
 class WorkerCreate(StrictModel):

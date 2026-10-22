@@ -29,7 +29,6 @@ from control_plane.db import create_engine_for_url
 from control_plane.store import (
     ControlPlaneError,
     ControlPlaneStore,
-    ForbiddenError,
     NotFoundError,
 )
 

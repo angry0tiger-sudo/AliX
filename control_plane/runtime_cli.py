@@ -64,7 +64,9 @@ def _api_request(
 
 
 def _docker(
-    args: list[str], timeout: float = 30.0
+    args: list[str],
+    timeout: float = 30.0,
+    environment: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     try:
         return subprocess.run(
@@ -73,6 +75,7 @@ def _docker(
             capture_output=True,
             text=True,
             timeout=timeout,
+            env=environment,
         )
     except (OSError, subprocess.TimeoutExpired):
         raise RuntimeError("docker_cli_unavailable_or_timeout") from None
@@ -133,6 +136,8 @@ def _start_worker(
         payload={"generation": generation, "credential_sha256": digest},
     )
     volume_name = f"alix-worker-state-{''.join(ch for ch in worker_id.lower() if ch.isalnum())[:12]}-g{generation}"
+    worker_environment = dict(os.environ)
+    worker_environment["ALIx_WORKER_TOKEN"] = worker_token
     result = _docker(
         [
             "compose",
@@ -154,12 +159,13 @@ def _start_worker(
             "--env",
             f"ALIx_WORKER_ID={worker_id}",
             "--env",
-            f"ALIx_WORKER_TOKEN={worker_token}",
+            "ALIx_WORKER_TOKEN",
             "--env",
             f"ALIx_WORKER_GENERATION={generation}",
             "worker",
         ],
         timeout=90.0,
+        environment=worker_environment,
     )
     if result.returncode != 0:
         raise RuntimeError("docker_worker_start_failed")
