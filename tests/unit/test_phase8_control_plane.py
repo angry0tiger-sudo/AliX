@@ -674,6 +674,7 @@ def test_control_plane_has_no_import_path_to_trade_execution() -> None:
                 for blocked in forbidden
             ), f"execution dependency found in {source}"
 
+
 def test_runtime_command_database_constraint_rejects_cross_tenant_worker(
     client: TestClient,
 ) -> None:
