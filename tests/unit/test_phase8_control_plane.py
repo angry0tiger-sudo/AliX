@@ -8,6 +8,7 @@ import sqlite3
 import subprocess
 import sys
 import urllib.error
+import urllib.request
 from datetime import datetime, timedelta, timezone
 from http.client import HTTPMessage
 from pathlib import Path
