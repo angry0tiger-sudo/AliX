@@ -205,10 +205,15 @@ def _request_worker_stop_or_disable(
 ) -> int | None:
     desired = str(row["desired_state"])
     observed = str(row["observed_state"])
-    if action == "stop" and desired == "STOPPED" and observed in (
-        "ABSENT",
-        "STOPPED",
-        "DISABLED",
+    if (
+        action == "stop"
+        and desired == "STOPPED"
+        and observed
+        in (
+            "ABSENT",
+            "STOPPED",
+            "DISABLED",
+        )
     ):
         return None
     if action == "disable" and desired == "DISABLED":
@@ -260,9 +265,7 @@ def _apply_runtime_worker_outcome(
         return
     action = str(command["action"])
     if action == "START":
-        _apply_start_ack(
-            connection, worker, worker_id, generation, container_name, now
-        )
+        _apply_start_ack(connection, worker, worker_id, generation, container_name, now)
     elif action in ("STOP", "DISABLE"):
         _apply_stop_ack(connection, worker, worker_id, generation, action, now)
 
@@ -858,7 +861,6 @@ class ControlPlaneStore:
             )
         return self.get_worker(principal, tenant_id, worker_id)
 
-
     def claim_runtime_commands(
         self,
         dispatcher_id: str,
@@ -1060,7 +1062,6 @@ class ControlPlaneStore:
                     "error_code": None if success else (safe_error or "runtime_failed"),
                 },
             )
-
 
     def list_audit_events(
         self, principal: Principal, tenant_id: str, limit: int = 100

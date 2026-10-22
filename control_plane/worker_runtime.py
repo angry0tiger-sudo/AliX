@@ -44,7 +44,11 @@ def _safe_worker_id(value: str) -> str:
 def _worker_host_is_allowed(hostname: str | None, port: int | None) -> bool:
     if hostname == "control-plane":
         return port == 8080
-    return hostname in {"127.0.0.1", "localhost"} and port is not None and 1 <= port <= 65535
+    return (
+        hostname in {"127.0.0.1", "localhost"}
+        and port is not None
+        and 1 <= port <= 65535
+    )
 
 
 def _url_has_no_credentials_or_suffix(parsed: Any) -> bool:
@@ -157,9 +161,7 @@ def _heartbeat_loop(
 ) -> int:
     failures = 0
     completed = 0
-    while not stop_event.is_set() and (
-        iterations is None or completed < iterations
-    ):
+    while not stop_event.is_set() and (iterations is None or completed < iterations):
         try:
             heartbeat_sender(base_url, worker_id, token, generation)
             _record_heartbeat(path, generation)
