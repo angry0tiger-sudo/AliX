@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import replace
 from datetime import datetime
 import hashlib
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -170,13 +172,13 @@ def test_nlp_fails_closed_for_invalid_input_output_and_failure() -> None:
 
 def test_nlp_rejects_bad_shape_missing_timestamp_and_future_publication() -> None:
     class BadClassifier:
-        def predict(self, text: str) -> str:
-            return "positive"
+        def predict(self, text: str) -> Mapping[str, object]:
+            return cast(Mapping[str, object], "positive")
 
     with pytest.raises(NlpServiceError, match="output_schema_invalid"):
         NlpService(
             manifest(), BadClassifier(), lambda: ts("2026-10-22T09:03:00Z"), True
-        ).infer(event())  # type: ignore[arg-type]
+        ).infer(event())
     with pytest.raises(ProviderError, match="published_after_ingest"):
         service().infer(replace(event(), published_at=ts("2026-10-22T09:05:00Z")))
     with pytest.raises(ProviderError, match="missing_timestamp"):

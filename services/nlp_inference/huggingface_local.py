@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 import hashlib
+from importlib import import_module
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol, cast
 
 from services.nlp_inference.service import ModelManifest, NlpServiceError
 
@@ -83,28 +84,24 @@ def load_local_huggingface_classifier(
         loaded = pipeline_factory(root)
     else:
         try:
-            from transformers import (
-                AutoModelForSequenceClassification,
-                AutoTokenizer,
-                pipeline,
-            )
+            transformers = cast(Any, import_module("transformers"))
         except ImportError:
             raise NlpServiceError("nlp_transformers_unavailable") from None
         try:
-            tokenizer = AutoTokenizer.from_pretrained(
+            tokenizer = transformers.AutoTokenizer.from_pretrained(
                 str(root), local_files_only=True, trust_remote_code=False
             )
-            model = AutoModelForSequenceClassification.from_pretrained(
+            model = transformers.AutoModelForSequenceClassification.from_pretrained(
                 str(root),
                 local_files_only=True,
                 trust_remote_code=False,
                 use_safetensors=True,
             )
-            loaded = pipeline(
+            loaded = transformers.pipeline(
                 "text-classification", model=model, tokenizer=tokenizer, device=-1
             )
         except Exception:
             raise NlpServiceError("nlp_local_model_load_failed") from None
     if not callable(loaded):
         raise NlpServiceError("nlp_local_pipeline_invalid")
-    return LocalHuggingFaceClassifier(loaded, manifest.label_map)  # type: ignore[arg-type]
+    return LocalHuggingFaceClassifier(loaded, manifest.label_map)

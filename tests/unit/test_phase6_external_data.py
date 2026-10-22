@@ -479,7 +479,7 @@ def test_point_in_time_join_fails_closed_on_bad_timestamp_rights_and_conflicts()
 ):
     with pytest.raises(ProviderError, match="missing_timestamp"):
         join_news_features_as_of(
-            [replace(feature(), available_at=None)],
+            [replace(feature(), available_at=None)],  # type: ignore[arg-type]
             asset="BTC/USDT",
             decision_timestamp="2026-10-22T09:05:00Z",
             window_start="2026-10-22T08:30:00Z",
