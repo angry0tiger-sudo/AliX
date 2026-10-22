@@ -109,6 +109,10 @@ class AliXFreqAIBaselineStrategy(IStrategy):  # type: ignore[misc]
             dataframe.attrs["freqai_status"] = "unavailable_fail_closed"
             return dataframe
         result_frame = freqai.start(dataframe, metadata, self)
+        if not isinstance(result_frame, DataFrame):
+            dataframe["do_predict"] = 0
+            dataframe.attrs["freqai_status"] = "invalid_output_fail_closed"
+            return dataframe
         result_frame["alix_data_quality_valid"] = True
         return result_frame
 
