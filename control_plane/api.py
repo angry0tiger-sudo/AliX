@@ -51,7 +51,7 @@ def create_app(database_url: str, authenticator: Authenticator) -> FastAPI:
         authorization: str | None = Header(default=None, alias="Authorization"),
     ) -> Principal:
         try:
-            return app.state.authenticator.authenticate(authorization)
+            return authenticator.authenticate(authorization)
         except AuthenticationError as exc:
             raise HTTPException(
                 status_code=401,

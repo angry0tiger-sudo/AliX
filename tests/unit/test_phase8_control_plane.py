@@ -7,7 +7,7 @@ import sqlite3
 import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from fastapi.testclient import TestClient
@@ -100,7 +100,7 @@ def make_account(
         },
     )
     assert response.status_code == 201, response.text
-    return response.json()
+    return cast(dict[str, Any], response.json())
 
 
 def make_worker(
@@ -122,7 +122,7 @@ def make_worker(
         },
     )
     assert response.status_code == 201, response.text
-    return response.json()
+    return cast(dict[str, Any], response.json())
 
 
 def test_local_single_user_token_fails_closed() -> None:
@@ -422,7 +422,7 @@ def test_runtime_command_lease_can_be_reclaimed_after_expiry(
         headers=auth(),
         json={"action": "start"},
     )
-    store: ControlPlaneStore = client.app.state.store
+    store: ControlPlaneStore = cast(Any, client.app).state.store
     start = datetime(2026, 10, 22, 12, tzinfo=timezone.utc)
     first = store.claim_runtime_commands("dispatcher-one", 1, 10, now=start)
     assert len(first) == 1
@@ -633,7 +633,7 @@ def test_runtime_cli_env_file_never_overwrites_existing_environment(
 
 
 def test_worker_profile_and_compose_security_contracts() -> None:
-    import yaml
+    yaml = cast(Any, __import__("yaml"))
 
     compose = yaml.safe_load(Path("compose.yaml").read_text(encoding="utf-8"))
     assert compose["services"]["postgres"]["networks"] == ["control-backend"]
@@ -688,7 +688,7 @@ def test_runtime_command_database_constraint_rejects_cross_tenant_worker(
     tenant_b = make_tenant(client, "Tenant B")
     account_b = make_account(client, tenant_b)
     worker_b = make_worker(client, tenant_b, account_b["account_id"])
-    store: ControlPlaneStore = client.app.state.store
+    store: ControlPlaneStore = cast(Any, client.app).state.store
 
     with pytest.raises(IntegrityError):
         with store.engine.begin() as connection:
@@ -740,7 +740,7 @@ def test_server_main_uses_loopback_by_default(
         captured["app"] = app
         captured.update(kwargs)
 
-    monkeypatch.setattr(control_server.uvicorn, "run", fake_run)
+    monkeypatch.setattr("control_plane.server.uvicorn.run", fake_run)
     control_server.main()
     assert captured["host"] == "127.0.0.1"
     assert captured["port"] == 8080
