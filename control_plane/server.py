@@ -44,7 +44,7 @@ def build_application() -> FastAPI:
 
 def main() -> None:
     app = build_application()
-    host = os.environ.get("ALIx_CONTROL_BIND_HOST", "0.0.0.0")
+    host = os.environ.get("ALIx_CONTROL_BIND_HOST", "127.0.0.1")
     port = int(os.environ.get("ALIx_CONTROL_PORT", "8080"))
     if not 1 <= port <= 65535:
         raise RuntimeError("invalid_control_plane_port")

@@ -95,6 +95,7 @@ workers = Table(
     Column("last_heartbeat", String(40), nullable=True),
     Column("created_at", String(40), nullable=False),
     Column("updated_at", String(40), nullable=False),
+    UniqueConstraint("tenant_id", "worker_id", name="uq_workers_tenant_worker"),
     ForeignKeyConstraint(
         ["tenant_id", "account_id", "exchange_id", "environment"],
         [
@@ -160,7 +161,7 @@ runtime_commands = Table(
     metadata,
     Column("command_id", String(80), primary_key=True),
     Column("tenant_id", String(80), ForeignKey("tenants.tenant_id"), nullable=False),
-    Column("worker_id", String(80), ForeignKey("workers.worker_id"), nullable=False),
+    Column("worker_id", String(80), nullable=False),
     Column("generation", Integer, nullable=False),
     Column("action", String(20), nullable=False),
     Column("status", String(20), nullable=False),
@@ -169,6 +170,11 @@ runtime_commands = Table(
     Column("lease_until", String(40), nullable=True),
     Column("completed_at", String(40), nullable=True),
     Column("error_code", String(80), nullable=True),
+    ForeignKeyConstraint(
+        ["tenant_id", "worker_id"],
+        ["workers.tenant_id", "workers.worker_id"],
+        name="fk_runtime_command_worker_tenant",
+    ),
     CheckConstraint("action IN ('START', 'STOP', 'DISABLE')", name="ck_runtime_action"),
     CheckConstraint(
         "status IN ('PENDING', 'CLAIMED', 'SUCCEEDED', 'FAILED')",

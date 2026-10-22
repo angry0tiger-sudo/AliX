@@ -500,6 +500,7 @@ def test_worker_fails_closed_on_revoked_identity_or_repeated_network_failure(
     tmp_path: Path,
 ) -> None:
     token = "worker-token-that-is-not-a-real-secret-012345"
+
     def rejected(
         base_url: str, worker_id: str, worker_token: str, generation: int
     ) -> None:
@@ -520,6 +521,7 @@ def test_worker_fails_closed_on_revoked_identity_or_repeated_network_failure(
     )
 
     attempts = 0
+
     def unavailable(
         base_url: str, worker_id: str, worker_token: str, generation: int
     ) -> None:
@@ -671,3 +673,35 @@ def test_control_plane_has_no_import_path_to_trade_execution() -> None:
                 for module in imported
                 for blocked in forbidden
             ), f"execution dependency found in {source}"
+
+def test_runtime_command_database_constraint_rejects_cross_tenant_worker(
+    client: TestClient,
+) -> None:
+    from sqlalchemy import insert
+    from sqlalchemy.exc import IntegrityError
+
+    from control_plane.db import runtime_commands
+
+    tenant_a = make_tenant(client, "Tenant A")
+    tenant_b = make_tenant(client, "Tenant B")
+    account_b = make_account(client, tenant_b)
+    worker_b = make_worker(client, tenant_b, account_b["account_id"])
+    store: ControlPlaneStore = client.app.state.store
+
+    with pytest.raises(IntegrityError):
+        with store.engine.begin() as connection:
+            connection.execute(
+                insert(runtime_commands).values(
+                    command_id="forged-cross-tenant-command",
+                    tenant_id=tenant_a,
+                    worker_id=worker_b["worker_id"],
+                    generation=1,
+                    action="START",
+                    status="PENDING",
+                    created_at=datetime.now(timezone.utc).isoformat(),
+                    claimed_by=None,
+                    lease_until=None,
+                    completed_at=None,
+                    error_code=None,
+                )
+            )
