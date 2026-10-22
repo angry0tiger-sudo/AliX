@@ -1,0 +1,1 @@
+"""Local, manifest-gated NLP inference interfaces."""
