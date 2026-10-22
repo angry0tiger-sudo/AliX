@@ -38,7 +38,9 @@ def _finite_matrix(features: DataFrame) -> np.ndarray:
         raise ValueError("meta_features_empty")
     if not features.columns.is_unique:
         raise ValueError("meta_feature_columns_must_be_unique")
-    values: np.ndarray = features.apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
+    values: np.ndarray = (
+        features.apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
+    )
     if not np.isfinite(values).all():
         raise ValueError("meta_features_non_finite")
     return values
@@ -269,7 +271,9 @@ class MetaLabelModel:
         assert self.scales_ is not None
         assert self.coefficients_ is not None
         assert self.intercept_ is not None
-        logits: np.ndarray = ((values - self.means_) / self.scales_) @ self.coefficients_
+        logits: np.ndarray = (
+            ((values - self.means_) / self.scales_) @ self.coefficients_
+        )
         logits = logits + self.intercept_
         probability: np.ndarray = 1.0 / (1.0 + np.exp(-np.clip(logits, -700.0, 700.0)))
         if not np.isfinite(probability).all():

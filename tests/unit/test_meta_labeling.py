@@ -327,7 +327,9 @@ def test_integrated_meta_walkforward_purges_maturing_barrier_labels() -> None:
     events = DataFrame(
         {
             "event_index": indices,
-            "side": np.where(oof["primary_prediction"].to_numpy(dtype=float) >= 0.5, 1, -1),
+            "side": np.where(
+                oof["primary_prediction"].to_numpy(dtype=float) >= 0.5, 1, -1
+            ),
             "target_volatility": volatility,
         }
     )
