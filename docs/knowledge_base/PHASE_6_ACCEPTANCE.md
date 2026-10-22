@@ -1,6 +1,6 @@
 # Phase 6 Acceptance: External Data, Point-in-Time Features and Local NLP
 
-Status: IMPLEMENTATION CI PASSED ON SHA 52bc49012a945bf6c3bb411b6a4d3933a9a69aa4 AND REPORT-SYNC CI PASSED ON SHA 416b46ebdbb59eb0f095fc7636368ca6b36de462; PR #8 READY FOR REVIEW; LIVE PROVIDERS AND MODEL LICENSES NOT APPROVED; ECONOMIC ACCEPTANCE NO-GO; NO TRADING.
+Status: IMPLEMENTATION CI PASSED ON SHA 52bc49012a945bf6c3bb411b6a4d3933a9a69aa4 AND REPORT-SYNC CI PASSED ON SHA 416b46ebdbb59eb0f095fc7636368ca6b36de462; PR #8 MERGED BY OWNER; LIVE PROVIDERS AND MODEL LICENSES NOT APPROVED; ECONOMIC ACCEPTANCE NO-GO; NO TRADING.
 
 Canonical MRD: docs/knowledge_base/AliX_MRD_Dynamic_Risk_FA.md, sections 2.7 and 4.2-4.7.
 Canonical Roadmap: docs/knowledge_base/AliX_Roadmap_Dynamic_Risk_FA.md, Phase 6.
@@ -11,7 +11,7 @@ Tested implementation SHA: `52bc49012a945bf6c3bb411b6a4d3933a9a69aa4`.
 Push CI: [run #402 / ID 39809700265](https://github.com/angry0tiger-sudo/AliX/actions/runs/39809700265) — success (Quality and Runtime).
 PR CI: [run #403 / ID 39809712528](https://github.com/angry0tiger-sudo/AliX/actions/runs/39809712528) — success (Quality and Runtime).
 Quality evidence: 131 passed, 91.18% coverage (90% minimum retained), 4 Phase 1 safety/dependency contracts passed, 13 warnings; the dependency audit found no known vulnerabilities.
-Both runs target the same tested implementation SHA above. The documentation-only report-sync commit will undergo its own exact-head CI before the PR is marked Ready for Review.
+Both runs target the same tested implementation SHA above. Report-sync CI also passed on SHA 416b46ebdbb59eb0f095fc7636368ca6b36de462; PR #8 was subsequently merged by the owner at 5873ba52ab827109a0be450670e971796295fa8e.
 
 ## Implementation scope
 
@@ -51,4 +51,4 @@ Both runs target the same tested implementation SHA above. The documentation-onl
 - Trading authorization = NO-GO.
 - No order submit/cancel, exchange API call, live data download, paid API call, external notification, live/dry-run/paper session or host-network change is authorized or performed by Phase 6.
 
-Implementation CI gates passed on the tested SHA; PR #8 remains subject to report-sync exact-head CI and owner review. External provider/model/data approval and economic acceptance remain NO-GO. This phase cannot activate providers or models, promote a Champion, authorize live connectivity or permit trading.
+Implementation and report-sync CI gates passed before the owner merged PR #8 at 5873ba52ab827109a0be450670e971796295fa8e. External provider/model/data approval and economic acceptance remain NO-GO. This phase cannot activate providers or models, promote a Champion, authorize live connectivity or permit trading.

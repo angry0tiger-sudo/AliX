@@ -10,5 +10,8 @@ This folder is the entry point for authoritative project rules and implementatio
 - [Phase 1 status report](../phase-reports/PHASE_1_STATUS.md): current candidate state and remaining gates.
 - [Pinned direct dependencies](../../requirements.txt) and [transitive lock](../../requirements.lock): reproducible Python 3.12 dependency set.
 - [Open tasks](OPEN_TASKS.md): explicit external and local-only blockers.
+- [Phase 7 acceptance](PHASE_7_ACCEPTANCE.md): independent risk plane, dynamic sizing, kill switch and economic gates.
+- [Phase 7 status report](../phase-reports/PHASE_7_STATUS.md): implementation evidence and NO-GO blockers.
+- [Phase 7 risk halt/re-arm runbook](../runbook/PHASE_7_RISK_HALT_AND_REARM.md): incident and manual recovery procedure.
 
 The original archive is retained unchanged. Extracted source documents should be promoted into the canonical `docs/` tree only after checksum and content review; do not silently overwrite existing material.
