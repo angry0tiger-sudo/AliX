@@ -42,6 +42,18 @@ BASELINE_MODEL_PARAMETERS: Final[dict[str, object]] = {
 REPORT_SCHEMA_VERSION: Final[str] = "alix.freqai.walk-forward-report.v1"
 
 
+def _validate_integer_parameter(name: str, value: object, minimum: int) -> None:
+    """Reject bools, non-integers, and values below a named minimum."""
+    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+        raise ValueError(f"{name} must be an integer of at least {minimum}")
+
+
+def _validate_cost_parameter(name: str, value: float) -> None:
+    """Reject negative and non-finite transaction-cost assumptions."""
+    if not math.isfinite(value) or value < 0:
+        raise ValueError(f"{name} must be finite and non-negative")
+
+
 @dataclass(frozen=True, slots=True)
 class WalkForwardConfig:
     """Predeclared split and transaction-cost assumptions for research runs."""
@@ -53,29 +65,11 @@ class WalkForwardConfig:
     slippage_bps_per_side: float = 5.0
 
     def __post_init__(self) -> None:
-        if (
-            isinstance(self.horizon, bool)
-            or not isinstance(self.horizon, int)
-            or self.horizon < 1
-        ):
-            raise ValueError("horizon must be a positive integer")
-        if (
-            isinstance(self.n_splits, bool)
-            or not isinstance(self.n_splits, int)
-            or self.n_splits < 2
-        ):
-            raise ValueError("n_splits must be an integer of at least 2")
-        if (
-            isinstance(self.min_train_size, bool)
-            or not isinstance(self.min_train_size, int)
-            or self.min_train_size < 30
-        ):
-            raise ValueError("min_train_size must be an integer of at least 30")
-        costs = (self.fee_bps_per_side, self.slippage_bps_per_side)
-        if any(not math.isfinite(cost) or cost < 0 for cost in costs):
-            raise ValueError(
-                "fee and slippage assumptions must be finite and non-negative"
-            )
+        _validate_integer_parameter("horizon", self.horizon, 1)
+        _validate_integer_parameter("n_splits", self.n_splits, 2)
+        _validate_integer_parameter("min_train_size", self.min_train_size, 30)
+        _validate_cost_parameter("fee_bps_per_side", self.fee_bps_per_side)
+        _validate_cost_parameter("slippage_bps_per_side", self.slippage_bps_per_side)
 
 
 @dataclass(frozen=True, slots=True)
