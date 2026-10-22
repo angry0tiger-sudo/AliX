@@ -200,9 +200,7 @@ def _label_one_event(
     exit_price = float(candles.iloc[exit_index]["close"])
     exit_reason = "vertical"
     for candle_index in range(event_index + 1, exit_index + 1):
-        touch = _barrier_touch(
-            candles.iloc[candle_index], side, take_price, stop_price
-        )
+        touch = _barrier_touch(candles.iloc[candle_index], side, take_price, stop_price)
         if touch is None:
             continue
         exit_index = candle_index

@@ -93,9 +93,11 @@ def generate_oof_primary_predictions(
             raise ValueError("oof_test_folds_overlap_or_are_out_of_order")
         train_indices = np.arange(fold.train_start, fold.train_stop, dtype=int)
         train_ends = label_ends[train_indices]
-        train_x = finite_features.iloc[train_indices].apply(
-            pd.to_numeric, errors="coerce"
-        ).to_numpy(dtype=float)
+        train_x = (
+            finite_features.iloc[train_indices]
+            .apply(pd.to_numeric, errors="coerce")
+            .to_numpy(dtype=float)
+        )
         train_y = targets[train_indices]
         eligible = (
             (train_ends < fold.test_start)
@@ -113,9 +115,11 @@ def generate_oof_primary_predictions(
         estimator = estimator_factory()
         estimator.fit(train_x[eligible], fit_y)
         test_indices = np.arange(fold.test_start, fold.test_stop, dtype=int)
-        test_x = finite_features.iloc[test_indices].apply(
-            pd.to_numeric, errors="coerce"
-        ).to_numpy(dtype=float)
+        test_x = (
+            finite_features.iloc[test_indices]
+            .apply(pd.to_numeric, errors="coerce")
+            .to_numpy(dtype=float)
+        )
         valid_test = np.isfinite(test_x).all(axis=1)
         if not valid_test.all():
             test_indices = test_indices[valid_test]
@@ -195,24 +199,25 @@ class MetaLabelModel:
         """Fit only on mature labels backed by purged OOF primary predictions."""
         values = _finite_matrix(features)
         label_values = np.asarray(labels)
-        if label_values.shape != (len(features),) or not np.isin(
-            label_values, [0, 1]
-        ).all():
+        if (
+            label_values.shape != (len(features),)
+            or not np.isin(label_values, [0, 1]).all()
+        ):
             raise ValueError("meta_labels_must_be_binary_and_aligned")
         if len(np.unique(label_values)) != 2:
             raise ValueError("meta_training_requires_both_classes")
-        if len(provenance) != len(features) or not set(
-            OOF_PROVENANCE_COLUMNS
-        ).issubset(provenance.columns):
+        if len(provenance) != len(features) or not set(OOF_PROVENANCE_COLUMNS).issubset(
+            provenance.columns
+        ):
             raise ValueError("oof_provenance_missing_or_misaligned")
         event_indices = provenance["event_index"].to_numpy(dtype=int)
         if not np.array_equal(event_indices, features.index.to_numpy(dtype=int)):
             raise ValueError("oof_event_indices_do_not_match_meta_features")
         fold_ids = provenance["fold_id"].to_numpy(dtype=int)
         primary_train_max = provenance["primary_train_max_index"].to_numpy(dtype=int)
-        primary_end_max = provenance[
-            "primary_train_max_label_end_index"
-        ].to_numpy(dtype=int)
+        primary_end_max = provenance["primary_train_max_label_end_index"].to_numpy(
+            dtype=int
+        )
         meta_ends = np.asarray(meta_label_end_indices, dtype=int)
         if meta_ends.shape != (len(features),):
             raise ValueError("meta_label_end_indices_misaligned")
@@ -325,8 +330,10 @@ class MetaLabelModel:
         if payload.get("training_signal_requirement") != "out_of_fold_only":
             raise ValueError("meta_model_oof_contract_missing")
         feature_names = payload.get("feature_names")
-        if not isinstance(feature_names, list) or not feature_names or not all(
-            isinstance(name, str) and name for name in feature_names
+        if (
+            not isinstance(feature_names, list)
+            or not feature_names
+            or not all(isinstance(name, str) and name for name in feature_names)
         ):
             raise ValueError("meta_model_feature_schema_invalid")
         model = cls(
@@ -338,11 +345,14 @@ class MetaLabelModel:
         coefficients = np.asarray(payload["coefficients"], dtype=float)
         intercept = float(payload["intercept"])
         expected_shape = (len(feature_names),)
-        if any(
-            array.shape != expected_shape
-            or not np.isfinite(array).all()
-            for array in (means, scales, coefficients)
-        ) or np.any(scales <= 0) or not math.isfinite(intercept):
+        if (
+            any(
+                array.shape != expected_shape or not np.isfinite(array).all()
+                for array in (means, scales, coefficients)
+            )
+            or np.any(scales <= 0)
+            or not math.isfinite(intercept)
+        ):
             raise ValueError("meta_model_serialized_parameters_invalid")
         model.feature_names_ = tuple(feature_names)
         model.means_ = means

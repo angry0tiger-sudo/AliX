@@ -65,9 +65,7 @@ def short_market(rows: int = 320, seed: int = 505) -> DataFrame:
     for index in range(1, rows):
         regime = 0.0025 if (index // 35) % 2 == 0 else 0.007
         opened[index] = close[index - 1]
-        close[index] = opened[index] * np.exp(
-            0.00005 + regime * rng.standard_normal()
-        )
+        close[index] = opened[index] * np.exp(0.00005 + regime * rng.standard_normal())
     range_width = rng.uniform(0.0005, 0.004, size=rows)
     high = np.maximum(opened, close) * (1.0 + range_width)
     low = np.minimum(opened, close) * (1.0 - range_width)
@@ -194,7 +192,9 @@ def test_oof_primary_predictions_are_purged_and_never_in_sample() -> None:
             "noise": rng.normal(size=300),
         }
     )
-    target = pd.Series((features["signal"] + 0.2 * rng.normal(size=300) > 0).astype(float))
+    target = pd.Series(
+        (features["signal"] + 0.2 * rng.normal(size=300) > 0).astype(float)
+    )
     label_end = np.arange(len(features), dtype=int) + 1
     folds = [
         OOFFold(0, 100, 100, 150),
@@ -213,9 +213,7 @@ def test_oof_primary_predictions_are_purged_and_never_in_sample() -> None:
     assert oof["event_index"].min() >= 100
     assert oof["event_index"].max() < 250
     assert (oof["primary_train_max_index"] < oof["event_index"]).all()
-    assert (
-        oof["primary_train_max_label_end_index"] < oof["event_index"]
-    ).all()
+    assert (oof["primary_train_max_label_end_index"] < oof["event_index"]).all()
     assert (oof["primary_train_count"] > 2).all()
 
 
@@ -273,7 +271,9 @@ def test_meta_model_fail_closed_and_rejects_leaked_provenance() -> None:
     unfitted = MetaLabelModel().filter_research_candidates(features, 0.5)
     assert not unfitted["research_filter_pass"].any()
     assert unfitted["reason_code"].eq("meta_model_or_input_invalid_fail_closed").all()
-    invalid_threshold = MetaLabelModel().filter_research_candidates(features, float("nan"))
+    invalid_threshold = MetaLabelModel().filter_research_candidates(
+        features, float("nan")
+    )
     assert not invalid_threshold["research_filter_pass"].any()
 
     labels = np.array([0, 1, 0, 1], dtype=int)

@@ -38,9 +38,7 @@ def make_synthetic_ohlcv(rows: int = 1400, seed: int = 20261022) -> pd.DataFrame
     if rows < 1250:
         raise ValueError("synthetic_row_count_must_be_at_least_1250")
     rng = np.random.default_rng(seed)
-    dates = pd.date_range(
-        "2020-01-01T00:00:00+00:00", periods=rows, freq="h"
-    )
+    dates = pd.date_range("2020-01-01T00:00:00+00:00", periods=rows, freq="h")
     opened = np.empty(rows, dtype=float)
     close = np.empty(rows, dtype=float)
     opened[0] = 100.0
@@ -114,8 +112,8 @@ def build_synthetic_report(commit_sha: str) -> dict[str, Any]:
 
     event_indices = primary_oof["event_index"].to_numpy(dtype=int)
     primary_classes = primary_oof["primary_prediction"].to_numpy(dtype=float)
-    volatility = feature_frame["%-volatility_12"].iloc[event_indices].to_numpy(
-        dtype=float
+    volatility = (
+        feature_frame["%-volatility_12"].iloc[event_indices].to_numpy(dtype=float)
     )
     if not np.isfinite(volatility).all() or np.any(volatility <= 0):
         raise ValueError("synthetic_event_volatility_invalid")
@@ -197,7 +195,9 @@ def build_synthetic_report(commit_sha: str) -> dict[str, Any]:
             "model_type": "synthetic mechanics LogisticRegression classifier",
             "fold_count": len(folds),
             "oos_sample_count": int(len(primary_oof)),
-            "minimum_primary_train_count": int(primary_oof["primary_train_count"].min()),
+            "minimum_primary_train_count": int(
+                primary_oof["primary_train_count"].min()
+            ),
             "purge_rule": "primary label_end_index < test_start",
         },
         "triple_barrier": {
@@ -244,7 +244,9 @@ def main() -> int:
                 "commit_sha": report["commit_sha"],
                 "primary_oos_samples": report["primary_oof"]["oos_sample_count"],
                 "triple_barrier_events": report["triple_barrier"]["event_count"],
-                "meta_evaluated_folds": report["meta_evaluation"]["evaluated_fold_count"],
+                "meta_evaluated_folds": report["meta_evaluation"][
+                    "evaluated_fold_count"
+                ],
                 "champion": report["champion"],
                 "promotion_status": report["promotion_status"],
                 "report": str(args.output),
