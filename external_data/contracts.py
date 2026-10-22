@@ -341,7 +341,9 @@ def _validate_market_fields(observation: MarketObservation) -> None:
         raise ProviderError("market_content_hash_invalid")
 
 
-def _validate_market_provenance(observation: MarketObservation) -> tuple[datetime, datetime]:
+def _validate_market_provenance(
+    observation: MarketObservation,
+) -> tuple[datetime, datetime]:
     event_time = parse_timestamp(observation.event_timestamp, "event_timestamp")
     ingested = parse_timestamp(observation.ingested_at, "ingested_at")
     available = parse_timestamp(observation.available_at, "available_at")
@@ -366,7 +368,9 @@ def _run_market_quality_gate(
             "source_id": observation.source_id,
             "event_id": observation.event_id,
             "event_timestamp": event_time.isoformat(),
-            "ingested_at": parse_timestamp(observation.ingested_at, "ingested_at").isoformat(),
+            "ingested_at": parse_timestamp(
+                observation.ingested_at, "ingested_at"
+            ).isoformat(),
             "available_at": available.isoformat(),
             "unit": observation.unit,
             "quote_currency": observation.quote_currency,
@@ -415,7 +419,9 @@ def _validate_news_feature_fields(feature: NewsFeature) -> None:
         raise ProviderError("nlp_sentiment_label_invalid")
 
 
-def _validate_numeric_range(name: str, value: float, lower: float, upper: float) -> None:
+def _validate_numeric_range(
+    name: str, value: float, lower: float, upper: float
+) -> None:
     valid_number = (
         not isinstance(value, bool)
         and isinstance(value, (int, float))
