@@ -29,7 +29,7 @@ jobs:
       - name: Pin resolver compatible with pip-tools
         run: python -m pip install pip==25.2
       - name: Install pinned quality tools
-        run: python -m pip install ruff==0.14.0 mypy==1.18.2 pandas==2.3.3 pandas-stubs==2.3.2.250926 bandit==1.8.6 pip-audit==2.9.0 pytest==9.0.3 pytest-cov==7.0.0 import-linter==2.3 xenon==0.9.3 pre-commit==4.3.0 jsonschema==4.25.1 pip-tools==7.5.0
+        run: python -m pip install ruff==0.14.0 mypy==1.18.2 pandas==2.3.3 pandas-stubs==2.3.2.250926 bandit==1.8.6 pip-audit==2.9.0 pytest==9.0.3 pytest-cov==7.0.0 import-linter==2.3 xenon==0.9.3 pre-commit==4.3.0 jsonschema==4.25.1 pip-tools==7.5.0 scikit-learn==1.9.0
       - name: Validate pre-commit configuration
         run: pre-commit validate-config
       - name: Compile source
@@ -133,4 +133,34 @@ jobs:
         with:
           name: phase4-synthetic-walkforward-report
           path: /tmp/alix-phase4-synthetic.json
+          if-no-files-found: error
+
+      - name: Run synthetic Phase 5 Triple-Barrier and Meta-Labeling mechanics check
+        run: |
+          python -m scripts.run_meta_labeling_walkforward --synthetic --output /tmp/alix-phase5-synthetic.json --commit-sha "${{ github.event.pull_request.head.sha || github.sha }}"
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          report = json.loads(Path("/tmp/alix-phase5-synthetic.json").read_text(encoding="utf-8"))
+          assert report["commit_sha"] == "${{ github.event.pull_request.head.sha || github.sha }}"
+          assert report["evaluation_status"] == "SYNTHETIC_MECHANICS_ONLY"
+          assert report["dataset"]["kind"] == "synthetic"
+          assert report["triple_barrier"]["event_count"] > 0
+          assert sum(report["triple_barrier"]["barrier_outcomes"].values()) == report["triple_barrier"]["event_count"]
+          assert report["primary_oof"]["oos_sample_count"] > 0
+          assert report["meta_evaluation"]["evaluated_fold_count"] >= 2
+          assert report["meta_evaluation"]["training_signal_requirement"] == "OUT_OF_FOLD_ONLY"
+          assert report["economic_gates"]["status"] == "NOT_EVALUATED"
+          assert report["champion"] is None
+          assert report["promotion_status"] == "BLOCKED_NO_ECONOMIC_GATE"
+          assert report["trading_authorization"] == "NO_GO"
+          assert report["model_output_is_order_permission"] is False
+          print("Phase 5 synthetic mechanics passed; no economic acceptance or trading permission is implied.")
+          PY
+      - name: Upload synthetic Phase 5 mechanics report
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase5-synthetic-meta-labeling-report
+          path: /tmp/alix-phase5-synthetic.json
           if-no-files-found: error

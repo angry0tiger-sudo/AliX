@@ -10,6 +10,10 @@ This index is the repository entry point for architecture, phase order, owner di
 - [Open tasks and deployment gates](knowledge_base/OPEN_TASKS.md): outstanding runtime and external evidence.
 - [Phase 4 acceptance](knowledge_base/PHASE_4_ACCEPTANCE.md): versioned checklist for the current phase.
 - [Phase 4 status report](phase-reports/PHASE_4_STATUS.md): current implementation state and evidence.
+- [Phase 5 acceptance](knowledge_base/PHASE_5_ACCEPTANCE.md): Triple-Barrier and OOF Meta-Labeling contracts, tests, and release gates.
+- [Phase 5 status report](phase-reports/PHASE_5_STATUS.md): implementation evidence, synthetic-only evaluation, and open gates.
+- [ADR-0005: Phase 5 Plan B](architecture/decisions/ADR-0005-phase-5-plan-b.md): decision to use isolated research services pending exact DeepAlpha source/runtime proof.
+- [Owner Directive: Phase 5](governance/owner-directives/2026-10-22-phase-5.md): explicit owner authorization and non-trading scope.
 - [Owner Directive: Phase 4 baseline](governance/owner-directives/2026-10-22-phase-4.md): baseline scope and safety boundary.
 - [Owner Directive: canonical knowledge-base paths](governance/owner-directives/2026-10-22-phase-4-knowledge-base-canonical-paths.md): explicit instruction establishing the stable document paths above.
 
