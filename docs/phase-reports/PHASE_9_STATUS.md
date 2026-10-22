@@ -19,9 +19,23 @@ Status: IN PROGRESS; overall Phase 9 acceptance is NO-GO pending implementation,
 - Add a disposable GitHub Actions PostgreSQL service to test the Control Plane's PostgreSQL dialect and transactional repository constraints, including concurrent Worker slot contention.
 - Prepare a Windows/PowerShell runbook for the owner to execute later. No owner machine or production service is operated by this work.
 
-## Verification
+## Verified implementation-source CI evidence
 
-No Phase 9 results are recorded until the new Phase 9 candidate commit completes its Push and PR workflows. Record exact SHA, both run URLs, job conclusions, test/coverage output and artifact URL after the actual run finishes. Do not reuse Phase 8 CI results as Phase 9 evidence.
+Source commit under test: `4c9168186d9da69235174a8dd15e5fa1ecdf6f7b`.
+
+- Push CI: [run 39859073512](https://github.com/angry0tiger-sudo/AliX/actions/runs/39859073512) — completed successfully.
+- PR CI: [run 39859084239](https://github.com/angry0tiger-sudo/AliX/actions/runs/39859084239) — completed successfully.
+- On both runs the required jobs `quality`, `freqtrade-runtime-smoke`, and `postgres-integration` completed with `success` on this exact source SHA.
+- Ruff lint/format, strict Mypy, Bandit, dependency resolution/lock and audit, architecture contracts, and Xenon complexity gate passed.
+- Strict Mypy: no issues in 75 source files.
+- Unit suite and coverage: **200 passed, 2 skipped, 13 warnings; 90.65% coverage**, above the unchanged 90% gate.
+- Phase 1 safety/dependency contracts: **4 passed**. Starter Kit/documentation validation passed.
+- Disposable PostgreSQL integration: **2 passed** per run, including tenant/account/Worker repository lifecycle and concurrent duplicate Worker-slot contention.
+- Freqtrade runtime smoke passed. Configuration remained closed and no exchange connection was requested.
+- Synthetic E2E: **11 scenarios**, with 1 simulated synthetic outcome, 8 rejected scenarios, 1 non-simulated proposal, and 1 unknown synthetic outcome recorded as `NO_RETRY`. The report records `order_permission=false`, `exchange_calls=0`, `real_order_attempts=0`, no credentials, `Champion=null`, and `trading_authorization=NO_GO`.
+- E2E artifact: the `phase9-synthetic-e2e-report` artifact is available from the Push run above. Its synthetic ledger has 11 rows, snapshot hash `88f8f86e37929d4c4cc76a89c720ee6b7bcebea220a4d6eed44e0b0a5919911f`, source status `SYNTHETIC_ONLY`, reconciliation status `NOT_RECONCILED`, and simulated net PnL `-64.799568`. This is a synthetic mechanism result, not economic or exchange-reconciled evidence.
+
+These results are for the implementation source SHA above. This documentation update creates a new commit and must pass its own exact-head Push and PR workflows before that documentation revision is treated as verified.
 
 ## Non-negotiable safety state
 
@@ -31,6 +45,8 @@ No Phase 9 results are recorded until the new Phase 9 candidate commit completes
 - Economic acceptance and trading authorization remain `NO-GO`.
 - No real order or exchange write is sent. No exchange execution connection or live/paper session is started. The synthetic unknown-outcome test proves no-retry state handling only; it is not a real order timeout.
 - Any report produced by the synthetic ledger uses `SYNTHETIC_ONLY` and `NOT_RECONCILED`.
+
+Phase 9 CI evidence confirms the above safety fields in the synthetic report. No exchange order API, live execution transport, real credential, or live/paper session is used by this workflow.
 
 ## Remaining operational blockers
 
