@@ -775,14 +775,17 @@ def test_account_disable_revokes_worker_and_fences_late_start_ack(
     ).json()[0]
     worker_token = "synthetic-worker-token-for-account-disable-012345"
     worker_hash = hashlib.sha256(worker_token.encode()).hexdigest()
-    assert client.put(
-        f"/v1/admin/workers/{worker['worker_id']}/runtime-credential",
-        headers=auth(),
-        json={
-            "generation": start_command["generation"],
-            "credential_sha256": worker_hash,
-        },
-    ).status_code == 204
+    assert (
+        client.put(
+            f"/v1/admin/workers/{worker['worker_id']}/runtime-credential",
+            headers=auth(),
+            json={
+                "generation": start_command["generation"],
+                "credential_sha256": worker_hash,
+            },
+        ).status_code
+        == 204
+    )
 
     reader = make_tenant(client, "Reader Tenant")
     add_member(client, reader, "reader-a", "tenant_reader")
@@ -900,13 +903,16 @@ def test_tenant_disable_blocks_members_and_queues_worker_disable(
         f"/v1/tenants/{tenant_id}/workers", headers=auth()
     ).json()[0]
     assert final_worker["observed_state"] == "DISABLED"
-    assert client.post(
-        f"/v1/tenants/{tenant_id}/workers",
-        headers=auth(),
-        json={
-            "account_id": account["account_id"],
-            "exchange_id": "nobitex",
-            "environment": "local",
-            "strategy_revision": "must-not-create",
-        },
-    ).status_code == 403
+    assert (
+        client.post(
+            f"/v1/tenants/{tenant_id}/workers",
+            headers=auth(),
+            json={
+                "account_id": account["account_id"],
+                "exchange_id": "nobitex",
+                "environment": "local",
+                "strategy_revision": "must-not-create",
+            },
+        ).status_code
+        == 403
+    )

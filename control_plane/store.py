@@ -93,7 +93,6 @@ def _audit(
     )
 
 
-
 def _schedule_worker_disables(
     connection: Any,
     principal: Principal,
@@ -239,9 +238,7 @@ class ControlPlaneStore:
             )
         return self.get_tenant(principal, tenant_id)
 
-    def disable_tenant(
-        self, principal: Principal, tenant_id: str
-    ) -> dict[str, Any]:
+    def disable_tenant(self, principal: Principal, tenant_id: str) -> dict[str, Any]:
         if not principal.platform_admin:
             raise ForbiddenError("platform_admin_required")
         with self.engine.begin() as connection:
@@ -257,8 +254,12 @@ class ControlPlaneStore:
                     .values(status="DISABLED")
                 )
                 _audit(
-                    connection, principal, "tenant.disabled",
-                    "tenant", tenant_id, tenant_id,
+                    connection,
+                    principal,
+                    "tenant.disabled",
+                    "tenant",
+                    tenant_id,
+                    tenant_id,
                 )
             _schedule_worker_disables(connection, principal, tenant_id, "tenant")
         return self.get_tenant(principal, tenant_id)
@@ -417,8 +418,12 @@ class ControlPlaneStore:
                     .values(status="DISABLED")
                 )
                 _audit(
-                    connection, principal, "account.disabled",
-                    "account", account_id, tenant_id,
+                    connection,
+                    principal,
+                    "account.disabled",
+                    "account",
+                    account_id,
+                    tenant_id,
                 )
             _schedule_worker_disables(
                 connection, principal, tenant_id, "account", account_id=account_id
