@@ -1,6 +1,6 @@
 # Phase 6 Status Report: External Data, Point-in-Time Features and Local NLP
 
-Status: IMPLEMENTATION CI PASSED ON TESTED SHA 52bc49012a945bf6c3bb411b6a4d3933a9a69aa4; READY FOR OWNER REVIEW AFTER REPORT-SYNC CI; EXTERNAL APPROVALS OPEN; ECONOMIC ACCEPTANCE NO-GO; CHAMPION BLOCKED; NO TRADING.
+Status: IMPLEMENTATION AND REPORT-SYNC CI PASSED; PR #8 READY FOR OWNER REVIEW; EXTERNAL APPROVALS OPEN; ECONOMIC ACCEPTANCE NO-GO; CHAMPION BLOCKED; NO TRADING.
 
 ## Repository and authorization
 
@@ -9,7 +9,7 @@ Status: IMPLEMENTATION CI PASSED ON TESTED SHA 52bc49012a945bf6c3bb411b6a4d3933a
 - Base SHA: ce360a770586e76dc5a0f7b2421a371322e6d738.
 - Work branch: feat/phase-6-external-data-nlp.
 - Tracking issue: https://github.com/angry0tiger-sudo/AliX/issues/7.
-- PR: [#8](https://github.com/angry0tiger-sudo/AliX/pull/8), OPEN and DRAFT at report creation; not merged. It will be marked Ready for Review only after report-sync CI is green.
+- PR: [#8](https://github.com/angry0tiger-sudo/AliX/pull/8), OPEN and READY FOR REVIEW; not merged. The Ready transition occurred after both push and PR workflows passed on report-sync SHA `416b46ebdbb59eb0f095fc7636368ca6b36de462`.
 - Phase 5 PR #6 is merged into main at https://github.com/angry0tiger-sudo/AliX/commit/ce360a770586e76dc5a0f7b2421a371322e6d738.
 - Main CI run #380 / ID 39733266520 succeeded on that exact base SHA. It is Phase 5 evidence, not Phase 6 evidence.
 
@@ -36,19 +36,26 @@ Status: IMPLEMENTATION CI PASSED ON TESTED SHA 52bc49012a945bf6c3bb411b6a4d3933a
 
 ## Verification
 
-### Exact tested implementation SHA
+### Tested implementation SHA
 
 - SHA: `52bc49012a945bf6c3bb411b6a4d3933a9a69aa4` ([commit](https://github.com/angry0tiger-sudo/AliX/commit/52bc49012a945bf6c3bb411b6a4d3933a9a69aa4)).
 - Push CI [run #402 / ID 39809700265](https://github.com/angry0tiger-sudo/AliX/actions/runs/39809700265): **success** on this exact SHA.
 - Pull Request CI [run #403 / ID 39809712528](https://github.com/angry0tiger-sudo/AliX/actions/runs/39809712528): **success** on this exact SHA.
 - Both workflow runs reported both required jobs successful: `quality=success` and `freqtrade-runtime-smoke=success`.
-- Quality evidence from the PR job log: compile, Ruff lint, Ruff format, Strict Mypy (51 source files), Bandit, dependency resolution dry run, transitive lock verification, pip-audit, architecture contracts, Xenon complexity, unit tests/coverage, Phase 1 safety/dependency contracts and project documentation validation all passed.
+- Quality log: compile, Ruff lint, Ruff format, Strict Mypy (51 source files), Bandit, dependency resolution dry run, transitive lock verification, pip-audit, architecture contracts, Xenon complexity, unit tests/coverage, Phase 1 safety/dependency contracts and project documentation validation all passed.
 - Unit tests: **131 passed**; coverage **91.18%** against the unchanged 90% minimum; 4 Phase 1 safety/dependency contract tests passed; 13 test warnings reported. Warnings include existing NumPy timedelta deprecation and scikit-learn feature-name warnings. No security audit vulnerabilities were reported.
-- Runtime smoke on the same SHA successfully installed and invoked pinned Freqtrade, loaded strategy/config while retaining closed trading defaults, and passed the existing synthetic Phase 4 and Phase 5 mechanics checks.
+- Runtime smoke installed and invoked pinned Freqtrade, loaded strategy/config while retaining closed trading defaults, and passed the existing synthetic Phase 4 and Phase 5 mechanics checks.
 - Four failures found on earlier commits were corrected: formatting, complexity, confidence type narrowing, and fixture edge cases. No gate/threshold was weakened.
-- The status/acceptance documentation sync is a subsequent documentation-only commit. CI will be re-run on that report-sync HEAD before PR #8 is marked Ready for Review.
-- Phase 6 model/data artifacts: none selected or downloaded; the CI's synthetic Phase 4/5 artifacts are not Phase 6 evidence.
-- No trading configuration, strategy entry/exit logic, Risk Gate, Kill Switch or order lifecycle was changed.
+
+### Report-sync SHA and current PR state
+
+- Report-sync commit: `416b46ebdbb59eb0f095fc7636368ca6b36de462` ([commit](https://github.com/angry0tiger-sudo/AliX/commit/416b46ebdbb59eb0f095fc7636368ca6b36de462)).
+- Push CI [run #404 / ID 39810335179](https://github.com/angry0tiger-sudo/AliX/actions/runs/39810335179): **success** on the exact report-sync SHA.
+- Pull Request CI [run #405 / ID 39810343496](https://github.com/angry0tiger-sudo/AliX/actions/runs/39810343496): **success** on the exact report-sync SHA.
+- Each run finished with both Quality and Runtime jobs successful.
+- PR #8 was changed from Draft to Ready for Review only after verifying that both run conclusions were success on the same report-sync SHA. PR remains open and unmerged.
+- The current follow-up is documentation-only; its exact head is also checked by the normal PR and push workflows. No Phase 6 model/data artifact has been selected or downloaded; synthetic Phase 4/5 artifacts are not Phase 6 evidence.
+- No trading configuration, strategy entry/exit logic, Risk Gate, Kill Switch or order lifecycle was changed; no order submit/cancel, exchange/provider request, download, external notification, live/dry-run/paper session or host-network change was performed.
 
 ## Open blockers
 
