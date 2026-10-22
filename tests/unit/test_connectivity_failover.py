@@ -154,9 +154,17 @@ def test_connectivity_manager_rejects_duplicate_route_ids_without_activation() -
         return True
 
     manager = ConnectivityManager({"same"}, probe)
+    def activate_vpn() -> bool:
+        activated.append("vpn")
+        return True
+
+    def activate_proxy() -> bool:
+        activated.append("proxy")
+        return True
+
     routes = [
-        VpnRouteDriver("same", activate=lambda: activated.append("vpn") is None),
-        ProxyRouteDriver("same", activate=lambda: activated.append("proxy") is None),
+        VpnRouteDriver("same", activate=activate_vpn),
+        ProxyRouteDriver("same", activate=activate_proxy),
     ]
 
     result = manager.select_route(routes)

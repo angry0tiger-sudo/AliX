@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
-from typing import Literal
+from typing import Literal, cast
 
 OHLCV_SCHEMA_VERSION = "ohlcv.v1"
 FEATURE_SCHEMA_VERSION = "feature-vector.v1"
@@ -241,7 +241,7 @@ def _price_values(
         if issue is not None:
             reasons.append(issue)
             continue
-        values[column] = float(value)
+        values[column] = float(cast(int | float | Decimal, value))
     return values, reasons
 
 
