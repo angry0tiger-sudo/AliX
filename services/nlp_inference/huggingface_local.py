@@ -16,6 +16,16 @@ class Pipeline(Protocol):
         """Run local text classification."""
 
 
+def _normalize_pipeline_output(output: object) -> Mapping[str, object]:
+    if isinstance(output, list) and output and isinstance(output[0], list):
+        output = output[0]
+    if isinstance(output, list) and output and isinstance(output[0], Mapping):
+        output = output[0]
+    if not isinstance(output, Mapping):
+        raise NlpServiceError("nlp_local_pipeline_output_invalid")
+    return output
+
+
 class LocalHuggingFaceClassifier:
     """A minimal adapter that normalizes the local pipeline's result shape."""
 
@@ -27,19 +37,13 @@ class LocalHuggingFaceClassifier:
 
     def predict(self, text: str) -> Mapping[str, object]:
         try:
-            output = self._pipeline(text, truncation=True, top_k=1)
+            raw = self._pipeline(text, truncation=True, top_k=1)
         except TimeoutError:
             raise NlpServiceError("nlp_timeout") from None
         except Exception:
             raise NlpServiceError("nlp_local_pipeline_failed") from None
-        if isinstance(output, list) and output and isinstance(output[0], list):
-            output = output[0]
-        if isinstance(output, list) and output and isinstance(output[0], Mapping):
-            output = output[0]
-        if not isinstance(output, Mapping):
-            raise NlpServiceError("nlp_local_pipeline_output_invalid")
-        label = output.get("label")
-        score = output.get("score")
+        output = _normalize_pipeline_output(raw)
+        label, score = output.get("label"), output.get("score")
         if not isinstance(label, str) or label not in self._label_map:
             raise NlpServiceError("nlp_local_pipeline_label_invalid")
         return {"label": label, "score": score}
@@ -73,6 +77,28 @@ def _verify_artifacts(manifest: ModelManifest) -> Path:
     return root
 
 
+def _build_local_pipeline(root: Path) -> object:
+    try:
+        transformers = cast(Any, import_module("transformers"))
+    except ImportError:
+        raise NlpServiceError("nlp_transformers_unavailable") from None
+    try:
+        tokenizer = transformers.AutoTokenizer.from_pretrained(
+            str(root), local_files_only=True, trust_remote_code=False
+        )
+        model = transformers.AutoModelForSequenceClassification.from_pretrained(
+            str(root),
+            local_files_only=True,
+            trust_remote_code=False,
+            use_safetensors=True,
+        )
+        return transformers.pipeline(
+            "text-classification", model=model, tokenizer=tokenizer, device=-1
+        )
+    except Exception:
+        raise NlpServiceError("nlp_local_model_load_failed") from None
+
+
 def load_local_huggingface_classifier(
     manifest: ModelManifest,
     *,
@@ -80,28 +106,11 @@ def load_local_huggingface_classifier(
 ) -> LocalHuggingFaceClassifier:
     """Load from verified local files only; never resolve model ID remotely."""
     root = _verify_artifacts(manifest)
-    if pipeline_factory is not None:
-        loaded = pipeline_factory(root)
-    else:
-        try:
-            transformers = cast(Any, import_module("transformers"))
-        except ImportError:
-            raise NlpServiceError("nlp_transformers_unavailable") from None
-        try:
-            tokenizer = transformers.AutoTokenizer.from_pretrained(
-                str(root), local_files_only=True, trust_remote_code=False
-            )
-            model = transformers.AutoModelForSequenceClassification.from_pretrained(
-                str(root),
-                local_files_only=True,
-                trust_remote_code=False,
-                use_safetensors=True,
-            )
-            loaded = transformers.pipeline(
-                "text-classification", model=model, tokenizer=tokenizer, device=-1
-            )
-        except Exception:
-            raise NlpServiceError("nlp_local_model_load_failed") from None
+    loaded = (
+        pipeline_factory(root)
+        if pipeline_factory is not None
+        else _build_local_pipeline(root)
+    )
     if not callable(loaded):
         raise NlpServiceError("nlp_local_pipeline_invalid")
     return LocalHuggingFaceClassifier(loaded, manifest.label_map)

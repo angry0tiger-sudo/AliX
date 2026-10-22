@@ -22,6 +22,9 @@ NLP_RESULT_SCHEMA_VERSION = "alix.nlp.sentiment.v1"
 HASH_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 PROVIDER_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 ALLOWED_SENTIMENTS = frozenset({"positive", "negative", "neutral"})
+SENSITIVE_QUERY_KEYS = frozenset(
+    {"key", "api_key", "apikey", "token", "secret", "password", "authorization"}
+)
 
 
 class ProviderError(ValueError):
@@ -75,6 +78,69 @@ def digest_content(value: str) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def _require_text(values: tuple[str, ...], reason: str) -> None:
+    if any(not isinstance(value, str) or not value.strip() for value in values):
+        raise ProviderError(reason)
+
+
+def _require_provider_text(values: tuple[str, ...]) -> None:
+    if any(not isinstance(value, str) or not value.strip() for value in values):
+        raise ProviderPolicyError("provider_registration_incomplete")
+
+
+def _validate_provider_endpoint(endpoint_url: str, is_test_fixture: bool) -> None:
+    parts = urlsplit(endpoint_url)
+    if parts.scheme != "https" or not parts.hostname:
+        raise ProviderPolicyError("provider_endpoint_must_use_https")
+    if parts.username or parts.password:
+        raise ProviderPolicyError("provider_endpoint_credentials_forbidden")
+    if any(key.lower() in SENSITIVE_QUERY_KEYS for key, _ in parse_qsl(parts.query)):
+        raise ProviderPolicyError("provider_endpoint_must_not_contain_credentials")
+    if is_test_fixture and not parts.hostname.endswith(".invalid"):
+        raise ProviderPolicyError("test_fixture_endpoint_must_use_invalid_domain")
+
+
+def _validate_provider_identity(provider_id: str, data_kind: str) -> None:
+    if not PROVIDER_ID_PATTERN.fullmatch(provider_id):
+        raise ProviderPolicyError("invalid_provider_id")
+    if data_kind not in {"news", "market_analytics"}:
+        raise ProviderPolicyError("unsupported_provider_kind")
+
+
+def _validate_provider_status(
+    provider_id: str,
+    license_status: str,
+    active: bool,
+    is_test_fixture: bool,
+    algorithmic_non_display_approved: bool,
+) -> None:
+    if not is_test_fixture and license_status == "test_only":
+        raise ProviderPolicyError("test_only_provider_cannot_be_runtime")
+    if is_test_fixture and license_status != "approved":
+        raise ProviderPolicyError("fixture_license_must_be_test_approved")
+    is_blocked_tradingview = (
+        "tradingview" in provider_id.casefold()
+        and active
+        and not algorithmic_non_display_approved
+    )
+    if is_blocked_tradingview:
+        raise ProviderPolicyError("tradingview_non_display_blocked")
+
+
+def _assert_provider_approved(
+    provider_id: str,
+    license_status: str,
+    active: bool,
+    algorithmic_non_display_approved: bool,
+) -> None:
+    if not active:
+        raise ProviderPolicyError("provider_inactive")
+    if license_status != "approved":
+        raise ProviderPolicyError("provider_license_not_approved")
+    if "tradingview" in provider_id.casefold() and not algorithmic_non_display_approved:
+        raise ProviderPolicyError("tradingview_non_display_blocked")
+
+
 @dataclass(frozen=True, slots=True)
 class ProviderRegistration:
     """A provider's reviewed scope and access policy."""
@@ -92,58 +158,34 @@ class ProviderRegistration:
     algorithmic_non_display_approved: bool = False
 
     def __post_init__(self) -> None:
-        if not PROVIDER_ID_PATTERN.fullmatch(self.provider_id):
-            raise ProviderPolicyError("invalid_provider_id")
-        if self.data_kind not in {"news", "market_analytics"}:
-            raise ProviderPolicyError("unsupported_provider_kind")
-        required = (
-            self.endpoint_url,
-            self.license_status,
-            self.rate_limit_policy,
-            self.retention_policy,
-            self.timestamp_semantics,
-            self.owner,
+        _validate_provider_identity(self.provider_id, self.data_kind)
+        _require_provider_text(
+            (
+                self.endpoint_url,
+                self.license_status,
+                self.rate_limit_policy,
+                self.retention_policy,
+                self.timestamp_semantics,
+                self.owner,
+            )
         )
-        if any(not isinstance(item, str) or not item.strip() for item in required):
-            raise ProviderPolicyError("provider_registration_incomplete")
-        parts = urlsplit(self.endpoint_url)
-        if parts.scheme != "https" or not parts.hostname:
-            raise ProviderPolicyError("provider_endpoint_must_use_https")
-        if parts.username or parts.password:
-            raise ProviderPolicyError("provider_endpoint_credentials_forbidden")
-        sensitive_keys = {
-            "key",
-            "api_key",
-            "apikey",
-            "token",
-            "secret",
-            "password",
-            "authorization",
-        }
-        if any(key.lower() in sensitive_keys for key, _ in parse_qsl(parts.query)):
-            raise ProviderPolicyError("provider_endpoint_must_not_contain_credentials")
-        if self.is_test_fixture and not parts.hostname.endswith(".invalid"):
-            raise ProviderPolicyError("test_fixture_endpoint_must_use_invalid_domain")
-        if not self.is_test_fixture and self.license_status == "test_only":
-            raise ProviderPolicyError("test_only_provider_cannot_be_runtime")
-        if (
-            "tradingview" in self.provider_id.casefold()
-            and self.active
-            and not self.algorithmic_non_display_approved
-        ):
-            raise ProviderPolicyError("tradingview_non_display_blocked")
+        _validate_provider_endpoint(self.endpoint_url, self.is_test_fixture)
+        _validate_provider_status(
+            self.provider_id,
+            self.license_status,
+            self.active,
+            self.is_test_fixture,
+            self.algorithmic_non_display_approved,
+        )
 
     def assert_ingestion_allowed(self) -> None:
         """Reject before transport access unless source approval is explicit."""
-        if not self.active:
-            raise ProviderPolicyError("provider_inactive")
-        if self.license_status != "approved":
-            raise ProviderPolicyError("provider_license_not_approved")
-        if (
-            "tradingview" in self.provider_id.casefold()
-            and not self.algorithmic_non_display_approved
-        ):
-            raise ProviderPolicyError("tradingview_non_display_blocked")
+        _assert_provider_approved(
+            self.provider_id,
+            self.license_status,
+            self.active,
+            self.algorithmic_non_display_approved,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -222,25 +264,28 @@ class NewsFeature:
     schema_version: str = NLP_RESULT_SCHEMA_VERSION
 
 
-def validate_news_event(event: NewsEvent) -> None:
-    """Validate source rights, schema and temporal provenance."""
-    required = (
-        event.event_id,
-        event.provider_id,
-        event.source_id,
-        event.revision,
-        event.license_status,
-        event.content_hash,
-        event.text,
+def _validate_news_schema_and_rights(event: NewsEvent) -> None:
+    _require_text(
+        (
+            event.event_id,
+            event.provider_id,
+            event.source_id,
+            event.revision,
+            event.license_status,
+            event.content_hash,
+            event.text,
+        ),
+        "news_record_required_field_missing",
     )
-    if any(not isinstance(item, str) or not item.strip() for item in required):
-        raise ProviderError("news_record_required_field_missing")
     if event.schema_version != NEWS_RECORD_SCHEMA_VERSION:
         raise ProviderError("news_schema_version_mismatch")
     if event.license_status != "approved":
         raise ProviderPolicyError("source_not_approved")
     if not HASH_PATTERN.fullmatch(event.content_hash):
         raise ProviderError("news_content_hash_invalid")
+
+
+def _validate_news_timeline(event: NewsEvent) -> None:
     published = parse_timestamp(event.published_at, "published_at")
     ingested = parse_timestamp(event.ingested_at, "ingested_at")
     available = parse_timestamp(event.available_at, "available_at")
@@ -252,39 +297,51 @@ def validate_news_event(event: NewsEvent) -> None:
         processed = parse_timestamp(event.processed_at, "processed_at")
         if processed < available:
             raise ProviderError("invalid_timestamp_order:processed_before_available")
-    if any(
-        not isinstance(asset, str) or not asset.strip() for asset in event.asset_mapping
-    ):
-        raise ProviderError("news_asset_mapping_invalid")
 
 
-def validate_market_observation(observation: MarketObservation) -> None:
-    """Validate a numeric record against provider rules and the shared DQ gate."""
-    required = (
-        observation.event_id,
-        observation.provider_id,
-        observation.source_id,
-        observation.market,
-        observation.revision,
-        observation.unit,
-        observation.quote_currency,
-        observation.license_status,
-        observation.rate_limit_status,
-        observation.content_hash,
+def _validate_asset_mapping(assets: tuple[str, ...], reason: str) -> None:
+    if any(not isinstance(asset, str) or not asset.strip() for asset in assets):
+        raise ProviderError(reason)
+
+
+def validate_news_event(event: NewsEvent) -> None:
+    """Validate source rights, schema and temporal provenance."""
+    _validate_news_schema_and_rights(event)
+    _validate_news_timeline(event)
+    _validate_asset_mapping(event.asset_mapping, "news_asset_mapping_invalid")
+
+
+def _validate_market_fields(observation: MarketObservation) -> None:
+    _require_text(
+        (
+            observation.event_id,
+            observation.provider_id,
+            observation.source_id,
+            observation.market,
+            observation.revision,
+            observation.unit,
+            observation.quote_currency,
+            observation.license_status,
+            observation.rate_limit_status,
+            observation.content_hash,
+        ),
+        "market_record_required_field_missing",
     )
-    if any(not isinstance(item, str) or not item.strip() for item in required):
-        raise ProviderError("market_record_required_field_missing")
     if observation.schema_version != EXTERNAL_RECORD_SCHEMA_VERSION:
         raise ProviderError("market_schema_version_mismatch")
     value = observation.value
-    if (
-        isinstance(value, bool)
-        or not isinstance(value, (int, float))
-        or not math.isfinite(float(value))
-    ):
+    valid_value = (
+        not isinstance(value, bool)
+        and isinstance(value, (int, float))
+        and math.isfinite(float(value))
+    )
+    if not valid_value:
         raise ProviderError("market_value_non_finite_or_invalid")
     if not HASH_PATTERN.fullmatch(observation.content_hash):
         raise ProviderError("market_content_hash_invalid")
+
+
+def _validate_market_provenance(observation: MarketObservation) -> tuple[datetime, datetime]:
     event_time = parse_timestamp(observation.event_timestamp, "event_timestamp")
     ingested = parse_timestamp(observation.ingested_at, "ingested_at")
     available = parse_timestamp(observation.available_at, "available_at")
@@ -294,6 +351,14 @@ def validate_market_observation(observation: MarketObservation) -> None:
         raise ProviderPolicyError("source_not_approved")
     if observation.rate_limit_status != RateLimitStatus.OK:
         raise ProviderPolicyError("rate_limit_policy_not_approved")
+    return event_time, available
+
+
+def _run_market_quality_gate(
+    observation: MarketObservation,
+    event_time: datetime,
+    available: datetime,
+) -> None:
     quality = validate_external_record(
         {
             "schema_version": observation.schema_version,
@@ -301,7 +366,7 @@ def validate_market_observation(observation: MarketObservation) -> None:
             "source_id": observation.source_id,
             "event_id": observation.event_id,
             "event_timestamp": event_time.isoformat(),
-            "ingested_at": ingested.isoformat(),
+            "ingested_at": parse_timestamp(observation.ingested_at, "ingested_at").isoformat(),
             "available_at": available.isoformat(),
             "unit": observation.unit,
             "quote_currency": observation.quote_currency,
@@ -312,26 +377,34 @@ def validate_market_observation(observation: MarketObservation) -> None:
         },
         as_of_timestamp=available,
     )
-    if not quality.passed or quality.status is not QualityStatus.VALID:
-        reasons = ",".join(quality.reasons) or "unknown_quality_failure"
-        raise ProviderError(f"market_record_quality_rejected:{reasons}")
+    if quality.passed and quality.status is QualityStatus.VALID:
+        return
+    reasons = ",".join(quality.reasons) or "unknown_quality_failure"
+    raise ProviderError(f"market_record_quality_rejected:{reasons}")
 
 
-def validate_news_feature(feature: NewsFeature) -> None:
-    """Reject non-auditable NLP features before they are stored or joined."""
-    required = (
-        feature.event_id,
-        feature.provider_id,
-        feature.source_id,
-        feature.revision,
-        feature.license_status,
-        feature.content_hash,
-        feature.model_id,
-        feature.model_revision,
-        feature.event_type,
+def validate_market_observation(observation: MarketObservation) -> None:
+    """Validate a numeric record against provider rules and the shared DQ gate."""
+    _validate_market_fields(observation)
+    event_time, available = _validate_market_provenance(observation)
+    _run_market_quality_gate(observation, event_time, available)
+
+
+def _validate_news_feature_fields(feature: NewsFeature) -> None:
+    _require_text(
+        (
+            feature.event_id,
+            feature.provider_id,
+            feature.source_id,
+            feature.revision,
+            feature.license_status,
+            feature.content_hash,
+            feature.model_id,
+            feature.model_revision,
+            feature.event_type,
+        ),
+        "nlp_feature_required_field_missing",
     )
-    if any(not isinstance(item, str) or not item.strip() for item in required):
-        raise ProviderError("nlp_feature_required_field_missing")
     if feature.schema_version != NLP_RESULT_SCHEMA_VERSION:
         raise ProviderError("nlp_schema_version_mismatch")
     if feature.license_status != "approved":
@@ -340,27 +413,34 @@ def validate_news_feature(feature: NewsFeature) -> None:
         raise ProviderError("nlp_content_hash_invalid")
     if feature.sentiment_label not in ALLOWED_SENTIMENTS:
         raise ProviderError("nlp_sentiment_label_invalid")
-    for name, value, lower, upper in (
-        ("sentiment_score", feature.sentiment_score, -1.0, 1.0),
-        ("confidence", feature.confidence, 0.0, 1.0),
-    ):
-        if (
-            isinstance(value, bool)
-            or not isinstance(value, (int, float))
-            or not math.isfinite(float(value))
-            or not lower <= value <= upper
-        ):
-            raise ProviderError(f"nlp_{name}_invalid")
+
+
+def _validate_numeric_range(name: str, value: float, lower: float, upper: float) -> None:
+    valid_number = (
+        not isinstance(value, bool)
+        and isinstance(value, (int, float))
+        and math.isfinite(float(value))
+        and lower <= value <= upper
+    )
+    if not valid_number:
+        raise ProviderError(f"nlp_{name}_invalid")
+
+
+def _validate_nlp_timeline(feature: NewsFeature) -> None:
     published = parse_timestamp(feature.published_at, "published_at")
     ingested = parse_timestamp(feature.ingested_at, "ingested_at")
     available = parse_timestamp(feature.available_at, "available_at")
     processed = parse_timestamp(feature.processed_at, "processed_at")
     if published > ingested or ingested > processed or processed > available:
         raise ProviderError("invalid_timestamp_order:nlp_feature")
+
+
+def validate_news_feature(feature: NewsFeature) -> None:
+    """Reject non-auditable NLP features before they are stored or joined."""
+    _validate_news_feature_fields(feature)
+    _validate_numeric_range("sentiment_score", feature.sentiment_score, -1.0, 1.0)
+    _validate_numeric_range("confidence", feature.confidence, 0.0, 1.0)
+    _validate_nlp_timeline(feature)
     if feature.calibration_status not in {"uncalibrated", "calibrated"}:
         raise ProviderError("nlp_calibration_status_invalid")
-    if any(
-        not isinstance(asset, str) or not asset.strip()
-        for asset in feature.asset_mapping
-    ):
-        raise ProviderError("nlp_asset_mapping_invalid")
+    _validate_asset_mapping(feature.asset_mapping, "nlp_asset_mapping_invalid")
