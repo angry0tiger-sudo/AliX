@@ -255,7 +255,7 @@ def _roundtrip_model(
     """Reload from a model-native serialization contract without unsafe pickle."""
     booster = getattr(model, "booster_", None)
     if booster is not None and callable(getattr(booster, "model_to_string", None)):
-        from lightgbm import Booster  # type: ignore[import-not-found]
+        from lightgbm import Booster
 
         payload = booster.model_to_string()
         restored = Booster(model_str=payload)
