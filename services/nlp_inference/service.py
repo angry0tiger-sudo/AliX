@@ -50,9 +50,16 @@ class ModelManifest:
 
     def __post_init__(self) -> None:
         fields = (
-            self.model_id, self.revision, self.artifact_dir, self.weights_file,
-            self.tokenizer_file, self.weights_sha256, self.tokenizer_sha256,
-            self.model_license_status, self.dataset_license_status, self.attribution,
+            self.model_id,
+            self.revision,
+            self.artifact_dir,
+            self.weights_file,
+            self.tokenizer_file,
+            self.weights_sha256,
+            self.tokenizer_sha256,
+            self.model_license_status,
+            self.dataset_license_status,
+            self.attribution,
         )
         if any(not isinstance(item, str) or not item.strip() for item in fields):
             raise NlpServiceError("nlp_model_manifest_incomplete")
@@ -140,7 +147,13 @@ class NlpService:
         if processed < available:
             raise NlpServiceError("nlp_clock_before_source_available")
         confidence = float(raw_score)
-        score = confidence if label == "positive" else -confidence if label == "negative" else 0.0
+        score = (
+            confidence
+            if label == "positive"
+            else -confidence
+            if label == "negative"
+            else 0.0
+        )
         result = NewsFeature(
             event_id=event.event_id,
             provider_id=event.provider_id,

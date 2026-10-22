@@ -101,17 +101,31 @@ def test_nlp_emits_versioned_features_after_local_inference() -> None:
     assert result.calibration_status == "uncalibrated"
     assert result.event_type == "unknown"
     assert result.schema_version == "alix.nlp.sentiment.v1"
-    negative = service(classifier=FakeClassifier({"label": "NEG", "score": 0.7})).infer(event())
-    neutral = service(classifier=FakeClassifier({"label": "NEU", "score": 0.0})).infer(event())
+    negative = service(classifier=FakeClassifier({"label": "NEG", "score": 0.7})).infer(
+        event()
+    )
+    neutral = service(classifier=FakeClassifier({"label": "NEU", "score": 0.0})).infer(
+        event()
+    )
     assert negative.sentiment_score == pytest.approx(-0.7)
     assert neutral.sentiment_score == 0.0
 
 
 def test_manifest_rejects_unapproved_license_unpinned_revision_and_paths() -> None:
     with pytest.raises(NlpServiceError, match="license_not_approved"):
-        manifest(model_license="conditional", dataset_license="approved", commercial_approved=True, fixture=False)
+        manifest(
+            model_license="conditional",
+            dataset_license="approved",
+            commercial_approved=True,
+            fixture=False,
+        )
     with pytest.raises(NlpServiceError, match="license_not_approved"):
-        manifest(model_license="approved", dataset_license="conditional", commercial_approved=True, fixture=False)
+        manifest(
+            model_license="approved",
+            dataset_license="conditional",
+            commercial_approved=True,
+            fixture=False,
+        )
     with pytest.raises(NlpServiceError, match="revision_not_immutable"):
         manifest(revision="main")
     with pytest.raises(NlpServiceError, match="hash_invalid"):
@@ -142,10 +156,14 @@ def test_nlp_fails_closed_for_invalid_input_output_and_failure() -> None:
         service(classifier=failure).infer(event())
     assert "secret detail" not in str(caught.value)
     with pytest.raises(NlpServiceError, match="label_unmapped"):
-        service(classifier=FakeClassifier({"label": "LABEL_77", "score": 0.9})).infer(event())
+        service(classifier=FakeClassifier({"label": "LABEL_77", "score": 0.9})).infer(
+            event()
+        )
     for score in (-0.1, 1.1, float("nan"), float("inf"), True):
         with pytest.raises(NlpServiceError, match="confidence_invalid"):
-            service(classifier=FakeClassifier({"label": "POS", "score": score})).infer(event())
+            service(classifier=FakeClassifier({"label": "POS", "score": score})).infer(
+                event()
+            )
     with pytest.raises(NlpServiceError, match="clock_before_source"):
         service(clock=ts("2026-10-22T09:00:00Z")).infer(event())
 
@@ -156,14 +174,18 @@ def test_nlp_rejects_bad_shape_missing_timestamp_and_future_publication() -> Non
             return "positive"
 
     with pytest.raises(NlpServiceError, match="output_schema_invalid"):
-        NlpService(manifest(), BadClassifier(), lambda: ts("2026-10-22T09:03:00Z"), True).infer(event())  # type: ignore[arg-type]
+        NlpService(
+            manifest(), BadClassifier(), lambda: ts("2026-10-22T09:03:00Z"), True
+        ).infer(event())  # type: ignore[arg-type]
     with pytest.raises(ProviderError, match="published_after_ingest"):
         service().infer(replace(event(), published_at=ts("2026-10-22T09:05:00Z")))
     with pytest.raises(ProviderError, match="missing_timestamp"):
         service().infer(replace(event(), available_at=None))
 
 
-def test_local_model_loader_verifies_hashes_and_never_uses_remote_id(tmp_path: Path) -> None:
+def test_local_model_loader_verifies_hashes_and_never_uses_remote_id(
+    tmp_path: Path,
+) -> None:
     weights, tokenizer = b"synthetic weight bytes", b"synthetic tokenizer bytes"
     (tmp_path / "model.safetensors").write_bytes(weights)
     (tmp_path / "tokenizer.json").write_bytes(tokenizer)
@@ -190,9 +212,13 @@ def test_local_model_loader_verifies_hashes_and_never_uses_remote_id(tmp_path: P
         load_local_huggingface_classifier(approved, pipeline_factory=fake_factory)
 
 
-def test_local_model_loader_rejects_fixture_manifest_missing_files_path_escape_and_bad_pipeline(tmp_path: Path) -> None:
+def test_local_model_loader_rejects_fixture_manifest_missing_files_path_escape_and_bad_pipeline(
+    tmp_path: Path,
+) -> None:
     with pytest.raises(NlpServiceError, match="test_fixture_cannot_load"):
-        load_local_huggingface_classifier(manifest(), pipeline_factory=lambda path: None)
+        load_local_huggingface_classifier(
+            manifest(), pipeline_factory=lambda path: None
+        )
     approved = manifest(
         model_license="approved",
         dataset_license="approved",
@@ -226,4 +252,6 @@ def test_local_model_loader_rejects_fixture_manifest_missing_files_path_escape_a
         tokenizer_sha256=hashlib.sha256(b"tokenizer").hexdigest(),
     )
     with pytest.raises(NlpServiceError, match="pipeline_invalid"):
-        load_local_huggingface_classifier(proper, pipeline_factory=lambda path: object())
+        load_local_huggingface_classifier(
+            proper, pipeline_factory=lambda path: object()
+        )

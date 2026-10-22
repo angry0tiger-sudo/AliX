@@ -68,7 +68,10 @@ def join_news_features_as_of(
     for feature in sorted(
         selected,
         key=lambda item: (
-            item.available_at, item.provider_id, item.event_id, item.revision,
+            item.available_at,
+            item.provider_id,
+            item.event_id,
+            item.revision,
         ),
     ):
         unique.setdefault((feature.provider_id, feature.content_hash), feature)

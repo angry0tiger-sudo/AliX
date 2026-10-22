@@ -112,8 +112,13 @@ class ProviderRegistration:
         if parts.username or parts.password:
             raise ProviderPolicyError("provider_endpoint_credentials_forbidden")
         sensitive_keys = {
-            "key", "api_key", "apikey", "token", "secret",
-            "password", "authorization",
+            "key",
+            "api_key",
+            "apikey",
+            "token",
+            "secret",
+            "password",
+            "authorization",
         }
         if any(key.lower() in sensitive_keys for key, _ in parse_qsl(parts.query)):
             raise ProviderPolicyError("provider_endpoint_must_not_contain_credentials")
@@ -220,8 +225,13 @@ class NewsFeature:
 def validate_news_event(event: NewsEvent) -> None:
     """Validate source rights, schema and temporal provenance."""
     required = (
-        event.event_id, event.provider_id, event.source_id, event.revision,
-        event.license_status, event.content_hash, event.text,
+        event.event_id,
+        event.provider_id,
+        event.source_id,
+        event.revision,
+        event.license_status,
+        event.content_hash,
+        event.text,
     )
     if any(not isinstance(item, str) or not item.strip() for item in required):
         raise ProviderError("news_record_required_field_missing")
@@ -242,24 +252,36 @@ def validate_news_event(event: NewsEvent) -> None:
         processed = parse_timestamp(event.processed_at, "processed_at")
         if processed < available:
             raise ProviderError("invalid_timestamp_order:processed_before_available")
-    if any(not isinstance(asset, str) or not asset.strip() for asset in event.asset_mapping):
+    if any(
+        not isinstance(asset, str) or not asset.strip() for asset in event.asset_mapping
+    ):
         raise ProviderError("news_asset_mapping_invalid")
 
 
 def validate_market_observation(observation: MarketObservation) -> None:
     """Validate a numeric record against provider rules and the shared DQ gate."""
     required = (
-        observation.event_id, observation.provider_id, observation.source_id,
-        observation.market, observation.revision, observation.unit,
-        observation.quote_currency, observation.license_status,
-        observation.rate_limit_status, observation.content_hash,
+        observation.event_id,
+        observation.provider_id,
+        observation.source_id,
+        observation.market,
+        observation.revision,
+        observation.unit,
+        observation.quote_currency,
+        observation.license_status,
+        observation.rate_limit_status,
+        observation.content_hash,
     )
     if any(not isinstance(item, str) or not item.strip() for item in required):
         raise ProviderError("market_record_required_field_missing")
     if observation.schema_version != EXTERNAL_RECORD_SCHEMA_VERSION:
         raise ProviderError("market_schema_version_mismatch")
     value = observation.value
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(float(value))
+    ):
         raise ProviderError("market_value_non_finite_or_invalid")
     if not HASH_PATTERN.fullmatch(observation.content_hash):
         raise ProviderError("market_content_hash_invalid")
@@ -298,9 +320,15 @@ def validate_market_observation(observation: MarketObservation) -> None:
 def validate_news_feature(feature: NewsFeature) -> None:
     """Reject non-auditable NLP features before they are stored or joined."""
     required = (
-        feature.event_id, feature.provider_id, feature.source_id, feature.revision,
-        feature.license_status, feature.content_hash, feature.model_id,
-        feature.model_revision, feature.event_type,
+        feature.event_id,
+        feature.provider_id,
+        feature.source_id,
+        feature.revision,
+        feature.license_status,
+        feature.content_hash,
+        feature.model_id,
+        feature.model_revision,
+        feature.event_type,
     )
     if any(not isinstance(item, str) or not item.strip() for item in required):
         raise ProviderError("nlp_feature_required_field_missing")
@@ -331,5 +359,8 @@ def validate_news_feature(feature: NewsFeature) -> None:
         raise ProviderError("invalid_timestamp_order:nlp_feature")
     if feature.calibration_status not in {"uncalibrated", "calibrated"}:
         raise ProviderError("nlp_calibration_status_invalid")
-    if any(not isinstance(asset, str) or not asset.strip() for asset in feature.asset_mapping):
+    if any(
+        not isinstance(asset, str) or not asset.strip()
+        for asset in feature.asset_mapping
+    ):
         raise ProviderError("nlp_asset_mapping_invalid")

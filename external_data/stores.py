@@ -43,13 +43,17 @@ class InMemoryNewsStore:
         return StoreWriteResult.STORED
 
     def records(self) -> tuple[NewsEvent, ...]:
-        return tuple(sorted(
-            self._records.values(),
-            key=lambda item: (
-                item.available_at.isoformat() if item.available_at else "",
-                item.provider_id, item.event_id, item.revision,
-            ),
-        ))
+        return tuple(
+            sorted(
+                self._records.values(),
+                key=lambda item: (
+                    item.available_at.isoformat() if item.available_at else "",
+                    item.provider_id,
+                    item.event_id,
+                    item.revision,
+                ),
+            )
+        )
 
 
 class InMemoryExternalFeatureStore:
@@ -70,13 +74,17 @@ class InMemoryExternalFeatureStore:
         return StoreWriteResult.STORED
 
     def records(self) -> tuple[MarketObservation, ...]:
-        return tuple(sorted(
-            self._records.values(),
-            key=lambda item: (
-                item.available_at.isoformat() if item.available_at else "",
-                item.provider_id, item.event_id, item.revision,
-            ),
-        ))
+        return tuple(
+            sorted(
+                self._records.values(),
+                key=lambda item: (
+                    item.available_at.isoformat() if item.available_at else "",
+                    item.provider_id,
+                    item.event_id,
+                    item.revision,
+                ),
+            )
+        )
 
 
 class InMemoryNlpFeatureStore:
@@ -88,8 +96,10 @@ class InMemoryNlpFeatureStore:
     def add(self, feature: NewsFeature) -> StoreWriteResult:
         validate_news_feature(feature)
         key = (
-            feature.provider_id, feature.event_id,
-            feature.revision, feature.model_revision,
+            feature.provider_id,
+            feature.event_id,
+            feature.revision,
+            feature.model_revision,
         )
         previous = self._records.get(key)
         if previous is not None:
@@ -106,10 +116,15 @@ class InMemoryNlpFeatureStore:
         return StoreWriteResult.STORED
 
     def records(self) -> tuple[NewsFeature, ...]:
-        return tuple(sorted(
-            self._records.values(),
-            key=lambda item: (
-                item.available_at.isoformat(),
-                item.provider_id, item.event_id, item.revision, item.model_revision,
-            ),
-        ))
+        return tuple(
+            sorted(
+                self._records.values(),
+                key=lambda item: (
+                    item.available_at.isoformat(),
+                    item.provider_id,
+                    item.event_id,
+                    item.revision,
+                    item.model_revision,
+                ),
+            )
+        )

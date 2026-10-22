@@ -18,7 +18,9 @@ class Pipeline(Protocol):
 class LocalHuggingFaceClassifier:
     """A minimal adapter that normalizes the local pipeline's result shape."""
 
-    def __init__(self, pipeline: Pipeline, label_map: tuple[tuple[str, str], ...]) -> None:
+    def __init__(
+        self, pipeline: Pipeline, label_map: tuple[tuple[str, str], ...]
+    ) -> None:
         self._pipeline = pipeline
         self._label_map = dict(label_map)
 
@@ -93,7 +95,9 @@ def load_local_huggingface_classifier(
                 str(root), local_files_only=True, trust_remote_code=False
             )
             model = AutoModelForSequenceClassification.from_pretrained(
-                str(root), local_files_only=True, trust_remote_code=False,
+                str(root),
+                local_files_only=True,
+                trust_remote_code=False,
                 use_safetensors=True,
             )
             loaded = pipeline(

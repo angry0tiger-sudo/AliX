@@ -36,8 +36,6 @@ jobs:
         run: python -m compileall -q connectivity external_data services integrations user_data/strategies user_data/freqaimodels tests scripts
       - name: Ruff lint
         run: ruff check connectivity external_data services integrations user_data/strategies user_data/freqaimodels tests scripts
-      - name: Print Ruff formatting diffs (diagnostic only)
-        run: ruff format --diff connectivity external_data services integrations user_data/strategies user_data/freqaimodels tests scripts || true
       - name: Ruff format check
         run: ruff format --check connectivity external_data services integrations user_data/strategies user_data/freqaimodels tests scripts
       - name: Strict type check

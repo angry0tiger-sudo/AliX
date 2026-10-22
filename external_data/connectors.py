@@ -133,7 +133,9 @@ class RssNewsConnector:
             mapped = self.asset_resolver(text) if self.asset_resolver else ()
         except Exception:
             raise ProviderError("news_asset_mapping_failed") from None
-        assets = tuple(sorted({item.strip().upper() for item in mapped if item.strip()}))
+        assets = tuple(
+            sorted({item.strip().upper() for item in mapped if item.strip()})
+        )
         result = NewsEvent(
             event_id=event_id,
             provider_id=self.registration.provider_id,
@@ -195,9 +197,18 @@ class MarketAnalyticsConnector:
         self.unit = unit
         self.quote_currency = quote_currency.upper()
 
-    def _parse_row(self, row: Mapping[str, object], received: datetime) -> MarketObservation:
-        event_id, market, revision = row.get("id"), row.get("market"), row.get("revision")
-        if not all(isinstance(item, str) and item.strip() for item in (event_id, market, revision)):
+    def _parse_row(
+        self, row: Mapping[str, object], received: datetime
+    ) -> MarketObservation:
+        event_id, market, revision = (
+            row.get("id"),
+            row.get("market"),
+            row.get("revision"),
+        )
+        if not all(
+            isinstance(item, str) and item.strip()
+            for item in (event_id, market, revision)
+        ):
             raise ProviderError("market_record_required_field_missing")
         value = row.get("value")
         if isinstance(value, bool) or not isinstance(value, (int, float)):

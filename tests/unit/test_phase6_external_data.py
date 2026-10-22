@@ -88,8 +88,11 @@ def rss_item(
 ) -> str:
     return (
         "<item><guid>" + guid + "</guid><title>" + title + "</title>"
-        "<pubDate>" + published + "</pubDate><description>"
-        + body + "</description></item>"
+        "<pubDate>"
+        + published
+        + "</pubDate><description>"
+        + body
+        + "</description></item>"
     )
 
 
@@ -185,14 +188,29 @@ def test_registry_fails_before_transport_for_inactive_or_unapproved_source() -> 
         registration(endpoint_url="https://rss.fixture.invalid/feed?api_key=fake")
     with pytest.raises(ProviderPolicyError, match="invalid_domain"):
         ProviderRegistration(
-            "fixture-live", "news", "https://example.com/feed", "approved",
-            "test", "none", "observed", "tests", True, True,
+            "fixture-live",
+            "news",
+            "https://example.com/feed",
+            "approved",
+            "test",
+            "none",
+            "observed",
+            "tests",
+            True,
+            True,
         )
     with pytest.raises(ProviderPolicyError, match="tradingview"):
         ProviderRegistration(
-            "tradingview", "market_analytics",
-            "https://tradingview.fixture.invalid/api", "approved",
-            "test", "none", "observed", "tests", True, True,
+            "tradingview",
+            "market_analytics",
+            "https://tradingview.fixture.invalid/api",
+            "approved",
+            "test",
+            "none",
+            "observed",
+            "tests",
+            True,
+            True,
         )
     assert transport.calls == []
 
@@ -200,7 +218,12 @@ def test_registry_fails_before_transport_for_inactive_or_unapproved_source() -> 
 def test_rss_ingest_parses_timestamps_mapping_and_normalized_content() -> None:
     body = rss_body(
         rss_item(body="<![CDATA[<p>Neutral &amp; synthetic text</p>]]>")
-        + rss_item("story-2", "Unknown story", "Thu, 22 Oct 2026 09:30:00 GMT", "No mapped asset")
+        + rss_item(
+            "story-2",
+            "Unknown story",
+            "Thu, 22 Oct 2026 09:30:00 GMT",
+            "No mapped asset",
+        )
     )
     transport = FixtureTransport(response(body))
     records = RssNewsConnector(
@@ -272,8 +295,11 @@ def test_market_connector_uses_shared_data_quality_contract() -> None:
     )
     transport = FixtureTransport(response(body))
     connector = MarketAnalyticsConnector(
-        registration("fixture-market", "market_analytics",
-                     endpoint_url="https://market.fixture.invalid/metrics"),
+        registration(
+            "fixture-market",
+            "market_analytics",
+            endpoint_url="https://market.fixture.invalid/metrics",
+        ),
         transport,
         unit="index",
         quote_currency="usdt",
@@ -292,10 +318,13 @@ def test_market_connector_uses_shared_data_quality_contract() -> None:
 def test_market_connector_rejects_bad_payload_schema_values_and_limits() -> None:
     transport = FixtureTransport(response("not json"))
     reg = registration(
-        "fixture-market", "market_analytics",
+        "fixture-market",
+        "market_analytics",
         endpoint_url="https://market.fixture.invalid/metrics",
     )
-    connector = MarketAnalyticsConnector(reg, transport, unit="index", quote_currency="USDT")
+    connector = MarketAnalyticsConnector(
+        reg, transport, unit="index", quote_currency="USDT"
+    )
     with pytest.raises(ProviderError, match="json_invalid"):
         connector.ingest()
     transport.result = response('{"data":[{"id":"x"}]}')
@@ -317,7 +346,9 @@ def test_market_connector_rejects_bad_payload_schema_values_and_limits() -> None
     with pytest.raises(ProviderError, match="unit_and_quote"):
         MarketAnalyticsConnector(reg, transport, unit="", quote_currency="USDT")
     with pytest.raises(ProviderPolicyError, match="kind_mismatch"):
-        MarketAnalyticsConnector(registration(), transport, unit="index", quote_currency="USDT")
+        MarketAnalyticsConnector(
+            registration(), transport, unit="index", quote_currency="USDT"
+        )
 
 
 def test_market_record_rejects_invalid_provenance_and_values() -> None:
@@ -326,16 +357,18 @@ def test_market_record_rejects_invalid_provenance_and_values() -> None:
     with pytest.raises(ProviderPolicyError, match="rate_limit_policy"):
         validate_market_observation(market_observation(rate_limit_status="limited"))
     with pytest.raises(ProviderError, match="ingest_after_available"):
-        validate_market_observation(market_observation(
-            available_at=ts("2026-10-22T09:45:00Z")
-        ))
+        validate_market_observation(
+            market_observation(available_at=ts("2026-10-22T09:45:00Z"))
+        )
     with pytest.raises(ProviderError, match="non_finite"):
         validate_market_observation(market_observation(value=float("inf")))
     with pytest.raises(ProviderError, match="hash_invalid"):
         validate_market_observation(market_observation(content_hash="not-a-hash"))
 
 
-def test_news_store_deduplicates_normalized_content_and_rejects_revision_conflicts() -> None:
+def test_news_store_deduplicates_normalized_content_and_rejects_revision_conflicts() -> (
+    None
+):
     store = InMemoryNewsStore()
     first = news_event(event_id="one", text="BTC   market update")
     alias = news_event(event_id="two", text="btc market update")
@@ -343,7 +376,9 @@ def test_news_store_deduplicates_normalized_content_and_rejects_revision_conflic
     assert store.add(first) is StoreWriteResult.DUPLICATE
     assert store.add(alias) is StoreWriteResult.DUPLICATE
     assert len(store.records()) == 1
-    conflicting = replace(first, content_hash=digest_content("different"), text="different")
+    conflicting = replace(
+        first, content_hash=digest_content("different"), text="different"
+    )
     with pytest.raises(ProviderError, match="revision_conflict"):
         store.add(conflicting)
     with pytest.raises(ProviderPolicyError, match="source_not_approved"):
@@ -371,37 +406,54 @@ def test_numeric_and_nlp_stores_are_separate_and_detect_conflicts() -> None:
 
 
 def test_point_in_time_join_selects_only_revision_available_at_decision() -> None:
-    old = feature(event_id="same", revision="r1", available_at="2026-10-22T09:03:00Z", text="old")
-    new = feature(event_id="same", revision="r2", available_at="2026-10-22T09:08:00Z", text="new")
+    old = feature(
+        event_id="same", revision="r1", available_at="2026-10-22T09:03:00Z", text="old"
+    )
+    new = feature(
+        event_id="same", revision="r2", available_at="2026-10-22T09:08:00Z", text="new"
+    )
     late = feature(event_id="late", available_at="2026-10-22T10:30:00Z")
     stale = feature(event_id="stale", available_at="2026-10-22T08:00:00Z")
     unmapped = feature(event_id="unmapped", assets=())
     records = [old, new, late, stale, unmapped]
     early = join_news_features_as_of(
-        records, asset="btc/usdt", decision_timestamp="2026-10-22T09:05:00Z",
+        records,
+        asset="btc/usdt",
+        decision_timestamp="2026-10-22T09:05:00Z",
         window_start="2026-10-22T08:30:00Z",
     )
     assert [item.event_id for item in early.records] == ["same"]
     assert early.records[0].revision == "r1"
     later = join_news_features_as_of(
-        records, asset="BTC/USDT", decision_timestamp="2026-10-22T09:10:00Z",
+        records,
+        asset="BTC/USDT",
+        decision_timestamp="2026-10-22T09:10:00Z",
         window_start="2026-10-22T08:30:00Z",
     )
     assert [item.event_id for item in later.records] == ["same"]
     assert later.records[0].revision == "r2"
     assert early.fingerprint != later.fingerprint
-    assert join_news_features_as_of(
-        records, asset="ETH/USDT", decision_timestamp="2026-10-22T09:05:00Z",
-        window_start="2026-10-22T08:30:00Z",
-    ).records == ()
+    assert (
+        join_news_features_as_of(
+            records,
+            asset="ETH/USDT",
+            decision_timestamp="2026-10-22T09:05:00Z",
+            window_start="2026-10-22T08:30:00Z",
+        ).records
+        == ()
+    )
     with pytest.raises(ProviderError, match="window_start_after_decision"):
         join_news_features_as_of(
-            records, asset="BTC/USDT", decision_timestamp="2026-10-22T09:05:00Z",
+            records,
+            asset="BTC/USDT",
+            decision_timestamp="2026-10-22T09:05:00Z",
             window_start="2026-10-22T09:06:00Z",
         )
     with pytest.raises(ProviderError, match="asset_required"):
         join_news_features_as_of(
-            [], asset=" ", decision_timestamp="2026-10-22T09:05:00Z",
+            [],
+            asset=" ",
+            decision_timestamp="2026-10-22T09:05:00Z",
             window_start="2026-10-22T08:30:00Z",
         )
 
@@ -422,29 +474,40 @@ def test_point_in_time_join_is_invariant_to_future_additions_and_deduplicates() 
     assert len(augmented.records) == 1
 
 
-def test_point_in_time_join_fails_closed_on_bad_timestamp_rights_and_conflicts() -> None:
+def test_point_in_time_join_fails_closed_on_bad_timestamp_rights_and_conflicts() -> (
+    None
+):
     with pytest.raises(ProviderError, match="missing_timestamp"):
         join_news_features_as_of(
-            [replace(feature(), available_at=None)], asset="BTC/USDT",
-            decision_timestamp="2026-10-22T09:05:00Z", window_start="2026-10-22T08:30:00Z",
+            [replace(feature(), available_at=None)],
+            asset="BTC/USDT",
+            decision_timestamp="2026-10-22T09:05:00Z",
+            window_start="2026-10-22T08:30:00Z",
         )
     with pytest.raises(ProviderError, match="timezone_required"):
         join_news_features_as_of(
             [replace(feature(), available_at=datetime(2026, 10, 22, 9, 3))],
-            asset="BTC/USDT", decision_timestamp="2026-10-22T09:05:00Z",
+            asset="BTC/USDT",
+            decision_timestamp="2026-10-22T09:05:00Z",
             window_start="2026-10-22T08:30:00Z",
         )
     with pytest.raises(ProviderPolicyError, match="source_not_approved"):
         join_news_features_as_of(
-            [feature(license_status="conditional")], asset="BTC/USDT",
-            decision_timestamp="2026-10-22T09:05:00Z", window_start="2026-10-22T08:30:00Z",
+            [feature(license_status="conditional")],
+            asset="BTC/USDT",
+            decision_timestamp="2026-10-22T09:05:00Z",
+            window_start="2026-10-22T08:30:00Z",
         )
-    first = feature(event_id="conflict", available_at="2026-10-22T09:03:00Z", text="one")
+    first = feature(
+        event_id="conflict", available_at="2026-10-22T09:03:00Z", text="one"
+    )
     second = replace(first, content_hash=digest_content("two"), revision="r2")
     with pytest.raises(ProviderError, match="revision_timestamp_conflict"):
         join_news_features_as_of(
-            [first, second], asset="BTC/USDT",
-            decision_timestamp="2026-10-22T09:05:00Z", window_start="2026-10-22T08:30:00Z",
+            [first, second],
+            asset="BTC/USDT",
+            decision_timestamp="2026-10-22T09:05:00Z",
+            window_start="2026-10-22T08:30:00Z",
         )
 
 
