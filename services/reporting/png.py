@@ -55,9 +55,11 @@ def render_equity_chart(values: Sequence[float], *, reconciliation_status: str,
     if reconciliation_status == "RECONCILED" and len(clean) >= 2:
         low, high = min(clean), max(clean)
         span = high - low if high > low else 1.0
-        points = [(left + i * (right - left) // (len(clean) - 1),
-                   bottom - int((value - low) / span * (bottom - top))
-                   for i, value in enumerate(clean)]
+        points = [
+            (left + i * (right - left) // (len(clean) - 1),
+             bottom - int((value - low) / span * (bottom - top)))
+            for i, value in enumerate(clean)
+        ]
         for first, second in zip(points, points[1:]):
             _line(canvas, first[0], first[1], second[0], second[1], (30, 95, 180))
     scanlines = b"".join(
