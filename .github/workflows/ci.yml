@@ -33,15 +33,15 @@ jobs:
       - name: Validate pre-commit configuration
         run: pre-commit validate-config
       - name: Compile source
-        run: python -m compileall -q connectivity services integrations user_data/strategies tests scripts
+        run: python -m compileall -q connectivity services integrations user_data/strategies user_data/freqaimodels tests scripts
       - name: Ruff lint
-        run: ruff check connectivity services integrations user_data/strategies tests scripts
+        run: ruff check connectivity services integrations user_data/strategies user_data/freqaimodels tests scripts
       - name: Ruff format check
-        run: ruff format --check connectivity services integrations user_data/strategies tests scripts
+        run: ruff format --check connectivity services integrations user_data/strategies user_data/freqaimodels tests scripts
       - name: Strict type check
         run: mypy --config-file mypy.ini
       - name: Security scan
-        run: bandit -r connectivity services integrations user_data/strategies scripts -ll
+        run: bandit -r connectivity services integrations user_data/strategies user_data/freqaimodels scripts -ll
       - name: Runtime and tooling dependency resolution (dry run)
         run: python -m pip install --dry-run --report /tmp/alix-dependency-resolution.json -r requirements.txt
       - name: Verify transitive dependency lock
@@ -54,7 +54,7 @@ jobs:
       - name: Architecture contracts
         run: lint-imports
       - name: Complexity gate
-        run: xenon --max-absolute B --max-modules B --max-average A connectivity services integrations user_data/strategies scripts
+        run: xenon --max-absolute B --max-modules B --max-average A connectivity services integrations user_data/strategies user_data/freqaimodels scripts
       - name: Unit tests and coverage (mock-only)
         run: pytest --cov=connectivity --cov=services --cov=integrations.nobitex --cov=user_data/strategies --cov-report=term-missing --cov-fail-under=90 -q
       - name: Phase 1 safety and dependency contracts
@@ -82,7 +82,7 @@ jobs:
       - name: Install pinned Freqtrade runtime
         run: |
           python -m pip install pip==25.2
-          python -m pip install freqtrade==2026.7
+          python -m pip install freqtrade==2026.7 lightgbm==4.7.0
       - name: Verify Freqtrade CLI
         run: freqtrade --version
       - name: Verify strategy loads with Freqtrade and config stays closed
@@ -91,11 +91,16 @@ jobs:
           import json
           from pathlib import Path
 
+          from freqtrade.freqai.base_models.BaseRegressionModel import BaseRegressionModel
           from freqtrade.strategy import IStrategy
+          from user_data.freqaimodels.AliXBaselineRegressor import AliXBaselineRegressor
+          from user_data.strategies.AliXFreqAIBaselineStrategy import AliXFreqAIBaselineStrategy
           from user_data.strategies.AliXStrategy import AliXStrategy
 
           config = json.loads(Path("config.json").read_text(encoding="utf-8"))
           assert issubclass(AliXStrategy, IStrategy)
+          assert issubclass(AliXFreqAIBaselineStrategy, IStrategy)
+          assert issubclass(AliXBaselineRegressor, BaseRegressionModel)
           assert config["dry_run"] is True
           assert config["initial_state"] == "stopped"
           assert config["max_open_trades"] == 0
@@ -104,3 +109,27 @@ jobs:
           assert config["exchange"]["pair_whitelist"] == []
           print("Freqtrade runtime smoke passed; no exchange connection was requested.")
           PY
+      - name: Run synthetic Phase 4 walk-forward mechanics check
+        run: |
+          python -m scripts.run_freqai_baseline_walkforward --synthetic --output /tmp/alix-phase4-synthetic.json --timeframe 1h --horizon 12 --folds 3 --min-train-size 300 --fee-bps 10 --slippage-bps 5 --commit-sha "$GITHUB_SHA"
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          report = json.loads(Path("/tmp/alix-phase4-synthetic.json").read_text(encoding="utf-8"))
+          assert report["evaluation_status"] == "SYNTHETIC_MECHANICS_ONLY"
+          assert report["dataset"]["kind"] == "synthetic"
+          assert len(report["folds"]) == 3
+          assert report["champion"] is None
+          assert report["promotion_status"] == "BLOCKED_NO_ECONOMIC_GATE"
+          assert report["economic_gates"]["status"] == "NOT_EVALUATED"
+          assert report["model"]["reload_roundtrip"] == "passed"
+          assert report["out_of_sample"]["sample_count"] > 0
+          print("Synthetic FreqAI mechanics passed; this is not economic evidence and Champion remains unset.")
+          PY
+      - name: Upload synthetic Phase 4 mechanics report
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase4-synthetic-walkforward-report
+          path: /tmp/alix-phase4-synthetic.json
+          if-no-files-found: error
