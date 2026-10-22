@@ -124,9 +124,8 @@ def prepare_model_dataset(dataframe: DataFrame, horizon: int) -> DataFrame:
     required = list(FEATURE_COLUMNS) + [TARGET_COLUMN]
     numeric = engineered[required].replace([np.inf, -np.inf], np.nan)
     valid = numeric.notna().all(axis=1)
-    dataset = engineered.loc[
-        valid, ["date", "close", "%-volatility_12"] + required
-    ].copy()
+    selected_columns = list(dict.fromkeys(["date", "close", "%-volatility_12", *required]))
+    dataset = engineered.loc[valid, selected_columns].copy()
     return dataset.reset_index(drop=True)
 
 
