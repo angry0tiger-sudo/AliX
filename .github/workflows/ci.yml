@@ -33,15 +33,15 @@ jobs:
       - name: Validate pre-commit configuration
         run: pre-commit validate-config
       - name: Compile source
-        run: python -m compileall -q connectivity external_data services integrations user_data/strategies user_data/freqaimodels tests scripts
+        run: python -m compileall -q risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels tests scripts
       - name: Ruff lint
-        run: ruff check connectivity external_data services integrations user_data/strategies user_data/freqaimodels tests scripts
+        run: ruff check risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels tests scripts
       - name: Ruff format check
-        run: ruff format --check connectivity external_data services integrations user_data/strategies user_data/freqaimodels tests scripts
+        run: ruff format --check risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels tests scripts
       - name: Strict type check
         run: mypy --config-file mypy.ini
       - name: Security scan
-        run: bandit -r connectivity external_data services integrations user_data/strategies user_data/freqaimodels scripts -ll
+        run: bandit -r risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels scripts -ll
       - name: Runtime and tooling dependency resolution (dry run)
         run: python -m pip install --dry-run --report /tmp/alix-dependency-resolution.json -r requirements.txt
       - name: Verify transitive dependency lock
@@ -54,9 +54,18 @@ jobs:
       - name: Architecture contracts
         run: lint-imports
       - name: Complexity gate
-        run: xenon --max-absolute B --max-modules B --max-average A connectivity external_data services integrations user_data/strategies user_data/freqaimodels scripts
+        run: xenon --max-absolute B --max-modules B --max-average A risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels scripts
       - name: Unit tests and coverage (mock-only)
-        run: pytest --cov=connectivity --cov=external_data --cov=services --cov=integrations.nobitex --cov=user_data/strategies --cov-report=term-missing --cov-fail-under=90 -q
+        run: pytest --cov=risk --cov=connectivity --cov=external_data --cov=services --cov=integrations.nobitex --cov=user_data/strategies --cov-report=term-missing --cov-fail-under=90 -q
+      - name: Phase 7 risk fault-injection report (synthetic only)
+        run: python scripts/run_phase7_risk_fault_injection.py --output /tmp/alix-phase7-risk-fault-injection.json --commit-sha "${{ github.event.pull_request.head.sha || github.sha }}"
+      - name: Upload Phase 7 fault-injection report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase7-risk-fault-injection-report
+          path: /tmp/alix-phase7-risk-fault-injection.json
+          if-no-files-found: warn
       - name: Phase 1 safety and dependency contracts
         run: pytest tests/unit/test_phase1_contracts.py -q
       - name: Starter Kit integrity and documentation validation

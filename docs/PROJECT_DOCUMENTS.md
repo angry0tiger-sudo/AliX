@@ -26,6 +26,15 @@ This index is the repository entry point for architecture, phase order, owner di
 - [Owner Directive](governance/owner-directives/2026-10-22-phase-6.md): authorization and scope boundaries.
 - Tracking issue: https://github.com/angry0tiger-sudo/AliX/issues/7.
 
+## Phase 7: Dynamic Risk Allocation, Risk Gate and Kill Switch
+
+- [Phase 7 acceptance](knowledge_base/PHASE_7_ACCEPTANCE.md): risk-plane, failure and remaining release/economic gates.
+- [Phase 7 status report](phase-reports/PHASE_7_STATUS.md): exact-head CI evidence and explicit blockers.
+- [ADR-0007](architecture/decisions/ADR-0007-phase-7-risk-engine.md): independent risk-plane and latched halt design.
+- [Owner Directive](governance/owner-directives/2026-10-22-phase-7.md): scope, fail-closed rules and non-trading authorization.
+- [Risk halt/re-arm runbook](runbook/PHASE_7_RISK_HALT_AND_REARM.md): operator process for incident, reconciliation and manual re-arm.
+- [Risk package](../risk/README.md): isolated contracts and implementation boundaries.
+
 ## Preserved compatibility copies
 
 These earlier paths are retained so existing links and history are not broken. The contents are preserved; the canonical stable paths are the two copies under `knowledge_base/`.

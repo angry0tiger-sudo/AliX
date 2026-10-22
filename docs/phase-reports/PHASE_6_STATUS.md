@@ -1,6 +1,6 @@
 # Phase 6 Status Report: External Data, Point-in-Time Features and Local NLP
 
-Status: IMPLEMENTATION AND REPORT-SYNC CI PASSED; PR #8 READY FOR OWNER REVIEW; EXTERNAL APPROVALS OPEN; ECONOMIC ACCEPTANCE NO-GO; CHAMPION BLOCKED; NO TRADING.
+Status: PHASE 6 MERGED BY OWNER; EXACT-HEAD IMPLEMENTATION/REPORT-SYNC CI PASSED BEFORE MERGE; EXTERNAL APPROVALS OPEN; ECONOMIC ACCEPTANCE NO-GO; CHAMPION BLOCKED; NO TRADING.
 
 ## Repository and authorization
 
@@ -9,7 +9,7 @@ Status: IMPLEMENTATION AND REPORT-SYNC CI PASSED; PR #8 READY FOR OWNER REVIEW; 
 - Base SHA: ce360a770586e76dc5a0f7b2421a371322e6d738.
 - Work branch: feat/phase-6-external-data-nlp.
 - Tracking issue: https://github.com/angry0tiger-sudo/AliX/issues/7.
-- PR: [#8](https://github.com/angry0tiger-sudo/AliX/pull/8), OPEN and READY FOR REVIEW; not merged. The Ready transition occurred after both push and PR workflows passed on report-sync SHA `416b46ebdbb59eb0f095fc7636368ca6b36de462`.
+- PR: [#8](https://github.com/angry0tiger-sudo/AliX/pull/8), merged by the owner. GitHub reports merge commit `5873ba52ab827109a0be450670e971796295fa8e`. The Phase 6 work itself remains offline/mock-only.
 - Phase 5 PR #6 is merged into main at https://github.com/angry0tiger-sudo/AliX/commit/ce360a770586e76dc5a0f7b2421a371322e6d738.
 - Main CI run #380 / ID 39733266520 succeeded on that exact base SHA. It is Phase 5 evidence, not Phase 6 evidence.
 
@@ -54,7 +54,7 @@ Status: IMPLEMENTATION AND REPORT-SYNC CI PASSED; PR #8 READY FOR OWNER REVIEW; 
 - Pull Request CI [run #405 / ID 39810343496](https://github.com/angry0tiger-sudo/AliX/actions/runs/39810343496): **success** on the exact report-sync SHA.
 - Each run finished with both Quality and Runtime jobs successful.
 - PR #8 was changed from Draft to Ready for Review only after verifying that both run conclusions were success on the same report-sync SHA. PR remains open and unmerged.
-- The current follow-up is documentation-only; its exact head is also checked by the normal PR and push workflows. No Phase 6 model/data artifact has been selected or downloaded; synthetic Phase 4/5 artifacts are not Phase 6 evidence.
+- The owner subsequently merged PR #8 at `5873ba52ab827109a0be450670e971796295fa8e`. Merge does not authorize live data, provider/model activation or trading. No Phase 6 model/data artifact was selected or downloaded; synthetic Phase 4/5 artifacts are not Phase 6 evidence.
 - No trading configuration, strategy entry/exit logic, Risk Gate, Kill Switch or order lifecycle was changed; no order submit/cancel, exchange/provider request, download, external notification, live/dry-run/paper session or host-network change was performed.
 
 ## Open blockers

@@ -2,10 +2,10 @@
 
 # Current repository checkpoint — 2026-10-22
 
-- Verified main HEAD: ce360a770586e76dc5a0f7b2421a371322e6d738.
+- Verified main HEAD before Phase 7 work: 5873ba52ab827109a0be450670e971796295fa8e (Phase 6 merge commit).
 - Phase 5 PR #6 was subsequently merged at that SHA. Main push CI run #380 / ID 39733266520 passed on the exact main SHA; this evidence is for Phase 5 only.
 - Phase 6 tracking issue: https://github.com/angry0tiger-sudo/AliX/issues/7. Work branch: feat/phase-6-external-data-nlp.
-- Phase 6 tested implementation SHA: `52bc49012a945bf6c3bb411b6a4d3933a9a69aa4`. Push CI [#402 / ID 39809700265](https://github.com/angry0tiger-sudo/AliX/actions/runs/39809700265) and PR CI [#403 / ID 39809712528](https://github.com/angry0tiger-sudo/AliX/actions/runs/39809712528) both passed with Quality and Runtime green. Quality evidence: 131 unit tests passed, 91.18% coverage, 4 Phase 1 safety contracts passed, pip-audit found no known vulnerabilities. Report-sync SHA `416b46ebdbb59eb0f095fc7636368ca6b36de462` also passed Push CI [#404 / ID 39810335179](https://github.com/angry0tiger-sudo/AliX/actions/runs/39810335179) and PR CI [#405 / ID 39810343496](https://github.com/angry0tiger-sudo/AliX/actions/runs/39810343496); both Quality and Runtime jobs green. PR #8 is Ready for Review, open, not merged.
+- Phase 6 tested implementation SHA: `52bc49012a945bf6c3bb411b6a4d3933a9a69aa4`. Push CI [#402 / ID 39809700265](https://github.com/angry0tiger-sudo/AliX/actions/runs/39809700265) and PR CI [#403 / ID 39809712528](https://github.com/angry0tiger-sudo/AliX/actions/runs/39809712528) both passed with Quality and Runtime green. Quality evidence: 131 unit tests passed, 91.18% coverage, 4 Phase 1 safety contracts passed, pip-audit found no known vulnerabilities. Report-sync SHA `416b46ebdbb59eb0f095fc7636368ca6b36de462` also passed Push CI [#404 / ID 39810335179](https://github.com/angry0tiger-sudo/AliX/actions/runs/39810335179) and PR CI [#405 / ID 39810343496](https://github.com/angry0tiger-sudo/AliX/actions/runs/39810343496); both Quality and Runtime jobs green. PR #8 was subsequently merged by the owner at 5873ba52ab827109a0be450670e971796295fa8e; merge confirmed in live GitHub PR metadata.
 - Phase 6 remains mock-only. Live provider rights, approved model/dataset revisions, owner-authorized historical news snapshots, calibration/ablation and durable stores remain open. Champion null; promotion blocked; economic acceptance and trading authorization NO-GO.
 
 
