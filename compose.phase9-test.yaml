@@ -1,0 +1,23 @@
+services:
+  postgres-phase9-test:
+    image: postgres:17.6-alpine
+    profiles:
+      - phase9-test
+    environment:
+      POSTGRES_DB: alix_phase9_test
+      POSTGRES_USER: phase9_test
+      POSTGRES_PASSWORD: phase9-only-synthetic-password
+    ports:
+      - "127.0.0.1:55432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: "no"
+    networks:
+      - phase9-db
+
+networks:
+  phase9-db:
+    internal: true

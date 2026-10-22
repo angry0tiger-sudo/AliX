@@ -44,6 +44,16 @@ This index is the repository entry point for architecture, phase order, owner di
 - [Local Compose runbook](runbook/PHASE_8_LOCAL_COMPOSE.md): owner-controlled local services and host dispatcher.
 - [Tenant isolation runbook](runbook/PHASE_8_TENANT_ISOLATION.md): authorization invariants and fail-closed recovery.
 
+## Phase 9: End-to-end testing and final preparation
+
+- [Phase 9 acceptance](knowledge_base/PHASE_9_ACCEPTANCE.md): roadmap checklist, evidence boundaries and remaining operational release gates.
+- [Phase 9 status report](phase-reports/PHASE_9_STATUS.md): exact-SHA CI evidence, synthetic-only status, and blockers.
+- [ADR-0009](architecture/decisions/ADR-0009-phase-9-synthetic-e2e-and-postgres-validation.md): synthetic E2E ledger and disposable PostgreSQL verification strategy.
+- [Owner Directive](governance/owner-directives/2026-10-23-phase-9.md): GitHub-only workflow, no real orders/live execution connections, and preserved `order_permission=false`.
+- [Windows/PostgreSQL runbook](runbook/PHASE_9_WINDOWS_POSTGRES_E2E.md): instructions prepared for future owner-run validation; not run by the assistant.
+- [Synthetic E2E runner](../scripts/run_phase9_e2e.py): deterministic data-quality/model/risk/simulation-ledger/report mechanics; no exchange I/O.
+- [Phase 9 tracking issue](https://github.com/angry0tiger-sudo/AliX/issues/11).
+
 ## Preserved compatibility copies
 
 These earlier paths are retained so existing links and history are not broken. The contents are preserved; the canonical stable paths are the two copies under `knowledge_base/`.
