@@ -16,6 +16,9 @@ Canonical Roadmap: docs/knowledge_base/AliX_Roadmap_Dynamic_Risk_FA.md, Phase 8.
 - [ ] Tenant ownership and membership are checked on every tenant-scoped operation.
 - [ ] Tenant A cannot enumerate, read or mutate Tenant B resources when IDs are forged.
 - [ ] Revoked membership cannot continue to access the Tenant.
+- [ ] Disabling a Tenant blocks subsequent scoped access and queues disable commands for every Worker under that Tenant.
+- [ ] Disabling an account blocks new Worker creation, immediately revokes Worker credentials and queues stop/disable.
+- [ ] A delayed START acknowledgement cannot change a disabled Worker back to STARTING or RUNNING.
 - [ ] Account-to-Worker binding checks tenant, account, exchange and environment.
 - [ ] PostgreSQL Control Plane schema and per-Worker SQLite data contracts are present and version-checked.
 - [ ] Concurrent Worker creation for one slot is rejected; start/stop commands are idempotent within current state.

@@ -137,6 +137,12 @@ def create_app(database_url: str, authenticator: Authenticator) -> FastAPI:
     ) -> dict[str, Any]:
         return store.get_tenant(principal, tenant_id)
 
+    @app.post("/v1/admin/tenants/{tenant_id}/disable")
+    def disable_tenant(
+        tenant_id: str, principal: Principal = Depends(platform_admin)
+    ) -> dict[str, Any]:
+        return store.disable_tenant(principal, tenant_id)
+
     @app.post("/v1/tenants/{tenant_id}/members", status_code=201)
     def add_member(
         tenant_id: str,
@@ -168,6 +174,14 @@ def create_app(database_url: str, authenticator: Authenticator) -> FastAPI:
             body.account_alias,
             body.secret_ref_id,
         )
+
+    @app.post("/v1/tenants/{tenant_id}/accounts/{account_id}/disable")
+    def disable_account(
+        tenant_id: str,
+        account_id: str,
+        principal: Principal = Depends(current_principal),
+    ) -> dict[str, Any]:
+        return store.disable_account(principal, tenant_id, account_id)
 
     @app.get("/v1/tenants/{tenant_id}/accounts")
     def list_accounts(

@@ -93,6 +93,76 @@ def _audit(
     )
 
 
+
+def _schedule_worker_disables(
+    connection: Any,
+    principal: Principal,
+    tenant_id: str,
+    reason: str,
+    account_id: str | None = None,
+) -> None:
+    """Revoke Worker capabilities immediately and queue idempotent container stops."""
+    query = select(workers).where(workers.c.tenant_id == tenant_id)
+    if account_id is not None:
+        query = query.where(workers.c.account_id == account_id)
+    rows = connection.execute(query).mappings().all()
+    for worker in rows:
+        worker_id = str(worker["worker_id"])
+        generation = int(worker["generation"])
+        now = utc_now()
+        if (
+            worker["desired_state"] == "DISABLED"
+            and worker["observed_state"] == "DISABLED"
+            and not worker["container_name"]
+        ):
+            continue
+        connection.execute(
+            update(workers)
+            .where(workers.c.worker_id == worker_id)
+            .values(
+                desired_state="DISABLED",
+                credential_sha256=None,
+                last_heartbeat=None,
+                updated_at=now,
+            )
+        )
+        pending_disable = connection.execute(
+            select(runtime_commands.c.command_id).where(
+                runtime_commands.c.worker_id == worker_id,
+                runtime_commands.c.generation == generation,
+                runtime_commands.c.action == "DISABLE",
+                runtime_commands.c.status.in_(("PENDING", "CLAIMED")),
+            )
+        ).first()
+        command_id: str | None = None
+        if pending_disable is None:
+            command_id = str(uuid.uuid4())
+            connection.execute(
+                insert(runtime_commands).values(
+                    command_id=command_id,
+                    tenant_id=tenant_id,
+                    worker_id=worker_id,
+                    generation=generation,
+                    action="DISABLE",
+                    status="PENDING",
+                    created_at=now,
+                    claimed_by=None,
+                    lease_until=None,
+                    completed_at=None,
+                    error_code=None,
+                )
+            )
+        _audit(
+            connection,
+            principal,
+            f"{reason}.worker_disable_requested",
+            "worker",
+            worker_id,
+            tenant_id,
+            {"generation": generation, "command_id": command_id},
+        )
+
+
 class ControlPlaneStore:
     """Authorization-aware persistence; callers never provide effective scope alone."""
 
@@ -118,7 +188,10 @@ class ControlPlaneStore:
         ).first()
         if tenant is None:
             raise NotFoundError("tenant_not_found")
-        if require_active and tenant._mapping["status"] != "ACTIVE":
+        tenant_status = str(tenant._mapping["status"])
+        if tenant_status != "ACTIVE" and not principal.platform_admin:
+            raise ForbiddenError("tenant_not_active")
+        if require_active and tenant_status != "ACTIVE":
             raise ForbiddenError("tenant_not_active")
         if principal.platform_admin:
             return
@@ -166,6 +239,30 @@ class ControlPlaneStore:
             )
         return self.get_tenant(principal, tenant_id)
 
+    def disable_tenant(
+        self, principal: Principal, tenant_id: str
+    ) -> dict[str, Any]:
+        if not principal.platform_admin:
+            raise ForbiddenError("platform_admin_required")
+        with self.engine.begin() as connection:
+            row = connection.execute(
+                select(tenants.c.status).where(tenants.c.tenant_id == tenant_id)
+            ).first()
+            if row is None:
+                raise NotFoundError("tenant_not_found")
+            if row._mapping["status"] != "DISABLED":
+                connection.execute(
+                    update(tenants)
+                    .where(tenants.c.tenant_id == tenant_id)
+                    .values(status="DISABLED")
+                )
+                _audit(
+                    connection, principal, "tenant.disabled",
+                    "tenant", tenant_id, tenant_id,
+                )
+            _schedule_worker_disables(connection, principal, tenant_id, "tenant")
+        return self.get_tenant(principal, tenant_id)
+
     def get_tenant(self, principal: Principal, tenant_id: str) -> dict[str, Any]:
         with self.engine.connect() as connection:
             self._require_tenant(
@@ -193,6 +290,7 @@ class ControlPlaneStore:
                 ).where(
                     memberships.c.subject == principal.subject,
                     memberships.c.status == "ACTIVE",
+                    tenants.c.status == "ACTIVE",
                 )
             return [dict(item) for item in connection.execute(query).mappings().all()]
 
@@ -296,6 +394,37 @@ class ControlPlaneStore:
             )
         return self.get_account(principal, tenant_id, account_id)
 
+    def disable_account(
+        self, principal: Principal, tenant_id: str, account_id: str
+    ) -> dict[str, Any]:
+        with self.engine.begin() as connection:
+            self._require_tenant(connection, principal, tenant_id, ("tenant_owner",))
+            account = connection.execute(
+                select(accounts.c.status).where(
+                    accounts.c.tenant_id == tenant_id,
+                    accounts.c.account_id == account_id,
+                )
+            ).first()
+            if account is None:
+                raise NotFoundError("account_not_found")
+            if account._mapping["status"] != "DISABLED":
+                connection.execute(
+                    update(accounts)
+                    .where(
+                        accounts.c.tenant_id == tenant_id,
+                        accounts.c.account_id == account_id,
+                    )
+                    .values(status="DISABLED")
+                )
+                _audit(
+                    connection, principal, "account.disabled",
+                    "account", account_id, tenant_id,
+                )
+            _schedule_worker_disables(
+                connection, principal, tenant_id, "account", account_id=account_id
+            )
+        return self.get_account(principal, tenant_id, account_id)
+
     def get_account(
         self, principal: Principal, tenant_id: str, account_id: str
     ) -> dict[str, Any]:
@@ -377,6 +506,8 @@ class ControlPlaneStore:
                 )
                 if account is None:
                     raise NotFoundError("account_exchange_binding_not_found")
+                if account["status"] == "DISABLED":
+                    raise InvalidStateError("account_disabled")
                 slot_filter = and_(
                     worker_slots.c.tenant_id == tenant_id,
                     worker_slots.c.account_id == account_id,
@@ -715,11 +846,13 @@ class ControlPlaneStore:
                 or row["tenant_status"] != "ACTIVE"
             ):
                 raise AuthorizationError("worker_identity_or_scope_invalid")
-            connection.execute(
+            result = connection.execute(
                 update(workers)
                 .where(
                     workers.c.worker_id == worker_id,
                     workers.c.generation == generation,
+                    workers.c.credential_sha256 == expected_hash,
+                    workers.c.desired_state == "START_REQUESTED",
                 )
                 .values(
                     observed_state="RUNNING",
@@ -727,6 +860,8 @@ class ControlPlaneStore:
                     updated_at=now,
                 )
             )
+            if result.rowcount != 1:
+                raise AuthorizationError("worker_identity_or_scope_invalid")
 
     def claimed_command_owner(self, command_id: str) -> dict[str, Any] | None:
         with self.engine.connect() as connection:
@@ -797,7 +932,11 @@ class ControlPlaneStore:
                 if success and action == "START":
                     connection.execute(
                         update(workers)
-                        .where(workers.c.worker_id == command["worker_id"])
+                        .where(
+                            workers.c.worker_id == command["worker_id"],
+                            workers.c.generation == generation,
+                            workers.c.desired_state == "START_REQUESTED",
+                        )
                         .values(
                             observed_state=(
                                 "RUNNING" if worker["last_heartbeat"] else "STARTING"
@@ -807,9 +946,16 @@ class ControlPlaneStore:
                         )
                     )
                 elif success and action in ("STOP", "DISABLE"):
+                    expected_desired = (
+                        "STOP_REQUESTED" if action == "STOP" else "DISABLED"
+                    )
                     connection.execute(
                         update(workers)
-                        .where(workers.c.worker_id == command["worker_id"])
+                        .where(
+                            workers.c.worker_id == command["worker_id"],
+                            workers.c.generation == generation,
+                            workers.c.desired_state == expected_desired,
+                        )
                         .values(
                             desired_state="DISABLED"
                             if action == "DISABLE"
@@ -826,7 +972,10 @@ class ControlPlaneStore:
                 elif not success:
                     connection.execute(
                         update(workers)
-                        .where(workers.c.worker_id == command["worker_id"])
+                        .where(
+                            workers.c.worker_id == command["worker_id"],
+                            workers.c.generation == generation,
+                        )
                         .values(
                             observed_state="QUARANTINED",
                             credential_sha256=None,

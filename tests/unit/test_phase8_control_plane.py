@@ -754,3 +754,159 @@ def test_local_image_uses_locked_dependencies_and_excludes_owner_secrets() -> No
     assert ".env" in dockerignore
     assert "secrets/" in dockerignore
     assert "!.env.example" in dockerignore
+
+
+def test_account_disable_revokes_worker_and_fences_late_start_ack(
+    client: TestClient,
+) -> None:
+    tenant_id = make_tenant(client, "Account Disable Tenant")
+    account = make_account(client, tenant_id)
+    worker = make_worker(client, tenant_id, account["account_id"])
+    started = client.post(
+        f"/v1/tenants/{tenant_id}/workers/{worker['worker_id']}/lifecycle",
+        headers=auth(),
+        json={"action": "start"},
+    )
+    assert started.status_code == 200
+    start_command = client.post(
+        "/v1/admin/runtime-commands/claim",
+        headers=auth(),
+        json={"dispatcher_id": "dispatcher-start"},
+    ).json()[0]
+    worker_token = "synthetic-worker-token-for-account-disable-012345"
+    worker_hash = hashlib.sha256(worker_token.encode()).hexdigest()
+    assert client.put(
+        f"/v1/admin/workers/{worker['worker_id']}/runtime-credential",
+        headers=auth(),
+        json={
+            "generation": start_command["generation"],
+            "credential_sha256": worker_hash,
+        },
+    ).status_code == 204
+
+    reader = make_tenant(client, "Reader Tenant")
+    add_member(client, reader, "reader-a", "tenant_reader")
+    denied = client.post(
+        f"/v1/tenants/{tenant_id}/accounts/{account['account_id']}/disable",
+        headers=auth("reader-a-token-012345678901234567890123456789"),
+    )
+    assert denied.status_code == 403
+
+    disabled = client.post(
+        f"/v1/tenants/{tenant_id}/accounts/{account['account_id']}/disable",
+        headers=auth(),
+    )
+    assert disabled.status_code == 200
+    assert disabled.json()["status"] == "DISABLED"
+    current_worker = client.get(
+        f"/v1/tenants/{tenant_id}/workers", headers=auth()
+    ).json()[0]
+    assert current_worker["desired_state"] == "DISABLED"
+    assert current_worker["credential_sha256"] is None
+
+    late_ack = client.post(
+        f"/v1/admin/runtime-commands/{start_command['command_id']}/ack",
+        headers=auth(),
+        json={"success": True, "container_name": "late-start-container"},
+    )
+    assert late_ack.status_code == 204
+    after_late_ack = client.get(
+        f"/v1/tenants/{tenant_id}/workers", headers=auth()
+    ).json()[0]
+    assert after_late_ack["desired_state"] == "DISABLED"
+    assert after_late_ack["container_name"] is None
+
+    heartbeat = client.post(
+        f"/v1/internal/workers/{worker['worker_id']}/heartbeat",
+        headers={"Authorization": f"Bearer {worker_token}"},
+        json={"generation": start_command["generation"]},
+    )
+    assert heartbeat.status_code == 401
+
+    disable_command = client.post(
+        "/v1/admin/runtime-commands/claim",
+        headers=auth(),
+        json={"dispatcher_id": "dispatcher-stop"},
+    ).json()[0]
+    assert disable_command["action"] == "DISABLE"
+    assert client.post(
+        f"/v1/admin/runtime-commands/{disable_command['command_id']}/ack",
+        headers=auth(),
+        json={"success": True, "container_name": None},
+    ).status_code == 204
+    final_worker = client.get(
+        f"/v1/tenants/{tenant_id}/workers", headers=auth()
+    ).json()[0]
+    assert final_worker["observed_state"] == "DISABLED"
+    replacement = client.post(
+        f"/v1/tenants/{tenant_id}/workers",
+        headers=auth(),
+        json={
+            "account_id": account["account_id"],
+            "exchange_id": "nobitex",
+            "environment": "local",
+            "strategy_revision": "fixture-after-disable",
+        },
+    )
+    assert replacement.status_code == 422
+
+
+def test_tenant_disable_blocks_members_and_queues_worker_disable(
+    client: TestClient,
+) -> None:
+    tenant_id = make_tenant(client, "Tenant Disable")
+    add_member(client, tenant_id, "owner-a", "tenant_owner")
+    account = make_account(client, tenant_id)
+    worker = make_worker(client, tenant_id, account["account_id"])
+
+    forbidden = client.post(
+        f"/v1/admin/tenants/{tenant_id}/disable",
+        headers=auth("owner-a-token-012345678901234567890123456789"),
+    )
+    assert forbidden.status_code == 403
+    assert client.get(
+        f"/v1/tenants/{tenant_id}", headers=auth()
+    ).json()["status"] == "ACTIVE"
+
+    disabled = client.post(
+        f"/v1/admin/tenants/{tenant_id}/disable", headers=auth()
+    )
+    assert disabled.status_code == 200
+    assert disabled.json()["status"] == "DISABLED"
+    assert client.get(
+        f"/v1/tenants/{tenant_id}",
+        headers=auth("owner-a-token-012345678901234567890123456789"),
+    ).status_code == 403
+
+    disabled_worker = client.get(
+        f"/v1/tenants/{tenant_id}/workers", headers=auth()
+    ).json()[0]
+    assert disabled_worker["desired_state"] == "DISABLED"
+
+    command = client.post(
+        "/v1/admin/runtime-commands/claim",
+        headers=auth(),
+        json={"dispatcher_id": "tenant-disable-dispatcher"},
+    ).json()[0]
+    assert command["action"] == "DISABLE"
+    assert command["worker_id"] == worker["worker_id"]
+    assert client.post(
+        f"/v1/admin/runtime-commands/{command['command_id']}/ack",
+        headers=auth(),
+        json={"success": True, "container_name": None},
+    ).status_code == 204
+
+    final_worker = client.get(
+        f"/v1/tenants/{tenant_id}/workers", headers=auth()
+    ).json()[0]
+    assert final_worker["observed_state"] == "DISABLED"
+    assert client.post(
+        f"/v1/tenants/{tenant_id}/workers",
+        headers=auth(),
+        json={
+            "account_id": account["account_id"],
+            "exchange_id": "nobitex",
+            "environment": "local",
+            "strategy_revision": "must-not-create",
+        },
+    ).status_code == 403
