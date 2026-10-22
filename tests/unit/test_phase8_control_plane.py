@@ -116,7 +116,13 @@ def make_account(
         },
     )
     assert response.status_code == 201, response.text
-    return cast(dict[str, Any], response.json())
+    account = cast(dict[str, Any], response.json())
+    enabled = client.post(
+        f"/v1/tenants/{tenant_id}/accounts/{account['account_id']}/enable",
+        headers=auth(token),
+    )
+    assert enabled.status_code == 200, enabled.text
+    return cast(dict[str, Any], enabled.json())
 
 
 def make_worker(

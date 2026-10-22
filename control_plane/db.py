@@ -72,7 +72,7 @@ accounts = Table(
         name="ck_account_nontrading_environment",
     ),
     CheckConstraint(
-        "status IN ('REGISTERED_DISABLED', 'DISABLED')",
+        "status IN ('REGISTERED_DISABLED', 'ACTIVE', 'DISABLED')",
         name="ck_account_status",
     ),
 )

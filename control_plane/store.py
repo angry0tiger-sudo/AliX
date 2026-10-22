@@ -557,6 +557,40 @@ class ControlPlaneStore:
             )
         return self.get_account(principal, tenant_id, account_id)
 
+    def enable_account(
+        self, principal: Principal, tenant_id: str, account_id: str
+    ) -> dict[str, Any]:
+        with self.engine.begin() as connection:
+            self._require_tenant(connection, principal, tenant_id, ("tenant_owner",))
+            account = connection.execute(
+                select(accounts.c.status).where(
+                    accounts.c.tenant_id == tenant_id,
+                    accounts.c.account_id == account_id,
+                )
+            ).first()
+            if account is None:
+                raise NotFoundError("account_not_found")
+            if account._mapping["status"] == "DISABLED":
+                raise InvalidStateError("disabled_account_requires_new_binding")
+            if account._mapping["status"] != "ACTIVE":
+                connection.execute(
+                    update(accounts)
+                    .where(
+                        accounts.c.tenant_id == tenant_id,
+                        accounts.c.account_id == account_id,
+                    )
+                    .values(status="ACTIVE")
+                )
+                _audit(
+                    connection,
+                    principal,
+                    "account.enabled",
+                    "account",
+                    account_id,
+                    tenant_id,
+                )
+        return self.get_account(principal, tenant_id, account_id)
+
     def disable_account(
         self, principal: Principal, tenant_id: str, account_id: str
     ) -> dict[str, Any]:
@@ -673,8 +707,8 @@ class ControlPlaneStore:
                 )
                 if account is None:
                     raise NotFoundError("account_exchange_binding_not_found")
-                if account["status"] == "DISABLED":
-                    raise InvalidStateError("account_disabled")
+                if account["status"] != "ACTIVE":
+                    raise InvalidStateError("account_not_active")
                 slot_filter = and_(
                     worker_slots.c.tenant_id == tenant_id,
                     worker_slots.c.account_id == account_id,
@@ -694,6 +728,7 @@ class ControlPlaneStore:
                                 workers.c.desired_state,
                                 workers.c.observed_state,
                                 workers.c.generation,
+                                workers.c.container_name,
                             ).where(workers.c.worker_id == slot["worker_id"])
                         )
                         .mappings()
@@ -703,13 +738,14 @@ class ControlPlaneStore:
                         previous is not None
                         and previous["desired_state"] == "DISABLED"
                         and previous["observed_state"] == "DISABLED"
+                        and not previous["container_name"]
                     )
                     reusable_stopped_slot = (
                         previous is not None
                         and int(previous["generation"]) > 0
                         and previous["desired_state"] == "STOPPED"
-                        and previous["observed_state"]
-                        in ("ABSENT", "STOPPED", "FAILED")
+                        and previous["observed_state"] in ("ABSENT", "STOPPED", "FAILED")
+                        and not previous["container_name"]
                     )
                     if not (reusable_disabled_slot or reusable_stopped_slot):
                         raise ConflictError("worker_slot_already_occupied")

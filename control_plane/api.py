@@ -175,6 +175,14 @@ def create_app(database_url: str, authenticator: Authenticator) -> FastAPI:
             body.secret_ref_id,
         )
 
+    @app.post("/v1/tenants/{tenant_id}/accounts/{account_id}/enable")
+    def enable_account(
+        tenant_id: str,
+        account_id: str,
+        principal: Principal = Depends(current_principal),
+    ) -> dict[str, Any]:
+        return store.enable_account(principal, tenant_id, account_id)
+
     @app.post("/v1/tenants/{tenant_id}/accounts/{account_id}/disable")
     def disable_account(
         tenant_id: str,
