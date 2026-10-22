@@ -691,17 +691,26 @@ class ControlPlaneStore:
                     previous = (
                         connection.execute(
                             select(
-                                workers.c.desired_state, workers.c.observed_state
+                                workers.c.desired_state,
+                                workers.c.observed_state,
+                                workers.c.generation,
                             ).where(workers.c.worker_id == slot["worker_id"])
                         )
                         .mappings()
                         .first()
                     )
-                    if previous is None or not (
-                        previous["desired_state"] in ("STOPPED", "DISABLED")
-                        and previous["observed_state"]
-                        in ("ABSENT", "STOPPED", "DISABLED", "FAILED")
-                    ):
+                    reusable_disabled_slot = (
+                        previous is not None
+                        and previous["desired_state"] == "DISABLED"
+                        and previous["observed_state"] == "DISABLED"
+                    )
+                    reusable_stopped_slot = (
+                        previous is not None
+                        and int(previous["generation"]) > 0
+                        and previous["desired_state"] == "STOPPED"
+                        and previous["observed_state"] in ("ABSENT", "STOPPED", "FAILED")
+                    )
+                    if not (reusable_disabled_slot or reusable_stopped_slot):
                         raise ConflictError("worker_slot_already_occupied")
                     generation = int(slot["generation"]) + 1
                 connection.execute(

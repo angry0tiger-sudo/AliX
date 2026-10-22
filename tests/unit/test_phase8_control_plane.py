@@ -3,8 +3,11 @@ from __future__ import annotations
 import ast
 import hashlib
 import json
+import os
 import sqlite3
 import subprocess
+import sys
+import urllib.error
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, cast
@@ -17,15 +20,26 @@ from control_plane.auth import (
     Principal,
     SingleUserTokenAuthenticator,
 )
+from control_plane import runtime_cli as runtime_cli_module
 from control_plane.api import create_app
 from control_plane import server as control_server
 from control_plane.runtime_cli import (
-    _local_control_base_url,
+    _api_request,
+    _container_info,
     _container_name,
+    _docker,
+    _local_control_base_url,
     _start_worker,
+    dispatch_once,
     load_env_file,
+    process_command,
 )
-from control_plane.store import ControlPlaneStore, ConflictError
+from control_plane.store import (
+    ConflictError,
+    ControlPlaneStore,
+    ForbiddenError,
+    NotFoundError,
+)
 from control_plane.worker_runtime import (
     WorkerAuthorizationFailure,
     WorkerRuntimeFailure,
@@ -349,7 +363,7 @@ def test_worker_start_claim_scoped_heartbeat_and_ack_are_idempotent(
     stale = client.post(
         f"/v1/internal/workers/{worker['worker_id']}/heartbeat",
         headers={"Authorization": f"Bearer {token}"},
-        json={"generation": command["generation"] - 1},
+        json={"generation": command["generation"] + 1},
     )
     assert stale.status_code == 401
 
@@ -630,8 +644,8 @@ def test_runtime_cli_env_file_never_overwrites_existing_environment(
     monkeypatch.delenv("ALIx_ADMIN_TOKEN", raising=False)
     monkeypatch.setenv("POSTGRES_PASSWORD", "already-set")
     load_env_file(env_file)
-    assert __import__("os").environ["ALIx_ADMIN_TOKEN"] == "local-test-token"
-    assert __import__("os").environ["POSTGRES_PASSWORD"] == "already-set"
+    assert os.environ["ALIx_ADMIN_TOKEN"] == "local-test-token"
+    assert os.environ["POSTGRES_PASSWORD"] == "already-set"
 
 
 def test_worker_profile_and_compose_security_contracts() -> None:
@@ -755,7 +769,7 @@ def test_local_image_uses_locked_dependencies_and_excludes_owner_secrets() -> No
     assert "USER 10001:10001" in dockerfile
     assert ".env" in dockerignore
     assert "secrets/" in dockerignore
-    assert "!.env.example" in dockerignore
+    assert "!/.env.example" in dockerignore
 
 
 def test_account_disable_revokes_worker_and_fences_late_start_ack(
@@ -956,3 +970,496 @@ def test_http_transport_is_restricted_to_local_control_plane_hosts() -> None:
     ):
         with pytest.raises(ValueError, match="worker_control_plane_url_not_allowed"):
             _validated_worker_control_url(url)
+
+
+def test_runtime_http_request_success_and_sanitized_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeResponse:
+        def __init__(self, status: int, body: bytes = b'{"ok":true}') -> None:
+            self.status = status
+            self.body = body
+
+        def __enter__(self) -> "FakeResponse":
+            return self
+
+        def __exit__(self, *args: Any) -> None:
+            del args
+
+        def read(self) -> bytes:
+            return self.body
+
+    class FakeOpener:
+        def __init__(self, response: FakeResponse | Exception) -> None:
+            self.response = response
+            self.request: Any = None
+            self.timeout: float | None = None
+
+        def open(self, request: Any, timeout: float) -> FakeResponse:
+            self.request = request
+            self.timeout = timeout
+            if isinstance(self.response, Exception):
+                raise self.response
+            return self.response
+
+    opener = FakeOpener(FakeResponse(200))
+    monkeypatch.setattr(
+        runtime_cli_module.urllib.request, "build_opener", lambda *args: opener
+    )
+    response = _api_request(
+        "http://127.0.0.1:8080/",
+        "synthetic-owner-token",
+        "/v1/example",
+        payload={"x": 1},
+        timeout=2.5,
+    )
+    assert response == {"ok": True}
+    assert opener.request.full_url == "http://127.0.0.1:8080/v1/example"
+    assert opener.request.get_method() == "POST"
+    assert opener.request.get_header("Authorization") == "Bearer synthetic-owner-token"
+    assert json.loads(opener.request.data) == {"x": 1}
+    assert opener.timeout == 2.5
+
+    opener.response = FakeResponse(204, b"")
+    assert (
+        _api_request(
+            "http://localhost:8080",
+            "synthetic-owner-token",
+            "/v1/no-content",
+            method="PUT",
+        )
+        is None
+    )
+
+    opener.response = urllib.error.HTTPError(
+        "http://127.0.0.1:8080/v1/example", 403, "synthetic", None, None
+    )
+    with pytest.raises(RuntimeError, match="control_plane_http_403"):
+        _api_request("http://127.0.0.1:8080", "synthetic-owner-token", "/v1/example")
+
+    opener.response = urllib.error.URLError("synthetic-unavailable")
+    with pytest.raises(RuntimeError, match="control_plane_unavailable"):
+        _api_request("http://127.0.0.1:8080", "synthetic-owner-token", "/v1/example")
+
+    with pytest.raises(RuntimeError, match="control_plane_url_not_allowed"):
+        _api_request("http://example.invalid:8080", "synthetic-owner-token", "/v1")
+
+
+def test_docker_adapter_and_container_inspection_fail_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def raise_os_error(*args: Any, **kwargs: Any) -> None:
+        del args, kwargs
+        raise OSError("synthetic-docker-missing")
+
+    monkeypatch.setattr(runtime_cli_module.subprocess, "run", raise_os_error)
+    with pytest.raises(RuntimeError, match="docker_cli_unavailable_or_timeout"):
+        _docker(["ps"])
+
+    def raise_timeout(*args: Any, **kwargs: Any) -> None:
+        del args, kwargs
+        raise subprocess.TimeoutExpired("docker", 1)
+
+    monkeypatch.setattr(runtime_cli_module.subprocess, "run", raise_timeout)
+    with pytest.raises(RuntimeError, match="docker_cli_unavailable_or_timeout"):
+        _docker(["ps"])
+
+    monkeypatch.setattr(
+        runtime_cli_module,
+        "_docker",
+        lambda args, timeout=30.0, environment=None: subprocess.CompletedProcess(
+            args, 1, "", "not-found"
+        ),
+    )
+    assert _container_info("alix-worker-missing-g1") is None
+
+    monkeypatch.setattr(
+        runtime_cli_module,
+        "_docker",
+        lambda args, timeout=30.0, environment=None: subprocess.CompletedProcess(
+            args, 0, "not-json", ""
+        ),
+    )
+    with pytest.raises(RuntimeError, match="docker_inspect_invalid"):
+        _container_info("alix-worker-invalid-g1")
+
+    monkeypatch.setattr(
+        runtime_cli_module,
+        "_docker",
+        lambda args, timeout=30.0, environment=None: subprocess.CompletedProcess(
+            args, 0, "[]", ""
+        ),
+    )
+    with pytest.raises(RuntimeError, match="docker_inspect_invalid"):
+        _container_info("alix-worker-empty-g1")
+
+
+def test_runtime_dispatcher_validates_existing_containers_and_stop_paths(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    calls: list[tuple[str, Any]] = []
+    name = "alix-worker-workerabc123-g4"
+    running_info = {
+        "Config": {
+            "Labels": {
+                "alix.worker.id": "worker-abc123",
+                "alix.worker.generation": "4",
+            }
+        },
+        "State": {"Running": True},
+    }
+    monkeypatch.setattr(
+        runtime_cli_module, "_container_info", lambda container_name: running_info
+    )
+    monkeypatch.setattr(
+        runtime_cli_module,
+        "_docker",
+        lambda args, timeout=30.0, environment=None: (
+            calls.append(("docker", args))
+            or subprocess.CompletedProcess(args, 0, "stopped", "")
+        ),
+    )
+    monkeypatch.setattr(
+        runtime_cli_module,
+        "_api_request",
+        lambda *args, **kwargs: calls.append(("api", (args, kwargs))),
+    )
+    start_command = {"action": "START", "worker_id": "worker-abc123", "generation": 4}
+    assert (
+        _start_worker(
+            start_command,
+            "http://127.0.0.1:8080",
+            "synthetic-owner-token",
+            tmp_path / "compose.yaml",
+            "alix",
+        )
+        == name
+    )
+    assert calls == []
+
+    def wrong_identity(container_name: str) -> dict[str, Any]:
+        del container_name
+        return {
+            "Config": {
+                "Labels": {
+                    "alix.worker.id": "other-worker",
+                    "alix.worker.generation": "4",
+                }
+            },
+            "State": {"Running": True},
+        }
+
+    monkeypatch.setattr(runtime_cli_module, "_container_info", wrong_identity)
+    with pytest.raises(RuntimeError, match="container_identity_mismatch"):
+        _start_worker(
+            start_command,
+            "http://127.0.0.1:8080",
+            "synthetic-owner-token",
+            tmp_path / "compose.yaml",
+            "alix",
+        )
+
+    acknowledgements: list[dict[str, Any]] = []
+
+    def capture_ack(*args: Any, **kwargs: Any) -> None:
+        del args
+        acknowledgements.append(kwargs["payload"])
+
+    monkeypatch.setattr(runtime_cli_module, "_api_request", capture_ack)
+    monkeypatch.setattr(
+        runtime_cli_module,
+        "_container_info",
+        lambda container_name: {
+            "Config": {
+                "Labels": {
+                    "alix.worker.id": "worker-abc123",
+                    "alix.worker.generation": "4",
+                }
+            },
+            "State": {"Running": True},
+        },
+    )
+    process_command(
+        {
+            "action": "STOP",
+            "worker_id": "worker-abc123",
+            "generation": 4,
+            "command_id": "synthetic-stop-command",
+        },
+        "http://127.0.0.1:8080",
+        "synthetic-owner-token",
+        tmp_path / "compose.yaml",
+        "alix",
+        "dispatcher-test",
+    )
+    assert calls[0][0] == "docker"
+    assert calls[0][1][0] == "stop"
+    assert acknowledgements[-1]["success"] is True
+    assert acknowledgements[-1]["container_name"] is None
+
+    monkeypatch.setattr(runtime_cli_module, "_container_info", wrong_identity)
+    process_command(
+        {
+            "action": "DISABLE",
+            "worker_id": "worker-abc123",
+            "generation": 4,
+            "command_id": "synthetic-disable-command",
+        },
+        "http://127.0.0.1:8080",
+        "synthetic-owner-token",
+        tmp_path / "compose.yaml",
+        "alix",
+        "dispatcher-test",
+    )
+    assert acknowledgements[-1]["success"] is False
+    assert acknowledgements[-1]["error_code"] == "container_identity_mismatch"
+
+    with pytest.raises(RuntimeError, match="unknown_runtime_command"):
+        process_command(
+            {"action": "EXEC", "worker_id": "worker-abc123", "generation": 4},
+            "http://127.0.0.1:8080",
+            "synthetic-owner-token",
+            tmp_path / "compose.yaml",
+            "alix",
+            "dispatcher-test",
+        )
+
+
+def test_dispatch_once_records_runtime_failures_without_leaking_exceptions(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    command = {
+        "action": "START",
+        "worker_id": "worker-dispatch-fail",
+        "generation": 1,
+        "command_id": "synthetic-dispatch-command",
+    }
+    calls: list[tuple[str, Any]] = []
+
+    def api_request(
+        base_url: str,
+        admin_token: str,
+        path: str,
+        method: str = "POST",
+        payload: dict[str, Any] | None = None,
+        timeout: float = 5.0,
+    ) -> list[dict[str, Any]] | None:
+        del base_url, admin_token, method, timeout
+        calls.append((path, payload))
+        if path.endswith("/claim"):
+            return [command]
+        return None
+
+    monkeypatch.setattr(runtime_cli_module, "_api_request", api_request)
+
+    def fail_command(*args: Any, **kwargs: Any) -> None:
+        del args, kwargs
+        raise RuntimeError("docker_worker_start_failed")
+
+    monkeypatch.setattr(runtime_cli_module, "process_command", fail_command)
+    count = dispatch_once(
+        "http://127.0.0.1:8080",
+        "synthetic-owner-token",
+        tmp_path / "compose.yaml",
+        "alix",
+        "dispatcher-fail",
+    )
+    assert count == 1
+    assert calls[-1][0].endswith("/synthetic-dispatch-command/ack")
+    assert calls[-1][1]["success"] is False
+    assert calls[-1][1]["error_code"] == "docker_worker_start_failed"
+
+    monkeypatch.setattr(runtime_cli_module, "_api_request", lambda *args, **kwargs: [])
+    assert (
+        dispatch_once(
+            "http://127.0.0.1:8080",
+            "synthetic-owner-token",
+            tmp_path / "compose.yaml",
+            "alix",
+            "dispatcher-empty",
+        )
+        == 0
+    )
+    monkeypatch.setattr(runtime_cli_module, "_api_request", lambda *args, **kwargs: {})
+    with pytest.raises(RuntimeError, match="runtime_command_response_invalid"):
+        dispatch_once(
+            "http://127.0.0.1:8080",
+            "synthetic-owner-token",
+            tmp_path / "compose.yaml",
+            "alix",
+            "dispatcher-malformed",
+        )
+
+
+def test_dispatcher_main_requires_owner_token_and_supports_single_pass(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("ALIx_ADMIN_TOKEN=" + "X" * 40 + "\n", encoding="utf-8")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "runtime_cli",
+            "--env-file",
+            str(env_file),
+            "--compose-file",
+            "compose.yaml",
+            "--once",
+        ],
+    )
+    monkeypatch.delenv("ALIx_ADMIN_TOKEN", raising=False)
+    calls: list[tuple[Any, ...]] = []
+    monkeypatch.setattr(
+        runtime_cli_module,
+        "dispatch_once",
+        lambda *args, **kwargs: calls.append(args) or 0,
+    )
+    assert runtime_cli_module.main() == 0
+    assert len(calls) == 1
+    assert calls[0][1] == "X" * 40
+
+    monkeypatch.delenv("ALIx_ADMIN_TOKEN", raising=False)
+    env_file.write_text("ALIx_ADMIN_TOKEN=short\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="ALIx_ADMIN_TOKEN must contain"):
+        runtime_cli_module.main()
+
+
+def test_worker_heartbeat_http_errors_and_input_validation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from control_plane.worker_runtime import _send_heartbeat
+
+    class FakeResponse:
+        status = 200
+
+        def __enter__(self) -> "FakeResponse":
+            return self
+
+        def __exit__(self, *args: Any) -> None:
+            del args
+
+    class FakeOpener:
+        def __init__(self, outcome: Any) -> None:
+            self.outcome = outcome
+
+        def open(self, request: Any, timeout: float) -> Any:
+            del request, timeout
+            if isinstance(self.outcome, Exception):
+                raise self.outcome
+            return self.outcome
+
+    monkeypatch.setattr(
+        "control_plane.worker_runtime.urllib.request.build_opener",
+        lambda *args: FakeOpener(FakeResponse()),
+    )
+    with pytest.raises(WorkerRuntimeFailure, match="heartbeat_response_unexpected"):
+        _send_heartbeat("http://control-plane:8080", "worker-http", "T" * 40, 1)
+
+    monkeypatch.setattr(
+        "control_plane.worker_runtime.urllib.request.build_opener",
+        lambda *args: FakeOpener(
+            urllib.error.HTTPError(
+                "http://control-plane:8080", 403, "forbidden", None, None
+            )
+        ),
+    )
+    with pytest.raises(WorkerAuthorizationFailure, match="worker_identity_rejected"):
+        _send_heartbeat("http://control-plane:8080", "worker-http", "T" * 40, 1)
+
+    monkeypatch.setattr(
+        "control_plane.worker_runtime.urllib.request.build_opener",
+        lambda *args: FakeOpener(urllib.error.URLError("synthetic-network-failure")),
+    )
+    with pytest.raises(OSError, match="heartbeat_request_failed"):
+        _send_heartbeat("http://control-plane:8080", "worker-http", "T" * 40, 1)
+
+    with pytest.raises(ValueError, match="invalid_worker_id"):
+        run_worker(
+            "worker with spaces",
+            "T" * 40,
+            1,
+            "http://control-plane:8080",
+            str(tmp_path / "invalid-id.sqlite"),
+            iterations=0,
+        )
+    with pytest.raises(ValueError, match="worker_credential_or_generation_invalid"):
+        run_worker(
+            "worker-valid",
+            "short",
+            1,
+            "http://control-plane:8080",
+            str(tmp_path / "invalid-token.sqlite"),
+            iterations=0,
+        )
+    with pytest.raises(ValueError, match="worker_credential_or_generation_invalid"):
+        run_worker(
+            "worker-valid",
+            "T" * 40,
+            0,
+            "http://control-plane:8080",
+            str(tmp_path / "invalid-generation.sqlite"),
+            iterations=0,
+        )
+
+
+def test_database_version_and_health_failure_are_fail_closed(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from control_plane.db import initialize_schema, schema_meta
+
+    store: ControlPlaneStore = client.app.state.store
+    with store.engine.begin() as connection:
+        connection.execute(
+            schema_meta.update()
+            .where(schema_meta.c.schema_key == "control_plane")
+            .values(schema_value="999")
+        )
+    with pytest.raises(RuntimeError, match="unsupported_control_plane_schema_version"):
+        initialize_schema(store.engine)
+
+    monkeypatch.setattr(
+        store, "ping", lambda: (_ for _ in ()).throw(RuntimeError("db-down"))
+    )
+    assert client.get("/healthz").status_code == 503
+
+
+def test_disabled_tenant_members_cannot_read_tenant_metadata(
+    client: TestClient,
+) -> None:
+    tenant_id = make_tenant(client, "Disabled Tenant Reader")
+    add_member(client, tenant_id, "owner-a", "tenant_owner")
+    store: ControlPlaneStore = client.app.state.store
+    store.disable_tenant(Principal("local-owner", platform_admin=True), tenant_id)
+    assert (
+        client.get(
+            f"/v1/tenants/{tenant_id}",
+            headers=auth("owner-a-token-012345678901234567890123456789"),
+        ).status_code
+        == 403
+    )
+    assert (
+        client.get(
+            "/v1/tenants",
+            headers=auth("owner-a-token-012345678901234567890123456789"),
+        ).json()
+        == []
+    )
+
+
+def test_store_authorization_and_missing_worker_fail_closed(
+    client: TestClient,
+) -> None:
+    tenant_id = make_tenant(client, "Store Error Paths")
+    principal = Principal("owner-a")
+    store: ControlPlaneStore = client.app.state.store
+    with pytest.raises(ForbiddenError):
+        store.create_tenant(principal, "forbidden")
+    with pytest.raises(ForbiddenError):
+        store.disable_tenant(principal, tenant_id)
+    with pytest.raises(ForbiddenError):
+        store.get_account(principal, tenant_id, "missing-account")
+    with pytest.raises(ForbiddenError):
+        store.get_worker(principal, tenant_id, "missing-worker")
+    with pytest.raises(NotFoundError):
+        store.heartbeat_worker("missing-worker", 1, "T" * 40)
