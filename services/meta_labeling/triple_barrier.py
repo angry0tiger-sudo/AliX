@@ -60,9 +60,7 @@ def canonicalize_ohlcv(candles: DataFrame) -> DataFrame:
         index=False, date_format="%Y-%m-%dT%H:%M:%S%z", float_format="%.12g"
     )
     canonical = pd.read_csv(StringIO(payload))
-    canonical["date"] = pd.to_datetime(
-        canonical["date"], errors="raise", utc=True
-    )
+    canonical["date"] = pd.to_datetime(canonical["date"], errors="raise", utc=True)
     return canonical
 
 
