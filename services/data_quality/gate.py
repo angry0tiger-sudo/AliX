@@ -662,7 +662,9 @@ def validate_model_output(
     """Validate a model proposal only; this function does not approve risk or orders."""
     reasons = _model_schema_reasons(output, expected_schema_version)
     reasons.extend(_model_value_reasons(output))
-    reasons.extend(_model_timestamp_reasons(output.get("produced_at"), decision_timestamp))
+    reasons.extend(
+        _model_timestamp_reasons(output.get("produced_at"), decision_timestamp)
+    )
     fingerprint_fields = (
         "schema_version",
         "produced_at",
