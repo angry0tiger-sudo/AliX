@@ -708,7 +708,8 @@ class ControlPlaneStore:
                         previous is not None
                         and int(previous["generation"]) > 0
                         and previous["desired_state"] == "STOPPED"
-                        and previous["observed_state"] in ("ABSENT", "STOPPED", "FAILED")
+                        and previous["observed_state"]
+                        in ("ABSENT", "STOPPED", "FAILED")
                     )
                     if not (reusable_disabled_slot or reusable_stopped_slot):
                         raise ConflictError("worker_slot_already_occupied")
