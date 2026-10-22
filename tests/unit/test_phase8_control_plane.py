@@ -20,6 +20,7 @@ from control_plane.auth import (
 from control_plane.api import create_app
 from control_plane import server as control_server
 from control_plane.runtime_cli import (
+    _local_control_base_url,
     _container_name,
     _start_worker,
     load_env_file,
@@ -28,6 +29,7 @@ from control_plane.store import ControlPlaneStore, ConflictError
 from control_plane.worker_runtime import (
     WorkerAuthorizationFailure,
     WorkerRuntimeFailure,
+    _validated_worker_control_url,
     run_worker,
 )
 
@@ -924,3 +926,27 @@ def test_tenant_disable_blocks_members_and_queues_worker_disable(
         ).status_code
         == 403
     )
+
+
+def test_http_transport_is_restricted_to_local_control_plane_hosts() -> None:
+    assert _local_control_base_url("http://127.0.0.1:8080") == "http://127.0.0.1:8080"
+    assert _local_control_base_url("http://localhost:8080") == "http://localhost:8080"
+    for url in (
+        "https://127.0.0.1:8080",
+        "http://example.invalid:8080",
+        "http://user:pass@127.0.0.1:8080",
+        "http://127.0.0.1:bad",
+    ):
+        with pytest.raises(RuntimeError, match="control_plane_url_not_allowed"):
+            _local_control_base_url(url)
+
+    assert _validated_worker_control_url("http://control-plane:8080") == "http://control-plane:8080"
+    assert _validated_worker_control_url("http://127.0.0.1:8080") == "http://127.0.0.1:8080"
+    for url in (
+        "https://control-plane:8080",
+        "http://external.invalid:8080",
+        "http://control-plane:8081",
+        "http://user:pass@control-plane:8080",
+    ):
+        with pytest.raises(ValueError, match="worker_control_plane_url_not_allowed"):
+            _validated_worker_control_url(url)

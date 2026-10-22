@@ -12,6 +12,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from urllib.parse import urlsplit
 from typing import Any
 
 
@@ -34,6 +35,26 @@ def load_env_file(path: Path) -> None:
             os.environ.setdefault(key, value)
 
 
+def _local_control_base_url(base_url: str) -> str:
+    parsed = urlsplit(base_url)
+    try:
+        port = parsed.port
+    except ValueError:
+        raise RuntimeError("control_plane_url_not_allowed") from None
+    if (
+        parsed.scheme != "http"
+        or parsed.hostname not in {"127.0.0.1", "localhost"}
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path not in ("", "/")
+        or parsed.query
+        or parsed.fragment
+        or (port is not None and not 1 <= port <= 65535)
+    ):
+        raise RuntimeError("control_plane_url_not_allowed")
+    return base_url.rstrip("/")
+
+
 def _api_request(
     base_url: str,
     admin_token: str,
@@ -42,9 +63,10 @@ def _api_request(
     payload: dict[str, Any] | None = None,
     timeout: float = 5.0,
 ) -> Any:
+    safe_base_url = _local_control_base_url(base_url)
     body = None if payload is None else json.dumps(payload).encode("utf-8")
     request = urllib.request.Request(
-        f"{base_url.rstrip('/')}{path}",
+        f"{safe_base_url}{path}",
         data=body,
         method=method,
         headers={
@@ -53,7 +75,10 @@ def _api_request(
         },
     )
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}), urllib.request.HTTPHandler()
+        )
+        with opener.open(request, timeout=timeout) as response:
             if response.status == 204:
                 return None
             return json.loads(response.read().decode("utf-8"))

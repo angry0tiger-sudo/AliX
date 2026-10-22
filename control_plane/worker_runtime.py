@@ -13,7 +13,7 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 
 class WorkerAuthorizationFailure(RuntimeError):
@@ -41,10 +41,36 @@ def _safe_worker_id(value: str) -> str:
     return value
 
 
+def _validated_worker_control_url(base_url: str) -> str:
+    parsed = urlsplit(base_url)
+    try:
+        port = parsed.port
+    except ValueError:
+        raise ValueError("worker_control_plane_url_not_allowed") from None
+    is_compose_service = parsed.hostname == "control-plane" and port == 8080
+    is_loopback = (
+        parsed.hostname in {"127.0.0.1", "localhost"}
+        and port is not None
+        and 1 <= port <= 65535
+    )
+    if (
+        parsed.scheme != "http"
+        or not (is_compose_service or is_loopback)
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path not in ("", "/")
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError("worker_control_plane_url_not_allowed")
+    return base_url.rstrip("/")
+
+
 def _send_heartbeat(
     base_url: str, worker_id: str, token: str, generation: int, timeout: float = 3.0
 ) -> None:
-    url = f"{base_url.rstrip('/')}/v1/internal/workers/{quote(worker_id, safe='')}/heartbeat"
+    safe_base_url = _validated_worker_control_url(base_url)
+    url = f"{safe_base_url}/v1/internal/workers/{quote(worker_id, safe='')}/heartbeat"
     payload = json.dumps({"generation": generation}).encode("utf-8")
     request = urllib.request.Request(
         url,
@@ -56,7 +82,10 @@ def _send_heartbeat(
         },
     )
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}), urllib.request.HTTPHandler()
+        )
+        with opener.open(request, timeout=timeout) as response:
             if response.status != 204:
                 raise WorkerRuntimeFailure("heartbeat_response_unexpected")
     except urllib.error.HTTPError as exc:
