@@ -68,9 +68,7 @@ def add_market_features(dataframe: DataFrame) -> DataFrame:
         "%-body_pct": (close - opened) / opened,
         "%-volume_change_1": volume.pct_change(fill_method=None),
         "%-close_vs_sma_12": close / close.rolling(12, min_periods=12).mean() - 1.0,
-        "%-atr_proxy_14": (
-            true_range.rolling(14, min_periods=14).mean() / close
-        ),
+        "%-atr_proxy_14": (true_range.rolling(14, min_periods=14).mean() / close),
     }
 
     for name in FEATURE_COLUMNS:
