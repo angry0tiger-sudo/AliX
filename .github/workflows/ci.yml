@@ -82,7 +82,7 @@ jobs:
       - name: Install pinned Freqtrade runtime
         run: |
           python -m pip install pip==25.2
-          python -m pip install freqtrade==2026.7 datasieve==0.1.9 scikit-learn==1.9.1 lightgbm==4.7.0
+          python -m pip install freqtrade==2026.7 datasieve==0.1.9 joblib==1.5.3 scikit-learn==1.9.0 lightgbm==4.7.0
       - name: Verify Freqtrade CLI
         run: freqtrade --version
       - name: Verify strategy loads with Freqtrade and config stays closed
