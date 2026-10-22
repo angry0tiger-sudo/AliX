@@ -284,6 +284,7 @@ def _roundtrip_model(
         "roundtrip_prediction_max_abs_diff": max_difference,
     }
 
+
 def _installed_version(package: str) -> str | None:
     try:
         return version(package)
