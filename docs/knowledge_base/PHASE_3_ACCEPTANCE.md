@@ -20,9 +20,10 @@ Owner directive: enter Phase 3 after Phase 2 PR #1 was merged into `main`.
   confidence/uncertainty bounds and as-of timing. Model output is never a Risk
   Gate approval or order instruction.
 - [ ] Synthetic regression tests cover all known fault classes and reason codes.
-- [ ] Backtest/live integrations use the same validation contracts before
-  feature engineering/inference; this candidate must document any unconnected
-  integration boundary explicitly.
+- [x] OHLCV validation is called from `AliXStrategy.populate_indicators`
+  before future feature computation, so Freqtrade backtest and runtime use the
+  same strategy hook. Feature-vector/model inference integration remains
+  gated until the FreqAI baseline exists.
 
 ## Connectivity Manager
 

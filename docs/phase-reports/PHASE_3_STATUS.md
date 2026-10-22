@@ -36,9 +36,10 @@ provider writes and host-network changes.
 ## Known limitations / open gates
 
 1. Review the candidate on GitHub and inspect CI evidence on its exact SHA.
-2. The Data Quality Gate has contracts and fixtures, but has not yet been wired
-   into a real DataProvider/FreqAI runtime lifecycle; that integration must be
-   designed without replacing Freqtrade's lifecycle.
+2. The OHLCV gate is wired into `AliXStrategy.populate_indicators`, before
+   future feature computation, and is exercised by unit tests for valid/gapped/
+   missing-timestamp fixtures. A FreqAI feature-vector/model-inference lifecycle
+   does not yet exist; integration into that future boundary remains open.
 3. Official provider schemas, licences, rate limits and freshness windows need
    owner-approved external verification; no live provider was called.
 4. Connectivity DNS/TLS/authentication/egress checks, actual VPN/proxy/tunnel

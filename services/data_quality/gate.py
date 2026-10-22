@@ -31,6 +31,7 @@ class QualityStatus(StrEnum):
 
 class QualityReasonCode(StrEnum):
     EMPTY_DATASET = "empty_dataset"
+    UNSUPPORTED_TIMEFRAME = "unsupported_timeframe"
     MISSING_COLUMNS = "missing_columns"
     INVALID_TIMESTAMP = "invalid_timestamp"
     TIMEZONE_REQUIRED = "timezone_required"
@@ -85,6 +86,7 @@ class QualityResult:
 
 _REASON_PREFIXES: tuple[tuple[str, QualityReasonCode], ...] = (
     ("empty_dataset", QualityReasonCode.EMPTY_DATASET),
+    ("unsupported_timeframe", QualityReasonCode.UNSUPPORTED_TIMEFRAME),
     ("missing_columns", QualityReasonCode.MISSING_COLUMNS),
     ("missing_features", QualityReasonCode.MISSING_FEATURES),
     ("unexpected_features", QualityReasonCode.UNEXPECTED_FEATURES),
