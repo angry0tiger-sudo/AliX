@@ -111,12 +111,13 @@ jobs:
           PY
       - name: Run synthetic Phase 4 walk-forward mechanics check
         run: |
-          python -m scripts.run_freqai_baseline_walkforward --synthetic --output /tmp/alix-phase4-synthetic.json --timeframe 1h --horizon 12 --folds 3 --min-train-size 300 --fee-bps 10 --slippage-bps 5 --commit-sha "$GITHUB_SHA"
+          python -m scripts.run_freqai_baseline_walkforward --synthetic --output /tmp/alix-phase4-synthetic.json --timeframe 1h --horizon 12 --folds 3 --min-train-size 300 --fee-bps 10 --slippage-bps 5 --commit-sha "${{ github.event.pull_request.head.sha || github.sha }}"
           python - <<'PY'
           import json
           from pathlib import Path
 
           report = json.loads(Path("/tmp/alix-phase4-synthetic.json").read_text(encoding="utf-8"))
+          assert report["commit_sha"] == "${{ github.event.pull_request.head.sha || github.sha }}"
           assert report["evaluation_status"] == "SYNTHETIC_MECHANICS_ONLY"
           assert report["dataset"]["kind"] == "synthetic"
           assert len(report["folds"]) == 3
