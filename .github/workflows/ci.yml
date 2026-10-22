@@ -36,6 +36,8 @@ jobs:
         run: python -m compileall -q connectivity services integrations user_data/strategies user_data/freqaimodels tests scripts
       - name: Ruff lint
         run: ruff check connectivity services integrations user_data/strategies user_data/freqaimodels tests scripts
+      - name: Ruff format diff (temporary read-only diagnostic)
+        run: ruff format --diff services/meta_labeling/triple_barrier.py
       - name: Ruff format check
         run: ruff format --check connectivity services integrations user_data/strategies user_data/freqaimodels tests scripts
       - name: Strict type check
