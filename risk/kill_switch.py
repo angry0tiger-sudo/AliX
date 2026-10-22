@@ -254,48 +254,9 @@ class SQLiteKillSwitchStore:
                 self._database_path, timeout=5, isolation_level=None
             )
             connection.execute("BEGIN IMMEDIATE")
-            row = connection.execute(
-                """
-                SELECT latched, reason, latched_at, version, last_transition,
-                       rearm_approval_id
-                FROM kill_switch_state WHERE singleton = 1
-                """
-            ).fetchone()
-            if row is None:
-                raise KillSwitchStateUnavailable("kill_switch_state_row_missing")
-            current = self._state_from_row(row)
-            if not current.latched or current.version != expected_version:
-                connection.rollback()
-                return False
-            next_version = current.version + 1
-            connection.execute(
-                """
-                UPDATE kill_switch_state
-                SET latched = 0, reason = '', latched_at = NULL, version = ?,
-                    last_transition = ?, rearm_approval_id = ?
-                WHERE singleton = 1 AND version = ? AND latched = 1
-                """,
-                (next_version, now.isoformat(), approval_id, expected_version),
+            return self._rearm_in_transaction(
+                connection, expected_version, approval_id, operator_id, reason, now
             )
-            if connection.total_changes < 1:
-                connection.rollback()
-                return False
-            connection.execute(
-                """
-                INSERT INTO kill_switch_events
-                    (occurred_at, action, reason, actor, state_version, approval_id)
-                VALUES (?, 'MANUAL_REARM', ?, ?, ?, ?)
-                """,
-                (
-                    now.isoformat(),
-                    reason,
-                    operator_id,
-                    next_version,
-                    approval_id,
-                ),
-            )
-            connection.commit()
-            return True
         except (OSError, sqlite3.Error, ValueError, TypeError) as exc:
             if connection is not None:
                 connection.rollback()
@@ -305,6 +266,58 @@ class SQLiteKillSwitchStore:
         finally:
             if connection is not None:
                 connection.close()
+
+    def _rearm_in_transaction(
+        self,
+        connection: sqlite3.Connection,
+        expected_version: int,
+        approval_id: str,
+        operator_id: str,
+        reason: str,
+        now: datetime,
+    ) -> bool:
+        row = connection.execute(
+            """
+            SELECT latched, reason, latched_at, version, last_transition,
+                   rearm_approval_id
+            FROM kill_switch_state WHERE singleton = 1
+            """
+        ).fetchone()
+        if row is None:
+            raise KillSwitchStateUnavailable("kill_switch_state_row_missing")
+        current = self._state_from_row(row)
+        if not current.latched or current.version != expected_version:
+            connection.rollback()
+            return False
+        next_version = current.version + 1
+        connection.execute(
+            """
+            UPDATE kill_switch_state
+            SET latched = 0, reason = '', latched_at = NULL, version = ?,
+                last_transition = ?, rearm_approval_id = ?
+            WHERE singleton = 1 AND version = ? AND latched = 1
+            """,
+            (next_version, now.isoformat(), approval_id, expected_version),
+        )
+        if connection.total_changes < 1:
+            connection.rollback()
+            return False
+        connection.execute(
+            """
+            INSERT INTO kill_switch_events
+                (occurred_at, action, reason, actor, state_version, approval_id)
+            VALUES (?, 'MANUAL_REARM', ?, ?, ?, ?)
+            """,
+            (
+                now.isoformat(),
+                reason,
+                operator_id,
+                next_version,
+                approval_id,
+            ),
+        )
+        connection.commit()
+        return True
 
     def audit_events(self) -> tuple[tuple[object, ...], ...]:
         connection: sqlite3.Connection | None = None

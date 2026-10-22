@@ -69,6 +69,35 @@ def compare_walk_forward_oos(
     tail_fraction: Decimal,
 ) -> OosComparison:
     """Compare paired OOS returns. It reports metrics but never accepts economics."""
+    ordered, fold_count = _validated_observations(observations, tail_fraction)
+    allocator_metrics = _metrics(
+        tuple(item.allocator_net_return for item in ordered),
+        tuple(item.allocator_cost for item in ordered),
+        tuple(item.allocator_turnover for item in ordered),
+        tail_fraction,
+    )
+    baseline_metrics = _metrics(
+        tuple(item.baseline_net_return for item in ordered),
+        tuple(item.baseline_cost for item in ordered),
+        tuple(item.baseline_turnover for item in ordered),
+        tail_fraction,
+    )
+    regime_returns = _regime_means(ordered)
+    allocator_means = tuple(row[1] for row in regime_returns)
+    spread = max(allocator_means) - min(allocator_means)
+    return OosComparison(
+        fold_count=fold_count,
+        allocator=allocator_metrics,
+        baseline=baseline_metrics,
+        regime_mean_returns=regime_returns,
+        regime_return_spread=spread,
+        economic_decision="NOT_EVALUATED_REQUIRES_OWNER_APPROVED_DATA_AND_THRESHOLDS",
+    )
+
+
+def _validated_observations(
+    observations: tuple[OosObservation, ...], tail_fraction: Decimal
+) -> tuple[tuple[OosObservation, ...], int]:
     require_decimal(
         "tail_fraction", tail_fraction, minimum=Decimal("0.00000000000000000001")
     )
@@ -83,39 +112,22 @@ def compare_walk_forward_oos(
         if prior is not None and item.train_cutoff != prior:
             raise ValueError("fold_train_cutoff_inconsistent")
         fold_cutoffs[item.fold_id] = item.train_cutoff
+    return ordered, len(fold_cutoffs)
 
-    allocator_metrics = _metrics(
-        tuple(item.allocator_net_return for item in ordered),
-        tuple(item.allocator_cost for item in ordered),
-        tuple(item.allocator_turnover for item in ordered),
-        tail_fraction,
-    )
-    baseline_metrics = _metrics(
-        tuple(item.baseline_net_return for item in ordered),
-        tuple(item.baseline_cost for item in ordered),
-        tuple(item.baseline_turnover for item in ordered),
-        tail_fraction,
-    )
+
+def _regime_means(
+    observations: tuple[OosObservation, ...],
+) -> tuple[tuple[str, Decimal, Decimal], ...]:
     by_regime: dict[str, list[OosObservation]] = {}
-    for item in ordered:
+    for item in observations:
         by_regime.setdefault(item.regime, []).append(item)
-    regime_returns = tuple(
+    return tuple(
         (
             regime,
             sum(row.allocator_net_return for row in rows) / Decimal(len(rows)),
             sum(row.baseline_net_return for row in rows) / Decimal(len(rows)),
         )
         for regime, rows in sorted(by_regime.items())
-    )
-    allocator_means = tuple(row[1] for row in regime_returns)
-    spread = max(allocator_means) - min(allocator_means)
-    return OosComparison(
-        fold_count=len(fold_cutoffs),
-        allocator=allocator_metrics,
-        baseline=baseline_metrics,
-        regime_mean_returns=regime_returns,
-        regime_return_spread=spread,
-        economic_decision="NOT_EVALUATED_REQUIRES_OWNER_APPROVED_DATA_AND_THRESHOLDS",
     )
 
 

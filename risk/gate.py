@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
+from typing import cast
 
 from risk.contracts import (
     AccountSnapshot,
@@ -68,14 +69,26 @@ class RiskGate:
                 ("required_gate_input_missing",),
                 Decimal("0"),
             )
+        return self._evaluate_complete_entry(
+            cast(RiskAllocation, allocation),
+            cast(AccountSnapshot, account),
+            cast(MarketSnapshot, market),
+            cast(MarketRules, rules),
+            cast(RiskPolicy, policy),
+            cast(KillSwitchState, kill_switch),
+            evaluated_at,
+        )
 
-        assert allocation is not None
-        assert account is not None
-        assert market is not None
-        assert rules is not None
-        assert policy is not None
-        assert kill_switch is not None
-
+    def _evaluate_complete_entry(
+        self,
+        allocation: RiskAllocation,
+        account: AccountSnapshot,
+        market: MarketSnapshot,
+        rules: MarketRules,
+        policy: RiskPolicy,
+        kill_switch: KillSwitchState,
+        evaluated_at: datetime,
+    ) -> GateDecision:
         estimate = (
             estimated_loss_per_unit(
                 market.price,
@@ -115,6 +128,18 @@ class RiskGate:
         policy: RiskPolicy,
         kill_switch: KillSwitchState,
     ) -> tuple[str, ...]:
+        return (
+            self._authorization_reasons(account, rules, policy, kill_switch)
+            + self._artifact_revision_reasons(allocation, account, market, rules, policy)
+        )
+
+    def _authorization_reasons(
+        self,
+        account: AccountSnapshot,
+        rules: MarketRules,
+        policy: RiskPolicy,
+        kill_switch: KillSwitchState,
+    ) -> tuple[str, ...]:
         reasons: list[str] = []
         if kill_switch.latched:
             reasons.append("kill_switch_latched")
@@ -124,6 +149,17 @@ class RiskGate:
             reasons.append("market_rules_unapproved")
         if not account.reconciled or not account.orders_reconciled:
             reasons.append("account_or_orders_not_reconciled")
+        return tuple(reasons)
+
+    def _artifact_revision_reasons(
+        self,
+        allocation: RiskAllocation,
+        account: AccountSnapshot,
+        market: MarketSnapshot,
+        rules: MarketRules,
+        policy: RiskPolicy,
+    ) -> tuple[str, ...]:
+        reasons: list[str] = []
         if allocation.policy_revision != policy.revision:
             reasons.append("policy_revision_mismatch")
         if allocation.account_snapshot_hash != account.source_snapshot_hash:
@@ -216,6 +252,15 @@ class RiskGate:
         rules: MarketRules,
         policy: RiskPolicy,
     ) -> tuple[str, ...]:
+        return (
+            self._stop_and_price_reasons(allocation, market)
+            + self._quantity_precision_reasons(allocation, rules)
+            + self._notional_and_balance_reasons(allocation, account, rules, policy)
+        )
+
+    def _stop_and_price_reasons(
+        self, allocation: RiskAllocation, market: MarketSnapshot
+    ) -> tuple[str, ...]:
         reasons: list[str] = []
         if allocation.side is Side.LONG and not allocation.stop_price < market.price:
             reasons.append("long_stop_not_below_entry")
@@ -229,6 +274,12 @@ class RiskGate:
             allocation.quantity * market.price
         ):
             reasons.append("allocation_price_or_stake_mismatch")
+        return tuple(reasons)
+
+    def _quantity_precision_reasons(
+        self, allocation: RiskAllocation, rules: MarketRules
+    ) -> tuple[str, ...]:
+        reasons: list[str] = []
         if (
             allocation.quantity < rules.min_quantity
             or allocation.quantity > rules.max_quantity
@@ -238,6 +289,16 @@ class RiskGate:
             reasons.append("quantity_precision_invalid")
         if allocation.stop_price % rules.price_tick != 0:
             reasons.append("stop_price_precision_invalid")
+        return tuple(reasons)
+
+    def _notional_and_balance_reasons(
+        self,
+        allocation: RiskAllocation,
+        account: AccountSnapshot,
+        rules: MarketRules,
+        policy: RiskPolicy,
+    ) -> tuple[str, ...]:
+        reasons: list[str] = []
         if (
             allocation.stake < rules.min_notional
             or allocation.stake > rules.max_notional

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
+from typing import cast
 
 from risk.contracts import (
     AccountSnapshot,
@@ -37,47 +38,37 @@ class DynamicRiskAllocator:
         if reasons:
             return self._rejected(reasons)
 
-        assert policy is not None
-        assert account is not None
-        assert market is not None
-        assert rules is not None
-        assert proposal is not None
-        assert now is not None
+        policy = cast(RiskPolicy, policy)
+        account = cast(AccountSnapshot, account)
+        market = cast(MarketSnapshot, market)
+        rules = cast(MarketRules, rules)
+        proposal = cast(ModelRiskProposal, proposal)
+        now = cast(datetime, now)
 
         daily_budget, trade_base = self._base_budgets(policy, account)
         if trade_base <= 0:
             return self._rejected(("risk_budget_exhausted",), daily_budget)
 
-        gross_limit = min(
-            policy.absolute_gross_exposure_cap,
-            account.equity * policy.max_gross_exposure_fraction,
-        )
-        remaining_exposure = (
-            gross_limit - account.gross_exposure - account.open_order_notional
-        )
-        correlated_limit = account.equity * policy.max_correlated_exposure_fraction
-        remaining_correlated = correlated_limit - account.correlated_exposure
-        if remaining_exposure <= 0:
-            return self._rejected(
-                ("gross_exposure_cap_exhausted",), daily_budget, trade_base
-            )
-        if remaining_correlated <= 0:
-            return self._rejected(
-                ("correlated_exposure_cap_exhausted",), daily_budget, trade_base
-            )
+        exposure = self._exposure_capacity(policy, account)
+        (
+            exposure_reason,
+            gross_limit,
+            remaining_exposure,
+            correlated_limit,
+            remaining_correlated,
+        ) = exposure
+        if exposure_reason is not None:
+            return self._rejected((exposure_reason,), daily_budget, trade_base)
 
-        regime_factor = policy.multiplier_for(proposal.regime)
-        assert regime_factor is not None
-        volatility = market.atr / market.price
-        dynamic_budget = (
-            trade_base
-            * proposal.calibrated_confidence
-            * (Decimal("1") - proposal.uncertainty)
-            * (Decimal("1") - proposal.calibration_error)
-            * min(Decimal("1"), policy.reference_atr_fraction / volatility)
-            * min(Decimal("1"), remaining_exposure / gross_limit)
-            * min(Decimal("1"), remaining_correlated / correlated_limit)
-            * regime_factor
+        dynamic_budget = self._dynamic_budget(
+            policy,
+            market,
+            proposal,
+            trade_base,
+            gross_limit,
+            remaining_exposure,
+            correlated_limit,
+            remaining_correlated,
         )
         if dynamic_budget <= 0:
             return self._rejected(
@@ -93,6 +84,57 @@ class DynamicRiskAllocator:
             now=now,
             daily_budget=daily_budget,
             trade_budget=dynamic_budget,
+        )
+
+    def _exposure_capacity(
+        self, policy: RiskPolicy, account: AccountSnapshot
+    ) -> tuple[str | None, Decimal, Decimal, Decimal, Decimal]:
+        gross_limit = min(
+            policy.absolute_gross_exposure_cap,
+            account.equity * policy.max_gross_exposure_fraction,
+        )
+        remaining_exposure = (
+            gross_limit - account.gross_exposure - account.open_order_notional
+        )
+        correlated_limit = account.equity * policy.max_correlated_exposure_fraction
+        remaining_correlated = correlated_limit - account.correlated_exposure
+        reason = None
+        if remaining_exposure <= 0:
+            reason = "gross_exposure_cap_exhausted"
+        elif remaining_correlated <= 0:
+            reason = "correlated_exposure_cap_exhausted"
+        return (
+            reason,
+            gross_limit,
+            remaining_exposure,
+            correlated_limit,
+            remaining_correlated,
+        )
+
+    def _dynamic_budget(
+        self,
+        policy: RiskPolicy,
+        market: MarketSnapshot,
+        proposal: ModelRiskProposal,
+        trade_base: Decimal,
+        gross_limit: Decimal,
+        remaining_exposure: Decimal,
+        correlated_limit: Decimal,
+        remaining_correlated: Decimal,
+    ) -> Decimal:
+        regime_factor = policy.multiplier_for(proposal.regime)
+        if regime_factor is None:
+            return Decimal("0")
+        volatility = market.atr / market.price
+        return (
+            trade_base
+            * proposal.calibrated_confidence
+            * (Decimal("1") - proposal.uncertainty)
+            * (Decimal("1") - proposal.calibration_error)
+            * min(Decimal("1"), policy.reference_atr_fraction / volatility)
+            * min(Decimal("1"), remaining_exposure / gross_limit)
+            * min(Decimal("1"), remaining_correlated / correlated_limit)
+            * regime_factor
         )
 
     def _base_budgets(
@@ -127,12 +169,24 @@ class DynamicRiskAllocator:
             value is None for value in (policy, account, market, rules, proposal, now)
         ):
             return ("required_risk_input_missing",)
-        assert policy is not None
-        assert account is not None
-        assert market is not None
-        assert rules is not None
-        assert proposal is not None
-        assert now is not None
+        return self._validate_present_inputs(
+            cast(RiskPolicy, policy),
+            cast(AccountSnapshot, account),
+            cast(MarketSnapshot, market),
+            cast(MarketRules, rules),
+            cast(ModelRiskProposal, proposal),
+            cast(datetime, now),
+        )
+
+    def _validate_present_inputs(
+        self,
+        policy: RiskPolicy,
+        account: AccountSnapshot,
+        market: MarketSnapshot,
+        rules: MarketRules,
+        proposal: ModelRiskProposal,
+        now: datetime,
+    ) -> tuple[str, ...]:
         if now.tzinfo is None or now.utcoffset() is None:
             return ("decision_time_timezone_required",)
         checks = (
@@ -215,55 +269,22 @@ class DynamicRiskAllocator:
         daily_budget: Decimal,
         trade_budget: Decimal,
     ) -> AllocationResult:
-        stop_distance_raw = market.atr * policy.stop_atr_multiple
-        raw_stop = (
-            market.price - stop_distance_raw
-            if proposal.side.value == "LONG"
-            else market.price + stop_distance_raw
-        )
-        if raw_stop <= 0:
-            return self._rejected(("stop_price_invalid",), daily_budget, trade_budget)
-        stop_price = (
-            floor_to_step(raw_stop, rules.price_tick)
-            if proposal.side.value == "LONG"
-            else ceil_to_step(raw_stop, rules.price_tick)
-        )
-        if stop_price <= 0:
-            return self._rejected(("stop_price_invalid",), daily_budget, trade_budget)
-        stop_distance = abs(market.price - stop_price)
-        unit_loss = estimated_loss_per_unit(
-            market.price, stop_price, policy.fee_rate, policy.slippage_rate
-        )
-        if unit_loss <= 0:
-            return self._rejected(("unit_loss_invalid",), daily_budget, trade_budget)
-
+        stop_terms = self._stop_terms(policy, market, rules, proposal)
+        if isinstance(stop_terms, str):
+            return self._rejected((stop_terms,), daily_budget, trade_budget)
+        stop_price, stop_distance, unit_loss = stop_terms
         quantity = self._bounded_quantity(
             policy, account, market, rules, trade_budget, unit_loss
         )
         stake = quantity * market.price
-        estimated_loss = quantity * unit_loss
-        if quantity < rules.min_quantity:
-            return self._rejected(
-                ("quantity_below_market_minimum",), daily_budget, trade_budget
-            )
-        if stake < rules.min_notional:
-            return self._rejected(
-                ("notional_below_market_minimum",), daily_budget, trade_budget
-            )
-        if stake > rules.max_notional:
-            quantity = floor_to_step(
-                rules.max_notional / market.price, rules.quantity_step
-            )
-            stake = quantity * market.price
-            estimated_loss = quantity * unit_loss
-        if quantity < rules.min_quantity or stake < rules.min_notional:
-            return self._rejected(
-                ("market_limits_leave_no_valid_size",), daily_budget, trade_budget
-            )
-        if estimated_loss > trade_budget:
-            return self._rejected(
-                ("calculated_loss_exceeds_budget",), daily_budget, trade_budget
-            )
+        quantity, stake, estimated_loss = self._apply_max_notional(
+            quantity, market, rules, unit_loss
+        )
+        size_reason = self._size_rejection(
+            quantity, stake, estimated_loss, trade_budget, rules
+        )
+        if size_reason is not None:
+            return self._rejected((size_reason,), daily_budget, trade_budget)
 
         fingerprint = stable_fingerprint(
             {
@@ -309,6 +330,69 @@ class DynamicRiskAllocator:
         return AllocationResult(
             True, (), daily_budget, trade_budget, allocation, fingerprint
         )
+
+    def _stop_terms(
+        self,
+        policy: RiskPolicy,
+        market: MarketSnapshot,
+        rules: MarketRules,
+        proposal: ModelRiskProposal,
+    ) -> tuple[Decimal, Decimal, Decimal] | str:
+        stop_distance_raw = market.atr * policy.stop_atr_multiple
+        raw_stop = (
+            market.price - stop_distance_raw
+            if proposal.side.value == "LONG"
+            else market.price + stop_distance_raw
+        )
+        if raw_stop <= 0:
+            return "stop_price_invalid"
+        stop_price = (
+            floor_to_step(raw_stop, rules.price_tick)
+            if proposal.side.value == "LONG"
+            else ceil_to_step(raw_stop, rules.price_tick)
+        )
+        if stop_price <= 0:
+            return "stop_price_invalid"
+        stop_distance = abs(market.price - stop_price)
+        unit_loss = estimated_loss_per_unit(
+            market.price, stop_price, policy.fee_rate, policy.slippage_rate
+        )
+        if unit_loss <= 0:
+            return "unit_loss_invalid"
+        return stop_price, stop_distance, unit_loss
+
+    def _apply_max_notional(
+        self,
+        quantity: Decimal,
+        market: MarketSnapshot,
+        rules: MarketRules,
+        unit_loss: Decimal,
+    ) -> tuple[Decimal, Decimal, Decimal]:
+        if quantity * market.price > rules.max_notional:
+            quantity = floor_to_step(
+                rules.max_notional / market.price, rules.quantity_step
+            )
+        stake = quantity * market.price
+        estimated_loss = quantity * unit_loss
+        return quantity, stake, estimated_loss
+
+    def _size_rejection(
+        self,
+        quantity: Decimal,
+        stake: Decimal,
+        estimated_loss: Decimal,
+        trade_budget: Decimal,
+        rules: MarketRules,
+    ) -> str | None:
+        if quantity < rules.min_quantity:
+            return "quantity_below_market_minimum"
+        if stake < rules.min_notional:
+            return "notional_below_market_minimum"
+        if quantity < rules.min_quantity or stake < rules.min_notional:
+            return "market_limits_leave_no_valid_size"
+        if estimated_loss > trade_budget:
+            return "calculated_loss_exceeds_budget"
+        return None
 
     def _bounded_quantity(
         self,

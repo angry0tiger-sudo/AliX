@@ -157,23 +157,27 @@ class MarketRules:
     max_notional: Decimal
 
     def __post_init__(self) -> None:
-        if not self.symbol.strip() or not self.revision.strip():
-            raise ValueError("market_rules_identity_missing")
-        for name in (
-            "price_tick",
-            "quantity_step",
-            "min_quantity",
-            "max_quantity",
-            "min_notional",
-            "max_notional",
-        ):
-            require_decimal(name, getattr(self, name), minimum=Decimal("0"))
-        if self.price_tick == 0 or self.quantity_step == 0:
-            raise ValueError("market_precision_step_must_be_positive")
-        if self.min_quantity <= 0 or self.max_quantity < self.min_quantity:
-            raise ValueError("market_quantity_limits_invalid")
-        if self.min_notional <= 0 or self.max_notional < self.min_notional:
-            raise ValueError("market_notional_limits_invalid")
+        _validate_market_rules(self)
+
+
+def _validate_market_rules(rules: MarketRules) -> None:
+    if not rules.symbol.strip() or not rules.revision.strip():
+        raise ValueError("market_rules_identity_missing")
+    for name in (
+        "price_tick",
+        "quantity_step",
+        "min_quantity",
+        "max_quantity",
+        "min_notional",
+        "max_notional",
+    ):
+        require_decimal(name, getattr(rules, name), minimum=Decimal("0"))
+    if rules.price_tick == 0 or rules.quantity_step == 0:
+        raise ValueError("market_precision_step_must_be_positive")
+    if rules.min_quantity <= 0 or rules.max_quantity < rules.min_quantity:
+        raise ValueError("market_quantity_limits_invalid")
+    if rules.min_notional <= 0 or rules.max_notional < rules.min_notional:
+        raise ValueError("market_notional_limits_invalid")
 
 
 @dataclass(frozen=True, slots=True)
@@ -340,45 +344,67 @@ class RiskAllocation:
 
     def __post_init__(self) -> None:
         require_aware_timestamp(self.created_at, "allocation_created_at")
-        if not all(
-            value.strip()
-            for value in (
-                self.decision_id,
-                self.model_revision,
-                self.policy_revision,
-                self.account_snapshot_hash,
-                self.market_revision,
-                self.rules_revision,
-                self.symbol,
-                self.regime,
-                self.fingerprint,
-            )
-        ):
-            raise ValueError("allocation_identity_missing")
-        for name in (
-            "daily_risk_budget",
-            "trade_risk_budget",
-            "quantity",
-            "stake",
-            "entry_price",
-            "stop_price",
-            "stop_distance",
-            "estimated_loss_including_costs",
-            "atr_snapshot",
-        ):
-            require_decimal(name, getattr(self, name), minimum=Decimal("0"))
-        if self.trade_risk_budget <= 0 or self.quantity <= 0 or self.stake <= 0:
-            raise ValueError("allocation_size_must_be_positive")
-        if self.entry_price <= 0 or self.stop_price <= 0 or self.stop_distance <= 0:
-            raise ValueError("allocation_stop_or_price_invalid")
-        if self.estimated_loss_including_costs > self.trade_risk_budget:
-            raise ValueError("allocation_loss_exceeds_budget")
-        for name in ("calibrated_confidence", "uncertainty", "calibration_error"):
-            value = getattr(self, name)
-            require_decimal(name, value, minimum=Decimal("0"))
-            if value > 1:
-                raise ValueError(f"{name}_out_of_range")
+        _validate_allocation_identity(self)
+        _validate_allocation_amounts(self)
+        _validate_allocation_size(self)
+        _validate_allocation_quality(self)
         require_decimal("expected_edge_after_costs", self.expected_edge_after_costs)
+
+
+def _validate_allocation_identity(allocation: RiskAllocation) -> None:
+    values = (
+        allocation.decision_id,
+        allocation.model_revision,
+        allocation.policy_revision,
+        allocation.account_snapshot_hash,
+        allocation.market_revision,
+        allocation.rules_revision,
+        allocation.symbol,
+        allocation.regime,
+        allocation.fingerprint,
+    )
+    if not all(value.strip() for value in values):
+        raise ValueError("allocation_identity_missing")
+
+
+def _validate_allocation_amounts(allocation: RiskAllocation) -> None:
+    for name in (
+        "daily_risk_budget",
+        "trade_risk_budget",
+        "quantity",
+        "stake",
+        "entry_price",
+        "stop_price",
+        "stop_distance",
+        "estimated_loss_including_costs",
+        "atr_snapshot",
+    ):
+        require_decimal(name, getattr(allocation, name), minimum=Decimal("0"))
+
+
+def _validate_allocation_size(allocation: RiskAllocation) -> None:
+    if (
+        allocation.trade_risk_budget <= 0
+        or allocation.quantity <= 0
+        or allocation.stake <= 0
+    ):
+        raise ValueError("allocation_size_must_be_positive")
+    if (
+        allocation.entry_price <= 0
+        or allocation.stop_price <= 0
+        or allocation.stop_distance <= 0
+    ):
+        raise ValueError("allocation_stop_or_price_invalid")
+    if allocation.estimated_loss_including_costs > allocation.trade_risk_budget:
+        raise ValueError("allocation_loss_exceeds_budget")
+
+
+def _validate_allocation_quality(allocation: RiskAllocation) -> None:
+    for name in ("calibrated_confidence", "uncertainty", "calibration_error"):
+        value = getattr(allocation, name)
+        require_decimal(name, value, minimum=Decimal("0"))
+        if value > 1:
+            raise ValueError(f"{name}_out_of_range")
 
 
 @dataclass(frozen=True, slots=True)
