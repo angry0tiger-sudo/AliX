@@ -17,6 +17,15 @@ This index is the repository entry point for architecture, phase order, owner di
 - [Owner Directive: Phase 4 baseline](governance/owner-directives/2026-10-22-phase-4.md): baseline scope and safety boundary.
 - [Owner Directive: canonical knowledge-base paths](governance/owner-directives/2026-10-22-phase-4-knowledge-base-canonical-paths.md): explicit instruction establishing the stable document paths above.
 
+## Phase 6: External Data and local NLP (offline only)
+
+- [Phase 6 acceptance](knowledge_base/PHASE_6_ACCEPTANCE.md): provider contracts, point-in-time tests and external approval gates.
+- [Phase 6 status report](phase-reports/PHASE_6_STATUS.md): exact-head CI evidence and unresolved blockers.
+- [Data provider registry](data-provider-registry.md): source rights, rate limits, retention, timestamp semantics and activation status.
+- [ADR-0006](architecture/decisions/ADR-0006-phase-6-external-data-nlp.md): contract-first external data and local NLP.
+- [Owner Directive](governance/owner-directives/2026-10-22-phase-6.md): authorization and scope boundaries.
+- Tracking issue: https://github.com/angry0tiger-sudo/AliX/issues/7.
+
 ## Preserved compatibility copies
 
 These earlier paths are retained so existing links and history are not broken. The contents are preserved; the canonical stable paths are the two copies under `knowledge_base/`.

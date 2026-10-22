@@ -1,5 +1,14 @@
 # Phase 1 Open Tasks and Deployment Verification
 
+# Current repository checkpoint — 2026-10-22
+
+- Verified main HEAD: ce360a770586e76dc5a0f7b2421a371322e6d738.
+- Phase 5 PR #6 was subsequently merged at that SHA. Main push CI run #380 / ID 39733266520 passed on the exact main SHA; this evidence is for Phase 5 only.
+- Phase 6 tracking issue: https://github.com/angry0tiger-sudo/AliX/issues/7. Work branch: feat/phase-6-external-data-nlp.
+- Phase 6 tested implementation SHA: `52bc49012a945bf6c3bb411b6a4d3933a9a69aa4`. Push CI [#402 / ID 39809700265](https://github.com/angry0tiger-sudo/AliX/actions/runs/39809700265) and PR CI [#403 / ID 39809712528](https://github.com/angry0tiger-sudo/AliX/actions/runs/39809712528) both passed with Quality and Runtime green. Quality evidence: 131 unit tests passed, 91.18% coverage, 4 Phase 1 safety contracts passed, pip-audit found no known vulnerabilities. Report-sync SHA `416b46ebdbb59eb0f095fc7636368ca6b36de462` also passed Push CI [#404 / ID 39810335179](https://github.com/angry0tiger-sudo/AliX/actions/runs/39810335179) and PR CI [#405 / ID 39810343496](https://github.com/angry0tiger-sudo/AliX/actions/runs/39810343496); both Quality and Runtime jobs green. PR #8 is Ready for Review, open, not merged.
+- Phase 6 remains mock-only. Live provider rights, approved model/dataset revisions, owner-authorized historical news snapshots, calibration/ablation and durable stores remain open. Champion null; promotion blocked; economic acceptance and trading authorization NO-GO.
+
+
 # Phase 4 checkpoint — merged; economics remain blocked
 
 - Phase 4 PR #4 was merged by the owner on 2026-10-22; merge commit and current main at Phase 5 start: `f553daa742e09c66c054f4566a22491fcfaa80a7`.
@@ -18,7 +27,7 @@
 - Latest exact-code synthetic artifact: [ID 12404705949](https://github.com/angry0tiger-sudo/AliX/actions/runs/39729707614/artifacts/12404705949). It records 1,400 synthetic candles, a VALID shared Data Quality Gate fingerprint, 800 OOF primary predictions, 800 Triple-Barrier events, and 3 evaluated meta folds; JSON model reload max score difference was 0.0.
 - Synthetic mechanics only: the historical-rate score baseline beat Meta-Label Brier/log-loss in all evaluated folds, and the filtered proposal mean net return was more negative than the unfiltered mean in all evaluated folds. These values are not market evidence.
 - Historical dataset/source/license/hash is not approved; economic acceptance criteria are not pre-registered. Economic acceptance remains **NO-GO**. Champion null; `promotion_status=BLOCKED_NO_ECONOMIC_GATE`; trading authorization NO-GO.
-- Owner review and merge of PR #6 remain pending. The current docs/status update will trigger its own latest-tip CI and must pass before release review.
+- Closure update (2026-10-22): PR #6 was subsequently merged into main at ce360a770586e76dc5a0f7b2421a371322e6d738. Historical synthetic metrics remain mechanics-only and are not market-performance evidence.
 - No exchange/provider requests, downloads, order writes, notifications, paper/live/dry-run sessions, or host networking changes are authorized or performed.
 
 # Phase 3 contract/CI checkpoint
