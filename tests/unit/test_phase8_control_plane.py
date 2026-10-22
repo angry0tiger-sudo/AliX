@@ -708,6 +708,7 @@ def test_runtime_command_database_constraint_rejects_cross_tenant_worker(
                 )
             )
 
+
 def test_server_fails_closed_without_token_and_rejects_oidc_until_configured(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
