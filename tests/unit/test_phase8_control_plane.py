@@ -1012,7 +1012,9 @@ def test_runtime_http_request_success_and_sanitized_errors(
 
     opener = FakeOpener(FakeResponse(200))
     monkeypatch.setattr(
-        cast(Any, runtime_cli_module).urllib.request, "build_opener", lambda *args: opener
+        urllib.request,
+        "build_opener",
+        lambda *args: opener,
     )
     response = _api_request(
         "http://127.0.0.1:8080/",
