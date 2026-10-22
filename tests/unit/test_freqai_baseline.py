@@ -14,6 +14,9 @@ from services.freqai_baseline.features import (
 )
 from services.freqai_baseline.walkforward import (
     WalkForwardConfig,
+    _collect_trade_returns,
+    _max_drawdown,
+    _simulate_non_overlapping_trades,
     make_walk_forward_folds,
     run_walk_forward,
     validate_ohlcv,
@@ -124,7 +127,9 @@ def test_walk_forward_folds_purge_target_horizon_before_test_start() -> None:
 def test_walk_forward_rejects_invalid_configuration_and_insufficient_data() -> None:
     for kwargs in (
         {"horizon": 0},
+        {"horizon": 1.5},
         {"n_splits": 1},
+        {"fee_bps_per_side": float("nan")},
         {"min_train_size": 10},
         {"fee_bps_per_side": -1.0},
         {"slippage_bps_per_side": -1.0},
@@ -205,6 +210,10 @@ def test_walk_forward_report_reloads_model_and_never_promotes_champion() -> None
     assert report["evaluation_status"] == "SYNTHETIC_MECHANICS_ONLY"
     assert report["model"]["reload_roundtrip"] == "passed"
     assert report["model"]["roundtrip_prediction_max_abs_diff"] == 0.0
+    assert len(report["experiment_config_sha256"]) == 64
+    assert report["compute"]["training_duration_seconds_total"] >= 0.0
+    assert len(report["compute"]["prediction_latency_ms_per_row_by_fold"]) == 2
+    assert report["runtime_versions"]["pandas"] == pd.__version__
     assert report["out_of_sample"]["sample_count"] > 0
     assert report["out_of_sample"]["forecast"]["rmse"] >= 0.0
     assert len(report["folds"]) == 2
@@ -253,3 +262,63 @@ def test_freqai_target_honors_versioned_horizon_contract() -> None:
     pd.testing.assert_series_equal(
         actual[TARGET_COLUMN], expected.rename(TARGET_COLUMN)
     )
+
+
+def test_costed_offline_trade_rule_accounts_for_costs_and_drawdown() -> None:
+    config = WalkForwardConfig(
+        horizon=3,
+        n_splits=2,
+        min_train_size=60,
+        fee_bps_per_side=10.0,
+        slippage_bps_per_side=5.0,
+    )
+    frame = market_frame(40)
+    frame[TARGET_COLUMN] = forward_return_target(frame, horizon=3)
+    test = frame.iloc[:30].reset_index(drop=True)
+    predictions = np.full(len(test), 0.05, dtype=float)
+
+    report = _simulate_non_overlapping_trades(test, predictions, config)
+    returns = _collect_trade_returns(test, predictions, config)
+
+    assert report["trade_count"] == 10
+    assert report["turnover_units"] == 20.0
+    assert report["fees_bps_cumulative"] == 200.0
+    assert report["slippage_bps_cumulative"] == 300.0
+    assert len(returns) == 10
+    assert report["no_trade_net_return"] == 0.0
+    assert _max_drawdown([]) == 0.0
+    assert _max_drawdown([-0.1, 0.2, -0.15]) < 0.0
+
+
+class NaNRegressor:
+    def __init__(self, **kwargs: Any) -> None:
+        self.parameters = kwargs
+
+    def fit(self, features: DataFrame, labels: np.ndarray) -> NaNRegressor:
+        return self
+
+    def predict(self, features: DataFrame) -> np.ndarray:
+        return np.full(len(features), np.nan, dtype=float)
+
+
+def test_walk_forward_rejects_non_finite_model_predictions() -> None:
+    try:
+        run_walk_forward(
+            market_frame(620),
+            pair="FIXTURE/USDT",
+            timeframe="1h",
+            timeframe_seconds=3600,
+            config=WalkForwardConfig(
+                horizon=3,
+                n_splits=2,
+                min_train_size=60,
+            ),
+            dataset_kind="synthetic",
+            dataset_sha256="b" * 64,
+            commit_sha="test-commit",
+            estimator_factory=NaNRegressor,
+        )
+    except ValueError as exc:
+        assert "malformed or non-finite predictions" in str(exc)
+    else:
+        raise AssertionError("non-finite model predictions must fail closed")
