@@ -1,0 +1,51 @@
+name: AliX Phase 10 Public-Price Observation (No Orders)
+
+on:
+  workflow_dispatch:
+    inputs:
+      duration_minutes:
+        description: Bounded read-only observation duration
+        type: choice
+        required: true
+        default: "60"
+        options:
+          - "5"
+          - "15"
+          - "60"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: alix-phase10-public-observation-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  public-price-observation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 65
+    env:
+      ALIx_ENV: paper
+      ALIx_DRY_RUN: "true"
+      ALIx_ALLOW_LIVE_TRADING: "false"
+      ALIx_REPORTING_ENABLED: "false"
+    steps:
+      - name: Checkout exact workflow ref
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Observe public market price, always abstaining
+        run: |
+          python scripts/run_phase10_public_price_observation.py \
+            --duration-seconds "$((${{ inputs.duration_minutes }} * 60))" \
+            --output artifacts/phase10-public-price-observation.jsonl
+      - name: Upload observation telemetry
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alix-phase10-public-price-observation-${{ github.run_id }}
+          path: artifacts/phase10-public-price-observation.jsonl
+          if-no-files-found: warn
+          retention-days: 14

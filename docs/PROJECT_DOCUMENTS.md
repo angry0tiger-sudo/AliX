@@ -73,3 +73,13 @@ These earlier paths are retained so existing links and history are not broken. T
 ## How these documents are kept discoverable
 
 CI executes `scripts/validate_project_docs.py`, which requires both canonical MRD/roadmap copies under `docs/knowledge_base/` as well as the preserved compatibility paths, acceptance/status reports, and current Owner Directives. Every new phase must update this index/acceptance record as needed. Do not replace or rewrite the preserved Starter Kit archive as a shortcut for updating live repository documents.
+
+
+## Phase 10: Scheduler, reporting and public-market research
+
+- [Phase 10 acceptance](knowledge_base/PHASE_10_ACCEPTANCE.md): scheduler/reconciliation gates, public data research and safety invariants.
+- [Phase 10 status](phase-reports/PHASE_10_STATUS.md): implementation/CI evidence and explicit blockers.
+- [ADR-0010](architecture/decisions/ADR-0010-phase-10-reporting-scheduler-public-research.md): durable schedule state, read-only reporting and public-market research boundaries.
+- [Owner Directive: Phase 10](governance/owner-directives/2026-10-23-phase-10.md): GitHub-only work, manual public data fetch, no order execution and no trading authorization.
+- [GitHub Actions / Windows handover runbook](runbook/PHASE_10_GITHUB_ACTIONS_AND_WINDOWS_HANDOVER.md): future owner-run steps, prepared but not executed.
+- [Phase 10 issue](https://github.com/angry0tiger-sudo/AliX/issues/13).

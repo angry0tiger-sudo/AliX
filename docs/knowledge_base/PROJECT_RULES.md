@@ -26,3 +26,11 @@
 
 ## Review evidence
 - Each phase report records commit SHA, acceptance criteria, CI run URL/status, test evidence, known limitations, dependency/model hashes where relevant, and explicit GO/NO-GO.
+
+
+## Phase 10 reporting and public market research
+- The manual Nobitex workflow may read only documented public OHLCV and public-price GET endpoints without credentials; source data and SHA256 manifest are retained as Actions artifacts.
+- Public price history is not account, balance, order, fill, or fee-tier truth.
+- The observation workflow always abstains and is not a Freqtrade/Paper order lifecycle.
+- Reporting is READY only when trade, decision and account snapshots are linked and explicitly reconciled. Otherwise it must be DEGRADED with uncertified financial metrics.
+- Scheduler idempotency is per scheduled slot. Exactly-once external delivery is not claimed.

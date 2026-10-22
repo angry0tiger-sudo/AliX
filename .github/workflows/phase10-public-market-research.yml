@@ -1,0 +1,88 @@
+name: AliX Phase 10 Public Historical Market Research
+
+on:
+  workflow_dispatch:
+    inputs:
+      days:
+        description: Historical lookback (UTC request window, hourly candles)
+        type: choice
+        required: true
+        default: "365"
+        options:
+          - "30"
+          - "90"
+          - "180"
+          - "365"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: alix-phase10-public-research-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  public-historical-research:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      ALIx_ENV: paper
+      ALIx_DRY_RUN: "true"
+      ALIx_ALLOW_LIVE_TRADING: "false"
+      ALIx_REPORTING_ENABLED: "false"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    steps:
+      - name: Checkout exact workflow ref
+        uses: actions/checkout@v4
+      - name: Set up pinned Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pinned research dependencies
+        run: |
+          python -m pip install pip==25.2
+          python -m pip install numpy==2.5.4 pandas==2.3.3 lightgbm==4.7.0 scikit-learn==1.9.0
+      - name: Fetch public historical Nobitex BTCUSDT candles
+        run: |
+          python scripts/fetch_nobitex_public_ohlcv.py \
+            --days "${{ inputs.days }}" \
+            --output-dir artifacts/phase10-public-market-data \
+            --commit-sha "${{ github.sha }}"
+      - name: Run fixed walk-forward research evaluation
+        run: |
+          python -m scripts.run_freqai_baseline_walkforward \
+            --input artifacts/phase10-public-market-data/nobitex-btcusdt-1h.csv \
+            --dataset-kind public_historical_market_data \
+            --pair BTC/USDT --timeframe 1h --horizon 12 \
+            --folds 3 --min-train-size 300 --fee-bps 25 --slippage-bps 5 \
+            --output artifacts/phase10-public-market-data/walk-forward-report.json \
+            --commit-sha "${{ github.sha }}"
+      - name: Verify provenance and closed trading state
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          report = json.loads(Path("artifacts/phase10-public-market-data/walk-forward-report.json").read_text(encoding="utf-8"))
+          assert report["dataset"]["kind"] == "public_historical_market_data"
+          assert report["dataset"]["sha256"]
+          assert report["commit_sha"] == "${{ github.sha }}"
+          assert report["champion"] is None
+          assert report["promotion_status"] == "BLOCKED_NO_ECONOMIC_GATE"
+          assert report["order_permission"] is False
+          assert report["trading_authorization"] == "NO-GO"
+          print(json.dumps({
+              "dataset_sha256": report["dataset"]["sha256"],
+              "oos_samples": report["out_of_sample"]["sample_count"],
+              "economic_research": report["out_of_sample"]["costed_fixed_horizon_research_rule"].get("economic_threshold_evaluation"),
+              "champion": report["champion"], "promotion_status": report["promotion_status"],
+              "order_permission": report["order_permission"]
+          }, sort_keys=True))
+          PY
+      - name: Upload data, manifest, and research report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alix-phase10-public-market-research-${{ github.run_id }}
+          path: artifacts/phase10-public-market-data/
+          if-no-files-found: warn
+          retention-days: 30

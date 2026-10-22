@@ -218,6 +218,11 @@ def _simulate_non_overlapping_trades(
             2 * trade_count * config.slippage_bps_per_side
         ),
         "trade_count": trade_count,
+        "winning_trade_count": sum(value > 0 for value in net_returns),
+        "losing_trade_count": sum(value <= 0 for value in net_returns),
+        "win_rate": (sum(value > 0 for value in net_returns) / trade_count) if trade_count else None,
+        "expectancy_net_per_trade": (sum(net_returns) / trade_count) if trade_count else None,
+        "net_trade_returns": net_returns,
         "buy_and_hold_gross_return": buy_hold_gross,
         "buy_and_hold_net_return": buy_hold_net,
         "no_trade_net_return": 0.0,
@@ -389,6 +394,17 @@ def run_walk_forward(
     oos_actual = np.asarray(all_actual, dtype=float)
     oos_predicted = np.asarray(all_predicted, dtype=float)
     model_net_total = float(np.prod(1.0 + np.asarray(all_trade_returns)) - 1.0)
+    winning_trades = sum(value > 0.0 for value in all_trade_returns)
+    win_rate = winning_trades / len(all_trade_returns) if all_trade_returns else None
+    expectancy = float(np.mean(all_trade_returns)) if all_trade_returns else None
+    strategy_max_drawdown = _max_drawdown(all_trade_returns)
+    sample_sufficient = len(all_trade_returns) >= 100
+    win_rate_pass = win_rate is not None and win_rate >= 0.60
+    drawdown_pass = abs(strategy_max_drawdown) <= 0.15
+    expectancy_pass = expectancy is not None and expectancy > 0.0
+    threshold_status = ("INSUFFICIENT_SAMPLE" if not sample_sufficient else
+                        "THRESHOLDS_MET_RESEARCH_ONLY" if win_rate_pass and drawdown_pass and expectancy_pass else
+                        "NO_GO_THRESHOLDS_NOT_MET")
     buy_hold_total = float(np.prod(1.0 + np.asarray(aggregate_buy_hold_returns)) - 1.0)
     if not all_trade_returns:
         model_net_total = 0.0
@@ -452,8 +468,21 @@ def run_walk_forward(
             ),
             "costed_fixed_horizon_research_rule": {
                 "net_return": model_net_total,
-                "max_drawdown": _max_drawdown(all_trade_returns),
+                "max_drawdown": strategy_max_drawdown,
                 "trade_count": aggregate_trade_count,
+                "winning_trade_count": winning_trades,
+                "win_rate": win_rate,
+                "win_rate_sample_size": len(all_trade_returns),
+                "win_rate_minimum_sample_met": sample_sufficient,
+                "win_rate_time_period": {"start": _timestamp(dataset["date"].iloc[0]), "end": _timestamp(dataset["date"].iloc[-1])},
+                "expectancy_net_per_trade": expectancy,
+                "economic_threshold_evaluation": {
+                    "minimum_trade_count": 100, "win_rate_minimum": 0.60,
+                    "maximum_drawdown_absolute": 0.15, "expectancy_must_be_positive": True,
+                    "win_rate_pass": win_rate_pass, "drawdown_pass": drawdown_pass,
+                    "expectancy_pass": expectancy_pass, "status": threshold_status,
+                    "authorization_effect": "NONE; Champion remains null and promotion/trading remain NO-GO",
+                },
                 "turnover_units": aggregate_turnover,
                 "fees_bps_cumulative": aggregate_fees,
                 "slippage_bps_cumulative": aggregate_slippage,
@@ -482,6 +511,14 @@ def run_walk_forward(
                 np.percentile(prediction_latency_ms_per_row_by_fold, 95)
             ),
         },
+        "strategy_scope": {
+            "evaluated_rule": "fixed-horizon long-only walk-forward research rule",
+            "freqtrade_strategy_backtest": "NOT_RUN: the committed AliX strategy scaffolds intentionally emit no trade signals",
+            "risk_engine_end_to_end": "NOT_EVALUATED: public candles are not reconciled account snapshots",
+            "orders_or_execution_api_used": False,
+        },
+        "order_permission": False,
+        "trading_authorization": "NO-GO",
         "future_risk_inputs": {
             "regime_probabilities": None,
             "calibrated_confidence": None,
