@@ -13,6 +13,7 @@ from services.freqai_baseline.features import (
     add_market_features,
     forward_return_target,
 )
+from scripts.run_meta_labeling_walkforward import _validate_synthetic_candles
 from services.meta_labeling.meta_model import (
     META_MODEL_SCHEMA_VERSION,
     MetaLabelModel,
@@ -182,6 +183,19 @@ def test_triple_barrier_fails_closed_on_bad_time_data_and_events() -> None:
         TripleBarrierConfig(profit_taking_multiplier=0)
     with pytest.raises(ValueError, match="fee and slippage"):
         TripleBarrierConfig(fee_bps_per_side=-1)
+
+
+def test_shared_data_quality_gate_runs_before_phase5_features() -> None:
+    candles = short_market(rows=320)
+    result = _validate_synthetic_candles(candles)
+    assert result["passed"] is True
+    assert result["status"] == "VALID"
+    assert result["fingerprint"]
+
+    gap = candles.copy()
+    gap.loc[7, "date"] = pd.Timestamp("2024-01-01T07:30:00Z")
+    with pytest.raises(ValueError, match="synthetic_ohlcv_rejected_by_data_quality_gate"):
+        _validate_synthetic_candles(gap)
 
 
 def test_oof_primary_predictions_are_purged_and_never_in_sample() -> None:

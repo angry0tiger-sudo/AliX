@@ -120,6 +120,9 @@ jobs:
           assert report["commit_sha"] == "${{ github.event.pull_request.head.sha || github.sha }}"
           assert report["evaluation_status"] == "SYNTHETIC_MECHANICS_ONLY"
           assert report["dataset"]["kind"] == "synthetic"
+          assert report["data_quality_gate"]["passed"] is True
+          assert report["data_quality_gate"]["status"] == "VALID"
+          assert report["data_quality_gate"]["fingerprint"]
           assert len(report["folds"]) == 3
           assert report["champion"] is None
           assert report["promotion_status"] == "BLOCKED_NO_ECONOMIC_GATE"

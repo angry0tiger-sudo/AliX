@@ -16,6 +16,7 @@ import pandas as pd
 import sklearn  # type: ignore[import-untyped]
 from sklearn.linear_model import LogisticRegression  # type: ignore[import-untyped]
 
+from services.data_quality.gate import validate_candles
 from services.freqai_baseline.features import (
     FEATURE_COLUMNS,
     add_market_features,
@@ -84,11 +85,34 @@ def _make_folds() -> list[OOFFold]:
     ]
 
 
+def _validate_synthetic_candles(candles: pd.DataFrame) -> dict[str, Any]:
+    """Run the shared Phase 3 Data Quality Gate before feature engineering."""
+    rows = [
+        {str(key): value for key, value in row.items()}
+        for row in candles.to_dict(orient="records")
+    ]
+    result = validate_candles(
+        rows,
+        expected_interval_seconds=3600,
+        gap_policy="reject",
+    )
+    if not result.passed:
+        reasons = ",".join(result.reasons)
+        raise ValueError(f"synthetic_ohlcv_rejected_by_data_quality_gate:{reasons}")
+    return {
+        "passed": result.passed,
+        "status": result.status.value if result.status is not None else "REJECTED",
+        "fingerprint": result.fingerprint,
+        "reason_codes": [code.value for code in result.reason_codes],
+    }
+
+
 def build_synthetic_report(commit_sha: str) -> dict[str, Any]:
     """Build the report and assert closed-by-default governance metadata."""
     if not re.fullmatch(r"[0-9a-f]{40}", commit_sha):
         raise ValueError("commit_sha_must_be_full_git_sha")
     candles = make_synthetic_ohlcv()
+    data_quality_gate = _validate_synthetic_candles(candles)
     features_frame = add_market_features(candles)
     feature_frame = features_frame.loc[:, list(FEATURE_COLUMNS)]
     forward = forward_return_target(candles, horizon=1).to_numpy(dtype=float)
@@ -164,6 +188,7 @@ def build_synthetic_report(commit_sha: str) -> dict[str, Any]:
         "schema_version": REPORT_SCHEMA_VERSION,
         "evaluation_status": "SYNTHETIC_MECHANICS_ONLY",
         "commit_sha": commit_sha,
+        "data_quality_gate": data_quality_gate,
         "dataset": {
             "kind": "synthetic",
             "seed": 20261022,
