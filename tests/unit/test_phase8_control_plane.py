@@ -9,6 +9,7 @@ import subprocess
 import sys
 import urllib.error
 from datetime import datetime, timedelta, timezone
+from http.client import HTTPMessage
 from pathlib import Path
 from typing import Any, cast
 
@@ -1117,14 +1118,16 @@ def test_runtime_dispatcher_validates_existing_containers_and_stop_paths(
     monkeypatch.setattr(
         runtime_cli_module, "_container_info", lambda container_name: running_info
     )
-    monkeypatch.setattr(
-        runtime_cli_module,
-        "_docker",
-        lambda args, timeout=30.0, environment=None: (
-            calls.append(("docker", args))
-            or subprocess.CompletedProcess(args, 0, "stopped", "")
-        ),
-    )
+    def fake_docker(
+        args: list[str],
+        timeout: float = 30.0,
+        environment: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        del timeout, environment
+        calls.append(("docker", args))
+        return subprocess.CompletedProcess(args, 0, "stopped", "")
+
+    monkeypatch.setattr(runtime_cli_module, "_docker", fake_docker)
     monkeypatch.setattr(
         runtime_cli_module,
         "_api_request",
@@ -1200,8 +1203,9 @@ def test_runtime_dispatcher_validates_existing_containers_and_stop_paths(
     )
     assert calls[0][0] == "docker"
     assert calls[0][1][0] == "stop"
-    assert acknowledgements[-1]["success"] is True
-    assert acknowledgements[-1]["container_name"] is None
+    stop_ack = dict(acknowledgements[-1])
+    assert stop_ack["success"] is True
+    assert stop_ack["container_name"] is None
 
     monkeypatch.setattr(runtime_cli_module, "_container_info", wrong_identity)
     process_command(
@@ -1217,8 +1221,9 @@ def test_runtime_dispatcher_validates_existing_containers_and_stop_paths(
         "alix",
         "dispatcher-test",
     )
-    assert acknowledgements[-1]["success"] is False
-    assert acknowledgements[-1]["error_code"] == "container_identity_mismatch"
+    disable_ack = dict(acknowledgements[-1])
+    assert disable_ack["success"] is False
+    assert disable_ack["error_code"] == "container_identity_mismatch"
 
     with pytest.raises(RuntimeError, match="unknown_runtime_command"):
         process_command(
@@ -1316,11 +1321,12 @@ def test_dispatcher_main_requires_owner_token_and_supports_single_pass(
     )
     monkeypatch.delenv("ALIx_ADMIN_TOKEN", raising=False)
     calls: list[tuple[Any, ...]] = []
-    monkeypatch.setattr(
-        runtime_cli_module,
-        "dispatch_once",
-        lambda *args, **kwargs: calls.append(args) or 0,
-    )
+    def fake_dispatch_once(*args: Any, **kwargs: Any) -> int:
+        del kwargs
+        calls.append(args)
+        return 0
+
+    monkeypatch.setattr(runtime_cli_module, "dispatch_once", fake_dispatch_once)
     assert runtime_cli_module.main() == 0
     assert len(calls) == 1
     assert calls[0][1] == "X" * 40
@@ -1366,7 +1372,7 @@ def test_worker_heartbeat_http_errors_and_input_validation(
         "control_plane.worker_runtime.urllib.request.build_opener",
         lambda *args: FakeOpener(
             urllib.error.HTTPError(
-                "http://control-plane:8080", 403, "forbidden", None, None
+                "http://control-plane:8080", 403, "forbidden", HTTPMessage(), None
             )
         ),
     )
@@ -1414,7 +1420,7 @@ def test_database_version_and_health_failure_are_fail_closed(
 ) -> None:
     from control_plane.db import initialize_schema, schema_meta
 
-    store: ControlPlaneStore = client.app.state.store
+    store: ControlPlaneStore = cast(Any, client.app).state.store
     with store.engine.begin() as connection:
         connection.execute(
             schema_meta.update()
