@@ -2,9 +2,22 @@
 
 Status: **IMPLEMENTATION IN PROGRESS; ECONOMIC ACCEPTANCE NO-GO; CHAMPION BLOCKED**.
 
-Roadmap: [Phase 4 — FreqAI baseline and quantitative evaluation](../roadmap/AliX_Roadmap_Dynamic_Risk_FA.md).
-Owner directive: [Phase 4 Owner Directive](../governance/owner-directives/2026-10-22-phase-4.md).
+Canonical roadmap: [Phase 4 — FreqAI baseline and quantitative evaluation](AliX_Roadmap_Dynamic_Risk_FA.md). Earlier compatibility copy: [docs/roadmap path](../roadmap/AliX_Roadmap_Dynamic_Risk_FA.md).
+Owner directive: [Phase 4 baseline directive](../governance/owner-directives/2026-10-22-phase-4.md); [canonical-path directive](../governance/owner-directives/2026-10-22-phase-4-knowledge-base-canonical-paths.md).
 Tracking issue: [#3](https://github.com/angry0tiger-sudo/AliX/issues/3).
+
+## Observed synthetic artifact (SYNTHETIC / MECHANICS ONLY)
+
+Reviewed artifact from [CI run #39722526159](https://github.com/angry0tiger-sudo/AliX/actions/runs/39722526159), artifact ID `12401817212`, SHA-256 digest `eda6e9e0a8c6c2c2236e53913da8e4b8538e619183eeea597ac1851c93dc7bfd`. It contains `alix-phase4-synthetic.json`.
+
+- Report status: `SYNTHETIC_MECHANICS_ONLY`; report schema `alix.freqai.walk-forward-report.v1`.
+- Dataset: synthetic `SYNTHETIC/USDT`, timeframe `1h`, 1,800 generated rows from `2020-01-01T00:00:00+00:00` through `2020-03-15T23:00:00+00:00`; 1,775 valid feature/target rows; dataset SHA-256 `9c5e7276d1cebfaa5c280f0c2e8aeb8f62ad1d6bc7e57bb9f5403d8418fb72e2`.
+- Contracts: feature `alix.freqai.features.v1`; target `alix.freqai.forward-return.v1`, target `&-s_forward_return`, horizon 12 candles. Config hash: `039f87f911e430a799e571ce74f20b9d1be23606a9494bfe22dab45827116333`.
+- Evaluation: 3 chronological expanding folds, minimum training size 300, 12-row purge; 1,463 aggregated OOS samples. OOS RMSE was 0.0226048 versus zero-forecast RMSE 0.0213377; MAE was 0.0163096 versus 0.0152165. The zero-forecast reference was better on these forecast-error metrics for this synthetic sample.
+- Costed research rule: 64 synthetic trades, turnover 128 units, cumulative fees 1,280 bps and slippage 640 bps; synthetic net return -0.0739532 and maximum drawdown -0.1223015. Only 1 of 3 folds had positive synthetic net return. These are generated-data mechanics results, not market returns.
+- Model: LightGBM `LGBMRegressor`, pinned parameters recorded in the JSON; native model-string reload passed with maximum absolute prediction difference 0.0. Synthetic-run training duration totaled 0.04495 seconds; prediction latency p50 0.002737 ms/row and p95 0.002767 ms/row. These tiny synthetic-run timings are not runtime capacity claims.
+- The inspected run's report `commit_sha` was `74a0391fd0e3d4302e530b2379a1678ef5651bf5` (the temporary PR merge ref), while the branch head was `54e6091ad3cf98c92b4108131233defe0cf7967a`. CI is being corrected to pass the pull request head SHA and assert that the report records it; the new exact-head run must be inspected before final review.
+- Economic gates were `NOT_EVALUATED`; `champion = null`; `promotion_status = BLOCKED_NO_ECONOMIC_GATE`. This artifact does not qualify a Champion or satisfy economic acceptance.
 
 ## Acceptance checklist
 
