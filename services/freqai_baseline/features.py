@@ -61,8 +61,8 @@ def add_market_features(dataframe: DataFrame) -> DataFrame:
 
     feature_values: dict[str, pd.Series] = {
         "%-return_1": returns,
-        "%-return_3": close.pct_change(3),
-        "%-return_6": close.pct_change(6),
+        "%-return_3": close.pct_change(3, fill_method=None),
+        "%-return_6": close.pct_change(6, fill_method=None),
         "%-volatility_12": returns.rolling(12, min_periods=12).std(),
         "%-range_pct": (high - low) / close,
         "%-body_pct": (close - opened) / opened,
