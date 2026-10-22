@@ -58,6 +58,7 @@ the machine-wide policy merely to run this test.
 ```powershell
 pytest tests/unit/test_phase0_scaffolds.py -q
 pytest tests/unit/test_data_quality_gate.py -q
+pytest tests/unit/test_strategy_data_quality_gate.py -q
 pytest tests/unit/test_connectivity_failover.py -q
 ```
 

@@ -61,8 +61,12 @@ class AliXStrategy(IStrategy):  # type: ignore[misc]
                 (QualityReasonCode.UNSUPPORTED_TIMEFRAME,),
             )
         else:
+            rows = [
+                {str(key): value for key, value in row.items()}
+                for row in dataframe.to_dict(orient="records")
+            ]
             result = validate_candles(
-                dataframe.to_dict(orient="records"),
+                rows,
                 expected_interval_seconds=interval_seconds,
             )
         dataframe["alix_data_quality_valid"] = result.passed
