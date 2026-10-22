@@ -78,7 +78,7 @@ def add_market_features(dataframe: DataFrame) -> DataFrame:
 
 def forward_return_target(dataframe: DataFrame, horizon: int = 12) -> pd.Series:
     """Return the forward close-to-close return label for training only."""
-    if isinstance(horizon, bool) or horizon < 1:
+    if isinstance(horizon, bool) or not isinstance(horizon, int) or horizon < 1:
         raise ValueError("horizon must be a positive integer")
     close = pd.to_numeric(dataframe["close"], errors="coerce")
     return (close.shift(-horizon) / close - 1.0).rename(TARGET_COLUMN)
