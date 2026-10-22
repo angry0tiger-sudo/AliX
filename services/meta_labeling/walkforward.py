@@ -6,7 +6,8 @@ from hashlib import sha256
 import math
 from typing import Any
 
-import numpy as npfrom pandas import DataFrame
+import numpy as np
+from pandas import DataFrame
 
 from services.meta_labeling.meta_model import (
     META_MODEL_SCHEMA_VERSION,
