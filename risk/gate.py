@@ -46,23 +46,19 @@ class RiskGate:
         kill_switch: KillSwitchState | None,
         evaluated_at: datetime,
     ) -> GateDecision:
-        reasons: list[str] = []
-        estimate = Decimal("0")
+        identity = allocation.decision_id if allocation is not None else "unknown"
         if evaluated_at.tzinfo is None or evaluated_at.utcoffset() is None:
-            reasons.append("decision_time_timezone_required")
+            return self._decision(
+                identity, evaluated_at, False, False,
+                ("decision_time_timezone_required",), Decimal("0")
+            )
         if any(
             value is None
             for value in (allocation, account, market, rules, policy, kill_switch)
         ):
-            reasons.append("required_gate_input_missing")
-        if reasons:
             return self._decision(
-                allocation.decision_id if allocation is not None else "unknown",
-                evaluated_at,
-                False,
-                False,
-                tuple(reasons),
-                estimate,
+                identity, evaluated_at, False, False,
+                ("required_gate_input_missing",), Decimal("0")
             )
 
         assert allocation is not None
@@ -72,24 +68,67 @@ class RiskGate:
         assert policy is not None
         assert kill_switch is not None
 
+        estimate = estimated_loss_per_unit(
+            market.price, allocation.stop_price, policy.fee_rate, policy.slippage_rate
+        ) * allocation.quantity
+        reasons = (
+            self._identity_reasons(allocation, account, market, rules, policy, kill_switch)
+            + self._freshness_and_cap_reasons(
+                allocation, account, market, policy, evaluated_at
+            )
+            + self._risk_profile_reasons(allocation, account, market, policy)
+            + self._market_structure_reasons(
+                allocation, account, market, rules, policy
+            )
+            + self._loss_capacity_reasons(
+                allocation, account, policy, estimate
+            )
+        )
+        unique_reasons = tuple(dict.fromkeys(reasons))
+        return self._decision(
+            allocation.decision_id, evaluated_at, not unique_reasons, False,
+            unique_reasons, estimate
+        )
+
+    def _identity_reasons(
+        self,
+        allocation: RiskAllocation,
+        account: AccountSnapshot,
+        market: MarketSnapshot,
+        rules: MarketRules,
+        policy: RiskPolicy,
+        kill_switch: KillSwitchState,
+    ) -> tuple[str, ...]:
+        reasons: list[str] = []
         if kill_switch.latched:
             reasons.append("kill_switch_latched")
         if not policy.owner_approved:
             reasons.append("risk_policy_not_owner_approved")
+        if not rules.approved:
+            reasons.append("market_rules_unapproved")
+        if not account.reconciled or not account.orders_reconciled:
+            reasons.append("account_or_orders_not_reconciled")
         if allocation.policy_revision != policy.revision:
             reasons.append("policy_revision_mismatch")
         if allocation.account_snapshot_hash != account.source_snapshot_hash:
             reasons.append("account_snapshot_hash_mismatch")
         if allocation.market_revision != market.source_revision:
             reasons.append("market_revision_mismatch")
-        if allocation.symbol != market.symbol or rules.symbol != market.symbol:
-            reasons.append("market_symbol_mismatch")
-        if not rules.approved:
-            reasons.append("market_rules_unapproved")
         if allocation.rules_revision != rules.revision:
             reasons.append("market_rules_revision_mismatch")
-        if not account.reconciled or not account.orders_reconciled:
-            reasons.append("account_or_orders_not_reconciled")
+        if allocation.symbol != market.symbol or rules.symbol != market.symbol:
+            reasons.append("market_symbol_mismatch")
+        return tuple(reasons)
+
+    def _freshness_and_cap_reasons(
+        self,
+        allocation: RiskAllocation,
+        account: AccountSnapshot,
+        market: MarketSnapshot,
+        policy: RiskPolicy,
+        evaluated_at: datetime,
+    ) -> tuple[str, ...]:
+        reasons: list[str] = []
         if evaluated_at < market.as_of or (
             evaluated_at - market.as_of
         ).total_seconds() > policy.max_market_age_seconds:
@@ -104,18 +143,29 @@ class RiskGate:
             reasons.append("allocation_stale_or_future")
         if account.daily_loss >= policy.absolute_daily_loss_cap:
             reasons.append("absolute_daily_loss_cap_hit")
-        if (
-            account.daily_loss
-            + account.open_position_risk
-            + account.open_order_risk
-            >= policy.absolute_daily_loss_cap
-        ):
+        reserved_loss = (
+            account.daily_loss + account.open_position_risk + account.open_order_risk
+        )
+        if reserved_loss >= policy.absolute_daily_loss_cap:
             reasons.append("absolute_loss_capacity_exhausted")
+        return tuple(reasons)
+
+    def _risk_profile_reasons(
+        self,
+        allocation: RiskAllocation,
+        account: AccountSnapshot,
+        market: MarketSnapshot,
+        policy: RiskPolicy,
+    ) -> tuple[str, ...]:
+        reasons: list[str] = []
         gross_limit = min(
             policy.absolute_gross_exposure_cap,
             account.equity * policy.max_gross_exposure_fraction,
         )
-        if account.gross_exposure + account.open_order_notional + allocation.stake > gross_limit:
+        if (
+            account.gross_exposure + account.open_order_notional + allocation.stake
+            > gross_limit
+        ):
             reasons.append("gross_exposure_cap_exceeded")
         correlated_limit = account.equity * policy.max_correlated_exposure_fraction
         if account.correlated_exposure + allocation.stake > correlated_limit:
@@ -134,7 +184,17 @@ class RiskGate:
             reasons.append("atr_snapshot_mismatch")
         if market.atr / market.price > policy.max_atr_fraction:
             reasons.append("atr_spike_exceeds_policy_limit")
+        return tuple(reasons)
 
+    def _market_structure_reasons(
+        self,
+        allocation: RiskAllocation,
+        account: AccountSnapshot,
+        market: MarketSnapshot,
+        rules: MarketRules,
+        policy: RiskPolicy,
+    ) -> tuple[str, ...]:
+        reasons: list[str] = []
         if allocation.side is Side.LONG and not allocation.stop_price < market.price:
             reasons.append("long_stop_not_below_entry")
         if allocation.side is Side.SHORT and not allocation.stop_price > market.price:
@@ -147,7 +207,10 @@ class RiskGate:
             allocation.quantity * market.price
         ):
             reasons.append("allocation_price_or_stake_mismatch")
-        if allocation.quantity < rules.min_quantity or allocation.quantity > rules.max_quantity:
+        if (
+            allocation.quantity < rules.min_quantity
+            or allocation.quantity > rules.max_quantity
+        ):
             reasons.append("quantity_outside_market_limits")
         if allocation.quantity % rules.quantity_step != 0:
             reasons.append("quantity_precision_invalid")
@@ -157,46 +220,32 @@ class RiskGate:
             reasons.append("notional_outside_market_limits")
         if allocation.stake > account.free_balance * policy.max_stake_fraction_of_free_balance:
             reasons.append("free_balance_limit_exceeded")
+        return tuple(reasons)
 
-        estimate = estimated_loss_per_unit(
-            market.price,
-            allocation.stop_price,
-            policy.fee_rate,
-            policy.slippage_rate,
-        ) * allocation.quantity
+    def _loss_capacity_reasons(
+        self,
+        allocation: RiskAllocation,
+        account: AccountSnapshot,
+        policy: RiskPolicy,
+        estimate: Decimal,
+    ) -> tuple[str, ...]:
+        reasons: list[str] = []
         if estimate > allocation.trade_risk_budget:
             reasons.append("recomputed_loss_exceeds_trade_budget")
         if estimate > allocation.estimated_loss_including_costs:
             reasons.append("reported_loss_understates_recomputed_loss")
-        daily_room = (
-            min(
-                account.equity * policy.daily_risk_budget_fraction,
-                policy.absolute_daily_loss_cap,
-            )
-            - account.daily_loss
-            - account.open_position_risk
-            - account.open_order_risk
+        daily_limit = min(
+            account.equity * policy.daily_risk_budget_fraction,
+            policy.absolute_daily_loss_cap,
         )
-        absolute_room = (
-            policy.absolute_daily_loss_cap
-            - account.daily_loss
-            - account.open_position_risk
-            - account.open_order_risk
+        reserved_loss = (
+            account.daily_loss + account.open_position_risk + account.open_order_risk
         )
-        if estimate > daily_room:
+        if estimate > daily_limit - reserved_loss:
             reasons.append("daily_risk_capacity_exceeded")
-        if estimate > absolute_room:
+        if estimate > policy.absolute_daily_loss_cap - reserved_loss:
             reasons.append("absolute_risk_capacity_exceeded")
-
-        unique_reasons = tuple(dict.fromkeys(reasons))
-        return self._decision(
-            allocation.decision_id,
-            evaluated_at,
-            not unique_reasons,
-            False,
-            unique_reasons,
-            estimate,
-        )
+        return tuple(reasons)
 
     def evaluate_reduction(
         self, action: ActionType, decision_id: str, evaluated_at: datetime
@@ -204,29 +253,16 @@ class RiskGate:
         """Entry/news gates cannot block exits or risk-reducing intents."""
         if action not in (ActionType.EXIT, ActionType.REDUCE_RISK):
             return self._decision(
-                decision_id,
-                evaluated_at,
-                False,
-                False,
-                ("not_a_risk_reducing_action",),
-                Decimal("0"),
+                decision_id, evaluated_at, False, False,
+                ("not_a_risk_reducing_action",), Decimal("0")
             )
         if evaluated_at.tzinfo is None or evaluated_at.utcoffset() is None:
             return self._decision(
-                decision_id,
-                evaluated_at,
-                False,
-                True,
-                ("decision_time_timezone_required_for_audit",),
-                Decimal("0"),
+                decision_id, evaluated_at, False, True,
+                ("decision_time_timezone_required_for_audit",), Decimal("0")
             )
         return self._decision(
-            decision_id,
-            evaluated_at,
-            False,
-            True,
-            (),
-            Decimal("0"),
+            decision_id, evaluated_at, False, True, (), Decimal("0")
         )
 
     def _decision(

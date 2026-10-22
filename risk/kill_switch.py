@@ -162,8 +162,6 @@ class SQLiteKillSwitchStore:
                 raise KillSwitchStateUnavailable("kill_switch_state_row_missing")
             return self._state_from_row(row)
         except (OSError, sqlite3.Error, ValueError, TypeError) as exc:
-            if isinstance(exc, KillSwitchStateUnavailable):
-                raise
             raise KillSwitchStateUnavailable("kill_switch_state_unreadable") from exc
         finally:
             if connection is not None:
@@ -230,7 +228,7 @@ class SQLiteKillSwitchStore:
         except (OSError, sqlite3.Error, ValueError, TypeError) as exc:
             if connection is not None:
                 connection.rollback()
-            if isinstance(exc, (KillSwitchStateUnavailable, ValueError)):
+            if isinstance(exc, ValueError):
                 raise
             raise KillSwitchStateUnavailable("kill_switch_latch_write_failed") from exc
         finally:
@@ -299,7 +297,7 @@ class SQLiteKillSwitchStore:
         except (OSError, sqlite3.Error, ValueError, TypeError) as exc:
             if connection is not None:
                 connection.rollback()
-            if isinstance(exc, (KillSwitchStateUnavailable, ValueError)):
+            if isinstance(exc, ValueError):
                 raise
             raise KillSwitchStateUnavailable("kill_switch_rearm_write_failed") from exc
         finally:

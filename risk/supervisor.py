@@ -7,7 +7,7 @@ from datetime import datetime
 from enum import StrEnum
 
 from risk.contracts import AccountSnapshot, RiskPolicy
-from risk.kill_switch import KillSwitchState, KillSwitchStateUnavailable, KillSwitchStore
+from risk.kill_switch import KillSwitchState, KillSwitchStore
 
 
 class SupervisorStatus(StrEnum):
@@ -84,8 +84,10 @@ class RiskSupervisor:
         reason = self._fault_reason(account, policy, health, now)
         if not reason:
             return SupervisorDecision(
-                SupervisorStatus.ACTIVE, "all_supervisor_checks_passed",
-                state.version, False
+                SupervisorStatus.ACTIVE,
+                "all_supervisor_checks_passed",
+                state.version,
+                False,
             )
         try:
             latched_state = self._store.latch(reason, now, "risk_supervisor")
@@ -111,16 +113,27 @@ class RiskSupervisor:
             return "supervisor_health_degraded"
         if not policy.owner_approved:
             return "risk_policy_not_owner_approved"
+        account_fault = self._account_fault(account, policy, now)
+        if account_fault:
+            return account_fault
+        return self._absolute_cap_fault(account, policy)
+
+    def _account_fault(
+        self, account: AccountSnapshot, policy: RiskPolicy, now: datetime
+    ) -> str:
         if not account.reconciled or not account.orders_reconciled:
             return "account_or_orders_not_reconciled"
         if now < account.as_of or (
             now - account.as_of
         ).total_seconds() > policy.max_account_age_seconds:
             return "account_snapshot_stale_or_future"
+        return ""
+
+    def _absolute_cap_fault(
+        self, account: AccountSnapshot, policy: RiskPolicy
+    ) -> str:
         if (
-            account.daily_loss
-            + account.open_position_risk
-            + account.open_order_risk
+            account.daily_loss + account.open_position_risk + account.open_order_risk
             >= policy.absolute_daily_loss_cap
         ):
             return "absolute_daily_loss_cap_hit"

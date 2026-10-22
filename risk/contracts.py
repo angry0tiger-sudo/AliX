@@ -230,58 +230,77 @@ class RiskPolicy:
         if not self.revision.strip():
             raise ValueError("risk_policy_revision_missing")
         require_decimal(
-            "absolute_daily_loss_cap", self.absolute_daily_loss_cap, minimum=Decimal("0.00000000000000000001")
+            "absolute_daily_loss_cap",
+            self.absolute_daily_loss_cap,
+            minimum=Decimal("0.00000000000000000001"),
         )
         require_decimal(
-            "absolute_gross_exposure_cap", self.absolute_gross_exposure_cap, minimum=Decimal("0.00000000000000000001")
+            "absolute_gross_exposure_cap",
+            self.absolute_gross_exposure_cap,
+            minimum=Decimal("0.00000000000000000001"),
         )
-        positive_fractions = (
-            "daily_risk_budget_fraction",
-            "per_trade_risk_fraction",
-            "max_stake_fraction_of_free_balance",
-            "max_gross_exposure_fraction",
-            "max_correlated_exposure_fraction",
-        )
-        for name in positive_fractions:
-            value = getattr(self, name)
-            require_decimal(name, value, minimum=Decimal("0.00000000000000000001"))
-            if value > 1:
-                raise ValueError(f"{name}_out_of_range")
-        if self.per_trade_risk_fraction > self.daily_risk_budget_fraction:
-            raise ValueError("per_trade_budget_exceeds_daily_budget")
-        bounded_fractions = (
-            "confidence_floor",
-            "max_uncertainty",
-            "max_calibration_error",
-        )
-        for name in bounded_fractions:
-            value = getattr(self, name)
-            require_decimal(name, value, minimum=Decimal("0"))
-            if value > 1:
-                raise ValueError(f"{name}_out_of_range")
-        for name in ("reference_atr_fraction", "max_atr_fraction", "stop_atr_multiple"):
-            require_decimal(name, getattr(self, name), minimum=Decimal("0.00000000000000000001"))
-        for name in ("fee_rate", "slippage_rate", "minimum_edge_after_costs"):
-            require_decimal(name, getattr(self, name), minimum=Decimal("0"))
-        if self.fee_rate >= 1 or self.slippage_rate >= 1:
-            raise ValueError("cost_rate_out_of_range")
+        _validate_policy_budget_fractions(self)
+        _validate_policy_quality_fractions(self)
+        _validate_policy_costs_and_stops(self)
         if self.max_market_age_seconds <= 0 or self.max_account_age_seconds <= 0:
             raise ValueError("freshness_limits_must_be_positive")
-        names = [name for name, _ in self.regime_multipliers]
-        if not names or len(names) != len(set(names)):
-            raise ValueError("regime_multipliers_missing_or_duplicated")
-        for name, multiplier in self.regime_multipliers:
-            if not name.strip():
-                raise ValueError("regime_name_missing")
-            require_decimal(name + "_multiplier", multiplier, minimum=Decimal("0"))
-            if multiplier > 1:
-                raise ValueError("regime_multiplier_must_not_exceed_one")
+        _validate_policy_regimes(self.regime_multipliers)
 
     def multiplier_for(self, regime: str) -> Decimal | None:
         for known_regime, multiplier in self.regime_multipliers:
             if known_regime == regime:
                 return multiplier
         return None
+
+
+def _validate_policy_budget_fractions(policy: RiskPolicy) -> None:
+    names = (
+        "daily_risk_budget_fraction",
+        "per_trade_risk_fraction",
+        "max_stake_fraction_of_free_balance",
+        "max_gross_exposure_fraction",
+        "max_correlated_exposure_fraction",
+    )
+    for name in names:
+        value = getattr(policy, name)
+        require_decimal(name, value, minimum=Decimal("0.00000000000000000001"))
+        if value > 1:
+            raise ValueError(f"{name}_out_of_range")
+    if policy.per_trade_risk_fraction > policy.daily_risk_budget_fraction:
+        raise ValueError("per_trade_budget_exceeds_daily_budget")
+
+
+def _validate_policy_quality_fractions(policy: RiskPolicy) -> None:
+    for name in ("confidence_floor", "max_uncertainty", "max_calibration_error"):
+        value = getattr(policy, name)
+        require_decimal(name, value, minimum=Decimal("0"))
+        if value > 1:
+            raise ValueError(f"{name}_out_of_range")
+
+
+def _validate_policy_costs_and_stops(policy: RiskPolicy) -> None:
+    for name in ("reference_atr_fraction", "max_atr_fraction", "stop_atr_multiple"):
+        require_decimal(
+            name, getattr(policy, name), minimum=Decimal("0.00000000000000000001")
+        )
+    for name in ("fee_rate", "slippage_rate", "minimum_edge_after_costs"):
+        require_decimal(name, getattr(policy, name), minimum=Decimal("0"))
+    if policy.fee_rate >= 1 or policy.slippage_rate >= 1:
+        raise ValueError("cost_rate_out_of_range")
+
+
+def _validate_policy_regimes(
+    regime_multipliers: tuple[tuple[str, Decimal], ...],
+) -> None:
+    names = [name for name, _ in regime_multipliers]
+    if not names or len(names) != len(set(names)):
+        raise ValueError("regime_multipliers_missing_or_duplicated")
+    for name, multiplier in regime_multipliers:
+        if not name.strip():
+            raise ValueError("regime_name_missing")
+        require_decimal(name + "_multiplier", multiplier, minimum=Decimal("0"))
+        if multiplier > 1:
+            raise ValueError("regime_multiplier_must_not_exceed_one")
 
 
 @dataclass(frozen=True, slots=True)

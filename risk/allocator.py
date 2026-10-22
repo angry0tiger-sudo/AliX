@@ -7,6 +7,7 @@ from decimal import Decimal
 
 from risk.contracts import (
     AccountSnapshot,
+    ceil_to_step,
     AllocationResult,
     MarketRules,
     MarketSnapshot,
@@ -43,19 +44,7 @@ class DynamicRiskAllocator:
         assert proposal is not None
         assert now is not None
 
-        daily_limit = min(
-            account.equity * policy.daily_risk_budget_fraction,
-            policy.absolute_daily_loss_cap,
-        )
-        reserved_loss = account.daily_loss + account.open_position_risk + account.open_order_risk
-        daily_budget = max(Decimal("0"), daily_limit - reserved_loss)
-        remaining_daily = daily_budget
-        absolute_room = policy.absolute_daily_loss_cap - reserved_loss
-        trade_base = min(
-            account.equity * policy.per_trade_risk_fraction,
-            remaining_daily,
-            absolute_room,
-        )
+        daily_budget, trade_base = self._base_budgets(policy, account)
         if trade_base <= 0:
             return self._rejected(("risk_budget_exhausted",), daily_budget)
 
@@ -63,8 +52,7 @@ class DynamicRiskAllocator:
             policy.absolute_gross_exposure_cap,
             account.equity * policy.max_gross_exposure_fraction,
         )
-        current_exposure = account.gross_exposure + account.open_order_notional
-        remaining_exposure = gross_limit - current_exposure
+        remaining_exposure = gross_limit - account.gross_exposure - account.open_order_notional
         correlated_limit = account.equity * policy.max_correlated_exposure_fraction
         remaining_correlated = correlated_limit - account.correlated_exposure
         if remaining_exposure <= 0:
@@ -72,30 +60,149 @@ class DynamicRiskAllocator:
         if remaining_correlated <= 0:
             return self._rejected(("correlated_exposure_cap_exhausted",), daily_budget, trade_base)
 
-        confidence_factor = proposal.calibrated_confidence
-        uncertainty_factor = Decimal("1") - proposal.uncertainty
-        calibration_factor = Decimal("1") - proposal.calibration_error
-        volatility = market.atr / market.price
-        volatility_factor = min(Decimal("1"), policy.reference_atr_fraction / volatility)
-        exposure_factor = min(Decimal("1"), remaining_exposure / gross_limit)
-        correlation_factor = min(Decimal("1"), remaining_correlated / correlated_limit)
         regime_factor = policy.multiplier_for(proposal.regime)
-        if regime_factor is None:
-            return self._rejected(("regime_not_approved",), daily_budget, trade_base)
-
-        trade_budget = (
+        assert regime_factor is not None
+        volatility = market.atr / market.price
+        dynamic_budget = (
             trade_base
-            * confidence_factor
-            * uncertainty_factor
-            * calibration_factor
-            * volatility_factor
-            * exposure_factor
-            * correlation_factor
+            * proposal.calibrated_confidence
+            * (Decimal("1") - proposal.uncertainty)
+            * (Decimal("1") - proposal.calibration_error)
+            * min(Decimal("1"), policy.reference_atr_fraction / volatility)
+            * min(Decimal("1"), remaining_exposure / gross_limit)
+            * min(Decimal("1"), remaining_correlated / correlated_limit)
             * regime_factor
         )
-        if trade_budget <= 0:
-            return self._rejected(("dynamic_risk_budget_zero",), daily_budget, trade_budget)
+        if dynamic_budget <= 0:
+            return self._rejected(("dynamic_risk_budget_zero",), daily_budget, dynamic_budget)
 
+        return self._build_allocation(
+            policy=policy,
+            account=account,
+            market=market,
+            rules=rules,
+            proposal=proposal,
+            now=now,
+            daily_budget=daily_budget,
+            trade_budget=dynamic_budget,
+        )
+
+    def _base_budgets(
+        self, policy: RiskPolicy, account: AccountSnapshot
+    ) -> tuple[Decimal, Decimal]:
+        reserved_loss = (
+            account.daily_loss + account.open_position_risk + account.open_order_risk
+        )
+        daily_limit = min(
+            account.equity * policy.daily_risk_budget_fraction,
+            policy.absolute_daily_loss_cap,
+        )
+        daily_budget = max(Decimal("0"), daily_limit - reserved_loss)
+        absolute_room = policy.absolute_daily_loss_cap - reserved_loss
+        trade_base = min(
+            account.equity * policy.per_trade_risk_fraction,
+            daily_budget,
+            absolute_room,
+        )
+        return daily_budget, trade_base
+
+    def _validate_inputs(
+        self,
+        policy: RiskPolicy | None,
+        account: AccountSnapshot | None,
+        market: MarketSnapshot | None,
+        rules: MarketRules | None,
+        proposal: ModelRiskProposal | None,
+        now: datetime | None,
+    ) -> tuple[str, ...]:
+        if any(value is None for value in (policy, account, market, rules, proposal, now)):
+            return ("required_risk_input_missing",)
+        assert policy is not None
+        assert account is not None
+        assert market is not None
+        assert rules is not None
+        assert proposal is not None
+        assert now is not None
+        if now.tzinfo is None or now.utcoffset() is None:
+            return ("decision_time_timezone_required",)
+        checks = (
+            self._account_policy_reason(policy, account, rules, market),
+            self._freshness_reason(policy, account, market, now),
+            self._proposal_reason(policy, account, market, proposal),
+        )
+        return tuple(reason for reason in checks if reason is not None)
+
+    def _account_policy_reason(
+        self,
+        policy: RiskPolicy,
+        account: AccountSnapshot,
+        rules: MarketRules,
+        market: MarketSnapshot,
+    ) -> str | None:
+        if not policy.owner_approved:
+            return "risk_policy_not_owner_approved"
+        if not account.reconciled or not account.orders_reconciled:
+            return "account_or_orders_not_reconciled"
+        if not rules.approved or rules.symbol != market.symbol:
+            return "market_rules_unapproved_or_mismatched"
+        return None
+
+    def _freshness_reason(
+        self,
+        policy: RiskPolicy,
+        account: AccountSnapshot,
+        market: MarketSnapshot,
+        now: datetime,
+    ) -> str | None:
+        if now < market.as_of or (
+            now - market.as_of
+        ).total_seconds() > policy.max_market_age_seconds:
+            return "market_price_stale_or_future"
+        if now < account.as_of or (
+            now - account.as_of
+        ).total_seconds() > policy.max_account_age_seconds:
+            return "account_snapshot_stale_or_future"
+        return None
+
+    def _proposal_reason(
+        self,
+        policy: RiskPolicy,
+        account: AccountSnapshot,
+        market: MarketSnapshot,
+        proposal: ModelRiskProposal,
+    ) -> str | None:
+        if proposal.regime != market.regime:
+            return "market_or_regime_mismatch"
+        if proposal.atr_snapshot != market.atr:
+            return "atr_snapshot_mismatch"
+        if account.daily_loss >= policy.absolute_daily_loss_cap:
+            return "absolute_daily_loss_cap_hit"
+        if proposal.calibrated_confidence < policy.confidence_floor:
+            return "confidence_below_policy_floor"
+        if proposal.uncertainty > policy.max_uncertainty:
+            return "uncertainty_above_policy_limit"
+        if proposal.calibration_error > policy.max_calibration_error:
+            return "calibration_degraded"
+        if proposal.expected_edge_after_costs <= policy.minimum_edge_after_costs:
+            return "edge_after_costs_not_positive_enough"
+        if market.atr / market.price > policy.max_atr_fraction:
+            return "atr_spike_exceeds_policy_limit"
+        if policy.multiplier_for(proposal.regime) is None:
+            return "regime_not_approved"
+        return None
+
+    def _build_allocation(
+        self,
+        *,
+        policy: RiskPolicy,
+        account: AccountSnapshot,
+        market: MarketSnapshot,
+        rules: MarketRules,
+        proposal: ModelRiskProposal,
+        now: datetime,
+        daily_budget: Decimal,
+        trade_budget: Decimal,
+    ) -> AllocationResult:
         stop_distance_raw = market.atr * policy.stop_atr_multiple
         raw_stop = (
             market.price - stop_distance_raw
@@ -118,24 +225,11 @@ class DynamicRiskAllocator:
         if unit_loss <= 0:
             return self._rejected(("unit_loss_invalid",), daily_budget, trade_budget)
 
-        risk_quantity = floor_to_step(trade_budget / unit_loss, rules.quantity_step)
-        cash_quantity = floor_to_step(
-            account.free_balance * policy.max_stake_fraction_of_free_balance / market.price,
-            rules.quantity_step,
+        quantity = self._bounded_quantity(
+            policy, account, market, rules, trade_budget, unit_loss
         )
-        exposure_quantity = floor_to_step(remaining_exposure / market.price, rules.quantity_step)
-        correlation_quantity = floor_to_step(remaining_correlated / market.price, rules.quantity_step)
-        market_quantity = min(
-            risk_quantity,
-            cash_quantity,
-            exposure_quantity,
-            correlation_quantity,
-            rules.max_quantity,
-        )
-        quantity = floor_to_step(market_quantity, rules.quantity_step)
         stake = quantity * market.price
         estimated_loss = quantity * unit_loss
-
         if quantity < rules.min_quantity:
             return self._rejected(("quantity_below_market_minimum",), daily_budget, trade_budget)
         if stake < rules.min_notional:
@@ -192,52 +286,45 @@ class DynamicRiskAllocator:
         )
         return AllocationResult(True, (), daily_budget, trade_budget, allocation, fingerprint)
 
-    def _validate_inputs(
+    def _bounded_quantity(
         self,
-        policy: RiskPolicy | None,
-        account: AccountSnapshot | None,
-        market: MarketSnapshot | None,
-        rules: MarketRules | None,
-        proposal: ModelRiskProposal | None,
-        now: datetime | None,
-    ) -> tuple[str, ...]:
-        if any(value is None for value in (policy, account, market, rules, proposal, now)):
-            return ("required_risk_input_missing",)
-        assert policy is not None
-        assert account is not None
-        assert market is not None
-        assert rules is not None
-        assert proposal is not None
-        assert now is not None
-        if now.tzinfo is None or now.utcoffset() is None:
-            return ("decision_time_timezone_required",)
-        if not policy.owner_approved:
-            return ("risk_policy_not_owner_approved",)
-        if not account.reconciled or not account.orders_reconciled:
-            return ("account_or_orders_not_reconciled",)
-        if not rules.approved or rules.symbol != market.symbol:
-            return ("market_rules_unapproved_or_mismatched",)
-        if now < market.as_of or (now - market.as_of).total_seconds() > policy.max_market_age_seconds:
-            return ("market_price_stale_or_future",)
-        if now < account.as_of or (now - account.as_of).total_seconds() > policy.max_account_age_seconds:
-            return ("account_snapshot_stale_or_future",)
-        if market.symbol != rules.symbol or proposal.regime != market.regime:
-            return ("market_or_regime_mismatch",)
-        if proposal.atr_snapshot != market.atr:
-            return ("atr_snapshot_mismatch",)
-        if account.daily_loss >= policy.absolute_daily_loss_cap:
-            return ("absolute_daily_loss_cap_hit",)
-        if proposal.calibrated_confidence < policy.confidence_floor:
-            return ("confidence_below_policy_floor",)
-        if proposal.uncertainty > policy.max_uncertainty:
-            return ("uncertainty_above_policy_limit",)
-        if proposal.calibration_error > policy.max_calibration_error:
-            return ("calibration_degraded",)
-        if proposal.expected_edge_after_costs <= policy.minimum_edge_after_costs:
-            return ("edge_after_costs_not_positive_enough",)
-        if market.atr / market.price > policy.max_atr_fraction:
-            return ("atr_spike_exceeds_policy_limit",)
-        return ()
+        policy: RiskPolicy,
+        account: AccountSnapshot,
+        market: MarketSnapshot,
+        rules: MarketRules,
+        trade_budget: Decimal,
+        unit_loss: Decimal,
+    ) -> Decimal:
+        candidates = (
+            floor_to_step(trade_budget / unit_loss, rules.quantity_step),
+            floor_to_step(
+                account.free_balance * policy.max_stake_fraction_of_free_balance
+                / market.price,
+                rules.quantity_step,
+            ),
+            floor_to_step(
+                (
+                    min(
+                        policy.absolute_gross_exposure_cap,
+                        account.equity * policy.max_gross_exposure_fraction,
+                    )
+                    - account.gross_exposure
+                    - account.open_order_notional
+                )
+                / market.price,
+                rules.quantity_step,
+            ),
+            floor_to_step(
+                (
+                    account.equity * policy.max_correlated_exposure_fraction
+                    - account.correlated_exposure
+                )
+                / market.price,
+                rules.quantity_step,
+            ),
+            rules.max_quantity,
+        )
+        return min(candidates)
 
     def _rejected(
         self,
@@ -261,3 +348,4 @@ class DynamicRiskAllocator:
             allocation=None,
             fingerprint=fingerprint,
         )
+
