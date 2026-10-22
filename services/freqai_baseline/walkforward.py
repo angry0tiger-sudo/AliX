@@ -10,7 +10,7 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from importlib.metadata import PackageNotFoundError, version
 from time import perf_counter
-from typing import Any, Final
+from typing import Any, Final, cast
 
 import numpy as np
 import pandas as pd
@@ -99,7 +99,10 @@ def validate_ohlcv(
         raise ValueError(f"OHLCV input is missing required columns: {missing}")
     if dataframe.columns.duplicated().any():
         raise ValueError("OHLCV input contains duplicate column names")
-    rows = dataframe.loc[:, list(OHLCV_COLUMNS)].to_dict(orient="records")
+    raw_rows = dataframe.loc[:, list(OHLCV_COLUMNS)].to_dict(orient="records")
+    rows: list[dict[str, object]] = [
+        {str(key): value for key, value in row.items()} for row in raw_rows
+    ]
     result = validate_candles(
         rows,
         expected_interval_seconds=timeframe_seconds,
@@ -270,7 +273,7 @@ def _installed_version(package: str) -> str | None:
 
 
 def _timestamp(value: object) -> str:
-    return pd.Timestamp(value).isoformat()
+    return pd.Timestamp(cast(Any, value)).isoformat()
 
 
 def run_walk_forward(
