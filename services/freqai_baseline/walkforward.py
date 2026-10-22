@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-import pickle
 import platform
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
@@ -253,8 +252,25 @@ def _regime_metrics(
 def _roundtrip_model(
     model: Any, features: DataFrame, expected: np.ndarray
 ) -> dict[str, Any]:
-    payload = pickle.dumps(model, protocol=pickle.HIGHEST_PROTOCOL)
-    restored = pickle.loads(payload)
+    """Reload from a model-native serialization contract without unsafe pickle."""
+    booster = getattr(model, "booster_", None)
+    if booster is not None and callable(getattr(booster, "model_to_string", None)):
+        from lightgbm import Booster  # type: ignore[import-not-found]
+
+        payload = booster.model_to_string()
+        restored = Booster(model_str=payload)
+        serializer = "lightgbm-native-model-string"
+    else:
+        serializer_method = getattr(model, "model_to_string", None)
+        restore_method = getattr(type(model), "model_from_string", None)
+        if not callable(serializer_method) or not callable(restore_method):
+            raise TypeError(
+                "estimator must expose a native model serialization and restore contract"
+            )
+        payload = serializer_method()
+        restored = restore_method(payload)
+        serializer = "estimator-native-model-string"
+
     restored_predictions = np.asarray(restored.predict(features), dtype=float)
     max_difference = (
         float(np.max(np.abs(restored_predictions - expected))) if expected.size else 0.0
@@ -262,12 +278,11 @@ def _roundtrip_model(
     if not np.allclose(restored_predictions, expected, rtol=1e-12, atol=1e-12):
         raise RuntimeError("model predictions changed after artifact reload")
     return {
-        "serializer": "python-pickle",
-        "artifact_sha256": hashlib.sha256(payload).hexdigest(),
+        "serializer": serializer,
+        "artifact_sha256": hashlib.sha256(payload.encode("utf-8")).hexdigest(),
         "reload_roundtrip": "passed",
         "roundtrip_prediction_max_abs_diff": max_difference,
     }
-
 
 def _installed_version(package: str) -> str | None:
     try:
