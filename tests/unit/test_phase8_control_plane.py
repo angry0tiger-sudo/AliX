@@ -1011,7 +1011,7 @@ def test_runtime_http_request_success_and_sanitized_errors(
 
     opener = FakeOpener(FakeResponse(200))
     monkeypatch.setattr(
-        runtime_cli_module.urllib.request, "build_opener", lambda *args: opener
+        cast(Any, runtime_cli_module).urllib.request, "build_opener", lambda *args: opener
     )
     response = _api_request(
         "http://127.0.0.1:8080/",
@@ -1039,7 +1039,7 @@ def test_runtime_http_request_success_and_sanitized_errors(
     )
 
     opener.response = urllib.error.HTTPError(
-        "http://127.0.0.1:8080/v1/example", 403, "synthetic", None, None
+        "http://127.0.0.1:8080/v1/example", 403, "synthetic", HTTPMessage(), None
     )
     with pytest.raises(RuntimeError, match="control_plane_http_403"):
         _api_request("http://127.0.0.1:8080", "synthetic-owner-token", "/v1/example")
@@ -1059,7 +1059,7 @@ def test_docker_adapter_and_container_inspection_fail_closed(
         del args, kwargs
         raise OSError("synthetic-docker-missing")
 
-    monkeypatch.setattr(runtime_cli_module.subprocess, "run", raise_os_error)
+    monkeypatch.setattr(cast(Any, runtime_cli_module).subprocess, "run", raise_os_error)
     with pytest.raises(RuntimeError, match="docker_cli_unavailable_or_timeout"):
         _docker(["ps"])
 
@@ -1067,7 +1067,7 @@ def test_docker_adapter_and_container_inspection_fail_closed(
         del args, kwargs
         raise subprocess.TimeoutExpired("docker", 1)
 
-    monkeypatch.setattr(runtime_cli_module.subprocess, "run", raise_timeout)
+    monkeypatch.setattr(cast(Any, runtime_cli_module).subprocess, "run", raise_timeout)
     with pytest.raises(RuntimeError, match="docker_cli_unavailable_or_timeout"):
         _docker(["ps"])
 
@@ -1443,7 +1443,7 @@ def test_disabled_tenant_members_cannot_read_tenant_metadata(
 ) -> None:
     tenant_id = make_tenant(client, "Disabled Tenant Reader")
     add_member(client, tenant_id, "owner-a", "tenant_owner")
-    store: ControlPlaneStore = client.app.state.store
+    store: ControlPlaneStore = cast(Any, client.app).state.store
     store.disable_tenant(Principal("local-owner", platform_admin=True), tenant_id)
     assert (
         client.get(
@@ -1466,7 +1466,7 @@ def test_store_authorization_and_missing_worker_fail_closed(
 ) -> None:
     tenant_id = make_tenant(client, "Store Error Paths")
     principal = Principal("owner-a")
-    store: ControlPlaneStore = client.app.state.store
+    store: ControlPlaneStore = cast(Any, client.app).state.store
     with pytest.raises(ForbiddenError):
         store.create_tenant(principal, "forbidden")
     with pytest.raises(ForbiddenError):
