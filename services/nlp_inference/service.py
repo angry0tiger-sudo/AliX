@@ -148,15 +148,12 @@ def _validate_classifier_output(
     label = dict(manifest.label_map).get(raw_label)
     if label is None:
         raise NlpServiceError("nlp_output_label_unmapped")
-    valid_score = (
-        not isinstance(raw_score, bool)
-        and isinstance(raw_score, (int, float))
-        and math.isfinite(float(raw_score))
-        and 0.0 <= float(raw_score) <= 1.0
-    )
-    if not valid_score:
+    if isinstance(raw_score, bool) or not isinstance(raw_score, (int, float)):
         raise NlpServiceError("nlp_output_confidence_invalid")
-    return label, float(raw_score)
+    confidence = float(raw_score)
+    if not math.isfinite(confidence) or not 0.0 <= confidence <= 1.0:
+        raise NlpServiceError("nlp_output_confidence_invalid")
+    return label, confidence
 
 
 def _signed_sentiment_score(label: str, confidence: float) -> float:
