@@ -1469,3 +1469,38 @@ def test_store_authorization_and_missing_worker_fail_closed(
         store.get_worker(principal, tenant_id, "missing-worker")
     with pytest.raises(NotFoundError):
         store.heartbeat_worker("missing-worker", 1, "T" * 40)
+
+
+def test_account_creation_is_disabled_until_owner_explicitly_enables_it(
+    client: TestClient,
+) -> None:
+    tenant_id = make_tenant(client, "Explicit Account Enable")
+    created = client.post(
+        f"/v1/tenants/{tenant_id}/accounts",
+        headers=auth(),
+        json={
+            "exchange_id": "nobitex",
+            "environment": "local",
+            "account_alias": "disabled-by-default",
+        },
+    )
+    assert created.status_code == 201
+    account = cast(dict[str, Any], created.json())
+    assert account["status"] == "REGISTERED_DISABLED"
+    denied = client.post(
+        f"/v1/tenants/{tenant_id}/workers",
+        headers=auth(),
+        json={
+            "account_id": account["account_id"],
+            "exchange_id": "nobitex",
+            "environment": "local",
+            "strategy_revision": "must-not-start",
+        },
+    )
+    assert denied.status_code == 422
+    enabled = client.post(
+        f"/v1/tenants/{tenant_id}/accounts/{account['account_id']}/enable",
+        headers=auth(),
+    )
+    assert enabled.status_code == 200
+    assert enabled.json()["status"] == "ACTIVE"
