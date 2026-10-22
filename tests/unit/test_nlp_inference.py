@@ -235,7 +235,9 @@ def test_local_model_loader_rejects_fixture_manifest_missing_files_path_escape_a
             replace(approved, artifact_dir=str(tmp_path / "missing")),
             pipeline_factory=lambda path: None,
         )
-    outside = tmp_path / "outside.safetensors"
+    outside_directory = tmp_path.parent / "outside-model-artifacts"
+    outside_directory.mkdir(exist_ok=True)
+    outside = outside_directory / "outside.safetensors"
     outside.write_bytes(b"outside")
     (tmp_path / "tokenizer.json").write_bytes(b"tokenizer")
     (tmp_path / "link.safetensors").symlink_to(outside)

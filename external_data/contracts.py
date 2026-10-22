@@ -116,8 +116,6 @@ def _validate_provider_status(
 ) -> None:
     if not is_test_fixture and license_status == "test_only":
         raise ProviderPolicyError("test_only_provider_cannot_be_runtime")
-    if is_test_fixture and license_status != "approved":
-        raise ProviderPolicyError("fixture_license_must_be_test_approved")
     is_blocked_tradingview = (
         "tradingview" in provider_id.casefold()
         and active

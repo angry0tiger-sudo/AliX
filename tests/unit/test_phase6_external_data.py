@@ -134,12 +134,14 @@ def feature(
     license_status: str = "approved",
 ) -> NewsFeature:
     instant = ts(available_at)
+    published = min(ts("2026-10-22T09:00:00Z"), instant)
+    ingested = min(ts("2026-10-22T09:01:00Z"), instant)
     return NewsFeature(
         event_id=event_id,
         provider_id="fixture-news",
         source_id="https://news.fixture.invalid/story",
-        published_at=ts("2026-10-22T09:00:00Z"),
-        ingested_at=ts("2026-10-22T09:01:00Z"),
+        published_at=published,
+        ingested_at=ingested,
         available_at=instant,
         processed_at=instant,
         revision=revision,

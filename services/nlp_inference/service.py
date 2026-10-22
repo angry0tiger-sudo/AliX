@@ -209,9 +209,9 @@ class NlpService:
             raise NlpServiceError("nlp_test_fixture_not_allowed_for_runtime")
 
     def infer(self, event: NewsEvent) -> NewsFeature:
-        validate_news_event(event)
         if not event.text.strip():
             raise NlpServiceError("nlp_input_text_missing")
+        validate_news_event(event)
         raw = _classify(self.classifier, event.text)
         label, confidence = _validate_classifier_output(raw, self.manifest)
         processed = parse_timestamp(self.clock(), "processed_at")
