@@ -37,7 +37,7 @@ jobs:
       - name: Ruff lint
         run: ruff check connectivity services integrations user_data/strategies user_data/freqaimodels tests scripts
       - name: Ruff format check
-        run: ruff format --check connectivity services integrations user_data/strategies user_data/freqaimodels tests scripts
+        run: ruff format --check connectivity services integrations user_data/strategies user_data/freqaimodels tests scripts --diff
       - name: Strict type check
         run: mypy --config-file mypy.ini
       - name: Security scan
