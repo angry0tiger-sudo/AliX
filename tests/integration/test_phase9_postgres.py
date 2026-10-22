@@ -88,7 +88,6 @@ def test_real_postgresql_control_plane_lifecycle_and_constraints() -> None:
         engine.dispose()
 
 
-
 def test_concurrent_worker_creation_for_one_slot_has_exactly_one_winner() -> None:
     engine = create_engine_for_url(POSTGRES_URL)
     try:
