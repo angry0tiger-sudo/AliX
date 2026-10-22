@@ -34,9 +34,7 @@ def test_data_quality_rejects_bad_ohlc_and_order() -> None:
     result = validate_candles([candle(1000), bad])
     assert not result.passed
     assert any("invalid_ohlc_range" in reason for reason in result.reasons)
-    assert any(
-        "timestamp_not_strictly_increasing" in reason for reason in result.reasons
-    )
+    assert any("duplicate_timestamp" in reason for reason in result.reasons)
 
 
 def test_connectivity_rejects_unlisted_route_without_probe() -> None:
