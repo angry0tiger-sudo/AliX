@@ -44,15 +44,22 @@ def _arguments() -> argparse.Namespace:
         type=Path,
         help="owner-supplied historical OHLCV CSV with timezone-aware date and OHLCV columns",
     )
-    parser.add_argument("--output", type=Path, required=True, help="path to JSON report")
+    parser.add_argument(
+        "--output", type=Path, required=True, help="path to JSON report"
+    )
     parser.add_argument("--pair", default="SYNTHETIC/USDT")
     parser.add_argument("--timeframe", choices=sorted(TIMEFRAME_SECONDS), default="1h")
     parser.add_argument("--horizon", type=int, default=12)
     parser.add_argument("--folds", type=int, default=3)
     parser.add_argument("--min-train-size", type=int, default=300)
-    parser.add_argument("--fee-bps", type=float, default=10.0, help="fee per side in basis points")
     parser.add_argument(
-        "--slippage-bps", type=float, default=5.0, help="slippage per side in basis points"
+        "--fee-bps", type=float, default=10.0, help="fee per side in basis points"
+    )
+    parser.add_argument(
+        "--slippage-bps",
+        type=float,
+        default=5.0,
+        help="slippage per side in basis points",
     )
     parser.add_argument(
         "--commit-sha",
@@ -108,7 +115,9 @@ def _load_owner_csv(path: Path) -> tuple[DataFrame, str]:
         try:
             timestamp = pd.Timestamp(value)
         except (TypeError, ValueError) as exc:
-            raise ValueError(f"invalid date timestamp on CSV line {row_number}") from exc
+            raise ValueError(
+                f"invalid date timestamp on CSV line {row_number}"
+            ) from exc
         if timestamp.tzinfo is None or timestamp.utcoffset() is None:
             raise ValueError(
                 f"naive date timestamp on CSV line {row_number}; timezone/offset is required"
@@ -141,7 +150,9 @@ def main() -> int:
     if args.synthetic:
         dataframe = _synthetic_ohlcv()
         dataset_kind = "synthetic"
-        serialized = dataframe.to_csv(index=False, date_format="%Y-%m-%dT%H:%M:%S%z").encode()
+        serialized = dataframe.to_csv(
+            index=False, date_format="%Y-%m-%dT%H:%M:%S%z"
+        ).encode()
         dataset_sha256 = hashlib.sha256(serialized).hexdigest()
         pair = "SYNTHETIC/USDT"
     else:
