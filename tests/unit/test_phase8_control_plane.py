@@ -1118,6 +1118,7 @@ def test_runtime_dispatcher_validates_existing_containers_and_stop_paths(
     monkeypatch.setattr(
         runtime_cli_module, "_container_info", lambda container_name: running_info
     )
+
     def fake_docker(
         args: list[str],
         timeout: float = 30.0,
@@ -1321,6 +1322,7 @@ def test_dispatcher_main_requires_owner_token_and_supports_single_pass(
     )
     monkeypatch.delenv("ALIx_ADMIN_TOKEN", raising=False)
     calls: list[tuple[Any, ...]] = []
+
     def fake_dispatch_once(*args: Any, **kwargs: Any) -> int:
         del kwargs
         calls.append(args)
