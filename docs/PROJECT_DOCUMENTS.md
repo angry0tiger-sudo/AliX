@@ -1,16 +1,24 @@
 # AliX canonical project documents
 
-This index is the repository entry point for architecture, phase order, owner directives, and acceptance evidence. Review these documents before changing the phase scope or promoting models.
+This index is the repository entry point for architecture, phase order, owner directives, and acceptance evidence. The stable canonical paths explicitly requested by the project owner are under `docs/knowledge_base/`.
 
 ## Canonical references
 
-- [Master Requirements Document (MRD)](architecture/AliX_MRD_Dynamic_Risk_FA.md): architecture, boundaries, safety policy, model/data contracts, risk and governance requirements.
-- [Project Roadmap](roadmap/AliX_Roadmap_Dynamic_Risk_FA.md): phase order, phase deliverables, acceptance checklists, and phase-specific GO/NO-GO conditions.
+- [Master Requirements Document (MRD)](knowledge_base/AliX_MRD_Dynamic_Risk_FA.md): canonical stable path for architecture, boundaries, safety policy, model/data contracts, risk and governance requirements.
+- [Project Roadmap](knowledge_base/AliX_Roadmap_Dynamic_Risk_FA.md): canonical stable path for phase order, phase deliverables, acceptance checklists, and phase-specific GO/NO-GO conditions.
 - [Project Rules](knowledge_base/PROJECT_RULES.md): repository workflow and mandatory safety conventions.
 - [Open tasks and deployment gates](knowledge_base/OPEN_TASKS.md): outstanding runtime and external evidence.
 - [Phase 4 acceptance](knowledge_base/PHASE_4_ACCEPTANCE.md): versioned checklist for the current phase.
 - [Phase 4 status report](phase-reports/PHASE_4_STATUS.md): current implementation state and evidence.
-- [Owner Directive: Phase 4](governance/owner-directives/2026-10-22-phase-4.md): current owner instruction and required boundaries.
+- [Owner Directive: Phase 4 baseline](governance/owner-directives/2026-10-22-phase-4.md): baseline scope and safety boundary.
+- [Owner Directive: canonical knowledge-base paths](governance/owner-directives/2026-10-22-phase-4-knowledge-base-canonical-paths.md): explicit instruction establishing the stable document paths above.
+
+## Preserved compatibility copies
+
+These earlier paths are retained so existing links and history are not broken. The contents are preserved; the canonical stable paths are the two copies under `knowledge_base/`.
+
+- [MRD compatibility copy](architecture/AliX_MRD_Dynamic_Risk_FA.md)
+- [Roadmap compatibility copy](roadmap/AliX_Roadmap_Dynamic_Risk_FA.md)
 
 ## Authority and change control
 
@@ -23,4 +31,4 @@ This index is the repository entry point for architecture, phase order, owner di
 
 ## How these documents are kept discoverable
 
-CI validates the presence of the MRD, roadmap, phase acceptance/status reports, and current Owner Directive. Every new phase must update this index/acceptance record as needed. Do not replace or rewrite the preserved Starter Kit archive as a shortcut for updating the live repository documents.
+CI executes `scripts/validate_project_docs.py`, which requires both canonical MRD/roadmap copies under `docs/knowledge_base/` as well as the preserved compatibility paths, acceptance/status reports, and current Owner Directives. Every new phase must update this index/acceptance record as needed. Do not replace or rewrite the preserved Starter Kit archive as a shortcut for updating live repository documents.
