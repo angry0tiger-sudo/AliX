@@ -14,7 +14,7 @@ import json
 import math
 from pathlib import Path
 import time
-from typing import Any, Callable
+from typing import Any, Callable, TypedDict, cast
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -24,6 +24,16 @@ SCHEMA_VERSION = "alix.nobitex.public-ohlcv.v1"
 INTERVAL_SECONDS = 3600
 ALLOWED_DAYS = (30, 90, 180, 365)
 MAX_CANDLES_PER_REQUEST = 400
+
+
+class CandleRecord(TypedDict):
+    timestamp: int
+    date: str
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
 
 
 def request_public_json(
@@ -64,7 +74,7 @@ def request_public_json(
 
 def parse_udf_payload(
     payload: dict[str, Any], *, requested_from: int, requested_to: int
-) -> list[dict[str, object]]:
+) -> list[CandleRecord]:
     if payload.get("s") == "no_data":
         return []
     if payload.get("s") != "ok":
@@ -76,20 +86,15 @@ def parse_udf_payload(
     lengths = {len(value) for value in arrays.values() if isinstance(value, list)}
     if len(lengths) != 1:
         raise ValueError("nobitex_ohlcv_array_length_mismatch")
-    timestamps = arrays["t"]
-    opens, highs, lows, closes, volumes = (
-        arrays["o"],
-        arrays["h"],
-        arrays["l"],
-        arrays["c"],
-        arrays["v"],
-    )
-    if not all(
-        isinstance(value, list)
-        for value in (timestamps, opens, highs, lows, closes, volumes)
-    ):
+    if not all(isinstance(arrays[name], list) for name in names):
         raise ValueError("nobitex_ohlcv_arrays_invalid")
-    rows: list[dict[str, object]] = []
+    timestamps = cast(list[Any], arrays["t"])
+    opens = cast(list[Any], arrays["o"])
+    highs = cast(list[Any], arrays["h"])
+    lows = cast(list[Any], arrays["l"])
+    closes = cast(list[Any], arrays["c"])
+    volumes = cast(list[Any], arrays["v"])
+    rows: list[CandleRecord] = []
     prior: int | None = None
     for index, raw_timestamp in enumerate(timestamps):
         if isinstance(raw_timestamp, bool) or not isinstance(raw_timestamp, int):
@@ -144,7 +149,7 @@ def fetch_historical_candles(
     now: datetime,
     request_json: Callable[[dict[str, str]], dict[str, Any]] = request_public_json,
     sleep_fn: Callable[[float], None] = time.sleep,
-) -> list[dict[str, object]]:
+) -> list[CandleRecord]:
     if isinstance(days, bool) or days not in ALLOWED_DAYS:
         raise ValueError("historical_days_out_of_policy")
     if now.tzinfo is None or now.utcoffset() is None:
@@ -156,7 +161,7 @@ def fetch_historical_candles(
         - INTERVAL_SECONDS
     )
     cursor = end - days * 86400
-    rows: list[dict[str, object]] = []
+    rows: list[CandleRecord] = []
     while cursor <= end:
         stop = min(cursor + (MAX_CANDLES_PER_REQUEST - 1) * INTERVAL_SECONDS, end)
         params = {
@@ -192,7 +197,7 @@ def fetch_historical_candles(
 
 
 def write_artifacts(
-    rows: list[dict[str, object]],
+    rows: list[CandleRecord],
     *,
     output_dir: Path,
     days: int,
@@ -212,7 +217,16 @@ def write_artifacts(
         )
         writer.writeheader()
         for row in rows:
-            writer.writerow({key: row[key] for key in writer.fieldnames})
+            writer.writerow(
+                {
+                    "date": row["date"],
+                    "open": row["open"],
+                    "high": row["high"],
+                    "low": row["low"],
+                    "close": row["close"],
+                    "volume": row["volume"],
+                }
+            )
     temporary.replace(csv_path)
     digest = hashlib.sha256(csv_path.read_bytes()).hexdigest()
     stamps = [int(row["timestamp"]) for row in rows]

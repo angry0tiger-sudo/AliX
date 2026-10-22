@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -15,7 +16,7 @@ from scripts.run_phase10_public_price_observation import observe_public_price
 UTC = timezone.utc
 
 
-def make_payload(start: int, count: int = 2) -> dict[str, object]:
+def make_payload(start: int, count: int = 2) -> dict[str, Any]:
     # Nobitex candle timestamps can be offset from UTC hour boundaries. Only the
     # spacing between bars is invariant; UTC epoch modulo 3600 is not required.
     stamps = [start + i * 3600 for i in range(count)]
@@ -56,7 +57,7 @@ def test_parser_rejects_ohlc_invalid_and_future_outside_requested_window() -> No
 def test_historical_fetch_is_bounded_rejects_gaps_and_uses_fake_transport() -> None:
     now = datetime(2026, 10, 23, 4, 0, tzinfo=UTC)
 
-    def getter(params: dict[str, str]) -> dict[str, object]:
+    def getter(params: dict[str, str]) -> dict[str, Any]:
         start, end = int(params["from"]), int(params["to"])
         stamps = list(range(start, end + 1, 3600))
         return {
@@ -78,7 +79,7 @@ def test_historical_fetch_is_bounded_rejects_gaps_and_uses_fake_transport() -> N
             days=10, now=now, request_json=getter, sleep_fn=lambda _: None
         )
 
-    def gapped(params: dict[str, str]) -> dict[str, object]:
+    def gapped(params: dict[str, str]) -> dict[str, Any]:
         response = getter(params)
         if len(response["t"]) > 3:
             response["t"] = response["t"][:2] + response["t"][3:]

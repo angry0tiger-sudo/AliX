@@ -10,6 +10,7 @@ from pathlib import Path
 from threading import Event
 from typing import Any
 
+from services.reporting.contracts import ReportingSource
 from services.reporting.png import render_equity_chart
 from services.reporting.scheduler import (
     ReportSchedulerStore,
@@ -92,7 +93,7 @@ def _build_report(
     freqtrade_db: Path | None,
     simulation_ledger_db: Path | None,
 ) -> dict[str, object]:
-    sources = []
+    sources: list[ReportingSource] = []
     if freqtrade_db is not None:
         sources.append(FreqtradeSQLiteTradeSource(freqtrade_db))
     if simulation_ledger_db is not None:

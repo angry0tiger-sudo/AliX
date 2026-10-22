@@ -124,10 +124,10 @@ class ReportSchedulerStore:
         if not database_url.strip():
             raise ValueError("scheduler_database_url_required")
         parsed = make_url(database_url)
-        if parsed.get_backend_name() == "sqlite" and parsed.database not in (
-            None,
-            "",
-            ":memory:",
+        if (
+            parsed.get_backend_name() == "sqlite"
+            and parsed.database is not None
+            and parsed.database not in ("", ":memory:")
         ):
             Path(parsed.database).expanduser().resolve().parent.mkdir(
                 parents=True, exist_ok=True
