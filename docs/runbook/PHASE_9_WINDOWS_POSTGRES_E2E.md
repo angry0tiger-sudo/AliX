@@ -36,7 +36,7 @@ py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install pip==25.2
 .\.venv\Scripts\python.exe -m pip install -r requirements.lock
 .\.venv\Scripts\python.exe -m pytest tests/unit/test_phase9_simulation_ledger.py -q
-.\.venv\Scripts\python.exe scripts/run_phase9_e2e.py --output artifacts/phase9-e2e.json --commit-sha (git rev-parse HEAD)
+.\.venv\Scripts\python.exe -m scripts.run_phase9_e2e --output artifacts/phase9-e2e.json --commit-sha (git rev-parse HEAD)
 ```
 
 Expected behaviour: Phase 9 emits a JSON report labelled `SYNTHETIC_E2E_ONLY`, records zero exchange calls and zero real-order attempts, leaves `order_permission=false`, and sets `Champion=null`. PnL in that artifact is synthetic only and must remain `NOT_RECONCILED`.

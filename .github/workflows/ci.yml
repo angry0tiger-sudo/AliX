@@ -65,7 +65,7 @@ jobs:
       - name: Unit tests and coverage (mock-only)
         run: pytest --cov=control_plane --cov=risk --cov=connectivity --cov=external_data --cov=services --cov=integrations.nobitex --cov=user_data/strategies --cov-report=term-missing --cov-fail-under=90 -q
       - name: Phase 9 end-to-end simulation (synthetic only)
-        run: python scripts/run_phase9_e2e.py --output /tmp/alix-phase9-e2e.json --commit-sha "${{ github.event.pull_request.head.sha || github.sha }}"
+        run: python -m scripts.run_phase9_e2e --output /tmp/alix-phase9-e2e.json --commit-sha "${{ github.event.pull_request.head.sha || github.sha }}"
       - name: Upload Phase 9 synthetic E2E report
         if: always()
         uses: actions/upload-artifact@v4
