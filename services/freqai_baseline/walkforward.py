@@ -151,9 +151,7 @@ def _forecast_metrics(actual: np.ndarray, predicted: np.ndarray) -> dict[str, fl
     return {
         "mae": float(np.mean(np.abs(error))),
         "rmse": float(np.sqrt(np.mean(np.square(error)))),
-        "directional_accuracy": float(
-            np.mean(np.sign(predicted) == np.sign(actual))
-        ),
+        "directional_accuracy": float(np.mean(np.sign(predicted) == np.sign(actual))),
     }
 
 
@@ -199,7 +197,9 @@ def _simulate_non_overlapping_trades(
         "max_drawdown": _max_drawdown(net_returns),
         "turnover_units": float(2 * trade_count),
         "fees_bps_cumulative": float(2 * trade_count * config.fee_bps_per_side),
-        "slippage_bps_cumulative": float(2 * trade_count * config.slippage_bps_per_side),
+        "slippage_bps_cumulative": float(
+            2 * trade_count * config.slippage_bps_per_side
+        ),
         "trade_count": trade_count,
         "buy_and_hold_gross_return": buy_hold_gross,
         "buy_and_hold_net_return": buy_hold_net,
@@ -233,9 +233,7 @@ def _roundtrip_model(
     restored = pickle.loads(payload)
     restored_predictions = np.asarray(restored.predict(features), dtype=float)
     max_difference = (
-        float(np.max(np.abs(restored_predictions - expected)))
-        if expected.size
-        else 0.0
+        float(np.max(np.abs(restored_predictions - expected))) if expected.size else 0.0
     )
     if not np.allclose(restored_predictions, expected, rtol=1e-12, atol=1e-12):
         raise RuntimeError("model predictions changed after artifact reload")
@@ -317,9 +315,7 @@ def run_walk_forward(
         fold_reports.append(fold_report)
         all_actual.extend(actual.tolist())
         all_predicted.extend(predicted.tolist())
-        all_trade_returns.extend(
-            _collect_trade_returns(test, predicted, config)
-        )
+        all_trade_returns.extend(_collect_trade_returns(test, predicted, config))
         aggregate_trade_count += int(economic["trade_count"])
         aggregate_turnover += float(economic["turnover_units"])
         aggregate_fees += float(economic["fees_bps_cumulative"])
@@ -427,9 +423,7 @@ def run_walk_forward(
 def _collect_trade_returns(
     test: DataFrame, predictions: np.ndarray, config: WalkForwardConfig
 ) -> list[float]:
-    cost = 2.0 * (
-        config.fee_bps_per_side + config.slippage_bps_per_side
-    ) / 10_000.0
+    cost = 2.0 * (config.fee_bps_per_side + config.slippage_bps_per_side) / 10_000.0
     returns: list[float] = []
     last_safe_offset = len(test) - config.horizon
     for offset in range(0, max(0, last_safe_offset + 1), config.horizon):
