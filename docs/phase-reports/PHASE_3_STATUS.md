@@ -38,8 +38,12 @@ Implementation candidate SHA: `a3c5a7e2748e47021b3f8eb52f5f694ef9d75517`.
 
 The owner-local system test runbook is prepared, **not executed** on the owner's
 machine. GitHub CI uses fixtures/fakes only for external provider and host-network
-behavior. The current documentation-only update must also pass its own exact-SHA
-checks before this PR is eligible for final owner review.
+behavior. The report and acceptance documentation follow-up commit
+`101c67dbcba5b773616e6664425e96c05c0b1c43` also passed exact-SHA CI:
+[push 39717394080](https://github.com/angry0tiger-sudo/AliX/actions/runs/39717394080)
+and [PR 39717398121](https://github.com/angry0tiger-sudo/AliX/actions/runs/39717398121)
+both completed successfully. The current PR head remains subject to its own
+required checks; final owner review is still pending.
 
 ## Known limitations / open gates
 

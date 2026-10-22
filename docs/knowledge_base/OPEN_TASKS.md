@@ -14,8 +14,12 @@
 - Remaining gates: owner-run local system tests; current provider schemas and
   licence/rate-limit review; live egress/DNS/TLS authentication review; future
   FreqAI inference wiring; reconciliation before route switch/retry; owner review.
-- The documentation-only follow-up must pass CI on its own SHA. These results
-  establish only the implementation candidate baseline, not live readiness.
+- Report/acceptance follow-up SHA `101c67dbcba5b773616e6664425e96c05c0b1c43`:
+  push CI [39717394080](https://github.com/angry0tiger-sudo/AliX/actions/runs/39717394080)
+  and PR CI [39717398121](https://github.com/angry0tiger-sudo/AliX/actions/runs/39717398121)
+  both completed successfully.
+- These checks establish the contract/CI foundation only; no live data provider,
+  order write, Bale send or host-network activation was exercised.
 
 
 

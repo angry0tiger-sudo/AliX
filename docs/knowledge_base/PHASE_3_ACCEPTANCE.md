@@ -1,11 +1,12 @@
 # Phase 3 Acceptance: Data Quality Gate and Connectivity Manager
 
-Status: **CONTRACT/CI FOUNDATION VERIFIED ON IMPLEMENTATION SHA; FINAL DOC-UPDATED SHA AND OWNER REVIEW PENDING**.
+Status: **CONTRACT/CI FOUNDATION VERIFIED ON IMPLEMENTATION AND DOCS FOLLOW-UP CANDIDATES; OWNER REVIEW PENDING**.
 
 Implementation SHA: `a3c5a7e2748e47021b3f8eb52f5f694ef9d75517`.
 
 - Push CI: [39717114585](https://github.com/angry0tiger-sudo/AliX/actions/runs/39717114585) — success.
 - Pull-request CI: [39717119556](https://github.com/angry0tiger-sudo/AliX/actions/runs/39717119556) — success.
+- Documentation follow-up commit `101c67dbcba5b773616e6664425e96c05c0b1c43` also passed exact-SHA checks: [push 39717394080](https://github.com/angry0tiger-sudo/AliX/actions/runs/39717394080) and [PR 39717398121](https://github.com/angry0tiger-sudo/AliX/actions/runs/39717398121).
 - Evidence: 91 passed, 92.62% coverage (90% minimum), 4 Phase 1 safety/dependency tests passed, Strict Mypy and all configured quality/security/dependency/complexity gates passed; Freqtrade runtime smoke passed with safe config and no exchange connection.
 
 
