@@ -94,8 +94,8 @@ def test_feature_values_at_time_t_do_not_depend_on_later_rows() -> None:
 
     for column in FEATURE_COLUMNS:
         np.testing.assert_allclose(
-            original.loc[:35, column].to_numpy(),
-            mutated.loc[:35, column].to_numpy(),
+            original[column].iloc[:36].to_numpy(dtype=float),
+            mutated[column].iloc[:36].to_numpy(dtype=float),
             equal_nan=True,
         )
 
@@ -104,7 +104,7 @@ def test_forward_target_rejects_invalid_horizon() -> None:
     frame = market_frame(20)
     for invalid in (0, -1, True):
         try:
-            forward_return_target(frame, horizon=invalid)  # type: ignore[arg-type]
+            forward_return_target(frame, horizon=invalid)
         except ValueError:
             continue
         raise AssertionError("invalid target horizon should be rejected")
@@ -130,7 +130,7 @@ def test_walk_forward_rejects_invalid_configuration_and_insufficient_data() -> N
         {"slippage_bps_per_side": -1.0},
     ):
         try:
-            WalkForwardConfig(**kwargs)  # type: ignore[arg-type]
+            WalkForwardConfig(**kwargs)
         except ValueError:
             continue
         raise AssertionError("invalid walk-forward configuration should fail")
@@ -149,7 +149,7 @@ def test_ohlcv_gate_rejects_gap_missing_fields_duplicate_columns_and_bad_timesta
 ):
     frame = market_frame(5)
     gap = frame.copy()
-    gap.loc[3, "date"] = gap.loc[2, "date"] + pd.Timedelta(hours=2)
+    gap.loc[3, "date"] = pd.Timestamp(gap["date"].iloc[2]) + pd.Timedelta(hours=2)
     try:
         validate_ohlcv(gap, timeframe_seconds=3600)
     except ValueError as exc:
