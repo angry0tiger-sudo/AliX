@@ -1,5 +1,16 @@
 # Phase 1 Open Tasks and Deployment Verification
 
+# Phase 4 tracking checkpoint — implementation in progress
+
+- Owner directive: `docs/governance/owner-directives/2026-10-22-phase-4.md`.
+- Canonical documents: `docs/PROJECT_DOCUMENTS.md`, `docs/knowledge_base/AliX_MRD_Dynamic_Risk_FA.md`, and `docs/knowledge_base/AliX_Roadmap_Dynamic_Risk_FA.md`; previous `docs/architecture/` and `docs/roadmap/` copies are retained for compatibility.
+- Tracking issue: https://github.com/angry0tiger-sudo/AliX/issues/3.
+- Branch: `feat/phase-4-freqai-baseline`; main remains unchanged.
+- Exact-head evidence: [CI run #326 / ID 39724732753](https://github.com/angry0tiger-sudo/AliX/actions/runs/39724732753) passed both `quality` and `freqtrade-runtime-smoke` on branch HEAD `eccd694d571da22853ea81065fa224afbfc239b6`. The latest [synthetic-only artifact ID 12402049075](https://github.com/angry0tiger-sudo/AliX/actions/runs/39724732753/artifacts/12402049075) was inspected; its report SHA matches the branch SHA and the new workflow assertion passed. Subsequent acceptance/status documentation commits trigger their own CI runs; use the latest exact-head checks on [PR #4](https://github.com/angry0tiger-sudo/AliX/pull/4) as authoritative for the current tip.
+- Economic gate: **NO-GO** until owner-approved acceptance thresholds are pre-registered and an authorized historical dataset/source/license is reviewed.
+- Champion: must remain null; `promotion_status=BLOCKED_NO_ECONOMIC_GATE`; economic acceptance and trading authorization remain NO-GO. No live, dry-run, or paper session, orders, provider/API calls, notifications, or host networking operations are authorized in Phase 4.
+
+
 # Phase 3 contract/CI checkpoint
 
 - Implementation candidate SHA: `a3c5a7e2748e47021b3f8eb52f5f694ef9d75517`.

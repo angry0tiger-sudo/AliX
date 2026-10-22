@@ -22,6 +22,16 @@ REQUIRED_MEMBERS = (
     "scripts/validate_project_docs.py",
 )
 REQUIRED_PROJECT_FILES = (
+    "docs/PROJECT_DOCUMENTS.md",
+    "docs/knowledge_base/AliX_MRD_Dynamic_Risk_FA.md",
+    "docs/knowledge_base/AliX_Roadmap_Dynamic_Risk_FA.md",
+    "docs/architecture/AliX_MRD_Dynamic_Risk_FA.md",
+    "docs/roadmap/AliX_Roadmap_Dynamic_Risk_FA.md",
+    "docs/governance/owner-directives/2026-10-22-phase-4-knowledge-base-canonical-paths.md",
+    "docs/governance/owner-directives/2026-10-22-phase-4.md",
+    "docs/knowledge_base/PHASE_4_ACCEPTANCE.md",
+    "docs/phase-reports/PHASE_4_STATUS.md",
+    "config/environments/freqai-baseline.sample.json",
     "docs/knowledge_base/PROJECT_RULES.md",
     "docs/knowledge_base/PHASE_0_ACCEPTANCE.md",
     ".pre-commit-config.yaml",
