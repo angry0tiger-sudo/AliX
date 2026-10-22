@@ -10,7 +10,9 @@ import json
 import math
 from typing import Protocol
 from urllib.parse import urlsplit, urlunsplit
-import xml.etree.ElementTree as ET
+
+from defusedxml import ElementTree as ET  # type: ignore[import-untyped]
+from defusedxml.common import DefusedXmlException  # type: ignore[import-untyped]
 
 from external_data.contracts import (
     ConnectorResponse,
@@ -159,8 +161,13 @@ class RssNewsConnector:
         if "<!doctype" in lowered or "<!entity" in lowered:
             raise ProviderError("rss_unsafe_xml_declaration")
         try:
-            root = ET.fromstring(response.body)
-        except ET.ParseError:
+            root = ET.fromstring(
+                response.body,
+                forbid_dtd=True,
+                forbid_entities=True,
+                forbid_external=True,
+            )
+        except (ET.ParseError, DefusedXmlException):
             raise ProviderError("rss_xml_invalid") from None
         entries = [
             element
