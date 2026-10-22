@@ -1,6 +1,6 @@
 # AliX Phase 3 Status Report
 
-Status: **IN PROGRESS / DATA QUALITY AND CONNECTIVITY CONTRACT CANDIDATE / LIVE EXECUTION BLOCKED**
+Status: **DATA QUALITY/CONNECTIVITY CONTRACT AND CI FOUNDATION VERIFIED / LOCAL & EXTERNAL DEPLOYMENT GATES OPEN / LIVE EXECUTION BLOCKED**
 
 ## Baseline
 
@@ -26,16 +26,24 @@ This candidate adds:
   duplicate-ID protection and an immutable status snapshot API.
 - A mock-only local-system-test runbook and phase acceptance checklist.
 
-## Verification rule
+## Exact-SHA CI evidence
 
-Only CI runs attached to the exact candidate SHA may be recorded as passing.
-The local runbook has been prepared; it has not been executed on the owner's
-local machine by this report. GitHub CI remains offline/mock-only for external
-provider writes and host-network changes.
+Implementation candidate SHA: `a3c5a7e2748e47021b3f8eb52f5f694ef9d75517`.
+
+- [Push workflow 39717114585](https://github.com/angry0tiger-sudo/AliX/actions/runs/39717114585): **success** on the implementation candidate SHA.
+- [Pull-request workflow 39717119556](https://github.com/angry0tiger-sudo/AliX/actions/runs/39717119556): **success** on the same SHA.
+- Quality job: **91 passed**, coverage **92.62%** against the 90% minimum; separate Phase 1 safety/dependency contract suite: **4 passed**.
+- Strict Mypy: no issues in 32 source files. Ruff lint/format, Bandit, dependency resolution and lock consistency, pip-audit, import-linter, Xenon, compile, pre-commit validation, and Starter Kit validation all passed.
+- Freqtrade 2026.7 runtime smoke passed with dry-run/stopped/zero-trade/empty-credential defaults and no exchange connection.
+
+The owner-local system test runbook is prepared, **not executed** on the owner's
+machine. GitHub CI uses fixtures/fakes only for external provider and host-network
+behavior. The current documentation-only update must also pass its own exact-SHA
+checks before this PR is eligible for final owner review.
 
 ## Known limitations / open gates
 
-1. Review the candidate on GitHub and inspect CI evidence on its exact SHA.
+1. Owner review and merge decision remain pending; the implementation candidate's exact-SHA CI evidence is recorded above.
 2. The OHLCV gate is wired into `AliXStrategy.populate_indicators`, before
    future feature computation, and is exercised by unit tests for valid/gapped/
    missing-timestamp fixtures. A FreqAI feature-vector/model-inference lifecycle
@@ -49,5 +57,4 @@ provider writes and host-network changes.
 
 ## Decision
 
-Phase 3 candidate only. No live trade, order, provider write, Bale message or
-host-network operation was performed. **NO-GO for live execution** remains in force.
+Phase 3 contract/CI foundation is verified for the implementation candidate. The documentation-only follow-up will be rechecked on its own SHA. No live trade, order, provider write, Bale message or host-network operation was performed. **NO-GO for live execution** remains in force.
