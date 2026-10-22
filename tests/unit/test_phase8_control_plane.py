@@ -832,11 +832,14 @@ def test_account_disable_revokes_worker_and_fences_late_start_ack(
         json={"dispatcher_id": "dispatcher-stop"},
     ).json()[0]
     assert disable_command["action"] == "DISABLE"
-    assert client.post(
-        f"/v1/admin/runtime-commands/{disable_command['command_id']}/ack",
-        headers=auth(),
-        json={"success": True, "container_name": None},
-    ).status_code == 204
+    assert (
+        client.post(
+            f"/v1/admin/runtime-commands/{disable_command['command_id']}/ack",
+            headers=auth(),
+            json={"success": True, "container_name": None},
+        ).status_code
+        == 204
+    )
     final_worker = client.get(
         f"/v1/tenants/{tenant_id}/workers", headers=auth()
     ).json()[0]
@@ -867,19 +870,21 @@ def test_tenant_disable_blocks_members_and_queues_worker_disable(
         headers=auth("owner-a-token-012345678901234567890123456789"),
     )
     assert forbidden.status_code == 403
-    assert client.get(
-        f"/v1/tenants/{tenant_id}", headers=auth()
-    ).json()["status"] == "ACTIVE"
-
-    disabled = client.post(
-        f"/v1/admin/tenants/{tenant_id}/disable", headers=auth()
+    assert (
+        client.get(f"/v1/tenants/{tenant_id}", headers=auth()).json()["status"]
+        == "ACTIVE"
     )
+
+    disabled = client.post(f"/v1/admin/tenants/{tenant_id}/disable", headers=auth())
     assert disabled.status_code == 200
     assert disabled.json()["status"] == "DISABLED"
-    assert client.get(
-        f"/v1/tenants/{tenant_id}",
-        headers=auth("owner-a-token-012345678901234567890123456789"),
-    ).status_code == 403
+    assert (
+        client.get(
+            f"/v1/tenants/{tenant_id}",
+            headers=auth("owner-a-token-012345678901234567890123456789"),
+        ).status_code
+        == 403
+    )
 
     disabled_worker = client.get(
         f"/v1/tenants/{tenant_id}/workers", headers=auth()
@@ -893,11 +898,14 @@ def test_tenant_disable_blocks_members_and_queues_worker_disable(
     ).json()[0]
     assert command["action"] == "DISABLE"
     assert command["worker_id"] == worker["worker_id"]
-    assert client.post(
-        f"/v1/admin/runtime-commands/{command['command_id']}/ack",
-        headers=auth(),
-        json={"success": True, "container_name": None},
-    ).status_code == 204
+    assert (
+        client.post(
+            f"/v1/admin/runtime-commands/{command['command_id']}/ack",
+            headers=auth(),
+            json={"success": True, "container_name": None},
+        ).status_code
+        == 204
+    )
 
     final_worker = client.get(
         f"/v1/tenants/{tenant_id}/workers", headers=auth()
