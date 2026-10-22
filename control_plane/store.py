@@ -1,0 +1,793 @@
+"""Transactional tenant, account, worker, command and audit repository."""
+
+from __future__ import annotations
+
+import hashlib
+import hmac
+import json
+import re
+import uuid
+from datetime import datetime, timedelta, timezone
+from typing import Any
+
+from sqlalchemy import and_, insert, or_, select, update
+from sqlalchemy.engine import Engine, RowMapping
+from sqlalchemy.exc import IntegrityError
+
+from control_plane.auth import AuthorizationError, Principal
+from control_plane.db import (
+    accounts,
+    audit_events,
+    initialize_schema,
+    memberships,
+    runtime_commands,
+    tenants,
+    worker_slots,
+    workers,
+)
+
+
+class ControlPlaneError(Exception):
+    """Base class for sanitized service errors."""
+
+    def __init__(self, code: str, status_code: int) -> None:
+        super().__init__(code)
+        self.code = code
+        self.status_code = status_code
+
+
+class NotFoundError(ControlPlaneError):
+    def __init__(self, code: str = "resource_not_found") -> None:
+        super().__init__(code, 404)
+
+
+class ConflictError(ControlPlaneError):
+    def __init__(self, code: str) -> None:
+        super().__init__(code, 409)
+
+
+class ForbiddenError(ControlPlaneError):
+    def __init__(self, code: str = "forbidden") -> None:
+        super().__init__(code, 403)
+
+
+class InvalidStateError(ControlPlaneError):
+    def __init__(self, code: str) -> None:
+        super().__init__(code, 422)
+
+
+
+def utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _json(value: dict[str, Any]) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
+def _row(row: RowMapping | None) -> dict[str, Any]:
+    if row is None:
+        raise NotFoundError()
+    return dict(row)
+
+
+def _audit(
+    connection: Any,
+    principal: Principal,
+    action: str,
+    resource_type: str,
+    resource_id: str,
+    tenant_id: str | None,
+    details: dict[str, Any] | None = None,
+) -> None:
+    connection.execute(
+        insert(audit_events).values(
+            event_id=str(uuid.uuid4()),
+            occurred_at=utc_now(),
+            actor_subject=principal.subject,
+            tenant_id=tenant_id,
+            action=action,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            details_json=_json(details or {}),
+        )
+    )
+
+
+class ControlPlaneStore:
+    """Authorization-aware persistence; callers never provide effective scope alone."""
+
+    def __init__(self, engine: Engine) -> None:
+        self.engine = engine
+        initialize_schema(engine)
+
+    def ping(self) -> bool:
+        with self.engine.connect() as connection:
+            connection.exec_driver_sql("SELECT 1")
+        return True
+
+    def _require_tenant(
+        self,
+        connection: Any,
+        principal: Principal,
+        tenant_id: str,
+        allowed_roles: tuple[str, ...],
+        require_active: bool = True,
+    ) -> None:
+        tenant = connection.execute(
+            select(tenants.c.status).where(tenants.c.tenant_id == tenant_id)
+        ).first()
+        if tenant is None:
+            raise NotFoundError("tenant_not_found")
+        if require_active and tenant._mapping["status"] != "ACTIVE":
+            raise ForbiddenError("tenant_not_active")
+        if principal.platform_admin:
+            return
+        membership = connection.execute(
+            select(memberships.c.role, memberships.c.status).where(
+                memberships.c.tenant_id == tenant_id,
+                memberships.c.subject == principal.subject,
+            )
+        ).first()
+        if (
+            membership is None
+            or membership._mapping["status"] != "ACTIVE"
+            or membership._mapping["role"] not in allowed_roles
+        ):
+            raise ForbiddenError()
+
+    def create_tenant(self, principal: Principal, name: str) -> dict[str, Any]:
+        if not principal.platform_admin:
+            raise ForbiddenError("platform_admin_required")
+        tenant_id = str(uuid.uuid4())
+        now = utc_now()
+        with self.engine.begin() as connection:
+            connection.execute(
+                insert(tenants).values(
+                    tenant_id=tenant_id, name=name, status="ACTIVE", created_at=now
+                )
+            )
+            connection.execute(
+                insert(memberships).values(
+                    tenant_id=tenant_id,
+                    subject=principal.subject,
+                    role="tenant_owner",
+                    status="ACTIVE",
+                    created_at=now,
+                )
+            )
+            _audit(
+                connection,
+                principal,
+                "tenant.created",
+                "tenant",
+                tenant_id,
+                tenant_id,
+                {"name": name},
+            )
+        return self.get_tenant(principal, tenant_id)
+
+    def get_tenant(self, principal: Principal, tenant_id: str) -> dict[str, Any]:
+        with self.engine.connect() as connection:
+            self._require_tenant(
+                connection,
+                principal,
+                tenant_id,
+                ("tenant_owner", "tenant_operator", "tenant_reader"),
+                require_active=False,
+            )
+            row = connection.execute(
+                select(tenants).where(tenants.c.tenant_id == tenant_id)
+            ).mappings().first()
+            return _row(row)
+
+    def list_tenants(self, principal: Principal) -> list[dict[str, Any]]:
+        with self.engine.connect() as connection:
+            query = select(tenants)
+            if not principal.platform_admin:
+                query = query.join(
+                    memberships, memberships.c.tenant_id == tenants.c.tenant_id
+                ).where(
+                    memberships.c.subject == principal.subject,
+                    memberships.c.status == "ACTIVE",
+                )
+            return [dict(item) for item in connection.execute(query).mappings().all()]
+
+    def add_membership(
+        self, principal: Principal, tenant_id: str, subject: str, role: str
+    ) -> dict[str, Any]:
+        with self.engine.begin() as connection:
+            self._require_tenant(connection, principal, tenant_id, ("tenant_owner",))
+            existing = connection.execute(
+                select(memberships.c.status).where(
+                    memberships.c.tenant_id == tenant_id,
+                    memberships.c.subject == subject,
+                )
+            ).first()
+            if existing is not None:
+                raise ConflictError("membership_already_exists")
+            now = utc_now()
+            connection.execute(
+                insert(memberships).values(
+                    tenant_id=tenant_id,
+                    subject=subject,
+                    role=role,
+                    status="ACTIVE",
+                    created_at=now,
+                )
+            )
+            _audit(
+                connection,
+                principal,
+                "membership.created",
+                "membership",
+                f"{tenant_id}:{subject}",
+                tenant_id,
+                {"role": role},
+            )
+        return {"tenant_id": tenant_id, "subject": subject, "role": role, "status": "ACTIVE"}
+
+    def revoke_membership(
+        self, principal: Principal, tenant_id: str, subject: str
+    ) -> None:
+        with self.engine.begin() as connection:
+            self._require_tenant(connection, principal, tenant_id, ("tenant_owner",))
+            result = connection.execute(
+                update(memberships)
+                .where(
+                    memberships.c.tenant_id == tenant_id,
+                    memberships.c.subject == subject,
+                    memberships.c.status == "ACTIVE",
+                )
+                .values(status="REVOKED")
+            )
+            if result.rowcount != 1:
+                raise NotFoundError("active_membership_not_found")
+            _audit(
+                connection,
+                principal,
+                "membership.revoked",
+                "membership",
+                f"{tenant_id}:{subject}",
+                tenant_id,
+            )
+
+    def create_account(
+        self,
+        principal: Principal,
+        tenant_id: str,
+        exchange_id: str,
+        environment: str,
+        account_alias: str,
+        secret_ref_id: str | None,
+    ) -> dict[str, Any]:
+        account_id = str(uuid.uuid4())
+        now = utc_now()
+        with self.engine.begin() as connection:
+            self._require_tenant(connection, principal, tenant_id, ("tenant_owner",))
+            connection.execute(
+                insert(accounts).values(
+                    account_id=account_id,
+                    tenant_id=tenant_id,
+                    exchange_id=exchange_id,
+                    environment=environment,
+                    account_alias=account_alias,
+                    status="REGISTERED_DISABLED",
+                    secret_ref_id=secret_ref_id,
+                    created_at=now,
+                )
+            )
+            _audit(
+                connection,
+                principal,
+                "account.registered",
+                "account",
+                account_id,
+                tenant_id,
+                {"exchange_id": exchange_id, "environment": environment},
+            )
+        return self.get_account(principal, tenant_id, account_id)
+
+    def get_account(
+        self, principal: Principal, tenant_id: str, account_id: str
+    ) -> dict[str, Any]:
+        with self.engine.connect() as connection:
+            self._require_tenant(
+                connection,
+                principal,
+                tenant_id,
+                ("tenant_owner", "tenant_operator", "tenant_reader"),
+                require_active=False,
+            )
+            row = connection.execute(
+                select(accounts).where(
+                    accounts.c.tenant_id == tenant_id,
+                    accounts.c.account_id == account_id,
+                )
+            ).mappings().first()
+            return _row(row)
+
+    def list_accounts(
+        self, principal: Principal, tenant_id: str
+    ) -> list[dict[str, Any]]:
+        with self.engine.connect() as connection:
+            self._require_tenant(
+                connection,
+                principal,
+                tenant_id,
+                ("tenant_owner", "tenant_operator", "tenant_reader"),
+                require_active=False,
+            )
+            rows = connection.execute(
+                select(accounts)
+                .where(accounts.c.tenant_id == tenant_id)
+                .order_by(accounts.c.created_at)
+            ).mappings().all()
+            return [dict(item) for item in rows]
+
+    def create_worker(
+        self,
+        principal: Principal,
+        tenant_id: str,
+        account_id: str,
+        exchange_id: str,
+        environment: str,
+        strategy_revision: str,
+        profile_id: str,
+    ) -> dict[str, Any]:
+        if environment not in ("local", "test"):
+            raise InvalidStateError("only_nontrading_environments_are_allowed")
+        worker_id = str(uuid.uuid4())
+        now = utc_now()
+        try:
+            with self.engine.begin() as connection:
+                self._require_tenant(
+                    connection, principal, tenant_id, ("tenant_owner", "tenant_operator")
+                )
+                account = connection.execute(
+                    select(accounts).where(
+                        accounts.c.tenant_id == tenant_id,
+                        accounts.c.account_id == account_id,
+                        accounts.c.exchange_id == exchange_id,
+                        accounts.c.environment == environment,
+                    )
+                ).mappings().first()
+                if account is None:
+                    raise NotFoundError("account_exchange_binding_not_found")
+                slot_filter = and_(
+                    worker_slots.c.tenant_id == tenant_id,
+                    worker_slots.c.account_id == account_id,
+                    worker_slots.c.exchange_id == exchange_id,
+                    worker_slots.c.environment == environment,
+                )
+                slot = connection.execute(
+                    select(worker_slots).where(slot_filter)
+                ).mappings().first()
+                generation = 0
+                if slot is not None:
+                    previous = connection.execute(
+                        select(workers.c.desired_state, workers.c.observed_state).where(
+                            workers.c.worker_id == slot["worker_id"]
+                        )
+                    ).mappings().first()
+                    if previous is None or not (
+                        previous["desired_state"] in ("STOPPED", "DISABLED")
+                        and previous["observed_state"]
+                        in ("ABSENT", "STOPPED", "DISABLED", "FAILED")
+                    ):
+                        raise ConflictError("worker_slot_already_occupied")
+                    generation = int(slot["generation"]) + 1
+                connection.execute(
+                    insert(workers).values(
+                        worker_id=worker_id,
+                        tenant_id=tenant_id,
+                        account_id=account_id,
+                        exchange_id=exchange_id,
+                        environment=environment,
+                        strategy_revision=strategy_revision,
+                        profile_id=profile_id,
+                        desired_state="STOPPED",
+                        observed_state="ABSENT",
+                        generation=generation,
+                        container_name=None,
+                        credential_sha256=None,
+                        last_heartbeat=None,
+                        created_at=now,
+                        updated_at=now,
+                    )
+                )
+                slot_values = {
+                    "tenant_id": tenant_id,
+                    "account_id": account_id,
+                    "exchange_id": exchange_id,
+                    "environment": environment,
+                    "generation": generation,
+                    "worker_id": worker_id,
+                }
+                if slot is None:
+                    connection.execute(insert(worker_slots).values(**slot_values))
+                else:
+                    connection.execute(
+                        update(worker_slots).where(slot_filter).values(**slot_values)
+                    )
+                _audit(
+                    connection,
+                    principal,
+                    "worker.registered",
+                    "worker",
+                    worker_id,
+                    tenant_id,
+                    {
+                        "exchange_id": exchange_id,
+                        "environment": environment,
+                        "profile_id": profile_id,
+                    },
+                )
+        except IntegrityError as exc:
+            raise ConflictError("worker_slot_or_binding_conflict") from exc
+        return self.get_worker(principal, tenant_id, worker_id)
+
+    def get_worker(
+        self, principal: Principal, tenant_id: str, worker_id: str
+    ) -> dict[str, Any]:
+        with self.engine.connect() as connection:
+            self._require_tenant(
+                connection,
+                principal,
+                tenant_id,
+                ("tenant_owner", "tenant_operator", "tenant_reader"),
+                require_active=False,
+            )
+            row = connection.execute(
+                select(workers).where(
+                    workers.c.tenant_id == tenant_id,
+                    workers.c.worker_id == worker_id,
+                )
+            ).mappings().first()
+            return _row(row)
+
+    def list_workers(
+        self, principal: Principal, tenant_id: str
+    ) -> list[dict[str, Any]]:
+        with self.engine.connect() as connection:
+            self._require_tenant(
+                connection,
+                principal,
+                tenant_id,
+                ("tenant_owner", "tenant_operator", "tenant_reader"),
+                require_active=False,
+            )
+            rows = connection.execute(
+                select(workers)
+                .where(workers.c.tenant_id == tenant_id)
+                .order_by(workers.c.created_at)
+            ).mappings().all()
+            return [dict(item) for item in rows]
+
+    def transition_worker(
+        self,
+        principal: Principal,
+        tenant_id: str,
+        worker_id: str,
+        action: str,
+    ) -> dict[str, Any]:
+        now = utc_now()
+        command_action = {"start": "START", "stop": "STOP", "disable": "DISABLE"}[action]
+        with self.engine.begin() as connection:
+            self._require_tenant(
+                connection, principal, tenant_id, ("tenant_owner", "tenant_operator")
+            )
+            row = connection.execute(
+                select(workers).where(
+                    workers.c.tenant_id == tenant_id,
+                    workers.c.worker_id == worker_id,
+                )
+            ).mappings().first()
+            if row is None:
+                raise NotFoundError("worker_not_found")
+            desired = str(row["desired_state"])
+            observed = str(row["observed_state"])
+            if action == "start":
+                if desired in ("START_REQUESTED",) or observed == "RUNNING":
+                    return dict(row)
+                if desired == "DISABLED" or observed == "QUARANTINED":
+                    raise ConflictError("worker_disabled_or_quarantined")
+                generation = int(row["generation"]) + 1
+                connection.execute(
+                    update(workers)
+                    .where(workers.c.worker_id == worker_id)
+                    .values(
+                        desired_state="START_REQUESTED",
+                        observed_state="STARTING",
+                        generation=generation,
+                        credential_sha256=None,
+                        updated_at=now,
+                    )
+                )
+                connection.execute(
+                    update(worker_slots)
+                    .where(
+                        worker_slots.c.tenant_id == tenant_id,
+                        worker_slots.c.account_id == row["account_id"],
+                        worker_slots.c.exchange_id == row["exchange_id"],
+                        worker_slots.c.environment == row["environment"],
+                    )
+                    .values(generation=generation, worker_id=worker_id)
+                )
+            else:
+                if action == "stop" and desired == "STOPPED" and observed in (
+                    "ABSENT",
+                    "STOPPED",
+                    "DISABLED",
+                ):
+                    return dict(row)
+                if action == "disable" and desired == "DISABLED":
+                    return dict(row)
+                generation = int(row["generation"])
+                connection.execute(
+                    update(workers)
+                    .where(workers.c.worker_id == worker_id)
+                    .values(
+                        desired_state="STOP_REQUESTED" if action == "stop" else "DISABLED",
+                        credential_sha256=None,
+                        updated_at=now,
+                    )
+                )
+            command_id = str(uuid.uuid4())
+            connection.execute(
+                insert(runtime_commands).values(
+                    command_id=command_id,
+                    tenant_id=tenant_id,
+                    worker_id=worker_id,
+                    generation=generation,
+                    action=command_action,
+                    status="PENDING",
+                    created_at=now,
+                    claimed_by=None,
+                    lease_until=None,
+                    completed_at=None,
+                    error_code=None,
+                )
+            )
+            _audit(
+                connection,
+                principal,
+                f"worker.{action}_requested",
+                "worker",
+                worker_id,
+                tenant_id,
+                {"generation": generation, "command_id": command_id},
+            )
+        return self.get_worker(principal, tenant_id, worker_id)
+
+    def claim_runtime_commands(
+        self,
+        dispatcher_id: str,
+        limit: int,
+        lease_seconds: int,
+        now: datetime | None = None,
+    ) -> list[dict[str, Any]]:
+        current = now or datetime.now(timezone.utc)
+        current_s = current.isoformat(timespec="seconds")
+        lease_s = (current + timedelta(seconds=lease_seconds)).isoformat(
+            timespec="seconds"
+        )
+        claimed: list[dict[str, Any]] = []
+        eligible = or_(
+            runtime_commands.c.status == "PENDING",
+            and_(
+                runtime_commands.c.status == "CLAIMED",
+                runtime_commands.c.lease_until <= current_s,
+            ),
+        )
+        with self.engine.begin() as connection:
+            candidates = connection.execute(
+                select(runtime_commands.c.command_id)
+                .where(eligible)
+                .order_by(runtime_commands.c.created_at)
+                .limit(limit)
+            ).all()
+            for candidate in candidates:
+                command_id = str(candidate._mapping["command_id"])
+                updated = connection.execute(
+                    update(runtime_commands)
+                    .where(runtime_commands.c.command_id == command_id, eligible)
+                    .values(
+                        status="CLAIMED",
+                        claimed_by=dispatcher_id,
+                        lease_until=lease_s,
+                    )
+                )
+                if updated.rowcount != 1:
+                    continue
+                row = connection.execute(
+                    select(runtime_commands).where(
+                        runtime_commands.c.command_id == command_id
+                    )
+                ).mappings().first()
+                if row is not None:
+                    claimed.append(dict(row))
+        return claimed
+
+    def register_worker_credential(
+        self, worker_id: str, generation: int, credential_sha256: str
+    ) -> None:
+        now = utc_now()
+        with self.engine.begin() as connection:
+            result = connection.execute(
+                update(workers)
+                .where(
+                    workers.c.worker_id == worker_id,
+                    workers.c.generation == generation,
+                    workers.c.desired_state == "START_REQUESTED",
+                    workers.c.observed_state.in_(("STARTING", "RUNNING")),
+                )
+                .values(credential_sha256=credential_sha256, updated_at=now)
+            )
+            if result.rowcount != 1:
+                raise ConflictError("worker_generation_or_state_mismatch")
+
+    def heartbeat_worker(
+        self, worker_id: str, generation: int, bearer_token: str | None
+    ) -> None:
+        if bearer_token is None:
+            raise AuthorizationError("worker_token_required")
+        token_hash = hashlib.sha256(bearer_token.encode("utf-8")).hexdigest()
+        now = utc_now()
+        with self.engine.begin() as connection:
+            row = connection.execute(
+                select(
+                    workers.c.tenant_id,
+                    workers.c.generation,
+                    workers.c.credential_sha256,
+                    workers.c.desired_state,
+                    tenants.c.status.label("tenant_status"),
+                )
+                .join(tenants, tenants.c.tenant_id == workers.c.tenant_id)
+                .where(workers.c.worker_id == worker_id)
+            ).mappings().first()
+            if row is None:
+                raise NotFoundError("worker_not_found")
+            expected_hash = row["credential_sha256"]
+            if (
+                not expected_hash
+                or not hmac.compare_digest(str(expected_hash), token_hash)
+                or int(row["generation"]) != generation
+                or row["desired_state"] != "START_REQUESTED"
+                or row["tenant_status"] != "ACTIVE"
+            ):
+                raise AuthorizationError("worker_identity_or_scope_invalid")
+            connection.execute(
+                update(workers)
+                .where(
+                    workers.c.worker_id == worker_id,
+                    workers.c.generation == generation,
+                )
+                .values(
+                    observed_state="RUNNING",
+                    last_heartbeat=now,
+                    updated_at=now,
+                )
+            )
+
+    def claimed_command_owner(self, command_id: str) -> dict[str, Any] | None:
+        with self.engine.connect() as connection:
+            row = connection.execute(
+                select(runtime_commands).where(
+                    runtime_commands.c.command_id == command_id,
+                    runtime_commands.c.status == "CLAIMED",
+                )
+            ).mappings().first()
+            return None if row is None else dict(row)
+
+    def acknowledge_runtime_command(
+        self,
+        command_id: str,
+        dispatcher_id: str,
+        success: bool,
+        container_name: str | None,
+        error_code: str | None,
+    ) -> None:
+        now = utc_now()
+        with self.engine.begin() as connection:
+            command = connection.execute(
+                select(runtime_commands).where(
+                    runtime_commands.c.command_id == command_id,
+                    runtime_commands.c.status == "CLAIMED",
+                    runtime_commands.c.claimed_by == dispatcher_id,
+                )
+            ).mappings().first()
+            if command is None:
+                raise ConflictError("runtime_command_lease_not_owned")
+            worker = connection.execute(
+                select(workers).where(workers.c.worker_id == command["worker_id"])
+            ).mappings().first()
+            if worker is None:
+                raise NotFoundError("worker_not_found")
+            action = str(command["action"])
+            generation = int(command["generation"])
+            current_generation = int(worker["generation"])
+            outcome = "SUCCEEDED" if success else "FAILED"
+            safe_error = error_code if error_code and re.fullmatch(
+                r"[a-z0-9_]{1,80}", error_code
+            ) else None
+            connection.execute(
+                update(runtime_commands)
+                .where(runtime_commands.c.command_id == command_id)
+                .values(
+                    status=outcome,
+                    completed_at=now,
+                    error_code=None if success else (safe_error or "runtime_failed"),
+                    lease_until=None,
+                )
+            )
+            if generation == current_generation:
+                if success and action == "START":
+                    connection.execute(
+                        update(workers)
+                        .where(workers.c.worker_id == command["worker_id"])
+                        .values(
+                            observed_state=(
+                                "RUNNING" if worker["last_heartbeat"] else "STARTING"
+                            ),
+                            container_name=container_name,
+                            updated_at=now,
+                        )
+                    )
+                elif success and action in ("STOP", "DISABLE"):
+                    connection.execute(
+                        update(workers)
+                        .where(workers.c.worker_id == command["worker_id"])
+                        .values(
+                            desired_state="DISABLED" if action == "DISABLE" else "STOPPED",
+                            observed_state=(
+                                "DISABLED" if action == "DISABLE" else "STOPPED"
+                            ),
+                            container_name=None,
+                            credential_sha256=None,
+                            last_heartbeat=None,
+                            updated_at=now,
+                        )
+                    )
+                elif not success:
+                    connection.execute(
+                        update(workers)
+                        .where(workers.c.worker_id == command["worker_id"])
+                        .values(
+                            observed_state="QUARANTINED",
+                            credential_sha256=None,
+                            updated_at=now,
+                        )
+                    )
+            _audit(
+                connection,
+                Principal(subject=f"runtime:{dispatcher_id}", platform_admin=True),
+                "runtime_command.acknowledged",
+                "runtime_command",
+                command_id,
+                str(command["tenant_id"]),
+                {
+                    "action": action,
+                    "generation": generation,
+                    "success": success,
+                    "error_code": None if success else (safe_error or "runtime_failed"),
+                },
+            )
+
+    def list_audit_events(
+        self, principal: Principal, tenant_id: str, limit: int = 100
+    ) -> list[dict[str, Any]]:
+        with self.engine.connect() as connection:
+            self._require_tenant(connection, principal, tenant_id, ("tenant_owner",))
+            rows = connection.execute(
+                select(audit_events)
+                .where(audit_events.c.tenant_id == tenant_id)
+                .order_by(audit_events.c.occurred_at.desc())
+                .limit(limit)
+            ).mappings().all()
+            result: list[dict[str, Any]] = []
+            for item in rows:
+                record = dict(item)
+                record["details"] = json.loads(str(record.pop("details_json")))
+                result.append(record)
+            return result

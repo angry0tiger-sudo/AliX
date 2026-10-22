@@ -11,6 +11,13 @@ defusedxml==0.7.1
 joblib==1.5.3
 scikit-learn==1.9.0
 
+# Local-first control plane runtime dependencies
+fastapi==0.158.1
+sqlalchemy==2.1.6
+psycopg[binary]==3.3.2
+uvicorn==0.54.0
+pyyaml==6.0.3
+
 # Tests and quality/security/architecture gates
 pytest==9.0.3
 pytest-cov==7.0.0

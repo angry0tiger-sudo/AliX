@@ -35,6 +35,15 @@ This index is the repository entry point for architecture, phase order, owner di
 - [Risk halt/re-arm runbook](runbook/PHASE_7_RISK_HALT_AND_REARM.md): operator process for incident, reconciliation and manual re-arm.
 - [Risk package](../risk/README.md): isolated contracts and implementation boundaries.
 
+## Phase 8: Local-first Control Plane and isolated Worker runtime
+
+- [Phase 8 acceptance](knowledge_base/PHASE_8_ACCEPTANCE.md): tenant authorization, local token mode, Worker isolation and exact-head CI gates.
+- [Phase 8 status report](phase-reports/PHASE_8_STATUS.md): branch-specific implementation evidence and remaining runtime blockers.
+- [ADR-0008](architecture/decisions/ADR-0008-phase-8-local-single-user-control-plane.md): PostgreSQL Control Plane, local owner token, per-Worker SQLite and isolated Containers.
+- [Owner Directive](governance/owner-directives/2026-10-22-phase-8.md): explicit local-first choices, runtime limits and no-trading boundary.
+- [Local Compose runbook](runbook/PHASE_8_LOCAL_COMPOSE.md): owner-controlled local services and host dispatcher.
+- [Tenant isolation runbook](runbook/PHASE_8_TENANT_ISOLATION.md): authorization invariants and fail-closed recovery.
+
 ## Preserved compatibility copies
 
 These earlier paths are retained so existing links and history are not broken. The contents are preserved; the canonical stable paths are the two copies under `knowledge_base/`.
