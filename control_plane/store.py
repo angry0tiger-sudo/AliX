@@ -162,6 +162,165 @@ def _schedule_worker_disables(
         )
 
 
+def _request_worker_start(
+    connection: Any, row: RowMapping, worker_id: str, now: str
+) -> int | None:
+    desired = str(row["desired_state"])
+    observed = str(row["observed_state"])
+    if desired == "START_REQUESTED" or observed == "RUNNING":
+        return None
+    if desired == "DISABLED" or observed == "QUARANTINED":
+        raise ConflictError("worker_disabled_or_quarantined")
+    generation = int(row["generation"]) + 1
+    connection.execute(
+        update(workers)
+        .where(workers.c.worker_id == worker_id)
+        .values(
+            desired_state="START_REQUESTED",
+            observed_state="STARTING",
+            generation=generation,
+            credential_sha256=None,
+            updated_at=now,
+        )
+    )
+    connection.execute(
+        update(worker_slots)
+        .where(
+            worker_slots.c.tenant_id == row["tenant_id"],
+            worker_slots.c.account_id == row["account_id"],
+            worker_slots.c.exchange_id == row["exchange_id"],
+            worker_slots.c.environment == row["environment"],
+        )
+        .values(generation=generation, worker_id=worker_id)
+    )
+    return generation
+
+
+def _request_worker_stop_or_disable(
+    connection: Any,
+    row: RowMapping,
+    worker_id: str,
+    action: str,
+    now: str,
+) -> int | None:
+    desired = str(row["desired_state"])
+    observed = str(row["observed_state"])
+    if action == "stop" and desired == "STOPPED" and observed in (
+        "ABSENT",
+        "STOPPED",
+        "DISABLED",
+    ):
+        return None
+    if action == "disable" and desired == "DISABLED":
+        return None
+    generation = int(row["generation"])
+    connection.execute(
+        update(workers)
+        .where(workers.c.worker_id == worker_id)
+        .values(
+            desired_state="STOP_REQUESTED" if action == "stop" else "DISABLED",
+            credential_sha256=None,
+            updated_at=now,
+        )
+    )
+    return generation
+
+
+def _safe_runtime_error_code(error_code: str | None) -> str | None:
+    if error_code and re.fullmatch(r"[a-z0-9_]{1,80}", error_code):
+        return error_code
+    return None
+
+
+def _apply_runtime_worker_outcome(
+    connection: Any,
+    command: RowMapping,
+    worker: RowMapping,
+    success: bool,
+    container_name: str | None,
+    now: str,
+) -> None:
+    worker_id = str(command["worker_id"])
+    generation = int(command["generation"])
+    if generation != int(worker["generation"]):
+        return
+    if not success:
+        connection.execute(
+            update(workers)
+            .where(
+                workers.c.worker_id == worker_id,
+                workers.c.generation == generation,
+            )
+            .values(
+                observed_state="QUARANTINED",
+                credential_sha256=None,
+                updated_at=now,
+            )
+        )
+        return
+    action = str(command["action"])
+    if action == "START":
+        _apply_start_ack(
+            connection, worker, worker_id, generation, container_name, now
+        )
+    elif action in ("STOP", "DISABLE"):
+        _apply_stop_ack(connection, worker, worker_id, generation, action, now)
+
+
+def _apply_start_ack(
+    connection: Any,
+    worker: RowMapping,
+    worker_id: str,
+    generation: int,
+    container_name: str | None,
+    now: str,
+) -> None:
+    if worker["desired_state"] != "START_REQUESTED":
+        return
+    connection.execute(
+        update(workers)
+        .where(
+            workers.c.worker_id == worker_id,
+            workers.c.generation == generation,
+            workers.c.desired_state == "START_REQUESTED",
+        )
+        .values(
+            observed_state="RUNNING" if worker["last_heartbeat"] else "STARTING",
+            container_name=container_name,
+            updated_at=now,
+        )
+    )
+
+
+def _apply_stop_ack(
+    connection: Any,
+    worker: RowMapping,
+    worker_id: str,
+    generation: int,
+    action: str,
+    now: str,
+) -> None:
+    expected_desired = "STOP_REQUESTED" if action == "STOP" else "DISABLED"
+    if worker["desired_state"] != expected_desired:
+        return
+    connection.execute(
+        update(workers)
+        .where(
+            workers.c.worker_id == worker_id,
+            workers.c.generation == generation,
+            workers.c.desired_state == expected_desired,
+        )
+        .values(
+            desired_state="DISABLED" if action == "DISABLE" else "STOPPED",
+            observed_state="DISABLED" if action == "DISABLE" else "STOPPED",
+            container_name=None,
+            credential_sha256=None,
+            last_heartbeat=None,
+            updated_at=now,
+        )
+    )
+
+
 class ControlPlaneStore:
     """Authorization-aware persistence; callers never provide effective scope alone."""
 
@@ -644,10 +803,10 @@ class ControlPlaneStore:
         worker_id: str,
         action: str,
     ) -> dict[str, Any]:
-        now = utc_now()
         command_action = {"start": "START", "stop": "STOP", "disable": "DISABLE"}[
             action
         ]
+        now = utc_now()
         with self.engine.begin() as connection:
             self._require_tenant(
                 connection, principal, tenant_id, ("tenant_owner", "tenant_operator")
@@ -664,61 +823,14 @@ class ControlPlaneStore:
             )
             if row is None:
                 raise NotFoundError("worker_not_found")
-            desired = str(row["desired_state"])
-            observed = str(row["observed_state"])
             if action == "start":
-                if desired in ("START_REQUESTED",) or observed == "RUNNING":
-                    return dict(row)
-                if desired == "DISABLED" or observed == "QUARANTINED":
-                    raise ConflictError("worker_disabled_or_quarantined")
-                generation = int(row["generation"]) + 1
-                connection.execute(
-                    update(workers)
-                    .where(workers.c.worker_id == worker_id)
-                    .values(
-                        desired_state="START_REQUESTED",
-                        observed_state="STARTING",
-                        generation=generation,
-                        credential_sha256=None,
-                        updated_at=now,
-                    )
-                )
-                connection.execute(
-                    update(worker_slots)
-                    .where(
-                        worker_slots.c.tenant_id == tenant_id,
-                        worker_slots.c.account_id == row["account_id"],
-                        worker_slots.c.exchange_id == row["exchange_id"],
-                        worker_slots.c.environment == row["environment"],
-                    )
-                    .values(generation=generation, worker_id=worker_id)
-                )
+                generation = _request_worker_start(connection, row, worker_id, now)
             else:
-                if (
-                    action == "stop"
-                    and desired == "STOPPED"
-                    and observed
-                    in (
-                        "ABSENT",
-                        "STOPPED",
-                        "DISABLED",
-                    )
-                ):
-                    return dict(row)
-                if action == "disable" and desired == "DISABLED":
-                    return dict(row)
-                generation = int(row["generation"])
-                connection.execute(
-                    update(workers)
-                    .where(workers.c.worker_id == worker_id)
-                    .values(
-                        desired_state="STOP_REQUESTED"
-                        if action == "stop"
-                        else "DISABLED",
-                        credential_sha256=None,
-                        updated_at=now,
-                    )
+                generation = _request_worker_stop_or_disable(
+                    connection, row, worker_id, action, now
                 )
+            if generation is None:
+                return dict(row)
             command_id = str(uuid.uuid4())
             connection.execute(
                 insert(runtime_commands).values(
@@ -745,6 +857,7 @@ class ControlPlaneStore:
                 {"generation": generation, "command_id": command_id},
             )
         return self.get_worker(principal, tenant_id, worker_id)
+
 
     def claim_runtime_commands(
         self,
@@ -914,79 +1027,25 @@ class ControlPlaneStore:
             )
             if worker is None:
                 raise NotFoundError("worker_not_found")
-            action = str(command["action"])
-            generation = int(command["generation"])
-            current_generation = int(worker["generation"])
-            outcome = "SUCCEEDED" if success else "FAILED"
-            safe_error = (
-                error_code
-                if error_code and re.fullmatch(r"[a-z0-9_]{1,80}", error_code)
-                else None
-            )
+            safe_error = _safe_runtime_error_code(error_code)
             connection.execute(
                 update(runtime_commands)
                 .where(runtime_commands.c.command_id == command_id)
                 .values(
-                    status=outcome,
+                    status="SUCCEEDED" if success else "FAILED",
                     completed_at=now,
                     error_code=None if success else (safe_error or "runtime_failed"),
                     lease_until=None,
                 )
             )
-            if generation == current_generation:
-                if success and action == "START":
-                    connection.execute(
-                        update(workers)
-                        .where(
-                            workers.c.worker_id == command["worker_id"],
-                            workers.c.generation == generation,
-                            workers.c.desired_state == "START_REQUESTED",
-                        )
-                        .values(
-                            observed_state=(
-                                "RUNNING" if worker["last_heartbeat"] else "STARTING"
-                            ),
-                            container_name=container_name,
-                            updated_at=now,
-                        )
-                    )
-                elif success and action in ("STOP", "DISABLE"):
-                    expected_desired = (
-                        "STOP_REQUESTED" if action == "STOP" else "DISABLED"
-                    )
-                    connection.execute(
-                        update(workers)
-                        .where(
-                            workers.c.worker_id == command["worker_id"],
-                            workers.c.generation == generation,
-                            workers.c.desired_state == expected_desired,
-                        )
-                        .values(
-                            desired_state="DISABLED"
-                            if action == "DISABLE"
-                            else "STOPPED",
-                            observed_state=(
-                                "DISABLED" if action == "DISABLE" else "STOPPED"
-                            ),
-                            container_name=None,
-                            credential_sha256=None,
-                            last_heartbeat=None,
-                            updated_at=now,
-                        )
-                    )
-                elif not success:
-                    connection.execute(
-                        update(workers)
-                        .where(
-                            workers.c.worker_id == command["worker_id"],
-                            workers.c.generation == generation,
-                        )
-                        .values(
-                            observed_state="QUARANTINED",
-                            credential_sha256=None,
-                            updated_at=now,
-                        )
-                    )
+            _apply_runtime_worker_outcome(
+                connection,
+                command,
+                worker,
+                success,
+                container_name,
+                now,
+            )
             _audit(
                 connection,
                 Principal(subject=f"runtime:{dispatcher_id}", platform_admin=True),
@@ -995,12 +1054,13 @@ class ControlPlaneStore:
                 command_id,
                 str(command["tenant_id"]),
                 {
-                    "action": action,
-                    "generation": generation,
+                    "action": str(command["action"]),
+                    "generation": int(command["generation"]),
                     "success": success,
                     "error_code": None if success else (safe_error or "runtime_failed"),
                 },
             )
+
 
     def list_audit_events(
         self, principal: Principal, tenant_id: str, limit: int = 100

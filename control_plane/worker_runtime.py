@@ -12,7 +12,7 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 from urllib.parse import quote, urlsplit
 
 
@@ -41,26 +41,32 @@ def _safe_worker_id(value: str) -> str:
     return value
 
 
+def _worker_host_is_allowed(hostname: str | None, port: int | None) -> bool:
+    if hostname == "control-plane":
+        return port == 8080
+    return hostname in {"127.0.0.1", "localhost"} and port is not None and 1 <= port <= 65535
+
+
+def _url_has_no_credentials_or_suffix(parsed: Any) -> bool:
+    return (
+        parsed.username is None
+        and parsed.password is None
+        and parsed.path in ("", "/")
+        and not parsed.query
+        and not parsed.fragment
+    )
+
+
 def _validated_worker_control_url(base_url: str) -> str:
     parsed = urlsplit(base_url)
     try:
         port = parsed.port
     except ValueError:
         raise ValueError("worker_control_plane_url_not_allowed") from None
-    is_compose_service = parsed.hostname == "control-plane" and port == 8080
-    is_loopback = (
-        parsed.hostname in {"127.0.0.1", "localhost"}
-        and port is not None
-        and 1 <= port <= 65535
-    )
     if (
         parsed.scheme != "http"
-        or not (is_compose_service or is_loopback)
-        or parsed.username is not None
-        or parsed.password is not None
-        or parsed.path not in ("", "/")
-        or parsed.query
-        or parsed.fragment
+        or not _worker_host_is_allowed(parsed.hostname, port)
+        or not _url_has_no_credentials_or_suffix(parsed)
     ):
         raise ValueError("worker_control_plane_url_not_allowed")
     return base_url.rstrip("/")
@@ -138,6 +144,38 @@ def _record_heartbeat(path: Path, generation: int) -> None:
         connection.close()
 
 
+def _heartbeat_loop(
+    worker_id: str,
+    token: str,
+    generation: int,
+    base_url: str,
+    path: Path,
+    stop_event: threading.Event,
+    heartbeat_sender: Callable[[str, str, str, int], None],
+    interval_seconds: float,
+    iterations: int | None,
+) -> int:
+    failures = 0
+    completed = 0
+    while not stop_event.is_set() and (
+        iterations is None or completed < iterations
+    ):
+        try:
+            heartbeat_sender(base_url, worker_id, token, generation)
+            _record_heartbeat(path, generation)
+            failures = 0
+        except WorkerAuthorizationFailure:
+            return 2
+        except (OSError, TimeoutError):
+            failures += 1
+            if failures >= 3:
+                return 3
+        completed += 1
+        if iterations is None:
+            stop_event.wait(interval_seconds)
+    return 0
+
+
 def run_worker(
     worker_id: str,
     token: str,
@@ -152,12 +190,7 @@ def run_worker(
     worker_id = _safe_worker_id(worker_id)
     if not token or len(token) < 32 or generation < 1:
         raise ValueError("worker_credential_or_generation_invalid")
-    if (
-        not base_url.startswith("http://control-plane:")
-        and not base_url.startswith("http://127.0.0.1:")
-        and not base_url.startswith("http://localhost:")
-    ):
-        raise ValueError("worker_control_plane_url_not_allowed")
+    safe_base_url = _validated_worker_control_url(base_url)
     path = Path(database_path)
     _initialize_worker_state(path, worker_id, generation)
     stop_event = threading.Event()
@@ -168,29 +201,21 @@ def run_worker(
 
     previous_term = signal.signal(signal.SIGTERM, _request_stop)
     previous_int = signal.signal(signal.SIGINT, _request_stop)
-    failures = 0
-    completed = 0
     try:
-        while not stop_event.is_set() and (
-            iterations is None or completed < iterations
-        ):
-            try:
-                heartbeat_sender(base_url, worker_id, token, generation)
-                _record_heartbeat(path, generation)
-                failures = 0
-            except WorkerAuthorizationFailure:
-                return 2
-            except (OSError, TimeoutError):
-                failures += 1
-                if failures >= 3:
-                    return 3
-            completed += 1
-            if iterations is None:
-                stop_event.wait(interval_seconds)
+        return _heartbeat_loop(
+            worker_id,
+            token,
+            generation,
+            safe_base_url,
+            path,
+            stop_event,
+            heartbeat_sender,
+            interval_seconds,
+            iterations,
+        )
     finally:
         signal.signal(signal.SIGTERM, previous_term)
         signal.signal(signal.SIGINT, previous_int)
-    return 0
 
 
 def main() -> int:

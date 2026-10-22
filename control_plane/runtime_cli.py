@@ -16,23 +16,51 @@ from urllib.parse import urlsplit
 from typing import Any
 
 
+def _unquote_env_value(value: str) -> str:
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+        return value[1:-1]
+    return value
+
+
+def _parse_env_entry(raw_line: str) -> tuple[str, str] | None:
+    line = raw_line.strip()
+    if not line or line.startswith("#") or "=" not in line:
+        return None
+    key, value = line.split("=", 1)
+    key = key.strip()
+    value = _unquote_env_value(value.strip())
+    if not key or not key.replace("_", "").isalnum():
+        return None
+    return key, value
+
+
 def load_env_file(path: Path) -> None:
     """Load simple KEY=VALUE entries without printing any values."""
     if not path.is_file():
         raise FileNotFoundError("env_file_not_found")
     for raw_line in path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        key = key.strip()
-        value = value.strip()
-        if value.startswith('"') and value.endswith('"') and len(value) >= 2:
-            value = value[1:-1]
-        elif value.startswith("'") and value.endswith("'") and len(value) >= 2:
-            value = value[1:-1]
-        if key and key.replace("_", "").isalnum():
+        entry = _parse_env_entry(raw_line)
+        if entry is not None:
+            key, value = entry
             os.environ.setdefault(key, value)
+
+
+def _is_loopback_hostname(hostname: str | None) -> bool:
+    return hostname in {"127.0.0.1", "localhost"}
+
+
+def _url_has_no_credentials_or_suffix(parsed: Any) -> bool:
+    return (
+        parsed.username is None
+        and parsed.password is None
+        and parsed.path in ("", "/")
+        and not parsed.query
+        and not parsed.fragment
+    )
+
+
+def _valid_optional_port(port: int | None) -> bool:
+    return port is None or 1 <= port <= 65535
 
 
 def _local_control_base_url(base_url: str) -> str:
@@ -43,13 +71,9 @@ def _local_control_base_url(base_url: str) -> str:
         raise RuntimeError("control_plane_url_not_allowed") from None
     if (
         parsed.scheme != "http"
-        or parsed.hostname not in {"127.0.0.1", "localhost"}
-        or parsed.username is not None
-        or parsed.password is not None
-        or parsed.path not in ("", "/")
-        or parsed.query
-        or parsed.fragment
-        or (port is not None and not 1 <= port <= 65535)
+        or not _is_loopback_hostname(parsed.hostname)
+        or not _url_has_no_credentials_or_suffix(parsed)
+        or not _valid_optional_port(port)
     ):
         raise RuntimeError("control_plane_url_not_allowed")
     return base_url.rstrip("/")
