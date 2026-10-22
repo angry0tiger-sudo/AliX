@@ -1,5 +1,16 @@
 # Phase 1 Open Tasks and Deployment Verification
 
+# Phase 4 tracking checkpoint — implementation in progress
+
+- Owner directive: `docs/governance/owner-directives/2026-10-22-phase-4.md`.
+- Canonical documents: `docs/PROJECT_DOCUMENTS.md`, the preserved MRD, and project roadmap.
+- Tracking issue: https://github.com/angry0tiger-sudo/AliX/issues/3.
+- Branch: `feat/phase-4-freqai-baseline`; main remains unchanged.
+- Planned evidence: exact-head CI, pinned FreqAI model/strategy-load smoke, seeded synthetic walk-forward report, and regression tests for leakage/embargo/reload/no-trade.
+- Economic gate: **NO-GO** until owner-approved acceptance thresholds are pre-registered and an authorized historical dataset/source/license is reviewed.
+- Champion: must remain null; no live, dry-run, or paper session, orders, provider/API calls, notifications, or host networking operations are authorized in Phase 4.
+
+
 # Phase 3 contract/CI checkpoint
 
 - Implementation candidate SHA: `a3c5a7e2748e47021b3f8eb52f5f694ef9d75517`.
