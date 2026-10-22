@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import pickle
+import platform
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
+from importlib.metadata import PackageNotFoundError, version
+from time import perf_counter
 from typing import Any, Final
 
 import numpy as np
@@ -49,14 +53,27 @@ class WalkForwardConfig:
     slippage_bps_per_side: float = 5.0
 
     def __post_init__(self) -> None:
-        if isinstance(self.horizon, bool) or self.horizon < 1:
+        if (
+            isinstance(self.horizon, bool)
+            or not isinstance(self.horizon, int)
+            or self.horizon < 1
+        ):
             raise ValueError("horizon must be a positive integer")
-        if isinstance(self.n_splits, bool) or self.n_splits < 2:
-            raise ValueError("n_splits must be at least 2")
-        if isinstance(self.min_train_size, bool) or self.min_train_size < 30:
-            raise ValueError("min_train_size must be at least 30")
-        if self.fee_bps_per_side < 0 or self.slippage_bps_per_side < 0:
-            raise ValueError("fee and slippage assumptions cannot be negative")
+        if (
+            isinstance(self.n_splits, bool)
+            or not isinstance(self.n_splits, int)
+            or self.n_splits < 2
+        ):
+            raise ValueError("n_splits must be an integer of at least 2")
+        if (
+            isinstance(self.min_train_size, bool)
+            or not isinstance(self.min_train_size, int)
+            or self.min_train_size < 30
+        ):
+            raise ValueError("min_train_size must be an integer of at least 30")
+        costs = (self.fee_bps_per_side, self.slippage_bps_per_side)
+        if any(not math.isfinite(cost) or cost < 0 for cost in costs):
+            raise ValueError("fee and slippage assumptions must be finite and non-negative")
 
 
 @dataclass(frozen=True, slots=True)
@@ -245,6 +262,13 @@ def _roundtrip_model(
     }
 
 
+def _installed_version(package: str) -> str | None:
+    try:
+        return version(package)
+    except PackageNotFoundError:
+        return None
+
+
 def _timestamp(value: object) -> str:
     return pd.Timestamp(value).isoformat()
 
@@ -269,6 +293,13 @@ def run_walk_forward(
     parameters = dict(BASELINE_MODEL_PARAMETERS)
     if model_parameters:
         parameters.update(model_parameters)
+    experiment_config = {
+        "walk_forward": asdict(config),
+        "model_parameters": parameters,
+    }
+    experiment_config_sha256 = hashlib.sha256(
+        json.dumps(experiment_config, sort_keys=True, allow_nan=False).encode("utf-8")
+    ).hexdigest()
     all_actual: list[float] = []
     all_predicted: list[float] = []
     all_trade_returns: list[float] = []
@@ -281,6 +312,8 @@ def run_walk_forward(
     aggregate_fees = 0.0
     aggregate_slippage = 0.0
     aggregate_buy_hold_returns: list[float] = []
+    training_seconds_by_fold: list[float] = []
+    prediction_latency_ms_per_row_by_fold: list[float] = []
 
     for fold in folds:
         train = dataset.iloc[fold.train_start : fold.train_stop]
@@ -289,8 +322,16 @@ def run_walk_forward(
         test_features = test.loc[:, list(FEATURE_COLUMNS)]
         actual = test[TARGET_COLUMN].to_numpy(dtype=float)
         model = _new_estimator(estimator_factory, parameters)
+        training_started = perf_counter()
         model.fit(train_features, train[TARGET_COLUMN].to_numpy(dtype=float))
+        training_seconds = perf_counter() - training_started
+        prediction_started = perf_counter()
         predicted = np.asarray(model.predict(test_features), dtype=float)
+        prediction_seconds = perf_counter() - prediction_started
+        training_seconds_by_fold.append(training_seconds)
+        prediction_latency_ms_per_row_by_fold.append(
+            prediction_seconds * 1000.0 / max(len(test_features), 1)
+        )
         if len(predicted) != len(actual) or not np.isfinite(predicted).all():
             raise ValueError("model returned malformed or non-finite predictions")
 
@@ -343,6 +384,15 @@ def run_walk_forward(
             else "RESEARCH_ONLY_ECONOMIC_GATES_PENDING"
         ),
         "commit_sha": commit_sha,
+        "experiment_config_sha256": experiment_config_sha256,
+        "runtime_versions": {
+            "python": platform.python_version(),
+            "numpy": np.__version__,
+            "pandas": pd.__version__,
+            "freqtrade": _installed_version("freqtrade"),
+            "lightgbm": _installed_version("lightgbm"),
+            "scikit_learn": _installed_version("scikit-learn"),
+        },
         "pair": pair,
         "timeframe": timeframe,
         "dataset": {
@@ -404,6 +454,17 @@ def run_walk_forward(
             ],
         },
         "folds": fold_reports,
+        "compute": {
+            "training_duration_seconds_total": float(sum(training_seconds_by_fold)),
+            "training_duration_seconds_by_fold": training_seconds_by_fold,
+            "prediction_latency_ms_per_row_by_fold": prediction_latency_ms_per_row_by_fold,
+            "prediction_latency_ms_per_row_p50": float(
+                np.percentile(prediction_latency_ms_per_row_by_fold, 50)
+            ),
+            "prediction_latency_ms_per_row_p95": float(
+                np.percentile(prediction_latency_ms_per_row_by_fold, 95)
+            ),
+        },
         "future_risk_inputs": {
             "regime_probabilities": None,
             "calibrated_confidence": None,
