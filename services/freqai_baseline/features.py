@@ -48,7 +48,7 @@ def add_market_features(dataframe: DataFrame) -> DataFrame:
     low = pd.to_numeric(result["low"], errors="coerce")
     close = pd.to_numeric(result["close"], errors="coerce")
     volume = pd.to_numeric(result["volume"], errors="coerce")
-    returns = close.pct_change()
+    returns = close.pct_change(fill_method=None)
     previous_close = close.shift(1)
     true_range = pd.concat(
         [
@@ -66,7 +66,7 @@ def add_market_features(dataframe: DataFrame) -> DataFrame:
         "%-volatility_12": returns.rolling(12, min_periods=12).std(),
         "%-range_pct": (high - low) / close,
         "%-body_pct": (close - opened) / opened,
-        "%-volume_change_1": volume.pct_change(),
+        "%-volume_change_1": volume.pct_change(fill_method=None),
         "%-close_vs_sma_12": close / close.rolling(12, min_periods=12).mean() - 1.0,
         "%-atr_proxy_14": (
             true_range.rolling(14, min_periods=14).mean() / close
