@@ -163,6 +163,7 @@ def test_ohlcv_gate_rejects_gap_missing_fields_duplicate_columns_and_bad_timesta
     else:
         raise AssertionError("missing volume should be rejected")
     duplicated = frame.copy()
+    duplicated["close_duplicate"] = duplicated["close"]
     duplicated.columns = list(duplicated.columns[:-1]) + ["close"]
     try:
         validate_ohlcv(duplicated, timeframe_seconds=3600)
