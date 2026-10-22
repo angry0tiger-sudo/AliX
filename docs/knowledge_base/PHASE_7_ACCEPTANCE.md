@@ -1,6 +1,6 @@
 # Phase 7 Acceptance: Dynamic Risk Allocation, Risk Gate and Kill Switch
 
-Status: IMPLEMENTATION CANDIDATE CREATED; EXACT-HEAD CI NOT YET VERIFIED; RUNTIME INTEGRATION NO-GO; ECONOMIC ACCEPTANCE NO-GO; NO TRADING.
+Status: IMPLEMENTATION CANDIDATE; IMPLEMENTATION SHA CI VERIFIED; RUNTIME INTEGRATION NO-GO; ECONOMIC ACCEPTANCE NO-GO; NO TRADING.
 
 Canonical MRD: docs/knowledge_base/AliX_MRD_Dynamic_Risk_FA.md.
 Canonical Roadmap: docs/knowledge_base/AliX_Roadmap_Dynamic_Risk_FA.md, Phase 7.
@@ -22,17 +22,32 @@ Work branch: feat/phase-7-risk-engine.
 
 ## Implementation and evidence checklist
 
-- [ ] Exact final PR-head Push and Pull Request workflows succeed; logs are inspected.
-- [ ] Risk package is included in compile, Ruff lint/format, strict Mypy, Bandit, Xenon and the existing coverage gate without lowering thresholds.
+- [x] Implementation SHA `489ad189e92b90fd5b2f548d486d703c1a1e7a29` has successful Push CI run 426 and Pull Request CI run 427; job results/logs inspected ([Push](https://github.com/angry0tiger-sudo/AliX/actions/runs/39830919965), [PR](https://github.com/angry0tiger-sudo/AliX/actions/runs/39830927121)). A documentation-only commit changes the branch HEAD and must be checked separately before review readiness.
+- [x] Risk package is included in compile, Ruff lint/format, strict Mypy, Bandit, Xenon/complexity and the existing coverage gate without lowering thresholds; all relevant steps passed and coverage is 90.68% against the unchanged 90% floor.
 - [ ] Confidence/calibration, higher ATR, changed regime, uncertainty, exposure and correlation change risk budget or reject entry deterministically.
 - [ ] Stake, stop, fee/slippage estimate, quantity step, price tick, min/max notional and free balance are independently validated by the Risk Gate.
 - [ ] Missing or stale snapshot, unapproved policy/market rules, unknown regime, missing allocation, unknown Kill Switch state and service fault fail closed.
 - [ ] Absolute caps remain independent of confidence; durable latch survives store re-instantiation and never auto-resets.
 - [ ] Manual re-arm fails when approval, account/order reconciliation, supervisor health, policy consistency or version matching is absent.
 - [ ] EXIT/REDUCE_RISK bypass entry denial, while order_permission remains false.
-- [ ] Fault-injection JSON records each scenario's pass/fail on the exact commit SHA and is attached to CI.
+- [x] Fault-injection JSON records synthetic scenario results for implementation SHA `489ad189e92b90fd5b2f548d486d703c1a1e7a29`; all 28 scenarios passed and the artifact is attached to the PR run ([artifact](https://github.com/angry0tiger-sudo/AliX/actions/runs/39830927121/artifacts/12449171737)).
 - [ ] No real provider/API/exchange request, order submission/cancellation, notification, model/data download, paper/live/dry-run session or host-network change occurs.
 - [ ] Paired walk-forward/OOS report covers drawdown, tail loss/CVaR, costs, turnover and regime stability against a simple baseline using owner-approved history and pre-registered economic thresholds.
+
+
+## Verified implementation CI evidence
+
+The following evidence is specific to implementation SHA `489ad189e92b90fd5b2f548d486d703c1a1e7a29` ([commit](https://github.com/angry0tiger-sudo/AliX/commit/489ad189e92b90fd5b2f548d486d703c1a1e7a29)).
+
+- Push workflow run 426: [completed successfully](https://github.com/angry0tiger-sudo/AliX/actions/runs/39830919965).
+- Pull Request workflow run 427: [completed successfully](https://github.com/angry0tiger-sudo/AliX/actions/runs/39830927121).
+- Both runs' `quality` and `freqtrade-runtime-smoke` jobs succeeded.
+- Ruff lint/format, strict Mypy, Bandit, dependency checks, architecture contracts and complexity gate all passed.
+- The mock-only suite passed **159 tests** with **90.68% total coverage** (minimum gate remains 90%); 4 Phase 1 safety/dependency contract tests also passed.
+- The synthetic Phase 7 fault-injection report records **28/28 passed** and is available as the [CI artifact](https://github.com/angry0tiger-sudo/AliX/actions/runs/39830927121/artifacts/12449171737).
+- Runtime smoke kept the configuration closed; Phase 4/5 mechanics checks were synthetic. No order was submitted and no live trading was authorized.
+
+A green implementation CI is evidence of tested mechanics, not production deployment, economic efficacy or permission to trade. The commit made to record this evidence creates a new branch HEAD; do not infer that new HEAD's CI result from these runs. The new HEAD requires its own successful Push and Pull Request workflows before the PR is marked ready for review.
 
 ## Explicitly open gates
 
