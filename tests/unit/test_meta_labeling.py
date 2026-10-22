@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 from pandas import DataFrame
-from sklearn.linear_model import LogisticRegression
+from sklearn.linear_model import LogisticRegression  # type: ignore[import-untyped]
 
 from services.freqai_baseline.features import (
     FEATURE_COLUMNS,
@@ -162,7 +162,7 @@ def test_triple_barrier_fails_closed_on_bad_time_data_and_events() -> None:
         apply_triple_barrier(naive, event_frame(), config)
 
     gap = flat_candles()
-    gap.loc[7, "date"] = gap.loc[7, "date"] + pd.Timedelta(minutes=30)
+    gap.loc[7, "date"] = pd.Timestamp("2024-01-01T07:30:00Z")
     with pytest.raises(ValueError, match="gap_detected"):
         apply_triple_barrier(gap, event_frame(), config)
 
@@ -304,7 +304,7 @@ def test_meta_model_fail_closed_and_rejects_leaked_provenance() -> None:
 def test_integrated_meta_walkforward_purges_maturing_barrier_labels() -> None:
     candles = short_market()
     engineered = add_market_features(candles)
-    features = engineered.loc[:, FEATURE_COLUMNS]
+    features = engineered.loc[:, list(FEATURE_COLUMNS)]
     forward = forward_return_target(candles, horizon=1).to_numpy(dtype=float)
     target = pd.Series(
         np.where(np.isfinite(forward), (forward > 0.0).astype(float), np.nan)
@@ -327,7 +327,7 @@ def test_integrated_meta_walkforward_purges_maturing_barrier_labels() -> None:
     events = DataFrame(
         {
             "event_index": indices,
-            "side": np.where(oof["primary_prediction"].to_numpy() >= 0.5, 1, -1),
+            "side": np.where(oof["primary_prediction"].to_numpy(dtype=float) >= 0.5, 1, -1),
             "target_volatility": volatility,
         }
     )

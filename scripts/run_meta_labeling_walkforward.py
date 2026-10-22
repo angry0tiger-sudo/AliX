@@ -13,8 +13,8 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-import sklearn
-from sklearn.linear_model import LogisticRegression
+import sklearn  # type: ignore[import-untyped]
+from sklearn.linear_model import LogisticRegression  # type: ignore[import-untyped]
 
 from services.freqai_baseline.features import (
     FEATURE_COLUMNS,
@@ -90,7 +90,7 @@ def build_synthetic_report(commit_sha: str) -> dict[str, Any]:
         raise ValueError("commit_sha_must_be_full_git_sha")
     candles = make_synthetic_ohlcv()
     features_frame = add_market_features(candles)
-    feature_frame = features_frame.loc[:, FEATURE_COLUMNS]
+    feature_frame = features_frame.loc[:, list(FEATURE_COLUMNS)]
     forward = forward_return_target(candles, horizon=1).to_numpy(dtype=float)
     primary_values = np.where(
         np.isfinite(forward),

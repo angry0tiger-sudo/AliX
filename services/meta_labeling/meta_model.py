@@ -11,8 +11,8 @@ from typing import Any, Final
 import numpy as np
 import pandas as pd
 from pandas import DataFrame
-from sklearn.linear_model import LogisticRegression
-from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import LogisticRegression  # type: ignore[import-untyped]
+from sklearn.preprocessing import StandardScaler  # type: ignore[import-untyped]
 
 META_MODEL_SCHEMA_VERSION: Final[str] = "alix.meta_labeling.logistic.v1"
 OOF_PROVENANCE_COLUMNS: Final[tuple[str, ...]] = (
@@ -38,7 +38,7 @@ def _finite_matrix(features: DataFrame) -> np.ndarray:
         raise ValueError("meta_features_empty")
     if not features.columns.is_unique:
         raise ValueError("meta_feature_columns_must_be_unique")
-    values = features.apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
+    values: np.ndarray = features.apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
     if not np.isfinite(values).all():
         raise ValueError("meta_features_non_finite")
     return values
@@ -65,7 +65,7 @@ def _validate_folds(folds: Sequence[OOFFold], row_count: int) -> None:
 def generate_oof_primary_predictions(
     features: DataFrame,
     primary_target: pd.Series,
-    label_end_indices: Sequence[int],
+    label_end_indices: Sequence[int] | np.ndarray,
     folds: Sequence[OOFFold],
     estimator_factory: Callable[[], Any],
 ) -> DataFrame:
@@ -191,13 +191,13 @@ class MetaLabelModel:
     def fit(
         self,
         features: DataFrame,
-        labels: Sequence[int],
+        labels: Sequence[int] | np.ndarray,
         provenance: DataFrame,
-        meta_label_end_indices: Sequence[int],
+        meta_label_end_indices: Sequence[int] | np.ndarray,
         evaluation_cutoff_index: int,
     ) -> MetaLabelModel:
         """Fit only on mature labels backed by purged OOF primary predictions."""
-        values = _finite_matrix(features)
+        values: np.ndarray = _finite_matrix(features)
         label_values = np.asarray(labels)
         if (
             label_values.shape != (len(features),)
@@ -269,9 +269,9 @@ class MetaLabelModel:
         assert self.scales_ is not None
         assert self.coefficients_ is not None
         assert self.intercept_ is not None
-        logits = ((values - self.means_) / self.scales_) @ self.coefficients_
+        logits: np.ndarray = ((values - self.means_) / self.scales_) @ self.coefficients_
         logits = logits + self.intercept_
-        probability = 1.0 / (1.0 + np.exp(-np.clip(logits, -700.0, 700.0)))
+        probability: np.ndarray = 1.0 / (1.0 + np.exp(-np.clip(logits, -700.0, 700.0)))
         if not np.isfinite(probability).all():
             raise ValueError("meta_probability_non_finite")
         return probability

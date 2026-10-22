@@ -98,7 +98,7 @@ def _validate_candles(candles: DataFrame, timeframe_seconds: int) -> DataFrame:
     if candles.empty:
         raise ValueError("ohlcv_empty")
 
-    result = candles.loc[:, _CANDLE_COLUMNS].copy().reset_index(drop=True)
+    result = candles.loc[:, list(_CANDLE_COLUMNS)].copy().reset_index(drop=True)
     dates = pd.to_datetime(result["date"], errors="raise")
     if getattr(dates.dt, "tz", None) is None:
         raise ValueError("timezone_required")
@@ -257,7 +257,7 @@ def apply_triple_barrier(
     normalized = _validate_candles(candles, selected.timeframe_seconds)
     results: list[dict[str, int | float | str | pd.Timestamp]] = []
     seen: set[int] = set()
-    for _, row in events.loc[:, _META_EVENT_COLUMNS].iterrows():
+    for _, row in events.loc[:, list(_META_EVENT_COLUMNS)].iterrows():
         event_index, _, _ = _validate_event(row, len(normalized), selected)
         if event_index in seen:
             raise ValueError("duplicate_event_index")
