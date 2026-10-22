@@ -56,7 +56,6 @@ class InvalidStateError(ControlPlaneError):
         super().__init__(code, 422)
 
 
-
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -176,9 +175,13 @@ class ControlPlaneStore:
                 ("tenant_owner", "tenant_operator", "tenant_reader"),
                 require_active=False,
             )
-            row = connection.execute(
-                select(tenants).where(tenants.c.tenant_id == tenant_id)
-            ).mappings().first()
+            row = (
+                connection.execute(
+                    select(tenants).where(tenants.c.tenant_id == tenant_id)
+                )
+                .mappings()
+                .first()
+            )
             return _row(row)
 
     def list_tenants(self, principal: Principal) -> list[dict[str, Any]]:
@@ -225,7 +228,12 @@ class ControlPlaneStore:
                 tenant_id,
                 {"role": role},
             )
-        return {"tenant_id": tenant_id, "subject": subject, "role": role, "status": "ACTIVE"}
+        return {
+            "tenant_id": tenant_id,
+            "subject": subject,
+            "role": role,
+            "status": "ACTIVE",
+        }
 
     def revoke_membership(
         self, principal: Principal, tenant_id: str, subject: str
@@ -299,12 +307,16 @@ class ControlPlaneStore:
                 ("tenant_owner", "tenant_operator", "tenant_reader"),
                 require_active=False,
             )
-            row = connection.execute(
-                select(accounts).where(
-                    accounts.c.tenant_id == tenant_id,
-                    accounts.c.account_id == account_id,
+            row = (
+                connection.execute(
+                    select(accounts).where(
+                        accounts.c.tenant_id == tenant_id,
+                        accounts.c.account_id == account_id,
+                    )
                 )
-            ).mappings().first()
+                .mappings()
+                .first()
+            )
             return _row(row)
 
     def list_accounts(
@@ -318,11 +330,15 @@ class ControlPlaneStore:
                 ("tenant_owner", "tenant_operator", "tenant_reader"),
                 require_active=False,
             )
-            rows = connection.execute(
-                select(accounts)
-                .where(accounts.c.tenant_id == tenant_id)
-                .order_by(accounts.c.created_at)
-            ).mappings().all()
+            rows = (
+                connection.execute(
+                    select(accounts)
+                    .where(accounts.c.tenant_id == tenant_id)
+                    .order_by(accounts.c.created_at)
+                )
+                .mappings()
+                .all()
+            )
             return [dict(item) for item in rows]
 
     def create_worker(
@@ -342,16 +358,23 @@ class ControlPlaneStore:
         try:
             with self.engine.begin() as connection:
                 self._require_tenant(
-                    connection, principal, tenant_id, ("tenant_owner", "tenant_operator")
+                    connection,
+                    principal,
+                    tenant_id,
+                    ("tenant_owner", "tenant_operator"),
                 )
-                account = connection.execute(
-                    select(accounts).where(
-                        accounts.c.tenant_id == tenant_id,
-                        accounts.c.account_id == account_id,
-                        accounts.c.exchange_id == exchange_id,
-                        accounts.c.environment == environment,
+                account = (
+                    connection.execute(
+                        select(accounts).where(
+                            accounts.c.tenant_id == tenant_id,
+                            accounts.c.account_id == account_id,
+                            accounts.c.exchange_id == exchange_id,
+                            accounts.c.environment == environment,
+                        )
                     )
-                ).mappings().first()
+                    .mappings()
+                    .first()
+                )
                 if account is None:
                     raise NotFoundError("account_exchange_binding_not_found")
                 slot_filter = and_(
@@ -360,16 +383,22 @@ class ControlPlaneStore:
                     worker_slots.c.exchange_id == exchange_id,
                     worker_slots.c.environment == environment,
                 )
-                slot = connection.execute(
-                    select(worker_slots).where(slot_filter)
-                ).mappings().first()
+                slot = (
+                    connection.execute(select(worker_slots).where(slot_filter))
+                    .mappings()
+                    .first()
+                )
                 generation = 0
                 if slot is not None:
-                    previous = connection.execute(
-                        select(workers.c.desired_state, workers.c.observed_state).where(
-                            workers.c.worker_id == slot["worker_id"]
+                    previous = (
+                        connection.execute(
+                            select(
+                                workers.c.desired_state, workers.c.observed_state
+                            ).where(workers.c.worker_id == slot["worker_id"])
                         )
-                    ).mappings().first()
+                        .mappings()
+                        .first()
+                    )
                     if previous is None or not (
                         previous["desired_state"] in ("STOPPED", "DISABLED")
                         and previous["observed_state"]
@@ -438,12 +467,16 @@ class ControlPlaneStore:
                 ("tenant_owner", "tenant_operator", "tenant_reader"),
                 require_active=False,
             )
-            row = connection.execute(
-                select(workers).where(
-                    workers.c.tenant_id == tenant_id,
-                    workers.c.worker_id == worker_id,
+            row = (
+                connection.execute(
+                    select(workers).where(
+                        workers.c.tenant_id == tenant_id,
+                        workers.c.worker_id == worker_id,
+                    )
                 )
-            ).mappings().first()
+                .mappings()
+                .first()
+            )
             return _row(row)
 
     def list_workers(
@@ -457,11 +490,15 @@ class ControlPlaneStore:
                 ("tenant_owner", "tenant_operator", "tenant_reader"),
                 require_active=False,
             )
-            rows = connection.execute(
-                select(workers)
-                .where(workers.c.tenant_id == tenant_id)
-                .order_by(workers.c.created_at)
-            ).mappings().all()
+            rows = (
+                connection.execute(
+                    select(workers)
+                    .where(workers.c.tenant_id == tenant_id)
+                    .order_by(workers.c.created_at)
+                )
+                .mappings()
+                .all()
+            )
             return [dict(item) for item in rows]
 
     def transition_worker(
@@ -472,17 +509,23 @@ class ControlPlaneStore:
         action: str,
     ) -> dict[str, Any]:
         now = utc_now()
-        command_action = {"start": "START", "stop": "STOP", "disable": "DISABLE"}[action]
+        command_action = {"start": "START", "stop": "STOP", "disable": "DISABLE"}[
+            action
+        ]
         with self.engine.begin() as connection:
             self._require_tenant(
                 connection, principal, tenant_id, ("tenant_owner", "tenant_operator")
             )
-            row = connection.execute(
-                select(workers).where(
-                    workers.c.tenant_id == tenant_id,
-                    workers.c.worker_id == worker_id,
+            row = (
+                connection.execute(
+                    select(workers).where(
+                        workers.c.tenant_id == tenant_id,
+                        workers.c.worker_id == worker_id,
+                    )
                 )
-            ).mappings().first()
+                .mappings()
+                .first()
+            )
             if row is None:
                 raise NotFoundError("worker_not_found")
             desired = str(row["desired_state"])
@@ -515,10 +558,15 @@ class ControlPlaneStore:
                     .values(generation=generation, worker_id=worker_id)
                 )
             else:
-                if action == "stop" and desired == "STOPPED" and observed in (
-                    "ABSENT",
-                    "STOPPED",
-                    "DISABLED",
+                if (
+                    action == "stop"
+                    and desired == "STOPPED"
+                    and observed
+                    in (
+                        "ABSENT",
+                        "STOPPED",
+                        "DISABLED",
+                    )
                 ):
                     return dict(row)
                 if action == "disable" and desired == "DISABLED":
@@ -528,7 +576,9 @@ class ControlPlaneStore:
                     update(workers)
                     .where(workers.c.worker_id == worker_id)
                     .values(
-                        desired_state="STOP_REQUESTED" if action == "stop" else "DISABLED",
+                        desired_state="STOP_REQUESTED"
+                        if action == "stop"
+                        else "DISABLED",
                         credential_sha256=None,
                         updated_at=now,
                     )
@@ -600,11 +650,15 @@ class ControlPlaneStore:
                 )
                 if updated.rowcount != 1:
                     continue
-                row = connection.execute(
-                    select(runtime_commands).where(
-                        runtime_commands.c.command_id == command_id
+                row = (
+                    connection.execute(
+                        select(runtime_commands).where(
+                            runtime_commands.c.command_id == command_id
+                        )
                     )
-                ).mappings().first()
+                    .mappings()
+                    .first()
+                )
                 if row is not None:
                     claimed.append(dict(row))
         return claimed
@@ -635,17 +689,21 @@ class ControlPlaneStore:
         token_hash = hashlib.sha256(bearer_token.encode("utf-8")).hexdigest()
         now = utc_now()
         with self.engine.begin() as connection:
-            row = connection.execute(
-                select(
-                    workers.c.tenant_id,
-                    workers.c.generation,
-                    workers.c.credential_sha256,
-                    workers.c.desired_state,
-                    tenants.c.status.label("tenant_status"),
+            row = (
+                connection.execute(
+                    select(
+                        workers.c.tenant_id,
+                        workers.c.generation,
+                        workers.c.credential_sha256,
+                        workers.c.desired_state,
+                        tenants.c.status.label("tenant_status"),
+                    )
+                    .join(tenants, tenants.c.tenant_id == workers.c.tenant_id)
+                    .where(workers.c.worker_id == worker_id)
                 )
-                .join(tenants, tenants.c.tenant_id == workers.c.tenant_id)
-                .where(workers.c.worker_id == worker_id)
-            ).mappings().first()
+                .mappings()
+                .first()
+            )
             if row is None:
                 raise NotFoundError("worker_not_found")
             expected_hash = row["credential_sha256"]
@@ -672,12 +730,16 @@ class ControlPlaneStore:
 
     def claimed_command_owner(self, command_id: str) -> dict[str, Any] | None:
         with self.engine.connect() as connection:
-            row = connection.execute(
-                select(runtime_commands).where(
-                    runtime_commands.c.command_id == command_id,
-                    runtime_commands.c.status == "CLAIMED",
+            row = (
+                connection.execute(
+                    select(runtime_commands).where(
+                        runtime_commands.c.command_id == command_id,
+                        runtime_commands.c.status == "CLAIMED",
+                    )
                 )
-            ).mappings().first()
+                .mappings()
+                .first()
+            )
             return None if row is None else dict(row)
 
     def acknowledge_runtime_command(
@@ -690,27 +752,37 @@ class ControlPlaneStore:
     ) -> None:
         now = utc_now()
         with self.engine.begin() as connection:
-            command = connection.execute(
-                select(runtime_commands).where(
-                    runtime_commands.c.command_id == command_id,
-                    runtime_commands.c.status == "CLAIMED",
-                    runtime_commands.c.claimed_by == dispatcher_id,
+            command = (
+                connection.execute(
+                    select(runtime_commands).where(
+                        runtime_commands.c.command_id == command_id,
+                        runtime_commands.c.status == "CLAIMED",
+                        runtime_commands.c.claimed_by == dispatcher_id,
+                    )
                 )
-            ).mappings().first()
+                .mappings()
+                .first()
+            )
             if command is None:
                 raise ConflictError("runtime_command_lease_not_owned")
-            worker = connection.execute(
-                select(workers).where(workers.c.worker_id == command["worker_id"])
-            ).mappings().first()
+            worker = (
+                connection.execute(
+                    select(workers).where(workers.c.worker_id == command["worker_id"])
+                )
+                .mappings()
+                .first()
+            )
             if worker is None:
                 raise NotFoundError("worker_not_found")
             action = str(command["action"])
             generation = int(command["generation"])
             current_generation = int(worker["generation"])
             outcome = "SUCCEEDED" if success else "FAILED"
-            safe_error = error_code if error_code and re.fullmatch(
-                r"[a-z0-9_]{1,80}", error_code
-            ) else None
+            safe_error = (
+                error_code
+                if error_code and re.fullmatch(r"[a-z0-9_]{1,80}", error_code)
+                else None
+            )
             connection.execute(
                 update(runtime_commands)
                 .where(runtime_commands.c.command_id == command_id)
@@ -739,7 +811,9 @@ class ControlPlaneStore:
                         update(workers)
                         .where(workers.c.worker_id == command["worker_id"])
                         .values(
-                            desired_state="DISABLED" if action == "DISABLE" else "STOPPED",
+                            desired_state="DISABLED"
+                            if action == "DISABLE"
+                            else "STOPPED",
                             observed_state=(
                                 "DISABLED" if action == "DISABLE" else "STOPPED"
                             ),
@@ -779,12 +853,16 @@ class ControlPlaneStore:
     ) -> list[dict[str, Any]]:
         with self.engine.connect() as connection:
             self._require_tenant(connection, principal, tenant_id, ("tenant_owner",))
-            rows = connection.execute(
-                select(audit_events)
-                .where(audit_events.c.tenant_id == tenant_id)
-                .order_by(audit_events.c.occurred_at.desc())
-                .limit(limit)
-            ).mappings().all()
+            rows = (
+                connection.execute(
+                    select(audit_events)
+                    .where(audit_events.c.tenant_id == tenant_id)
+                    .order_by(audit_events.c.occurred_at.desc())
+                    .limit(limit)
+                )
+                .mappings()
+                .all()
+            )
             result: list[dict[str, Any]] = []
             for item in rows:
                 record = dict(item)

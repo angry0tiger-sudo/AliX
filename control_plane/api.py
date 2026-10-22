@@ -79,9 +79,15 @@ def create_app(database_url: str, authenticator: Authenticator) -> FastAPI:
         request: Request, exc: AuthorizationError
     ) -> JSONResponse:
         del request
-        status_code = 401 if str(exc) in ("worker_token_required", "worker_identity_or_scope_invalid") else 403
+        status_code = (
+            401
+            if str(exc) in ("worker_token_required", "worker_identity_or_scope_invalid")
+            else 403
+        )
         headers = {"WWW-Authenticate": "Bearer"} if status_code == 401 else None
-        return JSONResponse(status_code=status_code, content={"detail": str(exc)}, headers=headers)
+        return JSONResponse(
+            status_code=status_code, content={"detail": str(exc)}, headers=headers
+        )
 
     @app.exception_handler(RequestValidationError)
     async def validation_error_handler(
@@ -120,7 +126,9 @@ def create_app(database_url: str, authenticator: Authenticator) -> FastAPI:
         return store.create_tenant(principal, body.name)
 
     @app.get("/v1/tenants")
-    def list_tenants(principal: Principal = Depends(current_principal)) -> list[dict[str, Any]]:
+    def list_tenants(
+        principal: Principal = Depends(current_principal),
+    ) -> list[dict[str, Any]]:
         return store.list_tenants(principal)
 
     @app.get("/v1/tenants/{tenant_id}")

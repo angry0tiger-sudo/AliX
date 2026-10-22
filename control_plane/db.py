@@ -110,8 +110,7 @@ workers = Table(
         name="ck_worker_nontrading_environment",
     ),
     CheckConstraint(
-        "desired_state IN "
-        "('STOPPED', 'START_REQUESTED', 'STOP_REQUESTED', 'DISABLED')",
+        "desired_state IN ('STOPPED', 'START_REQUESTED', 'STOP_REQUESTED', 'DISABLED')",
         name="ck_worker_desired_state",
     ),
     CheckConstraint(
@@ -170,9 +169,7 @@ runtime_commands = Table(
     Column("lease_until", String(40), nullable=True),
     Column("completed_at", String(40), nullable=True),
     Column("error_code", String(80), nullable=True),
-    CheckConstraint(
-        "action IN ('START', 'STOP', 'DISABLE')", name="ck_runtime_action"
-    ),
+    CheckConstraint("action IN ('START', 'STOP', 'DISABLE')", name="ck_runtime_action"),
     CheckConstraint(
         "status IN ('PENDING', 'CLAIMED', 'SUCCEEDED', 'FAILED')",
         name="ck_runtime_status",
@@ -182,7 +179,11 @@ runtime_commands = Table(
 Index("ix_memberships_subject_status", memberships.c.subject, memberships.c.status)
 Index("ix_accounts_tenant", accounts.c.tenant_id)
 Index("ix_workers_tenant", workers.c.tenant_id)
-Index("ix_runtime_commands_status_created", runtime_commands.c.status, runtime_commands.c.created_at)
+Index(
+    "ix_runtime_commands_status_created",
+    runtime_commands.c.status,
+    runtime_commands.c.created_at,
+)
 
 schema_meta = Table(
     "schema_meta",

@@ -29,7 +29,14 @@ def _timestamp() -> str:
 
 
 def _safe_worker_id(value: str) -> str:
-    if not value or len(value) > 80 or any(ch not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_" for ch in value):
+    if (
+        not value
+        or len(value) > 80
+        or any(
+            ch not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
+            for ch in value
+        )
+    ):
         raise ValueError("invalid_worker_id")
     return value
 
@@ -116,9 +123,11 @@ def run_worker(
     worker_id = _safe_worker_id(worker_id)
     if not token or len(token) < 32 or generation < 1:
         raise ValueError("worker_credential_or_generation_invalid")
-    if not base_url.startswith("http://control-plane:") and not base_url.startswith(
-        "http://127.0.0.1:"
-    ) and not base_url.startswith("http://localhost:"):
+    if (
+        not base_url.startswith("http://control-plane:")
+        and not base_url.startswith("http://127.0.0.1:")
+        and not base_url.startswith("http://localhost:")
+    ):
         raise ValueError("worker_control_plane_url_not_allowed")
     path = Path(database_path)
     _initialize_worker_state(path, worker_id, generation)
@@ -133,7 +142,9 @@ def run_worker(
     failures = 0
     completed = 0
     try:
-        while not stop_event.is_set() and (iterations is None or completed < iterations):
+        while not stop_event.is_set() and (
+            iterations is None or completed < iterations
+        ):
             try:
                 heartbeat_sender(base_url, worker_id, token, generation)
                 _record_heartbeat(path, generation)

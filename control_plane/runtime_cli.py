@@ -116,10 +116,9 @@ def _start_worker(
     existing = _container_info(name)
     if existing is not None:
         labels = existing.get("Config", {}).get("Labels", {})
-        if (
-            labels.get("alix.worker.id") != worker_id
-            or labels.get("alix.worker.generation") != str(generation)
-        ):
+        if labels.get("alix.worker.id") != worker_id or labels.get(
+            "alix.worker.generation"
+        ) != str(generation):
             raise RuntimeError("container_identity_mismatch")
         if existing.get("State", {}).get("Running") is True:
             return name
@@ -196,10 +195,9 @@ def process_command(
         error_code = None
         if info is not None:
             labels = info.get("Config", {}).get("Labels", {})
-            if (
-                labels.get("alix.worker.id") != worker_id
-                or labels.get("alix.worker.generation") != str(generation)
-            ):
+            if labels.get("alix.worker.id") != worker_id or labels.get(
+                "alix.worker.generation"
+            ) != str(generation):
                 success = False
                 error_code = "container_identity_mismatch"
             elif info.get("State", {}).get("Running") is True:
@@ -256,7 +254,13 @@ def dispatch_once(
                 dispatcher_id,
             )
         except (RuntimeError, ValueError, KeyError, TypeError) as exc:
-            code = str(exc) if str(exc).startswith(("docker_", "container_", "control_plane_", "unknown_")) else "runtime_dispatch_failed"
+            code = (
+                str(exc)
+                if str(exc).startswith(
+                    ("docker_", "container_", "control_plane_", "unknown_")
+                )
+                else "runtime_dispatch_failed"
+            )
             _api_request(
                 base_url,
                 admin_token,

@@ -12,7 +12,11 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from control_plane.auth import AuthenticationError, Principal, SingleUserTokenAuthenticator
+from control_plane.auth import (
+    AuthenticationError,
+    Principal,
+    SingleUserTokenAuthenticator,
+)
 from control_plane.api import create_app
 from control_plane.runtime_cli import (
     _container_name,
@@ -52,7 +56,9 @@ class TokenMapAuthenticator:
 
 @pytest.fixture
 def client(tmp_path: Path) -> TestClient:
-    app = create_app(f"sqlite:///{tmp_path / 'control-plane.sqlite'}", TokenMapAuthenticator())
+    app = create_app(
+        f"sqlite:///{tmp_path / 'control-plane.sqlite'}", TokenMapAuthenticator()
+    )
     return TestClient(app)
 
 
@@ -66,9 +72,7 @@ def make_tenant(client: TestClient, name: str) -> str:
     return str(response.json()["tenant_id"])
 
 
-def add_member(
-    client: TestClient, tenant_id: str, subject: str, role: str
-) -> None:
+def add_member(client: TestClient, tenant_id: str, subject: str, role: str) -> None:
     response = client.post(
         f"/v1/tenants/{tenant_id}/members",
         headers=auth(),
@@ -152,15 +156,25 @@ def test_tenant_membership_is_revoked_immediately(client: TestClient) -> None:
     tenant_id = make_tenant(client, "Membership Tenant")
     add_member(client, tenant_id, "owner-a", "tenant_owner")
     add_member(client, tenant_id, "reader-a", "tenant_reader")
-    assert client.get(f"/v1/tenants/{tenant_id}", headers=auth("reader-a-token-012345678901234567890123456789")).status_code == 200
+    assert (
+        client.get(
+            f"/v1/tenants/{tenant_id}",
+            headers=auth("reader-a-token-012345678901234567890123456789"),
+        ).status_code
+        == 200
+    )
     revoke = client.delete(
         f"/v1/tenants/{tenant_id}/members/reader-a",
         headers=auth("owner-a-token-012345678901234567890123456789"),
     )
     assert revoke.status_code == 204
-    assert client.get(
-        f"/v1/tenants/{tenant_id}", headers=auth("reader-a-token-012345678901234567890123456789")
-    ).status_code == 403
+    assert (
+        client.get(
+            f"/v1/tenants/{tenant_id}",
+            headers=auth("reader-a-token-012345678901234567890123456789"),
+        ).status_code
+        == 403
+    )
 
 
 def test_member_cannot_list_or_read_other_tenant(client: TestClient) -> None:
@@ -169,7 +183,8 @@ def test_member_cannot_list_or_read_other_tenant(client: TestClient) -> None:
     add_member(client, tenant_a, "owner-a", "tenant_owner")
     add_member(client, tenant_b, "owner-b", "tenant_owner")
     response = client.get(
-        f"/v1/tenants/{tenant_b}", headers=auth("owner-a-token-012345678901234567890123456789")
+        f"/v1/tenants/{tenant_b}",
+        headers=auth("owner-a-token-012345678901234567890123456789"),
     )
     assert response.status_code == 403
     visible = client.get(
@@ -178,7 +193,9 @@ def test_member_cannot_list_or_read_other_tenant(client: TestClient) -> None:
     assert [item["tenant_id"] for item in visible] == [tenant_a]
 
 
-def test_account_secret_is_reference_only_and_cross_tenant_binding_is_denied(client: TestClient) -> None:
+def test_account_secret_is_reference_only_and_cross_tenant_binding_is_denied(
+    client: TestClient,
+) -> None:
     tenant_a = make_tenant(client, "Tenant A")
     tenant_b = make_tenant(client, "Tenant B")
     add_member(client, tenant_a, "owner-a", "tenant_owner")
@@ -232,7 +249,9 @@ def test_account_binding_rejects_unapproved_environments(client: TestClient) -> 
     assert response.status_code == 422
 
 
-def test_duplicate_worker_slot_is_rejected_until_previous_worker_is_stopped(client: TestClient) -> None:
+def test_duplicate_worker_slot_is_rejected_until_previous_worker_is_stopped(
+    client: TestClient,
+) -> None:
     tenant_id = make_tenant(client, "Worker Slot Tenant")
     account = make_account(client, tenant_id)
     worker = make_worker(client, tenant_id, account["account_id"])
@@ -268,7 +287,9 @@ def test_duplicate_worker_slot_is_rejected_until_previous_worker_is_stopped(clie
     assert replacement["generation"] > worker["generation"]
 
 
-def test_worker_start_claim_scoped_heartbeat_and_ack_are_idempotent(client: TestClient) -> None:
+def test_worker_start_claim_scoped_heartbeat_and_ack_are_idempotent(
+    client: TestClient,
+) -> None:
     tenant_id = make_tenant(client, "Runtime Tenant")
     account = make_account(client, tenant_id)
     worker = make_worker(client, tenant_id, account["account_id"])
@@ -285,11 +306,14 @@ def test_worker_start_claim_scoped_heartbeat_and_ack_are_idempotent(client: Test
         json={"dispatcher_id": "dispatcher-a", "lease_seconds": 30},
     ).json()
     assert len(claimed) == 1
-    assert client.post(
-        "/v1/admin/runtime-commands/claim",
-        headers=auth(),
-        json={"dispatcher_id": "dispatcher-b"},
-    ).json() == []
+    assert (
+        client.post(
+            "/v1/admin/runtime-commands/claim",
+            headers=auth(),
+            json={"dispatcher_id": "dispatcher-b"},
+        ).json()
+        == []
+    )
     command = claimed[0]
     token = "worker-scoped-token-value-with-enough-length-123"
     digest = hashlib.sha256(token.encode()).hexdigest()
@@ -317,9 +341,7 @@ def test_worker_start_claim_scoped_heartbeat_and_ack_are_idempotent(client: Test
         json={"success": True, "container_name": "alix-worker-test-g1"},
     )
     assert ack.status_code == 204
-    result = client.get(
-        f"/v1/tenants/{tenant_id}/workers", headers=auth()
-    ).json()[0]
+    result = client.get(f"/v1/tenants/{tenant_id}/workers", headers=auth()).json()[0]
     assert result["observed_state"] == "RUNNING"
     stale = client.post(
         f"/v1/internal/workers/{worker['worker_id']}/heartbeat",
@@ -329,7 +351,9 @@ def test_worker_start_claim_scoped_heartbeat_and_ack_are_idempotent(client: Test
     assert stale.status_code == 401
 
 
-def test_stop_revokes_worker_capability_and_audit_has_no_token(client: TestClient) -> None:
+def test_stop_revokes_worker_capability_and_audit_has_no_token(
+    client: TestClient,
+) -> None:
     tenant_id = make_tenant(client, "Revoke Tenant")
     account = make_account(client, tenant_id)
     worker = make_worker(client, tenant_id, account["account_id"])
@@ -371,11 +395,14 @@ def test_stop_revokes_worker_capability_and_audit_has_no_token(client: TestClien
         headers=auth(),
         json={"success": True, "container_name": None},
     )
-    assert client.post(
-        f"/v1/internal/workers/{worker['worker_id']}/heartbeat",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"generation": start_command["generation"]},
-    ).status_code == 401
+    assert (
+        client.post(
+            f"/v1/internal/workers/{worker['worker_id']}/heartbeat",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"generation": start_command["generation"]},
+        ).status_code
+        == 401
+    )
     audit_text = json.dumps(
         client.get(f"/v1/tenants/{tenant_id}/audit", headers=auth()).json()
     )
@@ -383,7 +410,9 @@ def test_stop_revokes_worker_capability_and_audit_has_no_token(client: TestClien
     assert digest not in audit_text
 
 
-def test_runtime_command_lease_can_be_reclaimed_after_expiry(client: TestClient) -> None:
+def test_runtime_command_lease_can_be_reclaimed_after_expiry(
+    client: TestClient,
+) -> None:
     tenant_id = make_tenant(client, "Lease Tenant")
     account = make_account(client, tenant_id)
     worker = make_worker(client, tenant_id, account["account_id"])
@@ -418,14 +447,32 @@ def test_sqlite_worker_state_is_private_and_identity_bound(tmp_path: Path) -> No
     second_db = tmp_path / "worker-b" / "state.sqlite"
     token_a = "A" * 40
     token_b = "B" * 40
-    assert run_worker(
-        "worker-a", token_a, 1, "http://control-plane:8080", str(first_db),
-        sender, interval_seconds=0, iterations=2,
-    ) == 0
-    assert run_worker(
-        "worker-b", token_b, 2, "http://control-plane:8080", str(second_db),
-        sender, interval_seconds=0, iterations=1,
-    ) == 0
+    assert (
+        run_worker(
+            "worker-a",
+            token_a,
+            1,
+            "http://control-plane:8080",
+            str(first_db),
+            sender,
+            interval_seconds=0,
+            iterations=2,
+        )
+        == 0
+    )
+    assert (
+        run_worker(
+            "worker-b",
+            token_b,
+            2,
+            "http://control-plane:8080",
+            str(second_db),
+            sender,
+            interval_seconds=0,
+            iterations=1,
+        )
+        == 0
+    )
     assert len(calls) == 3
     assert {item[0] for item in calls} == {"worker-a", "worker-b"}
     with sqlite3.connect(first_db) as connection:
@@ -438,43 +485,91 @@ def test_sqlite_worker_state_is_private_and_identity_bound(tmp_path: Path) -> No
     assert identity == ("worker-a", 1)
     assert heartbeats == 2
     with pytest.raises(WorkerRuntimeFailure):
-        run_worker("worker-a", token_a, 2, "http://control-plane:8080", str(first_db), sender, iterations=1)
+        run_worker(
+            "worker-a",
+            token_a,
+            2,
+            "http://control-plane:8080",
+            str(first_db),
+            sender,
+            iterations=1,
+        )
 
 
-def test_worker_fails_closed_on_revoked_identity_or_repeated_network_failure(tmp_path: Path) -> None:
+def test_worker_fails_closed_on_revoked_identity_or_repeated_network_failure(
+    tmp_path: Path,
+) -> None:
     token = "worker-token-that-is-not-a-real-secret-012345"
-    def rejected(base_url: str, worker_id: str, worker_token: str, generation: int) -> None:
+    def rejected(
+        base_url: str, worker_id: str, worker_token: str, generation: int
+    ) -> None:
         raise WorkerAuthorizationFailure("revoked")
 
-    assert run_worker(
-        "worker-rejected", token, 1, "http://control-plane:8080",
-        str(tmp_path / "rejected.sqlite"), rejected, interval_seconds=0, iterations=3,
-    ) == 2
+    assert (
+        run_worker(
+            "worker-rejected",
+            token,
+            1,
+            "http://control-plane:8080",
+            str(tmp_path / "rejected.sqlite"),
+            rejected,
+            interval_seconds=0,
+            iterations=3,
+        )
+        == 2
+    )
 
     attempts = 0
-    def unavailable(base_url: str, worker_id: str, worker_token: str, generation: int) -> None:
+    def unavailable(
+        base_url: str, worker_id: str, worker_token: str, generation: int
+    ) -> None:
         nonlocal attempts
         attempts += 1
         raise OSError("synthetic_network_failure")
 
-    assert run_worker(
-        "worker-offline", token, 1, "http://control-plane:8080",
-        str(tmp_path / "offline.sqlite"), unavailable, interval_seconds=0, iterations=10,
-    ) == 3
+    assert (
+        run_worker(
+            "worker-offline",
+            token,
+            1,
+            "http://control-plane:8080",
+            str(tmp_path / "offline.sqlite"),
+            unavailable,
+            interval_seconds=0,
+            iterations=10,
+        )
+        == 3
+    )
     assert attempts == 3
     with pytest.raises(ValueError):
         run_worker(
-            "worker-invalid", token, 1, "http://untrusted.invalid:8080",
-            str(tmp_path / "invalid.sqlite"), interval_seconds=0, iterations=1,
+            "worker-invalid",
+            token,
+            1,
+            "http://untrusted.invalid:8080",
+            str(tmp_path / "invalid.sqlite"),
+            interval_seconds=0,
+            iterations=1,
         )
 
 
-def test_runtime_cli_uses_fixed_worker_service_and_scoped_token(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_runtime_cli_uses_fixed_worker_service_and_scoped_token(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     calls: list[tuple[str, Any]] = []
     monkeypatch.setattr("control_plane.runtime_cli._container_info", lambda name: None)
-    monkeypatch.setattr("control_plane.runtime_cli.secrets.token_urlsafe", lambda size: "S" * 48)
+    monkeypatch.setattr(
+        "control_plane.runtime_cli.secrets.token_urlsafe", lambda size: "S" * 48
+    )
 
-    def api_request(base_url: str, admin_token: str, path: str, method: str = "POST", payload: dict[str, Any] | None = None, timeout: float = 5.0) -> None:
+    def api_request(
+        base_url: str,
+        admin_token: str,
+        path: str,
+        method: str = "POST",
+        payload: dict[str, Any] | None = None,
+        timeout: float = 5.0,
+    ) -> None:
         del base_url, admin_token, timeout
         calls.append((path, payload))
         return None
@@ -501,7 +596,10 @@ def test_runtime_cli_uses_fixed_worker_service_and_scoped_token(monkeypatch: pyt
     assert name == "alix-worker-workerabc123-g4"
     registration = calls[0][1]
     assert registration["generation"] == 4
-    assert registration["credential_sha256"] == hashlib.sha256(("S" * 48).encode()).hexdigest()
+    assert (
+        registration["credential_sha256"]
+        == hashlib.sha256(("S" * 48).encode()).hexdigest()
+    )
     docker_environment = next(value for kind, value in calls if kind == "docker-env")
     docker_args = next(value for kind, value in calls if kind == "docker")
     assert docker_args[-1] == "worker"
@@ -548,6 +646,7 @@ def test_worker_profile_and_compose_security_contracts() -> None:
     assert "control-backend" not in worker_service["networks"]
     assert worker_service["profiles"] == ["worker"]
     assert "volumes" not in worker_service
+
 
 def test_control_plane_has_no_import_path_to_trade_execution() -> None:
     forbidden = {
