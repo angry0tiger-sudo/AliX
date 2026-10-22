@@ -940,8 +940,14 @@ def test_http_transport_is_restricted_to_local_control_plane_hosts() -> None:
         with pytest.raises(RuntimeError, match="control_plane_url_not_allowed"):
             _local_control_base_url(url)
 
-    assert _validated_worker_control_url("http://control-plane:8080") == "http://control-plane:8080"
-    assert _validated_worker_control_url("http://127.0.0.1:8080") == "http://127.0.0.1:8080"
+    assert (
+        _validated_worker_control_url("http://control-plane:8080")
+        == "http://control-plane:8080"
+    )
+    assert (
+        _validated_worker_control_url("http://127.0.0.1:8080")
+        == "http://127.0.0.1:8080"
+    )
     for url in (
         "https://control-plane:8080",
         "http://external.invalid:8080",
