@@ -334,9 +334,7 @@ def _validate_candle_row(
         reasons.extend(price_reasons)
         reasons.extend(_price_relationship_reasons(index, values))
 
-    timestamp, timestamp_reasons = _timestamp_reasons(
-        index, row, previous_timestamp
-    )
+    timestamp, timestamp_reasons = _timestamp_reasons(index, row, previous_timestamp)
     reasons.extend(timestamp_reasons)
     if timestamp is None:
         return reasons, previous_timestamp
