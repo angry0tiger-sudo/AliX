@@ -54,7 +54,7 @@ import-linter==2.3
 iniconfig==2.3.1
 janus==2.0.0
 jinja2==3.1.6
-joblib==1.6.0
+joblib==1.5.3
 jsonschema==4.25.1
 jsonschema-specifications==2025.9.1
 license-expression==30.4.4
@@ -117,7 +117,7 @@ rpds-py==2026.9.1
 ruff==0.14.0
 safetensors==0.8.0
 schedule==1.2.2
-scikit-learn==1.9.1
+scikit-learn==1.9.0
 scipy==1.18.1
 sdnotify==0.3.2
 shap==0.54.1
