@@ -59,9 +59,7 @@ def market_frame(rows: int = 620) -> DataFrame:
     for index in range(1, rows):
         opened[index] = close[index - 1]
         regime = 0.003 if (index // 100) % 2 == 0 else 0.01
-        close[index] = opened[index] * np.exp(
-            0.00003 + regime * rng.standard_normal()
-        )
+        close[index] = opened[index] * np.exp(0.00003 + regime * rng.standard_normal())
     high = np.maximum(opened, close) * 1.004
     low = np.minimum(opened, close) * 0.996
     volume = rng.lognormal(mean=4.0, sigma=0.3, size=rows)
@@ -146,7 +144,9 @@ def test_walk_forward_rejects_invalid_configuration_and_insufficient_data() -> N
         raise AssertionError("insufficient data should fail closed")
 
 
-def test_ohlcv_gate_rejects_gap_missing_fields_duplicate_columns_and_bad_timestamp() -> None:
+def test_ohlcv_gate_rejects_gap_missing_fields_duplicate_columns_and_bad_timestamp() -> (
+    None
+):
     frame = market_frame(5)
     gap = frame.copy()
     gap.loc[3, "date"] = gap.loc[2, "date"] + pd.Timedelta(hours=2)
@@ -209,9 +209,12 @@ def test_walk_forward_report_reloads_model_and_never_promotes_champion() -> None
     assert report["out_of_sample"]["forecast"]["rmse"] >= 0.0
     assert len(report["folds"]) == 2
     assert all(fold["purged_label_rows"] == 3 for fold in report["folds"])
-    assert report["out_of_sample"]["costed_fixed_horizon_research_rule"][
-        "no_trade_net_return"
-    ] == 0.0
+    assert (
+        report["out_of_sample"]["costed_fixed_horizon_research_rule"][
+            "no_trade_net_return"
+        ]
+        == 0.0
+    )
     assert report["economic_gates"]["status"] == "NOT_EVALUATED"
     assert report["champion"] is None
     assert report["promotion_status"] == "BLOCKED_NO_ECONOMIC_GATE"
@@ -240,9 +243,13 @@ def test_freqai_strategy_keeps_all_entry_and_exit_signals_closed() -> None:
 
 def test_freqai_target_honors_versioned_horizon_contract() -> None:
     strategy = AliXFreqAIBaselineStrategy()
-    setattr(strategy, "freqai_info", {"feature_parameters": {"label_period_candles": 5}})
+    setattr(
+        strategy, "freqai_info", {"feature_parameters": {"label_period_candles": 5}}
+    )
     frame = market_frame(25)
     actual = strategy.set_freqai_targets(frame.copy(), {"pair": "FIXTURE/USDT"})
     expected = frame["close"].shift(-5) / frame["close"] - 1.0
 
-    pd.testing.assert_series_equal(actual[TARGET_COLUMN], expected.rename(TARGET_COLUMN))
+    pd.testing.assert_series_equal(
+        actual[TARGET_COLUMN], expected.rename(TARGET_COLUMN)
+    )
