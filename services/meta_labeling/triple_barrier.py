@@ -57,9 +57,7 @@ def canonicalize_ohlcv(candles: DataFrame) -> DataFrame:
     from the same canonical bytes as the dataset SHA-256 in the report.
     """
     payload = candles.to_csv(
-        index=False,
-        date_format="%Y-%m-%dT%H:%M:%S%z",
-        float_format="%.12g",
+        index=False, date_format="%Y-%m-%dT%H:%M:%S%z", float_format="%.12g"
     )
     canonical = pd.read_csv(StringIO(payload))
     canonical["date"] = pd.to_datetime(
