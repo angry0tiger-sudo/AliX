@@ -7,7 +7,7 @@ Status: **OFFLINE BASELINE IMPLEMENTATION IN PROGRESS / ECONOMIC GATES NOT PASSE
 - Repository base: Phase 3 merge a7d301874d8503f75eaed7642dc9eaa6fcbc87ac.
 - Tracking issue: [#3](https://github.com/angry0tiger-sudo/AliX/issues/3).
 - Implementation branch: feat/phase-4-freqai-baseline.
-- Owner-provided source docs are being committed byte-for-byte under docs/architecture/ and docs/roadmap/.
+- Complete text from the owner-provided source documents has been added under docs/architecture/ and docs/roadmap/ as version-controlled canonical references.
 - Pinned runtime target: freqtrade==2026.7; the custom model follows that tag's BaseRegressionModel fit contract and uses pinned LightGBM.
 - Scope: versioned past-only OHLCV feature schema, isolated forward-return target, deterministic LightGBM regressor, horizon-purged expanding walk-forward evaluator, fold/regime diagnostics, reload reproducibility and versioned JSON report.
 - The new research strategy validates data before freqai.start; its entry/exit signals remain zero. Existing AliXStrategy remains untouched by FreqAI signal logic.
