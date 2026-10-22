@@ -324,6 +324,62 @@ def _apply_stop_ack(
     )
 
 
+def _require_active_worker_account(
+    connection: Any,
+    tenant_id: str,
+    account_id: str,
+    exchange_id: str,
+    environment: str,
+) -> None:
+    account = (
+        connection.execute(
+            select(accounts).where(
+                accounts.c.tenant_id == tenant_id,
+                accounts.c.account_id == account_id,
+                accounts.c.exchange_id == exchange_id,
+                accounts.c.environment == environment,
+            )
+        )
+        .mappings()
+        .first()
+    )
+    if account is None:
+        raise NotFoundError("account_exchange_binding_not_found")
+    if account["status"] != "ACTIVE":
+        raise InvalidStateError("account_not_active")
+
+
+def _reusable_worker_slot_generation(connection: Any, slot: RowMapping) -> int:
+    previous = (
+        connection.execute(
+            select(
+                workers.c.desired_state,
+                workers.c.observed_state,
+                workers.c.generation,
+                workers.c.container_name,
+            ).where(workers.c.worker_id == slot["worker_id"])
+        )
+        .mappings()
+        .first()
+    )
+    reusable_disabled_slot = (
+        previous is not None
+        and previous["desired_state"] == "DISABLED"
+        and previous["observed_state"] == "DISABLED"
+        and not previous["container_name"]
+    )
+    reusable_stopped_slot = (
+        previous is not None
+        and int(previous["generation"]) > 0
+        and previous["desired_state"] == "STOPPED"
+        and previous["observed_state"] in ("ABSENT", "STOPPED", "FAILED")
+        and not previous["container_name"]
+    )
+    if not (reusable_disabled_slot or reusable_stopped_slot):
+        raise ConflictError("worker_slot_already_occupied")
+    return int(slot["generation"]) + 1
+
+
 class ControlPlaneStore:
     """Authorization-aware persistence; callers never provide effective scope alone."""
 
@@ -693,22 +749,9 @@ class ControlPlaneStore:
                     tenant_id,
                     ("tenant_owner", "tenant_operator"),
                 )
-                account = (
-                    connection.execute(
-                        select(accounts).where(
-                            accounts.c.tenant_id == tenant_id,
-                            accounts.c.account_id == account_id,
-                            accounts.c.exchange_id == exchange_id,
-                            accounts.c.environment == environment,
-                        )
-                    )
-                    .mappings()
-                    .first()
+                _require_active_worker_account(
+                    connection, tenant_id, account_id, exchange_id, environment
                 )
-                if account is None:
-                    raise NotFoundError("account_exchange_binding_not_found")
-                if account["status"] != "ACTIVE":
-                    raise InvalidStateError("account_not_active")
                 slot_filter = and_(
                     worker_slots.c.tenant_id == tenant_id,
                     worker_slots.c.account_id == account_id,
@@ -722,35 +765,7 @@ class ControlPlaneStore:
                 )
                 generation = 0
                 if slot is not None:
-                    previous = (
-                        connection.execute(
-                            select(
-                                workers.c.desired_state,
-                                workers.c.observed_state,
-                                workers.c.generation,
-                                workers.c.container_name,
-                            ).where(workers.c.worker_id == slot["worker_id"])
-                        )
-                        .mappings()
-                        .first()
-                    )
-                    reusable_disabled_slot = (
-                        previous is not None
-                        and previous["desired_state"] == "DISABLED"
-                        and previous["observed_state"] == "DISABLED"
-                        and not previous["container_name"]
-                    )
-                    reusable_stopped_slot = (
-                        previous is not None
-                        and int(previous["generation"]) > 0
-                        and previous["desired_state"] == "STOPPED"
-                        and previous["observed_state"]
-                        in ("ABSENT", "STOPPED", "FAILED")
-                        and not previous["container_name"]
-                    )
-                    if not (reusable_disabled_slot or reusable_stopped_slot):
-                        raise ConflictError("worker_slot_already_occupied")
-                    generation = int(slot["generation"]) + 1
+                    generation = _reusable_worker_slot_generation(connection, slot)
                 connection.execute(
                     insert(workers).values(
                         worker_id=worker_id,
