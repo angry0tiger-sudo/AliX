@@ -11,7 +11,7 @@ from typing import Any
 from services.freqai_baseline.walkforward import BASELINE_MODEL_PARAMETERS
 
 try:
-    from freqtrade.freqai.base_models.BaseRegressionModel import BaseRegressionModel
+    from freqtrade.freqai.base_models.BaseRegressionModel import BaseRegressionModel  # type: ignore[import-not-found]
 except ImportError:  # Quality CI intentionally has no Freqtrade runtime dependency.
 
     class BaseRegressionModel:  # type: ignore[no-redef]
@@ -23,9 +23,7 @@ except ImportError:  # Quality CI intentionally has no Freqtrade runtime depende
 class AliXBaselineRegressor(BaseRegressionModel):  # type: ignore[misc]
     """Deterministic LightGBM regression baseline following Freqtrade's fit contract."""
 
-    def fit(
-        self, data_dictionary: dict[str, Any], dk: Any, **kwargs: Any
-    ) -> Any:
+    def fit(self, data_dictionary: dict[str, Any], dk: Any, **kwargs: Any) -> Any:
         # Defer the optional runtime imports so contract tests stay offline/lightweight.
         from lightgbm import LGBMRegressor  # type: ignore[import-not-found]
 
