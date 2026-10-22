@@ -23,14 +23,16 @@ from risk.allocator import DynamicRiskAllocator
 from risk.contracts import (
     AccountSnapshot,
     ActionType,
+    AllocationResult,
     MarketRules,
     MarketSnapshot,
     ModelRiskProposal,
+    RiskAllocation,
     RiskPolicy,
     Side,
     stable_fingerprint,
 )
-from risk.gate import RiskGate
+from risk.gate import GateDecision, RiskGate
 from risk.kill_switch import KillSwitchState
 from services.data_quality.gate import (
     EXTERNAL_RECORD_SCHEMA_VERSION,
@@ -349,14 +351,14 @@ def _record_rejection(
     }
 
 
-def _validate_input_stages(
+def _validate_data_sources(
     scenario: Scenario,
-) -> tuple[list[str], int, dict[str, object] | None, dict[str, object]]:
+) -> tuple[list[str], QualityResult, QualityResult, dict[str, object]]:
     reasons: list[str] = []
     candles = _candle_result(scenario)
-    external_source = _external_record(scenario)
     if not candles.passed or candles.status is not QualityStatus.VALID:
         reasons.extend(code.value for code in candles.reason_codes)
+    external_source = _external_record(scenario)
     external = validate_external_record(
         external_source,
         as_of_timestamp=NOW.isoformat(),
@@ -364,41 +366,62 @@ def _validate_input_stages(
     )
     if not external.passed or external.status is not QualityStatus.VALID:
         reasons.extend(code.value for code in external.reason_codes)
+    return reasons, candles, external, external_source
+
+
+def _validate_news_stage(scenario: Scenario) -> tuple[int, str | None, list[str]]:
     news_count, news_error = _join_news(scenario)
+    reasons: list[str] = []
     if news_error:
         reasons.append(news_error)
     elif news_count == 0:
         reasons.append("news_stale_or_unavailable")
-    model_check: dict[str, object] | None = None
-    model_result: dict[str, object] = {
-        "available": scenario.model_available,
-        "output": None,
-        "status": "NOT_RUN",
-        "reason_codes": [],
-    }
+    return news_count, news_error, reasons
+
+
+def _validate_model_stage(
+    scenario: Scenario,
+) -> tuple[list[str], dict[str, object] | None, dict[str, object]]:
     if not scenario.model_available:
-        reasons.append("model_unavailable")
-    else:
-        model_check = _model_output(scenario)
-        checked_model = validate_model_output(
-            model_check,
-            decision_timestamp=NOW.isoformat(),
+        return (
+            ["model_unavailable"],
+            None,
+            {
+                "available": False,
+                "output": None,
+                "status": "NOT_RUN",
+                "reason_codes": ["model_unavailable"],
+            },
         )
-        model_result = {
-            "available": True,
-            "output": model_check,
-            "status": (
-                checked_model.status.value
-                if checked_model.status is not None
-                else "UNKNOWN"
-            ),
-            "passed": checked_model.passed,
-            "reason_codes": [code.value for code in checked_model.reason_codes],
-            "fingerprint": checked_model.fingerprint,
-        }
-        if not checked_model.passed or checked_model.status is not QualityStatus.VALID:
-            reasons.extend(code.value for code in checked_model.reason_codes)
-    trace: dict[str, object] = {
+    model_output = _model_output(scenario)
+    checked = validate_model_output(
+        model_output,
+        decision_timestamp=NOW.isoformat(),
+    )
+    reasons = [code.value for code in checked.reason_codes]
+    model_result: dict[str, object] = {
+        "available": True,
+        "output": model_output,
+        "status": checked.status.value if checked.status is not None else "UNKNOWN",
+        "passed": checked.passed,
+        "reason_codes": reasons,
+        "fingerprint": checked.fingerprint,
+    }
+    if not checked.passed or checked.status is not QualityStatus.VALID:
+        return reasons, model_output, model_result
+    return [], model_output, model_result
+
+
+def _build_input_trace(
+    scenario: Scenario,
+    candles: QualityResult,
+    external: QualityResult,
+    external_source: dict[str, object],
+    news_count: int,
+    news_error: str | None,
+    model_result: dict[str, object],
+) -> dict[str, object]:
+    return {
         "decision_timestamp": NOW.isoformat(),
         "input_fingerprint_schema": "alix.phase9.input.v1",
         "scenario": {
@@ -420,16 +443,12 @@ def _validate_input_stages(
         },
         "data_quality": {
             "candles": {
-                "status": (
-                    candles.status.value if candles.status is not None else "UNKNOWN"
-                ),
+                "status": candles.status.value if candles.status is not None else "UNKNOWN",
                 "reason_codes": [code.value for code in candles.reason_codes],
                 "fingerprint": candles.fingerprint,
             },
             "external_record": {
-                "status": (
-                    external.status.value if external.status is not None else "UNKNOWN"
-                ),
+                "status": external.status.value if external.status is not None else "UNKNOWN",
                 "reason_codes": [code.value for code in external.reason_codes],
                 "fingerprint": external.fingerprint,
             },
@@ -442,52 +461,31 @@ def _validate_input_stages(
         },
         "model": model_result,
     }
-    return list(dict.fromkeys(reasons)), news_count, model_check, trace
 
 
-def _evaluate_scenario(
+def _validate_input_stages(
     scenario: Scenario,
-    ledger: SQLiteDecisionLedger,
-) -> dict[str, object]:
-    fingerprint = stable_fingerprint(
-        {
-            "scenario": scenario,
-            "decision_timestamp": NOW,
-            "source": "synthetic-only",
-        }
+) -> tuple[list[str], int, dict[str, object] | None, dict[str, object]]:
+    data_reasons, candles, external, external_source = _validate_data_sources(scenario)
+    news_count, news_error, news_reasons = _validate_news_stage(scenario)
+    model_reasons, model_output, model_result = _validate_model_stage(scenario)
+    trace = _build_input_trace(
+        scenario,
+        candles,
+        external,
+        external_source,
+        news_count,
+        news_error,
+        model_result,
     )
-    input_reasons, news_count, model, trace = _validate_input_stages(scenario)
-    trace["input_fingerprint"] = fingerprint
-    if input_reasons:
-        return _record_rejection(
-            scenario,
-            ledger,
-            fingerprint,
-            input_reasons,
-            model_revision=(
-                "phase9-synthetic-model-v1" if scenario.model_available else None
-            ),
-            trace=trace,
-        )
-    if not scenario.model_available or model is None:
-        return _record_rejection(
-            scenario,
-            ledger,
-            fingerprint,
-            ["model_unavailable"],
-            model_revision=None,
-            trace=trace,
-        )
-    if scenario.model_action != "ENTRY":
-        return _record_rejection(
-            scenario,
-            ledger,
-            fingerprint,
-            ["model_proposal_not_entry"],
-            SimulationStatus.NOT_SIMULATED,
-            trace=trace,
-        )
+    reasons = list(dict.fromkeys(data_reasons + news_reasons + model_reasons))
+    return reasons, news_count, model_output, trace
 
+
+def _evaluate_entry_risk(
+    scenario: Scenario,
+    trace: dict[str, object],
+) -> tuple[RiskPolicy, MarketSnapshot, AllocationResult, GateDecision]:
     policy, account, market, rules = _risk_inputs(scenario)
     allocation_result = DynamicRiskAllocator().allocate(
         policy=policy,
@@ -513,33 +511,13 @@ def _evaluate_scenario(
     )
     if gate.order_permission is not False:
         raise AssertionError("risk_gate_order_permission_must_remain_false")
-
     trace["allocator"] = {
         "approved": allocation_result.approved,
         "reasons": list(allocation_result.reasons),
         "daily_risk_budget": str(allocation_result.daily_risk_budget),
         "trade_risk_budget": str(allocation_result.trade_risk_budget),
         "fingerprint": allocation_result.fingerprint,
-        "allocation": (
-            {
-                "decision_id": allocation_result.allocation.decision_id,
-                "model_revision": allocation_result.allocation.model_revision,
-                "policy_revision": allocation_result.allocation.policy_revision,
-                "account_snapshot_hash": allocation_result.allocation.account_snapshot_hash,
-                "market_revision": allocation_result.allocation.market_revision,
-                "rules_revision": allocation_result.allocation.rules_revision,
-                "quantity": str(allocation_result.allocation.quantity),
-                "stake": str(allocation_result.allocation.stake),
-                "entry_price": str(allocation_result.allocation.entry_price),
-                "stop_price": str(allocation_result.allocation.stop_price),
-                "estimated_loss_including_costs": str(
-                    allocation_result.allocation.estimated_loss_including_costs
-                ),
-                "fingerprint": allocation_result.allocation.fingerprint,
-            }
-            if allocation_result.allocation is not None
-            else None
-        ),
+        "allocation": _allocation_trace(allocation_result.allocation),
     }
     trace["risk_gate"] = {
         "decision_id": gate.decision_id,
@@ -550,57 +528,102 @@ def _evaluate_scenario(
         "estimated_loss_including_costs": str(gate.estimated_loss_including_costs),
         "fingerprint": gate.fingerprint,
     }
-    risk_reasons = list(allocation_result.reasons)
-    risk_reasons.extend(gate.reasons)
-    if (
-        not allocation_result.approved
-        or allocation_result.allocation is None
-        or not gate.risk_approved
-    ):
-        trace["final_status"] = SimulationStatus.REJECTED.value
-        result = _record_rejection(
-            scenario, ledger, fingerprint, risk_reasons, trace=trace
-        )
-        result["risk_gate_fingerprint"] = gate.fingerprint
-        result["allocator_fingerprint"] = allocation_result.fingerprint
-        result["news_records_selected"] = news_count
-        result["trace_reconstructable"] = True
-        return result
+    return policy, market, allocation_result, gate
 
-    allocation = allocation_result.allocation
-    if scenario.outcome == "unknown":
-        ledger.append(
-            SimulationDecisionRecord(
-                decision_id=scenario.scenario_id,
-                decided_at=NOW,
-                input_fingerprint=fingerprint,
-                model_revision=allocation.model_revision,
-                risk_approved=True,
-                reasons=("synthetic_unknown_outcome_no_retry",),
-                simulation_status=SimulationStatus.SYNTHETIC_UNKNOWN_NO_RETRY,
-                trace_json=json.dumps(
-                    trace
-                    | {
-                        "final_status": SimulationStatus.SYNTHETIC_UNKNOWN_NO_RETRY.value,
-                        "timeout_policy": "NO_RETRY",
-                    },
-                    sort_keys=True,
-                    separators=(",", ":"),
-                ),
-            )
-        )
-        return {
-            "scenario_id": scenario.scenario_id,
-            "status": SimulationStatus.SYNTHETIC_UNKNOWN_NO_RETRY.value,
-            "risk_approved": True,
-            "order_permission": False,
-            "reasons": ["synthetic_unknown_outcome_no_retry"],
-            "simulated_fill": False,
-            "retry_count": 0,
-            "exchange_calls": 0,
-            "risk_gate_fingerprint": gate.fingerprint,
-        }
 
+def _allocation_trace(allocation: RiskAllocation | None) -> dict[str, object] | None:
+    if allocation is None:
+        return None
+    return {
+        "decision_id": allocation.decision_id,
+        "model_revision": allocation.model_revision,
+        "policy_revision": allocation.policy_revision,
+        "account_snapshot_hash": allocation.account_snapshot_hash,
+        "market_revision": allocation.market_revision,
+        "rules_revision": allocation.rules_revision,
+        "quantity": str(allocation.quantity),
+        "stake": str(allocation.stake),
+        "entry_price": str(allocation.entry_price),
+        "stop_price": str(allocation.stop_price),
+        "estimated_loss_including_costs": str(allocation.estimated_loss_including_costs),
+        "fingerprint": allocation.fingerprint,
+    }
+
+
+def _record_risk_denial(
+    scenario: Scenario,
+    ledger: SQLiteDecisionLedger,
+    fingerprint: str,
+    news_count: int,
+    trace: dict[str, object],
+    allocation_result: AllocationResult,
+    gate: GateDecision,
+) -> dict[str, object]:
+    risk_reasons = list(allocation_result.reasons) + list(gate.reasons)
+    trace["final_status"] = SimulationStatus.REJECTED.value
+    result = _record_rejection(
+        scenario, ledger, fingerprint, risk_reasons, trace=trace
+    )
+    result["risk_gate_fingerprint"] = gate.fingerprint
+    result["allocator_fingerprint"] = allocation_result.fingerprint
+    result["news_records_selected"] = news_count
+    result["trace_reconstructable"] = True
+    return result
+
+
+def _record_unknown_outcome(
+    scenario: Scenario,
+    ledger: SQLiteDecisionLedger,
+    fingerprint: str,
+    allocation: RiskAllocation,
+    trace: dict[str, object],
+    gate: GateDecision,
+) -> dict[str, object]:
+    ledger.append(
+        SimulationDecisionRecord(
+            decision_id=scenario.scenario_id,
+            decided_at=NOW,
+            input_fingerprint=fingerprint,
+            model_revision=allocation.model_revision,
+            risk_approved=True,
+            reasons=("synthetic_unknown_outcome_no_retry",),
+            simulation_status=SimulationStatus.SYNTHETIC_UNKNOWN_NO_RETRY,
+            trace_json=json.dumps(
+                trace
+                | {
+                    "final_status": SimulationStatus.SYNTHETIC_UNKNOWN_NO_RETRY.value,
+                    "timeout_policy": "NO_RETRY",
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+        )
+    )
+    return {
+        "scenario_id": scenario.scenario_id,
+        "status": SimulationStatus.SYNTHETIC_UNKNOWN_NO_RETRY.value,
+        "risk_approved": True,
+        "order_permission": False,
+        "reasons": ["synthetic_unknown_outcome_no_retry"],
+        "simulated_fill": False,
+        "retry_count": 0,
+        "exchange_calls": 0,
+        "risk_gate_fingerprint": gate.fingerprint,
+    }
+
+
+def _record_simulated_fill(
+    scenario: Scenario,
+    ledger: SQLiteDecisionLedger,
+    fingerprint: str,
+    allocation: RiskAllocation,
+    policy: RiskPolicy,
+    market: MarketSnapshot,
+    trace: dict[str, object],
+    gate: GateDecision,
+    allocation_result: AllocationResult,
+    news_count: int,
+) -> dict[str, object]:
     entry = market.price
     exit_price = allocation.stop_price
     gross_pnl = (exit_price - entry) * allocation.quantity
@@ -660,6 +683,90 @@ def _evaluate_scenario(
     }
 
 
+def _evaluate_entry_candidate(
+    scenario: Scenario,
+    ledger: SQLiteDecisionLedger,
+    fingerprint: str,
+    news_count: int,
+    trace: dict[str, object],
+) -> dict[str, object]:
+    policy, market, allocation_result, gate = _evaluate_entry_risk(scenario, trace)
+    allocation = allocation_result.allocation
+    if not allocation_result.approved or allocation is None or not gate.risk_approved:
+        return _record_risk_denial(
+            scenario,
+            ledger,
+            fingerprint,
+            news_count,
+            trace,
+            allocation_result,
+            gate,
+        )
+    if scenario.outcome == "unknown":
+        return _record_unknown_outcome(
+            scenario, ledger, fingerprint, allocation, trace, gate
+        )
+    return _record_simulated_fill(
+        scenario,
+        ledger,
+        fingerprint,
+        allocation,
+        policy,
+        market,
+        trace,
+        gate,
+        allocation_result,
+        news_count,
+    )
+
+
+def _evaluate_scenario(
+    scenario: Scenario,
+    ledger: SQLiteDecisionLedger,
+) -> dict[str, object]:
+    fingerprint = stable_fingerprint(
+        {
+            "scenario": scenario,
+            "decision_timestamp": NOW,
+            "source": "synthetic-only",
+        }
+    )
+    input_reasons, news_count, model, trace = _validate_input_stages(scenario)
+    trace["input_fingerprint"] = fingerprint
+    if input_reasons:
+        return _record_rejection(
+            scenario,
+            ledger,
+            fingerprint,
+            input_reasons,
+            model_revision=(
+                "phase9-synthetic-model-v1" if scenario.model_available else None
+            ),
+            trace=trace,
+        )
+    if not scenario.model_available or model is None:
+        return _record_rejection(
+            scenario,
+            ledger,
+            fingerprint,
+            ["model_unavailable"],
+            model_revision=None,
+            trace=trace,
+        )
+    if scenario.model_action != "ENTRY":
+        return _record_rejection(
+            scenario,
+            ledger,
+            fingerprint,
+            ["model_proposal_not_entry"],
+            SimulationStatus.NOT_SIMULATED,
+            trace=trace,
+        )
+    return _evaluate_entry_candidate(
+        scenario, ledger, fingerprint, news_count, trace
+    )
+
+
 def _exercise_risk_reduction() -> dict[str, object]:
     result = RiskGate().evaluate_reduction(
         ActionType.EXIT,
@@ -716,123 +823,158 @@ def _render_mock_report(snapshot: LedgerSnapshot) -> dict[str, object]:
     }
 
 
+def _expected_scenario_statuses() -> dict[str, str]:
+    return {
+        "baseline_entry": SimulationStatus.SIMULATED.value,
+        "stale_candles": SimulationStatus.REJECTED.value,
+        "candle_gap": SimulationStatus.REJECTED.value,
+        "stale_news": SimulationStatus.REJECTED.value,
+        "conflicting_news": SimulationStatus.REJECTED.value,
+        "future_external_availability": SimulationStatus.REJECTED.value,
+        "model_unavailable": SimulationStatus.REJECTED.value,
+        "model_hold": SimulationStatus.NOT_SIMULATED.value,
+        "atr_spike": SimulationStatus.REJECTED.value,
+        "kill_switch_latched": SimulationStatus.REJECTED.value,
+        "synthetic_order_timeout": SimulationStatus.SYNTHETIC_UNKNOWN_NO_RETRY.value,
+    }
+
+
+def _validate_scenario_results(results: list[dict[str, object]]) -> None:
+    baseline = next(
+        item for item in results if item["scenario_id"] == "baseline_entry"
+    )
+    if baseline["status"] != SimulationStatus.SIMULATED.value:
+        raise AssertionError(f"baseline_scenario_failed:{baseline['status']}")
+    expected = _expected_scenario_statuses()
+    actual = {str(item["scenario_id"]): str(item["status"]) for item in results}
+    if actual != expected:
+        raise AssertionError(f"phase9_scenario_matrix_mismatch:{actual!r}")
+
+
+def _validate_ledger_trace(
+    ledger: SQLiteDecisionLedger,
+    snapshot: LedgerSnapshot,
+) -> None:
+    baseline_record = ledger.get_record("baseline_entry")
+    if baseline_record is None:
+        raise AssertionError("phase9_ledger_baseline_record_missing")
+    baseline_trace = baseline_record.get("trace")
+    if not isinstance(baseline_trace, dict):
+        raise AssertionError("phase9_decision_trace_not_reconstructable")
+    required_keys = ("inputs", "model", "allocator", "risk_gate", "synthetic_fill")
+    if not all(key in baseline_trace for key in required_keys):
+        raise AssertionError("phase9_decision_trace_missing_required_stage")
+    _validate_synthetic_snapshot(snapshot)
+
+
+def _validate_synthetic_snapshot(snapshot: LedgerSnapshot) -> None:
+    if (
+        snapshot.order_permission is not False
+        or snapshot.reconciliation_status != "NOT_RECONCILED"
+    ):
+        raise AssertionError(
+            "synthetic_ledger_must_not_claim_order_permission_or_reconciliation"
+        )
+
+
+def _probe_ledger_idempotency(
+    ledger: SQLiteDecisionLedger,
+    before: LedgerSnapshot,
+) -> dict[str, object]:
+    fingerprint = stable_fingerprint({"baseline": "idempotent-replay"})
+    replay = SimulationDecisionRecord(
+        decision_id="phase9-replay-check",
+        decided_at=NOW,
+        input_fingerprint=fingerprint,
+        model_revision="phase9-synthetic-model-v1",
+        risk_approved=False,
+        reasons=("idempotency_probe",),
+        simulation_status=SimulationStatus.REJECTED,
+    )
+    first_append = ledger.append(replay)
+    second_append = ledger.append(replay)
+    if not first_append or second_append:
+        raise AssertionError("simulation_ledger_idempotency_failed")
+    after = ledger.snapshot(data_cutoff=NOW, generated_at=NOW)
+    if after.row_count != before.row_count + 1:
+        raise AssertionError("simulation_ledger_replay_changed_record_count")
+    return {
+        "first_append": first_append,
+        "identical_replay_inserted": second_append,
+        "row_count_before_probe": before.row_count,
+        "row_count_after_probe": after.row_count,
+        "probe_changes_snapshot": after.snapshot_hash != before.snapshot_hash,
+    }
+
+
+def _build_e2e_report(
+    commit_sha: str,
+    results: list[dict[str, object]],
+    snapshot: LedgerSnapshot,
+    idempotency: dict[str, object],
+    reduction: dict[str, object],
+) -> dict[str, object]:
+    if reduction["order_permission"] is not False:
+        raise AssertionError("risk_reduction_must_not_authorize_order")
+    return {
+        "schema_version": "alix.phase9.synthetic-e2e.v1",
+        "commit_sha": commit_sha,
+        "evaluation_status": "SYNTHETIC_E2E_ONLY",
+        "dataset_kind": "synthetic",
+        "scenario_count": len(results),
+        "scenario_results": results,
+        "risk_reduction_contract": reduction,
+        "ledger": {
+            "report_id": snapshot.report_id,
+            "data_cutoff": snapshot.data_cutoff.isoformat(),
+            "generated_at": snapshot.generated_at.isoformat(),
+            "snapshot_hash": snapshot.snapshot_hash,
+            "row_count": snapshot.row_count,
+            "simulated_count": snapshot.simulated_count,
+            "rejected_count": snapshot.rejected_count,
+            "not_simulated_count": snapshot.not_simulated_count,
+            "unknown_no_retry_count": snapshot.unknown_no_retry_count,
+            "simulated_net_pnl": str(snapshot.simulated_net_pnl),
+            "source_status": snapshot.source_status,
+            "reconciliation_status": snapshot.reconciliation_status,
+            "order_permission": False,
+        },
+        "idempotency": idempotency,
+        "reporting": _render_mock_report(snapshot),
+        "safety": {
+            "order_permission": False,
+            "real_order_attempts": 0,
+            "exchange_calls": 0,
+            "live_or_paper_sessions_started": 0,
+            "real_credentials_used": False,
+            "champion": None,
+            "promotion_status": "BLOCKED_NO_ECONOMIC_GATE",
+            "economic_acceptance": "NO_GO",
+            "trading_authorization": "NO_GO",
+        },
+        "limitations": [
+            "Decision ledger is a synthetic simulation ledger, not the actual Freqtrade trade database.",
+            "No source-of-truth exchange reconciliation is performed; PnL is synthetic and labelled NOT_RECONCILED.",
+            "The simulated timeout tests no-retry mechanics and does not represent an exchange request.",
+            "Capacity, production filesystem isolation, and owner-host Windows/PostgreSQL integration are not measured by this report.",
+        ],
+    }
+
+
 def run_e2e(commit_sha: str, output_path: Path | None = None) -> dict[str, object]:
     if not SHA_PATTERN.fullmatch(commit_sha):
         raise ValueError("full_commit_sha_required")
     with tempfile.TemporaryDirectory(prefix="alix-phase9-synthetic-") as temp_dir:
         ledger = SQLiteDecisionLedger(Path(temp_dir) / "decision-ledger.sqlite")
         results = [_evaluate_scenario(scenario, ledger) for scenario in SCENARIOS]
-        baseline = next(
-            item for item in results if item["scenario_id"] == "baseline_entry"
-        )
-        if baseline["status"] != SimulationStatus.SIMULATED.value:
-            raise AssertionError(f"baseline_scenario_failed:{baseline['status']}")
-        expected = {
-            "baseline_entry": SimulationStatus.SIMULATED.value,
-            "stale_candles": SimulationStatus.REJECTED.value,
-            "candle_gap": SimulationStatus.REJECTED.value,
-            "stale_news": SimulationStatus.REJECTED.value,
-            "conflicting_news": SimulationStatus.REJECTED.value,
-            "future_external_availability": SimulationStatus.REJECTED.value,
-            "model_unavailable": SimulationStatus.REJECTED.value,
-            "model_hold": SimulationStatus.NOT_SIMULATED.value,
-            "atr_spike": SimulationStatus.REJECTED.value,
-            "kill_switch_latched": SimulationStatus.REJECTED.value,
-            "synthetic_order_timeout": SimulationStatus.SYNTHETIC_UNKNOWN_NO_RETRY.value,
-        }
-        actual = {str(item["scenario_id"]): str(item["status"]) for item in results}
-        if actual != expected:
-            raise AssertionError(f"phase9_scenario_matrix_mismatch:{actual!r}")
-        snap = ledger.snapshot(data_cutoff=NOW, generated_at=NOW)
-        baseline_record = ledger.get_record("baseline_entry")
-        if baseline_record is None:
-            raise AssertionError("phase9_ledger_baseline_record_missing")
-        baseline_trace = baseline_record.get("trace")
-        if not isinstance(baseline_trace, dict):
-            raise AssertionError("phase9_decision_trace_not_reconstructable")
-        if not all(
-            key in baseline_trace
-            for key in ("inputs", "model", "allocator", "risk_gate", "synthetic_fill")
-        ):
-            raise AssertionError("phase9_decision_trace_missing_required_stage")
-        if (
-            snap.order_permission is not False
-            or snap.reconciliation_status != "NOT_RECONCILED"
-        ):
-            raise AssertionError(
-                "synthetic_ledger_must_not_claim_order_permission_or_reconciliation"
-            )
-
-        baseline_fingerprint = stable_fingerprint({"baseline": "idempotent-replay"})
-        replay = SimulationDecisionRecord(
-            decision_id="phase9-replay-check",
-            decided_at=NOW,
-            input_fingerprint=baseline_fingerprint,
-            model_revision="phase9-synthetic-model-v1",
-            risk_approved=False,
-            reasons=("idempotency_probe",),
-            simulation_status=SimulationStatus.REJECTED,
-        )
-        first_append = ledger.append(replay)
-        second_append = ledger.append(replay)
-        if not first_append or second_append:
-            raise AssertionError("simulation_ledger_idempotency_failed")
-        snapshot_after_replay = ledger.snapshot(data_cutoff=NOW, generated_at=NOW)
-        if snapshot_after_replay.row_count != snap.row_count + 1:
-            raise AssertionError("simulation_ledger_replay_changed_record_count")
+        _validate_scenario_results(results)
+        snapshot = ledger.snapshot(data_cutoff=NOW, generated_at=NOW)
+        _validate_ledger_trace(ledger, snapshot)
+        idempotency = _probe_ledger_idempotency(ledger, snapshot)
         reduction = _exercise_risk_reduction()
-        if reduction["order_permission"] is not False:
-            raise AssertionError("risk_reduction_must_not_authorize_order")
-        report = {
-            "schema_version": "alix.phase9.synthetic-e2e.v1",
-            "commit_sha": commit_sha,
-            "evaluation_status": "SYNTHETIC_E2E_ONLY",
-            "dataset_kind": "synthetic",
-            "scenario_count": len(results),
-            "scenario_results": results,
-            "risk_reduction_contract": reduction,
-            "ledger": {
-                "report_id": snap.report_id,
-                "data_cutoff": snap.data_cutoff.isoformat(),
-                "generated_at": snap.generated_at.isoformat(),
-                "snapshot_hash": snap.snapshot_hash,
-                "row_count": snap.row_count,
-                "simulated_count": snap.simulated_count,
-                "rejected_count": snap.rejected_count,
-                "not_simulated_count": snap.not_simulated_count,
-                "unknown_no_retry_count": snap.unknown_no_retry_count,
-                "simulated_net_pnl": str(snap.simulated_net_pnl),
-                "source_status": snap.source_status,
-                "reconciliation_status": snap.reconciliation_status,
-                "order_permission": False,
-            },
-            "idempotency": {
-                "first_append": first_append,
-                "identical_replay_inserted": second_append,
-                "row_count_before_probe": snap.row_count,
-                "row_count_after_probe": snapshot_after_replay.row_count,
-                "probe_changes_snapshot": snapshot_after_replay.snapshot_hash
-                != snap.snapshot_hash,
-            },
-            "reporting": _render_mock_report(snap),
-            "safety": {
-                "order_permission": False,
-                "real_order_attempts": 0,
-                "exchange_calls": 0,
-                "live_or_paper_sessions_started": 0,
-                "real_credentials_used": False,
-                "champion": None,
-                "promotion_status": "BLOCKED_NO_ECONOMIC_GATE",
-                "economic_acceptance": "NO_GO",
-                "trading_authorization": "NO_GO",
-            },
-            "limitations": [
-                "Decision ledger is a synthetic simulation ledger, not the actual Freqtrade trade database.",
-                "No source-of-truth exchange reconciliation is performed; PnL is synthetic and labelled NOT_RECONCILED.",
-                "The simulated timeout tests no-retry mechanics and does not represent an exchange request.",
-                "Capacity, production filesystem isolation, and owner-host Windows/PostgreSQL integration are not measured by this report.",
-            ],
-        }
+        report = _build_e2e_report(
+            commit_sha, results, snapshot, idempotency, reduction
+        )
     if output_path is not None:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(

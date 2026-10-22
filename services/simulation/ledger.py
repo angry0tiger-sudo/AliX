@@ -48,76 +48,132 @@ class SimulationDecisionRecord:
     trace_json: str = "{}"
 
     def __post_init__(self) -> None:
-        timestamp = self.decided_at
-        if timestamp.tzinfo is None or timestamp.utcoffset() is None:
-            raise ValueError("simulation_decision_timestamp_must_be_aware")
-        object.__setattr__(self, "decided_at", timestamp.astimezone(timezone.utc))
-        if not self.decision_id.strip():
-            raise ValueError("simulation_decision_id_required")
-        if not _SHA256_RE.fullmatch(self.input_fingerprint):
-            raise ValueError("simulation_input_fingerprint_invalid")
-        if self.model_revision is not None and not self.model_revision.strip():
-            raise ValueError("simulation_model_revision_invalid")
-        if self.order_permission is not False:
-            raise ValueError("simulation_order_permission_must_remain_false")
-        try:
-            decoded_trace = json.loads(self.trace_json)
-        except json.JSONDecodeError:
-            raise ValueError("simulation_trace_json_invalid") from None
-        if not isinstance(decoded_trace, dict):
-            raise ValueError("simulation_trace_must_be_json_object")
         object.__setattr__(
-            self,
-            "trace_json",
-            json.dumps(
-                decoded_trace,
-                sort_keys=True,
-                separators=(",", ":"),
-                ensure_ascii=True,
-            ),
+            self, "decided_at", _normalize_timestamp(self.decided_at)
         )
-        for name in (
-            "simulated_quantity",
-            "simulated_entry_price",
-            "simulated_stop_price",
-            "simulated_exit_price",
-            "simulated_net_pnl",
-        ):
-            value = getattr(self, name)
-            if not isinstance(value, Decimal) or not value.is_finite():
-                raise ValueError(f"{name}_must_be_finite_decimal")
-        for name in (
-            "simulated_quantity",
-            "simulated_entry_price",
-            "simulated_stop_price",
-            "simulated_exit_price",
-        ):
-            if getattr(self, name) < 0:
-                raise ValueError(f"{name}_must_not_be_negative")
-        if self.simulation_status is SimulationStatus.SIMULATED:
-            if (
-                not self.risk_approved
-                or self.simulated_quantity <= 0
-                or self.simulated_entry_price <= 0
-                or self.simulated_stop_price <= 0
-                or self.simulated_exit_price <= 0
-            ):
-                raise ValueError(
-                    "simulated_fill_requires_approved_risk_and_valid_prices"
-                )
-        elif self.simulated_quantity != 0:
-            raise ValueError("non_fill_status_must_not_contain_simulated_quantity")
-        if (
-            self.simulation_status
-            in (SimulationStatus.REJECTED, SimulationStatus.NOT_SIMULATED)
-            and self.risk_approved
-        ):
-            raise ValueError("non_simulated_decision_must_not_be_risk_approved")
-        if (
-            self.simulation_status is SimulationStatus.SYNTHETIC_UNKNOWN_NO_RETRY
-            and not self.risk_approved
-        ):
-            raise ValueError("synthetic_unknown_requires_a_risk_approved_candidate")
+        _validate_decision_identity(self)
+        _validate_decision_permission(self.order_permission)
+        object.__setattr__(self, "trace_json", _canonical_trace(self.trace_json))
+        _validate_finite_amounts(self)
+        _validate_nonnegative_amounts(self)
+        _validate_status_amounts(self)
+        _validate_status_authorization(self)
+
+
+def _normalize_timestamp(value: datetime) -> datetime:
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError("simulation_decision_timestamp_must_be_aware")
+    return value.astimezone(timezone.utc)
+
+
+def _validate_decision_id(value: str) -> None:
+    if not value.strip():
+        raise ValueError("simulation_decision_id_required")
+
+
+def _validate_input_fingerprint(value: str) -> None:
+    if not _SHA256_RE.fullmatch(value):
+        raise ValueError("simulation_input_fingerprint_invalid")
+
+
+def _validate_model_revision(value: str | None) -> None:
+    if value is not None and not value.strip():
+        raise ValueError("simulation_model_revision_invalid")
+
+
+def _validate_decision_identity(record: SimulationDecisionRecord) -> None:
+    _validate_decision_id(record.decision_id)
+    _validate_input_fingerprint(record.input_fingerprint)
+    _validate_model_revision(record.model_revision)
+
+
+def _validate_decision_permission(value: Literal[False]) -> None:
+    if value is not False:
+        raise ValueError("simulation_order_permission_must_remain_false")
+
+
+def _canonical_trace(value: str) -> str:
+    try:
+        decoded = json.loads(value)
+    except json.JSONDecodeError:
+        raise ValueError("simulation_trace_json_invalid") from None
+    if not isinstance(decoded, dict):
+        raise ValueError("simulation_trace_must_be_json_object")
+    return json.dumps(
+        decoded,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    )
+
+
+def _validate_finite_amounts(record: SimulationDecisionRecord) -> None:
+    names = (
+        "simulated_quantity",
+        "simulated_entry_price",
+        "simulated_stop_price",
+        "simulated_exit_price",
+        "simulated_net_pnl",
+    )
+    for name in names:
+        value = getattr(record, name)
+        if not isinstance(value, Decimal) or not value.is_finite():
+            raise ValueError(f"{name}_must_be_finite_decimal")
+
+
+def _validate_nonnegative_amounts(record: SimulationDecisionRecord) -> None:
+    names = (
+        "simulated_quantity",
+        "simulated_entry_price",
+        "simulated_stop_price",
+        "simulated_exit_price",
+    )
+    for name in names:
+        if getattr(record, name) < 0:
+            raise ValueError(f"{name}_must_not_be_negative")
+
+
+def _validate_simulated_fill(record: SimulationDecisionRecord) -> None:
+    if not record.risk_approved:
+        raise ValueError("simulated_fill_requires_approved_risk_and_valid_prices")
+    prices = (
+        record.simulated_quantity,
+        record.simulated_entry_price,
+        record.simulated_stop_price,
+        record.simulated_exit_price,
+    )
+    if any(value <= 0 for value in prices):
+        raise ValueError("simulated_fill_requires_approved_risk_and_valid_prices")
+
+
+def _validate_status_amounts(record: SimulationDecisionRecord) -> None:
+    if record.simulation_status is SimulationStatus.SIMULATED:
+        _validate_simulated_fill(record)
+        return
+    if record.simulated_quantity != 0:
+        raise ValueError("non_fill_status_must_not_contain_simulated_quantity")
+
+
+def _validate_non_fill_authorization(record: SimulationDecisionRecord) -> None:
+    if (
+        record.simulation_status
+        in (SimulationStatus.REJECTED, SimulationStatus.NOT_SIMULATED)
+        and record.risk_approved
+    ):
+        raise ValueError("non_simulated_decision_must_not_be_risk_approved")
+
+
+def _validate_unknown_authorization(record: SimulationDecisionRecord) -> None:
+    if (
+        record.simulation_status is SimulationStatus.SYNTHETIC_UNKNOWN_NO_RETRY
+        and not record.risk_approved
+    ):
+        raise ValueError("synthetic_unknown_requires_a_risk_approved_candidate")
+
+
+def _validate_status_authorization(record: SimulationDecisionRecord) -> None:
+    _validate_non_fill_authorization(record)
+    _validate_unknown_authorization(record)
 
 
 @dataclass(frozen=True, slots=True)
