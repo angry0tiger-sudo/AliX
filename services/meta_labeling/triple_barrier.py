@@ -8,6 +8,7 @@ A same-candle take-profit/stop-loss collision resolves conservatively to stop.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from io import StringIO
 import math
 from typing import Any, Final
 
@@ -47,6 +48,24 @@ _RESULT_COLUMNS: Final[tuple[str, ...]] = (
     "net_return",
     "meta_label",
 )
+
+
+def canonicalize_ohlcv(candles: DataFrame) -> DataFrame:
+    """Round-trip OHLCV through the report's versioned CSV representation.
+
+    Synthetic fixtures and their Data Quality Gate fingerprint are computed
+    from the same canonical bytes as the dataset SHA-256 in the report.
+    """
+    payload = candles.to_csv(
+        index=False,
+        date_format="%Y-%m-%dT%H:%M:%S%z",
+        float_format="%.12g",
+    )
+    canonical = pd.read_csv(StringIO(payload))
+    canonical["date"] = pd.to_datetime(
+        canonical["date"], errors="raise", utc=True
+    )
+    return canonical
 
 
 def _validate_multipliers(profit_taking: float, stop_loss: float) -> None:

@@ -27,6 +27,7 @@ from services.meta_labeling.triple_barrier import (
     TRIPLE_BARRIER_SCHEMA_VERSION,
     TripleBarrierConfig,
     apply_triple_barrier,
+    canonicalize_ohlcv,
 )
 from services.meta_labeling.walkforward import evaluate_meta_oof
 
@@ -111,7 +112,7 @@ def build_synthetic_report(commit_sha: str) -> dict[str, Any]:
     """Build the report and assert closed-by-default governance metadata."""
     if not re.fullmatch(r"[0-9a-f]{40}", commit_sha):
         raise ValueError("commit_sha_must_be_full_git_sha")
-    candles = make_synthetic_ohlcv()
+    candles = canonicalize_ohlcv(make_synthetic_ohlcv())
     data_quality_gate = _validate_synthetic_candles(candles)
     features_frame = add_market_features(candles)
     feature_frame = features_frame.loc[:, list(FEATURE_COLUMNS)]

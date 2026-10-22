@@ -23,6 +23,7 @@ from services.meta_labeling.meta_model import (
 from services.meta_labeling.triple_barrier import (
     TripleBarrierConfig,
     apply_triple_barrier,
+    canonicalize_ohlcv,
 )
 from services.meta_labeling.walkforward import evaluate_meta_oof
 
@@ -183,6 +184,27 @@ def test_triple_barrier_fails_closed_on_bad_time_data_and_events() -> None:
         TripleBarrierConfig(profit_taking_multiplier=0)
     with pytest.raises(ValueError, match="fee and slippage"):
         TripleBarrierConfig(fee_bps_per_side=-1)
+
+
+def test_csv_canonicalization_stabilizes_quality_fingerprint() -> None:
+    first = canonicalize_ohlcv(short_market(rows=320))
+    second = canonicalize_ohlcv(short_market(rows=320))
+    pd.testing.assert_frame_equal(first, second)
+
+    def quality_fingerprint(frame: DataFrame) -> str:
+        result = validate_candles(
+            [
+                {str(key): value for key, value in row.items()}
+                for row in frame.to_dict(orient="records")
+            ],
+            expected_interval_seconds=3600,
+            gap_policy="reject",
+        )
+        assert result.passed is True
+        assert result.fingerprint is not None
+        return result.fingerprint
+
+    assert quality_fingerprint(first) == quality_fingerprint(second)
 
 
 def test_shared_data_quality_gate_rejects_bad_synthetic_candles() -> None:
