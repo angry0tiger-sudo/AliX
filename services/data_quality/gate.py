@@ -80,7 +80,9 @@ class QualityResult:
         object.__setattr__(self, "status", status)
         object.__setattr__(self, "passed", status is not QualityStatus.REJECTED)
         if not self.reason_codes and self.reasons:
-            codes = tuple(dict.fromkeys(_reason_code(reason) for reason in self.reasons))
+            codes = tuple(
+                dict.fromkeys(_reason_code(reason) for reason in self.reasons)
+            )
             object.__setattr__(self, "reason_codes", codes)
 
 
@@ -192,10 +194,7 @@ def _parse_timestamp(value: object) -> tuple[float | None, str | None]:
 
 
 def _candle_fingerprint(rows: list[Mapping[str, object]]) -> str:
-    snapshot = [
-        {key: row.get(key) for key in REQUIRED_COLUMNS}
-        for row in rows
-    ]
+    snapshot = [{key: row.get(key) for key in REQUIRED_COLUMNS} for row in rows]
     return _fingerprint({"schema_version": OHLCV_SCHEMA_VERSION, "rows": snapshot})
 
 
@@ -549,7 +548,9 @@ def validate_external_record(
         )
     }
     degraded_codes = (
-        frozenset({QualityReasonCode.RATE_LIMIT_LIMITED}) if rate_limited else frozenset()
+        frozenset({QualityReasonCode.RATE_LIMIT_LIMITED})
+        if rate_limited
+        else frozenset()
     )
     return _result(
         reasons,

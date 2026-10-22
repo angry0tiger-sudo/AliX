@@ -53,14 +53,14 @@ def test_candles_return_versioned_fingerprint_and_valid_status() -> None:
     assert len(result.fingerprint or "") == 64
 
 
-def test_candle_validation_distinguishes_duplicate_and_out_of_order_timestamps() -> None:
+def test_candle_validation_distinguishes_duplicate_and_out_of_order_timestamps() -> (
+    None
+):
     duplicate = validate_candles([candle(1_000), candle(1_000)])
     out_of_order = validate_candles([candle(1_060), candle(1_000)])
 
     assert QualityReasonCode.DUPLICATE_TIMESTAMP in duplicate.reason_codes
-    assert (
-        QualityReasonCode.TIMESTAMP_NOT_INCREASING in out_of_order.reason_codes
-    )
+    assert QualityReasonCode.TIMESTAMP_NOT_INCREASING in out_of_order.reason_codes
 
 
 def test_candle_gap_is_rejected_by_default_and_can_be_explicitly_degraded() -> None:

@@ -60,7 +60,9 @@ class ConnectivityManager:
 
     def status_snapshot(self) -> tuple[ConnectivityStatus, ...]:
         """Return the most recent known status per route in stable route-ID order."""
-        return tuple(self._latest_statuses[key] for key in sorted(self._latest_statuses))
+        return tuple(
+            self._latest_statuses[key] for key in sorted(self._latest_statuses)
+        )
 
     def check(self, route: str) -> ConnectivityStatus:
         route_id = route.strip()
@@ -107,9 +109,7 @@ class ConnectivityManager:
         if not duplicates:
             return None
         statuses = tuple(
-            self._record(
-                ConnectivityStatus(route_id, False, "duplicate_route_id")
-            )
+            self._record(ConnectivityStatus(route_id, False, "duplicate_route_id"))
             for route_id in duplicates
         )
         self.current_route = None
