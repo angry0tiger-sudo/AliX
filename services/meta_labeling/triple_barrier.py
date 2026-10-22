@@ -138,10 +138,13 @@ def _validate_event(
 ) -> tuple[int, int, float]:
     raw_index = row["event_index"]
     if isinstance(raw_index, (bool, np.bool_)) or not isinstance(
-        raw_index, (int, np.integer)
+        raw_index, (int, float, np.integer, np.floating)
     ):
         raise ValueError("event_index_must_be_integer")
-    event_index = int(raw_index)
+    numeric_index = float(raw_index)
+    if not math.isfinite(numeric_index) or not numeric_index.is_integer():
+        raise ValueError("event_index_must_be_integer")
+    event_index = int(numeric_index)
     if event_index < 0 or event_index + config.max_holding_bars >= row_count:
         raise ValueError("event_horizon_out_of_bounds")
 
