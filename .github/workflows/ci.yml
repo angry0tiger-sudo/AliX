@@ -37,7 +37,7 @@ jobs:
       - name: Ruff lint
         run: ruff check risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels tests scripts
       - name: Ruff format check
-        run: ruff format --check risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels tests scripts
+        run: ruff format --check --diff risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels tests scripts
       - name: Strict type check
         run: mypy --config-file mypy.ini
       - name: Security scan
