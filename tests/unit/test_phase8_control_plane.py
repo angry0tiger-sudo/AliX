@@ -18,6 +18,7 @@ from control_plane.auth import (
     SingleUserTokenAuthenticator,
 )
 from control_plane.api import create_app
+from control_plane import server as control_server
 from control_plane.runtime_cli import (
     _container_name,
     _start_worker,
@@ -706,3 +707,49 @@ def test_runtime_command_database_constraint_rejects_cross_tenant_worker(
                     error_code=None,
                 )
             )
+
+def test_server_fails_closed_without_token_and_rejects_oidc_until_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ALIx_CONTROL_DATABASE_URL", "sqlite://")
+    monkeypatch.delenv("ALIx_ADMIN_TOKEN", raising=False)
+    monkeypatch.setenv("ALIx_AUTH_MODE", "single_user")
+    with pytest.raises(ValueError):
+        control_server.build_application()
+
+    monkeypatch.setenv("ALIx_ADMIN_TOKEN", "A" * 40)
+    monkeypatch.setenv("ALIx_AUTH_MODE", "oidc")
+    with pytest.raises(RuntimeError, match="unsupported_auth_mode"):
+        control_server.build_application()
+
+
+def test_server_main_uses_loopback_by_default(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv(
+        "ALIx_CONTROL_DATABASE_URL", f"sqlite:///{tmp_path / 'server.sqlite'}"
+    )
+    monkeypatch.setenv("ALIx_ADMIN_TOKEN", "owner-test-token-" + "X" * 40)
+    monkeypatch.setenv("ALIx_AUTH_MODE", "single_user")
+    monkeypatch.delenv("ALIx_CONTROL_BIND_HOST", raising=False)
+    monkeypatch.delenv("ALIx_CONTROL_PORT", raising=False)
+    captured: dict[str, Any] = {}
+
+    def fake_run(app: Any, **kwargs: Any) -> None:
+        captured["app"] = app
+        captured.update(kwargs)
+
+    monkeypatch.setattr(control_server.uvicorn, "run", fake_run)
+    control_server.main()
+    assert captured["host"] == "127.0.0.1"
+    assert captured["port"] == 8080
+
+
+def test_local_image_uses_locked_dependencies_and_excludes_owner_secrets() -> None:
+    dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
+    dockerignore = Path(".dockerignore").read_text(encoding="utf-8")
+    assert "pip install --no-cache-dir -r requirements.lock" in dockerfile
+    assert "USER 10001:10001" in dockerfile
+    assert ".env" in dockerignore
+    assert "secrets/" in dockerignore
+    assert "!.env.example" in dockerignore
