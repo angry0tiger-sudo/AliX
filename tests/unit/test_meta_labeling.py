@@ -194,7 +194,9 @@ def test_shared_data_quality_gate_runs_before_phase5_features() -> None:
 
     gap = candles.copy()
     gap.loc[7, "date"] = pd.Timestamp("2024-01-01T07:30:00Z")
-    with pytest.raises(ValueError, match="synthetic_ohlcv_rejected_by_data_quality_gate"):
+    with pytest.raises(
+        ValueError, match="synthetic_ohlcv_rejected_by_data_quality_gate"
+    ):
         _validate_synthetic_candles(gap)
 
 

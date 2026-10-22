@@ -120,9 +120,6 @@ jobs:
           assert report["commit_sha"] == "${{ github.event.pull_request.head.sha || github.sha }}"
           assert report["evaluation_status"] == "SYNTHETIC_MECHANICS_ONLY"
           assert report["dataset"]["kind"] == "synthetic"
-          assert report["data_quality_gate"]["passed"] is True
-          assert report["data_quality_gate"]["status"] == "VALID"
-          assert report["data_quality_gate"]["fingerprint"]
           assert len(report["folds"]) == 3
           assert report["champion"] is None
           assert report["promotion_status"] == "BLOCKED_NO_ECONOMIC_GATE"
@@ -149,6 +146,9 @@ jobs:
           assert report["commit_sha"] == "${{ github.event.pull_request.head.sha || github.sha }}"
           assert report["evaluation_status"] == "SYNTHETIC_MECHANICS_ONLY"
           assert report["dataset"]["kind"] == "synthetic"
+          assert report["data_quality_gate"]["passed"] is True
+          assert report["data_quality_gate"]["status"] == "VALID"
+          assert report["data_quality_gate"]["fingerprint"]
           assert report["triple_barrier"]["event_count"] > 0
           assert sum(report["triple_barrier"]["barrier_outcomes"].values()) == report["triple_barrier"]["event_count"]
           assert report["primary_oof"]["oos_sample_count"] > 0
