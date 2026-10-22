@@ -80,9 +80,7 @@ class TripleBarrierConfig:
     timeframe_seconds: int = 3600
 
     def __post_init__(self) -> None:
-        _validate_multipliers(
-            self.profit_taking_multiplier, self.stop_loss_multiplier
-        )
+        _validate_multipliers(self.profit_taking_multiplier, self.stop_loss_multiplier)
         _validate_costs(self.fee_bps_per_side, self.slippage_bps_per_side)
         _validate_positive_integer(self.max_holding_bars, "max_holding_bars")
         _validate_positive_integer(self.timeframe_seconds, "timeframe_seconds")
@@ -253,9 +251,7 @@ def _first_barrier_touch(
     exit_price = float(candles.iloc[exit_index]["close"])
     exit_reason = "vertical"
     for candle_index in range(event_index + 1, exit_index + 1):
-        touch = _barrier_touch(
-            candles.iloc[candle_index], side, take_price, stop_price
-        )
+        touch = _barrier_touch(candles.iloc[candle_index], side, take_price, stop_price)
         if touch is None:
             continue
         exit_index = candle_index
@@ -288,9 +284,7 @@ def _label_one_event(
     entry_row = candles.iloc[event_index]
     entry_price = float(entry_row["close"])
     entry_time = pd.Timestamp(entry_row["date"])
-    take_price, stop_price = _barrier_prices(
-        entry_price, side, volatility, config
-    )
+    take_price, stop_price = _barrier_prices(entry_price, side, volatility, config)
     exit_index, exit_price, exit_reason = _first_barrier_touch(
         candles,
         event_index,

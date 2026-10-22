@@ -126,9 +126,7 @@ def _build_meta_features(
     return result, list(result.columns)
 
 
-def _prior_mature_labels(
-    merged: DataFrame, fold_id: int, test_start: int
-) -> DataFrame:
+def _prior_mature_labels(merged: DataFrame, fold_id: int, test_start: int) -> DataFrame:
     eligible = (
         (merged["fold_id"] < fold_id)
         & (merged["event_index"] < test_start)
@@ -336,9 +334,7 @@ def evaluate_meta_oof(
     The probability cutoff is a synthetic-mechanics diagnostic only. It is not
     economic policy, Risk Gate approval or order permission.
     """
-    cutoff = _validate_inputs(
-        oof_predictions, barrier_labels, minimum_probability
-    )
+    cutoff = _validate_inputs(oof_predictions, barrier_labels, minimum_probability)
     merged = _merge_oof_labels(oof_predictions, barrier_labels)
     _validate_primary_oof_provenance(merged)
     meta_features, feature_names = _build_meta_features(candle_features, merged)

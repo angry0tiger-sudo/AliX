@@ -194,9 +194,7 @@ def _fold_prediction_records(
     max_label_end = int(np.max(label_ends[fit_indices]))
     if max_label_end >= fold.test_start:
         raise ValueError("oof_purge_contract_failed")
-    estimator = _fit_primary_estimator(
-        estimator_factory, fit_features, fit_labels
-    )
+    estimator = _fit_primary_estimator(estimator_factory, fit_features, fit_labels)
     test_indices, test_x = _test_feature_window(finite_features, fold)
     predictions, confidence = _validate_primary_predictions(
         estimator, test_x, len(test_indices)
@@ -252,7 +250,9 @@ def generate_oof_primary_predictions(
     return result
 
 
-def _validate_meta_labels(labels: Sequence[int] | np.ndarray, row_count: int) -> np.ndarray:
+def _validate_meta_labels(
+    labels: Sequence[int] | np.ndarray, row_count: int
+) -> np.ndarray:
     label_values = np.asarray(labels)
     if label_values.shape != (row_count,) or not np.isin(label_values, [0, 1]).all():
         raise ValueError("meta_labels_must_be_binary_and_aligned")
@@ -311,16 +311,14 @@ def _validate_meta_training_provenance(
     event_indices = _validate_provenance_schema(features, provenance)
     fold_ids = provenance["fold_id"].to_numpy(dtype=int)
     primary_train_max = provenance["primary_train_max_index"].to_numpy(dtype=int)
-    primary_end_max = provenance[
-        "primary_train_max_label_end_index"
-    ].to_numpy(dtype=int)
+    primary_end_max = provenance["primary_train_max_label_end_index"].to_numpy(
+        dtype=int
+    )
     meta_ends = np.asarray(meta_label_end_indices, dtype=int)
     _validate_primary_provenance_indices(
         event_indices, primary_train_max, primary_end_max, fold_ids
     )
-    _validate_meta_label_maturity(
-        event_indices, meta_ends, evaluation_cutoff_index
-    )
+    _validate_meta_label_maturity(event_indices, meta_ends, evaluation_cutoff_index)
 
 
 def _validate_serialized_feature_names(payload: dict[str, Any]) -> list[str]:
