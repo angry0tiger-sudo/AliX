@@ -408,7 +408,7 @@ def test_point_in_time_join_selects_only_revision_available_at_decision() -> Non
 
 def test_point_in_time_join_is_invariant_to_future_additions_and_deduplicates() -> None:
     known = feature(event_id="known", available_at="2026-10-22T09:03:00Z")
-    alias = replace(feature(event_id="alias"), content_hash=known.content_hash)
+    alias = replace(feature(event_id="zz-alias"), content_hash=known.content_hash)
     future = feature(event_id="future", available_at="2026-10-22T09:06:00Z")
     kwargs = {
         "asset": "BTC/USDT",

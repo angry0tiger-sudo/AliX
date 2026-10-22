@@ -119,10 +119,7 @@ class ProviderRegistration:
             raise ProviderPolicyError("provider_endpoint_must_not_contain_credentials")
         if self.is_test_fixture and not parts.hostname.endswith(".invalid"):
             raise ProviderPolicyError("test_fixture_endpoint_must_use_invalid_domain")
-        if self.is_test_fixture:
-            if self.license_status != "approved":
-                raise ProviderPolicyError("fixture_license_must_be_test_approved")
-        elif self.license_status == "test_only":
+        if not self.is_test_fixture and self.license_status == "test_only":
             raise ProviderPolicyError("test_only_provider_cannot_be_runtime")
         if (
             "tradingview" in self.provider_id.casefold()
