@@ -74,7 +74,9 @@ class WalkForwardConfig:
             raise ValueError("min_train_size must be an integer of at least 30")
         costs = (self.fee_bps_per_side, self.slippage_bps_per_side)
         if any(not math.isfinite(cost) or cost < 0 for cost in costs):
-            raise ValueError("fee and slippage assumptions must be finite and non-negative")
+            raise ValueError(
+                "fee and slippage assumptions must be finite and non-negative"
+            )
 
 
 @dataclass(frozen=True, slots=True)
