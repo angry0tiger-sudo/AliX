@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 
 from scripts.fetch_nobitex_public_ohlcv import (
+    CandleRecord,
     fetch_historical_candles,
     parse_udf_payload,
     write_artifacts,
@@ -96,7 +97,7 @@ def test_historical_fetch_is_bounded_rejects_gaps_and_uses_fake_transport() -> N
 def test_manifest_contains_data_hash_and_closed_authorization_state(
     tmp_path: Path,
 ) -> None:
-    rows = [
+    rows: list[CandleRecord] = [
         {
             "timestamp": 1792629000,
             "date": "2026-10-22T00:30:00Z",
