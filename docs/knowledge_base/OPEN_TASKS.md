@@ -3,12 +3,12 @@
 # Phase 4 tracking checkpoint — implementation in progress
 
 - Owner directive: `docs/governance/owner-directives/2026-10-22-phase-4.md`.
-- Canonical documents: `docs/PROJECT_DOCUMENTS.md`, the preserved MRD, and project roadmap.
+- Canonical documents: `docs/PROJECT_DOCUMENTS.md`, `docs/knowledge_base/AliX_MRD_Dynamic_Risk_FA.md`, and `docs/knowledge_base/AliX_Roadmap_Dynamic_Risk_FA.md`; previous `docs/architecture/` and `docs/roadmap/` copies are retained for compatibility.
 - Tracking issue: https://github.com/angry0tiger-sudo/AliX/issues/3.
 - Branch: `feat/phase-4-freqai-baseline`; main remains unchanged.
-- Planned evidence: exact-head CI, pinned FreqAI model/strategy-load smoke, seeded synthetic walk-forward report, and regression tests for leakage/embargo/reload/no-trade.
+- Evidence inspected on pre-follow-up branch HEAD `54e6091ad3cf98c92b4108131233defe0cf7967a`: [CI run 39722526159](https://github.com/angry0tiger-sudo/AliX/actions/runs/39722526159) passed both `quality` and `freqtrade-runtime-smoke`; the uploaded synthetic artifact was inspected. Exact-head CI for the new canonical paths, validator and report-SHA fix remains required before closing this checkpoint.
 - Economic gate: **NO-GO** until owner-approved acceptance thresholds are pre-registered and an authorized historical dataset/source/license is reviewed.
-- Champion: must remain null; no live, dry-run, or paper session, orders, provider/API calls, notifications, or host networking operations are authorized in Phase 4.
+- Champion: must remain null; `promotion_status=BLOCKED_NO_ECONOMIC_GATE`; economic acceptance and trading authorization remain NO-GO. No live, dry-run, or paper session, orders, provider/API calls, notifications, or host networking operations are authorized in Phase 4.
 
 
 # Phase 3 contract/CI checkpoint
