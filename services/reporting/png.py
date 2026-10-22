@@ -1,4 +1,5 @@
 """Dependency-free deterministic PNG chart; only reconciled equity may be plotted."""
+
 from __future__ import annotations
 
 import math
@@ -13,17 +14,22 @@ _WIDTH, _HEIGHT, _MARGIN = 720, 360, 28
 
 def _chunk(kind: bytes, payload: bytes) -> bytes:
     body = kind + payload
-    return struct.pack(">I", len(payload)) + body + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF)
+    return (
+        struct.pack(">I", len(payload))
+        + body
+        + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF)
+    )
 
 
 def _pixel(canvas: bytearray, x: int, y: int, rgb: tuple[int, int, int]) -> None:
     if 0 <= x < _WIDTH and 0 <= y < _HEIGHT:
         offset = (y * _WIDTH + x) * 3
-        canvas[offset:offset + 3] = bytes(rgb)
+        canvas[offset : offset + 3] = bytes(rgb)
 
 
-def _line(canvas: bytearray, x0: int, y0: int, x1: int, y1: int,
-          rgb: tuple[int, int, int]) -> None:
+def _line(
+    canvas: bytearray, x0: int, y0: int, x1: int, y1: int, rgb: tuple[int, int, int]
+) -> None:
     dx, sx = abs(x1 - x0), (1 if x0 < x1 else -1)
     dy, sy = -abs(y1 - y0), (1 if y0 < y1 else -1)
     error = dx + dy
@@ -40,8 +46,13 @@ def _line(canvas: bytearray, x0: int, y0: int, x1: int, y1: int,
             y0 += sy
 
 
-def render_equity_chart(values: Sequence[float], *, reconciliation_status: str,
-                        width: int = _WIDTH, height: int = _HEIGHT) -> bytes:
+def render_equity_chart(
+    values: Sequence[float],
+    *,
+    reconciliation_status: str,
+    width: int = _WIDTH,
+    height: int = _HEIGHT,
+) -> bytes:
     if width != _WIDTH or height != _HEIGHT:
         raise ValueError("chart_dimensions_are_versioned_and_fixed")
     canvas = bytearray([255] * (_WIDTH * _HEIGHT * 3))
@@ -56,17 +67,24 @@ def render_equity_chart(values: Sequence[float], *, reconciliation_status: str,
         low, high = min(clean), max(clean)
         span = high - low if high > low else 1.0
         points = [
-            (left + i * (right - left) // (len(clean) - 1),
-             bottom - int((value - low) / span * (bottom - top)))
+            (
+                left + i * (right - left) // (len(clean) - 1),
+                bottom - int((value - low) / span * (bottom - top)),
+            )
             for i, value in enumerate(clean)
         ]
         for first, second in zip(points, points[1:]):
             _line(canvas, first[0], first[1], second[0], second[1], (30, 95, 180))
     scanlines = b"".join(
-        b"\x00" + bytes(canvas[row * _WIDTH * 3:(row + 1) * _WIDTH * 3])
+        b"\x00" + bytes(canvas[row * _WIDTH * 3 : (row + 1) * _WIDTH * 3])
         for row in range(_HEIGHT)
     )
     header = struct.pack(">IIBBBBB", _WIDTH, _HEIGHT, 8, 2, 0, 0, 0)
     meta = ("AliX-Chart-Schema\x00" + PNG_CHART_SCHEMA_VERSION).encode("latin-1")
-    return (b"\x89PNG\r\n\x1a\n" + _chunk(b"IHDR", header) + _chunk(b"tEXt", meta)
-            + _chunk(b"IDAT", zlib.compress(scanlines, level=9)) + _chunk(b"IEND", b""))
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + _chunk(b"IHDR", header)
+        + _chunk(b"tEXt", meta)
+        + _chunk(b"IDAT", zlib.compress(scanlines, level=9))
+        + _chunk(b"IEND", b"")
+    )

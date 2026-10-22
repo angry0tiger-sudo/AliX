@@ -1,4 +1,5 @@
 """Durable daily scheduling with explicit timezone/DST and recovery policy."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -105,8 +106,11 @@ def next_daily_run(
         raise ValueError("reporting_timezone_invalid") from None
     for offset in range(370):
         result = scheduled_time_for_date(
-            local_date + timedelta(days=offset), timezone_name,
-            hour=hour, minute=minute, fold_policy=fold_policy,
+            local_date + timedelta(days=offset),
+            timezone_name,
+            hour=hour,
+            minute=minute,
+            fold_policy=fold_policy,
         )
         if result.astimezone(UTC) > current:
             return result
@@ -120,15 +124,22 @@ class ReportSchedulerStore:
         if not database_url.strip():
             raise ValueError("scheduler_database_url_required")
         parsed = make_url(database_url)
-        if parsed.get_backend_name() == "sqlite" and parsed.database not in (None, "", ":memory:"):
-            Path(parsed.database).expanduser().resolve().parent.mkdir(parents=True, exist_ok=True)
+        if parsed.get_backend_name() == "sqlite" and parsed.database not in (
+            None,
+            "",
+            ":memory:",
+        ):
+            Path(parsed.database).expanduser().resolve().parent.mkdir(
+                parents=True, exist_ok=True
+            )
         options: dict[str, object] = {"pool_pre_ping": True}
         if parsed.get_backend_name() == "sqlite":
             options["connect_args"] = {"timeout": 10}
         self._engine: Engine = create_engine(database_url, **options)
         try:
             with self._engine.begin() as connection:
-                connection.execute(text("""
+                connection.execute(
+                    text("""
                     CREATE TABLE IF NOT EXISTS alix_report_runs (
                         job_key VARCHAR(100) NOT NULL,
                         scheduled_for VARCHAR(40) NOT NULL,
@@ -142,8 +153,10 @@ class ReportSchedulerStore:
                         error_code VARCHAR(100),
                         PRIMARY KEY (job_key, scheduled_for)
                     )
-                """))
-                connection.execute(text("""
+                """)
+                )
+                connection.execute(
+                    text("""
                     CREATE TABLE IF NOT EXISTS alix_report_run_events (
                         event_id VARCHAR(64) PRIMARY KEY,
                         run_id VARCHAR(64) NOT NULL,
@@ -152,7 +165,8 @@ class ReportSchedulerStore:
                         status VARCHAR(24) NOT NULL,
                         error_code VARCHAR(100)
                     )
-                """))
+                """)
+                )
         except Exception:
             self._engine.dispose()
             raise
@@ -161,19 +175,39 @@ class ReportSchedulerStore:
         self._engine.dispose()
 
     @staticmethod
-    def _event(connection: Connection, run_id: str, now: datetime,
-               event_type: str, status: str, error_code: str | None = None) -> None:
-        connection.execute(text("""
+    def _event(
+        connection: Connection,
+        run_id: str,
+        now: datetime,
+        event_type: str,
+        status: str,
+        error_code: str | None = None,
+    ) -> None:
+        connection.execute(
+            text("""
             INSERT INTO alix_report_run_events
                 (event_id, run_id, occurred_at, event_type, status, error_code)
             VALUES (:event_id, :run_id, :occurred_at, :event_type, :status, :error_code)
-        """), {
-            "event_id": uuid4().hex, "run_id": run_id, "occurred_at": _stamp(now),
-            "event_type": event_type, "status": status, "error_code": error_code,
-        })
+        """),
+            {
+                "event_id": uuid4().hex,
+                "run_id": run_id,
+                "occurred_at": _stamp(now),
+                "event_type": event_type,
+                "status": status,
+                "error_code": error_code,
+            },
+        )
 
-    def claim(self, job_key: str, scheduled_for: datetime, *, now: datetime,
-              lease_seconds: int = 900, max_attempts: int = 3) -> ReportRunLease | None:
+    def claim(
+        self,
+        job_key: str,
+        scheduled_for: datetime,
+        *,
+        now: datetime,
+        lease_seconds: int = 900,
+        max_attempts: int = 3,
+    ) -> ReportRunLease | None:
         if not job_key.strip() or len(job_key) > 100:
             raise ValueError("scheduler_job_key_invalid")
         if lease_seconds < 1 or max_attempts < 1:
@@ -182,99 +216,180 @@ class ReportSchedulerStore:
         until = _stamp(_utc(now, "now") + timedelta(seconds=lease_seconds))
         run_id, token = _run_id(job_key, scheduled_for), uuid4().hex
         with self._engine.begin() as connection:
-            connection.execute(text("""
+            connection.execute(
+                text("""
                 INSERT INTO alix_report_runs
                     (job_key, scheduled_for, run_id, status, lease_owner, lease_until,
                      attempt, started_at, finished_at, error_code)
                 VALUES (:job, :scheduled, :run_id, 'CLAIMED', :owner, :until,
                         1, :now, NULL, NULL)
                 ON CONFLICT (job_key, scheduled_for) DO NOTHING
-            """), {"job": job_key, "scheduled": scheduled, "run_id": run_id,
-                   "owner": token, "until": until, "now": now_text})
-            row = connection.execute(text("""
+            """),
+                {
+                    "job": job_key,
+                    "scheduled": scheduled,
+                    "run_id": run_id,
+                    "owner": token,
+                    "until": until,
+                    "now": now_text,
+                },
+            )
+            row = (
+                connection.execute(
+                    text("""
                 SELECT run_id, status, lease_owner, lease_until, attempt
                 FROM alix_report_runs WHERE job_key=:job AND scheduled_for=:scheduled
-            """), {"job": job_key, "scheduled": scheduled}).mappings().first()
+            """),
+                    {"job": job_key, "scheduled": scheduled},
+                )
+                .mappings()
+                .first()
+            )
             if row is None:
                 return None
             if row["lease_owner"] == token and row["status"] == "CLAIMED":
                 self._event(connection, run_id, now, "CLAIMED", "CLAIMED")
-                return ReportRunLease(job_key, _utc(scheduled_for, "scheduled_for"),
-                                      run_id, token, 1)
-            result = connection.execute(text("""
+                return ReportRunLease(
+                    job_key, _utc(scheduled_for, "scheduled_for"), run_id, token, 1
+                )
+            result = connection.execute(
+                text("""
                 UPDATE alix_report_runs
                 SET status='CLAIMED', lease_owner=:owner, lease_until=:until,
                     attempt=attempt+1, started_at=:now, finished_at=NULL, error_code=NULL
                 WHERE job_key=:job AND scheduled_for=:scheduled AND attempt < :max_attempts
                   AND (status='FAILED' AND lease_until <= :now
                        OR status='CLAIMED' AND lease_until <= :now)
-            """), {"owner": token, "until": until, "now": now_text,
-                   "job": job_key, "scheduled": scheduled, "max_attempts": max_attempts})
+            """),
+                {
+                    "owner": token,
+                    "until": until,
+                    "now": now_text,
+                    "job": job_key,
+                    "scheduled": scheduled,
+                    "max_attempts": max_attempts,
+                },
+            )
             if result.rowcount != 1:
                 return None
-            current = connection.execute(text("""
+            current = (
+                connection.execute(
+                    text("""
                 SELECT attempt FROM alix_report_runs
                 WHERE job_key=:job AND scheduled_for=:scheduled
-            """), {"job": job_key, "scheduled": scheduled}).mappings().first()
+            """),
+                    {"job": job_key, "scheduled": scheduled},
+                )
+                .mappings()
+                .first()
+            )
             attempt = int(current["attempt"]) if current is not None else 2
             self._event(connection, run_id, now, "RECLAIMED", "CLAIMED")
-            return ReportRunLease(job_key, _utc(scheduled_for, "scheduled_for"),
-                                  run_id, token, attempt)
+            return ReportRunLease(
+                job_key, _utc(scheduled_for, "scheduled_for"), run_id, token, attempt
+            )
 
-    def finish(self, lease: ReportRunLease, *, success: bool, now: datetime,
-               error_code: str | None = None, retry_delay_seconds: int = 60) -> None:
+    def finish(
+        self,
+        lease: ReportRunLease,
+        *,
+        success: bool,
+        now: datetime,
+        error_code: str | None = None,
+        retry_delay_seconds: int = 60,
+    ) -> None:
         if retry_delay_seconds < 1:
             raise ValueError("scheduler_retry_delay_invalid")
         status = "SUCCEEDED" if success else "FAILED"
         safe_error = None
         if not success:
             candidate = (error_code or "report_job_failed").lower()
-            safe_error = candidate if _SAFE_ERROR.fullmatch(candidate) else "unclassified_error"
-        next_retry = _stamp(_utc(now, "now") + timedelta(seconds=retry_delay_seconds)) if not success else None
+            safe_error = (
+                candidate if _SAFE_ERROR.fullmatch(candidate) else "unclassified_error"
+            )
+        next_retry = (
+            _stamp(_utc(now, "now") + timedelta(seconds=retry_delay_seconds))
+            if not success
+            else None
+        )
         with self._engine.begin() as connection:
-            result = connection.execute(text("""
+            result = connection.execute(
+                text("""
                 UPDATE alix_report_runs
                 SET status=:status, finished_at=:finished, lease_owner=NULL,
                     lease_until=:retry_after, error_code=:error
                 WHERE job_key=:job AND scheduled_for=:scheduled AND run_id=:run_id
                   AND status='CLAIMED' AND lease_owner=:owner
-            """), {"status": status, "finished": _stamp(now), "retry_after": next_retry,
-                   "error": safe_error, "job": lease.job_key,
-                   "scheduled": _stamp(lease.scheduled_for), "run_id": lease.run_id,
-                   "owner": lease.lease_owner})
+            """),
+                {
+                    "status": status,
+                    "finished": _stamp(now),
+                    "retry_after": next_retry,
+                    "error": safe_error,
+                    "job": lease.job_key,
+                    "scheduled": _stamp(lease.scheduled_for),
+                    "run_id": lease.run_id,
+                    "owner": lease.lease_owner,
+                },
+            )
             if result.rowcount != 1:
                 raise LeaseLostError("report_scheduler_lease_lost")
             self._event(connection, lease.run_id, now, "FINISHED", status, safe_error)
 
-    def skip_late(self, job_key: str, scheduled_for: datetime, *, now: datetime) -> bool:
+    def skip_late(
+        self, job_key: str, scheduled_for: datetime, *, now: datetime
+    ) -> bool:
         scheduled, run_id = _stamp(scheduled_for), _run_id(job_key, scheduled_for)
         with self._engine.begin() as connection:
-            result = connection.execute(text("""
+            result = connection.execute(
+                text("""
                 INSERT INTO alix_report_runs
                     (job_key, scheduled_for, run_id, status, lease_owner, lease_until,
                      attempt, started_at, finished_at, error_code)
                 VALUES (:job, :scheduled, :run_id, 'SKIPPED_LATE', NULL, NULL,
                         0, :now, :now, 'catch_up_window_expired')
                 ON CONFLICT (job_key, scheduled_for) DO NOTHING
-            """), {"job": job_key, "scheduled": scheduled, "run_id": run_id, "now": _stamp(now)})
+            """),
+                {
+                    "job": job_key,
+                    "scheduled": scheduled,
+                    "run_id": run_id,
+                    "now": _stamp(now),
+                },
+            )
             if result.rowcount != 1:
                 return False
-            self._event(connection, run_id, now, "SKIPPED_LATE", "SKIPPED_LATE",
-                        "catch_up_window_expired")
+            self._event(
+                connection,
+                run_id,
+                now,
+                "SKIPPED_LATE",
+                "SKIPPED_LATE",
+                "catch_up_window_expired",
+            )
             return True
 
     def status_for(self, job_key: str, scheduled_for: datetime) -> str | None:
         with self._engine.connect() as connection:
-            result = connection.execute(text("""
+            result = connection.execute(
+                text("""
                 SELECT status FROM alix_report_runs
                 WHERE job_key=:job AND scheduled_for=:scheduled
-            """), {"job": job_key, "scheduled": _stamp(scheduled_for)}).first()
+            """),
+                {"job": job_key, "scheduled": _stamp(scheduled_for)},
+            ).first()
         return str(result[0]) if result else None
 
 
-def execute_once(store: ReportSchedulerStore, *, job_key: str, scheduled_for: datetime,
-                 now: datetime, job: Callable[[str], object],
-                 max_attempts: int = 3) -> ReportRunOutcome | None:
+def execute_once(
+    store: ReportSchedulerStore,
+    *,
+    job_key: str,
+    scheduled_for: datetime,
+    now: datetime,
+    job: Callable[[str], object],
+    max_attempts: int = 3,
+) -> ReportRunOutcome | None:
     lease = store.claim(job_key, scheduled_for, now=now, max_attempts=max_attempts)
     if lease is None:
         return None
@@ -284,19 +399,30 @@ def execute_once(store: ReportSchedulerStore, *, job_key: str, scheduled_for: da
         code = type(exc).__name__.lower()
         safe_code = code if _SAFE_ERROR.fullmatch(code) else "report_job_failed"
         delay = min(60 * (2 ** (lease.attempt - 1)), 600)
-        store.finish(lease, success=False, now=now, error_code=safe_code,
-                     retry_delay_seconds=delay)
+        store.finish(
+            lease,
+            success=False,
+            now=now,
+            error_code=safe_code,
+            retry_delay_seconds=delay,
+        )
         return ReportRunOutcome(lease.run_id, "FAILED", lease.attempt, safe_code)
     store.finish(lease, success=True, now=now)
     return ReportRunOutcome(lease.run_id, "SUCCEEDED", lease.attempt)
 
 
-def run_daily_scheduler(store: ReportSchedulerStore, *, job_key: str, timezone_name: str,
-                        job: Callable[[str], object], stop_event: Event,
-                        clock: Callable[[], datetime] = lambda: datetime.now(UTC),
-                        interval_seconds: int = 30,
-                        catch_up_window: timedelta = timedelta(hours=6),
-                        sleep_fn: Callable[[float], None] = sleep) -> None:
+def run_daily_scheduler(
+    store: ReportSchedulerStore,
+    *,
+    job_key: str,
+    timezone_name: str,
+    job: Callable[[str], object],
+    stop_event: Event,
+    clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+    interval_seconds: int = 30,
+    catch_up_window: timedelta = timedelta(hours=6),
+    sleep_fn: Callable[[float], None] = sleep,
+) -> None:
     """Explicit opt-in daemon loop; missed runs beyond six hours are recorded as skipped."""
     if interval_seconds < 1 or catch_up_window.total_seconds() < 0:
         raise ValueError("scheduler_poll_or_catch_up_policy_invalid")
@@ -306,12 +432,15 @@ def run_daily_scheduler(store: ReportSchedulerStore, *, job_key: str, timezone_n
         raise ValueError("reporting_timezone_invalid") from None
     while not stop_event.is_set():
         now = _utc(clock(), "scheduler_clock")
-        scheduled = scheduled_time_for_date(now.astimezone(ZoneInfo(timezone_name)).date(),
-                                            timezone_name)
+        scheduled = scheduled_time_for_date(
+            now.astimezone(ZoneInfo(timezone_name)).date(), timezone_name
+        )
         occurrence = scheduled.astimezone(UTC)
         if now >= occurrence:
             if now <= occurrence + catch_up_window:
-                execute_once(store, job_key=job_key, scheduled_for=scheduled, now=now, job=job)
+                execute_once(
+                    store, job_key=job_key, scheduled_for=scheduled, now=now, job=job
+                )
             else:
                 store.skip_late(job_key, scheduled, now=now)
         sleep_fn(float(interval_seconds))

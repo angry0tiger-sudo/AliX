@@ -1,4 +1,5 @@
 """Bounded public-price observation that always abstains; it never places orders."""
+
 from __future__ import annotations
 
 import argparse
@@ -13,8 +14,13 @@ from urllib.request import Request, urlopen
 
 def fetch_public_btc_usdt_price(*, timeout_seconds: float = 10.0) -> float:
     url = "https://apiv2.nobitex.ir/market/stats?" + urlencode(
-        {"srcCurrency": "btc", "dstCurrency": "usdt"})
-    request = Request(url, headers={"Accept": "application/json", "User-Agent": "AliX-Phase10-Observer/1"}, method="GET")
+        {"srcCurrency": "btc", "dstCurrency": "usdt"}
+    )
+    request = Request(
+        url,
+        headers={"Accept": "application/json", "User-Agent": "AliX-Phase10-Observer/1"},
+        method="GET",
+    )
     with urlopen(request, timeout=timeout_seconds) as response:
         if response.status != 200:
             raise ValueError("public_price_http_status_invalid")
@@ -34,12 +40,15 @@ def fetch_public_btc_usdt_price(*, timeout_seconds: float = 10.0) -> float:
     return price
 
 
-def observe_public_price(*, duration_seconds: int,
-                         fetch_price: Callable[[], float] = fetch_public_btc_usdt_price,
-                         monotonic: Callable[[], float] = time.monotonic,
-                         clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
-                         sleep_fn: Callable[[float], None] = time.sleep,
-                         interval_seconds: int = 60) -> list[dict[str, object]]:
+def observe_public_price(
+    *,
+    duration_seconds: int,
+    fetch_price: Callable[[], float] = fetch_public_btc_usdt_price,
+    monotonic: Callable[[], float] = time.monotonic,
+    clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+    sleep_fn: Callable[[float], None] = time.sleep,
+    interval_seconds: int = 60,
+) -> list[dict[str, object]]:
     if isinstance(duration_seconds, bool) or duration_seconds not in (300, 900, 3600):
         raise ValueError("observation_duration_must_be_bounded")
     if interval_seconds < 1 or interval_seconds > 60:
@@ -57,13 +66,23 @@ def observe_public_price(*, duration_seconds: int,
         except Exception:
             value = None
             status, reason = "DEGRADED", "PUBLIC_PRICE_UNAVAILABLE_FAIL_CLOSED"
-        records.append({
-            "observed_at": at.astimezone(timezone.utc).isoformat(), "pair": "BTC/USDT",
-            "price": value, "decision": "ABSTAIN", "reason": reason, "status": status,
-            "data_authority": "PUBLIC_PRICE_ONLY", "order_permission": False,
-            "Champion": None, "promotion_status": "BLOCKED_NO_ECONOMIC_GATE",
-            "trading_authorization": "NO-GO", "orders_submitted": 0, "credentials_used": False,
-        })
+        records.append(
+            {
+                "observed_at": at.astimezone(timezone.utc).isoformat(),
+                "pair": "BTC/USDT",
+                "price": value,
+                "decision": "ABSTAIN",
+                "reason": reason,
+                "status": status,
+                "data_authority": "PUBLIC_PRICE_ONLY",
+                "order_permission": False,
+                "Champion": None,
+                "promotion_status": "BLOCKED_NO_ECONOMIC_GATE",
+                "trading_authorization": "NO-GO",
+                "orders_submitted": 0,
+                "credentials_used": False,
+            }
+        )
         remaining = deadline - monotonic()
         if remaining > 0:
             sleep_fn(min(float(interval_seconds), remaining))
@@ -72,7 +91,9 @@ def observe_public_price(*, duration_seconds: int,
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--duration-seconds", type=int, choices=(300, 900, 3600), default=3600)
+    parser.add_argument(
+        "--duration-seconds", type=int, choices=(300, 900, 3600), default=3600
+    )
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     records = observe_public_price(duration_seconds=args.duration_seconds)
@@ -82,8 +103,17 @@ def main() -> int:
         for row in records:
             stream.write(json.dumps(row, sort_keys=True, allow_nan=False) + "\n")
     temporary.replace(args.output)
-    print(json.dumps({"record_count": len(records), "mode": "PUBLIC_PRICE_OBSERVATION_ONLY",
-                      "order_permission": False, "Champion": None}, sort_keys=True))
+    print(
+        json.dumps(
+            {
+                "record_count": len(records),
+                "mode": "PUBLIC_PRICE_OBSERVATION_ONLY",
+                "order_permission": False,
+                "Champion": None,
+            },
+            sort_keys=True,
+        )
+    )
     return 0
 
 

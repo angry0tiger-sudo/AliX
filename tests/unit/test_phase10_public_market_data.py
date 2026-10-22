@@ -5,7 +5,11 @@ from pathlib import Path
 
 import pytest
 
-from scripts.fetch_nobitex_public_ohlcv import fetch_historical_candles, parse_udf_payload, write_artifacts
+from scripts.fetch_nobitex_public_ohlcv import (
+    fetch_historical_candles,
+    parse_udf_payload,
+    write_artifacts,
+)
 from scripts.run_phase10_public_price_observation import observe_public_price
 
 UTC = timezone.utc
@@ -15,12 +19,21 @@ def make_payload(start: int, count: int = 2) -> dict[str, object]:
     # Nobitex candle timestamps can be offset from UTC hour boundaries. Only the
     # spacing between bars is invariant; UTC epoch modulo 3600 is not required.
     stamps = [start + i * 3600 for i in range(count)]
-    return {"s": "ok", "t": stamps, "o": [100.0] * count, "h": [102.0] * count,
-            "l": [99.0] * count, "c": [101.0] * count, "v": [5.0] * count}
+    return {
+        "s": "ok",
+        "t": stamps,
+        "o": [100.0] * count,
+        "h": [102.0] * count,
+        "l": [99.0] * count,
+        "c": [101.0] * count,
+        "v": [5.0] * count,
+    }
 
 
 def test_parser_handles_offset_hour_boundaries_and_rejects_bad_arrays() -> None:
-    rows = parse_udf_payload(make_payload(1800001800), requested_from=1800000000, requested_to=1800005400)
+    rows = parse_udf_payload(
+        make_payload(1800001800), requested_from=1800000000, requested_to=1800005400
+    )
     assert len(rows) == 2
     assert str(rows[0]["date"]).endswith("Z")
     payload = make_payload(1800000000)
@@ -35,7 +48,9 @@ def test_parser_rejects_ohlc_invalid_and_future_outside_requested_window() -> No
     with pytest.raises(ValueError, match="ohlc_invariant"):
         parse_udf_payload(payload, requested_from=1800000000, requested_to=1800003600)
     with pytest.raises(ValueError, match="out_of_bounds"):
-        parse_udf_payload(make_payload(1800000000), requested_from=1800003600, requested_to=1800007200)
+        parse_udf_payload(
+            make_payload(1800000000), requested_from=1800003600, requested_to=1800007200
+        )
 
 
 def test_historical_fetch_is_bounded_rejects_gaps_and_uses_fake_transport() -> None:
@@ -44,14 +59,24 @@ def test_historical_fetch_is_bounded_rejects_gaps_and_uses_fake_transport() -> N
     def getter(params: dict[str, str]) -> dict[str, object]:
         start, end = int(params["from"]), int(params["to"])
         stamps = list(range(start, end + 1, 3600))
-        return {"s": "ok", "t": stamps, "o": [100.0] * len(stamps),
-                "h": [102.0] * len(stamps), "l": [99.0] * len(stamps),
-                "c": [101.0] * len(stamps), "v": [5.0] * len(stamps)}
+        return {
+            "s": "ok",
+            "t": stamps,
+            "o": [100.0] * len(stamps),
+            "h": [102.0] * len(stamps),
+            "l": [99.0] * len(stamps),
+            "c": [101.0] * len(stamps),
+            "v": [5.0] * len(stamps),
+        }
 
-    rows = fetch_historical_candles(days=30, now=now, request_json=getter, sleep_fn=lambda _: None)
+    rows = fetch_historical_candles(
+        days=30, now=now, request_json=getter, sleep_fn=lambda _: None
+    )
     assert len(rows) == 720
     with pytest.raises(ValueError, match="historical_days"):
-        fetch_historical_candles(days=10, now=now, request_json=getter, sleep_fn=lambda _: None)
+        fetch_historical_candles(
+            days=10, now=now, request_json=getter, sleep_fn=lambda _: None
+        )
 
     def gapped(params: dict[str, str]) -> dict[str, object]:
         response = getter(params)
@@ -60,19 +85,43 @@ def test_historical_fetch_is_bounded_rejects_gaps_and_uses_fake_transport() -> N
             for key in ("o", "h", "l", "c", "v"):
                 response[key] = response[key][:2] + response[key][3:]
         return response
+
     with pytest.raises(ValueError, match="gap_detected"):
-        fetch_historical_candles(days=30, now=now, request_json=gapped, sleep_fn=lambda _: None)
+        fetch_historical_candles(
+            days=30, now=now, request_json=gapped, sleep_fn=lambda _: None
+        )
 
 
-def test_manifest_contains_data_hash_and_closed_authorization_state(tmp_path: Path) -> None:
+def test_manifest_contains_data_hash_and_closed_authorization_state(
+    tmp_path: Path,
+) -> None:
     rows = [
-        {"timestamp": 1792629000, "date": "2026-10-22T00:30:00Z", "open": 100.0,
-         "high": 101.0, "low": 99.0, "close": 100.5, "volume": 3.0},
-        {"timestamp": 1792632600, "date": "2026-10-22T01:30:00Z", "open": 100.5,
-         "high": 101.5, "low": 100.0, "close": 101.0, "volume": 4.0},
+        {
+            "timestamp": 1792629000,
+            "date": "2026-10-22T00:30:00Z",
+            "open": 100.0,
+            "high": 101.0,
+            "low": 99.0,
+            "close": 100.5,
+            "volume": 3.0,
+        },
+        {
+            "timestamp": 1792632600,
+            "date": "2026-10-22T01:30:00Z",
+            "open": 100.5,
+            "high": 101.5,
+            "low": 100.0,
+            "close": 101.0,
+            "volume": 4.0,
+        },
     ]
-    manifest = write_artifacts(rows, output_dir=tmp_path, days=30, retrieved_at=datetime.now(UTC),
-                               commit_sha="a" * 40)
+    manifest = write_artifacts(
+        rows,
+        output_dir=tmp_path,
+        days=30,
+        retrieved_at=datetime.now(UTC),
+        commit_sha="a" * 40,
+    )
     assert manifest["csv_sha256"]
     assert manifest["credentials_used"] is False
     assert manifest["order_permission"] is False

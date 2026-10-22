@@ -3,6 +3,7 @@
 Only GET /market/udf/history is used. No account/execution endpoints, credentials,
 orders, notification calls, or external writes are implemented.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -25,10 +26,15 @@ ALLOWED_DAYS = (30, 90, 180, 365)
 MAX_CANDLES_PER_REQUEST = 400
 
 
-def request_public_json(params: dict[str, str], *, timeout_seconds: float = 15.0) -> dict[str, Any]:
+def request_public_json(
+    params: dict[str, str], *, timeout_seconds: float = 15.0
+) -> dict[str, Any]:
     request = Request(
         ENDPOINT + "?" + urlencode(params),
-        headers={"Accept": "application/json", "User-Agent": "TraderBot/AliX-Phase10-Research"},
+        headers={
+            "Accept": "application/json",
+            "User-Agent": "TraderBot/AliX-Phase10-Research",
+        },
         method="GET",
     )
     for attempt in range(3):
@@ -40,15 +46,25 @@ def request_public_json(params: dict[str, str], *, timeout_seconds: float = 15.0
                 if not isinstance(payload, dict):
                     raise ValueError("public_api_payload_not_object")
                 return payload
-        except (HTTPError, URLError, TimeoutError, OSError, json.JSONDecodeError, ValueError):
+        except (
+            HTTPError,
+            URLError,
+            TimeoutError,
+            OSError,
+            json.JSONDecodeError,
+            ValueError,
+        ):
             if attempt == 2:
-                raise RuntimeError("public_api_request_failed_after_bounded_retries") from None
-            time.sleep(2 ** attempt)
+                raise RuntimeError(
+                    "public_api_request_failed_after_bounded_retries"
+                ) from None
+            time.sleep(2**attempt)
     raise RuntimeError("public_api_request_failed")
 
 
-def parse_udf_payload(payload: dict[str, Any], *, requested_from: int,
-                      requested_to: int) -> list[dict[str, object]]:
+def parse_udf_payload(
+    payload: dict[str, Any], *, requested_from: int, requested_to: int
+) -> list[dict[str, object]]:
     if payload.get("s") == "no_data":
         return []
     if payload.get("s") != "ok":
@@ -61,8 +77,17 @@ def parse_udf_payload(payload: dict[str, Any], *, requested_from: int,
     if len(lengths) != 1:
         raise ValueError("nobitex_ohlcv_array_length_mismatch")
     timestamps = arrays["t"]
-    opens, highs, lows, closes, volumes = arrays["o"], arrays["h"], arrays["l"], arrays["c"], arrays["v"]
-    if not all(isinstance(value, list) for value in (timestamps, opens, highs, lows, closes, volumes)):
+    opens, highs, lows, closes, volumes = (
+        arrays["o"],
+        arrays["h"],
+        arrays["l"],
+        arrays["c"],
+        arrays["v"],
+    )
+    if not all(
+        isinstance(value, list)
+        for value in (timestamps, opens, highs, lows, closes, volumes)
+    ):
         raise ValueError("nobitex_ohlcv_arrays_invalid")
     rows: list[dict[str, object]] = []
     prior: int | None = None
@@ -78,7 +103,13 @@ def parse_udf_payload(payload: dict[str, Any], *, requested_from: int,
             raise ValueError("nobitex_candle_timestamps_not_increasing")
         prior = stamp
         values: list[float] = []
-        for raw in (opens[index], highs[index], lows[index], closes[index], volumes[index]):
+        for raw in (
+            opens[index],
+            highs[index],
+            lows[index],
+            closes[index],
+            volumes[index],
+        ):
             try:
                 item = float(raw)
             except (TypeError, ValueError):
@@ -91,28 +122,52 @@ def parse_udf_payload(payload: dict[str, Any], *, requested_from: int,
             raise ValueError("nobitex_candle_price_or_volume_out_of_range")
         if high < max(opened, close) or low > min(opened, close) or high < low:
             raise ValueError("nobitex_candle_ohlc_invariant_failed")
-        rows.append({
-            "timestamp": stamp,
-            "date": datetime.fromtimestamp(stamp, timezone.utc).isoformat().replace("+00:00", "Z"),
-            "open": opened, "high": high, "low": low, "close": close, "volume": volume,
-        })
+        rows.append(
+            {
+                "timestamp": stamp,
+                "date": datetime.fromtimestamp(stamp, timezone.utc)
+                .isoformat()
+                .replace("+00:00", "Z"),
+                "open": opened,
+                "high": high,
+                "low": low,
+                "close": close,
+                "volume": volume,
+            }
+        )
     return rows
 
 
-def fetch_historical_candles(*, days: int, now: datetime,
-                             request_json: Callable[[dict[str, str]], dict[str, Any]] = request_public_json,
-                             sleep_fn: Callable[[float], None] = time.sleep) -> list[dict[str, object]]:
+def fetch_historical_candles(
+    *,
+    days: int,
+    now: datetime,
+    request_json: Callable[[dict[str, str]], dict[str, Any]] = request_public_json,
+    sleep_fn: Callable[[float], None] = time.sleep,
+) -> list[dict[str, object]]:
     if isinstance(days, bool) or days not in ALLOWED_DAYS:
         raise ValueError("historical_days_out_of_policy")
     if now.tzinfo is None or now.utcoffset() is None:
         raise ValueError("historical_cutoff_timezone_required")
-    end = int(now.astimezone(timezone.utc).timestamp()) // INTERVAL_SECONDS * INTERVAL_SECONDS - INTERVAL_SECONDS
+    end = (
+        int(now.astimezone(timezone.utc).timestamp())
+        // INTERVAL_SECONDS
+        * INTERVAL_SECONDS
+        - INTERVAL_SECONDS
+    )
     cursor = end - days * 86400
     rows: list[dict[str, object]] = []
     while cursor <= end:
         stop = min(cursor + (MAX_CANDLES_PER_REQUEST - 1) * INTERVAL_SECONDS, end)
-        params = {"symbol": "BTCUSDT", "resolution": "60", "from": str(cursor), "to": str(stop)}
-        batch = parse_udf_payload(request_json(params), requested_from=cursor, requested_to=stop)
+        params = {
+            "symbol": "BTCUSDT",
+            "resolution": "60",
+            "from": str(cursor),
+            "to": str(stop),
+        }
+        batch = parse_udf_payload(
+            request_json(params), requested_from=cursor, requested_to=stop
+        )
         if not batch:
             raise ValueError("nobitex_historical_empty_page")
         rows.extend(batch)
@@ -136,8 +191,14 @@ def fetch_historical_candles(*, days: int, now: datetime,
     return rows
 
 
-def write_artifacts(rows: list[dict[str, object]], *, output_dir: Path,
-                    days: int, retrieved_at: datetime, commit_sha: str) -> dict[str, object]:
+def write_artifacts(
+    rows: list[dict[str, object]],
+    *,
+    output_dir: Path,
+    days: int,
+    retrieved_at: datetime,
+    commit_sha: str,
+) -> dict[str, object]:
     if not rows:
         raise ValueError("nobitex_historical_candles_empty")
     if retrieved_at.tzinfo is None or retrieved_at.utcoffset() is None:
@@ -146,7 +207,9 @@ def write_artifacts(rows: list[dict[str, object]], *, output_dir: Path,
     csv_path = output_dir / "nobitex-btcusdt-1h.csv"
     temporary = output_dir / "nobitex-btcusdt-1h.csv.tmp"
     with temporary.open("w", encoding="utf-8", newline="") as stream:
-        writer = csv.DictWriter(stream, fieldnames=("date", "open", "high", "low", "close", "volume"))
+        writer = csv.DictWriter(
+            stream, fieldnames=("date", "open", "high", "low", "close", "volume")
+        )
         writer.writeheader()
         for row in rows:
             writer.writerow({key: row[key] for key in writer.fieldnames})
@@ -154,21 +217,35 @@ def write_artifacts(rows: list[dict[str, object]], *, output_dir: Path,
     digest = hashlib.sha256(csv_path.read_bytes()).hexdigest()
     stamps = [int(row["timestamp"]) for row in rows]
     manifest: dict[str, object] = {
-        "schema_version": SCHEMA_VERSION, "provider": "Nobitex public UDF history API",
-        "endpoint": "/market/udf/history", "symbol": "BTCUSDT", "pair": "BTC/USDT",
-        "timeframe": "1h", "requested_days": days,
+        "schema_version": SCHEMA_VERSION,
+        "provider": "Nobitex public UDF history API",
+        "endpoint": "/market/udf/history",
+        "symbol": "BTCUSDT",
+        "pair": "BTC/USDT",
+        "timeframe": "1h",
+        "requested_days": days,
         "retrieved_at": retrieved_at.astimezone(timezone.utc).isoformat(),
-        "first_candle_epoch": stamps[0], "last_candle_epoch": stamps[-1],
-        "row_count": len(rows), "gap_policy": "reject; no interpolation",
-        "csv_sha256": digest, "commit_sha": commit_sha,
+        "first_candle_epoch": stamps[0],
+        "last_candle_epoch": stamps[-1],
+        "row_count": len(rows),
+        "gap_policy": "reject; no interpolation",
+        "csv_sha256": digest,
+        "commit_sha": commit_sha,
         "data_authority": "PUBLIC_MARKET_DATA_ONLY_NOT_ACCOUNT_ORDER_OR_FILL_TRUTH",
-        "public_api_only": True, "credentials_used": False, "exchange_calls": 0,
-        "real_order_attempts": 0, "order_permission": False, "Champion": None,
-        "promotion_status": "BLOCKED_NO_ECONOMIC_GATE", "economic_acceptance": "NO-GO",
+        "public_api_only": True,
+        "credentials_used": False,
+        "exchange_calls": 0,
+        "real_order_attempts": 0,
+        "order_permission": False,
+        "Champion": None,
+        "promotion_status": "BLOCKED_NO_ECONOMIC_GATE",
+        "economic_acceptance": "NO-GO",
         "trading_authorization": "NO-GO",
     }
     (output_dir / "nobitex-btcusdt-1h.manifest.json").write_text(
-        json.dumps(manifest, indent=2, sort_keys=True, allow_nan=False) + "\n", encoding="utf-8")
+        json.dumps(manifest, indent=2, sort_keys=True, allow_nan=False) + "\n",
+        encoding="utf-8",
+    )
     return manifest
 
 
@@ -180,8 +257,13 @@ def main() -> int:
     args = parser.parse_args()
     now = datetime.now(timezone.utc)
     rows = fetch_historical_candles(days=args.days, now=now)
-    manifest = write_artifacts(rows, output_dir=args.output_dir, days=args.days,
-                               retrieved_at=now, commit_sha=args.commit_sha)
+    manifest = write_artifacts(
+        rows,
+        output_dir=args.output_dir,
+        days=args.days,
+        retrieved_at=now,
+        commit_sha=args.commit_sha,
+    )
     print(json.dumps(manifest, sort_keys=True, allow_nan=False))
     return 0
 

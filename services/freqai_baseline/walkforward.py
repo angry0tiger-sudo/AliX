@@ -220,8 +220,12 @@ def _simulate_non_overlapping_trades(
         "trade_count": trade_count,
         "winning_trade_count": sum(value > 0 for value in net_returns),
         "losing_trade_count": sum(value <= 0 for value in net_returns),
-        "win_rate": (sum(value > 0 for value in net_returns) / trade_count) if trade_count else None,
-        "expectancy_net_per_trade": (sum(net_returns) / trade_count) if trade_count else None,
+        "win_rate": (sum(value > 0 for value in net_returns) / trade_count)
+        if trade_count
+        else None,
+        "expectancy_net_per_trade": (sum(net_returns) / trade_count)
+        if trade_count
+        else None,
         "net_trade_returns": net_returns,
         "buy_and_hold_gross_return": buy_hold_gross,
         "buy_and_hold_net_return": buy_hold_net,
@@ -402,9 +406,13 @@ def run_walk_forward(
     win_rate_pass = win_rate is not None and win_rate >= 0.60
     drawdown_pass = abs(strategy_max_drawdown) <= 0.15
     expectancy_pass = expectancy is not None and expectancy > 0.0
-    threshold_status = ("INSUFFICIENT_SAMPLE" if not sample_sufficient else
-                        "THRESHOLDS_MET_RESEARCH_ONLY" if win_rate_pass and drawdown_pass and expectancy_pass else
-                        "NO_GO_THRESHOLDS_NOT_MET")
+    threshold_status = (
+        "INSUFFICIENT_SAMPLE"
+        if not sample_sufficient
+        else "THRESHOLDS_MET_RESEARCH_ONLY"
+        if win_rate_pass and drawdown_pass and expectancy_pass
+        else "NO_GO_THRESHOLDS_NOT_MET"
+    )
     buy_hold_total = float(np.prod(1.0 + np.asarray(aggregate_buy_hold_returns)) - 1.0)
     if not all_trade_returns:
         model_net_total = 0.0
@@ -474,13 +482,20 @@ def run_walk_forward(
                 "win_rate": win_rate,
                 "win_rate_sample_size": len(all_trade_returns),
                 "win_rate_minimum_sample_met": sample_sufficient,
-                "win_rate_time_period": {"start": _timestamp(dataset["date"].iloc[0]), "end": _timestamp(dataset["date"].iloc[-1])},
+                "win_rate_time_period": {
+                    "start": _timestamp(dataset["date"].iloc[0]),
+                    "end": _timestamp(dataset["date"].iloc[-1]),
+                },
                 "expectancy_net_per_trade": expectancy,
                 "economic_threshold_evaluation": {
-                    "minimum_trade_count": 100, "win_rate_minimum": 0.60,
-                    "maximum_drawdown_absolute": 0.15, "expectancy_must_be_positive": True,
-                    "win_rate_pass": win_rate_pass, "drawdown_pass": drawdown_pass,
-                    "expectancy_pass": expectancy_pass, "status": threshold_status,
+                    "minimum_trade_count": 100,
+                    "win_rate_minimum": 0.60,
+                    "maximum_drawdown_absolute": 0.15,
+                    "expectancy_must_be_positive": True,
+                    "win_rate_pass": win_rate_pass,
+                    "drawdown_pass": drawdown_pass,
+                    "expectancy_pass": expectancy_pass,
+                    "status": threshold_status,
                     "authorization_effect": "NONE; Champion remains null and promotion/trading remain NO-GO",
                 },
                 "turnover_units": aggregate_turnover,

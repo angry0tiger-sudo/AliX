@@ -44,7 +44,9 @@ class ReportingEngine:
             f"reconciliation_status={report.reconciliation_status}",
         ]
         if report.reconciliation_status != "RECONCILED":
-            lines.append("FINANCIAL RESULTS NOT RECONCILED: PnL/equity/drawdown are uncertified.")
+            lines.append(
+                "FINANCIAL RESULTS NOT RECONCILED: PnL/equity/drawdown are uncertified."
+            )
         for source in report.sources:
             lines.append(
                 f"source={source.source_type} status={source.status} "
@@ -52,10 +54,14 @@ class ReportingEngine:
             )
         for key, value in sorted(report.metrics.items()):
             lines.append(f"{key}={value}")
-        lines.extend([
-            "order_permission=false", "Champion=null",
-            "promotion_status=BLOCKED_NO_ECONOMIC_GATE", "trading_authorization=NO-GO",
-        ])
+        lines.extend(
+            [
+                "order_permission=false",
+                "Champion=null",
+                "promotion_status=BLOCKED_NO_ECONOMIC_GATE",
+                "trading_authorization=NO-GO",
+            ]
+        )
         return "\n".join(lines) + "\n"
 
     def render_snapshot_png(self, report: ReportingSnapshot) -> bytes:
@@ -64,7 +70,9 @@ class ReportingEngine:
         raw = report.metrics.get("reconciled_equity_curve")
         if report.reconciliation_status == "RECONCILED" and isinstance(raw, list):
             values = [float(value) for value in raw]
-        return render_equity_chart(values, reconciliation_status=report.reconciliation_status)
+        return render_equity_chart(
+            values, reconciliation_status=report.reconciliation_status
+        )
 
     def render_text(self, report: DailyReport) -> str:
         metrics = ", ".join(

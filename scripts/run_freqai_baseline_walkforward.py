@@ -48,7 +48,12 @@ def _arguments() -> argparse.Namespace:
         "--output", type=Path, required=True, help="path to JSON report"
     )
     parser.add_argument("--pair", default="SYNTHETIC/USDT")
-    parser.add_argument("--dataset-kind", choices=("owner_supplied_historical", "public_historical_market_data"), default="owner_supplied_historical", help="provenance label for --input")
+    parser.add_argument(
+        "--dataset-kind",
+        choices=("owner_supplied_historical", "public_historical_market_data"),
+        default="owner_supplied_historical",
+        help="provenance label for --input",
+    )
     parser.add_argument("--timeframe", choices=sorted(TIMEFRAME_SECONDS), default="1h")
     parser.add_argument("--horizon", type=int, default=12)
     parser.add_argument("--folds", type=int, default=3)
