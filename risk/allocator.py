@@ -248,14 +248,22 @@ class DynamicRiskAllocator:
             )
         if stake < rules.min_notional:
             return self._rejected(
+                ("notional_below_market_minimum",), daily_budget, trade_budget
+            )
         if stake > rules.max_notional:
-            quantity = floor_to_step(rules.max_notional / market.price, rules.quantity_step)
+            quantity = floor_to_step(
+                rules.max_notional / market.price, rules.quantity_step
+            )
             stake = quantity * market.price
             estimated_loss = quantity * unit_loss
         if quantity < rules.min_quantity or stake < rules.min_notional:
-            return self._rejected(("market_limits_leave_no_valid_size",), daily_budget, trade_budget)
+            return self._rejected(
+                ("market_limits_leave_no_valid_size",), daily_budget, trade_budget
+            )
         if estimated_loss > trade_budget:
-            return self._rejected(("calculated_loss_exceeds_budget",), daily_budget, trade_budget)
+            return self._rejected(
+                ("calculated_loss_exceeds_budget",), daily_budget, trade_budget
+            )
 
         fingerprint = stable_fingerprint(
             {
