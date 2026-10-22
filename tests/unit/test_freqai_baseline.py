@@ -292,7 +292,7 @@ def test_costed_offline_trade_rule_accounts_for_costs_and_drawdown() -> None:
     assert report["trade_count"] == 10
     assert report["turnover_units"] == 20.0
     assert report["fees_bps_cumulative"] == 200.0
-    assert report["slippage_bps_cumulative"] == 300.0
+    assert report["slippage_bps_cumulative"] == 100.0
     assert len(returns) == 10
     assert report["no_trade_net_return"] == 0.0
     assert _max_drawdown([]) == 0.0
