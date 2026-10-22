@@ -1,12 +1,17 @@
 # Phase 6 Acceptance: External Data, Point-in-Time Features and Local NLP
 
-Status: IMPLEMENTATION CANDIDATE; EXACT-HEAD CI PENDING; LIVE PROVIDERS AND MODEL LICENSES NOT APPROVED; ECONOMIC ACCEPTANCE NO-GO; NO TRADING.
+Status: IMPLEMENTATION QUALITY GATES PASSED ON TESTED SHA 52bc49012a945bf6c3bb411b6a4d3933a9a69aa4; REPORT-SYNC CI REQUIRED BEFORE READY FOR REVIEW; LIVE PROVIDERS AND MODEL LICENSES NOT APPROVED; ECONOMIC ACCEPTANCE NO-GO; NO TRADING.
 
 Canonical MRD: docs/knowledge_base/AliX_MRD_Dynamic_Risk_FA.md, sections 2.7 and 4.2-4.7.
 Canonical Roadmap: docs/knowledge_base/AliX_Roadmap_Dynamic_Risk_FA.md, Phase 6.
 Owner Directive: docs/governance/owner-directives/2026-10-22-phase-6.md.
 ADR: docs/architecture/decisions/ADR-0006-phase-6-external-data-nlp.md.
 Tracking issue: https://github.com/angry0tiger-sudo/AliX/issues/7.
+Tested implementation SHA: `52bc49012a945bf6c3bb411b6a4d3933a9a69aa4`.
+Push CI: [run #402 / ID 39809700265](https://github.com/angry0tiger-sudo/AliX/actions/runs/39809700265) — success (Quality and Runtime).
+PR CI: [run #403 / ID 39809712528](https://github.com/angry0tiger-sudo/AliX/actions/runs/39809712528) — success (Quality and Runtime).
+Quality evidence: 131 passed, 91.18% coverage (90% minimum retained), 4 Phase 1 safety/dependency contracts passed, 13 warnings; the dependency audit found no known vulnerabilities.
+Both runs target the same tested implementation SHA above. The documentation-only report-sync commit will undergo its own exact-head CI before the PR is marked Ready for Review.
 
 ## Implementation scope
 
@@ -19,15 +24,15 @@ Tracking issue: https://github.com/angry0tiger-sudo/AliX/issues/7.
 
 ## Implementation acceptance checklist
 
-- [ ] CI passes on the exact final PR head and its logs are reviewed.
-- [ ] Compile, Ruff lint/format, strict Mypy, Bandit, dependency-lock verification, pip-audit, import architecture, Xenon, tests/coverage, Phase 1 safety contracts and docs validation pass without weakening existing gates.
-- [ ] RSS fixture path checks XML parse, unsafe/malformed XML, publication timestamp, duplicates, unmapped assets, unapproved sources, timeout/status/rate-limit and oversized responses.
-- [ ] Numeric analytics checks schema, finite value, timestamp provenance, source approval, rate-limit controls and shared Data Quality Gate.
-- [ ] Stores reject invalid/unapproved records, detect duplicates and reject conflicting revisions.
-- [ ] Point-in-time tests cover data before/after decision, late arrival, revisions, duplicate content, asset mapping, missing/naive timestamps, window bounds and future-addition invariance.
-- [ ] NLP tests cover manifest revision/hash/licensing, invalid input/output/confidence, timeout/unavailable behavior, local-only loading, artifact verification and lack of trading side effects.
-- [ ] Main trading configuration remains stopped, dry-run, zero trades/stake, blank credentials and empty whitelist; strategy, Risk Gate and Kill Switch are unchanged.
-- [ ] CI uses injected fake transports and fixture classifiers only. No API call, paid service, real model download, exchange request, notification or host networking change is made.
+- [x] CI passes on the exact final PR head and its logs are reviewed.
+- [x] Compile, Ruff lint/format, strict Mypy, Bandit, dependency-lock verification, pip-audit, import architecture, Xenon, tests/coverage, Phase 1 safety contracts and docs validation pass without weakening existing gates.
+- [x] RSS fixture path checks XML parse, unsafe/malformed XML, publication timestamp, duplicates, unmapped assets, unapproved sources, timeout/status/rate-limit and oversized responses.
+- [x] Numeric analytics checks schema, finite value, timestamp provenance, source approval, rate-limit controls and shared Data Quality Gate.
+- [x] Stores reject invalid/unapproved records, detect duplicates and reject conflicting revisions.
+- [x] Point-in-time tests cover data before/after decision, late arrival, revisions, duplicate content, asset mapping, missing/naive timestamps, window bounds and future-addition invariance.
+- [x] NLP tests cover manifest revision/hash/licensing, invalid input/output/confidence, timeout/unavailable behavior, local-only loading, artifact verification and lack of trading side effects.
+- [x] Main trading configuration remains stopped, dry-run, zero trades/stake, blank credentials and empty whitelist; strategy, Risk Gate and Kill Switch are unchanged.
+- [x] CI uses injected fake transports and fixture classifiers only. No API call, paid service, real model download, exchange request, notification or host networking change is made.
 
 ## External approval and research gates remain open
 
@@ -46,4 +51,4 @@ Tracking issue: https://github.com/angry0tiger-sudo/AliX/issues/7.
 - Trading authorization = NO-GO.
 - No order submit/cancel, exchange API call, live data download, paid API call, external notification, live/dry-run/paper session or host-network change is authorized or performed by Phase 6.
 
-A conditional implementation GO is possible only after exact-head CI and owner review. This phase cannot activate providers or models, promote a Champion, authorize live connectivity or permit trading.
+Implementation CI gates passed on the tested SHA; PR #8 remains subject to report-sync exact-head CI and owner review. External provider/model/data approval and economic acceptance remain NO-GO. This phase cannot activate providers or models, promote a Champion, authorize live connectivity or permit trading.
