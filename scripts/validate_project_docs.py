@@ -95,6 +95,17 @@ REQUIRED_PROJECT_FILES = (
     ".github/workflows/ci.yml",
     "config/environments/market-whitelist.sample.json",
     "config/environments/market-whitelist.schema.json",
+    "docs/knowledge_base/PHASE_9_ACCEPTANCE.md",
+    "docs/phase-reports/PHASE_9_STATUS.md",
+    "docs/architecture/decisions/ADR-0009-phase-9-synthetic-e2e-and-postgres-validation.md",
+    "docs/governance/owner-directives/2026-10-23-phase-9.md",
+    "docs/runbook/PHASE_9_WINDOWS_POSTGRES_E2E.md",
+    "scripts/run_phase9_e2e.py",
+    "services/simulation/__init__.py",
+    "services/simulation/ledger.py",
+    "tests/unit/test_phase9_simulation_ledger.py",
+    "tests/integration/test_phase9_postgres.py",
+    "compose.phase9-test.yaml",
 )
 
 
