@@ -38,6 +38,15 @@ class MeanRegressor:
     def predict(self, features: DataFrame) -> np.ndarray:
         return np.full(len(features), self.mean_, dtype=float)
 
+    def model_to_string(self) -> str:
+        return format(self.mean_, ".17g")
+
+    @classmethod
+    def model_from_string(cls, payload: str) -> MeanRegressor:
+        estimator = cls()
+        estimator.mean_ = float(payload)
+        return estimator
+
 
 class FakeFreqAI:
     def __init__(self) -> None:
