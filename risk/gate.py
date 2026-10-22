@@ -128,10 +128,9 @@ class RiskGate:
         policy: RiskPolicy,
         kill_switch: KillSwitchState,
     ) -> tuple[str, ...]:
-        return (
-            self._authorization_reasons(account, rules, policy, kill_switch)
-            + self._artifact_revision_reasons(allocation, account, market, rules, policy)
-        )
+        return self._authorization_reasons(
+            account, rules, policy, kill_switch
+        ) + self._artifact_revision_reasons(allocation, account, market, rules, policy)
 
     def _authorization_reasons(
         self,
