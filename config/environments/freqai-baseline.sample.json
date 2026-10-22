@@ -1,0 +1,84 @@
+{
+  "$schema": "https://schema.freqtrade.io/schema.json",
+  "max_open_trades": 0,
+  "stake_currency": "USDT",
+  "stake_amount": 0,
+  "tradable_balance_ratio": 0.0,
+  "fiat_display_currency": "USD",
+  "dry_run": true,
+  "dry_run_wallet": 1000,
+  "cancel_open_orders_on_exit": true,
+  "trading_mode": "spot",
+  "margin_mode": "",
+  "unfilledtimeout": {
+    "entry": 10,
+    "exit": 10,
+    "exit_timeout_count": 0,
+    "unit": "minutes"
+  },
+  "entry_pricing": {
+    "price_side": "same",
+    "use_order_book": false,
+    "order_book_top": 1
+  },
+  "exit_pricing": {
+    "price_side": "same",
+    "use_order_book": false,
+    "order_book_top": 1
+  },
+  "exchange": {
+    "name": "binance",
+    "key": "",
+    "secret": "",
+    "ccxt_config": {},
+    "ccxt_async_config": {},
+    "pair_whitelist": [],
+    "pair_blacklist": [".*"]
+  },
+  "pairlists": [
+    { "method": "StaticPairList" }
+  ],
+  "telegram": { "enabled": false, "token": "", "chat_id": "" },
+  "api_server": { "enabled": false },
+  "bot_name": "AliX-freqai-baseline-research",
+  "initial_state": "stopped",
+  "force_entry_enable": false,
+  "internals": { "process_throttle_secs": 5 },
+  "freqaimodel": "AliXBaselineRegressor",
+  "freqai": {
+    "enabled": true,
+    "identifier": "alix-freqai-baseline-v1",
+    "train_period_days": 180,
+    "backtest_period_days": 14,
+    "live_retrain_hours": 0,
+    "fit_live_predictions_candles": 0,
+    "data_split_parameters": {
+      "test_size": 0.2,
+      "shuffle": false
+    },
+    "feature_parameters": {
+      "include_timeframes": ["1h"],
+      "include_corr_pairlist": [],
+      "include_shifted_candles": 0,
+      "indicator_periods_candles": [12],
+      "label_period_candles": 12,
+      "weight_factor": 0.0,
+      "principal_component_analysis": false,
+      "use_SVM_to_remove_outliers": false,
+      "DI_threshold": 0,
+      "plot_feature_importances": 0
+    },
+    "model_training_parameters": {
+      "objective": "regression",
+      "n_estimators": 80,
+      "learning_rate": 0.03,
+      "num_leaves": 15,
+      "max_depth": 4,
+      "random_state": 42,
+      "n_jobs": 1,
+      "verbosity": -1,
+      "deterministic": true,
+      "force_col_wise": true
+    }
+  }
+}
