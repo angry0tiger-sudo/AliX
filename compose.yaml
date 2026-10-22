@@ -1,0 +1,94 @@
+name: alix
+
+services:
+  postgres:
+    image: postgres:17.6-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-alix_control}
+      POSTGRES_USER: ${POSTGRES_USER:-alix}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the ignored local .env file}
+    volumes:
+      - control-pgdata:/var/lib/postgresql/data
+    networks:
+      - control-backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    mem_limit: 768m
+    pids_limit: 128
+    restart: unless-stopped
+
+  control-plane:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: alix-phase8:local
+    command: ["-m", "control_plane.server"]
+    environment:
+      ALIx_AUTH_MODE: single_user
+      ALIx_ADMIN_TOKEN: ${ALIx_ADMIN_TOKEN:?Set a random ALIx_ADMIN_TOKEN in the ignored local .env file}
+      ALIx_CONTROL_BIND_HOST: 0.0.0.0
+      ALIx_CONTROL_PORT: "8080"
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: ${POSTGRES_DB:-alix_control}
+      POSTGRES_USER: ${POSTGRES_USER:-alix}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the ignored local .env file}
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - control-backend
+      - worker-control
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    mem_limit: 512m
+    cpus: "1.0"
+    restart: unless-stopped
+
+  worker:
+    profiles:
+      - worker
+    image: alix-phase8:local
+    command: ["-m", "control_plane.worker_runtime"]
+    environment:
+      ALIx_WORKER_ID: ${ALIx_WORKER_ID:-unconfigured}
+      ALIx_WORKER_TOKEN: ${ALIx_WORKER_TOKEN:-}
+      ALIx_WORKER_GENERATION: ${ALIx_WORKER_GENERATION:-0}
+      ALIx_CONTROL_PLANE_URL: http://control-plane:8080
+      ALIx_WORKER_DB_PATH: /worker-state/worker.sqlite
+    networks:
+      - worker-control
+    user: "10001:10001"
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 64
+    mem_limit: 256m
+    cpus: "0.5"
+    restart: "no"
+
+networks:
+  control-backend:
+    internal: true
+  worker-control:
+    internal: true
+
+volumes:
+  control-pgdata:
+    name: alix-control-pgdata

@@ -89,6 +89,8 @@ pre-commit==4.3.0
 prompt-toolkit==3.0.53
 propcache==0.5.2
 psutil==7.2.2
+psycopg[binary]==3.3.2
+psycopg-binary==3.3.2
 py-serializable==2.1.0
 pyarrow==26.0.0
 pycoingecko==3.2.0

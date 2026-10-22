@@ -29,19 +29,24 @@ jobs:
       - name: Pin resolver compatible with pip-tools
         run: python -m pip install pip==25.2
       - name: Install pinned quality tools
-        run: python -m pip install ruff==0.14.0 mypy==1.18.2 pandas==2.3.3 pandas-stubs==2.3.2.250926 bandit==1.8.6 pip-audit==2.9.0 pytest==9.0.3 pytest-cov==7.0.0 import-linter==2.3 xenon==0.9.3 pre-commit==4.3.0 jsonschema==4.25.1 pip-tools==7.5.0 scikit-learn==1.9.0
+        run: python -m pip install ruff==0.14.0 mypy==1.18.2 pandas==2.3.3 pandas-stubs==2.3.2.250926 bandit==1.8.6 pip-audit==2.9.0 pytest==9.0.3 pytest-cov==7.0.0 import-linter==2.3 xenon==0.9.3 pre-commit==4.3.0 jsonschema==4.25.1 pip-tools==7.5.0 scikit-learn==1.9.0 fastapi==0.158.1 httpx2==2.16.0 sqlalchemy==2.1.6 'psycopg[binary]==3.3.2' uvicorn==0.54.0 pyyaml==6.0.3
       - name: Validate pre-commit configuration
         run: pre-commit validate-config
+      - name: Validate Docker Compose configuration without starting services
+        env:
+          POSTGRES_PASSWORD: compose-config-synthetic-password
+          ALIx_ADMIN_TOKEN: compose-config-synthetic-owner-token-0123456789
+        run: docker compose --file compose.yaml config --quiet
       - name: Compile source
-        run: python -m compileall -q risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels tests scripts
+        run: python -m compileall -q control_plane risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels tests scripts
       - name: Ruff lint
-        run: ruff check risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels tests scripts
+        run: ruff check control_plane risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels tests scripts
       - name: Ruff format check
-        run: ruff format --check --diff risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels tests scripts
+        run: ruff format --check --diff control_plane risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels tests scripts
       - name: Strict type check
         run: mypy --config-file mypy.ini
       - name: Security scan
-        run: bandit -r risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels scripts -ll
+        run: bandit -r control_plane risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels scripts -ll
       - name: Runtime and tooling dependency resolution (dry run)
         run: python -m pip install --dry-run --report /tmp/alix-dependency-resolution.json -r requirements.txt
       - name: Verify transitive dependency lock
@@ -54,9 +59,9 @@ jobs:
       - name: Architecture contracts
         run: lint-imports
       - name: Complexity gate
-        run: xenon --max-absolute B --max-modules B --max-average A risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels scripts
+        run: xenon --max-absolute B --max-modules B --max-average A control_plane risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels scripts
       - name: Unit tests and coverage (mock-only)
-        run: pytest --cov=risk --cov=connectivity --cov=external_data --cov=services --cov=integrations.nobitex --cov=user_data/strategies --cov-report=term-missing --cov-fail-under=90 -q
+        run: pytest --cov=control_plane --cov=risk --cov=connectivity --cov=external_data --cov=services --cov=integrations.nobitex --cov=user_data/strategies --cov-report=term-missing --cov-fail-under=90 -q
       - name: Phase 7 risk fault-injection report (synthetic only)
         run: python scripts/run_phase7_risk_fault_injection.py --output /tmp/alix-phase7-risk-fault-injection.json --commit-sha "${{ github.event.pull_request.head.sha || github.sha }}"
       - name: Upload Phase 7 fault-injection report

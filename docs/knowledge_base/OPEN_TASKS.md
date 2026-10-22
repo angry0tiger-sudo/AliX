@@ -9,6 +9,17 @@
 - Phase 6 remains mock-only. Live provider rights, approved model/dataset revisions, owner-authorized historical news snapshots, calibration/ablation and durable stores remain open. Champion null; promotion blocked; economic acceptance and trading authorization NO-GO.
 
 
+# Phase 8 checkpoint — local-first Control Plane (implementation candidate)
+
+- Owner-approved branch: feat/phase-8-multitenant-control-plane.
+- Base main SHA: 900eeef90b4e7c1d0e5652fad22f932a2aad9978.
+- Owner Directive: docs/governance/owner-directives/2026-10-22-phase-8.md.
+- ADR: docs/architecture/decisions/ADR-0008-phase-8-local-single-user-control-plane.md.
+- Scope: local token mode, PostgreSQL Control Plane schema, per-Worker SQLite, scoped Worker heartbeat, transactional runtime outbox, and isolated non-trading Compose Worker.
+- Status: in progress; do not claim completion until Push and PR CI pass on exact candidate SHAs.
+- No Freqtrade Worker, real exchange key, exchange/provider request, live/dry-run/paper session, order operation or host-network change is authorized.
+- Trading authorization remains NO-GO; order_permission remains false.
+
 # Phase 4 checkpoint — merged; economics remain blocked
 
 - Phase 4 PR #4 was merged by the owner on 2026-10-22; merge commit and current main at Phase 5 start: `f553daa742e09c66c054f4566a22491fcfaa80a7`.
