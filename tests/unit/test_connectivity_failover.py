@@ -154,6 +154,7 @@ def test_connectivity_manager_rejects_duplicate_route_ids_without_activation() -
         return True
 
     manager = ConnectivityManager({"same"}, probe)
+
     def activate_vpn() -> bool:
         activated.append("vpn")
         return True
