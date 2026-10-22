@@ -44,7 +44,9 @@ def record(
     )
 
 
-def test_ledger_is_idempotent_and_snapshot_is_explicitly_synthetic(tmp_path: Path) -> None:
+def test_ledger_is_idempotent_and_snapshot_is_explicitly_synthetic(
+    tmp_path: Path,
+) -> None:
     ledger = SQLiteDecisionLedger(tmp_path / "ledger.sqlite")
     assert ledger.append(record())
     assert not ledger.append(record())
@@ -67,7 +69,9 @@ def test_ledger_is_idempotent_and_snapshot_is_explicitly_synthetic(tmp_path: Pat
     assert len(snapshot.snapshot_hash) == 64
 
 
-def test_ledger_rejects_reused_decision_id_with_different_payload(tmp_path: Path) -> None:
+def test_ledger_rejects_reused_decision_id_with_different_payload(
+    tmp_path: Path,
+) -> None:
     ledger = SQLiteDecisionLedger(tmp_path / "ledger.sqlite")
     assert ledger.append(record())
     with pytest.raises(LedgerConflictError, match="payload_conflict"):

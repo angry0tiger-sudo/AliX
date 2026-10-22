@@ -13,7 +13,11 @@ from pathlib import Path
 import re
 import tempfile
 
-from external_data.contracts import NLP_RESULT_SCHEMA_VERSION, NewsFeature, ProviderError
+from external_data.contracts import (
+    NLP_RESULT_SCHEMA_VERSION,
+    NewsFeature,
+    ProviderError,
+)
 from external_data.point_in_time import join_news_features_as_of
 from risk.allocator import DynamicRiskAllocator
 from risk.contracts import (
@@ -238,9 +242,7 @@ def _news_feature(
 
 def _join_news(scenario: Scenario) -> tuple[int, str | None]:
     available_at = (
-        NOW - timedelta(hours=2)
-        if scenario.stale_news
-        else NOW - timedelta(minutes=3)
+        NOW - timedelta(hours=2) if scenario.stale_news else NOW - timedelta(minutes=3)
     )
     first = _news_feature(
         event_id=f"news-{scenario.scenario_id}",
@@ -394,10 +396,7 @@ def _validate_input_stages(
             "reason_codes": [code.value for code in checked_model.reason_codes],
             "fingerprint": checked_model.fingerprint,
         }
-        if (
-            not checked_model.passed
-            or checked_model.status is not QualityStatus.VALID
-        ):
+        if not checked_model.passed or checked_model.status is not QualityStatus.VALID:
             reasons.extend(code.value for code in checked_model.reason_codes)
     trace: dict[str, object] = {
         "decision_timestamp": NOW.isoformat(),
@@ -548,9 +547,7 @@ def _evaluate_scenario(
         "risk_reduction_allowed": gate.risk_reduction_allowed,
         "order_permission": False,
         "reasons": list(gate.reasons),
-        "estimated_loss_including_costs": str(
-            gate.estimated_loss_including_costs
-        ),
+        "estimated_loss_including_costs": str(gate.estimated_loss_including_costs),
         "fingerprint": gate.fingerprint,
     }
     risk_reasons = list(allocation_result.reasons)
@@ -607,8 +604,10 @@ def _evaluate_scenario(
     entry = market.price
     exit_price = allocation.stop_price
     gross_pnl = (exit_price - entry) * allocation.quantity
-    costs = (entry + exit_price) * allocation.quantity * (
-        policy.fee_rate + policy.slippage_rate
+    costs = (
+        (entry + exit_price)
+        * allocation.quantity
+        * (policy.fee_rate + policy.slippage_rate)
     )
     net_pnl = gross_pnl - costs
     ledger.append(
@@ -723,7 +722,9 @@ def run_e2e(commit_sha: str, output_path: Path | None = None) -> dict[str, objec
     with tempfile.TemporaryDirectory(prefix="alix-phase9-synthetic-") as temp_dir:
         ledger = SQLiteDecisionLedger(Path(temp_dir) / "decision-ledger.sqlite")
         results = [_evaluate_scenario(scenario, ledger) for scenario in SCENARIOS]
-        baseline = next(item for item in results if item["scenario_id"] == "baseline_entry")
+        baseline = next(
+            item for item in results if item["scenario_id"] == "baseline_entry"
+        )
         if baseline["status"] != SimulationStatus.SIMULATED.value:
             raise AssertionError(f"baseline_scenario_failed:{baseline['status']}")
         expected = {
@@ -749,10 +750,18 @@ def run_e2e(commit_sha: str, output_path: Path | None = None) -> dict[str, objec
         baseline_trace = baseline_record.get("trace")
         if not isinstance(baseline_trace, dict):
             raise AssertionError("phase9_decision_trace_not_reconstructable")
-        if not all(key in baseline_trace for key in ("inputs", "model", "allocator", "risk_gate", "synthetic_fill")):
+        if not all(
+            key in baseline_trace
+            for key in ("inputs", "model", "allocator", "risk_gate", "synthetic_fill")
+        ):
             raise AssertionError("phase9_decision_trace_missing_required_stage")
-        if snap.order_permission is not False or snap.reconciliation_status != "NOT_RECONCILED":
-            raise AssertionError("synthetic_ledger_must_not_claim_order_permission_or_reconciliation")
+        if (
+            snap.order_permission is not False
+            or snap.reconciliation_status != "NOT_RECONCILED"
+        ):
+            raise AssertionError(
+                "synthetic_ledger_must_not_claim_order_permission_or_reconciliation"
+            )
 
         baseline_fingerprint = stable_fingerprint({"baseline": "idempotent-replay"})
         replay = SimulationDecisionRecord(
@@ -802,7 +811,8 @@ def run_e2e(commit_sha: str, output_path: Path | None = None) -> dict[str, objec
                 "identical_replay_inserted": second_append,
                 "row_count_before_probe": snap.row_count,
                 "row_count_after_probe": snapshot_after_replay.row_count,
-                "probe_changes_snapshot": snapshot_after_replay.snapshot_hash != snap.snapshot_hash,
+                "probe_changes_snapshot": snapshot_after_replay.snapshot_hash
+                != snap.snapshot_hash,
             },
             "reporting": _render_mock_report(snap),
             "safety": {

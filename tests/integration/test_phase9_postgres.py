@@ -70,11 +70,15 @@ def test_real_postgresql_control_plane_lifecycle_and_constraints() -> None:
         assert [item["worker_id"] for item in workers] == [worker["worker_id"]]
 
         with engine.connect() as connection:
-            schema_row = connection.execute(
-                schema_meta.select().where(
-                    schema_meta.c.schema_key == "control_plane"
+            schema_row = (
+                connection.execute(
+                    schema_meta.select().where(
+                        schema_meta.c.schema_key == "control_plane"
+                    )
                 )
-            ).mappings().one()
+                .mappings()
+                .one()
+            )
             assert schema_row["schema_value"] == "1"
             audit_count = connection.execute(
                 audit_events.select().where(audit_events.c.tenant_id == tenant_id)

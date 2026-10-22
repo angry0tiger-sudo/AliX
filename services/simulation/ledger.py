@@ -102,7 +102,9 @@ class SimulationDecisionRecord:
                 or self.simulated_stop_price <= 0
                 or self.simulated_exit_price <= 0
             ):
-                raise ValueError("simulated_fill_requires_approved_risk_and_valid_prices")
+                raise ValueError(
+                    "simulated_fill_requires_approved_risk_and_valid_prices"
+                )
         elif self.simulated_quantity != 0:
             raise ValueError("non_fill_status_must_not_contain_simulated_quantity")
         if (
