@@ -1,15 +1,25 @@
 # Phase 1 Open Tasks and Deployment Verification
 
-# Phase 4 tracking checkpoint — implementation in progress
+# Phase 4 checkpoint — merged; economics remain blocked
 
-- Owner directive: `docs/governance/owner-directives/2026-10-22-phase-4.md`.
-- Canonical documents: `docs/PROJECT_DOCUMENTS.md`, `docs/knowledge_base/AliX_MRD_Dynamic_Risk_FA.md`, and `docs/knowledge_base/AliX_Roadmap_Dynamic_Risk_FA.md`; previous `docs/architecture/` and `docs/roadmap/` copies are retained for compatibility.
-- Tracking issue: https://github.com/angry0tiger-sudo/AliX/issues/3.
-- Branch: `feat/phase-4-freqai-baseline`; main remains unchanged.
-- Exact-head evidence: [CI run #326 / ID 39724732753](https://github.com/angry0tiger-sudo/AliX/actions/runs/39724732753) passed both `quality` and `freqtrade-runtime-smoke` on branch HEAD `eccd694d571da22853ea81065fa224afbfc239b6`. The latest [synthetic-only artifact ID 12402049075](https://github.com/angry0tiger-sudo/AliX/actions/runs/39724732753/artifacts/12402049075) was inspected; its report SHA matches the branch SHA and the new workflow assertion passed. Subsequent acceptance/status documentation commits trigger their own CI runs; use the latest exact-head checks on [PR #4](https://github.com/angry0tiger-sudo/AliX/pull/4) as authoritative for the current tip.
-- Economic gate: **NO-GO** until owner-approved acceptance thresholds are pre-registered and an authorized historical dataset/source/license is reviewed.
-- Champion: must remain null; `promotion_status=BLOCKED_NO_ECONOMIC_GATE`; economic acceptance and trading authorization remain NO-GO. No live, dry-run, or paper session, orders, provider/API calls, notifications, or host networking operations are authorized in Phase 4.
+- Phase 4 PR #4 was merged by the owner on 2026-10-22; merge commit and current main at Phase 5 start: `f553daa742e09c66c054f4566a22491fcfaa80a7`.
+- Final pre-merge exact-head CI: [run #333 / ID 39725145516](https://github.com/angry0tiger-sudo/AliX/actions/runs/39725145516), on `3987dbc3084c456dd8cf8eb5709bee6f480dc18a`; both quality and runtime smoke passed. The Phase 4 synthetic artifact was explicitly mechanics-only.
+- Canonical MRD/Roadmap remain under `docs/knowledge_base/`; earlier architecture/roadmap copies are retained.
+- Phase 4 economic acceptance: **NO-GO**. Champion remains null and promotion is blocked; no trading is authorized.
 
+# Phase 5 tracking checkpoint — owner-authorized, offline only
+
+- Owner directive: `docs/governance/owner-directives/2026-10-22-phase-5.md`.
+- Architecture decision: `docs/architecture/decisions/ADR-0005-phase-5-plan-b.md`; isolated MRD section 4.6 Plan B services; no DeepAlpha imports or Freqtrade core patches.
+- Tracking issue: https://github.com/angry0tiger-sudo/AliX/issues/5.
+- Branch: `feat/phase-5-triple-barrier-meta-labeling`; base at Phase 5 start: `f553daa742e09c66c054f4566a22491fcfaa80a7`.
+- Tested code SHA: `59ab355a04c9b9e6452bb4767b81d4c0fab7f3a2`; [CI run #369 / ID 39729707614](https://github.com/angry0tiger-sudo/AliX/actions/runs/39729707614) passed both quality and runtime smoke.
+- Evidence: 111 unit tests passed, 91.38% coverage against 90% required, 4 Phase 1 safety contracts passed; compile/Ruff/strict Mypy/Bandit/dependency lock/pip-audit/import-linter/Xenon/docs validation all passed. Runtime smoke used pinned Freqtrade 2026.7 with closed configuration and no exchange connection.
+- Latest exact-code synthetic artifact: [ID 12404705949](https://github.com/angry0tiger-sudo/AliX/actions/runs/39729707614/artifacts/12404705949). It records 1,400 synthetic candles, a VALID shared Data Quality Gate fingerprint, 800 OOF primary predictions, 800 Triple-Barrier events, and 3 evaluated meta folds; JSON model reload max score difference was 0.0.
+- Synthetic mechanics only: the historical-rate score baseline beat Meta-Label Brier/log-loss in all evaluated folds, and the filtered proposal mean net return was more negative than the unfiltered mean in all evaluated folds. These values are not market evidence.
+- Historical dataset/source/license/hash is not approved; economic acceptance criteria are not pre-registered. Economic acceptance remains **NO-GO**. Champion null; `promotion_status=BLOCKED_NO_ECONOMIC_GATE`; trading authorization NO-GO.
+- Owner review and merge of PR #6 remain pending. The current docs/status update will trigger its own latest-tip CI and must pass before release review.
+- No exchange/provider requests, downloads, order writes, notifications, paper/live/dry-run sessions, or host networking changes are authorized or performed.
 
 # Phase 3 contract/CI checkpoint
 

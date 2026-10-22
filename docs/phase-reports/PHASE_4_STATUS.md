@@ -1,13 +1,13 @@
 # Phase 4 Status Report — FreqAI Baseline
 
-Status: **IMPLEMENTATION CI PASS ON EXACT HEAD `eccd694d571da22853ea81065fa224afbfc239b6` (run #326); ECONOMIC ACCEPTANCE NO-GO; CHAMPION BLOCKED; NO TRADING; OWNER REVIEW REQUIRED**.
+Status: **PR #4 MERGED INTO MAIN; IMPLEMENTATION CI PASSED BEFORE MERGE; ECONOMIC ACCEPTANCE NO-GO; CHAMPION BLOCKED; NO TRADING**.
 
 ## Repository and pull request state
 
 - Repository: `angry0tiger-sudo/AliX`.
-- `main` HEAD observed before this follow-up: `a7d301874d8503f75eaed7642dc9eaa6fcbc87ac`; comparison confirmed the PR base and main were identical at that SHA. The follow-up commits are confined to `feat/phase-4-freqai-baseline`.
+- Phase 4 merge commit now on `main`: `f553daa742e09c66c054f4566a22491fcfaa80a7`; GitHub compare confirmed `main` was identical to this commit when Phase 5 work began.
 - Phase 4 implementation HEAD before the owner-directed document-path update: `54e6091ad3cf98c92b4108131233defe0cf7967a`.
-- PR: [#4](https://github.com/angry0tiger-sudo/AliX/pull/4), base `main`, branch `feat/phase-4-freqai-baseline`. At last read it was open, Draft, mergeable, and not merged. Never merge without explicit owner instruction.
+- PR: [#4](https://github.com/angry0tiger-sudo/AliX/pull/4) was merged by the owner on 2026-10-22; merge commit `f553daa742e09c66c054f4566a22491fcfaa80a7`. Phase 5 now proceeds on a separate branch and PR.
 - Tracking issue: [#3](https://github.com/angry0tiger-sudo/AliX/issues/3).
 - The owner-provided MRD/Roadmap source copies remain intact at `docs/architecture/AliX_MRD_Dynamic_Risk_FA.md` and `docs/roadmap/AliX_Roadmap_Dynamic_Risk_FA.md`. Exact-content copies have been added as the canonical stable references at `docs/knowledge_base/AliX_MRD_Dynamic_Risk_FA.md` and `docs/knowledge_base/AliX_Roadmap_Dynamic_Risk_FA.md`; each copied file's Git blob SHA equals its source file's SHA. The old paths remain compatibility copies.
 - `docs/PROJECT_DOCUMENTS.md` marks the knowledge-base paths canonical; `scripts/validate_project_docs.py` requires both canonical copies and the path Owner Directive; `.github/workflows/ci.yml` runs this validator. The versioned follow-up directive is `docs/governance/owner-directives/2026-10-22-phase-4-knowledge-base-canonical-paths.md`.
@@ -48,5 +48,5 @@ Status: **IMPLEMENTATION CI PASS ON EXACT HEAD `eccd694d571da22853ea81065fa224af
 - Economic acceptance: **NO-GO**.
 - Champion: `null`; promotion status: `BLOCKED_NO_ECONOMIC_GATE`.
 - Trading authorization: **NO-GO**. This phase does not authorize live, dry-run or paper sessions, order writes, exchange/API access, live market-data download, provider requests, notifications, or host/network changes.
-- PR #4 is not merged. Any transition out of Draft and any merge remain subject to the current exact-head evidence and the owner's explicit control.
-- Phase 5 (Meta-Labeling / Triple-Barrier) has **not** started and remains blocked until the owner explicitly approves it.
+- PR #4 is merged as recorded above. The Phase 4 economic NO-GO and all no-trading boundaries remain in force.
+- Phase 5 (Meta-Labeling / Triple-Barrier) was explicitly authorized by the owner on 2026-10-22; its current implementation and evidence are tracked in [Phase 5 status](PHASE_5_STATUS.md) and [Issue #5](https://github.com/angry0tiger-sudo/AliX/issues/5). This does not authorize trading.
