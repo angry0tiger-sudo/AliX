@@ -188,42 +188,64 @@ def make_armed_store(path: Path) -> SQLiteKillSwitchStore:
     return store
 
 
-def test_allocator_reduces_size_for_volatility_uncertainty_calibration_and_regime() -> None:
+def test_allocator_reduces_size_for_volatility_uncertainty_calibration_and_regime() -> (
+    None
+):
     allocator = DynamicRiskAllocator()
     policy = make_policy()
     baseline = allocator.allocate(
-        policy=policy, account=make_account(), market=make_market(),
-        rules=make_rules(), proposal=make_proposal(), now=NOW
+        policy=policy,
+        account=make_account(),
+        market=make_market(),
+        rules=make_rules(),
+        proposal=make_proposal(),
+        now=NOW,
     )
     assert baseline.allocation is not None
 
     volatile_market = make_market(atr=D("5"))
     volatile = allocator.allocate(
-        policy=policy, account=make_account(), market=volatile_market,
-        rules=make_rules(), proposal=make_proposal(atr_snapshot=D("5")), now=NOW
+        policy=policy,
+        account=make_account(),
+        market=volatile_market,
+        rules=make_rules(),
+        proposal=make_proposal(atr_snapshot=D("5")),
+        now=NOW,
     )
     assert volatile.allocation is not None
     assert volatile.trade_risk_budget < baseline.trade_risk_budget
     assert volatile.allocation.quantity < baseline.allocation.quantity
 
     uncertain = allocator.allocate(
-        policy=policy, account=make_account(), market=make_market(),
-        rules=make_rules(), proposal=make_proposal(uncertainty=D("0.4")), now=NOW
+        policy=policy,
+        account=make_account(),
+        market=make_market(),
+        rules=make_rules(),
+        proposal=make_proposal(uncertainty=D("0.4")),
+        now=NOW,
     )
     assert uncertain.allocation is not None
     assert uncertain.trade_risk_budget < baseline.trade_risk_budget
 
     degraded_calibration = allocator.allocate(
-        policy=policy, account=make_account(), market=make_market(),
-        rules=make_rules(), proposal=make_proposal(calibration_error=D("0.3")), now=NOW
+        policy=policy,
+        account=make_account(),
+        market=make_market(),
+        rules=make_rules(),
+        proposal=make_proposal(calibration_error=D("0.3")),
+        now=NOW,
     )
     assert degraded_calibration.allocation is not None
     assert degraded_calibration.trade_risk_budget < baseline.trade_risk_budget
 
     high_regime = make_market(regime="high")
     regime_result = allocator.allocate(
-        policy=policy, account=make_account(), market=high_regime,
-        rules=make_rules(), proposal=make_proposal(regime="high"), now=NOW
+        policy=policy,
+        account=make_account(),
+        market=high_regime,
+        rules=make_rules(),
+        proposal=make_proposal(regime="high"),
+        now=NOW,
     )
     assert regime_result.allocation is not None
     assert regime_result.trade_risk_budget < baseline.trade_risk_budget
@@ -234,9 +256,12 @@ def test_confidence_degradation_lowers_size_and_low_confidence_fails_closed() ->
     reduced = make_allocation(proposal=make_proposal(calibrated_confidence=D("0.5")))
     assert reduced.trade_risk_budget < base.trade_risk_budget
     rejected = DynamicRiskAllocator().allocate(
-        policy=make_policy(), account=make_account(), market=make_market(),
+        policy=make_policy(),
+        account=make_account(),
+        market=make_market(),
         rules=make_rules(),
-        proposal=make_proposal(calibrated_confidence=D("0.2")), now=NOW
+        proposal=make_proposal(calibrated_confidence=D("0.2")),
+        now=NOW,
     )
     assert not rejected.approved
     assert "confidence_below_policy_floor" in rejected.reasons
@@ -246,37 +271,55 @@ def test_atr_spike_regime_shift_missing_input_and_stale_price_fail_closed() -> N
     allocator = DynamicRiskAllocator()
     spike = make_market(atr=D("11"))
     result = allocator.allocate(
-        policy=make_policy(), account=make_account(), market=spike,
-        rules=make_rules(), proposal=make_proposal(atr_snapshot=D("11")), now=NOW
+        policy=make_policy(),
+        account=make_account(),
+        market=spike,
+        rules=make_rules(),
+        proposal=make_proposal(atr_snapshot=D("11")),
+        now=NOW,
     )
     assert not result.approved
     assert "atr_spike_exceeds_policy_limit" in result.reasons
 
     unknown_regime = make_market(regime="unknown")
     result = allocator.allocate(
-        policy=make_policy(), account=make_account(), market=unknown_regime,
-        rules=make_rules(), proposal=make_proposal(regime="unknown"), now=NOW
+        policy=make_policy(),
+        account=make_account(),
+        market=unknown_regime,
+        rules=make_rules(),
+        proposal=make_proposal(regime="unknown"),
+        now=NOW,
     )
     assert not result.approved
     assert "regime_not_approved" in result.reasons
 
     missing = allocator.allocate(
-        policy=make_policy(), account=make_account(), market=make_market(),
-        rules=make_rules(), proposal=None, now=NOW
+        policy=make_policy(),
+        account=make_account(),
+        market=make_market(),
+        rules=make_rules(),
+        proposal=None,
+        now=NOW,
     )
     assert not missing.approved
     assert "required_risk_input_missing" in missing.reasons
 
     stale_market = make_market(as_of=NOW - timedelta(seconds=120))
     stale = allocator.allocate(
-        policy=make_policy(), account=make_account(), market=stale_market,
-        rules=make_rules(), proposal=make_proposal(), now=NOW
+        policy=make_policy(),
+        account=make_account(),
+        market=stale_market,
+        rules=make_rules(),
+        proposal=make_proposal(),
+        now=NOW,
     )
     assert not stale.approved
     assert "market_price_stale_or_future" in stale.reasons
 
 
-def test_allocator_fails_closed_for_policy_account_and_edge_contract_violations() -> None:
+def test_allocator_fails_closed_for_policy_account_and_edge_contract_violations() -> (
+    None
+):
     allocator = DynamicRiskAllocator()
     args = {
         "account": make_account(),
@@ -294,9 +337,8 @@ def test_allocator_fails_closed_for_policy_account_and_edge_contract_violations(
     assert not unreconciled.approved
     assert "account_or_orders_not_reconciled" in unreconciled.reasons
     edge = allocator.allocate(
-        policy=make_policy(), **{
-            **args, "proposal": make_proposal(expected_edge_after_costs=D("0"))
-        }
+        policy=make_policy(),
+        **{**args, "proposal": make_proposal(expected_edge_after_costs=D("0"))},
     )
     assert not edge.approved
     assert "edge_after_costs_not_positive_enough" in edge.reasons
@@ -315,8 +357,14 @@ def test_stake_stop_fees_slippage_and_market_precision_are_consistent() -> None:
     assert allocation.quantity % rules.quantity_step == 0
     assert allocation.stop_price % rules.price_tick == 0
     assert allocation.stake == allocation.quantity * market.price
-    assert allocation.stake <= account.free_balance * policy.max_stake_fraction_of_free_balance
-    assert allocation.estimated_loss_including_costs > allocation.quantity * allocation.stop_distance
+    assert (
+        allocation.stake
+        <= account.free_balance * policy.max_stake_fraction_of_free_balance
+    )
+    assert (
+        allocation.estimated_loss_including_costs
+        > allocation.quantity * allocation.stop_distance
+    )
     assert allocation.estimated_loss_including_costs <= allocation.trade_risk_budget
     assert allocation.rules_revision == rules.revision
 
@@ -326,11 +374,18 @@ def test_independent_gate_approves_risk_not_order_permission() -> None:
     account = make_account()
     market = make_market()
     rules = make_rules()
-    allocation = make_allocation(policy=policy, account=account, market=market, rules=rules)
+    allocation = make_allocation(
+        policy=policy, account=account, market=market, rules=rules
+    )
     state = KillSwitchState(False, "", None, 2, NOW)
     decision = RiskGate().evaluate_entry(
-        allocation=allocation, account=account, market=market, rules=rules,
-        policy=policy, kill_switch=state, evaluated_at=NOW
+        allocation=allocation,
+        account=account,
+        market=market,
+        rules=rules,
+        policy=policy,
+        kill_switch=state,
+        evaluated_at=NOW,
     )
     assert decision.risk_approved
     assert not decision.order_permission
@@ -338,42 +393,64 @@ def test_independent_gate_approves_risk_not_order_permission() -> None:
     assert decision.estimated_loss_including_costs <= allocation.trade_risk_budget
 
 
-def test_gate_rejects_invalid_stop_policy_revision_missing_switch_and_stale_price() -> None:
+def test_gate_rejects_invalid_stop_policy_revision_missing_switch_and_stale_price() -> (
+    None
+):
     policy = make_policy()
     account = make_account()
     market = make_market()
     rules = make_rules()
-    allocation = make_allocation(policy=policy, account=account, market=market, rules=rules)
+    allocation = make_allocation(
+        policy=policy, account=account, market=market, rules=rules
+    )
     state = KillSwitchState(False, "", None, 2, NOW)
     gate = RiskGate()
 
     invalid_stop = replace(allocation, stop_price=market.price + D("1"))
     decision = gate.evaluate_entry(
-        allocation=invalid_stop, account=account, market=market, rules=rules,
-        policy=policy, kill_switch=state, evaluated_at=NOW
+        allocation=invalid_stop,
+        account=account,
+        market=market,
+        rules=rules,
+        policy=policy,
+        kill_switch=state,
+        evaluated_at=NOW,
     )
     assert not decision.risk_approved
     assert "long_stop_not_below_entry" in decision.reasons
 
     decision = gate.evaluate_entry(
-        allocation=allocation, account=account, market=market,
-        rules=make_rules(revision="market-rules-v2"), policy=policy,
-        kill_switch=state, evaluated_at=NOW
+        allocation=allocation,
+        account=account,
+        market=market,
+        rules=make_rules(revision="market-rules-v2"),
+        policy=policy,
+        kill_switch=state,
+        evaluated_at=NOW,
     )
     assert not decision.risk_approved
     assert "market_rules_revision_mismatch" in decision.reasons
 
     decision = gate.evaluate_entry(
-        allocation=allocation, account=account, market=market, rules=rules,
-        policy=policy, kill_switch=None, evaluated_at=NOW
+        allocation=allocation,
+        account=account,
+        market=market,
+        rules=rules,
+        policy=policy,
+        kill_switch=None,
+        evaluated_at=NOW,
     )
     assert not decision.risk_approved
     assert "required_gate_input_missing" in decision.reasons
 
     decision = gate.evaluate_entry(
-        allocation=allocation, account=make_account(orders_reconciled=False),
-        market=market, rules=rules, policy=policy, kill_switch=state,
-        evaluated_at=NOW
+        allocation=allocation,
+        account=make_account(orders_reconciled=False),
+        market=market,
+        rules=rules,
+        policy=policy,
+        kill_switch=state,
+        evaluated_at=NOW,
     )
     assert not decision.risk_approved
     assert "account_or_orders_not_reconciled" in decision.reasons
@@ -385,8 +462,12 @@ def test_absolute_cap_is_independent_of_high_model_confidence(tmp_path: Path) ->
     market = make_market()
     proposal = make_proposal(calibrated_confidence=D("1"), uncertainty=D("0"))
     allocation_result = DynamicRiskAllocator().allocate(
-        policy=policy, account=account, market=market, rules=make_rules(),
-        proposal=proposal, now=NOW
+        policy=policy,
+        account=account,
+        market=market,
+        rules=make_rules(),
+        proposal=proposal,
+        now=NOW,
     )
     assert not allocation_result.approved
     assert "absolute_daily_loss_cap_hit" in allocation_result.reasons
@@ -400,7 +481,9 @@ def test_absolute_cap_is_independent_of_high_model_confidence(tmp_path: Path) ->
     assert store.read().latched
 
 
-def test_supervisor_never_automatically_rearms_and_halts_on_exposure_cap(tmp_path: Path) -> None:
+def test_supervisor_never_automatically_rearms_and_halts_on_exposure_cap(
+    tmp_path: Path,
+) -> None:
     store = SQLiteKillSwitchStore(str(tmp_path / "switch.db"))
     state = store.read()
     supervisor = RiskSupervisor(store)
@@ -415,17 +498,33 @@ def test_supervisor_never_automatically_rearms_and_halts_on_exposure_cap(tmp_pat
     store = make_armed_store(tmp_path / "exposure.db")
     decision = RiskSupervisor(store).check(
         account=make_account(gross_exposure=D("10000")),
-        policy=make_policy(), health=make_health(), now=NOW
+        policy=make_policy(),
+        health=make_health(),
+        now=NOW,
     )
     assert decision.status is SupervisorStatus.HALTED
     assert decision.reason == "absolute_gross_exposure_cap_hit"
 
 
-def test_supervisor_api_timeout_crash_and_unknown_order_state_latch(tmp_path: Path) -> None:
+def test_supervisor_api_timeout_crash_and_unknown_order_state_latch(
+    tmp_path: Path,
+) -> None:
     cases = (
-        (make_health(risk_service_healthy=False), make_account(), "supervisor_health_degraded"),
-        (make_health(heartbeat_fresh=False), make_account(), "supervisor_health_degraded"),
-        (make_health(), make_account(orders_reconciled=False), "account_or_orders_not_reconciled"),
+        (
+            make_health(risk_service_healthy=False),
+            make_account(),
+            "supervisor_health_degraded",
+        ),
+        (
+            make_health(heartbeat_fresh=False),
+            make_account(),
+            "supervisor_health_degraded",
+        ),
+        (
+            make_health(),
+            make_account(orders_reconciled=False),
+            "account_or_orders_not_reconciled",
+        ),
     )
     for index, (health, account, expected_reason) in enumerate(cases):
         store = make_armed_store(tmp_path / f"fault-{index}.db")
@@ -440,27 +539,45 @@ def test_supervisor_api_timeout_crash_and_unknown_order_state_latch(tmp_path: Pa
 def test_risk_service_down_and_stale_account_or_market_never_approve_entry() -> None:
     allocator = DynamicRiskAllocator()
     missing = allocator.allocate(
-        policy=make_policy(), account=make_account(), market=make_market(),
-        rules=make_rules(), proposal=None, now=NOW
+        policy=make_policy(),
+        account=make_account(),
+        market=make_market(),
+        rules=make_rules(),
+        proposal=None,
+        now=NOW,
     )
     assert not missing.approved
     assert missing.allocation is None
-    assert not RiskGate().evaluate_entry(
-        allocation=missing.allocation, account=make_account(), market=make_market(),
-        rules=make_rules(), policy=make_policy(),
-        kill_switch=KillSwitchState(False, "", None, 2, NOW), evaluated_at=NOW
-    ).risk_approved
+    assert (
+        not RiskGate()
+        .evaluate_entry(
+            allocation=missing.allocation,
+            account=make_account(),
+            market=make_market(),
+            rules=make_rules(),
+            policy=make_policy(),
+            kill_switch=KillSwitchState(False, "", None, 2, NOW),
+            evaluated_at=NOW,
+        )
+        .risk_approved
+    )
 
     stale_account = make_account(as_of=NOW - timedelta(seconds=120))
     stale = allocator.allocate(
-        policy=make_policy(), account=stale_account, market=make_market(),
-        rules=make_rules(), proposal=make_proposal(), now=NOW
+        policy=make_policy(),
+        account=stale_account,
+        market=make_market(),
+        rules=make_rules(),
+        proposal=make_proposal(),
+        now=NOW,
     )
     assert not stale.approved
     assert "account_snapshot_stale_or_future" in stale.reasons
 
 
-def test_kill_switch_survives_store_restart_and_unknown_status_stays_halted(tmp_path: Path) -> None:
+def test_kill_switch_survives_store_restart_and_unknown_status_stays_halted(
+    tmp_path: Path,
+) -> None:
     path = str(tmp_path / "durable-switch.db")
     store = make_armed_store(Path(path))
     halted = RiskSupervisor(store).check(
@@ -479,7 +596,9 @@ def test_kill_switch_survives_store_restart_and_unknown_status_stays_halted(tmp_
     assert restarted_store.read().latched
 
 
-def test_kill_switch_rearm_requires_current_manual_evidence_and_is_audited(tmp_path: Path) -> None:
+def test_kill_switch_rearm_requires_current_manual_evidence_and_is_audited(
+    tmp_path: Path,
+) -> None:
     store = SQLiteKillSwitchStore(str(tmp_path / "manual-rearm.db"))
     controller = KillSwitchController(store)
     state = store.read()
@@ -532,16 +651,40 @@ def test_risk_reductions_are_not_blocked_by_entry_halt() -> None:
 def test_oos_metrics_report_drawdown_cvar_cost_turnover_and_regime_stability() -> None:
     observations = (
         OosObservation(
-            "fold-1", NOW - timedelta(days=3), NOW - timedelta(days=2), "low",
-            D("0.02"), D("0.01"), D("0.001"), D("0.002"), D("1"), D("1.2")
+            "fold-1",
+            NOW - timedelta(days=3),
+            NOW - timedelta(days=2),
+            "low",
+            D("0.02"),
+            D("0.01"),
+            D("0.001"),
+            D("0.002"),
+            D("1"),
+            D("1.2"),
         ),
         OosObservation(
-            "fold-1", NOW - timedelta(days=3), NOW - timedelta(days=1), "high",
-            D("-0.04"), D("-0.02"), D("0.003"), D("0.002"), D("1.5"), D("1.1")
+            "fold-1",
+            NOW - timedelta(days=3),
+            NOW - timedelta(days=1),
+            "high",
+            D("-0.04"),
+            D("-0.02"),
+            D("0.003"),
+            D("0.002"),
+            D("1.5"),
+            D("1.1"),
         ),
         OosObservation(
-            "fold-2", NOW - timedelta(hours=12), NOW, "low",
-            D("0.01"), D("0.005"), D("0.001"), D("0.001"), D("0.7"), D("0.8")
+            "fold-2",
+            NOW - timedelta(hours=12),
+            NOW,
+            "low",
+            D("0.01"),
+            D("0.005"),
+            D("0.001"),
+            D("0.001"),
+            D("0.7"),
+            D("0.8"),
         ),
     )
     report = compare_walk_forward_oos(observations, tail_fraction=D("0.2"))
@@ -558,10 +701,17 @@ def test_oos_metrics_report_drawdown_cvar_cost_turnover_and_regime_stability() -
 def test_oos_metrics_reject_temporal_leakage() -> None:
     with pytest.raises(ValueError, match="oos_temporal_leakage"):
         OosObservation(
-            "fold-1", NOW, NOW, "low",
-            D("0.01"), D("0.01"), D("0"), D("0"), D("0"), D("0")
+            "fold-1",
+            NOW,
+            NOW,
+            "low",
+            D("0.01"),
+            D("0.01"),
+            D("0"),
+            D("0"),
+            D("0"),
+            D("0"),
         )
-
 
 
 def test_contracts_reject_invalid_policy_ranges_and_regime_registry() -> None:
@@ -572,7 +722,9 @@ def test_contracts_reject_invalid_policy_ranges_and_regime_registry() -> None:
     with pytest.raises(ValueError, match="daily_risk_budget_fraction_out_of_range"):
         make_policy(daily_risk_budget_fraction=D("1.1"))
     with pytest.raises(ValueError, match="per_trade_budget_exceeds_daily_budget"):
-        make_policy(daily_risk_budget_fraction=D("0.005"), per_trade_risk_fraction=D("0.01"))
+        make_policy(
+            daily_risk_budget_fraction=D("0.005"), per_trade_risk_fraction=D("0.01")
+        )
     with pytest.raises(ValueError, match="confidence_floor_out_of_range"):
         make_policy(confidence_floor=D("1.1"))
     with pytest.raises(ValueError, match="cost_rate_out_of_range"):
@@ -645,12 +797,14 @@ def test_short_position_stop_rounding_and_gate_contract() -> None:
     rules = make_rules()
     proposal = make_proposal(side=Side.SHORT)
     allocation = make_allocation(
-        policy=policy, account=account, market=market,
-        rules=rules, proposal=proposal
+        policy=policy, account=account, market=market, rules=rules, proposal=proposal
     )
     assert allocation.stop_price > market.price
     decision = RiskGate().evaluate_entry(
-        allocation=allocation, account=account, market=market, rules=rules,
+        allocation=allocation,
+        account=account,
+        market=market,
+        rules=rules,
         policy=policy,
         kill_switch=KillSwitchState(False, "", None, 2, NOW),
         evaluated_at=NOW,
@@ -669,7 +823,10 @@ def test_gate_rejects_latched_switch_price_tampering_and_underreported_loss() ->
     )
     gate = RiskGate()
     latched = gate.evaluate_entry(
-        allocation=allocation, account=account, market=market, rules=rules,
+        allocation=allocation,
+        account=account,
+        market=market,
+        rules=rules,
         policy=policy,
         kill_switch=KillSwitchState(True, "test-latch", NOW, 3, NOW),
         evaluated_at=NOW,
@@ -679,7 +836,10 @@ def test_gate_rejects_latched_switch_price_tampering_and_underreported_loss() ->
 
     tampered = replace(allocation, quantity=allocation.quantity + rules.quantity_step)
     result = gate.evaluate_entry(
-        allocation=tampered, account=account, market=market, rules=rules,
+        allocation=tampered,
+        account=account,
+        market=market,
+        rules=rules,
         policy=policy,
         kill_switch=KillSwitchState(False, "", None, 2, NOW),
         evaluated_at=NOW,
@@ -689,7 +849,10 @@ def test_gate_rejects_latched_switch_price_tampering_and_underreported_loss() ->
 
     understated = replace(allocation, estimated_loss_including_costs=D("0.01"))
     result = gate.evaluate_entry(
-        allocation=understated, account=account, market=market, rules=rules,
+        allocation=understated,
+        account=account,
+        market=market,
+        rules=rules,
         policy=policy,
         kill_switch=KillSwitchState(False, "", None, 2, NOW),
         evaluated_at=NOW,
@@ -707,8 +870,11 @@ def test_gate_rejects_insufficient_free_balance_and_stale_allocation() -> None:
     )
     low_balance = make_account(free_balance=D("100"))
     result = RiskGate().evaluate_entry(
-        allocation=allocation, account=low_balance, market=market,
-        rules=rules, policy=policy,
+        allocation=allocation,
+        account=low_balance,
+        market=market,
+        rules=rules,
+        policy=policy,
         kill_switch=KillSwitchState(False, "", None, 2, NOW),
         evaluated_at=NOW,
     )
@@ -716,8 +882,11 @@ def test_gate_rejects_insufficient_free_balance_and_stale_allocation() -> None:
     assert "free_balance_limit_exceeded" in result.reasons
     old_allocation = replace(allocation, created_at=NOW - timedelta(seconds=120))
     result = RiskGate().evaluate_entry(
-        allocation=old_allocation, account=make_account(), market=market,
-        rules=rules, policy=policy,
+        allocation=old_allocation,
+        account=make_account(),
+        market=market,
+        rules=rules,
+        policy=policy,
         kill_switch=KillSwitchState(False, "", None, 2, NOW),
         evaluated_at=NOW,
     )
@@ -765,7 +934,9 @@ def test_kill_switch_idempotent_latch_and_in_memory_test_adapter() -> None:
         )
 
 
-def test_kill_switch_rejects_bad_state_and_unreadable_persistence(tmp_path: Path) -> None:
+def test_kill_switch_rejects_bad_state_and_unreadable_persistence(
+    tmp_path: Path,
+) -> None:
     from risk.kill_switch import KillSwitchStateUnavailable
 
     with pytest.raises(ValueError, match="durable_kill_switch_database_path_required"):
@@ -779,7 +950,9 @@ def test_kill_switch_rejects_bad_state_and_unreadable_persistence(tmp_path: Path
 
     store = SQLiteKillSwitchStore(str(tmp_path / "read-failure.db"))
     store._database_path = str(tmp_path / "nonexistent-directory" / "missing.db")
-    with pytest.raises(KillSwitchStateUnavailable, match="kill_switch_state_unreadable"):
+    with pytest.raises(
+        KillSwitchStateUnavailable, match="kill_switch_state_unreadable"
+    ):
         store.read()
     decision = RiskSupervisor(store).check(
         account=make_account(), policy=make_policy(), health=make_health(), now=NOW
@@ -788,7 +961,9 @@ def test_kill_switch_rejects_bad_state_and_unreadable_persistence(tmp_path: Path
     assert decision.reason == "kill_switch_state_unavailable"
 
 
-def test_kill_switch_unknown_row_and_manual_rearm_version_compare(tmp_path: Path) -> None:
+def test_kill_switch_unknown_row_and_manual_rearm_version_compare(
+    tmp_path: Path,
+) -> None:
     import sqlite3
 
     from risk.kill_switch import KillSwitchStateUnavailable
@@ -797,7 +972,9 @@ def test_kill_switch_unknown_row_and_manual_rearm_version_compare(tmp_path: Path
     store = SQLiteKillSwitchStore(str(path))
     with sqlite3.connect(path) as connection:
         connection.execute("DELETE FROM kill_switch_state")
-    with pytest.raises(KillSwitchStateUnavailable, match="kill_switch_state_row_missing"):
+    with pytest.raises(
+        KillSwitchStateUnavailable, match="kill_switch_state_row_missing"
+    ):
         store.read()
 
     live_store = SQLiteKillSwitchStore(str(tmp_path / "compare.db"))
@@ -814,7 +991,9 @@ def test_kill_switch_unknown_row_and_manual_rearm_version_compare(tmp_path: Path
     )
 
 
-def test_supervisor_missing_inputs_degraded_policy_stale_and_bad_time(tmp_path: Path) -> None:
+def test_supervisor_missing_inputs_degraded_policy_stale_and_bad_time(
+    tmp_path: Path,
+) -> None:
     store = make_armed_store(tmp_path / "supervisor-cases.db")
     supervisor = RiskSupervisor(store)
     decision = supervisor.check(
@@ -825,8 +1004,10 @@ def test_supervisor_missing_inputs_degraded_policy_stale_and_bad_time(tmp_path: 
 
     store = make_armed_store(tmp_path / "unapproved-policy.db")
     decision = RiskSupervisor(store).check(
-        account=make_account(), policy=make_policy(owner_approved=False),
-        health=make_health(), now=NOW
+        account=make_account(),
+        policy=make_policy(owner_approved=False),
+        health=make_health(),
+        now=NOW,
     )
     assert decision.status is SupervisorStatus.HALTED
     assert decision.reason == "risk_policy_not_owner_approved"
@@ -834,14 +1015,18 @@ def test_supervisor_missing_inputs_degraded_policy_stale_and_bad_time(tmp_path: 
     store = make_armed_store(tmp_path / "stale-supervisor.db")
     decision = RiskSupervisor(store).check(
         account=make_account(as_of=NOW - timedelta(seconds=120)),
-        policy=make_policy(), health=make_health(), now=NOW
+        policy=make_policy(),
+        health=make_health(),
+        now=NOW,
     )
     assert decision.status is SupervisorStatus.HALTED
     assert decision.reason == "account_snapshot_stale_or_future"
 
     decision = RiskSupervisor(store).check(
-        account=make_account(), policy=make_policy(), health=make_health(),
-        now=datetime(2026, 10, 22, 10, 0)
+        account=make_account(),
+        policy=make_policy(),
+        health=make_health(),
+        now=datetime(2026, 10, 22, 10, 0),
     )
     assert decision.status is SupervisorStatus.HALT_UNCONFIRMED
     assert decision.reason == "supervisor_time_invalid"
@@ -853,14 +1038,30 @@ def test_oos_comparison_rejects_missing_data_bad_tail_and_conflicting_fold() -> 
     with pytest.raises(ValueError, match="oos_observations_missing"):
         compare_walk_forward_oos((), tail_fraction=D("0.1"))
     observation = OosObservation(
-        "fold", NOW - timedelta(days=2), NOW - timedelta(days=1), "low",
-        D("0.01"), D("0.02"), D("0"), D("0"), D("0"), D("0")
+        "fold",
+        NOW - timedelta(days=2),
+        NOW - timedelta(days=1),
+        "low",
+        D("0.01"),
+        D("0.02"),
+        D("0"),
+        D("0"),
+        D("0"),
+        D("0"),
     )
     with pytest.raises(ValueError, match="tail_fraction_out_of_range"):
         compare_walk_forward_oos((observation,), tail_fraction=D("1.1"))
     other = OosObservation(
-        "fold", NOW - timedelta(days=3), NOW, "high",
-        D("-0.01"), D("-0.02"), D("0"), D("0"), D("0"), D("0")
+        "fold",
+        NOW - timedelta(days=3),
+        NOW,
+        "high",
+        D("-0.01"),
+        D("-0.02"),
+        D("0"),
+        D("0"),
+        D("0"),
+        D("0"),
     )
     with pytest.raises(ValueError, match="fold_train_cutoff_inconsistent"):
         compare_walk_forward_oos((observation, other), tail_fraction=D("0.1"))
@@ -869,16 +1070,40 @@ def test_oos_comparison_rejects_missing_data_bad_tail_and_conflicting_fold() -> 
 def test_oos_contract_rejects_invalid_returns_costs_and_missing_identity() -> None:
     with pytest.raises(ValueError, match="oos_fold_or_regime_missing"):
         OosObservation(
-            "", NOW - timedelta(days=2), NOW - timedelta(days=1), "low",
-            D("0"), D("0"), D("0"), D("0"), D("0"), D("0")
+            "",
+            NOW - timedelta(days=2),
+            NOW - timedelta(days=1),
+            "low",
+            D("0"),
+            D("0"),
+            D("0"),
+            D("0"),
+            D("0"),
+            D("0"),
         )
     with pytest.raises(ValueError, match="return_below_total_loss"):
         OosObservation(
-            "fold", NOW - timedelta(days=2), NOW - timedelta(days=1), "low",
-            D("-1.1"), D("0"), D("0"), D("0"), D("0"), D("0")
+            "fold",
+            NOW - timedelta(days=2),
+            NOW - timedelta(days=1),
+            "low",
+            D("-1.1"),
+            D("0"),
+            D("0"),
+            D("0"),
+            D("0"),
+            D("0"),
         )
     with pytest.raises(ValueError, match="allocator_cost_below_minimum"):
         OosObservation(
-            "fold", NOW - timedelta(days=2), NOW - timedelta(days=1), "low",
-            D("0"), D("0"), D("-1"), D("0"), D("0"), D("0")
+            "fold",
+            NOW - timedelta(days=2),
+            NOW - timedelta(days=1),
+            "low",
+            D("0"),
+            D("0"),
+            D("-1"),
+            D("0"),
+            D("0"),
+            D("0"),
         )

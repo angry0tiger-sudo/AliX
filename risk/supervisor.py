@@ -123,15 +123,14 @@ class RiskSupervisor:
     ) -> str:
         if not account.reconciled or not account.orders_reconciled:
             return "account_or_orders_not_reconciled"
-        if now < account.as_of or (
-            now - account.as_of
-        ).total_seconds() > policy.max_account_age_seconds:
+        if (
+            now < account.as_of
+            or (now - account.as_of).total_seconds() > policy.max_account_age_seconds
+        ):
             return "account_snapshot_stale_or_future"
         return ""
 
-    def _absolute_cap_fault(
-        self, account: AccountSnapshot, policy: RiskPolicy
-    ) -> str:
+    def _absolute_cap_fault(self, account: AccountSnapshot, policy: RiskPolicy) -> str:
         if (
             account.daily_loss + account.open_position_risk + account.open_order_risk
             >= policy.absolute_daily_loss_cap
@@ -144,9 +143,5 @@ class RiskSupervisor:
             return "absolute_gross_exposure_cap_hit"
         return ""
 
-    def _halted(
-        self, state: KillSwitchState, reason: str
-    ) -> SupervisorDecision:
-        return SupervisorDecision(
-            SupervisorStatus.HALTED, reason, state.version, True
-        )
+    def _halted(self, state: KillSwitchState, reason: str) -> SupervisorDecision:
+        return SupervisorDecision(SupervisorStatus.HALTED, reason, state.version, True)

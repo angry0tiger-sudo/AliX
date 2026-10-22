@@ -76,7 +76,12 @@ def main() -> int:
         json.dumps(result, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
-    print(json.dumps({key: value for key, value in result.items() if key != "raw_pytest_output"}, indent=2))
+    print(
+        json.dumps(
+            {key: value for key, value in result.items() if key != "raw_pytest_output"},
+            indent=2,
+        )
+    )
     if completed.returncode != 0 or result["scenario_count"] == 0:
         return completed.returncode or 1
     return 0

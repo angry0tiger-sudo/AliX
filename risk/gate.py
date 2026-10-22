@@ -49,16 +49,24 @@ class RiskGate:
         identity = allocation.decision_id if allocation is not None else "unknown"
         if evaluated_at.tzinfo is None or evaluated_at.utcoffset() is None:
             return self._decision(
-                identity, evaluated_at, False, False,
-                ("decision_time_timezone_required",), Decimal("0")
+                identity,
+                evaluated_at,
+                False,
+                False,
+                ("decision_time_timezone_required",),
+                Decimal("0"),
             )
         if any(
             value is None
             for value in (allocation, account, market, rules, policy, kill_switch)
         ):
             return self._decision(
-                identity, evaluated_at, False, False,
-                ("required_gate_input_missing",), Decimal("0")
+                identity,
+                evaluated_at,
+                False,
+                False,
+                ("required_gate_input_missing",),
+                Decimal("0"),
             )
 
         assert allocation is not None
@@ -68,26 +76,34 @@ class RiskGate:
         assert policy is not None
         assert kill_switch is not None
 
-        estimate = estimated_loss_per_unit(
-            market.price, allocation.stop_price, policy.fee_rate, policy.slippage_rate
-        ) * allocation.quantity
+        estimate = (
+            estimated_loss_per_unit(
+                market.price,
+                allocation.stop_price,
+                policy.fee_rate,
+                policy.slippage_rate,
+            )
+            * allocation.quantity
+        )
         reasons = (
-            self._identity_reasons(allocation, account, market, rules, policy, kill_switch)
+            self._identity_reasons(
+                allocation, account, market, rules, policy, kill_switch
+            )
             + self._freshness_and_cap_reasons(
                 allocation, account, market, policy, evaluated_at
             )
             + self._risk_profile_reasons(allocation, account, market, policy)
-            + self._market_structure_reasons(
-                allocation, account, market, rules, policy
-            )
-            + self._loss_capacity_reasons(
-                allocation, account, policy, estimate
-            )
+            + self._market_structure_reasons(allocation, account, market, rules, policy)
+            + self._loss_capacity_reasons(allocation, account, policy, estimate)
         )
         unique_reasons = tuple(dict.fromkeys(reasons))
         return self._decision(
-            allocation.decision_id, evaluated_at, not unique_reasons, False,
-            unique_reasons, estimate
+            allocation.decision_id,
+            evaluated_at,
+            not unique_reasons,
+            False,
+            unique_reasons,
+            estimate,
         )
 
     def _identity_reasons(
@@ -129,17 +145,23 @@ class RiskGate:
         evaluated_at: datetime,
     ) -> tuple[str, ...]:
         reasons: list[str] = []
-        if evaluated_at < market.as_of or (
-            evaluated_at - market.as_of
-        ).total_seconds() > policy.max_market_age_seconds:
+        if (
+            evaluated_at < market.as_of
+            or (evaluated_at - market.as_of).total_seconds()
+            > policy.max_market_age_seconds
+        ):
             reasons.append("market_price_stale_or_future")
-        if evaluated_at < account.as_of or (
-            evaluated_at - account.as_of
-        ).total_seconds() > policy.max_account_age_seconds:
+        if (
+            evaluated_at < account.as_of
+            or (evaluated_at - account.as_of).total_seconds()
+            > policy.max_account_age_seconds
+        ):
             reasons.append("account_snapshot_stale_or_future")
-        if allocation.created_at > evaluated_at or (
-            evaluated_at - allocation.created_at
-        ).total_seconds() > policy.max_market_age_seconds:
+        if (
+            allocation.created_at > evaluated_at
+            or (evaluated_at - allocation.created_at).total_seconds()
+            > policy.max_market_age_seconds
+        ):
             reasons.append("allocation_stale_or_future")
         if account.daily_loss >= policy.absolute_daily_loss_cap:
             reasons.append("absolute_daily_loss_cap_hit")
@@ -216,9 +238,15 @@ class RiskGate:
             reasons.append("quantity_precision_invalid")
         if allocation.stop_price % rules.price_tick != 0:
             reasons.append("stop_price_precision_invalid")
-        if allocation.stake < rules.min_notional or allocation.stake > rules.max_notional:
+        if (
+            allocation.stake < rules.min_notional
+            or allocation.stake > rules.max_notional
+        ):
             reasons.append("notional_outside_market_limits")
-        if allocation.stake > account.free_balance * policy.max_stake_fraction_of_free_balance:
+        if (
+            allocation.stake
+            > account.free_balance * policy.max_stake_fraction_of_free_balance
+        ):
             reasons.append("free_balance_limit_exceeded")
         return tuple(reasons)
 
@@ -253,17 +281,23 @@ class RiskGate:
         """Entry/news gates cannot block exits or risk-reducing intents."""
         if action not in (ActionType.EXIT, ActionType.REDUCE_RISK):
             return self._decision(
-                decision_id, evaluated_at, False, False,
-                ("not_a_risk_reducing_action",), Decimal("0")
+                decision_id,
+                evaluated_at,
+                False,
+                False,
+                ("not_a_risk_reducing_action",),
+                Decimal("0"),
             )
         if evaluated_at.tzinfo is None or evaluated_at.utcoffset() is None:
             return self._decision(
-                decision_id, evaluated_at, False, True,
-                ("decision_time_timezone_required_for_audit",), Decimal("0")
+                decision_id,
+                evaluated_at,
+                False,
+                True,
+                ("decision_time_timezone_required_for_audit",),
+                Decimal("0"),
             )
-        return self._decision(
-            decision_id, evaluated_at, False, True, (), Decimal("0")
-        )
+        return self._decision(decision_id, evaluated_at, False, True, (), Decimal("0"))
 
     def _decision(
         self,

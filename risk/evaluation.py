@@ -69,7 +69,9 @@ def compare_walk_forward_oos(
     tail_fraction: Decimal,
 ) -> OosComparison:
     """Compare paired OOS returns. It reports metrics but never accepts economics."""
-    require_decimal("tail_fraction", tail_fraction, minimum=Decimal("0.00000000000000000001"))
+    require_decimal(
+        "tail_fraction", tail_fraction, minimum=Decimal("0.00000000000000000001")
+    )
     if tail_fraction > 1:
         raise ValueError("tail_fraction_out_of_range")
     if not observations:
@@ -133,11 +135,15 @@ def _metrics(
             drawdown = max(drawdown, (high_water - equity) / high_water)
     tail_count = max(
         1,
-        int((Decimal(len(returns)) * tail_fraction).to_integral_value(rounding=ROUND_CEILING)),
+        int(
+            (Decimal(len(returns)) * tail_fraction).to_integral_value(
+                rounding=ROUND_CEILING
+            )
+        ),
     )
-    losses = sorted(
-        (max(Decimal("0"), -value) for value in returns), reverse=True
-    )[:tail_count]
+    losses = sorted((max(Decimal("0"), -value) for value in returns), reverse=True)[
+        :tail_count
+    ]
     cvar = sum(losses, Decimal("0")) / Decimal(len(losses))
     return PerformanceMetrics(
         observation_count=len(returns),

@@ -52,13 +52,19 @@ class DynamicRiskAllocator:
             policy.absolute_gross_exposure_cap,
             account.equity * policy.max_gross_exposure_fraction,
         )
-        remaining_exposure = gross_limit - account.gross_exposure - account.open_order_notional
+        remaining_exposure = (
+            gross_limit - account.gross_exposure - account.open_order_notional
+        )
         correlated_limit = account.equity * policy.max_correlated_exposure_fraction
         remaining_correlated = correlated_limit - account.correlated_exposure
         if remaining_exposure <= 0:
-            return self._rejected(("gross_exposure_cap_exhausted",), daily_budget, trade_base)
+            return self._rejected(
+                ("gross_exposure_cap_exhausted",), daily_budget, trade_base
+            )
         if remaining_correlated <= 0:
-            return self._rejected(("correlated_exposure_cap_exhausted",), daily_budget, trade_base)
+            return self._rejected(
+                ("correlated_exposure_cap_exhausted",), daily_budget, trade_base
+            )
 
         regime_factor = policy.multiplier_for(proposal.regime)
         assert regime_factor is not None
@@ -74,7 +80,9 @@ class DynamicRiskAllocator:
             * regime_factor
         )
         if dynamic_budget <= 0:
-            return self._rejected(("dynamic_risk_budget_zero",), daily_budget, dynamic_budget)
+            return self._rejected(
+                ("dynamic_risk_budget_zero",), daily_budget, dynamic_budget
+            )
 
         return self._build_allocation(
             policy=policy,
@@ -115,7 +123,9 @@ class DynamicRiskAllocator:
         proposal: ModelRiskProposal | None,
         now: datetime | None,
     ) -> tuple[str, ...]:
-        if any(value is None for value in (policy, account, market, rules, proposal, now)):
+        if any(
+            value is None for value in (policy, account, market, rules, proposal, now)
+        ):
             return ("required_risk_input_missing",)
         assert policy is not None
         assert account is not None
@@ -154,13 +164,15 @@ class DynamicRiskAllocator:
         market: MarketSnapshot,
         now: datetime,
     ) -> str | None:
-        if now < market.as_of or (
-            now - market.as_of
-        ).total_seconds() > policy.max_market_age_seconds:
+        if (
+            now < market.as_of
+            or (now - market.as_of).total_seconds() > policy.max_market_age_seconds
+        ):
             return "market_price_stale_or_future"
-        if now < account.as_of or (
-            now - account.as_of
-        ).total_seconds() > policy.max_account_age_seconds:
+        if (
+            now < account.as_of
+            or (now - account.as_of).total_seconds() > policy.max_account_age_seconds
+        ):
             return "account_snapshot_stale_or_future"
         return None
 
@@ -231,9 +243,11 @@ class DynamicRiskAllocator:
         stake = quantity * market.price
         estimated_loss = quantity * unit_loss
         if quantity < rules.min_quantity:
-            return self._rejected(("quantity_below_market_minimum",), daily_budget, trade_budget)
+            return self._rejected(
+                ("quantity_below_market_minimum",), daily_budget, trade_budget
+            )
         if stake < rules.min_notional:
-            return self._rejected(("notional_below_market_minimum",), daily_budget, trade_budget)
+            return self._rejected(
         if stake > rules.max_notional:
             quantity = floor_to_step(rules.max_notional / market.price, rules.quantity_step)
             stake = quantity * market.price
@@ -284,7 +298,9 @@ class DynamicRiskAllocator:
             expected_edge_after_costs=proposal.expected_edge_after_costs,
             fingerprint=fingerprint,
         )
-        return AllocationResult(True, (), daily_budget, trade_budget, allocation, fingerprint)
+        return AllocationResult(
+            True, (), daily_budget, trade_budget, allocation, fingerprint
+        )
 
     def _bounded_quantity(
         self,
@@ -298,7 +314,8 @@ class DynamicRiskAllocator:
         candidates = (
             floor_to_step(trade_budget / unit_loss, rules.quantity_step),
             floor_to_step(
-                account.free_balance * policy.max_stake_fraction_of_free_balance
+                account.free_balance
+                * policy.max_stake_fraction_of_free_balance
                 / market.price,
                 rules.quantity_step,
             ),
@@ -348,4 +365,3 @@ class DynamicRiskAllocator:
             allocation=None,
             fingerprint=fingerprint,
         )
-

@@ -137,7 +137,9 @@ class SQLiteKillSwitchStore:
                 (now,),
             )
         except (OSError, sqlite3.Error) as exc:
-            raise KillSwitchStateUnavailable("kill_switch_store_initialization_failed") from exc
+            raise KillSwitchStateUnavailable(
+                "kill_switch_store_initialization_failed"
+            ) from exc
         finally:
             if connection is not None:
                 connection.close()
@@ -145,7 +147,9 @@ class SQLiteKillSwitchStore:
             try:
                 os.chmod(self._database_path, 0o600)
             except OSError as exc:
-                raise KillSwitchStateUnavailable("kill_switch_store_permissions_failed") from exc
+                raise KillSwitchStateUnavailable(
+                    "kill_switch_store_permissions_failed"
+                ) from exc
 
     def read(self) -> KillSwitchState:
         connection: sqlite3.Connection | None = None
@@ -210,9 +214,7 @@ class SQLiteKillSwitchStore:
                 )
                 if connection.total_changes < 1:
                     raise KillSwitchStateUnavailable("kill_switch_latch_compare_failed")
-                next_state = KillSwitchState(
-                    True, reason, now, next_version, now, None
-                )
+                next_state = KillSwitchState(True, reason, now, next_version, now, None)
                 action = "LATCH"
                 event_reason = reason
             connection.execute(
@@ -322,18 +324,14 @@ class SQLiteKillSwitchStore:
                 connection.close()
 
     def _state_from_row(self, row: tuple[object, ...]) -> KillSwitchState:
-        latched_at = (
-            datetime.fromisoformat(str(row[2])) if row[2] is not None else None
-        )
+        latched_at = datetime.fromisoformat(str(row[2])) if row[2] is not None else None
         return KillSwitchState(
             latched=bool(row[0]),
             reason=str(row[1]),
             latched_at=latched_at,
             version=int(row[3]),
             last_transition=datetime.fromisoformat(str(row[4])),
-            rearm_approval_id=(
-                str(row[5]) if row[5] is not None else None
-            ),
+            rearm_approval_id=(str(row[5]) if row[5] is not None else None),
         )
 
 

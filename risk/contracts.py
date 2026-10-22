@@ -136,8 +136,12 @@ class MarketSnapshot:
             or not self.source_revision.strip()
         ):
             raise ValueError("market_identity_invalid")
-        require_decimal("market_price", self.price, minimum=Decimal("0.00000000000000000001"))
-        require_decimal("market_atr", self.atr, minimum=Decimal("0.00000000000000000001"))
+        require_decimal(
+            "market_price", self.price, minimum=Decimal("0.00000000000000000001")
+        )
+        require_decimal(
+            "market_atr", self.atr, minimum=Decimal("0.00000000000000000001")
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -191,7 +195,9 @@ class ModelRiskProposal:
             raise ValueError("model_revision_or_decision_id_missing")
         if not self.regime.strip():
             raise ValueError("proposal_regime_missing")
-        require_decimal("proposal_atr", self.atr_snapshot, minimum=Decimal("0.00000000000000000001"))
+        require_decimal(
+            "proposal_atr", self.atr_snapshot, minimum=Decimal("0.00000000000000000001")
+        )
         for name in ("calibrated_confidence", "uncertainty", "calibration_error"):
             value = getattr(self, name)
             require_decimal(name, value, minimum=Decimal("0"))
@@ -385,8 +391,12 @@ class AllocationResult:
     fingerprint: str
 
     def __post_init__(self) -> None:
-        require_decimal("result_daily_budget", self.daily_risk_budget, minimum=Decimal("0"))
-        require_decimal("result_trade_budget", self.trade_risk_budget, minimum=Decimal("0"))
+        require_decimal(
+            "result_daily_budget", self.daily_risk_budget, minimum=Decimal("0")
+        )
+        require_decimal(
+            "result_trade_budget", self.trade_risk_budget, minimum=Decimal("0")
+        )
         if self.approved != (self.allocation is not None):
             raise ValueError("allocation_result_state_inconsistent")
         if self.approved and self.reasons:
