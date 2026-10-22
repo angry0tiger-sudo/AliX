@@ -3,7 +3,7 @@ from typing import Any
 import pandas as pd
 
 from connectivity.manager.manager import ConnectivityManager
-from services.data_quality.gate import validate_candles
+from services.data_quality.gate import QualityStatus, validate_candles
 from services.reporting.engine import DailyReport, ReportingEngine
 from user_data.strategies.AliXStrategy import AliXStrategy
 
@@ -34,9 +34,7 @@ def test_data_quality_rejects_bad_ohlc_and_order() -> None:
     result = validate_candles([candle(1000), bad])
     assert not result.passed
     assert any("invalid_ohlc_range" in reason for reason in result.reasons)
-    assert any(
-        "timestamp_not_strictly_increasing" in reason for reason in result.reasons
-    )
+    assert any("duplicate_timestamp" in reason for reason in result.reasons)
 
 
 def test_connectivity_rejects_unlisted_route_without_probe() -> None:
@@ -81,6 +79,8 @@ def test_strategy_scaffold_generates_no_entry_or_exit_signals() -> None:
     enriched = strategy.populate_indicators(dataframe.copy(), metadata)
     entries = strategy.populate_entry_trend(enriched.copy(), metadata)
     exits = strategy.populate_exit_trend(enriched.copy(), metadata)
+    assert not enriched["alix_data_quality_valid"].any()
+    assert enriched.attrs["alix_data_quality"]["status"] == QualityStatus.REJECTED.value
     assert entries["enter_long"].eq(0).all()
     assert exits["exit_long"].eq(0).all()
 

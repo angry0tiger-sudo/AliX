@@ -1,5 +1,28 @@
 # Phase 1 Open Tasks and Deployment Verification
 
+# Phase 3 contract/CI checkpoint
+
+- Implementation candidate SHA: `a3c5a7e2748e47021b3f8eb52f5f694ef9d75517`.
+- [Push CI 39717114585](https://github.com/angry0tiger-sudo/AliX/actions/runs/39717114585) and
+  [PR CI 39717119556](https://github.com/angry0tiger-sudo/AliX/actions/runs/39717119556): success.
+- Evidence: 91 unit tests passed; 92.62% coverage; 4 Phase 1 safety/dependency
+  contracts passed; Mypy, Ruff, Bandit, pip-audit, import-linter, Xenon and
+  Freqtrade safe-config smoke passed.
+- Scope includes versioned quality contracts, fail-closed connectivity status
+  and failover diagnostics, strategy-level OHLCV gating, and the local system
+  test runbook. No live data/provider or host networking was exercised.
+- Remaining gates: owner-run local system tests; current provider schemas and
+  licence/rate-limit review; live egress/DNS/TLS authentication review; future
+  FreqAI inference wiring; reconciliation before route switch/retry; owner review.
+- Report/acceptance follow-up SHA `101c67dbcba5b773616e6664425e96c05c0b1c43`:
+  push CI [39717394080](https://github.com/angry0tiger-sudo/AliX/actions/runs/39717394080)
+  and PR CI [39717398121](https://github.com/angry0tiger-sudo/AliX/actions/runs/39717398121)
+  both completed successfully.
+- These checks establish the contract/CI foundation only; no live data provider,
+  order write, Bale send or host-network activation was exercised.
+
+
+
 ## Phase 2 contract/CI checkpoint
 
 - Contract implementation commit `8743469f5f072ea482e5d016859ebd7e8d32a92c`
