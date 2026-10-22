@@ -318,6 +318,51 @@ def _latest_candle_reasons(
     return []
 
 
+def _validate_candle_row(
+    index: int,
+    row: Mapping[str, object],
+    *,
+    previous_timestamp: float | None,
+    reference_time: float,
+    expected_interval_seconds: int | None,
+    gap_tolerance_seconds: int,
+    max_future_skew_seconds: int,
+) -> tuple[list[str], float | None]:
+    reasons = _missing_column_reasons(index, row)
+    if not reasons:
+        values, price_reasons = _price_values(index, row)
+        reasons.extend(price_reasons)
+        reasons.extend(_price_relationship_reasons(index, values))
+
+    timestamp, timestamp_reasons = _timestamp_reasons(
+        index, row, previous_timestamp
+    )
+    reasons.extend(timestamp_reasons)
+    if timestamp is None:
+        return reasons, previous_timestamp
+
+    future_reason = _future_timestamp_reason(
+        index, timestamp, reference_time, max_future_skew_seconds
+    )
+    if future_reason:
+        reasons.append(future_reason)
+    gap = _gap_reason(
+        index,
+        timestamp,
+        previous_timestamp,
+        expected_interval_seconds,
+        gap_tolerance_seconds,
+    )
+    if gap:
+        reasons.append(gap)
+    next_previous = (
+        timestamp
+        if previous_timestamp is None or timestamp > previous_timestamp
+        else previous_timestamp
+    )
+    return reasons, next_previous
+
+
 def validate_candles(
     rows: Iterable[Mapping[str, object]],
     *,
@@ -343,7 +388,6 @@ def validate_candles(
     data = list(rows)
     if not data:
         return _result(("empty_dataset",), fingerprint=_fingerprint([]))
-
     reference_time = time.time() if now_epoch is None else _finite_number(now_epoch)
     if reference_time is None:
         raise ValueError("now_epoch must be a finite epoch timestamp")
@@ -351,36 +395,16 @@ def validate_candles(
     reasons: list[str] = []
     previous_timestamp: float | None = None
     for index, row in enumerate(data):
-        missing = _missing_column_reasons(index, row)
-        if missing:
-            reasons.extend(missing)
-        else:
-            values, price_reasons = _price_values(index, row)
-            reasons.extend(price_reasons)
-            reasons.extend(_price_relationship_reasons(index, values))
-
-        timestamp, timestamp_reasons = _timestamp_reasons(
-            index, row, previous_timestamp
-        )
-        reasons.extend(timestamp_reasons)
-        if timestamp is None:
-            continue
-        future_reason = _future_timestamp_reason(
-            index, timestamp, reference_time, max_future_skew_seconds
-        )
-        if future_reason:
-            reasons.append(future_reason)
-        gap = _gap_reason(
+        row_reasons, previous_timestamp = _validate_candle_row(
             index,
-            timestamp,
-            previous_timestamp,
-            expected_interval_seconds,
-            gap_tolerance_seconds,
+            row,
+            previous_timestamp=previous_timestamp,
+            reference_time=reference_time,
+            expected_interval_seconds=expected_interval_seconds,
+            gap_tolerance_seconds=gap_tolerance_seconds,
+            max_future_skew_seconds=max_future_skew_seconds,
         )
-        if gap:
-            reasons.append(gap)
-        if previous_timestamp is None or timestamp > previous_timestamp:
-            previous_timestamp = timestamp
+        reasons.extend(row_reasons)
 
     reasons.extend(_latest_candle_reasons(data, reference_time, max_age_seconds))
     degraded_codes = (
@@ -403,6 +427,46 @@ def _feature_numeric_issue(name: str, value: object) -> str | None:
     return None
 
 
+def _feature_schema_reasons(
+    values: Mapping[str, object],
+    required_features: Iterable[str],
+    schema_version: str,
+    expected_schema_version: str,
+) -> list[str]:
+    reasons: list[str] = []
+    required = tuple(sorted(set(required_features)))
+    if schema_version != expected_schema_version:
+        reasons.append("schema_version_mismatch:feature_vector")
+    missing = sorted(set(required) - set(values))
+    unexpected = sorted(set(values) - set(required))
+    if missing:
+        reasons.append(f"missing_features:{','.join(missing)}")
+    if unexpected:
+        reasons.append(f"unexpected_features:{','.join(unexpected)}")
+    for name in required:
+        if name in values:
+            issue = _feature_numeric_issue(name, values[name])
+            if issue:
+                reasons.append(issue)
+    return reasons
+
+
+def _feature_timestamp_reasons(
+    available_at: object | None, decision_timestamp: object | None
+) -> list[str]:
+    reasons: list[str] = []
+    available_epoch, available_error = _parse_timestamp(available_at)
+    decision_epoch, decision_error = _parse_timestamp(decision_timestamp)
+    if available_at is None or decision_timestamp is None:
+        reasons.append("missing_timestamp_metadata:feature_vector")
+    elif available_error or decision_error:
+        reasons.append("invalid_available_at:feature_vector")
+    elif available_epoch is not None and decision_epoch is not None:
+        if available_epoch > decision_epoch:
+            reasons.append("future_data_leakage:feature_vector")
+    return reasons
+
+
 def validate_feature_vector(
     values: Mapping[str, object],
     *,
@@ -413,33 +477,10 @@ def validate_feature_vector(
     expected_schema_version: str = FEATURE_SCHEMA_VERSION,
 ) -> QualityResult:
     """Validate a versioned numeric feature vector and prevent future-data use."""
-    reasons: list[str] = []
-    required = tuple(sorted(set(required_features)))
-    supplied = set(values)
-    if schema_version != expected_schema_version:
-        reasons.append("schema_version_mismatch:feature_vector")
-    missing = sorted(set(required) - supplied)
-    unexpected = sorted(supplied - set(required))
-    if missing:
-        reasons.append(f"missing_features:{','.join(missing)}")
-    if unexpected:
-        reasons.append(f"unexpected_features:{','.join(unexpected)}")
-    for name in required:
-        if name in values:
-            issue = _feature_numeric_issue(name, values[name])
-            if issue:
-                reasons.append(issue)
-
-    available_epoch, available_error = _parse_timestamp(available_at)
-    decision_epoch, decision_error = _parse_timestamp(decision_timestamp)
-    if available_at is None or decision_timestamp is None:
-        reasons.append("missing_timestamp_metadata:feature_vector")
-    elif available_error or decision_error:
-        reasons.append("invalid_available_at:feature_vector")
-    elif available_epoch is not None and decision_epoch is not None:
-        if available_epoch > decision_epoch:
-            reasons.append("future_data_leakage:feature_vector")
-
+    reasons = _feature_schema_reasons(
+        values, required_features, schema_version, expected_schema_version
+    )
+    reasons.extend(_feature_timestamp_reasons(available_at, decision_timestamp))
     safe_values = {name: str(values[name]) for name in sorted(values)}
     fingerprint = _fingerprint(
         {"schema_version": schema_version, "features": safe_values}
@@ -460,18 +501,24 @@ def _required_text_fields(
     return [f"missing_provenance:{','.join(missing)}"]
 
 
-def _external_timestamp_reasons(
-    record: Mapping[str, object], as_of_timestamp: object
-) -> list[str]:
-    reasons: list[str] = []
+def _parse_external_timestamps(
+    record: Mapping[str, object],
+) -> tuple[dict[str, float], list[str]]:
     timestamps: dict[str, float] = {}
+    reasons: list[str] = []
     for field in ("event_timestamp", "ingested_at", "available_at"):
         parsed, error = _parse_timestamp(record.get(field))
         if error:
             reasons.append(f"invalid_{field}")
         elif parsed is not None:
             timestamps[field] = parsed
+    return timestamps, reasons
 
+
+def _external_as_of_reasons(
+    timestamps: Mapping[str, float], as_of_timestamp: object
+) -> list[str]:
+    reasons: list[str] = []
     as_of, as_of_error = _parse_timestamp(as_of_timestamp)
     if as_of_error or as_of is None:
         reasons.append("invalid_decision_timestamp")
@@ -481,6 +528,14 @@ def _external_timestamp_reasons(
         reasons.append("invalid_timestamp_order:ingested_after_available")
     if as_of is not None and available is not None and available > as_of:
         reasons.append("future_data_leakage:external_record")
+    return reasons
+
+
+def _external_timestamp_reasons(
+    record: Mapping[str, object], as_of_timestamp: object
+) -> list[str]:
+    timestamps, reasons = _parse_external_timestamps(record)
+    reasons.extend(_external_as_of_reasons(timestamps, as_of_timestamp))
     return reasons
 
 
@@ -559,23 +614,22 @@ def validate_external_record(
     )
 
 
-def validate_model_output(
-    output: Mapping[str, object],
-    *,
-    decision_timestamp: object,
-    expected_schema_version: str = MODEL_OUTPUT_SCHEMA_VERSION,
-) -> QualityResult:
-    """Validate a model proposal only; this function does not approve risk or orders."""
+def _model_schema_reasons(
+    output: Mapping[str, object], expected_schema_version: str
+) -> list[str]:
     reasons: list[str] = []
-    schema_version = output.get("schema_version")
-    if schema_version != expected_schema_version:
+    if output.get("schema_version") != expected_schema_version:
         reasons.append("schema_version_mismatch:model_output")
-    required = ("model_revision", "proposal", "confidence", "uncertainty")
     reasons.extend(_required_text_fields(output, ("model_revision", "proposal")))
-    missing_numeric = [key for key in required if key not in output]
-    if missing_numeric:
-        reasons.append(f"invalid_model_output:missing_{','.join(missing_numeric)}")
+    required = ("model_revision", "proposal", "confidence", "uncertainty")
+    missing = [key for key in required if key not in output]
+    if missing:
+        reasons.append(f"invalid_model_output:missing_{','.join(missing)}")
+    return reasons
 
+
+def _model_value_reasons(output: Mapping[str, object]) -> list[str]:
+    reasons: list[str] = []
     proposal = str(output.get("proposal") or "").strip().upper()
     if proposal not in {"ENTRY", "HOLD", "EXIT"}:
         reasons.append("invalid_model_output:proposal")
@@ -583,14 +637,32 @@ def validate_model_output(
         value = _finite_number(output.get(name))
         if value is None or not 0 <= value <= 1:
             reasons.append(f"invalid_model_output:{name}")
+    return reasons
 
-    produced_at, produced_error = _parse_timestamp(output.get("produced_at"))
+
+def _model_timestamp_reasons(
+    produced_at_value: object, decision_timestamp: object
+) -> list[str]:
+    reasons: list[str] = []
+    produced_at, produced_error = _parse_timestamp(produced_at_value)
     decision_at, decision_error = _parse_timestamp(decision_timestamp)
     if produced_error or decision_error or produced_at is None or decision_at is None:
         reasons.append("invalid_produced_at:model_output")
     elif produced_at > decision_at:
         reasons.append("future_data_leakage:model_output")
+    return reasons
 
+
+def validate_model_output(
+    output: Mapping[str, object],
+    *,
+    decision_timestamp: object,
+    expected_schema_version: str = MODEL_OUTPUT_SCHEMA_VERSION,
+) -> QualityResult:
+    """Validate a model proposal only; this function does not approve risk or orders."""
+    reasons = _model_schema_reasons(output, expected_schema_version)
+    reasons.extend(_model_value_reasons(output))
+    reasons.extend(_model_timestamp_reasons(output.get("produced_at"), decision_timestamp))
     fingerprint_fields = (
         "schema_version",
         "produced_at",
