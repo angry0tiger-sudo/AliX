@@ -48,9 +48,7 @@ class SimulationDecisionRecord:
     trace_json: str = "{}"
 
     def __post_init__(self) -> None:
-        object.__setattr__(
-            self, "decided_at", _normalize_timestamp(self.decided_at)
-        )
+        object.__setattr__(self, "decided_at", _normalize_timestamp(self.decided_at))
         _validate_decision_identity(self)
         _validate_decision_permission(self.order_permission)
         object.__setattr__(self, "trace_json", _canonical_trace(self.trace_json))

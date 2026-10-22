@@ -443,12 +443,16 @@ def _build_input_trace(
         },
         "data_quality": {
             "candles": {
-                "status": candles.status.value if candles.status is not None else "UNKNOWN",
+                "status": candles.status.value
+                if candles.status is not None
+                else "UNKNOWN",
                 "reason_codes": [code.value for code in candles.reason_codes],
                 "fingerprint": candles.fingerprint,
             },
             "external_record": {
-                "status": external.status.value if external.status is not None else "UNKNOWN",
+                "status": external.status.value
+                if external.status is not None
+                else "UNKNOWN",
                 "reason_codes": [code.value for code in external.reason_codes],
                 "fingerprint": external.fingerprint,
             },
@@ -545,7 +549,9 @@ def _allocation_trace(allocation: RiskAllocation | None) -> dict[str, object] | 
         "stake": str(allocation.stake),
         "entry_price": str(allocation.entry_price),
         "stop_price": str(allocation.stop_price),
-        "estimated_loss_including_costs": str(allocation.estimated_loss_including_costs),
+        "estimated_loss_including_costs": str(
+            allocation.estimated_loss_including_costs
+        ),
         "fingerprint": allocation.fingerprint,
     }
 
@@ -561,9 +567,7 @@ def _record_risk_denial(
 ) -> dict[str, object]:
     risk_reasons = list(allocation_result.reasons) + list(gate.reasons)
     trace["final_status"] = SimulationStatus.REJECTED.value
-    result = _record_rejection(
-        scenario, ledger, fingerprint, risk_reasons, trace=trace
-    )
+    result = _record_rejection(scenario, ledger, fingerprint, risk_reasons, trace=trace)
     result["risk_gate_fingerprint"] = gate.fingerprint
     result["allocator_fingerprint"] = allocation_result.fingerprint
     result["news_records_selected"] = news_count
@@ -762,9 +766,7 @@ def _evaluate_scenario(
             SimulationStatus.NOT_SIMULATED,
             trace=trace,
         )
-    return _evaluate_entry_candidate(
-        scenario, ledger, fingerprint, news_count, trace
-    )
+    return _evaluate_entry_candidate(scenario, ledger, fingerprint, news_count, trace)
 
 
 def _exercise_risk_reduction() -> dict[str, object]:
@@ -840,9 +842,7 @@ def _expected_scenario_statuses() -> dict[str, str]:
 
 
 def _validate_scenario_results(results: list[dict[str, object]]) -> None:
-    baseline = next(
-        item for item in results if item["scenario_id"] == "baseline_entry"
-    )
+    baseline = next(item for item in results if item["scenario_id"] == "baseline_entry")
     if baseline["status"] != SimulationStatus.SIMULATED.value:
         raise AssertionError(f"baseline_scenario_failed:{baseline['status']}")
     expected = _expected_scenario_statuses()
