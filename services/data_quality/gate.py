@@ -90,6 +90,11 @@ _REASON_PREFIXES: tuple[tuple[str, QualityReasonCode], ...] = (
     ("unexpected_features", QualityReasonCode.UNEXPECTED_FEATURES),
     ("timestamp_timezone_missing", QualityReasonCode.TIMEZONE_REQUIRED),
     ("timezone_required", QualityReasonCode.TIMEZONE_REQUIRED),
+    ("invalid_price_range", QualityReasonCode.INVALID_PRICE_RANGE),
+    ("invalid_ohlc_range", QualityReasonCode.OHLC_INVARIANT_VIOLATION),
+    ("invalid_rate_limit_status", QualityReasonCode.INVALID_RATE_LIMIT_STATUS),
+    ("invalid_timestamp_order", QualityReasonCode.INVALID_TIMESTAMP_ORDER),
+    ("invalid_model_output", QualityReasonCode.INVALID_MODEL_OUTPUT),
     ("invalid_available_at", QualityReasonCode.INVALID_TIMESTAMP),
     ("invalid_decision_timestamp", QualityReasonCode.INVALID_TIMESTAMP),
     ("invalid_event_timestamp", QualityReasonCode.INVALID_TIMESTAMP),
@@ -107,11 +112,9 @@ _REASON_PREFIXES: tuple[tuple[str, QualityReasonCode], ...] = (
     ("future_timestamp", QualityReasonCode.FUTURE_TIMESTAMP),
     ("non_finite_", QualityReasonCode.NON_FINITE_VALUE),
     ("feature_non_finite", QualityReasonCode.NON_FINITE_VALUE),
+    ("negative_volume", QualityReasonCode.NEGATIVE_VOLUME),
     ("invalid_", QualityReasonCode.INVALID_NUMERIC_VALUE),
     ("feature_non_numeric", QualityReasonCode.INVALID_NUMERIC_VALUE),
-    ("invalid_price_range", QualityReasonCode.INVALID_PRICE_RANGE),
-    ("invalid_ohlc_range", QualityReasonCode.OHLC_INVARIANT_VIOLATION),
-    ("negative_volume", QualityReasonCode.NEGATIVE_VOLUME),
     ("schema_version_mismatch", QualityReasonCode.SCHEMA_VERSION_MISMATCH),
     ("missing_timestamp_metadata", QualityReasonCode.MISSING_TIMESTAMP_METADATA),
     ("future_data_leakage", QualityReasonCode.FUTURE_DATA_LEAKAGE),
@@ -119,9 +122,6 @@ _REASON_PREFIXES: tuple[tuple[str, QualityReasonCode], ...] = (
     ("source_not_approved", QualityReasonCode.SOURCE_NOT_APPROVED),
     ("rate_limit_blocked", QualityReasonCode.RATE_LIMIT_BLOCKED),
     ("rate_limit_limited", QualityReasonCode.RATE_LIMIT_LIMITED),
-    ("invalid_rate_limit_status", QualityReasonCode.INVALID_RATE_LIMIT_STATUS),
-    ("invalid_timestamp_order", QualityReasonCode.INVALID_TIMESTAMP_ORDER),
-    ("invalid_model_output", QualityReasonCode.INVALID_MODEL_OUTPUT),
 )
 
 
@@ -246,6 +246,8 @@ def _price_values(
 
 def _price_relationship_reasons(index: int, values: Mapping[str, float]) -> list[str]:
     reasons: list[str] = []
+    if "volume" in values and values["volume"] < 0:
+        reasons.append(f"row_{index}_negative_volume")
     price_keys = ("open", "high", "low", "close")
     if not all(key in values for key in price_keys):
         return reasons
@@ -259,8 +261,6 @@ def _price_relationship_reasons(index: int, values: Mapping[str, float]) -> list
         reasons.append(f"row_{index}_invalid_price_range")
     if low > min(opened, close) or high < max(opened, close):
         reasons.append(f"row_{index}_invalid_ohlc_range")
-    if "volume" in values and values["volume"] < 0:
-        reasons.append(f"row_{index}_negative_volume")
     return reasons
 
 
