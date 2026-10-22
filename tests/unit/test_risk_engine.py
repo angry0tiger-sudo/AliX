@@ -17,6 +17,7 @@ from risk.contracts import (
     MarketRules,
     MarketSnapshot,
     ModelRiskProposal,
+    RiskAllocation,
     RiskPolicy,
     Side,
 )
@@ -155,7 +156,7 @@ def make_allocation(
     market: MarketSnapshot | None = None,
     rules: MarketRules | None = None,
     proposal: ModelRiskProposal | None = None,
-):
+) -> RiskAllocation:
     selected_policy = policy or make_policy()
     result = DynamicRiskAllocator().allocate(
         policy=selected_policy,
@@ -321,24 +322,33 @@ def test_allocator_fails_closed_for_policy_account_and_edge_contract_violations(
     None
 ):
     allocator = DynamicRiskAllocator()
-    args = {
-        "account": make_account(),
-        "market": make_market(),
-        "rules": make_rules(),
-        "proposal": make_proposal(),
-        "now": NOW,
-    }
-    unapproved = allocator.allocate(policy=make_policy(owner_approved=False), **args)
+    unapproved = allocator.allocate(
+        policy=make_policy(owner_approved=False),
+        account=make_account(),
+        market=make_market(),
+        rules=make_rules(),
+        proposal=make_proposal(),
+        now=NOW,
+    )
     assert not unapproved.approved
     assert "risk_policy_not_owner_approved" in unapproved.reasons
     unreconciled = allocator.allocate(
-        policy=make_policy(), **{**args, "account": make_account(reconciled=False)}
+        policy=make_policy(),
+        account=make_account(reconciled=False),
+        market=make_market(),
+        rules=make_rules(),
+        proposal=make_proposal(),
+        now=NOW,
     )
     assert not unreconciled.approved
     assert "account_or_orders_not_reconciled" in unreconciled.reasons
     edge = allocator.allocate(
         policy=make_policy(),
-        **{**args, "proposal": make_proposal(expected_edge_after_costs=D("0"))},
+        account=make_account(),
+        market=make_market(),
+        rules=make_rules(),
+        proposal=make_proposal(expected_edge_after_costs=D("0")),
+        now=NOW,
     )
     assert not edge.approved
     assert "edge_after_costs_not_positive_enough" in edge.reasons
@@ -758,21 +768,24 @@ def test_contracts_reject_invalid_snapshots_rules_and_proposals() -> None:
 
 def test_allocator_rejects_exhausted_exposure_budget_and_invalid_stop() -> None:
     allocator = DynamicRiskAllocator()
-    args = {
-        "policy": make_policy(),
-        "market": make_market(),
-        "rules": make_rules(),
-        "proposal": make_proposal(),
-        "now": NOW,
-    }
     gross = allocator.allocate(
-        **{**args, "account": make_account(gross_exposure=D("10000"))}
+        policy=make_policy(),
+        account=make_account(gross_exposure=D("10000")),
+        market=make_market(),
+        rules=make_rules(),
+        proposal=make_proposal(),
+        now=NOW,
     )
     assert not gross.approved
     assert "gross_exposure_cap_exhausted" in gross.reasons
 
     correlated = allocator.allocate(
-        **{**args, "account": make_account(correlated_exposure=D("8000"))}
+        policy=make_policy(),
+        account=make_account(correlated_exposure=D("8000")),
+        market=make_market(),
+        rules=make_rules(),
+        proposal=make_proposal(),
+        now=NOW,
     )
     assert not correlated.approved
     assert "correlated_exposure_cap_exhausted" in correlated.reasons

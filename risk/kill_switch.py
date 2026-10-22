@@ -324,12 +324,15 @@ class SQLiteKillSwitchStore:
                 connection.close()
 
     def _state_from_row(self, row: tuple[object, ...]) -> KillSwitchState:
+        version = row[3]
+        if not isinstance(version, int):
+            raise KillSwitchStateUnavailable("kill_switch_state_version_invalid")
         latched_at = datetime.fromisoformat(str(row[2])) if row[2] is not None else None
         return KillSwitchState(
             latched=bool(row[0]),
             reason=str(row[1]),
             latched_at=latched_at,
-            version=int(row[3]),
+            version=version,
             last_transition=datetime.fromisoformat(str(row[4])),
             rearm_approval_id=(str(row[5]) if row[5] is not None else None),
         )
