@@ -76,7 +76,7 @@ jobs:
           assert report["experiment_status"] == "COMPLETED"
           assert report["commit_sha"] == os.environ["GITHUB_SHA"]
           assert report["source"]["row_count"] == 8760
-          assert report["protocol"]["threshold_optimized"] is False
+          assert report["protocol"]["threshold_was_optimized"] is False
           assert report["champion"] is None
           assert report["economic_acceptance"] == "NO-GO"
           assert report["promotion_status"] == "BLOCKED_NO_STRATEGY_LEVEL_EVIDENCE"
