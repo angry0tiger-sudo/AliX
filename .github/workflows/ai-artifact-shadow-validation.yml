@@ -1,0 +1,82 @@
+name: AliX Technical Model Shadow Validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_shadow_only:
+        description: Validate the pinned public-data model artifact in a shadow-only runner
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: alix-technical-model-shadow-validation
+  cancel-in-progress: false
+
+jobs:
+  model-shadow-validation:
+    if: inputs.confirm_shadow_only == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      ALIx_ENV: paper
+      ALIx_DRY_RUN: "true"
+      ALIx_ALLOW_LIVE_TRADING: "false"
+      ALIx_REPORTING_ENABLED: "false"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      PYTHONPATH: ${{ github.workspace }}
+
+    steps:
+      - name: Checkout staging code and approval records
+        uses: actions/checkout@v4
+        with:
+          ref: staging
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install the pinned public-data inference runtime
+        run: |
+          python -m pip install pip==25.2
+          python -m pip install numpy==2.5.4 pandas==2.3.3 scipy==1.18.1 scikit-learn==1.9.0
+
+      - name: Download the exact reviewed training artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: alix-public-ai-artifacts-39976295482
+          repository: ${{ github.repository }}
+          run-id: 39976295482
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/alix-training-bundle
+
+      - name: Fetch fresh public BTCUSDT candles for point-in-time inference
+        run: |
+          CHECKOUT_SHA="$(git rev-parse HEAD)"
+          python scripts/fetch_nobitex_public_ohlcv.py \
+            --days 30 \
+            --output-dir "$RUNNER_TEMP/alix-current-market-data" \
+            --commit-sha "$CHECKOUT_SHA"
+
+      - name: Validate approved models and exercise fail-closed shadow path
+        run: |
+          python scripts/run_ai_shadow_validation.py \
+            --training-artifact-root "$RUNNER_TEMP/alix-training-bundle" \
+            --inference-csv "$RUNNER_TEMP/alix-current-market-data/nobitex-btcusdt-1h.csv" \
+            --inference-manifest "$RUNNER_TEMP/alix-current-market-data/nobitex-btcusdt-1h.manifest.json" \
+            --output "$RUNNER_TEMP/alix-ai-shadow-validation.json"
+
+      - name: Upload shadow validation evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: alix-ai-shadow-validation-${{ github.run_id }}
+          path: ${{ runner.temp }}/alix-ai-shadow-validation.json
+          if-no-files-found: error
+          retention-days: 30
