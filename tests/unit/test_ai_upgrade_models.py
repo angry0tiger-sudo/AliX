@@ -188,6 +188,7 @@ def test_model_loader_rejects_invalid_dataset_and_validation_provenance() -> Non
     with pytest.raises(ValueError, match="validation_not_passed"):
         load_hmm_model_document(json.dumps(raw))
 
+
 def test_model_loader_supports_explicit_technical_approval_without_economic_promotion() -> (
     None
 ):
