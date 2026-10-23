@@ -49,6 +49,7 @@ def fetch_public_btc_usdt_price(*, timeout_seconds: float = 10.0) -> float:
         raise ValueError("public_price_value_invalid")
     return price
 
+
 def observe_public_price(
     *,
     duration_seconds: int,

@@ -73,6 +73,7 @@ def request_public_json(
             connection.close()
     raise RuntimeError("public_api_request_failed")
 
+
 def parse_udf_payload(
     payload: dict[str, Any], *, requested_from: int, requested_to: int
 ) -> list[CandleRecord]:
