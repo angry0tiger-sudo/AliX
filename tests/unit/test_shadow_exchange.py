@@ -244,3 +244,4 @@ def test_shadow_fill_consumes_an_actual_positive_risk_gate_decision(
     assert simulated.order_permission is False
     assert simulated.gate_fingerprint == gate_decision.fingerprint
     assert exchange.get_fill(proposal.decision_id) == simulated
+

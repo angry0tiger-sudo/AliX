@@ -191,7 +191,9 @@ def test_model_loader_rejects_invalid_dataset_and_validation_provenance() -> Non
         load_hmm_model_document(json.dumps(raw))
 
 
-def test_model_loader_accepts_not_approved_external_record_but_never_authorizes() -> None:
+def test_model_loader_accepts_not_approved_external_record_but_never_authorizes() -> (
+    None
+):
     approval = {
         "schema_version": "alix.model-technical-approval.v1",
         "model_type": "gaussian_hmm",
@@ -245,6 +247,4 @@ def test_model_loader_requires_separate_hash_pinned_technical_approval() -> None
     assert loaded.owner_approved is True
     approval["model_sha256"] = "0" * 64
     with pytest.raises(ValueError, match="approval_hash_mismatch"):
-        load_hmm_model_document(
-            json.dumps(raw), approval_document=json.dumps(approval)
-        )
+        load_hmm_model_document(json.dumps(raw), approval_document=json.dumps(approval))

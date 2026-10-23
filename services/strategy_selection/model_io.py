@@ -124,7 +124,6 @@ def _model_from_payload(model: Mapping[str, Any], model_hash: str) -> RegimeHMMM
     return RegimeHMMModel(**values)  # type: ignore[arg-type]
 
 
-
 def _validate_technical_approval(
     document: str, *, model_type: str, model_hash: str, dataset_hash: str
 ) -> None:
@@ -246,6 +245,4 @@ def load_hmm_model_file(
             approval_document = Path(approval_path).read_text(encoding="utf-8")
         except OSError as error:
             raise ValueError("hmm_artifact_approval_unavailable") from error
-    return load_hmm_model_document(
-        document, approval_document=approval_document
-    )
+    return load_hmm_model_document(document, approval_document=approval_document)

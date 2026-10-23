@@ -180,9 +180,7 @@ def _empty_regime_columns(dataframe: DataFrame) -> DataFrame:
 def _infer_regimes(dataframe: DataFrame) -> DataFrame:
     """Apply the pinned model sequentially without using later candles as features."""
     try:
-        model = load_hmm_model_file(
-            _HMM_MODEL_PATH, approval_path=_HMM_APPROVAL_PATH
-        )
+        model = load_hmm_model_file(_HMM_MODEL_PATH, approval_path=_HMM_APPROVAL_PATH)
     except (ValueError, OSError):
         return dataframe
     classifier = HMMRegimeClassifier()
