@@ -220,8 +220,12 @@ def _validate_historical_rows(rows: list[CandleRecord], days: int) -> None:
     for previous, current in zip(stamps, stamps[1:]):
         if current - previous != INTERVAL_SECONDS:
             raise ValueError("nobitex_historical_gap_detected_no_interpolation")
-    if len(rows) < int(days * 24 * 0.98):
-        raise ValueError("nobitex_historical_row_coverage_too_low")
+    expected_rows = days * 24
+    if len(rows) != expected_rows:
+        raise ValueError(
+            "nobitex_historical_row_coverage_mismatch:"
+            f"expected={expected_rows}:actual={len(rows)}"
+        )
 
 
 def _latest_closed_candle_timestamp(
