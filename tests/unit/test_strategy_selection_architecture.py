@@ -12,6 +12,7 @@ def test_selector_modules_do_not_import_execution_or_risk_capabilities() -> None
         Path("services/strategy_selection/contracts.py"),
         Path("services/strategy_selection/registry.py"),
         Path("services/strategy_selection/selector.py"),
+        Path("services/strategy_selection/regime.py"),
     )
     forbidden_roots = {
         "ccxt",

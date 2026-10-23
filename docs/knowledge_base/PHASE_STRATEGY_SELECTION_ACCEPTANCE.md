@@ -24,7 +24,8 @@ Implement a pure, deterministic selector that returns a strategy proposal or NO_
 - [x] Deterministic tie-break by strategy ID/version.
 - [x] order_permission always remains false.
 - [x] Production registry is empty; no current strategy is implicitly promoted.
-- [ ] Runtime integration with Trade Proposal and append-only Decision Ledger is implemented and tested.
+- [x] Versioned HMM forward-filter module returns regime labels only when point-in-time Data Quality, schema, model revision/freshness, posterior confidence and posterior margin all pass.
+- [ ] Approved fitted HMM parameters, walk-forward regime calibration and runtime wiring into Trade Proposal / append-only Decision Ledger are completed and tested.
 - [x] Architecture test rejects direct imports of exchange/order/secret-capable and risk packages; runtime ACL isolation remains unproven.
 - [ ] Reviewed merge through effective main branch protections.
 
