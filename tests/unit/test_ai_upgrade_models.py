@@ -157,7 +157,9 @@ def test_hmm_artifact_parameters_are_json_native_and_semantically_ordered() -> N
         "range",
         "high_volatility",
     ]
-    assert parameters["fit_diagnostics"]["iterations"] >= 1
+    diagnostics = parameters["fit_diagnostics"]
+    assert isinstance(diagnostics, dict)
+    assert diagnostics["iterations"] >= 1
 
 
 def test_model_loader_validates_digest_schema_and_release_flags() -> None:

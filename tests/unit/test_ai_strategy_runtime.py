@@ -74,20 +74,17 @@ def test_dynamic_stop_uses_regime_atr_multiplier_and_fails_conservatively() -> N
     )
     trade = SimpleNamespace(open_rate=100.0)
     now = datetime(2026, 10, 23, 12, 0, tzinfo=timezone.utc)
-    assert (
-        abs(strategy.custom_stoploss("BTC/USDT", trade, now, 100.0, 0.0) - (-0.04))
-        < 1e-8
-    )
+    trend_stop = strategy.custom_stoploss("BTC/USDT", trade, now, 100.0, 0.0)
+    assert trend_stop is not None
+    assert abs(trend_stop - (-0.04)) < 1e-8
     analyzed.loc[0, "alix_regime"] = "range"
-    assert (
-        abs(strategy.custom_stoploss("BTC/USDT", trade, now, 100.0, 0.0) - (-0.02))
-        < 1e-8
-    )
+    range_stop = strategy.custom_stoploss("BTC/USDT", trade, now, 100.0, 0.0)
+    assert range_stop is not None
+    assert abs(range_stop - (-0.02)) < 1e-8
     analyzed.loc[0, "alix_regime"] = "high_volatility"
-    assert (
-        abs(strategy.custom_stoploss("BTC/USDT", trade, now, 100.0, 0.0) - (-0.015))
-        < 1e-8
-    )
+    volatile_stop = strategy.custom_stoploss("BTC/USDT", trade, now, 100.0, 0.0)
+    assert volatile_stop is not None
+    assert abs(volatile_stop - (-0.015)) < 1e-8
     assert strategy.custom_stoploss("BTC/USDT", trade, now, 0.0, 0.0) == -0.01
 
 

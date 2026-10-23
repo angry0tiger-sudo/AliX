@@ -13,7 +13,7 @@ import hashlib
 import json
 import math
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -63,7 +63,7 @@ _BREAKEVEN_BAND = 0.0025
 
 def _aware_timestamp(value: object) -> datetime | None:
     try:
-        parsed = pd.Timestamp(value)
+        parsed = pd.Timestamp(str(value))
     except (TypeError, ValueError, OverflowError):
         return None
     if parsed.tzinfo is None:
@@ -76,7 +76,7 @@ def _row_fingerprint(row: dict[str, object], previous_hash: Any) -> str:
     next_hash = previous_hash.copy()
     next_hash.update(content.encode("utf-8"))
     next_hash.update(b"\n")
-    return next_hash.hexdigest()
+    return cast(str, next_hash.hexdigest())
 
 
 def _add_technical_indicators(dataframe: DataFrame) -> DataFrame:
@@ -253,7 +253,7 @@ class AliXStrategy(IStrategy):  # type: ignore[misc]
     INTERFACE_VERSION = 3
     timeframe = "1h"
     can_short = False
-    minimal_roi = {}
+    minimal_roi: dict[int, float] = {}
     # Catastrophic fallback only; the operative stop is returned by custom_stoploss.
     stoploss = -0.99
     trailing_stop = False

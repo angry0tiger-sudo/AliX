@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
-from typing import Final
+from typing import Any, Final
 
 import numpy as np
 import pandas as pd
@@ -61,7 +61,7 @@ def _logsumexp(values: np.ndarray, axis: int) -> np.ndarray:
     maximum = np.max(values, axis=axis, keepdims=True)
     shifted = np.exp(values - maximum)
     answer = maximum + np.log(np.sum(shifted, axis=axis, keepdims=True))
-    return np.squeeze(answer, axis=axis)
+    return np.asarray(np.squeeze(answer, axis=axis), dtype=float)
 
 
 def _validate_features(features: DataFrame) -> np.ndarray:
@@ -286,7 +286,7 @@ def fit_parameters_for_artifact(
     max_iter: int = 80,
     tolerance: float = 1e-4,
     random_seed: int = 42,
-) -> dict[str, object]:
+) -> dict[str, Any]:
     """Convert fitted parameters into JSON-native values in the runtime schema."""
     fit = fit_gaussian_hmm(
         features,

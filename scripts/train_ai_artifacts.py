@@ -383,7 +383,7 @@ def train(
         "validation": hmm_validation,
         "training": {
             "fit_rows": int(len(regime_frame)),
-            "validation_rows": int(hmm_validation["validation_rows"]),
+            "validation_rows": cast(int, hmm_validation["validation_rows"]),
             "fit_diagnostics": fitted["fit_diagnostics"],
             "training_algorithm": "diagonal Gaussian HMM Baum-Welch",
             "random_seed": 42,

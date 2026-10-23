@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from decimal import Decimal
+from pathlib import Path
 import sqlite3
 
 import pytest
@@ -11,6 +12,7 @@ import pytest
 from risk.gate import GateDecision
 from services.simulation.shadow_exchange import (
     ShadowExchange,
+    ShadowFill,
     ShadowLedgerConflictError,
 )
 
@@ -35,7 +37,7 @@ def _execute(
     decision: GateDecision,
     confidence: str = "0.80",
     quantity: str = "2",
-):
+) -> ShadowFill:
     return exchange.simulate_round_trip(
         decision=decision,
         meta_confidence=Decimal(confidence),
@@ -48,7 +50,7 @@ def _execute(
 
 
 def test_shadow_fill_applies_round_trip_slippage_fees_and_stays_synthetic(
-    tmp_path,
+    tmp_path: Path,
 ) -> None:
     exchange = ShadowExchange(tmp_path / "shadow.sqlite3")
     result = _execute(exchange, _decision())
@@ -72,7 +74,7 @@ def test_shadow_fill_applies_round_trip_slippage_fees_and_stays_synthetic(
     ],
 )
 def test_shadow_never_fills_if_gate_or_meta_filter_rejects(
-    tmp_path, decision, confidence
+    tmp_path: Path, decision: GateDecision, confidence: str
 ) -> None:
     exchange = ShadowExchange(tmp_path / "shadow.sqlite3")
     result = _execute(exchange, decision, confidence)
@@ -97,7 +99,7 @@ def test_shadow_replay_is_idempotent_and_conflicting_reuse_is_rejected(
     assert exchange.row_count() == 1
 
 
-def test_shadow_validation_and_append_only_invariants(tmp_path) -> None:
+def test_shadow_validation_and_append_only_invariants(tmp_path: Path) -> None:
     exchange = ShadowExchange(tmp_path / "shadow.sqlite3")
     with pytest.raises(ValueError, match="positive"):
         exchange.simulate_round_trip(
