@@ -64,47 +64,11 @@ class RegimeHMMModel:
     minimum_posterior_margin: Decimal
 
     def __post_init__(self) -> None:
-        if not self.revision.strip() or not self.feature_schema_version.strip():
-            raise ValueError("regime_model_identity_missing")
-        if _SHA256.fullmatch(self.model_sha256) is None:
-            raise ValueError("regime_model_hash_invalid")
-        _require_aware("regime_model_trained_at", self.trained_at)
-        if not isinstance(self.owner_approved, bool):
-            raise ValueError("regime_model_approval_invalid")
-        _require_unique("regime_feature_names", self.feature_names, nonempty=True)
-        _require_unique("regime_labels", self.regimes, nonempty=True)
-        if len(self.regimes) < 2:
-            raise ValueError("regime_model_requires_multiple_states")
-        if len(self.initial_probabilities) != len(self.regimes):
-            raise ValueError("regime_initial_probability_shape_invalid")
-        _validate_probability_vector(
-            "regime_initial_probabilities", self.initial_probabilities
-        )
-        if len(self.transition_matrix) != len(self.regimes):
-            raise ValueError("regime_transition_matrix_shape_invalid")
-        for row in self.transition_matrix:
-            if len(row) != len(self.regimes):
-                raise ValueError("regime_transition_matrix_shape_invalid")
-            _validate_probability_vector("regime_transition_row", row)
-        if tuple(item.regime for item in self.emissions) != self.regimes:
-            raise ValueError("regime_emission_state_order_mismatch")
-        for emission in self.emissions:
-            if len(emission.means) != len(self.feature_names):
-                raise ValueError("regime_emission_feature_shape_invalid")
-        if self.max_model_age_seconds <= 0 or self.max_observation_age_seconds <= 0:
-            raise ValueError("regime_model_freshness_limits_invalid")
-        _require_decimal(
-            "regime_minimum_confidence",
-            self.minimum_confidence,
-            minimum=Decimal("0"),
-            maximum=Decimal("1"),
-        )
-        _require_decimal(
-            "regime_minimum_posterior_margin",
-            self.minimum_posterior_margin,
-            minimum=Decimal("0"),
-            maximum=Decimal("1"),
-        )
+        _validate_model_identity(self)
+        _validate_model_states(self)
+        _validate_model_probability_contract(self)
+        _validate_model_emissions(self)
+        _validate_model_freshness_and_thresholds(self)
 
     @property
     def fingerprint(self) -> str:
@@ -177,24 +141,9 @@ class RegimeInference:
     fingerprint: str
 
     def __post_init__(self) -> None:
-        if not self.decision_id.strip():
-            raise ValueError("regime_decision_id_missing")
-        if self.order_permission is not False:
-            raise ValueError("regime_classifier_cannot_grant_order_permission")
-        if not self.reason_codes:
-            raise ValueError("regime_reason_codes_required")
-        if _SHA256.fullmatch(self.fingerprint) is None:
-            raise ValueError("regime_inference_fingerprint_invalid")
-        if self.status is RegimeInferenceStatus.CLASSIFIED:
-            if (
-                not self.selected_regime
-                or self.confidence is None
-                or self.model_fingerprint is None
-                or self.evidence_fingerprint is None
-            ):
-                raise ValueError("classified_regime_evidence_missing")
-        elif self.selected_regime is not None or self.confidence is not None:
-            raise ValueError("no_trade_regime_must_not_select_state")
+        _validate_inference_identity(self)
+        _validate_inference_permission(self.order_permission)
+        _validate_inference_state(self)
 
 
 class HMMRegimeClassifier:
@@ -397,24 +346,44 @@ def _forward_filter(
     observation: RegimeObservation,
     previous: PreviousRegimePosterior | None,
 ) -> tuple[float, ...]:
-    if previous is None:
-        prior = tuple(float(value) for value in model.initial_probabilities)
-    else:
-        prior = tuple(
-            sum(
-                float(previous.probabilities[i]) * float(model.transition_matrix[i][j])
-                for i in range(len(model.regimes))
-            )
-            for j in range(len(model.regimes))
-        )
+    prior = _prior_probabilities(model, previous)
     feature_map = dict(observation.feature_values)
     values = tuple(float(feature_map[name]) for name in model.feature_names)
-    log_weights: list[float] = []
+    log_weights = _state_log_weights(model, prior, values)
+    return _normalize_log_weights(log_weights)
+
+
+def _prior_probabilities(
+    model: RegimeHMMModel,
+    previous: PreviousRegimePosterior | None,
+) -> tuple[float, ...]:
+    if previous is None:
+        return tuple(float(value) for value in model.initial_probabilities)
+    count = len(model.regimes)
+    return tuple(
+        sum(
+            float(previous.probabilities[i]) * float(model.transition_matrix[i][j])
+            for i in range(count)
+        )
+        for j in range(count)
+    )
+
+
+def _state_log_weights(
+    model: RegimeHMMModel,
+    prior: tuple[float, ...],
+    values: tuple[float, ...],
+) -> tuple[float, ...]:
+    log_weights = []
     for state_index, emission in enumerate(model.emissions):
         probability = prior[state_index]
         prior_log = math.log(probability) if probability > 0 else -math.inf
         log_weights.append(prior_log + _gaussian_log_likelihood(values, emission))
-    finite_weights = [value for value in log_weights if math.isfinite(value)]
+    return tuple(log_weights)
+
+
+def _normalize_log_weights(log_weights: tuple[float, ...]) -> tuple[float, ...]:
+    finite_weights = tuple(value for value in log_weights if math.isfinite(value))
     if not finite_weights:
         raise ValueError("regime_all_state_likelihoods_invalid")
     maximum = max(finite_weights)
@@ -422,10 +391,14 @@ def _forward_filter(
         math.exp(value - maximum) if math.isfinite(value) else 0.0
         for value in log_weights
     )
-    normalizer = sum(unnormalized)
+    return _normalize_weights(unnormalized)
+
+
+def _normalize_weights(weights: tuple[float, ...]) -> tuple[float, ...]:
+    normalizer = sum(weights)
     if not math.isfinite(normalizer) or normalizer <= 0:
         raise ValueError("regime_likelihood_normalizer_invalid")
-    return tuple(value / normalizer for value in unnormalized)
+    return tuple(value / normalizer for value in weights)
 
 
 def _gaussian_log_likelihood(
@@ -559,3 +532,96 @@ def _as_decimal(value: float) -> Decimal:
     if not math.isfinite(value):
         raise ValueError("regime_probability_not_finite")
     return Decimal(str(value))
+
+
+def _validate_model_identity(model: RegimeHMMModel) -> None:
+    if not model.revision.strip() or not model.feature_schema_version.strip():
+        raise ValueError("regime_model_identity_missing")
+    if _SHA256.fullmatch(model.model_sha256) is None:
+        raise ValueError("regime_model_hash_invalid")
+    _require_aware("regime_model_trained_at", model.trained_at)
+    if not isinstance(model.owner_approved, bool):
+        raise ValueError("regime_model_approval_invalid")
+
+
+def _validate_model_states(model: RegimeHMMModel) -> None:
+    _require_unique("regime_feature_names", model.feature_names, nonempty=True)
+    _require_unique("regime_labels", model.regimes, nonempty=True)
+    if len(model.regimes) < 2:
+        raise ValueError("regime_model_requires_multiple_states")
+
+
+def _validate_model_probability_contract(model: RegimeHMMModel) -> None:
+    if len(model.initial_probabilities) != len(model.regimes):
+        raise ValueError("regime_initial_probability_shape_invalid")
+    _validate_probability_vector(
+        "regime_initial_probabilities", model.initial_probabilities
+    )
+    _validate_transition_matrix(model.transition_matrix, len(model.regimes))
+
+
+def _validate_transition_matrix(
+    matrix: tuple[tuple[Decimal, ...], ...], state_count: int
+) -> None:
+    if len(matrix) != state_count:
+        raise ValueError("regime_transition_matrix_shape_invalid")
+    for row in matrix:
+        if len(row) != state_count:
+            raise ValueError("regime_transition_matrix_shape_invalid")
+        _validate_probability_vector("regime_transition_row", row)
+
+
+def _validate_model_emissions(model: RegimeHMMModel) -> None:
+    if tuple(item.regime for item in model.emissions) != model.regimes:
+        raise ValueError("regime_emission_state_order_mismatch")
+    for emission in model.emissions:
+        if len(emission.means) != len(model.feature_names):
+            raise ValueError("regime_emission_feature_shape_invalid")
+
+
+def _validate_model_freshness_and_thresholds(model: RegimeHMMModel) -> None:
+    if model.max_model_age_seconds <= 0 or model.max_observation_age_seconds <= 0:
+        raise ValueError("regime_model_freshness_limits_invalid")
+    _require_decimal(
+        "regime_minimum_confidence",
+        model.minimum_confidence,
+        minimum=Decimal("0"),
+        maximum=Decimal("1"),
+    )
+    _require_decimal(
+        "regime_minimum_posterior_margin",
+        model.minimum_posterior_margin,
+        minimum=Decimal("0"),
+        maximum=Decimal("1"),
+    )
+
+
+def _validate_inference_identity(inference: RegimeInference) -> None:
+    if not inference.decision_id.strip():
+        raise ValueError("regime_decision_id_missing")
+    if not inference.reason_codes:
+        raise ValueError("regime_reason_codes_required")
+    if _SHA256.fullmatch(inference.fingerprint) is None:
+        raise ValueError("regime_inference_fingerprint_invalid")
+
+
+def _validate_inference_permission(order_permission: bool) -> None:
+    if order_permission is not False:
+        raise ValueError("regime_classifier_cannot_grant_order_permission")
+
+
+def _validate_inference_state(inference: RegimeInference) -> None:
+    if inference.status is RegimeInferenceStatus.CLASSIFIED:
+        _validate_classified_state(inference)
+    elif inference.selected_regime is not None or inference.confidence is not None:
+        raise ValueError("no_trade_regime_must_not_select_state")
+
+
+def _validate_classified_state(inference: RegimeInference) -> None:
+    if (
+        not inference.selected_regime
+        or inference.confidence is None
+        or inference.model_fingerprint is None
+        or inference.evidence_fingerprint is None
+    ):
+        raise ValueError("classified_regime_evidence_missing")
