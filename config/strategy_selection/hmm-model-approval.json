@@ -1,12 +1,12 @@
 {
   "schema_version": "alix.model-technical-approval.v1",
   "model_type": "gaussian_hmm",
-  "status": "NOT_APPROVED",
-  "model_sha256": null,
-  "dataset_sha256": null,
+  "status": "OWNER_APPROVED_TECHNICAL_ONLY",
+  "model_sha256": "c3735b5ce711ecc490c85d75db78d6347900116117f5ad148db7a58c6e7e5329",
+  "dataset_sha256": "177e041034fcd91a57bcee59edf6762fcdec85e7a2f4e8b27951f664d9a88856",
   "owner": "angry0tiger-sudo",
-  "approval_id": null,
-  "approved_at": null,
+  "approval_id": "ALIX-OD-2026-10-23-TECHNICAL-APPROVAL-RUN-39976295482",
+  "approved_at": "2026-10-23T17:26:00Z",
   "economic_acceptance": "NO-GO",
   "order_permission": false,
   "trading_authorization": "NO-GO"
