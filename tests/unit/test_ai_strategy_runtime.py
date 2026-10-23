@@ -7,7 +7,7 @@ import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -168,7 +168,7 @@ def test_meta_scoring_preserves_valid_tail_rows_after_nan_warmup(
 
     result = strategy_module._score_meta_candidates(frame)
 
-    assert not np.isfinite(float(result.loc[0, "alix_meta_probability"]))
+    assert not np.isfinite(cast(float, result.loc[0, "alix_meta_probability"]))
     assert result.loc[0, "alix_meta_model_approved"] == np.bool_(False)
     assert np.isfinite(result.loc[1:, "alix_meta_probability"]).all()
     assert result.loc[1:, "alix_meta_model_approved"].all()
