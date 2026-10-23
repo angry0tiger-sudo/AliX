@@ -359,9 +359,9 @@ def _non_overlapping_trades(
     selected["meta_probability"] = probabilities[probabilities >= RESEARCH_THRESHOLD]
     trades: list[dict[str, Any]] = []
     last_exit = -1
-    for row in selected.sort_values("event_index").itertuples(index=False):
-        event_index = int(row.event_index)
-        exit_index = int(row.label_end_index)
+    for row in selected.sort_values("event_index").to_dict(orient="records"):
+        event_index = int(row["event_index"])
+        exit_index = int(row["label_end_index"])
         if event_index <= last_exit:
             continue
         last_exit = exit_index
@@ -370,10 +370,10 @@ def _non_overlapping_trades(
                 "fold_id": fold_id,
                 "event_index": event_index,
                 "label_end_index": exit_index,
-                "meta_probability": float(row.meta_probability),
-                "meta_label": int(row.meta_label),
-                "net_return": float(row.net_return),
-                "exit_reason": str(row.exit_reason),
+                "meta_probability": float(row["meta_probability"]),
+                "meta_label": int(row["meta_label"]),
+                "net_return": float(row["net_return"]),
+                "exit_reason": str(row["exit_reason"]),
             }
         )
     return trades
