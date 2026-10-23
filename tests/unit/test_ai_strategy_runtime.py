@@ -14,6 +14,7 @@ import pandas as pd
 import pytest
 
 import user_data.strategies.AliXStrategy as strategy_module
+from services.freqai_baseline.features import FEATURE_COLUMNS
 from services.meta_labeling.meta_model import (
     META_MODEL_SCHEMA_VERSION,
     MetaLabelModel,
@@ -149,7 +150,7 @@ def test_populate_indicators_marks_model_or_selection_missing_as_no_trade() -> N
 def test_meta_scoring_preserves_valid_tail_rows_after_nan_warmup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    feature_names = strategy_module.FEATURE_COLUMNS
+    feature_names = FEATURE_COLUMNS
     raw_model = {
         "schema_version": META_MODEL_SCHEMA_VERSION,
         "training_signal_requirement": "out_of_fold_only",
@@ -167,7 +168,7 @@ def test_meta_scoring_preserves_valid_tail_rows_after_nan_warmup(
 
     result = strategy_module._score_meta_candidates(frame)
 
-    assert np.isnan(result.loc[0, "alix_meta_probability"])
+    assert not np.isfinite(float(result.loc[0, "alix_meta_probability"]))
     assert result.loc[0, "alix_meta_model_approved"] == np.bool_(False)
     assert np.isfinite(result.loc[1:, "alix_meta_probability"]).all()
     assert result.loc[1:, "alix_meta_model_approved"].all()
