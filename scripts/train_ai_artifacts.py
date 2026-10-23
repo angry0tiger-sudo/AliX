@@ -181,9 +181,7 @@ def _meta_training(
         slippage_bps_per_side=SLIPPAGE_BPS_PER_SIDE,
         timeframe_seconds=3600,
     )
-    mature_horizon = (
-        event_indices + barrier_config.max_holding_bars < len(candles)
-    )
+    mature_horizon = event_indices + barrier_config.max_holding_bars < len(candles)
     valid_event = (
         np.isfinite(volatility)
         & (volatility > 0)
