@@ -132,6 +132,7 @@ def test_shadow_validation_and_append_only_invariants(tmp_path: Path) -> None:
                 "DELETE FROM shadow_round_trips WHERE decision_id='shadow-1'"
             )
 
+
 def test_shadow_fill_consumes_an_actual_positive_risk_gate_decision(
     tmp_path: Path,
 ) -> None:
@@ -244,4 +245,3 @@ def test_shadow_fill_consumes_an_actual_positive_risk_gate_decision(
     assert simulated.order_permission is False
     assert simulated.gate_fingerprint == gate_decision.fingerprint
     assert exchange.get_fill(proposal.decision_id) == simulated
-
