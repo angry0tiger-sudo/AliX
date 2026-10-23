@@ -568,7 +568,7 @@ def test_model_score_lineage_and_freshness_are_required(
 ) -> None:
     definition = make_definition()
     score = make_score(definition, **score_changes)
-    selected_scores = () if scores == () else (score,)
+    selected_scores: tuple[ModelStrategyScore, ...] = () if scores == () else (score,)
     if scores == "duplicate":
         selected_scores = (score, score)
     result = run_selector(definitions=(definition,), scores=selected_scores)
