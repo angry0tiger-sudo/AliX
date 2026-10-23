@@ -102,7 +102,9 @@ def _validate_approval(
     _require_closed_flags(approval, model_type)
 
 
-def _validate_candles(path: Path, manifest: Mapping[str, Any], expected_rows: int) -> DataFrame:
+def _validate_candles(
+    path: Path, manifest: Mapping[str, Any], expected_rows: int
+) -> tuple[DataFrame, str]:
     raw = path.read_bytes()
     if _sha256_bytes(raw) != manifest.get("csv_sha256"):
         raise ValueError("shadow_validation_csv_hash_mismatch")
@@ -138,7 +140,7 @@ def _validate_candles(path: Path, manifest: Mapping[str, Any], expected_rows: in
     quality = validate_candles(rows, expected_interval_seconds=3600, gap_policy="reject")
     if not quality.passed or quality.fingerprint is None:
         raise ValueError("shadow_validation_data_quality_rejected")
-    return candles
+    return candles, quality.fingerprint
 
 
 def _load_training_bundle(root: Path) -> tuple[DataFrame, dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
@@ -165,7 +167,7 @@ def _load_training_bundle(root: Path) -> tuple[DataFrame, dict[str, Any], dict[s
         raise ValueError("shadow_validation_training_provenance_mismatch")
     _require_closed_flags(manifest, "dataset_manifest")
     _require_closed_flags(report, "training_report")
-    candles = _validate_candles(
+    candles, quality_fingerprint = _validate_candles(
         data_root / "nobitex-btcusdt-1h.csv", manifest, expected_rows=8760
     )
     if (
@@ -180,7 +182,9 @@ def _load_training_bundle(root: Path) -> tuple[DataFrame, dict[str, Any], dict[s
     ):
         raise ValueError("shadow_validation_training_technical_gate_failed")
     if (
-        hmm.get("status") != "TRAINED_UNAPPROVED"
+        report.get("data_quality_fingerprint") != quality_fingerprint
+        or hmm.get("dataset", {}).get("data_quality_fingerprint") != quality_fingerprint
+        or hmm.get("status") != "TRAINED_UNAPPROVED"
         or hmm.get("owner_approved") is not False
         or hmm.get("model_sha256") != report.get("hmm", {}).get("model_sha256")
         or hmm.get("dataset", {}).get("csv_sha256") != DATASET_SHA256
@@ -277,7 +281,7 @@ def run_validation(
     inference_manifest_path: Path,
     output_path: Path,
 ) -> dict[str, Any]:
-    _, _, training_report, hmm, _ = _load_training_bundle(training_artifact_root)
+    _, _, _, hmm, _ = _load_training_bundle(training_artifact_root)
     inference_manifest = _read_object(inference_manifest_path)
     if (
         inference_manifest.get("provider") != "Nobitex public UDF history API"
@@ -290,10 +294,13 @@ def run_validation(
     ):
         raise ValueError("shadow_validation_inference_provenance_invalid")
     _require_closed_flags(inference_manifest, "inference_manifest")
-    inference_candles = _validate_candles(
+    inference_rows = inference_manifest.get("row_count")
+    if isinstance(inference_rows, bool) or not isinstance(inference_rows, int) or inference_rows <= 0:
+        raise ValueError("shadow_validation_inference_row_count_invalid")
+    inference_candles, inference_fingerprint = _validate_candles(
         inference_csv,
         inference_manifest,
-        expected_rows=int(inference_manifest.get("row_count", 0)),
+        expected_rows=inference_rows,
     )
     now = datetime.now(timezone.utc)
     latest_candle = inference_candles["date"].iloc[-1].to_pydatetime()
@@ -373,6 +380,7 @@ def run_validation(
         "approval_status": APPROVAL_STATUS,
         "inference_data_sha256": inference_manifest["csv_sha256"],
         "inference_rows": len(inference_candles),
+        "inference_data_quality_fingerprint": inference_fingerprint,
         "latest_candle": latest_candle.isoformat(),
         "latest_candle_age_seconds": age_seconds,
         "latest_hmm_revision": latest.get("alix_hmm_revision"),
