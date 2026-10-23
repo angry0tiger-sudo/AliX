@@ -288,7 +288,9 @@ def test_confidence_and_posterior_margin_are_independent_gates() -> None:
 
 
 def test_model_contract_rejects_invalid_state_probabilities_and_emissions() -> None:
-    with pytest.raises(ValueError, match="regime_initial_probabilities_must_sum_to_one"):
+    with pytest.raises(
+        ValueError, match="regime_initial_probabilities_must_sum_to_one"
+    ):
         make_model(initial_probabilities=(D("0.5"), D("0.5"), D("0.5")))
     with pytest.raises(ValueError, match="regime_transition_row_must_sum_to_one"):
         make_model(
@@ -306,5 +308,7 @@ def test_classifier_result_cannot_grant_order_permission() -> None:
     result = HMMRegimeClassifier().infer(
         model=make_model(), observation=make_observation()
     )
-    with pytest.raises(ValueError, match="regime_classifier_cannot_grant_order_permission"):
+    with pytest.raises(
+        ValueError, match="regime_classifier_cannot_grant_order_permission"
+    ):
         replace(result, order_permission=True)
