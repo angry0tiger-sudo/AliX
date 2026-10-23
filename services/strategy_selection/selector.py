@@ -118,9 +118,7 @@ def _global_input_reasons(
 ) -> tuple[str, ...]:
     reasons: list[str] = []
     if registry is None:
-        reasons.extend(
-            registry_failure_reasons or ("strategy_registry_unavailable",)
-        )
+        reasons.extend(registry_failure_reasons or ("strategy_registry_unavailable",))
     if context is None:
         reasons.append("selection_context_missing")
     else:
@@ -185,9 +183,7 @@ def _market_measurement_reasons(context: SelectionContext) -> tuple[str, ...]:
         ("spread_estimate_missing", context.spread_bps),
         ("quote_liquidity_missing", context.quote_liquidity_usdt),
     )
-    return tuple(
-        reason for reason, value in required_values if value is None
-    )
+    return tuple(reason for reason, value in required_values if value is None)
 
 
 def _eligible_candidates(
@@ -197,7 +193,9 @@ def _eligible_candidates(
     economic_policy: EconomicAcceptancePolicy,
     model_scores: tuple[ModelStrategyScore, ...],
     evidence_items: tuple[StrategyEvidence, ...],
-) -> tuple[list[tuple[Decimal, StrategyDefinition, StrategyEvidence]], list[CandidateRejection]]:
+) -> tuple[
+    list[tuple[Decimal, StrategyDefinition, StrategyEvidence]], list[CandidateRejection]
+]:
     candidates: list[tuple[Decimal, StrategyDefinition, StrategyEvidence]] = []
     rejections: list[CandidateRejection] = []
     for definition in registry.strategies:
@@ -213,7 +211,9 @@ def _eligible_candidates(
             rejections.append(
                 CandidateRejection(
                     strategy_id=definition.strategy_id,
-                    reasons=tuple(dict.fromkeys(reasons or ("candidate_not_eligible",))),
+                    reasons=tuple(
+                        dict.fromkeys(reasons or ("candidate_not_eligible",))
+                    ),
                 )
             )
         else:
@@ -497,7 +497,10 @@ def _fold_evidence_reasons(
     reasons: list[str] = []
     if len(evidence.folds) < 3:
         reasons.append("oos_fold_count_below_minimum")
-    if sum(fold.metrics.trade_count for fold in evidence.folds) != evidence.metrics.trade_count:
+    if (
+        sum(fold.metrics.trade_count for fold in evidence.folds)
+        != evidence.metrics.trade_count
+    ):
         reasons.append("oos_fold_sample_count_mismatch")
     for fold in evidence.folds:
         if fold.metrics.trade_count < 1:
@@ -521,7 +524,10 @@ def _regime_evidence_reasons(
         reasons.append("oos_regime_coverage_mismatch")
     if context.regime not in regimes:
         reasons.append("oos_current_regime_evidence_missing")
-    if sum(item.metrics.trade_count for item in evidence.regimes) != evidence.metrics.trade_count:
+    if (
+        sum(item.metrics.trade_count for item in evidence.regimes)
+        != evidence.metrics.trade_count
+    ):
         reasons.append("oos_regime_sample_count_mismatch")
     for item in evidence.regimes:
         if item.metrics.trade_count < 1:
