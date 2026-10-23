@@ -14,7 +14,7 @@ from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
 
-from services.data_quality.gate import QualityResult, QualityStatus
+from services.data_quality.gate import QualityResult
 
 
 class StrategyLifecycle(StrEnum):
