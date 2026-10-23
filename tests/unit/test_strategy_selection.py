@@ -418,6 +418,18 @@ def test_candidate_constraints_reject_before_score_can_select(
     assert result.order_permission is False
 
 
+def test_active_prohibited_market_condition_rejects_candidate() -> None:
+    definition = make_definition(prohibited_conditions=("news_outage",))
+    result = run_selector(
+        definitions=(definition,),
+        context=make_context(market_conditions=("news_outage",)),
+    )
+
+    assert result.status is SelectionStatus.NO_TRADE
+    assert "strategy_prohibited_market_condition_active" in _selected_reasons(result)
+    assert result.order_permission is False
+
+
 @pytest.mark.parametrize(
     ("context_changes", "expected"),
     (
@@ -440,18 +452,6 @@ def test_candidate_constraints_reject_before_score_can_select(
         ({"data_fingerprint": "f" * 64}, "data_quality_fingerprint_mismatch"),
     ),
 )
-def test_active_prohibited_market_condition_rejects_candidate() -> None:
-    definition = make_definition(prohibited_conditions=("news_outage",))
-    result = run_selector(
-        definitions=(definition,),
-        context=make_context(market_conditions=("news_outage",)),
-    )
-
-    assert result.status is SelectionStatus.NO_TRADE
-    assert "strategy_prohibited_market_condition_active" in _selected_reasons(result)
-    assert result.order_permission is False
-
-
 def test_context_constraints_fail_closed(
     context_changes: dict[str, Any], expected: str
 ) -> None:
