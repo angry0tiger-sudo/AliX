@@ -146,8 +146,6 @@ def test_populate_indicators_marks_model_or_selection_missing_as_no_trade() -> N
     assert (result["alix_signal_bundle_approved"] == False).all()  # noqa: E712
 
 
-
-
 def test_meta_scoring_preserves_valid_tail_rows_after_nan_warmup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -165,12 +163,7 @@ def test_meta_scoring_preserves_valid_tail_rows_after_nan_warmup(
     }
     model = MetaLabelModel.from_dict(raw_model)
     monkeypatch.setattr(strategy_module, "_load_meta_model", lambda: (model, True))
-    frame = pd.DataFrame(
-        {
-            name: [np.nan, 0.0, 0.1]
-            for name in feature_names
-        }
-    )
+    frame = pd.DataFrame({name: [np.nan, 0.0, 0.1] for name in feature_names})
 
     result = strategy_module._score_meta_candidates(frame)
 
