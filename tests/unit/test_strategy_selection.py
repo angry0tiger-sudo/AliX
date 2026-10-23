@@ -277,6 +277,57 @@ def test_model_score_is_only_a_ranker_after_deterministic_eligibility_gates() ->
     assert "strategy_not_selectable" in result.candidate_rejections[0].reasons
 
 
+def test_selector_switches_between_trend_and_mean_reversion_by_market_regime() -> None:
+    trend = make_definition(
+        strategy_id="trend_following",
+        code_sha256="1" * 64,
+        eligible_regimes=("trend",),
+    )
+    mean_reversion = make_definition(
+        strategy_id="mean_reversion",
+        code_sha256="2" * 64,
+        eligible_regimes=("range",),
+    )
+    trend_evidence = replace(
+        make_evidence(trend),
+        regimes=(
+            RegimeEvidence("trend", PerformanceEvidence(100, D("0.70"), D("0.012"), D("0.10"))),
+        ),
+    )
+    range_evidence = replace(
+        make_evidence(mean_reversion),
+        regimes=(
+            RegimeEvidence("range", PerformanceEvidence(100, D("0.70"), D("0.012"), D("0.10"))),
+        ),
+    )
+    definitions = (trend, mean_reversion)
+    scores = (
+        make_score(trend, score=D("0.70")),
+        make_score(mean_reversion, score=D("0.95")),
+    )
+    evidence = (trend_evidence, range_evidence)
+
+    trend_result = run_selector(
+        definitions=definitions,
+        context=make_context(regime="trend"),
+        scores=scores,
+        evidence=evidence,
+    )
+    range_result = run_selector(
+        definitions=definitions,
+        context=make_context(regime="range"),
+        scores=scores,
+        evidence=evidence,
+    )
+
+    assert trend_result.status is SelectionStatus.SELECTED
+    assert trend_result.selected_strategy_id == "trend_following"
+    assert range_result.status is SelectionStatus.SELECTED
+    assert range_result.selected_strategy_id == "mean_reversion"
+    assert trend_result.order_permission is False
+    assert range_result.order_permission is False
+
+
 def test_score_ties_are_broken_by_stable_strategy_id_order() -> None:
     alpha = make_definition(strategy_id="strategy_alpha", code_sha256="a" * 64)
     beta = make_definition(strategy_id="strategy_beta", code_sha256="f" * 64)
