@@ -586,9 +586,7 @@ def _concatenate_fold_predictions(evaluations: list[FoldEvaluation]) -> np.ndarr
     return np.concatenate([result.predicted for result in evaluations])
 
 
-def _compound_fold_metric(
-    evaluations: list[FoldEvaluation], metric_name: str
-) -> float:
+def _compound_fold_metric(evaluations: list[FoldEvaluation], metric_name: str) -> float:
     values = [float(result.economic[metric_name]) for result in evaluations]
     return float(np.prod(1.0 + np.asarray(values)) - 1.0)
 
@@ -623,9 +621,7 @@ def run_walk_forward(
     experiment_sha = hashlib.sha256(
         json.dumps(experiment_config, sort_keys=True, allow_nan=False).encode("utf-8")
     ).hexdigest()
-    evaluations = _evaluate_folds(
-        dataset, folds, parameters, config, estimator_factory
-    )
+    evaluations = _evaluate_folds(dataset, folds, parameters, config, estimator_factory)
     if not evaluations:
         raise RuntimeError("walk-forward evaluation produced no fitted models")
     trade_returns = _collect_fold_trade_returns(evaluations)
@@ -634,9 +630,7 @@ def run_walk_forward(
     final = evaluations[-1]
     reload_info = _roundtrip_model(final.model, final.test_features, final.predicted)
     economic = _economic_summary(dataset, evaluations, trade_returns)
-    buy_hold_total = _compound_fold_metric(
-        evaluations, "buy_and_hold_net_return"
-    )
+    buy_hold_total = _compound_fold_metric(evaluations, "buy_and_hold_net_return")
     return _compose_walk_forward_report(
         validated=validated,
         gate_fingerprint=gate_fingerprint,
