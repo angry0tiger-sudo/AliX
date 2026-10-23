@@ -136,10 +136,10 @@ class RegimeObservation:
                 raise ValueError(f"{name}_missing")
         names = tuple(name for name, _ in self.feature_values)
         _require_unique("regime_observation_features", names, nonempty=False)
-        for name, value in self.feature_values:
-            if not name.strip():
+        for feature_name, feature_value in self.feature_values:
+            if not feature_name.strip():
                 raise ValueError("regime_observation_feature_name_missing")
-            _require_decimal("regime_observation_feature_value", value)
+            _require_decimal("regime_observation_feature_value", feature_value)
 
 
 @dataclass(frozen=True, slots=True)
