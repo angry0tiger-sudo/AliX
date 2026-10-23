@@ -561,18 +561,14 @@ def _weighted_fold_average(
     return float(np.average(values, weights=weights))
 
 
-def _brier_skill(
-    brier: float | None, baseline_brier: float | None
-) -> float | None:
+def _brier_skill(brier: float | None, baseline_brier: float | None) -> float | None:
     if brier is None or baseline_brier is None or baseline_brier <= 0.0:
         return None
     return float(1.0 - brier / baseline_brier)
 
 
 def _aggregate_candidate(result: dict[str, Any]) -> dict[str, Any]:
-    evaluated = [
-        fold for fold in result["folds"] if fold.get("status") == "EVALUATED"
-    ]
+    evaluated = [fold for fold in result["folds"] if fold.get("status") == "EVALUATED"]
     trades = _flatten_trades(evaluated)
     metrics = _trade_metrics(trades)
     return {
