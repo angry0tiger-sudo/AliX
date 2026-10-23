@@ -112,58 +112,107 @@ def _add_technical_indicators(dataframe: DataFrame) -> DataFrame:
     return result
 
 
-def _load_meta_model() -> tuple[MetaLabelModel | None, bool]:
+def _read_meta_documents() -> (
+    tuple[dict[str, Any], dict[str, Any], dict[str, Any]] | None
+):
     try:
         raw = json.loads(_META_MODEL_PATH.read_text(encoding="utf-8"))
         manifest = json.loads(_META_MANIFEST_PATH.read_text(encoding="utf-8"))
         approval = json.loads(_META_APPROVAL_PATH.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(raw, dict) or not isinstance(manifest, dict):
+        return None
+    if not isinstance(approval, dict):
+        return None
+    return raw, manifest, approval
+
+
+def _parse_meta_approval_timestamp(value: object) -> pd.Timestamp | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        timestamp = pd.Timestamp(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if timestamp.tzinfo is None or timestamp.utcoffset() is None:
+        return None
+    return timestamp
+
+
+def _meta_manifest_matches_model(
+    manifest: dict[str, Any], digest: str
+) -> bool:
+    dataset_hash = manifest.get("dataset_sha256")
+    if manifest.get("model_sha256") != digest or manifest.get("dataset_rows") != 8760:
+        return False
+    return isinstance(dataset_hash, str) and len(dataset_hash) == 64
+
+
+def _meta_manifest_release_is_closed(manifest: dict[str, Any]) -> bool:
+    return (
+        manifest.get("economic_acceptance") == "NO-GO"
+        and manifest.get("trading_authorization") == "NO-GO"
+    )
+
+
+def _meta_approval_identity_matches(approval: dict[str, Any]) -> bool:
+    approval_id = approval.get("approval_id")
+    return (
+        approval.get("schema_version") == "alix.model-technical-approval.v1"
+        and approval.get("model_type") == "meta_label_logistic"
+        and approval.get("status") == "OWNER_APPROVED_TECHNICAL_ONLY"
+        and approval.get("owner") == "angry0tiger-sudo"
+        and isinstance(approval_id, str)
+        and bool(approval_id.strip())
+    )
+
+
+def _meta_approval_hashes_match(
+    approval: dict[str, Any], digest: str, dataset_hash: object
+) -> bool:
+    return (
+        approval.get("model_sha256") == digest
+        and approval.get("dataset_sha256") == dataset_hash
+    )
+
+
+def _meta_approval_release_is_closed(approval: dict[str, Any]) -> bool:
+    return (
+        approval.get("economic_acceptance") == "NO-GO"
+        and approval.get("order_permission") is False
+        and approval.get("trading_authorization") == "NO-GO"
+    )
+
+
+def _meta_approval_is_valid(
+    approval: dict[str, Any], digest: str, dataset_hash: object
+) -> bool:
+    approved_at = _parse_meta_approval_timestamp(approval.get("approved_at"))
+    return (
+        _meta_approval_identity_matches(approval)
+        and _meta_approval_hashes_match(approval, digest, dataset_hash)
+        and approved_at is not None
+        and _meta_approval_release_is_closed(approval)
+    )
+
+
+def _load_meta_model() -> tuple[MetaLabelModel | None, bool]:
+    documents = _read_meta_documents()
+    if documents is None:
         return None, False
-    if (
-        not isinstance(raw, dict)
-        or not isinstance(manifest, dict)
-        or not isinstance(approval, dict)
-    ):
-        return None, False
+    raw, manifest, approval = documents
     try:
         model = MetaLabelModel.from_dict(raw)
         digest = hashlib.sha256(model.to_json().encode("utf-8")).hexdigest()
     except (ValueError, TypeError, KeyError):
         return None, False
     dataset_hash = manifest.get("dataset_sha256")
-    approved_at = approval.get("approved_at")
-    approval_time: pd.Timestamp | None = None
-    if isinstance(approved_at, str):
-        try:
-            approval_time = pd.Timestamp(approved_at)
-        except (TypeError, ValueError, OverflowError):
-            approval_time = None
-    approval_valid = (
-        approval.get("schema_version") == "alix.model-technical-approval.v1"
-        and approval.get("model_type") == "meta_label_logistic"
-        and approval.get("status") == "OWNER_APPROVED_TECHNICAL_ONLY"
-        and approval.get("owner") == "angry0tiger-sudo"
-        and isinstance(approval.get("approval_id"), str)
-        and bool(str(approval.get("approval_id")).strip())
-        and approval.get("model_sha256") == digest
-        and approval.get("dataset_sha256") == dataset_hash
-        and approval_time is not None
-        and approval_time.tzinfo is not None
-        and approval_time.utcoffset() is not None
-        and approval.get("economic_acceptance") == "NO-GO"
-        and approval.get("order_permission") is False
-        and approval.get("trading_authorization") == "NO-GO"
-    )
-    if (
-        manifest.get("model_sha256") != digest
-        or manifest.get("dataset_rows") != 8760
-        or not isinstance(dataset_hash, str)
-        or len(dataset_hash) != 64
-        or manifest.get("economic_acceptance") != "NO-GO"
-        or manifest.get("trading_authorization") != "NO-GO"
-    ):
+    if not _meta_manifest_matches_model(manifest, digest):
         return None, False
-    return model, bool(approval_valid)
+    if not _meta_manifest_release_is_closed(manifest):
+        return None, False
+    return model, _meta_approval_is_valid(approval, digest, dataset_hash)
 
 
 def _empty_regime_columns(dataframe: DataFrame) -> DataFrame:
