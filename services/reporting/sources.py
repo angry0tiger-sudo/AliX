@@ -58,18 +58,6 @@ class FreqtradeSQLiteTradeSource:
     REQUIRED_COLUMNS = frozenset(
         {"id", "pair", "is_open", "open_date", "close_date", "close_profit_abs"}
     )
-    OPTIONAL_COLUMNS = frozenset(
-        {
-            "stake_amount",
-            "amount",
-            "open_rate",
-            "close_rate",
-            "fee_open",
-            "fee_close",
-            "exit_reason",
-            "strategy",
-        }
-    )
 
     def __init__(self, database_path: str | Path) -> None:
         self._path = Path(database_path)
@@ -92,11 +80,8 @@ class FreqtradeSQLiteTradeSource:
             }
             if not self.REQUIRED_COLUMNS.issubset(columns):
                 raise ReportingSourceError("freqtrade_trade_schema_mismatch")
-            selected = sorted(self.REQUIRED_COLUMNS | (self.OPTIONAL_COLUMNS & columns))
             rows = connection.execute(
-                "SELECT "
-                + ", ".join('"' + name + '"' for name in selected)
-                + ' FROM "trades"'
+                "SELECT id, pair, is_open, open_date, close_date, close_profit_abs FROM trades"
             ).fetchall()
         except sqlite3.Error:
             raise ReportingSourceError("freqtrade_trade_read_failed") from None

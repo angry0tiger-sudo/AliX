@@ -9,15 +9,15 @@ from __future__ import annotations
 import argparse
 import csv
 from datetime import datetime, timezone
+from http.client import HTTPSConnection, HTTPException
+import ssl
 import hashlib
 import json
 import math
 from pathlib import Path
 import time
 from typing import Any, Callable, TypedDict, cast
-from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
-from urllib.request import Request, urlopen
 
 ENDPOINT = "https://apiv2.nobitex.ir/market/udf/history"
 SCHEMA_VERSION = "alix.nobitex.public-ohlcv.v1"
@@ -39,38 +39,39 @@ class CandleRecord(TypedDict):
 def request_public_json(
     params: dict[str, str], *, timeout_seconds: float = 15.0
 ) -> dict[str, Any]:
-    request = Request(
-        ENDPOINT + "?" + urlencode(params),
-        headers={
-            "Accept": "application/json",
-            "User-Agent": "TraderBot/AliX-Phase10-Research",
-        },
-        method="GET",
-    )
+    """Perform a verified-TLS GET to a fixed public host; redirects are not followed."""
+    path = "/market/udf/history?" + urlencode(params)
     for attempt in range(3):
+        connection = HTTPSConnection(
+            "apiv2.nobitex.ir",
+            timeout=timeout_seconds,
+            context=ssl.create_default_context(),
+        )
         try:
-            with urlopen(request, timeout=timeout_seconds) as response:
-                if response.status != 200:
-                    raise ValueError("public_api_http_status_invalid")
-                payload = json.loads(response.read().decode("utf-8"))
-                if not isinstance(payload, dict):
-                    raise ValueError("public_api_payload_not_object")
-                return payload
-        except (
-            HTTPError,
-            URLError,
-            TimeoutError,
-            OSError,
-            json.JSONDecodeError,
-            ValueError,
-        ):
+            connection.request(
+                "GET",
+                path,
+                headers={
+                    "Accept": "application/json",
+                    "User-Agent": "TraderBot/AliX-Phase10-Research",
+                },
+            )
+            response = connection.getresponse()
+            if response.status != 200:
+                raise ValueError("public_api_http_status_invalid")
+            payload = json.loads(response.read().decode("utf-8"))
+            if not isinstance(payload, dict):
+                raise ValueError("public_api_payload_not_object")
+            return payload
+        except (HTTPException, TimeoutError, OSError, json.JSONDecodeError, ValueError):
             if attempt == 2:
                 raise RuntimeError(
                     "public_api_request_failed_after_bounded_retries"
                 ) from None
             time.sleep(2**attempt)
+        finally:
+            connection.close()
     raise RuntimeError("public_api_request_failed")
-
 
 def parse_udf_payload(
     payload: dict[str, Any], *, requested_from: int, requested_to: int

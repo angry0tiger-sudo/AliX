@@ -5,26 +5,36 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, timezone
 import json
+from http.client import HTTPSConnection
+import ssl
 from pathlib import Path
 import time
 from typing import Callable
-from urllib.parse import urlencode
-from urllib.request import Request, urlopen
 
 
 def fetch_public_btc_usdt_price(*, timeout_seconds: float = 10.0) -> float:
-    url = "https://apiv2.nobitex.ir/market/stats?" + urlencode(
-        {"srcCurrency": "btc", "dstCurrency": "usdt"}
+    """Read a public ticker from a fixed host over verified TLS, without redirects."""
+    path = "/market/stats?srcCurrency=btc&dstCurrency=usdt"
+    connection = HTTPSConnection(
+        "apiv2.nobitex.ir",
+        timeout=timeout_seconds,
+        context=ssl.create_default_context(),
     )
-    request = Request(
-        url,
-        headers={"Accept": "application/json", "User-Agent": "AliX-Phase10-Observer/1"},
-        method="GET",
-    )
-    with urlopen(request, timeout=timeout_seconds) as response:
+    try:
+        connection.request(
+            "GET",
+            path,
+            headers={
+                "Accept": "application/json",
+                "User-Agent": "AliX-Phase10-Observer/1",
+            },
+        )
+        response = connection.getresponse()
         if response.status != 200:
             raise ValueError("public_price_http_status_invalid")
         payload = json.loads(response.read().decode("utf-8"))
+    finally:
+        connection.close()
     if not isinstance(payload, dict) or payload.get("status") != "ok":
         raise ValueError("public_price_payload_not_ok")
     stats = payload.get("stats")
@@ -38,7 +48,6 @@ def fetch_public_btc_usdt_price(*, timeout_seconds: float = 10.0) -> float:
     if price <= 0 or price != price or price in (float("inf"), float("-inf")):
         raise ValueError("public_price_value_invalid")
     return price
-
 
 def observe_public_price(
     *,
