@@ -1,0 +1,6 @@
+{
+  "schema_version": "alix.strategy-registry.v1",
+  "revision": "alix-strategy-registry-2026-10-23-v1",
+  "economic_policy_revision": "alix-phase10-economic-thresholds-v1",
+  "strategies": []
+}
