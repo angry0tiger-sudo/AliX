@@ -57,6 +57,8 @@ _TIMEFRAME_SECONDS = {
 _HMM_MODEL_PATH = Path("user_data/models/hmm-regime-model.json")
 _META_MODEL_PATH = Path("user_data/models/meta-label-model.json")
 _META_MANIFEST_PATH = Path("user_data/models/meta-label-model.manifest.json")
+_HMM_APPROVAL_PATH = Path("config/strategy_selection/hmm-model-approval.json")
+_META_APPROVAL_PATH = Path("config/strategy_selection/meta-model-approval.json")
 _META_THRESHOLD = 0.70
 _BREAKEVEN_BAND = 0.0025
 
@@ -114,25 +116,54 @@ def _load_meta_model() -> tuple[MetaLabelModel | None, bool]:
     try:
         raw = json.loads(_META_MODEL_PATH.read_text(encoding="utf-8"))
         manifest = json.loads(_META_MANIFEST_PATH.read_text(encoding="utf-8"))
+        approval = json.loads(_META_APPROVAL_PATH.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None, False
-    if not isinstance(raw, dict) or not isinstance(manifest, dict):
+    if (
+        not isinstance(raw, dict)
+        or not isinstance(manifest, dict)
+        or not isinstance(approval, dict)
+    ):
         return None, False
     try:
         model = MetaLabelModel.from_dict(raw)
         digest = hashlib.sha256(model.to_json().encode("utf-8")).hexdigest()
     except (ValueError, TypeError, KeyError):
         return None, False
+    dataset_hash = manifest.get("dataset_sha256")
+    approved_at = approval.get("approved_at")
+    approval_time: pd.Timestamp | None = None
+    if isinstance(approved_at, str):
+        try:
+            approval_time = pd.Timestamp(approved_at)
+        except (TypeError, ValueError, OverflowError):
+            approval_time = None
+    approval_valid = (
+        approval.get("schema_version") == "alix.model-technical-approval.v1"
+        and approval.get("model_type") == "meta_label_logistic"
+        and approval.get("status") == "OWNER_APPROVED_TECHNICAL_ONLY"
+        and approval.get("owner") == "angry0tiger-sudo"
+        and isinstance(approval.get("approval_id"), str)
+        and bool(str(approval.get("approval_id")).strip())
+        and approval.get("model_sha256") == digest
+        and approval.get("dataset_sha256") == dataset_hash
+        and approval_time is not None
+        and approval_time.tzinfo is not None
+        and approval_time.utcoffset() is not None
+        and approval.get("economic_acceptance") == "NO-GO"
+        and approval.get("order_permission") is False
+        and approval.get("trading_authorization") == "NO-GO"
+    )
     if (
         manifest.get("model_sha256") != digest
         or manifest.get("dataset_rows") != 8760
-        or not isinstance(manifest.get("dataset_sha256"), str)
-        or len(str(manifest.get("dataset_sha256"))) != 64
+        or not isinstance(dataset_hash, str)
+        or len(dataset_hash) != 64
         or manifest.get("economic_acceptance") != "NO-GO"
         or manifest.get("trading_authorization") != "NO-GO"
     ):
         return None, False
-    return model, manifest.get("owner_approved") is True
+    return model, bool(approval_valid)
 
 
 def _empty_regime_columns(dataframe: DataFrame) -> DataFrame:
@@ -149,7 +180,9 @@ def _empty_regime_columns(dataframe: DataFrame) -> DataFrame:
 def _infer_regimes(dataframe: DataFrame) -> DataFrame:
     """Apply the pinned model sequentially without using later candles as features."""
     try:
-        model = load_hmm_model_file(_HMM_MODEL_PATH)
+        model = load_hmm_model_file(
+            _HMM_MODEL_PATH, approval_path=_HMM_APPROVAL_PATH
+        )
     except (ValueError, OSError):
         return dataframe
     classifier = HMMRegimeClassifier()

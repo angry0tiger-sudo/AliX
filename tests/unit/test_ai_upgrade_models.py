@@ -191,9 +191,27 @@ def test_model_loader_rejects_invalid_dataset_and_validation_provenance() -> Non
         load_hmm_model_document(json.dumps(raw))
 
 
-def test_model_loader_supports_explicit_technical_approval_without_economic_promotion() -> (
-    None
-):
+def test_model_loader_accepts_not_approved_external_record_but_never_authorizes() -> None:
+    approval = {
+        "schema_version": "alix.model-technical-approval.v1",
+        "model_type": "gaussian_hmm",
+        "status": "NOT_APPROVED",
+        "model_sha256": None,
+        "dataset_sha256": None,
+        "owner": "angry0tiger-sudo",
+        "approval_id": None,
+        "approved_at": None,
+        "economic_acceptance": "NO-GO",
+        "order_permission": False,
+        "trading_authorization": "NO-GO",
+    }
+    loaded = load_hmm_model_document(
+        _artifact_document(), approval_document=json.dumps(approval)
+    )
+    assert loaded.owner_approved is False
+
+
+def test_model_loader_requires_separate_hash_pinned_technical_approval() -> None:
     raw = json.loads(_artifact_document())
     raw["status"] = "OWNER_APPROVED_TECHNICAL_ONLY"
     raw["model"]["owner_approved"] = True
@@ -205,7 +223,28 @@ def test_model_loader_supports_explicit_technical_approval_without_economic_prom
         allow_nan=False,
     )
     raw["model_sha256"] = hashlib.sha256(canonical.encode()).hexdigest()
-    loaded = load_hmm_model_document(json.dumps(raw))
+    with pytest.raises(ValueError, match="separate_approval_required"):
+        load_hmm_model_document(json.dumps(raw))
+
+    approval = {
+        "schema_version": "alix.model-technical-approval.v1",
+        "model_type": "gaussian_hmm",
+        "status": "OWNER_APPROVED_TECHNICAL_ONLY",
+        "model_sha256": raw["model_sha256"],
+        "dataset_sha256": raw["dataset"]["csv_sha256"],
+        "owner": "angry0tiger-sudo",
+        "approval_id": "ALIX-TEST-TECHNICAL-APPROVAL",
+        "approved_at": "2026-10-23T12:00:00+00:00",
+        "economic_acceptance": "NO-GO",
+        "order_permission": False,
+        "trading_authorization": "NO-GO",
+    }
+    loaded = load_hmm_model_document(
+        json.dumps(raw), approval_document=json.dumps(approval)
+    )
     assert loaded.owner_approved is True
-    assert raw["economic_acceptance"] == "NO-GO"
-    assert raw["trading_authorization"] == "NO-GO"
+    approval["model_sha256"] = "0" * 64
+    with pytest.raises(ValueError, match="approval_hash_mismatch"):
+        load_hmm_model_document(
+            json.dumps(raw), approval_document=json.dumps(approval)
+        )

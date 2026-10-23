@@ -15,6 +15,7 @@ from services.strategy_selection.regime import (
 )
 
 MODEL_SCHEMA_VERSION = "alix.hmm.regime-model.v1"
+APPROVAL_SCHEMA_VERSION = "alix.model-technical-approval.v1"
 
 
 def _canonical_hash(value: Mapping[str, Any]) -> str:
@@ -123,7 +124,51 @@ def _model_from_payload(model: Mapping[str, Any], model_hash: str) -> RegimeHMMM
     return RegimeHMMModel(**values)  # type: ignore[arg-type]
 
 
-def load_hmm_model_document(document: str) -> RegimeHMMModel:
+
+def _validate_technical_approval(
+    document: str, *, model_type: str, model_hash: str, dataset_hash: str
+) -> None:
+    """Require a separate review-controlled approval record for technical inference."""
+    try:
+        decoded = json.loads(document)
+    except json.JSONDecodeError as error:
+        raise ValueError("model_approval_json_invalid") from error
+    approval = _mapping(decoded, "approval")
+    if approval.get("schema_version") != APPROVAL_SCHEMA_VERSION:
+        raise ValueError("model_approval_schema_version_mismatch")
+    if approval.get("model_type") != model_type:
+        raise ValueError("model_approval_type_mismatch")
+    if approval.get("status") != "OWNER_APPROVED_TECHNICAL_ONLY":
+        raise ValueError("model_approval_not_approved")
+    if approval.get("model_sha256") != model_hash:
+        raise ValueError("model_approval_hash_mismatch")
+    if approval.get("dataset_sha256") != dataset_hash:
+        raise ValueError("model_approval_dataset_hash_mismatch")
+    if approval.get("owner") != "angry0tiger-sudo":
+        raise ValueError("model_approval_owner_mismatch")
+    approval_id = approval.get("approval_id")
+    if not isinstance(approval_id, str) or not approval_id.strip():
+        raise ValueError("model_approval_id_missing")
+    approved_at = approval.get("approved_at")
+    if not isinstance(approved_at, str):
+        raise ValueError("model_approval_timestamp_invalid")
+    try:
+        timestamp = datetime.fromisoformat(approved_at.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise ValueError("model_approval_timestamp_invalid") from error
+    if timestamp.tzinfo is None or timestamp.utcoffset() is None:
+        raise ValueError("model_approval_timestamp_must_be_aware")
+    if (
+        approval.get("economic_acceptance") != "NO-GO"
+        or approval.get("order_permission") is not False
+        or approval.get("trading_authorization") != "NO-GO"
+    ):
+        raise ValueError("model_approval_release_flags_invalid")
+
+
+def load_hmm_model_document(
+    document: str, *, approval_document: str | None = None
+) -> RegimeHMMModel:
     """Parse and verify an HMM artifact; invalid or mutated weights are rejected."""
     try:
         decoded = json.loads(document)
@@ -159,14 +204,48 @@ def load_hmm_model_document(document: str) -> RegimeHMMModel:
     validation = _mapping(payload.get("validation"), "validation")
     if validation.get("passed") is not True:
         raise ValueError("hmm_artifact_validation_not_passed")
+    if status == "OWNER_APPROVED_TECHNICAL_ONLY":
+        if approval_document is None:
+            raise ValueError("hmm_artifact_separate_approval_required")
+        _validate_technical_approval(
+            approval_document,
+            model_type="gaussian_hmm",
+            model_hash=model_hash,
+            dataset_hash=digest,
+        )
+    elif approval_document is not None:
+        try:
+            approval_decoded = json.loads(approval_document)
+        except json.JSONDecodeError as error:
+            raise ValueError("model_approval_json_invalid") from error
+        approval = _mapping(approval_decoded, "approval")
+        if (
+            approval.get("schema_version") != APPROVAL_SCHEMA_VERSION
+            or approval.get("model_type") != "gaussian_hmm"
+            or approval.get("status") != "NOT_APPROVED"
+            or approval.get("economic_acceptance") != "NO-GO"
+            or approval.get("order_permission") is not False
+            or approval.get("trading_authorization") != "NO-GO"
+        ):
+            raise ValueError("hmm_artifact_unapproved_but_approval_supplied")
     return _model_from_payload(model, model_hash)
 
 
-def load_hmm_model_file(path: str | Path) -> RegimeHMMModel:
+def load_hmm_model_file(
+    path: str | Path, *, approval_path: str | Path | None = None
+) -> RegimeHMMModel:
     """Load an immutable, auditable model artifact from a configured path."""
     model_path = Path(path)
     try:
         document = model_path.read_text(encoding="utf-8")
     except OSError as error:
         raise ValueError("hmm_artifact_unavailable") from error
-    return load_hmm_model_document(document)
+    approval_document: str | None = None
+    if approval_path is not None:
+        try:
+            approval_document = Path(approval_path).read_text(encoding="utf-8")
+        except OSError as error:
+            raise ValueError("hmm_artifact_approval_unavailable") from error
+    return load_hmm_model_document(
+        document, approval_document=approval_document
+    )
