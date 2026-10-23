@@ -290,7 +290,12 @@ def _validate_hmm_training_artifact(
         raise ValueError("shadow_validation_hmm_quality_fingerprint_mismatch")
     if hmm.get("status") != "TRAINED_UNAPPROVED":
         raise ValueError("shadow_validation_hmm_source_status_invalid")
-    if hmm.get("owner_approved") is not False:
+    model_payload = hmm.get("model")
+    if not isinstance(model_payload, Mapping):
+        raise ValueError("shadow_validation_hmm_model_payload_invalid")
+    if model_payload.get("owner_approved") is not False:
+        raise ValueError("shadow_validation_hmm_source_must_remain_unapproved")
+    if "owner_approved" in hmm and hmm.get("owner_approved") is not False:
         raise ValueError("shadow_validation_hmm_source_must_remain_unapproved")
     if hmm.get("model_sha256") != report.get("hmm", {}).get("model_sha256"):
         raise ValueError("shadow_validation_hmm_model_hash_mismatch")
