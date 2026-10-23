@@ -1,6 +1,7 @@
 name: AliX Meta-Label Economic Experiments
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - "research/meta-label-economic-experiments"
@@ -84,10 +85,30 @@ jobs:
           assert report["strategy_registry_updated"] is False
           assert report["order_permission"] is False
           assert report["trading_authorization"] == "NO-GO"
+          baseline = report["baseline_fixed_configuration"]
+          top_candidates = [
+              {
+                  "candidate_id": item["candidate_id"],
+                  "trade_count": item["trade_count"],
+                  "win_rate": item["win_rate"],
+                  "net_expectancy": item["net_expectancy"],
+                  "max_abs_drawdown": item["max_abs_drawdown"],
+                  "brier_skill_vs_baseline": item["brier_skill_vs_baseline"],
+              }
+              for item in report["candidate_diagnostics"][:10]
+          ]
           print(json.dumps({
               "commit_sha": report["commit_sha"],
               "dataset_sha256": report["source"]["csv_sha256"],
               "candidate_count": report["protocol"]["candidate_grid"]["candidate_count"],
+              "baseline": {
+                  "trade_count": baseline["trade_count"],
+                  "win_rate": baseline["win_rate"],
+                  "net_expectancy": baseline["net_expectancy"],
+                  "brier_score_weighted": baseline["brier_score_weighted"],
+                  "brier_skill_vs_baseline": baseline["brier_skill_vs_baseline"],
+              },
+              "top_candidate_diagnostics": top_candidates,
               "adaptive_oos_trades": report["adaptive_walkforward_policy"]["trade_count"],
               "adaptive_win_rate": report["adaptive_walkforward_policy"]["win_rate"],
               "adaptive_net_expectancy": report["adaptive_walkforward_policy"]["net_expectancy"],
@@ -95,7 +116,7 @@ jobs:
               "Champion": report["champion"],
               "order_permission": report["order_permission"],
               "trading_authorization": report["trading_authorization"]
-          }, sort_keys=True))
+          }, sort_keys=True, allow_nan=False))
           PY
 
       - name: Upload immutable research evidence
