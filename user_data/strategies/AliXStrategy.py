@@ -140,9 +140,7 @@ def _parse_meta_approval_timestamp(value: object) -> pd.Timestamp | None:
     return timestamp
 
 
-def _meta_manifest_matches_model(
-    manifest: dict[str, Any], digest: str
-) -> bool:
+def _meta_manifest_matches_model(manifest: dict[str, Any], digest: str) -> bool:
     dataset_hash = manifest.get("dataset_sha256")
     if manifest.get("model_sha256") != digest or manifest.get("dataset_rows") != 8760:
         return False
