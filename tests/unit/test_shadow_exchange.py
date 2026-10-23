@@ -122,6 +122,9 @@ def test_shadow_validation_and_append_only_invariants(tmp_path: Path) -> None:
             slippage_rate=Decimal("0.001"),
         )
     assert exchange.get_fill("missing") is None
+    seeded = _execute(exchange, _decision())
+    assert seeded.status == "SIMULATED"
+    assert exchange.row_count() == 1
     with sqlite3.connect(tmp_path / "shadow.sqlite3") as connection:
         with pytest.raises(sqlite3.IntegrityError, match="append_only"):
             connection.execute(
@@ -245,3 +248,49 @@ def test_shadow_fill_consumes_an_actual_positive_risk_gate_decision(
     assert simulated.order_permission is False
     assert simulated.gate_fingerprint == gate_decision.fingerprint
     assert exchange.get_fill(proposal.decision_id) == simulated
+
+@pytest.mark.parametrize(
+    ("confidence", "quantity", "entry_price", "fee_rate", "slippage_rate", "reason"),
+    [
+        (Decimal("1.1"), Decimal("2"), Decimal("100"), Decimal("0.001"), Decimal("0.001"), "confidence_out_of_range"),
+        (Decimal("NaN"), Decimal("2"), Decimal("100"), Decimal("0.001"), Decimal("0.001"), "must_be_finite_decimal"),
+        (Decimal("0.8"), Decimal("2"), Decimal("0"), Decimal("0.001"), Decimal("0.001"), "must_be_positive"),
+        (Decimal("0.8"), Decimal("2"), Decimal("100"), Decimal("-0.1"), Decimal("0.001"), "fee_rate_out_of_range"),
+        (Decimal("0.8"), Decimal("2"), Decimal("100"), Decimal("0.03"), Decimal("0.001"), "fee_rate_out_of_range"),
+        (Decimal("0.8"), Decimal("2"), Decimal("100"), Decimal("0.001"), Decimal("0.06"), "slippage_rate_out_of_range"),
+    ],
+)
+def test_shadow_rejects_nonfinite_and_out_of_policy_execution_inputs(
+    tmp_path: Path,
+    confidence: Decimal,
+    quantity: Decimal,
+    entry_price: Decimal,
+    fee_rate: Decimal,
+    slippage_rate: Decimal,
+    reason: str,
+) -> None:
+    exchange = ShadowExchange(tmp_path / "invalid-inputs.sqlite3")
+    with pytest.raises(ValueError, match=reason):
+        exchange.simulate_round_trip(
+            decision=_decision(),
+            meta_confidence=confidence,
+            quantity=quantity,
+            entry_reference_price=entry_price,
+            exit_reference_price=Decimal("110"),
+            fee_rate=fee_rate,
+            slippage_rate=slippage_rate,
+        )
+
+
+def test_shadow_replay_detects_a_tampered_persisted_record_hash(tmp_path: Path) -> None:
+    exchange = ShadowExchange(tmp_path / "tampered.sqlite3")
+    original = _execute(exchange, _decision())
+    with sqlite3.connect(tmp_path / "tampered.sqlite3") as connection:
+        connection.execute("DROP TRIGGER shadow_ledger_no_update")
+        connection.execute(
+            "UPDATE shadow_round_trips SET record_hash=? WHERE decision_id=?",
+            ("0" * 64, original.decision_id),
+        )
+    with pytest.raises(RuntimeError, match="record_hash_mismatch"):
+        _execute(exchange, _decision())
+

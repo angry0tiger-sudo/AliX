@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 import hashlib
 import json
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -20,6 +22,7 @@ from services.strategy_selection.hmm_training import (
 from services.strategy_selection.model_io import (
     MODEL_SCHEMA_VERSION,
     load_hmm_model_document,
+    load_hmm_model_file,
 )
 
 
@@ -248,3 +251,119 @@ def test_model_loader_requires_separate_hash_pinned_technical_approval() -> None
     approval["model_sha256"] = "0" * 64
     with pytest.raises(ValueError, match="approval_hash_mismatch"):
         load_hmm_model_document(json.dumps(raw), approval_document=json.dumps(approval))
+
+
+def _rehash_hmm_document(raw: dict[str, Any]) -> str:
+    canonical = json.dumps(
+        raw["model"],
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    )
+    raw["model_sha256"] = hashlib.sha256(canonical.encode()).hexdigest()
+    return json.dumps(raw)
+
+
+def _owner_approved_hmm_document() -> tuple[str, dict[str, Any]]:
+    raw = json.loads(_artifact_document())
+    raw["status"] = "OWNER_APPROVED_TECHNICAL_ONLY"
+    raw["model"]["owner_approved"] = True
+    document = _rehash_hmm_document(raw)
+    approval: dict[str, Any] = {
+        "schema_version": "alix.model-technical-approval.v1",
+        "model_type": "gaussian_hmm",
+        "status": "OWNER_APPROVED_TECHNICAL_ONLY",
+        "model_sha256": raw["model_sha256"],
+        "dataset_sha256": raw["dataset"]["csv_sha256"],
+        "owner": "angry0tiger-sudo",
+        "approval_id": "ALIX-TEST-TECHNICAL-APPROVAL",
+        "approved_at": "2026-10-23T12:00:00+00:00",
+        "economic_acceptance": "NO-GO",
+        "order_permission": False,
+        "trading_authorization": "NO-GO",
+    }
+    return document, approval
+
+
+def test_model_loader_rejects_malformed_parameter_shapes_and_types() -> None:
+    cases: list[tuple[str, Any, str]] = [
+        ("trained_at", "not-a-timestamp", "trained_at_invalid"),
+        ("max_model_age_seconds", True, "max_model_age_seconds_invalid"),
+        ("initial_probabilities", ["bad", "0.33", "0.33"], "initial_probabilities_invalid"),
+        ("feature_names", [], "feature_names_invalid"),
+        ("emissions", None, "emissions_invalid"),
+        ("transition_matrix", None, "transition_matrix_invalid"),
+    ]
+    for field, value, reason in cases:
+        raw = json.loads(_artifact_document())
+        raw["model"][field] = value
+        with pytest.raises(ValueError, match=reason):
+            load_hmm_model_document(_rehash_hmm_document(raw))
+
+    raw = json.loads(_artifact_document())
+    raw["status"] = "OWNER_APPROVED_TECHNICAL_ONLY"
+    raw["model"]["owner_approved"] = False
+    with pytest.raises(ValueError, match="approval_status_mismatch"):
+        load_hmm_model_document(_rehash_hmm_document(raw))
+
+
+def test_model_loader_rejects_bad_dataset_and_document_roots() -> None:
+    cases: list[tuple[str, Any, str]] = [
+        ("provider", "unknown market source", "dataset_provider_invalid"),
+        ("csv_sha256", "short", "dataset_hash_invalid"),
+    ]
+    for field, value, reason in cases:
+        raw = json.loads(_artifact_document())
+        raw["dataset"][field] = value
+        with pytest.raises(ValueError, match=reason):
+            load_hmm_model_document(json.dumps(raw))
+    with pytest.raises(ValueError, match="root_must_be_object"):
+        load_hmm_model_document("[]")
+    with pytest.raises(ValueError, match="json_invalid"):
+        load_hmm_model_document("{broken")
+
+
+def test_model_loader_validates_each_external_approval_contract() -> None:
+    cases: list[tuple[str, Any, str]] = [
+        ("schema_version", "wrong", "approval_schema_version_mismatch"),
+        ("model_type", "wrong", "approval_type_mismatch"),
+        ("status", "NOT_APPROVED", "approval_not_approved"),
+        ("model_sha256", "0" * 64, "approval_hash_mismatch"),
+        ("dataset_sha256", "0" * 64, "approval_dataset_hash_mismatch"),
+        ("owner", "someone-else", "approval_owner_mismatch"),
+        ("approval_id", " ", "approval_id_missing"),
+        ("approved_at", "not-a-date", "approval_timestamp_invalid"),
+        ("approved_at", "2026-10-23T12:00:00", "timestamp_must_be_aware"),
+        ("economic_acceptance", "GO", "release_flags_invalid"),
+        ("order_permission", True, "release_flags_invalid"),
+        ("trading_authorization", "GO", "release_flags_invalid"),
+    ]
+    for field, value, reason in cases:
+        document, approval = _owner_approved_hmm_document()
+        approval[field] = value
+        with pytest.raises(ValueError, match=reason):
+            load_hmm_model_document(
+                document, approval_document=json.dumps(approval)
+            )
+
+
+def test_model_loader_rejects_approval_on_unapproved_artifact_when_flags_are_unsafe() -> None:
+    approval = {
+        "schema_version": "alix.model-technical-approval.v1",
+        "model_type": "gaussian_hmm",
+        "status": "NOT_APPROVED",
+        "model_sha256": None,
+        "dataset_sha256": None,
+        "owner": "angry0tiger-sudo",
+        "approval_id": None,
+        "approved_at": None,
+        "economic_acceptance": "GO",
+        "order_permission": True,
+        "trading_authorization": "GO",
+    }
+    with pytest.raises(ValueError, match="unapproved_but_approval_supplied"):
+        load_hmm_model_document(
+            _artifact_document(), approval_document=json.dumps(approval)
+        )
+

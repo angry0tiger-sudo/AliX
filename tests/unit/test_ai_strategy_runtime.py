@@ -3,11 +3,22 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
+import hashlib
+import json
+from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import numpy as np
 import pandas as pd
+import pytest
 
+import user_data.strategies.AliXStrategy as strategy_module
+from services.meta_labeling.meta_model import (
+    META_MODEL_SCHEMA_VERSION,
+    MetaLabelModel,
+)
 from user_data.strategies.AliXStrategy import AliXStrategy
 
 
@@ -134,3 +145,141 @@ def test_populate_indicators_marks_model_or_selection_missing_as_no_trade() -> N
     assert result["alix_data_quality_valid"].all()
     assert (result["alix_regime"] == "NO_TRADE").all()
     assert (result["alix_signal_bundle_approved"] == False).all()  # noqa: E712
+
+
+def _write_meta_artifacts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    manifest_changes: dict[str, object] | None = None,
+    approval_changes: dict[str, object] | None = None,
+    invalid_model: bool = False,
+) -> None:
+    raw_model: dict[str, Any] = {
+        "schema_version": META_MODEL_SCHEMA_VERSION,
+        "training_signal_requirement": "out_of_fold_only",
+        "feature_names": ["%-return_1"],
+        "means": [0.0],
+        "scales": [1.0],
+        "coefficients": [0.5],
+        "intercept": 0.0,
+        "regularization_c": 1.0,
+        "max_iter": 1000,
+    }
+    if invalid_model:
+        raw_model["schema_version"] = "wrong-schema"
+    model = MetaLabelModel.from_dict(raw_model) if not invalid_model else None
+    digest = (
+        hashlib.sha256(model.to_json().encode("utf-8")).hexdigest()
+        if model is not None
+        else "0" * 64
+    )
+    dataset_hash = "a" * 64
+    manifest: dict[str, object] = {
+        "model_sha256": digest,
+        "dataset_sha256": dataset_hash,
+        "dataset_rows": 8760,
+        "economic_acceptance": "NO-GO",
+        "trading_authorization": "NO-GO",
+    }
+    approval: dict[str, object] = {
+        "schema_version": "alix.model-technical-approval.v1",
+        "model_type": "meta_label_logistic",
+        "status": "OWNER_APPROVED_TECHNICAL_ONLY",
+        "owner": "angry0tiger-sudo",
+        "approval_id": "ALIX-TEST-META-APPROVAL",
+        "model_sha256": digest,
+        "dataset_sha256": dataset_hash,
+        "approved_at": "2026-10-23T12:00:00+00:00",
+        "economic_acceptance": "NO-GO",
+        "order_permission": False,
+        "trading_authorization": "NO-GO",
+    }
+    manifest.update(manifest_changes or {})
+    approval.update(approval_changes or {})
+    model_path = tmp_path / "meta-model.json"
+    manifest_path = tmp_path / "meta-manifest.json"
+    approval_path = tmp_path / "meta-approval.json"
+    model_path.write_text(json.dumps(raw_model), encoding="utf-8")
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    approval_path.write_text(json.dumps(approval), encoding="utf-8")
+    monkeypatch.setattr(strategy_module, "_META_MODEL_PATH", model_path)
+    monkeypatch.setattr(strategy_module, "_META_MANIFEST_PATH", manifest_path)
+    monkeypatch.setattr(strategy_module, "_META_APPROVAL_PATH", approval_path)
+
+
+def test_meta_model_loader_fails_closed_on_missing_or_malformed_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        strategy_module, "_META_MODEL_PATH", tmp_path / "missing-model.json"
+    )
+    monkeypatch.setattr(
+        strategy_module, "_META_MANIFEST_PATH", tmp_path / "missing-manifest.json"
+    )
+    monkeypatch.setattr(
+        strategy_module, "_META_APPROVAL_PATH", tmp_path / "missing-approval.json"
+    )
+    assert strategy_module._load_meta_model() == (None, False)
+
+    _write_meta_artifacts(tmp_path, monkeypatch, invalid_model=True)
+    assert strategy_module._load_meta_model() == (None, False)
+
+
+def test_meta_model_loader_requires_manifest_and_closed_release_flags(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_meta_artifacts(
+        tmp_path,
+        monkeypatch,
+        manifest_changes={"dataset_rows": 8759},
+    )
+    assert strategy_module._load_meta_model() == (None, False)
+
+    _write_meta_artifacts(
+        tmp_path,
+        monkeypatch,
+        manifest_changes={"trading_authorization": "GO"},
+    )
+    assert strategy_module._load_meta_model() == (None, False)
+
+
+@pytest.mark.parametrize(
+    ("approval_change", "value"),
+    [
+        ("status", "NOT_APPROVED"),
+        ("owner", "untrusted-owner"),
+        ("approval_id", ""),
+        ("model_sha256", "0" * 64),
+        ("dataset_sha256", "0" * 64),
+        ("approved_at", "not-a-timestamp"),
+        ("approved_at", "2026-10-23T12:00:00"),
+        ("order_permission", True),
+        ("economic_acceptance", "GO"),
+    ],
+)
+def test_meta_model_loader_requires_hash_pinned_technical_approval(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    approval_change: str,
+    value: object,
+) -> None:
+    _write_meta_artifacts(
+        tmp_path,
+        monkeypatch,
+        approval_changes={approval_change: value},
+    )
+    model, approved = strategy_module._load_meta_model()
+    assert model is not None
+    assert approved is False
+
+
+def test_meta_model_loader_accepts_valid_technical_only_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_meta_artifacts(tmp_path, monkeypatch)
+    model, approved = strategy_module._load_meta_model()
+    assert model is not None
+    assert approved is True
+    assert strategy_module._load_meta_model()[1] is True
+
