@@ -200,35 +200,57 @@ def _validate_candles(
     return candles, _data_quality_fingerprint(candles)
 
 
-def _validate_training_provenance(
+def _validate_training_commit_identity(
     manifest: Mapping[str, Any], report: Mapping[str, Any]
 ) -> None:
-    if (
-        report.get("commit_sha") != TRAINING_RUN_COMMIT
-        or manifest.get("commit_sha") != TRAINING_RUN_COMMIT
-    ):
-        raise ValueError("shadow_validation_training_commit_mismatch")
-    if (
-        report.get("dataset_rows") != 8760
-        or report.get("dataset_sha256") != DATASET_SHA256
-        or manifest.get("csv_sha256") != DATASET_SHA256
-    ):
-        raise ValueError("shadow_validation_training_dataset_identity_mismatch")
-    if (
-        manifest.get("provider") != "Nobitex public UDF history API"
-        or manifest.get("requested_days") != 365
-    ):
+    if report.get("commit_sha") != TRAINING_RUN_COMMIT:
+        raise ValueError("shadow_validation_report_commit_mismatch")
+    if manifest.get("commit_sha") != TRAINING_RUN_COMMIT:
+        raise ValueError("shadow_validation_manifest_commit_mismatch")
+
+
+def _validate_training_dataset_identity(
+    manifest: Mapping[str, Any], report: Mapping[str, Any]
+) -> None:
+    if report.get("dataset_rows") != 8760:
+        raise ValueError("shadow_validation_training_dataset_rows_mismatch")
+    if report.get("dataset_sha256") != DATASET_SHA256:
+        raise ValueError("shadow_validation_report_dataset_hash_mismatch")
+    if manifest.get("csv_sha256") != DATASET_SHA256:
+        raise ValueError("shadow_validation_manifest_dataset_hash_mismatch")
+
+
+def _validate_training_provider(manifest: Mapping[str, Any]) -> None:
+    if manifest.get("provider") != "Nobitex public UDF history API":
         raise ValueError("shadow_validation_training_provider_mismatch")
+    if manifest.get("requested_days") != 365:
+        raise ValueError("shadow_validation_training_window_mismatch")
+
+
+def _validate_training_access_policy(manifest: Mapping[str, Any]) -> None:
     if manifest.get("public_api_only") is not True:
         raise ValueError("shadow_validation_training_not_public_only")
     if manifest.get("credentials_used") is not False:
         raise ValueError("shadow_validation_training_credentials_detected")
-    if (
-        manifest.get("exchange_calls") != 0
-        or manifest.get("real_order_attempts") != 0
-        or manifest.get("Champion") is not None
-    ):
-        raise ValueError("shadow_validation_training_execution_invariant_failed")
+
+
+def _validate_training_no_execution(manifest: Mapping[str, Any]) -> None:
+    if manifest.get("exchange_calls") != 0:
+        raise ValueError("shadow_validation_training_exchange_calls_detected")
+    if manifest.get("real_order_attempts") != 0:
+        raise ValueError("shadow_validation_training_real_orders_detected")
+    if manifest.get("Champion") is not None:
+        raise ValueError("shadow_validation_training_champion_must_be_null")
+
+
+def _validate_training_provenance(
+    manifest: Mapping[str, Any], report: Mapping[str, Any]
+) -> None:
+    _validate_training_commit_identity(manifest, report)
+    _validate_training_dataset_identity(manifest, report)
+    _validate_training_provider(manifest)
+    _validate_training_access_policy(manifest)
+    _validate_training_no_execution(manifest)
     _require_closed_flags(manifest, "dataset_manifest")
     _require_closed_flags(report, "training_report")
 
