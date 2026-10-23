@@ -180,12 +180,14 @@ def _quality_reasons(context: SelectionContext) -> tuple[str, ...]:
 
 def _market_measurement_reasons(context: SelectionContext) -> tuple[str, ...]:
     required_values = (
-        ("estimated_fee_bps", context.estimated_fee_bps),
-        ("estimated_slippage_bps", context.estimated_slippage_bps),
-        ("spread_bps", context.spread_bps),
-        ("quote_liquidity_usdt", context.quote_liquidity_usdt),
+        ("estimated_fee_missing", context.estimated_fee_bps),
+        ("estimated_slippage_missing", context.estimated_slippage_bps),
+        ("spread_estimate_missing", context.spread_bps),
+        ("quote_liquidity_missing", context.quote_liquidity_usdt),
     )
-    return tuple(f"{name.removesuffix('_bps')}_missing" for name, value in required_values if value is None)
+    return tuple(
+        reason for reason, value in required_values if value is None
+    )
 
 
 def _eligible_candidates(

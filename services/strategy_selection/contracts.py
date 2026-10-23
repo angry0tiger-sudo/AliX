@@ -431,24 +431,37 @@ class StrategySelectionResult:
         _require_text("selection_result_decision_id", self.decision_id)
         if self.evaluated_at is not None:
             _require_aware("selection_result_evaluated_at", self.evaluated_at)
-        if self.order_permission is not False:
-            raise ValueError("strategy_selector_cannot_grant_order_permission")
-        if self.status is SelectionStatus.SELECTED:
-            if not self.selected_strategy_id or not self.selected_strategy_version:
-                raise ValueError("selected_strategy_identity_missing")
-            if self.model_score is None or self.evidence_fingerprint is None:
-                raise ValueError("selected_strategy_evidence_missing")
-        elif any(
-            value is not None
-            for value in (
-                self.selected_strategy_id,
-                self.selected_strategy_version,
-                self.model_score,
-                self.evidence_fingerprint,
-            )
-        ):
-            raise ValueError("no_trade_result_must_not_name_selected_strategy")
+        _validate_selection_result_state(self)
         _require_unique_texts(
             "selection_result_reasons", self.reason_codes, nonempty=True
         )
         _require_hash("selection_result_fingerprint", self.fingerprint)
+
+
+def _validate_selection_result_state(result: StrategySelectionResult) -> None:
+    if result.order_permission is not False:
+        raise ValueError("strategy_selector_cannot_grant_order_permission")
+    if result.status is SelectionStatus.SELECTED:
+        _validate_selected_result(result)
+    else:
+        _validate_no_trade_result(result)
+
+
+def _validate_selected_result(result: StrategySelectionResult) -> None:
+    if not result.selected_strategy_id or not result.selected_strategy_version:
+        raise ValueError("selected_strategy_identity_missing")
+    if result.model_score is None or result.evidence_fingerprint is None:
+        raise ValueError("selected_strategy_evidence_missing")
+
+
+def _validate_no_trade_result(result: StrategySelectionResult) -> None:
+    if any(
+        value is not None
+        for value in (
+            result.selected_strategy_id,
+            result.selected_strategy_version,
+            result.model_score,
+            result.evidence_fingerprint,
+        )
+    ):
+        raise ValueError("no_trade_result_must_not_name_selected_strategy")
