@@ -80,7 +80,6 @@ def _row_fingerprint(row: dict[str, object], previous_hash: Any) -> str:
 
 def _add_technical_indicators(dataframe: DataFrame) -> DataFrame:
     result = dataframe.copy()
-    opened = pd.to_numeric(result["open"], errors="coerce")
     high = pd.to_numeric(result["high"], errors="coerce")
     low = pd.to_numeric(result["low"], errors="coerce")
     close = pd.to_numeric(result["close"], errors="coerce")
@@ -157,7 +156,6 @@ def _infer_regimes(dataframe: DataFrame) -> DataFrame:
     required = ("date", "open", "high", "low", "close", "volume")
     rolling_hash = hashlib.sha256()
     previous: PreviousRegimePosterior | None = None
-    previous_close_time: datetime | None = None
     regimes: list[str] = []
     confidence_values: list[float] = []
     revisions: list[str | None] = []
@@ -174,7 +172,6 @@ def _infer_regimes(dataframe: DataFrame) -> DataFrame:
             revisions.append(None)
             valid_values.append(False)
             previous = None
-            previous_close_time = None
             continue
         close_time += timedelta(seconds=_TIMEFRAME_SECONDS["1h"])
         if position >= len(regime_features):
@@ -225,7 +222,6 @@ def _infer_regimes(dataframe: DataFrame) -> DataFrame:
                 ),
                 fingerprint=result.fingerprint,
             )
-            previous_close_time = close_time
         else:
             regimes.append("NO_TRADE")
             confidence_values.append(float("nan"))
@@ -233,8 +229,6 @@ def _infer_regimes(dataframe: DataFrame) -> DataFrame:
             valid_values.append(False)
             previous = None
             previous_close_time = None
-        if previous_close_time is not None and close_time <= previous_close_time:
-            previous = None
     dataframe["alix_regime"] = regimes
     dataframe["alix_regime_confidence"] = confidence_values
     dataframe["alix_hmm_revision"] = revisions
