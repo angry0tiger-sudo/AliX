@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 import math
 import re
 from dataclasses import asdict, dataclass
@@ -353,8 +351,10 @@ def _feature_contract_reasons(
     reasons: list[str] = []
     if observation.feature_schema_version != model.feature_schema_version:
         reasons.append("regime_feature_schema_mismatch")
-    if observation.symbol != observation.symbol.upper() or not observation.symbol.endswith(
-        "/USDT"
+    if (
+        observation.symbol != observation.symbol.upper()
+        or observation.symbol.count("/") != 1
+        or not observation.symbol.endswith("/USDT")
     ):
         reasons.append("regime_spot_usdt_symbol_required")
     if observation.observed_at <= observation.evaluated_at and (
