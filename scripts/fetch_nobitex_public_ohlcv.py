@@ -180,7 +180,7 @@ def _fetch_candle_pages(
     cursor = start
     rows: list[CandleRecord] = []
     while cursor <= end:
-        stop = min(cursor + (MAX_CANDLES_PER_REQUEST - 1) * INTERVAL_SECONDS, end)
+        stop = min(cursor + (MAX_CANDLES_PER_REQUEST - 3) * INTERVAL_SECONDS, end)
         # Pad query bounds by one interval to tolerate providers that interpret
         # UDF range endpoints as exclusive, but retain only the exact target window.
         request_from = max(start, cursor - INTERVAL_SECONDS)
@@ -198,9 +198,7 @@ def _fetch_candle_pages(
                 requested_from=request_from,
                 requested_to=request_to,
             )
-            batch = [
-                row for row in page if cursor <= row["timestamp"] <= stop
-            ]
+            batch = [row for row in page if cursor <= row["timestamp"] <= stop]
             if batch:
                 break
             if attempt < 2:
