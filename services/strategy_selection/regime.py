@@ -554,3 +554,8 @@ def _validate_probability_vector(
         )
     if abs(sum(values, Decimal("0")) - Decimal("1")) > _PROBABILITY_TOLERANCE:
         raise ValueError(f"{name}_must_sum_to_one")
+
+def _as_decimal(value: float) -> Decimal:
+    if not math.isfinite(value):
+        raise ValueError("regime_probability_not_finite")
+    return Decimal(str(value))
