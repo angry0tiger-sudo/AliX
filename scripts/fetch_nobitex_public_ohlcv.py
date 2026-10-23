@@ -181,17 +181,32 @@ def _fetch_candle_pages(
     rows: list[CandleRecord] = []
     while cursor <= end:
         stop = min(cursor + (MAX_CANDLES_PER_REQUEST - 1) * INTERVAL_SECONDS, end)
+        # Pad query bounds by one interval to tolerate providers that interpret
+        # UDF range endpoints as exclusive, but retain only the exact target window.
+        request_from = max(start, cursor - INTERVAL_SECONDS)
+        request_to = min(end, stop + INTERVAL_SECONDS)
         params = {
             "symbol": "BTCUSDT",
             "resolution": "60",
-            "from": str(cursor),
-            "to": str(stop),
+            "from": str(request_from),
+            "to": str(request_to),
         }
-        batch = parse_udf_payload(
-            request_json(params), requested_from=cursor, requested_to=stop
-        )
+        batch: list[CandleRecord] = []
+        for attempt in range(3):
+            page = parse_udf_payload(
+                request_json(params),
+                requested_from=request_from,
+                requested_to=request_to,
+            )
+            batch = [
+                row for row in page if cursor <= row["timestamp"] <= stop
+            ]
+            if batch:
+                break
+            if attempt < 2:
+                sleep_fn(2**attempt)
         if not batch:
-            raise ValueError("nobitex_historical_empty_page")
+            raise ValueError(f"nobitex_historical_empty_page:{cursor}:{stop}")
         rows.extend(batch)
         cursor = batch[-1]["timestamp"] + INTERVAL_SECONDS
         if cursor <= end:
