@@ -104,8 +104,8 @@ def _validate_ohlcv(candles: DataFrame) -> None:
         raise ValueError("experiment_timestamps_invalid")
     if not candles["date"].is_monotonic_increasing:
         raise ValueError("experiment_timestamps_not_increasing")
-    differences = candles["date"].diff().iloc[1:].dt.total_seconds().to_numpy(
-        dtype=float
+    differences = (
+        candles["date"].diff().iloc[1:].dt.total_seconds().to_numpy(dtype=float)
     )
     if not np.all(differences == 3600.0):
         raise ValueError("experiment_hourly_grid_invalid")
@@ -186,17 +186,15 @@ def _engineer_experiment_features(candles: DataFrame) -> DataFrame:
         volume_mean = log_volume.rolling(window, min_periods=window).mean()
         volume_std = log_volume.rolling(window, min_periods=window).std()
         result[f"%-volume_z_{window}"] = (
-            (log_volume - volume_mean) / volume_std.replace(0.0, np.nan)
-        )
+            log_volume - volume_mean
+        ) / volume_std.replace(0.0, np.nan)
     volume_median = volume.rolling(24, min_periods=24).median()
     result["%-volume_ratio_24"] = volume / volume_median.replace(0.0, np.nan) - 1.0
     for window in (24, 72):
         rolling_mean = close.rolling(window, min_periods=window).mean()
         result[f"%-close_vs_sma_{window}"] = close / rolling_mean - 1.0
     for window in (12, 24):
-        result[f"%-momentum_{window}"] = close.pct_change(
-            window, fill_method=None
-        )
+        result[f"%-momentum_{window}"] = close.pct_change(window, fill_method=None)
     rolling_high = high.rolling(24, min_periods=24).max()
     rolling_low = low.rolling(24, min_periods=24).min()
     width = (rolling_high - rolling_low).replace(0.0, np.nan)
@@ -250,9 +248,7 @@ def _make_folds(row_count: int) -> list[OOFFold]:
     return folds
 
 
-def _primary_estimator(
-    name: str, regularization_c: float, standardized: bool
-) -> Any:
+def _primary_estimator(name: str, regularization_c: float, standardized: bool) -> Any:
     classifier = LogisticRegression(
         C=regularization_c,
         max_iter=1000,
@@ -440,7 +436,9 @@ def _evaluate_one_fold(
     labels = test_rows["meta_label"].to_numpy(dtype=float)
     clipped = np.clip(probabilities, 1e-12, 1.0 - 1e-12)
     brier = float(np.mean(np.square(probabilities - labels)))
-    log_loss = float(-np.mean(labels * np.log(clipped) + (1.0 - labels) * np.log1p(-clipped)))
+    log_loss = float(
+        -np.mean(labels * np.log(clipped) + (1.0 - labels) * np.log1p(-clipped))
+    )
     base_probability = float(train_rows["meta_label"].mean())
     baseline_brier = float(np.mean(np.square(base_probability - labels)))
     baseline_clipped = float(np.clip(base_probability, 1e-12, 1.0 - 1e-12))
@@ -536,9 +534,7 @@ def _flatten_trades(folds: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _aggregate_candidate(result: dict[str, Any]) -> dict[str, Any]:
-    evaluated = [
-        fold for fold in result["folds"] if fold.get("status") == "EVALUATED"
-    ]
+    evaluated = [fold for fold in result["folds"] if fold.get("status") == "EVALUATED"]
     trades = _flatten_trades(evaluated)
     metrics = _trade_metrics(trades)
     sample_count = sum(int(fold["test_count"]) for fold in evaluated)
@@ -719,9 +715,7 @@ def run_experiments(
         "source": {
             "provider": PUBLIC_PROVIDER,
             "csv_sha256": dataset_hash,
-            "manifest_sha256": _sha256_bytes(
-                manifest_path.read_bytes()
-            ),
+            "manifest_sha256": _sha256_bytes(manifest_path.read_bytes()),
             "row_count": int(len(candles)),
             "start": candles["date"].iloc[0].isoformat(),
             "end": candles["date"].iloc[-1].isoformat(),
@@ -826,9 +820,7 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--commit-sha", required=True)
     args = parser.parse_args()
-    report = run_experiments(
-        args.input, args.manifest, args.output, args.commit_sha
-    )
+    report = run_experiments(args.input, args.manifest, args.output, args.commit_sha)
     print(
         json.dumps(
             {
@@ -836,9 +828,7 @@ def main() -> int:
                 "candidate_count": report["protocol"]["candidate_grid"][
                     "candidate_count"
                 ],
-                "oos_trade_count": report["adaptive_walkforward_policy"][
-                    "trade_count"
-                ],
+                "oos_trade_count": report["adaptive_walkforward_policy"]["trade_count"],
                 "win_rate": report["adaptive_walkforward_policy"]["win_rate"],
                 "net_expectancy": report["adaptive_walkforward_policy"][
                     "net_expectancy"
