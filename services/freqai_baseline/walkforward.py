@@ -558,6 +558,48 @@ def _compose_walk_forward_report(
     }
 
 
+def _evaluate_folds(
+    dataset: DataFrame,
+    folds: list[WalkForwardFold],
+    parameters: dict[str, object],
+    config: WalkForwardConfig,
+    estimator_factory: EstimatorFactory | None,
+) -> list[FoldEvaluation]:
+    return [
+        _evaluate_fold(dataset, fold, parameters, config, estimator_factory)
+        for fold in folds
+    ]
+
+
+def _collect_fold_trade_returns(evaluations: list[FoldEvaluation]) -> list[float]:
+    trade_returns: list[float] = []
+    for result in evaluations:
+        trade_returns.extend(result.trade_returns)
+    return trade_returns
+
+
+def _concatenate_fold_actuals(evaluations: list[FoldEvaluation]) -> np.ndarray:
+    return np.concatenate([result.actual for result in evaluations])
+
+
+def _concatenate_fold_predictions(evaluations: list[FoldEvaluation]) -> np.ndarray:
+    return np.concatenate([result.predicted for result in evaluations])
+
+
+def _compound_fold_metric(
+    evaluations: list[FoldEvaluation], metric_name: str
+) -> float:
+    values = [float(result.economic[metric_name]) for result in evaluations]
+    return float(np.prod(1.0 + np.asarray(values)) - 1.0)
+
+
+def _sum_fold_metric(evaluations: list[FoldEvaluation], metric_name: str) -> float:
+    total = 0.0
+    for result in evaluations:
+        total += float(result.economic[metric_name])
+    return total
+
+
 def run_walk_forward(
     dataframe: DataFrame,
     *,
@@ -581,22 +623,20 @@ def run_walk_forward(
     experiment_sha = hashlib.sha256(
         json.dumps(experiment_config, sort_keys=True, allow_nan=False).encode("utf-8")
     ).hexdigest()
-    evaluations = [
-        _evaluate_fold(dataset, fold, parameters, config, estimator_factory)
-        for fold in folds
-    ]
+    evaluations = _evaluate_folds(
+        dataset, folds, parameters, config, estimator_factory
+    )
     if not evaluations:
         raise RuntimeError("walk-forward evaluation produced no fitted models")
-    trade_returns = [value for result in evaluations for value in result.trade_returns]
-    actual = np.concatenate([result.actual for result in evaluations])
-    predicted = np.concatenate([result.predicted for result in evaluations])
+    trade_returns = _collect_fold_trade_returns(evaluations)
+    actual = _concatenate_fold_actuals(evaluations)
+    predicted = _concatenate_fold_predictions(evaluations)
     final = evaluations[-1]
     reload_info = _roundtrip_model(final.model, final.test_features, final.predicted)
     economic = _economic_summary(dataset, evaluations, trade_returns)
-    buy_hold_values = [
-        float(result.economic["buy_and_hold_net_return"]) for result in evaluations
-    ]
-    buy_hold_total = float(np.prod(1.0 + np.asarray(buy_hold_values)) - 1.0)
+    buy_hold_total = _compound_fold_metric(
+        evaluations, "buy_and_hold_net_return"
+    )
     return _compose_walk_forward_report(
         validated=validated,
         gate_fingerprint=gate_fingerprint,
@@ -615,15 +655,9 @@ def run_walk_forward(
         oos_predicted=predicted,
         reload_info=reload_info,
         economic=economic,
-        turnover=sum(
-            float(result.economic["turnover_units"]) for result in evaluations
-        ),
-        fees=sum(
-            float(result.economic["fees_bps_cumulative"]) for result in evaluations
-        ),
-        slippage=sum(
-            float(result.economic["slippage_bps_cumulative"]) for result in evaluations
-        ),
+        turnover=_sum_fold_metric(evaluations, "turnover_units"),
+        fees=_sum_fold_metric(evaluations, "fees_bps_cumulative"),
+        slippage=_sum_fold_metric(evaluations, "slippage_bps_cumulative"),
         buy_hold_total=buy_hold_total,
     )
 
