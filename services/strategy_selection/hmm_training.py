@@ -180,9 +180,7 @@ def _update_hmm_parameters(
     transitions = transition_counts / transition_counts.sum(axis=1, keepdims=True)
     means = (gamma.T @ values) / state_mass[:, None]
     delta = values[:, None, :] - means[None, :, :]
-    variances = (gamma[:, :, None] * delta * delta).sum(axis=0) / state_mass[
-        :, None
-    ]
+    variances = (gamma[:, :, None] * delta * delta).sum(axis=0) / state_mass[:, None]
     variances = np.maximum(variances, _VARIANCE_FLOOR)
     return initial, transitions, means, variances
 

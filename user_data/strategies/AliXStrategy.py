@@ -315,9 +315,7 @@ def _apply_model_features(dataframe: DataFrame) -> bool:
         from services.strategy_selection.hmm_training import calculate_regime_features
 
         regime_features = calculate_regime_features(dataframe)
-        dataframe["directional_efficiency"] = regime_features[
-            "directional_efficiency"
-        ]
+        dataframe["directional_efficiency"] = regime_features["directional_efficiency"]
         dataframe["realized_volatility"] = regime_features["realized_volatility"]
     except (ValueError, KeyError, TypeError):
         return False
@@ -383,9 +381,7 @@ def _read_atr_stop_inputs(
 def _calculate_atr_stop(
     current_rate: float, atr: float, entry_rate: float, regime: str
 ) -> float:
-    multiplier = {"trend": 2.0, "range": 1.0, "high_volatility": 0.75}.get(
-        regime, 0.75
-    )
+    multiplier = {"trend": 2.0, "range": 1.0, "high_volatility": 0.75}.get(regime, 0.75)
     stop_rate = entry_rate - multiplier * atr
     if not math.isfinite(stop_rate) or stop_rate <= 0:
         return -0.01

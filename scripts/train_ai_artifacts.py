@@ -90,10 +90,7 @@ def _validate_dataset_manifest(manifest: dict[str, Any], digest: str) -> None:
         raise ValueError("ai_training_provider_not_approved_for_research")
     if manifest.get("credentials_used") is not False:
         raise ValueError("ai_training_public_dataset_must_use_no_credentials")
-    if (
-        manifest.get("row_count") != 8760
-        or manifest.get("requested_days") != 365
-    ):
+    if manifest.get("row_count") != 8760 or manifest.get("requested_days") != 365:
         raise ValueError("ai_training_dataset_must_be_8760_hourly_candles")
 
 

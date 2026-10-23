@@ -203,7 +203,9 @@ def _validate_technical_approval(
     _validate_approval_release_flags(approval)
 
 
-def _validate_artifact_identity(payload: Mapping[str, Any]) -> tuple[str, Mapping[str, Any]]:
+def _validate_artifact_identity(
+    payload: Mapping[str, Any],
+) -> tuple[str, Mapping[str, Any]]:
     if payload.get("schema_version") != MODEL_SCHEMA_VERSION:
         raise ValueError("hmm_artifact_schema_version_mismatch")
     status = payload.get("status")
