@@ -290,7 +290,11 @@ def test_model_loader_rejects_malformed_parameter_shapes_and_types() -> None:
     cases: list[tuple[str, Any, str]] = [
         ("trained_at", "not-a-timestamp", "trained_at_invalid"),
         ("max_model_age_seconds", True, "max_model_age_seconds_invalid"),
-        ("initial_probabilities", ["bad", "0.33", "0.33"], "initial_probabilities_invalid"),
+        (
+            "initial_probabilities",
+            ["bad", "0.33", "0.33"],
+            "initial_probabilities_invalid",
+        ),
         ("feature_names", [], "feature_names_invalid"),
         ("emissions", None, "emissions_invalid"),
         ("transition_matrix", None, "transition_matrix_invalid"),
@@ -343,12 +347,12 @@ def test_model_loader_validates_each_external_approval_contract() -> None:
         document, approval = _owner_approved_hmm_document()
         approval[field] = value
         with pytest.raises(ValueError, match=reason):
-            load_hmm_model_document(
-                document, approval_document=json.dumps(approval)
-            )
+            load_hmm_model_document(document, approval_document=json.dumps(approval))
 
 
-def test_model_loader_rejects_approval_on_unapproved_artifact_when_flags_are_unsafe() -> None:
+def test_model_loader_rejects_approval_on_unapproved_artifact_when_flags_are_unsafe() -> (
+    None
+):
     approval = {
         "schema_version": "alix.model-technical-approval.v1",
         "model_type": "gaussian_hmm",
@@ -380,4 +384,3 @@ def test_model_loader_file_reports_missing_model_and_approval_artifacts(
             model_path,
             approval_path=tmp_path / "absent-approval.json",
         )
-

@@ -252,12 +252,54 @@ def test_shadow_fill_consumes_an_actual_positive_risk_gate_decision(
 @pytest.mark.parametrize(
     ("confidence", "quantity", "entry_price", "fee_rate", "slippage_rate", "reason"),
     [
-        (Decimal("1.1"), Decimal("2"), Decimal("100"), Decimal("0.001"), Decimal("0.001"), "confidence_out_of_range"),
-        (Decimal("NaN"), Decimal("2"), Decimal("100"), Decimal("0.001"), Decimal("0.001"), "must_be_finite_decimal"),
-        (Decimal("0.8"), Decimal("2"), Decimal("0"), Decimal("0.001"), Decimal("0.001"), "must_be_positive"),
-        (Decimal("0.8"), Decimal("2"), Decimal("100"), Decimal("-0.1"), Decimal("0.001"), "fee_rate_out_of_range"),
-        (Decimal("0.8"), Decimal("2"), Decimal("100"), Decimal("0.03"), Decimal("0.001"), "fee_rate_out_of_range"),
-        (Decimal("0.8"), Decimal("2"), Decimal("100"), Decimal("0.001"), Decimal("0.06"), "slippage_rate_out_of_range"),
+        (
+            Decimal("1.1"),
+            Decimal("2"),
+            Decimal("100"),
+            Decimal("0.001"),
+            Decimal("0.001"),
+            "confidence_out_of_range",
+        ),
+        (
+            Decimal("NaN"),
+            Decimal("2"),
+            Decimal("100"),
+            Decimal("0.001"),
+            Decimal("0.001"),
+            "must_be_finite_decimal",
+        ),
+        (
+            Decimal("0.8"),
+            Decimal("2"),
+            Decimal("0"),
+            Decimal("0.001"),
+            Decimal("0.001"),
+            "must_be_positive",
+        ),
+        (
+            Decimal("0.8"),
+            Decimal("2"),
+            Decimal("100"),
+            Decimal("-0.1"),
+            Decimal("0.001"),
+            "fee_rate_out_of_range",
+        ),
+        (
+            Decimal("0.8"),
+            Decimal("2"),
+            Decimal("100"),
+            Decimal("0.03"),
+            Decimal("0.001"),
+            "fee_rate_out_of_range",
+        ),
+        (
+            Decimal("0.8"),
+            Decimal("2"),
+            Decimal("100"),
+            Decimal("0.001"),
+            Decimal("0.06"),
+            "slippage_rate_out_of_range",
+        ),
     ],
 )
 def test_shadow_rejects_nonfinite_and_out_of_policy_execution_inputs(
@@ -293,4 +335,3 @@ def test_shadow_replay_detects_a_tampered_persisted_record_hash(tmp_path: Path) 
         )
     with pytest.raises(RuntimeError, match="record_hash_mismatch"):
         _execute(exchange, _decision())
-

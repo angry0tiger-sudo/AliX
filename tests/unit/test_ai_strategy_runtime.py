@@ -281,4 +281,3 @@ def test_meta_model_loader_accepts_valid_technical_only_artifacts(
     assert model is not None
     assert approved is True
     assert strategy_module._load_meta_model()[1] is True
-
