@@ -15,7 +15,9 @@ from services.simulation.shadow_exchange import (
 )
 
 
-def _decision(*, approved: bool = True, permission: bool = False, decision_id: str = "shadow-1") -> GateDecision:
+def _decision(
+    *, approved: bool = True, permission: bool = False, decision_id: str = "shadow-1"
+) -> GateDecision:
     return GateDecision(
         decision_id=decision_id,
         evaluated_at=datetime(2026, 10, 23, 12, 0, tzinfo=timezone.utc),
@@ -28,7 +30,12 @@ def _decision(*, approved: bool = True, permission: bool = False, decision_id: s
     )
 
 
-def _execute(exchange: ShadowExchange, decision: GateDecision, confidence: str = "0.80", quantity: str = "2"):
+def _execute(
+    exchange: ShadowExchange,
+    decision: GateDecision,
+    confidence: str = "0.80",
+    quantity: str = "2",
+):
     return exchange.simulate_round_trip(
         decision=decision,
         meta_confidence=Decimal(confidence),
@@ -40,7 +47,9 @@ def _execute(exchange: ShadowExchange, decision: GateDecision, confidence: str =
     )
 
 
-def test_shadow_fill_applies_round_trip_slippage_fees_and_stays_synthetic(tmp_path) -> None:
+def test_shadow_fill_applies_round_trip_slippage_fees_and_stays_synthetic(
+    tmp_path,
+) -> None:
     exchange = ShadowExchange(tmp_path / "shadow.sqlite3")
     result = _execute(exchange, _decision())
     assert result.status == "SIMULATED"
@@ -62,7 +71,9 @@ def test_shadow_fill_applies_round_trip_slippage_fees_and_stays_synthetic(tmp_pa
         (_decision(), "0.69"),
     ],
 )
-def test_shadow_never_fills_if_gate_or_meta_filter_rejects(tmp_path, decision, confidence) -> None:
+def test_shadow_never_fills_if_gate_or_meta_filter_rejects(
+    tmp_path, decision, confidence
+) -> None:
     exchange = ShadowExchange(tmp_path / "shadow.sqlite3")
     result = _execute(exchange, decision, confidence)
     assert result.status == "REJECTED"
@@ -73,7 +84,9 @@ def test_shadow_never_fills_if_gate_or_meta_filter_rejects(tmp_path, decision, c
     assert exchange.row_count() == 1
 
 
-def test_shadow_replay_is_idempotent_and_conflicting_reuse_is_rejected(tmp_path) -> None:
+def test_shadow_replay_is_idempotent_and_conflicting_reuse_is_rejected(
+    tmp_path,
+) -> None:
     exchange = ShadowExchange(tmp_path / "shadow.sqlite3")
     first = _execute(exchange, _decision())
     replay = _execute(exchange, _decision())
@@ -99,6 +112,10 @@ def test_shadow_validation_and_append_only_invariants(tmp_path) -> None:
     assert exchange.get_fill("missing") is None
     with sqlite3.connect(tmp_path / "shadow.sqlite3") as connection:
         with pytest.raises(sqlite3.IntegrityError, match="append_only"):
-            connection.execute("UPDATE shadow_round_trips SET source_status='LIVE' WHERE decision_id='shadow-1'")
+            connection.execute(
+                "UPDATE shadow_round_trips SET source_status='LIVE' WHERE decision_id='shadow-1'"
+            )
         with pytest.raises(sqlite3.IntegrityError, match="append_only"):
-            connection.execute("DELETE FROM shadow_round_trips WHERE decision_id='shadow-1'")
+            connection.execute(
+                "DELETE FROM shadow_round_trips WHERE decision_id='shadow-1'"
+            )

@@ -43,8 +43,10 @@ def _mapping(value: object, field: str) -> Mapping[str, Any]:
 
 
 def _string_list(value: object, field: str) -> tuple[str, ...]:
-    if not isinstance(value, list) or not value or not all(
-        isinstance(item, str) and item.strip() for item in value
+    if (
+        not isinstance(value, list)
+        or not value
+        or not all(isinstance(item, str) and item.strip() for item in value)
     ):
         raise ValueError(f"hmm_artifact_{field}_invalid")
     return tuple(value)
@@ -100,7 +102,9 @@ def _model_from_payload(model: Mapping[str, Any], model_hash: str) -> RegimeHMMM
         "initial_probabilities": initial,
         "transition_matrix": transition,
         "emissions": tuple(emissions),
-        "minimum_confidence": _decimal(model.get("minimum_confidence"), "minimum_confidence"),
+        "minimum_confidence": _decimal(
+            model.get("minimum_confidence"), "minimum_confidence"
+        ),
         "minimum_posterior_margin": _decimal(
             model.get("minimum_posterior_margin"), "minimum_posterior_margin"
         ),

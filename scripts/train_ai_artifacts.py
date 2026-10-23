@@ -26,7 +26,11 @@ from services.freqai_baseline.features import (
     add_market_features,
     forward_return_target,
 )
-from services.meta_labeling.meta_model import MetaLabelModel, OOFFold, generate_oof_primary_predictions
+from services.meta_labeling.meta_model import (
+    MetaLabelModel,
+    OOFFold,
+    generate_oof_primary_predictions,
+)
 from services.meta_labeling.triple_barrier import (
     TripleBarrierConfig,
     apply_triple_barrier,
@@ -64,7 +68,9 @@ def _sha256_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
 
-def _load_dataset(dataset_path: Path, manifest_path: Path) -> tuple[DataFrame, dict[str, Any], str]:
+def _load_dataset(
+    dataset_path: Path, manifest_path: Path
+) -> tuple[DataFrame, dict[str, Any], str]:
     try:
         raw_bytes = dataset_path.read_bytes()
         manifest_value = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -79,7 +85,10 @@ def _load_dataset(dataset_path: Path, manifest_path: Path) -> tuple[DataFrame, d
         raise ValueError("ai_training_provider_not_approved_for_research")
     if manifest_value.get("credentials_used") is not False:
         raise ValueError("ai_training_public_dataset_must_use_no_credentials")
-    if manifest_value.get("row_count") != 8760 or manifest_value.get("requested_days") != 365:
+    if (
+        manifest_value.get("row_count") != 8760
+        or manifest_value.get("requested_days") != 365
+    ):
         raise ValueError("ai_training_dataset_must_be_8760_hourly_candles")
     candles = pd.read_csv(dataset_path)
     required = ("date", "open", "high", "low", "close", "volume")
@@ -88,7 +97,10 @@ def _load_dataset(dataset_path: Path, manifest_path: Path) -> tuple[DataFrame, d
     candles["date"] = pd.to_datetime(candles["date"], utc=True, errors="raise")
     if len(candles) != 8760:
         raise ValueError("ai_training_row_count_mismatch")
-    if candles["date"].duplicated().any() or not candles["date"].is_monotonic_increasing:
+    if (
+        candles["date"].duplicated().any()
+        or not candles["date"].is_monotonic_increasing
+    ):
         raise ValueError("ai_training_timestamps_must_be_unique_and_increasing")
     deltas = candles["date"].diff().iloc[1:].dt.total_seconds().to_numpy(dtype=float)
     if not np.all(deltas == 3600.0):
@@ -112,7 +124,10 @@ def _load_dataset(dataset_path: Path, manifest_path: Path) -> tuple[DataFrame, d
     ):
         raise ValueError("ai_training_ohlcv_invariants_failed")
     quality = validate_candles(
-        [{str(key): value for key, value in row.items()} for row in candles.to_dict(orient="records")],
+        [
+            {str(key): value for key, value in row.items()}
+            for row in candles.to_dict(orient="records")
+        ],
         expected_interval_seconds=3600,
         gap_policy="reject",
     )
@@ -135,7 +150,9 @@ def _folds(row_count: int) -> list[OOFFold]:
     return folds
 
 
-def _meta_training(candles: DataFrame, data_hash: str) -> tuple[dict[str, Any], dict[str, Any]]:
+def _meta_training(
+    candles: DataFrame, data_hash: str
+) -> tuple[dict[str, Any], dict[str, Any]]:
     enriched = add_market_features(candles)
     feature_frame = enriched.loc[:, list(FEATURE_COLUMNS)]
     forward_one = forward_return_target(candles, horizon=1).to_numpy(dtype=float)
@@ -153,9 +170,13 @@ def _meta_training(candles: DataFrame, data_hash: str) -> tuple[dict[str, Any], 
         ),
     )
     event_indices = oof["event_index"].to_numpy(dtype=int)
-    volatility = feature_frame["%-volatility_12"].iloc[event_indices].to_numpy(dtype=float)
-    valid_event = np.isfinite(volatility) & (volatility > 0) & (
-        oof["primary_prediction"].to_numpy(dtype=float) >= 0.5
+    volatility = (
+        feature_frame["%-volatility_12"].iloc[event_indices].to_numpy(dtype=float)
+    )
+    valid_event = (
+        np.isfinite(volatility)
+        & (volatility > 0)
+        & (oof["primary_prediction"].to_numpy(dtype=float) >= 0.5)
     )
     events = pd.DataFrame(
         {
@@ -236,7 +257,9 @@ def _meta_training(candles: DataFrame, data_hash: str) -> tuple[dict[str, Any], 
                 )
             )
             selected = probabilities >= META_THRESHOLD
-            net_returns = merged.iloc[test_positions]["net_return"].to_numpy(dtype=float)
+            net_returns = merged.iloc[test_positions]["net_return"].to_numpy(
+                dtype=float
+            )
             selected_returns = net_returns[selected]
             validation = {
                 "status": "TECHNICAL_VALIDATION_PASSED",
@@ -304,8 +327,12 @@ def _meta_training(candles: DataFrame, data_hash: str) -> tuple[dict[str, Any], 
     }, validation
 
 
-def train(dataset_path: Path, manifest_path: Path, output_dir: Path, commit_sha: str) -> dict[str, Any]:
-    if len(commit_sha) != 40 or any(character not in "0123456789abcdef" for character in commit_sha):
+def train(
+    dataset_path: Path, manifest_path: Path, output_dir: Path, commit_sha: str
+) -> dict[str, Any]:
+    if len(commit_sha) != 40 or any(
+        character not in "0123456789abcdef" for character in commit_sha
+    ):
         raise ValueError("ai_training_commit_sha_invalid")
     candles, dataset, data_hash = _load_dataset(dataset_path, manifest_path)
     regime_frame = calculate_regime_features(candles).dropna().reset_index(drop=True)
@@ -377,11 +404,13 @@ def train(dataset_path: Path, manifest_path: Path, output_dir: Path, commit_sha:
         encoding="utf-8",
     )
     (output_dir / "meta-label-model.json").write_text(
-        json.dumps(meta_result["model"], indent=2, sort_keys=True, allow_nan=False) + "\n",
+        json.dumps(meta_result["model"], indent=2, sort_keys=True, allow_nan=False)
+        + "\n",
         encoding="utf-8",
     )
     (output_dir / "meta-label-model.manifest.json").write_text(
-        json.dumps(meta_result["manifest"], indent=2, sort_keys=True, allow_nan=False) + "\n",
+        json.dumps(meta_result["manifest"], indent=2, sort_keys=True, allow_nan=False)
+        + "\n",
         encoding="utf-8",
     )
     report = {

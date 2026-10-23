@@ -52,38 +52,63 @@ class ShadowFill:
             raise ValueError("shadow_gate_fingerprint_invalid")
         if self.order_permission is not False or self.source_status != "SYNTHETIC_ONLY":
             raise ValueError("shadow_permission_or_source_invariant_failed")
-        if not self.meta_confidence.is_finite() or not Decimal("0") <= self.meta_confidence <= Decimal("1"):
+        if not self.meta_confidence.is_finite() or not Decimal(
+            "0"
+        ) <= self.meta_confidence <= Decimal("1"):
             raise ValueError("shadow_meta_confidence_invalid")
         for name in (
-            "quantity", "entry_fill_price", "exit_fill_price", "entry_fee",
-            "exit_fee", "gross_pnl", "net_pnl",
+            "quantity",
+            "entry_fill_price",
+            "exit_fill_price",
+            "entry_fee",
+            "exit_fee",
+            "gross_pnl",
+            "net_pnl",
         ):
             value = getattr(self, name)
             if not isinstance(value, Decimal) or not value.is_finite():
                 raise ValueError(f"shadow_{name}_must_be_finite_decimal")
-        if min(self.quantity, self.entry_fill_price, self.exit_fill_price, self.entry_fee, self.exit_fee) < 0:
+        if (
+            min(
+                self.quantity,
+                self.entry_fill_price,
+                self.exit_fill_price,
+                self.entry_fee,
+                self.exit_fee,
+            )
+            < 0
+        ):
             raise ValueError("shadow_amount_must_not_be_negative")
         if self.status not in {"SIMULATED", "REJECTED"}:
             raise ValueError("shadow_status_invalid")
-        if self.status == "SIMULATED" and min(
-            self.quantity, self.entry_fill_price, self.exit_fill_price
-        ) <= 0:
+        if (
+            self.status == "SIMULATED"
+            and min(self.quantity, self.entry_fill_price, self.exit_fill_price) <= 0
+        ):
             raise ValueError("shadow_fill_prices_and_quantity_must_be_positive")
         if self.status == "SIMULATED" and self.rejection_reasons:
             raise ValueError("shadow_filled_record_cannot_have_rejection_reasons")
         if self.status == "REJECTED" and not self.rejection_reasons:
             raise ValueError("shadow_rejected_record_requires_reason")
         if self.status == "REJECTED" and any(
-            value != 0 for value in (
-                self.quantity, self.entry_fill_price, self.exit_fill_price,
-                self.entry_fee, self.exit_fee, self.gross_pnl, self.net_pnl,
+            value != 0
+            for value in (
+                self.quantity,
+                self.entry_fill_price,
+                self.exit_fill_price,
+                self.entry_fee,
+                self.exit_fee,
+                self.gross_pnl,
+                self.net_pnl,
             )
         ):
             raise ValueError("shadow_rejection_must_not_claim_fill")
 
 
 def _canonical(value: object) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
+    return json.dumps(
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False
+    )
 
 
 def _record_payload(fill: ShadowFill) -> dict[str, object]:
@@ -96,14 +121,22 @@ def _record_payload(fill: ShadowFill) -> dict[str, object]:
 
 def _fill_from_payload(payload: dict[str, object]) -> ShadowFill:
     decimal_names = (
-        "meta_confidence", "quantity", "entry_fill_price", "exit_fill_price",
-        "entry_fee", "exit_fee", "gross_pnl", "net_pnl",
+        "meta_confidence",
+        "quantity",
+        "entry_fill_price",
+        "exit_fill_price",
+        "entry_fee",
+        "exit_fee",
+        "gross_pnl",
+        "net_pnl",
     )
     values: dict[str, object] = dict(payload)
     for name in decimal_names:
         values[name] = Decimal(str(payload[name]))
     reasons = payload.get("rejection_reasons", [])
-    if not isinstance(reasons, list) or not all(isinstance(item, str) for item in reasons):
+    if not isinstance(reasons, list) or not all(
+        isinstance(item, str) for item in reasons
+    ):
         raise RuntimeError("shadow_rejection_reasons_invalid")
     values["rejection_reasons"] = tuple(reasons)
     return ShadowFill(**values)  # type: ignore[arg-type]
@@ -157,7 +190,9 @@ class ShadowExchange:
         self._initialize()
 
     def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(str(self.database_path), timeout=5, isolation_level=None)
+        connection = sqlite3.connect(
+            str(self.database_path), timeout=5, isolation_level=None
+        )
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA busy_timeout=5000")
         connection.execute("PRAGMA synchronous=FULL")
@@ -219,7 +254,9 @@ class ShadowExchange:
             "fee_rate": str(fee_rate),
             "slippage_rate": str(slippage_rate),
         }
-        input_fingerprint = hashlib.sha256(_canonical(request).encode("utf-8")).hexdigest()
+        input_fingerprint = hashlib.sha256(
+            _canonical(request).encode("utf-8")
+        ).hexdigest()
         accepted = (
             decision.risk_approved is True
             and decision.order_permission is False
@@ -229,7 +266,10 @@ class ShadowExchange:
             reason
             for condition, reason in (
                 (decision.risk_approved is not True, "risk_gate_rejected"),
-                (decision.order_permission is not False, "order_permission_must_remain_false"),
+                (
+                    decision.order_permission is not False,
+                    "order_permission_must_remain_false",
+                ),
                 (meta_confidence < META_CONFIDENCE_FLOOR, "meta_confidence_below_0.70"),
             )
             if condition
@@ -276,12 +316,16 @@ class ShadowExchange:
             ).fetchone()
             if prior is not None:
                 if prior["input_fingerprint"] != fill.input_fingerprint:
-                    raise ShadowLedgerConflictError("shadow_decision_id_payload_conflict")
+                    raise ShadowLedgerConflictError(
+                        "shadow_decision_id_payload_conflict"
+                    )
                 existing = json.loads(str(prior["payload_json"]))
                 if not isinstance(existing, dict):
                     raise RuntimeError("shadow_ledger_payload_invalid")
                 existing_json = _canonical(existing)
-                existing_hash = hashlib.sha256(existing_json.encode("utf-8")).hexdigest()
+                existing_hash = hashlib.sha256(
+                    existing_json.encode("utf-8")
+                ).hexdigest()
                 if existing_hash != prior["record_hash"]:
                     raise RuntimeError("shadow_ledger_record_hash_mismatch")
                 connection.commit()
@@ -317,7 +361,9 @@ class ShadowExchange:
 
     def row_count(self) -> int:
         with closing(self._connect()) as connection:
-            row = connection.execute("SELECT COUNT(*) AS count FROM shadow_round_trips").fetchone()
+            row = connection.execute(
+                "SELECT COUNT(*) AS count FROM shadow_round_trips"
+            ).fetchone()
         if row is None:
             raise RuntimeError("shadow_ledger_count_unavailable")
         return int(row["count"])

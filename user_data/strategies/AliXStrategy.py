@@ -38,6 +38,7 @@ from services.strategy_selection.regime import (
 try:
     from freqtrade.strategy import IStrategy  # type: ignore[import-not-found]
 except ImportError:  # pragma: no cover - only used by lightweight tooling.
+
     class IStrategy:  # type: ignore[no-redef]
         """Static-check fallback for environments without Freqtrade."""
 
@@ -152,7 +153,9 @@ def _infer_regimes(dataframe: DataFrame) -> DataFrame:
     except (ValueError, OSError):
         return dataframe
     classifier = HMMRegimeClassifier()
-    regime_features = dataframe.loc[:, ["directional_efficiency", "realized_volatility"]]
+    regime_features = dataframe.loc[
+        :, ["directional_efficiency", "realized_volatility"]
+    ]
     required = ("date", "open", "high", "low", "close", "volume")
     rolling_hash = hashlib.sha256()
     previous: PreviousRegimePosterior | None = None
@@ -163,7 +166,11 @@ def _infer_regimes(dataframe: DataFrame) -> DataFrame:
     for position, (_, row) in enumerate(dataframe.iterrows()):
         candle = {name: row[name] for name in required}
         prefix_hash = _row_fingerprint(candle, rolling_hash)
-        rolling_hash.update(json.dumps(candle, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8"))
+        rolling_hash.update(
+            json.dumps(
+                candle, sort_keys=True, separators=(",", ":"), default=str
+            ).encode("utf-8")
+        )
         rolling_hash.update(b"\n")
         close_time = _aware_timestamp(row["date"])
         if close_time is None:
@@ -201,13 +208,21 @@ def _infer_regimes(dataframe: DataFrame) -> DataFrame:
             timeframe="1h",
             feature_schema_version=model.feature_schema_version,
             feature_values=(
-                ("directional_efficiency", Decimal(str(float(values["directional_efficiency"])))),
-                ("realized_volatility", Decimal(str(float(values["realized_volatility"])))),
+                (
+                    "directional_efficiency",
+                    Decimal(str(float(values["directional_efficiency"]))),
+                ),
+                (
+                    "realized_volatility",
+                    Decimal(str(float(values["realized_volatility"]))),
+                ),
             ),
             data_quality=quality,
             data_fingerprint=prefix_hash,
         )
-        result = classifier.infer(model=model, observation=observation, previous=previous)
+        result = classifier.infer(
+            model=model, observation=observation, previous=previous
+        )
         if result.status is RegimeInferenceStatus.CLASSIFIED:
             regimes.append(str(result.selected_regime))
             confidence_values.append(float(result.confidence or Decimal("0")))
@@ -217,8 +232,7 @@ def _infer_regimes(dataframe: DataFrame) -> DataFrame:
                 model_revision=model.revision,
                 as_of=close_time,
                 probabilities=tuple(
-                    Decimal(str(dict(result.posterior)[name]))
-                    for name in model.regimes
+                    Decimal(str(dict(result.posterior)[name])) for name in model.regimes
                 ),
                 fingerprint=result.fingerprint,
             )
@@ -239,7 +253,7 @@ class AliXStrategy(IStrategy):  # type: ignore[misc]
     INTERFACE_VERSION = 3
     timeframe = "1h"
     can_short = False
-    minimal_roi = {"0": 0.0}
+    minimal_roi = {}
     # Catastrophic fallback only; the operative stop is returned by custom_stoploss.
     stoploss = -0.99
     trailing_stop = False
@@ -285,10 +299,14 @@ class AliXStrategy(IStrategy):  # type: ignore[misc]
             engineered = add_market_features(dataframe)
             for name in FEATURE_COLUMNS:
                 dataframe[name] = engineered[name]
-            from services.strategy_selection.hmm_training import calculate_regime_features
+            from services.strategy_selection.hmm_training import (
+                calculate_regime_features,
+            )
 
             regime_features = calculate_regime_features(dataframe)
-            dataframe["directional_efficiency"] = regime_features["directional_efficiency"]
+            dataframe["directional_efficiency"] = regime_features[
+                "directional_efficiency"
+            ]
             dataframe["realized_volatility"] = regime_features["realized_volatility"]
         except (ValueError, KeyError, TypeError):
             dataframe["alix_data_quality_valid"] = False
@@ -382,7 +400,9 @@ class AliXStrategy(IStrategy):  # type: ignore[misc]
         momentum_reversal = dataframe["rsi_14"] >= 60.0
         dataframe.loc[close_below_trend | momentum_reversal, "exit_long"] = 1
         dataframe.loc[close_below_trend, "exit_tag"] = "technical_trend_exit"
-        dataframe.loc[momentum_reversal & ~close_below_trend, "exit_tag"] = "momentum_exit"
+        dataframe.loc[momentum_reversal & ~close_below_trend, "exit_tag"] = (
+            "momentum_exit"
+        )
         return dataframe
 
     def custom_stoploss(
@@ -444,7 +464,9 @@ class AliXStrategy(IStrategy):  # type: ignore[misc]
             return None
         if current_time.tzinfo is None or current_time.utcoffset() is None:
             return None
-        elapsed = current_time.astimezone(timezone.utc) - opened_at.astimezone(timezone.utc)
+        elapsed = current_time.astimezone(timezone.utc) - opened_at.astimezone(
+            timezone.utc
+        )
         if elapsed < timedelta(seconds=12 * _TIMEFRAME_SECONDS.get(self.timeframe, 0)):
             return None
         if not math.isfinite(current_profit) or abs(current_profit) > _BREAKEVEN_BAND:

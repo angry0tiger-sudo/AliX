@@ -28,11 +28,19 @@ def _feature_rows(count: int = 420) -> pd.DataFrame:
     labels = np.arange(count) % 3
     efficiency = np.choose(
         labels,
-        [rng.normal(0.80, 0.05, count), rng.normal(0.20, 0.05, count), rng.normal(0.35, 0.08, count)],
+        [
+            rng.normal(0.80, 0.05, count),
+            rng.normal(0.20, 0.05, count),
+            rng.normal(0.35, 0.08, count),
+        ],
     )
     volatility = np.choose(
         labels,
-        [rng.normal(0.004, 0.0008, count), rng.normal(0.003, 0.0005, count), rng.normal(0.018, 0.002, count)],
+        [
+            rng.normal(0.004, 0.0008, count),
+            rng.normal(0.003, 0.0005, count),
+            rng.normal(0.018, 0.002, count),
+        ],
     )
     return pd.DataFrame(
         {
@@ -57,16 +65,30 @@ def _artifact_document() -> str:
             ["0.1", "0.1", "0.8"],
         ],
         "emissions": [
-            {"regime": "trend", "means": ["0.8", "0.004"], "standard_deviations": ["0.1", "0.002"]},
-            {"regime": "range", "means": ["0.2", "0.003"], "standard_deviations": ["0.1", "0.001"]},
-            {"regime": "high_volatility", "means": ["0.3", "0.02"], "standard_deviations": ["0.1", "0.005"]},
+            {
+                "regime": "trend",
+                "means": ["0.8", "0.004"],
+                "standard_deviations": ["0.1", "0.002"],
+            },
+            {
+                "regime": "range",
+                "means": ["0.2", "0.003"],
+                "standard_deviations": ["0.1", "0.001"],
+            },
+            {
+                "regime": "high_volatility",
+                "means": ["0.3", "0.02"],
+                "standard_deviations": ["0.1", "0.005"],
+            },
         ],
         "max_model_age_seconds": 2592000,
         "max_observation_age_seconds": 7200,
         "minimum_confidence": "0.55",
         "minimum_posterior_margin": "0.10",
     }
-    canonical = json.dumps(model, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
+    canonical = json.dumps(
+        model, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False
+    )
     document = {
         "schema_version": MODEL_SCHEMA_VERSION,
         "status": "TRAINED_UNAPPROVED",
@@ -131,7 +153,9 @@ def test_hmm_artifact_parameters_are_json_native_and_semantically_ordered() -> N
     parameters = fit_parameters_for_artifact(_feature_rows(240))
     assert len(parameters["emissions"]) == 3
     assert [value["regime"] for value in parameters["emissions"]] == [
-        "trend", "range", "high_volatility"
+        "trend",
+        "range",
+        "high_volatility",
     ]
     assert parameters["fit_diagnostics"]["iterations"] >= 1
 
@@ -164,7 +188,9 @@ def test_model_loader_rejects_invalid_dataset_and_validation_provenance() -> Non
     with pytest.raises(ValueError, match="validation_not_passed"):
         load_hmm_model_document(json.dumps(raw))
 
-def test_model_loader_supports_explicit_technical_approval_without_economic_promotion() -> None:
+def test_model_loader_supports_explicit_technical_approval_without_economic_promotion() -> (
+    None
+):
     raw = json.loads(_artifact_document())
     raw["status"] = "OWNER_APPROVED_TECHNICAL_ONLY"
     raw["model"]["owner_approved"] = True

@@ -96,9 +96,7 @@ def _initial_parameters(
     if np.any(weights < 2):
         raise ValueError("hmm_training_initial_state_underpopulated")
     means = np.vstack([values[labels == state].mean(axis=0) for state in range(3)])
-    variances = np.vstack(
-        [values[labels == state].var(axis=0) for state in range(3)]
-    )
+    variances = np.vstack([values[labels == state].var(axis=0) for state in range(3)])
     global_variance = np.maximum(values.var(axis=0), _VARIANCE_FLOOR)
     variances = np.maximum(variances, global_variance * 1e-4)
     transitions = np.ones((3, 3), dtype=float)
@@ -140,9 +138,7 @@ def _forward_backward(
     log_likelihood = float(_logsumexp(alpha[-1], axis=0))
     for index in range(row_count - 2, -1, -1):
         beta[index] = _logsumexp(
-            log_transitions
-            + emissions[index + 1][None, :]
-            + beta[index + 1][None, :],
+            log_transitions + emissions[index + 1][None, :] + beta[index + 1][None, :],
             axis=1,
         )
     log_gamma = alpha + beta - log_likelihood
@@ -165,7 +161,11 @@ def _forward_backward(
 def _fit_numeric(
     values: np.ndarray, *, max_iter: int, tolerance: float, random_seed: int
 ) -> HMMFit:
-    if isinstance(max_iter, bool) or not isinstance(max_iter, int) or not 2 <= max_iter <= 500:
+    if (
+        isinstance(max_iter, bool)
+        or not isinstance(max_iter, int)
+        or not 2 <= max_iter <= 500
+    ):
         raise ValueError("hmm_training_iteration_limit_invalid")
     if not math.isfinite(tolerance) or not 1e-8 <= tolerance <= 0.1:
         raise ValueError("hmm_training_tolerance_invalid")
@@ -182,7 +182,9 @@ def _fit_numeric(
         transitions = transition_counts / transition_counts.sum(axis=1, keepdims=True)
         means = (gamma.T @ values) / state_mass[:, None]
         delta = values[:, None, :] - means[None, :, :]
-        variances = (gamma[:, :, None] * delta * delta).sum(axis=0) / state_mass[:, None]
+        variances = (gamma[:, :, None] * delta * delta).sum(axis=0) / state_mass[
+            :, None
+        ]
         variances = np.maximum(variances, _VARIANCE_FLOOR)
         iterations = iteration
         if math.isfinite(prior_likelihood) and abs(likelihood - prior_likelihood) <= (
@@ -208,7 +210,10 @@ def _fit_numeric(
         ),
         means=tuple(tuple(float(value) for value in means[index]) for index in order),
         standard_deviations=tuple(
-            tuple(float(math.sqrt(value)) for value in np.maximum(variances[index], _VARIANCE_FLOOR))
+            tuple(
+                float(math.sqrt(value))
+                for value in np.maximum(variances[index], _VARIANCE_FLOOR)
+            )
             for index in order
         ),
         mean_log_likelihood=float(likelihood / len(values)),
@@ -262,7 +267,9 @@ def validate_hmm_holdout(
         and all(value > 0 for value in occupancy)
     )
     return {
-        "status": "TECHNICAL_VALIDATION_PASSED" if passed else "TECHNICAL_VALIDATION_FAILED",
+        "status": "TECHNICAL_VALIDATION_PASSED"
+        if passed
+        else "TECHNICAL_VALIDATION_FAILED",
         "passed": bool(passed),
         "validation_rows": int(len(validation)),
         "mean_log_likelihood": float(log_likelihood / len(validation)),
@@ -288,7 +295,9 @@ def fit_parameters_for_artifact(
         random_seed=random_seed,
     )
     return {
-        "initial_probabilities": [format(value, ".17g") for value in fit.initial_probabilities],
+        "initial_probabilities": [
+            format(value, ".17g") for value in fit.initial_probabilities
+        ],
         "transition_matrix": [
             [format(value, ".17g") for value in row] for row in fit.transition_matrix
         ],
