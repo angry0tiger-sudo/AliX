@@ -48,6 +48,12 @@ def _arguments() -> argparse.Namespace:
         "--output", type=Path, required=True, help="path to JSON report"
     )
     parser.add_argument("--pair", default="SYNTHETIC/USDT")
+    parser.add_argument(
+        "--dataset-kind",
+        choices=("owner_supplied_historical", "public_historical_market_data"),
+        default="owner_supplied_historical",
+        help="provenance label for --input",
+    )
     parser.add_argument("--timeframe", choices=sorted(TIMEFRAME_SECONDS), default="1h")
     parser.add_argument("--horizon", type=int, default=12)
     parser.add_argument("--folds", type=int, default=3)
@@ -159,7 +165,7 @@ def main() -> int:
         if args.input is None:
             raise ValueError("input path is required unless --synthetic is selected")
         dataframe, dataset_sha256 = _load_owner_csv(args.input)
-        dataset_kind = "owner_supplied_historical"
+        dataset_kind = args.dataset_kind
         pair = args.pair
 
     report = run_walk_forward(

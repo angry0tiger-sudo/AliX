@@ -106,6 +106,11 @@ REQUIRED_PROJECT_FILES = (
     "tests/unit/test_phase9_simulation_ledger.py",
     "tests/integration/test_phase9_postgres.py",
     "compose.phase9-test.yaml",
+    "docs/knowledge_base/PHASE_10_ACCEPTANCE.md",
+    "docs/phase-reports/PHASE_10_STATUS.md",
+    "docs/architecture/decisions/ADR-0010-phase-10-reporting-scheduler-public-research.md",
+    "docs/governance/owner-directives/2026-10-23-phase-10.md",
+    "docs/runbook/PHASE_10_GITHUB_ACTIONS_AND_WINDOWS_HANDOVER.md",
 )
 
 

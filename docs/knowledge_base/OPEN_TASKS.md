@@ -143,3 +143,17 @@
 - The original archive remains unchanged at repository root.
 - `artifacts-manifest/starter-kit.json` pins both Git blob SHA-1 and SHA-256.
 - The validator recomputes both checksums, verifies ZIP integrity and required embedded documents, and validates the market whitelist sample against its JSON Schema.
+
+
+# Phase 10 checkpoint: scheduler, reporting contracts and public market research
+
+- Tracking issue: https://github.com/angry0tiger-sudo/AliX/issues/13.
+- Base main SHA: `7893c87a8eea7fc10cf91b7cac3d891797b1f9e5`.
+- Owner Directive: `docs/governance/owner-directives/2026-10-23-phase-10.md`.
+- ADR: `docs/architecture/decisions/ADR-0010-phase-10-reporting-scheduler-public-research.md`.
+- Status: IN PROGRESS / NO-GO pending exact-head CI and review of market-data artifacts.
+- Public Nobitex OHLCV retrieval is a manual GitHub Actions workflow. CSV/manifest/research report remain workflow artifacts, not source-controlled market history.
+- Scheduler state is persisted by schedule slot with a lease, bounded retry/backoff and run history; SQLite is one-host only and PostgreSQL is the shared-store option.
+- Freqtrade and synthetic-ledger adapters are read-only. The Phase 9 ledger remains SYNTHETIC_ONLY / NOT_RECONCILED. An account snapshot and reconciled decision/order linkage are not yet provided.
+- The current AliX strategy scaffolds remain signal-free. Walk-forward output is a fixed-horizon research rule, not a full Freqtrade/RiskGate execution test.
+- `Champion=null`, `order_permission=false`, promotion blocked and trading authorization NO-GO remain mandatory. Phase 10 PR must not be merged without separate explicit owner authorization.
