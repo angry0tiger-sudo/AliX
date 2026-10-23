@@ -229,7 +229,7 @@ def fetch_historical_candles(
     )
     end -= INTERVAL_SECONDS
     rows = _fetch_candle_pages(
-        start=end - days * 86400,
+        start=end - (days * 24 - 1) * INTERVAL_SECONDS,
         end=end,
         request_json=request_json,
         sleep_fn=sleep_fn,

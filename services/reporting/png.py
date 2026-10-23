@@ -93,13 +93,13 @@ def _draw_series(
 
 def _encode_png(canvas: bytearray) -> bytes:
     scanlines = b"".join(
-        b"\\x00" + bytes(canvas[row * _WIDTH * 3 : (row + 1) * _WIDTH * 3])
+        b"\x00" + bytes(canvas[row * _WIDTH * 3 : (row + 1) * _WIDTH * 3])
         for row in range(_HEIGHT)
     )
     header = struct.pack(">IIBBBBB", _WIDTH, _HEIGHT, 8, 2, 0, 0, 0)
-    metadata = ("AliX-Chart-Schema\\x00" + PNG_CHART_SCHEMA_VERSION).encode("latin-1")
+    metadata = ("AliX-Chart-Schema\x00" + PNG_CHART_SCHEMA_VERSION).encode("latin-1")
     return (
-        b"\\x89PNG\\r\\n\\x1a\\n"
+        b"\x89PNG\r\n\x1a\n"
         + _chunk(b"IHDR", header)
         + _chunk(b"tEXt", metadata)
         + _chunk(b"IDAT", zlib.compress(scanlines, level=9))
