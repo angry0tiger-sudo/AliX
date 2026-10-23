@@ -1,9 +1,6 @@
 name: AliX Phase 10 Public Historical Market Research
 
 on:
-  push:
-    branches:
-      - ops/phase-10-public-data-run-2026-10-23
   workflow_dispatch:
     inputs:
       days:
@@ -48,7 +45,7 @@ jobs:
       - name: Fetch public historical Nobitex BTCUSDT candles
         run: |
           python scripts/fetch_nobitex_public_ohlcv.py \
-            --days "${{ inputs.days || '365' }}" \
+            --days "${{ inputs.days }}" \
             --output-dir artifacts/phase10-public-market-data \
             --commit-sha "${{ github.sha }}"
       - name: Run fixed walk-forward research evaluation
