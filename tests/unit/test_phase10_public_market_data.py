@@ -64,10 +64,8 @@ def test_historical_fetch_is_bounded_rejects_gaps_and_uses_fake_transport() -> N
         start, end = int(params["from"]), int(params["to"])
         offset = INTERVAL_SECONDS // 2
         first = (
-            ((start - offset + INTERVAL_SECONDS - 1) // INTERVAL_SECONDS)
-            * INTERVAL_SECONDS
-            + offset
-        )
+            (start - offset + INTERVAL_SECONDS - 1) // INTERVAL_SECONDS
+        ) * INTERVAL_SECONDS + offset
         stamps = list(range(first, end + 1, INTERVAL_SECONDS))
         return {
             "s": "ok",
