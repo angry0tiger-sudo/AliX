@@ -117,9 +117,7 @@ def make_context(**changes: Any) -> SelectionContext:
     return SelectionContext(**values)
 
 
-def make_evidence(
-    definition: StrategyDefinition, **changes: Any
-) -> StrategyEvidence:
+def make_evidence(definition: StrategyDefinition, **changes: Any) -> StrategyEvidence:
     metrics = PerformanceEvidence(
         trade_count=100,
         win_rate=D("0.70"),
@@ -172,9 +170,7 @@ def make_evidence(
     return StrategyEvidence(**values)
 
 
-def make_score(
-    definition: StrategyDefinition, **changes: Any
-) -> ModelStrategyScore:
+def make_score(definition: StrategyDefinition, **changes: Any) -> ModelStrategyScore:
     values: dict[str, Any] = {
         "strategy_id": definition.strategy_id,
         "strategy_version": definition.version,
@@ -210,9 +206,7 @@ def run_selector(
         selected_scores = tuple(make_score(item) for item in selected_definitions)
     selected_evidence = evidence
     if selected_evidence is None:
-        selected_evidence = tuple(
-            make_evidence(item) for item in selected_definitions
-        )
+        selected_evidence = tuple(make_evidence(item) for item in selected_definitions)
     return select_strategy(
         registry=make_registry(*selected_definitions),
         context=selected_context,
@@ -226,17 +220,27 @@ def _selected_reasons(result: StrategySelectionResult) -> tuple[str, ...]:
     return result.candidate_rejections[0].reasons
 
 
-def test_approved_oos_candidate_selects_deterministically_without_order_permission() -> None:
+def test_approved_oos_candidate_selects_deterministically_without_order_permission() -> (
+    None
+):
     definition = make_definition()
     context = make_context()
     policy = make_policy()
     scores = (make_score(definition),)
     evidence = (make_evidence(definition),)
     first = run_selector(
-        definitions=(definition,), context=context, policy=policy, scores=scores, evidence=evidence
+        definitions=(definition,),
+        context=context,
+        policy=policy,
+        scores=scores,
+        evidence=evidence,
     )
     second = run_selector(
-        definitions=(definition,), context=context, policy=policy, scores=scores, evidence=evidence
+        definitions=(definition,),
+        context=context,
+        policy=policy,
+        scores=scores,
+        evidence=evidence,
     )
 
     assert first.status is SelectionStatus.SELECTED
@@ -250,13 +254,18 @@ def test_approved_oos_candidate_selects_deterministically_without_order_permissi
 
 
 def test_model_score_is_only_a_ranker_after_deterministic_eligibility_gates() -> None:
-    rejected = make_definition(strategy_id="strategy_alpha", lifecycle=StrategyLifecycle.RESEARCH_ONLY)
+    rejected = make_definition(
+        strategy_id="strategy_alpha", lifecycle=StrategyLifecycle.RESEARCH_ONLY
+    )
     accepted = make_definition(
         strategy_id="strategy_beta",
         code_sha256="f" * 64,
         lifecycle=StrategyLifecycle.SELECTABLE,
     )
-    scores = (make_score(rejected, score=D("0.99")), make_score(accepted, score=D("0.50")))
+    scores = (
+        make_score(rejected, score=D("0.99")),
+        make_score(accepted, score=D("0.50")),
+    )
     evidence = (make_evidence(rejected), make_evidence(accepted))
     result = run_selector(
         definitions=(rejected, accepted), scores=scores, evidence=evidence
@@ -369,20 +378,38 @@ def test_registry_rejects_duplicate_strategy_ids_and_unapproved_schema() -> None
         ({"lifecycle": StrategyLifecycle.RESEARCH_ONLY}, "strategy_not_selectable"),
         ({"lifecycle": StrategyLifecycle.RETIRED}, "strategy_not_selectable"),
         ({"owner_approved": False}, "strategy_owner_approval_missing"),
-        ({"strategy_license_status": LicenseStatus.CONDITIONAL}, "strategy_or_data_license_not_approved"),
-        ({"data_license_status": LicenseStatus.REJECTED}, "strategy_or_data_license_not_approved"),
-        ({"dependency_license_status": LicenseStatus.CONDITIONAL}, "strategy_or_data_license_not_approved"),
+        (
+            {"strategy_license_status": LicenseStatus.CONDITIONAL},
+            "strategy_or_data_license_not_approved",
+        ),
+        (
+            {"data_license_status": LicenseStatus.REJECTED},
+            "strategy_or_data_license_not_approved",
+        ),
+        (
+            {"dependency_license_status": LicenseStatus.CONDITIONAL},
+            "strategy_or_data_license_not_approved",
+        ),
         ({"eligible_regimes": ("range",)}, "strategy_regime_not_supported"),
         ({"supported_timeframes": ("15m",)}, "strategy_timeframe_not_supported"),
         ({"data_schema_version": "ohlcv.v2"}, "strategy_data_schema_mismatch"),
         ({"feature_schema_version": "features.v2"}, "strategy_feature_schema_mismatch"),
-        ({"required_features": ("unavailable_feature",)}, "strategy_required_features_missing"),
-        ({"prohibited_conditions": ("news_outage",)}, "strategy_prohibited_market_condition_active"),
+        (
+            {"required_features": ("unavailable_feature",)},
+            "strategy_required_features_missing",
+        ),
+        (
+            {"prohibited_conditions": ("news_outage",)},
+            "strategy_prohibited_market_condition_active",
+        ),
         ({"max_data_age_seconds": 10}, "market_data_stale_for_strategy"),
         ({"max_fee_bps": D("10")}, "estimated_fee_above_strategy_limit"),
         ({"max_slippage_bps": D("2")}, "estimated_slippage_above_strategy_limit"),
         ({"max_spread_bps": D("2")}, "spread_above_strategy_limit"),
-        ({"minimum_quote_liquidity_usdt": D("200000")}, "quote_liquidity_below_strategy_minimum"),
+        (
+            {"minimum_quote_liquidity_usdt": D("200000")},
+            "quote_liquidity_below_strategy_minimum",
+        ),
     ),
 )
 def test_candidate_constraints_reject_before_score_can_select(
@@ -401,9 +428,15 @@ def test_candidate_constraints_reject_before_score_can_select(
         ({"symbol": "BTC/BTC"}, "spot_usdt_symbol_required"),
         ({"symbol": "btc/USDT"}, "spot_usdt_symbol_required"),
         ({"regime": "unknown"}, "strategy_regime_not_supported"),
-        ({"market_conditions": ("liquidity_shock",)}, "strategy_prohibited_market_condition_active"),
+        (
+            {"market_conditions": ("liquidity_shock",)},
+            "strategy_prohibited_market_condition_active",
+        ),
         ({"available_features": ()}, "selection_features_missing"),
-        ({"market_data_as_of": NOW + timedelta(seconds=1)}, "market_data_timestamp_in_future"),
+        (
+            {"market_data_as_of": NOW + timedelta(seconds=1)},
+            "market_data_timestamp_in_future",
+        ),
         ({"estimated_fee_bps": None}, "estimated_fee_missing"),
         ({"estimated_slippage_bps": None}, "estimated_slippage_missing"),
         ({"spread_bps": None}, "spread_estimate_missing"),
@@ -472,7 +505,10 @@ def test_missing_context_or_policy_and_unapproved_policy_abstain() -> None:
 
     assert "selection_context_missing" in missing_context.reason_codes
     assert "economic_acceptance_policy_missing" in missing_policy.reason_codes
-    assert "economic_acceptance_policy_not_owner_approved" in unapproved_policy.reason_codes
+    assert (
+        "economic_acceptance_policy_not_owner_approved"
+        in unapproved_policy.reason_codes
+    )
     assert all(
         item.order_permission is False
         for item in (missing_context, missing_policy, unapproved_policy)
@@ -516,7 +552,11 @@ def test_missing_registry_and_policy_revision_mismatch_abstain() -> None:
         ({}, (), "model_score_missing"),
         ({"strategy_version": "2.0.0"}, None, "model_score_version_mismatch"),
         ({"model_revision": "wrong-model-v1"}, None, "model_score_revision_mismatch"),
-        ({"scored_at": NOW + timedelta(seconds=1)}, None, "model_score_timestamp_in_future"),
+        (
+            {"scored_at": NOW + timedelta(seconds=1)},
+            None,
+            "model_score_timestamp_in_future",
+        ),
         ({"scored_at": NOW - timedelta(hours=1)}, None, "model_score_stale"),
         ({}, "duplicate", "model_score_ambiguous"),
     ),
@@ -542,8 +582,14 @@ def test_model_score_lineage_and_freshness_are_required(
         ({"strategy_code_sha256": "f" * 64}, "strategy_code_hash_mismatch"),
         ({"strategy_version": "2.0.0"}, "evidence_version_mismatch"),
         ({"feature_schema_version": "features.v2"}, "oos_feature_schema_mismatch"),
-        ({"economic_policy_revision": "economic-policy-v2"}, "oos_economic_policy_revision_mismatch"),
-        ({"evaluated_at": NOW + timedelta(seconds=1)}, "oos_evidence_timestamp_in_future"),
+        (
+            {"economic_policy_revision": "economic-policy-v2"},
+            "oos_economic_policy_revision_mismatch",
+        ),
+        (
+            {"evaluated_at": NOW + timedelta(seconds=1)},
+            "oos_evidence_timestamp_in_future",
+        ),
         ({"evaluated_at": NOW - timedelta(days=60)}, "oos_evidence_stale"),
         ({"passed_test_ids": ()}, "required_strategy_tests_missing"),
         ({"fee_bps": D("10")}, "oos_fee_assumption_below_current_estimate"),
@@ -574,13 +620,16 @@ def test_pre_registered_economic_thresholds_reject_failing_evidence(
 ) -> None:
     definition = make_definition()
     evidence = make_evidence(
-        definition, metrics=PerformanceEvidence(**{
-            "trade_count": 100,
-            "win_rate": D("0.70"),
-            "net_expectancy": D("0.012"),
-            "max_abs_drawdown": D("0.10"),
-            **metric_changes,
-        })
+        definition,
+        metrics=PerformanceEvidence(
+            **{
+                "trade_count": 100,
+                "win_rate": D("0.70"),
+                "net_expectancy": D("0.012"),
+                "max_abs_drawdown": D("0.10"),
+                **metric_changes,
+            }
+        ),
     )
     result = run_selector(definitions=(definition,), evidence=(evidence,))
     assert result.status is SelectionStatus.NO_TRADE
@@ -594,7 +643,9 @@ def test_fold_and_regime_stability_are_required() -> None:
         evidence.folds[1],
         metrics=PerformanceEvidence(33, D("0.6"), D("-0.01"), D("0.12")),
     )
-    fold_failure = replace(evidence, folds=(evidence.folds[0], negative_fold, evidence.folds[2]))
+    fold_failure = replace(
+        evidence, folds=(evidence.folds[0], negative_fold, evidence.folds[2])
+    )
     no_fold_evidence = replace(evidence, folds=())
     mismatch_fold_count = replace(
         evidence,
@@ -636,7 +687,9 @@ def test_fold_and_regime_stability_are_required() -> None:
         assert expected in _selected_reasons(result)
 
 
-def test_duplicate_evidence_and_mismatched_model_score_are_not_resolved_by_guessing() -> None:
+def test_duplicate_evidence_and_mismatched_model_score_are_not_resolved_by_guessing() -> (
+    None
+):
     definition = make_definition()
     evidence = make_evidence(definition)
     duplicate_evidence = run_selector(
@@ -659,10 +712,16 @@ def test_duplicate_evidence_and_mismatched_model_score_are_not_resolved_by_guess
         (lambda: make_definition(quote_currency="BTC"), "quote_must_be_usdt"),
         (lambda: make_definition(allow_short=True), "shorting_forbidden"),
         (lambda: make_definition(code_sha256="not-a-hash"), "invalid_hash"),
-        (lambda: make_definition(eligible_regimes=("trend", "trend")), "contains_duplicates"),
+        (
+            lambda: make_definition(eligible_regimes=("trend", "trend")),
+            "contains_duplicates",
+        ),
         (lambda: make_policy(minimum_trade_count=0), "minimum_trade_count_invalid"),
         (lambda: make_policy(max_evidence_age_seconds=0), "evidence_age_limit_invalid"),
-        (lambda: PerformanceEvidence(1, D("1.1"), D("0.1"), D("0.1")), "win_rate_above_maximum"),
+        (
+            lambda: PerformanceEvidence(1, D("1.1"), D("0.1"), D("0.1")),
+            "win_rate_above_maximum",
+        ),
     ),
 )
 def test_contracts_reject_invalid_strategy_policy_and_metrics(

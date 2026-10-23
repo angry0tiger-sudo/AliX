@@ -39,9 +39,7 @@ _GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 
 
 def stable_fingerprint(value: object) -> str:
-    rendered = json.dumps(
-        value, sort_keys=True, separators=(",", ":"), default=str
-    )
+    rendered = json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(rendered.encode("utf-8")).hexdigest()
 
 
@@ -77,7 +75,9 @@ def _require_decimal(
         raise ValueError(f"{name}_above_maximum")
 
 
-def _require_unique_texts(name: str, values: tuple[str, ...], *, nonempty: bool) -> None:
+def _require_unique_texts(
+    name: str, values: tuple[str, ...], *, nonempty: bool
+) -> None:
     if nonempty and not values:
         raise ValueError(f"{name}_required")
     for value in values:
@@ -94,7 +94,11 @@ def _validate_performance(
     net_expectancy: Decimal,
     max_abs_drawdown: Decimal,
 ) -> None:
-    if isinstance(trade_count, bool) or not isinstance(trade_count, int) or trade_count < 0:
+    if (
+        isinstance(trade_count, bool)
+        or not isinstance(trade_count, int)
+        or trade_count < 0
+    ):
         raise ValueError(f"{prefix}_trade_count_invalid")
     _require_decimal(
         f"{prefix}_win_rate",
@@ -157,8 +161,12 @@ class StrategyDefinition:
         _require_unique_texts(
             "supported_timeframes", self.supported_timeframes, nonempty=True
         )
-        _require_unique_texts("required_features", self.required_features, nonempty=True)
-        _require_unique_texts("required_test_ids", self.required_test_ids, nonempty=True)
+        _require_unique_texts(
+            "required_features", self.required_features, nonempty=True
+        )
+        _require_unique_texts(
+            "required_test_ids", self.required_test_ids, nonempty=True
+        )
         _require_unique_texts(
             "prohibited_conditions", self.prohibited_conditions, nonempty=False
         )
@@ -299,11 +307,15 @@ class StrategyEvidence:
         _require_hash("evidence_dataset", self.dataset_sha256)
         _require_hash("evidence_report", self.report_sha256)
         _require_text("evidence_feature_schema_version", self.feature_schema_version)
-        _require_text("evidence_economic_policy_revision", self.economic_policy_revision)
+        _require_text(
+            "evidence_economic_policy_revision", self.economic_policy_revision
+        )
         _require_aware("evidence_evaluated_at", self.evaluated_at)
         _require_unique_texts("passed_test_ids", self.passed_test_ids, nonempty=False)
         _require_decimal("evidence_fee_bps", self.fee_bps, minimum=Decimal("0"))
-        _require_decimal("evidence_slippage_bps", self.slippage_bps, minimum=Decimal("0"))
+        _require_decimal(
+            "evidence_slippage_bps", self.slippage_bps, minimum=Decimal("0")
+        )
         fold_ids = tuple(fold.fold_id for fold in self.folds)
         regime_names = tuple(item.regime for item in self.regimes)
         _require_unique_texts("evidence_fold_ids", fold_ids, nonempty=False)
@@ -392,7 +404,9 @@ class CandidateRejection:
 
     def __post_init__(self) -> None:
         _require_text("rejected_strategy_id", self.strategy_id)
-        _require_unique_texts("candidate_rejection_reasons", self.reasons, nonempty=True)
+        _require_unique_texts(
+            "candidate_rejection_reasons", self.reasons, nonempty=True
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -434,5 +448,7 @@ class StrategySelectionResult:
             )
         ):
             raise ValueError("no_trade_result_must_not_name_selected_strategy")
-        _require_unique_texts("selection_result_reasons", self.reason_codes, nonempty=True)
+        _require_unique_texts(
+            "selection_result_reasons", self.reason_codes, nonempty=True
+        )
         _require_hash("selection_result_fingerprint", self.fingerprint)

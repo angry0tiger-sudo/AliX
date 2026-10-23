@@ -147,9 +147,7 @@ def _definition(raw: object) -> StrategyDefinition:
         max_fee_bps=_decimal(item["max_fee_bps"]),
         max_slippage_bps=_decimal(item["max_slippage_bps"]),
         max_spread_bps=_decimal(item["max_spread_bps"]),
-        minimum_quote_liquidity_usdt=_decimal(
-            item["minimum_quote_liquidity_usdt"]
-        ),
+        minimum_quote_liquidity_usdt=_decimal(item["minimum_quote_liquidity_usdt"]),
         strategy_license_status=LicenseStatus(_text(item["strategy_license_status"])),
         data_license_status=LicenseStatus(_text(item["data_license_status"])),
         dependency_license_status=LicenseStatus(

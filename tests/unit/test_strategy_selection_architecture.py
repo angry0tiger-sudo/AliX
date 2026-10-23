@@ -29,7 +29,9 @@ def test_selector_modules_do_not_import_execution_or_risk_capabilities() -> None
         module = ast.parse(source_path.read_text(encoding="utf-8"))
         for node in ast.walk(module):
             if isinstance(node, ast.Import):
-                imports.extend(alias.name.split(".", maxsplit=1)[0] for alias in node.names)
+                imports.extend(
+                    alias.name.split(".", maxsplit=1)[0] for alias in node.names
+                )
             elif isinstance(node, ast.ImportFrom) and node.module is not None:
                 imports.append(node.module.split(".", maxsplit=1)[0])
 

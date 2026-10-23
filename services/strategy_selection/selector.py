@@ -250,10 +250,7 @@ def _cost_and_liquidity_reasons(
         reasons.append("estimated_slippage_above_strategy_limit")
     if spread is not None and spread > definition.max_spread_bps:
         reasons.append("spread_above_strategy_limit")
-    if (
-        liquidity is not None
-        and liquidity < definition.minimum_quote_liquidity_usdt
-    ):
+    if liquidity is not None and liquidity < definition.minimum_quote_liquidity_usdt:
         reasons.append("quote_liquidity_below_strategy_minimum")
     return tuple(reasons)
 
@@ -264,11 +261,11 @@ def _matching_model_score(
     context: SelectionContext,
     model_scores: tuple[ModelStrategyScore, ...],
 ) -> tuple[ModelStrategyScore | None, tuple[str, ...]]:
-    same_id = [score for score in model_scores if score.strategy_id == definition.strategy_id]
+    same_id = [
+        score for score in model_scores if score.strategy_id == definition.strategy_id
+    ]
     matching = [
-        score
-        for score in same_id
-        if score.strategy_version == definition.version
+        score for score in same_id if score.strategy_version == definition.version
     ]
     if not matching:
         if same_id:
@@ -300,11 +297,7 @@ def _matching_evidence(
     same_id = [
         item for item in evidence_items if item.strategy_id == definition.strategy_id
     ]
-    matching = [
-        item
-        for item in same_id
-        if item.strategy_version == definition.version
-    ]
+    matching = [item for item in same_id if item.strategy_version == definition.version]
     if not matching:
         reason = "evidence_version_mismatch" if same_id else "oos_evidence_missing"
         return None, (reason,)
@@ -372,7 +365,10 @@ def _evidence_reasons(
         reasons.append("oos_regime_coverage_mismatch")
     if context.regime not in known_regimes:
         reasons.append("oos_current_regime_evidence_missing")
-    if sum(item.metrics.trade_count for item in evidence.regimes) != metrics.trade_count:
+    if (
+        sum(item.metrics.trade_count for item in evidence.regimes)
+        != metrics.trade_count
+    ):
         reasons.append("oos_regime_sample_count_mismatch")
     for regime_evidence in evidence.regimes:
         if regime_evidence.metrics.trade_count < 1:
