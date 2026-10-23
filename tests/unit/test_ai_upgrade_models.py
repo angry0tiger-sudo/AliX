@@ -206,4 +206,3 @@ def test_model_loader_supports_explicit_technical_approval_without_economic_prom
     assert loaded.owner_approved is True
     assert raw["economic_acceptance"] == "NO-GO"
     assert raw["trading_authorization"] == "NO-GO"
-
