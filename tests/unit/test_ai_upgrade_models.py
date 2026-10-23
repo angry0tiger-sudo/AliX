@@ -367,3 +367,17 @@ def test_model_loader_rejects_approval_on_unapproved_artifact_when_flags_are_uns
             _artifact_document(), approval_document=json.dumps(approval)
         )
 
+
+def test_model_loader_file_reports_missing_model_and_approval_artifacts(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(ValueError, match="artifact_unavailable"):
+        load_hmm_model_file(tmp_path / "absent-model.json")
+    model_path = tmp_path / "model.json"
+    model_path.write_text(_artifact_document(), encoding="utf-8")
+    with pytest.raises(ValueError, match="approval_unavailable"):
+        load_hmm_model_file(
+            model_path,
+            approval_path=tmp_path / "absent-approval.json",
+        )
+
