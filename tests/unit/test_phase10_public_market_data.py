@@ -8,6 +8,7 @@ import pytest
 
 from scripts.fetch_nobitex_public_ohlcv import (
     CandleRecord,
+    INTERVAL_SECONDS,
     fetch_historical_candles,
     parse_udf_payload,
     write_artifacts,
@@ -56,11 +57,14 @@ def test_parser_rejects_ohlc_invalid_and_future_outside_requested_window() -> No
 
 
 def test_historical_fetch_is_bounded_rejects_gaps_and_uses_fake_transport() -> None:
-    now = datetime(2026, 10, 23, 4, 0, tzinfo=UTC)
+    # Nobitex BTCUSDT hourly candles observed on the provider's :30 grid.
+    now = datetime(2026, 10, 23, 4, 18, tzinfo=UTC)
 
     def getter(params: dict[str, str]) -> dict[str, Any]:
         start, end = int(params["from"]), int(params["to"])
-        stamps = list(range(start, end + 1, 3600))
+        offset = INTERVAL_SECONDS // 2
+        first = ((start - offset + INTERVAL_SECONDS - 1) // INTERVAL_SECONDS) * INTERVAL_SECONDS + offset
+        stamps = list(range(first, end + 1, INTERVAL_SECONDS))
         return {
             "s": "ok",
             "t": stamps,
@@ -75,6 +79,10 @@ def test_historical_fetch_is_bounded_rejects_gaps_and_uses_fake_transport() -> N
         days=30, now=now, request_json=getter, sleep_fn=lambda _: None
     )
     assert len(rows) == 720
+    assert rows[0]["timestamp"] % INTERVAL_SECONDS == INTERVAL_SECONDS // 2
+    assert rows[-1]["timestamp"] % INTERVAL_SECONDS == INTERVAL_SECONDS // 2
+    assert rows[-1]["timestamp"] + INTERVAL_SECONDS <= int(now.timestamp())
+    assert rows[-1]["timestamp"] == int(datetime(2026, 10, 23, 2, 30, tzinfo=UTC).timestamp())
     with pytest.raises(ValueError, match="historical_days"):
         fetch_historical_candles(
             days=10, now=now, request_json=getter, sleep_fn=lambda _: None
