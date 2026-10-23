@@ -249,6 +249,7 @@ def test_shadow_fill_consumes_an_actual_positive_risk_gate_decision(
     assert simulated.gate_fingerprint == gate_decision.fingerprint
     assert exchange.get_fill(proposal.decision_id) == simulated
 
+
 @pytest.mark.parametrize(
     ("confidence", "quantity", "entry_price", "fee_rate", "slippage_rate", "reason"),
     [
