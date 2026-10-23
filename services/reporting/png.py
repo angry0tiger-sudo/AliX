@@ -81,7 +81,9 @@ def _series_points(
     ]
 
 
-def _draw_series(canvas: bytearray, values: list[float], bounds: tuple[int, int, int, int]) -> None:
+def _draw_series(
+    canvas: bytearray, values: list[float], bounds: tuple[int, int, int, int]
+) -> None:
     if len(values) < 2:
         return
     points = _series_points(values, bounds)

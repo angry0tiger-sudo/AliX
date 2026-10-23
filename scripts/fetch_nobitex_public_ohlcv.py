@@ -91,7 +91,9 @@ def _validated_udf_arrays(
     return tuple(cast(list[Any], value) for value in arrays)  # type: ignore[return-value]
 
 
-def _parse_numeric_values(raw_values: tuple[Any, ...]) -> tuple[float, float, float, float, float]:
+def _parse_numeric_values(
+    raw_values: tuple[Any, ...],
+) -> tuple[float, float, float, float, float]:
     numbers: list[float] = []
     for raw in raw_values:
         try:
@@ -125,7 +127,9 @@ def _parse_candle(
     if prior_timestamp is not None and stamp <= prior_timestamp:
         raise ValueError("nobitex_candle_timestamps_not_increasing")
     opened, high, low, close, volume = _parse_numeric_values(raw_values)
-    candle_date = datetime.fromtimestamp(stamp, timezone.utc).isoformat().replace("+00:00", "Z")
+    candle_date = (
+        datetime.fromtimestamp(stamp, timezone.utc).isoformat().replace("+00:00", "Z")
+    )
     return {
         "timestamp": stamp,
         "date": candle_date,
@@ -147,7 +151,13 @@ def parse_udf_payload(
     rows: list[CandleRecord] = []
     prior: int | None = None
     for index, raw_timestamp in enumerate(timestamps):
-        values = (opens[index], highs[index], lows[index], closes[index], volumes[index])
+        values = (
+            opens[index],
+            highs[index],
+            lows[index],
+            closes[index],
+            volumes[index],
+        )
         candle = _parse_candle(
             raw_timestamp,
             values,
@@ -171,7 +181,12 @@ def _fetch_candle_pages(
     rows: list[CandleRecord] = []
     while cursor <= end:
         stop = min(cursor + (MAX_CANDLES_PER_REQUEST - 1) * INTERVAL_SECONDS, end)
-        params = {"symbol": "BTCUSDT", "resolution": "60", "from": str(cursor), "to": str(stop)}
+        params = {
+            "symbol": "BTCUSDT",
+            "resolution": "60",
+            "from": str(cursor),
+            "to": str(stop),
+        }
         batch = parse_udf_payload(
             request_json(params), requested_from=cursor, requested_to=stop
         )
@@ -207,7 +222,11 @@ def fetch_historical_candles(
         raise ValueError("historical_days_out_of_policy")
     if now.tzinfo is None or now.utcoffset() is None:
         raise ValueError("historical_cutoff_timezone_required")
-    end = int(now.astimezone(timezone.utc).timestamp()) // INTERVAL_SECONDS * INTERVAL_SECONDS
+    end = (
+        int(now.astimezone(timezone.utc).timestamp())
+        // INTERVAL_SECONDS
+        * INTERVAL_SECONDS
+    )
     end -= INTERVAL_SECONDS
     rows = _fetch_candle_pages(
         start=end - days * 86400,
@@ -219,6 +238,7 @@ def fetch_historical_candles(
         raise ValueError("nobitex_historical_candles_empty")
     _validate_historical_rows(rows, days)
     return rows
+
 
 def write_artifacts(
     rows: list[CandleRecord],

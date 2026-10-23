@@ -357,7 +357,9 @@ def _evaluate_fold(
         trade_returns=_collect_trade_returns(test, predicted, config),
         economic=economic,
         training_seconds=training_seconds,
-        prediction_latency_ms_per_row=prediction_seconds * 1000.0 / max(len(test_features), 1),
+        prediction_latency_ms_per_row=prediction_seconds
+        * 1000.0
+        / max(len(test_features), 1),
         model=model,
         test_features=test_features,
     )
@@ -395,7 +397,9 @@ def _economic_summary(
         if trade_count
         else 0.0,
         "max_drawdown": max_drawdown,
-        "trade_count": sum(int(result.economic["trade_count"]) for result in fold_results),
+        "trade_count": sum(
+            int(result.economic["trade_count"]) for result in fold_results
+        ),
         "winning_trade_count": winning,
         "win_rate": win_rate,
         "win_rate_sample_size": trade_count,
@@ -413,7 +417,9 @@ def _economic_summary(
             "win_rate_pass": win_rate is not None and win_rate >= 0.60,
             "drawdown_pass": abs(max_drawdown) <= 0.15,
             "expectancy_pass": expectancy is not None and expectancy > 0.0,
-            "status": _economic_gate_status(trade_count, win_rate, max_drawdown, expectancy),
+            "status": _economic_gate_status(
+                trade_count, win_rate, max_drawdown, expectancy
+            ),
             "authorization_effect": "NONE; Champion remains null and promotion/trading remain NO-GO",
         },
     }
@@ -449,7 +455,9 @@ def _compose_walk_forward_report(
     out_of_sample = {
         "sample_count": len(oos_actual),
         "forecast": _forecast_metrics(oos_actual, oos_predicted),
-        "zero_forecast_baseline": _forecast_metrics(oos_actual, np.zeros_like(oos_actual)),
+        "zero_forecast_baseline": _forecast_metrics(
+            oos_actual, np.zeros_like(oos_actual)
+        ),
         "costed_fixed_horizon_research_rule": {
             **economic,
             "turnover_units": turnover,
@@ -607,11 +615,18 @@ def run_walk_forward(
         oos_predicted=predicted,
         reload_info=reload_info,
         economic=economic,
-        turnover=sum(float(result.economic["turnover_units"]) for result in evaluations),
-        fees=sum(float(result.economic["fees_bps_cumulative"]) for result in evaluations),
-        slippage=sum(float(result.economic["slippage_bps_cumulative"]) for result in evaluations),
+        turnover=sum(
+            float(result.economic["turnover_units"]) for result in evaluations
+        ),
+        fees=sum(
+            float(result.economic["fees_bps_cumulative"]) for result in evaluations
+        ),
+        slippage=sum(
+            float(result.economic["slippage_bps_cumulative"]) for result in evaluations
+        ),
         buy_hold_total=buy_hold_total,
     )
+
 
 def _collect_trade_returns(
     test: DataFrame, predictions: np.ndarray, config: WalkForwardConfig

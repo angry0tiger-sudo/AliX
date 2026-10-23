@@ -62,8 +62,7 @@ def _valid_wall_time_candidates(wall: datetime, zone: ZoneInfo) -> list[datetime
         local = wall.replace(tzinfo=zone, fold=fold)
         round_trip = local.astimezone(UTC).astimezone(zone).replace(tzinfo=None)
         duplicate_instant = any(
-            local.astimezone(UTC) == existing.astimezone(UTC)
-            for existing in candidates
+            local.astimezone(UTC) == existing.astimezone(UTC) for existing in candidates
         )
         if round_trip == wall and not duplicate_instant:
             candidates.append(local)

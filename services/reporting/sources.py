@@ -91,9 +91,7 @@ def _classify_trade_row(
     return "closed", str(row["id"]), profit
 
 
-def _summarize_trade_rows(
-    rows: list[sqlite3.Row], cutoff: datetime
-) -> dict[str, Any]:
+def _summarize_trade_rows(rows: list[sqlite3.Row], cutoff: datetime) -> dict[str, Any]:
     closed_count = open_count = unknown_profit = 0
     profit_total = 0.0
     closed_ids: list[str] = []
@@ -115,7 +113,9 @@ def _summarize_trade_rows(
         "observed_trade_row_count": len(rows),
         "closed_trade_count": closed_count,
         "open_trade_count": open_count,
-        "freqtrade_reported_profit_abs_sum": profit_total if unknown_profit == 0 else None,
+        "freqtrade_reported_profit_abs_sum": profit_total
+        if unknown_profit == 0
+        else None,
         "profit_rows_unknown": unknown_profit,
         "profit_field": "trades.close_profit_abs; reported, not account-reconciled",
         "fee_totals_available": False,
@@ -183,7 +183,10 @@ def _ledger_payload_at_cutoff(
         payload = json.loads(str(row["payload_json"]))
     except json.JSONDecodeError:
         raise ReportingSourceError("simulation_ledger_payload_invalid") from None
-    if not isinstance(payload, dict) or payload.get("source_status") != "SYNTHETIC_ONLY":
+    if (
+        not isinstance(payload, dict)
+        or payload.get("source_status") != "SYNTHETIC_ONLY"
+    ):
         raise ReportingSourceError("simulation_ledger_provenance_mismatch")
     return payload
 

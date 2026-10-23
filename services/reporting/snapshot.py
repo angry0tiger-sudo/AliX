@@ -145,9 +145,7 @@ def _build_metrics(trade: SourceSnapshot, ledger: SourceSnapshot) -> dict[str, o
     return metrics
 
 
-def _all_required_sources_reconciled(
-    by_type: dict[str, SourceSnapshot]
-) -> bool:
+def _all_required_sources_reconciled(by_type: dict[str, SourceSnapshot]) -> bool:
     return all(
         by_type[source_type].status == "OK" and by_type[source_type].reconciled
         for source_type in _REQUIRED
