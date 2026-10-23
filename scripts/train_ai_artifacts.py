@@ -12,12 +12,12 @@ import json
 import math
 from pathlib import Path
 import platform
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
 from pandas import DataFrame
-import sklearn
+import sklearn  # type: ignore[import-untyped]
 from sklearn.linear_model import LogisticRegression  # type: ignore[import-untyped]
 
 from services.data_quality.gate import validate_candles
@@ -173,18 +173,6 @@ def _meta_training(
     volatility = (
         feature_frame["%-volatility_12"].iloc[event_indices].to_numpy(dtype=float)
     )
-    valid_event = (
-        np.isfinite(volatility)
-        & (volatility > 0)
-        & (oof["primary_prediction"].to_numpy(dtype=float) >= 0.5)
-    )
-    events = pd.DataFrame(
-        {
-            "event_index": event_indices[valid_event],
-            "side": np.ones(int(valid_event.sum()), dtype=int),
-            "target_volatility": volatility[valid_event],
-        }
-    )
     barrier_config = TripleBarrierConfig(
         profit_taking_multiplier=1.5,
         stop_loss_multiplier=1.0,
@@ -192,6 +180,22 @@ def _meta_training(
         fee_bps_per_side=FEE_BPS_PER_SIDE,
         slippage_bps_per_side=SLIPPAGE_BPS_PER_SIDE,
         timeframe_seconds=3600,
+    )
+    mature_horizon = (
+        event_indices + barrier_config.max_holding_bars < len(candles)
+    )
+    valid_event = (
+        np.isfinite(volatility)
+        & (volatility > 0)
+        & (oof["primary_prediction"].to_numpy(dtype=float) >= 0.5)
+        & mature_horizon
+    )
+    events = pd.DataFrame(
+        {
+            "event_index": event_indices[valid_event],
+            "side": np.ones(int(valid_event.sum()), dtype=int),
+            "target_volatility": volatility[valid_event],
+        }
     )
     labels = apply_triple_barrier(candles, events, barrier_config)
     merged = _merge_oof_labels(oof, labels)
