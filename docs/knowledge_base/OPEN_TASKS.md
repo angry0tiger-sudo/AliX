@@ -157,3 +157,17 @@
 - Freqtrade and synthetic-ledger adapters are read-only. The Phase 9 ledger remains SYNTHETIC_ONLY / NOT_RECONCILED. An account snapshot and reconciled decision/order linkage are not yet provided.
 - The current AliX strategy scaffolds remain signal-free. Walk-forward output is a fixed-horizon research rule, not a full Freqtrade/RiskGate execution test.
 - `Champion=null`, `order_permission=false`, promotion blocked and trading authorization NO-GO remain mandatory. Phase 10 PR must not be merged without separate explicit owner authorization.
+
+
+# Strategy Registry and regime-aware selector — 2026-10-23
+
+- Tracking issue: https://github.com/angry0tiger-sudo/AliX/issues/17.
+- Work branch: feat/strategy-registry-selector; base main SHA: 57103cf4cf7af720ec1166794df9dd62954cd38a.
+- ADR: docs/architecture/decisions/ADR-0011-versioned-strategy-registry-and-selector.md.
+- Owner Directive: docs/governance/owner-directives/2026-10-23-strategy-registry-selection.md.
+- Status: implementation candidate / research only; the production registry is empty. The selector cannot approve risk or grant order permission.
+- The selector requires code/data/report/evaluation lineage, valid data quality, exact schema and regime compatibility, license approval, current cost/liquidity context, complete walk-forward folds/regime evidence and pre-registered economic thresholds.
+- Economic gate remains at least 100 OOS trades, win rate >= 60%, absolute maximum drawdown <= 15% and positive net expectancy after costs. The latest Phase 10 result has 16 trades and remains INSUFFICIENT_SAMPLE.
+- No strategy is selected by default; no Freqtrade entry/exit signals or order paths are enabled.
+- Related merge blocker: issue #16. Repository ruleset for main was observed with enforcement disabled; classic branch-protection status was not readable by the current GitHub integration. Verify effective branch protection/review requirements before merging exchange/data-path changes.
+- Current safety state remains Champion=null, order_permission=false, promotion blocked, economic acceptance NO-GO and trading authorization NO-GO.
