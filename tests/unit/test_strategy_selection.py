@@ -398,10 +398,6 @@ def test_registry_rejects_duplicate_strategy_ids_and_unapproved_schema() -> None
             {"required_features": ("unavailable_feature",)},
             "strategy_required_features_missing",
         ),
-        (
-            {"prohibited_conditions": ("news_outage",)},
-            "strategy_prohibited_market_condition_active",
-        ),
         ({"max_data_age_seconds": 10}, "market_data_stale_for_strategy"),
         ({"max_fee_bps": D("10")}, "estimated_fee_above_strategy_limit"),
         ({"max_slippage_bps": D("2")}, "estimated_slippage_above_strategy_limit"),
@@ -444,6 +440,18 @@ def test_candidate_constraints_reject_before_score_can_select(
         ({"data_fingerprint": "f" * 64}, "data_quality_fingerprint_mismatch"),
     ),
 )
+def test_active_prohibited_market_condition_rejects_candidate() -> None:
+    definition = make_definition(prohibited_conditions=("news_outage",))
+    result = run_selector(
+        definitions=(definition,),
+        context=make_context(market_conditions=("news_outage",)),
+    )
+
+    assert result.status is SelectionStatus.NO_TRADE
+    assert "strategy_prohibited_market_condition_active" in _selected_reasons(result)
+    assert result.order_permission is False
+
+
 def test_context_constraints_fail_closed(
     context_changes: dict[str, Any], expected: str
 ) -> None:
