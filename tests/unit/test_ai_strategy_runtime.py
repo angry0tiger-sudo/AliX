@@ -7,13 +7,14 @@ import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
 import pytest
 
 import user_data.strategies.AliXStrategy as strategy_module
+from services.freqai_baseline.features import FEATURE_COLUMNS
 from services.meta_labeling.meta_model import (
     META_MODEL_SCHEMA_VERSION,
     MetaLabelModel,
@@ -144,6 +145,33 @@ def test_populate_indicators_marks_model_or_selection_missing_as_no_trade() -> N
     assert result["alix_data_quality_valid"].all()
     assert (result["alix_regime"] == "NO_TRADE").all()
     assert (result["alix_signal_bundle_approved"] == False).all()  # noqa: E712
+
+
+def test_meta_scoring_preserves_valid_tail_rows_after_nan_warmup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    feature_names = FEATURE_COLUMNS
+    raw_model = {
+        "schema_version": META_MODEL_SCHEMA_VERSION,
+        "training_signal_requirement": "out_of_fold_only",
+        "feature_names": list(feature_names),
+        "means": [0.0] * len(feature_names),
+        "scales": [1.0] * len(feature_names),
+        "coefficients": [0.1] * len(feature_names),
+        "intercept": 0.0,
+        "regularization_c": 1.0,
+        "max_iter": 1000,
+    }
+    model = MetaLabelModel.from_dict(raw_model)
+    monkeypatch.setattr(strategy_module, "_load_meta_model", lambda: (model, True))
+    frame = pd.DataFrame({name: [np.nan, 0.0, 0.1] for name in feature_names})
+
+    result = strategy_module._score_meta_candidates(frame)
+
+    assert not np.isfinite(cast(float, result.loc[0, "alix_meta_probability"]))
+    assert result.loc[0, "alix_meta_model_approved"] == np.bool_(False)
+    assert np.isfinite(result.loc[1:, "alix_meta_probability"]).all()
+    assert result.loc[1:, "alix_meta_model_approved"].all()
 
 
 def _write_meta_artifacts(

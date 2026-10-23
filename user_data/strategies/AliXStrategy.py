@@ -370,16 +370,28 @@ def _apply_model_features(dataframe: DataFrame) -> bool:
 
 
 def _score_meta_candidates(dataframe: DataFrame) -> DataFrame:
+    """Score only rows with a complete feature vector; warm-up rows stay rejected."""
     model, model_approved = _load_meta_model()
     if model is None:
         return dataframe
     feature_frame = dataframe.loc[:, list(FEATURE_COLUMNS)]
+    probabilities = np.full(len(dataframe), np.nan, dtype=float)
+    approved_rows = np.zeros(len(dataframe), dtype=bool)
     try:
-        dataframe["alix_meta_probability"] = model.predict_probability(feature_frame)
-        dataframe["alix_meta_model_approved"] = model_approved
+        numeric_features = feature_frame.to_numpy(dtype=float)
+        finite_rows = np.isfinite(numeric_features).all(axis=1)
+        if finite_rows.any():
+            probabilities[finite_rows] = model.predict_probability(
+                feature_frame.loc[finite_rows]
+            )
+            approved_rows[finite_rows] = model_approved
     except (ValueError, TypeError):
-        dataframe["alix_meta_probability"] = np.nan
-        dataframe["alix_meta_model_approved"] = False
+        # A schema or numeric failure invalidates this scoring batch, not a
+        # subset selected by optimistic coercion or imputation.
+        probabilities.fill(np.nan)
+        approved_rows.fill(False)
+    dataframe["alix_meta_probability"] = probabilities
+    dataframe["alix_meta_model_approved"] = approved_rows
     return dataframe
 
 
