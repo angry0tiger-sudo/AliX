@@ -77,10 +77,19 @@ def test_historical_fetch_is_bounded_rejects_gaps_and_uses_fake_transport() -> N
             "v": [5.0] * len(stamps),
         }
 
+    empty_pages = [0]
+
+    def transient_empty(params: dict[str, str]) -> dict[str, Any]:
+        if int(params["to"]) < int(now.timestamp()) and empty_pages[0] == 0:
+            empty_pages[0] += 1
+            return {"s": "no_data"}
+        return getter(params)
+
     rows = fetch_historical_candles(
-        days=30, now=now, request_json=getter, sleep_fn=lambda _: None
+        days=30, now=now, request_json=transient_empty, sleep_fn=lambda _: None
     )
     assert len(rows) == 720
+    assert empty_pages[0] == 1
     assert rows[0]["timestamp"] % INTERVAL_SECONDS == INTERVAL_SECONDS // 2
     assert rows[-1]["timestamp"] % INTERVAL_SECONDS == INTERVAL_SECONDS // 2
     assert rows[-1]["timestamp"] + INTERVAL_SECONDS <= int(now.timestamp())
