@@ -69,6 +69,7 @@ def test_shadow_never_fills_if_gate_or_meta_filter_rejects(tmp_path, decision, c
     assert result.quantity == 0
     assert result.entry_fill_price == 0
     assert result.order_permission is False
+    assert result.rejection_reasons
     assert exchange.row_count() == 1
 
 

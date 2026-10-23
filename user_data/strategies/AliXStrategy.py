@@ -228,7 +228,6 @@ def _infer_regimes(dataframe: DataFrame) -> DataFrame:
             revisions.append(result.model_revision)
             valid_values.append(False)
             previous = None
-            previous_close_time = None
     dataframe["alix_regime"] = regimes
     dataframe["alix_regime_confidence"] = confidence_values
     dataframe["alix_hmm_revision"] = revisions

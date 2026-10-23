@@ -128,7 +128,8 @@ def load_hmm_model_document(document: str) -> RegimeHMMModel:
     payload = _mapping(decoded, "root")
     if payload.get("schema_version") != MODEL_SCHEMA_VERSION:
         raise ValueError("hmm_artifact_schema_version_mismatch")
-    if payload.get("status") != "TRAINED_UNAPPROVED":
+    status = payload.get("status")
+    if status not in {"TRAINED_UNAPPROVED", "OWNER_APPROVED_TECHNICAL_ONLY"}:
         raise ValueError("hmm_artifact_status_not_loadable")
     if payload.get("economic_acceptance") != "NO-GO":
         raise ValueError("hmm_artifact_economic_gate_must_remain_no_go")
@@ -140,6 +141,9 @@ def load_hmm_model_document(document: str) -> RegimeHMMModel:
         raise ValueError("hmm_artifact_model_hash_invalid")
     if _canonical_hash(model) != model_hash:
         raise ValueError("hmm_artifact_model_hash_mismatch")
+    expected_owner_approval = status == "OWNER_APPROVED_TECHNICAL_ONLY"
+    if model.get("owner_approved") is not expected_owner_approval:
+        raise ValueError("hmm_artifact_approval_status_mismatch")
     dataset = _mapping(payload.get("dataset"), "dataset")
     if dataset.get("provider") != "Nobitex public UDF history API":
         raise ValueError("hmm_artifact_dataset_provider_invalid")

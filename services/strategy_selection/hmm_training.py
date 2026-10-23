@@ -45,6 +45,7 @@ def calculate_regime_features(candles: DataFrame) -> DataFrame:
     path_length = absolute_moves.rolling(12, min_periods=12).sum()
     net_move = (close - close.shift(12)).abs()
     efficiency = net_move.div(path_length.where(path_length > 0))
+    efficiency = efficiency.mask(path_length.eq(0), 0.0)
     volatility = returns.rolling(12, min_periods=12).std(ddof=0)
     result = DataFrame(
         {

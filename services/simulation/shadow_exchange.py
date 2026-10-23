@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import closing
 from dataclasses import asdict, dataclass
 from decimal import Decimal
 import hashlib
@@ -15,6 +16,7 @@ from risk.gate import GateDecision
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 META_CONFIDENCE_FLOOR = Decimal("0.70")
+SHADOW_ENGINE_REVISION = "shadow-exchange-v1"
 
 
 class ShadowLedgerConflictError(RuntimeError):
@@ -37,6 +39,7 @@ class ShadowFill:
     exit_fee: Decimal
     gross_pnl: Decimal
     net_pnl: Decimal
+    rejection_reasons: tuple[str, ...] = ()
     order_permission: Literal[False] = False
     source_status: Literal["SYNTHETIC_ONLY"] = "SYNTHETIC_ONLY"
 
@@ -60,10 +63,16 @@ class ShadowFill:
                 raise ValueError(f"shadow_{name}_must_be_finite_decimal")
         if min(self.quantity, self.entry_fill_price, self.exit_fill_price, self.entry_fee, self.exit_fee) < 0:
             raise ValueError("shadow_amount_must_not_be_negative")
+        if self.status not in {"SIMULATED", "REJECTED"}:
+            raise ValueError("shadow_status_invalid")
         if self.status == "SIMULATED" and min(
             self.quantity, self.entry_fill_price, self.exit_fill_price
         ) <= 0:
             raise ValueError("shadow_fill_prices_and_quantity_must_be_positive")
+        if self.status == "SIMULATED" and self.rejection_reasons:
+            raise ValueError("shadow_filled_record_cannot_have_rejection_reasons")
+        if self.status == "REJECTED" and not self.rejection_reasons:
+            raise ValueError("shadow_rejected_record_requires_reason")
         if self.status == "REJECTED" and any(
             value != 0 for value in (
                 self.quantity, self.entry_fill_price, self.exit_fill_price,
@@ -93,6 +102,10 @@ def _fill_from_payload(payload: dict[str, object]) -> ShadowFill:
     values: dict[str, object] = dict(payload)
     for name in decimal_names:
         values[name] = Decimal(str(payload[name]))
+    reasons = payload.get("rejection_reasons", [])
+    if not isinstance(reasons, list) or not all(isinstance(item, str) for item in reasons):
+        raise RuntimeError("shadow_rejection_reasons_invalid")
+    values["rejection_reasons"] = tuple(reasons)
     return ShadowFill(**values)  # type: ignore[arg-type]
 
 
@@ -151,7 +164,7 @@ class ShadowExchange:
         return connection
 
     def _initialize(self) -> None:
-        with self._connect() as connection:
+        with closing(self._connect()) as connection:
             connection.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS shadow_round_trips (
@@ -194,6 +207,7 @@ class ShadowExchange:
             slippage_rate=slippage_rate,
         )
         request = {
+            "engine_revision": SHADOW_ENGINE_REVISION,
             "decision_id": decision.decision_id,
             "gate_fingerprint": decision.fingerprint,
             "risk_approved": decision.risk_approved,
@@ -210,6 +224,15 @@ class ShadowExchange:
             decision.risk_approved is True
             and decision.order_permission is False
             and meta_confidence >= META_CONFIDENCE_FLOOR
+        )
+        rejection_reasons = tuple(
+            reason
+            for condition, reason in (
+                (decision.risk_approved is not True, "risk_gate_rejected"),
+                (decision.order_permission is not False, "order_permission_must_remain_false"),
+                (meta_confidence < META_CONFIDENCE_FLOOR, "meta_confidence_below_0.70"),
+            )
+            if condition
         )
         if accepted:
             entry_fill = entry_reference_price * (Decimal("1") + slippage_rate)
@@ -237,18 +260,18 @@ class ShadowExchange:
             exit_fee=exit_fee,
             gross_pnl=gross_pnl,
             net_pnl=net_pnl,
+            rejection_reasons=rejection_reasons,
         )
-        self._append_once(fill)
-        return fill
+        return self._append_once(fill)
 
-    def _append_once(self, fill: ShadowFill) -> None:
+    def _append_once(self, fill: ShadowFill) -> ShadowFill:
         payload_json = _canonical(_record_payload(fill))
         record_hash = hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
         connection = self._connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
             prior = connection.execute(
-                "SELECT input_fingerprint, payload_json FROM shadow_round_trips WHERE decision_id = ?",
+                "SELECT input_fingerprint, record_hash, payload_json FROM shadow_round_trips WHERE decision_id = ?",
                 (fill.decision_id,),
             ).fetchone()
             if prior is not None:
@@ -257,8 +280,12 @@ class ShadowExchange:
                 existing = json.loads(str(prior["payload_json"]))
                 if not isinstance(existing, dict):
                     raise RuntimeError("shadow_ledger_payload_invalid")
+                existing_json = _canonical(existing)
+                existing_hash = hashlib.sha256(existing_json.encode("utf-8")).hexdigest()
+                if existing_hash != prior["record_hash"]:
+                    raise RuntimeError("shadow_ledger_record_hash_mismatch")
                 connection.commit()
-                return
+                return _fill_from_payload(existing)
             connection.execute(
                 """
                 INSERT INTO shadow_round_trips
@@ -268,6 +295,7 @@ class ShadowExchange:
                 (fill.decision_id, fill.input_fingerprint, record_hash, payload_json),
             )
             connection.commit()
+            return fill
         except Exception:
             connection.rollback()
             raise
@@ -275,7 +303,7 @@ class ShadowExchange:
             connection.close()
 
     def get_fill(self, decision_id: str) -> ShadowFill | None:
-        with self._connect() as connection:
+        with closing(self._connect()) as connection:
             row = connection.execute(
                 "SELECT payload_json FROM shadow_round_trips WHERE decision_id = ?",
                 (decision_id,),
@@ -288,7 +316,7 @@ class ShadowExchange:
         return _fill_from_payload(payload)
 
     def row_count(self) -> int:
-        with self._connect() as connection:
+        with closing(self._connect()) as connection:
             row = connection.execute("SELECT COUNT(*) AS count FROM shadow_round_trips").fetchone()
         if row is None:
             raise RuntimeError("shadow_ledger_count_unavailable")

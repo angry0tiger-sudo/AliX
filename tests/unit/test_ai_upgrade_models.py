@@ -46,7 +46,7 @@ def _artifact_document() -> str:
     model = {
         "revision": "hmm-test-v1",
         "trained_at": datetime(2026, 10, 1, tzinfo=timezone.utc).isoformat(),
-        "owner_approved": True,
+        "owner_approved": False,
         "feature_schema_version": "market-regime-features.v1",
         "feature_names": ["directional_efficiency", "realized_volatility"],
         "regimes": ["trend", "range", "high_volatility"],
@@ -139,7 +139,7 @@ def test_hmm_artifact_parameters_are_json_native_and_semantically_ordered() -> N
 def test_model_loader_validates_digest_schema_and_release_flags() -> None:
     loaded = load_hmm_model_document(_artifact_document())
     assert loaded.revision == "hmm-test-v1"
-    assert loaded.owner_approved is True
+    assert loaded.owner_approved is False
     raw = json.loads(_artifact_document())
     raw["model"]["minimum_confidence"] = "0.60"
     with pytest.raises(ValueError, match="hash_mismatch"):
@@ -163,3 +163,21 @@ def test_model_loader_rejects_invalid_dataset_and_validation_provenance() -> Non
     raw["validation"]["passed"] = False
     with pytest.raises(ValueError, match="validation_not_passed"):
         load_hmm_model_document(json.dumps(raw))
+
+def test_model_loader_supports_explicit_technical_approval_without_economic_promotion() -> None:
+    raw = json.loads(_artifact_document())
+    raw["status"] = "OWNER_APPROVED_TECHNICAL_ONLY"
+    raw["model"]["owner_approved"] = True
+    canonical = json.dumps(
+        raw["model"],
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    )
+    raw["model_sha256"] = hashlib.sha256(canonical.encode()).hexdigest()
+    loaded = load_hmm_model_document(json.dumps(raw))
+    assert loaded.owner_approved is True
+    assert raw["economic_acceptance"] == "NO-GO"
+    assert raw["trading_authorization"] == "NO-GO"
+
