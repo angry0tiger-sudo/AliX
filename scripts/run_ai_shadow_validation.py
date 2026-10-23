@@ -351,6 +351,7 @@ def _load_training_bundle(
     )
     return candles, manifest, report, hmm, meta_manifest
 
+
 def _prepare_technically_approved_models(
     root: Path,
     output_dir: Path,
@@ -628,6 +629,7 @@ def run_validation(
         encoding="utf-8",
     )
     return report
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
