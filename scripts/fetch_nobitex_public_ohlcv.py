@@ -180,18 +180,31 @@ def _fetch_candle_pages(
     cursor = start
     rows: list[CandleRecord] = []
     while cursor <= end:
-        stop = min(cursor + (MAX_CANDLES_PER_REQUEST - 1) * INTERVAL_SECONDS, end)
+        stop = min(cursor + (MAX_CANDLES_PER_REQUEST - 3) * INTERVAL_SECONDS, end)
+        # Pad query bounds by one interval to tolerate providers that interpret
+        # UDF range endpoints as exclusive, but retain only the exact target window.
+        request_from = cursor - INTERVAL_SECONDS
+        request_to = stop + INTERVAL_SECONDS
         params = {
             "symbol": "BTCUSDT",
             "resolution": "60",
-            "from": str(cursor),
-            "to": str(stop),
+            "from": str(request_from),
+            "to": str(request_to),
         }
-        batch = parse_udf_payload(
-            request_json(params), requested_from=cursor, requested_to=stop
-        )
+        batch: list[CandleRecord] = []
+        for attempt in range(3):
+            page = parse_udf_payload(
+                request_json(params),
+                requested_from=request_from,
+                requested_to=request_to,
+            )
+            batch = [row for row in page if cursor <= row["timestamp"] <= stop]
+            if batch:
+                break
+            if attempt < 2:
+                sleep_fn(2**attempt)
         if not batch:
-            raise ValueError("nobitex_historical_empty_page")
+            raise ValueError(f"nobitex_historical_empty_page:{cursor}:{stop}")
         rows.extend(batch)
         cursor = batch[-1]["timestamp"] + INTERVAL_SECONDS
         if cursor <= end:
@@ -207,8 +220,43 @@ def _validate_historical_rows(rows: list[CandleRecord], days: int) -> None:
     for previous, current in zip(stamps, stamps[1:]):
         if current - previous != INTERVAL_SECONDS:
             raise ValueError("nobitex_historical_gap_detected_no_interpolation")
-    if len(rows) < int(days * 24 * 0.98):
-        raise ValueError("nobitex_historical_row_coverage_too_low")
+    expected_rows = days * 24
+    if len(rows) != expected_rows:
+        raise ValueError(
+            "nobitex_historical_row_coverage_mismatch:"
+            f"expected={expected_rows}:actual={len(rows)}"
+        )
+
+
+def _latest_closed_candle_timestamp(
+    *,
+    now: datetime,
+    request_json: Callable[[dict[str, str]], dict[str, Any]],
+) -> int:
+    """Discover the provider's candle grid and select the latest fully closed bar."""
+    now_epoch = int(now.astimezone(timezone.utc).timestamp())
+    requested_from = now_epoch - MAX_CANDLES_PER_REQUEST * INTERVAL_SECONDS
+    payload = request_json(
+        {
+            "symbol": "BTCUSDT",
+            "resolution": "60",
+            "from": str(requested_from),
+            "to": str(now_epoch),
+        }
+    )
+    recent_rows = parse_udf_payload(
+        payload,
+        requested_from=requested_from,
+        requested_to=now_epoch,
+    )
+    closed_stamps = [
+        row["timestamp"]
+        for row in recent_rows
+        if row["timestamp"] + INTERVAL_SECONDS <= now_epoch
+    ]
+    if not closed_stamps:
+        raise ValueError("nobitex_historical_no_closed_candle")
+    return closed_stamps[-1]
 
 
 def fetch_historical_candles(
@@ -222,14 +270,10 @@ def fetch_historical_candles(
         raise ValueError("historical_days_out_of_policy")
     if now.tzinfo is None or now.utcoffset() is None:
         raise ValueError("historical_cutoff_timezone_required")
-    end = (
-        int(now.astimezone(timezone.utc).timestamp())
-        // INTERVAL_SECONDS
-        * INTERVAL_SECONDS
-    )
-    end -= INTERVAL_SECONDS
+    end = _latest_closed_candle_timestamp(now=now, request_json=request_json)
+    start = end - (days * 24 - 1) * INTERVAL_SECONDS
     rows = _fetch_candle_pages(
-        start=end - (days * 24 - 1) * INTERVAL_SECONDS,
+        start=start,
         end=end,
         request_json=request_json,
         sleep_fn=sleep_fn,
