@@ -291,13 +291,17 @@ def test_selector_switches_between_trend_and_mean_reversion_by_market_regime() -
     trend_evidence = replace(
         make_evidence(trend),
         regimes=(
-            RegimeEvidence("trend", PerformanceEvidence(100, D("0.70"), D("0.012"), D("0.10"))),
+            RegimeEvidence(
+                "trend", PerformanceEvidence(100, D("0.70"), D("0.012"), D("0.10"))
+            ),
         ),
     )
     range_evidence = replace(
         make_evidence(mean_reversion),
         regimes=(
-            RegimeEvidence("range", PerformanceEvidence(100, D("0.70"), D("0.012"), D("0.10"))),
+            RegimeEvidence(
+                "range", PerformanceEvidence(100, D("0.70"), D("0.012"), D("0.10"))
+            ),
         ),
     )
     definitions = (trend, mean_reversion)
