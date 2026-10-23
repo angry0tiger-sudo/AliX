@@ -280,6 +280,121 @@ def _infer_regimes(dataframe: DataFrame) -> DataFrame:
     return dataframe
 
 
+def _strategy_data_quality(dataframe: DataFrame, timeframe: str) -> QualityResult:
+    interval_seconds = _TIMEFRAME_SECONDS.get(timeframe)
+    if interval_seconds is None:
+        return QualityResult(
+            False,
+            ("unsupported_timeframe",),
+            QualityStatus.REJECTED,
+            (QualityReasonCode.UNSUPPORTED_TIMEFRAME,),
+        )
+    rows = [
+        {str(key): value for key, value in row.items()}
+        for row in dataframe.to_dict(orient="records")
+    ]
+    return validate_candles(
+        rows,
+        expected_interval_seconds=interval_seconds,
+        gap_policy="reject",
+    )
+
+
+def _fail_closed(dataframe: DataFrame) -> DataFrame:
+    dataframe["alix_data_quality_valid"] = False
+    _empty_regime_columns(dataframe)
+    dataframe["alix_selection_status"] = "NO_TRADE"
+    return dataframe
+
+
+def _apply_model_features(dataframe: DataFrame) -> bool:
+    try:
+        engineered = add_market_features(dataframe)
+        for name in FEATURE_COLUMNS:
+            dataframe[name] = engineered[name]
+        from services.strategy_selection.hmm_training import calculate_regime_features
+
+        regime_features = calculate_regime_features(dataframe)
+        dataframe["directional_efficiency"] = regime_features[
+            "directional_efficiency"
+        ]
+        dataframe["realized_volatility"] = regime_features["realized_volatility"]
+    except (ValueError, KeyError, TypeError):
+        return False
+    return True
+
+
+def _score_meta_candidates(dataframe: DataFrame) -> DataFrame:
+    model, model_approved = _load_meta_model()
+    if model is None:
+        return dataframe
+    feature_frame = dataframe.loc[:, list(FEATURE_COLUMNS)]
+    try:
+        dataframe["alix_meta_probability"] = model.predict_probability(feature_frame)
+        dataframe["alix_meta_model_approved"] = model_approved
+    except (ValueError, TypeError):
+        dataframe["alix_meta_probability"] = np.nan
+        dataframe["alix_meta_model_approved"] = False
+    return dataframe
+
+
+def _attach_selector_gate(dataframe: DataFrame) -> DataFrame:
+    if "alix_selected_strategy_id" not in dataframe:
+        dataframe["alix_selected_strategy_id"] = None
+    if "alix_selection_status" not in dataframe:
+        dataframe["alix_selection_status"] = "NO_TRADE"
+    dataframe["alix_signal_bundle_approved"] = (
+        dataframe["alix_hmm_valid"].astype(bool)
+        & dataframe["alix_meta_model_approved"].astype(bool)
+        & dataframe["alix_selection_status"].eq("SELECTED")
+        & dataframe["alix_selected_strategy_id"].isin(
+            ["trend_following", "mean_reversion"]
+        )
+        & dataframe["alix_data_quality_valid"].astype(bool)
+    )
+    return dataframe
+
+
+def _read_atr_stop_inputs(
+    strategy: object, pair: str, trade: Any
+) -> tuple[float, float, str] | None:
+    data_provider = getattr(strategy, "dp", None)
+    getter = getattr(data_provider, "get_analyzed_dataframe", None)
+    if not callable(getter):
+        return None
+    try:
+        analyzed, _ = getter(pair, getattr(strategy, "timeframe", "1h"))
+    except (AttributeError, TypeError, ValueError):
+        return None
+    if not isinstance(analyzed, DataFrame) or analyzed.empty:
+        return None
+    row = analyzed.iloc[-1]
+    try:
+        atr = float(row["atr_14"])
+        entry_rate = float(trade.open_rate)
+        regime = str(row.get("alix_regime", "NO_TRADE"))
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return None
+    if not all(math.isfinite(value) and value > 0 for value in (atr, entry_rate)):
+        return None
+    return atr, entry_rate, regime
+
+
+def _calculate_atr_stop(
+    current_rate: float, atr: float, entry_rate: float, regime: str
+) -> float:
+    multiplier = {"trend": 2.0, "range": 1.0, "high_volatility": 0.75}.get(
+        regime, 0.75
+    )
+    stop_rate = entry_rate - multiplier * atr
+    if not math.isfinite(stop_rate) or stop_rate <= 0:
+        return -0.01
+    relative_stop = (stop_rate / current_rate) - 1.0
+    if not math.isfinite(relative_stop) or relative_stop >= 0:
+        return -0.001
+    return max(relative_stop, -0.99)
+
+
 class AliXStrategy(IStrategy):  # type: ignore[misc]
     INTERFACE_VERSION = 3
     timeframe = "1h"
@@ -296,82 +411,22 @@ class AliXStrategy(IStrategy):  # type: ignore[misc]
         self, dataframe: DataFrame, metadata: dict[str, Any]
     ) -> DataFrame:
         """Validate OHLCV, derive causal features and load reviewed AI artifacts."""
-        interval_seconds = _TIMEFRAME_SECONDS.get(self.timeframe)
-        if interval_seconds is None:
-            result = QualityResult(
-                False,
-                ("unsupported_timeframe",),
-                QualityStatus.REJECTED,
-                (QualityReasonCode.UNSUPPORTED_TIMEFRAME,),
-            )
-        else:
-            rows = [
-                {str(key): value for key, value in row.items()}
-                for row in dataframe.to_dict(orient="records")
-            ]
-            result = validate_candles(
-                rows,
-                expected_interval_seconds=interval_seconds,
-                gap_policy="reject",
-            )
+        result = _strategy_data_quality(dataframe, self.timeframe)
         dataframe.attrs["alix_data_quality"] = {
             "status": result.status.value if result.status is not None else "REJECTED",
             "reason_codes": tuple(code.value for code in result.reason_codes),
             "fingerprint": result.fingerprint,
         }
         if not result.passed:
-            dataframe["alix_data_quality_valid"] = False
-            _empty_regime_columns(dataframe)
-            dataframe["alix_selection_status"] = "NO_TRADE"
-            return dataframe
+            return _fail_closed(dataframe)
         dataframe["alix_data_quality_valid"] = True
         dataframe = _add_technical_indicators(dataframe)
-        try:
-            engineered = add_market_features(dataframe)
-            for name in FEATURE_COLUMNS:
-                dataframe[name] = engineered[name]
-            from services.strategy_selection.hmm_training import (
-                calculate_regime_features,
-            )
-
-            regime_features = calculate_regime_features(dataframe)
-            dataframe["directional_efficiency"] = regime_features[
-                "directional_efficiency"
-            ]
-            dataframe["realized_volatility"] = regime_features["realized_volatility"]
-        except (ValueError, KeyError, TypeError):
-            dataframe["alix_data_quality_valid"] = False
-            _empty_regime_columns(dataframe)
-            dataframe["alix_selection_status"] = "NO_TRADE"
-            return dataframe
+        if not _apply_model_features(dataframe):
+            return _fail_closed(dataframe)
         dataframe = _empty_regime_columns(dataframe)
         dataframe = _infer_regimes(dataframe)
-        model, meta_owner_approved = _load_meta_model()
-        if model is not None:
-            feature_frame = dataframe.loc[:, list(FEATURE_COLUMNS)]
-            try:
-                probabilities = model.predict_probability(feature_frame)
-                dataframe["alix_meta_probability"] = probabilities
-                dataframe["alix_meta_model_approved"] = meta_owner_approved
-            except (ValueError, TypeError):
-                dataframe["alix_meta_probability"] = np.nan
-                dataframe["alix_meta_model_approved"] = False
-        # The official selector remains a separate capability. This strategy will
-        # consume its explicit result but will never fabricate a SELECTED decision.
-        if "alix_selected_strategy_id" not in dataframe:
-            dataframe["alix_selected_strategy_id"] = None
-        if "alix_selection_status" not in dataframe:
-            dataframe["alix_selection_status"] = "NO_TRADE"
-        dataframe["alix_signal_bundle_approved"] = (
-            dataframe["alix_hmm_valid"].astype(bool)
-            & dataframe["alix_meta_model_approved"].astype(bool)
-            & dataframe["alix_selection_status"].eq("SELECTED")
-            & dataframe["alix_selected_strategy_id"].isin(
-                ["trend_following", "mean_reversion"]
-            )
-            & dataframe["alix_data_quality_valid"].astype(bool)
-        )
-        return dataframe
+        dataframe = _score_meta_candidates(dataframe)
+        return _attach_selector_gate(dataframe)
 
     def populate_entry_trend(
         self, dataframe: DataFrame, metadata: dict[str, Any]
@@ -448,35 +503,11 @@ class AliXStrategy(IStrategy):  # type: ignore[misc]
         """Set an ATR stop at 2x in trend, 1x in range, tighter in high volatility."""
         if not math.isfinite(current_rate) or current_rate <= 0:
             return -0.01
-        data_provider = getattr(self, "dp", None)
-        getter = getattr(data_provider, "get_analyzed_dataframe", None)
-        if not callable(getter):
+        stop_inputs = _read_atr_stop_inputs(self, pair, trade)
+        if stop_inputs is None:
             return -0.01
-        try:
-            analyzed, _ = getter(pair, self.timeframe)
-        except (AttributeError, TypeError, ValueError):
-            return -0.01
-        if not isinstance(analyzed, DataFrame) or analyzed.empty:
-            return -0.01
-        row = analyzed.iloc[-1]
-        try:
-            atr = float(row["atr_14"])
-            entry_rate = float(trade.open_rate)
-            regime = str(row.get("alix_regime", "NO_TRADE"))
-        except (KeyError, TypeError, ValueError, AttributeError):
-            return -0.01
-        if not all(math.isfinite(value) and value > 0 for value in (atr, entry_rate)):
-            return -0.01
-        multiplier = {"trend": 2.0, "range": 1.0, "high_volatility": 0.75}.get(
-            regime, 0.75
-        )
-        stop_rate = entry_rate - multiplier * atr
-        if not math.isfinite(stop_rate) or stop_rate <= 0:
-            return -0.01
-        relative_stop = (stop_rate / current_rate) - 1.0
-        if not math.isfinite(relative_stop) or relative_stop >= 0:
-            return -0.001
-        return max(relative_stop, -0.99)
+        atr, entry_rate, regime = stop_inputs
+        return _calculate_atr_stop(current_rate, atr, entry_rate, regime)
 
     def custom_exit(
         self,

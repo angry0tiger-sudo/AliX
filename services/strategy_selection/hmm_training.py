@@ -158,9 +158,7 @@ def _forward_backward(
     return gamma, log_likelihood, xi_counts
 
 
-def _fit_numeric(
-    values: np.ndarray, *, max_iter: int, tolerance: float, random_seed: int
-) -> HMMFit:
+def _validate_fit_configuration(max_iter: int, tolerance: float) -> None:
     if (
         isinstance(max_iter, bool)
         or not isinstance(max_iter, int)
@@ -169,6 +167,33 @@ def _fit_numeric(
         raise ValueError("hmm_training_iteration_limit_invalid")
     if not math.isfinite(tolerance) or not 1e-8 <= tolerance <= 0.1:
         raise ValueError("hmm_training_tolerance_invalid")
+
+
+def _update_hmm_parameters(
+    values: np.ndarray,
+    gamma: np.ndarray,
+    transition_counts: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    state_mass = np.maximum(gamma.sum(axis=0), _EPSILON)
+    initial = np.maximum(gamma[0], _EPSILON)
+    initial /= initial.sum()
+    transitions = transition_counts / transition_counts.sum(axis=1, keepdims=True)
+    means = (gamma.T @ values) / state_mass[:, None]
+    delta = values[:, None, :] - means[None, :, :]
+    variances = (gamma[:, :, None] * delta * delta).sum(axis=0) / state_mass[
+        :, None
+    ]
+    variances = np.maximum(variances, _VARIANCE_FLOOR)
+    return initial, transitions, means, variances
+
+
+def _run_baum_welch(
+    values: np.ndarray,
+    *,
+    max_iter: int,
+    tolerance: float,
+    random_seed: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, float, int]:
     initial, transitions, means, variances = _initial_parameters(values, random_seed)
     prior_likelihood = -math.inf
     iterations = 0
@@ -176,16 +201,9 @@ def _fit_numeric(
         gamma, likelihood, transition_counts = _forward_backward(
             values, initial, transitions, means, variances
         )
-        state_mass = np.maximum(gamma.sum(axis=0), _EPSILON)
-        initial = np.maximum(gamma[0], _EPSILON)
-        initial /= initial.sum()
-        transitions = transition_counts / transition_counts.sum(axis=1, keepdims=True)
-        means = (gamma.T @ values) / state_mass[:, None]
-        delta = values[:, None, :] - means[None, :, :]
-        variances = (gamma[:, :, None] * delta * delta).sum(axis=0) / state_mass[
-            :, None
-        ]
-        variances = np.maximum(variances, _VARIANCE_FLOOR)
+        initial, transitions, means, variances = _update_hmm_parameters(
+            values, gamma, transition_counts
+        )
         iterations = iteration
         if math.isfinite(prior_likelihood) and abs(likelihood - prior_likelihood) <= (
             tolerance * max(1.0, abs(prior_likelihood))
@@ -195,13 +213,44 @@ def _fit_numeric(
     gamma, likelihood, _ = _forward_backward(
         values, initial, transitions, means, variances
     )
-    # Stable semantic ordering: the high-volatility state is selected first,
-    # then the most directional remaining state; the last state is range.
+    return (
+        initial,
+        transitions,
+        means,
+        variances,
+        gamma,
+        likelihood,
+        iterations,
+    )
+
+
+def _semantic_state_order(means: np.ndarray) -> list[int]:
     high_volatility = int(np.argmax(means[:, 1]))
     remaining = [index for index in range(3) if index != high_volatility]
     trend = max(remaining, key=lambda index: means[index, 0])
     range_state = next(index for index in remaining if index != trend)
-    order = [trend, range_state, high_volatility]
+    return [trend, range_state, high_volatility]
+
+
+def _fit_numeric(
+    values: np.ndarray, *, max_iter: int, tolerance: float, random_seed: int
+) -> HMMFit:
+    _validate_fit_configuration(max_iter, tolerance)
+    (
+        initial,
+        transitions,
+        means,
+        variances,
+        gamma,
+        likelihood,
+        iterations,
+    ) = _run_baum_welch(
+        values,
+        max_iter=max_iter,
+        tolerance=tolerance,
+        random_seed=random_seed,
+    )
+    order = _semantic_state_order(means)
     occupancy = gamma.mean(axis=0)
     return HMMFit(
         initial_probabilities=tuple(float(initial[index]) for index in order),

@@ -68,33 +68,36 @@ def _sha256_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
 
-def _load_dataset(
+def _read_dataset_manifest(
     dataset_path: Path, manifest_path: Path
-) -> tuple[DataFrame, dict[str, Any], str]:
+) -> tuple[bytes, dict[str, Any], str]:
     try:
         raw_bytes = dataset_path.read_bytes()
-        manifest_value = json.loads(manifest_path.read_text(encoding="utf-8"))
+        decoded = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
         raise ValueError("ai_training_dataset_or_manifest_unreadable") from error
-    if not isinstance(manifest_value, dict):
+    if not isinstance(decoded, dict):
         raise ValueError("ai_training_manifest_must_be_object")
     digest = _sha256_bytes(raw_bytes)
-    if manifest_value.get("csv_sha256") != digest:
+    _validate_dataset_manifest(decoded, digest)
+    return raw_bytes, decoded, digest
+
+
+def _validate_dataset_manifest(manifest: dict[str, Any], digest: str) -> None:
+    if manifest.get("csv_sha256") != digest:
         raise ValueError("ai_training_dataset_sha256_mismatch")
-    if manifest_value.get("provider") != "Nobitex public UDF history API":
+    if manifest.get("provider") != "Nobitex public UDF history API":
         raise ValueError("ai_training_provider_not_approved_for_research")
-    if manifest_value.get("credentials_used") is not False:
+    if manifest.get("credentials_used") is not False:
         raise ValueError("ai_training_public_dataset_must_use_no_credentials")
     if (
-        manifest_value.get("row_count") != 8760
-        or manifest_value.get("requested_days") != 365
+        manifest.get("row_count") != 8760
+        or manifest.get("requested_days") != 365
     ):
         raise ValueError("ai_training_dataset_must_be_8760_hourly_candles")
-    candles = pd.read_csv(dataset_path)
-    required = ("date", "open", "high", "low", "close", "volume")
-    if tuple(candles.columns) != required:
-        raise ValueError("ai_training_csv_schema_invalid")
-    candles["date"] = pd.to_datetime(candles["date"], utc=True, errors="raise")
+
+
+def _validate_hourly_grid(candles: DataFrame) -> None:
     if len(candles) != 8760:
         raise ValueError("ai_training_row_count_mismatch")
     if (
@@ -105,6 +108,9 @@ def _load_dataset(
     deltas = candles["date"].diff().iloc[1:].dt.total_seconds().to_numpy(dtype=float)
     if not np.all(deltas == 3600.0):
         raise ValueError("ai_training_gap_or_timeframe_mismatch_no_interpolation")
+
+
+def _validate_numeric_ohlcv(candles: DataFrame) -> None:
     for name in ("open", "high", "low", "close", "volume"):
         candles[name] = pd.to_numeric(candles[name], errors="coerce")
         values = candles[name].to_numpy(dtype=float)
@@ -123,18 +129,41 @@ def _load_dataset(
         or np.any(high < low)
     ):
         raise ValueError("ai_training_ohlcv_invariants_failed")
+
+
+def _read_ohlcv_frame(dataset_path: Path) -> DataFrame:
+    candles = pd.read_csv(dataset_path)
+    required = ("date", "open", "high", "low", "close", "volume")
+    if tuple(candles.columns) != required:
+        raise ValueError("ai_training_csv_schema_invalid")
+    candles["date"] = pd.to_datetime(candles["date"], utc=True, errors="raise")
+    _validate_hourly_grid(candles)
+    _validate_numeric_ohlcv(candles)
+    return candles
+
+
+def _validate_dataset_quality(candles: DataFrame) -> str:
+    rows = [
+        {str(key): value for key, value in row.items()}
+        for row in candles.to_dict(orient="records")
+    ]
     quality = validate_candles(
-        [
-            {str(key): value for key, value in row.items()}
-            for row in candles.to_dict(orient="records")
-        ],
+        rows,
         expected_interval_seconds=3600,
         gap_policy="reject",
     )
     if not quality.passed or quality.fingerprint is None:
         raise ValueError("ai_training_shared_data_quality_gate_rejected_dataset")
-    manifest_value["data_quality_fingerprint"] = quality.fingerprint
-    return candles, manifest_value, digest
+    return quality.fingerprint
+
+
+def _load_dataset(
+    dataset_path: Path, manifest_path: Path
+) -> tuple[DataFrame, dict[str, Any], str]:
+    _, manifest, digest = _read_dataset_manifest(dataset_path, manifest_path)
+    candles = _read_ohlcv_frame(dataset_path)
+    manifest["data_quality_fingerprint"] = _validate_dataset_quality(candles)
+    return candles, manifest, digest
 
 
 def _folds(row_count: int) -> list[OOFFold]:

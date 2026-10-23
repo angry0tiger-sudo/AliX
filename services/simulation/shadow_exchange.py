@@ -44,65 +44,86 @@ class ShadowFill:
     source_status: Literal["SYNTHETIC_ONLY"] = "SYNTHETIC_ONLY"
 
     def __post_init__(self) -> None:
-        if not self.decision_id.strip():
-            raise ValueError("shadow_decision_id_required")
-        if _SHA256.fullmatch(self.input_fingerprint) is None:
-            raise ValueError("shadow_input_fingerprint_invalid")
-        if _SHA256.fullmatch(self.gate_fingerprint) is None:
-            raise ValueError("shadow_gate_fingerprint_invalid")
-        if self.order_permission is not False or self.source_status != "SYNTHETIC_ONLY":
-            raise ValueError("shadow_permission_or_source_invariant_failed")
-        if not self.meta_confidence.is_finite() or not Decimal(
-            "0"
-        ) <= self.meta_confidence <= Decimal("1"):
-            raise ValueError("shadow_meta_confidence_invalid")
-        for name in (
-            "quantity",
-            "entry_fill_price",
-            "exit_fill_price",
-            "entry_fee",
-            "exit_fee",
-            "gross_pnl",
-            "net_pnl",
-        ):
-            value = getattr(self, name)
-            if not isinstance(value, Decimal) or not value.is_finite():
-                raise ValueError(f"shadow_{name}_must_be_finite_decimal")
-        if (
-            min(
-                self.quantity,
-                self.entry_fill_price,
-                self.exit_fill_price,
-                self.entry_fee,
-                self.exit_fee,
-            )
-            < 0
-        ):
-            raise ValueError("shadow_amount_must_not_be_negative")
-        if self.status not in {"SIMULATED", "REJECTED"}:
-            raise ValueError("shadow_status_invalid")
-        if (
-            self.status == "SIMULATED"
-            and min(self.quantity, self.entry_fill_price, self.exit_fill_price) <= 0
-        ):
-            raise ValueError("shadow_fill_prices_and_quantity_must_be_positive")
-        if self.status == "SIMULATED" and self.rejection_reasons:
-            raise ValueError("shadow_filled_record_cannot_have_rejection_reasons")
-        if self.status == "REJECTED" and not self.rejection_reasons:
-            raise ValueError("shadow_rejected_record_requires_reason")
-        if self.status == "REJECTED" and any(
-            value != 0
-            for value in (
-                self.quantity,
-                self.entry_fill_price,
-                self.exit_fill_price,
-                self.entry_fee,
-                self.exit_fee,
-                self.gross_pnl,
-                self.net_pnl,
-            )
-        ):
-            raise ValueError("shadow_rejection_must_not_claim_fill")
+        _validate_shadow_identity(self)
+        _validate_shadow_confidence(self)
+        _validate_shadow_amounts(self)
+        _validate_shadow_status(self)
+
+
+def _validate_shadow_identity(fill: ShadowFill) -> None:
+    if not fill.decision_id.strip():
+        raise ValueError("shadow_decision_id_required")
+    if _SHA256.fullmatch(fill.input_fingerprint) is None:
+        raise ValueError("shadow_input_fingerprint_invalid")
+    if _SHA256.fullmatch(fill.gate_fingerprint) is None:
+        raise ValueError("shadow_gate_fingerprint_invalid")
+    if fill.order_permission is not False or fill.source_status != "SYNTHETIC_ONLY":
+        raise ValueError("shadow_permission_or_source_invariant_failed")
+
+
+def _validate_shadow_confidence(fill: ShadowFill) -> None:
+    if not fill.meta_confidence.is_finite() or not Decimal(
+        "0"
+    ) <= fill.meta_confidence <= Decimal("1"):
+        raise ValueError("shadow_meta_confidence_invalid")
+
+
+def _validate_shadow_amounts(fill: ShadowFill) -> None:
+    for name in (
+        "quantity",
+        "entry_fill_price",
+        "exit_fill_price",
+        "entry_fee",
+        "exit_fee",
+        "gross_pnl",
+        "net_pnl",
+    ):
+        value = getattr(fill, name)
+        if not isinstance(value, Decimal) or not value.is_finite():
+            raise ValueError(f"shadow_{name}_must_be_finite_decimal")
+    if (
+        min(
+            fill.quantity,
+            fill.entry_fill_price,
+            fill.exit_fill_price,
+            fill.entry_fee,
+            fill.exit_fee,
+        )
+        < 0
+    ):
+        raise ValueError("shadow_amount_must_not_be_negative")
+
+
+def _validate_simulated_fill(fill: ShadowFill) -> None:
+    if min(fill.quantity, fill.entry_fill_price, fill.exit_fill_price) <= 0:
+        raise ValueError("shadow_fill_prices_and_quantity_must_be_positive")
+    if fill.rejection_reasons:
+        raise ValueError("shadow_filled_record_cannot_have_rejection_reasons")
+
+
+def _validate_rejected_fill(fill: ShadowFill) -> None:
+    if not fill.rejection_reasons:
+        raise ValueError("shadow_rejected_record_requires_reason")
+    amounts = (
+        fill.quantity,
+        fill.entry_fill_price,
+        fill.exit_fill_price,
+        fill.entry_fee,
+        fill.exit_fee,
+        fill.gross_pnl,
+        fill.net_pnl,
+    )
+    if any(value != 0 for value in amounts):
+        raise ValueError("shadow_rejection_must_not_claim_fill")
+
+
+def _validate_shadow_status(fill: ShadowFill) -> None:
+    if fill.status not in {"SIMULATED", "REJECTED"}:
+        raise ValueError("shadow_status_invalid")
+    if fill.status == "SIMULATED":
+        _validate_simulated_fill(fill)
+    else:
+        _validate_rejected_fill(fill)
 
 
 def _canonical(value: object) -> str:
