@@ -93,42 +93,48 @@ def _validate_manifest_flags(manifest: dict[str, Any]) -> None:
             raise ValueError(f"experiment_public_manifest_contract_failed:{field}")
 
 
-def _validate_ohlcv(candles: DataFrame) -> None:
-    required = ("date", "open", "high", "low", "close", "volume")
-    if tuple(candles.columns) != required:
-        raise ValueError("experiment_ohlcv_schema_invalid")
-    if len(candles) != EXPECTED_ROWS:
-        raise ValueError("experiment_dataset_rows_invalid")
+def _validate_time_grid(candles: DataFrame) -> None:
     candles["date"] = pd.to_datetime(candles["date"], utc=True, errors="raise")
-    if candles["date"].isna().any() or candles["date"].duplicated().any():
+    dates = candles["date"]
+    if dates.isna().any() or dates.duplicated().any():
         raise ValueError("experiment_timestamps_invalid")
-    if not candles["date"].is_monotonic_increasing:
+    if not dates.is_monotonic_increasing:
         raise ValueError("experiment_timestamps_not_increasing")
-    differences = (
-        candles["date"].diff().iloc[1:].dt.total_seconds().to_numpy(dtype=float)
-    )
+    differences = dates.diff().iloc[1:].dt.total_seconds().to_numpy(dtype=float)
     if not np.all(differences == 3600.0):
         raise ValueError("experiment_hourly_grid_invalid")
-    numeric = candles.loc[:, ["open", "high", "low", "close", "volume"]].apply(
-        pd.to_numeric, errors="coerce"
-    )
-    values = numeric.to_numpy(dtype=float)
-    if not np.isfinite(values).all():
+
+
+def _normalize_numeric_ohlcv(candles: DataFrame) -> None:
+    columns = ["open", "high", "low", "close", "volume"]
+    numeric = candles.loc[:, columns].apply(pd.to_numeric, errors="coerce")
+    if not np.isfinite(numeric.to_numpy(dtype=float)).all():
         raise ValueError("experiment_ohlcv_non_finite")
     opened = numeric["open"].to_numpy(dtype=float)
     high = numeric["high"].to_numpy(dtype=float)
     low = numeric["low"].to_numpy(dtype=float)
     close = numeric["close"].to_numpy(dtype=float)
     volume = numeric["volume"].to_numpy(dtype=float)
-    if (
+    invalid_geometry = (
         np.any(np.minimum.reduce([opened, high, low, close]) <= 0)
         or np.any(volume < 0)
         or np.any(high < np.maximum(opened, close))
         or np.any(low > np.minimum(opened, close))
         or np.any(high < low)
-    ):
+    )
+    if invalid_geometry:
         raise ValueError("experiment_ohlcv_geometry_invalid")
-    candles.loc[:, ["open", "high", "low", "close", "volume"]] = numeric
+    candles.loc[:, columns] = numeric
+
+
+def _validate_ohlcv(candles: DataFrame) -> None:
+    required = ("date", "open", "high", "low", "close", "volume")
+    if tuple(candles.columns) != required:
+        raise ValueError("experiment_ohlcv_schema_invalid")
+    if len(candles) != EXPECTED_ROWS:
+        raise ValueError("experiment_dataset_rows_invalid")
+    _validate_time_grid(candles)
+    _normalize_numeric_ohlcv(candles)
 
 
 def _load_dataset(
@@ -333,20 +339,32 @@ def _max_abs_drawdown(returns: list[float]) -> float | None:
     return float(np.max(drawdowns))
 
 
+def _win_rate(returns: list[float]) -> float | None:
+    if not returns:
+        return None
+    return float(sum(value > 0.0 for value in returns) / len(returns))
+
+
+def _net_expectancy(returns: list[float]) -> float | None:
+    return float(np.mean(returns)) if returns else None
+
+
+def _profit_factor(returns: list[float]) -> float | None:
+    positive_total = sum(value for value in returns if value > 0.0)
+    loss_total = abs(sum(value for value in returns if value < 0.0))
+    if loss_total <= 0.0:
+        return None
+    return float(positive_total / loss_total)
+
+
 def _trade_metrics(trades: list[dict[str, Any]]) -> dict[str, Any]:
     returns = [float(item["net_return"]) for item in trades]
-    count = len(returns)
-    positives = [value for value in returns if value > 0.0]
-    negatives = [value for value in returns if value < 0.0]
-    losses = abs(sum(negatives))
     return {
-        "trade_count": count,
-        "win_rate": float(len(positives) / count) if count else None,
-        "net_expectancy": float(np.mean(returns)) if count else None,
-        "total_net_return_simple_sum": float(sum(returns)) if count else None,
-        "profit_factor": (
-            float(sum(positives) / losses) if count and losses > 0.0 else None
-        ),
+        "trade_count": len(returns),
+        "win_rate": _win_rate(returns),
+        "net_expectancy": _net_expectancy(returns),
+        "total_net_return_simple_sum": sum(returns) if returns else None,
+        "profit_factor": _profit_factor(returns),
         "max_abs_drawdown": _max_abs_drawdown(returns),
         "selected_trades": trades,
     }
@@ -533,44 +551,72 @@ def _flatten_trades(folds: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(trades, key=lambda item: int(item["event_index"]))
 
 
+def _weighted_fold_average(
+    folds: list[dict[str, Any]], metric_name: str
+) -> float | None:
+    if not folds:
+        return None
+    values = [float(fold[metric_name]) for fold in folds]
+    weights = [int(fold["test_count"]) for fold in folds]
+    return float(np.average(values, weights=weights))
+
+
+def _brier_skill(
+    brier: float | None, baseline_brier: float | None
+) -> float | None:
+    if brier is None or baseline_brier is None or baseline_brier <= 0.0:
+        return None
+    return float(1.0 - brier / baseline_brier)
+
+
 def _aggregate_candidate(result: dict[str, Any]) -> dict[str, Any]:
-    evaluated = [fold for fold in result["folds"] if fold.get("status") == "EVALUATED"]
+    evaluated = [
+        fold for fold in result["folds"] if fold.get("status") == "EVALUATED"
+    ]
     trades = _flatten_trades(evaluated)
     metrics = _trade_metrics(trades)
-    sample_count = sum(int(fold["test_count"]) for fold in evaluated)
-    brier = (
-        float(
-            np.average(
-                [fold["brier_score"] for fold in evaluated],
-                weights=[fold["test_count"] for fold in evaluated],
-            )
-        )
-        if evaluated
-        else None
-    )
-    baseline_brier = (
-        float(
-            np.average(
-                [fold["baseline_brier_score"] for fold in evaluated],
-                weights=[fold["test_count"] for fold in evaluated],
-            )
-        )
-        if evaluated
-        else None
-    )
     return {
         "evaluated_fold_count": len(evaluated),
         "skipped_fold_count": len(result["folds"]) - len(evaluated),
-        "oos_event_count": sample_count,
-        "brier_score_weighted": brier,
-        "baseline_brier_score_weighted": baseline_brier,
-        "brier_skill_vs_baseline": (
-            float(1.0 - brier / baseline_brier)
-            if brier is not None and baseline_brier is not None and baseline_brier > 0
-            else None
+        "oos_event_count": sum(int(fold["test_count"]) for fold in evaluated),
+        "brier_score_weighted": _weighted_fold_average(evaluated, "brier_score"),
+        "baseline_brier_score_weighted": _weighted_fold_average(
+            evaluated, "baseline_brier_score"
+        ),
+        "brier_skill_vs_baseline": _brier_skill(
+            _weighted_fold_average(evaluated, "brier_score"),
+            _weighted_fold_average(evaluated, "baseline_brier_score"),
         ),
         **metrics,
     }
+
+
+def _prior_evaluated_folds(
+    result: dict[str, Any], fold_id: int
+) -> list[dict[str, Any]]:
+    return [
+        row
+        for row in result["folds"]
+        if int(row["fold_id"]) < fold_id and row["status"] == "EVALUATED"
+    ]
+
+
+def _prior_candidate_score(
+    prior: list[dict[str, Any]],
+) -> tuple[tuple[float, float, float, int], int] | None:
+    trades = _flatten_trades(prior)
+    if len(trades) < MIN_PRIOR_TRADES_FOR_SELECTION:
+        return None
+    returns = [float(trade["net_return"]) for trade in trades]
+    win_rate = float(sum(value > 0.0 for value in returns) / len(returns))
+    expectancy = float(np.mean(returns))
+    if win_rate <= 0.60 or expectancy <= 0.0:
+        return None
+    brier = _weighted_fold_average(prior, "brier_score")
+    if brier is None:
+        return None
+    score = (expectancy, win_rate, -brier, len(trades))
+    return score, len(trades)
 
 
 def _choose_configuration(
@@ -580,27 +626,11 @@ def _choose_configuration(
 ) -> tuple[str, str, int]:
     qualified: list[tuple[tuple[float, float, float, int], str, int]] = []
     for identifier, result in candidate_results.items():
-        prior = [
-            row
-            for row in result["folds"]
-            if int(row["fold_id"]) < fold_id and row["status"] == "EVALUATED"
-        ]
-        trades = _flatten_trades(prior)
-        if len(trades) < MIN_PRIOR_TRADES_FOR_SELECTION:
-            continue
-        returns = [float(trade["net_return"]) for trade in trades]
-        win_rate = sum(value > 0.0 for value in returns) / len(returns)
-        expectancy = float(np.mean(returns))
-        if win_rate <= 0.60 or expectancy <= 0.0:
-            continue
-        brier = float(
-            np.average(
-                [row["brier_score"] for row in prior],
-                weights=[row["test_count"] for row in prior],
-            )
-        )
-        score = (expectancy, win_rate, -brier, len(trades))
-        qualified.append((score, identifier, len(trades)))
+        prior = _prior_evaluated_folds(result, fold_id)
+        selection = _prior_candidate_score(prior)
+        if selection is not None:
+            score, count = selection
+            qualified.append((score, identifier, count))
     if not qualified:
         return (
             baseline_id,
