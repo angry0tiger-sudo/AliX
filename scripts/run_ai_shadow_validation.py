@@ -96,9 +96,7 @@ def _validate_approval_identity(
         raise ValueError(f"shadow_validation_approval_hash_mismatch:{model_type}")
 
 
-def _validate_approval_timestamp(
-    approval: Mapping[str, Any], model_type: str
-) -> None:
+def _validate_approval_timestamp(approval: Mapping[str, Any], model_type: str) -> None:
     approved_at = approval.get("approved_at")
     if not isinstance(approved_at, str):
         raise ValueError(f"shadow_validation_approval_timestamp_missing:{model_type}")
@@ -459,9 +457,7 @@ def _install_promoted_runtime_models(
 ) -> dict[str, Any]:
     promoted_dir = output_path.parent / "promoted-models"
     meta_manifest = _read_object(
-        training_artifact_root
-        / "alix-ai-artifacts"
-        / "meta-label-model.manifest.json"
+        training_artifact_root / "alix-ai-artifacts" / "meta-label-model.manifest.json"
     )
     promotion, _ = _prepare_technically_approved_models(
         training_artifact_root, promoted_dir, hmm, meta_manifest
