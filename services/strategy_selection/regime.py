@@ -155,7 +155,9 @@ class PreviousRegimePosterior:
         if not self.model_revision.strip():
             raise ValueError("previous_regime_model_revision_missing")
         _require_aware("previous_regime_as_of", self.as_of)
-        _validate_probability_vector("previous_regime_probabilities", self.probabilities)
+        _validate_probability_vector(
+            "previous_regime_probabilities", self.probabilities
+        )
         if _SHA256.fullmatch(self.fingerprint) is None:
             raise ValueError("previous_regime_fingerprint_invalid")
 
@@ -357,9 +359,11 @@ def _feature_contract_reasons(
         or not observation.symbol.endswith("/USDT")
     ):
         reasons.append("regime_spot_usdt_symbol_required")
-    if observation.observed_at <= observation.evaluated_at and (
-        observation.evaluated_at - observation.observed_at
-    ).total_seconds() > model.max_observation_age_seconds:
+    if (
+        observation.observed_at <= observation.evaluated_at
+        and (observation.evaluated_at - observation.observed_at).total_seconds()
+        > model.max_observation_age_seconds
+    ):
         reasons.append("regime_observation_stale")
     observed_names = tuple(name for name, _ in observation.feature_values)
     if not observed_names:
@@ -398,8 +402,7 @@ def _forward_filter(
     else:
         prior = tuple(
             sum(
-                float(previous.probabilities[i])
-                * float(model.transition_matrix[i][j])
+                float(previous.probabilities[i]) * float(model.transition_matrix[i][j])
                 for i in range(len(model.regimes))
             )
             for j in range(len(model.regimes))
@@ -410,9 +413,7 @@ def _forward_filter(
     for state_index, emission in enumerate(model.emissions):
         probability = prior[state_index]
         prior_log = math.log(probability) if probability > 0 else -math.inf
-        log_weights.append(
-            prior_log + _gaussian_log_likelihood(values, emission)
-        )
+        log_weights.append(prior_log + _gaussian_log_likelihood(values, emission))
     finite_weights = [value for value in log_weights if math.isfinite(value)]
     if not finite_weights:
         raise ValueError("regime_all_state_likelihoods_invalid")
@@ -540,9 +541,7 @@ def _require_decimal(
         raise ValueError(f"{name}_above_maximum")
 
 
-def _validate_probability_vector(
-    name: str, values: tuple[Decimal, ...]
-) -> None:
+def _validate_probability_vector(name: str, values: tuple[Decimal, ...]) -> None:
     if not values:
         raise ValueError(f"{name}_empty")
     for value in values:
@@ -554,6 +553,7 @@ def _validate_probability_vector(
         )
     if abs(sum(values, Decimal("0")) - Decimal("1")) > _PROBABILITY_TOLERANCE:
         raise ValueError(f"{name}_must_sum_to_one")
+
 
 def _as_decimal(value: float) -> Decimal:
     if not math.isfinite(value):

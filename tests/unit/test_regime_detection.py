@@ -128,12 +128,8 @@ def test_hmm_uses_previous_posterior_and_preserves_state_lineage() -> None:
         )
     )
     prior = make_previous()
-    first = classifier.infer(
-        model=model, observation=observation, previous=prior
-    )
-    second = classifier.infer(
-        model=model, observation=observation, previous=prior
-    )
+    first = classifier.infer(model=model, observation=observation, previous=prior)
+    second = classifier.infer(model=model, observation=observation, previous=prior)
 
     assert first.status is RegimeInferenceStatus.CLASSIFIED
     assert first.selected_regime == "range"
@@ -191,9 +187,7 @@ def test_hmm_uses_previous_posterior_and_preserves_state_lineage() -> None:
         ),
         (
             make_model(),
-            make_observation(
-                feature_values=(("directional_efficiency", D("0.8")),)
-            ),
+            make_observation(feature_values=(("directional_efficiency", D("0.8")),)),
             None,
             "regime_feature_set_mismatch",
         ),
