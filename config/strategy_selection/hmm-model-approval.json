@@ -1,0 +1,13 @@
+{
+  "schema_version": "alix.model-technical-approval.v1",
+  "model_type": "gaussian_hmm",
+  "status": "NOT_APPROVED",
+  "model_sha256": null,
+  "dataset_sha256": null,
+  "owner": "angry0tiger-sudo",
+  "approval_id": null,
+  "approved_at": null,
+  "economic_acceptance": "NO-GO",
+  "order_permission": false,
+  "trading_authorization": "NO-GO"
+}
