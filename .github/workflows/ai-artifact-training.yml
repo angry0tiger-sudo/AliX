@@ -59,7 +59,10 @@ jobs:
             --commit-sha "$GITHUB_SHA"
 
       - name: Train and validate HMM and Meta-Label artifacts
+        env:
+          PYTHONPATH: ${{ github.workspace }}
         run: |
+          python -c "from services.data_quality.gate import validate_candles"
           python scripts/train_ai_artifacts.py \
             --dataset "$RUNNER_TEMP/nobitex-market-data/nobitex-btcusdt-1h.csv" \
             --manifest "$RUNNER_TEMP/nobitex-market-data/nobitex-btcusdt-1h.manifest.json" \
