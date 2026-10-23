@@ -1,0 +1,148 @@
+name: AliX Manual Public AI Artifact Training
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_public_read_only:
+        description: Confirm this run may fetch public OHLCV data only, without credentials or orders
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: alix-ai-artifact-training
+  cancel-in-progress: false
+
+jobs:
+  train-public-artifacts:
+    if: inputs.confirm_public_read_only == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      ALIx_ENV: paper
+      ALIx_DRY_RUN: "true"
+      ALIx_ALLOW_LIVE_TRADING: "false"
+      ALIx_REPORTING_ENABLED: "false"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    steps:
+      - name: Checkout selected candidate ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install the pinned research runtime subset
+        run: |
+          python -m pip install pip==25.2
+          python -m pip install numpy==2.5.4 pandas==2.3.3 scipy==1.18.1 scikit-learn==1.9.0
+
+      - name: Retrieve the reviewed, immutable OHLCV fetcher
+        run: |
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+            https://raw.githubusercontent.com/angry0tiger-sudo/AliX/cb3ec1bc61355bdc84d1ff671a0c510ccf8a0260/scripts/fetch_nobitex_public_ohlcv.py \
+            --output "$RUNNER_TEMP/fetch_nobitex_public_ohlcv.py"
+
+      - name: Fetch 365 days of public BTCUSDT candles
+        run: |
+          python "$RUNNER_TEMP/fetch_nobitex_public_ohlcv.py" \
+            --days 365 \
+            --output-dir "$RUNNER_TEMP/nobitex-market-data" \
+            --commit-sha "$GITHUB_SHA"
+
+      - name: Train and validate HMM and Meta-Label artifacts
+        run: |
+          python scripts/train_ai_artifacts.py \
+            --dataset "$RUNNER_TEMP/nobitex-market-data/nobitex-btcusdt-1h.csv" \
+            --manifest "$RUNNER_TEMP/nobitex-market-data/nobitex-btcusdt-1h.manifest.json" \
+            --output-dir "$RUNNER_TEMP/alix-ai-artifacts" \
+            --commit-sha "$GITHUB_SHA"
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          from services.meta_labeling.meta_model import MetaLabelModel
+          from services.strategy_selection.model_io import load_hmm_model_document
+
+          root = Path(os.environ["RUNNER_TEMP"]) / "alix-ai-artifacts"
+          data_root = Path(os.environ["RUNNER_TEMP"]) / "nobitex-market-data"
+          report = json.loads((root / "ai-training-report.json").read_text(encoding="utf-8"))
+          dataset_manifest = json.loads((data_root / "nobitex-btcusdt-1h.manifest.json").read_text(encoding="utf-8"))
+          hmm_document = (root / "hmm-regime-model.json").read_text(encoding="utf-8")
+          hmm_artifact = json.loads(hmm_document)
+          hmm_model = load_hmm_model_document(
+              hmm_document,
+              approval_document=Path("config/strategy_selection/hmm-model-approval.json").read_text(encoding="utf-8"),
+          )
+          meta_model_document = json.loads((root / "meta-label-model.json").read_text(encoding="utf-8"))
+          meta_model = MetaLabelModel.from_dict(meta_model_document)
+          meta_manifest = json.loads((root / "meta-label-model.manifest.json").read_text(encoding="utf-8"))
+          meta_model_sha256 = hashlib.sha256(meta_model.to_json().encode("utf-8")).hexdigest()
+
+          assert report["commit_sha"] == os.environ["GITHUB_SHA"]
+          assert report["dataset_rows"] == 8760
+          assert dataset_manifest["row_count"] == 8760
+          assert dataset_manifest["requested_days"] == 365
+          assert dataset_manifest["provider"] == "Nobitex public UDF history API"
+          assert dataset_manifest["public_api_only"] is True
+          assert dataset_manifest["credentials_used"] is False
+          assert dataset_manifest["exchange_calls"] == 0
+          assert dataset_manifest["real_order_attempts"] == 0
+          assert dataset_manifest["commit_sha"] == os.environ["GITHUB_SHA"]
+          assert report["dataset_sha256"] == dataset_manifest["csv_sha256"]
+          assert report["hmm"]["validation"]["passed"] is True
+          assert report["meta_model"]["validation"]["passed"] is True
+          assert report["meta_model"]["validation"]["status"] == "TECHNICAL_VALIDATION_PASSED"
+          assert report["hmm"]["owner_approved"] is False
+          assert hmm_artifact["status"] == "TRAINED_UNAPPROVED"
+          assert hmm_artifact["model_sha256"] == report["hmm"]["model_sha256"]
+          assert hmm_artifact["dataset"]["csv_sha256"] == report["dataset_sha256"]
+          assert hmm_model.revision == report["hmm"]["model_revision"]
+          assert hmm_model.owner_approved is False
+          assert meta_manifest["dataset_sha256"] == report["dataset_sha256"]
+          assert meta_manifest["dataset_rows"] == 8760
+          assert meta_manifest["model_sha256"] == meta_model_sha256 == report["meta_model"]["model_sha256"]
+          assert meta_manifest["owner_approved"] is False
+          assert dataset_manifest["order_permission"] is False
+          assert dataset_manifest["Champion"] is None
+          assert report["Champion"] is None
+          assert report["economic_acceptance"] == "NO-GO"
+          assert report["order_permission"] is False
+          assert report["trading_authorization"] == "NO-GO"
+          print(json.dumps({
+              "commit_sha": report["commit_sha"],
+              "dataset_rows": report["dataset_rows"],
+              "dataset_start": report["dataset_start"],
+              "dataset_end": report["dataset_end"],
+              "dataset_sha256": report["dataset_sha256"],
+              "hmm_model_revision": hmm_model.revision,
+              "hmm_trained_at": hmm_model.trained_at.isoformat(),
+              "hmm_model_sha256": hmm_model.model_sha256,
+              "meta_model_sha256": meta_model_sha256,
+              "meta_validation": report["meta_model"]["validation"]["status"],
+              "economic_acceptance": report["economic_acceptance"],
+              "Champion": report["Champion"],
+              "order_permission": report["order_permission"],
+              "trading_authorization": report["trading_authorization"],
+          }, sort_keys=True))
+          PY
+
+      - name: Upload dataset manifest, trained weights and validation report
+        uses: actions/upload-artifact@v4
+        with:
+          name: alix-public-ai-artifacts-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/nobitex-market-data/
+            ${{ runner.temp }}/alix-ai-artifacts/
+          if-no-files-found: error
+          retention-days: 30
