@@ -1,4 +1,4 @@
-"""Dependency-free deterministic PNG chart; only reconciled equity may be plotted."""
+"""Dependency-free PNG chart output with a strict reconciliation guard."""
 
 from __future__ import annotations
 
@@ -46,6 +46,65 @@ def _line(
             y0 += sy
 
 
+def _draw_axes(canvas: bytearray) -> tuple[int, int, int, int]:
+    left, right = _MARGIN, _WIDTH - _MARGIN
+    top, bottom = _MARGIN, _HEIGHT - _MARGIN
+    for index in range(1, 5):
+        y = top + index * (bottom - top) // 5
+        _line(canvas, left, y, right, y, (225, 225, 225))
+    _line(canvas, left, top, left, bottom, (80, 80, 80))
+    _line(canvas, left, bottom, right, bottom, (80, 80, 80))
+    return left, right, top, bottom
+
+
+def _finite_values(values: Sequence[float]) -> list[float]:
+    result: list[float] = []
+    for value in values:
+        candidate = float(value)
+        if math.isfinite(candidate):
+            result.append(candidate)
+    return result
+
+
+def _series_points(
+    values: list[float], bounds: tuple[int, int, int, int]
+) -> list[tuple[int, int]]:
+    left, right, top, bottom = bounds
+    low, high = min(values), max(values)
+    span = high - low if high > low else 1.0
+    return [
+        (
+            left + index * (right - left) // (len(values) - 1),
+            bottom - int((value - low) / span * (bottom - top)),
+        )
+        for index, value in enumerate(values)
+    ]
+
+
+def _draw_series(canvas: bytearray, values: list[float], bounds: tuple[int, int, int, int]) -> None:
+    if len(values) < 2:
+        return
+    points = _series_points(values, bounds)
+    for first, second in zip(points, points[1:]):
+        _line(canvas, first[0], first[1], second[0], second[1], (30, 95, 180))
+
+
+def _encode_png(canvas: bytearray) -> bytes:
+    scanlines = b"".join(
+        b"\\x00" + bytes(canvas[row * _WIDTH * 3 : (row + 1) * _WIDTH * 3])
+        for row in range(_HEIGHT)
+    )
+    header = struct.pack(">IIBBBBB", _WIDTH, _HEIGHT, 8, 2, 0, 0, 0)
+    metadata = ("AliX-Chart-Schema\\x00" + PNG_CHART_SCHEMA_VERSION).encode("latin-1")
+    return (
+        b"\\x89PNG\\r\\n\\x1a\\n"
+        + _chunk(b"IHDR", header)
+        + _chunk(b"tEXt", metadata)
+        + _chunk(b"IDAT", zlib.compress(scanlines, level=9))
+        + _chunk(b"IEND", b"")
+    )
+
+
 def render_equity_chart(
     values: Sequence[float],
     *,
@@ -53,38 +112,12 @@ def render_equity_chart(
     width: int = _WIDTH,
     height: int = _HEIGHT,
 ) -> bytes:
+    """Plot an equity curve only for explicitly reconciled financial data."""
     if width != _WIDTH or height != _HEIGHT:
         raise ValueError("chart_dimensions_are_versioned_and_fixed")
     canvas = bytearray([255] * (_WIDTH * _HEIGHT * 3))
-    left, right, top, bottom = _MARGIN, _WIDTH - _MARGIN, _MARGIN, _HEIGHT - _MARGIN
-    for index in range(1, 5):
-        y = top + index * (bottom - top) // 5
-        _line(canvas, left, y, right, y, (225, 225, 225))
-    _line(canvas, left, top, left, bottom, (80, 80, 80))
-    _line(canvas, left, bottom, right, bottom, (80, 80, 80))
-    clean = [float(item) for item in values if math.isfinite(float(item))]
-    if reconciliation_status == "RECONCILED" and len(clean) >= 2:
-        low, high = min(clean), max(clean)
-        span = high - low if high > low else 1.0
-        points = [
-            (
-                left + i * (right - left) // (len(clean) - 1),
-                bottom - int((value - low) / span * (bottom - top)),
-            )
-            for i, value in enumerate(clean)
-        ]
-        for first, second in zip(points, points[1:]):
-            _line(canvas, first[0], first[1], second[0], second[1], (30, 95, 180))
-    scanlines = b"".join(
-        b"\x00" + bytes(canvas[row * _WIDTH * 3 : (row + 1) * _WIDTH * 3])
-        for row in range(_HEIGHT)
-    )
-    header = struct.pack(">IIBBBBB", _WIDTH, _HEIGHT, 8, 2, 0, 0, 0)
-    meta = ("AliX-Chart-Schema\x00" + PNG_CHART_SCHEMA_VERSION).encode("latin-1")
-    return (
-        b"\x89PNG\r\n\x1a\n"
-        + _chunk(b"IHDR", header)
-        + _chunk(b"tEXt", meta)
-        + _chunk(b"IDAT", zlib.compress(scanlines, level=9))
-        + _chunk(b"IEND", b"")
-    )
+    bounds = _draw_axes(canvas)
+    clean = _finite_values(values)
+    if reconciliation_status == "RECONCILED":
+        _draw_series(canvas, clean, bounds)
+    return _encode_png(canvas)

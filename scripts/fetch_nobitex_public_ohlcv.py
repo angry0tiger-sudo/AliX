@@ -74,75 +74,126 @@ def request_public_json(
     raise RuntimeError("public_api_request_failed")
 
 
-def parse_udf_payload(
-    payload: dict[str, Any], *, requested_from: int, requested_to: int
-) -> list[CandleRecord]:
+def _validated_udf_arrays(
+    payload: dict[str, Any],
+) -> tuple[list[Any], list[Any], list[Any], list[Any], list[Any], list[Any]]:
     if payload.get("s") == "no_data":
-        return []
+        return [], [], [], [], [], []
     if payload.get("s") != "ok":
         raise ValueError("nobitex_public_api_status_not_ok")
     names = ("t", "o", "h", "l", "c", "v")
-    arrays = {name: payload.get(name) for name in names}
-    if any(not isinstance(value, list) for value in arrays.values()):
+    arrays = [payload.get(name) for name in names]
+    if any(not isinstance(value, list) for value in arrays):
         raise ValueError("nobitex_ohlcv_arrays_missing")
-    lengths = {len(value) for value in arrays.values() if isinstance(value, list)}
+    lengths = {len(value) for value in arrays if isinstance(value, list)}
     if len(lengths) != 1:
         raise ValueError("nobitex_ohlcv_array_length_mismatch")
-    if not all(isinstance(arrays[name], list) for name in names):
-        raise ValueError("nobitex_ohlcv_arrays_invalid")
-    timestamps = cast(list[Any], arrays["t"])
-    opens = cast(list[Any], arrays["o"])
-    highs = cast(list[Any], arrays["h"])
-    lows = cast(list[Any], arrays["l"])
-    closes = cast(list[Any], arrays["c"])
-    volumes = cast(list[Any], arrays["v"])
+    return tuple(cast(list[Any], value) for value in arrays)  # type: ignore[return-value]
+
+
+def _parse_numeric_values(raw_values: tuple[Any, ...]) -> tuple[float, float, float, float, float]:
+    numbers: list[float] = []
+    for raw in raw_values:
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            raise ValueError("nobitex_candle_value_invalid") from None
+        if not math.isfinite(value):
+            raise ValueError("nobitex_candle_value_not_finite")
+        numbers.append(value)
+    opened, high, low, close, volume = numbers
+    if min(opened, high, low, close) <= 0 or volume < 0:
+        raise ValueError("nobitex_candle_price_or_volume_out_of_range")
+    if high < max(opened, close) or low > min(opened, close) or high < low:
+        raise ValueError("nobitex_candle_ohlc_invariant_failed")
+    return opened, high, low, close, volume
+
+
+def _parse_candle(
+    raw_timestamp: Any,
+    raw_values: tuple[Any, ...],
+    *,
+    requested_from: int,
+    requested_to: int,
+    prior_timestamp: int | None,
+) -> CandleRecord:
+    if isinstance(raw_timestamp, bool) or not isinstance(raw_timestamp, int):
+        raise ValueError("nobitex_candle_timestamp_invalid")
+    stamp = raw_timestamp
+    if stamp < requested_from or stamp > requested_to:
+        raise ValueError("nobitex_candle_timestamp_out_of_bounds")
+    if prior_timestamp is not None and stamp <= prior_timestamp:
+        raise ValueError("nobitex_candle_timestamps_not_increasing")
+    opened, high, low, close, volume = _parse_numeric_values(raw_values)
+    candle_date = datetime.fromtimestamp(stamp, timezone.utc).isoformat().replace("+00:00", "Z")
+    return {
+        "timestamp": stamp,
+        "date": candle_date,
+        "open": opened,
+        "high": high,
+        "low": low,
+        "close": close,
+        "volume": volume,
+    }
+
+
+def parse_udf_payload(
+    payload: dict[str, Any], *, requested_from: int, requested_to: int
+) -> list[CandleRecord]:
+    arrays = _validated_udf_arrays(payload)
+    timestamps, opens, highs, lows, closes, volumes = arrays
+    if not timestamps:
+        return []
     rows: list[CandleRecord] = []
     prior: int | None = None
     for index, raw_timestamp in enumerate(timestamps):
-        if isinstance(raw_timestamp, bool) or not isinstance(raw_timestamp, int):
-            raise ValueError("nobitex_candle_timestamp_invalid")
-        stamp = raw_timestamp
-        # Do not require UTC epoch modulo 3600: venue candle boundaries can be
-        # offset from UTC whole hours. Regular spacing is checked after retrieval.
-        if stamp < requested_from or stamp > requested_to:
-            raise ValueError("nobitex_candle_timestamp_out_of_bounds")
-        if prior is not None and stamp <= prior:
-            raise ValueError("nobitex_candle_timestamps_not_increasing")
-        prior = stamp
-        values: list[float] = []
-        for raw in (
-            opens[index],
-            highs[index],
-            lows[index],
-            closes[index],
-            volumes[index],
-        ):
-            try:
-                item = float(raw)
-            except (TypeError, ValueError):
-                raise ValueError("nobitex_candle_value_invalid") from None
-            if not math.isfinite(item):
-                raise ValueError("nobitex_candle_value_not_finite")
-            values.append(item)
-        opened, high, low, close, volume = values
-        if min(opened, high, low, close) <= 0 or volume < 0:
-            raise ValueError("nobitex_candle_price_or_volume_out_of_range")
-        if high < max(opened, close) or low > min(opened, close) or high < low:
-            raise ValueError("nobitex_candle_ohlc_invariant_failed")
-        rows.append(
-            {
-                "timestamp": stamp,
-                "date": datetime.fromtimestamp(stamp, timezone.utc)
-                .isoformat()
-                .replace("+00:00", "Z"),
-                "open": opened,
-                "high": high,
-                "low": low,
-                "close": close,
-                "volume": volume,
-            }
+        values = (opens[index], highs[index], lows[index], closes[index], volumes[index])
+        candle = _parse_candle(
+            raw_timestamp,
+            values,
+            requested_from=requested_from,
+            requested_to=requested_to,
+            prior_timestamp=prior,
         )
+        rows.append(candle)
+        prior = candle["timestamp"]
     return rows
+
+
+def _fetch_candle_pages(
+    *,
+    start: int,
+    end: int,
+    request_json: Callable[[dict[str, str]], dict[str, Any]],
+    sleep_fn: Callable[[float], None],
+) -> list[CandleRecord]:
+    cursor = start
+    rows: list[CandleRecord] = []
+    while cursor <= end:
+        stop = min(cursor + (MAX_CANDLES_PER_REQUEST - 1) * INTERVAL_SECONDS, end)
+        params = {"symbol": "BTCUSDT", "resolution": "60", "from": str(cursor), "to": str(stop)}
+        batch = parse_udf_payload(
+            request_json(params), requested_from=cursor, requested_to=stop
+        )
+        if not batch:
+            raise ValueError("nobitex_historical_empty_page")
+        rows.extend(batch)
+        cursor = batch[-1]["timestamp"] + INTERVAL_SECONDS
+        if cursor <= end:
+            sleep_fn(1.1)
+    return rows
+
+
+def _validate_historical_rows(rows: list[CandleRecord], days: int) -> None:
+    rows.sort(key=lambda item: item["timestamp"])
+    stamps = [row["timestamp"] for row in rows]
+    if len(stamps) != len(set(stamps)):
+        raise ValueError("nobitex_historical_duplicate_candle")
+    for previous, current in zip(stamps, stamps[1:]):
+        if current - previous != INTERVAL_SECONDS:
+            raise ValueError("nobitex_historical_gap_detected_no_interpolation")
+    if len(rows) < int(days * 24 * 0.98):
+        raise ValueError("nobitex_historical_row_coverage_too_low")
 
 
 def fetch_historical_candles(
@@ -156,47 +207,18 @@ def fetch_historical_candles(
         raise ValueError("historical_days_out_of_policy")
     if now.tzinfo is None or now.utcoffset() is None:
         raise ValueError("historical_cutoff_timezone_required")
-    end = (
-        int(now.astimezone(timezone.utc).timestamp())
-        // INTERVAL_SECONDS
-        * INTERVAL_SECONDS
-        - INTERVAL_SECONDS
+    end = int(now.astimezone(timezone.utc).timestamp()) // INTERVAL_SECONDS * INTERVAL_SECONDS
+    end -= INTERVAL_SECONDS
+    rows = _fetch_candle_pages(
+        start=end - days * 86400,
+        end=end,
+        request_json=request_json,
+        sleep_fn=sleep_fn,
     )
-    cursor = end - days * 86400
-    rows: list[CandleRecord] = []
-    while cursor <= end:
-        stop = min(cursor + (MAX_CANDLES_PER_REQUEST - 1) * INTERVAL_SECONDS, end)
-        params = {
-            "symbol": "BTCUSDT",
-            "resolution": "60",
-            "from": str(cursor),
-            "to": str(stop),
-        }
-        batch = parse_udf_payload(
-            request_json(params), requested_from=cursor, requested_to=stop
-        )
-        if not batch:
-            raise ValueError("nobitex_historical_empty_page")
-        rows.extend(batch)
-        # Anchor the next page to the observed market-candle boundary, not the
-        # UTC request window, to avoid dropping venue-offset candles at boundaries.
-        cursor = int(batch[-1]["timestamp"]) + INTERVAL_SECONDS
-        if cursor <= end:
-            sleep_fn(1.1)
-    rows.sort(key=lambda item: int(item["timestamp"]))
-    seen: set[int] = set()
-    for item in rows:
-        stamp = int(item["timestamp"])
-        if stamp in seen:
-            raise ValueError("nobitex_historical_duplicate_candle")
-        seen.add(stamp)
-    for prior, current in zip(rows, rows[1:]):
-        if int(current["timestamp"]) - int(prior["timestamp"]) != INTERVAL_SECONDS:
-            raise ValueError("nobitex_historical_gap_detected_no_interpolation")
-    if len(rows) < int(days * 24 * 0.98):
-        raise ValueError("nobitex_historical_row_coverage_too_low")
+    if not rows:
+        raise ValueError("nobitex_historical_candles_empty")
+    _validate_historical_rows(rows, days)
     return rows
-
 
 def write_artifacts(
     rows: list[CandleRecord],

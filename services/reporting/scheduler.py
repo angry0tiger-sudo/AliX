@@ -56,6 +56,26 @@ def _run_id(job_key: str, scheduled_for: datetime) -> str:
     return sha256(material.encode("utf-8")).hexdigest()
 
 
+def _valid_wall_time_candidates(wall: datetime, zone: ZoneInfo) -> list[datetime]:
+    candidates: list[datetime] = []
+    for fold in (0, 1):
+        local = wall.replace(tzinfo=zone, fold=fold)
+        round_trip = local.astimezone(UTC).astimezone(zone).replace(tzinfo=None)
+        duplicate_instant = any(
+            local.astimezone(UTC) == existing.astimezone(UTC)
+            for existing in candidates
+        )
+        if round_trip == wall and not duplicate_instant:
+            candidates.append(local)
+    return sorted(candidates, key=lambda item: item.astimezone(UTC))
+
+
+def _select_wall_time(candidates: list[datetime], fold_policy: str) -> datetime:
+    if fold_policy == "first":
+        return candidates[0]
+    return candidates[-1]
+
+
 def scheduled_time_for_date(
     run_date: date,
     timezone_name: str,
@@ -64,7 +84,7 @@ def scheduled_time_for_date(
     minute: int = 0,
     fold_policy: str = "first",
 ) -> datetime:
-    """Resolve a wall time; DST gaps shift to first valid minute, folds choose one side."""
+    """Resolve a wall time; gaps move forward and folds choose one instant."""
     if not 0 <= hour <= 23 or not 0 <= minute <= 59:
         raise ValueError("scheduled_wall_time_out_of_range")
     if fold_policy not in {"first", "second"}:
@@ -75,18 +95,11 @@ def scheduled_time_for_date(
         raise ValueError("reporting_timezone_invalid") from None
     intended = datetime.combine(run_date, time(hour=hour, minute=minute))
     for offset in range(181):
-        wall = intended + timedelta(minutes=offset)
-        candidates: list[datetime] = []
-        for fold in (0, 1):
-            local = wall.replace(tzinfo=zone, fold=fold)
-            round_trip = local.astimezone(UTC).astimezone(zone).replace(tzinfo=None)
-            if round_trip == wall and all(
-                local.astimezone(UTC) != item.astimezone(UTC) for item in candidates
-            ):
-                candidates.append(local)
+        candidates = _valid_wall_time_candidates(
+            intended + timedelta(minutes=offset), zone
+        )
         if candidates:
-            candidates.sort(key=lambda item: item.astimezone(UTC))
-            return candidates[0] if fold_policy == "first" else candidates[-1]
+            return _select_wall_time(candidates, fold_policy)
     raise ValueError("reporting_timezone_gap_exceeds_three_hours")
 
 

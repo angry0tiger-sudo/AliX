@@ -299,131 +299,180 @@ def _timestamp(value: object) -> str:
     return pd.Timestamp(cast(Any, value)).isoformat()
 
 
-def run_walk_forward(
-    dataframe: DataFrame,
-    *,
-    pair: str,
-    timeframe: str,
-    timeframe_seconds: int,
+@dataclass(frozen=True, slots=True)
+class FoldEvaluation:
+    """Research evidence emitted by one temporal fold; no execution side effects."""
+
+    report: dict[str, Any]
+    actual: np.ndarray
+    predicted: np.ndarray
+    trade_returns: list[float]
+    economic: dict[str, Any]
+    training_seconds: float
+    prediction_latency_ms_per_row: float
+    model: Any
+    test_features: DataFrame
+
+
+def _evaluate_fold(
+    dataset: DataFrame,
+    fold: WalkForwardFold,
+    parameters: dict[str, object],
     config: WalkForwardConfig,
+    estimator_factory: EstimatorFactory | None,
+) -> FoldEvaluation:
+    train = dataset.iloc[fold.train_start : fold.train_stop]
+    test = dataset.iloc[fold.test_start : fold.test_stop]
+    train_features = train.loc[:, list(FEATURE_COLUMNS)]
+    test_features = test.loc[:, list(FEATURE_COLUMNS)]
+    actual = test[TARGET_COLUMN].to_numpy(dtype=float)
+    model = _new_estimator(estimator_factory, parameters)
+    started = perf_counter()
+    model.fit(train_features, train[TARGET_COLUMN].to_numpy(dtype=float))
+    training_seconds = perf_counter() - started
+    started = perf_counter()
+    predicted = np.asarray(model.predict(test_features), dtype=float)
+    prediction_seconds = perf_counter() - started
+    if len(predicted) != len(actual) or not np.isfinite(predicted).all():
+        raise ValueError("model returned malformed or non-finite predictions")
+    economic = _simulate_non_overlapping_trades(test, predicted, config)
+    fold_report = {
+        "fold": fold.fold,
+        "train_rows": len(train),
+        "test_rows": len(test),
+        "purged_label_rows": config.horizon,
+        "train_start": _timestamp(train["date"].iloc[0]),
+        "train_end": _timestamp(train["date"].iloc[-1]),
+        "test_start": _timestamp(test["date"].iloc[0]),
+        "test_end": _timestamp(test["date"].iloc[-1]),
+        "forecast_oos": _forecast_metrics(actual, predicted),
+        "zero_forecast_baseline_oos": _forecast_metrics(actual, np.zeros_like(actual)),
+        "costed_fixed_horizon_research_rule": economic,
+        "volatility_regime_oos": _regime_metrics(train, test, actual, predicted),
+    }
+    return FoldEvaluation(
+        report=fold_report,
+        actual=actual,
+        predicted=predicted,
+        trade_returns=_collect_trade_returns(test, predicted, config),
+        economic=economic,
+        training_seconds=training_seconds,
+        prediction_latency_ms_per_row=prediction_seconds * 1000.0 / max(len(test_features), 1),
+        model=model,
+        test_features=test_features,
+    )
+
+
+def _economic_gate_status(
+    sample_count: int,
+    win_rate: float | None,
+    max_drawdown: float,
+    expectancy: float | None,
+) -> str:
+    if sample_count < 100:
+        return "INSUFFICIENT_SAMPLE"
+    if win_rate is None or win_rate < 0.60:
+        return "NO_GO_THRESHOLDS_NOT_MET"
+    if abs(max_drawdown) > 0.15:
+        return "NO_GO_THRESHOLDS_NOT_MET"
+    if expectancy is None or expectancy <= 0.0:
+        return "NO_GO_THRESHOLDS_NOT_MET"
+    return "THRESHOLDS_MET_RESEARCH_ONLY"
+
+
+def _economic_summary(
+    dataset: DataFrame,
+    fold_results: list[FoldEvaluation],
+    trade_returns: list[float],
+) -> dict[str, Any]:
+    trade_count = len(trade_returns)
+    winning = sum(result > 0.0 for result in trade_returns)
+    win_rate = winning / trade_count if trade_count else None
+    expectancy = float(np.mean(trade_returns)) if trade_count else None
+    max_drawdown = _max_drawdown(trade_returns)
+    return {
+        "net_return": float(np.prod(1.0 + np.asarray(trade_returns)) - 1.0)
+        if trade_count
+        else 0.0,
+        "max_drawdown": max_drawdown,
+        "trade_count": sum(int(result.economic["trade_count"]) for result in fold_results),
+        "winning_trade_count": winning,
+        "win_rate": win_rate,
+        "win_rate_sample_size": trade_count,
+        "win_rate_minimum_sample_met": trade_count >= 100,
+        "win_rate_time_period": {
+            "start": _timestamp(dataset["date"].iloc[0]),
+            "end": _timestamp(dataset["date"].iloc[-1]),
+        },
+        "expectancy_net_per_trade": expectancy,
+        "economic_threshold_evaluation": {
+            "minimum_trade_count": 100,
+            "win_rate_minimum": 0.60,
+            "maximum_drawdown_absolute": 0.15,
+            "expectancy_must_be_positive": True,
+            "win_rate_pass": win_rate is not None and win_rate >= 0.60,
+            "drawdown_pass": abs(max_drawdown) <= 0.15,
+            "expectancy_pass": expectancy is not None and expectancy > 0.0,
+            "status": _economic_gate_status(trade_count, win_rate, max_drawdown, expectancy),
+            "authorization_effect": "NONE; Champion remains null and promotion/trading remain NO-GO",
+        },
+    }
+
+
+def _compose_walk_forward_report(
+    *,
+    validated: DataFrame,
+    gate_fingerprint: str,
+    dataset: DataFrame,
     dataset_kind: str,
     dataset_sha256: str,
+    pair: str,
+    timeframe: str,
+    config: WalkForwardConfig,
+    folds: list[WalkForwardFold],
+    parameters: dict[str, object],
+    experiment_config_sha256: str,
     commit_sha: str,
-    estimator_factory: EstimatorFactory | None = None,
-    model_parameters: dict[str, object] | None = None,
+    evaluations: list[FoldEvaluation],
+    oos_actual: np.ndarray,
+    oos_predicted: np.ndarray,
+    reload_info: dict[str, Any],
+    economic: dict[str, Any],
+    turnover: float,
+    fees: float,
+    slippage: float,
+    buy_hold_total: float,
 ) -> dict[str, Any]:
-    """Run offline walk-forward forecasting and costed research metrics only."""
-    validated, gate_fingerprint = validate_ohlcv(dataframe, timeframe_seconds)
-    dataset = prepare_model_dataset(validated, config.horizon)
-    folds = make_walk_forward_folds(len(dataset), config)
-    parameters = dict(BASELINE_MODEL_PARAMETERS)
-    if model_parameters:
-        parameters.update(model_parameters)
-    experiment_config = {
-        "walk_forward": asdict(config),
-        "model_parameters": parameters,
+    fold_reports = [result.report for result in evaluations]
+    latencies = [result.prediction_latency_ms_per_row for result in evaluations]
+    training_times = [result.training_seconds for result in evaluations]
+    out_of_sample = {
+        "sample_count": len(oos_actual),
+        "forecast": _forecast_metrics(oos_actual, oos_predicted),
+        "zero_forecast_baseline": _forecast_metrics(oos_actual, np.zeros_like(oos_actual)),
+        "costed_fixed_horizon_research_rule": {
+            **economic,
+            "turnover_units": turnover,
+            "fees_bps_cumulative": fees,
+            "slippage_bps_cumulative": slippage,
+            "buy_and_hold_net_return": buy_hold_total,
+            "no_trade_net_return": 0.0,
+            "execution_boundary": "offline research only; not connected to AliXStrategy or Freqtrade order lifecycle",
+        },
+        "positive_net_return_fold_count": sum(
+            float(item["costed_fixed_horizon_research_rule"]["net_return"]) > 0.0
+            for item in fold_reports
+        ),
+        "fold_net_returns": [
+            item["costed_fixed_horizon_research_rule"]["net_return"]
+            for item in fold_reports
+        ],
     }
-    experiment_config_sha256 = hashlib.sha256(
-        json.dumps(experiment_config, sort_keys=True, allow_nan=False).encode("utf-8")
-    ).hexdigest()
-    all_actual: list[float] = []
-    all_predicted: list[float] = []
-    all_trade_returns: list[float] = []
-    fold_reports: list[dict[str, Any]] = []
-    final_model: Any = None
-    final_test_features = DataFrame()
-    final_predictions = np.asarray([], dtype=float)
-    aggregate_trade_count = 0
-    aggregate_turnover = 0.0
-    aggregate_fees = 0.0
-    aggregate_slippage = 0.0
-    aggregate_buy_hold_returns: list[float] = []
-    training_seconds_by_fold: list[float] = []
-    prediction_latency_ms_per_row_by_fold: list[float] = []
-
-    for fold in folds:
-        train = dataset.iloc[fold.train_start : fold.train_stop]
-        test = dataset.iloc[fold.test_start : fold.test_stop]
-        train_features = train.loc[:, list(FEATURE_COLUMNS)]
-        test_features = test.loc[:, list(FEATURE_COLUMNS)]
-        actual = test[TARGET_COLUMN].to_numpy(dtype=float)
-        model = _new_estimator(estimator_factory, parameters)
-        training_started = perf_counter()
-        model.fit(train_features, train[TARGET_COLUMN].to_numpy(dtype=float))
-        training_seconds = perf_counter() - training_started
-        prediction_started = perf_counter()
-        predicted = np.asarray(model.predict(test_features), dtype=float)
-        prediction_seconds = perf_counter() - prediction_started
-        training_seconds_by_fold.append(training_seconds)
-        prediction_latency_ms_per_row_by_fold.append(
-            prediction_seconds * 1000.0 / max(len(test_features), 1)
-        )
-        if len(predicted) != len(actual) or not np.isfinite(predicted).all():
-            raise ValueError("model returned malformed or non-finite predictions")
-
-        forecast_metrics = _forecast_metrics(actual, predicted)
-        zero_metrics = _forecast_metrics(actual, np.zeros_like(actual))
-        economic = _simulate_non_overlapping_trades(test, predicted, config)
-        regime = _regime_metrics(train, test, actual, predicted)
-        fold_report = {
-            "fold": fold.fold,
-            "train_rows": len(train),
-            "test_rows": len(test),
-            "purged_label_rows": config.horizon,
-            "train_start": _timestamp(train["date"].iloc[0]),
-            "train_end": _timestamp(train["date"].iloc[-1]),
-            "test_start": _timestamp(test["date"].iloc[0]),
-            "test_end": _timestamp(test["date"].iloc[-1]),
-            "forecast_oos": forecast_metrics,
-            "zero_forecast_baseline_oos": zero_metrics,
-            "costed_fixed_horizon_research_rule": economic,
-            "volatility_regime_oos": regime,
-        }
-        fold_reports.append(fold_report)
-        all_actual.extend(actual.tolist())
-        all_predicted.extend(predicted.tolist())
-        all_trade_returns.extend(_collect_trade_returns(test, predicted, config))
-        aggregate_trade_count += int(economic["trade_count"])
-        aggregate_turnover += float(economic["turnover_units"])
-        aggregate_fees += float(economic["fees_bps_cumulative"])
-        aggregate_slippage += float(economic["slippage_bps_cumulative"])
-        aggregate_buy_hold_returns.append(float(economic["buy_and_hold_net_return"]))
-        final_model = model
-        final_test_features = test_features
-        final_predictions = predicted
-
-    if final_model is None:
-        raise RuntimeError("walk-forward evaluation produced no fitted models")
-    reload_info = _roundtrip_model(final_model, final_test_features, final_predictions)
-    oos_actual = np.asarray(all_actual, dtype=float)
-    oos_predicted = np.asarray(all_predicted, dtype=float)
-    model_net_total = float(np.prod(1.0 + np.asarray(all_trade_returns)) - 1.0)
-    winning_trades = sum(value > 0.0 for value in all_trade_returns)
-    win_rate = winning_trades / len(all_trade_returns) if all_trade_returns else None
-    expectancy = float(np.mean(all_trade_returns)) if all_trade_returns else None
-    strategy_max_drawdown = _max_drawdown(all_trade_returns)
-    sample_sufficient = len(all_trade_returns) >= 100
-    win_rate_pass = win_rate is not None and win_rate >= 0.60
-    drawdown_pass = abs(strategy_max_drawdown) <= 0.15
-    expectancy_pass = expectancy is not None and expectancy > 0.0
-    threshold_status = (
-        "INSUFFICIENT_SAMPLE"
-        if not sample_sufficient
-        else "THRESHOLDS_MET_RESEARCH_ONLY"
-        if win_rate_pass and drawdown_pass and expectancy_pass
-        else "NO_GO_THRESHOLDS_NOT_MET"
-    )
-    buy_hold_total = float(np.prod(1.0 + np.asarray(aggregate_buy_hold_returns)) - 1.0)
-    if not all_trade_returns:
-        model_net_total = 0.0
-
     return {
         "report_schema_version": REPORT_SCHEMA_VERSION,
-        "evaluation_status": (
-            "SYNTHETIC_MECHANICS_ONLY"
-            if dataset_kind == "synthetic"
-            else "RESEARCH_ONLY_ECONOMIC_GATES_PENDING"
-        ),
+        "evaluation_status": "SYNTHETIC_MECHANICS_ONLY"
+        if dataset_kind == "synthetic"
+        else "RESEARCH_ONLY_ECONOMIC_GATES_PENDING",
         "commit_sha": commit_sha,
         "experiment_config_sha256": experiment_config_sha256,
         "runtime_versions": {
@@ -468,63 +517,14 @@ def run_walk_forward(
             "parameters": parameters,
             **reload_info,
         },
-        "out_of_sample": {
-            "sample_count": len(oos_actual),
-            "forecast": _forecast_metrics(oos_actual, oos_predicted),
-            "zero_forecast_baseline": _forecast_metrics(
-                oos_actual, np.zeros_like(oos_actual)
-            ),
-            "costed_fixed_horizon_research_rule": {
-                "net_return": model_net_total,
-                "max_drawdown": strategy_max_drawdown,
-                "trade_count": aggregate_trade_count,
-                "winning_trade_count": winning_trades,
-                "win_rate": win_rate,
-                "win_rate_sample_size": len(all_trade_returns),
-                "win_rate_minimum_sample_met": sample_sufficient,
-                "win_rate_time_period": {
-                    "start": _timestamp(dataset["date"].iloc[0]),
-                    "end": _timestamp(dataset["date"].iloc[-1]),
-                },
-                "expectancy_net_per_trade": expectancy,
-                "economic_threshold_evaluation": {
-                    "minimum_trade_count": 100,
-                    "win_rate_minimum": 0.60,
-                    "maximum_drawdown_absolute": 0.15,
-                    "expectancy_must_be_positive": True,
-                    "win_rate_pass": win_rate_pass,
-                    "drawdown_pass": drawdown_pass,
-                    "expectancy_pass": expectancy_pass,
-                    "status": threshold_status,
-                    "authorization_effect": "NONE; Champion remains null and promotion/trading remain NO-GO",
-                },
-                "turnover_units": aggregate_turnover,
-                "fees_bps_cumulative": aggregate_fees,
-                "slippage_bps_cumulative": aggregate_slippage,
-                "buy_and_hold_net_return": buy_hold_total,
-                "no_trade_net_return": 0.0,
-                "execution_boundary": "offline research only; not connected to AliXStrategy or Freqtrade order lifecycle",
-            },
-            "positive_net_return_fold_count": sum(
-                float(item["costed_fixed_horizon_research_rule"]["net_return"]) > 0.0
-                for item in fold_reports
-            ),
-            "fold_net_returns": [
-                item["costed_fixed_horizon_research_rule"]["net_return"]
-                for item in fold_reports
-            ],
-        },
+        "out_of_sample": out_of_sample,
         "folds": fold_reports,
         "compute": {
-            "training_duration_seconds_total": float(sum(training_seconds_by_fold)),
-            "training_duration_seconds_by_fold": training_seconds_by_fold,
-            "prediction_latency_ms_per_row_by_fold": prediction_latency_ms_per_row_by_fold,
-            "prediction_latency_ms_per_row_p50": float(
-                np.percentile(prediction_latency_ms_per_row_by_fold, 50)
-            ),
-            "prediction_latency_ms_per_row_p95": float(
-                np.percentile(prediction_latency_ms_per_row_by_fold, 95)
-            ),
+            "training_duration_seconds_total": float(sum(training_times)),
+            "training_duration_seconds_by_fold": training_times,
+            "prediction_latency_ms_per_row_by_fold": latencies,
+            "prediction_latency_ms_per_row_p50": float(np.percentile(latencies, 50)),
+            "prediction_latency_ms_per_row_p95": float(np.percentile(latencies, 95)),
         },
         "strategy_scope": {
             "evaluated_rule": "fixed-horizon long-only walk-forward research rule",
@@ -549,6 +549,69 @@ def run_walk_forward(
         "promotion_status": "BLOCKED_NO_ECONOMIC_GATE",
     }
 
+
+def run_walk_forward(
+    dataframe: DataFrame,
+    *,
+    pair: str,
+    timeframe: str,
+    timeframe_seconds: int,
+    config: WalkForwardConfig,
+    dataset_kind: str,
+    dataset_sha256: str,
+    commit_sha: str,
+    estimator_factory: EstimatorFactory | None = None,
+    model_parameters: dict[str, object] | None = None,
+) -> dict[str, Any]:
+    """Run offline walk-forward forecasting and costed research metrics only."""
+    validated, gate_fingerprint = validate_ohlcv(dataframe, timeframe_seconds)
+    dataset = prepare_model_dataset(validated, config.horizon)
+    folds = make_walk_forward_folds(len(dataset), config)
+    parameters = dict(BASELINE_MODEL_PARAMETERS)
+    parameters.update(model_parameters or {})
+    experiment_config = {"walk_forward": asdict(config), "model_parameters": parameters}
+    experiment_sha = hashlib.sha256(
+        json.dumps(experiment_config, sort_keys=True, allow_nan=False).encode("utf-8")
+    ).hexdigest()
+    evaluations = [
+        _evaluate_fold(dataset, fold, parameters, config, estimator_factory)
+        for fold in folds
+    ]
+    if not evaluations:
+        raise RuntimeError("walk-forward evaluation produced no fitted models")
+    trade_returns = [value for result in evaluations for value in result.trade_returns]
+    actual = np.concatenate([result.actual for result in evaluations])
+    predicted = np.concatenate([result.predicted for result in evaluations])
+    final = evaluations[-1]
+    reload_info = _roundtrip_model(final.model, final.test_features, final.predicted)
+    economic = _economic_summary(dataset, evaluations, trade_returns)
+    buy_hold_values = [
+        float(result.economic["buy_and_hold_net_return"]) for result in evaluations
+    ]
+    buy_hold_total = float(np.prod(1.0 + np.asarray(buy_hold_values)) - 1.0)
+    return _compose_walk_forward_report(
+        validated=validated,
+        gate_fingerprint=gate_fingerprint,
+        dataset=dataset,
+        dataset_kind=dataset_kind,
+        dataset_sha256=dataset_sha256,
+        pair=pair,
+        timeframe=timeframe,
+        config=config,
+        folds=folds,
+        parameters=parameters,
+        experiment_config_sha256=experiment_sha,
+        commit_sha=commit_sha,
+        evaluations=evaluations,
+        oos_actual=actual,
+        oos_predicted=predicted,
+        reload_info=reload_info,
+        economic=economic,
+        turnover=sum(float(result.economic["turnover_units"]) for result in evaluations),
+        fees=sum(float(result.economic["fees_bps_cumulative"]) for result in evaluations),
+        slippage=sum(float(result.economic["slippage_bps_cumulative"]) for result in evaluations),
+        buy_hold_total=buy_hold_total,
+    )
 
 def _collect_trade_returns(
     test: DataFrame, predictions: np.ndarray, config: WalkForwardConfig

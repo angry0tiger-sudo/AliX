@@ -50,14 +50,86 @@ def _read_only(path: Path) -> sqlite3.Connection:
         raise ReportingSourceError("source_database_unavailable") from None
 
 
+def _read_freqtrade_rows(connection: sqlite3.Connection) -> list[sqlite3.Row]:
+    tables = {
+        str(row[0])
+        for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+    if "trades" not in tables:
+        raise ReportingSourceError("freqtrade_trades_table_missing")
+    columns = {
+        str(row["name"])
+        for row in connection.execute("PRAGMA table_info(trades)").fetchall()
+    }
+    required = {"id", "pair", "is_open", "open_date", "close_date", "close_profit_abs"}
+    if not required.issubset(columns):
+        raise ReportingSourceError("freqtrade_trade_schema_mismatch")
+    return connection.execute(
+        "SELECT id, pair, is_open, open_date, close_date, close_profit_abs FROM trades"
+    ).fetchall()
+
+
+def _classify_trade_row(
+    row: sqlite3.Row, cutoff: datetime
+) -> tuple[str, str | None, float | None]:
+    opened = _timestamp(row["open_date"])
+    if opened is None or opened > cutoff:
+        return "ignored", None, None
+    if bool(row["is_open"]):
+        return "open", str(row["id"]), None
+    closed = _timestamp(row["close_date"])
+    if closed is None or closed > cutoff:
+        return "ignored", None, None
+    try:
+        profit = float(row["close_profit_abs"])
+    except (TypeError, ValueError):
+        return "closed_unknown_profit", str(row["id"]), None
+    if not (profit == profit and abs(profit) != float("inf")):
+        return "closed_unknown_profit", str(row["id"]), None
+    return "closed", str(row["id"]), profit
+
+
+def _summarize_trade_rows(
+    rows: list[sqlite3.Row], cutoff: datetime
+) -> dict[str, Any]:
+    closed_count = open_count = unknown_profit = 0
+    profit_total = 0.0
+    closed_ids: list[str] = []
+    for row in rows:
+        status, trade_id, profit = _classify_trade_row(row, cutoff)
+        if status == "ignored":
+            continue
+        if status == "open":
+            open_count += 1
+            continue
+        closed_count += 1
+        if trade_id is not None:
+            closed_ids.append(trade_id)
+        if profit is None:
+            unknown_profit += 1
+        else:
+            profit_total += profit
+    return {
+        "observed_trade_row_count": len(rows),
+        "closed_trade_count": closed_count,
+        "open_trade_count": open_count,
+        "freqtrade_reported_profit_abs_sum": profit_total if unknown_profit == 0 else None,
+        "profit_rows_unknown": unknown_profit,
+        "profit_field": "trades.close_profit_abs; reported, not account-reconciled",
+        "fee_totals_available": False,
+        "account_snapshot_available": False,
+        "closed_ids_hash": hashlib.sha256(",".join(closed_ids).encode()).hexdigest(),
+        "reconciliation_status": "NOT_RECONCILED",
+    }
+
+
 class FreqtradeSQLiteTradeSource:
     """Schema-reflected reader for Freqtrade 2026.7 SQLite trades; read-only."""
 
     source_type = "freqtrade_trade_db"
     SOURCE_REVISION = "freqtrade-2026.7-trades-contract"
-    REQUIRED_COLUMNS = frozenset(
-        {"id", "pair", "is_open", "open_date", "close_date", "close_profit_abs"}
-    )
 
     def __init__(self, database_path: str | Path) -> None:
         self._path = Path(database_path)
@@ -66,68 +138,14 @@ class FreqtradeSQLiteTradeSource:
         cutoff_utc = _utc(cutoff, "report_cutoff")
         connection = _read_only(self._path)
         try:
-            tables = {
-                str(row[0])
-                for row in connection.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table'"
-                ).fetchall()
-            }
-            if "trades" not in tables:
-                raise ReportingSourceError("freqtrade_trades_table_missing")
-            columns = {
-                str(row["name"])
-                for row in connection.execute("PRAGMA table_info(trades)").fetchall()
-            }
-            if not self.REQUIRED_COLUMNS.issubset(columns):
-                raise ReportingSourceError("freqtrade_trade_schema_mismatch")
-            rows = connection.execute(
-                "SELECT id, pair, is_open, open_date, close_date, close_profit_abs FROM trades"
-            ).fetchall()
+            rows = _read_freqtrade_rows(connection)
+        except ReportingSourceError:
+            raise
         except sqlite3.Error:
             raise ReportingSourceError("freqtrade_trade_read_failed") from None
         finally:
             connection.close()
-
-        closed_count = open_count = unknown_profit = 0
-        profit_total = 0.0
-        closed_ids: list[str] = []
-        for row in rows:
-            opened = _timestamp(row["open_date"])
-            if opened is None or opened > cutoff_utc:
-                continue
-            if bool(row["is_open"]):
-                open_count += 1
-                continue
-            closed = _timestamp(row["close_date"])
-            if closed is None or closed > cutoff_utc:
-                continue
-            closed_count += 1
-            closed_ids.append(str(row["id"]))
-            try:
-                profit = float(row["close_profit_abs"])
-            except (TypeError, ValueError):
-                unknown_profit += 1
-            else:
-                if not (profit == profit and abs(profit) != float("inf")):
-                    unknown_profit += 1
-                else:
-                    profit_total += profit
-        summary: dict[str, Any] = {
-            "observed_trade_row_count": len(rows),
-            "closed_trade_count": closed_count,
-            "open_trade_count": open_count,
-            "freqtrade_reported_profit_abs_sum": profit_total
-            if unknown_profit == 0
-            else None,
-            "profit_rows_unknown": unknown_profit,
-            "profit_field": "trades.close_profit_abs; reported, not account-reconciled",
-            "fee_totals_available": False,
-            "account_snapshot_available": False,
-            "closed_ids_hash": hashlib.sha256(
-                ",".join(closed_ids).encode()
-            ).hexdigest(),
-            "reconciliation_status": "NOT_RECONCILED",
-        }
+        summary = _summarize_trade_rows(rows, cutoff_utc)
         return SourceSnapshot(
             source_id="freqtrade-sqlite-readonly",
             source_type=self.source_type,
@@ -139,6 +157,67 @@ class FreqtradeSQLiteTradeSource:
             reconciled=False,
             summary=summary,
         )
+
+
+def _read_simulation_rows(connection: sqlite3.Connection) -> list[sqlite3.Row]:
+    tables = {
+        str(row[0])
+        for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+    if "simulation_decision_ledger" not in tables:
+        raise ReportingSourceError("simulation_ledger_table_missing")
+    return connection.execute(
+        "SELECT decided_at, payload_json FROM simulation_decision_ledger"
+    ).fetchall()
+
+
+def _ledger_payload_at_cutoff(
+    row: sqlite3.Row, cutoff: datetime
+) -> dict[str, Any] | None:
+    decided = _timestamp(row["decided_at"])
+    if decided is None or decided > cutoff:
+        return None
+    try:
+        payload = json.loads(str(row["payload_json"]))
+    except json.JSONDecodeError:
+        raise ReportingSourceError("simulation_ledger_payload_invalid") from None
+    if not isinstance(payload, dict) or payload.get("source_status") != "SYNTHETIC_ONLY":
+        raise ReportingSourceError("simulation_ledger_provenance_mismatch")
+    return payload
+
+
+def _simulated_pnl(payload: dict[str, Any]) -> tuple[bool, float]:
+    if payload.get("simulation_status") != "SIMULATED":
+        return False, 0.0
+    try:
+        return True, float(payload.get("simulated_net_pnl", "0"))
+    except (TypeError, ValueError):
+        raise ReportingSourceError("simulation_ledger_amount_invalid") from None
+
+
+def _summarize_simulation_rows(
+    rows: list[sqlite3.Row], cutoff: datetime
+) -> dict[str, Any]:
+    count = simulated = 0
+    pnl = 0.0
+    for row in rows:
+        payload = _ledger_payload_at_cutoff(row, cutoff)
+        if payload is None:
+            continue
+        count += 1
+        is_simulated, net_pnl = _simulated_pnl(payload)
+        if is_simulated:
+            simulated += 1
+            pnl += net_pnl
+    return {
+        "decision_count": count,
+        "simulated_count": simulated,
+        "synthetic_net_pnl": pnl,
+        "financial_truth": False,
+        "reconciliation_status": "NOT_RECONCILED",
+    }
 
 
 class SQLiteSimulationLedgerSource:
@@ -154,47 +233,13 @@ class SQLiteSimulationLedgerSource:
         cutoff_utc = _utc(cutoff, "report_cutoff")
         connection = _read_only(self._path)
         try:
-            tables = {
-                str(row[0])
-                for row in connection.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table'"
-                ).fetchall()
-            }
-            if "simulation_decision_ledger" not in tables:
-                raise ReportingSourceError("simulation_ledger_table_missing")
-            rows = connection.execute(
-                "SELECT decided_at, payload_json FROM simulation_decision_ledger"
-            ).fetchall()
+            rows = _read_simulation_rows(connection)
+        except ReportingSourceError:
+            raise
         except sqlite3.Error:
             raise ReportingSourceError("simulation_ledger_read_failed") from None
         finally:
             connection.close()
-        count = simulated = 0
-        pnl = 0.0
-        for row in rows:
-            decided = _timestamp(row["decided_at"])
-            if decided is None or decided > cutoff_utc:
-                continue
-            try:
-                payload = json.loads(str(row["payload_json"]))
-            except json.JSONDecodeError:
-                raise ReportingSourceError(
-                    "simulation_ledger_payload_invalid"
-                ) from None
-            if (
-                not isinstance(payload, dict)
-                or payload.get("source_status") != "SYNTHETIC_ONLY"
-            ):
-                raise ReportingSourceError("simulation_ledger_provenance_mismatch")
-            count += 1
-            if payload.get("simulation_status") == "SIMULATED":
-                simulated += 1
-                try:
-                    pnl += float(payload.get("simulated_net_pnl", "0"))
-                except (TypeError, ValueError):
-                    raise ReportingSourceError(
-                        "simulation_ledger_amount_invalid"
-                    ) from None
         return SourceSnapshot(
             source_id="phase9-simulation-ledger-readonly",
             source_type=self.source_type,
@@ -204,11 +249,5 @@ class SQLiteSimulationLedgerSource:
             source_revision=self.SOURCE_REVISION,
             authoritative=False,
             reconciled=False,
-            summary={
-                "decision_count": count,
-                "simulated_count": simulated,
-                "synthetic_net_pnl": pnl,
-                "financial_truth": False,
-                "reconciliation_status": "NOT_RECONCILED",
-            },
+            summary=_summarize_simulation_rows(rows, cutoff_utc),
         )
