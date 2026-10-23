@@ -19,6 +19,7 @@ import tempfile
 from typing import Any, Mapping
 
 import numpy as np
+from numpy.typing import NDArray
 import pandas as pd
 from pandas import DataFrame
 
@@ -144,11 +145,11 @@ def _validate_hourly_timestamps(candles: DataFrame) -> None:
 
 
 def _validate_ohlc_invariants(
-    opened: np.ndarray,
-    high: np.ndarray,
-    low: np.ndarray,
-    close: np.ndarray,
-    volume: np.ndarray,
+    opened: NDArray[np.float64],
+    high: NDArray[np.float64],
+    low: NDArray[np.float64],
+    close: NDArray[np.float64],
+    volume: NDArray[np.float64],
 ) -> None:
     if np.any(np.minimum.reduce([opened, high, low, close]) <= 0):
         raise ValueError("shadow_validation_prices_not_positive")
