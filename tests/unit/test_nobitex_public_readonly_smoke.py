@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from decimal import Decimal
 
 import pytest
 
@@ -54,7 +55,7 @@ def test_public_smoke_reports_read_only_market_facts_and_no_execution_permission
     limits = report["limits"]
     assert limits["account_fee_schedule"] == "NOT_VERIFIED_WITHOUT_ACCOUNT_READ_AUTH"
     assert limits["individual_order_status"] == "NOT_QUERIED_WITHOUT_READ_TOKEN"
-    assert report["public_orderbook"]["observed_spread_bps"] == "20"
+    assert Decimal(report["public_orderbook"]["observed_spread_bps"]) == Decimal("20")
 
 
 @pytest.mark.parametrize(
