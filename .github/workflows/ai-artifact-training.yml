@@ -1,0 +1,99 @@
+name: AliX Manual Public AI Artifact Training
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_public_read_only:
+        description: Confirm this run may fetch public OHLCV data only, without credentials or orders
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: alix-ai-artifact-training
+  cancel-in-progress: false
+
+jobs:
+  train-public-artifacts:
+    if: inputs.confirm_public_read_only == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      ALIx_ENV: paper
+      ALIx_DRY_RUN: "true"
+      ALIx_ALLOW_LIVE_TRADING: "false"
+      ALIx_REPORTING_ENABLED: "false"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    steps:
+      - name: Checkout selected candidate ref
+        uses: actions/checkout@v4
+        with:
+          ref: \${{ github.ref }}
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install the pinned research runtime subset
+        run: |
+          python -m pip install pip==25.2
+          python -m pip install numpy==2.5.4 pandas==2.3.3 scipy==1.18.1 scikit-learn==1.9.0
+
+      - name: Retrieve the reviewed, immutable OHLCV fetcher
+        run: |
+          curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+            https://raw.githubusercontent.com/angry0tiger-sudo/AliX/cb3ec1bc61355bdc84d1ff671a0c510ccf8a0260/scripts/fetch_nobitex_public_ohlcv.py \
+            --output "$RUNNER_TEMP/fetch_nobitex_public_ohlcv.py"
+
+      - name: Fetch 365 days of public BTCUSDT candles
+        run: |
+          python "$RUNNER_TEMP/fetch_nobitex_public_ohlcv.py" \
+            --days 365 \
+            --output-dir "$RUNNER_TEMP/nobitex-market-data" \
+            --commit-sha "$GITHUB_SHA"
+
+      - name: Train and validate HMM and Meta-Label artifacts
+        run: |
+          python scripts/train_ai_artifacts.py \
+            --dataset "$RUNNER_TEMP/nobitex-market-data/nobitex-btcusdt-1h.csv" \
+            --manifest "$RUNNER_TEMP/nobitex-market-data/nobitex-btcusdt-1h.manifest.json" \
+            --output-dir "$RUNNER_TEMP/alix-ai-artifacts" \
+            --commit-sha "$GITHUB_SHA"
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["RUNNER_TEMP"]) / "alix-ai-artifacts"
+          report = json.loads((root / "ai-training-report.json").read_text(encoding="utf-8"))
+          assert report["dataset_rows"] == 8760
+          assert report["hmm"]["validation"]["passed"] is True
+          assert report["hmm"]["owner_approved"] is False
+          assert report["economic_acceptance"] == "NO-GO"
+          assert report["order_permission"] is False
+          assert report["trading_authorization"] == "NO-GO"
+          print(json.dumps({
+              "dataset_sha256": report["dataset_sha256"],
+              "hmm_model_sha256": report["hmm"]["model_sha256"],
+              "meta_model_sha256": report["meta_model"]["model_sha256"],
+              "meta_validation": report["meta_model"]["validation"]["status"],
+              "economic_acceptance": report["economic_acceptance"],
+              "trading_authorization": report["trading_authorization"],
+          }, sort_keys=True))
+          PY
+
+      - name: Upload dataset manifest, trained weights and validation report
+        uses: actions/upload-artifact@v4
+        with:
+          name: alix-public-ai-artifacts-\${{ github.run_id }}
+          path: |
+            \${{ runner.temp }}/nobitex-market-data/
+            \${{ runner.temp }}/alix-ai-artifacts/
+          if-no-files-found: error
+          retention-days: 30
