@@ -183,8 +183,8 @@ def _fetch_candle_pages(
         stop = min(cursor + (MAX_CANDLES_PER_REQUEST - 3) * INTERVAL_SECONDS, end)
         # Pad query bounds by one interval to tolerate providers that interpret
         # UDF range endpoints as exclusive, but retain only the exact target window.
-        request_from = max(start, cursor - INTERVAL_SECONDS)
-        request_to = min(end, stop + INTERVAL_SECONDS)
+        request_from = cursor - INTERVAL_SECONDS
+        request_to = stop + INTERVAL_SECONDS
         params = {
             "symbol": "BTCUSDT",
             "resolution": "60",
