@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 
 from scripts.fetch_nobitex_public_ohlcv import (
+    _validate_historical_rows,
     CandleRecord,
     INTERVAL_SECONDS,
     fetch_historical_candles,
@@ -95,6 +96,10 @@ def test_historical_fetch_is_bounded_rejects_gaps_and_uses_fake_transport() -> N
     assert rows[-1]["timestamp"] + INTERVAL_SECONDS <= int(now.timestamp())
     expected_end = int(datetime(2026, 10, 23, 2, 30, tzinfo=UTC).timestamp())
     assert rows[-1]["timestamp"] == expected_end
+    for incomplete_rows in (rows[:-1], rows[1:]):
+        with pytest.raises(ValueError, match="coverage_mismatch"):
+            _validate_historical_rows(incomplete_rows, 30)
+
     with pytest.raises(ValueError, match="historical_days"):
         fetch_historical_candles(
             days=10, now=now, request_json=getter, sleep_fn=lambda _: None
