@@ -114,14 +114,19 @@ def _validate_candles(
     if len(candles) != expected_rows or manifest.get("row_count") != expected_rows:
         raise ValueError("shadow_validation_candle_count_mismatch")
     candles["date"] = pd.to_datetime(candles["date"], utc=True, errors="raise")
-    if candles["date"].duplicated().any() or not candles["date"].is_monotonic_increasing:
+    if (
+        candles["date"].duplicated().any()
+        or not candles["date"].is_monotonic_increasing
+    ):
         raise ValueError("shadow_validation_timestamps_not_unique_increasing")
     deltas = candles["date"].diff().iloc[1:].dt.total_seconds().to_numpy(dtype=float)
     if not np.all(deltas == 3600.0):
         raise ValueError("shadow_validation_gap_or_timeframe_mismatch")
     for name in ("open", "high", "low", "close", "volume"):
         candles[name] = pd.to_numeric(candles[name], errors="coerce")
-    values = candles.loc[:, ["open", "high", "low", "close", "volume"]].to_numpy(dtype=float)
+    values = candles.loc[:, ["open", "high", "low", "close", "volume"]].to_numpy(
+        dtype=float
+    )
     if not np.isfinite(values).all():
         raise ValueError("shadow_validation_nonfinite_ohlcv")
     opened, high, low, close, volume = (values[:, i] for i in range(5))
@@ -137,13 +142,17 @@ def _validate_candles(
         {str(key): value for key, value in row.items()}
         for row in candles.to_dict(orient="records")
     ]
-    quality = validate_candles(rows, expected_interval_seconds=3600, gap_policy="reject")
+    quality = validate_candles(
+        rows, expected_interval_seconds=3600, gap_policy="reject"
+    )
     if not quality.passed or quality.fingerprint is None:
         raise ValueError("shadow_validation_data_quality_rejected")
     return candles, quality.fingerprint
 
 
-def _load_training_bundle(root: Path) -> tuple[DataFrame, dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
+def _load_training_bundle(
+    root: Path,
+) -> tuple[DataFrame, dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
     data_root = root / "nobitex-market-data"
     model_root = root / "alix-ai-artifacts"
     manifest = _read_object(data_root / "nobitex-btcusdt-1h.manifest.json")
@@ -193,7 +202,11 @@ def _load_training_bundle(root: Path) -> tuple[DataFrame, dict[str, Any], dict[s
     _require_closed_flags(hmm, "hmm_training_artifact")
     # The source artifact must load while unapproved; approval is applied only from the
     # separate, reviewed config below.
-    load_hmm_model_document((root / "alix-ai-artifacts" / "hmm-regime-model.json").read_text(encoding="utf-8"))
+    load_hmm_model_document(
+        (root / "alix-ai-artifacts" / "hmm-regime-model.json").read_text(
+            encoding="utf-8"
+        )
+    )
     meta = _read_object(model_root / "meta-label-model.json")
     meta_model = MetaLabelModel.from_dict(meta)
     meta_hash = _sha256_bytes(meta_model.to_json().encode("utf-8"))
@@ -232,8 +245,12 @@ def _prepare_technically_approved_models(
         model_hash=promoted_hash,
         dataset_hash=dataset_hash,
     )
-    hmm_text = json.dumps(promoted_hmm, sort_keys=True, indent=2, allow_nan=False) + "\n"
-    loaded_hmm = load_hmm_model_document(hmm_text, approval_document=json.dumps(hmm_approval))
+    hmm_text = (
+        json.dumps(promoted_hmm, sort_keys=True, indent=2, allow_nan=False) + "\n"
+    )
+    loaded_hmm = load_hmm_model_document(
+        hmm_text, approval_document=json.dumps(hmm_approval)
+    )
     meta_path = root / "alix-ai-artifacts" / "meta-label-model.json"
     meta = _read_object(meta_path)
     meta_model = MetaLabelModel.from_dict(meta)
@@ -295,7 +312,11 @@ def run_validation(
         raise ValueError("shadow_validation_inference_provenance_invalid")
     _require_closed_flags(inference_manifest, "inference_manifest")
     inference_rows = inference_manifest.get("row_count")
-    if isinstance(inference_rows, bool) or not isinstance(inference_rows, int) or inference_rows <= 0:
+    if (
+        isinstance(inference_rows, bool)
+        or not isinstance(inference_rows, int)
+        or inference_rows <= 0
+    ):
         raise ValueError("shadow_validation_inference_row_count_invalid")
     inference_candles, inference_fingerprint = _validate_candles(
         inference_csv,
@@ -314,9 +335,14 @@ def run_validation(
         raise ValueError("shadow_validation_latest_candle_not_after_model_training")
     promoted_dir = output_path.parent / "promoted-models"
     promotion, _ = _prepare_technically_approved_models(
-        training_artifact_root, promoted_dir, hmm, _read_object(
-            training_artifact_root / "alix-ai-artifacts" / "meta-label-model.manifest.json"
-        )
+        training_artifact_root,
+        promoted_dir,
+        hmm,
+        _read_object(
+            training_artifact_root
+            / "alix-ai-artifacts"
+            / "meta-label-model.manifest.json"
+        ),
     )
     runtime_model_dir = Path("user_data/models")
     runtime_model_dir.mkdir(parents=True, exist_ok=True)
@@ -368,7 +394,11 @@ def run_validation(
         )
         if probe.status != "REJECTED" or probe.order_permission is not False:
             raise ValueError("shadow_validation_denied_probe_was_not_rejected")
-        if probe.quantity != 0 or probe.net_pnl != 0 or probe.source_status != "SYNTHETIC_ONLY":
+        if (
+            probe.quantity != 0
+            or probe.net_pnl != 0
+            or probe.source_status != "SYNTHETIC_ONLY"
+        ):
             raise ValueError("shadow_validation_denied_probe_claimed_fill")
         probe_row_count = exchange.row_count()
     report = {
@@ -387,7 +417,9 @@ def run_validation(
         "latest_hmm_regime": latest.get("alix_regime"),
         "latest_hmm_valid": bool(latest.get("alix_hmm_valid", False)),
         "latest_meta_probability": meta_probability,
-        "latest_meta_model_approved": bool(latest.get("alix_meta_model_approved", False)),
+        "latest_meta_model_approved": bool(
+            latest.get("alix_meta_model_approved", False)
+        ),
         "strategy_registry_count": len(registry.get("strategies", [])),
         "candidate_entry_count": entry_count,
         "shadow_denial_probe_status": probe.status,
