@@ -48,20 +48,32 @@ def subtract_calendar_months(value: datetime, months: int) -> datetime:
     return value.replace(year=year, month=month, day=day)
 
 
+def _parse_integer_field(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, (str, int)):
+        raise ValueError("binance_kline_integer_field_type_invalid")
+    return int(value)
+
+
+def _parse_float_field(value: object) -> float:
+    if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+        raise ValueError("binance_kline_float_field_type_invalid")
+    return float(value)
+
+
 def _construct_kline(payload: list[object]) -> KlineRow:
     try:
         return KlineRow(
-            open_time_ms=int(payload[0]),
-            open=float(payload[1]),
-            high=float(payload[2]),
-            low=float(payload[3]),
-            close=float(payload[4]),
-            volume=float(payload[5]),
-            close_time_ms=int(payload[6]),
-            quote_volume=float(payload[7]),
-            trade_count=int(payload[8]),
-            taker_buy_base_volume=float(payload[9]),
-            taker_buy_quote_volume=float(payload[10]),
+            open_time_ms=_parse_integer_field(payload[0]),
+            open=_parse_float_field(payload[1]),
+            high=_parse_float_field(payload[2]),
+            low=_parse_float_field(payload[3]),
+            close=_parse_float_field(payload[4]),
+            volume=_parse_float_field(payload[5]),
+            close_time_ms=_parse_integer_field(payload[6]),
+            quote_volume=_parse_float_field(payload[7]),
+            trade_count=_parse_integer_field(payload[8]),
+            taker_buy_base_volume=_parse_float_field(payload[9]),
+            taker_buy_quote_volume=_parse_float_field(payload[10]),
         )
     except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError("binance_kline_numeric_field_invalid") from exc

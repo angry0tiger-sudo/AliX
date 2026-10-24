@@ -62,6 +62,25 @@ def test_invalid_binance_rows_are_rejected(payload: list[object]) -> None:
         parse_kline(payload)
 
 
+def test_invalid_numeric_field_types_are_rejected() -> None:
+    payload: list[object] = [
+        0,
+        "100",
+        "102",
+        "99",
+        "101",
+        "4",
+        59_999,
+        "450",
+        12,
+        "2",
+        "210",
+    ]
+    payload[0] = True
+    with pytest.raises(ValueError, match="numeric_field_invalid"):
+        parse_kline(payload)
+
+
 def test_gap_count_reports_missing_intervals_without_filling_them() -> None:
     rows = [
         KlineRow(0, 59_999, 100, 101, 99, 100, 1, 100, 2, 0.5, 50),
