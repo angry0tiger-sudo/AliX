@@ -77,13 +77,16 @@ class StrategySpec:
 
     def __post_init__(self) -> None:
         _validate_strategy_identity(self.strategy_id)
-        _validate_strategy_approval(self.lifecycle, self.owner_approved, self.allow_short)
+        _validate_strategy_approval(
+            self.lifecycle, self.owner_approved, self.allow_short
+        )
         _validate_strategy_regimes(self.timeframe, self.eligible_regimes)
         _validate_strategy_requirements(self.required_features, self.max_holding_bars)
         _validate_strategy_numeric_parameters(
-            self.minimum_relative_volume, self.atr_stop_multiple, self.atr_target_multiple
+            self.minimum_relative_volume,
+            self.atr_stop_multiple,
+            self.atr_target_multiple,
         )
-
 
 
 def _validate_strategy_identity(strategy_id: str) -> None:
@@ -91,19 +94,25 @@ def _validate_strategy_identity(strategy_id: str) -> None:
         raise ValueError("autonomous_strategy_id_unknown")
 
 
-def _validate_strategy_approval(lifecycle: str, owner_approved: bool, allow_short: bool) -> None:
+def _validate_strategy_approval(
+    lifecycle: str, owner_approved: bool, allow_short: bool
+) -> None:
     if lifecycle != "RESEARCH_ONLY" or owner_approved or allow_short:
         raise ValueError("autonomous_strategy_must_remain_research_only")
 
 
-def _validate_strategy_regimes(timeframe: str, eligible_regimes: tuple[str, ...]) -> None:
+def _validate_strategy_regimes(
+    timeframe: str, eligible_regimes: tuple[str, ...]
+) -> None:
     if timeframe != "1h" or not eligible_regimes:
         raise ValueError("autonomous_strategy_contract_invalid")
     if not set(eligible_regimes).issubset(REGIME_NAMES):
         raise ValueError("autonomous_strategy_regime_invalid")
 
 
-def _validate_strategy_requirements(required_features: tuple[str, ...], max_holding_bars: int) -> None:
+def _validate_strategy_requirements(
+    required_features: tuple[str, ...], max_holding_bars: int
+) -> None:
     if not required_features or max_holding_bars < 1:
         raise ValueError("autonomous_strategy_features_or_horizon_invalid")
 
@@ -150,14 +159,21 @@ class WalkForwardConfig:
     def __post_init__(self) -> None:
         _validate_walk_forward_counts(self.initial_train_rows, self.fold_count)
         _validate_walk_forward_finite_values(
-            self.minimum_confidence, self.fee_bps_per_side, self.slippage_bps_per_side,
-            self.risk_fraction, self.max_position_fraction, self.initial_equity,
+            self.minimum_confidence,
+            self.fee_bps_per_side,
+            self.slippage_bps_per_side,
+            self.risk_fraction,
+            self.max_position_fraction,
+            self.initial_equity,
         )
         _validate_walk_forward_bounds(
-            self.minimum_confidence, self.fee_bps_per_side, self.slippage_bps_per_side,
-            self.risk_fraction, self.max_position_fraction, self.initial_equity,
+            self.minimum_confidence,
+            self.fee_bps_per_side,
+            self.slippage_bps_per_side,
+            self.risk_fraction,
+            self.max_position_fraction,
+            self.initial_equity,
         )
-
 
 
 def _validate_walk_forward_counts(initial_train_rows: int, fold_count: int) -> None:
@@ -166,24 +182,44 @@ def _validate_walk_forward_counts(initial_train_rows: int, fold_count: int) -> N
 
 
 def _validate_walk_forward_finite_values(
-    minimum_confidence: float, fee_bps_per_side: float, slippage_bps_per_side: float,
-    risk_fraction: float, max_position_fraction: float, initial_equity: float,
+    minimum_confidence: float,
+    fee_bps_per_side: float,
+    slippage_bps_per_side: float,
+    risk_fraction: float,
+    max_position_fraction: float,
+    initial_equity: float,
 ) -> None:
-    values = (minimum_confidence, fee_bps_per_side, slippage_bps_per_side,
-              risk_fraction, max_position_fraction, initial_equity)
+    values = (
+        minimum_confidence,
+        fee_bps_per_side,
+        slippage_bps_per_side,
+        risk_fraction,
+        max_position_fraction,
+        initial_equity,
+    )
     if not all(math.isfinite(value) for value in values):
         raise ValueError("autonomous_walk_forward_config_non_finite")
 
 
 def _validate_walk_forward_bounds(
-    minimum_confidence: float, fee_bps_per_side: float, slippage_bps_per_side: float,
-    risk_fraction: float, max_position_fraction: float, initial_equity: float,
+    minimum_confidence: float,
+    fee_bps_per_side: float,
+    slippage_bps_per_side: float,
+    risk_fraction: float,
+    max_position_fraction: float,
+    initial_equity: float,
 ) -> None:
     invalid_costs = min(fee_bps_per_side, slippage_bps_per_side) < 0
     invalid_confidence = not 0.5 <= minimum_confidence <= 1
     invalid_risk = not 0 < risk_fraction <= 0.02
     invalid_exposure = not 0 < max_position_fraction <= 1
-    if invalid_confidence or invalid_costs or invalid_risk or invalid_exposure or initial_equity <= 0:
+    if (
+        invalid_confidence
+        or invalid_costs
+        or invalid_risk
+        or invalid_exposure
+        or initial_equity <= 0
+    ):
         raise ValueError("autonomous_walk_forward_config_out_of_range")
 
 
@@ -252,10 +288,13 @@ def _registry_integer(value: object, reason: str) -> int:
     return value
 
 
-
-def _registry_string_list(entry: Mapping[str, object], key: str, reason: str) -> tuple[str, ...]:
+def _registry_string_list(
+    entry: Mapping[str, object], key: str, reason: str
+) -> tuple[str, ...]:
     value = entry[key]
-    if not isinstance(value, list) or not all(isinstance(item, str) and item for item in value):
+    if not isinstance(value, list) or not all(
+        isinstance(item, str) and item for item in value
+    ):
         raise ValueError(reason)
     return tuple(str(item) for item in value)
 
@@ -277,21 +316,34 @@ def _parse_registry_entry(raw: object) -> StrategySpec:
     entry = _require_mapping(raw, "autonomous_registry_entry_invalid")
     if set(entry) != _REGISTRY_ENTRY_KEYS:
         raise ValueError("autonomous_registry_entry_schema_invalid")
-    regimes = _registry_string_list(entry, "eligible_regimes", "autonomous_registry_lists_invalid")
-    required = _registry_string_list(entry, "required_features", "autonomous_registry_lists_invalid")
-    owner_approved, allow_short, requires_positive_volume = _validated_registry_flags(entry)
+    regimes = _registry_string_list(
+        entry, "eligible_regimes", "autonomous_registry_lists_invalid"
+    )
+    required = _registry_string_list(
+        entry, "required_features", "autonomous_registry_lists_invalid"
+    )
+    owner_approved, allow_short, requires_positive_volume = _validated_registry_flags(
+        entry
+    )
     return StrategySpec(
-        strategy_id=_registry_text(entry["strategy_id"], "autonomous_registry_id_invalid"),
+        strategy_id=_registry_text(
+            entry["strategy_id"], "autonomous_registry_id_invalid"
+        ),
         version=_registry_text(entry["version"], "autonomous_registry_version_invalid"),
-        lifecycle=_registry_text(entry["lifecycle"], "autonomous_registry_lifecycle_invalid"),
+        lifecycle=_registry_text(
+            entry["lifecycle"], "autonomous_registry_lifecycle_invalid"
+        ),
         owner_approved=owner_approved,
         allow_short=allow_short,
-        timeframe=_registry_text(entry["timeframe"], "autonomous_registry_timeframe_invalid"),
+        timeframe=_registry_text(
+            entry["timeframe"], "autonomous_registry_timeframe_invalid"
+        ),
         eligible_regimes=regimes,
         required_features=required,
         requires_positive_volume=requires_positive_volume,
         minimum_relative_volume=_registry_float(
-            entry["minimum_relative_volume"], "autonomous_registry_relative_volume_invalid"
+            entry["minimum_relative_volume"],
+            "autonomous_registry_relative_volume_invalid",
         ),
         max_holding_bars=_registry_integer(
             entry["max_holding_bars"], "autonomous_registry_holding_horizon_invalid"
@@ -303,6 +355,7 @@ def _parse_registry_entry(raw: object) -> StrategySpec:
             entry["atr_target_multiple"], "autonomous_registry_target_multiple_invalid"
         ),
     )
+
 
 def _parse_registry_document(
     document: str, expected_code_sha256: str
@@ -364,7 +417,6 @@ def _finite_number(row: Mapping[str, object], name: str) -> float | None:
     return result if math.isfinite(result) else None
 
 
-
 def _validate_hourly_timestamps(date_values: Series) -> Series:
     dates = pd.to_datetime(date_values, errors="raise")
     if dates.dt.tz is None:
@@ -407,6 +459,7 @@ def _validate_hourly_candles(candles: DataFrame) -> DataFrame:
     _validate_hourly_numeric_values(result)
     _validate_hourly_ohlc_invariants(result)
     return result.reset_index(drop=True)
+
 
 def _relative_strength_index(close: Series, period: int = 14) -> Series:
     delta = close.diff()
@@ -461,7 +514,6 @@ def compute_autonomous_features(candles: DataFrame) -> DataFrame:
     return output
 
 
-
 def _finite_feature_values(
     row: Mapping[str, object], names: tuple[str, ...]
 ) -> dict[str, float] | None:
@@ -475,15 +527,24 @@ def _finite_feature_values(
 
 
 def _trend_following_entry(row: Mapping[str, object], close: float) -> bool:
-    values = _finite_feature_values(row, ("ema_fast", "ema_slow", "macd", "macd_signal"))
+    values = _finite_feature_values(
+        row, ("ema_fast", "ema_slow", "macd", "macd_signal")
+    )
     if values is None:
         return False
-    return close > values["ema_fast"] > values["ema_slow"] and values["macd"] > values["macd_signal"]
+    return (
+        close > values["ema_fast"] > values["ema_slow"]
+        and values["macd"] > values["macd_signal"]
+    )
 
 
 def _mean_reversion_entry(row: Mapping[str, object], close: float) -> bool:
     values = _finite_feature_values(row, ("rsi_14", "bollinger_lower"))
-    return values is not None and values["rsi_14"] <= 30.0 and close <= values["bollinger_lower"]
+    return (
+        values is not None
+        and values["rsi_14"] <= 30.0
+        and close <= values["bollinger_lower"]
+    )
 
 
 def _volatility_breakout_entry(row: Mapping[str, object], close: float) -> bool:
@@ -492,12 +553,17 @@ def _volatility_breakout_entry(row: Mapping[str, object], close: float) -> bool:
 
 
 def _scalping_entry(
-    row: Mapping[str, object], close: float, *, source_volume_available: bool,
+    row: Mapping[str, object],
+    close: float,
+    *,
+    source_volume_available: bool,
     minimum_relative_volume: float,
 ) -> bool:
     if not source_volume_available:
         return False
-    values = _finite_feature_values(row, ("volume", "relative_volume", "ema_fast", "momentum_3h"))
+    values = _finite_feature_values(
+        row, ("volume", "relative_volume", "ema_fast", "momentum_3h")
+    )
     if values is None:
         return False
     return (
@@ -528,13 +594,15 @@ def generate_entry_signal(
     if strategy_id == "volatility_breakout":
         return _volatility_breakout_entry(row, close)
     return _scalping_entry(
-        row, close, source_volume_available=source_volume_available,
+        row,
+        close,
+        source_volume_available=source_volume_available,
         minimum_relative_volume=minimum_relative_volume,
     )
 
+
 def _registry_by_id(registry: StrategyRegistry) -> dict[str, StrategySpec]:
     return {spec.strategy_id: spec for spec in registry.strategies}
-
 
 
 def _selection_input_failure(
@@ -550,16 +618,24 @@ def _selection_input_failure(
 
 
 def _scalping_is_eligible(
-    row: Mapping[str, object], source_volume_available: bool, minimum_relative_volume: float
+    row: Mapping[str, object],
+    source_volume_available: bool,
+    minimum_relative_volume: float,
 ) -> bool:
     if not source_volume_available:
         return False
     values = _finite_feature_values(row, ("volume", "relative_volume"))
-    return values is not None and values["volume"] > 0 and values["relative_volume"] >= minimum_relative_volume
+    return (
+        values is not None
+        and values["volume"] > 0
+        and values["relative_volume"] >= minimum_relative_volume
+    )
 
 
 def _candidate_for_regime(
-    regime: str, row: Mapping[str, object], specs: dict[str, StrategySpec],
+    regime: str,
+    row: Mapping[str, object],
+    specs: dict[str, StrategySpec],
     source_volume_available: bool,
 ) -> str | None:
     if regime == "trend":
@@ -569,13 +645,19 @@ def _candidate_for_regime(
     if regime != "range":
         return None
     spec = specs["scalping"]
-    return "scalping" if _scalping_is_eligible(
-        row, source_volume_available, spec.minimum_relative_volume
-    ) else "mean_reversion"
+    return (
+        "scalping"
+        if _scalping_is_eligible(
+            row, source_volume_available, spec.minimum_relative_volume
+        )
+        else "mean_reversion"
+    )
 
 
 def _candidate_eligibility_failure(
-    regime: str, candidate_id: str, specs: dict[str, StrategySpec],
+    regime: str,
+    candidate_id: str,
+    specs: dict[str, StrategySpec],
     source_volume_available: bool,
 ) -> str | None:
     if regime not in specs[candidate_id].eligible_regimes:
@@ -600,15 +682,30 @@ def choose_strategy(
         return StrategySelection(regime, confidence, None, "NO_TRADE", failure)
     specs = _registry_by_id(registry)
     if set(specs) != set(STRATEGY_IDS):
-        return StrategySelection(regime, confidence, None, "NO_TRADE", "registry_candidate_set_invalid")
+        return StrategySelection(
+            regime, confidence, None, "NO_TRADE", "registry_candidate_set_invalid"
+        )
     selected_regime = str(regime)
-    candidate = _candidate_for_regime(selected_regime, row, specs, source_volume_available)
+    candidate = _candidate_for_regime(
+        selected_regime, row, specs, source_volume_available
+    )
     if candidate is None:
-        return StrategySelection(regime, confidence, None, "NO_TRADE", "regime_has_no_valid_candidate")
-    failure = _candidate_eligibility_failure(selected_regime, candidate, specs, source_volume_available)
+        return StrategySelection(
+            regime, confidence, None, "NO_TRADE", "regime_has_no_valid_candidate"
+        )
+    failure = _candidate_eligibility_failure(
+        selected_regime, candidate, specs, source_volume_available
+    )
     if failure is not None:
         return StrategySelection(regime, confidence, None, "NO_TRADE", failure)
-    return StrategySelection(regime, confidence, candidate, "SELECTED_RESEARCH_ONLY", "hmm_regime_candidate_selected")
+    return StrategySelection(
+        regime,
+        confidence,
+        candidate,
+        "SELECTED_RESEARCH_ONLY",
+        "hmm_regime_candidate_selected",
+    )
+
 
 def make_research_decision(
     regime: str | None,
@@ -653,15 +750,19 @@ def make_research_decision(
     )
 
 
-
 def _risk_inputs_valid(
-    entry_price: float, atr: float, confidence: float, equity: float,
+    entry_price: float,
+    atr: float,
+    confidence: float,
+    equity: float,
     minimum_confidence: float,
 ) -> bool:
     values = (entry_price, atr, confidence, equity)
     return (
         all(math.isfinite(value) for value in values)
-        and entry_price > 0 and atr > 0 and equity > 0
+        and entry_price > 0
+        and atr > 0
+        and equity > 0
         and minimum_confidence <= confidence <= 1
     )
 
@@ -685,8 +786,11 @@ def _atr_stop_target_distances(
 
 
 def _risk_sized_quantity(
-    entry_price: float, stop_distance: float, confidence: float,
-    equity: float, config: WalkForwardConfig,
+    entry_price: float,
+    stop_distance: float,
+    confidence: float,
+    equity: float,
+    config: WalkForwardConfig,
 ) -> tuple[float, float] | None:
     risk_budget = equity * config.risk_fraction * confidence
     quantity_by_risk = risk_budget / stop_distance
@@ -708,21 +812,32 @@ def plan_dynamic_risk(
     config: WalkForwardConfig,
 ) -> DynamicRiskPlan | None:
     """Size a simulated long position by ATR distance, equity budget and HMM score."""
-    if not _risk_inputs_valid(entry_price, atr, confidence, equity, config.minimum_confidence):
+    if not _risk_inputs_valid(
+        entry_price, atr, confidence, equity, config.minimum_confidence
+    ):
         return None
     stop_distance, target_distance = _atr_stop_target_distances(atr, regime, spec)
     if min(stop_distance, target_distance) <= 0:
         return None
-    sizing = _risk_sized_quantity(entry_price, stop_distance, confidence, equity, config)
+    sizing = _risk_sized_quantity(
+        entry_price, stop_distance, confidence, equity, config
+    )
     if sizing is None:
         return None
     risk_budget, quantity = sizing
     return DynamicRiskPlan(
-        entry_price=entry_price, atr=atr,
-        stop_loss=entry_price - stop_distance, take_profit=entry_price + target_distance,
-        quantity=quantity, notional=quantity * entry_price, risk_budget=risk_budget,
-        stop_distance=stop_distance, target_distance=target_distance, confidence=confidence,
+        entry_price=entry_price,
+        atr=atr,
+        stop_loss=entry_price - stop_distance,
+        take_profit=entry_price + target_distance,
+        quantity=quantity,
+        notional=quantity * entry_price,
+        risk_budget=risk_budget,
+        stop_distance=stop_distance,
+        target_distance=target_distance,
+        confidence=confidence,
     )
+
 
 def make_walk_forward_folds(
     row_count: int, config: WalkForwardConfig
@@ -817,7 +932,6 @@ def _net_trade_result(
     return gross_pnl - costs, costs
 
 
-
 @dataclass(slots=True)
 class _PolicyState:
     equity: float
@@ -830,35 +944,60 @@ class _PolicyState:
 
 
 def _resolve_policy_selection(
-    policy_id: str | None, regime: str, confidence: float,
-    row: Mapping[str, object], registry: StrategyRegistry,
-    source_volume_available: bool, config: WalkForwardConfig,
+    policy_id: str | None,
+    regime: str,
+    confidence: float,
+    row: Mapping[str, object],
+    registry: StrategyRegistry,
+    source_volume_available: bool,
+    config: WalkForwardConfig,
 ) -> StrategySelection:
     if policy_id is None:
         return choose_strategy(
-            regime, confidence, row, registry,
+            regime,
+            confidence,
+            row,
+            registry,
             source_volume_available=source_volume_available,
             minimum_confidence=config.minimum_confidence,
         )
     return StrategySelection(
-        regime, confidence, policy_id, "FIXED_RESEARCH_BASELINE",
+        regime,
+        confidence,
+        policy_id,
+        "FIXED_RESEARCH_BASELINE",
         "predeclared_fixed_strategy_baseline",
     )
 
 
 def _append_policy_decision(
-    state: _PolicyState, policy_id: str | None, *, fold_index: int, timestamp: str,
-    regime: str | None, confidence: float | None, strategy_id: str | None,
-    status: str, reason: str, entry_signal: bool,
+    state: _PolicyState,
+    policy_id: str | None,
+    *,
+    fold_index: int,
+    timestamp: str,
+    regime: str | None,
+    confidence: float | None,
+    strategy_id: str | None,
+    status: str,
+    reason: str,
+    entry_signal: bool,
 ) -> None:
     if policy_id is not None:
         return
-    state.decisions.append({
-        "fold": fold_index, "timestamp": timestamp, "regime": regime,
-        "hmm_confidence": confidence, "strategy_id": strategy_id,
-        "status": status, "reason": reason, "entry_signal": entry_signal,
-        "order_permission": False,
-    })
+    state.decisions.append(
+        {
+            "fold": fold_index,
+            "timestamp": timestamp,
+            "regime": regime,
+            "hmm_confidence": confidence,
+            "strategy_id": strategy_id,
+            "status": status,
+            "reason": reason,
+            "entry_signal": entry_signal,
+            "order_permission": False,
+        }
+    )
 
 
 def _record_selected_strategy(state: _PolicyState, strategy_id: str) -> None:
@@ -869,9 +1008,19 @@ def _record_selected_strategy(state: _PolicyState, strategy_id: str) -> None:
 
 
 def _execute_simulated_trade(
-    policy_id: str | None, fold_index: int, cursor: int, test_stop: int, timestamp: str,
-    regime: str, confidence: float, strategy_id: str, row: Mapping[str, object],
-    candles: DataFrame, spec: StrategySpec, config: WalkForwardConfig, state: _PolicyState,
+    policy_id: str | None,
+    fold_index: int,
+    cursor: int,
+    test_stop: int,
+    timestamp: str,
+    regime: str,
+    confidence: float,
+    strategy_id: str,
+    row: Mapping[str, object],
+    candles: DataFrame,
+    spec: StrategySpec,
+    config: WalkForwardConfig,
+    state: _PolicyState,
 ) -> int | None:
     atr = _finite_number(row, "atr_14")
     if atr is None:
@@ -879,54 +1028,90 @@ def _execute_simulated_trade(
     entry_index = cursor + 1
     entry_price = float(candles["open"].iloc[entry_index])
     plan = plan_dynamic_risk(
-        entry_price=entry_price, atr=atr, regime=regime, confidence=confidence,
-        equity=state.equity, spec=spec, config=config,
+        entry_price=entry_price,
+        atr=atr,
+        regime=regime,
+        confidence=confidence,
+        equity=state.equity,
+        spec=spec,
+        config=config,
     )
     if plan is None:
         return None
     exit_index, exit_price, exit_reason = _exit_fill(
-        candles, entry_index=entry_index, test_stop=test_stop,
-        plan=plan, max_holding_bars=spec.max_holding_bars,
+        candles,
+        entry_index=entry_index,
+        test_stop=test_stop,
+        plan=plan,
+        max_holding_bars=spec.max_holding_bars,
     )
     net_pnl, costs = _net_trade_result(entry_price, exit_price, plan.quantity, config)
     equity_before = state.equity
     state.equity = max(0.0, state.equity + net_pnl)
-    state.trades.append({
-        "policy": "autonomous_meta" if policy_id is None else policy_id,
-        "fold": fold_index, "strategy_id": strategy_id, "regime": regime,
-        "hmm_confidence": confidence, "signal_time": timestamp,
-        "entry_time": str(candles["date"].iloc[entry_index]),
-        "exit_time": str(candles["date"].iloc[exit_index]),
-        "entry_index": entry_index, "exit_index": exit_index,
-        "entry_price": entry_price, "exit_price": exit_price, "atr_at_signal": atr,
-        "stop_loss": plan.stop_loss, "take_profit": plan.take_profit,
-        "quantity": plan.quantity, "notional_quote": plan.notional,
-        "risk_budget_quote": plan.risk_budget,
-        "gross_pnl_quote": plan.quantity * (exit_price - entry_price),
-        "estimated_cost_quote": costs, "net_pnl_quote": net_pnl,
-        "net_return_bps": net_pnl / plan.notional * 10_000.0,
-        "won_net_of_costs": net_pnl > 0, "exit_reason": exit_reason,
-        "equity_before_quote": equity_before, "equity_after_quote": state.equity,
-        "order_permission": False, "real_order_attempted": False,
-    })
+    state.trades.append(
+        {
+            "policy": "autonomous_meta" if policy_id is None else policy_id,
+            "fold": fold_index,
+            "strategy_id": strategy_id,
+            "regime": regime,
+            "hmm_confidence": confidence,
+            "signal_time": timestamp,
+            "entry_time": str(candles["date"].iloc[entry_index]),
+            "exit_time": str(candles["date"].iloc[exit_index]),
+            "entry_index": entry_index,
+            "exit_index": exit_index,
+            "entry_price": entry_price,
+            "exit_price": exit_price,
+            "atr_at_signal": atr,
+            "stop_loss": plan.stop_loss,
+            "take_profit": plan.take_profit,
+            "quantity": plan.quantity,
+            "notional_quote": plan.notional,
+            "risk_budget_quote": plan.risk_budget,
+            "gross_pnl_quote": plan.quantity * (exit_price - entry_price),
+            "estimated_cost_quote": costs,
+            "net_pnl_quote": net_pnl,
+            "net_return_bps": net_pnl / plan.notional * 10_000.0,
+            "won_net_of_costs": net_pnl > 0,
+            "exit_reason": exit_reason,
+            "equity_before_quote": equity_before,
+            "equity_after_quote": state.equity,
+            "order_permission": False,
+            "real_order_attempted": False,
+        }
+    )
     state.equity_curve.append(state.equity)
     return exit_index
 
 
 def _process_policy_bar(
-    policy_id: str | None, fold_index: int, cursor: int, test_stop: int,
-    candles: DataFrame, features: DataFrame,
-    regime_predictions: dict[int, tuple[str, float]], registry: StrategyRegistry,
-    specs: dict[str, StrategySpec], source_volume_available: bool,
-    config: WalkForwardConfig, state: _PolicyState,
+    policy_id: str | None,
+    fold_index: int,
+    cursor: int,
+    test_stop: int,
+    candles: DataFrame,
+    features: DataFrame,
+    regime_predictions: dict[int, tuple[str, float]],
+    registry: StrategyRegistry,
+    specs: dict[str, StrategySpec],
+    source_volume_available: bool,
+    config: WalkForwardConfig,
+    state: _PolicyState,
 ) -> int:
     timestamp = str(candles["date"].iloc[cursor])
     regime_info = regime_predictions.get(cursor)
     if regime_info is None:
         _append_policy_decision(
-            state, policy_id, fold_index=fold_index, timestamp=timestamp,
-            regime=None, confidence=None, strategy_id=None, status="NO_TRADE",
-            reason="hmm_regime_unavailable", entry_signal=False,
+            state,
+            policy_id,
+            fold_index=fold_index,
+            timestamp=timestamp,
+            regime=None,
+            confidence=None,
+            strategy_id=None,
+            status="NO_TRADE",
+            reason="hmm_regime_unavailable",
+            entry_signal=False,
         )
         return cursor + 1
     regime, confidence = regime_info
@@ -939,52 +1124,95 @@ def _process_policy_bar(
     strategy_id = selection.strategy_id
     if strategy_id is None:
         _append_policy_decision(
-            state, policy_id, fold_index=fold_index, timestamp=timestamp,
-            regime=regime, confidence=confidence, strategy_id=None,
-            status=selection.status, reason=selection.reason, entry_signal=False,
+            state,
+            policy_id,
+            fold_index=fold_index,
+            timestamp=timestamp,
+            regime=regime,
+            confidence=confidence,
+            strategy_id=None,
+            status=selection.status,
+            reason=selection.reason,
+            entry_signal=False,
         )
         return cursor + 1
     if confidence < config.minimum_confidence:
         _append_policy_decision(
-            state, policy_id, fold_index=fold_index, timestamp=timestamp,
-            regime=regime, confidence=confidence, strategy_id=strategy_id,
-            status="NO_TRADE", reason="hmm_confidence_below_threshold",
+            state,
+            policy_id,
+            fold_index=fold_index,
+            timestamp=timestamp,
+            regime=regime,
+            confidence=confidence,
+            strategy_id=strategy_id,
+            status="NO_TRADE",
+            reason="hmm_confidence_below_threshold",
             entry_signal=False,
         )
         return cursor + 1
     spec = specs[strategy_id]
     _record_selected_strategy(state, strategy_id)
     has_signal = generate_entry_signal(
-        strategy_id, row, source_volume_available=source_volume_available,
+        strategy_id,
+        row,
+        source_volume_available=source_volume_available,
         minimum_relative_volume=spec.minimum_relative_volume,
     )
     _append_policy_decision(
-        state, policy_id, fold_index=fold_index, timestamp=timestamp,
-        regime=regime, confidence=confidence, strategy_id=strategy_id,
+        state,
+        policy_id,
+        fold_index=fold_index,
+        timestamp=timestamp,
+        regime=regime,
+        confidence=confidence,
+        strategy_id=strategy_id,
         status="ENTRY_SIGNAL" if has_signal else "NO_SIGNAL",
-        reason=("hmm_selected_strategy_entry_signal" if has_signal
-                else "selected_strategy_entry_conditions_not_met"),
+        reason=(
+            "hmm_selected_strategy_entry_signal"
+            if has_signal
+            else "selected_strategy_entry_conditions_not_met"
+        ),
         entry_signal=has_signal,
     )
     if not has_signal:
         return cursor + 1
     exit_index = _execute_simulated_trade(
-        policy_id, fold_index, cursor, test_stop, timestamp, regime, confidence,
-        strategy_id, row, candles, spec, config, state,
+        policy_id,
+        fold_index,
+        cursor,
+        test_stop,
+        timestamp,
+        regime,
+        confidence,
+        strategy_id,
+        row,
+        candles,
+        spec,
+        config,
+        state,
     )
     return cursor + 1 if exit_index is None else exit_index
 
 
 def _run_policy(
-    policy_id: str | None, candles: DataFrame, features: DataFrame,
+    policy_id: str | None,
+    candles: DataFrame,
+    features: DataFrame,
     folds: tuple[tuple[int, int, int], ...],
-    regime_predictions: dict[int, tuple[str, float]], registry: StrategyRegistry, *,
-    source_volume_available: bool, config: WalkForwardConfig,
+    regime_predictions: dict[int, tuple[str, float]],
+    registry: StrategyRegistry,
+    *,
+    source_volume_available: bool,
+    config: WalkForwardConfig,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
     initial_equity = config.initial_equity
     state = _PolicyState(
-        equity=initial_equity, equity_curve=[initial_equity], trades=[], decisions=[],
-        switch_count=0, last_selected=None,
+        equity=initial_equity,
+        equity_curve=[initial_equity],
+        trades=[],
+        decisions=[],
+        switch_count=0,
+        last_selected=None,
         selection_counts={strategy_id: 0 for strategy_id in STRATEGY_IDS},
     )
     specs = _registry_by_id(registry)
@@ -992,14 +1220,28 @@ def _run_policy(
         cursor = test_start
         while cursor < test_stop - 1:
             cursor = _process_policy_bar(
-                policy_id, fold_index, cursor, test_stop, candles, features,
-                regime_predictions, registry, specs, source_volume_available, config, state,
+                policy_id,
+                fold_index,
+                cursor,
+                test_stop,
+                candles,
+                features,
+                regime_predictions,
+                registry,
+                specs,
+                source_volume_available,
+                config,
+                state,
             )
     metrics = summarize_policy_metrics(
-        state.trades, state.equity_curve, initial_equity=initial_equity,
-        switch_count=state.switch_count, selection_counts=state.selection_counts,
+        state.trades,
+        state.equity_curve,
+        initial_equity=initial_equity,
+        switch_count=state.switch_count,
+        selection_counts=state.selection_counts,
     )
     return metrics, state.trades, state.decisions
+
 
 def _return_distribution(
     returns: list[float],
@@ -1049,15 +1291,17 @@ def summarize_policy_metrics(
         "expectancy_bps_per_trade": expectancy,
         "average_win_bps": average_win,
         "average_loss_bps": average_loss,
-        "total_net_pnl_quote": float(sum(float(trade["net_pnl_quote"]) for trade in trades)),
+        "total_net_pnl_quote": float(
+            sum(float(trade["net_pnl_quote"]) for trade in trades)
+        ),
         "total_return_pct": (final_equity / initial_equity - 1.0) * 100.0,
         "max_drawdown_pct": _maximum_drawdown(equity_curve, initial_equity),
         "strategy_trade_counts": _strategy_trade_counts(trades),
-        "selector_strategy_checks": selection_counts or {
-            strategy_id: 0 for strategy_id in STRATEGY_IDS
-        },
+        "selector_strategy_checks": selection_counts
+        or {strategy_id: 0 for strategy_id in STRATEGY_IDS},
         "strategy_switch_count": switch_count,
     }
+
 
 def _comparisons(
     meta: dict[str, Any], baselines: dict[str, dict[str, Any]]
@@ -1095,27 +1339,49 @@ def _comparisons(
     return comparisons
 
 
-
 def _validate_commit_sha(commit_sha: str) -> None:
-    if len(commit_sha) != 40 or any(character not in "0123456789abcdef" for character in commit_sha):
+    if len(commit_sha) != 40 or any(
+        character not in "0123456789abcdef" for character in commit_sha
+    ):
         raise ValueError("autonomous_commit_sha_invalid")
 
 
 def _evaluate_policy_set(
-    bars: DataFrame, features: DataFrame, folds: tuple[tuple[int, int, int], ...],
-    regime_predictions: dict[int, tuple[str, float]], registry: StrategyRegistry,
-    source_volume_available: bool, config: WalkForwardConfig,
-) -> tuple[dict[str, Any], dict[str, dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    bars: DataFrame,
+    features: DataFrame,
+    folds: tuple[tuple[int, int, int], ...],
+    regime_predictions: dict[int, tuple[str, float]],
+    registry: StrategyRegistry,
+    source_volume_available: bool,
+    config: WalkForwardConfig,
+) -> tuple[
+    dict[str, Any],
+    dict[str, dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+]:
     meta_metrics, meta_trades, decisions = _run_policy(
-        None, bars, features, folds, regime_predictions, registry,
-        source_volume_available=source_volume_available, config=config,
+        None,
+        bars,
+        features,
+        folds,
+        regime_predictions,
+        registry,
+        source_volume_available=source_volume_available,
+        config=config,
     )
     baseline_metrics: dict[str, dict[str, Any]] = {}
     all_trades = list(meta_trades)
     for strategy_id in STRATEGY_IDS:
         metrics, trades, _ = _run_policy(
-            strategy_id, bars, features, folds, regime_predictions, registry,
-            source_volume_available=source_volume_available, config=config,
+            strategy_id,
+            bars,
+            features,
+            folds,
+            regime_predictions,
+            registry,
+            source_volume_available=source_volume_available,
+            config=config,
         )
         baseline_metrics[strategy_id] = metrics
         all_trades.extend(trades)
@@ -1123,15 +1389,21 @@ def _evaluate_policy_set(
 
 
 def _build_research_report(
-    *, commit_sha: str, source: Mapping[str, Any], registry: StrategyRegistry,
-    config: WalkForwardConfig, fold_reports: list[dict[str, Any]],
-    source_volume_available: bool, meta_metrics: dict[str, Any],
+    *,
+    commit_sha: str,
+    source: Mapping[str, Any],
+    registry: StrategyRegistry,
+    config: WalkForwardConfig,
+    fold_reports: list[dict[str, Any]],
+    source_volume_available: bool,
+    meta_metrics: dict[str, Any],
     baseline_metrics: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
     comparison = _comparisons(meta_metrics, baseline_metrics)
     scalping_status = (
         "ENABLED_SUBJECT_TO_PER_BAR_VOLUME_AND_RELATIVE_VOLUME_GATES"
-        if source_volume_available else "BLOCKED_NO_POSITIVE_SOURCE_VOLUME"
+        if source_volume_available
+        else "BLOCKED_NO_POSITIVE_SOURCE_VOLUME"
     )
     return {
         "schema_version": "alix.autonomous-meta-strategy-report.v1",
@@ -1139,19 +1411,25 @@ def _build_research_report(
         "run_status": "COMPLETED_RESEARCH_ONLY",
         "source": dict(source),
         "walk_forward": {
-            "timeframe": "1h", "fold_count": len(fold_reports), "folds": fold_reports,
-            "final_holdout_used": False, "training_policy": "EXPANDING_CHRONOLOGICAL_TRAIN_WINDOWS",
+            "timeframe": "1h",
+            "fold_count": len(fold_reports),
+            "folds": fold_reports,
+            "final_holdout_used": False,
+            "training_policy": "EXPANDING_CHRONOLOGICAL_TRAIN_WINDOWS",
             "regime_feature_names": list(FEATURE_NAMES),
         },
         "strategy_registry": {
-            "revision": registry.revision, "document_sha256": registry.document_sha256,
-            "code_sha256": registry.code_sha256, "candidate_count": len(registry.strategies),
+            "revision": registry.revision,
+            "document_sha256": registry.document_sha256,
+            "code_sha256": registry.code_sha256,
+            "candidate_count": len(registry.strategies),
             "candidate_ids": [spec.strategy_id for spec in registry.strategies],
             "all_candidates_research_only": all(
                 spec.lifecycle == "RESEARCH_ONLY" and not spec.owner_approved
                 for spec in registry.strategies
             ),
-            "production_registry_modified": False, "scalping_status": scalping_status,
+            "production_registry_modified": False,
+            "scalping_status": scalping_status,
         },
         "selector": {
             "method": "HMM_REGIME_PLUS_CONFIDENCE_AND_DATA_ELIGIBILITY",
@@ -1167,7 +1445,8 @@ def _build_research_report(
             "economic_acceptance": "NO-GO",
             "fee_bps_per_side": config.fee_bps_per_side,
             "slippage_bps_per_side": config.slippage_bps_per_side,
-            "spread_observed": False, "orderbook_liquidity_observed": False,
+            "spread_observed": False,
+            "orderbook_liquidity_observed": False,
             "win_rate_definition": "net_pnl_quote_positive_after_assumed_fees_and_slippage",
             "expectancy_definition": "mean_net_return_bps_per_completed_trade",
             "meta_strategy_metrics": meta_metrics,
@@ -1180,18 +1459,27 @@ def _build_research_report(
             ),
         },
         "safety_invariants": {
-            "Champion": None, "order_permission": False, "trading_authorization": "NO-GO",
-            "economic_acceptance": "NO-GO", "model_promoted": False,
-            "production_model_updated": False, "production_strategy_registry_updated": False,
-            "orders_or_execution_api_used": False, "private_api_calls": 0,
+            "Champion": None,
+            "order_permission": False,
+            "trading_authorization": "NO-GO",
+            "economic_acceptance": "NO-GO",
+            "model_promoted": False,
+            "production_model_updated": False,
+            "production_strategy_registry_updated": False,
+            "orders_or_execution_api_used": False,
+            "private_api_calls": 0,
             "real_order_attempts": 0,
         },
     }
 
 
 def evaluate_historical_bars(
-    candles: DataFrame, registry: StrategyRegistry, *, commit_sha: str,
-    source: Mapping[str, Any], config: WalkForwardConfig | None = None,
+    candles: DataFrame,
+    registry: StrategyRegistry,
+    *,
+    commit_sha: str,
+    source: Mapping[str, Any],
+    config: WalkForwardConfig | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
     """Evaluate dynamic regime selection against four fixed-policy baselines."""
     selected_config = config or WalkForwardConfig()
@@ -1204,17 +1492,30 @@ def evaluate_historical_bars(
         regime_features, folds, selected_config
     )
     volume_positive_rows = int((bars["volume"] > 0).sum())
-    source_volume_available = volume_positive_rows > 0 and bool(source.get("volume_observed", True))
+    source_volume_available = volume_positive_rows > 0 and bool(
+        source.get("volume_observed", True)
+    )
     meta_metrics, baseline_metrics, all_trades, decisions = _evaluate_policy_set(
-        bars, features, folds, regime_predictions, registry,
-        source_volume_available, selected_config,
+        bars,
+        features,
+        folds,
+        regime_predictions,
+        registry,
+        source_volume_available,
+        selected_config,
     )
     report = _build_research_report(
-        commit_sha=commit_sha, source=source, registry=registry, config=selected_config,
-        fold_reports=fold_reports, source_volume_available=source_volume_available,
-        meta_metrics=meta_metrics, baseline_metrics=baseline_metrics,
+        commit_sha=commit_sha,
+        source=source,
+        registry=registry,
+        config=selected_config,
+        fold_reports=fold_reports,
+        source_volume_available=source_volume_available,
+        meta_metrics=meta_metrics,
+        baseline_metrics=baseline_metrics,
     )
     return report, all_trades, decisions
+
 
 __all__ = [
     "DEFAULT_FOLD_COUNT",
