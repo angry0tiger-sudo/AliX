@@ -1,0 +1,165 @@
+"""Regime-routed strategy proposals that cannot authorize orders or promotion."""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass
+from typing import Mapping
+
+from services.strategy_selection.contracts import (
+    StrategyLifecycle,
+)
+from services.strategy_selection.regime import (
+    RegimeInference,
+    RegimeInferenceStatus,
+)
+from services.strategy_selection.registry import StrategyRegistry
+
+REGIME_STRATEGY_MAP: dict[str, str] = {
+    "trend": "trend_following",
+    "range": "mean_reversion",
+    "volatile": "momentum_breakout",
+    "high_volatility": "momentum_breakout",
+}
+STRATEGY_IDS = ("trend_following", "mean_reversion", "momentum_breakout")
+ROUND_TRIP_COST_BPS = 60.0
+
+
+@dataclass(frozen=True, slots=True)
+class ResearchRoute:
+    regime: str | None
+    strategy_id: str | None
+    status: str
+    reason: str
+    order_permission: bool = False
+    champion: None = None
+
+    def __post_init__(self) -> None:
+        if self.order_permission or self.champion is not None:
+            raise ValueError("ai_core_research_route_cannot_authorize_or_promote")
+
+
+@dataclass(frozen=True, slots=True)
+class StrategySignal:
+    strategy_id: str
+    signal: int
+    reason: str
+    order_permission: bool = False
+
+    def __post_init__(self) -> None:
+        if self.strategy_id not in STRATEGY_IDS:
+            raise ValueError("ai_core_strategy_id_unknown")
+        if self.signal not in (0, 1):
+            raise ValueError("ai_core_strategy_signal_must_be_long_or_flat")
+        if self.order_permission:
+            raise ValueError("ai_core_strategy_signal_cannot_authorize_orders")
+
+
+def _registry_candidate(
+    registry: StrategyRegistry, strategy_id: str
+) -> bool:
+    matching = [item for item in registry.strategies if item.strategy_id == strategy_id]
+    if len(matching) != 1:
+        return False
+    definition = matching[0]
+    return (
+        definition.lifecycle is StrategyLifecycle.RESEARCH_ONLY
+        and not definition.owner_approved
+        and not definition.allow_short
+        and "4h" in definition.supported_timeframes
+    )
+
+
+def route_research_regime(
+    regime: str | None, registry: StrategyRegistry
+) -> ResearchRoute:
+    """Map a technical research regime to a research-only registry entry."""
+    if regime is None or not regime.strip():
+        return ResearchRoute(None, None, "NO_TRADE", "regime_missing")
+    strategy_id = REGIME_STRATEGY_MAP.get(regime)
+    if strategy_id is None:
+        return ResearchRoute(regime, None, "NO_TRADE", "regime_not_mapped")
+    if not _registry_candidate(registry, strategy_id):
+        return ResearchRoute(regime, None, "NO_TRADE", "research_registry_candidate_invalid")
+    return ResearchRoute(regime, strategy_id, "RESEARCH_PROPOSAL", "hmm_regime_route_resolved")
+
+
+def route_approved_inference(
+    inference: RegimeInference | None, registry: StrategyRegistry
+) -> ResearchRoute:
+    """Use the existing approved HMM contract; all other outcomes abstain."""
+    if (
+        inference is None
+        or inference.status is not RegimeInferenceStatus.CLASSIFIED
+        or inference.order_permission
+        or inference.selected_regime is None
+    ):
+        return ResearchRoute(None, None, "NO_TRADE", "approved_hmm_inference_unavailable")
+    return route_research_regime(inference.selected_regime, registry)
+
+
+def _number(row: Mapping[str, object], name: str) -> float | None:
+    value = row.get(name)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    numeric = float(value)
+    return numeric if math.isfinite(numeric) else None
+
+
+def generate_candidate_signal(
+    strategy_id: str, row: Mapping[str, object]
+) -> StrategySignal:
+    """Generate a long/flat research signal from one already-known feature row."""
+    if strategy_id not in STRATEGY_IDS:
+        raise ValueError("ai_core_strategy_id_unknown")
+    required: dict[str, tuple[str, ...]] = {
+        "trend_following": ("ema_crossover_24_72", "return_6"),
+        "mean_reversion": ("rsi_14", "bollinger_position_24", "return_3"),
+        "momentum_breakout": ("breakout_distance_24", "volume_zscore_24", "return_6"),
+    }
+    values = {name: _number(row, name) for name in required[strategy_id]}
+    if any(value is None for value in values.values()):
+        return StrategySignal(strategy_id, 0, "required_feature_missing_or_non_finite")
+    if strategy_id == "trend_following":
+        signal = int(
+            values["ema_crossover_24_72"] > 0 and values["return_6"] > 0  # type: ignore[operator]
+        )
+    elif strategy_id == "mean_reversion":
+        signal = int(
+            values["rsi_14"] <= 30
+            and values["bollinger_position_24"] <= 0
+            and values["return_3"] < 0
+        )  # type: ignore[operator]
+    else:
+        signal = int(
+            values["breakout_distance_24"] > 0
+            and values["volume_zscore_24"] > 0
+            and values["return_6"] > 0
+        )  # type: ignore[operator]
+    return StrategySignal(
+        strategy_id,
+        signal,
+        "predeclared_research_rule_signal" if signal else "predeclared_rule_not_triggered",
+    )
+
+
+def ensemble_cost_filter(predicted_return: float, round_trip_cost_bps: float = ROUND_TRIP_COST_BPS) -> bool:
+    if (
+        not math.isfinite(predicted_return)
+        or not math.isfinite(round_trip_cost_bps)
+        or round_trip_cost_bps < 0
+    ):
+        return False
+    return predicted_return > round_trip_cost_bps / 10_000.0
+
+
+__all__ = [
+    "REGIME_STRATEGY_MAP",
+    "STRATEGY_IDS",
+    "ResearchRoute",
+    "StrategySignal",
+    "ensemble_cost_filter",
+    "generate_candidate_signal",
+    "route_approved_inference",
+    "route_research_regime",
+]

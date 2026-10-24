@@ -1,0 +1,320 @@
+"""Causal 4H feature engineering for the research-only AI core."""
+
+from __future__ import annotations
+
+from typing import Final
+
+import numpy as np
+import pandas as pd
+from pandas import DataFrame, Series
+
+AI_FEATURE_SCHEMA_VERSION: Final[str] = "alix.ai-core.features.v1"
+SENTIMENT_FEATURE_SCHEMA_VERSION: Final[str] = "alix.ai-core.sentiment-features.v1"
+OHLCV_COLUMNS: Final[tuple[str, ...]] = (
+    "date",
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+)
+SENTIMENT_COLUMNS: Final[tuple[str, ...]] = (
+    "sentiment_mean_24h",
+    "sentiment_mean_72h",
+    "sentiment_weighted_24h",
+    "sentiment_event_count_24h",
+    "sentiment_confidence_mean_24h",
+    "sentiment_available",
+)
+_TREND_WINDOWS: Final[tuple[int, ...]] = (6, 12, 24, 48, 72)
+_RETURN_WINDOWS: Final[tuple[int, ...]] = (1, 2, 3, 6, 12, 24)
+_BOLLINGER_WINDOWS: Final[tuple[int, ...]] = (12, 24)
+_RSI_WINDOWS: Final[tuple[int, ...]] = (6, 14, 28)
+_ATR_WINDOWS: Final[tuple[int, ...]] = (7, 14, 28)
+_VOLATILITY_WINDOWS: Final[tuple[int, ...]] = (6, 12, 24, 48)
+_CROSS_WINDOWS: Final[tuple[int, ...]] = (12, 24)
+_REQUIRED_CROSS_ASSETS: Final[tuple[str, ...]] = ("BTCUSDT", "ETHUSDT")
+
+
+def _validate_ohlcv(candles: DataFrame, interval_seconds: int) -> DataFrame:
+    missing = sorted(set(OHLCV_COLUMNS) - set(candles.columns))
+    if missing:
+        raise ValueError(f"ai_core_ohlcv_columns_missing:{missing}")
+    if candles.empty or candles.columns.duplicated().any():
+        raise ValueError("ai_core_ohlcv_empty_or_duplicate_columns")
+    result = candles.loc[:, list(OHLCV_COLUMNS)].copy()
+    parsed_dates = pd.to_datetime(result["date"], errors="raise")
+    if parsed_dates.dt.tz is None:
+        raise ValueError("ai_core_timestamps_must_be_timezone_aware")
+    result["date"] = parsed_dates.dt.tz_convert("UTC")
+    if result["date"].duplicated().any():
+        raise ValueError("ai_core_duplicate_timestamps")
+    if not result["date"].is_monotonic_increasing:
+        raise ValueError("ai_core_timestamps_not_chronological")
+    gaps = result["date"].diff().dropna().dt.total_seconds()
+    if not gaps.eq(float(interval_seconds)).all():
+        raise ValueError("ai_core_timeframe_gap_or_mismatch")
+
+    for column in ("open", "high", "low", "close", "volume"):
+        result[column] = pd.to_numeric(result[column], errors="coerce")
+    prices = result[["open", "high", "low", "close"]].to_numpy(dtype=float)
+    volumes = result["volume"].to_numpy(dtype=float)
+    if not np.isfinite(prices).all() or not np.isfinite(volumes).all():
+        raise ValueError("ai_core_ohlcv_non_finite")
+    if (prices <= 0).any() or (volumes < 0).any():
+        raise ValueError("ai_core_ohlcv_out_of_range")
+    if (
+        (result["high"] < result[["open", "close"]].max(axis=1)).any()
+        or (result["low"] > result[["open", "close"]].min(axis=1)).any()
+        or (result["high"] < result["low"]).any()
+    ):
+        raise ValueError("ai_core_ohlc_invariant_failed")
+    return result
+
+
+def aggregate_hourly_to_4h(candles: DataFrame) -> DataFrame:
+    """Aggregate exactly four contiguous hourly candles; never fill gaps or partial bars."""
+    hourly = _validate_ohlcv(candles, 3600)
+    if len(hourly) < 4 or len(hourly) % 4:
+        raise ValueError("ai_core_hourly_rows_must_form_complete_4h_bars")
+    hourly = hourly.assign(_bar_group=np.arange(len(hourly), dtype=int) // 4)
+    aggregated = hourly.groupby("_bar_group", sort=True).agg(
+        date=("date", "first"),
+        open=("open", "first"),
+        high=("high", "max"),
+        low=("low", "min"),
+        close=("close", "last"),
+        volume=("volume", "sum"),
+    )
+    result = aggregated.reset_index(drop=True)
+    return _validate_ohlcv(result, 4 * 3600)
+
+
+def _rsi(close: Series, period: int) -> Series:
+    delta = close.diff()
+    gains = delta.clip(lower=0).rolling(period, min_periods=period).mean()
+    losses = (-delta.clip(upper=0)).rolling(period, min_periods=period).mean()
+    denominator = losses.where(losses > 0)
+    relative_strength = gains / denominator
+    value = 100.0 - (100.0 / (1.0 + relative_strength))
+    value = value.mask((losses == 0) & (gains > 0), 100.0)
+    return value.mask((losses == 0) & (gains == 0), 50.0)
+
+
+def _true_range(high: Series, low: Series, close: Series) -> Series:
+    previous = close.shift(1)
+    return pd.concat(
+        [high - low, (high - previous).abs(), (low - previous).abs()],
+        axis=1,
+    ).max(axis=1)
+
+
+def _volume_profile_proxy(
+    typical_price: Series, volume: Series, close: Series, window: int
+) -> tuple[Series, Series]:
+    """Coarse OHLCV profile proxy; not a trade-level volume-at-price feed."""
+    point_of_control = np.full(len(typical_price), np.nan, dtype=float)
+    value_area_position = np.full(len(typical_price), np.nan, dtype=float)
+    price_values = typical_price.to_numpy(dtype=float)
+    volume_values = volume.to_numpy(dtype=float)
+    close_values = close.to_numpy(dtype=float)
+
+    for end in range(window - 1, len(price_values)):
+        prices = price_values[end - window + 1 : end + 1]
+        volumes = volume_values[end - window + 1 : end + 1]
+        total_volume = float(volumes.sum())
+        if total_volume <= 0 or not np.isfinite(prices).all():
+            continue
+        if float(prices.max()) == float(prices.min()):
+            point_of_control[end] = float(prices[0])
+            value_area_position[end] = 0.5
+            continue
+        histogram, edges = np.histogram(prices, bins=8, weights=volumes)
+        point_index = int(np.argmax(histogram))
+        point_of_control[end] = float((edges[point_index] + edges[point_index + 1]) / 2.0)
+        ranked = np.argsort(histogram)[::-1]
+        selected: list[int] = []
+        selected_volume = 0.0
+        for index in ranked:
+            selected.append(int(index))
+            selected_volume += float(histogram[index])
+            if selected_volume >= 0.70 * total_volume:
+                break
+        lower = float(edges[min(selected)])
+        upper = float(edges[max(selected) + 1])
+        span = upper - lower
+        value_area_position[end] = (
+            float(np.clip((close_values[end] - lower) / span, 0.0, 1.0))
+            if span > 0
+            else 0.5
+        )
+    poc_distance = pd.Series(point_of_control, index=close.index) / close - 1.0
+    return poc_distance, pd.Series(value_area_position, index=close.index)
+
+
+def _base_feature_values(candles: DataFrame) -> dict[str, Series]:
+    opened = candles["open"].astype(float)
+    high = candles["high"].astype(float)
+    low = candles["low"].astype(float)
+    close = candles["close"].astype(float)
+    volume = candles["volume"].astype(float)
+    returns = close.pct_change(fill_method=None)
+    log_returns = np.log(close).diff()
+    typical_price = (high + low + close) / 3.0
+    true_range = _true_range(high, low, close)
+    values: dict[str, Series] = {}
+
+    for window in _RETURN_WINDOWS:
+        values[f"return_{window}"] = close.pct_change(window, fill_method=None)
+    values["log_return_1"] = log_returns
+    averages: dict[int, Series] = {}
+    exponential: dict[int, Series] = {}
+    for window in _TREND_WINDOWS:
+        averages[window] = close.rolling(window, min_periods=window).mean()
+        exponential[window] = close.ewm(
+            span=window, adjust=False, min_periods=window
+        ).mean()
+        values[f"sma_ratio_{window}"] = close / averages[window] - 1.0
+        values[f"ema_ratio_{window}"] = close / exponential[window] - 1.0
+    for window in (12, 24):
+        values[f"sma_slope_{window}"] = averages[window].pct_change(3, fill_method=None)
+    for fast, slow in ((6, 24), (12, 48), (24, 72)):
+        values[f"ema_crossover_{fast}_{slow}"] = (
+            exponential[fast] / exponential[slow] - 1.0
+        )
+
+    for window in _BOLLINGER_WINDOWS:
+        mean = close.rolling(window, min_periods=window).mean()
+        deviation = close.rolling(window, min_periods=window).std(ddof=0)
+        upper = mean + 2.0 * deviation
+        lower = mean - 2.0 * deviation
+        width = (upper - lower) / mean
+        values[f"bollinger_width_{window}"] = width
+        values[f"bollinger_position_{window}"] = (
+            (close - lower) / (upper - lower).where((upper - lower) > 0)
+        ).mask((upper - lower) == 0, 0.5)
+
+    for window in _RSI_WINDOWS:
+        values[f"rsi_{window}"] = _rsi(close, window)
+    values["true_range_pct"] = true_range / close
+    for window in _ATR_WINDOWS:
+        values[f"atr_ratio_{window}"] = (
+            true_range.rolling(window, min_periods=window).mean() / close
+        )
+    for window in _VOLATILITY_WINDOWS:
+        values[f"realized_volatility_{window}"] = returns.rolling(
+            window, min_periods=window
+        ).std(ddof=0)
+    for window in (12, 24):
+        values[f"downside_volatility_{window}"] = returns.clip(upper=0).rolling(
+            window, min_periods=window
+        ).std(ddof=0)
+
+    values["volume_return_1"] = volume.pct_change(fill_method=None)
+    values["volume_return_6"] = volume.pct_change(6, fill_method=None)
+    for window in (12, 24):
+        rolling_volume = volume.rolling(window, min_periods=window)
+        mean = rolling_volume.mean()
+        deviation = rolling_volume.std(ddof=0).where(
+            rolling_volume.std(ddof=0) > 0
+        )
+        values[f"volume_zscore_{window}"] = (volume - mean) / deviation
+        values[f"relative_volume_{window}"] = volume / mean.where(mean > 0)
+        quote_turnover = close * volume
+        rolling_turnover = quote_turnover.rolling(window, min_periods=window).sum()
+        values[f"rolling_quote_turnover_ratio_{window}"] = (
+            rolling_turnover / rolling_turnover.rolling(window, min_periods=window).median()
+        ) - 1.0
+
+    for window in (12, 24):
+        vwap = (
+            (typical_price * volume).rolling(window, min_periods=window).sum()
+            / volume.rolling(window, min_periods=window).sum().where(
+                volume.rolling(window, min_periods=window).sum() > 0
+            )
+        )
+        values[f"rolling_vwap_distance_{window}"] = close / vwap - 1.0
+        poc, value_area = _volume_profile_proxy(typical_price, volume, close, window)
+        values[f"volume_profile_poc_distance_{window}"] = poc
+        values[f"volume_profile_value_area_position_{window}"] = value_area
+
+    for window in (12, 24):
+        previous_high = high.shift(1).rolling(window, min_periods=window).max()
+        values[f"breakout_distance_{window}"] = close / previous_high - 1.0
+    values["candle_body_ratio"] = (close - opened) / (high - low).where(high > low)
+    values["upper_wick_ratio"] = (high - pd.concat([opened, close], axis=1).max(axis=1)) / (
+        high - low
+    ).where(high > low)
+    values["lower_wick_ratio"] = (pd.concat([opened, close], axis=1).min(axis=1) - low) / (
+        high - low
+    ).where(high > low)
+    return values
+
+
+def _cross_asset_features(
+    base: DataFrame, cross_asset: dict[str, DataFrame] | None
+) -> dict[str, Series]:
+    output: dict[str, Series] = {}
+    base_close = base["close"].astype(float)
+    base_returns = base_close.pct_change(fill_method=None)
+    for symbol in _REQUIRED_CROSS_ASSETS:
+        close = pd.Series(np.nan, index=base.index, dtype=float)
+        if cross_asset is not None and symbol in cross_asset:
+            asset = _validate_ohlcv(cross_asset[symbol], 4 * 3600)
+            aligned = asset.set_index("date")["close"].reindex(base["date"])
+            close = pd.Series(aligned.to_numpy(dtype=float), index=base.index)
+        asset_returns = close.pct_change(fill_method=None)
+        key = symbol.lower()
+        output[f"{key}_return_1"] = asset_returns
+        output[f"{key}_return_6"] = close.pct_change(6, fill_method=None)
+        for window in _CROSS_WINDOWS:
+            output[f"{key}_correlation_{window}"] = base_returns.rolling(
+                window, min_periods=window
+            ).corr(asset_returns)
+        rolling_variance = asset_returns.rolling(24, min_periods=24).var(ddof=0)
+        rolling_covariance = base_returns.rolling(24, min_periods=24).cov(asset_returns)
+        output[f"{key}_beta_24"] = rolling_covariance / rolling_variance.where(
+            rolling_variance > 0
+        )
+        output[f"relative_strength_{key}_12"] = (
+            base_close.pct_change(12, fill_method=None)
+            - close.pct_change(12, fill_method=None)
+        )
+    return output
+
+
+def build_ai_features(
+    candles_4h: DataFrame,
+    *,
+    cross_asset: dict[str, DataFrame] | None = None,
+    sentiment_features: DataFrame | None = None,
+) -> DataFrame:
+    """Create causal features from validated 4H candles and point-in-time side inputs."""
+    candles = _validate_ohlcv(candles_4h, 4 * 3600)
+    base_values = _base_feature_values(candles)
+    cross_values = _cross_asset_features(candles, cross_asset)
+    values = {**base_values, **cross_values}
+    features = DataFrame(values, index=candles.index).replace([np.inf, -np.inf], np.nan)
+    result = pd.concat([candles, features], axis=1)
+    if sentiment_features is not None:
+        required = {"date", *SENTIMENT_COLUMNS}
+        if not required.issubset(sentiment_features.columns):
+            raise ValueError("ai_core_sentiment_feature_schema_invalid")
+        sentiment = sentiment_features.loc[:, ["date", *SENTIMENT_COLUMNS]].copy()
+        sentiment["date"] = pd.to_datetime(sentiment["date"], utc=True, errors="raise")
+        if sentiment["date"].duplicated().any():
+            raise ValueError("ai_core_sentiment_duplicate_timestamps")
+        result = result.merge(
+            sentiment, how="left", on="date", validate="one_to_one", sort=False
+        )
+    return result
+
+
+__all__ = [
+    "AI_FEATURE_SCHEMA_VERSION",
+    "SENTIMENT_FEATURE_SCHEMA_VERSION",
+    "OHLCV_COLUMNS",
+    "SENTIMENT_COLUMNS",
+    "aggregate_hourly_to_4h",
+    "build_ai_features",
+]
