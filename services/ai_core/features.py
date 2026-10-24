@@ -218,41 +218,59 @@ def select_model_feature_schema(
     return selected, "BLOCKED_NO_POSITIVE_SOURCE_VOLUME"
 
 
-def _validate_ohlcv(candles: DataFrame, interval_seconds: int) -> DataFrame:
+
+def _validate_required_ohlcv_columns(candles: DataFrame) -> None:
     missing = sorted(set(OHLCV_COLUMNS) - set(candles.columns))
     if missing:
         raise ValueError(f"ai_core_ohlcv_columns_missing:{missing}")
     if candles.empty or candles.columns.duplicated().any():
         raise ValueError("ai_core_ohlcv_empty_or_duplicate_columns")
-    result = candles.loc[:, list(OHLCV_COLUMNS)].copy()
-    parsed_dates = pd.to_datetime(result["date"], errors="raise")
+
+
+def _validate_timestamp_sequence(
+    date_values: Series, interval_seconds: int
+) -> Series:
+    parsed_dates = pd.to_datetime(date_values, errors="raise")
     if parsed_dates.dt.tz is None:
         raise ValueError("ai_core_timestamps_must_be_timezone_aware")
-    result["date"] = parsed_dates.dt.tz_convert("UTC")
-    if result["date"].duplicated().any():
+    normalized_dates = parsed_dates.dt.tz_convert("UTC")
+    if normalized_dates.duplicated().any():
         raise ValueError("ai_core_duplicate_timestamps")
-    if not result["date"].is_monotonic_increasing:
+    if not normalized_dates.is_monotonic_increasing:
         raise ValueError("ai_core_timestamps_not_chronological")
-    gaps = result["date"].diff().dropna().dt.total_seconds()
+    gaps = normalized_dates.diff().dropna().dt.total_seconds()
     if not gaps.eq(float(interval_seconds)).all():
         raise ValueError("ai_core_timeframe_gap_or_mismatch")
+    return normalized_dates
 
-    for column in ("open", "high", "low", "close", "volume"):
-        result[column] = pd.to_numeric(result[column], errors="coerce")
-    prices = result[["open", "high", "low", "close"]].to_numpy(dtype=float)
-    volumes = result["volume"].to_numpy(dtype=float)
+
+def _validate_ohlcv_numeric_ranges(prices: np.ndarray, volumes: np.ndarray) -> None:
     if not np.isfinite(prices).all() or not np.isfinite(volumes).all():
         raise ValueError("ai_core_ohlcv_non_finite")
     if (prices <= 0).any() or (volumes < 0).any():
         raise ValueError("ai_core_ohlcv_out_of_range")
+
+
+def _validate_ohlc_invariants(candles: DataFrame) -> None:
     if (
-        (result["high"] < result[["open", "close"]].max(axis=1)).any()
-        or (result["low"] > result[["open", "close"]].min(axis=1)).any()
-        or (result["high"] < result["low"]).any()
+        (candles["high"] < candles[["open", "close"]].max(axis=1)).any()
+        or (candles["low"] > candles[["open", "close"]].min(axis=1)).any()
+        or (candles["high"] < candles["low"]).any()
     ):
         raise ValueError("ai_core_ohlc_invariant_failed")
-    return result
 
+
+def _validate_ohlcv(candles: DataFrame, interval_seconds: int) -> DataFrame:
+    _validate_required_ohlcv_columns(candles)
+    result = candles.loc[:, list(OHLCV_COLUMNS)].copy()
+    result["date"] = _validate_timestamp_sequence(result["date"], interval_seconds)
+    for column in ("open", "high", "low", "close", "volume"):
+        result[column] = pd.to_numeric(result[column], errors="coerce")
+    prices = result[["open", "high", "low", "close"]].to_numpy(dtype=float)
+    volumes = result["volume"].to_numpy(dtype=float)
+    _validate_ohlcv_numeric_ranges(prices, volumes)
+    _validate_ohlc_invariants(result)
+    return result
 
 def aggregate_hourly_to_4h(candles: DataFrame) -> DataFrame:
     """Aggregate exactly four contiguous hourly candles; never fill gaps or partial bars."""
@@ -336,20 +354,9 @@ def _volume_profile_proxy(
     return poc_distance, pd.Series(value_area_position, index=close.index)
 
 
-def _base_feature_values(candles: DataFrame) -> dict[str, Series]:
-    opened = candles["open"].astype(float)
-    high = candles["high"].astype(float)
-    low = candles["low"].astype(float)
-    close = candles["close"].astype(float)
-    volume = candles["volume"].astype(float)
-    returns = close.pct_change(fill_method=None)
-    log_returns = pd.Series(
-        np.log(close.to_numpy(dtype=float)), index=close.index
-    ).diff()
-    typical_price = (high + low + close) / 3.0
-    true_range = _true_range(high, low, close)
-    values: dict[str, Series] = {}
 
+def _trend_feature_values(close: Series, log_returns: Series) -> dict[str, Series]:
+    values: dict[str, Series] = {}
     for window in _RETURN_WINDOWS:
         values[f"return_{window}"] = close.pct_change(window, fill_method=None)
     values["log_return_1"] = log_returns
@@ -368,7 +375,6 @@ def _base_feature_values(candles: DataFrame) -> dict[str, Series]:
         values[f"ema_crossover_{fast}_{slow}"] = (
             exponential[fast] / exponential[slow] - 1.0
         )
-
     for window in _BOLLINGER_WINDOWS:
         mean = close.rolling(window, min_periods=window).mean()
         deviation = close.rolling(window, min_periods=window).std(ddof=0)
@@ -379,7 +385,13 @@ def _base_feature_values(candles: DataFrame) -> dict[str, Series]:
         values[f"bollinger_position_{window}"] = (
             (close - lower) / (upper - lower).where((upper - lower) > 0)
         ).mask((upper - lower) == 0, 0.5)
+    return values
 
+
+def _volatility_feature_values(
+    close: Series, returns: Series, true_range: Series
+) -> dict[str, Series]:
+    values: dict[str, Series] = {}
     for window in _RSI_WINDOWS:
         values[f"rsi_{window}"] = _rsi(close, window)
     values["true_range_pct"] = true_range / close
@@ -395,9 +407,21 @@ def _base_feature_values(candles: DataFrame) -> dict[str, Series]:
         values[f"downside_volatility_{window}"] = (
             returns.clip(upper=0).rolling(window, min_periods=window).std(ddof=0)
         )
+    return values
 
-    values["volume_return_1"] = volume.pct_change(fill_method=None)
-    values["volume_return_6"] = volume.pct_change(6, fill_method=None)
+
+def _volume_feature_values(
+    opened: Series,
+    high: Series,
+    low: Series,
+    close: Series,
+    volume: Series,
+    typical_price: Series,
+) -> dict[str, Series]:
+    values: dict[str, Series] = {
+        "volume_return_1": volume.pct_change(fill_method=None),
+        "volume_return_6": volume.pct_change(6, fill_method=None),
+    }
     for window in (12, 24):
         rolling_volume = volume.rolling(window, min_periods=window)
         mean = rolling_volume.mean()
@@ -410,7 +434,6 @@ def _base_feature_values(candles: DataFrame) -> dict[str, Series]:
             rolling_turnover
             / rolling_turnover.rolling(window, min_periods=window).median()
         ) - 1.0
-
     for window in (12, 24):
         vwap = (typical_price * volume).rolling(
             window, min_periods=window
@@ -421,7 +444,6 @@ def _base_feature_values(candles: DataFrame) -> dict[str, Series]:
         poc, value_area = _volume_profile_proxy(typical_price, volume, close, window)
         values[f"volume_profile_poc_distance_{window}"] = poc
         values[f"volume_profile_value_area_position_{window}"] = value_area
-
     for window in (12, 24):
         previous_high = high.shift(1).rolling(window, min_periods=window).max()
         values[f"breakout_distance_{window}"] = close / previous_high - 1.0
@@ -434,6 +456,23 @@ def _base_feature_values(candles: DataFrame) -> dict[str, Series]:
     ) / (high - low).where(high > low)
     return values
 
+
+def _base_feature_values(candles: DataFrame) -> dict[str, Series]:
+    opened = candles["open"].astype(float)
+    high = candles["high"].astype(float)
+    low = candles["low"].astype(float)
+    close = candles["close"].astype(float)
+    volume = candles["volume"].astype(float)
+    returns = close.pct_change(fill_method=None)
+    log_returns = pd.Series(
+        np.log(close.to_numpy(dtype=float)), index=close.index
+    ).diff()
+    typical_price = (high + low + close) / 3.0
+    true_range = _true_range(high, low, close)
+    values = _trend_feature_values(close, log_returns)
+    values.update(_volatility_feature_values(close, returns, true_range))
+    values.update(_volume_feature_values(opened, high, low, close, volume, typical_price))
+    return values
 
 def _cross_asset_features(
     base: DataFrame, cross_asset: dict[str, DataFrame] | None

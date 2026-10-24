@@ -56,18 +56,14 @@ def _published_timestamp(value: str) -> datetime:
     return parse_timestamp(parsed, "published_at")
 
 
-def parse_persian_rss(
-    xml_body: bytes,
-    *,
-    provider: ProviderRegistration,
-    ingested_at: datetime,
-    asset_mapping: tuple[str, ...] = ("BTC/USDT",),
-) -> tuple[NewsEvent, ...]:
-    """Parse an already-fetched RSS/Atom document after source approval; no network I/O."""
+
+def _validate_rss_provider(provider: ProviderRegistration) -> None:
     provider.assert_ingestion_allowed()
     if provider.data_kind != "news":
         raise ProviderError("persian_rss_provider_kind_invalid")
-    ingestion_time = parse_timestamp(ingested_at, "ingested_at")
+
+
+def _rss_items(xml_body: bytes) -> list[ElementTree.Element]:
     try:
         root = ElementTree.fromstring(xml_body)
     except (ElementTree.ParseError, ValueError):
@@ -79,48 +75,75 @@ def parse_persian_rss(
     ]
     if not items:
         raise ProviderError("persian_rss_items_missing")
+    return items
+
+
+def _news_event_from_rss_item(
+    item: ElementTree.Element,
+    *,
+    provider: ProviderRegistration,
+    ingestion_time: datetime,
+    asset_mapping: tuple[str, ...],
+) -> NewsEvent:
+    title = _child_text(item, "title")
+    description = _child_text(item, "description", "summary", "content")
+    rendered = normalize_news_text(f"{title} {description}")
+    if not rendered:
+        raise ProviderError("persian_rss_item_text_missing")
+    published = _published_timestamp(
+        _child_text(item, "pubdate", "published", "updated")
+    )
+    if published > ingestion_time:
+        raise ProviderError("persian_rss_published_after_ingestion")
+    content_hash = digest_content(rendered)
+    identity = hashlib.sha256(
+        f"{provider.provider_id}|{published.isoformat()}|{content_hash}".encode(
+            "utf-8"
+        )
+    ).hexdigest()
+    return NewsEvent(
+        event_id=identity,
+        provider_id=provider.provider_id,
+        source_id=provider.provider_id,
+        published_at=published,
+        ingested_at=ingestion_time,
+        available_at=ingestion_time,
+        revision=content_hash,
+        asset_mapping=asset_mapping,
+        license_status=provider.license_status,
+        content_hash=content_hash,
+        text=rendered,
+        title=normalize_news_text(title),
+    )
+
+
+def parse_persian_rss(
+    xml_body: bytes,
+    *,
+    provider: ProviderRegistration,
+    ingested_at: datetime,
+    asset_mapping: tuple[str, ...] = ("BTC/USDT",),
+) -> tuple[NewsEvent, ...]:
+    """Parse an already-fetched RSS/Atom document after source approval; no network I/O."""
+    _validate_rss_provider(provider)
+    ingestion_time = parse_timestamp(ingested_at, "ingested_at")
+    items = _rss_items(xml_body)
     events: list[NewsEvent] = []
     seen: set[str] = set()
     for item in items:
-        title = _child_text(item, "title")
-        description = _child_text(item, "description", "summary", "content")
-        rendered = normalize_news_text(f"{title} {description}")
-        if not rendered:
-            raise ProviderError("persian_rss_item_text_missing")
-        published = _published_timestamp(
-            _child_text(item, "pubdate", "published", "updated")
+        event = _news_event_from_rss_item(
+            item,
+            provider=provider,
+            ingestion_time=ingestion_time,
+            asset_mapping=asset_mapping,
         )
-        if published > ingestion_time:
-            raise ProviderError("persian_rss_published_after_ingestion")
-        content_hash = digest_content(rendered)
-        if content_hash in seen:
+        if event.content_hash in seen:
             continue
-        seen.add(content_hash)
-        identity = hashlib.sha256(
-            f"{provider.provider_id}|{published.isoformat()}|{content_hash}".encode(
-                "utf-8"
-            )
-        ).hexdigest()
-        events.append(
-            NewsEvent(
-                event_id=identity,
-                provider_id=provider.provider_id,
-                source_id=provider.provider_id,
-                published_at=published,
-                ingested_at=ingestion_time,
-                available_at=ingestion_time,
-                revision=content_hash,
-                asset_mapping=asset_mapping,
-                license_status=provider.license_status,
-                content_hash=content_hash,
-                text=rendered,
-                title=normalize_news_text(title),
-            )
-        )
+        seen.add(event.content_hash)
+        events.append(event)
     if not events:
         raise ProviderError("persian_rss_no_unique_items")
     return tuple(events)
-
 
 def _eligible_sentiment(feature: NewsFeature) -> bool:
     validate_news_feature(feature)

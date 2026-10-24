@@ -22,6 +22,37 @@ class Regressor(Protocol):
 RegressorFactory = Callable[[], Regressor]
 
 
+
+def _validate_weight_names(weights: tuple[tuple[str, float], ...]) -> None:
+    if tuple(name for name, _ in weights) != MODEL_NAMES:
+        raise ValueError("ai_ensemble_weights_must_name_all_models_in_order")
+
+
+def _validate_weight_values(weights: tuple[tuple[str, float], ...]) -> None:
+    if any(not math.isfinite(weight) or weight < 0 for _, weight in weights):
+        raise ValueError("ai_ensemble_weights_must_be_finite_nonnegative")
+
+
+def _validate_weight_sum(weights: tuple[tuple[str, float], ...]) -> None:
+    if abs(sum(weight for _, weight in weights) - 1.0) > 1e-9:
+        raise ValueError("ai_ensemble_weights_must_sum_to_one")
+
+
+def _validate_n_estimators(value: int) -> None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 10:
+        raise ValueError("ai_ensemble_n_estimators_invalid")
+
+
+def _validate_max_depth(value: int) -> None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError("ai_ensemble_max_depth_invalid")
+
+
+def _validate_random_seed(value: int) -> None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError("ai_ensemble_random_seed_invalid")
+
+
 @dataclass(frozen=True, slots=True)
 class EnsembleConfig:
     weights: tuple[tuple[str, float], ...] = (
@@ -34,31 +65,13 @@ class EnsembleConfig:
     max_depth: int = 4
 
     def __post_init__(self) -> None:
-        names = tuple(name for name, _ in self.weights)
-        if names != MODEL_NAMES:
-            raise ValueError("ai_ensemble_weights_must_name_all_models_in_order")
-        values = tuple(weight for _, weight in self.weights)
-        if any(not math.isfinite(weight) or weight < 0 for weight in values):
-            raise ValueError("ai_ensemble_weights_must_be_finite_nonnegative")
-        if abs(sum(values) - 1.0) > 1e-9:
-            raise ValueError("ai_ensemble_weights_must_sum_to_one")
-        if (
-            isinstance(self.n_estimators, bool)
-            or not isinstance(self.n_estimators, int)
-            or self.n_estimators < 10
-        ):
-            raise ValueError("ai_ensemble_n_estimators_invalid")
-        if (
-            isinstance(self.max_depth, bool)
-            or not isinstance(self.max_depth, int)
-            or self.max_depth < 1
-        ):
-            raise ValueError("ai_ensemble_max_depth_invalid")
-        if isinstance(self.random_seed, bool) or not isinstance(self.random_seed, int):
-            raise ValueError("ai_ensemble_random_seed_invalid")
+        _validate_weight_names(self.weights)
+        _validate_weight_values(self.weights)
+        _validate_weight_sum(self.weights)
+        _validate_n_estimators(self.n_estimators)
+        _validate_max_depth(self.max_depth)
+        _validate_random_seed(self.random_seed)
 
-
-@dataclass(frozen=True, slots=True)
 class EnsemblePrediction:
     predictions: tuple[float, ...]
     per_model_predictions: tuple[tuple[str, tuple[float, ...]], ...]
@@ -119,30 +132,50 @@ def default_model_factories(config: EnsembleConfig) -> dict[str, RegressorFactor
     }
 
 
-def _validate_training_inputs(
-    training_features: DataFrame,
-    target: Series | np.ndarray,
-    prediction_features: DataFrame,
-) -> np.ndarray:
+
+def _validate_training_frames(
+    training_features: DataFrame, prediction_features: DataFrame
+) -> None:
     if training_features.empty or prediction_features.empty:
         raise ValueError("ai_ensemble_feature_data_empty")
     if tuple(training_features.columns) != tuple(prediction_features.columns):
         raise ValueError("ai_ensemble_feature_schema_mismatch")
     if training_features.columns.duplicated().any():
         raise ValueError("ai_ensemble_duplicate_feature_names")
-    train = training_features.to_numpy(dtype=float)
-    prediction = prediction_features.to_numpy(dtype=float)
-    labels = np.asarray(target, dtype=float).reshape(-1)
+
+
+def _validate_training_shapes(
+    train: np.ndarray, labels: np.ndarray, prediction: np.ndarray
+) -> None:
     if train.shape[0] != len(labels) or len(labels) < 30:
         raise ValueError("ai_ensemble_training_sample_count_invalid")
     if train.shape[1] < 1 or prediction.shape[1] != train.shape[1]:
         raise ValueError("ai_ensemble_feature_shape_invalid")
+
+
+def _validate_finite_training_data(train: np.ndarray, labels: np.ndarray) -> None:
     if not np.isfinite(train).all() or not np.isfinite(labels).all():
         raise ValueError("ai_ensemble_training_data_non_finite")
+
+
+def _validate_finite_prediction_data(prediction: np.ndarray) -> None:
     if not np.isfinite(prediction).all():
         raise ValueError("ai_ensemble_prediction_data_non_finite")
-    return labels
 
+
+def _validate_training_inputs(
+    training_features: DataFrame,
+    target: Series | np.ndarray,
+    prediction_features: DataFrame,
+) -> np.ndarray:
+    _validate_training_frames(training_features, prediction_features)
+    train = training_features.to_numpy(dtype=float)
+    prediction = prediction_features.to_numpy(dtype=float)
+    labels = np.asarray(target, dtype=float).reshape(-1)
+    _validate_training_shapes(train, labels, prediction)
+    _validate_finite_training_data(train, labels)
+    _validate_finite_prediction_data(prediction)
+    return labels
 
 def _validate_factory_set(
     factories: Mapping[str, RegressorFactory],

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Mapping
+from typing import Callable, Mapping
 
 from services.strategy_selection.contracts import (
     StrategyLifecycle,
@@ -113,39 +113,68 @@ def _number(row: Mapping[str, object], name: str) -> float | None:
     return numeric if math.isfinite(numeric) else None
 
 
+
+def _trend_following_signal(values: Mapping[str, float]) -> int:
+    return int(values["ema_crossover_24_72"] > 0 and values["return_6"] > 0)
+
+
+def _mean_reversion_signal(values: Mapping[str, float]) -> int:
+    return int(
+        values["rsi_14"] <= 30
+        and values["bollinger_position_24"] <= 0
+        and values["return_3"] < 0
+    )
+
+
+def _momentum_breakout_signal(values: Mapping[str, float]) -> int:
+    return int(
+        values["breakout_distance_24"] > 0
+        and values["volume_zscore_24"] > 0
+        and values["return_6"] > 0
+    )
+
+
+SignalRule = tuple[tuple[str, ...], Callable[[Mapping[str, float]], int]]
+_SIGNAL_RULES: dict[str, SignalRule] = {
+    "trend_following": (
+        ("ema_crossover_24_72", "return_6"),
+        _trend_following_signal,
+    ),
+    "mean_reversion": (
+        ("rsi_14", "bollinger_position_24", "return_3"),
+        _mean_reversion_signal,
+    ),
+    "momentum_breakout": (
+        ("breakout_distance_24", "volume_zscore_24", "return_6"),
+        _momentum_breakout_signal,
+    ),
+}
+
+
+def _numeric_signal_values(
+    row: Mapping[str, object], required: tuple[str, ...]
+) -> dict[str, float] | None:
+    values: dict[str, float] = {}
+    for name in required:
+        value = _number(row, name)
+        if value is None:
+            return None
+        values[name] = value
+    return values
+
+
 def generate_candidate_signal(
     strategy_id: str, row: Mapping[str, object]
 ) -> StrategySignal:
     """Generate a long/flat research signal from one already-known feature row."""
-    if strategy_id not in STRATEGY_IDS:
+    rule = _SIGNAL_RULES.get(strategy_id)
+    if rule is None:
         raise ValueError("ai_core_strategy_id_unknown")
-    required: dict[str, tuple[str, ...]] = {
-        "trend_following": ("ema_crossover_24_72", "return_6"),
-        "mean_reversion": ("rsi_14", "bollinger_position_24", "return_3"),
-        "momentum_breakout": ("breakout_distance_24", "volume_zscore_24", "return_6"),
-    }
-    values: dict[str, float] = {}
-    for name in required[strategy_id]:
-        value = _number(row, name)
-        if value is None:
-            return StrategySignal(
-                strategy_id, 0, "required_feature_missing_or_non_finite"
-            )
-        values[name] = value
-    if strategy_id == "trend_following":
-        signal = int(values["ema_crossover_24_72"] > 0 and values["return_6"] > 0)
-    elif strategy_id == "mean_reversion":
-        signal = int(
-            values["rsi_14"] <= 30
-            and values["bollinger_position_24"] <= 0
-            and values["return_3"] < 0
-        )
-    else:
-        signal = int(
-            values["breakout_distance_24"] > 0
-            and values["volume_zscore_24"] > 0
-            and values["return_6"] > 0
-        )
+    required, signal_calculator = rule
+    values = _numeric_signal_values(row, required)
+    if values is None:
+        return StrategySignal(strategy_id, 0, "required_feature_missing_or_non_finite")
+    signal = signal_calculator(values)
     return StrategySignal(
         strategy_id,
         signal,
@@ -153,7 +182,6 @@ def generate_candidate_signal(
         if signal
         else "predeclared_rule_not_triggered",
     )
-
 
 def ensemble_cost_filter(
     predicted_return: float, round_trip_cost_bps: float = ROUND_TRIP_COST_BPS
