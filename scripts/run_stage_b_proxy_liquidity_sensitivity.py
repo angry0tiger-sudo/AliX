@@ -52,14 +52,18 @@ def _download_bytes(url: str) -> bytes | None:
     try:
         with urllib.request.urlopen(request, timeout=60) as response:
             if response.status != 200:
-                raise RuntimeError(f"binance_archive_http_status:{response.status}:{url}")
+                raise RuntimeError(
+                    f"binance_archive_http_status:{response.status}:{url}"
+                )
             return response.read()
     except urllib.error.HTTPError as error:
         if error.code == 404:
             return None
         raise RuntimeError(f"binance_archive_http_error:{error.code}:{url}") from error
     except urllib.error.URLError as error:
-        raise RuntimeError(f"binance_archive_download_error:{url}:{error.reason}") from error
+        raise RuntimeError(
+            f"binance_archive_download_error:{url}:{error.reason}"
+        ) from error
 
 
 def _month_url(month: pd.Timestamp) -> str:
@@ -79,7 +83,9 @@ def _day_url(day: pd.Timestamp) -> str:
 def _read_kline_archive(payload: bytes) -> DataFrame:
     try:
         with zipfile.ZipFile(io.BytesIO(payload)) as archive:
-            csv_names = [name for name in archive.namelist() if name.lower().endswith(".csv")]
+            csv_names = [
+                name for name in archive.namelist() if name.lower().endswith(".csv")
+            ]
             if len(csv_names) != 1:
                 raise ValueError("binance_kline_archive_csv_count_invalid")
             with archive.open(csv_names[0]) as stream:
@@ -88,7 +94,13 @@ def _read_kline_archive(payload: bytes) -> DataFrame:
         raise ValueError(f"binance_kline_archive_invalid:{error}") from error
 
     frame.columns = [
-        "open_time", "open", "high", "low", "close", "base_volume", "quote_volume"
+        "open_time",
+        "open",
+        "high",
+        "low",
+        "close",
+        "base_volume",
+        "quote_volume",
     ]
     for column in frame.columns:
         frame[column] = pd.to_numeric(frame[column], errors="coerce")
@@ -133,7 +145,11 @@ def _download_binance_klines(
         if payload is not None:
             pieces.append(_read_kline_archive(payload))
             downloads.append(
-                {"url": url, "sha256": hashlib.sha256(payload).hexdigest(), "kind": "monthly"}
+                {
+                    "url": url,
+                    "sha256": hashlib.sha256(payload).hexdigest(),
+                    "kind": "monthly",
+                }
             )
             continue
 
@@ -165,9 +181,13 @@ def _download_binance_klines(
     if not pieces:
         raise ValueError("binance_kline_source_returned_no_data")
     klines = pd.concat(pieces, ignore_index=True)
-    klines = klines.loc[
-        klines["date"].between(start.floor("D"), end + pd.Timedelta(hours=1))
-    ].sort_values("date").reset_index(drop=True)
+    klines = (
+        klines.loc[
+            klines["date"].between(start.floor("D"), end + pd.Timedelta(hours=1))
+        ]
+        .sort_values("date")
+        .reset_index(drop=True)
+    )
     if klines.empty:
         raise ValueError("binance_kline_source_has_no_rows_in_requested_period")
     if klines["date"].duplicated().any():
@@ -205,7 +225,9 @@ def _scale_binance_quote_volume(klines: DataFrame) -> tuple[DataFrame, dict[str,
         raise ValueError("binance_quote_volume_timestamp_duplicate")
 
     result["utc_day"] = result["date"].dt.floor("D")
-    daily_total = result.groupby("utc_day")["quote_volume"].transform("sum").to_numpy(float)
+    daily_total = (
+        result.groupby("utc_day")["quote_volume"].transform("sum").to_numpy(float)
+    )
     ratio = np.zeros(len(result), dtype=float)
     positive = daily_total > 0
     ratio[positive] = np.minimum(
@@ -233,7 +255,9 @@ def _scale_binance_quote_volume(klines: DataFrame) -> tuple[DataFrame, dict[str,
     return result, stats
 
 
-def _align_proxy_volume(candles: DataFrame, klines: DataFrame) -> tuple[np.ndarray, dict[str, Any]]:
+def _align_proxy_volume(
+    candles: DataFrame, klines: DataFrame
+) -> tuple[np.ndarray, dict[str, Any]]:
     """Align proxy labels to the fixed candle phase without claiming identical windows."""
     scaled, scale_stats = _scale_binance_quote_volume(klines)
     candle_dates = pd.to_datetime(candles["date"], utc=True, errors="raise")
@@ -262,7 +286,9 @@ def _align_proxy_volume(candles: DataFrame, klines: DataFrame) -> tuple[np.ndarr
     aligned_source = scaled.loc[
         :, ["date", "quote_volume", "proxy_quote_volume", "proxy_scale_ratio"]
     ].copy()
-    aligned_source["date"] = aligned_source["date"] + pd.Timedelta(minutes=phase_minutes)
+    aligned_source["date"] = aligned_source["date"] + pd.Timedelta(
+        minutes=phase_minutes
+    )
 
     aligned = candles.loc[:, ["date"]].copy()
     aligned["date"] = candle_dates
@@ -282,9 +308,11 @@ def _align_proxy_volume(candles: DataFrame, klines: DataFrame) -> tuple[np.ndarr
     if not np.isfinite(capacity).all() or np.any(capacity < 0):
         raise ValueError("proxy_capacity_invalid")
 
-    daily_proxy = pd.DataFrame(
-        {"date": aligned["date"], "proxy_quote_volume": proxy}
-    ).groupby(aligned["date"].dt.floor("D"))["proxy_quote_volume"].sum()
+    daily_proxy = (
+        pd.DataFrame({"date": aligned["date"], "proxy_quote_volume": proxy})
+        .groupby(aligned["date"].dt.floor("D"))["proxy_quote_volume"]
+        .sum()
+    )
     if (daily_proxy > PROXY_DAILY_QUOTE_CAP + 1e-6).any():
         raise ValueError("aligned_proxy_daily_quote_cap_invariant_violated")
 
@@ -318,9 +346,10 @@ def _align_proxy_volume(candles: DataFrame, klines: DataFrame) -> tuple[np.ndarr
     }
     return capacity, stats
 
-def _event_outcomes(candles: DataFrame) -> tuple[
-    dict[tuple[int, float, float], DataFrame], list[dict[str, Any]]
-]:
+
+def _event_outcomes(
+    candles: DataFrame,
+) -> tuple[dict[tuple[int, float, float], DataFrame], list[dict[str, Any]]]:
     close = pd.to_numeric(candles["close"], errors="raise")
     volatility = np.log(close).diff().rolling(24, min_periods=24).std() * math.sqrt(24)
     outcome_map: dict[tuple[int, float, float], DataFrame] = {}
@@ -365,16 +394,25 @@ def _event_outcomes(candles: DataFrame) -> tuple[
                             "profit_taking_multiplier": pt,
                             "stop_loss_multiplier": sl,
                             "target_volatility_floor": TARGET_VOLATILITY_FLOOR,
-                            "minimum_take_profit_barrier_return": pt * TARGET_VOLATILITY_FLOOR,
+                            "minimum_take_profit_barrier_return": pt
+                            * TARGET_VOLATILITY_FLOOR,
                             "slippage_bps_per_side": slip,
                             "round_trip_cost_bps": 2.0 * (stage_b.FEE_BPS_SIDE + slip),
                             "scheduled_event_count_not_trade_count": len(outcomes),
-                            "take_profit_count": int(outcomes["exit_reason"].eq("take_profit").sum()),
-                            "stop_loss_count": int(outcomes["exit_reason"].eq("stop_loss").sum()),
-                            "vertical_count": int(outcomes["exit_reason"].eq("vertical").sum()),
+                            "take_profit_count": int(
+                                outcomes["exit_reason"].eq("take_profit").sum()
+                            ),
+                            "stop_loss_count": int(
+                                outcomes["exit_reason"].eq("stop_loss").sum()
+                            ),
+                            "vertical_count": int(
+                                outcomes["exit_reason"].eq("vertical").sum()
+                            ),
                             "mean_gross_barrier_return": float(np.mean(gross)),
                             "median_gross_barrier_return": float(np.median(gross)),
-                            "mean_net_barrier_diagnostic_return": float(np.mean(gross - cost)),
+                            "mean_net_barrier_diagnostic_return": float(
+                                np.mean(gross - cost)
+                            ),
                             "status": "DESCRIPTIVE_BARRIER_OUTCOMES_NOT_EXECUTION_BACKTEST",
                         }
                     )
@@ -382,11 +420,16 @@ def _event_outcomes(candles: DataFrame) -> tuple[
 
 
 def _validate_reference_prices(reference: DataFrame) -> DataFrame:
-    if not {"timestamp", "reference_price"}.issubset(reference.columns) or reference.empty:
+    if (
+        not {"timestamp", "reference_price"}.issubset(reference.columns)
+        or reference.empty
+    ):
         raise ValueError("bookdepth_reference_price_schema_missing_or_empty")
     result = reference.loc[:, ["timestamp", "reference_price"]].copy()
     result["timestamp"] = pd.to_datetime(result["timestamp"], utc=True, errors="raise")
-    result["reference_price"] = pd.to_numeric(result["reference_price"], errors="coerce")
+    result["reference_price"] = pd.to_numeric(
+        result["reference_price"], errors="coerce"
+    )
     values = result["reference_price"].to_numpy(dtype=float)
     if not np.isfinite(values).all() or np.any(values <= 0):
         raise ValueError("bookdepth_reference_price_invalid")
@@ -417,21 +460,26 @@ def _validate_bookdepth_rows(book: DataFrame) -> DataFrame:
 
     expected = set(BOOK_BANDS)
     for _, group in result.groupby(BOOK_TIME, sort=True):
-        if set(group["percentage"].astype(int).tolist()) != expected or len(group) != len(expected):
+        if set(group["percentage"].astype(int).tolist()) != expected or len(
+            group
+        ) != len(expected):
             raise ValueError("bookdepth_snapshot_incomplete_percentage_bands")
         for side in ("bid", "ask"):
             side_values = group.loc[
-                group["percentage"].lt(0) if side == "bid" else group["percentage"].gt(0)
+                group["percentage"].lt(0)
+                if side == "bid"
+                else group["percentage"].gt(0)
             ].copy()
             side_values["band"] = side_values["percentage"].abs().astype(int)
             side_values = side_values.sort_values("band")
             for column in ("depth", "notional"):
                 if np.any(np.diff(side_values[column].to_numpy(dtype=float)) < 0):
-                    raise ValueError(f"bookdepth_cumulative_{column}_not_monotonic:{side}")
-            implied_prices = (
-                side_values["notional"].to_numpy(dtype=float)
-                / side_values["depth"].to_numpy(dtype=float)
-            )
+                    raise ValueError(
+                        f"bookdepth_cumulative_{column}_not_monotonic:{side}"
+                    )
+            implied_prices = side_values["notional"].to_numpy(
+                dtype=float
+            ) / side_values["depth"].to_numpy(dtype=float)
             if side == "bid" and np.any(np.diff(implied_prices) > 1e-9):
                 raise ValueError("bookdepth_bid_implied_price_not_monotonic")
             if side == "ask" and np.any(np.diff(implied_prices) < -1e-9):
@@ -457,7 +505,9 @@ def add_banded_orderbook_features(
     if enriched["reference_price"].isna().any():
         raise ValueError("bookdepth_reference_price_missing_or_stale")
 
-    implied = enriched["notional"].to_numpy(dtype=float) / enriched["depth"].to_numpy(dtype=float)
+    implied = enriched["notional"].to_numpy(dtype=float) / enriched["depth"].to_numpy(
+        dtype=float
+    )
     reference = enriched["reference_price"].to_numpy(dtype=float)
     pct = enriched["percentage"].to_numpy(dtype=float) / 100.0
     tolerance = reference * PRICE_BAND_TOLERANCE_FRACTION
@@ -469,7 +519,9 @@ def add_banded_orderbook_features(
     snapshots: list[dict[str, Any]] = []
     for timestamp, group in enriched.groupby(BOOK_TIME, sort=True):
         row: dict[str, Any] = {BOOK_TIME: timestamp}
-        lookup = {int(record["percentage"]): record for record in group.to_dict("records")}
+        lookup = {
+            int(record["percentage"]): record for record in group.to_dict("records")
+        }
         for band in BOOK_FEATURE_BANDS:
             bid = lookup[-band]
             ask = lookup[band]
@@ -510,14 +562,23 @@ def add_banded_orderbook_features(
 def _validate_bookdepth_manifest(
     book_path: Path, reference_path: Path, manifest_path: Path
 ) -> dict[str, Any]:
-    if not book_path.is_file() or not reference_path.is_file() or not manifest_path.is_file():
+    if (
+        not book_path.is_file()
+        or not reference_path.is_file()
+        or not manifest_path.is_file()
+    ):
         raise ValueError("bookdepth_data_reference_or_manifest_missing")
     value = json.loads(manifest_path.read_text(encoding="utf-8"))
     if not isinstance(value, dict):
         raise ValueError("bookdepth_manifest_not_object")
     required = {
-        "schema", "venue", "symbol", "source_url", "permission_status",
-        "csv_sha256", "reference_price_sha256",
+        "schema",
+        "venue",
+        "symbol",
+        "source_url",
+        "permission_status",
+        "csv_sha256",
+        "reference_price_sha256",
     }
     if not required.issubset(value):
         raise ValueError("bookdepth_manifest_required_fields_missing")
@@ -539,7 +600,10 @@ def _validate_bookdepth_manifest(
     reference_sha = hashlib.sha256(reference_path.read_bytes()).hexdigest()
     if book_sha != str(value["csv_sha256"]) or len(book_sha) != 64:
         raise ValueError("bookdepth_csv_checksum_mismatch")
-    if reference_sha != str(value["reference_price_sha256"]) or len(reference_sha) != 64:
+    if (
+        reference_sha != str(value["reference_price_sha256"])
+        or len(reference_sha) != 64
+    ):
         raise ValueError("bookdepth_reference_price_checksum_mismatch")
     return value
 
@@ -551,11 +615,21 @@ def _load_banded_book_features(
     manifest_path: Path | None,
 ) -> tuple[str, DataFrame | None, int | None, str | None, list[str]]:
     if book_path is None and reference_path is None and manifest_path is None:
-        return "NOT_PROVIDED", None, None, None, ["historical_banded_orderbook_not_provided"]
+        return (
+            "NOT_PROVIDED",
+            None,
+            None,
+            None,
+            ["historical_banded_orderbook_not_provided"],
+        )
     if book_path is None or reference_path is None or manifest_path is None:
-        return "INVALID", None, None, None, [
-            "bookdepth_csv_reference_price_and_manifest_are_all_required"
-        ]
+        return (
+            "INVALID",
+            None,
+            None,
+            None,
+            ["bookdepth_csv_reference_price_and_manifest_are_all_required"],
+        )
     try:
         _validate_bookdepth_manifest(book_path, reference_path, manifest_path)
         book = pd.read_csv(book_path)
@@ -569,7 +643,13 @@ def _load_banded_book_features(
         json.JSONDecodeError,
         pd.errors.ParserError,
     ) as error:
-        return "INVALID_OR_INCOMPLETE", None, None, None, [f"bookdepth_validation_failed:{error}"]
+        return (
+            "INVALID_OR_INCOMPLETE",
+            None,
+            None,
+            None,
+            [f"bookdepth_validation_failed:{error}"],
+        )
     manifest_sha = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
     return "VALIDATED_BANDED_RELATIVE_FEATURES", features, len(book), manifest_sha, []
 
@@ -615,7 +695,9 @@ def run_experiment(
     reference_price_csv: Path | None = None,
     bookdepth_manifest: Path | None = None,
 ) -> dict[str, Any]:
-    if len(commit_sha) != 40 or any(char not in "0123456789abcdef" for char in commit_sha):
+    if len(commit_sha) != 40 or any(
+        char not in "0123456789abcdef" for char in commit_sha
+    ):
         raise ValueError("research_commit_sha_invalid")
     candles, source_report, segment_hash = stage_b._load_development(input_dir)
     klines, kline_manifest = _download_binance_klines(
@@ -665,13 +747,15 @@ def run_experiment(
             "stop_loss_multipliers": list(SL_MULTIPLIERS),
             "target_volatility_source": "trailing 24-hour volatility, floored at 0.51% to keep the 2x TP barrier at or above 1.02%",
             "target_volatility_floor": TARGET_VOLATILITY_FLOOR,
-            "minimum_take_profit_barrier_return": min(PT_MULTIPLIERS) * TARGET_VOLATILITY_FLOOR,
+            "minimum_take_profit_barrier_return": min(PT_MULTIPLIERS)
+            * TARGET_VOLATILITY_FLOOR,
             "minimum_take_profit_barrier_exceeds_one_percent": (
                 min(PT_MULTIPLIERS) * TARGET_VOLATILITY_FLOOR > 0.01
             ),
             "barrier_candidate_count": len(outcomes_by_config),
             "model_candidate_count_planned": 2 * len(outcomes_by_config),
-            "model_candidate_count_executed": len(feature_groups) * len(outcomes_by_config),
+            "model_candidate_count_executed": len(feature_groups)
+            * len(outcomes_by_config),
             "model_candidate_count_blocked_for_missing_or_invalid_book": (
                 0 if book_features is not None else len(outcomes_by_config)
             ),
@@ -785,17 +869,31 @@ def main() -> int:
                 "commit_sha": report["created_by_commit_sha"],
                 "run_status": report["run_status"],
                 "barrier_scenarios": report["protocol"]["diagnostic_scenario_count"],
-                "planned_model_candidates": report["protocol"]["model_candidate_count_planned"],
-                "executed_model_candidates": report["protocol"]["model_candidate_count_executed"],
-                "blocked_book_candidates": report["protocol"]["model_candidate_count_blocked_for_missing_or_invalid_book"],
+                "planned_model_candidates": report["protocol"][
+                    "model_candidate_count_planned"
+                ],
+                "executed_model_candidates": report["protocol"][
+                    "model_candidate_count_executed"
+                ],
+                "blocked_book_candidates": report["protocol"][
+                    "model_candidate_count_blocked_for_missing_or_invalid_book"
+                ],
                 "oos_predictions": report["protocol"]["oos_prediction_row_count"],
-                "proxy_coverage_fraction": report["data_availability"]["binance_kline_proxy"]["matched_candle_fraction"],
-                "proxy_order_capacity_rows": report["data_availability"]["binance_kline_proxy"]["proxy_candle_rows_with_10_quote_unit_capacity"],
-                "proxy_pass_count": report["proxy_sensitivity_evaluation"]["proxy_candidate_pass_count"],
+                "proxy_coverage_fraction": report["data_availability"][
+                    "binance_kline_proxy"
+                ]["matched_candle_fraction"],
+                "proxy_order_capacity_rows": report["data_availability"][
+                    "binance_kline_proxy"
+                ]["proxy_candle_rows_with_10_quote_unit_capacity"],
+                "proxy_pass_count": report["proxy_sensitivity_evaluation"][
+                    "proxy_candidate_pass_count"
+                ],
                 "economic_status": report["economic_evaluation"]["status"],
                 "Champion": report["safety_invariants"]["Champion"],
                 "order_permission": report["safety_invariants"]["order_permission"],
-                "trading_authorization": report["safety_invariants"]["trading_authorization"],
+                "trading_authorization": report["safety_invariants"][
+                    "trading_authorization"
+                ],
             },
             sort_keys=True,
             allow_nan=False,

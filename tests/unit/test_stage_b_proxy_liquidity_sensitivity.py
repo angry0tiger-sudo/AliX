@@ -87,10 +87,14 @@ def test_ten_quote_unit_order_requires_at_least_one_thousand_proxy_turnover() ->
     assert cap[1] < REFERENCE_ORDER_NOTIONAL
 
 
-def test_banded_book_adapter_emits_only_relative_features_and_joins_prior_snapshot() -> None:
+def test_banded_book_adapter_emits_only_relative_features_and_joins_prior_snapshot() -> (
+    None
+):
     first = "2024-01-01T00:59:30Z"
     second = "2024-01-01T01:59:30Z"
-    book = pd.DataFrame(_book_rows(first) + _book_rows(second, bid_scale=1.0, ask_scale=3.0))
+    book = pd.DataFrame(
+        _book_rows(first) + _book_rows(second, bid_scale=1.0, ask_scale=3.0)
+    )
     references = pd.DataFrame(
         {
             "timestamp": pd.to_datetime([first, second], utc=True),
@@ -101,7 +105,9 @@ def test_banded_book_adapter_emits_only_relative_features_and_joins_prior_snapsh
     assert features["depth_imbalance_1pct"].iloc[0] == pytest.approx(0.5)
     assert features["depth_imbalance_1pct"].iloc[1] == pytest.approx(-0.5)
     assert features["notional_imbalance_5pct"].between(-1.0, 1.0).all()
-    assert not any(column in features.columns for column in ("depth", "notional", "percentage"))
+    assert not any(
+        column in features.columns for column in ("depth", "notional", "percentage")
+    )
     assert len(features) == len(_candles())
 
 
@@ -109,7 +115,10 @@ def test_banded_book_adapter_fails_closed_on_missing_band() -> None:
     timestamp = "2024-01-01T00:59:30Z"
     book = pd.DataFrame(_book_rows(timestamp)[:-1])
     reference = pd.DataFrame(
-        {"timestamp": pd.to_datetime([timestamp], utc=True), "reference_price": [100_000.0]}
+        {
+            "timestamp": pd.to_datetime([timestamp], utc=True),
+            "reference_price": [100_000.0],
+        }
     )
     with pytest.raises(ValueError, match="incomplete_percentage_bands"):
         add_banded_orderbook_features(_candles().iloc[:1], book, reference)
@@ -121,13 +130,18 @@ def test_banded_book_adapter_rejects_out_of_band_implied_price() -> None:
     rows[0]["notional"] = float(rows[0]["depth"]) * 80_000.0
     book = pd.DataFrame(rows)
     reference = pd.DataFrame(
-        {"timestamp": pd.to_datetime([timestamp], utc=True), "reference_price": [100_000.0]}
+        {
+            "timestamp": pd.to_datetime([timestamp], utc=True),
+            "reference_price": [100_000.0],
+        }
     )
     with pytest.raises(ValueError, match="implied_price_outside_declared_band"):
         add_banded_orderbook_features(_candles().iloc[:1], book, reference)
 
 
-def test_bookdepth_manifest_checks_permission_and_both_checksums(tmp_path: Path) -> None:
+def test_bookdepth_manifest_checks_permission_and_both_checksums(
+    tmp_path: Path,
+) -> None:
     book_path = tmp_path / "book.csv"
     reference_path = tmp_path / "reference.csv"
     manifest_path = tmp_path / "manifest.json"
@@ -140,17 +154,26 @@ def test_bookdepth_manifest_checks_permission_and_both_checksums(tmp_path: Path)
         "source_url": "https://data.binance.vision/data/futures/um/daily/bookDepth/BTCUSDT/example.zip",
         "permission_status": "approved",
         "csv_sha256": hashlib.sha256(book_path.read_bytes()).hexdigest(),
-        "reference_price_sha256": hashlib.sha256(reference_path.read_bytes()).hexdigest(),
+        "reference_price_sha256": hashlib.sha256(
+            reference_path.read_bytes()
+        ).hexdigest(),
     }
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
-    assert _validate_bookdepth_manifest(book_path, reference_path, manifest_path)["permission_status"] == "approved"
+    assert (
+        _validate_bookdepth_manifest(book_path, reference_path, manifest_path)[
+            "permission_status"
+        ]
+        == "approved"
+    )
     manifest["permission_status"] = "unverified"
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     with pytest.raises(ValueError, match="permission_not_approved"):
         _validate_bookdepth_manifest(book_path, reference_path, manifest_path)
 
 
-def test_proxy_alignment_handles_nobitex_half_hour_phase_without_fabricating_volume() -> None:
+def test_proxy_alignment_handles_nobitex_half_hour_phase_without_fabricating_volume() -> (
+    None
+):
     candles = pd.DataFrame(
         {
             "date": pd.to_datetime(
