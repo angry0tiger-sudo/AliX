@@ -325,7 +325,7 @@ def test_hourly_market_data_validation_fails_closed(mutation: str, reason: str) 
         candles = candles.iloc[::-1].reset_index(drop=True)
     elif mutation == "gap":
         date_values = pd.to_datetime(candles["date"], utc=True).tolist()
-        date_values[20] = pd.Timestamp(date_values[20]) + pd.Timedelta(minutes=1)
+        date_values[20] = pd.Timestamp(date_values[20]) + pd.Timedelta(1, unit="m")
         candles["date"] = pd.to_datetime(date_values, utc=True)
     elif mutation == "naive_time":
         candles["date"] = candles["date"].dt.tz_localize(None)

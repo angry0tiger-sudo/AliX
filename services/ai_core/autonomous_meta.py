@@ -424,7 +424,7 @@ def _validate_hourly_timestamps(date_values: Series) -> Series:
     dates = dates.dt.tz_convert("UTC")
     if dates.duplicated().any() or not dates.is_monotonic_increasing:
         raise ValueError("autonomous_timestamps_duplicate_or_non_monotonic")
-    if not dates.diff().dropna().eq(pd.Timedelta(hours=1)).all():
+    if not dates.diff().dropna().eq(pd.Timedelta(1, unit="h")).all():
         raise ValueError("autonomous_hourly_timestamps_not_contiguous")
     return dates
 

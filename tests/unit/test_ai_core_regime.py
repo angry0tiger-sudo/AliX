@@ -55,6 +55,25 @@ def test_hmm_inference_returns_normalized_causal_posteriors() -> None:
     assert all(0.0 <= value <= 1.0 for row in posterior for value in row)
 
 
+def test_hmm_inference_keeps_log_probabilities_stable_when_posteriors_underflow() -> None:
+    fit = fitted_parameters(
+        means=((0.70, 0.004), (0.0, 0.004), (1.0, 0.004)),
+        standard_deviations=(
+            (0.001, 0.001),
+            (0.001, 0.001),
+            (0.001, 0.001),
+        ),
+    )
+    source = observations(8)
+    with np.errstate(divide="raise", invalid="raise"):
+        regimes, posterior = infer_hmm_regimes(source, fit)
+
+    assert len(regimes) == len(source)
+    assert all(np.isfinite(value) for row in posterior for value in row)
+    assert any(value == 0.0 for row in posterior for value in row)
+    assert all(sum(row) == pytest.approx(1.0) for row in posterior)
+
+
 def test_hmm_forward_filter_is_invariant_to_future_observation_changes() -> None:
     fit = fitted_parameters()
     history = observations(15)

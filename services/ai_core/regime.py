@@ -114,18 +114,31 @@ def infer_hmm_regimes(
     posteriors: list[tuple[float, ...]] = []
     for observation in values:
         candidate = prior + _log_emission(observation, means, standard_deviations)
+        if not np.isfinite(candidate).all():
+            raise ValueError("ai_core_hmm_inference_non_finite")
         normalizer = _logsumexp(candidate)
-        posterior = np.exp(candidate - normalizer)
+        if not math.isfinite(normalizer):
+            raise ValueError("ai_core_hmm_inference_non_finite")
+        log_posterior = candidate - normalizer
+        if not np.isfinite(log_posterior).all():
+            raise ValueError("ai_core_hmm_inference_non_finite")
+        posterior = np.exp(log_posterior)
+        if not np.isfinite(posterior).all() or not math.isclose(
+            float(posterior.sum()), 1.0, rel_tol=1e-12, abs_tol=1e-12
+        ):
+            raise ValueError("ai_core_hmm_inference_non_finite")
         selected = int(np.argmax(posterior))
         regimes.append(REGIME_NAMES[selected])
         posteriors.append(tuple(float(value) for value in posterior))
         prior = np.asarray(
             [
-                _logsumexp(np.log(posterior) + log_transition[:, state])
+                _logsumexp(log_posterior + log_transition[:, state])
                 for state in range(3)
             ],
             dtype=float,
         )
+        if not np.isfinite(prior).all():
+            raise ValueError("ai_core_hmm_inference_non_finite")
     return tuple(regimes), tuple(posteriors)
 
 
