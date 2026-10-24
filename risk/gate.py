@@ -267,6 +267,34 @@ class RiskGate:
         rules: MarketRules,
         policy: RiskPolicy,
     ) -> tuple[str, ...]:
+        identity_reasons = self._initial_stake_identity_reasons(
+            allocation, policy
+        )
+        if account.currency != "USDT" or not market.symbol.endswith("/USDT"):
+            return tuple(
+                dict.fromkeys(identity_reasons + ("initial_stake_usdt_market_required",))
+            )
+        target, below_target, balance_reasons = self._initial_stake_target(
+            account, market, policy
+        )
+        quantity = floor_to_step(target / market.price, rules.quantity_step)
+        stake = quantity * market.price
+        reasons = (
+            identity_reasons
+            + balance_reasons
+            + self._initial_stake_market_reasons(
+                quantity, stake, below_target, rules, policy
+            )
+            + self._initial_stake_allocation_reasons(
+                quantity, stake, allocation
+            )
+            + self._initial_stake_funding_reasons(stake, account, policy)
+        )
+        return tuple(dict.fromkeys(reasons))
+
+    def _initial_stake_identity_reasons(
+        self, allocation: RiskAllocation, policy: RiskPolicy
+    ) -> tuple[str, ...]:
         stake_policy = policy.initial_stake_policy
         reasons: list[str] = []
         if not stake_policy.owner_approved:
@@ -275,37 +303,70 @@ class RiskGate:
             reasons.append("initial_stake_policy_revision_mismatch")
         if allocation.initial_stake_policy_fingerprint != stake_policy.fingerprint:
             reasons.append("initial_stake_policy_fingerprint_mismatch")
-        if account.currency != "USDT" or not market.symbol.endswith("/USDT"):
-            reasons.append("initial_stake_usdt_market_required")
-            return tuple(reasons)
+        return tuple(reasons)
+
+    def _initial_stake_target(
+        self,
+        account: AccountSnapshot,
+        market: MarketSnapshot,
+        policy: RiskPolicy,
+    ) -> tuple[Decimal, bool, tuple[str, ...]]:
+        stake_policy = policy.initial_stake_policy
         below_target = account.free_balance < stake_policy.target_usdt
         if below_target and not stake_policy.use_all_free_balance_below_target:
-            reasons.append("initial_stake_below_target_policy_disabled")
-        reserve_factor = Decimal("1") + policy.fee_rate + policy.slippage_rate
-        target_notional = (
-            account.free_balance / reserve_factor
+            return (
+                stake_policy.target_usdt,
+                True,
+                ("initial_stake_below_target_policy_disabled",),
+            )
+        reserve = Decimal("1") + policy.fee_rate + policy.slippage_rate
+        target = (
+            account.free_balance / reserve
             if below_target
             else stake_policy.target_usdt
         )
-        expected_quantity = floor_to_step(
-            target_notional / market.price, rules.quantity_step
-        )
-        expected_stake = expected_quantity * market.price
-        if not below_target and expected_stake < stake_policy.target_usdt:
+        return target, below_target, ()
+
+    def _initial_stake_market_reasons(
+        self,
+        quantity: Decimal,
+        stake: Decimal,
+        below_target: bool,
+        rules: MarketRules,
+        policy: RiskPolicy,
+    ) -> tuple[str, ...]:
+        stake_policy = policy.initial_stake_policy
+        reasons: list[str] = []
+        if not below_target and stake < stake_policy.target_usdt:
             reasons.append("initial_stake_target_not_representable_at_market_precision")
-        if (
-            expected_quantity > rules.max_quantity
-            or expected_stake > rules.max_notional
-        ):
+        if quantity > rules.max_quantity or stake > rules.max_notional:
             reasons.append("initial_stake_target_exceeds_market_maximum")
-        if (
-            expected_quantity != allocation.quantity
-            or expected_stake != allocation.stake
-        ):
-            reasons.append("initial_stake_target_mismatch")
-        if expected_stake * reserve_factor > account.free_balance:
-            reasons.append("initial_stake_fee_reserve_insufficient")
-        return tuple(dict.fromkeys(reasons))
+        if quantity < rules.min_quantity:
+            reasons.append("quantity_below_market_minimum")
+        if stake < rules.min_notional:
+            reasons.append("notional_below_market_minimum")
+        return tuple(reasons)
+
+    def _initial_stake_allocation_reasons(
+        self,
+        quantity: Decimal,
+        stake: Decimal,
+        allocation: RiskAllocation,
+    ) -> tuple[str, ...]:
+        if quantity != allocation.quantity or stake != allocation.stake:
+            return ("initial_stake_target_mismatch",)
+        return ()
+
+    def _initial_stake_funding_reasons(
+        self,
+        stake: Decimal,
+        account: AccountSnapshot,
+        policy: RiskPolicy,
+    ) -> tuple[str, ...]:
+        reserve = Decimal("1") + policy.fee_rate + policy.slippage_rate
+        if stake * reserve > account.free_balance:
+            return ("initial_stake_fee_reserve_insufficient",)
+        return ()
 
     def _stop_and_price_reasons(
         self, allocation: RiskAllocation, market: MarketSnapshot
