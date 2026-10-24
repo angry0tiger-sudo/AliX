@@ -127,7 +127,9 @@ def test_banded_book_adapter_fails_closed_on_missing_band() -> None:
 def test_banded_book_adapter_rejects_out_of_band_implied_price() -> None:
     timestamp = "2024-01-01T00:59:30Z"
     rows = _book_rows(timestamp)
-    rows[0]["notional"] = float(rows[0]["depth"]) * 80_000.0
+    depth = rows[0]["depth"]
+    assert isinstance(depth, (int, float))
+    rows[0]["notional"] = float(depth) * 80_000.0
     book = pd.DataFrame(rows)
     reference = pd.DataFrame(
         {

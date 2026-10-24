@@ -12,7 +12,7 @@ import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlsplit
 
 import numpy as np
@@ -20,6 +20,7 @@ import pandas as pd
 from pandas import DataFrame
 
 from scripts import run_stage_b_triple_barrier_orderbook as stage_b
+from scripts.run_stage_b_walk_forward import A_HOLDOUT, HOUR, SOURCE_RUN_ID, utc_text
 from services.meta_labeling.triple_barrier import (
     TripleBarrierConfig,
     apply_triple_barrier,
@@ -55,7 +56,7 @@ def _download_bytes(url: str) -> bytes | None:
                 raise RuntimeError(
                     f"binance_archive_http_status:{response.status}:{url}"
                 )
-            return response.read()
+            return cast(bytes, response.read())
     except urllib.error.HTTPError as error:
         if error.code == 404:
             return None
@@ -381,7 +382,7 @@ def _event_outcomes(
                     max_holding_bars=horizon,
                     fee_bps_per_side=0.0,
                     slippage_bps_per_side=0.0,
-                    timeframe_seconds=stage_b.HOUR,
+                    timeframe_seconds=HOUR,
                 )
                 outcomes = apply_triple_barrier(candles, events, config)
                 outcome_map[(horizon, pt, sl)] = outcomes
@@ -536,7 +537,7 @@ def add_banded_orderbook_features(
     features = DataFrame(snapshots)
     left = candles.loc[:, ["date"]].copy()
     left["date"] = pd.to_datetime(left["date"], utc=True, errors="raise")
-    left["decision_time"] = left["date"] + pd.Timedelta(seconds=stage_b.HOUR)
+    left["decision_time"] = left["date"] + pd.Timedelta(seconds=HOUR)
     joined = pd.merge_asof(
         left.sort_values("decision_time"),
         features.sort_values(BOOK_TIME),
@@ -728,7 +729,7 @@ def run_experiment(
         "run_status": run_status,
         "created_by_commit_sha": commit_sha,
         "source": {
-            "coverage_workflow_run_id": stage_b.SOURCE_RUN_ID,
+            "coverage_workflow_run_id": SOURCE_RUN_ID,
             "coverage_csv_sha256": source_report["csv_sha256"],
             "coverage_manifest_sha256": source_report["manifest_sha256"],
             "segment_a_rows_sha256": segment_hash,
@@ -736,10 +737,10 @@ def run_experiment(
             "ohlcv_venue": "Nobitex historical prices; original volume field remains unchanged",
             "timeframe": "1h",
             "development_rows": len(candles),
-            "reserved_final_90_day_holdout_rows": stage_b.A_HOLDOUT,
+            "reserved_final_90_day_holdout_rows": A_HOLDOUT,
             "holdout_used": False,
-            "development_start_utc": stage_b.utc_text(candles["date"].iloc[0]),
-            "development_end_utc": stage_b.utc_text(candles["date"].iloc[-1]),
+            "development_start_utc": utc_text(candles["date"].iloc[0]),
+            "development_end_utc": utc_text(candles["date"].iloc[-1]),
         },
         "protocol": {
             "horizons_hours": list(HORIZONS),
