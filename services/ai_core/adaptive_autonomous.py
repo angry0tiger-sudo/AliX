@@ -225,7 +225,9 @@ def _validate_adaptive_policy_document(
     ):
         raise ValueError("adaptive_config_code_hash_invalid")
     parameters = payload["parameters"]
-    if not isinstance(parameters, dict) or set(parameters) != set(asdict(AdaptiveConfig())):
+    if not isinstance(parameters, dict) or set(parameters) != set(
+        asdict(AdaptiveConfig())
+    ):
         raise ValueError("adaptive_config_parameters_invalid")
     return expected_hash, parameters
 
@@ -252,7 +254,6 @@ def load_adaptive_config(path: Path, module_path: Path) -> AdaptiveConfig:
     expected_hash, parameters = _validate_adaptive_policy_document(payload)
     _verify_adaptive_module_hash(module_path, expected_hash)
     return _construct_adaptive_config(parameters)
-
 
 
 def _finite_number(value: object) -> float | None:
@@ -462,7 +463,12 @@ def _valid_dynamic_stop_inputs(
     values = (entry_price, atr, support_level, stop_multiple)
     if not all(math.isfinite(value) for value in values):
         return False
-    if entry_price <= 0 or atr <= 0 or support_level <= 0 or support_level >= entry_price:
+    if (
+        entry_price <= 0
+        or atr <= 0
+        or support_level <= 0
+        or support_level >= entry_price
+    ):
         return False
     return (
         config.minimum_stop_atr_multiple
@@ -511,7 +517,6 @@ def plan_dynamic_stop(
     )
 
 
-
 def _valid_position_inputs(
     equity: float,
     entry_price: float,
@@ -520,7 +525,14 @@ def _valid_position_inputs(
     trend_strength: float,
     volatility_score: float,
 ) -> bool:
-    values = (equity, entry_price, stop_loss, confidence, trend_strength, volatility_score)
+    values = (
+        equity,
+        entry_price,
+        stop_loss,
+        confidence,
+        trend_strength,
+        volatility_score,
+    )
     if not all(math.isfinite(value) for value in values):
         return False
     return (
@@ -534,13 +546,16 @@ def _valid_position_inputs(
 
 
 def _adaptive_risk_fraction(
-    confidence: float, trend_strength: float, volatility_score: float,
+    confidence: float,
+    trend_strength: float,
+    volatility_score: float,
     config: AdaptiveConfig,
 ) -> float:
     risk_strength = confidence * trend_strength * (1.0 - 0.5 * volatility_score)
-    requested = config.minimum_risk_fraction + (
-        config.maximum_risk_fraction - config.minimum_risk_fraction
-    ) * risk_strength
+    requested = (
+        config.minimum_risk_fraction
+        + (config.maximum_risk_fraction - config.minimum_risk_fraction) * risk_strength
+    )
     return min(
         config.maximum_risk_fraction,
         max(config.minimum_risk_fraction, requested),
@@ -593,7 +608,6 @@ def size_adaptive_position(
         risk_budget=risk_budget,
         risk_fraction=risk_fraction,
     )
-
 
 
 def update_intelligent_trailing_stop(
@@ -856,7 +870,6 @@ def summarize_adaptive_metrics(
         "max_drawdown_pct": max_drawdown,
         "average_net_return_bps": expectancy,
     }
-
 
 
 __all__ = [

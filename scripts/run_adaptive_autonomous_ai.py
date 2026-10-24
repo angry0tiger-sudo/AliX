@@ -762,15 +762,13 @@ def _print_research_summary(report: dict[str, Any], commit_sha: str) -> None:
     )
 
 
-def run_research(
-    input_dir: Path, output_dir: Path, commit_sha: str
-) -> dict[str, Any]:
+def run_research(input_dir: Path, output_dir: Path, commit_sha: str) -> dict[str, Any]:
     _validate_commit_sha(commit_sha)
     project_root = Path(__file__).resolve().parents[1]
     module_path = project_root / "services" / "ai_core" / "adaptive_autonomous.py"
     config_path = project_root / "configs" / "research" / "adaptive-autonomous-ai.json"
-    config, config_document, candles, source, contexts = _load_verified_research_context(
-        input_dir, module_path, config_path
+    config, config_document, candles, source, contexts = (
+        _load_verified_research_context(input_dir, module_path, config_path)
     )
     (
         adaptive_metrics,
@@ -781,16 +779,19 @@ def run_research(
         learning,
     ) = _run_policy_suite(candles, contexts, config)
     report = _adaptive_report(
-        commit_sha, source, config, config_document,
-        adaptive_metrics, baseline_metrics, learning, all_learning,
+        commit_sha,
+        source,
+        config,
+        config_document,
+        adaptive_metrics,
+        baseline_metrics,
+        learning,
+        all_learning,
     )
     _validate_report_safety(report)
-    _write_research_outputs(
-        output_dir, report, all_trades, all_decisions, all_learning
-    )
+    _write_research_outputs(output_dir, report, all_trades, all_decisions, all_learning)
     _print_research_summary(report, commit_sha)
     return report
-
 
 
 def main() -> int:

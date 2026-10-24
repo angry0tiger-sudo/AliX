@@ -1,7 +1,7 @@
 {
   "schema_version": "alix.adaptive-autonomous-ai-policy.v1",
   "revision": "adaptive-autonomous-ai-v1",
-  "code_sha256": "635765531f3ba17d23daa32c8c4d9b0261208486df41a22e0dc17343ca65da00",
+  "code_sha256": "9d96414274287613950d7092bf41ea963fb3958cd17648cebb13975d8b4aa133",
   "parameters": {
     "minimum_selection_confidence": 0.55,
     "minimum_entry_trend_strength": 0.35,
