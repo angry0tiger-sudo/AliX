@@ -4,6 +4,7 @@ Signals are targets chosen after a candle closes. A target from candle i is
 executed at candle i+1 open. Residual spot exposure is liquidated at the final
 candle close. Fees and slippage are charged on every executed side.
 """
+
 from __future__ import annotations
 
 import math
@@ -194,9 +195,7 @@ def _max_drawdown(initial_equity: float, marks: Sequence[EquityMark]) -> float:
     for mark in marks:
         peak = max(peak, mark.equity)
         if peak > 0:
-            largest_drawdown = max(
-                largest_drawdown, (peak - mark.equity) / peak
-            )
+            largest_drawdown = max(largest_drawdown, (peak - mark.equity) / peak)
     return largest_drawdown
 
 

@@ -150,11 +150,7 @@ def _validate_expression(root: ExpressionGene) -> None:
             ):
                 raise ValueError("constant_expression_invalid")
             _require_finite(node.constant, "expression_constant")
-        elif (
-            node.feature is not None
-            or node.constant is not None
-            or not node.children
-        ):
+        elif node.feature is not None or node.constant is not None or not node.children:
             raise ValueError("operator_expression_invalid")
         for child in node.children:
             visit(child, depth + 1)
