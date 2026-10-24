@@ -21,7 +21,6 @@ from risk.contracts import (
     RiskAllocation,
     RiskPolicy,
     Side,
-    InitialStakePolicy,
 )
 from risk.evaluation import OosObservation, compare_walk_forward_oos
 from risk.gate import RiskGate
