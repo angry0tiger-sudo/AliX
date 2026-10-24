@@ -596,6 +596,7 @@ def select_segment_features(
         raise StageBError("segment_has_no_usable_features")
     return selected, excluded
 
+
 def prepare_segment(
     segment: DataFrame, name: str
 ) -> tuple[DataFrame, str, list[str], list[dict[str, str]]]:
