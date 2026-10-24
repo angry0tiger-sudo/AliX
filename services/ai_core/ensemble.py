@@ -108,7 +108,7 @@ def default_model_factories(config: EnsembleConfig) -> dict[str, RegressorFactor
             objective="regression",
             n_estimators=config.n_estimators,
             learning_rate=0.03,
-            num_leaves=min(15, 2 ** config.max_depth),
+            num_leaves=min(15, 2**config.max_depth),
             max_depth=config.max_depth,
             random_state=config.random_seed,
             n_jobs=1,
@@ -160,7 +160,9 @@ def _predict_one_model(
 ) -> tuple[str, tuple[float, ...]]:
     estimator = factory()
     estimator.fit(training_features, target)
-    predictions = np.asarray(estimator.predict(prediction_features), dtype=float).reshape(-1)
+    predictions = np.asarray(
+        estimator.predict(prediction_features), dtype=float
+    ).reshape(-1)
     if len(predictions) != len(prediction_features):
         raise ValueError(f"ai_ensemble_prediction_length_mismatch:{name}")
     if not np.isfinite(predictions).all():

@@ -96,7 +96,9 @@ def parse_persian_rss(
             continue
         seen.add(content_hash)
         identity = hashlib.sha256(
-            f"{provider.provider_id}|{published.isoformat()}|{content_hash}".encode("utf-8")
+            f"{provider.provider_id}|{published.isoformat()}|{content_hash}".encode(
+                "utf-8"
+            )
         ).hexdigest()
         events.append(
             NewsEvent(
@@ -143,7 +145,10 @@ def _window_summary(
     confidences = [float(item.confidence) for item in eligible]
     weighted_denominator = sum(confidences)
     weighted_mean = (
-        sum(score * confidence for score, confidence in zip(scores, confidences, strict=True))
+        sum(
+            score * confidence
+            for score, confidence in zip(scores, confidences, strict=True)
+        )
         / weighted_denominator
     )
     return (
@@ -178,7 +183,9 @@ def aggregate_point_in_time_sentiment(
             raise ProviderError("sentiment_available_before_publication")
         validate_news_feature(feature)
     for timestamp in dates:
-        decision_time = timestamp.to_pydatetime() + pd.Timedelta(hours=4).to_pytimedelta()
+        decision_time = (
+            timestamp.to_pydatetime() + pd.Timedelta(hours=4).to_pytimedelta()
+        )
         mean_24, weighted_24, confidence_24, count_24 = _window_summary(
             sorted_features, decision_time, SENTIMENT_WINDOW_24H_SECONDS
         )

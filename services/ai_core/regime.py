@@ -42,11 +42,7 @@ def infer_hmm_regimes(
     values = features.to_numpy(dtype=float)
     if values.ndim != 2 or values.shape[0] == 0 or not np.isfinite(values).all():
         raise ValueError("ai_core_hmm_observations_invalid")
-    if (
-        np.any(values[:, 0] < 0)
-        or np.any(values[:, 0] > 1)
-        or np.any(values[:, 1] < 0)
-    ):
+    if np.any(values[:, 0] < 0) or np.any(values[:, 0] > 1) or np.any(values[:, 1] < 0):
         raise ValueError("ai_core_hmm_observations_invalid")
     initial = np.asarray(fitted.initial_probabilities, dtype=float)
     transitions = np.asarray(fitted.transition_matrix, dtype=float)

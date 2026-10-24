@@ -19,20 +19,23 @@ from services.ai_core.sentiment import (
     parse_persian_rss,
 )
 
+
 def candles_4h(rows: int = 120) -> pd.DataFrame:
     index = np.arange(rows, dtype=float)
     close = 1000.0 * np.exp(np.cumsum(0.0005 + 0.006 * np.sin(index / 7.0)))
     opened = np.r_[close[0] * 0.999, close[:-1]]
     high = np.maximum(opened, close) * 1.002
     low = np.minimum(opened, close) * 0.998
-    return pd.DataFrame({
-        "date": pd.date_range("2024-01-01T00:30:00Z", periods=rows, freq="4h"),
-        "open": opened,
-        "high": high,
-        "low": low,
-        "close": close,
-        "volume": 100.0 + (index % 17) * 7.0,
-    })
+    return pd.DataFrame(
+        {
+            "date": pd.date_range("2024-01-01T00:30:00Z", periods=rows, freq="4h"),
+            "open": opened,
+            "high": high,
+            "low": low,
+            "close": close,
+            "volume": 100.0 + (index % 17) * 7.0,
+        }
+    )
 
 
 def provider(**changes: object) -> ProviderRegistration:
@@ -103,9 +106,7 @@ def news_feature(
 
 def test_persian_rss_parser_normalizes_deduplicates_and_sets_availability() -> None:
     ingested = datetime(2025, 10, 20, 10, 5, tzinfo=timezone.utc)
-    events = parse_persian_rss(
-        valid_rss(), provider=provider(), ingested_at=ingested
-    )
+    events = parse_persian_rss(valid_rss(), provider=provider(), ingested_at=ingested)
     assert len(events) == 1
     event = events[0]
     assert event.text == "قیمت بیت‌کوین افزایش بازار"
@@ -211,7 +212,9 @@ def test_sentiment_aggregation_is_point_in_time_and_requires_calibration() -> No
     assert tuple(name for name in SENTIMENT_COLUMNS if name not in output.columns) == ()
 
 
-def test_sentiment_aggregation_does_not_impute_missing_news_and_rejects_bad_timezones() -> None:
+def test_sentiment_aggregation_does_not_impute_missing_news_and_rejects_bad_timezones() -> (
+    None
+):
     candles = candles_4h(2)
     output = aggregate_point_in_time_sentiment(candles, ())
     assert output["sentiment_mean_24h"].isna().all()

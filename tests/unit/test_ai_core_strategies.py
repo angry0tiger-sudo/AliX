@@ -77,7 +77,10 @@ def test_research_registry_contains_three_unapproved_candidates_only() -> None:
         "momentum_breakout",
         "trend_following",
     )
-    assert all(item.lifecycle is StrategyLifecycle.RESEARCH_ONLY for item in registry.strategies)
+    assert all(
+        item.lifecycle is StrategyLifecycle.RESEARCH_ONLY
+        for item in registry.strategies
+    )
     assert all(not item.owner_approved for item in registry.strategies)
     assert all(item.supported_timeframes == ("4h",) for item in registry.strategies)
     assert all(not item.allow_short for item in registry.strategies)
@@ -106,7 +109,9 @@ def test_unknown_regime_or_bad_registry_candidate_abstains() -> None:
     registry = research_registry()
     assert route_research_regime(None, registry).status == "NO_TRADE"
     assert route_research_regime("unseen", registry).strategy_id is None
-    trend = next(item for item in registry.strategies if item.strategy_id == "trend_following")
+    trend = next(
+        item for item in registry.strategies if item.strategy_id == "trend_following"
+    )
     unapproved_contract = replace(trend, lifecycle=StrategyLifecycle.SELECTABLE)
     invalid_registry = StrategyRegistry(
         revision=registry.revision,

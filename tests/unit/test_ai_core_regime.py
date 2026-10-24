@@ -60,9 +60,9 @@ def test_hmm_forward_filter_is_invariant_to_future_observation_changes() -> None
     history = observations(15)
     future = observations(8)
     altered_future = future.copy()
-    altered_future["directional_efficiency"] = 1.0 - altered_future[
-        "directional_efficiency"
-    ]
+    altered_future["directional_efficiency"] = (
+        1.0 - altered_future["directional_efficiency"]
+    )
     altered_future["realized_volatility"] = 0.08
     first_regimes, first_posterior = infer_hmm_regimes(history, fit)
     combined_a = pd.concat([history, future], ignore_index=True)

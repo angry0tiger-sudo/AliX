@@ -18,17 +18,13 @@ from services.ai_core.features import (
 
 def candles_4h(rows: int = 120, *, offset: float = 0.0) -> pd.DataFrame:
     index = np.arange(rows, dtype=float)
-    close = 1_000.0 * np.exp(
-        np.cumsum(0.0005 + 0.006 * np.sin(index / 7.0)) + offset
-    )
+    close = 1_000.0 * np.exp(np.cumsum(0.0005 + 0.006 * np.sin(index / 7.0)) + offset)
     opened = np.r_[close[0] * 0.999, close[:-1]]
     high = np.maximum(opened, close) * (1.002 + 0.0002 * (index % 3))
     low = np.minimum(opened, close) * (0.998 - 0.0001 * (index % 2))
     return pd.DataFrame(
         {
-            "date": pd.date_range(
-                "2024-01-01T00:30:00Z", periods=rows, freq="4h"
-            ),
+            "date": pd.date_range("2024-01-01T00:30:00Z", periods=rows, freq="4h"),
             "open": opened,
             "high": high,
             "low": low,
@@ -85,7 +81,9 @@ def test_cross_asset_features_require_exact_aligned_eth_data() -> None:
     eth = candles_4h(100, offset=0.2)
     extended = build_ai_features(btc, cross_asset={"ETHUSDT": eth})
     assert all(name in extended.columns for name in AI_FEATURE_COLUMNS)
-    assert extended.loc[:, list(CROSS_ASSET_FEATURE_COLUMNS)].iloc[40:].notna().all().all()
+    assert (
+        extended.loc[:, list(CROSS_ASSET_FEATURE_COLUMNS)].iloc[40:].notna().all().all()
+    )
 
     shifted = eth.copy()
     shifted["date"] = shifted["date"] + pd.Timedelta(hours=1)
@@ -186,4 +184,6 @@ def test_point_in_time_sentiment_columns_are_joined_without_forward_fill() -> No
     assert joined["sentiment_mean_24h"].isna().sum() == len(candles) - 2
     assert joined["sentiment_mean_24h"].iloc[2] == pytest.approx(0.1)
     with pytest.raises(ValueError, match="sentiment_feature_schema_invalid"):
-        build_ai_features(candles, sentiment_features=pd.DataFrame({"date": candles["date"]}))
+        build_ai_features(
+            candles, sentiment_features=pd.DataFrame({"date": candles["date"]})
+        )

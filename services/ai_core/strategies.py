@@ -55,9 +55,7 @@ class StrategySignal:
             raise ValueError("ai_core_strategy_signal_cannot_authorize_orders")
 
 
-def _registry_candidate(
-    registry: StrategyRegistry, strategy_id: str
-) -> bool:
+def _registry_candidate(registry: StrategyRegistry, strategy_id: str) -> bool:
     matching = [item for item in registry.strategies if item.strategy_id == strategy_id]
     if len(matching) != 1:
         return False
@@ -81,8 +79,12 @@ def route_research_regime(
     if strategy_id is None:
         return ResearchRoute(regime, None, "NO_TRADE", "regime_not_mapped")
     if not _registry_candidate(registry, strategy_id, regime):
-        return ResearchRoute(regime, None, "NO_TRADE", "research_registry_candidate_invalid")
-    return ResearchRoute(regime, strategy_id, "RESEARCH_PROPOSAL", "hmm_regime_route_resolved")
+        return ResearchRoute(
+            regime, None, "NO_TRADE", "research_registry_candidate_invalid"
+        )
+    return ResearchRoute(
+        regime, strategy_id, "RESEARCH_PROPOSAL", "hmm_regime_route_resolved"
+    )
 
 
 def route_approved_inference(
@@ -95,7 +97,9 @@ def route_approved_inference(
         or inference.order_permission
         or inference.selected_regime is None
     ):
-        return ResearchRoute(None, None, "NO_TRADE", "approved_hmm_inference_unavailable")
+        return ResearchRoute(
+            None, None, "NO_TRADE", "approved_hmm_inference_unavailable"
+        )
     return route_research_regime(inference.selected_regime, registry)
 
 
@@ -140,11 +144,15 @@ def generate_candidate_signal(
     return StrategySignal(
         strategy_id,
         signal,
-        "predeclared_research_rule_signal" if signal else "predeclared_rule_not_triggered",
+        "predeclared_research_rule_signal"
+        if signal
+        else "predeclared_rule_not_triggered",
     )
 
 
-def ensemble_cost_filter(predicted_return: float, round_trip_cost_bps: float = ROUND_TRIP_COST_BPS) -> bool:
+def ensemble_cost_filter(
+    predicted_return: float, round_trip_cost_bps: float = ROUND_TRIP_COST_BPS
+) -> bool:
     if (
         not math.isfinite(predicted_return)
         or not math.isfinite(round_trip_cost_bps)

@@ -266,7 +266,9 @@ def _volume_profile_proxy(
             continue
         histogram, edges = np.histogram(prices, bins=8, weights=volumes)
         point_index = int(np.argmax(histogram))
-        point_of_control[end] = float((edges[point_index] + edges[point_index + 1]) / 2.0)
+        point_of_control[end] = float(
+            (edges[point_index] + edges[point_index + 1]) / 2.0
+        )
         ranked = np.argsort(histogram)[::-1]
         selected: list[int] = []
         selected_volume = 0.0
@@ -341,32 +343,30 @@ def _base_feature_values(candles: DataFrame) -> dict[str, Series]:
             window, min_periods=window
         ).std(ddof=0)
     for window in (12, 24):
-        values[f"downside_volatility_{window}"] = returns.clip(upper=0).rolling(
-            window, min_periods=window
-        ).std(ddof=0)
+        values[f"downside_volatility_{window}"] = (
+            returns.clip(upper=0).rolling(window, min_periods=window).std(ddof=0)
+        )
 
     values["volume_return_1"] = volume.pct_change(fill_method=None)
     values["volume_return_6"] = volume.pct_change(6, fill_method=None)
     for window in (12, 24):
         rolling_volume = volume.rolling(window, min_periods=window)
         mean = rolling_volume.mean()
-        deviation = rolling_volume.std(ddof=0).where(
-            rolling_volume.std(ddof=0) > 0
-        )
+        deviation = rolling_volume.std(ddof=0).where(rolling_volume.std(ddof=0) > 0)
         values[f"volume_zscore_{window}"] = (volume - mean) / deviation
         values[f"relative_volume_{window}"] = volume / mean.where(mean > 0)
         quote_turnover = close * volume
         rolling_turnover = quote_turnover.rolling(window, min_periods=window).sum()
         values[f"rolling_quote_turnover_ratio_{window}"] = (
-            rolling_turnover / rolling_turnover.rolling(window, min_periods=window).median()
+            rolling_turnover
+            / rolling_turnover.rolling(window, min_periods=window).median()
         ) - 1.0
 
     for window in (12, 24):
-        vwap = (
-            (typical_price * volume).rolling(window, min_periods=window).sum()
-            / volume.rolling(window, min_periods=window).sum().where(
-                volume.rolling(window, min_periods=window).sum() > 0
-            )
+        vwap = (typical_price * volume).rolling(
+            window, min_periods=window
+        ).sum() / volume.rolling(window, min_periods=window).sum().where(
+            volume.rolling(window, min_periods=window).sum() > 0
         )
         values[f"rolling_vwap_distance_{window}"] = close / vwap - 1.0
         poc, value_area = _volume_profile_proxy(typical_price, volume, close, window)
@@ -377,12 +377,12 @@ def _base_feature_values(candles: DataFrame) -> dict[str, Series]:
         previous_high = high.shift(1).rolling(window, min_periods=window).max()
         values[f"breakout_distance_{window}"] = close / previous_high - 1.0
     values["candle_body_ratio"] = (close - opened) / (high - low).where(high > low)
-    values["upper_wick_ratio"] = (high - pd.concat([opened, close], axis=1).max(axis=1)) / (
-        high - low
-    ).where(high > low)
-    values["lower_wick_ratio"] = (pd.concat([opened, close], axis=1).min(axis=1) - low) / (
-        high - low
-    ).where(high > low)
+    values["upper_wick_ratio"] = (
+        high - pd.concat([opened, close], axis=1).max(axis=1)
+    ) / (high - low).where(high > low)
+    values["lower_wick_ratio"] = (
+        pd.concat([opened, close], axis=1).min(axis=1) - low
+    ) / (high - low).where(high > low)
     return values
 
 
@@ -418,10 +418,9 @@ def _cross_asset_features(
         output[f"{key}_beta_24"] = rolling_covariance / rolling_variance.where(
             rolling_variance > 0
         )
-        output[f"relative_strength_{key}_12"] = (
-            base_close.pct_change(12, fill_method=None)
-            - close.pct_change(12, fill_method=None)
-        )
+        output[f"relative_strength_{key}_12"] = base_close.pct_change(
+            12, fill_method=None
+        ) - close.pct_change(12, fill_method=None)
     return output
 
 

@@ -41,9 +41,7 @@ def dataset(rows: int = 50) -> tuple[DataFrame, np.ndarray, DataFrame]:
         }
     )
     target = np.linspace(-0.02, 0.03, rows)
-    prediction = pd.DataFrame(
-        {"first": [0.1, 0.2], "second": [0.3, 0.4]}
-    )
+    prediction = pd.DataFrame({"first": [0.1, 0.2], "second": [0.3, 0.4]})
     return train, target, prediction
 
 
@@ -197,9 +195,7 @@ def test_prediction_contract_and_regression_metrics_reject_bad_values() -> None:
         EnsemblePrediction((), (), (), ())
     with pytest.raises(ValueError, match="prediction_non_finite"):
         EnsemblePrediction((float("nan"),), (), (), ("first",))
-    metrics = regression_metrics(
-        np.asarray([0.1, -0.1]), np.asarray([0.2, -0.2])
-    )
+    metrics = regression_metrics(np.asarray([0.1, -0.1]), np.asarray([0.2, -0.2]))
     assert metrics["mae"] == pytest.approx(0.1)
     assert metrics["rmse"] == pytest.approx(0.1)
     assert metrics["directional_accuracy"] == 1.0

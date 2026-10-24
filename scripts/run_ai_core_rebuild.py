@@ -95,8 +95,10 @@ def _load_eth_4h(
     hourly = frame.loc[:, ["date", "open", "high", "low", "close", "volume"]]
     eth_4h = aggregate_hourly_to_4h(hourly)
     eth_4h["date"] = eth_4h["date"] + pd.Timedelta(minutes=phase_minutes)
-    if not eth_4h["date"].reset_index(drop=True).equals(
-        btc_4h["date"].reset_index(drop=True)
+    if (
+        not eth_4h["date"]
+        .reset_index(drop=True)
+        .equals(btc_4h["date"].reset_index(drop=True))
     ):
         raise ValueError("ai_core_eth_cross_asset_labels_do_not_match_btc")
     return eth_4h, {
@@ -257,9 +259,7 @@ def _evaluate_fold(
         test, predictions, test_regime_names, registry
     )
     component_metrics = {
-        name: regression_metrics(
-            actual, np.asarray(component_predictions, dtype=float)
-        )
+        name: regression_metrics(actual, np.asarray(component_predictions, dtype=float))
         for name, component_predictions in ensemble.per_model_predictions
     }
     report = {
@@ -305,7 +305,9 @@ def _summarize_strategies(
         )
         result[strategy_id] = {
             "routed_rows": sum(int(item["routed_rows"]) for item in fold_stats),
-            "candidate_signals": sum(int(item["candidate_signals"]) for item in fold_stats),
+            "candidate_signals": sum(
+                int(item["candidate_signals"]) for item in fold_stats
+            ),
             "trade_count": trade_count,
             "net_expectancy": expectancy_sum / trade_count if trade_count else None,
             "max_abs_drawdown_max_across_folds": max(
@@ -409,7 +411,9 @@ def _run_walk_forward(
     )
     reports: list[dict[str, Any]] = []
     prediction_rows: list[dict[str, Any]] = []
-    for fold_index, (train_stop, test_start, test_stop) in enumerate(fold_specs, start=1):
+    for fold_index, (train_stop, test_start, test_stop) in enumerate(
+        fold_specs, start=1
+    ):
         fold_report, rows = _evaluate_fold(
             data,
             regime_features,
@@ -433,7 +437,9 @@ def _report_document(
     registry_sha: str,
     fold_reports: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    actual_cross_asset = source["eth_cross_asset_manifest"]["status"] == "LOADED_HASH_PINNED_INPUT"
+    actual_cross_asset = (
+        source["eth_cross_asset_manifest"]["status"] == "LOADED_HASH_PINNED_INPUT"
+    )
     safety = {
         "Champion": None,
         "order_permission": False,
@@ -550,8 +556,8 @@ def run_rebuild(
         raise ValueError("ai_core_commit_sha_invalid")
     project_root = Path(__file__).resolve().parents[1]
     registry, registry_sha = _load_research_registry(project_root)
-    data, regime_features, feature_names, source, _, segment_hash = _prepare_market_dataset(
-        input_dir, eth_input
+    data, regime_features, feature_names, source, _, segment_hash = (
+        _prepare_market_dataset(input_dir, eth_input)
     )
     if len(data) <= MINIMUM_TRAIN_ROWS + FORWARD_HORIZON_4H + FOLD_COUNT:
         raise ValueError("ai_core_research_rows_insufficient")
@@ -594,14 +600,18 @@ def main() -> int:
                 "commit_sha": report["created_by_commit_sha"],
                 "run_status": report["run_status"],
                 "timeframe": report["source"]["evaluation_timeframe"],
-                "model_feature_count": report["feature_engineering"]["model_feature_count"],
+                "model_feature_count": report["feature_engineering"][
+                    "model_feature_count"
+                ],
                 "ensemble_models": report["ensemble"]["models"],
                 "strategies": report["strategy_registry"]["candidate_count"],
                 "oos_predictions": sum(
                     item["test_stop_exclusive"] - item["test_start"]
                     for item in report["ensemble"]["walk_forward_folds"]
                 ),
-                "cross_asset_status": report["feature_engineering"]["cross_asset_status"],
+                "cross_asset_status": report["feature_engineering"][
+                    "cross_asset_status"
+                ],
                 "economic_status": report["economic_evaluation"]["status"],
                 "Champion": report["safety_invariants"]["Champion"],
                 "order_permission": report["safety_invariants"]["order_permission"],
