@@ -1,0 +1,30 @@
+{
+  "schema_version": "alix.adaptive-autonomous-ai-policy.v1",
+  "revision": "adaptive-autonomous-ai-v1",
+  "code_sha256": "67e8f856c76a103d7cf499bd021401b53f2e4b099191a6ca760d6cdced0d820d",
+  "parameters": {
+    "minimum_selection_confidence": 0.55,
+    "minimum_entry_trend_strength": 0.35,
+    "minimum_risk_fraction": 0.001,
+    "maximum_risk_fraction": 0.0075,
+    "maximum_position_fraction": 0.95,
+    "maximum_stop_distance_fraction": 0.12,
+    "support_buffer_atr": 0.15,
+    "strong_trend_threshold": 0.65,
+    "strong_trailing_atr_multiple": 3,
+    "weak_trailing_atr_multiple": 1.25,
+    "initial_stop_atr_multiple": 2,
+    "initial_trailing_atr_multiple": 2.5,
+    "minimum_stop_atr_multiple": 1.25,
+    "maximum_stop_atr_multiple": 4,
+    "minimum_trailing_atr_multiple": 1,
+    "maximum_trailing_atr_multiple": 5,
+    "minimum_confidence_floor": 0.5,
+    "maximum_confidence_floor": 0.8,
+    "stop_adaptation_step": 0.25,
+    "confidence_adaptation_step": 0.02,
+    "fee_bps_per_side": 25,
+    "slippage_bps_per_side": 20,
+    "initial_equity": 10000
+  }
+}

@@ -55,7 +55,7 @@ def test_hmm_inference_returns_normalized_causal_posteriors() -> None:
     assert all(0.0 <= value <= 1.0 for row in posterior for value in row)
 
 
-def test_hmm_inference_handles_underflow_without_log_zero() -> None:
+def test_hmm_inference_keeps_log_probabilities_stable_when_posteriors_underflow() -> None:
     fit = fitted_parameters(
         means=((0.70, 0.004), (0.0, 0.004), (1.0, 0.004)),
         standard_deviations=(

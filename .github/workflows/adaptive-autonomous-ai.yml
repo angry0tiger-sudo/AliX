@@ -1,0 +1,155 @@
+name: AliX Adaptive Autonomous AI Research
+
+on:
+  push:
+    branches:
+      - "research/adaptive-autonomous-ai"
+    paths:
+      - ".github/workflows/adaptive-autonomous-ai.yml"
+      - "services/ai_core/adaptive_autonomous.py"
+      - "scripts/run_adaptive_autonomous_ai.py"
+      - "scripts/run_autonomous_meta_strategy.py"
+      - "configs/research/adaptive-autonomous-ai.json"
+      - "tests/unit/test_adaptive_autonomous_ai.py"
+      - "tests/unit/test_autonomous_meta_strategy.py"
+      - "docs/knowledge_base/ADAPTIVE_AUTONOMOUS_AI.md"
+      - "docs/governance/owner-directives/2026-10-25-adaptive-autonomous-ai.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: alix-adaptive-autonomous-ai-research
+  cancel-in-progress: false
+
+jobs:
+  adaptive-autonomous-ai:
+    name: Adaptive timeframe, risk, trailing exit and failure feedback
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      actions: read
+    env:
+      ALIx_ENV: paper
+      ALIx_DRY_RUN: "true"
+      ALIx_ALLOW_LIVE_TRADING: "false"
+      ALIx_REPORTING_ENABLED: "false"
+      PYTHONUNBUFFERED: "1"
+      PYTHONPATH: "."
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    steps:
+      - name: Checkout exact research commit without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up pinned Python runtime
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned CPU-only research dependencies
+        run: |
+          python -m pip install pip==25.2
+          python -m pip install numpy==2.5.4 pandas==2.3.3 pandas-stubs==2.3.2.250926 scikit-learn==1.9.0 pytest==9.0.3
+
+      - name: Run adaptive policy and shared data-contract tests
+        run: |
+          python -m pytest \
+            tests/unit/test_adaptive_autonomous_ai.py \
+            tests/unit/test_autonomous_meta_strategy.py \
+            tests/unit/test_ai_core_regime.py -q
+
+      - name: Download immutable Stage A historical development artifact
+        uses: actions/download-artifact@v4
+        with:
+          repository: angry0tiger-sudo/AliX
+          run-id: 40077609244
+          name: alix-nobitex-history-coverage-40077609244
+          path: artifacts/stage-a-coverage
+          github-token: ${{ github.token }}
+
+      - name: Run chronological adaptive simulation on verified development bars
+        run: |
+          python scripts/run_adaptive_autonomous_ai.py \
+            --input-dir artifacts/stage-a-coverage \
+            --output-dir artifacts/adaptive-autonomous-ai \
+            --commit-sha "$GITHUB_SHA"
+
+      - name: Verify adaptive report, learning ledgers and immutable safety invariants
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          import pandas as pd
+
+          root = Path("artifacts/adaptive-autonomous-ai")
+          report = json.loads(
+              (root / "adaptive-autonomous-ai-report.json").read_text(encoding="utf-8")
+          )
+          assert report["created_by_commit_sha"] == os.environ["GITHUB_SHA"]
+          assert report["run_status"] == "COMPLETED_RESEARCH_ONLY"
+          assert report["source"]["final_holdout_used"] is False
+          assert report["policy"]["timeframes"] == ["1h", "4h", "1d"]
+          assert "no_take_profit" in report["policy"]["exit_policy"]
+          assert report["economic_evaluation"]["economic_acceptance"] == "NO-GO"
+          assert set(report["economic_evaluation"]["fixed_timeframe_baselines"]) == {
+              "1h", "4h", "1d"
+          }
+          safety = report["safety_invariants"]
+          assert safety["Champion"] is None
+          assert safety["order_permission"] is False
+          assert safety["trading_authorization"] == "NO-GO"
+          assert safety["economic_acceptance"] == "NO-GO"
+          assert safety["model_promoted"] is False
+          assert safety["production_registry_modified"] is False
+          assert safety["orders_or_execution_api_used"] is False
+          assert safety["private_api_calls"] == 0
+          assert safety["real_order_attempts"] == 0
+          assert safety["final_holdout_used"] is False
+
+          for name in (
+              "adaptive-autonomous-ai-trades.csv",
+              "adaptive-autonomous-ai-decisions.csv",
+              "adaptive-autonomous-ai-learning-ledger.csv",
+          ):
+              assert (root / name).is_file(), name
+
+          trades = pd.read_csv(root / "adaptive-autonomous-ai-trades.csv")
+          assert "take_profit" not in trades.columns
+          if not trades.empty:
+              assert (trades["order_permission"] == False).all()
+              assert (trades["real_order_attempted"] == False).all()
+
+          learning = pd.read_csv(root / "adaptive-autonomous-ai-learning-ledger.csv")
+          assert len(learning) == report["learning"]["event_count"]
+          print(json.dumps({
+              "commit_sha": report["created_by_commit_sha"],
+              "run_status": report["run_status"],
+              "adaptive_metrics": report["economic_evaluation"]["adaptive_selector_metrics"],
+              "fixed_timeframe_baselines": report["economic_evaluation"]["fixed_timeframe_baselines"],
+              "comparison": report["economic_evaluation"]["comparison_vs_fixed_timeframes"],
+              "learning_events": len(learning),
+              "Champion": safety["Champion"],
+              "order_permission": safety["order_permission"],
+              "trading_authorization": safety["trading_authorization"],
+          }, sort_keys=True, allow_nan=False))
+          PY
+
+      - name: Upload exact-commit adaptive research evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: adaptive-autonomous-ai-${{ github.sha }}
+          path: |
+            artifacts/adaptive-autonomous-ai/adaptive-autonomous-ai-report.json
+            artifacts/adaptive-autonomous-ai/adaptive-autonomous-ai-trades.csv
+            artifacts/adaptive-autonomous-ai/adaptive-autonomous-ai-decisions.csv
+            artifacts/adaptive-autonomous-ai/adaptive-autonomous-ai-learning-ledger.csv
+          if-no-files-found: warn
+          retention-days: 30

@@ -63,6 +63,15 @@ def _load_verified_history(input_dir: Path) -> tuple[DataFrame, dict[str, Any]]:
     return candles, source
 
 
+def load_verified_history(input_dir: Path) -> tuple[DataFrame, dict[str, Any]]:
+    """Public read-only interface for verified Stage A development data.
+
+    The loader retains the Stage B provenance checks and never exposes the
+    reserved final holdout to a research runner.
+    """
+    return _load_verified_history(input_dir)
+
+
 def run_research(
     input_dir: Path,
     output_dir: Path,
