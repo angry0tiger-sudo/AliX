@@ -33,6 +33,7 @@ jobs:
       ALIx_ALLOW_LIVE_TRADING: "false"
       ALIx_REPORTING_ENABLED: "false"
       PYTHONUNBUFFERED: "1"
+      PYTHONPATH: ${{ github.workspace }}
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
     steps:
       - name: Checkout exact Stage B code commit without persisted credentials
