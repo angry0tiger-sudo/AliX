@@ -167,9 +167,7 @@ PRICE_ONLY_AI_FEATURE_COLUMNS: Final[tuple[str, ...]] = tuple(
     if name not in VOLUME_DEPENDENT_FEATURE_COLUMNS
 )
 PRICE_ONLY_EXTENDED_FEATURE_COLUMNS: Final[tuple[str, ...]] = tuple(
-    name
-    for name in AI_FEATURE_COLUMNS
-    if name not in VOLUME_DEPENDENT_FEATURE_COLUMNS
+    name for name in AI_FEATURE_COLUMNS if name not in VOLUME_DEPENDENT_FEATURE_COLUMNS
 )
 
 OHLCV_COLUMNS: Final[tuple[str, ...]] = (

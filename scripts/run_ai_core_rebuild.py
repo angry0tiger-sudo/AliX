@@ -379,8 +379,7 @@ def _prepare_market_dataset(
     ]
     if unavailable_features:
         raise ValueError(
-            "ai_core_selected_features_never_observed:"
-            + ",".join(unavailable_features)
+            "ai_core_selected_features_never_observed:" + ",".join(unavailable_features)
         )
     forward_return = btc_4h["close"].shift(-FORWARD_HORIZON_4H) / btc_4h["close"] - 1.0
     valid = (
@@ -488,7 +487,9 @@ def _report_document(
             ]
             + (
                 ["volume_zscores_turnover_VWAP_and_volume_profile_proxy"]
-                if any(name in VOLUME_DEPENDENT_FEATURE_COLUMNS for name in feature_names)
+                if any(
+                    name in VOLUME_DEPENDENT_FEATURE_COLUMNS for name in feature_names
+                )
                 else []
             )
             + (
@@ -586,9 +587,7 @@ def run_rebuild(
     data, regime_features, feature_names, source, _, segment_hash = (
         _prepare_market_dataset(input_dir, eth_input)
     )
-    minimum_required_rows = (
-        MINIMUM_TRAIN_ROWS + FORWARD_HORIZON_4H + FOLD_COUNT
-    )
+    minimum_required_rows = MINIMUM_TRAIN_ROWS + FORWARD_HORIZON_4H + FOLD_COUNT
     if len(data) <= minimum_required_rows:
         raise ValueError(
             "ai_core_research_rows_insufficient:"

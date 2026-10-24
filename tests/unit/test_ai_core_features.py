@@ -73,9 +73,7 @@ def test_feature_schema_has_58_base_features_and_six_real_eth_features() -> None
 def test_model_feature_selection_drops_only_unobserved_volume_groups() -> None:
     candles = candles_4h(100)
     candles["volume"] = 0.0
-    selected, status = select_model_feature_schema(
-        candles, cross_asset_available=False
-    )
+    selected, status = select_model_feature_schema(candles, cross_asset_available=False)
     assert len(selected) == 44
     assert selected == PRICE_ONLY_AI_FEATURE_COLUMNS
     assert status == "BLOCKED_NO_POSITIVE_SOURCE_VOLUME"
@@ -94,9 +92,7 @@ def test_model_feature_selection_drops_only_unobserved_volume_groups() -> None:
         candles, cross_asset_available=False
     )
     assert len(complete) == 58
-    assert complete == tuple(
-        name for name in BASE_AI_FEATURE_COLUMNS
-    )
+    assert complete == BASE_AI_FEATURE_COLUMNS
     assert complete_status == "SOURCE_VOLUME_POSITIVE_OBSERVATIONS_PRESENT"
 
 
@@ -163,9 +159,7 @@ def test_hourly_to_four_hour_aggregation_is_exact_and_gap_aware() -> None:
 def test_ohlcv_quality_validation_fails_closed(mutation: str, reason: str) -> None:
     frame = candles_4h(8)
     if mutation == "duplicate":
-        frame["date"] = frame["date"].where(
-            frame.index != 1, frame["date"].iloc[0]
-        )
+        frame["date"] = frame["date"].where(frame.index != 1, frame["date"].iloc[0])
     elif mutation == "descending":
         frame = frame.iloc[::-1].reset_index(drop=True)
     elif mutation == "gap":
@@ -180,9 +174,7 @@ def test_ohlcv_quality_validation_fails_closed(mutation: str, reason: str) -> No
     elif mutation == "negative_volume":
         frame.loc[2, "volume"] = -1.0
     elif mutation == "bad_ohlc":
-        frame["high"] = frame["high"].where(
-            frame.index != 2, frame["low"] - 1.0
-        )
+        frame["high"] = frame["high"].where(frame.index != 2, frame["low"] - 1.0)
     else:
         frame = frame.drop(columns=["low"])
     with pytest.raises(ValueError, match=reason):
