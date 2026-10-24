@@ -171,3 +171,15 @@
 - No strategy is selected by default; no Freqtrade entry/exit signals or order paths are enabled.
 - Related merge blocker: issue #16. Repository ruleset for main was observed with enforcement disabled; classic branch-protection status was not readable by the current GitHub integration. Verify effective branch protection/review requirements before merging exchange/data-path changes.
 - Current safety state remains Champion=null, order_permission=false, promotion blocked, economic acceptance NO-GO and trading authorization NO-GO.
+
+
+# Owner-directed stake policy and Supervisor entry-review candidate — 2026-10-23
+
+- PR #21: https://github.com/angry0tiger-sudo/AliX/pull/21; exact-head CI after rebase is required before merge.
+- Owner Directive: docs/governance/owner-directives/2026-10-23-initial-stake-10-usdt.md.
+- ADRs: docs/architecture/decisions/ADR-0012-initial-stake-target-and-risk-conflict.md and ADR-0013-risk-supervisor-entry-review-contract.md.
+- Strict settings parser: risk/initial_stake_policy.py; config: config/risk/initial-stake-policy.json. The value-object default is unapproved; invalid/missing config has no approved fallback. Runtime config loading still needs integration verification.
+- DynamicRiskAllocator and independent RiskGate enforce initial target and fee reserve without overriding protective risk caps.
+- RiskSupervisor returns PASS_TO_RISK_GATE, RESIZE_REQUIRED or REJECT; never grants order permission and never auto-rearms.
+- V1 Short ENTRY is rejected by allocator and RiskGate; exit/REDUCE_RISK is not the target of this restriction.
+- **Owner Directive Override (2026-10-24):** The owner explicitly directs rebasing PR #21 onto current `staging` and merging only if all required checks pass on the rebased HEAD. This supersedes earlier task-note wording to keep PR #21 unmerged pending merge-governance verification. It does not authorize live trading or change `Champion=null`, `order_permission=false`, economic acceptance `NO-GO`, or `trading_authorization=NO-GO`.

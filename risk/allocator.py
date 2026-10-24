@@ -15,6 +15,7 @@ from risk.contracts import (
     ModelRiskProposal,
     RiskAllocation,
     RiskPolicy,
+    Side,
     estimated_loss_per_unit,
     floor_to_step,
     stable_fingerprint,
@@ -190,11 +191,17 @@ class DynamicRiskAllocator:
         if now.tzinfo is None or now.utcoffset() is None:
             return ("decision_time_timezone_required",)
         checks = (
+            self._entry_scope_reason(proposal),
             self._account_policy_reason(policy, account, rules, market),
             self._freshness_reason(policy, account, market, now),
             self._proposal_reason(policy, account, market, proposal),
         )
         return tuple(reason for reason in checks if reason is not None)
+
+    def _entry_scope_reason(self, proposal: ModelRiskProposal) -> str | None:
+        if proposal.side is not Side.LONG:
+            return "short_entry_forbidden_in_v1"
+        return None
 
     def _account_policy_reason(
         self,
