@@ -11,7 +11,7 @@ import math
 import urllib3
 import zipfile
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 from urllib.parse import urlsplit
 
 import numpy as np
@@ -73,7 +73,7 @@ def _download_bytes(url: str) -> bytes | None:
             return None
         if response.status != 200:
             raise RuntimeError(f"binance_archive_http_status:{response.status}:{url}")
-        return cast(bytes, response.data)
+        return response.data
     finally:
         response.release_conn()
 
