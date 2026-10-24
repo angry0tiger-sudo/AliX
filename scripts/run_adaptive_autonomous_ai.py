@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-import pandas as pd
 from pandas import DataFrame
 
 from scripts.run_autonomous_meta_strategy import load_verified_history

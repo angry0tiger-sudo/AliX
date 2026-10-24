@@ -16,7 +16,7 @@ from typing import Any, Mapping
 
 import numpy as np
 import pandas as pd
-from pandas import DataFrame, Series
+from pandas import DataFrame
 
 TIMEFRAMES = ("1h", "4h", "1d")
 OHLCV_COLUMNS = ("date", "open", "high", "low", "close", "volume")
