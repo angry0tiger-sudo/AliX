@@ -206,29 +206,48 @@ def _read_adaptive_policy_document(path: Path) -> object:
         raise ValueError("adaptive_config_document_unreadable") from exc
 
 
-def _validate_adaptive_policy_document(
-    payload: object,
-) -> tuple[str, dict[str, Any]]:
+def _require_policy_mapping(payload: object) -> dict[str, Any]:
     expected_keys = {"schema_version", "revision", "code_sha256", "parameters"}
     if not isinstance(payload, dict) or set(payload) != expected_keys:
         raise ValueError("adaptive_config_document_schema_invalid")
-    if payload["schema_version"] != POLICY_SCHEMA:
+    return payload
+
+
+def _validate_policy_schema(schema_version: object) -> None:
+    if schema_version != POLICY_SCHEMA:
         raise ValueError("adaptive_config_schema_unsupported")
-    revision = payload["revision"]
+
+
+def _validate_policy_revision(revision: object) -> None:
     if not isinstance(revision, str) or not revision.strip():
         raise ValueError("adaptive_config_revision_invalid")
-    expected_hash = payload["code_sha256"]
+
+
+def _validate_policy_hash(expected_hash: object) -> str:
     if (
         not isinstance(expected_hash, str)
         or len(expected_hash) != 64
         or any(char not in "0123456789abcdef" for char in expected_hash)
     ):
         raise ValueError("adaptive_config_code_hash_invalid")
-    parameters = payload["parameters"]
-    if not isinstance(parameters, dict) or set(parameters) != set(
-        asdict(AdaptiveConfig())
-    ):
+    return expected_hash
+
+
+def _validate_policy_parameters(parameters: object) -> dict[str, Any]:
+    expected_parameters = set(asdict(AdaptiveConfig()))
+    if not isinstance(parameters, dict) or set(parameters) != expected_parameters:
         raise ValueError("adaptive_config_parameters_invalid")
+    return parameters
+
+
+def _validate_adaptive_policy_document(
+    payload: object,
+) -> tuple[str, dict[str, Any]]:
+    document = _require_policy_mapping(payload)
+    _validate_policy_schema(document["schema_version"])
+    _validate_policy_revision(document["revision"])
+    expected_hash = _validate_policy_hash(document["code_sha256"])
+    parameters = _validate_policy_parameters(document["parameters"])
     return expected_hash, parameters
 
 
