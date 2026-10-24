@@ -1,0 +1,139 @@
+{
+  "schema_version": "alix.strategy-registry.v1",
+  "revision": "ai-core-rebuild-research-v1",
+  "economic_policy_revision": "ai-core-rebuild-not-approved-v1",
+  "strategies": [
+    {
+      "code_sha256": "beb60aff32a857e13ec75955ea91b1b2d2d08ceb2a133874e62ce78da67b4a56",
+      "version": "0.1.0",
+      "lifecycle": "RESEARCH_ONLY",
+      "owner_approved": false,
+      "supported_timeframes": [
+        "4h"
+      ],
+      "data_schema_version": "ohlcv.v1",
+      "feature_schema_version": "alix.ai-core.features.v1",
+      "required_test_ids": [
+        "ai-core-feature-contracts-v1",
+        "ai-core-regime-routing-v1"
+      ],
+      "prohibited_conditions": [
+        "invalid_data_quality",
+        "missing_regime",
+        "missing_ensemble_prediction",
+        "cost_filter_rejected"
+      ],
+      "risk_profile_id": "ai-core-research-no-orders",
+      "risk_profile_revision": "ai-core-rebuild-v1",
+      "max_data_age_seconds": 14400,
+      "max_model_score_age_seconds": 14400,
+      "max_fee_bps": "50.0",
+      "max_slippage_bps": "50.0",
+      "max_spread_bps": "100.0",
+      "minimum_quote_liquidity_usdt": "50000.0",
+      "strategy_license_status": "CONDITIONAL",
+      "data_license_status": "CONDITIONAL",
+      "dependency_license_status": "CONDITIONAL",
+      "market_type": "spot",
+      "quote_currency": "USDT",
+      "allow_short": false,
+      "strategy_id": "trend_following",
+      "eligible_regimes": [
+        "trend"
+      ],
+      "required_features": [
+        "ema_crossover_24_72",
+        "return_6"
+      ]
+    },
+    {
+      "code_sha256": "beb60aff32a857e13ec75955ea91b1b2d2d08ceb2a133874e62ce78da67b4a56",
+      "version": "0.1.0",
+      "lifecycle": "RESEARCH_ONLY",
+      "owner_approved": false,
+      "supported_timeframes": [
+        "4h"
+      ],
+      "data_schema_version": "ohlcv.v1",
+      "feature_schema_version": "alix.ai-core.features.v1",
+      "required_test_ids": [
+        "ai-core-feature-contracts-v1",
+        "ai-core-regime-routing-v1"
+      ],
+      "prohibited_conditions": [
+        "invalid_data_quality",
+        "missing_regime",
+        "missing_ensemble_prediction",
+        "cost_filter_rejected"
+      ],
+      "risk_profile_id": "ai-core-research-no-orders",
+      "risk_profile_revision": "ai-core-rebuild-v1",
+      "max_data_age_seconds": 14400,
+      "max_model_score_age_seconds": 14400,
+      "max_fee_bps": "50.0",
+      "max_slippage_bps": "50.0",
+      "max_spread_bps": "100.0",
+      "minimum_quote_liquidity_usdt": "50000.0",
+      "strategy_license_status": "CONDITIONAL",
+      "data_license_status": "CONDITIONAL",
+      "dependency_license_status": "CONDITIONAL",
+      "market_type": "spot",
+      "quote_currency": "USDT",
+      "allow_short": false,
+      "strategy_id": "mean_reversion",
+      "eligible_regimes": [
+        "range"
+      ],
+      "required_features": [
+        "rsi_14",
+        "bollinger_position_24",
+        "return_3"
+      ]
+    },
+    {
+      "code_sha256": "beb60aff32a857e13ec75955ea91b1b2d2d08ceb2a133874e62ce78da67b4a56",
+      "version": "0.1.0",
+      "lifecycle": "RESEARCH_ONLY",
+      "owner_approved": false,
+      "supported_timeframes": [
+        "4h"
+      ],
+      "data_schema_version": "ohlcv.v1",
+      "feature_schema_version": "alix.ai-core.features.v1",
+      "required_test_ids": [
+        "ai-core-feature-contracts-v1",
+        "ai-core-regime-routing-v1"
+      ],
+      "prohibited_conditions": [
+        "invalid_data_quality",
+        "missing_regime",
+        "missing_ensemble_prediction",
+        "cost_filter_rejected"
+      ],
+      "risk_profile_id": "ai-core-research-no-orders",
+      "risk_profile_revision": "ai-core-rebuild-v1",
+      "max_data_age_seconds": 14400,
+      "max_model_score_age_seconds": 14400,
+      "max_fee_bps": "50.0",
+      "max_slippage_bps": "50.0",
+      "max_spread_bps": "100.0",
+      "minimum_quote_liquidity_usdt": "50000.0",
+      "strategy_license_status": "CONDITIONAL",
+      "data_license_status": "CONDITIONAL",
+      "dependency_license_status": "CONDITIONAL",
+      "market_type": "spot",
+      "quote_currency": "USDT",
+      "allow_short": false,
+      "strategy_id": "momentum_breakout",
+      "eligible_regimes": [
+        "volatile",
+        "high_volatility"
+      ],
+      "required_features": [
+        "breakout_distance_24",
+        "volume_zscore_24",
+        "return_6"
+      ]
+    }
+  ]
+}
