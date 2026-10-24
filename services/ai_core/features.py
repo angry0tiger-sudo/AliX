@@ -69,12 +69,6 @@ AI_FEATURE_COLUMNS: Final[tuple[str, ...]] = (
     "candle_body_ratio",
     "upper_wick_ratio",
     "lower_wick_ratio",
-    "btcusdt_return_1",
-    "btcusdt_return_6",
-    "btcusdt_correlation_12",
-    "btcusdt_correlation_24",
-    "btcusdt_beta_24",
-    "relative_strength_btcusdt_12",
     "ethusdt_return_1",
     "ethusdt_return_6",
     "ethusdt_correlation_12",
@@ -82,6 +76,75 @@ AI_FEATURE_COLUMNS: Final[tuple[str, ...]] = (
     "ethusdt_beta_24",
     "relative_strength_ethusdt_12",
 )
+BASE_AI_FEATURE_COLUMNS: Final[tuple[str, ...]] = (
+    "return_1",
+    "return_2",
+    "return_3",
+    "return_6",
+    "return_12",
+    "return_24",
+    "log_return_1",
+    "sma_ratio_6",
+    "ema_ratio_6",
+    "sma_ratio_12",
+    "ema_ratio_12",
+    "sma_ratio_24",
+    "ema_ratio_24",
+    "sma_ratio_48",
+    "ema_ratio_48",
+    "sma_ratio_72",
+    "ema_ratio_72",
+    "sma_slope_12",
+    "sma_slope_24",
+    "ema_crossover_6_24",
+    "ema_crossover_12_48",
+    "ema_crossover_24_72",
+    "bollinger_width_12",
+    "bollinger_position_12",
+    "bollinger_width_24",
+    "bollinger_position_24",
+    "rsi_6",
+    "rsi_14",
+    "rsi_28",
+    "true_range_pct",
+    "atr_ratio_7",
+    "atr_ratio_14",
+    "atr_ratio_28",
+    "realized_volatility_6",
+    "realized_volatility_12",
+    "realized_volatility_24",
+    "realized_volatility_48",
+    "downside_volatility_12",
+    "downside_volatility_24",
+    "volume_return_1",
+    "volume_return_6",
+    "volume_zscore_12",
+    "relative_volume_12",
+    "rolling_quote_turnover_ratio_12",
+    "volume_zscore_24",
+    "relative_volume_24",
+    "rolling_quote_turnover_ratio_24",
+    "rolling_vwap_distance_12",
+    "volume_profile_poc_distance_12",
+    "volume_profile_value_area_position_12",
+    "rolling_vwap_distance_24",
+    "volume_profile_poc_distance_24",
+    "volume_profile_value_area_position_24",
+    "breakout_distance_12",
+    "breakout_distance_24",
+    "candle_body_ratio",
+    "upper_wick_ratio",
+    "lower_wick_ratio",
+)
+CROSS_ASSET_FEATURE_COLUMNS: Final[tuple[str, ...]] = (
+    "ethusdt_return_1",
+    "ethusdt_return_6",
+    "ethusdt_correlation_12",
+    "ethusdt_correlation_24",
+    "ethusdt_beta_24",
+    "relative_strength_ethusdt_12",
+)
+
 OHLCV_COLUMNS: Final[tuple[str, ...]] = (
     "date",
     "open",
@@ -105,7 +168,7 @@ _RSI_WINDOWS: Final[tuple[int, ...]] = (6, 14, 28)
 _ATR_WINDOWS: Final[tuple[int, ...]] = (7, 14, 28)
 _VOLATILITY_WINDOWS: Final[tuple[int, ...]] = (6, 12, 24, 48)
 _CROSS_WINDOWS: Final[tuple[int, ...]] = (12, 24)
-_REQUIRED_CROSS_ASSETS: Final[tuple[str, ...]] = ("BTCUSDT", "ETHUSDT")
+_REQUIRED_CROSS_ASSETS: Final[tuple[str, ...]] = ("ETHUSDT",)
 
 
 def _validate_ohlcv(candles: DataFrame, interval_seconds: int) -> DataFrame:
@@ -327,6 +390,11 @@ def _cross_asset_features(
     base: DataFrame, cross_asset: dict[str, DataFrame] | None
 ) -> dict[str, Series]:
     output: dict[str, Series] = {}
+    if cross_asset is None:
+        return output
+    missing_symbols = sorted(set(_REQUIRED_CROSS_ASSETS) - set(cross_asset))
+    if missing_symbols:
+        raise ValueError(f"ai_core_cross_asset_sources_missing:{missing_symbols}")
     base_close = base["close"].astype(float)
     base_returns = base_close.pct_change(fill_method=None)
     for symbol in _REQUIRED_CROSS_ASSETS:
@@ -334,6 +402,8 @@ def _cross_asset_features(
         if cross_asset is not None and symbol in cross_asset:
             asset = _validate_ohlcv(cross_asset[symbol], 4 * 3600)
             aligned = asset.set_index("date")["close"].reindex(base["date"])
+            if aligned.isna().any():
+                raise ValueError(f"ai_core_cross_asset_alignment_incomplete:{symbol}")
             close = pd.Series(aligned.to_numpy(dtype=float), index=base.index)
         asset_returns = close.pct_change(fill_method=None)
         key = symbol.lower()
@@ -383,10 +453,12 @@ def build_ai_features(
 
 
 __all__ = [
+    "AI_FEATURE_COLUMNS",
     "AI_FEATURE_SCHEMA_VERSION",
-    "SENTIMENT_FEATURE_SCHEMA_VERSION",
-    "OHLCV_COLUMNS",
+    "BASE_AI_FEATURE_COLUMNS",
+    "CROSS_ASSET_FEATURE_COLUMNS",
     "SENTIMENT_COLUMNS",
+    "SENTIMENT_FEATURE_SCHEMA_VERSION",
     "aggregate_hourly_to_4h",
     "build_ai_features",
 ]
