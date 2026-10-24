@@ -60,3 +60,8 @@ The workflow asserts and records:
 ### Degenerate but valid indicator windows
 
 A perfectly flat rolling window has no missing candle data but creates a zero denominator for RSI and range-position. The research feature contract defines those two edge cases explicitly: RSI is 50 when average gain and average loss are both zero; range position is 0.5 when the rolling high, rolling low, and close are identical. These are deterministic indicator definitions, not OHLCV imputation. Leading warm-up rows and genuine data gaps remain undefined and are never filled.
+
+
+## Cross-candidate calendar alignment
+
+All 12 configurations share the exact same contiguous A-development OOS timestamp grid. The shared start is the first time the selected extended feature set is fully defined; the shared end is the final time at which the longest (24-hour) target has matured. Every candidate-specific dataset is checked against both shared bounds and against a reference timestamp vector. Any missing or shifted row fails closed rather than allowing fold-number comparisons across different dates.

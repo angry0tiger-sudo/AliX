@@ -174,22 +174,66 @@ def _candidate_features(
     return selected, excluded
 
 
-def _build_dataset(
-    engineered: DataFrame, feature_columns: Sequence[str], horizon: int
-) -> DataFrame:
-    """Keep only naturally complete feature/label rows; never impute."""
-    target = forward_return_target(engineered, horizon=horizon)
+def _common_evaluation_bounds(
+    engineered: DataFrame,
+    feature_columns: Sequence[str],
+    max_horizon: int,
+) -> tuple[pd.Timestamp, pd.Timestamp]:
+    """Find one contiguous A-development time range shared by every candidate."""
+    if max_horizon < 1:
+        raise ValueError("optimization_max_horizon_invalid")
+    target = forward_return_target(engineered, horizon=max_horizon)
     numeric = engineered.loc[:, list(feature_columns)].replace(
         [np.inf, -np.inf], np.nan
     )
     valid = numeric.notna().all(axis=1) & target.notna() & np.isfinite(target)
+    positions = np.flatnonzero(valid.to_numpy(dtype=bool))
+    if positions.size == 0:
+        raise ValueError("optimization_common_evaluation_range_empty")
+    first = int(positions[0])
+    last = int(positions[-1])
+    if not bool(valid.iloc[first : last + 1].all()):
+        raise ValueError("optimization_common_evaluation_range_has_internal_gap")
+    dates = pd.to_datetime(engineered["date"], utc=True, errors="raise")
+    common_dates = dates.iloc[first : last + 1]
+    if not (common_dates.diff().dropna() == pd.Timedelta(seconds=HOUR)).all():
+        raise ValueError("optimization_common_evaluation_grid_not_contiguous")
+    return pd.Timestamp(common_dates.iloc[0]), pd.Timestamp(common_dates.iloc[-1])
+
+
+def _build_dataset(
+    engineered: DataFrame,
+    feature_columns: Sequence[str],
+    horizon: int,
+    common_start_utc: pd.Timestamp,
+    common_end_utc: pd.Timestamp,
+) -> DataFrame:
+    """Build rows inside the common candidate grid without imputing values."""
+    if horizon < 1 or common_start_utc > common_end_utc:
+        raise ValueError("optimization_dataset_bounds_invalid")
+    target = forward_return_target(engineered, horizon=horizon)
+    numeric = engineered.loc[:, list(feature_columns)].replace(
+        [np.inf, -np.inf], np.nan
+    )
+    dates = pd.to_datetime(engineered["date"], utc=True, errors="raise")
+    in_common_range = dates.ge(common_start_utc) & dates.le(common_end_utc)
+    valid = (
+        numeric.notna().all(axis=1)
+        & target.notna()
+        & np.isfinite(target)
+        & in_common_range
+    )
     selected = engineered.loc[valid, ["date", "close", *feature_columns]].copy()
     selected[TARGET_COLUMN] = target.loc[valid].to_numpy(dtype=float)
     selected = selected.reset_index(drop=True)
     if selected.empty:
         raise ValueError("optimization_dataset_empty")
-    dates = pd.to_datetime(selected["date"], utc=True, errors="raise")
-    if not (dates.diff().dropna() == pd.Timedelta(seconds=HOUR)).all():
+    selected_dates = pd.to_datetime(selected["date"], utc=True, errors="raise")
+    if selected_dates.iloc[0] != common_start_utc or selected_dates.iloc[-1] != common_end_utc:
+        raise ValueError("optimization_candidate_does_not_cover_common_bounds")
+    if not (
+        selected_dates.diff().dropna() == pd.Timedelta(seconds=HOUR)
+    ).all():
         raise ValueError("optimization_valid_rows_not_contiguous")
     feature_values = selected.loc[:, list(feature_columns)].to_numpy(dtype=float)
     labels = selected[TARGET_COLUMN].to_numpy(dtype=float)
@@ -585,12 +629,35 @@ def run_signal_optimization(
         engineered, tuple(FEATURE_COLUMNS) + NEW_FEATURE_COLUMNS
     )
     selected_features, excluded_features = _candidate_features(engineered)
+    common_start_utc, common_end_utc = _common_evaluation_bounds(
+        engineered,
+        selected_features["extended_trend_rsi"],
+        max(HORIZON_GRID),
+    )
 
     candidate_results: dict[str, dict[str, Any]] = {}
+    shared_timestamp_ns: np.ndarray | None = None
+    shared_row_count: int | None = None
     for feature_group in FEATURE_GROUPS:
         feature_columns = selected_features[feature_group]
         for horizon in HORIZON_GRID:
-            dataset = _build_dataset(engineered, feature_columns, horizon)
+            dataset = _build_dataset(
+                engineered,
+                feature_columns,
+                horizon,
+                common_start_utc,
+                common_end_utc,
+            )
+            dataset_timestamp_ns = pd.to_datetime(
+                dataset["date"], utc=True, errors="raise"
+            ).astype("int64").to_numpy(dtype=np.int64)
+            if shared_timestamp_ns is None:
+                shared_timestamp_ns = dataset_timestamp_ns
+                shared_row_count = len(dataset)
+            elif not np.array_equal(dataset_timestamp_ns, shared_timestamp_ns):
+                raise ValueError("optimization_candidate_timestamp_grid_mismatch")
+            if len(dataset) != shared_row_count:
+                raise ValueError("optimization_candidate_row_count_mismatch")
             for model_profile in ("phase4_default", "shallow_regularized"):
                 candidate_id = _candidate_id(feature_group, model_profile, horizon)
                 candidate_results[candidate_id] = _evaluate_candidate(
@@ -642,6 +709,8 @@ def run_signal_optimization(
             "development_start_utc": utc_text(development["date"].iloc[0]),
             "development_end_utc": utc_text(development["date"].iloc[-1]),
             "reserved_holdout_start_utc": utc_text(holdout_start),
+            "common_candidate_oos_start_utc": utc_text(common_start_utc),
+            "common_candidate_oos_end_utc": utc_text(common_end_utc),
             "data_quality_gate_fingerprint": quality_fingerprint,
         },
         "root_cause_analysis": {
@@ -702,6 +771,14 @@ def run_signal_optimization(
             "fee_bps_per_side": FEE_BPS_SIDE,
             "slippage_bps_per_side": SLIPPAGE_BPS_SIDE,
             "horizons_hours": list(HORIZON_GRID),
+            "common_candidate_oos_start_utc": utc_text(common_start_utc),
+            "common_candidate_oos_end_utc": utc_text(common_end_utc),
+            "common_candidate_row_count": shared_row_count,
+            "candidate_timestamp_alignment": (
+                "All 12 candidates use identical contiguous A-development timestamps; "
+                "the shared end date allows maturity of the maximum 24-hour target."
+            ),
+            "candidate_timestamps_aligned": True,
             "feature_groups": {
                 group: {
                     "selected_columns": selected_features[group],

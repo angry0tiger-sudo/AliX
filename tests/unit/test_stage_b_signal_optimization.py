@@ -9,6 +9,9 @@ from scripts.run_stage_b_signal_optimization import (
     FEATURE_GROUPS,
     HORIZON_GRID,
     MODEL_PROFILES,
+    NEW_FEATURE_COLUMNS,
+    _build_dataset,
+    _common_evaluation_bounds,
     add_signal_features,
     summarize_cost_hurdle,
 )
@@ -127,3 +130,32 @@ def test_flat_price_windows_have_explicit_neutral_technical_definitions() -> Non
     assert featured["%-rsi_14"].iloc[14:].eq(50.0).all()
     assert featured["%-range_position_24"].iloc[23:].eq(0.5).all()
     pd.testing.assert_frame_equal(candles, original)
+
+
+def test_all_candidates_use_an_identical_contiguous_timestamp_grid() -> None:
+    candles = _ohlcv(rows=520)
+    engineered = add_signal_features(candles)
+    baseline_features = [
+        name for name in FEATURE_COLUMNS if name != "%-volume_change_1"
+    ]
+    extended_features = baseline_features + list(NEW_FEATURE_COLUMNS)
+    common_start, common_end = _common_evaluation_bounds(
+        engineered, extended_features, max(HORIZON_GRID)
+    )
+
+    baseline_12 = _build_dataset(
+        engineered, baseline_features, 12, common_start, common_end
+    )
+    extended_24 = _build_dataset(
+        engineered, extended_features, 24, common_start, common_end
+    )
+    baseline_dates = pd.to_datetime(baseline_12["date"], utc=True)
+    extended_dates = pd.to_datetime(extended_24["date"], utc=True)
+
+    pd.testing.assert_series_equal(
+        baseline_dates.reset_index(drop=True),
+        extended_dates.reset_index(drop=True),
+    )
+    assert baseline_dates.iloc[0] == common_start
+    assert baseline_dates.iloc[-1] == common_end
+    assert len(baseline_12) == len(extended_24)
