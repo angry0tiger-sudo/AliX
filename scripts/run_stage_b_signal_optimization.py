@@ -809,6 +809,7 @@ def run_signal_optimization(
     holdout_start = context["holdout_start"]
     development = context["development"]
     quality_fingerprint = context["quality_fingerprint"]
+    feature_diagnostics = context["feature_diagnostics"]
     selected_features = context["selected_features"]
     excluded_features = context["excluded_features"]
     common_start_utc = context["common_start_utc"]
