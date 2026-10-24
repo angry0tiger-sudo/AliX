@@ -133,9 +133,7 @@ def generate_candidate_signal(
             )
         values[name] = value
     if strategy_id == "trend_following":
-        signal = int(
-            values["ema_crossover_24_72"] > 0 and values["return_6"] > 0
-        )
+        signal = int(values["ema_crossover_24_72"] > 0 and values["return_6"] > 0)
     elif strategy_id == "mean_reversion":
         signal = int(
             values["rsi_14"] <= 30
