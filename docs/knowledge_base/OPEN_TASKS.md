@@ -205,3 +205,12 @@
 - The correction evaluates internal undefined values only after the candidate's first defined observation. The dataset's existing complete-row selection drops natural warm-up rows and enforces timestamp continuity. No imputation, fill, interpolation, backfill, or resampling is permitted.
 - `%-volume_change_1` remains excluded where mathematically undefined: A contains 58,655 zero-volume candles; B contains isolated zero previous-volume observations. Do not change feature semantics to force this column into the model.
 - Added regression tests for staggered warm-up plus true internal gaps, and feature-availability/source-volume diagnostics in the Stage B artifact. Re-run through GitHub Actions; preserve all CI and economic gates and keep `Champion=null`, `order_permission=false`, `trading_authorization=NO-GO`, `economic_acceptance=NO-GO`.
+
+
+## Stage B signal optimization research — 2026-10-24
+
+- Root cause from Stage B run 40099106018: 30,022 A-development OOS forecasts produced 2,502 non-overlapping 12-hour entry opportunities, but only 12 predictions exceeded the unchanged 0.60% round-trip cost hurdle. The opportunity forecast 99th percentile was 0.4655%, below the hurdle. This Stage B path is a return regressor, not Triple-Barrier Meta-Label probability filtering.
+- A-only, research-only grid added on branch \`research/stage-b-signal-optimization\`: horizons 6/12/24 hours, current vs extended past-only trend/RSI features, and current vs shallow-regularized LightGBM parameters. The reserved final 90-day A holdout is removed before feature/target calculation.
+- No threshold relaxation or data imputation; no volume-derived feature is fabricated because source segment A has zero positive-volume observations. HMM/Meta-Label stay out of this direct Stage B experiment, because they are separate Phase 5 signal paths.
+- Adaptive candidate selection requires >=30 prior OOS trades, win rate >60%, positive net expectancy and drawdown <15%; otherwise it uses the existing baseline. Candidate summaries are exploratory, not a Champion selection.
+- Hard invariants remain \`Champion=null\`, \`order_permission=false\`, \`trading_authorization=NO-GO\`, and \`economic_acceptance=NO-GO\`.

@@ -1,0 +1,128 @@
+name: AliX Stage B Signal Optimization Research
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - "research/stage-b-signal-optimization"
+    paths:
+      - ".github/workflows/stage-b-signal-optimization.yml"
+      - "scripts/run_stage_b_signal_optimization.py"
+      - "scripts/run_stage_b_walk_forward.py"
+      - "services/freqai_baseline/features.py"
+      - "services/freqai_baseline/walkforward.py"
+      - "tests/unit/test_stage_b_signal_optimization.py"
+      - "docs/knowledge_base/STAGE_B_SIGNAL_OPTIMIZATION.md"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: alix-stage-b-signal-optimization
+  cancel-in-progress: false
+
+jobs:
+  signal-optimization-research:
+    name: A-development signal and feature grid
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read
+    env:
+      ALIx_ENV: paper
+      ALIx_DRY_RUN: "true"
+      ALIx_ALLOW_LIVE_TRADING: "false"
+      ALIx_REPORTING_ENABLED: "false"
+      PYTHONUNBUFFERED: "1"
+      PYTHONPATH: ${{ github.workspace }}
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+    steps:
+      - name: Checkout exact research candidate without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up pinned Python runtime
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download immutable Stage A coverage artifact
+        uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: 40077609244
+          name: alix-nobitex-history-coverage-40077609244
+          path: artifacts/stage-a-coverage
+          github-token: ${{ github.token }}
+
+      - name: Install pinned offline research dependencies
+        run: |
+          python -m pip install pip==25.2
+          python -m pip install numpy==2.5.4 pandas==2.3.3 lightgbm==4.7.0 scikit-learn==1.9.0
+
+      - name: Run A-development signal optimization without evaluating reserved holdout
+        run: |
+          python scripts/run_stage_b_signal_optimization.py \
+            --input-dir artifacts/stage-a-coverage \
+            --output-dir artifacts/stage-b-signal-optimization \
+            --commit-sha "${{ github.sha }}"
+
+      - name: Verify provenance, no-imputation rules, economic gates, and safety invariants
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path("artifacts/stage-b-signal-optimization")
+          report = json.loads((root / "signal-optimization-report.json").read_text(encoding="utf-8"))
+          assert report["run_status"] == "COMPLETED_RESEARCH_ONLY"
+          assert report["created_by_commit_sha"] == "${{ github.sha }}"
+          assert report["source"]["coverage_workflow_run_id"] == 40077609244
+          assert report["protocol"]["holdout_evaluated_by_this_experiment"] is False
+          assert report["protocol"]["holdout_used_for_feature_or_parameter_selection"] is False
+          assert report["protocol"]["feature_imputation"] is False
+          assert report["protocol"]["forward_fill"] is False
+          assert report["protocol"]["backfill"] is False
+          assert report["protocol"]["interpolation"] is False
+          assert report["protocol"]["resampling"] is False
+          assert report["protocol"]["cost_hurdle_optimized"] is False
+          assert report["protocol"]["candidate_count"] == 12
+          safety = report["safety_invariants"]
+          assert safety["Champion"] is None
+          assert safety["order_permission"] is False
+          assert safety["trading_authorization"] == "NO-GO"
+          assert safety["economic_acceptance"] == "NO-GO"
+          assert safety["model_promoted"] is False
+          assert safety["production_model_updated"] is False
+          assert safety["strategy_registry_updated"] is False
+          assert safety["orders_or_execution_api_used"] is False
+          assert safety["private_api_calls"] == 0
+          assert safety["order_endpoint_calls"] == 0
+          assert safety["real_order_attempts"] == 0
+          print(json.dumps({
+              "commit_sha": report["created_by_commit_sha"],
+              "source_csv_sha256": report["source"]["coverage_csv_sha256"],
+              "candidate_count": report["protocol"]["candidate_count"],
+              "baseline": report["fixed_baseline_candidate"],
+              "adaptive_policy": report["adaptive_walkforward_policy"],
+              "Champion": safety["Champion"],
+              "order_permission": safety["order_permission"],
+              "trading_authorization": safety["trading_authorization"]
+          }, sort_keys=True, allow_nan=False))
+          PY
+
+      - name: Upload feature, fold, prediction, trade, and policy evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alix-stage-b-signal-optimization-${{ github.run_id }}
+          path: |
+            artifacts/stage-a-coverage/
+            artifacts/stage-b-signal-optimization/
+          if-no-files-found: error
+          retention-days: 90
