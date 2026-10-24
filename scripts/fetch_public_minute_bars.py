@@ -106,6 +106,7 @@ def parse_kline(payload: object) -> KlineRow:
     _validate_kline_row(row)
     return row
 
+
 def _fetch_page(symbol: str, start_ms: int, end_ms: int) -> list[KlineRow]:
     params: dict[str, str | int] = {
         "symbol": symbol,

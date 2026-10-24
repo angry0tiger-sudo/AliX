@@ -154,6 +154,7 @@ def validate_bars(bars: Sequence[SimBar]) -> None:
             _validate_bar_order(previous, bar)
         previous = bar
 
+
 def _validate_exposures(
     target_exposures: Sequence[float], bar_count: int, config: SimulationConfig
 ) -> None:
