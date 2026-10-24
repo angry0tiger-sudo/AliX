@@ -497,13 +497,11 @@ def installed_version(package: str) -> str | None:
         return None
 
 
-def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
+def write_csv(
+    path: Path, rows: list[dict[str, Any]], empty_fields: list[str]
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    fields = list(rows[0]) if rows else [
-        "segment", "evaluation", "fold_id", "timestamp_utc",
-        "forecast_return_horizon", "realized_forward_return",
-        "round_trip_cost_fraction", "trade_opportunity", "trade_taken",
-    ]
+    fields = list(rows[0]) if rows else empty_fields
     with path.open("w", encoding="utf-8", newline="") as stream:
         writer = csv.DictWriter(stream, fieldnames=fields, extrasaction="raise")
         writer.writeheader()
@@ -570,10 +568,21 @@ def run_stage_b(input_dir: Path, output_dir: Path, commit_sha: str) -> dict[str,
     write_csv(
         output_dir / "oos-predictions.csv",
         [row for result in all_results for row in result["prediction_rows"]],
+        [
+            "segment", "evaluation", "fold_id", "timestamp_utc",
+            "forecast_return_horizon", "realized_forward_return",
+            "round_trip_cost_fraction", "trade_opportunity", "trade_taken",
+        ],
     )
     write_csv(
         output_dir / "oos-trades.csv",
         a_dev["trades"] + holdout["trades"] + b_diag["trades"],
+        [
+            "segment", "evaluation", "fold_id", "entry_utc", "exit_utc",
+            "horizon_hours", "forecast_return", "gross_return",
+            "fee_bps_round_trip", "slippage_bps_round_trip", "net_return",
+            "won_after_costs", "order_submitted",
+        ],
     )
 
     details: dict[str, Any] = {}
@@ -683,6 +692,7 @@ def run_stage_b(input_dir: Path, output_dir: Path, commit_sha: str) -> dict[str,
             "order_permission": False,
             "trading_authorization": "NO-GO",
             "economic_acceptance": "NO-GO",
+            "model_training_performed": True,
             "model_promoted": False,
             "production_model_updated": False,
             "strategy_registry_updated": False,
