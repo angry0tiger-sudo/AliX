@@ -21,7 +21,6 @@ from services.ai_core.ensemble import (
 from services.ai_core.features import (
     AI_FEATURE_COLUMNS,
     AI_FEATURE_SCHEMA_VERSION,
-    BASE_AI_FEATURE_COLUMNS,
     CROSS_ASSET_FEATURE_COLUMNS,
     VOLUME_DEPENDENT_FEATURE_COLUMNS,
     aggregate_hourly_to_4h,
