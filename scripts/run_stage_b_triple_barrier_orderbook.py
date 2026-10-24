@@ -118,7 +118,9 @@ def _validate_book_price_order(bids: np.ndarray, asks: np.ndarray) -> None:
         raise ValueError("orderbook_crossed_or_locked")
 
 
-def _validate_book_side_depth(bid_quantities: np.ndarray, ask_quantities: np.ndarray) -> None:
+def _validate_book_side_depth(
+    bid_quantities: np.ndarray, ask_quantities: np.ndarray
+) -> None:
     if np.any(bid_quantities.sum(axis=1) <= 0) or np.any(
         ask_quantities.sum(axis=1) <= 0
     ):
@@ -215,7 +217,14 @@ def _load_orderbook_features(
         _validate_orderbook_manifest(orderbook_path, manifest_path)
         book = pd.read_csv(orderbook_path)
         features = add_relative_orderbook_features(candles, book)
-    except (ValueError, KeyError, TypeError, OSError, json.JSONDecodeError, pd.errors.ParserError) as error:
+    except (
+        ValueError,
+        KeyError,
+        TypeError,
+        OSError,
+        json.JSONDecodeError,
+        pd.errors.ParserError,
+    ) as error:
         return (
             "INVALID",
             None,
@@ -404,7 +413,9 @@ def _liquidity_capacity(
             "liquidity_participation_cap_fraction": PARTICIPATION_CAP,
             "max_order_notional_quote_currency": float(cap.max()),
             "rows_with_positive_order_capacity": int((cap > 0.0).sum()),
-            "rows_with_reference_order_capacity": int((cap >= REFERENCE_ORDER_NOTIONAL_QUOTE).sum()),
+            "rows_with_reference_order_capacity": int(
+                (cap >= REFERENCE_ORDER_NOTIONAL_QUOTE).sum()
+            ),
             "reference_order_notional_quote_currency": REFERENCE_ORDER_NOTIONAL_QUOTE,
             "status": status,
         },
@@ -521,8 +532,12 @@ def _evaluate_candidate(
                     "max_order_notional_quote_currency": order_cap,
                     "reference_order_notional_quote_currency": REFERENCE_ORDER_NOTIONAL_QUOTE,
                     "counterfactual_signal": bool(signalled),
-                    "liquidity_eligible": bool(order_cap >= REFERENCE_ORDER_NOTIONAL_QUOTE),
-                    "executable_trade": bool(signalled and order_cap >= REFERENCE_ORDER_NOTIONAL_QUOTE),
+                    "liquidity_eligible": bool(
+                        order_cap >= REFERENCE_ORDER_NOTIONAL_QUOTE
+                    ),
+                    "executable_trade": bool(
+                        signalled and order_cap >= REFERENCE_ORDER_NOTIONAL_QUOTE
+                    ),
                 }
             )
         folds.append(
@@ -626,7 +641,11 @@ def _evaluate_grid(
     all_folds: list[dict[str, Any]] = []
     all_predictions: list[dict[str, Any]] = []
     stress_rows: list[dict[str, Any]] = []
-    for (horizon, profit_multiplier, stop_multiplier), outcomes in outcomes_by_config.items():
+    for (
+        horizon,
+        profit_multiplier,
+        stop_multiplier,
+    ), outcomes in outcomes_by_config.items():
         baseline_id = (
             f"ohlcv_only|h{horizon}|pt{profit_multiplier:g}|sl{stop_multiplier:g}"
         )
@@ -726,9 +745,11 @@ def _build_report(
             "stop_loss_multipliers": list(SL_MULTIPLIERS),
             "barrier_candidate_count": len(outcomes_by_config),
             "model_candidate_count_planned": 2 * len(outcomes_by_config),
-            "model_candidate_count_executed": len(feature_groups) * len(outcomes_by_config),
+            "model_candidate_count_executed": len(feature_groups)
+            * len(outcomes_by_config),
             "model_candidate_count_blocked_for_missing_book": (
-                0 if orderbook_status == "VALIDATED_RELATIVE_FEATURES"
+                0
+                if orderbook_status == "VALIDATED_RELATIVE_FEATURES"
                 else len(outcomes_by_config)
             ),
             "diagnostic_scenario_count": len(barrier_scenarios),
@@ -810,7 +831,9 @@ def run_experiment(
     orderbook_result = _load_orderbook_features(
         candles, orderbook_csv, orderbook_manifest
     )
-    orderbook_status, book_features, book_rows, manifest_hash, book_blockers = orderbook_result
+    orderbook_status, book_features, book_rows, manifest_hash, book_blockers = (
+        orderbook_result
+    )
     blockers = book_blockers + _liquidity_blockers(liquidity)
     price_features = _price_features(candles)
     feature_groups = _build_feature_groups(price_features, book_features)

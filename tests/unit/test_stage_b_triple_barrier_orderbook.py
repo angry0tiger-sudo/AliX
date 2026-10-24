@@ -90,8 +90,9 @@ def test_verified_quote_volume_is_capped_at_one_percent() -> None:
     assert capacity.tolist() == pytest.approx([1.0, 0.5])
 
 
-
-def test_orderbook_manifest_requires_approved_provenance_and_matching_checksum(tmp_path: Path) -> None:
+def test_orderbook_manifest_requires_approved_provenance_and_matching_checksum(
+    tmp_path: Path,
+) -> None:
     book_path = tmp_path / "book.csv"
     book_path.write_text("snapshot_timestamp_utc,bid_price_1\n", encoding="utf-8")
     manifest = {
@@ -105,7 +106,10 @@ def test_orderbook_manifest_requires_approved_provenance_and_matching_checksum(t
     manifest_path = tmp_path / "book-manifest.json"
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
-    assert _validate_orderbook_manifest(book_path, manifest_path)["permission_status"] == "approved"
+    assert (
+        _validate_orderbook_manifest(book_path, manifest_path)["permission_status"]
+        == "approved"
+    )
 
     manifest["permission_status"] = "unverified"
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
