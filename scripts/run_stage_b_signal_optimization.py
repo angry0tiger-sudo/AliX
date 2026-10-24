@@ -139,9 +139,7 @@ def add_signal_features(candles: DataFrame) -> DataFrame:
 
     rolling_high = high.rolling(24, min_periods=24).max()
     rolling_low = low.rolling(24, min_periods=24).min()
-    range_width = (rolling_high - rolling_low).where(
-        (rolling_high - rolling_low) > 0.0
-    )
+    range_width = (rolling_high - rolling_low).where((rolling_high - rolling_low) > 0.0)
     result["%-range_position_24"] = (close - rolling_low) / range_width
     result.replace([np.inf, -np.inf], np.nan, inplace=True)
     return result
@@ -279,9 +277,7 @@ def _economic_gate(
         "expectancy_pass": expectancy_pass,
         "drawdown_pass": drawdown_pass,
         "status": status,
-        "authorization_effect": (
-            "NONE; Champion remains null and trading stays NO-GO"
-        ),
+        "authorization_effect": ("NONE; Champion remains null and trading stays NO-GO"),
     }
 
 
@@ -608,9 +604,7 @@ def run_signal_optimization(
         _candidate_summary(result) for result in candidate_results.values()
     ]
     prediction_rows = [
-        row
-        for result in candidate_results.values()
-        for row in result["predictions"]
+        row for result in candidate_results.values() for row in result["predictions"]
     ]
     trade_rows = [
         row for result in candidate_results.values() for row in result["trades"]
@@ -846,9 +840,7 @@ def run_signal_optimization(
     _write_csv(output_dir / "oos-trades.csv", trade_rows, trade_columns)
     _write_csv(output_dir / "candidate-fold-metrics.csv", fold_rows, fold_columns)
     _write_csv(output_dir / "adaptive-policy-trace.csv", policy_trace, trace_columns)
-    _write_csv(
-        output_dir / "adaptive-policy-trades.csv", policy_trades, trade_columns
-    )
+    _write_csv(output_dir / "adaptive-policy-trades.csv", policy_trades, trade_columns)
     return report
 
 
@@ -878,9 +870,9 @@ def main() -> int:
                 "adaptive_policy": {
                     "trade_count": report["adaptive_walkforward_policy"]["trade_count"],
                     "win_rate": report["adaptive_walkforward_policy"]["win_rate"],
-                    "net_expectancy_per_trade": report[
-                        "adaptive_walkforward_policy"
-                    ]["net_expectancy_per_trade"],
+                    "net_expectancy_per_trade": report["adaptive_walkforward_policy"][
+                        "net_expectancy_per_trade"
+                    ],
                     "max_drawdown_abs": report["adaptive_walkforward_policy"][
                         "max_drawdown_abs"
                     ],

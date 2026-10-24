@@ -23,9 +23,7 @@ def _ohlcv(rows: int = 280) -> pd.DataFrame:
     low = np.minimum(opened, close) * 0.998
     return pd.DataFrame(
         {
-            "date": pd.date_range(
-                "2020-01-01T00:00:00Z", periods=rows, freq="h"
-            ),
+            "date": pd.date_range("2020-01-01T00:00:00Z", periods=rows, freq="h"),
             "open": opened,
             "high": high,
             "low": low,
@@ -45,9 +43,7 @@ def test_extended_features_use_natural_warmup_without_imputation() -> None:
     assert featured["%-rsi_14"].iloc[14:].notna().all()
     assert featured["%-volume_change_1"].isna().all()
     assert featured["%-close_vs_sma_200"].iloc[199] == pytest.approx(
-        candles["close"].iloc[199]
-        / candles["close"].iloc[:200].mean()
-        - 1.0
+        candles["close"].iloc[199] / candles["close"].iloc[:200].mean() - 1.0
     )
 
 
@@ -57,12 +53,12 @@ def test_extended_features_are_past_only() -> None:
     split = 240
     changed.loc[split, "close"] = changed.loc[split, "close"] * 1.15
     changed.loc[split, "open"] = changed.loc[split - 1, "close"]
-    changed.loc[split, "high"] = max(
-        changed.loc[split, "open"], changed.loc[split, "close"]
-    ) * 1.002
-    changed.loc[split, "low"] = min(
-        changed.loc[split, "open"], changed.loc[split, "close"]
-    ) * 0.998
+    changed.loc[split, "high"] = (
+        max(changed.loc[split, "open"], changed.loc[split, "close"]) * 1.002
+    )
+    changed.loc[split, "low"] = (
+        min(changed.loc[split, "open"], changed.loc[split, "close"]) * 0.998
+    )
 
     original_features = add_signal_features(candles)
     changed_features = add_signal_features(changed)
@@ -99,8 +95,9 @@ def test_experiment_grid_preserves_baseline_and_closed_safety_defaults() -> None
     assert FEATURE_GROUPS == ("stage_b_8", "extended_trend_rsi")
     assert set(MODEL_PROFILES) == {"phase4_default", "shallow_regularized"}
     assert MODEL_PROFILES["phase4_default"]["n_estimators"] == 80
-    assert MODEL_PROFILES["shallow_regularized"]["num_leaves"] < (
-        MODEL_PROFILES["phase4_default"]["num_leaves"]
+    assert (
+        MODEL_PROFILES["shallow_regularized"]["num_leaves"]
+        < (MODEL_PROFILES["phase4_default"]["num_leaves"])
     )
 
 
