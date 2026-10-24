@@ -1,0 +1,148 @@
+name: AliX Research AI Core Rebuild
+
+on:
+  push:
+    branches:
+      - "research/ai-core-rebuild"
+    paths:
+      - ".github/workflows/ai-core-rebuild.yml"
+      - "services/ai_core/**"
+      - "scripts/run_ai_core_rebuild.py"
+      - "configs/research/ai-core-strategy-registry.json"
+      - "tests/unit/test_ai_core_*.py"
+      - "requirements.txt"
+      - "requirements.lock"
+      - "docs/knowledge_base/AI_CORE_REBUILD_RESEARCH.md"
+      - "docs/governance/owner-directives/2026-10-24-ai-core-rebuild.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: alix-research-ai-core-rebuild
+  cancel-in-progress: false
+
+jobs:
+  research-ai-core:
+    name: 4H AI core walk-forward research and safety audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      actions: read
+    env:
+      ALIx_ENV: paper
+      ALIx_DRY_RUN: "true"
+      ALIx_ALLOW_LIVE_TRADING: "false"
+      ALIx_REPORTING_ENABLED: "false"
+      PYTHONUNBUFFERED: "1"
+      PYTHONPATH: "."
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    steps:
+      - name: Checkout exact research commit without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up pinned Python runtime
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned CPU-only research dependencies
+        run: |
+          python -m pip install pip==25.2
+          python -m pip install numpy==2.5.4 pandas==2.3.3 pandas-stubs==2.3.2.250926 scikit-learn==1.9.0 lightgbm==4.7.0 xgboost-cpu==3.4.1 defusedxml==0.7.1 pytest==9.0.3
+
+      - name: Run AI-core unit and safety contracts
+        run: |
+          python -m pytest \
+            tests/unit/test_ai_core_features.py \
+            tests/unit/test_ai_core_ensemble.py \
+            tests/unit/test_ai_core_regime.py \
+            tests/unit/test_ai_core_strategies.py \
+            tests/unit/test_ai_core_sentiment.py -q
+
+      - name: Download immutable Stage A BTC development artifact
+        uses: actions/download-artifact@v4
+        with:
+          repository: angry0tiger-sudo/AliX
+          run-id: 40077609244
+          name: alix-nobitex-history-coverage-40077609244
+          path: artifacts/stage-a-coverage
+          github-token: ${{ github.token }}
+
+      - name: Run research-only 4H AI-core walk-forward
+        run: |
+          python scripts/run_ai_core_rebuild.py \
+            --input-dir artifacts/stage-a-coverage \
+            --output-dir artifacts/ai-core-rebuild \
+            --commit-sha "$GITHUB_SHA"
+
+      - name: Verify feature, ensemble, strategy, provenance and safety contracts
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          report_path = Path("artifacts/ai-core-rebuild/ai-core-rebuild-report.json")
+          predictions_path = Path("artifacts/ai-core-rebuild/ai-core-oos-predictions.csv")
+          report = json.loads(report_path.read_text(encoding="utf-8"))
+          assert report["created_by_commit_sha"] == os.environ["GITHUB_SHA"]
+          assert report["run_status"] == "COMPLETED_RESEARCH_ONLY"
+          assert report["source"]["evaluation_timeframe"] == "4h"
+          assert report["source"]["final_holdout_used"] is False
+          assert report["feature_engineering"]["model_feature_count"] >= 50
+          assert report["feature_engineering"]["extended_feature_schema_count"] >= 60
+          assert len(report["feature_engineering"]["model_feature_names"]) == report["feature_engineering"]["model_feature_count"]
+          assert report["ensemble"]["models"] == ["xgboost", "random_forest", "lightgbm"]
+          assert report["ensemble"]["method"] == "equal_weighted_mean"
+          assert len(report["ensemble"]["walk_forward_folds"]) == 3
+          assert report["strategy_registry"]["candidate_count"] == 3
+          assert report["strategy_registry"]["all_candidates_research_only"] is True
+          assert report["strategy_registry"]["production_registry_modified"] is False
+          assert report["economic_evaluation"]["status"] == "NOT_EVALUATED_RESEARCH_ONLY"
+          assert report["economic_evaluation"]["economic_acceptance"] == "NO-GO"
+          safety = report["safety_invariants"]
+          assert safety["Champion"] is None
+          assert safety["order_permission"] is False
+          assert safety["trading_authorization"] == "NO-GO"
+          assert safety["model_promoted"] is False
+          assert safety["production_model_updated"] is False
+          assert safety["production_strategy_registry_updated"] is False
+          assert safety["orders_or_execution_api_used"] is False
+          assert safety["private_api_calls"] == 0
+          assert safety["real_order_attempts"] == 0
+          assert predictions_path.is_file()
+          print(json.dumps({
+              "commit_sha": report["created_by_commit_sha"],
+              "run_status": report["run_status"],
+              "model_feature_count": report["feature_engineering"]["model_feature_count"],
+              "extended_feature_schema_count": report["feature_engineering"]["extended_feature_schema_count"],
+              "ensemble_models": report["ensemble"]["models"],
+              "strategy_candidate_count": report["strategy_registry"]["candidate_count"],
+              "oos_predictions": sum(
+                  fold["test_stop_exclusive"] - fold["test_start"]
+                  for fold in report["ensemble"]["walk_forward_folds"]
+              ),
+              "cross_asset_status": report["feature_engineering"]["cross_asset_status"],
+              "sentiment_status": report["sentiment"]["status"],
+              "economic_status": report["economic_evaluation"]["status"],
+              "Champion": safety["Champion"],
+              "order_permission": safety["order_permission"],
+          }, sort_keys=True, allow_nan=False))
+          PY
+
+      - name: Upload exact-commit AI core evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-core-rebuild-${{ github.sha }}
+          path: |
+            artifacts/ai-core-rebuild/ai-core-rebuild-report.json
+            artifacts/ai-core-rebuild/ai-core-oos-predictions.csv
+          if-no-files-found: warn
+          retention-days: 30
