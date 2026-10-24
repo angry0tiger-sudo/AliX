@@ -14,6 +14,7 @@ from risk.allocator import DynamicRiskAllocator
 from risk.contracts import (
     AccountSnapshot,
     ActionType,
+    InitialStakePolicy,
     MarketRules,
     MarketSnapshot,
     ModelRiskProposal,
@@ -170,6 +171,135 @@ def make_allocation(
     return result.allocation
 
 
+def test_initial_stake_policy_is_versioned_immutable_and_validated() -> None:
+    stake_policy = InitialStakePolicy()
+    assert stake_policy.owner_approved
+    assert stake_policy.target_usdt == D("10")
+    assert stake_policy.directive_id == "ALIX-OD-2026-10-23-INITIAL-STAKE-10-USDT"
+    assert len(stake_policy.fingerprint) == 64
+    with pytest.raises(AttributeError):
+        stake_policy.target_usdt = D("20")  # type: ignore[misc]
+    with pytest.raises(ValueError, match="initial_stake_target_usdt_below_minimum"):
+        InitialStakePolicy(target_usdt=D("0"))
+
+
+def test_allocator_targets_ten_usdt_with_balance_and_precision_guards() -> None:
+    policy = make_policy()
+    result = DynamicRiskAllocator().allocate(
+        policy=policy,
+        account=make_account(free_balance=D("100")),
+        market=make_market(),
+        rules=make_rules(),
+        proposal=make_proposal(),
+        now=NOW,
+    )
+    assert result.approved and result.allocation is not None
+    assert result.allocation.stake == D("10")
+    assert result.allocation.quantity == D("0.1")
+    assert (
+        result.allocation.initial_stake_policy_revision
+        == policy.initial_stake_policy.revision
+    )
+    assert (
+        result.allocation.initial_stake_policy_fingerprint
+        == policy.initial_stake_policy.fingerprint
+    )
+
+
+def test_allocator_uses_available_below_target_when_all_other_limits_allow() -> None:
+    policy = make_policy(max_stake_fraction_of_free_balance=D("1"))
+    account = make_account(free_balance=D("2"))
+    result = DynamicRiskAllocator().allocate(
+        policy=policy,
+        account=account,
+        market=make_market(),
+        rules=make_rules(min_notional=D("1")),
+        proposal=make_proposal(),
+        now=NOW,
+    )
+    assert result.approved and result.allocation is not None
+    assert result.allocation.stake == D("1.9")
+    assert result.allocation.stake < account.free_balance
+    assert result.allocation.stake * (
+        D("1") + policy.fee_rate + policy.slippage_rate
+    ) <= account.free_balance
+
+
+def test_allocator_rejects_exact_ten_when_cost_reserve_is_not_affordable() -> None:
+    policy = make_policy(max_stake_fraction_of_free_balance=D("1"))
+    result = DynamicRiskAllocator().allocate(
+        policy=policy,
+        account=make_account(free_balance=D("10")),
+        market=make_market(),
+        rules=make_rules(),
+        proposal=make_proposal(),
+        now=NOW,
+    )
+    assert not result.approved
+    assert "initial_stake_fee_reserve_insufficient" in result.reasons
+
+
+@pytest.mark.parametrize(
+    ("rules", "expected"),
+    (
+        (
+            make_rules(min_notional=D("1"), max_notional=D("9")),
+            "initial_stake_target_exceeds_market_maximum",
+        ),
+        (
+            make_rules(max_quantity=D("0.05")),
+            "initial_stake_target_exceeds_market_maximum",
+        ),
+        (make_rules(min_notional=D("11")), "notional_below_market_minimum"),
+    ),
+)
+def test_allocator_rejects_market_limits_instead_of_silently_resizing(
+    rules: MarketRules, expected: str
+) -> None:
+    result = DynamicRiskAllocator().allocate(
+        policy=make_policy(),
+        account=make_account(free_balance=D("100")),
+        market=make_market(),
+        rules=rules,
+        proposal=make_proposal(),
+        now=NOW,
+    )
+    assert not result.approved
+    assert expected in result.reasons
+
+
+def test_allocator_rejects_initial_target_when_protective_budget_is_smaller() -> None:
+    policy = make_policy(
+        daily_risk_budget_fraction=D("0.00002"),
+        per_trade_risk_fraction=D("0.00001"),
+    )
+    result = DynamicRiskAllocator().allocate(
+        policy=policy,
+        account=make_account(free_balance=D("100")),
+        market=make_market(),
+        rules=make_rules(),
+        proposal=make_proposal(),
+        now=NOW,
+    )
+    assert not result.approved
+    assert "initial_stake_target_conflicts_with_protective_cap" in result.reasons
+
+
+def test_allocator_fails_closed_when_initial_stake_policy_is_unapproved() -> None:
+    result = DynamicRiskAllocator().allocate(
+        policy=make_policy(
+            initial_stake_policy=InitialStakePolicy(owner_approved=False)
+        ),
+        account=make_account(),
+        market=make_market(),
+        rules=make_rules(),
+        proposal=make_proposal(),
+        now=NOW,
+    )
+    assert not result.approved
+    assert "initial_stake_policy_not_owner_approved" in result.reasons
+
+
 def make_armed_store(path: Path) -> SQLiteKillSwitchStore:
     store = SQLiteKillSwitchStore(str(path))
     state = store.read()
@@ -215,7 +345,8 @@ def test_allocator_reduces_size_for_volatility_uncertainty_calibration_and_regim
     )
     assert volatile.allocation is not None
     assert volatile.trade_risk_budget < baseline.trade_risk_budget
-    assert volatile.allocation.quantity < baseline.allocation.quantity
+    assert volatile.allocation.quantity == baseline.allocation.quantity
+    assert volatile.allocation.stake == D("10")
 
     uncertain = allocator.allocate(
         policy=policy,
@@ -847,7 +978,12 @@ def test_gate_rejects_latched_switch_price_tampering_and_underreported_loss() ->
     assert not latched.risk_approved
     assert "kill_switch_latched" in latched.reasons
 
-    tampered = replace(allocation, quantity=allocation.quantity + rules.quantity_step)
+    tampered_quantity = allocation.quantity + rules.quantity_step
+    tampered = replace(
+        allocation,
+        quantity=tampered_quantity,
+        stake=tampered_quantity * market.price,
+    )
     result = gate.evaluate_entry(
         allocation=tampered,
         account=account,
@@ -874,6 +1010,51 @@ def test_gate_rejects_latched_switch_price_tampering_and_underreported_loss() ->
     assert "reported_loss_understates_recomputed_loss" in result.reasons
 
 
+def test_gate_rejects_initial_stake_target_and_policy_revision_tampering() -> None:
+    policy = make_policy()
+    account = make_account()
+    market = make_market()
+    rules = make_rules()
+    allocation = make_allocation(
+        policy=policy, account=account, market=market, rules=rules
+    )
+    gate = RiskGate()
+    state = KillSwitchState(False, "", None, 2, NOW)
+
+    stale_policy_revision = replace(
+        allocation, initial_stake_policy_revision="older-policy-v0"
+    )
+    stale_revision_result = gate.evaluate_entry(
+        allocation=stale_policy_revision,
+        account=account,
+        market=market,
+        rules=rules,
+        policy=policy,
+        kill_switch=state,
+        evaluated_at=NOW,
+    )
+    assert not stale_revision_result.risk_approved
+    assert "initial_stake_policy_revision_mismatch" in stale_revision_result.reasons
+
+    changed_target_quantity = allocation.quantity + rules.quantity_step
+    changed_size = replace(
+        allocation,
+        quantity=changed_target_quantity,
+        stake=changed_target_quantity * market.price,
+    )
+    changed_size_result = gate.evaluate_entry(
+        allocation=changed_size,
+        account=account,
+        market=market,
+        rules=rules,
+        policy=policy,
+        kill_switch=state,
+        evaluated_at=NOW,
+    )
+    assert not changed_size_result.risk_approved
+    assert "initial_stake_target_mismatch" in changed_size_result.reasons
+
+
 def test_gate_rejects_insufficient_free_balance_and_stale_allocation() -> None:
     policy = make_policy()
     market = make_market()
@@ -881,7 +1062,7 @@ def test_gate_rejects_insufficient_free_balance_and_stale_allocation() -> None:
     allocation = make_allocation(
         policy=policy, account=make_account(), market=market, rules=rules
     )
-    low_balance = make_account(free_balance=D("100"))
+    low_balance = make_account(free_balance=D("15"))
     result = RiskGate().evaluate_entry(
         allocation=allocation,
         account=low_balance,

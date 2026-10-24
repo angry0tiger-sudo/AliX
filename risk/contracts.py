@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal, ROUND_DOWN, ROUND_UP
 from enum import StrEnum
@@ -211,6 +211,44 @@ class ModelRiskProposal:
 
 
 @dataclass(frozen=True, slots=True)
+class InitialStakePolicy:
+    """Versioned owner directive for the initial entry notional target."""
+
+    revision: str = "initial-stake-10-usdt-v1"
+    directive_id: str = "ALIX-OD-2026-10-23-INITIAL-STAKE-10-USDT"
+    owner_approved: bool = True
+    target_usdt: Decimal = Decimal("10")
+    use_all_free_balance_below_target: bool = True
+
+    def __post_init__(self) -> None:
+        if not self.revision.strip() or not self.directive_id.strip():
+            raise ValueError("initial_stake_policy_identity_missing")
+        if not isinstance(self.owner_approved, bool):
+            raise ValueError("initial_stake_policy_approval_invalid")
+        if not isinstance(self.use_all_free_balance_below_target, bool):
+            raise ValueError("initial_stake_policy_balance_rule_invalid")
+        require_decimal(
+            "initial_stake_target_usdt",
+            self.target_usdt,
+            minimum=Decimal("0.00000000000000000001"),
+        )
+
+    @property
+    def fingerprint(self) -> str:
+        return stable_fingerprint(
+            {
+                "revision": self.revision,
+                "directive_id": self.directive_id,
+                "owner_approved": self.owner_approved,
+                "target_usdt": self.target_usdt,
+                "use_all_free_balance_below_target": (
+                    self.use_all_free_balance_below_target
+                ),
+            }
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class RiskPolicy:
     """Immutable policy loaded from an owner-controlled source of truth."""
 
@@ -235,6 +273,7 @@ class RiskPolicy:
     max_market_age_seconds: int
     max_account_age_seconds: int
     regime_multipliers: tuple[tuple[str, Decimal], ...]
+    initial_stake_policy: InitialStakePolicy = field(default_factory=InitialStakePolicy)
 
     def __post_init__(self) -> None:
         if not self.revision.strip():
@@ -252,6 +291,8 @@ class RiskPolicy:
         _validate_policy_budget_fractions(self)
         _validate_policy_quality_fractions(self)
         _validate_policy_costs_and_stops(self)
+        if not isinstance(self.initial_stake_policy, InitialStakePolicy):
+            raise ValueError("initial_stake_policy_missing_or_invalid")
         if self.max_market_age_seconds <= 0 or self.max_account_age_seconds <= 0:
             raise ValueError("freshness_limits_must_be_positive")
         _validate_policy_regimes(self.regime_multipliers)
@@ -341,6 +382,10 @@ class RiskAllocation:
     calibration_error: Decimal
     expected_edge_after_costs: Decimal
     fingerprint: str
+    initial_stake_policy_revision: str = "initial-stake-10-usdt-v1"
+    initial_stake_policy_fingerprint: str = field(
+        default_factory=lambda: InitialStakePolicy().fingerprint
+    )
 
     def __post_init__(self) -> None:
         require_aware_timestamp(self.created_at, "allocation_created_at")
@@ -362,6 +407,8 @@ def _validate_allocation_identity(allocation: RiskAllocation) -> None:
         allocation.symbol,
         allocation.regime,
         allocation.fingerprint,
+        allocation.initial_stake_policy_revision,
+        allocation.initial_stake_policy_fingerprint,
     )
     if not all(value.strip() for value in values):
         raise ValueError("allocation_identity_missing")
