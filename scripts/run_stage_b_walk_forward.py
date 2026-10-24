@@ -10,7 +10,7 @@ import os
 import sys
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Sequence, cast
 
 import numpy as np
 import pandas as pd
@@ -59,7 +59,7 @@ class FoldSpec:
 
 
 def utc_text(value: object) -> str:
-    timestamp = pd.Timestamp(value)
+    timestamp = pd.Timestamp(cast(Any, value))
     if timestamp.tzinfo is None or timestamp.utcoffset() is None:
         raise StageBError("timestamp_timezone_missing")
     return timestamp.tz_convert("UTC").isoformat().replace("+00:00", "Z")
