@@ -4,16 +4,12 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import io
 import json
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
-import zipfile
 
 import numpy as np
 import pandas as pd
-import urllib3
 from pandas import DataFrame
 
 from scripts import run_stage_b_triple_barrier_orderbook as stage_b
@@ -25,6 +21,7 @@ from services.ai_core.ensemble import (
 from services.ai_core.features import (
     AI_FEATURE_COLUMNS,
     AI_FEATURE_SCHEMA_VERSION,
+    BASE_AI_FEATURE_COLUMNS,
     aggregate_hourly_to_4h,
     build_ai_features,
 )
@@ -40,181 +37,12 @@ from services.strategy_selection.hmm_training import (
 )
 from services.strategy_selection.registry import load_registry_document
 
-SYMBOL = "ETHUSDT"
-INTERVAL = "1h"
-ARCHIVE_ROOT = "https://data.binance.vision/data/spot"
 OUTPUT_SCHEMA = "alix.ai-core-rebuild-report.v1"
 FORWARD_HORIZON_4H = 6
 ROUND_TRIP_COST = ROUND_TRIP_COST_BPS / 10_000.0
 MINIMUM_TRAIN_ROWS = 360
 FOLD_COUNT = 3
-HTTP_POOL = urllib3.PoolManager()
-
-
-def _fetch_archive(url: str) -> bytes | None:
-    source = urlsplit(url)
-    if (
-        source.scheme != "https"
-        or source.hostname != "data.binance.vision"
-        or not source.path.startswith("/data/spot/")
-    ):
-        raise ValueError("ai_core_archive_url_not_allowlisted")
-    try:
-        response = HTTP_POOL.request(
-            "GET",
-            url,
-            headers={"User-Agent": "AliX-ai-core-research/1.0"},
-            timeout=urllib3.Timeout(connect=10.0, read=60.0),
-            retries=False,
-            redirect=False,
-        )
-    except urllib3.exceptions.HTTPError as error:
-        raise RuntimeError(f"ai_core_archive_download_failed:{error}") from error
-    try:
-        if response.status == 404:
-            return None
-        if response.status != 200:
-            raise RuntimeError(f"ai_core_archive_http_status:{response.status}")
-        return response.data
-    finally:
-        response.release_conn()
-
-
-def _month_starts(start: pd.Timestamp, end: pd.Timestamp) -> list[pd.Timestamp]:
-    current = pd.Timestamp(year=start.year, month=start.month, day=1, tz="UTC")
-    last = pd.Timestamp(year=end.year, month=end.month, day=1, tz="UTC")
-    months: list[pd.Timestamp] = []
-    while current <= last:
-        months.append(current)
-        current = current + pd.offsets.MonthBegin(1)
-    return months
-
-
-def _month_url(symbol: str, month: pd.Timestamp) -> str:
-    return (
-        f"{ARCHIVE_ROOT}/monthly/klines/{symbol}/{INTERVAL}/"
-        f"{symbol}-{INTERVAL}-{month:%Y-%m}.zip"
-    )
-
-
-def _day_url(symbol: str, day: pd.Timestamp) -> str:
-    return (
-        f"{ARCHIVE_ROOT}/daily/klines/{symbol}/{INTERVAL}/"
-        f"{symbol}-{INTERVAL}-{day:%Y-%m-%d}.zip"
-    )
-
-
-def _read_kline_archive(payload: bytes) -> DataFrame:
-    try:
-        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
-            csv_names = [
-                name for name in archive.namelist() if name.lower().endswith(".csv")
-            ]
-            if len(csv_names) != 1:
-                raise ValueError("ai_core_archive_csv_count_invalid")
-            with archive.open(csv_names[0]) as stream:
-                frame = pd.read_csv(
-                    stream, header=None, usecols=[0, 1, 2, 4, 5, 7]
-                )
-    except (zipfile.BadZipFile, pd.errors.ParserError, ValueError) as error:
-        raise ValueError(f"ai_core_archive_invalid:{error}") from error
-    frame.columns = [
-        "open_time",
-        "open",
-        "high",
-        "close",
-        "base_volume",
-        "quote_volume",
-    ]
-    for column in frame.columns:
-        frame[column] = pd.to_numeric(frame[column], errors="coerce")
-    frame = frame.dropna(subset=["open_time", "open", "high", "close", "quote_volume"])
-    if frame.empty:
-        raise ValueError("ai_core_archive_empty")
-    if (
-        (frame["open"] <= 0).any()
-        or (frame["high"] <= 0).any()
-        or (frame["close"] <= 0).any()
-        or (frame["quote_volume"] < 0).any()
-    ):
-        raise ValueError("ai_core_archive_values_out_of_range")
-    unit = "us" if float(frame["open_time"].max()) >= 100_000_000_000_000 else "ms"
-    frame["date"] = pd.to_datetime(
-        frame["open_time"].astype("int64"), unit=unit, utc=True, errors="raise"
-    )
-    return frame.loc[:, ["date", "open", "high", "close", "quote_volume"]].sort_values(
-        "date"
-    ).reset_index(drop=True)
-
-
-def _download_month(
-    symbol: str, month: pd.Timestamp, start: pd.Timestamp, end: pd.Timestamp
-) -> tuple[list[DataFrame], list[dict[str, str]]]:
-    month_url = _month_url(symbol, month)
-    payload = _fetch_archive(month_url)
-    if payload is not None:
-        return (
-            [_read_kline_archive(payload)],
-            [{"url": month_url, "sha256": hashlib.sha256(payload).hexdigest()}],
-        )
-    first_month = pd.Timestamp(year=start.year, month=start.month, day=1, tz="UTC")
-    last_month = pd.Timestamp(year=end.year, month=end.month, day=1, tz="UTC")
-    if month not in (first_month, last_month):
-        raise ValueError(f"ai_core_interior_archive_missing:{month:%Y-%m}")
-    first_day = max(month, start.floor("D"))
-    last_day_in_month = month + pd.offsets.MonthBegin(1) - pd.Timedelta(days=1)
-    last_day = min(last_day_in_month, end.floor("D"))
-    pieces: list[DataFrame] = []
-    manifests: list[dict[str, str]] = []
-    day = first_day
-    while day <= last_day:
-        day_url = _day_url(symbol, day)
-        daily_payload = _fetch_archive(day_url)
-        if daily_payload is None:
-            raise ValueError(f"ai_core_boundary_archive_missing:{day:%Y-%m-%d}")
-        pieces.append(_read_kline_archive(daily_payload))
-        manifests.append(
-            {"url": day_url, "sha256": hashlib.sha256(daily_payload).hexdigest()}
-        )
-        day = day + pd.Timedelta(days=1)
-    return pieces, manifests
-
-
-def _download_eth_4h(
-    start: pd.Timestamp, end: pd.Timestamp, *, timestamp_phase_minutes: int
-) -> tuple[DataFrame, dict[str, Any]]:
-    pieces: list[DataFrame] = []
-    archives: list[dict[str, str]] = []
-    for month in _month_starts(start, end):
-        month_pieces, month_archives = _download_month(SYMBOL, month, start, end)
-        pieces.extend(month_pieces)
-        archives.extend(month_archives)
-    hourly = pd.concat(pieces, ignore_index=True)
-    upper = end.floor("D") + pd.Timedelta(hours=23)
-    hourly = hourly.loc[hourly["date"].between(start.floor("D"), upper)]
-    hourly = hourly.sort_values("date").reset_index(drop=True)
-    if hourly.empty or hourly["date"].duplicated().any():
-        raise ValueError("ai_core_eth_source_empty_or_ambiguous")
-    hourly = hourly.rename(columns={"quote_volume": "volume"})
-    eth_4h = aggregate_hourly_to_4h(hourly)
-    eth_4h["date"] = eth_4h["date"] + pd.Timedelta(
-        minutes=timestamp_phase_minutes
-    )
-    manifest = {
-        "venue": "binance_spot",
-        "symbol": SYMBOL,
-        "interval": INTERVAL,
-        "rows_hourly": len(hourly),
-        "rows_4h": len(eth_4h),
-        "timestamp_phase_label_shift_minutes": timestamp_phase_minutes,
-        "exact_same_window_claimed": False,
-        "archives": archives,
-        "source_semantics": (
-            "Binance hourly OHLCV windows are label-shifted to match Nobitex's fixed "
-            "timestamp phase for cross-asset sensitivity; source windows are not identical."
-        ),
-    }
-    return eth_4h, manifest
+STRATEGY_IDS = ("trend_following", "mean_reversion", "momentum_breakout")
 
 
 def _load_research_registry(project_root: Path) -> tuple[Any, str]:
@@ -232,7 +60,59 @@ def _load_research_registry(project_root: Path) -> tuple[Any, str]:
     strategy_hash = hashlib.sha256(strategy_path.read_bytes()).hexdigest()
     if any(item.code_sha256 != strategy_hash for item in registry.strategies):
         raise ValueError("ai_core_research_registry_code_hash_mismatch")
+    if any(
+        item.owner_approved or item.lifecycle.value != "RESEARCH_ONLY"
+        for item in registry.strategies
+    ):
+        raise ValueError("ai_core_research_registry_must_remain_unapproved")
     return registry, hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _load_eth_4h(
+    input_path: Path, btc_4h: DataFrame, phase_minutes: int
+) -> tuple[DataFrame, dict[str, Any]]:
+    """Load a supplied and hash-pinned hourly CSV; this function never fetches data."""
+    raw_bytes = input_path.read_bytes()
+    frame = pd.read_csv(input_path)
+    required = {"date", "open", "high", "low", "close", "volume"}
+    if not required.issubset(frame.columns):
+        raise ValueError("ai_core_eth_input_columns_missing")
+    parsed = pd.to_datetime(frame["date"], errors="raise")
+    if parsed.dt.tz is None:
+        raise ValueError("ai_core_eth_timestamps_must_be_timezone_aware")
+    frame["date"] = parsed.dt.tz_convert("UTC")
+    expected_first = pd.Timestamp(btc_4h["date"].iloc[0]) - pd.Timedelta(
+        minutes=phase_minutes
+    )
+    expected_last = (
+        pd.Timestamp(btc_4h["date"].iloc[-1])
+        - pd.Timedelta(minutes=phase_minutes)
+        + pd.Timedelta(hours=3)
+    )
+    frame = frame.loc[frame["date"].between(expected_first, expected_last)].copy()
+    if len(frame) != 4 * len(btc_4h):
+        raise ValueError("ai_core_eth_input_hourly_coverage_incomplete")
+    hourly = frame.loc[:, ["date", "open", "high", "low", "close", "volume"]]
+    eth_4h = aggregate_hourly_to_4h(hourly)
+    eth_4h["date"] = eth_4h["date"] + pd.Timedelta(minutes=phase_minutes)
+    if not eth_4h["date"].reset_index(drop=True).equals(
+        btc_4h["date"].reset_index(drop=True)
+    ):
+        raise ValueError("ai_core_eth_cross_asset_labels_do_not_match_btc")
+    return eth_4h, {
+        "status": "LOADED_HASH_PINNED_INPUT",
+        "provider": "owner-supplied historical CSV",
+        "symbol": "ETHUSDT",
+        "input_sha256": hashlib.sha256(raw_bytes).hexdigest(),
+        "rows_hourly": len(hourly),
+        "rows_4h": len(eth_4h),
+        "timestamp_phase_label_shift_minutes": phase_minutes,
+        "exact_same_window_claimed": False,
+        "source_semantics": (
+            "Hourly source windows are relabelled to the BTC source's stable timestamp "
+            "phase for sensitivity only; matching labels do not prove identical venue windows."
+        ),
+    }
 
 
 def _walk_forward_folds(
@@ -278,24 +158,22 @@ def _trade_stats(returns: list[float]) -> dict[str, Any]:
     }
 
 
+def _empty_strategy_summaries() -> dict[str, dict[str, Any]]:
+    return {
+        strategy_id: {"routed_rows": 0, "candidate_signals": 0, "net_returns": []}
+        for strategy_id in STRATEGY_IDS
+    }
+
+
 def _evaluate_candidate_signals(
     test_rows: DataFrame,
-    targets: np.ndarray,
     predictions: np.ndarray,
     regimes: tuple[str, ...],
     registry: Any,
 ) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
-    summaries: dict[str, dict[str, Any]] = {
-        "trend_following": {"routed_rows": 0, "candidate_signals": 0, "net_returns": []},
-        "mean_reversion": {"routed_rows": 0, "candidate_signals": 0, "net_returns": []},
-        "momentum_breakout": {
-            "routed_rows": 0,
-            "candidate_signals": 0,
-            "net_returns": [],
-        },
-    }
+    summaries = _empty_strategy_summaries()
     prediction_rows: list[dict[str, Any]] = []
-    next_allowed: dict[str, int] = {name: 0 for name in summaries}
+    next_allowed = {name: 0 for name in summaries}
     for offset, (_, row) in enumerate(test_rows.iterrows()):
         route = route_research_regime(regimes[offset], registry)
         strategy_id = route.strategy_id
@@ -311,10 +189,10 @@ def _evaluate_candidate_signals(
             if candidate_signal and predictions[offset] > ROUND_TRIP_COST:
                 summary["candidate_signals"] = int(summary["candidate_signals"]) + 1
                 if offset >= next_allowed[strategy_id]:
-                    net_return = float(targets[offset] - ROUND_TRIP_COST)
-                    cast_returns = summary["net_returns"]
-                    if isinstance(cast_returns, list):
-                        cast_returns.append(net_return)
+                    net_return = float(row["forward_return"] - ROUND_TRIP_COST)
+                    raw_returns = summary["net_returns"]
+                    if isinstance(raw_returns, list):
+                        raw_returns.append(net_return)
                     next_allowed[strategy_id] = offset + FORWARD_HORIZON_4H
                     accepted = True
                     reason = "research_candidate_passed_ensemble_cost_filter"
@@ -327,22 +205,24 @@ def _evaluate_candidate_signals(
                 "routed_strategy": strategy_id,
                 "candidate_signal": candidate_signal,
                 "ensemble_predicted_return": float(predictions[offset]),
-                "realized_forward_return": float(targets[offset]),
+                "realized_forward_return": float(row["forward_return"]),
                 "research_trade_accepted": accepted,
                 "route_or_signal_reason": reason,
+                "Champion": None,
                 "order_permission": False,
             }
         )
-    for item in summaries.values():
-        raw_returns = item.pop("net_returns")
-        values = raw_returns if isinstance(raw_returns, list) else []
-        item.update(_trade_stats(values))
+    for strategy_id, summary in summaries.items():
+        values = summary.pop("net_returns")
+        returns = values if isinstance(values, list) else []
+        summary.update(_trade_stats(returns))
     return summaries, prediction_rows
 
 
 def _evaluate_fold(
     data: DataFrame,
     regime_features: DataFrame,
+    feature_names: tuple[str, ...],
     fold_index: int,
     train_stop: int,
     test_start: int,
@@ -351,67 +231,88 @@ def _evaluate_fold(
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     train = data.iloc[:train_stop]
     test = data.iloc[test_start:test_stop]
-    feature_names = list(AI_FEATURE_COLUMNS)
-    train_features = train.loc[:, feature_names]
-    test_features = test.loc[:, feature_names]
-    model_result = fit_weighted_ensemble(
+    train_features = train.loc[:, list(feature_names)]
+    test_features = test.loc[:, list(feature_names)]
+    ensemble = fit_weighted_ensemble(
         train_features,
         train["forward_return"],
         test_features,
         config=EnsembleConfig(n_estimators=48, random_seed=42 + fold_index),
     )
     actual = test["forward_return"].to_numpy(dtype=float)
-    predictions = np.asarray(model_result.predictions, dtype=float)
-
-    training_regimes = regime_features.loc[train.index, :]
-    test_regimes = regime_features.loc[test.index, :]
-    if len(training_regimes) < 100:
+    predictions = np.asarray(ensemble.predictions, dtype=float)
+    train_regimes = regime_features.loc[train.index]
+    test_regimes = regime_features.loc[test.index]
+    if len(train_regimes) < 100:
         raise ValueError("ai_core_hmm_training_rows_below_minimum")
-    fit = fit_gaussian_hmm(training_regimes, max_iter=24, random_seed=42 + fold_index)
-    causal_regimes, posterior = infer_hmm_regimes(
-        pd.concat([training_regimes, test_regimes], axis=0), fit
+    fitted_hmm = fit_gaussian_hmm(
+        train_regimes, max_iter=24, random_seed=42 + fold_index
     )
-    labels = causal_regimes[len(training_regimes) :]
-    if len(posterior) != len(training_regimes) + len(test_regimes):
+    combined_regimes = pd.concat([train_regimes, test_regimes], axis=0)
+    causal_regimes, posterior = infer_hmm_regimes(combined_regimes, fitted_hmm)
+    test_regime_names = causal_regimes[len(train_regimes) :]
+    if len(posterior) != len(combined_regimes):
         raise ValueError("ai_core_hmm_posterior_accounting_mismatch")
     strategy_summary, rows = _evaluate_candidate_signals(
-        test,
-        actual,
-        predictions,
-        labels,
-        registry,
+        test, predictions, test_regime_names, registry
     )
-    per_model_metrics = {
+    component_metrics = {
         name: regression_metrics(
-            actual,
-            np.asarray(component_predictions, dtype=float),
+            actual, np.asarray(component_predictions, dtype=float)
         )
-        for name, component_predictions in model_result.per_model_predictions
+        for name, component_predictions in ensemble.per_model_predictions
     }
-    return (
-        {
-            "fold": fold_index,
-            "training_rows": len(train),
-            "training_stop_exclusive": train_stop,
-            "test_start": test_start,
-            "test_stop_exclusive": test_stop,
-            "purge_horizon_bars": FORWARD_HORIZON_4H,
-            "training_end_precedes_test_by_horizon": train_stop <= test_start - FORWARD_HORIZON_4H,
-            "ensemble_metrics": regression_metrics(actual, predictions),
-            "component_model_metrics": per_model_metrics,
-            "hmm_mean_log_likelihood": fit.mean_log_likelihood,
-            "hmm_iterations": fit.iterations,
-            "hmm_state_occupancy_training": dict(
-                zip(
-                    ("trend", "range", "high_volatility"),
-                    fit.state_occupancy,
-                    strict=True,
-                )
+    report = {
+        "fold": fold_index,
+        "training_rows": len(train),
+        "training_stop_exclusive": train_stop,
+        "test_start": test_start,
+        "test_stop_exclusive": test_stop,
+        "purge_horizon_bars": FORWARD_HORIZON_4H,
+        "training_end_precedes_test_by_horizon": (
+            train_stop <= test_start - FORWARD_HORIZON_4H
+        ),
+        "ensemble_metrics": regression_metrics(actual, predictions),
+        "component_model_metrics": component_metrics,
+        "hmm_mean_log_likelihood": fitted_hmm.mean_log_likelihood,
+        "hmm_iterations": fitted_hmm.iterations,
+        "hmm_state_occupancy_training": dict(
+            zip(
+                ("trend", "range", "high_volatility"),
+                fitted_hmm.state_occupancy,
+                strict=True,
+            )
+        ),
+        "strategy_research_diagnostics": strategy_summary,
+    }
+    return report, rows
+
+
+def _summarize_strategies(
+    fold_reports: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    result: dict[str, dict[str, Any]] = {}
+    for strategy_id in STRATEGY_IDS:
+        fold_stats = [
+            report["strategy_research_diagnostics"][strategy_id]
+            for report in fold_reports
+        ]
+        trade_count = sum(int(item["trade_count"]) for item in fold_stats)
+        expectancy_sum = sum(
+            float(item["net_expectancy"]) * int(item["trade_count"])
+            for item in fold_stats
+            if item["net_expectancy"] is not None
+        )
+        result[strategy_id] = {
+            "routed_rows": sum(int(item["routed_rows"]) for item in fold_stats),
+            "candidate_signals": sum(int(item["candidate_signals"]) for item in fold_stats),
+            "trade_count": trade_count,
+            "net_expectancy": expectancy_sum / trade_count if trade_count else None,
+            "max_abs_drawdown_max_across_folds": max(
+                float(item["max_abs_drawdown"]) for item in fold_stats
             ),
-            "strategy_research_diagnostics": strategy_summary,
-        },
-        rows,
-    )
+        }
+    return result
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -429,112 +330,119 @@ def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
     DataFrame(rows).to_csv(path, index=False)
 
 
-def run_rebuild(input_dir: Path, output_dir: Path, commit_sha: str) -> dict[str, Any]:
-    if len(commit_sha) != 40 or any(
-        character not in "0123456789abcdef" for character in commit_sha
-    ):
-        raise ValueError("ai_core_commit_sha_invalid")
-    project_root = Path(__file__).resolve().parents[1]
-    registry, registry_sha = _load_research_registry(project_root)
+def _prepare_market_dataset(
+    input_dir: Path, eth_input: Path | None
+) -> tuple[DataFrame, DataFrame, tuple[str, ...], dict[str, Any], dict[str, Any], str]:
     hourly_btc, source_report, segment_hash = stage_b._load_development(input_dir)
-    minute_phases = tuple(
+    phases = tuple(
         sorted(pd.to_datetime(hourly_btc["date"], utc=True).dt.minute.unique().tolist())
     )
-    if len(minute_phases) != 1:
+    if len(phases) != 1:
         raise ValueError("ai_core_btc_timestamp_phase_not_uniform")
+    phase_minutes = int(phases[0])
     btc_4h = aggregate_hourly_to_4h(hourly_btc)
-    eth_4h, eth_manifest = _download_eth_4h(
-        pd.Timestamp(btc_4h["date"].iloc[0]),
-        pd.Timestamp(btc_4h["date"].iloc[-1]),
-        timestamp_phase_minutes=int(minute_phases[0]),
-    )
-    features = build_ai_features(
-        btc_4h,
-        cross_asset={"BTCUSDT": btc_4h, "ETHUSDT": eth_4h},
-    )
+    if eth_input is None:
+        features = build_ai_features(btc_4h)
+        feature_names = BASE_AI_FEATURE_COLUMNS
+        eth_manifest: dict[str, Any] = {
+            "status": "BLOCKED_MISSING_APPROVED_CROSS_ASSET_DATASET",
+            "provider_fetch_performed": False,
+            "reason": (
+                "Cross-asset features are implemented but the repository currently contains "
+                "no pinned, approved ETH hourly dataset. Supply --eth-input to evaluate them."
+            ),
+        }
+    else:
+        eth_4h, eth_manifest = _load_eth_4h(eth_input, btc_4h, phase_minutes)
+        features = build_ai_features(btc_4h, cross_asset={"ETHUSDT": eth_4h})
+        feature_names = AI_FEATURE_COLUMNS
     forward_return = btc_4h["close"].shift(-FORWARD_HORIZON_4H) / btc_4h["close"] - 1.0
     valid = (
-        features.loc[:, list(AI_FEATURE_COLUMNS)].notna().all(axis=1)
+        features.loc[:, list(feature_names)].notna().all(axis=1)
         & forward_return.replace([np.inf, -np.inf], np.nan).notna()
     )
     data = features.loc[valid].copy()
     data["forward_return"] = forward_return.loc[valid]
     regime_features = calculate_regime_features(btc_4h).loc[data.index]
-    if len(data) <= MINIMUM_TRAIN_ROWS + FORWARD_HORIZON_4H + FOLD_COUNT:
-        raise ValueError("ai_core_research_rows_insufficient")
+    source = {
+        "coverage_workflow_run_id": 40077609244,
+        "coverage_csv_sha256": source_report["csv_sha256"],
+        "coverage_manifest_sha256": source_report["manifest_sha256"],
+        "segment_a_rows_sha256": segment_hash,
+        "symbol": "BTCUSDT",
+        "source_timeframe": "1h",
+        "evaluation_timeframe": "4h",
+        "development_rows_hourly": len(hourly_btc),
+        "development_rows_4h": len(btc_4h),
+        "final_holdout_used": False,
+        "reserved_final_90_day_holdout_rows": 90 * 24,
+        "eth_cross_asset_manifest": eth_manifest,
+    }
+    return data, regime_features, feature_names, source, eth_manifest, segment_hash
+
+
+def _run_walk_forward(
+    data: DataFrame,
+    regime_features: DataFrame,
+    feature_names: tuple[str, ...],
+    registry: Any,
+) -> list[dict[str, Any]]:
     fold_specs = _walk_forward_folds(
         len(data),
         min_train_rows=MINIMUM_TRAIN_ROWS,
         horizon=FORWARD_HORIZON_4H,
         folds=FOLD_COUNT,
     )
-
-    fold_reports: list[dict[str, Any]] = []
-    predictions: list[dict[str, Any]] = []
+    reports: list[dict[str, Any]] = []
+    prediction_rows: list[dict[str, Any]] = []
     for fold_index, (train_stop, test_start, test_stop) in enumerate(fold_specs, start=1):
-        report, rows = _evaluate_fold(
+        fold_report, rows = _evaluate_fold(
             data,
             regime_features,
+            feature_names,
             fold_index,
             train_stop,
             test_start,
             test_stop,
             registry,
         )
-        fold_reports.append(report)
-        predictions.extend(rows)
+        reports.append(fold_report)
+        prediction_rows.extend(rows)
+    return reports, prediction_rows
 
-    strategy_summary: dict[str, dict[str, Any]] = {}
-    for strategy_id in ("trend_following", "mean_reversion", "momentum_breakout"):
-        fold_stats = [
-            report["strategy_research_diagnostics"][strategy_id]
-            for report in fold_reports
-        ]
-        strategy_summary[strategy_id] = {
-            "routed_rows": sum(int(item["routed_rows"]) for item in fold_stats),
-            "candidate_signals": sum(int(item["candidate_signals"]) for item in fold_stats),
-            "trade_count": sum(int(item["trade_count"]) for item in fold_stats),
-            "net_expectancy": (
-                float(
-                    np.average(
-                        [
-                            float(item["net_expectancy"]) * int(item["trade_count"])
-                            for item in fold_stats
-                            if item["net_expectancy"] is not None
-                        ]
-                    )
-                    / sum(int(item["trade_count"]) for item in fold_stats)
-                )
-                if sum(int(item["trade_count"]) for item in fold_stats) > 0
-                else None
-            ),
-            "max_abs_drawdown_max_across_folds": max(
-                float(item["max_abs_drawdown"]) for item in fold_stats
-            ),
-        }
 
-    report: dict[str, Any] = {
+def _report_document(
+    commit_sha: str,
+    source: dict[str, Any],
+    feature_names: tuple[str, ...],
+    registry: Any,
+    registry_sha: str,
+    fold_reports: list[dict[str, Any]],
+) -> dict[str, Any]:
+    actual_cross_asset = source["eth_cross_asset_manifest"]["status"] == "LOADED_HASH_PINNED_INPUT"
+    safety = {
+        "Champion": None,
+        "order_permission": False,
+        "promotion_status": "BLOCKED_NO_ECONOMIC_GATE",
+        "economic_acceptance": "NO-GO",
+        "trading_authorization": "NO-GO",
+        "model_promoted": False,
+        "production_model_updated": False,
+        "production_strategy_registry_updated": False,
+        "orders_or_execution_api_used": False,
+        "private_api_calls": 0,
+        "real_order_attempts": 0,
+    }
+    return {
         "schema_version": OUTPUT_SCHEMA,
         "run_status": "COMPLETED_RESEARCH_ONLY",
         "created_by_commit_sha": commit_sha,
-        "source": {
-            "coverage_workflow_run_id": 40077609244,
-            "coverage_csv_sha256": source_report["csv_sha256"],
-            "coverage_manifest_sha256": source_report["manifest_sha256"],
-            "segment_a_rows_sha256": segment_hash,
-            "symbol": "BTCUSDT",
-            "source_timeframe": "1h",
-            "evaluation_timeframe": "4h",
-            "development_rows_hourly": len(hourly_btc),
-            "development_rows_4h": len(btc_4h),
-            "final_holdout_used": False,
-            "reserved_final_90_day_holdout_rows": 90 * 24,
-            "eth_cross_asset_manifest": eth_manifest,
-        },
+        "source": source,
         "feature_engineering": {
             "schema_version": AI_FEATURE_SCHEMA_VERSION,
-            "feature_count": len(AI_FEATURE_COLUMNS),
-            "feature_names": list(AI_FEATURE_COLUMNS),
+            "model_feature_count": len(feature_names),
+            "model_feature_names": list(feature_names),
+            "extended_feature_schema_count": len(AI_FEATURE_COLUMNS),
             "groups": [
                 "returns",
                 "SMA_and_EMA",
@@ -544,22 +452,34 @@ def run_rebuild(input_dir: Path, output_dir: Path, commit_sha: str) -> dict[str,
                 "realized_and_downside_volatility",
                 "volume_zscores_and_turnover",
                 "OHLCV_volume_profile_proxy",
-                "BTC_and_ETH_cross_asset_correlation_and_beta",
+                "ETH_cross_asset_return_correlation_and_beta",
             ],
             "volume_profile_limitation": (
                 "Profile features are coarse bins of candle typical price weighted by OHLCV "
                 "volume, not trade-level volume-at-price data."
             ),
-            "cross_venue_limitation": (
-                "ETHUSDT features use Binance Spot data; labels are shifted only to align "
-                "the stable 30-minute source timestamp phase and do not create identical windows."
+            "cross_asset_status": (
+                "INCLUDED_WITH_TIMESTAMP_PHASE_CAVEAT"
+                if actual_cross_asset
+                else "BLOCKED_MISSING_APPROVED_CROSS_ASSET_DATASET"
             ),
-            "lookahead_policy": "trailing windows only; cross-asset joins require exact shifted labels; no backfill",
+            "cross_asset_limitation": (
+                "ETHUSDT labels are phase-aligned for sensitivity only; matching timestamps "
+                "do not establish exact same-window or same-venue observations."
+            ),
+            "lookahead_policy": (
+                "trailing windows only; exact timestamp join for optional cross-asset input; "
+                "no backfill or interpolation"
+            ),
         },
         "ensemble": {
             "models": ["xgboost", "random_forest", "lightgbm"],
             "method": "equal_weighted_mean",
-            "weights": {"xgboost": 1.0 / 3.0, "random_forest": 1.0 / 3.0, "lightgbm": 1.0 / 3.0},
+            "weights": {
+                "xgboost": 1.0 / 3.0,
+                "random_forest": 1.0 / 3.0,
+                "lightgbm": 1.0 / 3.0,
+            },
             "target": "24-hour forward close return",
             "walk_forward_folds": fold_reports,
         },
@@ -576,44 +496,60 @@ def run_rebuild(input_dir: Path, output_dir: Path, commit_sha: str) -> dict[str,
                 "trend": "trend_following",
                 "range": "mean_reversion",
                 "volatile": "momentum_breakout",
+                "high_volatility": "momentum_breakout",
             },
-            "runtime_approved_hmm_required": True,
             "production_registry_modified": False,
+            "order_permission": False,
         },
-        "strategy_research_diagnostics": strategy_summary,
+        "strategy_research_diagnostics": _summarize_strategies(fold_reports),
         "sentiment": {
             "module_available": True,
             "provider_fetch_performed": False,
             "used_in_model_features": False,
             "status": "BLOCKED_PENDING_APPROVED_PERSIAN_RSS_PROVIDER_AND_CALIBRATED_MODEL",
             "reason": (
-                "The RSS parser is implemented, but no provider license/retention approval "
-                "or calibrated owner-reviewed NLP model was present in this research branch."
+                "Point-in-time RSS parsing and aggregation are implemented; no provider "
+                "license/retention approval or calibrated owner-reviewed NLP model is approved."
             ),
         },
         "economic_evaluation": {
             "status": "NOT_EVALUATED_RESEARCH_ONLY",
             "economic_acceptance": "NO-GO",
-            "reason": "Technical metrics are diagnostics only and are not owner-approved economic evidence.",
+            "reason": (
+                "Technical metrics are diagnostics only and are not owner-approved economic evidence."
+            ),
         },
-        "safety_invariants": {
-            "Champion": None,
-            "order_permission": False,
-            "promotion_status": "BLOCKED_NO_ECONOMIC_GATE",
-            "economic_acceptance": "NO-GO",
-            "trading_authorization": "NO-GO",
-            "model_promoted": False,
-            "production_model_updated": False,
-            "production_strategy_registry_updated": False,
-            "orders_or_execution_api_used": False,
-            "private_api_calls": 0,
-            "real_order_attempts": 0,
-        },
+        "safety_invariants": safety,
     }
-    if (
-        report["safety_invariants"]["Champion"] is not None
-        or report["safety_invariants"]["order_permission"] is not False
+
+
+def run_rebuild(
+    input_dir: Path,
+    output_dir: Path,
+    commit_sha: str,
+    *,
+    eth_input: Path | None = None,
+) -> dict[str, Any]:
+    if len(commit_sha) != 40 or any(
+        character not in "0123456789abcdef" for character in commit_sha
     ):
+        raise ValueError("ai_core_commit_sha_invalid")
+    project_root = Path(__file__).resolve().parents[1]
+    registry, registry_sha = _load_research_registry(project_root)
+    data, regime_features, feature_names, source, _, segment_hash = _prepare_market_dataset(
+        input_dir, eth_input
+    )
+    if len(data) <= MINIMUM_TRAIN_ROWS + FORWARD_HORIZON_4H + FOLD_COUNT:
+        raise ValueError("ai_core_research_rows_insufficient")
+    source["segment_a_rows_sha256"] = segment_hash
+    fold_reports, predictions = _run_walk_forward(
+        data, regime_features, feature_names, registry
+    )
+    report = _report_document(
+        commit_sha, source, feature_names, registry, registry_sha, fold_reports
+    )
+    safety = report["safety_invariants"]
+    if safety["Champion"] is not None or safety["order_permission"] is not False:
         raise ValueError("ai_core_safety_invariant_violated")
     _write_json(output_dir / "ai-core-rebuild-report.json", report)
     _write_csv(output_dir / "ai-core-oos-predictions.csv", predictions)
@@ -625,21 +561,33 @@ def main() -> int:
     parser.add_argument("--input-dir", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--commit-sha", required=True)
+    parser.add_argument(
+        "--eth-input",
+        type=Path,
+        default=None,
+        help="Optional owner-supplied, approved, hash-pinned hourly ETHUSDT CSV; no download is performed.",
+    )
     args = parser.parse_args()
-    report = run_rebuild(args.input_dir, args.output_dir, args.commit_sha)
+    report = run_rebuild(
+        args.input_dir,
+        args.output_dir,
+        args.commit_sha,
+        eth_input=args.eth_input,
+    )
     print(
         json.dumps(
             {
                 "commit_sha": report["created_by_commit_sha"],
                 "run_status": report["run_status"],
                 "timeframe": report["source"]["evaluation_timeframe"],
-                "features": report["feature_engineering"]["feature_count"],
+                "model_feature_count": report["feature_engineering"]["model_feature_count"],
                 "ensemble_models": report["ensemble"]["models"],
                 "strategies": report["strategy_registry"]["candidate_count"],
                 "oos_predictions": sum(
                     item["test_stop_exclusive"] - item["test_start"]
                     for item in report["ensemble"]["walk_forward_folds"]
                 ),
+                "cross_asset_status": report["feature_engineering"]["cross_asset_status"],
                 "economic_status": report["economic_evaluation"]["status"],
                 "Champion": report["safety_invariants"]["Champion"],
                 "order_permission": report["safety_invariants"]["order_permission"],
