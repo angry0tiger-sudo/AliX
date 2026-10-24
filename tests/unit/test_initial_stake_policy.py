@@ -72,6 +72,16 @@ def test_versioned_policy_file_loads_explicit_owner_approval() -> None:
                 "use_all_free_balance_below_target": True,
             }
         ),
+        json.dumps(
+            {
+                "schema_version": POLICY_SCHEMA_VERSION,
+                "revision": "r1",
+                "directive_id": "d1",
+                "owner_approved": True,
+                "target_usdt": "not-a-decimal",
+                "use_all_free_balance_below_target": True,
+            }
+        ),
     ),
 )
 def test_invalid_policy_documents_fail_closed_without_fallback(
