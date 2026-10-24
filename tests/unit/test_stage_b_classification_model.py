@@ -59,7 +59,9 @@ def test_signal_requires_probability_and_high_volatility_gates() -> None:
     assert result.tolist() == [True, False, False, True]
 
 
-def test_shared_technical_features_preserve_warmup_and_flat_window_definitions() -> None:
+def test_shared_technical_features_preserve_warmup_and_flat_window_definitions() -> (
+    None
+):
     candles = _flat_candles()
     original = candles.copy(deep=True)
     featured = add_signal_features(candles)
