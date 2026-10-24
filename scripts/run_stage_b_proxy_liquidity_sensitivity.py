@@ -101,9 +101,7 @@ def _extract_kline_csv(payload: bytes) -> DataFrame:
             if len(csv_names) != 1:
                 raise ValueError("binance_kline_archive_csv_count_invalid")
             with archive.open(csv_names[0]) as stream:
-                return pd.read_csv(
-                    stream, header=None, usecols=[0, 1, 2, 3, 4, 5, 7]
-                )
+                return pd.read_csv(stream, header=None, usecols=[0, 1, 2, 3, 4, 5, 7])
     except (zipfile.BadZipFile, pd.errors.ParserError, ValueError) as error:
         raise ValueError(f"binance_kline_archive_invalid:{error}") from error
 
@@ -138,6 +136,7 @@ def _normalise_kline_frame(frame: DataFrame) -> DataFrame:
 
 def _read_kline_archive(payload: bytes) -> DataFrame:
     return _normalise_kline_frame(_extract_kline_csv(payload))
+
 
 def _month_starts(start: pd.Timestamp, end: pd.Timestamp) -> list[pd.Timestamp]:
     cursor = pd.Timestamp(year=start.year, month=start.month, day=1, tz="UTC")
@@ -392,6 +391,7 @@ def _align_proxy_volume(
     )
     return capacity, stats
 
+
 def _event_outcomes(
     candles: DataFrame,
 ) -> tuple[dict[tuple[int, float, float], DataFrame], list[dict[str, Any]]]:
@@ -487,9 +487,7 @@ def _validate_reference_prices(reference: DataFrame) -> DataFrame:
 
 def _validate_bookdepth_side(group: DataFrame, side: str) -> None:
     side_mask = (
-        group["percentage"].lt(0)
-        if side == "bid"
-        else group["percentage"].gt(0)
+        group["percentage"].lt(0) if side == "bid" else group["percentage"].gt(0)
     )
     side_values = group.loc[side_mask].copy()
     side_values["band"] = side_values["percentage"].abs().astype(int)
@@ -538,9 +536,8 @@ def _validate_bookdepth_rows(book: DataFrame) -> DataFrame:
         _validate_bookdepth_snapshot(timestamp, group)
     return result.sort_values([BOOK_TIME, "percentage"]).reset_index(drop=True)
 
-def _enrich_bookdepth_reference(
-    bands: DataFrame, references: DataFrame
-) -> DataFrame:
+
+def _enrich_bookdepth_reference(bands: DataFrame, references: DataFrame) -> DataFrame:
     enriched = pd.merge_asof(
         bands.sort_values(BOOK_TIME),
         references.sort_values("reference_timestamp"),
@@ -589,7 +586,9 @@ def _banded_snapshot_features(enriched: DataFrame) -> DataFrame:
     return DataFrame(snapshots)
 
 
-def _join_banded_features_to_candles(candles: DataFrame, features: DataFrame) -> DataFrame:
+def _join_banded_features_to_candles(
+    candles: DataFrame, features: DataFrame
+) -> DataFrame:
     left = candles.loc[:, ["date"]].copy()
     left["date"] = pd.to_datetime(left["date"], utc=True, errors="raise")
     left["decision_time"] = left["date"] + pd.Timedelta(seconds=HOUR)
@@ -627,6 +626,7 @@ def add_banded_orderbook_features(
     enriched = _enrich_bookdepth_reference(bands, references)
     features = _banded_snapshot_features(enriched)
     return _join_banded_features_to_candles(candles, features)
+
 
 def _load_bookdepth_manifest(
     book_path: Path, reference_path: Path, manifest_path: Path
@@ -679,7 +679,10 @@ def _validate_bookdepth_manifest_checksums(
     reference_sha = hashlib.sha256(reference_path.read_bytes()).hexdigest()
     if book_sha != str(value["csv_sha256"]) or len(book_sha) != 64:
         raise ValueError("bookdepth_csv_checksum_mismatch")
-    if reference_sha != str(value["reference_price_sha256"]) or len(reference_sha) != 64:
+    if (
+        reference_sha != str(value["reference_price_sha256"])
+        or len(reference_sha) != 64
+    ):
         raise ValueError("bookdepth_reference_price_checksum_mismatch")
 
 
@@ -690,6 +693,7 @@ def _validate_bookdepth_manifest(
     _validate_bookdepth_manifest_identity(value)
     _validate_bookdepth_manifest_checksums(book_path, reference_path, value)
     return value
+
 
 def _load_banded_book_features(
     candles: DataFrame,
