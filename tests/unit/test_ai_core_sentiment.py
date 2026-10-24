@@ -78,7 +78,7 @@ def news_feature(
     published = published_at or datetime(2024, 1, 1, 2, tzinfo=timezone.utc)
     ingested = ingested_at or published + timedelta(minutes=10)
     available = available_at or ingested + timedelta(minutes=20)
-    processed = processed_at or available + timedelta(minutes=5)
+    processed = processed_at or available - timedelta(minutes=2)
     return NewsFeature(
         event_id=event_id,
         provider_id="persian-test-rss",
@@ -171,7 +171,7 @@ def test_sentiment_aggregation_is_point_in_time_and_requires_calibration() -> No
         published_at=recent_available - timedelta(minutes=30),
         ingested_at=recent_available - timedelta(minutes=10),
         available_at=recent_available,
-        processed_at=recent_available + timedelta(minutes=2),
+        processed_at=recent_available - timedelta(minutes=2),
         score=0.8,
     )
     old = news_feature(
@@ -179,7 +179,7 @@ def test_sentiment_aggregation_is_point_in_time_and_requires_calibration() -> No
         published_at=old_available - timedelta(minutes=30),
         ingested_at=old_available - timedelta(minutes=10),
         available_at=old_available,
-        processed_at=old_available + timedelta(minutes=2),
+        processed_at=old_available - timedelta(minutes=2),
         score=-0.4,
     )
     uncalibrated = news_feature(
@@ -187,7 +187,7 @@ def test_sentiment_aggregation_is_point_in_time_and_requires_calibration() -> No
         available_at=recent_available,
         ingested_at=recent_available - timedelta(minutes=20),
         published_at=recent_available - timedelta(minutes=30),
-        processed_at=recent_available + timedelta(minutes=2),
+        processed_at=recent_available - timedelta(minutes=2),
         score=-0.9,
         calibration_status="uncalibrated",
         confidence=0.99,
@@ -197,7 +197,7 @@ def test_sentiment_aggregation_is_point_in_time_and_requires_calibration() -> No
         published_at=decision_time + timedelta(minutes=10),
         ingested_at=decision_time + timedelta(minutes=15),
         available_at=decision_time + timedelta(minutes=20),
-        processed_at=decision_time + timedelta(minutes=25),
+        processed_at=decision_time + timedelta(minutes=18),
         score=-1.0,
     )
     output = aggregate_point_in_time_sentiment(
