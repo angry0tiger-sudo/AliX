@@ -113,7 +113,6 @@ def _number(row: Mapping[str, object], name: str) -> float | None:
     return numeric if math.isfinite(numeric) else None
 
 
-
 def _trend_following_signal(values: Mapping[str, float]) -> int:
     return int(values["ema_crossover_24_72"] > 0 and values["return_6"] > 0)
 
@@ -182,6 +181,7 @@ def generate_candidate_signal(
         if signal
         else "predeclared_rule_not_triggered",
     )
+
 
 def ensemble_cost_filter(
     predicted_return: float, round_trip_cost_bps: float = ROUND_TRIP_COST_BPS

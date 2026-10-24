@@ -33,15 +33,10 @@ def _log_emission(
     return np.asarray(log_density, dtype=float)
 
 
-
 def _validated_observation_values(values: np.ndarray) -> np.ndarray:
     if values.ndim != 2 or values.shape[0] == 0 or not np.isfinite(values).all():
         raise ValueError("ai_core_hmm_observations_invalid")
-    if (
-        np.any(values[:, 0] < 0)
-        or np.any(values[:, 0] > 1)
-        or np.any(values[:, 1] < 0)
-    ):
+    if np.any(values[:, 0] < 0) or np.any(values[:, 0] > 1) or np.any(values[:, 1] < 0):
         raise ValueError("ai_core_hmm_observations_invalid")
     return values
 
@@ -112,9 +107,7 @@ def infer_hmm_regimes(
 ) -> tuple[tuple[str, ...], tuple[tuple[float, ...], ...]]:
     """Forward-filter unseen rows in order; this routine does not approve a model."""
     values = _observations_from_features(features)
-    initial, transitions, means, standard_deviations = _validated_hmm_parameters(
-        fitted
-    )
+    initial, transitions, means, standard_deviations = _validated_hmm_parameters(fitted)
     log_transition = np.log(transitions)
     prior = np.log(initial)
     regimes: list[str] = []
@@ -134,5 +127,6 @@ def infer_hmm_regimes(
             dtype=float,
         )
     return tuple(regimes), tuple(posteriors)
+
 
 __all__ = ["infer_hmm_regimes"]

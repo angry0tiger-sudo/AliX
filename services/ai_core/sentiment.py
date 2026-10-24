@@ -56,7 +56,6 @@ def _published_timestamp(value: str) -> datetime:
     return parse_timestamp(parsed, "published_at")
 
 
-
 def _validate_rss_provider(provider: ProviderRegistration) -> None:
     provider.assert_ingestion_allowed()
     if provider.data_kind != "news":
@@ -97,9 +96,7 @@ def _news_event_from_rss_item(
         raise ProviderError("persian_rss_published_after_ingestion")
     content_hash = digest_content(rendered)
     identity = hashlib.sha256(
-        f"{provider.provider_id}|{published.isoformat()}|{content_hash}".encode(
-            "utf-8"
-        )
+        f"{provider.provider_id}|{published.isoformat()}|{content_hash}".encode("utf-8")
     ).hexdigest()
     return NewsEvent(
         event_id=identity,
@@ -144,6 +141,7 @@ def parse_persian_rss(
     if not events:
         raise ProviderError("persian_rss_no_unique_items")
     return tuple(events)
+
 
 def _eligible_sentiment(feature: NewsFeature) -> bool:
     validate_news_feature(feature)

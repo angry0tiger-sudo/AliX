@@ -22,7 +22,6 @@ class Regressor(Protocol):
 RegressorFactory = Callable[[], Regressor]
 
 
-
 def _validate_weight_names(weights: tuple[tuple[str, float], ...]) -> None:
     if tuple(name for name, _ in weights) != MODEL_NAMES:
         raise ValueError("ai_ensemble_weights_must_name_all_models_in_order")
@@ -72,6 +71,8 @@ class EnsembleConfig:
         _validate_max_depth(self.max_depth)
         _validate_random_seed(self.random_seed)
 
+
+@dataclass(frozen=True, slots=True)
 class EnsemblePrediction:
     predictions: tuple[float, ...]
     per_model_predictions: tuple[tuple[str, tuple[float, ...]], ...]
@@ -132,7 +133,6 @@ def default_model_factories(config: EnsembleConfig) -> dict[str, RegressorFactor
     }
 
 
-
 def _validate_training_frames(
     training_features: DataFrame, prediction_features: DataFrame
 ) -> None:
@@ -176,6 +176,7 @@ def _validate_training_inputs(
     _validate_finite_training_data(train, labels)
     _validate_finite_prediction_data(prediction)
     return labels
+
 
 def _validate_factory_set(
     factories: Mapping[str, RegressorFactory],

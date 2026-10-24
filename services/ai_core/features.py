@@ -218,7 +218,6 @@ def select_model_feature_schema(
     return selected, "BLOCKED_NO_POSITIVE_SOURCE_VOLUME"
 
 
-
 def _validate_required_ohlcv_columns(candles: DataFrame) -> None:
     missing = sorted(set(OHLCV_COLUMNS) - set(candles.columns))
     if missing:
@@ -227,9 +226,7 @@ def _validate_required_ohlcv_columns(candles: DataFrame) -> None:
         raise ValueError("ai_core_ohlcv_empty_or_duplicate_columns")
 
 
-def _validate_timestamp_sequence(
-    date_values: Series, interval_seconds: int
-) -> Series:
+def _validate_timestamp_sequence(date_values: Series, interval_seconds: int) -> Series:
     parsed_dates = pd.to_datetime(date_values, errors="raise")
     if parsed_dates.dt.tz is None:
         raise ValueError("ai_core_timestamps_must_be_timezone_aware")
@@ -271,6 +268,7 @@ def _validate_ohlcv(candles: DataFrame, interval_seconds: int) -> DataFrame:
     _validate_ohlcv_numeric_ranges(prices, volumes)
     _validate_ohlc_invariants(result)
     return result
+
 
 def aggregate_hourly_to_4h(candles: DataFrame) -> DataFrame:
     """Aggregate exactly four contiguous hourly candles; never fill gaps or partial bars."""
@@ -352,7 +350,6 @@ def _volume_profile_proxy(
         )
     poc_distance = pd.Series(point_of_control, index=close.index) / close - 1.0
     return poc_distance, pd.Series(value_area_position, index=close.index)
-
 
 
 def _trend_feature_values(close: Series, log_returns: Series) -> dict[str, Series]:
@@ -471,8 +468,11 @@ def _base_feature_values(candles: DataFrame) -> dict[str, Series]:
     true_range = _true_range(high, low, close)
     values = _trend_feature_values(close, log_returns)
     values.update(_volatility_feature_values(close, returns, true_range))
-    values.update(_volume_feature_values(opened, high, low, close, volume, typical_price))
+    values.update(
+        _volume_feature_values(opened, high, low, close, volume, typical_price)
+    )
     return values
+
 
 def _cross_asset_features(
     base: DataFrame, cross_asset: dict[str, DataFrame] | None
