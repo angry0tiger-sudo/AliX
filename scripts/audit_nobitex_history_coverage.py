@@ -135,7 +135,7 @@ def _validate_timestamp(
         raise AuditError("candle_timestamp_out_of_requested_bounds")
     if previous is not None and value <= previous:
         raise AuditError("response_timestamps_not_strictly_increasing")
-    return value
+    return int(value)
 
 
 def _validate_candle_geometry(
