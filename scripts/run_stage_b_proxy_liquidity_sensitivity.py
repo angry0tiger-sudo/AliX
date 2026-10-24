@@ -505,7 +505,7 @@ def _validate_bookdepth_side(group: DataFrame, side: str) -> None:
         raise ValueError("bookdepth_ask_implied_price_not_monotonic")
 
 
-def _validate_bookdepth_snapshot(timestamp: pd.Timestamp, group: DataFrame) -> None:
+def _validate_bookdepth_snapshot(timestamp: object, group: DataFrame) -> None:
     expected = set(BOOK_BANDS)
     actual = set(group["percentage"].astype(int).tolist())
     if actual != expected or len(group) != len(expected):
