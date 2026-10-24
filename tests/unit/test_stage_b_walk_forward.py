@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import pandas as pd
+
 from scripts.run_stage_b_walk_forward import (
     build_fixed_window_folds,
     economic_gate,
     segment_bounds,
+    select_segment_features,
 )
 
 
@@ -68,3 +71,29 @@ def test_economic_gate_never_passes_with_fewer_than_100_oos_trades() -> None:
     result = economic_gate(99, 1.0, 1.0, 0.0)
     assert result["status"] == "INSUFFICIENT_SAMPLE"
     assert result["trade_count_pass"] is False
+
+
+def test_unavailable_feature_is_excluded_without_imputation() -> None:
+    frame = pd.DataFrame(
+        {
+            "available": [float("nan"), 1.0, 2.0, 3.0, 4.0],
+            "undefined_inside_segment": [
+                float("nan"),
+                1.0,
+                float("nan"),
+                3.0,
+                4.0,
+            ],
+        }
+    )
+    selected, excluded = select_segment_features(
+        frame, ("available", "undefined_inside_segment")
+    )
+    assert selected == ["available"]
+    assert excluded == [
+        {
+            "feature": "undefined_inside_segment",
+            "reason": "undefined_on_otherwise_usable_rows",
+        }
+    ]
+    assert frame["undefined_inside_segment"].isna().sum() == 2

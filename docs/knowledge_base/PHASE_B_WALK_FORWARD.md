@@ -11,7 +11,7 @@ The immutable input is the Stage A coverage artifact from run [40077609244](http
 - Segment A: 58,655 hourly candles from 2018-10-09 06:30 UTC to 2025-06-18 04:30 UTC.
 - Segment B: 11,514 hourly candles from 2025-07-01 13:30 UTC to 2026-10-24 06:30 UTC.
 - Gap: 320 missing hourly slots. The workflow never inserts synthetic candles, forward-fills, backfills, resamples, or interpolates.
-- A and B are parsed, validated, featured, and evaluated independently. Every fold gets a freshly constructed model; no estimator, indicator state, target, or trading state transfers between A and B.
+- A and B are parsed, validated, featured, and evaluated independently. Every fold gets a freshly constructed model; no estimator, indicator state, target, or trading state transfers between A and B. A feature undefined on otherwise usable rows within a segment is excluded from that segment's model input and explicitly recorded; it is never imputed.
 
 ## Pre-registered fold protocol
 
