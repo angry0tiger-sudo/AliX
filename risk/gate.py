@@ -260,9 +260,7 @@ class RiskGate:
             + self._notional_and_balance_reasons(allocation, account, rules, policy)
         )
 
-    def _entry_scope_reasons(
-        self, allocation: RiskAllocation
-    ) -> tuple[str, ...]:
+    def _entry_scope_reasons(self, allocation: RiskAllocation) -> tuple[str, ...]:
         if allocation.side is not Side.LONG:
             return ("short_entry_forbidden_in_v1",)
         return ()

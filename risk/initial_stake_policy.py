@@ -52,9 +52,7 @@ def load_initial_stake_policy_document(document: str) -> InitialStakePolicyLoadR
             directive_id=raw["directive_id"],
             owner_approved=raw["owner_approved"],
             target_usdt=target,
-            use_all_free_balance_below_target=raw[
-                "use_all_free_balance_below_target"
-            ],
+            use_all_free_balance_below_target=raw["use_all_free_balance_below_target"],
         )
     except (
         ValueError,
