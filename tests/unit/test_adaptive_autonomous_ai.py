@@ -172,7 +172,9 @@ def test_multitimeframe_builder_rejects_invalid_hourly_data(
     elif mutation == "descending":
         candles = candles.iloc[::-1].reset_index(drop=True)
     elif mutation == "gap":
-        gap_date = cast(pd.Timestamp, pd.to_datetime(candles["date"], utc=True).iloc[20])
+        gap_date = cast(
+            pd.Timestamp, pd.to_datetime(candles["date"], utc=True).iloc[20]
+        )
         candles.loc[20, "date"] = gap_date + pd.Timedelta(1, unit="m")
     elif mutation == "non_finite":
         candles.loc[20, "close"] = np.inf
