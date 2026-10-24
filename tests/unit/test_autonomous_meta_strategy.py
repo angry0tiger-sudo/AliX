@@ -179,10 +179,12 @@ def test_registry_file_missing_and_registry_regime_contract_rejected(
             for item in strategy_registry.strategies
         ),
     )
-    with pytest.raises(ValueError, match="regime_contract_mismatch"):
-        # Serialization and parsing are deliberately bypassed to test the selector's
-        # independent runtime contract, not the code-hash parser.
-        choose_strategy("trend", 0.9, signal_row(), invalid, source_volume_available=True)
+    selection = choose_strategy(
+        "trend", 0.9, signal_row(), invalid, source_volume_available=True
+    )
+    assert selection.status == "NO_TRADE"
+    assert selection.strategy_id is None
+    assert selection.reason == "regime_has_no_valid_candidate"
 
 
 @pytest.mark.parametrize(
