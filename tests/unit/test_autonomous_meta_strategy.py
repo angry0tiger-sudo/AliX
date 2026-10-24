@@ -4,7 +4,7 @@ import hashlib
 import json
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -220,7 +220,26 @@ def test_strategy_spec_rejects_invalid_contracts(
 ) -> None:
     template = strategy_registry.strategies[0]
     with pytest.raises(ValueError, match=reason):
-        replace(template, **{field: value})
+        if field == "lifecycle":
+            replace(template, lifecycle=cast(str, value))
+        elif field == "owner_approved":
+            replace(template, owner_approved=cast(bool, value))
+        elif field == "allow_short":
+            replace(template, allow_short=cast(bool, value))
+        elif field == "timeframe":
+            replace(template, timeframe=cast(str, value))
+        elif field == "eligible_regimes":
+            replace(template, eligible_regimes=cast(tuple[str, ...], value))
+        elif field == "required_features":
+            replace(template, required_features=cast(tuple[str, ...], value))
+        elif field == "max_holding_bars":
+            replace(template, max_holding_bars=cast(int, value))
+        elif field == "minimum_relative_volume":
+            replace(template, minimum_relative_volume=cast(float, value))
+        elif field == "atr_stop_multiple":
+            replace(template, atr_stop_multiple=cast(float, value))
+        else:
+            raise AssertionError(f"unexpected strategy field: {field}")
 
 
 @pytest.mark.parametrize(
@@ -240,17 +259,34 @@ def test_walk_forward_config_rejects_invalid_risk_or_split_values(
     field: str, value: object, reason: str
 ) -> None:
     with pytest.raises(ValueError, match=reason):
-        WalkForwardConfig(**{field: value})
+        if field == "initial_train_rows":
+            WalkForwardConfig(initial_train_rows=cast(int, value))
+        elif field == "fold_count":
+            WalkForwardConfig(fold_count=cast(int, value))
+        elif field == "minimum_confidence":
+            WalkForwardConfig(minimum_confidence=cast(float, value))
+        elif field == "fee_bps_per_side":
+            WalkForwardConfig(fee_bps_per_side=cast(float, value))
+        elif field == "slippage_bps_per_side":
+            WalkForwardConfig(slippage_bps_per_side=cast(float, value))
+        elif field == "risk_fraction":
+            WalkForwardConfig(risk_fraction=cast(float, value))
+        elif field == "max_position_fraction":
+            WalkForwardConfig(max_position_fraction=cast(float, value))
+        elif field == "initial_equity":
+            WalkForwardConfig(initial_equity=cast(float, value))
+        else:
+            raise AssertionError(f"unexpected walk-forward field: {field}")
 
 
 def test_features_are_causal_and_atr_scales_with_price_ranges() -> None:
     candles = hourly_candles()
     features = compute_autonomous_features(candles)
     altered = candles.copy()
-    altered.loc[len(altered) - 1, "close"] *= 1.4
-    altered.loc[len(altered) - 1, "high"] *= 1.4
-    altered.loc[len(altered) - 1, "open"] *= 1.4
-    altered.loc[len(altered) - 1, "low"] *= 1.4
+    for column in ("close", "high", "open", "low"):
+        values = pd.to_numeric(altered[column], errors="raise").to_numpy(dtype=float)
+        values[-1] = values[-1] * 1.4
+        altered[column] = values
     changed_features = compute_autonomous_features(altered)
     pd.testing.assert_series_equal(
         features.iloc[:-1]["atr_14"],
@@ -288,7 +324,9 @@ def test_hourly_market_data_validation_fails_closed(mutation: str, reason: str) 
     elif mutation == "descending":
         candles = candles.iloc[::-1].reset_index(drop=True)
     elif mutation == "gap":
-        candles.loc[20, "date"] = candles.loc[20, "date"] + pd.Timedelta(minutes=1)
+        date_values = pd.to_datetime(candles["date"], utc=True).tolist()
+        date_values[20] = pd.Timestamp(date_values[20]) + pd.Timedelta(minutes=1)
+        candles["date"] = pd.to_datetime(date_values, utc=True)
     elif mutation == "naive_time":
         candles["date"] = candles["date"].dt.tz_localize(None)
     elif mutation == "non_finite":
@@ -296,7 +334,10 @@ def test_hourly_market_data_validation_fails_closed(mutation: str, reason: str) 
     elif mutation == "negative_volume":
         candles.loc[10, "volume"] = -1.0
     elif mutation == "bad_ohlc":
-        candles.loc[10, "high"] = candles.loc[10, "low"] - 1.0
+        low_values = pd.to_numeric(candles["low"], errors="raise").to_numpy(dtype=float)
+        high_values = pd.to_numeric(candles["high"], errors="raise").to_numpy(dtype=float)
+        high_values[10] = low_values[10] - 1.0
+        candles["high"] = high_values
     with pytest.raises(ValueError, match=reason):
         compute_autonomous_features(candles)
 

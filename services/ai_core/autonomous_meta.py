@@ -754,7 +754,9 @@ def _run_policy(
                 cursor += 1
                 continue
             regime, confidence = regime_info
-            row = features.iloc[cursor]
+            row: dict[str, object] = {
+                str(name): value for name, value in features.iloc[cursor].items()
+            }
             if policy_id is None:
                 selection = choose_strategy(
                     regime,

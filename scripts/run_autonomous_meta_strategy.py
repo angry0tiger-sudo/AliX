@@ -10,6 +10,7 @@ from typing import Any
 from pandas import DataFrame
 
 from scripts import run_stage_b_triple_barrier_orderbook as stage_b
+from scripts.run_stage_b_walk_forward import A_HOLDOUT
 from services.ai_core.autonomous_meta import (
     WalkForwardConfig,
     evaluate_historical_bars,
@@ -53,7 +54,7 @@ def _load_verified_history(input_dir: Path) -> tuple[DataFrame, dict[str, Any]]:
         "rows_used_for_research": len(candles),
         "source_volume_positive_rows": positive_volume_rows,
         "volume_observed": True,
-        "reserved_final_holdout_rows": int(stage_b.A_HOLDOUT),
+        "reserved_final_holdout_rows": int(A_HOLDOUT),
         "final_holdout_used": False,
         "orderbook_or_spread_observed": False,
     }
