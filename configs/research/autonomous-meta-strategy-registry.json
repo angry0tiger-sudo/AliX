@@ -1,7 +1,7 @@
 {
   "schema_version": "alix.autonomous-meta-strategy-registry.v1",
   "revision": "autonomous-meta-research-v1",
-  "code_sha256": "f089c2b1fa707e37915bb776b90e83a898147feac81a324f914ed9a65974b449",
+  "code_sha256": "624d86ad511bb8f794336e0e7fb9331ac371c61927dd61acab4ed1f37aef3814",
   "strategies": [
     {
       "strategy_id": "trend_following",

@@ -238,17 +238,24 @@ def _parse_registry_entry(raw: object) -> StrategySpec:
     if not isinstance(entry["requires_positive_volume"], bool):
         raise ValueError("autonomous_registry_volume_flag_invalid")
     return StrategySpec(
-        strategy_id=_registry_text(entry["strategy_id"], "autonomous_registry_id_invalid"),
+        strategy_id=_registry_text(
+            entry["strategy_id"], "autonomous_registry_id_invalid"
+        ),
         version=_registry_text(entry["version"], "autonomous_registry_version_invalid"),
-        lifecycle=_registry_text(entry["lifecycle"], "autonomous_registry_lifecycle_invalid"),
+        lifecycle=_registry_text(
+            entry["lifecycle"], "autonomous_registry_lifecycle_invalid"
+        ),
         owner_approved=entry["owner_approved"],
         allow_short=entry["allow_short"],
-        timeframe=_registry_text(entry["timeframe"], "autonomous_registry_timeframe_invalid"),
+        timeframe=_registry_text(
+            entry["timeframe"], "autonomous_registry_timeframe_invalid"
+        ),
         eligible_regimes=tuple(regimes),
         required_features=tuple(required),
         requires_positive_volume=entry["requires_positive_volume"],
         minimum_relative_volume=_registry_float(
-            entry["minimum_relative_volume"], "autonomous_registry_relative_volume_invalid"
+            entry["minimum_relative_volume"],
+            "autonomous_registry_relative_volume_invalid",
         ),
         max_holding_bars=_registry_integer(
             entry["max_holding_bars"], "autonomous_registry_holding_horizon_invalid"
@@ -262,7 +269,9 @@ def _parse_registry_entry(raw: object) -> StrategySpec:
     )
 
 
-def _parse_registry_document(document: str, expected_code_sha256: str) -> StrategyRegistry:
+def _parse_registry_document(
+    document: str, expected_code_sha256: str
+) -> StrategyRegistry:
     try:
         raw_object = json.loads(document)
     except json.JSONDecodeError as error:
@@ -270,8 +279,12 @@ def _parse_registry_document(document: str, expected_code_sha256: str) -> Strate
     raw = _require_mapping(raw_object, "autonomous_registry_root_invalid")
     if set(raw) != _REGISTRY_ROOT_KEYS or raw.get("schema_version") != REGISTRY_SCHEMA:
         raise ValueError("autonomous_registry_schema_invalid")
-    revision = _registry_text(raw.get("revision"), "autonomous_registry_revision_invalid")
-    code_hash = _registry_text(raw.get("code_sha256"), "autonomous_registry_code_hash_invalid")
+    revision = _registry_text(
+        raw.get("revision"), "autonomous_registry_revision_invalid"
+    )
+    code_hash = _registry_text(
+        raw.get("code_sha256"), "autonomous_registry_code_hash_invalid"
+    )
     if code_hash != expected_code_sha256:
         raise ValueError("autonomous_registry_code_hash_mismatch")
     entries = raw.get("strategies")
@@ -308,7 +321,9 @@ def load_strategy_registry(path: Path) -> StrategyRegistry:
 
 def _finite_number(row: Mapping[str, object], name: str) -> float | None:
     value = row.get(name)
-    if isinstance(value, bool) or not isinstance(value, (int, float, np.integer, np.floating)):
+    if isinstance(value, bool) or not isinstance(
+        value, (int, float, np.integer, np.floating)
+    ):
         return None
     result = float(value)
     return result if math.isfinite(result) else None
@@ -369,9 +384,9 @@ def compute_autonomous_features(candles: DataFrame) -> DataFrame:
     ema_12 = close.ewm(span=12, adjust=False, min_periods=12).mean()
     ema_26 = close.ewm(span=26, adjust=False, min_periods=26).mean()
     output["macd"] = ema_12 - ema_26
-    output["macd_signal"] = output["macd"].ewm(
-        span=9, adjust=False, min_periods=9
-    ).mean()
+    output["macd_signal"] = (
+        output["macd"].ewm(span=9, adjust=False, min_periods=9).mean()
+    )
     output["rsi_14"] = _relative_strength_index(close)
     middle = close.rolling(20, min_periods=20).mean()
     deviation = close.rolling(20, min_periods=20).std(ddof=0)
@@ -417,7 +432,14 @@ def generate_entry_signal(
         slow = _finite_number(row, "ema_slow")
         macd = _finite_number(row, "macd")
         signal = _finite_number(row, "macd_signal")
-        return fast is not None and slow is not None and macd is not None and signal is not None and close > fast > slow and macd > signal
+        return (
+            fast is not None
+            and slow is not None
+            and macd is not None
+            and signal is not None
+            and close > fast > slow
+            and macd > signal
+        )
     if strategy_id == "mean_reversion":
         rsi = _finite_number(row, "rsi_14")
         lower = _finite_number(row, "bollinger_lower")
@@ -457,14 +479,22 @@ def choose_strategy(
 ) -> StrategySelection:
     """Select a registry entry from a confident HMM regime, or explicitly abstain."""
     if regime not in REGIME_NAMES:
-        return StrategySelection(regime, confidence, None, "NO_TRADE", "regime_missing_or_unknown")
+        return StrategySelection(
+            regime, confidence, None, "NO_TRADE", "regime_missing_or_unknown"
+        )
     if confidence is None or not math.isfinite(confidence) or not 0 <= confidence <= 1:
-        return StrategySelection(regime, confidence, None, "NO_TRADE", "confidence_invalid")
+        return StrategySelection(
+            regime, confidence, None, "NO_TRADE", "confidence_invalid"
+        )
     if confidence < minimum_confidence:
-        return StrategySelection(regime, confidence, None, "NO_TRADE", "hmm_confidence_below_threshold")
+        return StrategySelection(
+            regime, confidence, None, "NO_TRADE", "hmm_confidence_below_threshold"
+        )
     specs = _registry_by_id(registry)
     if set(specs) != set(STRATEGY_IDS):
-        return StrategySelection(regime, confidence, None, "NO_TRADE", "registry_candidate_set_invalid")
+        return StrategySelection(
+            regime, confidence, None, "NO_TRADE", "registry_candidate_set_invalid"
+        )
     selected_id = {
         "trend": "trend_following",
         "high_volatility": "volatility_breakout",
@@ -482,10 +512,20 @@ def choose_strategy(
         )
         selected_id = "scalping" if scalp_is_eligible else "mean_reversion"
     if selected_id is None or regime not in specs[selected_id].eligible_regimes:
-        return StrategySelection(regime, confidence, None, "NO_TRADE", "regime_has_no_valid_candidate")
+        return StrategySelection(
+            regime, confidence, None, "NO_TRADE", "regime_has_no_valid_candidate"
+        )
     if specs[selected_id].requires_positive_volume and not source_volume_available:
-        return StrategySelection(regime, confidence, None, "NO_TRADE", "source_volume_not_observed")
-    return StrategySelection(regime, confidence, selected_id, "SELECTED_RESEARCH_ONLY", "hmm_regime_candidate_selected")
+        return StrategySelection(
+            regime, confidence, None, "NO_TRADE", "source_volume_not_observed"
+        )
+    return StrategySelection(
+        regime,
+        confidence,
+        selected_id,
+        "SELECTED_RESEARCH_ONLY",
+        "hmm_regime_candidate_selected",
+    )
 
 
 def make_research_decision(
@@ -589,7 +629,9 @@ def make_walk_forward_folds(
     folds: list[tuple[int, int, int]] = []
     for fold_index in range(config.fold_count):
         test_start = config.initial_train_rows + fold_index * window
-        test_stop = row_count if fold_index == config.fold_count - 1 else test_start + window
+        test_stop = (
+            row_count if fold_index == config.fold_count - 1 else test_start + window
+        )
         folds.append((test_start, test_start, test_stop))
     return tuple(folds)
 
@@ -604,9 +646,15 @@ def _regime_predictions_for_folds(
     for fold_index, (train_stop, test_start, test_stop) in enumerate(folds, start=1):
         training = regime_features.iloc[:train_stop].dropna()
         testing = regime_features.iloc[test_start:test_stop].dropna()
-        fitted = fit_gaussian_hmm(training.loc[:, list(FEATURE_NAMES)], random_seed=config.random_seed)
-        regimes, posteriors = infer_hmm_regimes(testing.loc[:, list(FEATURE_NAMES)], fitted)
-        for index, regime, posterior in zip(testing.index, regimes, posteriors, strict=True):
+        fitted = fit_gaussian_hmm(
+            training.loc[:, list(FEATURE_NAMES)], random_seed=config.random_seed
+        )
+        regimes, posteriors = infer_hmm_regimes(
+            testing.loc[:, list(FEATURE_NAMES)], fitted
+        )
+        for index, regime, posterior in zip(
+            testing.index, regimes, posteriors, strict=True
+        ):
             predictions[int(index)] = (regime, max(posterior))
         fold_reports.append(
             {
@@ -617,7 +665,9 @@ def _regime_predictions_for_folds(
                 "test_rows_classified": len(testing),
                 "hmm_mean_log_likelihood": fitted.mean_log_likelihood,
                 "hmm_iterations": fitted.iterations,
-                "state_occupancy": dict(zip(REGIME_NAMES, fitted.state_occupancy, strict=True)),
+                "state_occupancy": dict(
+                    zip(REGIME_NAMES, fitted.state_occupancy, strict=True)
+                ),
             }
         )
     return predictions, fold_reports
@@ -659,7 +709,6 @@ def _net_trade_result(
     cost_rate = (config.fee_bps_per_side + config.slippage_bps_per_side) / 10_000.0
     costs = quantity * (entry_price + exit_price) * cost_rate
     return gross_pnl - costs, costs
-
 
 
 def _run_policy(
@@ -865,6 +914,7 @@ def _run_policy(
     )
     return metrics, trades, decisions
 
+
 def summarize_policy_metrics(
     trades: list[dict[str, Any]],
     equity_curve: list[float],
@@ -897,11 +947,14 @@ def summarize_policy_metrics(
         "expectancy_bps_per_trade": expectancy,
         "average_win_bps": avg_win,
         "average_loss_bps": avg_loss,
-        "total_net_pnl_quote": float(sum(float(trade["net_pnl_quote"]) for trade in trades)),
+        "total_net_pnl_quote": float(
+            sum(float(trade["net_pnl_quote"]) for trade in trades)
+        ),
         "total_return_pct": (final_equity / initial_equity - 1.0) * 100.0,
         "max_drawdown_pct": max_drawdown,
         "strategy_trade_counts": counts,
-        "selector_strategy_checks": selection_counts or {strategy_id: 0 for strategy_id in STRATEGY_IDS},
+        "selector_strategy_checks": selection_counts
+        or {strategy_id: 0 for strategy_id in STRATEGY_IDS},
         "strategy_switch_count": switch_count,
     }
 
@@ -942,7 +995,6 @@ def _comparisons(
     return comparisons
 
 
-
 def evaluate_historical_bars(
     candles: DataFrame,
     registry: StrategyRegistry,
@@ -953,7 +1005,9 @@ def evaluate_historical_bars(
 ) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
     """Evaluate dynamic regime selection against four fixed-policy baselines."""
     selected_config = config or WalkForwardConfig()
-    if len(commit_sha) != 40 or any(character not in "0123456789abcdef" for character in commit_sha):
+    if len(commit_sha) != 40 or any(
+        character not in "0123456789abcdef" for character in commit_sha
+    ):
         raise ValueError("autonomous_commit_sha_invalid")
     bars = _validate_hourly_candles(candles)
     features = compute_autonomous_features(bars)
@@ -963,7 +1017,9 @@ def evaluate_historical_bars(
         regime_features, folds, selected_config
     )
     volume_positive_rows = int((bars["volume"] > 0).sum())
-    source_volume_available = volume_positive_rows > 0 and bool(source.get("volume_observed", True))
+    source_volume_available = volume_positive_rows > 0 and bool(
+        source.get("volume_observed", True)
+    )
     meta_metrics, meta_trades, decisions = _run_policy(
         None,
         bars,
@@ -1062,6 +1118,7 @@ def evaluate_historical_bars(
         },
     }
     return report, all_trades, decisions
+
 
 __all__ = [
     "DEFAULT_FOLD_COUNT",

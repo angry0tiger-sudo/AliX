@@ -88,12 +88,20 @@ def strategy_registry() -> StrategyRegistry:
 def test_registry_has_four_independent_research_only_strategies(
     strategy_registry: StrategyRegistry,
 ) -> None:
-    assert tuple(spec.strategy_id for spec in strategy_registry.strategies) == STRATEGY_IDS
-    assert all(spec.lifecycle == "RESEARCH_ONLY" for spec in strategy_registry.strategies)
-    assert all(not spec.owner_approved and not spec.allow_short for spec in strategy_registry.strategies)
-    assert strategy_registry.code_sha256 == hashlib.sha256(
-        Path(autonomous.__file__).read_bytes()
-    ).hexdigest()
+    assert (
+        tuple(spec.strategy_id for spec in strategy_registry.strategies) == STRATEGY_IDS
+    )
+    assert all(
+        spec.lifecycle == "RESEARCH_ONLY" for spec in strategy_registry.strategies
+    )
+    assert all(
+        not spec.owner_approved and not spec.allow_short
+        for spec in strategy_registry.strategies
+    )
+    assert (
+        strategy_registry.code_sha256
+        == hashlib.sha256(Path(autonomous.__file__).read_bytes()).hexdigest()
+    )
     assert strategy_registry.document_sha256
 
 
@@ -139,7 +147,9 @@ def test_registry_loader_fails_closed(
         elif mutation == "approval":
             decoded["strategies"][0]["owner_approved"] = True
         elif mutation == "duplicate_id":
-            decoded["strategies"][1]["strategy_id"] = decoded["strategies"][0]["strategy_id"]
+            decoded["strategies"][1]["strategy_id"] = decoded["strategies"][0][
+                "strategy_id"
+            ]
         elif mutation == "wrong_regime":
             decoded["strategies"][0]["eligible_regimes"] = ["not_a_regime"]
         elif mutation == "bad_list":
@@ -150,7 +160,8 @@ def test_registry_loader_fails_closed(
     if mutation == "bad_hash":
         with pytest.raises(ValueError, match=expected_reason):
             autonomous._parse_registry_document(
-                document, hashlib.sha256(Path(autonomous.__file__).read_bytes()).hexdigest()
+                document,
+                hashlib.sha256(Path(autonomous.__file__).read_bytes()).hexdigest(),
             )
     elif mutation == "invalid_json":
         with pytest.raises(ValueError, match=expected_reason):
@@ -266,9 +277,7 @@ def test_features_are_causal_and_atr_scales_with_price_ranges() -> None:
         ("bad_ohlc", "ohlc_invariant"),
     ),
 )
-def test_hourly_market_data_validation_fails_closed(
-    mutation: str, reason: str
-) -> None:
+def test_hourly_market_data_validation_fails_closed(mutation: str, reason: str) -> None:
     candles = hourly_candles(80)
     if mutation == "missing_column":
         candles = candles.drop(columns=["low"])
@@ -297,13 +306,25 @@ def test_hourly_market_data_validation_fails_closed(
     (
         (
             "trend_following",
-            {"close": 110.0, "ema_fast": 109.0, "ema_slow": 108.0, "macd": 2.0, "macd_signal": 1.0},
+            {
+                "close": 110.0,
+                "ema_fast": 109.0,
+                "ema_slow": 108.0,
+                "macd": 2.0,
+                "macd_signal": 1.0,
+            },
         ),
         ("mean_reversion", {"close": 80.0, "rsi_14": 20.0, "bollinger_lower": 81.0}),
         ("volatility_breakout", {"close": 105.0, "previous_high_20": 104.0}),
         (
             "scalping",
-            {"close": 105.0, "volume": 300.0, "relative_volume": 2.0, "ema_fast": 104.0, "momentum_3h": 0.01},
+            {
+                "close": 105.0,
+                "volume": 300.0,
+                "relative_volume": 2.0,
+                "ema_fast": 104.0,
+                "momentum_3h": 0.01,
+            },
         ),
     ),
 )
@@ -380,7 +401,11 @@ def test_hmm_selector_abstains_on_bad_or_uncertain_regimes(
     expected_reason: str,
 ) -> None:
     selection = choose_strategy(
-        regime, confidence, signal_row(), strategy_registry, source_volume_available=True
+        regime,
+        confidence,
+        signal_row(),
+        strategy_registry,
+        source_volume_available=True,
     )
     assert selection.status == "NO_TRADE"
     assert selection.strategy_id is None
@@ -390,7 +415,11 @@ def test_hmm_selector_abstains_on_bad_or_uncertain_regimes(
 def test_selector_rejects_registry_regime_mismatch(
     strategy_registry: StrategyRegistry,
 ) -> None:
-    trend = next(item for item in strategy_registry.strategies if item.strategy_id == "trend_following")
+    trend = next(
+        item
+        for item in strategy_registry.strategies
+        if item.strategy_id == "trend_following"
+    )
     invalid_trend = replace(trend, eligible_regimes=("range",))
     registry = StrategyRegistry(
         revision=strategy_registry.revision,
@@ -401,7 +430,9 @@ def test_selector_rejects_registry_regime_mismatch(
             for item in strategy_registry.strategies
         ),
     )
-    decision = choose_strategy("trend", 0.9, signal_row(), registry, source_volume_available=True)
+    decision = choose_strategy(
+        "trend", 0.9, signal_row(), registry, source_volume_available=True
+    )
     assert decision.status == "NO_TRADE"
     assert decision.reason == "regime_has_no_valid_candidate"
 
@@ -429,15 +460,29 @@ def test_research_decision_separates_selection_from_signal(
 def test_dynamic_risk_plan_scales_with_atr_confidence_and_regime(
     strategy_registry: StrategyRegistry,
 ) -> None:
-    spec = next(item for item in strategy_registry.strategies if item.strategy_id == "trend_following")
+    spec = next(
+        item
+        for item in strategy_registry.strategies
+        if item.strategy_id == "trend_following"
+    )
     config = WalkForwardConfig(initial_train_rows=120, fold_count=2)
     calm = plan_dynamic_risk(
-        entry_price=100.0, atr=2.0, regime="range", confidence=0.8,
-        equity=10_000.0, spec=spec, config=config,
+        entry_price=100.0,
+        atr=2.0,
+        regime="range",
+        confidence=0.8,
+        equity=10_000.0,
+        spec=spec,
+        config=config,
     )
     volatile = plan_dynamic_risk(
-        entry_price=100.0, atr=2.0, regime="high_volatility", confidence=0.9,
-        equity=10_000.0, spec=spec, config=config,
+        entry_price=100.0,
+        atr=2.0,
+        regime="high_volatility",
+        confidence=0.9,
+        equity=10_000.0,
+        spec=spec,
+        config=config,
     )
     assert calm is not None and volatile is not None
     assert volatile.stop_distance > calm.stop_distance
@@ -452,10 +497,46 @@ def test_dynamic_risk_plan_scales_with_atr_confidence_and_regime(
 @pytest.mark.parametrize(
     ("kwargs", "config"),
     (
-        ({"entry_price": 0.0, "atr": 1.0, "regime": "trend", "confidence": 0.9, "equity": 1000.0}, None),
-        ({"entry_price": 100.0, "atr": 0.0, "regime": "trend", "confidence": 0.9, "equity": 1000.0}, None),
-        ({"entry_price": 100.0, "atr": 1.0, "regime": "trend", "confidence": 0.4, "equity": 1000.0}, None),
-        ({"entry_price": float("nan"), "atr": 1.0, "regime": "trend", "confidence": 0.9, "equity": 1000.0}, None),
+        (
+            {
+                "entry_price": 0.0,
+                "atr": 1.0,
+                "regime": "trend",
+                "confidence": 0.9,
+                "equity": 1000.0,
+            },
+            None,
+        ),
+        (
+            {
+                "entry_price": 100.0,
+                "atr": 0.0,
+                "regime": "trend",
+                "confidence": 0.9,
+                "equity": 1000.0,
+            },
+            None,
+        ),
+        (
+            {
+                "entry_price": 100.0,
+                "atr": 1.0,
+                "regime": "trend",
+                "confidence": 0.4,
+                "equity": 1000.0,
+            },
+            None,
+        ),
+        (
+            {
+                "entry_price": float("nan"),
+                "atr": 1.0,
+                "regime": "trend",
+                "confidence": 0.9,
+                "equity": 1000.0,
+            },
+            None,
+        ),
     ),
 )
 def test_dynamic_risk_plan_abstains_on_invalid_sizing_inputs(
@@ -482,8 +563,13 @@ def test_exit_simulation_uses_stop_first_when_both_barriers_hit(
     spec = strategy_registry.strategies[0]
     config = WalkForwardConfig(initial_train_rows=120, fold_count=2)
     plan = plan_dynamic_risk(
-        entry_price=100.0, atr=1.0, regime="trend", confidence=0.9,
-        equity=10_000.0, spec=spec, config=config,
+        entry_price=100.0,
+        atr=1.0,
+        regime="trend",
+        confidence=0.9,
+        equity=10_000.0,
+        spec=spec,
+        config=config,
     )
     assert plan is not None
     bars.loc[30, ["open", "high", "low", "close"]] = [100.0, 104.0, 97.0, 101.0]
@@ -511,8 +597,13 @@ def test_exit_simulation_handles_gap_fills(
     spec = strategy_registry.strategies[0]
     config = WalkForwardConfig(initial_train_rows=120, fold_count=2)
     plan = plan_dynamic_risk(
-        entry_price=100.0, atr=1.0, regime="trend", confidence=0.9,
-        equity=10_000.0, spec=spec, config=config,
+        entry_price=100.0,
+        atr=1.0,
+        regime="trend",
+        confidence=0.9,
+        equity=10_000.0,
+        spec=spec,
+        config=config,
     )
     assert plan is not None
     bars.loc[30, ["open", "high", "low", "close"]] = bar_values
@@ -522,16 +613,28 @@ def test_exit_simulation_handles_gap_fills(
     assert reason == expected_reason
 
 
-def test_metrics_and_comparisons_report_missing_samples_without_inventing_values() -> None:
+def test_metrics_and_comparisons_report_missing_samples_without_inventing_values() -> (
+    None
+):
     no_trades = summarize_policy_metrics([], [10_000.0], initial_equity=10_000.0)
     assert no_trades["status"] == "NO_TRADES"
     assert no_trades["win_rate_pct"] is None
     assert no_trades["expectancy_bps_per_trade"] is None
     trades = [
-        {"strategy_id": "trend_following", "net_return_bps": 100.0, "net_pnl_quote": 10.0},
-        {"strategy_id": "mean_reversion", "net_return_bps": -40.0, "net_pnl_quote": -4.0},
+        {
+            "strategy_id": "trend_following",
+            "net_return_bps": 100.0,
+            "net_pnl_quote": 10.0,
+        },
+        {
+            "strategy_id": "mean_reversion",
+            "net_return_bps": -40.0,
+            "net_pnl_quote": -4.0,
+        },
     ]
-    metrics = summarize_policy_metrics(trades, [10_000.0, 10_010.0, 10_006.0], initial_equity=10_000.0)
+    metrics = summarize_policy_metrics(
+        trades, [10_000.0, 10_010.0, 10_006.0], initial_equity=10_000.0
+    )
     assert metrics["win_rate_pct"] == 50.0
     assert metrics["expectancy_bps_per_trade"] == 30.0
     assert metrics["max_drawdown_pct"] > 0
@@ -561,7 +664,9 @@ def test_historical_walk_forward_emits_four_baselines_and_closed_safety_contract
     assert report["walk_forward"]["fold_count"] == 2
     assert report["walk_forward"]["final_holdout_used"] is False
     assert report["strategy_registry"]["candidate_count"] == 4
-    assert set(report["economic_evaluation"]["fixed_strategy_baselines"]) == set(STRATEGY_IDS)
+    assert set(report["economic_evaluation"]["fixed_strategy_baselines"]) == set(
+        STRATEGY_IDS
+    )
     assert report["economic_evaluation"]["economic_acceptance"] == "NO-GO"
     assert all(item["order_permission"] is False for item in trades)
     assert all(item["real_order_attempted"] is False for item in trades)
@@ -584,9 +689,14 @@ def test_historical_evaluation_blocks_scalping_without_positive_source_volume(
         strategy_registry,
         commit_sha="b" * 40,
         source={"volume_observed": True, "final_holdout_used": False},
-        config=WalkForwardConfig(initial_train_rows=180, fold_count=2, minimum_confidence=0.5),
+        config=WalkForwardConfig(
+            initial_train_rows=180, fold_count=2, minimum_confidence=0.5
+        ),
     )
-    assert report["strategy_registry"]["scalping_status"] == "BLOCKED_NO_POSITIVE_SOURCE_VOLUME"
+    assert (
+        report["strategy_registry"]["scalping_status"]
+        == "BLOCKED_NO_POSITIVE_SOURCE_VOLUME"
+    )
     assert all(trade["strategy_id"] != "scalping" for trade in trades)
     assert report["safety_invariants"]["Champion"] is None
 

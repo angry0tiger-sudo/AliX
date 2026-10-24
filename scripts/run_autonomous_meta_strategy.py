@@ -71,10 +71,7 @@ def run_research(
 ) -> dict[str, Any]:
     project_root = Path(__file__).resolve().parents[1]
     registry_path = (
-        project_root
-        / "configs"
-        / "research"
-        / "autonomous-meta-strategy-registry.json"
+        project_root / "configs" / "research" / "autonomous-meta-strategy-registry.json"
     )
     registry = load_strategy_registry(registry_path)
     candles, source = _load_verified_history(input_dir)
@@ -103,17 +100,32 @@ def run_research(
         output_dir / TRADES_NAME,
         trades,
         [
-            "policy", "fold", "strategy_id", "regime", "hmm_confidence",
-            "entry_time", "exit_time", "net_return_bps", "net_pnl_quote",
-            "order_permission", "real_order_attempted",
+            "policy",
+            "fold",
+            "strategy_id",
+            "regime",
+            "hmm_confidence",
+            "entry_time",
+            "exit_time",
+            "net_return_bps",
+            "net_pnl_quote",
+            "order_permission",
+            "real_order_attempted",
         ],
     )
     _write_rows(
         output_dir / DECISIONS_NAME,
         decisions,
         [
-            "fold", "timestamp", "regime", "hmm_confidence", "strategy_id",
-            "status", "reason", "entry_signal", "order_permission",
+            "fold",
+            "timestamp",
+            "regime",
+            "hmm_confidence",
+            "strategy_id",
+            "status",
+            "reason",
+            "entry_signal",
+            "order_permission",
         ],
     )
     meta = report["economic_evaluation"]["meta_strategy_metrics"]
@@ -129,7 +141,9 @@ def run_research(
                 "meta_trade_count": meta["trade_count"],
                 "meta_win_rate_pct": meta["win_rate_pct"],
                 "meta_expectancy_bps_per_trade": meta["expectancy_bps_per_trade"],
-                "economic_acceptance": report["economic_evaluation"]["economic_acceptance"],
+                "economic_acceptance": report["economic_evaluation"][
+                    "economic_acceptance"
+                ],
                 "Champion": safety["Champion"],
                 "order_permission": safety["order_permission"],
                 "trading_authorization": safety["trading_authorization"],
