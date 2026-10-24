@@ -16,10 +16,14 @@ import numpy as np
 import pandas as pd
 from pandas import DataFrame
 
-from services.freqai_baseline.features import FEATURE_COLUMNS, TARGET_COLUMN
+from services.freqai_baseline.features import (
+    FEATURE_COLUMNS,
+    TARGET_COLUMN,
+    add_market_features,
+    forward_return_target,
+)
 from services.freqai_baseline.walkforward import (
     BASELINE_MODEL_PARAMETERS,
-    prepare_model_dataset,
     validate_ohlcv,
 )
 
@@ -365,29 +369,30 @@ def fit_new_model() -> Any:
     return LGBMRegressor(**dict(BASELINE_MODEL_PARAMETERS))
 
 
-def fit_fold_model(train: DataFrame) -> Any:
-    """Fit one new model from this fold's past-only training rows."""
-    if len(train) < 1:
-        raise StageBError("fold_training_rows_empty")
+def fit_fold_model(train: DataFrame, feature_columns: list[str]) -> Any:
+    """Fit one new model using only this segment's available past-only features."""
+    if len(train) < 1 or not feature_columns:
+        raise StageBError("fold_training_rows_or_features_empty")
     train_y = train[TARGET_COLUMN].to_numpy(dtype=float)
     if not np.isfinite(train_y).all():
         raise StageBError("training_target_non_finite")
     model = fit_new_model()
-    model.fit(train.loc[:, list(FEATURE_COLUMNS)], train_y)
+    model.fit(train.loc[:, feature_columns], train_y)
     return model
 
 
 def predict_fold(
-    model: Any, test: DataFrame, terminal_fold: bool
+    model: Any,
+    test: DataFrame,
+    feature_columns: list[str],
+    terminal_fold: bool,
 ) -> tuple[DataFrame, np.ndarray, np.ndarray]:
     """Predict OOS labels, excluding rows whose full horizon would cross a fold."""
     scored_count = len(test) if terminal_fold else len(test) - HORIZON
     scored = test.iloc[:scored_count]
     if scored.empty:
         raise StageBError("fold_has_no_scored_oos_rows")
-    predicted = np.asarray(
-        model.predict(scored.loc[:, list(FEATURE_COLUMNS)]), dtype=float
-    )
+    predicted = np.asarray(model.predict(scored.loc[:, feature_columns]), dtype=float)
     actual = scored[TARGET_COLUMN].to_numpy(dtype=float)
     if len(predicted) != len(actual) or not np.isfinite(predicted).all():
         raise StageBError("oos_prediction_invalid")
@@ -475,12 +480,15 @@ def evaluate_fold(
     dataset: DataFrame,
     fold: FoldSpec,
     terminal_fold: bool,
+    feature_columns: list[str],
 ) -> dict[str, Any]:
     """Fit one fold, score OOS rows, and emit the fold's research evidence."""
     train = dataset.iloc[: fold.train_stop]
     test = dataset.iloc[fold.test_start : fold.test_stop]
-    model = fit_fold_model(train)
-    scored, predicted, actual = predict_fold(model, test, terminal_fold)
+    model = fit_fold_model(train, feature_columns)
+    scored, predicted, actual = predict_fold(
+        model, test, feature_columns, terminal_fold
+    )
     prediction_rows, trades = build_oos_rows(
         segment, evaluation, fold, test, scored, predicted, actual, terminal_fold
     )
@@ -511,22 +519,110 @@ def evaluate_fold(
     }
 
 
-def prepare_segment(segment: DataFrame, name: str) -> tuple[DataFrame, str]:
+def initially_available_features(
+    engineered: DataFrame, candidates: Sequence[str]
+) -> tuple[list[str], list[dict[str, str]]]:
+    """Exclude features with no defined values anywhere in this segment."""
+    selected: list[str] = []
+    excluded: list[dict[str, str]] = []
+    for column in candidates:
+        values = engineered[column].replace([np.inf, -np.inf], np.nan)
+        if values.notna().any():
+            selected.append(column)
+        else:
+            excluded.append(
+                {"feature": column, "reason": "undefined_for_all_segment_rows"}
+            )
+    return selected, excluded
+
+
+def feature_undefined_when_peers_are_usable(
+    engineered: DataFrame, candidate: str, peers: Sequence[str]
+) -> bool:
+    """Check an individual feature only where every peer is defined."""
+    if not peers:
+        return False
+    usable_rows = (
+        engineered.loc[:, list(peers)]
+        .replace([np.inf, -np.inf], np.nan)
+        .notna()
+        .all(axis=1)
+    )
+    candidate_valid = engineered[candidate].replace([np.inf, -np.inf], np.nan)
+    return bool(
+        usable_rows.any() and not candidate_valid.loc[usable_rows].notna().all()
+    )
+
+
+def exclude_internally_undefined_features(
+    engineered: DataFrame, selected: list[str]
+) -> tuple[list[str], list[dict[str, str]]]:
+    """Iteratively drop features with internal gaps relative to their peers."""
+    excluded: list[dict[str, str]] = []
+    while True:
+        invalid_feature = next(
+            (
+                candidate
+                for candidate in selected
+                if feature_undefined_when_peers_are_usable(
+                    engineered,
+                    candidate,
+                    [column for column in selected if column != candidate],
+                )
+            ),
+            None,
+        )
+        if invalid_feature is None:
+            return selected, excluded
+        selected.remove(invalid_feature)
+        excluded.append(
+            {
+                "feature": invalid_feature,
+                "reason": "undefined_on_otherwise_usable_rows",
+            }
+        )
+
+
+def select_segment_features(
+    engineered: DataFrame, candidates: Sequence[str] = FEATURE_COLUMNS
+) -> tuple[list[str], list[dict[str, str]]]:
+    """Exclude features undefined on usable rows; never fill or repair feature data."""
+    selected, excluded = initially_available_features(engineered, candidates)
+    selected, internal_exclusions = exclude_internally_undefined_features(
+        engineered, selected
+    )
+    excluded.extend(internal_exclusions)
+    if not selected:
+        raise StageBError("segment_has_no_usable_features")
+    return selected, excluded
+
+
+def prepare_segment(
+    segment: DataFrame, name: str
+) -> tuple[DataFrame, str, list[str], list[dict[str, str]]]:
+    """Build segment-local feature/target rows without imputing unavailable values."""
     candles = segment.loc[:, ["date", "open", "high", "low", "close", "volume"]].copy()
     validated, fingerprint = validate_ohlcv(candles, HOUR)
-    dataset = prepare_model_dataset(validated, HORIZON)
+    engineered = add_market_features(validated)
+    engineered[TARGET_COLUMN] = forward_return_target(engineered, HORIZON)
+    feature_columns, excluded_features = select_segment_features(engineered)
+    required = feature_columns + [TARGET_COLUMN]
+    numeric = engineered.loc[:, required].replace([np.inf, -np.inf], np.nan)
+    valid_rows = numeric.notna().all(axis=1)
+    selected_columns = list(dict.fromkeys(["date", "close", *required]))
+    dataset = engineered.loc[valid_rows, selected_columns].copy().reset_index(drop=True)
     if dataset.empty:
         raise StageBError(f"segment_{name}_dataset_empty")
     dates = pd.to_datetime(dataset["date"], utc=True, errors="raise")
     if not (dates.diff().dropna() == pd.Timedelta(seconds=HOUR)).all():
         raise StageBError(f"segment_{name}_feature_rows_not_contiguous")
-    features = dataset.loc[:, list(FEATURE_COLUMNS)].to_numpy(dtype=float)
+    features = dataset.loc[:, feature_columns].to_numpy(dtype=float)
     if (
         not np.isfinite(features).all()
         or not np.isfinite(dataset[TARGET_COLUMN].to_numpy(dtype=float)).all()
     ):
         raise StageBError(f"segment_{name}_feature_or_target_non_finite")
-    return dataset, fingerprint
+    return dataset, fingerprint, feature_columns, excluded_features
 
 
 def evaluate_many(
@@ -536,11 +632,17 @@ def evaluate_many(
     folds: list[FoldSpec],
     out_dir: Path,
     completed: int,
+    feature_columns: list[str],
 ) -> tuple[list[dict[str, Any]], int]:
     results: list[dict[str, Any]] = []
     for fold in folds:
         result = evaluate_fold(
-            segment, evaluation, dataset, fold, fold.test_stop == len(dataset)
+            segment,
+            evaluation,
+            dataset,
+            fold,
+            fold.test_stop == len(dataset),
+            feature_columns,
         )
         results.append(result)
         completed += 1
@@ -599,8 +701,8 @@ def run_stage_b(input_dir: Path, output_dir: Path, commit_sha: str) -> dict[str,
     output_dir.mkdir(parents=True, exist_ok=True)
     frame, source_report, segments, segment_hashes = verify_source_artifact(input_dir)
     segment_a, segment_b = segments
-    dataset_a, fingerprint_a = prepare_segment(segment_a, "A")
-    dataset_b, fingerprint_b = prepare_segment(segment_b, "B")
+    dataset_a, fingerprint_a, features_a, excluded_a = prepare_segment(segment_a, "A")
+    dataset_b, fingerprint_b, features_b, excluded_b = prepare_segment(segment_b, "B")
     holdout_start = pd.Timestamp(segment_a["date"].iloc[-A_HOLDOUT])
     a_dev_stop = int((dataset_a["date"] < holdout_start).sum())
     if a_dev_stop <= A_TRAIN + HORIZON:
@@ -638,7 +740,13 @@ def run_stage_b(input_dir: Path, output_dir: Path, commit_sha: str) -> dict[str,
     )
 
     a_results, completed = evaluate_many(
-        "A", "walk_forward_development", dataset_a, a_dev_folds, output_dir, 0
+        "A",
+        "walk_forward_development",
+        dataset_a,
+        a_dev_folds,
+        output_dir,
+        0,
+        features_a,
     )
     b_results, completed = evaluate_many(
         "B",
@@ -647,6 +755,7 @@ def run_stage_b(input_dir: Path, output_dir: Path, commit_sha: str) -> dict[str,
         b_folds,
         output_dir,
         completed,
+        features_b,
     )
     # Final holdout is evaluated last and never used for model/parameter selection.
     holdout_results, completed = evaluate_many(
@@ -656,6 +765,7 @@ def run_stage_b(input_dir: Path, output_dir: Path, commit_sha: str) -> dict[str,
         [holdout_fold],
         output_dir,
         completed,
+        features_a,
     )
     a_dev = aggregate(a_results)
     b_diag = aggregate(b_results)
@@ -697,9 +807,25 @@ def run_stage_b(input_dir: Path, output_dir: Path, commit_sha: str) -> dict[str,
     )
 
     details: dict[str, Any] = {}
-    for name, segment, dataset, fingerprint, segment_hash in (
-        ("A", segment_a, dataset_a, fingerprint_a, segment_hashes[0]),
-        ("B", segment_b, dataset_b, fingerprint_b, segment_hashes[1]),
+    for name, segment, dataset, fingerprint, segment_hash, features, excluded in (
+        (
+            "A",
+            segment_a,
+            dataset_a,
+            fingerprint_a,
+            segment_hashes[0],
+            features_a,
+            excluded_a,
+        ),
+        (
+            "B",
+            segment_b,
+            dataset_b,
+            fingerprint_b,
+            segment_hashes[1],
+            features_b,
+            excluded_b,
+        ),
     ):
         details[name] = {
             "input_candle_count": len(segment),
@@ -708,6 +834,8 @@ def run_stage_b(input_dir: Path, output_dir: Path, commit_sha: str) -> dict[str,
             "end_utc": utc_text(segment["date"].iloc[-1]),
             "segment_csv_rows_sha256": segment_hash,
             "data_quality_gate_fingerprint": fingerprint,
+            "model_feature_columns": features,
+            "excluded_features_without_imputation": excluded,
             "fresh_state_within_segment": True,
             "state_shared_with_other_segment": False,
         }
@@ -729,7 +857,7 @@ def run_stage_b(input_dir: Path, output_dir: Path, commit_sha: str) -> dict[str,
             "model": "pinned Phase 4 LightGBM LGBMRegressor",
             "parameters": dict(BASELINE_MODEL_PARAMETERS),
             "fresh_model_per_fold": True,
-            "feature_policy": "existing past-only features, calculated independently within each source segment",
+            "feature_policy": "existing past-only features are computed per segment; features undefined on otherwise usable rows are excluded and recorded, never imputed",
             "target": "12-hour forward close-to-close return",
             "entry_rule": "take a fixed-horizon long-only research trade only when predicted return exceeds modeled round-trip costs",
             "exit_rule": "12 hours, non-overlapping; development trades cannot cross fold boundaries",
@@ -757,6 +885,8 @@ def run_stage_b(input_dir: Path, output_dir: Path, commit_sha: str) -> dict[str,
             "backfill": False,
             "resampling": False,
             "segments_validated_independently": True,
+            "segment_specific_feature_availability": True,
+            "feature_imputation_performed": False,
         },
         "runtime_versions": {
             "python": sys.version.split()[0],

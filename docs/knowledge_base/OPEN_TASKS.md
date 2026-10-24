@@ -191,3 +191,9 @@
 - Protocol: segment-local indicators and freshly fit models, expanding windows, 12-hour label purge, 90-day OOS windows, A final 90-day holdout evaluated separately and last; B has an independent 180-day diagnostic warm-up.
 - Strict economic checks: >=100 OOS trades, win rate >60%, net expectancy >0 after modeled costs, absolute max drawdown <15%. A, A holdout, and B are assessed separately; no pooling across segments.
 - Results and exact inputs are stored in the Stage B GitHub Actions artifact. Threshold results remain research-only; `Champion=null`, `order_permission=false`, `trading_authorization=NO-GO`, and `economic_acceptance=NO-GO` are immutable.
+
+## Stage B feature-availability correction — 2026-10-24
+
+- Run #40080923964 stopped before training because all observed hourly volume values in segment A are zero, making the existing volume percentage-change feature undefined across that segment.
+- The revised runner excludes features undefined for all rows or at rows where other features are otherwise usable, records exclusions per segment, and never imputes missing values. A and B retain independent feature schemas and fresh fold estimators.
+- The failed run is a feature-availability failure, not an economic result. All economic and safety gates remain unchanged.
