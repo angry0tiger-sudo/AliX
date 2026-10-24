@@ -12,6 +12,7 @@ import pytest
 from risk.allocator import DynamicRiskAllocator
 from risk.contracts import (
     AccountSnapshot,
+    InitialStakePolicy,
     MarketRules,
     MarketSnapshot,
     ModelRiskProposal,
@@ -143,6 +144,7 @@ def test_shadow_fill_consumes_an_actual_positive_risk_gate_decision(
     policy = RiskPolicy(
         revision="shadow-integration-policy-v1",
         owner_approved=True,
+        initial_stake_policy=InitialStakePolicy(owner_approved=True),
         absolute_daily_loss_cap=Decimal("100"),
         absolute_gross_exposure_cap=Decimal("10000"),
         daily_risk_budget_fraction=Decimal("0.05"),
