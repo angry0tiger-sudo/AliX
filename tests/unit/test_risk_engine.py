@@ -1108,12 +1108,7 @@ def test_gate_rejects_latched_switch_price_tampering_and_underreported_loss() ->
     assert not latched.risk_approved
     assert "kill_switch_latched" in latched.reasons
 
-    tampered_quantity = allocation.quantity + rules.quantity_step
-    tampered = replace(
-        allocation,
-        quantity=tampered_quantity,
-        stake=tampered_quantity * market.price,
-    )
+    tampered = replace(allocation, quantity=allocation.quantity + rules.quantity_step)
     result = gate.evaluate_entry(
         allocation=tampered,
         account=account,
