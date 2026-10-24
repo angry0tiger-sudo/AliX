@@ -186,9 +186,7 @@ def _validate_manifest_source_url(manifest: dict[str, Any]) -> None:
         raise ValueError("orderbook_manifest_source_url_invalid")
 
 
-def _validate_manifest_checksum(
-    book_path: Path, manifest: dict[str, Any]
-) -> None:
+def _validate_manifest_checksum(book_path: Path, manifest: dict[str, Any]) -> None:
     expected_hash = str(manifest["csv_sha256"])
     actual_hash = hashlib.sha256(book_path.read_bytes()).hexdigest()
     if len(expected_hash) != 64 or expected_hash != actual_hash:
