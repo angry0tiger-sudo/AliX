@@ -4,7 +4,7 @@
   "economic_policy_revision": "ai-core-rebuild-not-approved-v1",
   "strategies": [
     {
-      "code_sha256": "beb60aff32a857e13ec75955ea91b1b2d2d08ceb2a133874e62ce78da67b4a56",
+      "code_sha256": "5545a61d4a8b5a08f56dab1473c248bd0eb14e7cd6e898a34dca5e92248bdd7d",
       "version": "0.1.0",
       "lifecycle": "RESEARCH_ONLY",
       "owner_approved": false,
@@ -47,7 +47,7 @@
       ]
     },
     {
-      "code_sha256": "beb60aff32a857e13ec75955ea91b1b2d2d08ceb2a133874e62ce78da67b4a56",
+      "code_sha256": "5545a61d4a8b5a08f56dab1473c248bd0eb14e7cd6e898a34dca5e92248bdd7d",
       "version": "0.1.0",
       "lifecycle": "RESEARCH_ONLY",
       "owner_approved": false,
@@ -91,7 +91,7 @@
       ]
     },
     {
-      "code_sha256": "beb60aff32a857e13ec75955ea91b1b2d2d08ceb2a133874e62ce78da67b4a56",
+      "code_sha256": "5545a61d4a8b5a08f56dab1473c248bd0eb14e7cd6e898a34dca5e92248bdd7d",
       "version": "0.1.0",
       "lifecycle": "RESEARCH_ONLY",
       "owner_approved": false,
