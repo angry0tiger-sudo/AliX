@@ -89,17 +89,11 @@ class SupervisorProposalDecision:
             require_aware_timestamp(self.evaluated_at, "supervisor_review_time")
         if not self.decision_id.strip() or not self.reason_codes:
             raise ValueError("supervisor_proposal_decision_identity_missing")
-        if self.order_permission is not False:
-            raise ValueError("supervisor_cannot_grant_order_permission")
-        if len(self.fingerprint) != 64 or any(
-            character not in "0123456789abcdef" for character in self.fingerprint
-        ):
-            raise ValueError("supervisor_proposal_fingerprint_invalid")
-        if self.action is SupervisorProposalAction.RESIZE_REQUIRED:
-            if self.suggested_quantity is None or self.suggested_stake is None:
-                raise ValueError("supervisor_resize_target_missing")
-        elif self.suggested_quantity is not None or self.suggested_stake is not None:
-            raise ValueError("supervisor_non_resize_must_not_propose_new_size")
+        _validate_supervisor_order_permission(self.order_permission)
+        _validate_supervisor_fingerprint(self.fingerprint)
+        _validate_supervisor_size_fields(
+            self.action, self.suggested_quantity, self.suggested_stake
+        )
 
 
 class RiskSupervisor:
@@ -165,54 +159,13 @@ class RiskSupervisor:
         now: datetime,
     ) -> SupervisorProposalDecision:
         decision_id = allocation.decision_id if allocation is not None else "unknown"
-        if now.tzinfo is None or now.utcoffset() is None:
-            return _build_proposal_decision(
-                SupervisorProposalAction.REJECT,
-                decision_id,
-                None,
-                None,
-                ("supervisor_time_invalid",),
-                allocation,
-                policy,
-            )
-        if (
-            allocation is None
-            or account is None
-            or market is None
-            or rules is None
-            or policy is None
-            or health is None
-        ):
-            return _build_proposal_decision(
-                SupervisorProposalAction.REJECT,
-                decision_id,
-                now,
-                None,
-                ("supervisor_proposal_input_missing",),
-                allocation,
-                policy,
-            )
-        supervisor_state = self.check(
-            account=account, policy=policy, health=health, now=now
+        rejection = _entry_review_preflight(
+            decision_id, allocation, account, market, rules, policy, health, now
         )
-        if supervisor_state.status is not SupervisorStatus.ACTIVE:
-            return _build_proposal_decision(
-                SupervisorProposalAction.REJECT,
-                decision_id,
-                now,
-                supervisor_state.state_version,
-                (supervisor_state.reason,),
-                allocation,
-                policy,
-            )
-        return _evaluate_proposal(
-            allocation=allocation,
-            account=account,
-            market=market,
-            rules=rules,
-            policy=policy,
-            now=now,
-            state_version=supervisor_state.state_version,
+        if rejection is not None:
+            return rejection
+        return _review_validated_entry(
+            self, allocation, account, market, rules, policy, health, now
         )
 
     def _fault_reason(
@@ -601,4 +554,118 @@ def _build_proposal_decision(
         suggested_stake=suggested_stake,
         order_permission=False,
         fingerprint=stable_fingerprint(payload),
+    )
+
+
+def _validate_supervisor_order_permission(order_permission: bool) -> None:
+    if order_permission is not False:
+        raise ValueError("supervisor_cannot_grant_order_permission")
+
+
+def _validate_supervisor_fingerprint(fingerprint: str) -> None:
+    if len(fingerprint) != 64 or any(
+        character not in "0123456789abcdef" for character in fingerprint
+    ):
+        raise ValueError("supervisor_proposal_fingerprint_invalid")
+
+
+def _validate_supervisor_size_fields(
+    action: SupervisorProposalAction,
+    suggested_quantity: Decimal | None,
+    suggested_stake: Decimal | None,
+) -> None:
+    if action is SupervisorProposalAction.RESIZE_REQUIRED:
+        if suggested_quantity is None or suggested_stake is None:
+            raise ValueError("supervisor_resize_target_missing")
+    elif suggested_quantity is not None or suggested_stake is not None:
+        raise ValueError("supervisor_non_resize_must_not_propose_new_size")
+
+
+def _entry_review_preflight(
+    decision_id: str,
+    allocation: RiskAllocation | None,
+    account: AccountSnapshot | None,
+    market: MarketSnapshot | None,
+    rules: MarketRules | None,
+    policy: RiskPolicy | None,
+    health: SupervisorHealth | None,
+    now: datetime,
+) -> SupervisorProposalDecision | None:
+    if now.tzinfo is None or now.utcoffset() is None:
+        return _build_proposal_decision(
+            SupervisorProposalAction.REJECT,
+            decision_id,
+            None,
+            None,
+            ("supervisor_time_invalid",),
+            allocation,
+            policy,
+        )
+    if _entry_review_input_missing(allocation, account, market, rules, policy, health):
+        return _build_proposal_decision(
+            SupervisorProposalAction.REJECT,
+            decision_id,
+            now,
+            None,
+            ("supervisor_proposal_input_missing",),
+            allocation,
+            policy,
+        )
+    return None
+
+
+def _entry_review_input_missing(
+    allocation: RiskAllocation | None,
+    account: AccountSnapshot | None,
+    market: MarketSnapshot | None,
+    rules: MarketRules | None,
+    policy: RiskPolicy | None,
+    health: SupervisorHealth | None,
+) -> bool:
+    return any(
+        value is None for value in (allocation, account, market, rules, policy, health)
+    )
+
+
+def _review_validated_entry(
+    supervisor: RiskSupervisor,
+    allocation: RiskAllocation | None,
+    account: AccountSnapshot | None,
+    market: MarketSnapshot | None,
+    rules: MarketRules | None,
+    policy: RiskPolicy | None,
+    health: SupervisorHealth | None,
+    now: datetime,
+) -> SupervisorProposalDecision:
+    if (
+        allocation is None
+        or account is None
+        or market is None
+        or rules is None
+        or policy is None
+        or health is None
+    ):
+        raise ValueError("supervisor_internal_input_narrowing_failed")
+    decision_id = allocation.decision_id
+    supervisor_state = supervisor.check(
+        account=account, policy=policy, health=health, now=now
+    )
+    if supervisor_state.status is not SupervisorStatus.ACTIVE:
+        return _build_proposal_decision(
+            SupervisorProposalAction.REJECT,
+            decision_id,
+            now,
+            supervisor_state.state_version,
+            (supervisor_state.reason,),
+            allocation,
+            policy,
+        )
+    return _evaluate_proposal(
+        allocation=allocation,
+        account=account,
+        market=market,
+        rules=rules,
+        policy=policy,
+        now=now,
+        state_version=supervisor_state.state_version,
     )
