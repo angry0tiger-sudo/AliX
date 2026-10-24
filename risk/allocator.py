@@ -273,13 +273,26 @@ class DynamicRiskAllocator:
         if isinstance(stop_terms, str):
             return self._rejected((stop_terms,), daily_budget, trade_budget)
         stop_price, stop_distance, unit_loss = stop_terms
-        quantity = self._bounded_quantity(
+        risk_bounded_quantity = self._bounded_quantity(
             policy, account, market, rules, trade_budget, unit_loss
         )
-        stake = quantity * market.price
-        quantity, stake, estimated_loss = self._apply_max_notional(
-            quantity, market, rules, unit_loss
+        quantity, quantity_reason = self._initial_stake_quantity(
+            policy=policy, account=account, market=market, rules=rules
         )
+        if quantity_reason is not None or quantity is None:
+            return self._rejected(
+                (quantity_reason or "initial_stake_target_invalid",),
+                daily_budget,
+                trade_budget,
+            )
+        if quantity > risk_bounded_quantity:
+            return self._rejected(
+                ("initial_stake_target_conflicts_with_protective_cap",),
+                daily_budget,
+                trade_budget,
+            )
+        stake = quantity * market.price
+        estimated_loss = quantity * unit_loss
         size_reason = self._size_rejection(
             quantity, stake, estimated_loss, trade_budget, rules
         )
@@ -291,6 +304,10 @@ class DynamicRiskAllocator:
                 "decision_id": proposal.decision_id,
                 "model_revision": proposal.model_revision,
                 "policy_revision": policy.revision,
+                "initial_stake_policy_revision": policy.initial_stake_policy.revision,
+                "initial_stake_policy_fingerprint": (
+                    policy.initial_stake_policy.fingerprint
+                ),
                 "account_hash": account.source_snapshot_hash,
                 "market_revision": market.source_revision,
                 "rules_revision": rules.revision,
@@ -326,6 +343,8 @@ class DynamicRiskAllocator:
             calibration_error=proposal.calibration_error,
             expected_edge_after_costs=proposal.expected_edge_after_costs,
             fingerprint=fingerprint,
+            initial_stake_policy_revision=policy.initial_stake_policy.revision,
+            initial_stake_policy_fingerprint=policy.initial_stake_policy.fingerprint,
         )
         return AllocationResult(
             True, (), daily_budget, trade_budget, allocation, fingerprint
@@ -361,20 +380,63 @@ class DynamicRiskAllocator:
             return "unit_loss_invalid"
         return stop_price, stop_distance, unit_loss
 
-    def _apply_max_notional(
+    def _initial_stake_quantity(
         self,
-        quantity: Decimal,
+        *,
+        policy: RiskPolicy,
+        account: AccountSnapshot,
         market: MarketSnapshot,
         rules: MarketRules,
-        unit_loss: Decimal,
-    ) -> tuple[Decimal, Decimal, Decimal]:
-        if quantity * market.price > rules.max_notional:
-            quantity = floor_to_step(
-                rules.max_notional / market.price, rules.quantity_step
+    ) -> tuple[Decimal | None, str | None]:
+        stake_policy = policy.initial_stake_policy
+        if not stake_policy.owner_approved:
+            return None, "initial_stake_policy_not_owner_approved"
+        if account.currency != "USDT" or not market.symbol.endswith("/USDT"):
+            return None, "initial_stake_usdt_market_required"
+        if account.free_balance < stake_policy.target_usdt:
+            if not stake_policy.use_all_free_balance_below_target:
+                return None, "initial_stake_below_target_policy_disabled"
+            target_notional = account.free_balance / (
+                Decimal("1") + policy.fee_rate + policy.slippage_rate
             )
+        else:
+            target_notional = stake_policy.target_usdt
+        quantity = floor_to_step(target_notional / market.price, rules.quantity_step)
+        reason = self._initial_stake_size_reason(
+            policy=policy,
+            account=account,
+            market=market,
+            rules=rules,
+            quantity=quantity,
+        )
+        return (None, reason) if reason is not None else (quantity, None)
+
+    def _initial_stake_size_reason(
+        self,
+        *,
+        policy: RiskPolicy,
+        account: AccountSnapshot,
+        market: MarketSnapshot,
+        rules: MarketRules,
+        quantity: Decimal,
+    ) -> str | None:
+        stake_policy = policy.initial_stake_policy
         stake = quantity * market.price
-        estimated_loss = quantity * unit_loss
-        return quantity, stake, estimated_loss
+        below_target = account.free_balance < stake_policy.target_usdt
+        if quantity > rules.max_quantity or stake > rules.max_notional:
+            return "initial_stake_target_exceeds_market_maximum"
+        if not below_target and stake < stake_policy.target_usdt:
+            return "initial_stake_target_not_representable_at_market_precision"
+        if quantity < rules.min_quantity:
+            return "quantity_below_market_minimum"
+        if stake < rules.min_notional:
+            return "notional_below_market_minimum"
+        reserved_total = stake * (
+            Decimal("1") + policy.fee_rate + policy.slippage_rate
+        )
+        if reserved_total > account.free_balance:
+            return "initial_stake_fee_reserve_insufficient"
+        return None
 
     def _size_rejection(
         self,
