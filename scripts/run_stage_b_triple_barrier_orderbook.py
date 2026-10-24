@@ -212,7 +212,7 @@ def _load_orderbook_features(
             ["orderbook_provenance_manifest_not_provided"],
         )
     try:
-        manifest = _validate_orderbook_manifest(orderbook_path, manifest_path)
+        _validate_orderbook_manifest(orderbook_path, manifest_path)
         book = pd.read_csv(orderbook_path)
         features = add_relative_orderbook_features(candles, book)
     except (ValueError, KeyError, TypeError, OSError, json.JSONDecodeError, pd.errors.ParserError) as error:
