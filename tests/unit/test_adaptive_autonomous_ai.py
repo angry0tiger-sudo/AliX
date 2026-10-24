@@ -41,9 +41,7 @@ def hourly_candles(rows: int = 1_440) -> DataFrame:
     low = np.minimum(opened, close) - 0.35
     return pd.DataFrame(
         {
-            "date": pd.date_range(
-                "2020-01-01T00:00:00Z", periods=rows, freq="1h"
-            ),
+            "date": pd.date_range("2020-01-01T00:00:00Z", periods=rows, freq="1h"),
             "open": opened,
             "high": high,
             "low": low,
@@ -254,81 +252,161 @@ def test_dynamic_stop_uses_atr_and_prior_support_or_abstains() -> None:
     assert plan.stop_loss < 100.0
     assert plan.stop_distance == pytest.approx(100.0 - plan.stop_loss)
 
-    assert plan_dynamic_stop(
-        entry_price=100.0, atr=10.0, support_level=90.0, state=state, config=config
-    ) is None
-    assert plan_dynamic_stop(
-        entry_price=100.0, atr=2.0, support_level=110.0, state=state, config=config
-    ) is None
-    assert plan_dynamic_stop(
-        entry_price=float("nan"), atr=2.0, support_level=95.0, state=state, config=config
-    ) is None
-    assert plan_dynamic_stop(
-        entry_price=100.0,
-        atr=2.0,
-        support_level=95.0,
-        state=replace(state, atr_stop_multiple=99.0),
-        config=config,
-    ) is None
+    assert (
+        plan_dynamic_stop(
+            entry_price=100.0, atr=10.0, support_level=90.0, state=state, config=config
+        )
+        is None
+    )
+    assert (
+        plan_dynamic_stop(
+            entry_price=100.0, atr=2.0, support_level=110.0, state=state, config=config
+        )
+        is None
+    )
+    assert (
+        plan_dynamic_stop(
+            entry_price=float("nan"),
+            atr=2.0,
+            support_level=95.0,
+            state=state,
+            config=config,
+        )
+        is None
+    )
+    assert (
+        plan_dynamic_stop(
+            entry_price=100.0,
+            atr=2.0,
+            support_level=95.0,
+            state=replace(state, atr_stop_multiple=99.0),
+            config=config,
+        )
+        is None
+    )
 
 
 def test_adaptive_sizing_responds_to_confidence_trend_and_volatility() -> None:
     config = AdaptiveConfig()
     high = size_adaptive_position(
-        equity=10_000.0, entry_price=100.0, stop_loss=95.0,
-        confidence=0.95, trend_strength=0.9, volatility_score=0.1, config=config,
+        equity=10_000.0,
+        entry_price=100.0,
+        stop_loss=95.0,
+        confidence=0.95,
+        trend_strength=0.9,
+        volatility_score=0.1,
+        config=config,
     )
     low = size_adaptive_position(
-        equity=10_000.0, entry_price=100.0, stop_loss=95.0,
-        confidence=0.4, trend_strength=0.3, volatility_score=0.9, config=config,
+        equity=10_000.0,
+        entry_price=100.0,
+        stop_loss=95.0,
+        confidence=0.4,
+        trend_strength=0.3,
+        volatility_score=0.9,
+        config=config,
     )
     assert high is not None and low is not None
     assert high.risk_fraction > low.risk_fraction
     assert high.quantity > low.quantity
     assert high.notional <= 10_000.0 * config.maximum_position_fraction
     assert high.risk_fraction <= config.maximum_risk_fraction
-    assert size_adaptive_position(
-        equity=0, entry_price=100, stop_loss=95, confidence=0.9,
-        trend_strength=0.9, volatility_score=0.1, config=config,
-    ) is None
-    assert size_adaptive_position(
-        equity=1000, entry_price=100, stop_loss=101, confidence=0.9,
-        trend_strength=0.9, volatility_score=0.1, config=config,
-    ) is None
-    assert size_adaptive_position(
-        equity=1000, entry_price=100, stop_loss=90, confidence=float("nan"),
-        trend_strength=0.9, volatility_score=0.1, config=config,
-    ) is None
+    assert (
+        size_adaptive_position(
+            equity=0,
+            entry_price=100,
+            stop_loss=95,
+            confidence=0.9,
+            trend_strength=0.9,
+            volatility_score=0.1,
+            config=config,
+        )
+        is None
+    )
+    assert (
+        size_adaptive_position(
+            equity=1000,
+            entry_price=100,
+            stop_loss=101,
+            confidence=0.9,
+            trend_strength=0.9,
+            volatility_score=0.1,
+            config=config,
+        )
+        is None
+    )
+    assert (
+        size_adaptive_position(
+            equity=1000,
+            entry_price=100,
+            stop_loss=90,
+            confidence=float("nan"),
+            trend_strength=0.9,
+            volatility_score=0.1,
+            config=config,
+        )
+        is None
+    )
 
 
 def test_intelligent_trailing_stop_gives_winners_room_and_never_loosens() -> None:
     config = AdaptiveConfig()
     state = initial_parameter_state(config)
     strong = update_intelligent_trailing_stop(
-        current_stop=90, high_watermark=120, current_close=118, atr=2,
-        support_level=110, trend_strength=0.9, macd_histogram=1.0,
-        state=state, config=config,
+        current_stop=90,
+        high_watermark=120,
+        current_close=118,
+        atr=2,
+        support_level=110,
+        trend_strength=0.9,
+        macd_histogram=1.0,
+        state=state,
+        config=config,
     )
     weak = update_intelligent_trailing_stop(
-        current_stop=90, high_watermark=120, current_close=118, atr=2,
-        support_level=110, trend_strength=0.3, macd_histogram=-0.1,
-        state=state, config=config,
+        current_stop=90,
+        high_watermark=120,
+        current_close=118,
+        atr=2,
+        support_level=110,
+        trend_strength=0.3,
+        macd_histogram=-0.1,
+        state=state,
+        config=config,
     )
     assert strong is not None and weak is not None
     assert strong[1] == "TREND_RUNNER"
     assert weak[1] == "TIGHTEN_TRAIL"
     assert strong[0] >= 90 and weak[0] >= 90
     assert weak[0] > strong[0]
-    assert update_intelligent_trailing_stop(
-        current_stop=119, high_watermark=120, current_close=118, atr=2,
-        support_level=110, trend_strength=0.9, macd_histogram=1,
-        state=state, config=config,
-    ) is None
-    assert update_intelligent_trailing_stop(
-        current_stop=float("nan"), high_watermark=120, current_close=118, atr=2,
-        support_level=110, trend_strength=0.9, macd_histogram=1,
-        state=state, config=config,
-    ) is None
+    assert (
+        update_intelligent_trailing_stop(
+            current_stop=119,
+            high_watermark=120,
+            current_close=118,
+            atr=2,
+            support_level=110,
+            trend_strength=0.9,
+            macd_histogram=1,
+            state=state,
+            config=config,
+        )
+        is None
+    )
+    assert (
+        update_intelligent_trailing_stop(
+            current_stop=float("nan"),
+            high_watermark=120,
+            current_close=118,
+            atr=2,
+            support_level=110,
+            trend_strength=0.9,
+            macd_histogram=1,
+            state=state,
+            config=config,
+        )
+        is None
+    )
 
 
 def test_failure_analysis_widens_a_tight_stop_for_future_trades() -> None:
@@ -338,7 +416,9 @@ def test_failure_analysis_widens_a_tight_stop_for_future_trades() -> None:
     assert result["classification"] == "stop_too_tight"
     assert result["parameter_update_applied"] is True
     assert updated.atr_stop_multiple == pytest.approx(state.atr_stop_multiple + 0.25)
-    assert updated.trailing_atr_multiple == pytest.approx(state.trailing_atr_multiple + 0.25)
+    assert updated.trailing_atr_multiple == pytest.approx(
+        state.trailing_atr_multiple + 0.25
+    )
     assert updated.revision == 1
     assert updated.trades_observed == 1
     reachable = closed_trade(stop_atr=2.2, favorable_atr=1.1)
@@ -346,7 +426,9 @@ def test_failure_analysis_widens_a_tight_stop_for_future_trades() -> None:
     assert reachable_analysis["classification"] == "stop_too_tight"
 
 
-def test_failure_analysis_increases_selectivity_after_regime_shift_or_signal_failure() -> None:
+def test_failure_analysis_increases_selectivity_after_regime_shift_or_signal_failure() -> (
+    None
+):
     config = AdaptiveConfig()
     state = initial_parameter_state(config)
     shifted, shifted_state = analyze_post_trade_failure(
@@ -363,7 +445,8 @@ def test_failure_analysis_increases_selectivity_after_regime_shift_or_signal_fai
 
     generic, generic_state = analyze_post_trade_failure(
         closed_trade(exit_reason="end_of_data", stop_atr=2.0, favorable_atr=0.1),
-        state, config,
+        state,
+        config,
     )
     assert generic["classification"] == "signal_or_execution_assumption_failure"
     assert generic_state.entry_confidence_floor > state.entry_confidence_floor
@@ -383,7 +466,9 @@ def test_three_consecutive_wins_adjust_future_trailing_and_confidence() -> None:
     assert state.consecutive_wins == 0
 
 
-def test_failure_analysis_rejects_unverifiable_trade_and_respects_parameter_caps() -> None:
+def test_failure_analysis_rejects_unverifiable_trade_and_respects_parameter_caps() -> (
+    None
+):
     config = AdaptiveConfig()
     state = replace(
         initial_parameter_state(config),
@@ -404,10 +489,16 @@ def test_failure_analysis_rejects_unverifiable_trade_and_respects_parameter_caps
         analyze_post_trade_failure({"net_pnl_quote": float("nan")}, state, config)
     with pytest.raises(ValueError, match="categorical_fields_invalid"):
         analyze_post_trade_failure(
-            {"net_pnl_quote": -1, "initial_stop_distance_atr": 1,
-             "max_favorable_excursion_atr": 0.1, "exit_reason": 1,
-             "entry_regime": "trend", "exit_regime": "trend"},
-            state, config,
+            {
+                "net_pnl_quote": -1,
+                "initial_stop_distance_atr": 1,
+                "max_favorable_excursion_atr": 0.1,
+                "exit_reason": 1,
+                "entry_regime": "trend",
+                "exit_regime": "trend",
+            },
+            state,
+            config,
         )
 
 

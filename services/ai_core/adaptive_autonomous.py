@@ -106,7 +106,8 @@ def _validate_config_structure(config: AdaptiveConfig) -> None:
 
 def _validate_config_stop(config: AdaptiveConfig) -> None:
     if not (
-        0 < config.minimum_stop_atr_multiple
+        0
+        < config.minimum_stop_atr_multiple
         <= config.initial_stop_atr_multiple
         <= config.maximum_stop_atr_multiple
     ):
@@ -115,7 +116,8 @@ def _validate_config_stop(config: AdaptiveConfig) -> None:
 
 def _validate_config_trailing(config: AdaptiveConfig) -> None:
     if not (
-        0 < config.minimum_trailing_atr_multiple
+        0
+        < config.minimum_trailing_atr_multiple
         <= config.initial_trailing_atr_multiple
         <= config.maximum_trailing_atr_multiple
     ):
@@ -131,7 +133,8 @@ def _validate_config_trailing(config: AdaptiveConfig) -> None:
 
 def _validate_config_confidence(config: AdaptiveConfig) -> None:
     if not (
-        0 < config.minimum_confidence_floor
+        0
+        < config.minimum_confidence_floor
         <= config.minimum_selection_confidence
         <= config.maximum_confidence_floor
         <= 1
@@ -140,11 +143,15 @@ def _validate_config_confidence(config: AdaptiveConfig) -> None:
 
 
 def _validate_config_costs(config: AdaptiveConfig) -> None:
-    if min(
-        config.stop_adaptation_step,
-        config.confidence_adaptation_step,
-        config.initial_equity,
-    ) <= 0 or min(config.fee_bps_per_side, config.slippage_bps_per_side) < 0:
+    if (
+        min(
+            config.stop_adaptation_step,
+            config.confidence_adaptation_step,
+            config.initial_equity,
+        )
+        <= 0
+        or min(config.fee_bps_per_side, config.slippage_bps_per_side) < 0
+    ):
         raise ValueError("adaptive_config_cost_or_step_invalid")
 
 
@@ -223,7 +230,9 @@ def load_adaptive_config(path: Path, module_path: Path) -> AdaptiveConfig:
     if actual_hash != expected_hash:
         raise ValueError("adaptive_config_code_hash_mismatch")
     parameters = payload["parameters"]
-    if not isinstance(parameters, dict) or set(parameters) != set(asdict(AdaptiveConfig())):
+    if not isinstance(parameters, dict) or set(parameters) != set(
+        asdict(AdaptiveConfig())
+    ):
         raise ValueError("adaptive_config_parameters_invalid")
     try:
         return AdaptiveConfig(**parameters)
@@ -281,6 +290,7 @@ def _validate_hourly_candles(candles: DataFrame) -> DataFrame:
     _validate_hourly_numeric_values(result)
     return result.reset_index(drop=True)
 
+
 def _resample_complete_bars(bars: DataFrame, timeframe: str) -> DataFrame:
     rule, expected_rows = {"4h": ("4h", 4), "1d": ("1D", 24)}[timeframe]
     indexed = bars.set_index("date")
@@ -293,9 +303,11 @@ def _resample_complete_bars(bars: DataFrame, timeframe: str) -> DataFrame:
         close=("close", "last"),
         volume=("volume", "sum"),
     )
-    counts = indexed["close"].resample(
-        rule, closed="left", label="right", origin="start_day"
-    ).count()
+    counts = (
+        indexed["close"]
+        .resample(rule, closed="left", label="right", origin="start_day")
+        .count()
+    )
     return aggregation.loc[counts.eq(expected_rows)].reset_index()
 
 
@@ -305,9 +317,10 @@ def _context_features(bars: DataFrame, timeframe: str) -> DataFrame:
     low = bars["low"].astype(float)
     fast = close.ewm(span=8, adjust=False, min_periods=8).mean()
     slow = close.ewm(span=21, adjust=False, min_periods=21).mean()
-    macd = close.ewm(span=12, adjust=False, min_periods=12).mean() - close.ewm(
-        span=26, adjust=False, min_periods=26
-    ).mean()
+    macd = (
+        close.ewm(span=12, adjust=False, min_periods=12).mean()
+        - close.ewm(span=26, adjust=False, min_periods=26).mean()
+    )
     macd_signal = macd.ewm(span=9, adjust=False, min_periods=9).mean()
     prior_close = close.shift(1)
     true_range = pd.concat(
@@ -436,7 +449,12 @@ def plan_dynamic_stop(
     values = (entry_price, atr, support_level, state.atr_stop_multiple)
     if not all(math.isfinite(value) for value in values):
         return None
-    if entry_price <= 0 or atr <= 0 or support_level <= 0 or support_level >= entry_price:
+    if (
+        entry_price <= 0
+        or atr <= 0
+        or support_level <= 0
+        or support_level >= entry_price
+    ):
         return None
     if not (
         config.minimum_stop_atr_multiple
@@ -473,7 +491,14 @@ def size_adaptive_position(
     config: AdaptiveConfig,
 ) -> AdaptivePositionPlan | None:
     """Scale risk budget with confidence/trend and reduce it in high volatility."""
-    values = (equity, entry_price, stop_loss, confidence, trend_strength, volatility_score)
+    values = (
+        equity,
+        entry_price,
+        stop_loss,
+        confidence,
+        trend_strength,
+        volatility_score,
+    )
     if not all(math.isfinite(value) for value in values):
         return None
     if (
@@ -487,9 +512,10 @@ def size_adaptive_position(
     ):
         return None
     risk_strength = confidence * trend_strength * (1.0 - 0.5 * volatility_score)
-    risk_fraction = config.minimum_risk_fraction + (
-        config.maximum_risk_fraction - config.minimum_risk_fraction
-    ) * risk_strength
+    risk_fraction = (
+        config.minimum_risk_fraction
+        + (config.maximum_risk_fraction - config.minimum_risk_fraction) * risk_strength
+    )
     risk_fraction = min(
         config.maximum_risk_fraction, max(config.minimum_risk_fraction, risk_fraction)
     )
@@ -542,9 +568,7 @@ def update_intelligent_trailing_stop(
         <= config.maximum_trailing_atr_multiple
     ):
         return None
-    strong = (
-        trend_strength >= config.strong_trend_threshold and macd_histogram > 0
-    )
+    strong = trend_strength >= config.strong_trend_threshold and macd_histogram > 0
     weak_adjustment = (
         config.weak_trailing_atr_multiple
         + state.trailing_atr_multiple
@@ -635,7 +659,10 @@ def _adapt_parameter_values(
         )
         next_wins = 0
         updated = next_floor != state.entry_confidence_floor
-    elif classification in {"signal_reversal", "signal_or_execution_assumption_failure"}:
+    elif classification in {
+        "signal_reversal",
+        "signal_or_execution_assumption_failure",
+    }:
         next_floor = _bounded(
             next_floor + config.confidence_adaptation_step / 2.0,
             config.minimum_confidence_floor,
@@ -688,8 +715,8 @@ def analyze_post_trade_failure(
         pnl, stop_atr, favorable_atr, exit_reason, entry_regime, exit_regime
     )
     before = asdict(state)
-    next_stop, next_trailing, next_floor, next_wins, updated = (
-        _adapt_parameter_values(classification, state, config)
+    next_stop, next_trailing, next_floor, next_wins, updated = _adapt_parameter_values(
+        classification, state, config
     )
     new_state = replace(
         state,
@@ -711,6 +738,7 @@ def analyze_post_trade_failure(
         },
         new_state,
     )
+
 
 def summarize_adaptive_metrics(
     trades: list[dict[str, Any]], *, initial_equity: float

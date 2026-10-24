@@ -70,9 +70,7 @@ def _number(row: dict[str, Any], name: str) -> float | None:
     return result if math.isfinite(result) else None
 
 
-def _timeframe_context(
-    row: dict[str, Any], timeframe: str
-) -> dict[str, float] | None:
+def _timeframe_context(row: dict[str, Any], timeframe: str) -> dict[str, float] | None:
     names = (
         "close",
         "ema_fast",
@@ -124,7 +122,9 @@ def _close_trade(
     quantity = float(position["quantity"])
     notional = entry_price * quantity
     gross_pnl = quantity * (exit_price - entry_price)
-    cost_rate = 2.0 * (config.fee_bps_per_side + config.slippage_bps_per_side) / 10_000.0
+    cost_rate = (
+        2.0 * (config.fee_bps_per_side + config.slippage_bps_per_side) / 10_000.0
+    )
     costs = notional * cost_rate
     net_pnl = gross_pnl - costs
     equity_after = max(0.0, equity + net_pnl)
@@ -254,11 +254,24 @@ def _manage_open_position(
     if low <= prior_stop:
         position["max_adverse_excursion_atr"] = max(
             float(position["max_adverse_excursion_atr"]),
-            max(0.0, (float(position["entry_price"]) - low) / float(position["entry_atr"])),
+            max(
+                0.0,
+                (float(position["entry_price"]) - low) / float(position["entry_atr"]),
+            ),
         )
         equity, state = _record_close(
-            position, candles, contexts, cursor, min(opening, prior_stop),
-            "trailing_stop", equity, state, config, trades, decisions, learning_ledger,
+            position,
+            candles,
+            contexts,
+            cursor,
+            min(opening, prior_stop),
+            "trailing_stop",
+            equity,
+            state,
+            config,
+            trades,
+            decisions,
+            learning_ledger,
         )
         return None, equity, state
 
@@ -269,21 +282,39 @@ def _manage_open_position(
     )
     position["max_favorable_excursion_atr"] = max(
         float(position["max_favorable_excursion_atr"]),
-        max(0.0, (high - float(position["entry_price"])) / float(position["entry_atr"])),
+        max(
+            0.0, (high - float(position["entry_price"])) / float(position["entry_atr"])
+        ),
     )
     context = _timeframe_context(contexts.iloc[cursor].to_dict(), timeframe)
     if context is None:
         decisions.append(
             _decision_row(
-                policy, timestamp, timeframe, confidence, "HOLD",
-                "timeframe_context_unavailable_keep_prior_stop", False, prior_stop,
+                policy,
+                timestamp,
+                timeframe,
+                confidence,
+                "HOLD",
+                "timeframe_context_unavailable_keep_prior_stop",
+                False,
+                prior_stop,
             )
         )
         return position, equity, state
     if close < context["ema_fast"] and context["macd_histogram"] < 0:
         equity, state = _record_close(
-            position, candles, contexts, cursor, close, "trend_reversal",
-            equity, state, config, trades, decisions, learning_ledger,
+            position,
+            candles,
+            contexts,
+            cursor,
+            close,
+            "trend_reversal",
+            equity,
+            state,
+            config,
+            trades,
+            decisions,
+            learning_ledger,
         )
         return None, equity, state
 
@@ -306,8 +337,14 @@ def _manage_open_position(
         position["last_trailing_mode"] = mode
     decisions.append(
         _decision_row(
-            policy, timestamp, timeframe, confidence, "MANAGE",
-            f"trailing_policy:{mode}", False, float(position["current_stop"]),
+            policy,
+            timestamp,
+            timeframe,
+            confidence,
+            "MANAGE",
+            f"trailing_policy:{mode}",
+            False,
+            float(position["current_stop"]),
         )
     )
     return position, equity, state
@@ -339,8 +376,13 @@ def _try_open_position(
     confidence = selector.confidence
     if equity <= 0 or cursor + 2 >= len(candles):
         return None, _decision_row(
-            policy, timestamp, timeframe, confidence, "NO_ENTRY",
-            "equity_depleted_or_insufficient_future_bars", False,
+            policy,
+            timestamp,
+            timeframe,
+            confidence,
+            "NO_ENTRY",
+            "equity_depleted_or_insufficient_future_bars",
+            False,
         )
     if timeframe is None:
         return None, _decision_row(
@@ -349,19 +391,34 @@ def _try_open_position(
     context = _timeframe_context(context_row, timeframe)
     if context is None:
         return None, _decision_row(
-            policy, timestamp, timeframe, confidence, "NO_ENTRY",
-            "selected_timeframe_context_unavailable", False,
+            policy,
+            timestamp,
+            timeframe,
+            confidence,
+            "NO_ENTRY",
+            "selected_timeframe_context_unavailable",
+            False,
         )
     if confidence < state.entry_confidence_floor:
         return None, _decision_row(
-            policy, timestamp, timeframe, confidence, "NO_ENTRY",
-            "selection_confidence_below_adaptive_floor", False,
+            policy,
+            timestamp,
+            timeframe,
+            confidence,
+            "NO_ENTRY",
+            "selection_confidence_below_adaptive_floor",
+            False,
         )
     signal = _entry_signal(context, config)
     if not signal:
         return None, _decision_row(
-            policy, timestamp, timeframe, confidence, "NO_ENTRY",
-            "trend_and_macd_entry_conditions_not_met", False,
+            policy,
+            timestamp,
+            timeframe,
+            confidence,
+            "NO_ENTRY",
+            "trend_and_macd_entry_conditions_not_met",
+            False,
         )
     entry_index = cursor + 1
     entry_price = float(candles["open"].iloc[entry_index])
@@ -374,8 +431,13 @@ def _try_open_position(
     )
     if stop_plan is None:
         return None, _decision_row(
-            policy, timestamp, timeframe, confidence, "NO_ENTRY",
-            "dynamic_stop_invalid_or_exceeds_risk_envelope", True,
+            policy,
+            timestamp,
+            timeframe,
+            confidence,
+            "NO_ENTRY",
+            "dynamic_stop_invalid_or_exceeds_risk_envelope",
+            True,
         )
     sizing = size_adaptive_position(
         equity=equity,
@@ -388,8 +450,14 @@ def _try_open_position(
     )
     if sizing is None:
         return None, _decision_row(
-            policy, timestamp, timeframe, confidence, "NO_ENTRY",
-            "adaptive_position_sizing_invalid", True, stop_plan.stop_loss,
+            policy,
+            timestamp,
+            timeframe,
+            confidence,
+            "NO_ENTRY",
+            "adaptive_position_sizing_invalid",
+            True,
+            stop_plan.stop_loss,
         )
     position: dict[str, Any] = {
         "trade_id": trade_count + 1,
@@ -415,8 +483,14 @@ def _try_open_position(
         "last_trailing_mode": "INITIAL_STOP",
     }
     return position, _decision_row(
-        policy, timestamp, timeframe, confidence, "OPEN",
-        "adaptive_entry_accepted_next_hour_open", True, stop_plan.stop_loss,
+        policy,
+        timestamp,
+        timeframe,
+        confidence,
+        "OPEN",
+        "adaptive_entry_accepted_next_hour_open",
+        True,
+        stop_plan.stop_loss,
     )
 
 
@@ -427,7 +501,9 @@ def _simulate_policy(
     *,
     policy: str,
     fixed_timeframe: str | None = None,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+) -> tuple[
+    list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]
+]:
     state = initial_parameter_state(config)
     equity = config.initial_equity
     trades: list[dict[str, Any]] = []
@@ -437,20 +513,45 @@ def _simulate_policy(
     for cursor in range(len(candles)):
         if position is not None:
             position, equity, state = _manage_open_position(
-                position, cursor, candles, contexts, equity, state, config,
-                trades, decisions, learning_ledger,
+                position,
+                cursor,
+                candles,
+                contexts,
+                equity,
+                state,
+                config,
+                trades,
+                decisions,
+                learning_ledger,
             )
             continue
         position, decision = _try_open_position(
-            candles, contexts.iloc[cursor].to_dict(), cursor, policy, fixed_timeframe,
-            equity, state, config, len(trades),
+            candles,
+            contexts.iloc[cursor].to_dict(),
+            cursor,
+            policy,
+            fixed_timeframe,
+            equity,
+            state,
+            config,
+            len(trades),
         )
         decisions.append(decision)
     if position is not None:
         final_index = len(candles) - 1
         equity, state = _record_close(
-            position, candles, contexts, final_index, float(candles["close"].iloc[final_index]),
-            "end_of_data", equity, state, config, trades, decisions, learning_ledger,
+            position,
+            candles,
+            contexts,
+            final_index,
+            float(candles["close"].iloc[final_index]),
+            "end_of_data",
+            equity,
+            state,
+            config,
+            trades,
+            decisions,
+            learning_ledger,
         )
     summary = summarize_adaptive_metrics(trades, initial_equity=config.initial_equity)
     summary["final_parameter_state"] = asdict(state)
@@ -473,14 +574,13 @@ def _comparison(
             "expectancy_delta_bps": float(left) - float(right)
             if left is not None and right is not None
             else None,
-            "trade_count_delta": int(adaptive["trade_count"]) - int(baseline["trade_count"]),
+            "trade_count_delta": int(adaptive["trade_count"])
+            - int(baseline["trade_count"]),
         }
     return result
 
 
-def run_research(
-    input_dir: Path, output_dir: Path, commit_sha: str
-) -> dict[str, Any]:
+def run_research(input_dir: Path, output_dir: Path, commit_sha: str) -> dict[str, Any]:
     if len(commit_sha) != 40 or any(
         char not in "0123456789abcdef" for char in commit_sha
     ):
@@ -503,7 +603,11 @@ def run_research(
     all_learning = list(learning)
     for timeframe in FIXED_TIMEFRAMES:
         trades, decisions, ledger, metrics = _simulate_policy(
-            candles, contexts, config, policy=f"fixed_{timeframe}", fixed_timeframe=timeframe
+            candles,
+            contexts,
+            config,
+            policy=f"fixed_{timeframe}",
+            fixed_timeframe=timeframe,
         )
         baseline_metrics[timeframe] = metrics
         all_trades.extend(trades)
@@ -541,7 +645,9 @@ def run_research(
             "orderbook_liquidity_observed": False,
             "adaptive_selector_metrics": adaptive_metrics,
             "fixed_timeframe_baselines": baseline_metrics,
-            "comparison_vs_fixed_timeframes": _comparison(adaptive_metrics, baseline_metrics),
+            "comparison_vs_fixed_timeframes": _comparison(
+                adaptive_metrics, baseline_metrics
+            ),
             "final_holdout_used": False,
             "reason": "Exploratory sequential adaptation is not independent economic validation or live execution evidence.",
         },
