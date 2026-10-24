@@ -242,17 +242,17 @@ def _evaluate_fold(
     actual = test["forward_return"].to_numpy(dtype=float)
     predictions = np.asarray(ensemble.predictions, dtype=float)
     train_regimes = regime_features.loc[train.index]
-    test_regimes = regime_features.loc[test.index]
     if len(train_regimes) < 100:
         raise ValueError("ai_core_hmm_training_rows_below_minimum")
     fitted_hmm = fit_gaussian_hmm(
         train_regimes, max_iter=24, random_seed=42 + fold_index
     )
-    combined_regimes = pd.concat([train_regimes, test_regimes], axis=0)
-    causal_regimes, posterior = infer_hmm_regimes(combined_regimes, fitted_hmm)
-    test_regime_names = causal_regimes[len(train_regimes) :]
-    if len(posterior) != len(combined_regimes):
+    causal_window = regime_features.loc[train.index[0] : test.index[-1]]
+    causal_regimes, posterior = infer_hmm_regimes(causal_window, fitted_hmm)
+    if len(posterior) != len(causal_window):
         raise ValueError("ai_core_hmm_posterior_accounting_mismatch")
+    regime_by_index = dict(zip(causal_window.index, causal_regimes, strict=True))
+    test_regime_names = tuple(regime_by_index[index] for index in test.index)
     strategy_summary, rows = _evaluate_candidate_signals(
         test, predictions, test_regime_names, registry
     )
@@ -386,7 +386,7 @@ def _run_walk_forward(
     regime_features: DataFrame,
     feature_names: tuple[str, ...],
     registry: Any,
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     fold_specs = _walk_forward_folds(
         len(data),
         min_train_rows=MINIMUM_TRAIN_ROWS,
