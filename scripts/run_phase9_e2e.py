@@ -24,6 +24,7 @@ from risk.contracts import (
     AccountSnapshot,
     ActionType,
     AllocationResult,
+    InitialStakePolicy,
     MarketRules,
     MarketSnapshot,
     ModelRiskProposal,
@@ -109,6 +110,7 @@ def _policy() -> RiskPolicy:
         max_market_age_seconds=180,
         max_account_age_seconds=180,
         regime_multipliers=(("low", D("1")), ("high", D("0.6"))),
+        initial_stake_policy=InitialStakePolicy(owner_approved=True),
     )
 
 
