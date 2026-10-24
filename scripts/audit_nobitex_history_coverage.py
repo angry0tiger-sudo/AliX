@@ -45,7 +45,6 @@ class Candle(TypedDict):
     close: float
     volume: float
 
-
 def utc_iso(timestamp: int) -> str:
     return (
         datetime.fromtimestamp(timestamp, timezone.utc)
@@ -53,14 +52,12 @@ def utc_iso(timestamp: int) -> str:
         .replace("+00:00", "Z")
     )
 
-
 def write_json(path: Path, payload: dict[str, Any]) -> str:
     encoded = (
         json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n"
     ).encode("utf-8")
     path.write_bytes(encoded)
     return hashlib.sha256(encoded).hexdigest()
-
 
 def request_json(params: dict[str, str]) -> dict[str, Any]:
     request_path = f"{PATH}?{urlencode(params)}"
@@ -102,7 +99,6 @@ def request_json(params: dict[str, str]) -> dict[str, Any]:
             connection.close()
     raise AuditError("public_api_request_failed")
 
-
 def finite_number(value: Any, field: str) -> float:
     try:
         number = float(value)
@@ -111,8 +107,6 @@ def finite_number(value: Any, field: str) -> float:
     if not math.isfinite(number):
         raise AuditError(f"candle_value_not_finite:{field}")
     return number
-
-
 
 def _validated_ohlcv_arrays(payload: dict[str, Any]) -> list[list[Any]]:
     if payload.get("s") != "ok":
@@ -126,7 +120,6 @@ def _validated_ohlcv_arrays(payload: dict[str, Any]) -> list[list[Any]]:
         raise AuditError("public_api_ohlcv_array_length_mismatch")
     return columns
 
-
 def _validate_timestamp(
     value: Any, lower: int, upper: int, previous: int | None
 ) -> int:
@@ -137,7 +130,6 @@ def _validate_timestamp(
     if previous is not None and value <= previous:
         raise AuditError("response_timestamps_not_strictly_increasing")
     return value
-
 
 def _validate_candle_geometry(
     opened: float, high: float, low: float, close: float, volume: float
@@ -152,7 +144,6 @@ def _validate_candle_geometry(
         raise AuditError("candle_low_above_open_or_close")
     if high < low:
         raise AuditError("candle_high_below_low")
-
 
 def _parse_candle_row(
     raw: tuple[Any, ...], lower: int, upper: int, previous: int | None
@@ -174,10 +165,7 @@ def _parse_candle_row(
         "volume": volume,
     }
 
-
-def parse_candles(
-    payload: dict[str, Any], lower: int, upper: int
-) -> list[Candle]:
+def parse_candles(payload: dict[str, Any], lower: int, upper: int) -> list[Candle]:
     if payload.get("s") == "no_data":
         return []
     arrays = _validated_ohlcv_arrays(payload)
@@ -188,7 +176,6 @@ def parse_candles(
     if len(rows) > MAX_RESPONSE_BARS:
         raise AuditError("public_api_response_exceeded_candle_limit")
     return rows
-
 
 def _rows_with_previous(
     columns: list[list[Any]],
@@ -215,7 +202,6 @@ def latest_closed_candle(now: int) -> int:
         raise AuditError("latest_closed_candle_not_available")
     return max(closed)
 
-
 def fetch_window(start: int, end: int) -> list[Candle]:
     lower = max(0, start - HOUR)
     upper = end + HOUR
@@ -227,7 +213,6 @@ def fetch_window(start: int, end: int) -> list[Candle]:
     }
     rows = parse_candles(request_json(params), lower, upper)
     return [row for row in rows if start <= row["timestamp"] <= end]
-
 
 def segment_record(
     first: Candle, last: Candle, count: int
@@ -244,7 +229,6 @@ def segment_record(
         "span_days": days,
         "span_years_365_25_day": days / 365.25,
     }
-
 
 def contiguous_segments(
     candles: list[Candle],
@@ -265,7 +249,6 @@ def contiguous_segments(
     result.append(segment_record(first, previous, count))
     return result
 
-
 def find_gaps(candles: list[Candle]) -> list[dict[str, int | str]]:
     gaps: list[dict[str, int | str]] = []
     for previous, current in zip(candles, candles[1:]):
@@ -285,7 +268,6 @@ def find_gaps(candles: list[Candle]) -> list[dict[str, int | str]]:
         )
     return gaps
 
-
 def write_candles(path: Path, candles: list[Candle]) -> str:
     with path.open("w", encoding="utf-8", newline="") as stream:
         writer = csv.DictWriter(
@@ -297,8 +279,6 @@ def write_candles(path: Path, candles: list[Candle]) -> str:
         writer.writerows(candles)
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
-
-
 def _merge_window_batch(
     found: dict[int, Candle], batch: list[Candle], latest: int
 ) -> None:
@@ -309,7 +289,6 @@ def _merge_window_batch(
         if stamp in found:
             raise AuditError("duplicate_candle_across_windows")
         found[stamp] = candle
-
 
 def _collect_history(
     start: int, latest: int
@@ -337,7 +316,6 @@ def _collect_history(
         if end >= start:
             time.sleep(PAUSE_SECONDS)
     return found, windows
-
 
 def _coverage_summary(
     lookback_years: int,
@@ -405,7 +383,6 @@ def _coverage_summary(
         "window_results": windows,
     }
 
-
 def scan(lookback_years: int) -> tuple[dict[str, Any], list[Candle], int]:
     now = int(datetime.now(timezone.utc).timestamp())
     latest = latest_closed_candle(now)
@@ -438,7 +415,6 @@ def safety_flags() -> dict[str, Any]:
         "trading_authorization": "NO-GO",
     }
 
-
 def append_step_summary(report: dict[str, Any]) -> None:
     summary_value = os.environ.get("GITHUB_STEP_SUMMARY")
     if not summary_value:
@@ -465,7 +441,6 @@ def append_step_summary(report: dict[str, Any]) -> None:
     ]
     with Path(summary_value).open("a", encoding="utf-8") as stream:
         stream.write("\n".join(lines))
-
 
 def run_audit(lookback_years: int, commit_sha: str, output_dir: Path) -> dict[str, Any]:
     if lookback_years not in LOOKBACK_YEARS:
@@ -499,7 +474,6 @@ def run_audit(lookback_years: int, commit_sha: str, output_dir: Path) -> dict[st
     write_json(output_dir / "nobitex-history-coverage-report.json", report)
     append_step_summary(report)
     return report
-
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
