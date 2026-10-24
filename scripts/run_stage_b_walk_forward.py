@@ -22,7 +22,10 @@ from services.freqai_baseline.features import (
     add_market_features,
     forward_return_target,
 )
-from services.freqai_baseline.walkforward import BASELINE_MODEL_PARAMETERS, validate_ohlcv
+from services.freqai_baseline.walkforward import (
+    BASELINE_MODEL_PARAMETERS,
+    validate_ohlcv,
+)
 
 HOUR = 3600
 HORIZON = 12
@@ -389,9 +392,7 @@ def predict_fold(
     scored = test.iloc[:scored_count]
     if scored.empty:
         raise StageBError("fold_has_no_scored_oos_rows")
-    predicted = np.asarray(
-        model.predict(scored.loc[:, feature_columns]), dtype=float
-    )
+    predicted = np.asarray(model.predict(scored.loc[:, feature_columns]), dtype=float)
     actual = scored[TARGET_COLUMN].to_numpy(dtype=float)
     if len(predicted) != len(actual) or not np.isfinite(predicted).all():
         raise StageBError("oos_prediction_invalid")
@@ -667,12 +668,8 @@ def run_stage_b(input_dir: Path, output_dir: Path, commit_sha: str) -> dict[str,
     output_dir.mkdir(parents=True, exist_ok=True)
     frame, source_report, segments, segment_hashes = verify_source_artifact(input_dir)
     segment_a, segment_b = segments
-    dataset_a, fingerprint_a, features_a, excluded_a = prepare_segment(
-        segment_a, "A"
-    )
-    dataset_b, fingerprint_b, features_b, excluded_b = prepare_segment(
-        segment_b, "B"
-    )
+    dataset_a, fingerprint_a, features_a, excluded_a = prepare_segment(segment_a, "A")
+    dataset_b, fingerprint_b, features_b, excluded_b = prepare_segment(segment_b, "B")
     holdout_start = pd.Timestamp(segment_a["date"].iloc[-A_HOLDOUT])
     a_dev_stop = int((dataset_a["date"] < holdout_start).sum())
     if a_dev_stop <= A_TRAIN + HORIZON:
@@ -779,12 +776,22 @@ def run_stage_b(input_dir: Path, output_dir: Path, commit_sha: str) -> dict[str,
     details: dict[str, Any] = {}
     for name, segment, dataset, fingerprint, segment_hash, features, excluded in (
         (
-            "A", segment_a, dataset_a, fingerprint_a, segment_hashes[0],
-            features_a, excluded_a,
+            "A",
+            segment_a,
+            dataset_a,
+            fingerprint_a,
+            segment_hashes[0],
+            features_a,
+            excluded_a,
         ),
         (
-            "B", segment_b, dataset_b, fingerprint_b, segment_hashes[1],
-            features_b, excluded_b,
+            "B",
+            segment_b,
+            dataset_b,
+            fingerprint_b,
+            segment_hashes[1],
+            features_b,
+            excluded_b,
         ),
     ):
         details[name] = {
