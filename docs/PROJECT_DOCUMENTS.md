@@ -83,3 +83,9 @@ CI executes `scripts/validate_project_docs.py`, which requires both canonical MR
 - [Owner Directive: Phase 10](governance/owner-directives/2026-10-23-phase-10.md): GitHub-only work, manual public data fetch, no order execution and no trading authorization.
 - [GitHub Actions / Windows handover runbook](runbook/PHASE_10_GITHUB_ACTIONS_AND_WINDOWS_HANDOVER.md): future owner-run steps, prepared but not executed.
 - [Phase 10 issue](https://github.com/angry0tiger-sudo/AliX/issues/13).
+
+## Stage B: Gap-aware multi-year walk-forward research
+
+- [Stage B protocol](knowledge_base/PHASE_B_WALK_FORWARD.md): pinned inputs, independent segment evaluation, terminal A holdout, strict economic thresholds, and preserved safety invariants.
+- [Stage B runner](../scripts/run_stage_b_walk_forward.py): verified Stage A artifact reader and offline research-only walk-forward evaluator.
+- [Stage B GitHub Actions workflow](../.github/workflows/stage-b-gap-aware-walk-forward.yml): downloads the immutable Stage A artifact, runs the OOS folds, and uploads inputs and reports.
