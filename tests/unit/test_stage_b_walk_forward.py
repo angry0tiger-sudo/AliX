@@ -3,13 +3,12 @@ from __future__ import annotations
 import pandas as pd
 
 from scripts.run_stage_b_walk_forward import (
-    FEATURE_COLUMNS,
-    add_market_features,
     build_fixed_window_folds,
     economic_gate,
     segment_bounds,
     select_segment_features,
 )
+from services.freqai_baseline.features import FEATURE_COLUMNS, add_market_features
 
 
 def test_segment_bounds_split_at_gap_without_inserting_rows() -> None:
@@ -160,4 +159,4 @@ def test_market_feature_schema_survives_natural_rolling_warmup() -> None:
 
     assert selected == list(FEATURE_COLUMNS)
     assert excluded == []
-    assert engineered.loc[14, list(FEATURE_COLUMNS)].notna().all()
+    assert engineered.iloc[14].loc[list(FEATURE_COLUMNS)].notna().all()
