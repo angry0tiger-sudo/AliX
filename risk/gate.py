@@ -293,9 +293,15 @@ class RiskGate:
         expected_stake = expected_quantity * market.price
         if not below_target and expected_stake < stake_policy.target_usdt:
             reasons.append("initial_stake_target_not_representable_at_market_precision")
-        if expected_quantity > rules.max_quantity or expected_stake > rules.max_notional:
+        if (
+            expected_quantity > rules.max_quantity
+            or expected_stake > rules.max_notional
+        ):
             reasons.append("initial_stake_target_exceeds_market_maximum")
-        if expected_quantity != allocation.quantity or expected_stake != allocation.stake:
+        if (
+            expected_quantity != allocation.quantity
+            or expected_stake != allocation.stake
+        ):
             reasons.append("initial_stake_target_mismatch")
         if expected_stake * reserve_factor > account.free_balance:
             reasons.append("initial_stake_fee_reserve_insufficient")

@@ -431,9 +431,7 @@ class DynamicRiskAllocator:
             return "quantity_below_market_minimum"
         if stake < rules.min_notional:
             return "notional_below_market_minimum"
-        reserved_total = stake * (
-            Decimal("1") + policy.fee_rate + policy.slippage_rate
-        )
+        reserved_total = stake * (Decimal("1") + policy.fee_rate + policy.slippage_rate)
         if reserved_total > account.free_balance:
             return "initial_stake_fee_reserve_insufficient"
         return None

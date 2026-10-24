@@ -220,9 +220,10 @@ def test_allocator_uses_available_below_target_when_all_other_limits_allow() -> 
     assert result.approved and result.allocation is not None
     assert result.allocation.stake == D("1.9")
     assert result.allocation.stake < account.free_balance
-    assert result.allocation.stake * (
-        D("1") + policy.fee_rate + policy.slippage_rate
-    ) <= account.free_balance
+    assert (
+        result.allocation.stake * (D("1") + policy.fee_rate + policy.slippage_rate)
+        <= account.free_balance
+    )
 
 
 def test_allocator_rejects_exact_ten_when_cost_reserve_is_not_affordable() -> None:
