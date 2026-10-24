@@ -7,9 +7,9 @@ import csv
 import hashlib
 import json
 import math
-from urllib.parse import urlsplit
 from pathlib import Path
 from typing import Any, Sequence
+from urllib.parse import urlsplit
 
 import numpy as np
 import pandas as pd
@@ -152,42 +152,6 @@ def _validate_orderbook(book: DataFrame) -> DataFrame:
             _validate_book_level(result, side, level)
     _validate_book_geometry(result)
     return result
-
-
-def _validate_orderbook_manifest(
-    book_path: Path, manifest_path: Path
-) -> dict[str, Any]:
-    if not book_path.is_file() or not manifest_path.is_file():
-        raise ValueError("orderbook_data_or_manifest_missing")
-    manifest_value = json.loads(manifest_path.read_text(encoding="utf-8"))
-    if not isinstance(manifest_value, dict):
-        raise ValueError("orderbook_manifest_not_object")
-    required_fields = {
-        "schema",
-        "venue",
-        "symbol",
-        "source_url",
-        "permission_status",
-        "csv_sha256",
-    }
-    if not required_fields.issubset(manifest_value):
-        raise ValueError("orderbook_manifest_schema_missing")
-    if manifest_value["schema"] != ORDERBOOK_MANIFEST_SCHEMA:
-        raise ValueError("orderbook_manifest_schema_unsupported")
-    if manifest_value["venue"] != "binance_usdm_futures":
-        raise ValueError("orderbook_manifest_venue_mismatch")
-    if manifest_value["symbol"] != "BTCUSDT":
-        raise ValueError("orderbook_manifest_symbol_mismatch")
-    if manifest_value["permission_status"] != "approved":
-        raise ValueError("orderbook_data_permission_not_approved")
-    source = urlsplit(str(manifest_value["source_url"]))
-    if source.scheme != "https" or "binance" not in (source.hostname or "").casefold():
-        raise ValueError("orderbook_manifest_source_url_invalid")
-    expected_hash = str(manifest_value["csv_sha256"])
-    actual_hash = hashlib.sha256(book_path.read_bytes()).hexdigest()
-    if len(expected_hash) != 64 or expected_hash != actual_hash:
-        raise ValueError("orderbook_manifest_checksum_mismatch")
-    return manifest_value
 
 
 def _validate_orderbook_manifest(
