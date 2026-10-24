@@ -85,9 +85,11 @@ jobs:
           assert report["protocol"]["model_candidate_count_blocked_for_missing_book"] == 8
           assert report["protocol"]["oos_prediction_row_count"] > 0
           assert report["protocol"]["round_trip_total_cost_bps"] == [90.0, 120.0, 150.0]
+          assert report["protocol"]["stress_acceptance_requires_all_slippage_scenarios"] is True
           assert report["protocol"]["liquidity_participation_cap_fraction"] == 0.01
           assert report["data_availability"]["liquidity"]["positive_volume_rows"] == 0
           assert report["data_availability"]["liquidity"]["rows_with_positive_order_capacity"] == 0
+          assert report["data_availability"]["liquidity"]["rows_with_reference_order_capacity"] == 0
           assert report["economic_evaluation"]["status"] == "NOT_EVALUATED_BLOCKED_INPUT_DATA"
           safety = report["safety_invariants"]
           assert safety["Champion"] is None

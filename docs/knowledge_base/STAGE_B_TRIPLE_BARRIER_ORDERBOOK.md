@@ -33,3 +33,8 @@ Economic acceptance requires at least 100 executable OOS trades, win rate above 
 ## Safety
 
 The workflow downloads only the pinned public Stage A artifact, produces JSON/CSV research artifacts, and verifies provenance and immutable safety states. Tests cover normalized relative features, stale/crossed book rejection and the 1% local-volume cap. It makes no private API calls and never submits orders. Production schema and model/strategy registries remain unchanged.
+
+
+## Provenance gate update
+
+If Order Book data is later supplied, the input must be accompanied by a JSON manifest with schema `alix.binance-orderbook-manifest.v1`, venue `binance_usdm_futures`, symbol `BTCUSDT`, an HTTPS Binance source URL, `permission_status: approved`, and a matching CSV SHA-256. The approved status is an explicit owner/provider authorization assertion, not something inferred from file availability. Economic acceptance requires every candidate to pass all three slippage scenarios (90/120/150 bps round trip), not just the most optimistic one. The 100 quote-unit position is a fixed research sizing unit used only to test the 1% local-liquidity cap; it does not modify production stake settings.

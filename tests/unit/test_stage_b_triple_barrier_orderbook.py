@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -76,6 +77,7 @@ def test_zero_source_volume_grants_zero_capacity() -> None:
     assert report["status"] == "BLOCKED_ZERO_SOURCE_VOLUME"
     assert report["positive_volume_rows"] == 0
     assert report["rows_with_positive_order_capacity"] == 0
+    assert report["rows_with_reference_order_capacity"] == 0
     assert capacity.tolist() == [0.0, 0.0]
 
 
@@ -84,11 +86,12 @@ def test_verified_quote_volume_is_capped_at_one_percent() -> None:
     candles["volume"] = [100.0, 50.0]
     report, capacity = _liquidity_capacity(candles, "quote_asset")
     assert report["status"] == "READY_FOR_CAP_CHECK"
+    assert report["rows_with_reference_order_capacity"] == 0
     assert capacity.tolist() == pytest.approx([1.0, 0.5])
 
 
 
-def test_orderbook_manifest_requires_approved_provenance_and_matching_checksum(tmp_path) -> None:
+def test_orderbook_manifest_requires_approved_provenance_and_matching_checksum(tmp_path: Path) -> None:
     book_path = tmp_path / "book.csv"
     book_path.write_text("snapshot_timestamp_utc,bid_price_1\n", encoding="utf-8")
     manifest = {
