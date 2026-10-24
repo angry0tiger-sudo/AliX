@@ -581,8 +581,12 @@ def _candidate_summary(result: dict[str, Any]) -> dict[str, Any]:
         "high_volatility_opportunity_rate": (
             float(len(high_volatility) / len(opportunities)) if opportunities else None
         ),
-        "probability_p50": float(np.quantile(probabilities, 0.50)) if probabilities else None,
-        "probability_p90": float(np.quantile(probabilities, 0.90)) if probabilities else None,
+        "probability_p50": float(np.quantile(probabilities, 0.50))
+        if probabilities
+        else None,
+        "probability_p90": float(np.quantile(probabilities, 0.90))
+        if probabilities
+        else None,
         "positive_event_rate_oos": (
             float(np.mean([bool(row["realized_positive_event"]) for row in rows]))
             if rows
@@ -621,9 +625,7 @@ def _select_policy_fold(
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     eligible: list[tuple[tuple[float, float, float, int], str, int]] = []
     for candidate_id, result in sorted(candidate_results.items()):
-        prior = [
-            row for row in result["trades"] if int(row["fold_index"]) < fold_index
-        ]
+        prior = [row for row in result["trades"] if int(row["fold_index"]) < fold_index]
         score = _prior_candidate_score(prior)
         if score is not None:
             ranking, metrics = score
@@ -820,7 +822,9 @@ def _build_report(
             "feature_groups": {
                 group: {
                     "selected_columns": features[group],
-                    "excluded_features_without_imputation": context["excluded_features"][group],
+                    "excluded_features_without_imputation": context[
+                        "excluded_features"
+                    ][group],
                 }
                 for group in FEATURE_GROUPS
             },
@@ -913,34 +917,79 @@ def _write_evidence(
         },
     )
     prediction_columns = [
-        "candidate_id", "feature_group", "model_profile", "horizon_hours",
-        "probability_threshold", "fold_index", "fold_id", "timestamp_utc",
-        "predicted_probability_up_over_cost", "realized_forward_return",
-        "realized_positive_event", "trade_opportunity", "past_volatility_24",
-        "training_volatility_cutoff_q75", "high_volatility_regime", "trade_taken",
+        "candidate_id",
+        "feature_group",
+        "model_profile",
+        "horizon_hours",
+        "probability_threshold",
+        "fold_index",
+        "fold_id",
+        "timestamp_utc",
+        "predicted_probability_up_over_cost",
+        "realized_forward_return",
+        "realized_positive_event",
+        "trade_opportunity",
+        "past_volatility_24",
+        "training_volatility_cutoff_q75",
+        "high_volatility_regime",
+        "trade_taken",
         "round_trip_cost_fraction",
     ]
     trade_columns = [
-        "candidate_id", "feature_group", "model_profile", "horizon_hours",
-        "probability_threshold", "fold_index", "fold_id", "entry_utc", "exit_utc",
-        "predicted_probability_up_over_cost", "past_volatility_24",
-        "training_volatility_cutoff_q75", "gross_return", "net_return",
-        "won_after_costs", "order_submitted",
+        "candidate_id",
+        "feature_group",
+        "model_profile",
+        "horizon_hours",
+        "probability_threshold",
+        "fold_index",
+        "fold_id",
+        "entry_utc",
+        "exit_utc",
+        "predicted_probability_up_over_cost",
+        "past_volatility_24",
+        "training_volatility_cutoff_q75",
+        "gross_return",
+        "net_return",
+        "won_after_costs",
+        "order_submitted",
     ]
     fold_columns = [
-        "candidate_id", "feature_group", "model_profile", "probability_threshold",
-        "fold_index", "fold_id", "train_rows", "test_rows", "scored_oos_rows",
-        "purged_label_rows", "train_start_utc", "train_end_utc", "test_start_utc",
-        "test_end_utc", "positive_event_rate_train", "positive_event_rate_test",
-        "probability_p50", "probability_p90", "training_volatility_cutoff_q75",
-        "entry_opportunity_count", "high_volatility_opportunity_count", "trade_count",
-        "winning_trade_count", "losing_or_flat_trade_count", "win_rate",
-        "net_expectancy_per_trade", "net_return_compounded", "max_drawdown_abs",
+        "candidate_id",
+        "feature_group",
+        "model_profile",
+        "probability_threshold",
+        "fold_index",
+        "fold_id",
+        "train_rows",
+        "test_rows",
+        "scored_oos_rows",
+        "purged_label_rows",
+        "train_start_utc",
+        "train_end_utc",
+        "test_start_utc",
+        "test_end_utc",
+        "positive_event_rate_train",
+        "positive_event_rate_test",
+        "probability_p50",
+        "probability_p90",
+        "training_volatility_cutoff_q75",
+        "entry_opportunity_count",
+        "high_volatility_opportunity_count",
+        "trade_count",
+        "winning_trade_count",
+        "losing_or_flat_trade_count",
+        "win_rate",
+        "net_expectancy_per_trade",
+        "net_return_compounded",
+        "max_drawdown_abs",
         "economic_threshold_evaluation",
     ]
     trace_columns = [
-        "fold_index", "selected_candidate_id", "selection_reason",
-        "prior_selected_trades_used", "current_fold_results_used_for_selection",
+        "fold_index",
+        "selected_candidate_id",
+        "selection_reason",
+        "prior_selected_trades_used",
+        "current_fold_results_used_for_selection",
         "current_fold_trade_count",
     ]
     _write_csv(output_dir / "oos-predictions.csv", prediction_rows, prediction_columns)
@@ -959,7 +1008,9 @@ def run_classification_experiment(
         context["datasets"], context["selected_features"]
     )
     policy, policy_trace, policy_trades = _evaluate_adaptive_policy(candidate_results)
-    summaries, predictions, trades, folds = _flatten_candidate_results(candidate_results)
+    summaries, predictions, trades, folds = _flatten_candidate_results(
+        candidate_results
+    )
     report = _build_report(
         commit_sha, context, candidate_results, summaries, policy, policy_trace
     )
@@ -970,7 +1021,14 @@ def run_classification_experiment(
     if report["protocol"]["candidate_count"] != 12:
         raise ValueError("classification_candidate_count_contract_failed")
     _write_evidence(
-        output_dir, context, report, predictions, trades, folds, policy_trace, policy_trades
+        output_dir,
+        context,
+        report,
+        predictions,
+        trades,
+        folds,
+        policy_trace,
+        policy_trades,
     )
     return report
 
@@ -981,7 +1039,9 @@ def main() -> int:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--commit-sha", default=os.environ.get("GITHUB_SHA", "UNKNOWN"))
     args = parser.parse_args()
-    report = run_classification_experiment(args.input_dir, args.output_dir, args.commit_sha)
+    report = run_classification_experiment(
+        args.input_dir, args.output_dir, args.commit_sha
+    )
     print(
         json.dumps(
             {
@@ -992,7 +1052,9 @@ def main() -> int:
                 "adaptive_policy": report["adaptive_walkforward_policy"],
                 "Champion": report["safety_invariants"]["Champion"],
                 "order_permission": report["safety_invariants"]["order_permission"],
-                "trading_authorization": report["safety_invariants"]["trading_authorization"],
+                "trading_authorization": report["safety_invariants"][
+                    "trading_authorization"
+                ],
             },
             sort_keys=True,
             allow_nan=False,
