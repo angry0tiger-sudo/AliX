@@ -1,0 +1,121 @@
+name: AliX Stage B Gap-Aware Multi-Year Walk-Forward
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - staging
+    paths:
+      - ".github/workflows/stage-b-gap-aware-walk-forward.yml"
+      - "scripts/run_stage_b_walk_forward.py"
+      - "tests/unit/test_stage_b_walk_forward.py"
+      - "docs/knowledge_base/PHASE_B_WALK_FORWARD.md"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: alix-stage-b-gap-aware-walk-forward
+  cancel-in-progress: false
+
+jobs:
+  stage-b-research:
+    name: Offline gap-aware walk-forward research
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read
+    env:
+      ALIx_ENV: paper
+      ALIx_DRY_RUN: "true"
+      ALIx_ALLOW_LIVE_TRADING: "false"
+      ALIx_REPORTING_ENABLED: "false"
+      PYTHONUNBUFFERED: "1"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    steps:
+      - name: Checkout exact Stage B code commit without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up pinned Python runtime
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download immutable Stage A coverage artifact
+        uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: 40077609244
+          name: alix-nobitex-history-coverage-40077609244
+          path: artifacts/stage-a-coverage
+          github-token: ${{ github.token }}
+
+      - name: Install pinned offline research dependencies
+        run: |
+          python -m pip install pip==25.2
+          python -m pip install numpy==2.5.4 pandas==2.3.3 lightgbm==4.7.0 scikit-learn==1.9.0
+
+      - name: Run Stage B with isolated temporal segments and reserved A holdout
+        run: |
+          python scripts/run_stage_b_walk_forward.py \
+            --input-dir artifacts/stage-a-coverage \
+            --output-dir artifacts/stage-b-results \
+            --commit-sha "${{ github.sha }}"
+
+      - name: Verify provenance, strict thresholds, and fail-closed safety state
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          report = json.loads(Path("artifacts/stage-b-results/stage-b-report.json").read_text(encoding="utf-8"))
+          assert report["run_status"] == "COMPLETED_RESEARCH_ONLY"
+          assert report["report_schema"] == "alix.stage-b.gap-aware-walk-forward.v1"
+          assert report["source"]["coverage_workflow_run_id"] == 40077609244
+          assert report["source"]["coverage_csv_sha256"] == report["source"]["csv_sha256"]
+          assert report["dataset_quality"]["interpolation"] is False
+          assert report["dataset_quality"]["forward_fill"] is False
+          assert report["dataset_quality"]["backfill"] is False
+          assert report["dataset_quality"]["resampling"] is False
+          assert report["evaluations"]["segment_a_final_holdout"]["used_for_model_or_parameter_selection"] is False
+          assert report["evaluations"]["segment_b_independent_diagnostic"]["not_comparable_to_three_year_A_gate"] is True
+          assert report["strict_economic_acceptance"]["aggregate_across_segments"] is False
+          assert report["strict_economic_acceptance"]["criteria"]["win_rate"] == "> 60%"
+          assert report["strict_economic_acceptance"]["criteria"]["absolute_max_drawdown"] == "< 15%"
+          safety = report["safety_invariants"]
+          assert safety["Champion"] is None
+          assert safety["order_permission"] is False
+          assert safety["trading_authorization"] == "NO-GO"
+          assert safety["economic_acceptance"] == "NO-GO"
+          assert safety["model_promoted"] is False
+          assert safety["production_model_updated"] is False
+          assert safety["strategy_registry_updated"] is False
+          assert safety["orders_or_execution_api_used"] is False
+          assert safety["private_api_calls"] == 0
+          assert safety["order_endpoint_calls"] == 0
+          assert safety["real_order_attempts"] == 0
+          print(json.dumps({
+              "segment_a_walk_forward": report["evaluations"]["segment_a_walk_forward_development"]["result"]["metrics"],
+              "segment_a_holdout": report["evaluations"]["segment_a_final_holdout"]["result"]["metrics"],
+              "segment_b_diagnostic": report["evaluations"]["segment_b_independent_diagnostic"]["result"]["metrics"],
+              "Champion": safety["Champion"],
+              "order_permission": safety["order_permission"],
+              "trading_authorization": safety["trading_authorization"]
+          }, sort_keys=True))
+          PY
+
+      - name: Upload exact input, predictions, trades, folds, and report even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alix-stage-b-gap-aware-walk-forward-${{ github.run_id }}
+          path: |
+            artifacts/stage-a-coverage/
+            artifacts/stage-b-results/
+          if-no-files-found: error
+          retention-days: 90

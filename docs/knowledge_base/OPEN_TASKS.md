@@ -183,3 +183,11 @@
 - RiskSupervisor returns PASS_TO_RISK_GATE, RESIZE_REQUIRED or REJECT; never grants order permission and never auto-rearms.
 - V1 Short ENTRY is rejected by allocator and RiskGate; exit/REDUCE_RISK is not the target of this restriction.
 - **Owner Directive Override (2026-10-24):** The owner explicitly directs rebasing PR #21 onto current `staging` and merging only if all required checks pass on the rebased HEAD. This supersedes earlier task-note wording to keep PR #21 unmerged pending merge-governance verification. It does not authorize live trading or change `Champion=null`, `order_permission=false`, economic acceptance `NO-GO`, or `trading_authorization=NO-GO`.
+
+# Phase B gap-aware walk-forward research — 2026-10-24
+
+- Owner-approved scope: fixed Phase 4 LightGBM baseline, offline multi-year research only; no model approval, promotion, order submission, or trading authorization.
+- Pinned Stage A input: workflow run 40077609244; CSV SHA-256 6b3f3ae006b8dc58d9f0f4092250cb484073984fb2249ed795bc0e12e823994c; 58,655 candles in segment A and 11,514 in segment B; 320 hourly slots missing between segments.
+- Protocol: segment-local indicators and freshly fit models, expanding windows, 12-hour label purge, 90-day OOS windows, A final 90-day holdout evaluated separately and last; B has an independent 180-day diagnostic warm-up.
+- Strict economic checks: >=100 OOS trades, win rate >60%, net expectancy >0 after modeled costs, absolute max drawdown <15%. A, A holdout, and B are assessed separately; no pooling across segments.
+- Results and exact inputs are stored in the Stage B GitHub Actions artifact. Threshold results remain research-only; `Champion=null`, `order_permission=false`, `trading_authorization=NO-GO`, and `economic_acceptance=NO-GO` are immutable.
