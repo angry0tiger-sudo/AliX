@@ -216,7 +216,7 @@ class InitialStakePolicy:
 
     revision: str = "initial-stake-10-usdt-v1"
     directive_id: str = "ALIX-OD-2026-10-23-INITIAL-STAKE-10-USDT"
-    owner_approved: bool = True
+    owner_approved: bool = False
     target_usdt: Decimal = Decimal("10")
     use_all_free_balance_below_target: bool = True
 

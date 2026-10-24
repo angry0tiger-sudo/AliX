@@ -21,6 +21,7 @@ from risk.contracts import (
     RiskAllocation,
     RiskPolicy,
     Side,
+    InitialStakePolicy,
 )
 from risk.evaluation import OosObservation, compare_walk_forward_oos
 from risk.gate import RiskGate
@@ -45,6 +46,7 @@ def make_policy(**changes: Any) -> RiskPolicy:
     values: dict[str, Any] = {
         "revision": "owner-policy-v1",
         "owner_approved": True,
+        "initial_stake_policy": InitialStakePolicy(owner_approved=True),
         "absolute_daily_loss_cap": D("100"),
         "absolute_gross_exposure_cap": D("10000"),
         "daily_risk_budget_fraction": D("0.05"),
@@ -172,7 +174,8 @@ def make_allocation(
 
 
 def test_initial_stake_policy_is_versioned_immutable_and_validated() -> None:
-    stake_policy = InitialStakePolicy()
+    assert not InitialStakePolicy().owner_approved
+    stake_policy = InitialStakePolicy(owner_approved=True)
     assert stake_policy.owner_approved
     assert stake_policy.target_usdt == D("10")
     assert stake_policy.directive_id == "ALIX-OD-2026-10-23-INITIAL-STAKE-10-USDT"
