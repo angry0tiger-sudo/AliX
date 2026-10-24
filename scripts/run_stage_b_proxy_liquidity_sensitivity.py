@@ -234,14 +234,46 @@ def _scale_binance_quote_volume(klines: DataFrame) -> tuple[DataFrame, dict[str,
 
 
 def _align_proxy_volume(candles: DataFrame, klines: DataFrame) -> tuple[np.ndarray, dict[str, Any]]:
+    """Align proxy labels to the fixed candle phase without claiming identical windows."""
     scaled, scale_stats = _scale_binance_quote_volume(klines)
-    aligned = candles.loc[:, ["date"]].merge(
-        scaled.loc[:, ["date", "quote_volume", "proxy_quote_volume"]],
+    candle_dates = pd.to_datetime(candles["date"], utc=True, errors="raise")
+    minute_phases = sorted(candle_dates.dt.minute.unique().tolist())
+    if (
+        len(minute_phases) != 1
+        or candle_dates.dt.second.ne(0).any()
+        or candle_dates.dt.microsecond.ne(0).any()
+        or candle_dates.dt.nanosecond.ne(0).any()
+    ):
+        raise ValueError("proxy_candle_timestamp_phase_not_uniform")
+    if (
+        scaled["date"].dt.minute.ne(0).any()
+        or scaled["date"].dt.second.ne(0).any()
+        or scaled["date"].dt.microsecond.ne(0).any()
+        or scaled["date"].dt.nanosecond.ne(0).any()
+    ):
+        raise ValueError("binance_hourly_source_timestamps_not_hour_aligned")
+
+    # Nobitex candles in the pinned source are timestamped at HH:30 UTC,
+    # while Binance 1h kline labels are HH:00 UTC. Shift the label only by
+    # the constant phase so observations align for sensitivity analysis. The
+    # volume still represents Binance's original [HH:00, HH+1:00) interval,
+    # not the exact Nobitex [HH:30, HH+1:30) interval.
+    phase_minutes = int(minute_phases[0])
+    aligned_source = scaled.loc[
+        :, ["date", "quote_volume", "proxy_quote_volume", "proxy_scale_ratio"]
+    ].copy()
+    aligned_source["date"] = aligned_source["date"] + pd.Timedelta(minutes=phase_minutes)
+
+    aligned = candles.loc[:, ["date"]].copy()
+    aligned["date"] = candle_dates
+    aligned = aligned.merge(
+        aligned_source,
         how="left",
         on="date",
         validate="one_to_one",
+        indicator=True,
     )
-    matched = aligned["proxy_quote_volume"].notna()
+    matched = aligned["_merge"].eq("both")
     proxy = aligned["proxy_quote_volume"].fillna(0.0).to_numpy(dtype=float)
     source_quote = aligned["quote_volume"]
     capacity = proxy * PARTICIPATION_CAP
@@ -251,8 +283,8 @@ def _align_proxy_volume(candles: DataFrame, klines: DataFrame) -> tuple[np.ndarr
         raise ValueError("proxy_capacity_invalid")
 
     daily_proxy = pd.DataFrame(
-        {"date": candles["date"], "proxy_quote_volume": proxy}
-    ).groupby(candles["date"].dt.floor("D"))["proxy_quote_volume"].sum()
+        {"date": aligned["date"], "proxy_quote_volume": proxy}
+    ).groupby(aligned["date"].dt.floor("D"))["proxy_quote_volume"].sum()
     if (daily_proxy > PROXY_DAILY_QUOTE_CAP + 1e-6).any():
         raise ValueError("aligned_proxy_daily_quote_cap_invariant_violated")
 
@@ -277,9 +309,14 @@ def _align_proxy_volume(candles: DataFrame, klines: DataFrame) -> tuple[np.ndarr
             REFERENCE_ORDER_NOTIONAL / PARTICIPATION_CAP
         ),
         "unmatched_rows_receive_zero_capacity": True,
+        "timestamp_phase_minutes": phase_minutes,
+        "timestamp_alignment_policy": (
+            "label-only shift by the uniform Nobitex timestamp phase; Binance volume "
+            "retains its original UTC-hour interval and is only a nearby-window sensitivity proxy"
+        ),
+        "exact_same_window_turnover_claimed": False,
     }
     return capacity, stats
-
 
 def _event_outcomes(candles: DataFrame) -> tuple[
     dict[tuple[int, float, float], DataFrame], list[dict[str, Any]]

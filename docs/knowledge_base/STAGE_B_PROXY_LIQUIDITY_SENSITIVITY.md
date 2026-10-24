@@ -49,3 +49,10 @@ The experiment computes proxy-only diagnostics for the same hard thresholds: at 
 - PR #36 is not modified by this branch or workflow.
 
 A future real economic evaluation still requires historically valid Nobitex candle quote turnover and a separately verified, temporally aligned market-data set. Proxy results cannot satisfy that requirement.
+
+
+## Timestamp-phase alignment correction
+
+The pinned Nobitex candles are timestamped on the half-hour UTC phase (for example HH:30Z), while Binance one-hour kline labels are aligned to HH:00Z. An exact timestamp join therefore produces zero matches even when both histories cover the same dates.
+
+The sensitivity runner now validates that each source has a uniform timestamp phase and shifts only the Binance kline label by the observed fixed Nobitex phase before matching. It does not shift or modify the measured volume value. The resulting value still describes Binance's original UTC-hour interval, which only partially overlaps the Nobitex candle interval; the output explicitly records exact_same_window_turnover_claimed=false. This supports a disclosed proxy-window sensitivity only, not historical Nobitex turnover, an exact per-candle liquidity measurement, or economic acceptance. Mixed timestamp phases fail closed.

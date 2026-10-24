@@ -14,6 +14,7 @@ from scripts.run_stage_b_proxy_liquidity_sensitivity import (
     MAX_BINANCE_VOLUME_SHARE,
     PROXY_DAILY_QUOTE_CAP,
     REFERENCE_ORDER_NOTIONAL,
+    _align_proxy_volume,
     _scale_binance_quote_volume,
     _validate_bookdepth_manifest,
     add_banded_orderbook_features,
@@ -147,3 +148,49 @@ def test_bookdepth_manifest_checks_permission_and_both_checksums(tmp_path: Path)
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     with pytest.raises(ValueError, match="permission_not_approved"):
         _validate_bookdepth_manifest(book_path, reference_path, manifest_path)
+
+
+def test_proxy_alignment_handles_nobitex_half_hour_phase_without_fabricating_volume() -> None:
+    candles = pd.DataFrame(
+        {
+            "date": pd.to_datetime(
+                ["2024-01-01T00:30:00Z", "2024-01-01T01:30:00Z"], utc=True
+            )
+        }
+    )
+    # Source values remain actual Binance hourly quote-volume values. Only the
+    # timestamp label is phase-aligned, and the report discloses that limitation.
+    klines = pd.DataFrame(
+        {
+            "date": pd.to_datetime(
+                ["2024-01-01T00:00:00Z", "2024-01-01T01:00:00Z"], utc=True
+            ),
+            "quote_volume": [200_000.0, 300_000.0],
+        }
+    )
+    capacity, report = _align_proxy_volume(candles, klines)
+    assert report["matched_candle_count"] == 2
+    assert report["unmatched_candle_count"] == 0
+    assert report["timestamp_phase_minutes"] == 30
+    assert report["exact_same_window_turnover_claimed"] is False
+    assert report["proxy_is_not_observed_nobitex_volume"] is True
+    assert report["historical_nobitex_volume_replaced"] is False
+    assert capacity.tolist() == pytest.approx([200.0, 300.0])
+
+
+def test_proxy_alignment_rejects_mixed_nobitex_timestamp_phases() -> None:
+    candles = pd.DataFrame(
+        {
+            "date": pd.to_datetime(
+                ["2024-01-01T00:30:00Z", "2024-01-01T01:00:00Z"], utc=True
+            )
+        }
+    )
+    klines = pd.DataFrame(
+        {
+            "date": pd.to_datetime(["2024-01-01T00:00:00Z"], utc=True),
+            "quote_volume": [200_000.0],
+        }
+    )
+    with pytest.raises(ValueError, match="timestamp_phase_not_uniform"):
+        _align_proxy_volume(candles, klines)
