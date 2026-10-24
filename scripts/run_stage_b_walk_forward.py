@@ -549,7 +549,9 @@ def feature_undefined_when_peers_are_usable(
         .all(axis=1)
     )
     candidate_valid = engineered[candidate].replace([np.inf, -np.inf], np.nan)
-    return bool(usable_rows.any() and not candidate_valid.loc[usable_rows].notna().all())
+    return bool(
+        usable_rows.any() and not candidate_valid.loc[usable_rows].notna().all()
+    )
 
 
 def exclude_internally_undefined_features(
