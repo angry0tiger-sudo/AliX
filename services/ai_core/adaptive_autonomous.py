@@ -199,22 +199,23 @@ def initial_parameter_state(config: AdaptiveConfig) -> AdaptiveParameterState:
     )
 
 
-def load_adaptive_config(path: Path, module_path: Path) -> AdaptiveConfig:
-    """Load a strict policy document and verify the exact module SHA-256."""
+def _read_adaptive_policy_document(path: Path) -> object:
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise ValueError("adaptive_config_document_unreadable") from exc
-    if not isinstance(payload, dict) or set(payload) != {
-        "schema_version",
-        "revision",
-        "code_sha256",
-        "parameters",
-    }:
+
+
+def _validate_adaptive_policy_document(
+    payload: object,
+) -> tuple[str, dict[str, Any]]:
+    expected_keys = {"schema_version", "revision", "code_sha256", "parameters"}
+    if not isinstance(payload, dict) or set(payload) != expected_keys:
         raise ValueError("adaptive_config_document_schema_invalid")
     if payload["schema_version"] != POLICY_SCHEMA:
         raise ValueError("adaptive_config_schema_unsupported")
-    if not isinstance(payload["revision"], str) or not payload["revision"].strip():
+    revision = payload["revision"]
+    if not isinstance(revision, str) or not revision.strip():
         raise ValueError("adaptive_config_revision_invalid")
     expected_hash = payload["code_sha256"]
     if (
@@ -223,21 +224,35 @@ def load_adaptive_config(path: Path, module_path: Path) -> AdaptiveConfig:
         or any(char not in "0123456789abcdef" for char in expected_hash)
     ):
         raise ValueError("adaptive_config_code_hash_invalid")
+    parameters = payload["parameters"]
+    if not isinstance(parameters, dict) or set(parameters) != set(asdict(AdaptiveConfig())):
+        raise ValueError("adaptive_config_parameters_invalid")
+    return expected_hash, parameters
+
+
+def _verify_adaptive_module_hash(module_path: Path, expected_hash: str) -> None:
     try:
         actual_hash = hashlib.sha256(module_path.read_bytes()).hexdigest()
     except OSError as exc:
         raise ValueError("adaptive_config_module_unreadable") from exc
     if actual_hash != expected_hash:
         raise ValueError("adaptive_config_code_hash_mismatch")
-    parameters = payload["parameters"]
-    if not isinstance(parameters, dict) or set(parameters) != set(
-        asdict(AdaptiveConfig())
-    ):
-        raise ValueError("adaptive_config_parameters_invalid")
+
+
+def _construct_adaptive_config(parameters: dict[str, Any]) -> AdaptiveConfig:
     try:
         return AdaptiveConfig(**parameters)
     except (TypeError, ValueError) as exc:
         raise ValueError("adaptive_config_parameters_invalid") from exc
+
+
+def load_adaptive_config(path: Path, module_path: Path) -> AdaptiveConfig:
+    """Load a strict policy document and verify the exact module SHA-256."""
+    payload = _read_adaptive_policy_document(path)
+    expected_hash, parameters = _validate_adaptive_policy_document(payload)
+    _verify_adaptive_module_hash(module_path, expected_hash)
+    return _construct_adaptive_config(parameters)
+
 
 
 def _finite_number(value: object) -> float | None:
@@ -437,6 +452,36 @@ def select_adaptive_timeframe(
     return TimeframeDecision(selected, confidence, scores, reason)
 
 
+def _valid_dynamic_stop_inputs(
+    entry_price: float,
+    atr: float,
+    support_level: float,
+    stop_multiple: float,
+    config: AdaptiveConfig,
+) -> bool:
+    values = (entry_price, atr, support_level, stop_multiple)
+    if not all(math.isfinite(value) for value in values):
+        return False
+    if entry_price <= 0 or atr <= 0 or support_level <= 0 or support_level >= entry_price:
+        return False
+    return (
+        config.minimum_stop_atr_multiple
+        <= stop_multiple
+        <= config.maximum_stop_atr_multiple
+    )
+
+
+def _valid_stop_geometry(
+    entry_price: float, stop_loss: float, maximum_distance_fraction: float
+) -> bool:
+    stop_distance = entry_price - stop_loss
+    return (
+        stop_loss > 0
+        and stop_distance > 0
+        and stop_distance / entry_price <= maximum_distance_fraction
+    )
+
+
 def plan_dynamic_stop(
     *,
     entry_price: float,
@@ -446,38 +491,75 @@ def plan_dynamic_stop(
     config: AdaptiveConfig,
 ) -> DynamicStopPlan | None:
     """Place a long stop below both the ATR envelope and prior observed support."""
-    values = (entry_price, atr, support_level, state.atr_stop_multiple)
-    if not all(math.isfinite(value) for value in values):
-        return None
-    if (
-        entry_price <= 0
-        or atr <= 0
-        or support_level <= 0
-        or support_level >= entry_price
+    stop_multiple = state.atr_stop_multiple
+    if not _valid_dynamic_stop_inputs(
+        entry_price, atr, support_level, stop_multiple, config
     ):
         return None
-    if not (
-        config.minimum_stop_atr_multiple
-        <= state.atr_stop_multiple
-        <= config.maximum_stop_atr_multiple
-    ):
-        return None
-    atr_stop = entry_price - atr * state.atr_stop_multiple
+    atr_stop = entry_price - atr * stop_multiple
     structure_stop = support_level - atr * config.support_buffer_atr
     stop_loss = min(atr_stop, structure_stop)
-    stop_distance = entry_price - stop_loss
-    if (
-        stop_loss <= 0
-        or stop_distance <= 0
-        or stop_distance / entry_price > config.maximum_stop_distance_fraction
+    if not _valid_stop_geometry(
+        entry_price, stop_loss, config.maximum_stop_distance_fraction
     ):
         return None
     return DynamicStopPlan(
         stop_loss=stop_loss,
-        stop_distance=stop_distance,
+        stop_distance=entry_price - stop_loss,
         support_level=support_level,
-        atr_stop_multiple=state.atr_stop_multiple,
+        atr_stop_multiple=stop_multiple,
     )
+
+
+
+def _valid_position_inputs(
+    equity: float,
+    entry_price: float,
+    stop_loss: float,
+    confidence: float,
+    trend_strength: float,
+    volatility_score: float,
+) -> bool:
+    values = (equity, entry_price, stop_loss, confidence, trend_strength, volatility_score)
+    if not all(math.isfinite(value) for value in values):
+        return False
+    return (
+        equity > 0
+        and entry_price > 0
+        and 0 < stop_loss < entry_price
+        and 0 <= confidence <= 1
+        and 0 <= trend_strength <= 1
+        and 0 <= volatility_score <= 1
+    )
+
+
+def _adaptive_risk_fraction(
+    confidence: float, trend_strength: float, volatility_score: float,
+    config: AdaptiveConfig,
+) -> float:
+    risk_strength = confidence * trend_strength * (1.0 - 0.5 * volatility_score)
+    requested = config.minimum_risk_fraction + (
+        config.maximum_risk_fraction - config.minimum_risk_fraction
+    ) * risk_strength
+    return min(
+        config.maximum_risk_fraction,
+        max(config.minimum_risk_fraction, requested),
+    )
+
+
+def _risk_limited_quantity(
+    equity: float,
+    entry_price: float,
+    stop_distance: float,
+    risk_budget: float,
+    config: AdaptiveConfig,
+) -> float | None:
+    quantity_by_risk = risk_budget / stop_distance
+    quantity_by_notional = equity * config.maximum_position_fraction / entry_price
+    quantity = min(quantity_by_risk, quantity_by_notional)
+    if not math.isfinite(quantity) or quantity <= 0:
+        return None
+    return quantity
 
 
 def size_adaptive_position(
@@ -491,40 +573,19 @@ def size_adaptive_position(
     config: AdaptiveConfig,
 ) -> AdaptivePositionPlan | None:
     """Scale risk budget with confidence/trend and reduce it in high volatility."""
-    values = (
-        equity,
-        entry_price,
-        stop_loss,
-        confidence,
-        trend_strength,
-        volatility_score,
-    )
-    if not all(math.isfinite(value) for value in values):
-        return None
-    if (
-        equity <= 0
-        or entry_price <= 0
-        or stop_loss <= 0
-        or stop_loss >= entry_price
-        or not 0 <= confidence <= 1
-        or not 0 <= trend_strength <= 1
-        or not 0 <= volatility_score <= 1
+    if not _valid_position_inputs(
+        equity, entry_price, stop_loss, confidence, trend_strength, volatility_score
     ):
         return None
-    risk_strength = confidence * trend_strength * (1.0 - 0.5 * volatility_score)
-    risk_fraction = (
-        config.minimum_risk_fraction
-        + (config.maximum_risk_fraction - config.minimum_risk_fraction) * risk_strength
-    )
-    risk_fraction = min(
-        config.maximum_risk_fraction, max(config.minimum_risk_fraction, risk_fraction)
+    risk_fraction = _adaptive_risk_fraction(
+        confidence, trend_strength, volatility_score, config
     )
     risk_budget = equity * risk_fraction
     stop_distance = entry_price - stop_loss
-    quantity_by_risk = risk_budget / stop_distance
-    quantity_by_notional = equity * config.maximum_position_fraction / entry_price
-    quantity = min(quantity_by_risk, quantity_by_notional)
-    if not math.isfinite(quantity) or quantity <= 0:
+    quantity = _risk_limited_quantity(
+        equity, entry_price, stop_distance, risk_budget, config
+    )
+    if quantity is None:
         return None
     return AdaptivePositionPlan(
         quantity=quantity,
@@ -532,6 +593,7 @@ def size_adaptive_position(
         risk_budget=risk_budget,
         risk_fraction=risk_fraction,
     )
+
 
 
 def update_intelligent_trailing_stop(
@@ -740,16 +802,19 @@ def analyze_post_trade_failure(
     )
 
 
-def summarize_adaptive_metrics(
-    trades: list[dict[str, Any]], *, initial_equity: float
-) -> dict[str, Any]:
-    """Summarize closed trades; absent samples remain null rather than zero."""
-    if not math.isfinite(initial_equity) or initial_equity <= 0:
-        raise ValueError("adaptive_metrics_initial_equity_invalid")
+def _validated_trade_metric_values(
+    trades: list[dict[str, Any]],
+) -> tuple[list[float], list[float]]:
     returns = [float(trade["net_return_bps"]) for trade in trades]
     pnl_values = [float(trade["net_pnl_quote"]) for trade in trades]
     if any(not math.isfinite(value) for value in returns + pnl_values):
         raise ValueError("adaptive_metrics_non_finite_trade")
+    return returns, pnl_values
+
+
+def _equity_drawdown_metrics(
+    pnl_values: list[float], initial_equity: float
+) -> tuple[float, float]:
     equity = initial_equity
     peak = initial_equity
     max_drawdown = 0.0
@@ -758,22 +823,40 @@ def summarize_adaptive_metrics(
         peak = max(peak, equity)
         if peak > 0:
             max_drawdown = max(max_drawdown, (peak - equity) / peak)
-    win_rate = (
-        sum(value > 0 for value in pnl_values) / len(pnl_values) * 100.0
-        if pnl_values
-        else None
-    )
-    expectancy = sum(returns) / len(returns) if returns else None
+    total_return = (equity / initial_equity - 1.0) * 100.0
+    return total_return, max_drawdown * 100.0
+
+
+def _win_rate_percent(pnl_values: list[float]) -> float | None:
+    if not pnl_values:
+        return None
+    return sum(value > 0 for value in pnl_values) / len(pnl_values) * 100.0
+
+
+def _expectancy_bps(returns: list[float]) -> float | None:
+    return sum(returns) / len(returns) if returns else None
+
+
+def summarize_adaptive_metrics(
+    trades: list[dict[str, Any]], *, initial_equity: float
+) -> dict[str, Any]:
+    """Summarize closed trades; absent samples remain null rather than zero."""
+    if not math.isfinite(initial_equity) or initial_equity <= 0:
+        raise ValueError("adaptive_metrics_initial_equity_invalid")
+    returns, pnl_values = _validated_trade_metric_values(trades)
+    total_return, max_drawdown = _equity_drawdown_metrics(pnl_values, initial_equity)
+    expectancy = _expectancy_bps(returns)
     return {
         "status": "METRICS_AVAILABLE" if trades else "NO_TRADES",
         "trade_count": len(trades),
-        "win_rate_pct": win_rate,
+        "win_rate_pct": _win_rate_percent(pnl_values),
         "expectancy_bps_per_trade": expectancy,
         "total_net_pnl_quote": sum(pnl_values),
-        "total_return_pct": (equity / initial_equity - 1.0) * 100.0,
-        "max_drawdown_pct": max_drawdown * 100.0,
+        "total_return_pct": total_return,
+        "max_drawdown_pct": max_drawdown,
         "average_net_return_bps": expectancy,
     }
+
 
 
 __all__ = [

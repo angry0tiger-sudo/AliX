@@ -580,20 +580,35 @@ def _comparison(
     return result
 
 
-def run_research(input_dir: Path, output_dir: Path, commit_sha: str) -> dict[str, Any]:
+def _validate_commit_sha(commit_sha: str) -> None:
     if len(commit_sha) != 40 or any(
         char not in "0123456789abcdef" for char in commit_sha
     ):
         raise ValueError("adaptive_commit_sha_invalid")
-    project_root = Path(__file__).resolve().parents[1]
-    module_path = project_root / "services" / "ai_core" / "adaptive_autonomous.py"
-    config_path = project_root / "configs" / "research" / "adaptive-autonomous-ai.json"
+
+
+def _load_verified_research_context(
+    input_dir: Path, module_path: Path, config_path: Path
+) -> tuple[AdaptiveConfig, dict[str, Any], DataFrame, dict[str, Any], DataFrame]:
     config = load_adaptive_config(config_path, module_path)
     config_document = json.loads(config_path.read_text(encoding="utf-8"))
     candles, source = load_verified_history(input_dir)
     if source.get("final_holdout_used") is not False:
         raise ValueError("adaptive_final_holdout_must_remain_reserved")
     contexts = build_multitimeframe_contexts(candles)
+    return config, config_document, candles, source, contexts
+
+
+def _run_policy_suite(
+    candles: DataFrame, contexts: DataFrame, config: AdaptiveConfig
+) -> tuple[
+    dict[str, Any],
+    dict[str, dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+]:
     adaptive_trades, adaptive_decisions, learning, adaptive_metrics = _simulate_policy(
         candles, contexts, config, policy="adaptive_selector"
     )
@@ -613,7 +628,27 @@ def run_research(input_dir: Path, output_dir: Path, commit_sha: str) -> dict[str
         all_trades.extend(trades)
         all_decisions.extend(decisions)
         all_learning.extend(ledger)
-    report: dict[str, Any] = {
+    return (
+        adaptive_metrics,
+        baseline_metrics,
+        all_trades,
+        all_decisions,
+        all_learning,
+        learning,
+    )
+
+
+def _adaptive_report(
+    commit_sha: str,
+    source: dict[str, Any],
+    config: AdaptiveConfig,
+    config_document: dict[str, Any],
+    adaptive_metrics: dict[str, Any],
+    baseline_metrics: dict[str, dict[str, Any]],
+    learning: list[dict[str, Any]],
+    all_learning: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
         "schema_version": "alix.adaptive-autonomous-ai-report.v1",
         "created_by_commit_sha": commit_sha,
         "run_status": "COMPLETED_RESEARCH_ONLY",
@@ -678,6 +713,9 @@ def run_research(input_dir: Path, output_dir: Path, commit_sha: str) -> dict[str
             "final_holdout_used": False,
         },
     }
+
+
+def _validate_report_safety(report: dict[str, Any]) -> None:
     safety = report["safety_invariants"]
     if (
         safety["Champion"] is not None
@@ -688,17 +726,30 @@ def run_research(input_dir: Path, output_dir: Path, commit_sha: str) -> dict[str
         or safety["final_holdout_used"] is not False
     ):
         raise ValueError("adaptive_safety_contract_violated")
+
+
+def _write_research_outputs(
+    output_dir: Path,
+    report: dict[str, Any],
+    all_trades: list[dict[str, Any]],
+    all_decisions: list[dict[str, Any]],
+    all_learning: list[dict[str, Any]],
+) -> None:
     _write_json(output_dir / REPORT_NAME, report)
     _write_rows(output_dir / TRADES_NAME, all_trades)
     _write_rows(output_dir / DECISIONS_NAME, all_decisions)
     _write_rows(output_dir / LEARNING_NAME, all_learning)
+
+
+def _print_research_summary(report: dict[str, Any], commit_sha: str) -> None:
+    evaluation = report["economic_evaluation"]
     print(
         json.dumps(
             {
                 "commit_sha": commit_sha,
                 "run_status": report["run_status"],
-                "adaptive_metrics": adaptive_metrics,
-                "fixed_timeframe_baselines": baseline_metrics,
+                "adaptive_metrics": evaluation["adaptive_selector_metrics"],
+                "fixed_timeframe_baselines": evaluation["fixed_timeframe_baselines"],
                 "economic_acceptance": "NO-GO",
                 "Champion": None,
                 "order_permission": False,
@@ -709,7 +760,37 @@ def run_research(input_dir: Path, output_dir: Path, commit_sha: str) -> dict[str
             allow_nan=False,
         )
     )
+
+
+def run_research(
+    input_dir: Path, output_dir: Path, commit_sha: str
+) -> dict[str, Any]:
+    _validate_commit_sha(commit_sha)
+    project_root = Path(__file__).resolve().parents[1]
+    module_path = project_root / "services" / "ai_core" / "adaptive_autonomous.py"
+    config_path = project_root / "configs" / "research" / "adaptive-autonomous-ai.json"
+    config, config_document, candles, source, contexts = _load_verified_research_context(
+        input_dir, module_path, config_path
+    )
+    (
+        adaptive_metrics,
+        baseline_metrics,
+        all_trades,
+        all_decisions,
+        all_learning,
+        learning,
+    ) = _run_policy_suite(candles, contexts, config)
+    report = _adaptive_report(
+        commit_sha, source, config, config_document,
+        adaptive_metrics, baseline_metrics, learning, all_learning,
+    )
+    _validate_report_safety(report)
+    _write_research_outputs(
+        output_dir, report, all_trades, all_decisions, all_learning
+    )
+    _print_research_summary(report, commit_sha)
     return report
+
 
 
 def main() -> int:
