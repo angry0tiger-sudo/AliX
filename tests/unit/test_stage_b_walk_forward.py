@@ -3,6 +3,8 @@ from __future__ import annotations
 import pandas as pd
 
 from scripts.run_stage_b_walk_forward import (
+    FEATURE_COLUMNS,
+    add_market_features,
     build_fixed_window_folds,
     economic_gate,
     segment_bounds,
@@ -97,3 +99,65 @@ def test_unavailable_feature_is_excluded_without_imputation() -> None:
         }
     ]
     assert frame["undefined_inside_segment"].isna().sum() == 2
+
+
+def test_feature_selection_ignores_staggered_leading_warmup_but_rejects_internal_gap() -> None:
+    frame = pd.DataFrame(
+        {
+            "return_1": [float("nan"), 0.1, 0.2, 0.3, 0.4, 0.5],
+            "return_3": [
+                float("nan"),
+                float("nan"),
+                float("nan"),
+                0.3,
+                0.4,
+                0.5,
+            ],
+            "atr_proxy_14": [
+                float("nan"),
+                float("nan"),
+                float("nan"),
+                float("nan"),
+                0.4,
+                0.5,
+            ],
+            "volume_change": [float("nan"), 0.1, 0.2, 0.3, float("nan"), 0.5],
+        }
+    )
+
+    selected, excluded = select_segment_features(
+        frame, ("return_1", "return_3", "atr_proxy_14", "volume_change")
+    )
+
+    assert selected == ["return_1", "return_3", "atr_proxy_14"]
+    assert excluded == [
+        {
+            "feature": "volume_change",
+            "reason": "undefined_on_otherwise_usable_rows",
+        }
+    ]
+    assert frame.loc[:3, "atr_proxy_14"].isna().all()
+
+
+def test_market_feature_schema_survives_natural_rolling_warmup() -> None:
+    candle_count = 40
+    close = pd.Series([100.0 + index for index in range(candle_count)])
+    frame = pd.DataFrame(
+        {
+            "date": pd.date_range(
+                "2020-01-01", periods=candle_count, freq="h", tz="UTC"
+            ),
+            "open": close - 0.25,
+            "high": close + 1.0,
+            "low": close - 1.0,
+            "close": close,
+            "volume": [float(index + 1) for index in range(candle_count)],
+        }
+    )
+
+    engineered = add_market_features(frame)
+    selected, excluded = select_segment_features(engineered)
+
+    assert selected == list(FEATURE_COLUMNS)
+    assert excluded == []
+    assert engineered.loc[14, list(FEATURE_COLUMNS)].notna().all()

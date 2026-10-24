@@ -539,7 +539,7 @@ def initially_available_features(
 def feature_undefined_when_peers_are_usable(
     engineered: DataFrame, candidate: str, peers: Sequence[str]
 ) -> bool:
-    """Check an individual feature only where every peer is defined."""
+    """Detect internal gaps after warm-up, not expected leading NaNs."""
     if not peers:
         return False
     usable_rows = (
@@ -549,9 +549,46 @@ def feature_undefined_when_peers_are_usable(
         .all(axis=1)
     )
     candidate_valid = engineered[candidate].replace([np.inf, -np.inf], np.nan)
-    return bool(
-        usable_rows.any() and not candidate_valid.loc[usable_rows].notna().all()
+    defined_positions = np.flatnonzero(candidate_valid.notna().to_numpy())
+    if defined_positions.size == 0:
+        return True
+    first_defined_position = int(defined_positions[0])
+    after_warmup = pd.Series(
+        np.arange(len(engineered)) >= first_defined_position,
+        index=engineered.index,
     )
+    eligible_rows = usable_rows & after_warmup
+    return bool(
+        eligible_rows.any() and not candidate_valid.loc[eligible_rows].notna().all()
+    )
+
+
+def feature_availability_diagnostics(
+    engineered: DataFrame, candidates: Sequence[str] = FEATURE_COLUMNS
+) -> dict[str, dict[str, int | None]]:
+    """Report leading warm-up and later undefined observations per feature."""
+    diagnostics: dict[str, dict[str, int | None]] = {}
+    for column in candidates:
+        values = engineered[column].replace([np.inf, -np.inf], np.nan)
+        defined = values.notna().to_numpy()
+        positions = np.flatnonzero(defined)
+        first_defined_position = int(positions[0]) if positions.size else None
+        diagnostics[column] = {
+            "defined_rows": int(defined.sum()),
+            "undefined_rows": int((~defined).sum()),
+            "first_defined_row_index": first_defined_position,
+            "leading_undefined_rows": (
+                first_defined_position
+                if first_defined_position is not None
+                else len(values)
+            ),
+            "undefined_after_first_defined_rows": (
+                int(values.iloc[first_defined_position:].isna().sum())
+                if first_defined_position is not None
+                else None
+            ),
+        }
+    return diagnostics
 
 
 def exclude_internally_undefined_features(
@@ -599,12 +636,19 @@ def select_segment_features(
 
 def prepare_segment(
     segment: DataFrame, name: str
-) -> tuple[DataFrame, str, list[str], list[dict[str, str]]]:
+) -> tuple[
+    DataFrame,
+    str,
+    list[str],
+    list[dict[str, str]],
+    dict[str, dict[str, int | None]],
+]:
     """Build segment-local feature/target rows without imputing unavailable values."""
     candles = segment.loc[:, ["date", "open", "high", "low", "close", "volume"]].copy()
     validated, fingerprint = validate_ohlcv(candles, HOUR)
     engineered = add_market_features(validated)
     engineered[TARGET_COLUMN] = forward_return_target(engineered, HORIZON)
+    feature_diagnostics = feature_availability_diagnostics(engineered)
     feature_columns, excluded_features = select_segment_features(engineered)
     required = feature_columns + [TARGET_COLUMN]
     numeric = engineered.loc[:, required].replace([np.inf, -np.inf], np.nan)
@@ -622,7 +666,13 @@ def prepare_segment(
         or not np.isfinite(dataset[TARGET_COLUMN].to_numpy(dtype=float)).all()
     ):
         raise StageBError(f"segment_{name}_feature_or_target_non_finite")
-    return dataset, fingerprint, feature_columns, excluded_features
+    return (
+        dataset,
+        fingerprint,
+        feature_columns,
+        excluded_features,
+        feature_diagnostics,
+    )
 
 
 def evaluate_many(
@@ -701,8 +751,20 @@ def run_stage_b(input_dir: Path, output_dir: Path, commit_sha: str) -> dict[str,
     output_dir.mkdir(parents=True, exist_ok=True)
     frame, source_report, segments, segment_hashes = verify_source_artifact(input_dir)
     segment_a, segment_b = segments
-    dataset_a, fingerprint_a, features_a, excluded_a = prepare_segment(segment_a, "A")
-    dataset_b, fingerprint_b, features_b, excluded_b = prepare_segment(segment_b, "B")
+    (
+        dataset_a,
+        fingerprint_a,
+        features_a,
+        excluded_a,
+        feature_diagnostics_a,
+    ) = prepare_segment(segment_a, "A")
+    (
+        dataset_b,
+        fingerprint_b,
+        features_b,
+        excluded_b,
+        feature_diagnostics_b,
+    ) = prepare_segment(segment_b, "B")
     holdout_start = pd.Timestamp(segment_a["date"].iloc[-A_HOLDOUT])
     a_dev_stop = int((dataset_a["date"] < holdout_start).sum())
     if a_dev_stop <= A_TRAIN + HORIZON:
@@ -807,7 +869,16 @@ def run_stage_b(input_dir: Path, output_dir: Path, commit_sha: str) -> dict[str,
     )
 
     details: dict[str, Any] = {}
-    for name, segment, dataset, fingerprint, segment_hash, features, excluded in (
+    for (
+        name,
+        segment,
+        dataset,
+        fingerprint,
+        segment_hash,
+        features,
+        excluded,
+        feature_diagnostics,
+    ) in (
         (
             "A",
             segment_a,
@@ -816,6 +887,7 @@ def run_stage_b(input_dir: Path, output_dir: Path, commit_sha: str) -> dict[str,
             segment_hashes[0],
             features_a,
             excluded_a,
+            feature_diagnostics_a,
         ),
         (
             "B",
@@ -825,6 +897,7 @@ def run_stage_b(input_dir: Path, output_dir: Path, commit_sha: str) -> dict[str,
             segment_hashes[1],
             features_b,
             excluded_b,
+            feature_diagnostics_b,
         ),
     ):
         details[name] = {
@@ -836,6 +909,12 @@ def run_stage_b(input_dir: Path, output_dir: Path, commit_sha: str) -> dict[str,
             "data_quality_gate_fingerprint": fingerprint,
             "model_feature_columns": features,
             "excluded_features_without_imputation": excluded,
+            "feature_availability_diagnostics": feature_diagnostics,
+            "source_volume_diagnostics": {
+                "zero_volume_rows": int((segment["volume"] == 0).sum()),
+                "positive_volume_rows": int((segment["volume"] > 0).sum()),
+                "unique_volume_values": int(segment["volume"].nunique()),
+            },
             "fresh_state_within_segment": True,
             "state_shared_with_other_segment": False,
         }

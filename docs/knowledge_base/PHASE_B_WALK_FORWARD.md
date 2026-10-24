@@ -43,3 +43,11 @@ The workflow verifies the upstream CSV and manifest hashes, run ID, commit, time
 ## Immutable safety state
 
 `Champion=null`, `order_permission=false`, `trading_authorization=NO-GO`, and `economic_acceptance=NO-GO`. Model promotion and strategy registry updates remain prohibited.
+
+
+## Feature warm-up selection correction — 2026-10-24
+
+- The rolling/return formulas already emit expected leading NaNs: return windows warm up at rows 1, 3, and 6; volatility at row 12; SMA at row 11; and ATR proxy at row 13. The segment selector previously treated the shorter-warm-up peer rows as evidence of internal gaps, then iteratively excluded valid features.
+- The selector now ignores each candidate feature's leading undefined prefix and excludes a feature only when it is still undefined after its first defined value on rows where peer features are usable. The normal complete-row mask drops the joint warm-up; no fill or synthetic value is introduced. Internal gaps after warm-up still cause feature exclusion, and remaining timestamps must be contiguous.
+- The pinned Stage A input has zero volume in all 58,655 A candles; in B, zero previous-volume observations make percentage volume change undefined at internal positions. Accordingly, `%-volume_change_1` remains excluded for the affected segment(s). This is a source-data limitation, not a rolling-window bug.
+- The report now records per-feature first-defined position, leading undefined count, later undefined count, and segment volume diagnostics so future runs can distinguish natural warm-up from internal missingness.
