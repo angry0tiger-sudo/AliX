@@ -445,9 +445,8 @@ def build_oos_rows(
         zip(predicted.tolist(), actual.tolist(), strict=True)
     ):
         entry = pd.Timestamp(scored["date"].iloc[offset])
-        opportunity = (
-            offset % HORIZON == 0
-            and (terminal_fold or offset + HORIZON < len(test))
+        opportunity = offset % HORIZON == 0 and (
+            terminal_fold or offset + HORIZON < len(test)
         )
         prediction_rows.append(
             {
