@@ -1,0 +1,146 @@
+name: AliX Autonomous Meta-Strategy Research
+
+on:
+  push:
+    branches:
+      - "research/autonomous-meta-strategy"
+    paths:
+      - ".github/workflows/autonomous-meta-strategy.yml"
+      - "services/ai_core/autonomous_meta.py"
+      - "scripts/run_autonomous_meta_strategy.py"
+      - "configs/research/autonomous-meta-strategy-registry.json"
+      - "tests/unit/test_autonomous_meta_strategy.py"
+      - "docs/knowledge_base/AUTONOMOUS_META_STRATEGY.md"
+      - "docs/governance/owner-directives/2026-10-24-autonomous-meta-strategy.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: alix-autonomous-meta-strategy-research
+  cancel-in-progress: false
+
+jobs:
+  autonomous-meta-strategy:
+    name: 1H HMM selector, dynamic risk and walk-forward audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      actions: read
+    env:
+      ALIx_ENV: paper
+      ALIx_DRY_RUN: "true"
+      ALIx_ALLOW_LIVE_TRADING: "false"
+      ALIx_REPORTING_ENABLED: "false"
+      PYTHONUNBUFFERED: "1"
+      PYTHONPATH: "."
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    steps:
+      - name: Checkout exact research commit without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up pinned Python runtime
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned CPU-only research dependencies
+        run: |
+          python -m pip install pip==25.2
+          python -m pip install numpy==2.5.4 pandas==2.3.3 pandas-stubs==2.3.2.250926 scikit-learn==1.9.0 pytest==9.0.3
+
+      - name: Run autonomous strategy, HMM and risk contract tests
+        run: |
+          python -m pytest \
+            tests/unit/test_autonomous_meta_strategy.py \
+            tests/unit/test_ai_core_regime.py \
+            tests/unit/test_ai_core_strategies.py -q
+
+      - name: Download immutable Stage A historical development artifact
+        uses: actions/download-artifact@v4
+        with:
+          repository: angry0tiger-sudo/AliX
+          run-id: 40077609244
+          name: alix-nobitex-history-coverage-40077609244
+          path: artifacts/stage-a-coverage
+          github-token: ${{ github.token }}
+
+      - name: Run expanding walk-forward on verified historical bars
+        run: |
+          python scripts/run_autonomous_meta_strategy.py \
+            --input-dir artifacts/stage-a-coverage \
+            --output-dir artifacts/autonomous-meta-strategy \
+            --commit-sha "$GITHUB_SHA"
+
+      - name: Verify research report, comparison metrics and immutable safety invariants
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          report = json.loads(
+              Path("artifacts/autonomous-meta-strategy/autonomous-meta-strategy-report.json")
+              .read_text(encoding="utf-8")
+          )
+          assert report["created_by_commit_sha"] == os.environ["GITHUB_SHA"]
+          assert report["run_status"] == "COMPLETED_RESEARCH_ONLY"
+          assert report["source"]["source_timeframe"] == "1h"
+          assert report["source"]["final_holdout_used"] is False
+          registry = report["strategy_registry"]
+          assert registry["candidate_count"] == 4
+          assert set(registry["candidate_ids"]) == {
+              "trend_following", "mean_reversion", "volatility_breakout", "scalping"
+          }
+          assert registry["all_candidates_research_only"] is True
+          assert registry["production_registry_modified"] is False
+          evaluation = report["economic_evaluation"]
+          assert evaluation["status"] == "ASSUMPTION_BASED_HISTORICAL_BAR_SIMULATION"
+          assert evaluation["economic_acceptance"] == "NO-GO"
+          assert set(evaluation["fixed_strategy_baselines"]) == set(registry["candidate_ids"])
+          assert set(evaluation["comparison_vs_each_fixed_strategy"]) == set(registry["candidate_ids"])
+          safety = report["safety_invariants"]
+          assert safety["Champion"] is None
+          assert safety["order_permission"] is False
+          assert safety["trading_authorization"] == "NO-GO"
+          assert safety["model_promoted"] is False
+          assert safety["production_model_updated"] is False
+          assert safety["production_strategy_registry_updated"] is False
+          assert safety["orders_or_execution_api_used"] is False
+          assert safety["private_api_calls"] == 0
+          assert safety["real_order_attempts"] == 0
+          for filename in (
+              "autonomous-meta-strategy-oos-trades.csv",
+              "autonomous-meta-strategy-oos-decisions.csv",
+          ):
+              assert Path("artifacts/autonomous-meta-strategy", filename).is_file()
+          print(json.dumps({
+              "commit_sha": report["created_by_commit_sha"],
+              "run_status": report["run_status"],
+              "strategy_count": registry["candidate_count"],
+              "scalping_status": registry["scalping_status"],
+              "meta_metrics": evaluation["meta_strategy_metrics"],
+              "fixed_baselines": evaluation["fixed_strategy_baselines"],
+              "comparison": evaluation["comparison_vs_each_fixed_strategy"],
+              "Champion": safety["Champion"],
+              "order_permission": safety["order_permission"],
+              "trading_authorization": safety["trading_authorization"],
+          }, sort_keys=True, allow_nan=False))
+          PY
+
+      - name: Upload exact-commit research evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: autonomous-meta-strategy-${{ github.sha }}
+          path: |
+            artifacts/autonomous-meta-strategy/autonomous-meta-strategy-report.json
+            artifacts/autonomous-meta-strategy/autonomous-meta-strategy-oos-trades.csv
+            artifacts/autonomous-meta-strategy/autonomous-meta-strategy-oos-decisions.csv
+          if-no-files-found: warn
+          retention-days: 30

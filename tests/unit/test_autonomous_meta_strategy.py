@@ -242,8 +242,8 @@ def test_features_are_causal_and_atr_scales_with_price_ranges() -> None:
     altered.loc[len(altered) - 1, "low"] *= 1.4
     changed_features = compute_autonomous_features(altered)
     pd.testing.assert_series_equal(
-        features.loc[: -2, "atr_14"],
-        changed_features.loc[: -2, "atr_14"],
+        features.iloc[:-1]["atr_14"],
+        changed_features.iloc[:-1]["atr_14"],
         check_names=True,
     )
     assert features["macd"].notna().sum() > 0
