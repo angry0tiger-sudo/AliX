@@ -267,12 +267,12 @@ class RiskGate:
         rules: MarketRules,
         policy: RiskPolicy,
     ) -> tuple[str, ...]:
-        identity_reasons = self._initial_stake_identity_reasons(
-            allocation, policy
-        )
+        identity_reasons = self._initial_stake_identity_reasons(allocation, policy)
         if account.currency != "USDT" or not market.symbol.endswith("/USDT"):
             return tuple(
-                dict.fromkeys(identity_reasons + ("initial_stake_usdt_market_required",))
+                dict.fromkeys(
+                    identity_reasons + ("initial_stake_usdt_market_required",)
+                )
             )
         target, below_target, balance_reasons = self._initial_stake_target(
             account, market, policy
@@ -285,9 +285,7 @@ class RiskGate:
             + self._initial_stake_market_reasons(
                 quantity, stake, below_target, rules, policy
             )
-            + self._initial_stake_allocation_reasons(
-                quantity, stake, allocation
-            )
+            + self._initial_stake_allocation_reasons(quantity, stake, allocation)
             + self._initial_stake_funding_reasons(stake, account, policy)
         )
         return tuple(dict.fromkeys(reasons))
@@ -321,9 +319,7 @@ class RiskGate:
             )
         reserve = Decimal("1") + policy.fee_rate + policy.slippage_rate
         target = (
-            account.free_balance / reserve
-            if below_target
-            else stake_policy.target_usdt
+            account.free_balance / reserve if below_target else stake_policy.target_usdt
         )
         return target, below_target, ()
 
