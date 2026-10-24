@@ -182,7 +182,9 @@ def fit_weighted_ensemble(
     target = _validate_training_inputs(
         training_features, training_target, prediction_features
     )
-    selected_factories = dict(factories or default_model_factories(selected_config))
+    selected_factories = dict(
+        factories if factories is not None else default_model_factories(selected_config)
+    )
     _validate_factory_set(selected_factories)
     components = tuple(
         _predict_one_model(

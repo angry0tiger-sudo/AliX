@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -18,7 +18,21 @@ from services.ai_core.sentiment import (
     aggregate_point_in_time_sentiment,
     parse_persian_rss,
 )
-from tests.unit.test_ai_core_features import candles_4h
+
+def candles_4h(rows: int = 120) -> pd.DataFrame:
+    index = np.arange(rows, dtype=float)
+    close = 1000.0 * np.exp(np.cumsum(0.0005 + 0.006 * np.sin(index / 7.0)))
+    opened = np.r_[close[0] * 0.999, close[:-1]]
+    high = np.maximum(opened, close) * 1.002
+    low = np.minimum(opened, close) * 0.998
+    return pd.DataFrame({
+        "date": pd.date_range("2024-01-01T00:30:00Z", periods=rows, freq="4h"),
+        "open": opened,
+        "high": high,
+        "low": low,
+        "close": close,
+        "volume": 100.0 + (index % 17) * 7.0,
+    })
 
 
 def provider(**changes: object) -> ProviderRegistration:

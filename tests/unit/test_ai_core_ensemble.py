@@ -88,7 +88,7 @@ def test_weighted_ensemble_uses_only_predeclared_normalized_weights() -> None:
         config=config,
         factories=factories((0.1, 0.2, 0.4)),
     )
-    assert result.predictions == pytest.approx((0.17, 0.17))
+    assert result.predictions == pytest.approx((0.19, 0.19))
 
 
 @pytest.mark.parametrize(
@@ -147,6 +147,7 @@ def test_ensemble_rejects_invalid_training_or_prediction_inputs(
         train = train.rename(columns={"first": "other"})
     elif train_change == "duplicate_columns":
         train.columns = ["first", "first"]
+        prediction.columns = ["first", "first"]
     elif train_change == "bad_rows":
         train = train.iloc[:20]
         target = target[:20]

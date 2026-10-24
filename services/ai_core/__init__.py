@@ -22,6 +22,8 @@ from services.ai_core.strategies import (
 __all__ = [
     "AI_FEATURE_COLUMNS",
     "AI_FEATURE_SCHEMA_VERSION",
+    "BASE_AI_FEATURE_COLUMNS",
+    "CROSS_ASSET_FEATURE_COLUMNS",
     "EnsembleConfig",
     "EnsemblePrediction",
     "REGIME_STRATEGY_MAP",
