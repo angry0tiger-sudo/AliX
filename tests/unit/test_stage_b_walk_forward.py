@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from scripts.run_stage_b_walk_forward import (
-    FoldSpec,
     build_fixed_window_folds,
     economic_gate,
     segment_bounds,
