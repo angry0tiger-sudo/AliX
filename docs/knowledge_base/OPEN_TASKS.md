@@ -214,3 +214,12 @@
 - No threshold relaxation or data imputation; no volume-derived feature is fabricated because source segment A has zero positive-volume observations. HMM/Meta-Label stay out of this direct Stage B experiment, because they are separate Phase 5 signal paths.
 - Adaptive candidate selection requires >=30 prior OOS trades, win rate >60%, positive net expectancy and drawdown <15%; otherwise it uses the existing baseline. Candidate summaries are exploratory, not a Champion selection.
 - Hard invariants remain `Champion=null`, `order_permission=false`, `trading_authorization=NO-GO`, and `economic_acceptance=NO-GO`.
+
+
+## Stage B classification and volatility research — 2026-10-24
+
+- Owner Directive: use binary classification for the long-side event "12-hour gross return > +0.60%", not absolute move magnitude, because a large down move is not a buy signal.
+- Candidate filter: enter only on non-overlapping 12-hour opportunities when probability clears a predeclared candidate threshold and current closed-candle 24-hour volatility is at least the current fold's training-only 75th percentile.
+- Fixed grid: 2 feature groups x 2 class-weighting profiles x probability cutoffs 0.35/0.50/0.65. These are candidate configurations; economic acceptance gates and the 0.60% cost hurdle remain unchanged.
+- Evaluate Stage A segment A development only; remove the final 90-day holdout before features/labels, purge the 12-hour target, align candidate timestamps, and never impute or fabricate volume features.
+- Keep Champion=null, order_permission=false, trading_authorization=NO-GO, and economic_acceptance=NO-GO unless strict gates are met; research results cannot promote production or authorize orders.

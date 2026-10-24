@@ -1,0 +1,134 @@
+name: AliX Stage B Classification and Volatility Research
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - "research/classification-model"
+    paths:
+      - ".github/workflows/stage-b-classification-model.yml"
+      - "scripts/run_stage_b_classification.py"
+      - "scripts/stage_b_research_features.py"
+      - "scripts/run_stage_b_signal_optimization.py"
+      - "scripts/run_stage_b_walk_forward.py"
+      - "services/freqai_baseline/features.py"
+      - "services/freqai_baseline/walkforward.py"
+      - "tests/unit/test_stage_b_classification_model.py"
+      - "docs/knowledge_base/STAGE_B_CLASSIFICATION_MODEL.md"
+      - "docs/knowledge_base/OPEN_TASKS.md"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: alix-stage-b-classification-model
+  cancel-in-progress: false
+
+jobs:
+  classification-volatility-research:
+    name: A-development classification and volatility grid
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read
+    env:
+      ALIx_ENV: paper
+      ALIx_DRY_RUN: "true"
+      ALIx_ALLOW_LIVE_TRADING: "false"
+      ALIx_REPORTING_ENABLED: "false"
+      PYTHONUNBUFFERED: "1"
+      PYTHONPATH: ${{ github.workspace }}
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+    steps:
+      - name: Checkout exact research candidate without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up pinned Python runtime
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download immutable Stage A coverage artifact
+        uses: actions/download-artifact@v4
+        with:
+          repository: ${{ github.repository }}
+          run-id: 40077609244
+          name: alix-nobitex-history-coverage-40077609244
+          path: artifacts/stage-a-coverage
+          github-token: ${{ github.token }}
+
+      - name: Install pinned research dependencies
+        run: |
+          python -m pip install pip==25.2
+          python -m pip install numpy==2.5.4 pandas==2.3.3 lightgbm==4.7.0 scikit-learn==1.9.0
+
+      - name: Run A-development classifier grid without evaluating reserved holdout
+        run: |
+          python scripts/run_stage_b_classification.py \
+            --input-dir artifacts/stage-a-coverage \
+            --output-dir artifacts/stage-b-classification \
+            --commit-sha "${{ github.sha }}"
+
+      - name: Enforce provenance, fixed cost, no-imputation, alignment, and safety invariants
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path("artifacts/stage-b-classification")
+          report = json.loads((root / "classification-report.json").read_text(encoding="utf-8"))
+          assert report["run_status"] == "COMPLETED_RESEARCH_ONLY"
+          assert report["created_by_commit_sha"] == "${{ github.sha }}"
+          assert report["source"]["coverage_workflow_run_id"] == 40077609244
+          assert report["protocol"]["holdout_evaluated"] is False
+          assert report["protocol"]["holdout_used_for_feature_or_parameter_selection"] is False
+          assert report["protocol"]["candidate_count"] == 12
+          assert report["protocol"]["candidate_timestamp_alignment"] is True
+          assert report["protocol"]["cost_hurdle_optimized"] is False
+          assert report["protocol"]["feature_imputation"] is False
+          assert report["protocol"]["forward_fill"] is False
+          assert report["protocol"]["backfill"] is False
+          assert report["protocol"]["interpolation"] is False
+          assert report["protocol"]["resampling"] is False
+          assert report["target"]["round_trip_cost_fraction"] == 0.006
+          assert report["protocol"]["volatility_filter"]["cutoff_recomputed_per_fold_from_train_only"] is True
+          assert report["protocol"]["volatility_filter"]["low_volatility_entry_allowed"] is False
+          safety = report["safety_invariants"]
+          assert safety["Champion"] is None
+          assert safety["order_permission"] is False
+          assert safety["trading_authorization"] == "NO-GO"
+          assert safety["economic_acceptance"] == "NO-GO"
+          assert safety["model_promoted"] is False
+          assert safety["production_model_updated"] is False
+          assert safety["strategy_registry_updated"] is False
+          assert safety["orders_or_execution_api_used"] is False
+          assert safety["private_api_calls"] == 0
+          assert safety["order_endpoint_calls"] == 0
+          assert safety["real_order_attempts"] == 0
+          print(json.dumps({
+              "commit_sha": report["created_by_commit_sha"],
+              "candidate_count": report["protocol"]["candidate_count"],
+              "baseline": report["fixed_baseline_candidate"],
+              "adaptive_policy": report["adaptive_walkforward_policy"],
+              "Champion": safety["Champion"],
+              "order_permission": safety["order_permission"],
+              "trading_authorization": safety["trading_authorization"]
+          }, sort_keys=True, allow_nan=False))
+          PY
+
+      - name: Upload classifier, volatility-filter, fold, prediction, and trade evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alix-stage-b-classification-${{ github.run_id }}
+          path: |
+            artifacts/stage-a-coverage/
+            artifacts/stage-b-classification/
+          if-no-files-found: error
+          retention-days: 90
