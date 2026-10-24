@@ -123,11 +123,9 @@ def test_flat_price_windows_have_explicit_neutral_technical_definitions() -> Non
         }
     )
 
+    original = candles.copy(deep=True)
     featured = add_signal_features(candles)
 
     assert featured["%-rsi_14"].iloc[14:].eq(50.0).all()
     assert featured["%-range_position_24"].iloc[23:].eq(0.5).all()
-    pd.testing.assert_frame_equal(
-        candles,
-        candles.copy(),
-    )
+    pd.testing.assert_frame_equal(candles, original)
