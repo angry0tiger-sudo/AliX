@@ -330,16 +330,28 @@ def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
     DataFrame(rows).to_csv(path, index=False)
 
 
+def _complete_hourly_groups(hourly: DataFrame) -> tuple[DataFrame, int]:
+    if len(hourly) < 4:
+        raise ValueError("ai_core_hourly_rows_below_one_complete_4h_bar")
+    trailing_rows = len(hourly) % 4
+    complete = hourly.iloc[:-trailing_rows].copy() if trailing_rows else hourly.copy()
+    if len(complete) < 4:
+        raise ValueError("ai_core_hourly_rows_below_one_complete_4h_bar")
+    return complete, trailing_rows
+
+
 def _prepare_market_dataset(
     input_dir: Path, eth_input: Path | None
 ) -> tuple[DataFrame, DataFrame, tuple[str, ...], dict[str, Any], dict[str, Any], str]:
     hourly_btc, source_report, segment_hash = stage_b._load_development(input_dir)
+    source_hourly_rows = len(hourly_btc)
     phases = tuple(
         sorted(pd.to_datetime(hourly_btc["date"], utc=True).dt.minute.unique().tolist())
     )
     if len(phases) != 1:
         raise ValueError("ai_core_btc_timestamp_phase_not_uniform")
     phase_minutes = int(phases[0])
+    hourly_btc, discarded_tail_rows = _complete_hourly_groups(hourly_btc)
     btc_4h = aggregate_hourly_to_4h(hourly_btc)
     if eth_input is None:
         features = build_ai_features(btc_4h)
@@ -372,7 +384,9 @@ def _prepare_market_dataset(
         "symbol": "BTCUSDT",
         "source_timeframe": "1h",
         "evaluation_timeframe": "4h",
-        "development_rows_hourly": len(hourly_btc),
+        "development_rows_hourly_source": source_hourly_rows,
+        "development_rows_hourly_used_for_4h": len(hourly_btc),
+        "discarded_incomplete_trailing_hourly_rows": discarded_tail_rows,
         "development_rows_4h": len(btc_4h),
         "final_holdout_used": False,
         "reserved_final_90_day_holdout_rows": 90 * 24,
