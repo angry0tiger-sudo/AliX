@@ -566,32 +566,54 @@ def _evaluate_candidate(
     }
 
 
+def _summarize_opportunity_regime(
+    predictions: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Summarize eligible entry opportunities and their training-only volatility gate."""
+    opportunities = [row for row in predictions if row["trade_opportunity"]]
+    high_volatility = [
+        row for row in opportunities if row["high_volatility_regime"]
+    ]
+    rate = float(len(high_volatility) / len(opportunities)) if opportunities else None
+    return {
+        "entry_opportunity_count": len(opportunities),
+        "high_volatility_opportunity_count": len(high_volatility),
+        "high_volatility_opportunity_rate": rate,
+    }
+
+
+def _summarize_classifier_probabilities(
+    predictions: list[dict[str, Any]],
+) -> dict[str, float | None]:
+    """Summarize model confidence without coupling it to economic acceptance."""
+    if not predictions:
+        return {"probability_p50": None, "probability_p90": None}
+    probabilities = [
+        float(row["predicted_probability_up_over_cost"]) for row in predictions
+    ]
+    return {
+        "probability_p50": float(np.quantile(probabilities, 0.50)),
+        "probability_p90": float(np.quantile(probabilities, 0.90)),
+    }
+
+
+def _positive_event_rate(predictions: list[dict[str, Any]]) -> float | None:
+    """Return the OOS prevalence of the defined long-over-cost event."""
+    if not predictions:
+        return None
+    return float(np.mean([bool(row["realized_positive_event"]) for row in predictions]))
+
+
 def _candidate_summary(result: dict[str, Any]) -> dict[str, Any]:
-    rows = result["predictions"]
-    opportunities = [row for row in rows if row["trade_opportunity"]]
-    high_volatility = [row for row in opportunities if row["high_volatility_regime"]]
-    probabilities = [float(row["predicted_probability_up_over_cost"]) for row in rows]
+    predictions = result["predictions"]
     return {
         "candidate_id": result["candidate_id"],
         "configuration": result["configuration"],
         "evaluated_fold_count": len(result["folds"]),
-        "oos_prediction_count": len(rows),
-        "entry_opportunity_count": len(opportunities),
-        "high_volatility_opportunity_count": len(high_volatility),
-        "high_volatility_opportunity_rate": (
-            float(len(high_volatility) / len(opportunities)) if opportunities else None
-        ),
-        "probability_p50": float(np.quantile(probabilities, 0.50))
-        if probabilities
-        else None,
-        "probability_p90": float(np.quantile(probabilities, 0.90))
-        if probabilities
-        else None,
-        "positive_event_rate_oos": (
-            float(np.mean([bool(row["realized_positive_event"]) for row in rows]))
-            if rows
-            else None
-        ),
+        "oos_prediction_count": len(predictions),
+        **_summarize_opportunity_regime(predictions),
+        **_summarize_classifier_probabilities(predictions),
+        "positive_event_rate_oos": _positive_event_rate(predictions),
         **_trade_summary(result["trades"]),
     }
 
