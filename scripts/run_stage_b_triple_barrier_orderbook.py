@@ -535,10 +535,6 @@ def run_experiment(
                         **_stress_metrics(predictions, slippage),
                     }
                 )
-    book_expected = len(outcomes_by_config)
-    book_executed = sum(
-        1 for row in stress_rows if row["feature_group"] == "ohlcv_plus_binance_relative_book"
-    ) // len(SLIPPAGE_BPS)
     economic_ready = (
         book_features is not None
         and liquidity["status"] == "READY_FOR_CAP_CHECK"
