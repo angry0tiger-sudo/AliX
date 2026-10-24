@@ -13,6 +13,7 @@ import csv
 import json
 import math
 import os
+from itertools import product
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -85,6 +86,94 @@ MODEL_PROFILES: dict[str, dict[str, object]] = {
     },
 }
 BASELINE_CANDIDATE_ID = "stage_b_8|phase4_default|h12"
+
+
+def _build_candidate_datasets(
+    engineered: DataFrame,
+    selected_features: dict[str, list[str]],
+    common_start_utc: pd.Timestamp,
+    common_end_utc: pd.Timestamp,
+) -> tuple[dict[tuple[str, int], DataFrame], int]:
+    """Build and verify the exact common timestamp grid for all configurations."""
+    datasets: dict[tuple[str, int], DataFrame] = {}
+    reference_timestamps: np.ndarray | None = None
+    reference_row_count: int | None = None
+    for feature_group in FEATURE_GROUPS:
+        columns = selected_features[feature_group]
+        for horizon in HORIZON_GRID:
+            dataset = _build_dataset(
+                engineered, columns, horizon, common_start_utc, common_end_utc
+            )
+            timestamps = pd.to_datetime(
+                dataset["date"], utc=True, errors="raise"
+            ).astype("int64").to_numpy(dtype=np.int64)
+            if reference_timestamps is None:
+                reference_timestamps = timestamps
+                reference_row_count = len(dataset)
+            elif not np.array_equal(timestamps, reference_timestamps):
+                raise ValueError("optimization_candidate_timestamp_grid_mismatch")
+            if len(dataset) != reference_row_count:
+                raise ValueError("optimization_candidate_row_count_mismatch")
+            datasets[(feature_group, horizon)] = dataset
+    if reference_row_count is None:
+        raise ValueError("optimization_candidate_grid_empty")
+    return datasets, reference_row_count
+
+
+def _evaluate_candidate_grid(
+    datasets: dict[tuple[str, int], DataFrame],
+    selected_features: dict[str, list[str]],
+) -> dict[str, dict[str, Any]]:
+    """Evaluate the fixed grid of feature groups, horizons, and model profiles."""
+    results: dict[str, dict[str, Any]] = {}
+    for feature_group, horizon, model_profile in product(
+        FEATURE_GROUPS, HORIZON_GRID, ("phase4_default", "shallow_regularized")
+    ):
+        candidate_id = _candidate_id(feature_group, model_profile, horizon)
+        results[candidate_id] = _evaluate_candidate(
+            candidate_id=candidate_id,
+            feature_group=feature_group,
+            feature_columns=selected_features[feature_group],
+            model_profile=model_profile,
+            horizon=horizon,
+            dataset=datasets[(feature_group, horizon)],
+        )
+    return results
+
+
+def _collect_candidate_rows(
+    candidate_results: dict[str, dict[str, Any]],
+) -> tuple[
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+]:
+    """Flatten candidate evidence into report summaries and reproducible CSV rows."""
+    summaries = [
+        _candidate_summary(result) for result in candidate_results.values()
+    ]
+    predictions = [
+        row
+        for result in candidate_results.values()
+        for row in result["predictions"]
+    ]
+    trades = [
+        row for result in candidate_results.values() for row in result["trades"]
+    ]
+    folds = [
+        {
+            "candidate_id": result["candidate_id"],
+            "feature_group": result["configuration"]["feature_group"],
+            "model_profile": result["configuration"]["model_profile"],
+            "horizon_hours": result["configuration"]["horizon_hours"],
+            **fold,
+        }
+        for result in candidate_results.values()
+        for fold in result["folds"]
+    ]
+    return summaries, predictions, trades, folds
+
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -366,6 +455,137 @@ def _candidate_id(group: str, profile: str, horizon: int) -> str:
     return f"{group}|{profile}|h{horizon}"
 
 
+def _build_fold_rows(
+    *,
+    candidate_id: str,
+    feature_group: str,
+    model_profile: str,
+    horizon: int,
+    fold_index: int,
+    fold_id: str,
+    scored: DataFrame,
+    test: DataFrame,
+    forecasts: np.ndarray,
+    realized: np.ndarray,
+    terminal_fold: bool,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Materialize forecast rows and cost-qualified paper trades for one fold."""
+    predictions: list[dict[str, Any]] = []
+    trades: list[dict[str, Any]] = []
+    for offset, (forecast, outcome) in enumerate(
+        zip(forecasts.tolist(), realized.tolist(), strict=True)
+    ):
+        entry = pd.Timestamp(scored["date"].iloc[offset])
+        opportunity = offset % horizon == 0 and (
+            terminal_fold or offset + horizon < len(test)
+        )
+        take_trade = opportunity and forecast > ROUND_TRIP_COST
+        prediction = {
+            "candidate_id": candidate_id,
+            "feature_group": feature_group,
+            "model_profile": model_profile,
+            "horizon_hours": horizon,
+            "fold_index": fold_index,
+            "fold_id": fold_id,
+            "timestamp_utc": utc_text(entry),
+            "forecast_return_horizon": float(forecast),
+            "realized_forward_return": float(outcome),
+            "round_trip_cost_fraction": ROUND_TRIP_COST,
+            "trade_opportunity": bool(opportunity),
+            "trade_taken": bool(take_trade),
+        }
+        predictions.append(prediction)
+        if take_trade:
+            trades.append(
+                {
+                    "candidate_id": candidate_id,
+                    "feature_group": feature_group,
+                    "model_profile": model_profile,
+                    "horizon_hours": horizon,
+                    "fold_index": fold_index,
+                    "fold_id": fold_id,
+                    "entry_utc": utc_text(entry),
+                    "exit_utc": utc_text(entry + pd.Timedelta(hours=horizon)),
+                    "forecast_return": float(forecast),
+                    "gross_return": float(outcome),
+                    "fee_bps_round_trip": 2.0 * FEE_BPS_SIDE,
+                    "slippage_bps_round_trip": 2.0 * SLIPPAGE_BPS_SIDE,
+                    "net_return": float(outcome - ROUND_TRIP_COST),
+                    "won_after_costs": float(outcome - ROUND_TRIP_COST) > 0.0,
+                    "order_submitted": False,
+                }
+            )
+    return predictions, trades
+
+
+def _evaluate_candidate_fold(
+    *,
+    candidate_id: str,
+    feature_group: str,
+    feature_columns: list[str],
+    model_profile: str,
+    horizon: int,
+    fold_index: int,
+    fold: Any,
+    dataset: DataFrame,
+) -> dict[str, Any]:
+    """Fit and score one purged OOS fold, then return its audit evidence."""
+    train = dataset.iloc[: fold.train_stop]
+    test = dataset.iloc[fold.test_start : fold.test_stop]
+    if train.empty or test.empty:
+        raise ValueError(f"optimization_fold_empty:{fold.fold_id}")
+    model = _make_model(model_profile)
+    model.fit(
+        train.loc[:, feature_columns],
+        train[TARGET_COLUMN].to_numpy(dtype=float),
+    )
+    terminal_fold = fold.test_stop == len(dataset)
+    scored_count = len(test) if terminal_fold else len(test) - horizon
+    scored = test.iloc[:scored_count]
+    if scored.empty:
+        raise ValueError(f"optimization_fold_has_no_oos_rows:{fold.fold_id}")
+    forecasts = np.asarray(model.predict(scored.loc[:, feature_columns]), dtype=float)
+    realized = scored[TARGET_COLUMN].to_numpy(dtype=float)
+    if (
+        len(forecasts) != len(realized)
+        or not np.isfinite(forecasts).all()
+        or not np.isfinite(realized).all()
+    ):
+        raise ValueError(f"optimization_oos_values_invalid:{fold.fold_id}")
+    predictions, trades = _build_fold_rows(
+        candidate_id=candidate_id,
+        feature_group=feature_group,
+        model_profile=model_profile,
+        horizon=horizon,
+        fold_index=fold_index,
+        fold_id=fold.fold_id,
+        scored=scored,
+        test=test,
+        forecasts=forecasts,
+        realized=realized,
+        terminal_fold=terminal_fold,
+    )
+    hurdle = summarize_cost_hurdle(
+        [float(row["forecast_return_horizon"]) for row in predictions],
+        [bool(row["trade_opportunity"]) for row in predictions],
+    )
+    fold_report = {
+        "fold_index": fold_index,
+        "fold_id": fold.fold_id,
+        "train_rows": len(train),
+        "test_rows": len(test),
+        "scored_oos_rows": len(scored),
+        "purged_label_rows": horizon,
+        "train_start_utc": utc_text(train["date"].iloc[0]),
+        "train_end_utc": utc_text(train["date"].iloc[-1]),
+        "test_start_utc": utc_text(test["date"].iloc[0]),
+        "test_end_utc": utc_text(test["date"].iloc[-1]),
+        **hurdle,
+        **_trade_summary(trades),
+    }
+    return {"fold_report": fold_report, "predictions": predictions, "trades": trades}
+
+
 def _evaluate_candidate(
     *,
     candidate_id: str,
@@ -375,6 +595,7 @@ def _evaluate_candidate(
     horizon: int,
     dataset: DataFrame,
 ) -> dict[str, Any]:
+    """Evaluate one candidate using fresh estimators and expanding OOS folds."""
     folds = build_fixed_window_folds(
         stop_index=len(dataset),
         initial_train_rows=A_TRAIN,
@@ -382,106 +603,23 @@ def _evaluate_candidate(
         window_rows=WINDOW,
         prefix=f"SIG-{feature_group}-{model_profile}-H{horizon}",
     )
+    fold_reports: list[dict[str, Any]] = []
     prediction_rows: list[dict[str, Any]] = []
     trades: list[dict[str, Any]] = []
-    fold_reports: list[dict[str, Any]] = []
-
     for fold_index, fold in enumerate(folds):
-        train = dataset.iloc[: fold.train_stop]
-        test = dataset.iloc[fold.test_start : fold.test_stop]
-        if train.empty or test.empty:
-            raise ValueError(f"optimization_fold_empty:{fold.fold_id}")
-        model = _make_model(model_profile)
-        model.fit(
-            train.loc[:, feature_columns],
-            train[TARGET_COLUMN].to_numpy(dtype=float),
+        fold_result = _evaluate_candidate_fold(
+            candidate_id=candidate_id,
+            feature_group=feature_group,
+            feature_columns=feature_columns,
+            model_profile=model_profile,
+            horizon=horizon,
+            fold_index=fold_index,
+            fold=fold,
+            dataset=dataset,
         )
-        terminal_fold = fold.test_stop == len(dataset)
-        scored_count = len(test) if terminal_fold else len(test) - horizon
-        scored = test.iloc[:scored_count]
-        if scored.empty:
-            raise ValueError(f"optimization_fold_has_no_oos_rows:{fold.fold_id}")
-        forecasts = np.asarray(
-            model.predict(scored.loc[:, feature_columns]), dtype=float
-        )
-        realized = scored[TARGET_COLUMN].to_numpy(dtype=float)
-        if (
-            len(forecasts) != len(realized)
-            or not np.isfinite(forecasts).all()
-            or not np.isfinite(realized).all()
-        ):
-            raise ValueError(f"optimization_oos_values_invalid:{fold.fold_id}")
-
-        fold_trades: list[dict[str, Any]] = []
-        fold_predictions: list[dict[str, Any]] = []
-        for offset, (forecast, outcome) in enumerate(
-            zip(forecasts.tolist(), realized.tolist(), strict=True)
-        ):
-            entry = pd.Timestamp(scored["date"].iloc[offset])
-            opportunity = offset % horizon == 0 and (
-                terminal_fold or offset + horizon < len(test)
-            )
-            take_trade = opportunity and forecast > ROUND_TRIP_COST
-            prediction = {
-                "candidate_id": candidate_id,
-                "feature_group": feature_group,
-                "model_profile": model_profile,
-                "horizon_hours": horizon,
-                "fold_index": fold_index,
-                "fold_id": fold.fold_id,
-                "timestamp_utc": utc_text(entry),
-                "forecast_return_horizon": float(forecast),
-                "realized_forward_return": float(outcome),
-                "round_trip_cost_fraction": ROUND_TRIP_COST,
-                "trade_opportunity": bool(opportunity),
-                "trade_taken": bool(take_trade),
-            }
-            fold_predictions.append(prediction)
-            if not take_trade:
-                continue
-            net_return = float(outcome - ROUND_TRIP_COST)
-            trade = {
-                "candidate_id": candidate_id,
-                "feature_group": feature_group,
-                "model_profile": model_profile,
-                "horizon_hours": horizon,
-                "fold_index": fold_index,
-                "fold_id": fold.fold_id,
-                "entry_utc": utc_text(entry),
-                "exit_utc": utc_text(entry + pd.Timedelta(hours=horizon)),
-                "forecast_return": float(forecast),
-                "gross_return": float(outcome),
-                "fee_bps_round_trip": 2.0 * FEE_BPS_SIDE,
-                "slippage_bps_round_trip": 2.0 * SLIPPAGE_BPS_SIDE,
-                "net_return": net_return,
-                "won_after_costs": net_return > 0.0,
-                "order_submitted": False,
-            }
-            fold_trades.append(trade)
-            trades.append(trade)
-
-        prediction_rows.extend(fold_predictions)
-        hurdle = summarize_cost_hurdle(
-            [float(row["forecast_return_horizon"]) for row in fold_predictions],
-            [bool(row["trade_opportunity"]) for row in fold_predictions],
-        )
-        fold_reports.append(
-            {
-                "fold_index": fold_index,
-                "fold_id": fold.fold_id,
-                "train_rows": len(train),
-                "test_rows": len(test),
-                "scored_oos_rows": len(scored),
-                "purged_label_rows": horizon,
-                "train_start_utc": utc_text(train["date"].iloc[0]),
-                "train_end_utc": utc_text(train["date"].iloc[-1]),
-                "test_start_utc": utc_text(test["date"].iloc[0]),
-                "test_end_utc": utc_text(test["date"].iloc[-1]),
-                **hurdle,
-                **_trade_summary(fold_trades),
-            }
-        )
-
+        fold_reports.append(fold_result["fold_report"])
+        prediction_rows.extend(fold_result["predictions"])
+        trades.extend(fold_result["trades"])
     return {
         "candidate_id": candidate_id,
         "configuration": {
@@ -539,55 +677,71 @@ def _prior_candidate_score(
     return score, metrics
 
 
+def _eligible_prior_candidates(
+    candidate_results: dict[str, dict[str, Any]], fold_index: int
+) -> list[tuple[tuple[float, float, float, int], str, int]]:
+    """Rank only candidates that pass gates on strictly earlier OOS folds."""
+    eligible: list[tuple[tuple[float, float, float, int], str, int]] = []
+    for candidate_id, result in sorted(candidate_results.items()):
+        prior_trades = [
+            trade
+            for trade in result["trades"]
+            if int(trade["fold_index"]) < fold_index
+        ]
+        selection = _prior_candidate_score(prior_trades)
+        if selection is not None:
+            score, metrics = selection
+            eligible.append((score, candidate_id, int(metrics["trade_count"])))
+    return eligible
+
+
+def _select_and_collect_policy_fold(
+    candidate_results: dict[str, dict[str, Any]], fold_index: int
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Select one configuration from prior folds and collect only current-fold trades."""
+    eligible = _eligible_prior_candidates(candidate_results, fold_index)
+    if eligible:
+        _, chosen_id, prior_count = max(eligible, key=lambda item: item[0])
+        reason = "selected_using_prior_oos_trades_only"
+    else:
+        chosen_id = BASELINE_CANDIDATE_ID
+        prior_count = 0
+        reason = "fallback_no_prior_candidate_passed_selection_gates"
+    chosen = candidate_results[chosen_id]
+    current_trades = [
+        trade
+        for trade in chosen["trades"]
+        if int(trade["fold_index"]) == fold_index
+    ]
+    fold_report = chosen["folds"][fold_index]
+    trace_row = {
+        "fold_index": fold_index,
+        "fold_id": fold_report["fold_id"],
+        "selected_candidate_id": chosen_id,
+        "selection_reason": reason,
+        "prior_selected_trades_used": prior_count,
+        "current_fold_results_used_for_selection": False,
+        "current_fold_trade_count": len(current_trades),
+    }
+    return trace_row, current_trades
+
+
 def _evaluate_adaptive_policy(
     candidate_results: dict[str, dict[str, Any]],
 ) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
+    """Build a fold-by-fold policy using prior OOS evidence only."""
     baseline = candidate_results[BASELINE_CANDIDATE_ID]
     fold_count = len(baseline["folds"])
     if any(len(result["folds"]) != fold_count for result in candidate_results.values()):
         raise ValueError("optimization_candidate_fold_count_mismatch")
-
     trace: list[dict[str, Any]] = []
     adaptive_trades: list[dict[str, Any]] = []
     for fold_index in range(fold_count):
-        eligible: list[tuple[tuple[float, float, float, int], str, int]] = []
-        for candidate_id, result in sorted(candidate_results.items()):
-            prior = [
-                trade
-                for trade in result["trades"]
-                if int(trade["fold_index"]) < fold_index
-            ]
-            selection = _prior_candidate_score(prior)
-            if selection is not None:
-                score, metrics = selection
-                eligible.append((score, candidate_id, int(metrics["trade_count"])))
-        if eligible:
-            _, chosen_id, prior_count = max(eligible, key=lambda item: item[0])
-            reason = "selected_using_prior_oos_trades_only"
-        else:
-            chosen_id = BASELINE_CANDIDATE_ID
-            prior_count = 0
-            reason = "fallback_no_prior_candidate_passed_selection_gates"
-
-        chosen = candidate_results[chosen_id]
-        current_fold_trades = [
-            trade
-            for trade in chosen["trades"]
-            if int(trade["fold_index"]) == fold_index
-        ]
-        adaptive_trades.extend(current_fold_trades)
-        fold_report = chosen["folds"][fold_index]
-        trace.append(
-            {
-                "fold_index": fold_index,
-                "fold_id": fold_report["fold_id"],
-                "selected_candidate_id": chosen_id,
-                "selection_reason": reason,
-                "prior_selected_trades_used": prior_count,
-                "current_fold_results_used_for_selection": False,
-                "current_fold_trade_count": len(current_fold_trades),
-            }
+        trace_row, current_trades = _select_and_collect_policy_fold(
+            candidate_results, fold_index
         )
+        trace.append(trace_row)
+        adaptive_trades.extend(current_trades)
     policy = {
         "selection_rule": (
             "Use prior A-development OOS trades only; require >=30 prior trades, "
@@ -607,20 +761,15 @@ def _evaluate_adaptive_policy(
     return policy, trace, adaptive_trades
 
 
-def run_signal_optimization(
-    input_dir: Path, output_dir: Path, commit_sha: str
-) -> dict[str, Any]:
-    _validate_commit_sha(commit_sha)
+def _prepare_development_context(input_dir: Path) -> dict[str, Any]:
+    """Authenticate Stage A and remove the reserved holdout before feature work."""
     _frame, source_report, segments, segment_hashes = verify_source_artifact(input_dir)
     segment_a = segments[0]
     if len(segment_a) <= A_HOLDOUT + A_TRAIN + WINDOW:
         raise ValueError("optimization_segment_a_too_short")
-
     holdout_start = pd.Timestamp(segment_a["date"].iloc[-A_HOLDOUT])
-    # Slice away the reserved A holdout before feature calculation or target creation.
     development = segment_a.iloc[:-A_HOLDOUT].copy().reset_index(drop=True)
     del segment_a, segments, _frame
-
     candle_columns = ["date", "open", "high", "low", "close", "volume"]
     validated, quality_fingerprint = validate_ohlcv(
         development.loc[:, candle_columns].copy(), HOUR
@@ -635,66 +784,48 @@ def run_signal_optimization(
         selected_features["extended_trend_rsi"],
         max(HORIZON_GRID),
     )
+    return {
+        "source_report": source_report,
+        "segment_hashes": segment_hashes,
+        "holdout_start": holdout_start,
+        "development": development,
+        "quality_fingerprint": quality_fingerprint,
+        "engineered": engineered,
+        "feature_diagnostics": feature_diagnostics,
+        "selected_features": selected_features,
+        "excluded_features": excluded_features,
+        "common_start_utc": common_start_utc,
+        "common_end_utc": common_end_utc,
+    }
 
-    candidate_results: dict[str, dict[str, Any]] = {}
-    shared_timestamp_ns: np.ndarray | None = None
-    shared_row_count: int | None = None
-    for feature_group in FEATURE_GROUPS:
-        feature_columns = selected_features[feature_group]
-        for horizon in HORIZON_GRID:
-            dataset = _build_dataset(
-                engineered,
-                feature_columns,
-                horizon,
-                common_start_utc,
-                common_end_utc,
-            )
-            dataset_timestamp_ns = (
-                pd.to_datetime(dataset["date"], utc=True, errors="raise")
-                .astype("int64")
-                .to_numpy(dtype=np.int64)
-            )
-            if shared_timestamp_ns is None:
-                shared_timestamp_ns = dataset_timestamp_ns
-                shared_row_count = len(dataset)
-            elif not np.array_equal(dataset_timestamp_ns, shared_timestamp_ns):
-                raise ValueError("optimization_candidate_timestamp_grid_mismatch")
-            if len(dataset) != shared_row_count:
-                raise ValueError("optimization_candidate_row_count_mismatch")
-            for model_profile in ("phase4_default", "shallow_regularized"):
-                candidate_id = _candidate_id(feature_group, model_profile, horizon)
-                candidate_results[candidate_id] = _evaluate_candidate(
-                    candidate_id=candidate_id,
-                    feature_group=feature_group,
-                    feature_columns=feature_columns,
-                    model_profile=model_profile,
-                    horizon=horizon,
-                    dataset=dataset,
-                )
 
+def run_signal_optimization(
+    input_dir: Path, output_dir: Path, commit_sha: str
+) -> dict[str, Any]:
+    _validate_commit_sha(commit_sha)
+    context = _prepare_development_context(input_dir)
+    source_report = context["source_report"]
+    segment_hashes = context["segment_hashes"]
+    holdout_start = context["holdout_start"]
+    development = context["development"]
+    quality_fingerprint = context["quality_fingerprint"]
+    selected_features = context["selected_features"]
+    excluded_features = context["excluded_features"]
+    common_start_utc = context["common_start_utc"]
+    common_end_utc = context["common_end_utc"]
+    candidate_datasets, shared_row_count = _build_candidate_datasets(
+        context["engineered"],
+        selected_features,
+        common_start_utc,
+        common_end_utc,
+    )
+    candidate_results = _evaluate_candidate_grid(candidate_datasets, selected_features)
     policy, policy_trace, policy_trades = _evaluate_adaptive_policy(candidate_results)
-    candidate_summaries = [
-        _candidate_summary(result) for result in candidate_results.values()
-    ]
-    prediction_rows = [
-        row for result in candidate_results.values() for row in result["predictions"]
-    ]
-    trade_rows = [
-        row for result in candidate_results.values() for row in result["trades"]
-    ]
-    fold_rows = [
-        {
-            "candidate_id": result["candidate_id"],
-            "feature_group": result["configuration"]["feature_group"],
-            "model_profile": result["configuration"]["model_profile"],
-            "horizon_hours": result["configuration"]["horizon_hours"],
-            **fold,
-        }
-        for result in candidate_results.values()
-        for fold in result["folds"]
-    ]
-
+    candidate_summaries, prediction_rows, trade_rows, fold_rows = (
+        _collect_candidate_rows(candidate_results)
+    )
     baseline_summary = _candidate_summary(candidate_results[BASELINE_CANDIDATE_ID])
+
     report: dict[str, Any] = {
         "report_schema": REPORT_SCHEMA,
         "run_status": "COMPLETED_RESEARCH_ONLY",
