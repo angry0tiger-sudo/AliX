@@ -222,6 +222,10 @@ def test_proxy_alignment_rejects_mixed_nobitex_timestamp_phases() -> None:
         _align_proxy_volume(candles, klines)
 
 
-def test_binance_archive_downloader_rejects_untrusted_hosts_before_network_access() -> None:
+def test_binance_archive_downloader_rejects_untrusted_hosts_before_network_access() -> (
+    None
+):
     with pytest.raises(ValueError, match="source_url_not_allowlisted"):
-        _download_bytes("https://example.com/data/spot/monthly/klines/BTCUSDT/1h/example.zip")
+        _download_bytes(
+            "https://example.com/data/spot/monthly/klines/BTCUSDT/1h/example.zip"
+        )

@@ -77,6 +77,7 @@ def _download_bytes(url: str) -> bytes | None:
     finally:
         response.release_conn()
 
+
 def _month_url(month: pd.Timestamp) -> str:
     return (
         f"{BINANCE_SPOT_ROOT}/monthly/klines/{SYMBOL}/{BINANCE_KLINE_INTERVAL}/"
