@@ -1,0 +1,113 @@
+name: AliX Stage B Triple-Barrier and Relative Order-Book Research
+
+on:
+  push:
+    branches:
+      - "research/stage-b-triple-barrier-orderbook"
+    paths:
+      - ".github/workflows/stage-b-triple-barrier-orderbook.yml"
+      - "scripts/run_stage_b_triple_barrier_orderbook.py"
+      - "tests/unit/test_stage_b_triple_barrier_orderbook.py"
+      - "services/meta_labeling/triple_barrier.py"
+      - "docs/knowledge_base/STAGE_B_TRIPLE_BARRIER_ORDERBOOK.md"
+      - "docs/knowledge_base/OPEN_TASKS.md"
+      - "docs/governance/owner-directives/2026-10-24-stage-b-orderbook.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: alix-stage-b-triple-barrier-orderbook
+  cancel-in-progress: false
+
+jobs:
+  triple-barrier-orderbook-research:
+    name: A-development Triple-Barrier and data-availability audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read
+    env:
+      ALIx_ENV: paper
+      ALIx_DRY_RUN: "true"
+      ALIx_ALLOW_LIVE_TRADING: "false"
+      ALIx_REPORTING_ENABLED: "false"
+      PYTHONUNBUFFERED: "1"
+      PYTHONPATH: ${{ github.workspace }}
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    steps:
+      - name: Checkout exact research commit without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set up pinned Python runtime
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pinned research dependencies
+        run: |
+          python -m pip install pip==25.2
+          python -m pip install numpy==2.5.4 pandas==2.3.3 lightgbm==4.7.0 scikit-learn==1.9.0
+      - name: Download immutable Stage A coverage artifact
+        uses: actions/download-artifact@v4
+        with:
+          repository: angry0tiger-sudo/AliX
+          run-id: 40077609244
+          name: alix-nobitex-history-coverage-40077609244
+          path: artifacts/stage-a-coverage
+          github-token: ${{ github.token }}
+      - name: Run Triple-Barrier diagnostics and fail-closed data gates
+        run: |
+          python scripts/run_stage_b_triple_barrier_orderbook.py \
+            --input-dir artifacts/stage-a-coverage \
+            --output-dir artifacts/stage-b-triple-barrier-orderbook \
+            --commit-sha "$GITHUB_SHA" \
+            --nobitex-volume-unit unknown
+      - name: Verify provenance, cost stress and immutable safety state
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          report = json.loads(Path("artifacts/stage-b-triple-barrier-orderbook/triple-barrier-orderbook-report.json").read_text(encoding="utf-8"))
+          assert report["created_by_commit_sha"] == os.environ["GITHUB_SHA"]
+          assert report["source"]["coverage_workflow_run_id"] == 40077609244
+          assert report["source"]["holdout_used"] is False
+          assert report["protocol"]["horizons_hours"] == [24, 48]
+          assert report["protocol"]["barrier_candidate_count"] == 8
+          assert report["protocol"]["diagnostic_scenario_count"] == 24
+          assert report["protocol"]["model_candidate_count_planned"] == 16
+          assert report["protocol"]["model_candidate_count_executed"] == 8
+          assert report["protocol"]["model_candidate_count_blocked_for_missing_book"] == 8
+          assert report["protocol"]["oos_prediction_row_count"] > 0
+          assert report["protocol"]["round_trip_total_cost_bps"] == [90.0, 120.0, 150.0]
+          assert report["protocol"]["liquidity_participation_cap_fraction"] == 0.01
+          assert report["data_availability"]["liquidity"]["positive_volume_rows"] == 0
+          assert report["data_availability"]["liquidity"]["rows_with_positive_order_capacity"] == 0
+          assert report["economic_evaluation"]["status"] == "NOT_EVALUATED_BLOCKED_INPUT_DATA"
+          safety = report["safety_invariants"]
+          assert safety["Champion"] is None
+          assert safety["order_permission"] is False
+          assert safety["trading_authorization"] == "NO-GO"
+          assert safety["economic_acceptance"] == "NO-GO"
+          assert safety["model_promoted"] is False
+          assert safety["production_model_updated"] is False
+          assert safety["strategy_registry_updated"] is False
+          assert safety["orders_or_execution_api_used"] is False
+          assert safety["private_api_calls"] == 0
+          assert safety["order_endpoint_calls"] == 0
+          assert safety["real_order_attempts"] == 0
+          print(json.dumps({"commit_sha": report["created_by_commit_sha"], "run_status": report["run_status"], "barrier_scenarios": report["protocol"]["diagnostic_scenario_count"], "executed_model_candidates": report["protocol"]["model_candidate_count_executed"], "oos_predictions": report["protocol"]["oos_prediction_row_count"], "orderbook_status": report["data_availability"]["orderbook_status"], "liquidity_status": report["data_availability"]["liquidity"]["status"], "economic_status": report["economic_evaluation"]["status"]}, sort_keys=True, allow_nan=False))
+          PY
+      - name: Upload barrier diagnostics and data-gate report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alix-stage-b-triple-barrier-orderbook-${{ github.run_id }}
+          path: artifacts/stage-b-triple-barrier-orderbook/
+          if-no-files-found: error
+          retention-days: 90

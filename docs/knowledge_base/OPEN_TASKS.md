@@ -214,3 +214,13 @@
 - No threshold relaxation or data imputation; no volume-derived feature is fabricated because source segment A has zero positive-volume observations. HMM/Meta-Label stay out of this direct Stage B experiment, because they are separate Phase 5 signal paths.
 - Adaptive candidate selection requires >=30 prior OOS trades, win rate >60%, positive net expectancy and drawdown <15%; otherwise it uses the existing baseline. Candidate summaries are exploratory, not a Champion selection.
 - Hard invariants remain `Champion=null`, `order_permission=false`, `trading_authorization=NO-GO`, and `economic_acceptance=NO-GO`.
+
+
+# Owner Directive: Stage B Triple-Barrier + Order Book stress research — 2026-10-24
+
+- New branch: research/stage-b-triple-barrier-orderbook, based on staging 1bcac18470ff705f9bfbc363db1467a4a5624dfe.
+- Fixed grid: 24/48-hour horizon, PT multipliers 1.5/2.0, SL multipliers 0.75/1.0, costs at 25 bps/side fees plus 20/35/50 bps/side slippage (90/120/150 bps round trip).
+- Binance Order Book is permitted only for relative imbalance/spread features, never absolute depth transfer to Nobitex.
+- Order notional capped at 1% of contemporaneous, unit-verified Nobitex quote notional. Stage A Segment A has 58,655 zero-volume candles and grants zero capacity.
+- No historical Binance Level-2 snapshots exist in the pinned Stage A artifact. No private API credentials or order endpoints are used to acquire them; book-enhanced candidates remain blocked until permitted, provenance-verifiable snapshots are supplied.
+- Economic acceptance requires >=100 executable OOS trades, win rate >60%, positive net expectancy and absolute max drawdown <15%. All safety invariants and quality gates remain unchanged.
