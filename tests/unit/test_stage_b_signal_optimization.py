@@ -54,14 +54,22 @@ def test_extended_features_are_past_only() -> None:
     candles = _ohlcv()
     changed = candles.copy()
     split = 240
-    changed.loc[split, "close"] = changed.loc[split, "close"] * 1.15
-    changed.loc[split, "open"] = changed.loc[split - 1, "close"]
-    changed.loc[split, "high"] = (
-        max(changed.loc[split, "open"], changed.loc[split, "close"]) * 1.002
-    )
-    changed.loc[split, "low"] = (
-        min(changed.loc[split, "open"], changed.loc[split, "close"]) * 0.998
-    )
+    changed_open = pd.to_numeric(changed["open"], errors="raise").copy()
+    changed_high = pd.to_numeric(changed["high"], errors="raise").copy()
+    changed_low = pd.to_numeric(changed["low"], errors="raise").copy()
+    changed_close = pd.to_numeric(changed["close"], errors="raise").copy()
+    changed_close.iloc[split] = float(changed_close.iloc[split]) * 1.15
+    changed_open.iloc[split] = float(changed_close.iloc[split - 1])
+    changed_high.iloc[split] = max(
+        float(changed_open.iloc[split]), float(changed_close.iloc[split])
+    ) * 1.002
+    changed_low.iloc[split] = min(
+        float(changed_open.iloc[split]), float(changed_close.iloc[split])
+    ) * 0.998
+    changed["open"] = changed_open
+    changed["high"] = changed_high
+    changed["low"] = changed_low
+    changed["close"] = changed_close
 
     original_features = add_signal_features(candles)
     changed_features = add_signal_features(changed)
@@ -97,10 +105,9 @@ def test_experiment_grid_preserves_baseline_and_closed_safety_defaults() -> None
     assert HORIZON_GRID == (12, 6, 24)
     assert FEATURE_GROUPS == ("stage_b_8", "extended_trend_rsi")
     assert set(MODEL_PROFILES) == {"phase4_default", "shallow_regularized"}
-    assert MODEL_PROFILES["phase4_default"]["n_estimators"] == 80
-    assert (
-        MODEL_PROFILES["shallow_regularized"]["num_leaves"]
-        < (MODEL_PROFILES["phase4_default"]["num_leaves"])
+    assert int(MODEL_PROFILES["phase4_default"]["n_estimators"]) == 80
+    assert int(MODEL_PROFILES["shallow_regularized"]["num_leaves"]) < int(
+        MODEL_PROFILES["phase4_default"]["num_leaves"]
     )
 
 
