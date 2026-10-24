@@ -92,7 +92,7 @@ def _day_url(day: pd.Timestamp) -> str:
     )
 
 
-def _read_kline_archive(payload: bytes) -> DataFrame:
+def _extract_kline_csv(payload: bytes) -> DataFrame:
     try:
         with zipfile.ZipFile(io.BytesIO(payload)) as archive:
             csv_names = [
@@ -101,10 +101,14 @@ def _read_kline_archive(payload: bytes) -> DataFrame:
             if len(csv_names) != 1:
                 raise ValueError("binance_kline_archive_csv_count_invalid")
             with archive.open(csv_names[0]) as stream:
-                frame = pd.read_csv(stream, header=None, usecols=[0, 1, 2, 3, 4, 5, 7])
+                return pd.read_csv(
+                    stream, header=None, usecols=[0, 1, 2, 3, 4, 5, 7]
+                )
     except (zipfile.BadZipFile, pd.errors.ParserError, ValueError) as error:
         raise ValueError(f"binance_kline_archive_invalid:{error}") from error
 
+
+def _normalise_kline_frame(frame: DataFrame) -> DataFrame:
     frame.columns = [
         "open_time",
         "open",
@@ -131,6 +135,9 @@ def _read_kline_archive(payload: bytes) -> DataFrame:
         raise ValueError("binance_kline_archive_duplicate_timestamps")
     return result.reset_index(drop=True)
 
+
+def _read_kline_archive(payload: bytes) -> DataFrame:
+    return _normalise_kline_frame(_extract_kline_csv(payload))
 
 def _month_starts(start: pd.Timestamp, end: pd.Timestamp) -> list[pd.Timestamp]:
     cursor = pd.Timestamp(year=start.year, month=start.month, day=1, tz="UTC")
@@ -267,59 +274,38 @@ def _scale_binance_quote_volume(klines: DataFrame) -> tuple[DataFrame, dict[str,
     return result, stats
 
 
-def _align_proxy_volume(
-    candles: DataFrame, klines: DataFrame
-) -> tuple[np.ndarray, dict[str, Any]]:
-    """Align proxy labels to the fixed candle phase without claiming identical windows."""
-    scaled, scale_stats = _scale_binance_quote_volume(klines)
+def _candle_timestamp_phase(candles: DataFrame) -> tuple[pd.Series, int]:
     candle_dates = pd.to_datetime(candles["date"], utc=True, errors="raise")
-    minute_phases = sorted(candle_dates.dt.minute.unique().tolist())
-    if (
-        len(minute_phases) != 1
-        or candle_dates.dt.second.ne(0).any()
+    phases = sorted(candle_dates.dt.minute.unique().tolist())
+    has_subminute_precision = (
+        candle_dates.dt.second.ne(0).any()
         or candle_dates.dt.microsecond.ne(0).any()
         or candle_dates.dt.nanosecond.ne(0).any()
-    ):
+    )
+    if len(phases) != 1 or has_subminute_precision:
         raise ValueError("proxy_candle_timestamp_phase_not_uniform")
-    if (
-        scaled["date"].dt.minute.ne(0).any()
-        or scaled["date"].dt.second.ne(0).any()
-        or scaled["date"].dt.microsecond.ne(0).any()
-        or scaled["date"].dt.nanosecond.ne(0).any()
-    ):
+    return candle_dates, int(phases[0])
+
+
+def _validate_binance_hourly_phase(klines: DataFrame) -> None:
+    has_subhour_label = (
+        klines["date"].dt.minute.ne(0).any()
+        or klines["date"].dt.second.ne(0).any()
+        or klines["date"].dt.microsecond.ne(0).any()
+        or klines["date"].dt.nanosecond.ne(0).any()
+    )
+    if has_subhour_label:
         raise ValueError("binance_hourly_source_timestamps_not_hour_aligned")
 
-    # Nobitex candles in the pinned source are timestamped at HH:30 UTC,
-    # while Binance 1h kline labels are HH:00 UTC. Shift the label only by
-    # the constant phase so observations align for sensitivity analysis. The
-    # volume still represents Binance's original [HH:00, HH+1:00) interval,
-    # not the exact Nobitex [HH:30, HH+1:30) interval.
-    phase_minutes = int(minute_phases[0])
-    aligned_source = scaled.loc[
-        :, ["date", "quote_volume", "proxy_quote_volume", "proxy_scale_ratio"]
-    ].copy()
-    aligned_source["date"] = aligned_source["date"] + pd.Timedelta(
-        minutes=phase_minutes
-    )
 
-    aligned = candles.loc[:, ["date"]].copy()
-    aligned["date"] = candle_dates
-    aligned = aligned.merge(
-        aligned_source,
-        how="left",
-        on="date",
-        validate="one_to_one",
-        indicator=True,
-    )
-    matched = aligned["_merge"].eq("both")
-    proxy = aligned["proxy_quote_volume"].fillna(0.0).to_numpy(dtype=float)
-    source_quote = aligned["quote_volume"]
-    capacity = proxy * PARTICIPATION_CAP
+def _validate_proxy_capacity(proxy: np.ndarray, capacity: np.ndarray) -> None:
     if not np.isfinite(proxy).all() or np.any(proxy < 0):
         raise ValueError("proxy_volume_alignment_invalid")
     if not np.isfinite(capacity).all() or np.any(capacity < 0):
         raise ValueError("proxy_capacity_invalid")
 
+
+def _daily_proxy_totals(aligned: DataFrame, proxy: np.ndarray) -> pd.Series:
     daily_proxy = (
         pd.DataFrame({"date": aligned["date"], "proxy_quote_volume": proxy})
         .groupby(aligned["date"].dt.floor("D"))["proxy_quote_volume"]
@@ -327,8 +313,20 @@ def _align_proxy_volume(
     )
     if (daily_proxy > PROXY_DAILY_QUOTE_CAP + 1e-6).any():
         raise ValueError("aligned_proxy_daily_quote_cap_invariant_violated")
+    return daily_proxy
 
-    stats = {
+
+def _proxy_alignment_stats(
+    candles: DataFrame,
+    scale_stats: dict[str, Any],
+    aligned: DataFrame,
+    matched: pd.Series,
+    capacity: np.ndarray,
+    daily_proxy: pd.Series,
+    phase_minutes: int,
+) -> dict[str, Any]:
+    source_quote = aligned["quote_volume"]
+    return {
         **scale_stats,
         "source": "Binance Spot BTCUSDT hourly quote_asset_volume archives",
         "candle_count": len(candles),
@@ -356,8 +354,43 @@ def _align_proxy_volume(
         ),
         "exact_same_window_turnover_claimed": False,
     }
-    return capacity, stats
 
+
+def _align_proxy_volume(
+    candles: DataFrame, klines: DataFrame
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """Align proxy labels to a fixed phase without claiming identical time windows."""
+    scaled, scale_stats = _scale_binance_quote_volume(klines)
+    candle_dates, phase_minutes = _candle_timestamp_phase(candles)
+    _validate_binance_hourly_phase(scaled)
+
+    # Nobitex candles use HH:30 UTC labels while Binance candles use HH:00 UTC.
+    # Shift only the label; the measured Binance volume still describes the
+    # original UTC hour and is only a nearby-window sensitivity proxy.
+    aligned_source = scaled.loc[
+        :, ["date", "quote_volume", "proxy_quote_volume", "proxy_scale_ratio"]
+    ].copy()
+    aligned_source["date"] = aligned_source["date"] + pd.Timedelta(
+        minutes=phase_minutes
+    )
+    aligned = candles.loc[:, ["date"]].copy()
+    aligned["date"] = candle_dates
+    aligned = aligned.merge(
+        aligned_source,
+        how="left",
+        on="date",
+        validate="one_to_one",
+        indicator=True,
+    )
+    matched = aligned["_merge"].eq("both")
+    proxy = aligned["proxy_quote_volume"].fillna(0.0).to_numpy(dtype=float)
+    capacity = proxy * PARTICIPATION_CAP
+    _validate_proxy_capacity(proxy, capacity)
+    daily_proxy = _daily_proxy_totals(aligned, proxy)
+    stats = _proxy_alignment_stats(
+        candles, scale_stats, aligned, matched, capacity, daily_proxy, phase_minutes
+    )
+    return capacity, stats
 
 def _event_outcomes(
     candles: DataFrame,
@@ -452,6 +485,37 @@ def _validate_reference_prices(reference: DataFrame) -> DataFrame:
     return result.rename(columns={"timestamp": "reference_timestamp"})
 
 
+def _validate_bookdepth_side(group: DataFrame, side: str) -> None:
+    side_mask = (
+        group["percentage"].lt(0)
+        if side == "bid"
+        else group["percentage"].gt(0)
+    )
+    side_values = group.loc[side_mask].copy()
+    side_values["band"] = side_values["percentage"].abs().astype(int)
+    side_values = side_values.sort_values("band")
+    for column in ("depth", "notional"):
+        if np.any(np.diff(side_values[column].to_numpy(dtype=float)) < 0):
+            raise ValueError(f"bookdepth_cumulative_{column}_not_monotonic:{side}")
+
+    implied_prices = side_values["notional"].to_numpy(dtype=float) / side_values[
+        "depth"
+    ].to_numpy(dtype=float)
+    if side == "bid" and np.any(np.diff(implied_prices) > 1e-9):
+        raise ValueError("bookdepth_bid_implied_price_not_monotonic")
+    if side == "ask" and np.any(np.diff(implied_prices) < -1e-9):
+        raise ValueError("bookdepth_ask_implied_price_not_monotonic")
+
+
+def _validate_bookdepth_snapshot(timestamp: pd.Timestamp, group: DataFrame) -> None:
+    expected = set(BOOK_BANDS)
+    actual = set(group["percentage"].astype(int).tolist())
+    if actual != expected or len(group) != len(expected):
+        raise ValueError(f"bookdepth_snapshot_incomplete_percentage_bands:{timestamp}")
+    _validate_bookdepth_side(group, "bid")
+    _validate_bookdepth_side(group, "ask")
+
+
 def _validate_bookdepth_rows(book: DataFrame) -> DataFrame:
     required = {BOOK_TIME, "percentage", "depth", "notional"}
     if not required.issubset(book.columns) or book.empty:
@@ -470,41 +534,13 @@ def _validate_bookdepth_rows(book: DataFrame) -> DataFrame:
     if result.duplicated([BOOK_TIME, "percentage"]).any():
         raise ValueError("bookdepth_timestamp_percentage_duplicate")
 
-    expected = set(BOOK_BANDS)
-    for _, group in result.groupby(BOOK_TIME, sort=True):
-        if set(group["percentage"].astype(int).tolist()) != expected or len(
-            group
-        ) != len(expected):
-            raise ValueError("bookdepth_snapshot_incomplete_percentage_bands")
-        for side in ("bid", "ask"):
-            side_values = group.loc[
-                group["percentage"].lt(0)
-                if side == "bid"
-                else group["percentage"].gt(0)
-            ].copy()
-            side_values["band"] = side_values["percentage"].abs().astype(int)
-            side_values = side_values.sort_values("band")
-            for column in ("depth", "notional"):
-                if np.any(np.diff(side_values[column].to_numpy(dtype=float)) < 0):
-                    raise ValueError(
-                        f"bookdepth_cumulative_{column}_not_monotonic:{side}"
-                    )
-            implied_prices = side_values["notional"].to_numpy(
-                dtype=float
-            ) / side_values["depth"].to_numpy(dtype=float)
-            if side == "bid" and np.any(np.diff(implied_prices) > 1e-9):
-                raise ValueError("bookdepth_bid_implied_price_not_monotonic")
-            if side == "ask" and np.any(np.diff(implied_prices) < -1e-9):
-                raise ValueError("bookdepth_ask_implied_price_not_monotonic")
+    for timestamp, group in result.groupby(BOOK_TIME, sort=True):
+        _validate_bookdepth_snapshot(timestamp, group)
     return result.sort_values([BOOK_TIME, "percentage"]).reset_index(drop=True)
 
-
-def add_banded_orderbook_features(
-    candles: DataFrame, book: DataFrame, reference_prices: DataFrame
+def _enrich_bookdepth_reference(
+    bands: DataFrame, references: DataFrame
 ) -> DataFrame:
-    """Adapt percentage-band depth to normalized features only; never infer L2 levels."""
-    bands = _validate_bookdepth_rows(book)
-    references = _validate_reference_prices(reference_prices)
     enriched = pd.merge_asof(
         bands.sort_values(BOOK_TIME),
         references.sort_values("reference_timestamp"),
@@ -525,9 +561,15 @@ def add_banded_orderbook_features(
     tolerance = reference * PRICE_BAND_TOLERANCE_FRACTION
     lower = np.where(pct < 0, reference * (1.0 + pct), reference)
     upper = np.where(pct > 0, reference * (1.0 + pct), reference)
-    if np.any(implied < lower - tolerance) or np.any(implied > upper + tolerance):
+    outside_band = np.any(implied < lower - tolerance) or np.any(
+        implied > upper + tolerance
+    )
+    if outside_band:
         raise ValueError("bookdepth_implied_price_outside_declared_band")
+    return enriched
 
+
+def _banded_snapshot_features(enriched: DataFrame) -> DataFrame:
     snapshots: list[dict[str, Any]] = []
     for timestamp, group in enriched.groupby(BOOK_TIME, sort=True):
         row: dict[str, Any] = {BOOK_TIME: timestamp}
@@ -544,8 +586,10 @@ def add_banded_orderbook_features(
                 float(bid["notional"]) - float(ask["notional"])
             ) / (float(bid["notional"]) + float(ask["notional"]))
         snapshots.append(row)
+    return DataFrame(snapshots)
 
-    features = DataFrame(snapshots)
+
+def _join_banded_features_to_candles(candles: DataFrame, features: DataFrame) -> DataFrame:
     left = candles.loc[:, ["date"]].copy()
     left["date"] = pd.to_datetime(left["date"], utc=True, errors="raise")
     left["decision_time"] = left["date"] + pd.Timedelta(seconds=HOUR)
@@ -566,12 +610,25 @@ def add_banded_orderbook_features(
     if joined[BOOK_TIME].isna().any():
         raise ValueError("bookdepth_snapshot_missing_or_stale_at_decision_time")
     values = joined[feature_columns].to_numpy(dtype=float)
-    if not np.isfinite(values).all() or np.any(np.abs(values) > 1.0 + 1e-12):
+    features_invalid = not np.isfinite(values).all() or np.any(
+        np.abs(values) > 1.0 + 1e-12
+    )
+    if features_invalid:
         raise ValueError("bookdepth_relative_feature_out_of_range")
     return joined.loc[:, ["date", *feature_columns]].reset_index(drop=True)
 
 
-def _validate_bookdepth_manifest(
+def add_banded_orderbook_features(
+    candles: DataFrame, book: DataFrame, reference_prices: DataFrame
+) -> DataFrame:
+    """Adapt percentage-band depth to relative features only; never infer L2 levels."""
+    bands = _validate_bookdepth_rows(book)
+    references = _validate_reference_prices(reference_prices)
+    enriched = _enrich_bookdepth_reference(bands, references)
+    features = _banded_snapshot_features(enriched)
+    return _join_banded_features_to_candles(candles, features)
+
+def _load_bookdepth_manifest(
     book_path: Path, reference_path: Path, manifest_path: Path
 ) -> dict[str, Any]:
     if (
@@ -596,29 +653,43 @@ def _validate_bookdepth_manifest(
         raise ValueError("bookdepth_manifest_required_fields_missing")
     if value["schema"] != BOOK_MANIFEST_SCHEMA:
         raise ValueError("bookdepth_manifest_schema_unsupported")
+    return value
+
+
+def _validate_bookdepth_manifest_identity(value: dict[str, Any]) -> None:
     if value["venue"] != "binance_usdm_futures" or value["symbol"] != SYMBOL:
         raise ValueError("bookdepth_manifest_identity_mismatch")
     if value["permission_status"] != "approved":
         raise ValueError("bookdepth_permission_not_approved")
     source = urlsplit(str(value["source_url"]))
-    if (
+    source_invalid = (
         source.scheme != "https"
         or source.hostname != "data.binance.vision"
         or "/data/futures/um/" not in source.path
         or "/bookDepth/BTCUSDT/" not in source.path
-    ):
+    )
+    if source_invalid:
         raise ValueError("bookdepth_manifest_source_url_invalid")
+
+
+def _validate_bookdepth_manifest_checksums(
+    book_path: Path, reference_path: Path, value: dict[str, Any]
+) -> None:
     book_sha = hashlib.sha256(book_path.read_bytes()).hexdigest()
     reference_sha = hashlib.sha256(reference_path.read_bytes()).hexdigest()
     if book_sha != str(value["csv_sha256"]) or len(book_sha) != 64:
         raise ValueError("bookdepth_csv_checksum_mismatch")
-    if (
-        reference_sha != str(value["reference_price_sha256"])
-        or len(reference_sha) != 64
-    ):
+    if reference_sha != str(value["reference_price_sha256"]) or len(reference_sha) != 64:
         raise ValueError("bookdepth_reference_price_checksum_mismatch")
-    return value
 
+
+def _validate_bookdepth_manifest(
+    book_path: Path, reference_path: Path, manifest_path: Path
+) -> dict[str, Any]:
+    value = _load_bookdepth_manifest(book_path, reference_path, manifest_path)
+    _validate_bookdepth_manifest_identity(value)
+    _validate_bookdepth_manifest_checksums(book_path, reference_path, value)
+    return value
 
 def _load_banded_book_features(
     candles: DataFrame,
