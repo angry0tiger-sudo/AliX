@@ -104,7 +104,7 @@ def _validate_commit_sha(commit_sha: str) -> None:
         raise ValueError("classification_commit_sha_invalid")
 
 
-def event_labels(forward_returns: Sequence[float]) -> np.ndarray:
+def event_labels(forward_returns: Sequence[float] | np.ndarray) -> np.ndarray:
     """Label the actionable long event: gross 12h return strictly greater than cost."""
     values = np.asarray(forward_returns, dtype=float)
     if values.ndim != 1 or not np.isfinite(values).all():
@@ -113,7 +113,7 @@ def event_labels(forward_returns: Sequence[float]) -> np.ndarray:
 
 
 def volatility_cutoff(
-    training_volatility: Sequence[float],
+    training_volatility: Sequence[float] | np.ndarray,
     quantile: float = VOLATILITY_CUTOFF_QUANTILE,
 ) -> float:
     """Derive a regime cutoff from training-fold values only."""
@@ -132,8 +132,8 @@ def volatility_cutoff(
 
 
 def signal_mask(
-    probabilities: Sequence[float],
-    current_volatility: Sequence[float],
+    probabilities: Sequence[float] | np.ndarray,
+    current_volatility: Sequence[float] | np.ndarray,
     probability_threshold: float,
     training_volatility_cutoff: float,
 ) -> np.ndarray:
