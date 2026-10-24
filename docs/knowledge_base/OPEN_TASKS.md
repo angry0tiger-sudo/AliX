@@ -197,3 +197,11 @@
 - Run #40080923964 stopped before training because all observed hourly volume values in segment A are zero, making the existing volume percentage-change feature undefined across that segment.
 - The revised runner excludes features undefined for all rows or at rows where other features are otherwise usable, records exclusions per segment, and never imputes missing values. A and B retain independent feature schemas and fresh fold estimators.
 - The failed run is a feature-availability failure, not an economic result. All economic and safety gates remain unchanged.
+
+
+## Stage B feature warm-up selector correction — 2026-10-24
+
+- Root cause confirmed against the pinned CSV: OHLCV columns are present, finite, and validated; return/rolling features have only their expected leading warm-up NaNs. The feature selector compared candidates at peer-usable rows without excluding each candidate's own leading warm-up, which cascaded into dropping six valid features.
+- The correction evaluates internal undefined values only after the candidate's first defined observation. The dataset's existing complete-row selection drops natural warm-up rows and enforces timestamp continuity. No imputation, fill, interpolation, backfill, or resampling is permitted.
+- `%-volume_change_1` remains excluded where mathematically undefined: A contains 58,655 zero-volume candles; B contains isolated zero previous-volume observations. Do not change feature semantics to force this column into the model.
+- Added regression tests for staggered warm-up plus true internal gaps, and feature-availability/source-volume diagnostics in the Stage B artifact. Re-run through GitHub Actions; preserve all CI and economic gates and keep `Champion=null`, `order_permission=false`, `trading_authorization=NO-GO`, `economic_acceptance=NO-GO`.
