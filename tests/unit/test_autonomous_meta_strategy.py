@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import copy
 import hashlib
 import json
 from dataclasses import replace
@@ -15,7 +14,6 @@ from pandas import DataFrame
 import services.ai_core.autonomous_meta as autonomous
 from services.ai_core.autonomous_meta import (
     STRATEGY_IDS,
-    DynamicRiskPlan,
     StrategyRegistry,
     StrategySelection,
     WalkForwardConfig,
