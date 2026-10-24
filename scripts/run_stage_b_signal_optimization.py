@@ -229,11 +229,12 @@ def _build_dataset(
     if selected.empty:
         raise ValueError("optimization_dataset_empty")
     selected_dates = pd.to_datetime(selected["date"], utc=True, errors="raise")
-    if selected_dates.iloc[0] != common_start_utc or selected_dates.iloc[-1] != common_end_utc:
+    if (
+        selected_dates.iloc[0] != common_start_utc
+        or selected_dates.iloc[-1] != common_end_utc
+    ):
         raise ValueError("optimization_candidate_does_not_cover_common_bounds")
-    if not (
-        selected_dates.diff().dropna() == pd.Timedelta(seconds=HOUR)
-    ).all():
+    if not (selected_dates.diff().dropna() == pd.Timedelta(seconds=HOUR)).all():
         raise ValueError("optimization_valid_rows_not_contiguous")
     feature_values = selected.loc[:, list(feature_columns)].to_numpy(dtype=float)
     labels = selected[TARGET_COLUMN].to_numpy(dtype=float)
@@ -648,9 +649,11 @@ def run_signal_optimization(
                 common_start_utc,
                 common_end_utc,
             )
-            dataset_timestamp_ns = pd.to_datetime(
-                dataset["date"], utc=True, errors="raise"
-            ).astype("int64").to_numpy(dtype=np.int64)
+            dataset_timestamp_ns = (
+                pd.to_datetime(dataset["date"], utc=True, errors="raise")
+                .astype("int64")
+                .to_numpy(dtype=np.int64)
+            )
             if shared_timestamp_ns is None:
                 shared_timestamp_ns = dataset_timestamp_ns
                 shared_row_count = len(dataset)

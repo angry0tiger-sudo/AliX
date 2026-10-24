@@ -60,12 +60,12 @@ def test_extended_features_are_past_only() -> None:
     changed_close = pd.to_numeric(changed["close"], errors="raise").copy()
     changed_close.iloc[split] = float(changed_close.iloc[split]) * 1.15
     changed_open.iloc[split] = float(changed_close.iloc[split - 1])
-    changed_high.iloc[split] = max(
-        float(changed_open.iloc[split]), float(changed_close.iloc[split])
-    ) * 1.002
-    changed_low.iloc[split] = min(
-        float(changed_open.iloc[split]), float(changed_close.iloc[split])
-    ) * 0.998
+    changed_high.iloc[split] = (
+        max(float(changed_open.iloc[split]), float(changed_close.iloc[split])) * 1.002
+    )
+    changed_low.iloc[split] = (
+        min(float(changed_open.iloc[split]), float(changed_close.iloc[split])) * 0.998
+    )
     changed["open"] = changed_open
     changed["high"] = changed_high
     changed["low"] = changed_low
