@@ -106,6 +106,7 @@ class RiskGate:
             + self._freshness_and_cap_reasons(
                 allocation, account, market, policy, evaluated_at
             )
+            + self._entry_scope_reasons(allocation)
             + self._initial_stake_reasons(allocation, account, market, rules, policy)
             + self._risk_profile_reasons(allocation, account, market, policy)
             + self._market_structure_reasons(allocation, account, market, rules, policy)
@@ -258,6 +259,13 @@ class RiskGate:
             + self._quantity_precision_reasons(allocation, rules)
             + self._notional_and_balance_reasons(allocation, account, rules, policy)
         )
+
+    def _entry_scope_reasons(
+        self, allocation: RiskAllocation
+    ) -> tuple[str, ...]:
+        if allocation.side is not Side.LONG:
+            return ("short_entry_forbidden_in_v1",)
+        return ()
 
     def _initial_stake_reasons(
         self,

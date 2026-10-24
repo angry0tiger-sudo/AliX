@@ -35,6 +35,7 @@ from risk.kill_switch import (
 from risk.supervisor import (
     RiskSupervisor,
     SupervisorHealth,
+    SupervisorProposalAction,
     SupervisorStatus,
 )
 
@@ -626,6 +627,123 @@ def test_absolute_cap_is_independent_of_high_model_confidence(tmp_path: Path) ->
     assert store.read().latched
 
 
+def test_supervisor_entry_review_passes_only_to_risk_gate_and_never_grants_order(
+    tmp_path: Path,
+) -> None:
+    store = make_armed_store(tmp_path / "supervisor-review.db")
+    supervisor = RiskSupervisor(store)
+    policy = make_policy()
+    account = make_account()
+    market = make_market()
+    rules = make_rules()
+    allocation = make_allocation(
+        policy=policy, account=account, market=market, rules=rules
+    )
+    review = supervisor.review_entry_proposal(
+        allocation=allocation,
+        account=account,
+        market=market,
+        rules=rules,
+        policy=policy,
+        health=make_health(),
+        now=NOW,
+    )
+    assert review.action is SupervisorProposalAction.PASS_TO_RISK_GATE
+    assert review.order_permission is False
+    assert review.reason_codes == (
+        "supervisor_review_passed_risk_gate_still_required",
+    )
+    assert review.fingerprint
+
+
+def test_supervisor_resizes_oversized_proposal_only_to_owner_target(
+    tmp_path: Path,
+) -> None:
+    store = make_armed_store(tmp_path / "supervisor-resize.db")
+    supervisor = RiskSupervisor(store)
+    policy = make_policy()
+    account = make_account()
+    market = make_market()
+    rules = make_rules()
+    allocation = make_allocation(
+        policy=policy, account=account, market=market, rules=rules
+    )
+    oversized_quantity = allocation.quantity * D("2")
+    oversized = replace(
+        allocation,
+        quantity=oversized_quantity,
+        stake=oversized_quantity * market.price,
+    )
+    review = supervisor.review_entry_proposal(
+        allocation=oversized,
+        account=account,
+        market=market,
+        rules=rules,
+        policy=policy,
+        health=make_health(),
+        now=NOW,
+    )
+    assert review.action is SupervisorProposalAction.RESIZE_REQUIRED
+    assert review.suggested_quantity == allocation.quantity
+    assert review.suggested_stake == D("10")
+    assert review.order_permission is False
+
+
+def test_supervisor_rejects_target_that_conflicts_with_protective_caps(
+    tmp_path: Path,
+) -> None:
+    store = make_armed_store(tmp_path / "supervisor-cap.db")
+    supervisor = RiskSupervisor(store)
+    base_policy = make_policy()
+    account = make_account()
+    market = make_market()
+    rules = make_rules()
+    allocation = make_allocation(
+        policy=base_policy, account=account, market=market, rules=rules
+    )
+    restrictive_policy = make_policy(
+        revision="owner-policy-restrictive-v2",
+        per_trade_risk_fraction=D("0.000001"),
+    )
+    allocation = replace(allocation, policy_revision=restrictive_policy.revision)
+    review = supervisor.review_entry_proposal(
+        allocation=allocation,
+        account=account,
+        market=market,
+        rules=rules,
+        policy=restrictive_policy,
+        health=make_health(),
+        now=NOW,
+    )
+    assert review.action is SupervisorProposalAction.REJECT
+    assert "supervisor_cap_conflicts_with_initial_stake" in review.reason_codes
+    assert review.order_permission is False
+
+
+def test_supervisor_entry_review_rejects_degraded_health(tmp_path: Path) -> None:
+    store = make_armed_store(tmp_path / "supervisor-degraded.db")
+    supervisor = RiskSupervisor(store)
+    policy = make_policy()
+    account = make_account()
+    market = make_market()
+    rules = make_rules()
+    allocation = make_allocation(
+        policy=policy, account=account, market=market, rules=rules
+    )
+    review = supervisor.review_entry_proposal(
+        allocation=allocation,
+        account=account,
+        market=market,
+        rules=rules,
+        policy=policy,
+        health=make_health(ledger_writable=False),
+        now=NOW,
+    )
+    assert review.action is SupervisorProposalAction.REJECT
+    assert "supervisor_health_degraded" in review.reason_codes
+    assert review.order_permission is False
+
+
 def test_supervisor_never_automatically_rearms_and_halts_on_exposure_cap(
     tmp_path: Path,
 ) -> None:
@@ -938,18 +1056,28 @@ def test_allocator_rejects_exhausted_exposure_budget_and_invalid_stop() -> None:
     assert "stop_price_invalid" in bad_stop.reasons
 
 
-def test_short_position_stop_rounding_and_gate_contract() -> None:
+def test_short_entry_is_rejected_by_allocator_and_independent_gate() -> None:
     policy = make_policy()
     account = make_account()
     market = make_market()
     rules = make_rules()
-    proposal = make_proposal(side=Side.SHORT)
-    allocation = make_allocation(
-        policy=policy, account=account, market=market, rules=rules, proposal=proposal
+    result = DynamicRiskAllocator().allocate(
+        policy=policy,
+        account=account,
+        market=market,
+        rules=rules,
+        proposal=make_proposal(side=Side.SHORT),
+        now=NOW,
     )
-    assert allocation.stop_price > market.price
+    assert not result.approved
+    assert "short_entry_forbidden_in_v1" in result.reasons
+
+    long_allocation = make_allocation(
+        policy=policy, account=account, market=market, rules=rules
+    )
+    short_allocation = replace(long_allocation, side=Side.SHORT)
     decision = RiskGate().evaluate_entry(
-        allocation=allocation,
+        allocation=short_allocation,
         account=account,
         market=market,
         rules=rules,
@@ -957,8 +1085,9 @@ def test_short_position_stop_rounding_and_gate_contract() -> None:
         kill_switch=KillSwitchState(False, "", None, 2, NOW),
         evaluated_at=NOW,
     )
-    assert decision.risk_approved
-    assert not decision.order_permission
+    assert not decision.risk_approved
+    assert "short_entry_forbidden_in_v1" in decision.reasons
+    assert decision.order_permission is False
 
 
 def test_gate_rejects_latched_switch_price_tampering_and_underreported_loss() -> None:
