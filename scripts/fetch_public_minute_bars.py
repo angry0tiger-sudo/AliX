@@ -48,11 +48,9 @@ def subtract_calendar_months(value: datetime, months: int) -> datetime:
     return value.replace(year=year, month=month, day=day)
 
 
-def parse_kline(payload: object) -> KlineRow:
-    if not isinstance(payload, list) or len(payload) < 11:
-        raise ValueError("binance_kline_shape_invalid")
+def _construct_kline(payload: list[object]) -> KlineRow:
     try:
-        row = KlineRow(
+        return KlineRow(
             open_time_ms=int(payload[0]),
             open=float(payload[1]),
             high=float(payload[2]),
@@ -67,27 +65,46 @@ def parse_kline(payload: object) -> KlineRow:
         )
     except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError("binance_kline_numeric_field_invalid") from exc
-    if row.open_time_ms < 0 or row.close_time_ms < row.open_time_ms:
-        raise ValueError("binance_kline_timestamps_invalid")
+
+
+def _validate_kline_prices(row: KlineRow) -> None:
     prices = (row.open, row.high, row.low, row.close)
-    volumes = (
-        row.volume,
-        row.quote_volume,
-        row.taker_buy_base_volume,
-        row.taker_buy_quote_volume,
-    )
     if any(not math.isfinite(item) or item <= 0 for item in prices):
         raise ValueError("binance_kline_price_invalid")
     if row.high < max(row.open, row.close, row.low):
         raise ValueError("binance_kline_high_invalid")
     if row.low > min(row.open, row.close, row.high):
         raise ValueError("binance_kline_low_invalid")
+
+
+def _validate_kline_volumes(row: KlineRow) -> None:
+    volumes = (
+        row.volume,
+        row.quote_volume,
+        row.taker_buy_base_volume,
+        row.taker_buy_quote_volume,
+    )
     if any(not math.isfinite(item) or item < 0 for item in volumes):
         raise ValueError("binance_kline_volume_invalid")
     if row.trade_count < 0:
         raise ValueError("binance_kline_trade_count_invalid")
-    return row
 
+
+def _validate_kline_row(row: KlineRow) -> None:
+    if row.open_time_ms < 0 or row.close_time_ms < row.open_time_ms:
+        raise ValueError("binance_kline_timestamps_invalid")
+    _validate_kline_prices(row)
+    _validate_kline_volumes(row)
+
+
+def parse_kline(payload: object) -> KlineRow:
+    """Parse one Binance kline and fail closed on malformed values."""
+
+    if not isinstance(payload, list) or len(payload) < 11:
+        raise ValueError("binance_kline_shape_invalid")
+    row = _construct_kline(payload)
+    _validate_kline_row(row)
+    return row
 
 def _fetch_page(symbol: str, start_ms: int, end_ms: int) -> list[KlineRow]:
     params: dict[str, str | int] = {

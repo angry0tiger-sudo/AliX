@@ -96,6 +96,52 @@ def _require_finite_number(name: str, value: float) -> None:
         raise ValueError(f"{name}_must_be_finite")
 
 
+def _validate_bar_timestamps(bar: SimBar) -> None:
+    if isinstance(bar.open_time_ms, bool) or not isinstance(bar.open_time_ms, int):
+        raise ValueError("bar_timestamp_invalid")
+    if isinstance(bar.close_time_ms, bool) or not isinstance(bar.close_time_ms, int):
+        raise ValueError("bar_timestamp_invalid")
+    if bar.open_time_ms < 0 or bar.close_time_ms < bar.open_time_ms:
+        raise ValueError("bar_timestamp_range_invalid")
+
+
+def _validate_bar_numeric_fields(bar: SimBar) -> None:
+    for name, value in (
+        ("open", bar.open),
+        ("high", bar.high),
+        ("low", bar.low),
+        ("close", bar.close),
+        ("volume", bar.volume),
+    ):
+        _require_finite_number(name, value)
+
+
+def _validate_bar_price_geometry(bar: SimBar) -> None:
+    if min(bar.open, bar.high, bar.low, bar.close) <= 0:
+        raise ValueError("bar_price_must_be_positive")
+    if bar.volume < 0:
+        raise ValueError("bar_volume_must_be_non_negative")
+    if bar.high < max(bar.open, bar.close, bar.low):
+        raise ValueError("bar_high_inconsistent")
+    if bar.low > min(bar.open, bar.close, bar.high):
+        raise ValueError("bar_low_inconsistent")
+
+
+def _validate_bar_order(previous: SimBar, current: SimBar) -> None:
+    if current.open_time_ms <= previous.open_time_ms:
+        raise ValueError("bar_timestamps_not_strictly_increasing")
+    if current.open_time_ms <= previous.close_time_ms:
+        raise ValueError("bars_overlap_or_close_time_invalid")
+
+
+def _validate_one_bar(bar: SimBar) -> None:
+    if not isinstance(bar, SimBar):
+        raise ValueError("bar_type_invalid")
+    _validate_bar_timestamps(bar)
+    _validate_bar_numeric_fields(bar)
+    _validate_bar_price_geometry(bar)
+
+
 def validate_bars(bars: Sequence[SimBar]) -> None:
     """Reject invalid, overlapping, unordered, or non-finite market bars."""
 
@@ -103,40 +149,10 @@ def validate_bars(bars: Sequence[SimBar]) -> None:
         raise ValueError("bars_empty")
     previous: SimBar | None = None
     for bar in bars:
-        if not isinstance(bar, SimBar):
-            raise ValueError("bar_type_invalid")
-        if (
-            isinstance(bar.open_time_ms, bool)
-            or not isinstance(bar.open_time_ms, int)
-            or isinstance(bar.close_time_ms, bool)
-            or not isinstance(bar.close_time_ms, int)
-        ):
-            raise ValueError("bar_timestamp_invalid")
-        if bar.open_time_ms < 0 or bar.close_time_ms < bar.open_time_ms:
-            raise ValueError("bar_timestamp_range_invalid")
-        for name, value in (
-            ("open", bar.open),
-            ("high", bar.high),
-            ("low", bar.low),
-            ("close", bar.close),
-            ("volume", bar.volume),
-        ):
-            _require_finite_number(name, value)
-        if min(bar.open, bar.high, bar.low, bar.close) <= 0:
-            raise ValueError("bar_price_must_be_positive")
-        if bar.volume < 0:
-            raise ValueError("bar_volume_must_be_non_negative")
-        if bar.high < max(bar.open, bar.close, bar.low):
-            raise ValueError("bar_high_inconsistent")
-        if bar.low > min(bar.open, bar.close, bar.high):
-            raise ValueError("bar_low_inconsistent")
+        _validate_one_bar(bar)
         if previous is not None:
-            if bar.open_time_ms <= previous.open_time_ms:
-                raise ValueError("bar_timestamps_not_strictly_increasing")
-            if bar.open_time_ms <= previous.close_time_ms:
-                raise ValueError("bars_overlap_or_close_time_invalid")
+            _validate_bar_order(previous, bar)
         previous = bar
-
 
 def _validate_exposures(
     target_exposures: Sequence[float], bar_count: int, config: SimulationConfig
@@ -199,6 +215,84 @@ def _max_drawdown(initial_equity: float, marks: Sequence[EquityMark]) -> float:
     return largest_drawdown
 
 
+def _record_close_mark(
+    bar: SimBar,
+    cash: float,
+    quantity: float,
+    marks: list[EquityMark],
+) -> None:
+    equity = cash + quantity * bar.close
+    if not math.isfinite(equity) or equity <= 0:
+        raise ValueError("equity_non_positive_at_bar_close")
+    marks.append(
+        EquityMark(
+            timestamp_ms=bar.close_time_ms,
+            cash=cash,
+            quantity=quantity,
+            mark_price=bar.close,
+            equity=equity,
+        )
+    )
+
+
+def _replay_bar_targets(
+    bars: Sequence[SimBar],
+    target_exposures: Sequence[float],
+    config: SimulationConfig,
+) -> tuple[float, float, list[SimFill], list[EquityMark]]:
+    cash = config.initial_equity
+    quantity = 0.0
+    fills: list[SimFill] = []
+    marks: list[EquityMark] = []
+    for index, bar in enumerate(bars):
+        if index > 0:
+            cash, quantity, fill = _rebalance(
+                cash,
+                quantity,
+                bar.open,
+                bar.open_time_ms,
+                target_exposures[index - 1],
+                config,
+            )
+            if fill is not None:
+                fills.append(fill)
+        _record_close_mark(bar, cash, quantity, marks)
+    return cash, quantity, fills, marks
+
+
+def _liquidate_final_position(
+    last_bar: SimBar,
+    cash: float,
+    quantity: float,
+    config: SimulationConfig,
+    fills: list[SimFill],
+    marks: list[EquityMark],
+) -> float:
+    cash, quantity, terminal_fill = _rebalance(
+        cash, quantity, last_bar.close, last_bar.close_time_ms, 0.0, config
+    )
+    if terminal_fill is not None:
+        fills.append(terminal_fill)
+    if not math.isfinite(cash) or cash <= 0:
+        raise ValueError("final_equity_non_positive")
+    marks.append(
+        EquityMark(
+            timestamp_ms=last_bar.close_time_ms,
+            cash=cash,
+            quantity=quantity,
+            mark_price=last_bar.close,
+            equity=cash,
+        )
+    )
+    return cash
+
+
+def _sum_fill_costs(fills: Sequence[SimFill]) -> tuple[float, float]:
+    total_fees = sum(fill.fee for fill in fills)
+    total_slippage = sum(fill.slippage_cost for fill in fills)
+    return total_fees, total_slippage
+
+
 def simulate(
     bars: Sequence[SimBar],
     target_exposures: Sequence[float],
@@ -209,61 +303,13 @@ def simulate(
     validate_bars(bars)
     selected_config = config if config is not None else SimulationConfig()
     _validate_exposures(target_exposures, len(bars), selected_config)
-    cash = selected_config.initial_equity
-    quantity = 0.0
-    fills: list[SimFill] = []
-    marks: list[EquityMark] = []
-
-    for index, bar in enumerate(bars):
-        if index > 0:
-            cash, quantity, fill = _rebalance(
-                cash,
-                quantity,
-                bar.open,
-                bar.open_time_ms,
-                target_exposures[index - 1],
-                selected_config,
-            )
-            if fill is not None:
-                fills.append(fill)
-        equity = cash + quantity * bar.close
-        if not math.isfinite(equity) or equity <= 0:
-            raise ValueError("equity_non_positive_at_bar_close")
-        marks.append(
-            EquityMark(
-                timestamp_ms=bar.close_time_ms,
-                cash=cash,
-                quantity=quantity,
-                mark_price=bar.close,
-                equity=equity,
-            )
-        )
-
-    last_bar = bars[-1]
-    cash, quantity, terminal_fill = _rebalance(
-        cash,
-        quantity,
-        last_bar.close,
-        last_bar.close_time_ms,
-        0.0,
-        selected_config,
+    cash, quantity, fills, marks = _replay_bar_targets(
+        bars, target_exposures, selected_config
     )
-    if terminal_fill is not None:
-        fills.append(terminal_fill)
-    final_equity = cash
-    if not math.isfinite(final_equity) or final_equity <= 0:
-        raise ValueError("final_equity_non_positive")
-    marks.append(
-        EquityMark(
-            timestamp_ms=last_bar.close_time_ms,
-            cash=cash,
-            quantity=quantity,
-            mark_price=last_bar.close,
-            equity=final_equity,
-        )
+    final_equity = _liquidate_final_position(
+        bars[-1], cash, quantity, selected_config, fills, marks
     )
-    total_fees = sum(fill.fee for fill in fills)
-    total_slippage = sum(fill.slippage_cost for fill in fills)
+    total_fees, total_slippage = _sum_fill_costs(fills)
     return SimulationResult(
         initial_equity=selected_config.initial_equity,
         final_equity=final_equity,
