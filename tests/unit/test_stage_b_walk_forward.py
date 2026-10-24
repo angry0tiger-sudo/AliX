@@ -101,7 +101,7 @@ def test_unavailable_feature_is_excluded_without_imputation() -> None:
     assert frame["undefined_inside_segment"].isna().sum() == 2
 
 
-def test_feature_selection_ignores_staggered_leading_warmup_but_rejects_internal_gap() -> None:
+def test_feature_selector_ignores_warmup_and_rejects_internal_gap() -> None:
     frame = pd.DataFrame(
         {
             "return_1": [float("nan"), 0.1, 0.2, 0.3, 0.4, 0.5],
