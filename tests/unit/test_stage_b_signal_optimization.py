@@ -105,10 +105,9 @@ def test_experiment_grid_preserves_baseline_and_closed_safety_defaults() -> None
     assert HORIZON_GRID == (12, 6, 24)
     assert FEATURE_GROUPS == ("stage_b_8", "extended_trend_rsi")
     assert set(MODEL_PROFILES) == {"phase4_default", "shallow_regularized"}
-    assert int(MODEL_PROFILES["phase4_default"]["n_estimators"]) == 80
-    assert int(MODEL_PROFILES["shallow_regularized"]["num_leaves"]) < int(
-        MODEL_PROFILES["phase4_default"]["num_leaves"]
-    )
+    assert MODEL_PROFILES["phase4_default"]["n_estimators"] == 80
+    assert MODEL_PROFILES["phase4_default"]["num_leaves"] == 15
+    assert MODEL_PROFILES["shallow_regularized"]["num_leaves"] == 7
 
 
 def test_cost_hurdle_rejects_mismatched_or_non_finite_inputs() -> None:
