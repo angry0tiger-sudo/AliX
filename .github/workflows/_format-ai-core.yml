@@ -1,0 +1,67 @@
+name: Temporary AI core formatter export
+
+on:
+  push:
+    branches:
+      - "research/ai-core-rebuild"
+    paths:
+      - ".github/workflows/_format-ai-core.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  format-and-export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pinned formatter
+        run: |
+          python -m pip install pip==25.2
+          python -m pip install ruff==0.14.0
+      - name: Apply exact Ruff formatting and export bounded source chunks
+        run: |
+          ruff format \
+            services/ai_core/__init__.py \
+            services/ai_core/features.py \
+            services/ai_core/ensemble.py \
+            services/ai_core/regime.py \
+            services/ai_core/strategies.py \
+            services/ai_core/sentiment.py \
+            scripts/run_ai_core_rebuild.py \
+            tests/unit/test_ai_core_features.py \
+            tests/unit/test_ai_core_ensemble.py \
+            tests/unit/test_ai_core_regime.py \
+            tests/unit/test_ai_core_strategies.py \
+            tests/unit/test_ai_core_sentiment.py
+          python - <<'PY'
+          import base64
+          from pathlib import Path
+
+          names = (
+              "services/ai_core/__init__.py",
+              "services/ai_core/features.py",
+              "services/ai_core/ensemble.py",
+              "services/ai_core/regime.py",
+              "services/ai_core/strategies.py",
+              "services/ai_core/sentiment.py",
+              "scripts/run_ai_core_rebuild.py",
+              "tests/unit/test_ai_core_features.py",
+              "tests/unit/test_ai_core_ensemble.py",
+              "tests/unit/test_ai_core_regime.py",
+              "tests/unit/test_ai_core_strategies.py",
+              "tests/unit/test_ai_core_sentiment.py",
+          )
+          for name in names:
+              encoded = base64.b64encode(Path(name).read_bytes()).decode("ascii")
+              for index, start in enumerate(range(0, len(encoded), 3000)):
+                  print(f"FORMAT_SOURCE|{name}|{index}|{encoded[start:start + 3000]}")
+          PY
