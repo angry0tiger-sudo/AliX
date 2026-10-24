@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import hashlib
+import json
+
 import pandas as pd
 import pytest
 
 from scripts.run_stage_b_triple_barrier_orderbook import (
     BOOK_TIME,
     _liquidity_capacity,
+    _validate_orderbook_manifest,
     add_relative_orderbook_features,
 )
 
@@ -81,3 +85,26 @@ def test_verified_quote_volume_is_capped_at_one_percent() -> None:
     report, capacity = _liquidity_capacity(candles, "quote_asset")
     assert report["status"] == "READY_FOR_CAP_CHECK"
     assert capacity.tolist() == pytest.approx([1.0, 0.5])
+
+
+
+def test_orderbook_manifest_requires_approved_provenance_and_matching_checksum(tmp_path) -> None:
+    book_path = tmp_path / "book.csv"
+    book_path.write_text("snapshot_timestamp_utc,bid_price_1\n", encoding="utf-8")
+    manifest = {
+        "schema": "alix.binance-orderbook-manifest.v1",
+        "venue": "binance_usdm_futures",
+        "symbol": "BTCUSDT",
+        "source_url": "https://data.binance.vision/data/futures/um/daily/bookDepth/BTCUSDT/example.zip",
+        "permission_status": "approved",
+        "csv_sha256": hashlib.sha256(book_path.read_bytes()).hexdigest(),
+    }
+    manifest_path = tmp_path / "book-manifest.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    assert _validate_orderbook_manifest(book_path, manifest_path)["permission_status"] == "approved"
+
+    manifest["permission_status"] = "unverified"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(ValueError, match="permission_not_approved"):
+        _validate_orderbook_manifest(book_path, manifest_path)
