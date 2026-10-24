@@ -63,7 +63,8 @@ def _registry_candidate(
         return False
     definition = matching[0]
     return (
-        definition.lifecycle is StrategyLifecycle.RESEARCH_ONLY
+        regime in definition.eligible_regimes
+        and definition.lifecycle is StrategyLifecycle.RESEARCH_ONLY
         and not definition.owner_approved
         and not definition.allow_short
         and "4h" in definition.supported_timeframes
@@ -79,7 +80,7 @@ def route_research_regime(
     strategy_id = REGIME_STRATEGY_MAP.get(regime)
     if strategy_id is None:
         return ResearchRoute(regime, None, "NO_TRADE", "regime_not_mapped")
-    if not _registry_candidate(registry, strategy_id):
+    if not _registry_candidate(registry, strategy_id, regime):
         return ResearchRoute(regime, None, "NO_TRADE", "research_registry_candidate_invalid")
     return ResearchRoute(regime, strategy_id, "RESEARCH_PROPOSAL", "hmm_regime_route_resolved")
 

@@ -121,6 +121,17 @@ def test_unknown_regime_or_bad_registry_candidate_abstains() -> None:
     assert rejected.strategy_id is None
     assert rejected.order_permission is False
 
+    wrong_regime = replace(trend, eligible_regimes=("range",))
+    mismatched_registry = StrategyRegistry(
+        revision=registry.revision,
+        economic_policy_revision=registry.economic_policy_revision,
+        strategies=tuple(
+            wrong_regime if item.strategy_id == "trend_following" else item
+            for item in registry.strategies
+        ),
+    )
+    assert route_research_regime("trend", mismatched_registry).strategy_id is None
+
 
 def test_existing_hmm_result_contract_routes_only_classified_inference() -> None:
     registry = research_registry()
