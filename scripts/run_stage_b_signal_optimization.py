@@ -171,7 +171,6 @@ def _collect_candidate_rows(
     return summaries, predictions, trades, folds
 
 
-
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
