@@ -8,7 +8,7 @@ import hashlib
 from collections.abc import Sequence
 
 import pandas as pd
-from defusedxml import ElementTree
+from defusedxml import ElementTree  # type: ignore[import-untyped]
 from pandas import DataFrame
 
 from external_data.contracts import (
@@ -37,8 +37,9 @@ def _child_text(element: ElementTree.Element, *names: str) -> str:
     for child in element.iter():
         if child is element:
             continue
-        if _local_name(child.tag) in expected and child.text:
-            return child.text.strip()
+        text = child.text
+        if _local_name(str(child.tag)) in expected and isinstance(text, str):
+            return text.strip()
     return ""
 
 

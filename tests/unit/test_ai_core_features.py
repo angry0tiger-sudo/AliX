@@ -105,7 +105,10 @@ def test_hourly_to_four_hour_aggregation_is_exact_and_gap_aware() -> None:
     with pytest.raises(ValueError, match="complete_4h_bars"):
         aggregate_hourly_to_4h(hourly.iloc[:-1])
     broken = hourly.copy()
-    broken.loc[4, "date"] += pd.Timedelta(minutes=1)
+    broken["date"] = broken["date"].where(
+        broken.index != 4,
+        broken["date"] + pd.Timedelta(minutes=1),
+    )
     with pytest.raises(ValueError, match="gap_or_mismatch"):
         aggregate_hourly_to_4h(broken)
 
@@ -126,11 +129,16 @@ def test_hourly_to_four_hour_aggregation_is_exact_and_gap_aware() -> None:
 def test_ohlcv_quality_validation_fails_closed(mutation: str, reason: str) -> None:
     frame = candles_4h(8)
     if mutation == "duplicate":
-        frame.loc[1, "date"] = frame.loc[0, "date"]
+        frame["date"] = frame["date"].where(
+            frame.index != 1, frame["date"].iloc[0]
+        )
     elif mutation == "descending":
         frame = frame.iloc[::-1].reset_index(drop=True)
     elif mutation == "gap":
-        frame.loc[2, "date"] += pd.Timedelta(minutes=1)
+        frame["date"] = frame["date"].where(
+            frame.index != 2,
+            frame["date"] + pd.Timedelta(minutes=1),
+        )
     elif mutation == "naive":
         frame["date"] = frame["date"].dt.tz_localize(None)
     elif mutation == "infinite":
@@ -138,7 +146,9 @@ def test_ohlcv_quality_validation_fails_closed(mutation: str, reason: str) -> No
     elif mutation == "negative_volume":
         frame.loc[2, "volume"] = -1.0
     elif mutation == "bad_ohlc":
-        frame.loc[2, "high"] = frame.loc[2, "low"] - 1.0
+        frame["high"] = frame["high"].where(
+            frame.index != 2, frame["low"] - 1.0
+        )
     else:
         frame = frame.drop(columns=["low"])
     with pytest.raises(ValueError, match=reason):

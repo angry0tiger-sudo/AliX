@@ -12,7 +12,6 @@ from services.ai_core.ensemble import (
     EnsembleConfig,
     EnsemblePrediction,
     RegressorFactory,
-    default_model_factories,
     fit_weighted_ensemble,
     regression_metrics,
 )
@@ -114,10 +113,12 @@ def test_ensemble_config_rejects_unbounded_model_configuration() -> None:
         EnsembleConfig(random_seed=True)
 
 
-def test_default_factories_are_cpu_pinned_and_cover_the_required_models() -> None:
-    built = default_model_factories(EnsembleConfig(n_estimators=10))
-    assert set(built) == set(MODEL_NAMES)
-    assert all(callable(factory) for factory in built.values())
+def test_default_ensemble_configuration_names_all_three_models() -> None:
+    config = EnsembleConfig()
+    assert MODEL_NAMES == ("xgboost", "random_forest", "lightgbm")
+    assert tuple(name for name, _ in config.weights) == MODEL_NAMES
+    assert sum(weight for _, weight in config.weights) == pytest.approx(1.0)
+    assert all(weight == pytest.approx(1.0 / 3.0) for _, weight in config.weights)
 
 
 @pytest.mark.parametrize(

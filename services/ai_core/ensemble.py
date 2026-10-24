@@ -81,8 +81,8 @@ class EnsemblePrediction:
 def default_model_factories(config: EnsembleConfig) -> dict[str, RegressorFactory]:
     """Build CPU-only estimators lazily so importing feature code stays lightweight."""
     from lightgbm import LGBMRegressor  # type: ignore[import-not-found]
-    from sklearn.ensemble import RandomForestRegressor
-    from xgboost import XGBRegressor
+    from sklearn.ensemble import RandomForestRegressor  # type: ignore[import-untyped]
+    from xgboost import XGBRegressor  # type: ignore[import-not-found]
 
     return {
         "xgboost": lambda: XGBRegressor(
