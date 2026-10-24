@@ -113,58 +113,93 @@ def finite_number(value: Any, field: str) -> float:
     return number
 
 
-def parse_candles(payload: dict[str, Any], lower: int, upper: int) -> list[Candle]:
-    if payload.get("s") == "no_data":
-        return []
+
+def _validated_ohlcv_arrays(payload: dict[str, Any]) -> list[list[Any]]:
     if payload.get("s") != "ok":
         raise AuditError("public_api_status_not_ok")
-    arrays = [payload.get(name) for name in ("t", "o", "h", "l", "c", "v")]
+    names = ("t", "o", "h", "l", "c", "v")
+    arrays = [payload.get(name) for name in names]
     if any(not isinstance(values, list) for values in arrays):
         raise AuditError("public_api_ohlcv_arrays_missing")
     columns = [values for values in arrays if isinstance(values, list)]
     if len({len(values) for values in columns}) != 1:
         raise AuditError("public_api_ohlcv_array_length_mismatch")
+    return columns
 
-    result: list[Candle] = []
-    previous: int | None = None
-    for raw in zip(*columns, strict=True):
-        timestamp = raw[0]
-        if isinstance(timestamp, bool) or not isinstance(timestamp, int):
-            raise AuditError("candle_timestamp_invalid")
-        if timestamp < lower or timestamp > upper:
-            raise AuditError("candle_timestamp_out_of_requested_bounds")
-        if previous is not None and timestamp <= previous:
-            raise AuditError("response_timestamps_not_strictly_increasing")
 
-        opened = finite_number(raw[1], "open")
-        high = finite_number(raw[2], "high")
-        low = finite_number(raw[3], "low")
-        close = finite_number(raw[4], "close")
-        volume = finite_number(raw[5], "volume")
-        if (
-            min(opened, high, low, close) <= 0
-            or volume < 0
-            or high < max(opened, close)
-            or low > min(opened, close)
-            or high < low
-        ):
-            raise AuditError("candle_ohlcv_geometry_invalid")
-        result.append(
-            {
-                "timestamp": timestamp,
-                "date": utc_iso(timestamp),
-                "open": opened,
-                "high": high,
-                "low": low,
-                "close": close,
-                "volume": volume,
-            }
-        )
-        previous = timestamp
-    if len(result) > MAX_RESPONSE_BARS:
+def _validate_timestamp(
+    value: Any, lower: int, upper: int, previous: int | None
+) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise AuditError("candle_timestamp_invalid")
+    if value < lower or value > upper:
+        raise AuditError("candle_timestamp_out_of_requested_bounds")
+    if previous is not None and value <= previous:
+        raise AuditError("response_timestamps_not_strictly_increasing")
+    return value
+
+
+def _validate_candle_geometry(
+    opened: float, high: float, low: float, close: float, volume: float
+) -> None:
+    if min(opened, high, low, close) <= 0:
+        raise AuditError("candle_price_not_positive")
+    if volume < 0:
+        raise AuditError("candle_volume_negative")
+    if high < max(opened, close):
+        raise AuditError("candle_high_below_open_or_close")
+    if low > min(opened, close):
+        raise AuditError("candle_low_above_open_or_close")
+    if high < low:
+        raise AuditError("candle_high_below_low")
+
+
+def _parse_candle_row(
+    raw: tuple[Any, ...], lower: int, upper: int, previous: int | None
+) -> Candle:
+    timestamp = _validate_timestamp(raw[0], lower, upper, previous)
+    opened = finite_number(raw[1], "open")
+    high = finite_number(raw[2], "high")
+    low = finite_number(raw[3], "low")
+    close = finite_number(raw[4], "close")
+    volume = finite_number(raw[5], "volume")
+    _validate_candle_geometry(opened, high, low, close, volume)
+    return {
+        "timestamp": timestamp,
+        "date": utc_iso(timestamp),
+        "open": opened,
+        "high": high,
+        "low": low,
+        "close": close,
+        "volume": volume,
+    }
+
+
+def parse_candles(
+    payload: dict[str, Any], lower: int, upper: int
+) -> list[Candle]:
+    if payload.get("s") == "no_data":
+        return []
+    arrays = _validated_ohlcv_arrays(payload)
+    rows = [
+        _parse_candle_row(raw, lower, upper, previous)
+        for raw, previous in _rows_with_previous(arrays)
+    ]
+    if len(rows) > MAX_RESPONSE_BARS:
         raise AuditError("public_api_response_exceeded_candle_limit")
-    return result
+    return rows
 
+
+def _rows_with_previous(
+    columns: list[list[Any]],
+) -> list[tuple[tuple[Any, ...], int | None]]:
+    previous: int | None = None
+    result: list[tuple[tuple[Any, ...], int | None]] = []
+    for raw in zip(*columns, strict=True):
+        result.append((raw, previous))
+        timestamp = raw[0]
+        previous = timestamp if isinstance(timestamp, int) else None
+    return result
 
 def latest_closed_candle(now: int) -> int:
     lower = max(0, now - (MAX_RESPONSE_BARS - 10) * HOUR)
@@ -263,24 +298,29 @@ def write_candles(path: Path, candles: list[Candle]) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def scan(lookback_years: int) -> tuple[dict[str, Any], list[Candle], int]:
-    now = int(datetime.now(timezone.utc).timestamp())
-    latest = latest_closed_candle(now)
-    expected = lookback_years * 365 * 24
-    start = latest - (expected - 1) * HOUR
+
+def _merge_window_batch(
+    found: dict[int, Candle], batch: list[Candle], latest: int
+) -> None:
+    for candle in batch:
+        stamp = candle["timestamp"]
+        if (stamp - latest) % HOUR != 0:
+            raise AuditError("candle_timestamp_not_aligned_to_hourly_grid")
+        if stamp in found:
+            raise AuditError("duplicate_candle_across_windows")
+        found[stamp] = candle
+
+
+def _collect_history(
+    start: int, latest: int
+) -> tuple[dict[int, Candle], list[dict[str, int | str]]]:
     found: dict[int, Candle] = {}
     windows: list[dict[str, int | str]] = []
     end = latest
     while end >= start:
         begin = max(start, end - (WINDOW_BARS - 1) * HOUR)
         batch = fetch_window(begin, end)
-        for candle in batch:
-            stamp = candle["timestamp"]
-            if (stamp - latest) % HOUR != 0:
-                raise AuditError("candle_timestamp_not_aligned_to_hourly_grid")
-            if stamp in found:
-                raise AuditError("duplicate_candle_across_windows")
-            found[stamp] = candle
+        _merge_window_batch(found, batch, latest)
         windows.append(
             {
                 "start_utc": utc_iso(begin),
@@ -296,13 +336,16 @@ def scan(lookback_years: int) -> tuple[dict[str, Any], list[Candle], int]:
         end = begin - HOUR
         if end >= start:
             time.sleep(PAUSE_SECONDS)
+    return found, windows
 
-    candles = [found[stamp] for stamp in sorted(found)]
-    if not candles:
-        raise AuditError("no_candles_found_in_requested_lookback")
-    if latest not in found:
-        raise AuditError("latest_probe_candle_not_recovered_by_full_scan")
 
+def _coverage_summary(
+    lookback_years: int,
+    start: int,
+    latest: int,
+    candles: list[Candle],
+    windows: list[dict[str, int | str]],
+) -> dict[str, Any]:
     gaps = find_gaps(candles)
     segments = contiguous_segments(candles)
     longest = max(segments, key=lambda row: int(row["candle_count"]))
@@ -312,6 +355,7 @@ def scan(lookback_years: int) -> tuple[dict[str, Any], list[Candle], int]:
     )
     first_stamp = candles[0]["timestamp"]
     last_stamp = candles[-1]["timestamp"]
+    expected = lookback_years * 365 * 24
     leading = (first_stamp - start) // HOUR
     trailing = (latest - last_stamp) // HOUR
     missing_inside = (last_stamp - first_stamp) // HOUR + 1 - len(candles)
@@ -321,7 +365,7 @@ def scan(lookback_years: int) -> tuple[dict[str, Any], list[Candle], int]:
         and last_stamp == latest
         and not gaps
     )
-    coverage: dict[str, Any] = {
+    return {
         "audit_status": "COMPLETED",
         "coverage_verdict": "GAP_FREE_FULL_LOOKBACK"
         if full
@@ -360,8 +404,21 @@ def scan(lookback_years: int) -> tuple[dict[str, Any], list[Candle], int]:
         else 0.0,
         "window_results": windows,
     }
-    return coverage, candles, latest
 
+
+def scan(lookback_years: int) -> tuple[dict[str, Any], list[Candle], int]:
+    now = int(datetime.now(timezone.utc).timestamp())
+    latest = latest_closed_candle(now)
+    expected = lookback_years * 365 * 24
+    start = latest - (expected - 1) * HOUR
+    found, windows = _collect_history(start, latest)
+    candles = [found[stamp] for stamp in sorted(found)]
+    if not candles:
+        raise AuditError("no_candles_found_in_requested_lookback")
+    if latest not in found:
+        raise AuditError("latest_probe_candle_not_recovered_by_full_scan")
+    coverage = _coverage_summary(lookback_years, start, latest, candles, windows)
+    return coverage, candles, latest
 
 def safety_flags() -> dict[str, Any]:
     return {
