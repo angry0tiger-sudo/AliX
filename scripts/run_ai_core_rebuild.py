@@ -559,8 +559,19 @@ def run_rebuild(
     data, regime_features, feature_names, source, _, segment_hash = (
         _prepare_market_dataset(input_dir, eth_input)
     )
-    if len(data) <= MINIMUM_TRAIN_ROWS + FORWARD_HORIZON_4H + FOLD_COUNT:
-        raise ValueError("ai_core_research_rows_insufficient")
+    minimum_required_rows = (
+        MINIMUM_TRAIN_ROWS + FORWARD_HORIZON_4H + FOLD_COUNT
+    )
+    if len(data) <= minimum_required_rows:
+        raise ValueError(
+            "ai_core_research_rows_insufficient:"
+            f"eligible_rows={len(data)}:"
+            f"required_more_than={minimum_required_rows}:"
+            f"hourly_source_rows={source['development_rows_hourly_source']}:"
+            f"hourly_rows_used={source['development_rows_hourly_used_for_4h']}:"
+            f"four_hour_rows={source['development_rows_4h']}:"
+            f"base_feature_count={len(feature_names)}"
+        )
     source["segment_a_rows_sha256"] = segment_hash
     fold_reports, predictions = _run_walk_forward(
         data, regime_features, feature_names, registry
