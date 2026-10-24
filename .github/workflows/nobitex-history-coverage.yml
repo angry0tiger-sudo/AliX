@@ -14,7 +14,7 @@ on:
         default: "10"
   push:
     branches:
-      - research/nobitex-history-coverage
+      - staging
     paths:
       - ".github/workflows/nobitex-history-coverage.yml"
       - "scripts/audit_nobitex_history_coverage.py"
