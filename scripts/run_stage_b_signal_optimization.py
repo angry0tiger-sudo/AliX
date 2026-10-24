@@ -125,10 +125,10 @@ def add_signal_features(candles: DataFrame) -> DataFrame:
     losses = -change.clip(upper=0.0)
     average_gain = gains.rolling(14, min_periods=14).mean()
     average_loss = losses.rolling(14, min_periods=14).mean()
-    rsi_denominator = (average_gain + average_loss).where(
-        (average_gain + average_loss) > 0.0
-    )
-    result["%-rsi_14"] = 100.0 * average_gain / rsi_denominator
+    rsi_denominator = average_gain + average_loss
+    rsi = 100.0 * average_gain / rsi_denominator.where(rsi_denominator > 0.0)
+    # A fully flat 14-bar window has a defined neutral RSI by convention.
+    result["%-rsi_14"] = rsi.mask(rsi_denominator.eq(0.0), 50.0)
 
     for window in (50, 200):
         rolling_mean = close.rolling(window, min_periods=window).mean()
@@ -139,8 +139,11 @@ def add_signal_features(candles: DataFrame) -> DataFrame:
 
     rolling_high = high.rolling(24, min_periods=24).max()
     rolling_low = low.rolling(24, min_periods=24).min()
-    range_width = (rolling_high - rolling_low).where((rolling_high - rolling_low) > 0.0)
-    result["%-range_position_24"] = (close - rolling_low) / range_width
+    range_width = rolling_high - rolling_low
+    range_position = (close - rolling_low) / range_width.where(range_width > 0.0)
+    flat_range = range_width.eq(0.0) & close.eq(rolling_low)
+    # When the complete rolling range is flat, the close is at the neutral midpoint.
+    result["%-range_position_24"] = range_position.mask(flat_range, 0.5)
     result.replace([np.inf, -np.inf], np.nan, inplace=True)
     return result
 

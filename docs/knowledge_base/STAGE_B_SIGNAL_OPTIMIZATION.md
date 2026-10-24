@@ -55,3 +55,8 @@ The workflow asserts and records:
 - \`economic_acceptance = NO-GO\`
 - no production model or strategy-registry update
 - zero private API calls and zero order endpoint calls
+
+
+### Degenerate but valid indicator windows
+
+A perfectly flat rolling window has no missing candle data but creates a zero denominator for RSI and range-position. The research feature contract defines those two edge cases explicitly: RSI is 50 when average gain and average loss are both zero; range position is 0.5 when the rolling high, rolling low, and close are identical. These are deterministic indicator definitions, not OHLCV imputation. Leading warm-up rows and genuine data gaps remain undefined and are never filled.

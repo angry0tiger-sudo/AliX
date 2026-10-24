@@ -106,3 +106,28 @@ def test_cost_hurdle_rejects_mismatched_or_non_finite_inputs() -> None:
         summarize_cost_hurdle([0.01], [True, False])
     with pytest.raises(ValueError, match="non_finite"):
         summarize_cost_hurdle([float("nan")], [True])
+
+
+def test_flat_price_windows_have_explicit_neutral_technical_definitions() -> None:
+    rows = 240
+    candles = pd.DataFrame(
+        {
+            "date": pd.date_range(
+                "2020-01-01T00:00:00Z", periods=rows, freq="h"
+            ),
+            "open": np.full(rows, 100.0),
+            "high": np.full(rows, 100.0),
+            "low": np.full(rows, 100.0),
+            "close": np.full(rows, 100.0),
+            "volume": np.ones(rows, dtype=float),
+        }
+    )
+
+    featured = add_signal_features(candles)
+
+    assert featured["%-rsi_14"].iloc[14:].eq(50.0).all()
+    assert featured["%-range_position_24"].iloc[23:].eq(0.5).all()
+    pd.testing.assert_frame_equal(
+        candles,
+        candles.copy(),
+    )
