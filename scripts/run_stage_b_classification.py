@@ -571,9 +571,7 @@ def _summarize_opportunity_regime(
 ) -> dict[str, Any]:
     """Summarize eligible entry opportunities and their training-only volatility gate."""
     opportunities = [row for row in predictions if row["trade_opportunity"]]
-    high_volatility = [
-        row for row in opportunities if row["high_volatility_regime"]
-    ]
+    high_volatility = [row for row in opportunities if row["high_volatility_regime"]]
     rate = float(len(high_volatility) / len(opportunities)) if opportunities else None
     return {
         "entry_opportunity_count": len(opportunities),
