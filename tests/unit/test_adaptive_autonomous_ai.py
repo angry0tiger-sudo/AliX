@@ -172,13 +172,15 @@ def test_multitimeframe_builder_rejects_invalid_hourly_data(
     elif mutation == "descending":
         candles = candles.iloc[::-1].reset_index(drop=True)
     elif mutation == "gap":
-        candles.loc[20, "date"] = candles.loc[20, "date"] + pd.Timedelta(1, unit="m")
+        gap_date = cast(pd.Timestamp, pd.to_datetime(candles["date"], utc=True).iloc[20])
+        candles.loc[20, "date"] = gap_date + pd.Timedelta(1, unit="m")
     elif mutation == "non_finite":
         candles.loc[20, "close"] = np.inf
     elif mutation == "negative_volume":
         candles.loc[20, "volume"] = -1.0
     elif mutation == "bad_ohlc":
-        candles.loc[20, "low"] = candles.loc[20, "high"] + 1.0
+        high_value = float(candles["high"].iloc[20])
+        candles.loc[20, "low"] = high_value + 1.0
     with pytest.raises(ValueError, match=reason):
         build_multitimeframe_contexts(candles)
 
@@ -199,9 +201,12 @@ def test_timeframe_contexts_are_complete_and_causal() -> None:
     changed_future.loc[24 * 35 :, ["open", "high", "low", "close"]] += 50.0
     altered_contexts = build_multitimeframe_contexts(changed_future)
     cutoff = 24 * 35 - 2
+    context_columns = [
+        column for column in contexts.columns if column != "decision_time"
+    ]
     pd.testing.assert_series_equal(
-        contexts.loc[cutoff, contexts.columns != "decision_time"],
-        altered_contexts.loc[cutoff, altered_contexts.columns != "decision_time"],
+        contexts.loc[cutoff, context_columns],
+        altered_contexts.loc[cutoff, context_columns],
         check_names=False,
     )
 
