@@ -661,6 +661,7 @@ def _net_trade_result(
     return gross_pnl - costs, costs
 
 
+
 def _run_policy(
     policy_id: str | None,
     candles: DataFrame,
@@ -671,20 +672,36 @@ def _run_policy(
     *,
     source_volume_available: bool,
     config: WalkForwardConfig,
-) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
     specs = _registry_by_id(registry)
     initial_equity = config.initial_equity
     equity = initial_equity
     equity_curve = [equity]
     trades: list[dict[str, Any]] = []
+    decisions: list[dict[str, Any]] = []
     switch_count = 0
     last_selected: str | None = None
     selection_counts = {strategy_id: 0 for strategy_id in STRATEGY_IDS}
     for fold_index, (_, test_start, test_stop) in enumerate(folds, start=1):
         cursor = test_start
         while cursor < test_stop - 1:
+            timestamp = str(candles["date"].iloc[cursor])
             regime_info = regime_predictions.get(cursor)
             if regime_info is None:
+                if policy_id is None:
+                    decisions.append(
+                        {
+                            "fold": fold_index,
+                            "timestamp": timestamp,
+                            "regime": None,
+                            "hmm_confidence": None,
+                            "strategy_id": None,
+                            "status": "NO_TRADE",
+                            "reason": "hmm_regime_unavailable",
+                            "entry_signal": False,
+                            "order_permission": False,
+                        }
+                    )
                 cursor += 1
                 continue
             regime, confidence = regime_info
@@ -708,7 +725,38 @@ def _run_policy(
                     "FIXED_RESEARCH_BASELINE",
                     "predeclared_fixed_strategy_baseline",
                 )
-            if strategy_id is None or confidence < config.minimum_confidence:
+            if strategy_id is None:
+                if policy_id is None:
+                    decisions.append(
+                        {
+                            "fold": fold_index,
+                            "timestamp": timestamp,
+                            "regime": regime,
+                            "hmm_confidence": confidence,
+                            "strategy_id": None,
+                            "status": selection.status,
+                            "reason": selection.reason,
+                            "entry_signal": False,
+                            "order_permission": False,
+                        }
+                    )
+                cursor += 1
+                continue
+            if confidence < config.minimum_confidence:
+                if policy_id is None:
+                    decisions.append(
+                        {
+                            "fold": fold_index,
+                            "timestamp": timestamp,
+                            "regime": regime,
+                            "hmm_confidence": confidence,
+                            "strategy_id": strategy_id,
+                            "status": "NO_TRADE",
+                            "reason": "hmm_confidence_below_threshold",
+                            "entry_signal": False,
+                            "order_permission": False,
+                        }
+                    )
                 cursor += 1
                 continue
             spec = specs[strategy_id]
@@ -716,12 +764,31 @@ def _run_policy(
             if last_selected is not None and strategy_id != last_selected:
                 switch_count += 1
             last_selected = strategy_id
-            if not generate_entry_signal(
+            has_signal = generate_entry_signal(
                 strategy_id,
                 row,
                 source_volume_available=source_volume_available,
                 minimum_relative_volume=spec.minimum_relative_volume,
-            ):
+            )
+            if policy_id is None:
+                decisions.append(
+                    {
+                        "fold": fold_index,
+                        "timestamp": timestamp,
+                        "regime": regime,
+                        "hmm_confidence": confidence,
+                        "strategy_id": strategy_id,
+                        "status": "ENTRY_SIGNAL" if has_signal else "NO_SIGNAL",
+                        "reason": (
+                            "hmm_selected_strategy_entry_signal"
+                            if has_signal
+                            else "selected_strategy_entry_conditions_not_met"
+                        ),
+                        "entry_signal": has_signal,
+                        "order_permission": False,
+                    }
+                )
+            if not has_signal:
                 cursor += 1
                 continue
             entry_index = cursor + 1
@@ -762,7 +829,7 @@ def _run_policy(
                     "strategy_id": strategy_id,
                     "regime": regime,
                     "hmm_confidence": confidence,
-                    "signal_time": str(candles["date"].iloc[cursor]),
+                    "signal_time": timestamp,
                     "entry_time": str(candles["date"].iloc[entry_index]),
                     "exit_time": str(candles["date"].iloc[exit_index]),
                     "entry_index": entry_index,
@@ -796,8 +863,7 @@ def _run_policy(
         switch_count=switch_count,
         selection_counts=selection_counts,
     )
-    return metrics, trades
-
+    return metrics, trades, decisions
 
 def summarize_policy_metrics(
     trades: list[dict[str, Any]],
@@ -876,6 +942,7 @@ def _comparisons(
     return comparisons
 
 
+
 def evaluate_historical_bars(
     candles: DataFrame,
     registry: StrategyRegistry,
@@ -883,7 +950,7 @@ def evaluate_historical_bars(
     commit_sha: str,
     source: Mapping[str, Any],
     config: WalkForwardConfig | None = None,
-) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
     """Evaluate dynamic regime selection against four fixed-policy baselines."""
     selected_config = config or WalkForwardConfig()
     if len(commit_sha) != 40 or any(character not in "0123456789abcdef" for character in commit_sha):
@@ -897,7 +964,7 @@ def evaluate_historical_bars(
     )
     volume_positive_rows = int((bars["volume"] > 0).sum())
     source_volume_available = volume_positive_rows > 0 and bool(source.get("volume_observed", True))
-    meta_metrics, meta_trades = _run_policy(
+    meta_metrics, meta_trades, decisions = _run_policy(
         None,
         bars,
         features,
@@ -910,7 +977,7 @@ def evaluate_historical_bars(
     baseline_metrics: dict[str, dict[str, Any]] = {}
     all_trades = list(meta_trades)
     for strategy_id in STRATEGY_IDS:
-        metrics, trades = _run_policy(
+        metrics, trades, _ = _run_policy(
             strategy_id,
             bars,
             features,
@@ -994,8 +1061,7 @@ def evaluate_historical_bars(
             "real_order_attempts": 0,
         },
     }
-    return report, all_trades
-
+    return report, all_trades, decisions
 
 __all__ = [
     "DEFAULT_FOLD_COUNT",
