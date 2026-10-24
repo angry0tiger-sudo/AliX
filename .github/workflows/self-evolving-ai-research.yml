@@ -1,0 +1,124 @@
+name: AliX Self-Evolving AI Phase 0-1 Research
+
+on:
+  push:
+    branches:
+      - "research/self-evolving-ai"
+    paths:
+      - ".github/workflows/self-evolving-ai-research.yml"
+      - "services/ai_core/self_evolving_simulator.py"
+      - "services/ai_core/self_evolving_genome.py"
+      - "scripts/fetch_public_minute_bars.py"
+      - "configs/research/self-evolving-ai.json"
+      - "tests/unit/test_self_evolving_simulator.py"
+      - "tests/unit/test_self_evolving_genome.py"
+      - "tests/unit/test_fetch_public_minute_bars.py"
+      - "docs/knowledge_base/SELF_EVOLVING_AI_ARCHITECTURE.md"
+      - "docs/governance/owner-directives/2026-10-25-self-evolving-ai.md"
+  workflow_dispatch:
+    inputs:
+      symbol:
+        description: "Public Binance Spot symbol"
+        required: true
+        default: "BTCUSDT"
+        type: string
+      months:
+        description: "Calendar months of closed 1m bars"
+        required: true
+        default: "6"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: alix-self-evolving-ai-research
+  cancel-in-progress: false
+
+jobs:
+  simulator-and-minute-data:
+    name: Causal simulator, genome contracts and public minute data
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      ALIx_ENV: paper
+      ALIx_DRY_RUN: "true"
+      ALIx_ALLOW_LIVE_TRADING: "false"
+      ALIx_REPORTING_ENABLED: "false"
+      PYTHONUNBUFFERED: "1"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    steps:
+      - name: Checkout exact commit without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python runtime
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run simulator, genome and public-data contract tests
+        run: |
+          python -m pytest \
+            tests/unit/test_self_evolving_simulator.py \
+            tests/unit/test_self_evolving_genome.py \
+            tests/unit/test_fetch_public_minute_bars.py -q
+
+      - name: Fetch six calendar months of public 1m bars
+        env:
+          RESEARCH_SYMBOL: ${{ inputs.symbol || 'BTCUSDT' }}
+          RESEARCH_MONTHS: ${{ inputs.months || '6' }}
+        run: |
+          python -m scripts.fetch_public_minute_bars \
+            --symbol "$RESEARCH_SYMBOL" \
+            --months "$RESEARCH_MONTHS" \
+            --out-dir artifacts/public-minute-bars
+
+      - name: Verify provenance, coverage report and immutable safety invariants
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path("artifacts/public-minute-bars")
+          manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+          safety = manifest["safety_invariants"]
+          assert manifest["schema_version"] == "alix.self-evolving-data-manifest.v1"
+          assert manifest["interval"] == "1m"
+          assert manifest["row_count"] > 0
+          assert len(manifest["csv_sha256"]) == 64
+          assert safety["Champion"] is None
+          assert safety["order_permission"] is False
+          assert safety["trading_authorization"] == "NO-GO"
+          assert manifest["private_api_calls"] == 0
+          assert manifest["orders_or_execution_api_used"] is False
+          assert manifest["real_order_attempts"] == 0
+          print(json.dumps({
+              "symbol": manifest["symbol"],
+              "interval": manifest["interval"],
+              "start_utc": manifest["start_utc"],
+              "end_utc": manifest["end_utc"],
+              "row_count": manifest["row_count"],
+              "missing_minute_intervals_between_rows": manifest["missing_minute_intervals_between_rows"],
+              "coverage_fraction": manifest["coverage_fraction"],
+              "csv_sha256": manifest["csv_sha256"],
+              "Champion": safety["Champion"],
+              "order_permission": safety["order_permission"],
+              "trading_authorization": safety["trading_authorization"],
+          }, sort_keys=True, allow_nan=False))
+          PY
+
+      - name: Upload public data and verified manifest
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: self-evolving-public-minute-bars-${{ github.sha }}
+          path: |
+            artifacts/public-minute-bars/*.csv
+            artifacts/public-minute-bars/manifest.json
+          if-no-files-found: warn
+          retention-days: 30

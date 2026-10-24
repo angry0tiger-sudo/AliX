@@ -178,3 +178,8 @@ A run is technically acceptable only when:
 - `Champion = null`, `order_permission = false`, and `trading_authorization = NO-GO` remain true.
 
 Economic acceptance is separate. Positive in-sample PnL or a 60% win rate is insufficient. The frozen candidate must demonstrate positive net expectancy out of sample, acceptable drawdown under pre-registered limits, adequate trade count, robustness across periods/regimes, and tolerable cost sensitivity. If any criterion fails or evidence is insufficient, the answer remains NO-GO.
+
+
+The phase-1 simulator deliberately models **spot long/flat** only. Short positions, margin, borrow fees, and perpetual funding are not yet modeled, so negative target exposure is rejected rather than reported as economically valid. Add those contract-specific costs and liquidation rules before allowing an evolutionary candidate to use short or leveraged actions. The 95% maximum target exposure is an accounting safety envelope that reserves room for simulated execution costs; it is not an alpha rule, and the genome cannot change it.
+
+The first Actions run verifies the real public-data request and records the actual coverage and gaps; this design note does not claim that the 6-month download has already completed successfully.
