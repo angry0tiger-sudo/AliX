@@ -112,9 +112,7 @@ def test_flat_price_windows_have_explicit_neutral_technical_definitions() -> Non
     rows = 240
     candles = pd.DataFrame(
         {
-            "date": pd.date_range(
-                "2020-01-01T00:00:00Z", periods=rows, freq="h"
-            ),
+            "date": pd.date_range("2020-01-01T00:00:00Z", periods=rows, freq="h"),
             "open": np.full(rows, 100.0),
             "high": np.full(rows, 100.0),
             "low": np.full(rows, 100.0),
