@@ -100,11 +100,13 @@ def segment_bounds(
             raise StageBError("timestamp_delta_not_hour_aligned")
         if delta > HOUR:
             starts.append(index)
-            gaps.append({
-                "left_timestamp": previous,
-                "right_timestamp": current,
-                "missing_hours": delta // HOUR - 1,
-            })
+            gaps.append(
+                {
+                    "left_timestamp": previous,
+                    "right_timestamp": current,
+                    "missing_hours": delta // HOUR - 1,
+                }
+            )
         previous = current
     stops = starts[1:] + [len(timestamps)]
     return list(zip(starts, stops, strict=True)), gaps
@@ -203,7 +205,9 @@ def verify_source_artifact(
         raise StageBError("source_candle_count_unexpected")
     ranges, gaps = segment_bounds(frame["timestamp"].to_numpy(dtype=np.int64).tolist())
     if len(ranges) != 2 or len(gaps) != 1 or gaps[0]["missing_hours"] != 320:
-        raise StageBError("source_must_contain_exactly_two_segments_and_one_320_hour_gap")
+        raise StageBError(
+            "source_must_contain_exactly_two_segments_and_one_320_hour_gap"
+        )
     expected = report.get("contiguous_segments")
     if not isinstance(expected, list) or len(expected) != 2:
         raise StageBError("source_segment_manifest_invalid")
@@ -246,9 +250,11 @@ def build_fixed_window_folds(
         test_stop = min(test_start + window_rows, stop_index)
         if test_stop - test_start <= horizon:
             break
-        result.append(FoldSpec(
-            f"{prefix}-{number:02d}", test_start - horizon, test_start, test_stop
-        ))
+        result.append(
+            FoldSpec(
+                f"{prefix}-{number:02d}", test_start - horizon, test_start, test_stop
+            )
+        )
         test_start += window_rows
         number += 1
     if not result:
@@ -269,8 +275,10 @@ def economic_gate(
     drawdown_pass = drawdown_abs < 0.15
     passed = count_pass and win_pass and expectancy_pass and drawdown_pass
     status = (
-        "INSUFFICIENT_SAMPLE" if not count_pass
-        else "THRESHOLDS_MET_RESEARCH_ONLY" if passed
+        "INSUFFICIENT_SAMPLE"
+        if not count_pass
+        else "THRESHOLDS_MET_RESEARCH_ONLY"
+        if passed
         else "NO_GO_THRESHOLDS_NOT_MET"
     )
     return {
@@ -314,12 +322,15 @@ def summarize_trades(trades: list[dict[str, Any]]) -> dict[str, Any]:
         "win_rate": rate,
         "expectancy_net_per_trade": expectancy,
         "net_return_compounded": float(np.prod(1.0 + np.asarray(returns)) - 1.0)
-        if returns else 0.0,
+        if returns
+        else 0.0,
         "max_drawdown_abs": drawdown,
         "fee_bps_per_side": FEE_BPS_SIDE,
         "slippage_bps_per_side": SLIPPAGE_BPS_SIDE,
         "round_trip_cost_fraction": ROUND_TRIP_COST,
-        "economic_threshold_evaluation": economic_gate(count, rate, expectancy, drawdown),
+        "economic_threshold_evaluation": economic_gate(
+            count, rate, expectancy, drawdown
+        ),
     }
 
 
@@ -371,36 +382,40 @@ def evaluate_fold(
             terminal_fold or offset + HORIZON < len(test)
         )
         taken = opportunity and forecast > ROUND_TRIP_COST
-        prediction_rows.append({
-            "segment": segment,
-            "evaluation": evaluation,
-            "fold_id": fold.fold_id,
-            "timestamp_utc": utc_text(entry),
-            "forecast_return_horizon": forecast,
-            "realized_forward_return": realized,
-            "round_trip_cost_fraction": ROUND_TRIP_COST,
-            "trade_opportunity": opportunity,
-            "trade_taken": taken,
-        })
+        prediction_rows.append(
+            {
+                "segment": segment,
+                "evaluation": evaluation,
+                "fold_id": fold.fold_id,
+                "timestamp_utc": utc_text(entry),
+                "forecast_return_horizon": forecast,
+                "realized_forward_return": realized,
+                "round_trip_cost_fraction": ROUND_TRIP_COST,
+                "trade_opportunity": opportunity,
+                "trade_taken": taken,
+            }
+        )
         if taken:
             net = float(realized - ROUND_TRIP_COST)
             if net <= -1.0:
                 raise StageBError("net_return_below_full_capital_loss_contract")
-            trades.append({
-                "segment": segment,
-                "evaluation": evaluation,
-                "fold_id": fold.fold_id,
-                "entry_utc": utc_text(entry),
-                "exit_utc": utc_text(entry + pd.Timedelta(hours=HORIZON)),
-                "horizon_hours": HORIZON,
-                "forecast_return": float(forecast),
-                "gross_return": float(realized),
-                "fee_bps_round_trip": 2 * FEE_BPS_SIDE,
-                "slippage_bps_round_trip": 2 * SLIPPAGE_BPS_SIDE,
-                "net_return": net,
-                "won_after_costs": net > 0.0,
-                "order_submitted": False,
-            })
+            trades.append(
+                {
+                    "segment": segment,
+                    "evaluation": evaluation,
+                    "fold_id": fold.fold_id,
+                    "entry_utc": utc_text(entry),
+                    "exit_utc": utc_text(entry + pd.Timedelta(hours=HORIZON)),
+                    "horizon_hours": HORIZON,
+                    "forecast_return": float(forecast),
+                    "gross_return": float(realized),
+                    "fee_bps_round_trip": 2 * FEE_BPS_SIDE,
+                    "slippage_bps_round_trip": 2 * SLIPPAGE_BPS_SIDE,
+                    "net_return": net,
+                    "won_after_costs": net > 0.0,
+                    "order_submitted": False,
+                }
+            )
 
     return {
         "segment": segment,
@@ -439,9 +454,10 @@ def prepare_segment(segment: DataFrame, name: str) -> tuple[DataFrame, str]:
     if not (dates.diff().dropna() == pd.Timedelta(seconds=HOUR)).all():
         raise StageBError(f"segment_{name}_feature_rows_not_contiguous")
     features = dataset.loc[:, list(FEATURE_COLUMNS)].to_numpy(dtype=float)
-    if not np.isfinite(features).all() or not np.isfinite(
-        dataset[TARGET_COLUMN].to_numpy(dtype=float)
-    ).all():
+    if (
+        not np.isfinite(features).all()
+        or not np.isfinite(dataset[TARGET_COLUMN].to_numpy(dtype=float)).all()
+    ):
         raise StageBError(f"segment_{name}_feature_or_target_non_finite")
     return dataset, fingerprint
 
@@ -461,15 +477,18 @@ def evaluate_many(
         )
         results.append(result)
         completed += 1
-        write_json(out_dir / "progress.json", {
-            "status": "IN_PROGRESS",
-            "completed_folds": completed,
-            "last_completed_fold": fold.fold_id,
-            "Champion": None,
-            "order_permission": False,
-            "trading_authorization": "NO-GO",
-            "economic_acceptance": "NO-GO",
-        })
+        write_json(
+            out_dir / "progress.json",
+            {
+                "status": "IN_PROGRESS",
+                "completed_folds": completed,
+                "last_completed_fold": fold.fold_id,
+                "Champion": None,
+                "order_permission": False,
+                "trading_authorization": "NO-GO",
+                "economic_acceptance": "NO-GO",
+            },
+        )
     return results, completed
 
 
@@ -479,8 +498,11 @@ def aggregate(results: list[dict[str, Any]]) -> dict[str, Any]:
         "fold_count": len(results),
         "metrics": summarize_trades(trades),
         "folds": [
-            {key: value for key, value in result.items()
-             if key not in ("prediction_rows", "trades")}
+            {
+                key: value
+                for key, value in result.items()
+                if key not in ("prediction_rows", "trades")
+            }
             for result in results
         ],
         "trades": trades,
@@ -497,9 +519,7 @@ def installed_version(package: str) -> str | None:
         return None
 
 
-def write_csv(
-    path: Path, rows: list[dict[str, Any]], empty_fields: list[str]
-) -> None:
+def write_csv(path: Path, rows: list[dict[str, Any]], empty_fields: list[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fields = list(rows[0]) if rows else empty_fields
     with path.open("w", encoding="utf-8", newline="") as stream:
@@ -521,9 +541,7 @@ def run_stage_b(input_dir: Path, output_dir: Path, commit_sha: str) -> dict[str,
     if dataset_a["date"].iloc[a_dev_stop] != holdout_start:
         raise StageBError("segment_a_holdout_boundary_not_exact")
 
-    a_dev_folds = build_fixed_window_folds(
-        a_dev_stop, A_TRAIN, HORIZON, WINDOW, "A-WF"
-    )
+    a_dev_folds = build_fixed_window_folds(a_dev_stop, A_TRAIN, HORIZON, WINDOW, "A-WF")
     holdout_fold = FoldSpec(
         "A-HOLDOUT-90D", a_dev_stop - HORIZON, a_dev_stop, len(dataset_a)
     )
@@ -532,34 +550,45 @@ def run_stage_b(input_dir: Path, output_dir: Path, commit_sha: str) -> dict[str,
     b_folds = build_fixed_window_folds(
         len(dataset_b), B_TRAIN, HORIZON, WINDOW, "B-DIAG"
     )
-    write_json(output_dir / "input-verification.json", {
-        "coverage_workflow_run_id": SOURCE_RUN_ID,
-        "coverage_artifact_name": SOURCE_ARTIFACT,
-        "coverage_commit_sha": SOURCE_COMMIT,
-        "stage_b_code_commit_sha": commit_sha,
-        "csv_sha256": source_report["csv_sha256"],
-        "manifest_sha256": source_report["manifest_sha256"],
-        "observed_candles": len(frame),
-        "gap_hours": 320,
-        "segment_a_sha256": segment_hashes[0],
-        "segment_b_sha256": segment_hashes[1],
-        "interpolation": False,
-        "forward_fill": False,
-        "backfill": False,
-        "resampling": False,
-    })
+    write_json(
+        output_dir / "input-verification.json",
+        {
+            "coverage_workflow_run_id": SOURCE_RUN_ID,
+            "coverage_artifact_name": SOURCE_ARTIFACT,
+            "coverage_commit_sha": SOURCE_COMMIT,
+            "stage_b_code_commit_sha": commit_sha,
+            "csv_sha256": source_report["csv_sha256"],
+            "manifest_sha256": source_report["manifest_sha256"],
+            "observed_candles": len(frame),
+            "gap_hours": 320,
+            "segment_a_sha256": segment_hashes[0],
+            "segment_b_sha256": segment_hashes[1],
+            "interpolation": False,
+            "forward_fill": False,
+            "backfill": False,
+            "resampling": False,
+        },
+    )
 
     a_results, completed = evaluate_many(
         "A", "walk_forward_development", dataset_a, a_dev_folds, output_dir, 0
     )
     b_results, completed = evaluate_many(
-        "B", "independent_short_history_diagnostic", dataset_b, b_folds,
-        output_dir, completed,
+        "B",
+        "independent_short_history_diagnostic",
+        dataset_b,
+        b_folds,
+        output_dir,
+        completed,
     )
     # Final holdout is evaluated last and never used for model/parameter selection.
     holdout_results, completed = evaluate_many(
-        "A", "untouched_final_holdout", dataset_a, [holdout_fold],
-        output_dir, completed,
+        "A",
+        "untouched_final_holdout",
+        dataset_a,
+        [holdout_fold],
+        output_dir,
+        completed,
     )
     a_dev = aggregate(a_results)
     b_diag = aggregate(b_results)
@@ -569,19 +598,34 @@ def run_stage_b(input_dir: Path, output_dir: Path, commit_sha: str) -> dict[str,
         output_dir / "oos-predictions.csv",
         [row for result in all_results for row in result["prediction_rows"]],
         [
-            "segment", "evaluation", "fold_id", "timestamp_utc",
-            "forecast_return_horizon", "realized_forward_return",
-            "round_trip_cost_fraction", "trade_opportunity", "trade_taken",
+            "segment",
+            "evaluation",
+            "fold_id",
+            "timestamp_utc",
+            "forecast_return_horizon",
+            "realized_forward_return",
+            "round_trip_cost_fraction",
+            "trade_opportunity",
+            "trade_taken",
         ],
     )
     write_csv(
         output_dir / "oos-trades.csv",
         a_dev["trades"] + holdout["trades"] + b_diag["trades"],
         [
-            "segment", "evaluation", "fold_id", "entry_utc", "exit_utc",
-            "horizon_hours", "forecast_return", "gross_return",
-            "fee_bps_round_trip", "slippage_bps_round_trip", "net_return",
-            "won_after_costs", "order_submitted",
+            "segment",
+            "evaluation",
+            "fold_id",
+            "entry_utc",
+            "exit_utc",
+            "horizon_hours",
+            "forecast_return",
+            "gross_return",
+            "fee_bps_round_trip",
+            "slippage_bps_round_trip",
+            "net_return",
+            "won_after_costs",
+            "order_submitted",
         ],
     )
 
@@ -703,16 +747,19 @@ def run_stage_b(input_dir: Path, output_dir: Path, commit_sha: str) -> dict[str,
         },
     }
     write_json(output_dir / "stage-b-report.json", report)
-    write_json(output_dir / "progress.json", {
-        "status": "COMPLETED",
-        "completed_folds": completed,
-        "planned_folds": completed,
-        "holdout_evaluated": True,
-        "Champion": None,
-        "order_permission": False,
-        "trading_authorization": "NO-GO",
-        "economic_acceptance": "NO-GO",
-    })
+    write_json(
+        output_dir / "progress.json",
+        {
+            "status": "COMPLETED",
+            "completed_folds": completed,
+            "planned_folds": completed,
+            "holdout_evaluated": True,
+            "Champion": None,
+            "order_permission": False,
+            "trading_authorization": "NO-GO",
+            "economic_acceptance": "NO-GO",
+        },
+    )
     return report
 
 
@@ -726,33 +773,44 @@ def main() -> int:
         report = run_stage_b(args.input_dir, args.output_dir, args.commit_sha)
     except Exception as error:
         args.output_dir.mkdir(parents=True, exist_ok=True)
-        write_json(args.output_dir / "stage-b-failure.json", {
-            "report_schema": REPORT_SCHEMA,
-            "run_status": "FAILED_CLOSED",
-            "failure_type": type(error).__name__,
-            "failure_code": str(error),
-            "Champion": None,
-            "order_permission": False,
-            "trading_authorization": "NO-GO",
-            "economic_acceptance": "NO-GO",
-            "orders_or_execution_api_used": False,
-        })
+        write_json(
+            args.output_dir / "stage-b-failure.json",
+            {
+                "report_schema": REPORT_SCHEMA,
+                "run_status": "FAILED_CLOSED",
+                "failure_type": type(error).__name__,
+                "failure_code": str(error),
+                "Champion": None,
+                "order_permission": False,
+                "trading_authorization": "NO-GO",
+                "economic_acceptance": "NO-GO",
+                "orders_or_execution_api_used": False,
+            },
+        )
         raise
-    print(json.dumps({
-        "run_status": report["run_status"],
-        "segment_a_walk_forward": report["evaluations"][
-            "segment_a_walk_forward_development"
-        ]["result"]["metrics"],
-        "segment_a_holdout": report["evaluations"]["segment_a_final_holdout"][
-            "result"
-        ]["metrics"],
-        "segment_b_diagnostic": report["evaluations"][
-            "segment_b_independent_diagnostic"
-        ]["result"]["metrics"],
-        "Champion": report["safety_invariants"]["Champion"],
-        "order_permission": report["safety_invariants"]["order_permission"],
-        "trading_authorization": report["safety_invariants"]["trading_authorization"],
-    }, sort_keys=True, allow_nan=False))
+    print(
+        json.dumps(
+            {
+                "run_status": report["run_status"],
+                "segment_a_walk_forward": report["evaluations"][
+                    "segment_a_walk_forward_development"
+                ]["result"]["metrics"],
+                "segment_a_holdout": report["evaluations"]["segment_a_final_holdout"][
+                    "result"
+                ]["metrics"],
+                "segment_b_diagnostic": report["evaluations"][
+                    "segment_b_independent_diagnostic"
+                ]["result"]["metrics"],
+                "Champion": report["safety_invariants"]["Champion"],
+                "order_permission": report["safety_invariants"]["order_permission"],
+                "trading_authorization": report["safety_invariants"][
+                    "trading_authorization"
+                ],
+            },
+            sort_keys=True,
+            allow_nan=False,
+        )
+    )
     return 0
 
 
