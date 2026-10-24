@@ -104,9 +104,11 @@ def _build_candidate_datasets(
             dataset = _build_dataset(
                 engineered, columns, horizon, common_start_utc, common_end_utc
             )
-            timestamps = pd.to_datetime(
-                dataset["date"], utc=True, errors="raise"
-            ).astype("int64").to_numpy(dtype=np.int64)
+            timestamps = (
+                pd.to_datetime(dataset["date"], utc=True, errors="raise")
+                .astype("int64")
+                .to_numpy(dtype=np.int64)
+            )
             if reference_timestamps is None:
                 reference_timestamps = timestamps
                 reference_row_count = len(dataset)
@@ -150,17 +152,11 @@ def _collect_candidate_rows(
     list[dict[str, Any]],
 ]:
     """Flatten candidate evidence into report summaries and reproducible CSV rows."""
-    summaries = [
-        _candidate_summary(result) for result in candidate_results.values()
-    ]
+    summaries = [_candidate_summary(result) for result in candidate_results.values()]
     predictions = [
-        row
-        for result in candidate_results.values()
-        for row in result["predictions"]
+        row for result in candidate_results.values() for row in result["predictions"]
     ]
-    trades = [
-        row for result in candidate_results.values() for row in result["trades"]
-    ]
+    trades = [row for result in candidate_results.values() for row in result["trades"]]
     folds = [
         {
             "candidate_id": result["candidate_id"],
@@ -684,9 +680,7 @@ def _eligible_prior_candidates(
     eligible: list[tuple[tuple[float, float, float, int], str, int]] = []
     for candidate_id, result in sorted(candidate_results.items()):
         prior_trades = [
-            trade
-            for trade in result["trades"]
-            if int(trade["fold_index"]) < fold_index
+            trade for trade in result["trades"] if int(trade["fold_index"]) < fold_index
         ]
         selection = _prior_candidate_score(prior_trades)
         if selection is not None:
@@ -709,9 +703,7 @@ def _select_and_collect_policy_fold(
         reason = "fallback_no_prior_candidate_passed_selection_gates"
     chosen = candidate_results[chosen_id]
     current_trades = [
-        trade
-        for trade in chosen["trades"]
-        if int(trade["fold_index"]) == fold_index
+        trade for trade in chosen["trades"] if int(trade["fold_index"]) == fold_index
     ]
     fold_report = chosen["folds"][fold_index]
     trace_row = {
