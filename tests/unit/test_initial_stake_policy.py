@@ -14,9 +14,7 @@ from risk.initial_stake_policy import (
 
 
 def test_versioned_policy_file_loads_explicit_owner_approval() -> None:
-    document = Path("config/risk/initial-stake-policy.json").read_text(
-        encoding="utf-8"
-    )
+    document = Path("config/risk/initial-stake-policy.json").read_text(encoding="utf-8")
     result = load_initial_stake_policy_document(document)
 
     assert result.reason_codes == ()

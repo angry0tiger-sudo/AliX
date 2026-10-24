@@ -417,13 +417,15 @@ def _proposal_freshness_reasons(
     now: datetime,
 ) -> tuple[str, ...]:
     reasons: list[str] = []
-    if market.as_of > now or (
-        now - market.as_of
-    ).total_seconds() > policy.max_market_age_seconds:
+    if (
+        market.as_of > now
+        or (now - market.as_of).total_seconds() > policy.max_market_age_seconds
+    ):
         reasons.append("market_price_stale_or_future")
-    if allocation.created_at > now or (
-        now - allocation.created_at
-    ).total_seconds() > policy.max_market_age_seconds:
+    if (
+        allocation.created_at > now
+        or (now - allocation.created_at).total_seconds() > policy.max_market_age_seconds
+    ):
         reasons.append("allocation_stale_or_future")
     return tuple(reasons)
 
@@ -547,8 +549,7 @@ def _maximum_entry_quantity(
         rules.max_notional,
     )
     quantities = [
-        floor_to_step(cap / market.price, rules.quantity_step)
-        for cap in notional_caps
+        floor_to_step(cap / market.price, rules.quantity_step) for cap in notional_caps
     ]
     quantities.append(rules.max_quantity)
     return min(quantities)

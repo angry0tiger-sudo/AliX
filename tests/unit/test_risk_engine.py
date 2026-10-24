@@ -649,9 +649,7 @@ def test_supervisor_entry_review_passes_only_to_risk_gate_and_never_grants_order
     )
     assert review.action is SupervisorProposalAction.PASS_TO_RISK_GATE
     assert review.order_permission is False
-    assert review.reason_codes == (
-        "supervisor_review_passed_risk_gate_still_required",
-    )
+    assert review.reason_codes == ("supervisor_review_passed_risk_gate_still_required",)
     assert review.fingerprint
 
 
