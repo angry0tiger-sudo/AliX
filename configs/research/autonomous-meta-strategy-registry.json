@@ -1,0 +1,94 @@
+{
+  "schema_version": "alix.autonomous-meta-strategy-registry.v1",
+  "revision": "autonomous-meta-research-v1",
+  "code_sha256": "b24e0d4d314483c0c38cb02b3699a9fcf1b4bdeba5ed9604e93c10c8376e89aa",
+  "strategies": [
+    {
+      "strategy_id": "trend_following",
+      "version": "0.1.0",
+      "lifecycle": "RESEARCH_ONLY",
+      "owner_approved": false,
+      "allow_short": false,
+      "timeframe": "1h",
+      "eligible_regimes": [
+        "trend"
+      ],
+      "required_features": [
+        "ema_fast",
+        "ema_slow",
+        "macd",
+        "macd_signal",
+        "atr_14"
+      ],
+      "requires_positive_volume": false,
+      "minimum_relative_volume": 0,
+      "max_holding_bars": 24,
+      "atr_stop_multiple": 2,
+      "atr_target_multiple": 3
+    },
+    {
+      "strategy_id": "mean_reversion",
+      "version": "0.1.0",
+      "lifecycle": "RESEARCH_ONLY",
+      "owner_approved": false,
+      "allow_short": false,
+      "timeframe": "1h",
+      "eligible_regimes": [
+        "range"
+      ],
+      "required_features": [
+        "rsi_14",
+        "bollinger_lower",
+        "atr_14"
+      ],
+      "requires_positive_volume": false,
+      "minimum_relative_volume": 0,
+      "max_holding_bars": 12,
+      "atr_stop_multiple": 1.25,
+      "atr_target_multiple": 1.6
+    },
+    {
+      "strategy_id": "volatility_breakout",
+      "version": "0.1.0",
+      "lifecycle": "RESEARCH_ONLY",
+      "owner_approved": false,
+      "allow_short": false,
+      "timeframe": "1h",
+      "eligible_regimes": [
+        "high_volatility"
+      ],
+      "required_features": [
+        "previous_high_20",
+        "atr_14",
+        "close"
+      ],
+      "requires_positive_volume": false,
+      "minimum_relative_volume": 0,
+      "max_holding_bars": 12,
+      "atr_stop_multiple": 2.5,
+      "atr_target_multiple": 3.5
+    },
+    {
+      "strategy_id": "scalping",
+      "version": "0.1.0",
+      "lifecycle": "RESEARCH_ONLY",
+      "owner_approved": false,
+      "allow_short": false,
+      "timeframe": "1h",
+      "eligible_regimes": [
+        "range"
+      ],
+      "required_features": [
+        "relative_volume",
+        "volume",
+        "ema_fast",
+        "momentum_3h"
+      ],
+      "requires_positive_volume": true,
+      "minimum_relative_volume": 1.5,
+      "max_holding_bars": 3,
+      "atr_stop_multiple": 0.75,
+      "atr_target_multiple": 1
+    }
+  ]
+}
