@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from typing import Protocol
 
 import numpy as np
-import pandas as pd
 from pandas import DataFrame, Series
 
 MODEL_NAMES = ("xgboost", "random_forest", "lightgbm")

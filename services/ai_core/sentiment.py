@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from email.utils import parsedate_to_datetime
 import hashlib
 from collections.abc import Sequence
