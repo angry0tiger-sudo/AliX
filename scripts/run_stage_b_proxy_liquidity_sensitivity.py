@@ -8,8 +8,7 @@ import hashlib
 import io
 import json
 import math
-import urllib.error
-import urllib.request
+import urllib3
 import zipfile
 from pathlib import Path
 from typing import Any, cast
@@ -46,26 +45,37 @@ PRICE_BAND_TOLERANCE_FRACTION = 0.005
 BOOK_MANIFEST_SCHEMA = "alix.binance-bookdepth-manifest.v1"
 
 
-def _download_bytes(url: str) -> bytes | None:
-    request = urllib.request.Request(
-        url, headers={"User-Agent": "AliX-research-only/1.0"}, method="GET"
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=60) as response:
-            if response.status != 200:
-                raise RuntimeError(
-                    f"binance_archive_http_status:{response.status}:{url}"
-                )
-            return cast(bytes, response.read())
-    except urllib.error.HTTPError as error:
-        if error.code == 404:
-            return None
-        raise RuntimeError(f"binance_archive_http_error:{error.code}:{url}") from error
-    except urllib.error.URLError as error:
-        raise RuntimeError(
-            f"binance_archive_download_error:{url}:{error.reason}"
-        ) from error
+HTTP_POOL = urllib3.PoolManager()
 
+
+def _download_bytes(url: str) -> bytes | None:
+    source = urlsplit(url)
+    if (
+        source.scheme != "https"
+        or source.hostname != "data.binance.vision"
+        or not source.path.startswith("/data/spot/")
+    ):
+        raise ValueError("binance_archive_source_url_not_allowlisted")
+    try:
+        response = HTTP_POOL.request(
+            "GET",
+            url,
+            headers={"User-Agent": "AliX-research-only/1.0"},
+            timeout=urllib3.Timeout(connect=10.0, read=60.0),
+            retries=False,
+            redirect=True,
+        )
+    except urllib3.exceptions.HTTPError as error:
+        raise RuntimeError(f"binance_archive_download_error:{url}:{error}") from error
+
+    try:
+        if response.status == 404:
+            return None
+        if response.status != 200:
+            raise RuntimeError(f"binance_archive_http_status:{response.status}:{url}")
+        return cast(bytes, response.data)
+    finally:
+        response.release_conn()
 
 def _month_url(month: pd.Timestamp) -> str:
     return (

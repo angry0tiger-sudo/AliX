@@ -52,7 +52,7 @@ jobs:
       - name: Install pinned research dependencies and test runner
         run: |
           python -m pip install pip==25.2
-          python -m pip install numpy==2.5.4 pandas==2.3.3 lightgbm==4.7.0 scikit-learn==1.9.0 pytest==8.4.2
+          python -m pip install numpy==2.5.4 pandas==2.3.3 lightgbm==4.7.0 scikit-learn==1.9.0 pytest==8.4.2 urllib3==2.8.0
 
       - name: Run proxy adapter and capacity unit tests
         run: python -m pytest tests/unit/test_stage_b_proxy_liquidity_sensitivity.py -q

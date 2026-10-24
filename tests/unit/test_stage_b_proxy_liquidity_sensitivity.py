@@ -15,6 +15,7 @@ from scripts.run_stage_b_proxy_liquidity_sensitivity import (
     PROXY_DAILY_QUOTE_CAP,
     REFERENCE_ORDER_NOTIONAL,
     _align_proxy_volume,
+    _download_bytes,
     _scale_binance_quote_volume,
     _validate_bookdepth_manifest,
     add_banded_orderbook_features,
@@ -219,3 +220,8 @@ def test_proxy_alignment_rejects_mixed_nobitex_timestamp_phases() -> None:
     )
     with pytest.raises(ValueError, match="timestamp_phase_not_uniform"):
         _align_proxy_volume(candles, klines)
+
+
+def test_binance_archive_downloader_rejects_untrusted_hosts_before_network_access() -> None:
+    with pytest.raises(ValueError, match="source_url_not_allowlisted"):
+        _download_bytes("https://example.com/data/spot/monthly/klines/BTCUSDT/1h/example.zip")
