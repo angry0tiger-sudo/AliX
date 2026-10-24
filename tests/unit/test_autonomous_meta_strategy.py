@@ -335,7 +335,9 @@ def test_hourly_market_data_validation_fails_closed(mutation: str, reason: str) 
         candles.loc[10, "volume"] = -1.0
     elif mutation == "bad_ohlc":
         low_values = pd.to_numeric(candles["low"], errors="raise").to_numpy(dtype=float)
-        high_values = pd.to_numeric(candles["high"], errors="raise").to_numpy(dtype=float)
+        high_values = pd.to_numeric(candles["high"], errors="raise").to_numpy(
+            dtype=float
+        )
         high_values[10] = low_values[10] - 1.0
         candles["high"] = high_values
     with pytest.raises(ValueError, match=reason):
