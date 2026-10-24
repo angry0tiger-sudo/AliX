@@ -62,9 +62,7 @@ def test_stale_orderbook_snapshot_fails_closed() -> None:
 def test_crossed_orderbook_fails_closed() -> None:
     first = _snapshot("2024-01-01T00:59:30Z", 3.0, 1.0)
     first["ask_price_1"] = 99.0
-    book = pd.DataFrame(
-        [first, _snapshot("2024-01-01T01:59:30Z", 1.0, 3.0)]
-    )
+    book = pd.DataFrame([first, _snapshot("2024-01-01T01:59:30Z", 1.0, 3.0)])
     with pytest.raises(ValueError, match="crossed_or_locked"):
         add_relative_orderbook_features(_candles(), book)
 

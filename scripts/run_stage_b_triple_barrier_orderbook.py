@@ -13,8 +13,17 @@ import numpy as np
 import pandas as pd
 from pandas import DataFrame
 
-from scripts.run_stage_b_walk_forward import A_HOLDOUT, HOUR, SOURCE_RUN_ID, utc_text, verify_source_artifact
-from services.meta_labeling.triple_barrier import TripleBarrierConfig, apply_triple_barrier
+from scripts.run_stage_b_walk_forward import (
+    A_HOLDOUT,
+    HOUR,
+    SOURCE_RUN_ID,
+    utc_text,
+    verify_source_artifact,
+)
+from services.meta_labeling.triple_barrier import (
+    TripleBarrierConfig,
+    apply_triple_barrier,
+)
 
 SCHEMA = "alix.stage-b.triple-barrier-orderbook.v1"
 HORIZONS = (24, 48)
@@ -96,9 +105,7 @@ def _validate_orderbook(book: DataFrame) -> DataFrame:
             values = result[[price_column, quantity_column]].to_numpy(dtype=float)
             if not np.isfinite(values).all():
                 raise ValueError(f"orderbook_non_finite:{side}:{level}")
-            if (result[price_column] <= 0).any() or (
-                result[quantity_column] < 0
-            ).any():
+            if (result[price_column] <= 0).any() or (result[quantity_column] < 0).any():
                 raise ValueError(f"orderbook_value_out_of_range:{side}:{level}")
     bid_prices = result[[f"bid_price_{i}" for i in range(1, 21)]].to_numpy(float)
     ask_prices = result[[f"ask_price_{i}" for i in range(1, 21)]].to_numpy(float)
@@ -160,9 +167,7 @@ def _load_development(input_dir: Path) -> tuple[DataFrame, dict[str, Any], str]:
         raise ValueError("stage_a_segment_too_short")
     candles = segments[0].iloc[:-A_HOLDOUT].copy().reset_index(drop=True)
     candles["date"] = pd.to_datetime(candles["date"], utc=True, errors="raise")
-    if not (
-        candles["date"].diff().dropna() == pd.Timedelta(seconds=HOUR)
-    ).all():
+    if not (candles["date"].diff().dropna() == pd.Timedelta(seconds=HOUR)).all():
         raise ValueError("stage_a_development_not_contiguous")
     values = candles[["open", "high", "low", "close", "volume"]].to_numpy(float)
     if not np.isfinite(values).all() or np.any(values[:, 4] < 0):
@@ -178,12 +183,10 @@ def _price_features(candles: DataFrame) -> DataFrame:
     features = DataFrame(index=candles.index)
     features["log_return_1h"] = log_close.diff()
     for horizon in (6, 24, 48):
-        features[f"momentum_{horizon}h"] = close.pct_change(
-            horizon, fill_method=None
-        )
-    features["volatility_24h"] = (
-        log_close.diff().rolling(24, min_periods=24).std() * math.sqrt(24)
-    )
+        features[f"momentum_{horizon}h"] = close.pct_change(horizon, fill_method=None)
+    features["volatility_24h"] = log_close.diff().rolling(
+        24, min_periods=24
+    ).std() * math.sqrt(24)
     for window in (50, 200):
         features[f"close_vs_sma_{window}"] = (
             close / close.rolling(window, min_periods=window).mean() - 1.0
@@ -204,7 +207,9 @@ def _price_features(candles: DataFrame) -> DataFrame:
     return features.replace([np.inf, -np.inf], np.nan)
 
 
-def _event_outcomes(candles: DataFrame) -> tuple[dict[tuple[int, float, float], DataFrame], list[dict[str, Any]]]:
+def _event_outcomes(
+    candles: DataFrame,
+) -> tuple[dict[tuple[int, float, float], DataFrame], list[dict[str, Any]]]:
     close = pd.to_numeric(candles["close"], errors="raise")
     volatility = np.log(close).diff().rolling(24, min_periods=24).std() * math.sqrt(24)
     all_outcomes: dict[tuple[int, float, float], DataFrame] = {}
@@ -250,9 +255,15 @@ def _event_outcomes(candles: DataFrame) -> tuple[dict[tuple[int, float, float], 
                             "slippage_bps_per_side": slippage,
                             "round_trip_cost_bps": 2.0 * (FEE_BPS_SIDE + slippage),
                             "scheduled_event_count_not_trade_count": len(outcomes),
-                            "take_profit_count": int(outcomes["exit_reason"].eq("take_profit").sum()),
-                            "stop_loss_count": int(outcomes["exit_reason"].eq("stop_loss").sum()),
-                            "vertical_count": int(outcomes["exit_reason"].eq("vertical").sum()),
+                            "take_profit_count": int(
+                                outcomes["exit_reason"].eq("take_profit").sum()
+                            ),
+                            "stop_loss_count": int(
+                                outcomes["exit_reason"].eq("stop_loss").sum()
+                            ),
+                            "vertical_count": int(
+                                outcomes["exit_reason"].eq("vertical").sum()
+                            ),
                             "mean_gross_return": float(np.mean(gross)),
                             "median_gross_return": float(np.median(gross)),
                             "mean_net_return": float(np.mean(gross - cost)),
@@ -262,7 +273,9 @@ def _event_outcomes(candles: DataFrame) -> tuple[dict[tuple[int, float, float], 
     return all_outcomes, scenarios
 
 
-def _liquidity_capacity(candles: DataFrame, volume_unit: str) -> tuple[dict[str, Any], np.ndarray]:
+def _liquidity_capacity(
+    candles: DataFrame, volume_unit: str
+) -> tuple[dict[str, Any], np.ndarray]:
     volume = pd.to_numeric(candles["volume"], errors="raise").to_numpy(float)
     close = pd.to_numeric(candles["close"], errors="raise").to_numpy(float)
     positive = volume > 0.0
@@ -301,7 +314,9 @@ def _fold_boundaries(row_count: int) -> list[tuple[int, int]]:
     ]
 
 
-def _fit_predict(train_x: DataFrame, train_y: np.ndarray, test_x: DataFrame) -> np.ndarray:
+def _fit_predict(
+    train_x: DataFrame, train_y: np.ndarray, test_x: DataFrame
+) -> np.ndarray:
     from lightgbm import LGBMClassifier  # type: ignore[import-not-found]
 
     if np.unique(train_y).size != 2:
@@ -320,7 +335,9 @@ def _fit_predict(train_x: DataFrame, train_y: np.ndarray, test_x: DataFrame) -> 
     )
     model.fit(train_x, train_y)
     positive_class = list(model.classes_).index(1)
-    probabilities = np.asarray(model.predict_proba(test_x)[:, positive_class], dtype=float)
+    probabilities = np.asarray(
+        model.predict_proba(test_x)[:, positive_class], dtype=float
+    )
     if not np.isfinite(probabilities).all():
         raise ValueError("triple_barrier_oos_probabilities_non_finite")
     return probabilities
@@ -340,11 +357,12 @@ def _evaluate_candidate(
     event_features = event_features.loc[usable].reset_index(drop=True)
     folds: list[dict[str, Any]] = []
     predictions: list[dict[str, Any]] = []
-    for fold_index, (test_start, test_stop) in enumerate(_fold_boundaries(len(candles))):
-        train_mask = (
-            labelled["event_index"].lt(test_start)
-            & labelled["label_end_index"].lt(test_start)
-        )
+    for fold_index, (test_start, test_stop) in enumerate(
+        _fold_boundaries(len(candles))
+    ):
+        train_mask = labelled["event_index"].lt(test_start) & labelled[
+            "label_end_index"
+        ].lt(test_start)
         test_mask = (
             labelled["event_index"].ge(test_start)
             & labelled["event_index"].lt(test_stop)
@@ -433,7 +451,9 @@ def _drawdown(returns: Sequence[float]) -> float | None:
     return abs(worst)
 
 
-def _stress_metrics(predictions: list[dict[str, Any]], slippage: float) -> dict[str, Any]:
+def _stress_metrics(
+    predictions: list[dict[str, Any]], slippage: float
+) -> dict[str, Any]:
     round_trip_cost = 2.0 * (FEE_BPS_SIDE + slippage) / 10_000.0
     signalled = [row for row in predictions if row["counterfactual_signal"]]
     executable = [row for row in signalled if row["executable_trade"]]
@@ -447,7 +467,9 @@ def _stress_metrics(predictions: list[dict[str, Any]], slippage: float) -> dict[
             "win_rate": rate,
             "net_expectancy_per_trade": float(np.mean(returns)) if count else None,
             "max_drawdown_abs": _drawdown(returns),
-            "compounded_return": float(np.prod(1.0 + np.asarray(returns)) - 1.0) if count else 0.0,
+            "compounded_return": float(np.prod(1.0 + np.asarray(returns)) - 1.0)
+            if count
+            else 0.0,
         }
 
     actual = summary(executable)
@@ -467,7 +489,10 @@ def _stress_metrics(predictions: list[dict[str, Any]], slippage: float) -> dict[
         "round_trip_total_cost_bps": 2.0 * (FEE_BPS_SIDE + slippage),
         "counterfactual_signals_not_eligible_for_acceptance": summary(signalled),
         "executable_trade_metrics": actual,
-        "strict_economic_gate_on_executable_trades": {**gates, "passed": all(gates.values())},
+        "strict_economic_gate_on_executable_trades": {
+            **gates,
+            "passed": all(gates.values()),
+        },
     }
 
 
@@ -478,7 +503,9 @@ def run_experiment(
     orderbook_csv: Path | None,
     volume_unit: str,
 ) -> dict[str, Any]:
-    if len(commit_sha) != 40 or any(char not in "0123456789abcdef" for char in commit_sha):
+    if len(commit_sha) != 40 or any(
+        char not in "0123456789abcdef" for char in commit_sha
+    ):
         raise ValueError("research_commit_sha_invalid")
     candles, source_report, segment_hash = _load_development(input_dir)
     outcomes_by_config, barrier_scenarios = _event_outcomes(candles)
@@ -507,13 +534,20 @@ def run_experiment(
     feature_groups: dict[str, DataFrame] = {"ohlcv_only": price_features}
     if book_features is not None:
         feature_groups["ohlcv_plus_binance_relative_book"] = pd.concat(
-            [price_features.reset_index(drop=True), book_features.drop(columns=["date"])],
+            [
+                price_features.reset_index(drop=True),
+                book_features.drop(columns=["date"]),
+            ],
             axis=1,
         )
     all_folds: list[dict[str, Any]] = []
     all_predictions: list[dict[str, Any]] = []
     stress_rows: list[dict[str, Any]] = []
-    for (horizon, profit_multiplier, stop_multiplier), outcomes in outcomes_by_config.items():
+    for (
+        horizon,
+        profit_multiplier,
+        stop_multiplier,
+    ), outcomes in outcomes_by_config.items():
         candidate_id = (
             f"ohlcv_only|h{horizon}|pt{profit_multiplier:g}|sl{stop_multiplier:g}"
         )
@@ -577,7 +611,8 @@ def run_experiment(
             "stop_loss_multipliers": list(SL_MULTIPLIERS),
             "barrier_candidate_count": len(outcomes_by_config),
             "model_candidate_count_planned": 2 * len(outcomes_by_config),
-            "model_candidate_count_executed": len(feature_groups) * len(outcomes_by_config),
+            "model_candidate_count_executed": len(feature_groups)
+            * len(outcomes_by_config),
             "model_candidate_count_blocked_for_missing_book": (
                 0 if book_features is not None else len(outcomes_by_config)
             ),
@@ -670,14 +705,18 @@ def main() -> int:
                 "commit_sha": report["created_by_commit_sha"],
                 "run_status": report["run_status"],
                 "barrier_scenarios": report["protocol"]["diagnostic_scenario_count"],
-                "executed_model_candidates": report["protocol"]["model_candidate_count_executed"],
+                "executed_model_candidates": report["protocol"][
+                    "model_candidate_count_executed"
+                ],
                 "oos_predictions": report["protocol"]["oos_prediction_row_count"],
                 "orderbook_status": report["data_availability"]["orderbook_status"],
                 "liquidity_status": report["data_availability"]["liquidity"]["status"],
                 "economic_status": report["economic_evaluation"]["status"],
                 "Champion": report["safety_invariants"]["Champion"],
                 "order_permission": report["safety_invariants"]["order_permission"],
-                "trading_authorization": report["safety_invariants"]["trading_authorization"],
+                "trading_authorization": report["safety_invariants"][
+                    "trading_authorization"
+                ],
             },
             sort_keys=True,
             allow_nan=False,
