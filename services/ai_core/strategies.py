@@ -124,25 +124,30 @@ def generate_candidate_signal(
         "mean_reversion": ("rsi_14", "bollinger_position_24", "return_3"),
         "momentum_breakout": ("breakout_distance_24", "volume_zscore_24", "return_6"),
     }
-    values = {name: _number(row, name) for name in required[strategy_id]}
-    if any(value is None for value in values.values()):
-        return StrategySignal(strategy_id, 0, "required_feature_missing_or_non_finite")
+    values: dict[str, float] = {}
+    for name in required[strategy_id]:
+        value = _number(row, name)
+        if value is None:
+            return StrategySignal(
+                strategy_id, 0, "required_feature_missing_or_non_finite"
+            )
+        values[name] = value
     if strategy_id == "trend_following":
         signal = int(
-            values["ema_crossover_24_72"] > 0 and values["return_6"] > 0  # type: ignore[operator]
+            values["ema_crossover_24_72"] > 0 and values["return_6"] > 0
         )
     elif strategy_id == "mean_reversion":
         signal = int(
             values["rsi_14"] <= 30
             and values["bollinger_position_24"] <= 0
             and values["return_3"] < 0
-        )  # type: ignore[operator]
+        )
     else:
         signal = int(
             values["breakout_distance_24"] > 0
             and values["volume_zscore_24"] > 0
             and values["return_6"] > 0
-        )  # type: ignore[operator]
+        )
     return StrategySignal(
         strategy_id,
         signal,

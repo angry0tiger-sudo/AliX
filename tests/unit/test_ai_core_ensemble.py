@@ -47,8 +47,14 @@ def dataset(rows: int = 50) -> tuple[DataFrame, np.ndarray, DataFrame]:
 def factories(
     values: tuple[float, float, float], *, length_delta: int = 0
 ) -> Mapping[str, RegressorFactory]:
+    def factory_for(value: float) -> RegressorFactory:
+        def create() -> ConstantRegressor:
+            return ConstantRegressor(value, length_delta=length_delta)
+
+        return create
+
     return {
-        name: (lambda value=value: ConstantRegressor(value, length_delta=length_delta))
+        name: factory_for(value)
         for name, value in zip(MODEL_NAMES, values, strict=True)
     }
 

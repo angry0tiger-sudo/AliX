@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import cast
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -43,10 +45,10 @@ def candles_1h(rows: int = 12) -> pd.DataFrame:
     # Four hourly samples per synthetic 4H bar, with valid intrabar ranges.
     points: list[dict[str, object]] = []
     for row in source.itertuples(index=False):
-        start = pd.Timestamp(row.date)
+        start = cast(pd.Timestamp, row.date)
         for hour in range(4):
-            opened = float(row.open) * (1.0 + hour * 0.0001)
-            close = float(row.close) * (1.0 + hour * 0.0001)
+            opened = float(cast(float, row.open)) * (1.0 + hour * 0.0001)
+            close = float(cast(float, row.close)) * (1.0 + hour * 0.0001)
             points.append(
                 {
                     "date": start + pd.Timedelta(hours=hour),
@@ -54,7 +56,7 @@ def candles_1h(rows: int = 12) -> pd.DataFrame:
                     "high": max(opened, close) * 1.001,
                     "low": min(opened, close) * 0.999,
                     "close": close,
-                    "volume": float(row.volume) / 4.0,
+                    "volume": float(cast(float, row.volume)) / 4.0,
                 }
             )
     return pd.DataFrame(points)
@@ -209,7 +211,7 @@ def test_point_in_time_sentiment_columns_are_joined_without_forward_fill() -> No
     candles = candles_4h(10)
     sentiment = pd.DataFrame(
         {
-            "date": candles["date"].iloc[[2, 5]],
+            "date": candles["date"].iloc[np.asarray([2, 5], dtype=np.intp)],
             **{
                 name: [0.1, 0.2] if name != "sentiment_available" else [True, True]
                 for name in SENTIMENT_COLUMNS

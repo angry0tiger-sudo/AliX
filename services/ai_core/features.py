@@ -343,7 +343,9 @@ def _base_feature_values(candles: DataFrame) -> dict[str, Series]:
     close = candles["close"].astype(float)
     volume = candles["volume"].astype(float)
     returns = close.pct_change(fill_method=None)
-    log_returns = np.log(close).diff()
+    log_returns = pd.Series(
+        np.log(close.to_numpy(dtype=float)), index=close.index
+    ).diff()
     typical_price = (high + low + close) / 3.0
     true_range = _true_range(high, low, close)
     values: dict[str, Series] = {}
