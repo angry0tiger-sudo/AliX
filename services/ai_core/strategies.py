@@ -55,7 +55,9 @@ class StrategySignal:
             raise ValueError("ai_core_strategy_signal_cannot_authorize_orders")
 
 
-def _registry_candidate(registry: StrategyRegistry, strategy_id: str) -> bool:
+def _registry_candidate(
+    registry: StrategyRegistry, strategy_id: str, regime: str
+) -> bool:
     matching = [item for item in registry.strategies if item.strategy_id == strategy_id]
     if len(matching) != 1:
         return False
