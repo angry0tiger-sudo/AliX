@@ -1,0 +1,66 @@
+name: AliX Nobitex Public History Coverage Audit
+
+on:
+  workflow_dispatch:
+    inputs:
+      lookback_years:
+        description: Maximum history horizon to audit
+        required: true
+        type: choice
+        options:
+          - "3"
+          - "5"
+          - "10"
+        default: "10"
+  push:
+    branches:
+      - staging
+    paths:
+      - ".github/workflows/nobitex-history-coverage.yml"
+      - "scripts/audit_nobitex_history_coverage.py"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: alix-nobitex-history-coverage
+  cancel-in-progress: false
+
+jobs:
+  public-history-coverage:
+    name: Audit public OHLCV history only
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - name: Checkout exact audit commit without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Python standard-library runtime
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Scan public historical candles
+        env:
+          LOOKBACK_YEARS: ${{ inputs.lookback_years || '10' }}
+        run: |
+          python scripts/audit_nobitex_history_coverage.py \
+            --lookback-years "$LOOKBACK_YEARS" \
+            --commit-sha "$GITHUB_SHA" \
+            --output-dir "$RUNNER_TEMP/alix-nobitex-history-coverage"
+
+      - name: Upload coverage evidence even when the scan fails
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alix-nobitex-history-coverage-${{ github.run_id }}
+          path: ${{ runner.temp }}/alix-nobitex-history-coverage/
+          if-no-files-found: warn
+          retention-days: 30
