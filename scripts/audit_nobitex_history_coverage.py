@@ -47,8 +47,10 @@ class Candle(TypedDict):
 
 
 def utc_iso(timestamp: int) -> str:
-    return datetime.fromtimestamp(timestamp, timezone.utc).isoformat().replace(
-        "+00:00", "Z"
+    return (
+        datetime.fromtimestamp(timestamp, timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z")
     )
 
 
@@ -111,9 +113,7 @@ def finite_number(value: Any, field: str) -> float:
     return number
 
 
-def parse_candles(
-    payload: dict[str, Any], lower: int, upper: int
-) -> list[Candle]:
+def parse_candles(payload: dict[str, Any], lower: int, upper: int) -> list[Candle]:
     if payload.get("s") == "no_data":
         return []
     if payload.get("s") != "ok":
@@ -167,8 +167,13 @@ def parse_candles(
 
 
 def latest_closed_candle(now: int) -> int:
-    lower = max(0, now - (MAX_RESPONSE_BARS + 2) * HOUR)
-    params = {"symbol": "BTCUSDT", "resolution": "60", "from": str(lower), "to": str(now)}
+    lower = max(0, now - (MAX_RESPONSE_BARS - 10) * HOUR)
+    params = {
+        "symbol": "BTCUSDT",
+        "resolution": "60",
+        "from": str(lower),
+        "to": str(now),
+    }
     rows = parse_candles(request_json(params), lower, now)
     closed = [row["timestamp"] for row in rows if row["timestamp"] + HOUR <= now]
     if not closed:
@@ -318,7 +323,9 @@ def scan(lookback_years: int) -> tuple[dict[str, Any], list[Candle], int]:
     )
     coverage: dict[str, Any] = {
         "audit_status": "COMPLETED",
-        "coverage_verdict": "GAP_FREE_FULL_LOOKBACK" if full else "PARTIAL_OR_GAPPED_HISTORY",
+        "coverage_verdict": "GAP_FREE_FULL_LOOKBACK"
+        if full
+        else "PARTIAL_OR_GAPPED_HISTORY",
         "lookback_years_requested": lookback_years,
         "lookback_days_requested": lookback_years * 365,
         "symbol": "BTCUSDT",
@@ -336,7 +343,9 @@ def scan(lookback_years: int) -> tuple[dict[str, Any], list[Candle], int]:
         "trailing_unobserved_hours_after_newest_observation": trailing,
         "missing_hours_between_observations": missing_inside,
         "inter_observation_gap_count": len(gaps),
-        "empty_window_count": sum(int(w["returned_candle_count"]) == 0 for w in windows),
+        "empty_window_count": sum(
+            int(w["returned_candle_count"]) == 0 for w in windows
+        ),
         "windows_completed": len(windows),
         "public_market_data_request_count": len(windows) + 1,
         "full_requested_lookback_is_contiguous": full,
@@ -346,7 +355,9 @@ def scan(lookback_years: int) -> tuple[dict[str, Any], list[Candle], int]:
         "longest_contiguous_segment": longest,
         "longest_contiguous_span_years": longest["span_years_365_25_day"],
         "contiguous_segment_ending_at_latest_candle": recent,
-        "recent_contiguous_span_years": recent["span_years_365_25_day"] if recent else 0.0,
+        "recent_contiguous_span_years": recent["span_years_365_25_day"]
+        if recent
+        else 0.0,
         "window_results": windows,
     }
     return coverage, candles, latest
@@ -435,7 +446,9 @@ def run_audit(lookback_years: int, commit_sha: str, output_dir: Path) -> dict[st
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--lookback-years", type=int, choices=LOOKBACK_YEARS, default=10)
+    parser.add_argument(
+        "--lookback-years", type=int, choices=LOOKBACK_YEARS, default=10
+    )
     parser.add_argument("--commit-sha", required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args()
