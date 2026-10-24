@@ -183,10 +183,10 @@ def validate_source_ohlcv(frame: DataFrame) -> None:
         raise StageBError("source_high_below_low")
 
 
-def verify_source_artifact(
+def read_coverage_artifact(
     input_dir: Path,
-) -> tuple[DataFrame, dict[str, Any], list[DataFrame], list[str]]:
-    """Verify the immutable Stage A artifact and return the two source segments."""
+) -> tuple[Path, bytes, dict[str, Any], dict[str, Any]]:
+    """Read and authenticate the immutable Stage A files before parsing candles."""
     csv_path = input_dir / CSV_NAME
     manifest_path = input_dir / MANIFEST_NAME
     report_path = input_dir / REPORT_NAME
@@ -199,10 +199,24 @@ def verify_source_artifact(
     csv_hash = hashlib.sha256(raw_bytes).hexdigest()
     manifest_hash = hashlib.sha256(manifest_bytes).hexdigest()
     check_artifact_metadata(manifest, report, csv_hash, manifest_hash)
+    return csv_path, raw_bytes, manifest, report
+
+
+def validate_coverage_frame(
+    csv_path: Path, raw_bytes: bytes
+) -> tuple[DataFrame, list[str]]:
+    """Parse the pinned CSV and validate rows without sorting or repairing data."""
     frame, lines = parse_source_frame(csv_path, raw_bytes)
     validate_source_ohlcv(frame)
     if len(frame) != 70169:
         raise StageBError("source_candle_count_unexpected")
+    return frame, lines
+
+
+def split_verified_segments(
+    frame: DataFrame, lines: list[str], report: dict[str, Any]
+) -> tuple[list[DataFrame], list[str]]:
+    """Verify exact segment boundaries and hash each untouched source-row range."""
     ranges, gaps = segment_bounds(frame["timestamp"].to_numpy(dtype=np.int64).tolist())
     if len(ranges) != 2 or len(gaps) != 1 or gaps[0]["missing_hours"] != 320:
         raise StageBError(
@@ -227,6 +241,16 @@ def verify_source_artifact(
             if expected[number].get(key) != value:
                 raise StageBError("source_segment_boundary_mismatch")
         segments.append(segment)
+    return segments, hashes
+
+
+def verify_source_artifact(
+    input_dir: Path,
+) -> tuple[DataFrame, dict[str, Any], list[DataFrame], list[str]]:
+    """Authenticate Stage A provenance and return only its observed segments."""
+    csv_path, raw_bytes, _manifest, report = read_coverage_artifact(input_dir)
+    frame, lines = validate_coverage_frame(csv_path, raw_bytes)
+    segments, hashes = split_verified_segments(frame, lines, report)
     return frame, report, segments, hashes
 
 
@@ -341,24 +365,22 @@ def fit_new_model() -> Any:
     return LGBMRegressor(**dict(BASELINE_MODEL_PARAMETERS))
 
 
-def evaluate_fold(
-    segment: str,
-    evaluation: str,
-    dataset: DataFrame,
-    fold: FoldSpec,
-    terminal_fold: bool,
-) -> dict[str, Any]:
-    train = dataset.iloc[: fold.train_stop]
-    test = dataset.iloc[fold.test_start : fold.test_stop]
-    if len(train) < 1 or len(test) <= HORIZON:
-        raise StageBError("fold_rows_insufficient")
-    train_x = train.loc[:, list(FEATURE_COLUMNS)]
+def fit_fold_model(train: DataFrame) -> Any:
+    """Fit one new model from this fold's past-only training rows."""
+    if len(train) < 1:
+        raise StageBError("fold_training_rows_empty")
     train_y = train[TARGET_COLUMN].to_numpy(dtype=float)
     if not np.isfinite(train_y).all():
         raise StageBError("training_target_non_finite")
     model = fit_new_model()
-    model.fit(train_x, train_y)
+    model.fit(train.loc[:, list(FEATURE_COLUMNS)], train_y)
+    return model
 
+
+def predict_fold(
+    model: Any, test: DataFrame, terminal_fold: bool
+) -> tuple[DataFrame, np.ndarray, np.ndarray]:
+    """Predict OOS labels, excluding rows whose full horizon would cross a fold."""
     scored_count = len(test) if terminal_fold else len(test) - HORIZON
     scored = test.iloc[:scored_count]
     if scored.empty:
@@ -371,17 +393,62 @@ def evaluate_fold(
         raise StageBError("oos_prediction_invalid")
     if not np.isfinite(actual).all():
         raise StageBError("oos_target_non_finite")
+    return scored, predicted, actual
 
+
+def build_trade_record(
+    segment: str,
+    evaluation: str,
+    fold_id: str,
+    entry: pd.Timestamp,
+    forecast: float,
+    realized: float,
+    opportunity: bool,
+) -> dict[str, Any] | None:
+    """Return a costed research trade only when the pre-registered entry rule passes."""
+    if not opportunity or forecast <= ROUND_TRIP_COST:
+        return None
+    net = float(realized - ROUND_TRIP_COST)
+    if net <= -1.0:
+        raise StageBError("net_return_below_full_capital_loss_contract")
+    return {
+        "segment": segment,
+        "evaluation": evaluation,
+        "fold_id": fold_id,
+        "entry_utc": utc_text(entry),
+        "exit_utc": utc_text(entry + pd.Timedelta(hours=HORIZON)),
+        "horizon_hours": HORIZON,
+        "forecast_return": float(forecast),
+        "gross_return": float(realized),
+        "fee_bps_round_trip": 2 * FEE_BPS_SIDE,
+        "slippage_bps_round_trip": 2 * SLIPPAGE_BPS_SIDE,
+        "net_return": net,
+        "won_after_costs": net > 0.0,
+        "order_submitted": False,
+    }
+
+
+def build_oos_rows(
+    segment: str,
+    evaluation: str,
+    fold: FoldSpec,
+    test: DataFrame,
+    scored: DataFrame,
+    predicted: np.ndarray,
+    actual: np.ndarray,
+    terminal_fold: bool,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Create OOS forecast rows and non-overlapping research trades."""
     prediction_rows: list[dict[str, Any]] = []
     trades: list[dict[str, Any]] = []
     for offset, (forecast, realized) in enumerate(
         zip(predicted.tolist(), actual.tolist(), strict=True)
     ):
         entry = pd.Timestamp(scored["date"].iloc[offset])
-        opportunity = offset % HORIZON == 0 and (
-            terminal_fold or offset + HORIZON < len(test)
+        opportunity = (
+            offset % HORIZON == 0
+            and (terminal_fold or offset + HORIZON < len(test))
         )
-        taken = opportunity and forecast > ROUND_TRIP_COST
         prediction_rows.append(
             {
                 "segment": segment,
@@ -392,31 +459,32 @@ def evaluate_fold(
                 "realized_forward_return": realized,
                 "round_trip_cost_fraction": ROUND_TRIP_COST,
                 "trade_opportunity": opportunity,
-                "trade_taken": taken,
+                "trade_taken": opportunity and forecast > ROUND_TRIP_COST,
             }
         )
-        if taken:
-            net = float(realized - ROUND_TRIP_COST)
-            if net <= -1.0:
-                raise StageBError("net_return_below_full_capital_loss_contract")
-            trades.append(
-                {
-                    "segment": segment,
-                    "evaluation": evaluation,
-                    "fold_id": fold.fold_id,
-                    "entry_utc": utc_text(entry),
-                    "exit_utc": utc_text(entry + pd.Timedelta(hours=HORIZON)),
-                    "horizon_hours": HORIZON,
-                    "forecast_return": float(forecast),
-                    "gross_return": float(realized),
-                    "fee_bps_round_trip": 2 * FEE_BPS_SIDE,
-                    "slippage_bps_round_trip": 2 * SLIPPAGE_BPS_SIDE,
-                    "net_return": net,
-                    "won_after_costs": net > 0.0,
-                    "order_submitted": False,
-                }
-            )
+        trade = build_trade_record(
+            segment, evaluation, fold.fold_id, entry, forecast, realized, opportunity
+        )
+        if trade is not None:
+            trades.append(trade)
+    return prediction_rows, trades
 
+
+def evaluate_fold(
+    segment: str,
+    evaluation: str,
+    dataset: DataFrame,
+    fold: FoldSpec,
+    terminal_fold: bool,
+) -> dict[str, Any]:
+    """Fit one fold, score OOS rows, and emit the fold's research evidence."""
+    train = dataset.iloc[: fold.train_stop]
+    test = dataset.iloc[fold.test_start : fold.test_stop]
+    model = fit_fold_model(train)
+    scored, predicted, actual = predict_fold(model, test, terminal_fold)
+    prediction_rows, trades = build_oos_rows(
+        segment, evaluation, fold, test, scored, predicted, actual, terminal_fold
+    )
     return {
         "segment": segment,
         "evaluation": evaluation,
