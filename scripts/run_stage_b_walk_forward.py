@@ -519,50 +519,80 @@ def evaluate_fold(
     }
 
 
+def initially_available_features(
+    engineered: DataFrame, candidates: Sequence[str]
+) -> tuple[list[str], list[dict[str, str]]]:
+    """Exclude features with no defined values anywhere in this segment."""
+    selected: list[str] = []
+    excluded: list[dict[str, str]] = []
+    for column in candidates:
+        values = engineered[column].replace([np.inf, -np.inf], np.nan)
+        if values.notna().any():
+            selected.append(column)
+        else:
+            excluded.append(
+                {"feature": column, "reason": "undefined_for_all_segment_rows"}
+            )
+    return selected, excluded
+
+
+def feature_undefined_when_peers_are_usable(
+    engineered: DataFrame, candidate: str, peers: Sequence[str]
+) -> bool:
+    """Check an individual feature only where every peer is defined."""
+    if not peers:
+        return False
+    usable_rows = (
+        engineered.loc[:, list(peers)]
+        .replace([np.inf, -np.inf], np.nan)
+        .notna()
+        .all(axis=1)
+    )
+    candidate_valid = engineered[candidate].replace([np.inf, -np.inf], np.nan)
+    return bool(usable_rows.any() and not candidate_valid.loc[usable_rows].notna().all())
+
+
+def exclude_internally_undefined_features(
+    engineered: DataFrame, selected: list[str]
+) -> tuple[list[str], list[dict[str, str]]]:
+    """Iteratively drop features with internal gaps relative to their peers."""
+    excluded: list[dict[str, str]] = []
+    while True:
+        invalid_feature = next(
+            (
+                candidate
+                for candidate in selected
+                if feature_undefined_when_peers_are_usable(
+                    engineered,
+                    candidate,
+                    [column for column in selected if column != candidate],
+                )
+            ),
+            None,
+        )
+        if invalid_feature is None:
+            return selected, excluded
+        selected.remove(invalid_feature)
+        excluded.append(
+            {
+                "feature": invalid_feature,
+                "reason": "undefined_on_otherwise_usable_rows",
+            }
+        )
+
+
 def select_segment_features(
     engineered: DataFrame, candidates: Sequence[str] = FEATURE_COLUMNS
 ) -> tuple[list[str], list[dict[str, str]]]:
     """Exclude features undefined on usable rows; never fill or repair feature data."""
-    selected = [
-        column
-        for column in candidates
-        if engineered[column].replace([np.inf, -np.inf], np.nan).notna().any()
-    ]
-    excluded: list[dict[str, str]] = [
-        {"feature": column, "reason": "undefined_for_all_segment_rows"}
-        for column in candidates
-        if column not in selected
-    ]
-    changed = True
-    while changed:
-        changed = False
-        for candidate in list(selected):
-            other_columns = [column for column in selected if column != candidate]
-            if not other_columns:
-                continue
-            usable_rows = (
-                engineered.loc[:, other_columns]
-                .replace([np.inf, -np.inf], np.nan)
-                .notna()
-                .all(axis=1)
-            )
-            candidate_valid = (
-                engineered[candidate].replace([np.inf, -np.inf], np.nan).notna()
-            )
-            if usable_rows.any() and not candidate_valid.loc[usable_rows].all():
-                selected.remove(candidate)
-                excluded.append(
-                    {
-                        "feature": candidate,
-                        "reason": "undefined_on_otherwise_usable_rows",
-                    }
-                )
-                changed = True
-                break
+    selected, excluded = initially_available_features(engineered, candidates)
+    selected, internal_exclusions = exclude_internally_undefined_features(
+        engineered, selected
+    )
+    excluded.extend(internal_exclusions)
     if not selected:
         raise StageBError("segment_has_no_usable_features")
     return selected, excluded
-
 
 def prepare_segment(
     segment: DataFrame, name: str
