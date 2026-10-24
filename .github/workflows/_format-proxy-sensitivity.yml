@@ -1,0 +1,46 @@
+name: Temporary format extraction for proxy research
+
+on:
+  push:
+    branches:
+      - "research/proxy-liquidity-test"
+    paths:
+      - ".github/workflows/_format-proxy-sensitivity.yml"
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  format-and-export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact branch commit without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pinned Ruff formatter
+        run: |
+          python -m pip install pip==25.2
+          python -m pip install ruff==0.14.0
+      - name: Format the research files
+        run: ruff format scripts/run_stage_b_proxy_liquidity_sensitivity.py tests/unit/test_stage_b_proxy_liquidity_sensitivity.py
+      - name: Export exact formatter output as bounded log chunks
+        run: |
+          python - <<'PY'
+          import base64
+          from pathlib import Path
+
+          for name in (
+              "scripts/run_stage_b_proxy_liquidity_sensitivity.py",
+              "tests/unit/test_stage_b_proxy_liquidity_sensitivity.py",
+          ):
+              encoded = base64.b64encode(Path(name).read_bytes()).decode("ascii")
+              for index, start in enumerate(range(0, len(encoded), 3000)):
+                  print(f"FORMAT_SOURCE|{name}|{index}|{encoded[start:start + 3000]}")
+          PY
