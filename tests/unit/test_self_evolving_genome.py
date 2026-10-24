@@ -112,7 +112,7 @@ def test_invalid_indicator_genes_fail_closed(kwargs: dict[str, object]) -> None:
 def test_invalid_expression_nodes_fail_closed() -> None:
     with pytest.raises(ValueError, match="feature_expression_invalid"):
         ExpressionGene(operator="feature")
-    with pytest.raises(ValueError, match="constant_expression_invalid"):
+    with pytest.raises(ValueError, match="expression_constant_must_be_finite"):
         ExpressionGene(operator="constant", constant=math.inf)
     with pytest.raises(ValueError, match="operator_expression_invalid"):
         ExpressionGene(operator="add")
