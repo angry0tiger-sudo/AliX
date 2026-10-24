@@ -7,9 +7,11 @@ on:
     paths:
       - ".github/workflows/autonomous-meta-strategy.yml"
       - "services/ai_core/autonomous_meta.py"
+      - "services/ai_core/regime.py"
       - "scripts/run_autonomous_meta_strategy.py"
       - "configs/research/autonomous-meta-strategy-registry.json"
       - "tests/unit/test_autonomous_meta_strategy.py"
+      - "tests/unit/test_ai_core_regime.py"
       - "docs/knowledge_base/AUTONOMOUS_META_STRATEGY.md"
       - "docs/governance/owner-directives/2026-10-24-autonomous-meta-strategy.md"
   workflow_dispatch:
