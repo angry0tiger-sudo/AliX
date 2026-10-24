@@ -1,0 +1,146 @@
+name: AliX Stage B Proxy Liquidity Sensitivity
+
+on:
+  push:
+    branches:
+      - "research/proxy-liquidity-test"
+    paths:
+      - ".github/workflows/stage-b-proxy-liquidity-sensitivity.yml"
+      - "scripts/run_stage_b_proxy_liquidity_sensitivity.py"
+      - "tests/unit/test_stage_b_proxy_liquidity_sensitivity.py"
+      - "scripts/run_stage_b_triple_barrier_orderbook.py"
+      - "services/meta_labeling/triple_barrier.py"
+      - "docs/knowledge_base/STAGE_B_PROXY_LIQUIDITY_SENSITIVITY.md"
+      - "docs/governance/owner-directives/2026-10-24-proxy-liquidity-sensitivity.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: alix-stage-b-proxy-liquidity-sensitivity
+  cancel-in-progress: false
+
+jobs:
+  proxy-liquidity-sensitivity:
+    name: Proxy-only walk-forward sensitivity and fail-closed data audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      actions: read
+    env:
+      ALIx_ENV: paper
+      ALIx_DRY_RUN: "true"
+      ALIx_ALLOW_LIVE_TRADING: "false"
+      ALIx_REPORTING_ENABLED: "false"
+      PYTHONUNBUFFERED: "1"
+      PYTHONPATH: "."
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    steps:
+      - name: Checkout this research commit without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up pinned Python runtime
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned research dependencies and test runner
+        run: |
+          python -m pip install pip==25.2
+          python -m pip install numpy==2.5.4 pandas==2.3.3 lightgbm==4.7.0 scikit-learn==1.9.0 pytest==8.4.2
+
+      - name: Run proxy adapter and capacity unit tests
+        run: python -m pytest tests/unit/test_stage_b_proxy_liquidity_sensitivity.py -q
+
+      - name: Download immutable Stage A coverage artifact
+        uses: actions/download-artifact@v4
+        with:
+          repository: angry0tiger-sudo/AliX
+          run-id: 40077609244
+          name: alix-nobitex-history-coverage-40077609244
+          path: artifacts/stage-a-coverage
+          github-token: ${{ github.token }}
+
+      - name: Run proxy-only Triple-Barrier sensitivity
+        run: |
+          python scripts/run_stage_b_proxy_liquidity_sensitivity.py \
+            --input-dir artifacts/stage-a-coverage \
+            --output-dir artifacts/stage-b-proxy-liquidity \
+            --commit-sha "$GITHUB_SHA"
+
+      - name: Verify provenance, proxy bounds, economic non-acceptance, and safety
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          report_path = Path("artifacts/stage-b-proxy-liquidity/proxy-liquidity-sensitivity-report.json")
+          report = json.loads(report_path.read_text(encoding="utf-8"))
+          assert report["created_by_commit_sha"] == os.environ["GITHUB_SHA"]
+          assert report["source"]["coverage_workflow_run_id"] == 40077609244
+          assert report["source"]["holdout_used"] is False
+          assert report["protocol"]["horizons_hours"] == [24, 48]
+          assert report["protocol"]["profit_taking_multipliers"] == [2.0, 3.0]
+          assert report["protocol"]["stop_loss_multipliers"] == [0.75, 1.25]
+          assert report["protocol"]["barrier_candidate_count"] == 8
+          assert report["protocol"]["diagnostic_scenario_count"] == 24
+          assert report["protocol"]["model_candidate_count_planned"] == 16
+          assert report["protocol"]["model_candidate_count_executed"] in (8, 16)
+          assert report["protocol"]["model_candidate_count_blocked_for_missing_or_invalid_book"] == 16 - report["protocol"]["model_candidate_count_executed"]
+          assert report["protocol"]["minimum_take_profit_barrier_exceeds_one_percent"] is True
+          assert report["protocol"]["reference_order_notional_quote_currency"] == 10.0
+          assert report["protocol"]["liquidity_participation_cap_fraction"] == 0.01
+          proxy = report["data_availability"]["binance_kline_proxy"]
+          assert proxy["proxy_is_not_observed_nobitex_volume"] is True
+          assert proxy["historical_nobitex_volume_replaced"] is False
+          assert proxy["maximum_binance_share"] <= 0.10
+          assert proxy["max_applied_scale_ratio"] <= 0.10
+          assert proxy["max_daily_proxy_quote_volume"] <= 1500000.0 + 1e-6
+          assert proxy["matched_candle_count"] > 0
+          assert proxy["required_proxy_candle_quote_turnover_for_10_unit_order"] == 1000.0
+          assert report["economic_evaluation"]["status"] == "NOT_EVALUATED_PROXY_ONLY"
+          assert report["economic_evaluation"]["economic_acceptance"] == "NO-GO"
+          assert report["proxy_sensitivity_evaluation"]["strict_gate"]["all_three_slippage_scenarios_required"] is True
+          safety = report["safety_invariants"]
+          assert safety["Champion"] is None
+          assert safety["order_permission"] is False
+          assert safety["trading_authorization"] == "NO-GO"
+          assert safety["economic_acceptance"] == "NO-GO"
+          assert safety["model_promoted"] is False
+          assert safety["production_model_updated"] is False
+          assert safety["strategy_registry_updated"] is False
+          assert safety["orders_or_execution_api_used"] is False
+          assert safety["private_api_calls"] == 0
+          assert safety["order_endpoint_calls"] == 0
+          assert safety["real_order_attempts"] == 0
+          print(json.dumps({
+              "commit_sha": report["created_by_commit_sha"],
+              "run_status": report["run_status"],
+              "barrier_scenarios": report["protocol"]["diagnostic_scenario_count"],
+              "planned_model_candidates": report["protocol"]["model_candidate_count_planned"],
+              "executed_model_candidates": report["protocol"]["model_candidate_count_executed"],
+              "blocked_book_candidates": report["protocol"]["model_candidate_count_blocked_for_missing_or_invalid_book"],
+              "proxy_coverage_fraction": proxy["matched_candle_fraction"],
+              "proxy_rows_eligible_for_10_quote_unit_order": proxy["proxy_candle_rows_with_10_quote_unit_capacity"],
+              "proxy_gate_pass_count": report["proxy_sensitivity_evaluation"]["proxy_candidate_pass_count"],
+              "economic_status": report["economic_evaluation"]["status"],
+              "Champion": safety["Champion"],
+              "order_permission": safety["order_permission"],
+              "trading_authorization": safety["trading_authorization"],
+          }, sort_keys=True, allow_nan=False))
+          PY
+
+      - name: Upload proxy sensitivity report and source manifest
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alix-stage-b-proxy-liquidity-report
+          path: artifacts/stage-b-proxy-liquidity/
+          if-no-files-found: warn
+          retention-days: 90
