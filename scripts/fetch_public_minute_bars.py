@@ -13,9 +13,7 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Sequence
-from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
-from urllib.request import Request, urlopen
+import requests
 
 BINANCE_PUBLIC_KLINES_URL = "https://data-api.binance.vision/api/v3/klines"
 INTERVAL = "1m"
@@ -92,30 +90,23 @@ def parse_kline(payload: object) -> KlineRow:
 
 
 def _fetch_page(symbol: str, start_ms: int, end_ms: int) -> list[KlineRow]:
-    query = urlencode(
-        {
-            "symbol": symbol,
-            "interval": INTERVAL,
-            "startTime": start_ms,
-            "endTime": end_ms,
-            "limit": KLINES_LIMIT,
-        }
-    )
-    request = Request(
-        f"{BINANCE_PUBLIC_KLINES_URL}?{query}",
-        headers={"User-Agent": USER_AGENT},
-        method="GET",
-    )
+    params = {
+        "symbol": symbol,
+        "interval": INTERVAL,
+        "startTime": start_ms,
+        "endTime": end_ms,
+        "limit": KLINES_LIMIT,
+    }
     try:
-        with urlopen(request, timeout=30) as response:
-            payload: object = json.loads(response.read().decode("utf-8"))
-    except (
-        HTTPError,
-        URLError,
-        TimeoutError,
-        UnicodeDecodeError,
-        json.JSONDecodeError,
-    ) as exc:
+        response = requests.get(
+            BINANCE_PUBLIC_KLINES_URL,
+            params=params,
+            headers={"User-Agent": USER_AGENT},
+            timeout=30,
+        )
+        response.raise_for_status()
+        payload: object = response.json()
+    except (requests.RequestException, ValueError) as exc:
         raise RuntimeError("public_binance_market_data_request_failed") from exc
     if not isinstance(payload, list):
         raise ValueError("binance_kline_response_not_list")
