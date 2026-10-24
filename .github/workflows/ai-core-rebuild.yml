@@ -95,8 +95,12 @@ jobs:
           assert report["run_status"] == "COMPLETED_RESEARCH_ONLY"
           assert report["source"]["evaluation_timeframe"] == "4h"
           assert report["source"]["final_holdout_used"] is False
-          assert report["feature_engineering"]["model_feature_count"] >= 50
+          assert report["feature_engineering"]["model_feature_count"] >= 40
           assert report["feature_engineering"]["extended_feature_schema_count"] >= 60
+          assert report["feature_engineering"]["volume_feature_status"] in (
+              "SOURCE_VOLUME_POSITIVE_OBSERVATIONS_PRESENT",
+              "BLOCKED_NO_POSITIVE_SOURCE_VOLUME",
+          )
           assert len(report["feature_engineering"]["model_feature_names"]) == report["feature_engineering"]["model_feature_count"]
           assert report["ensemble"]["models"] == ["xgboost", "random_forest", "lightgbm"]
           assert report["ensemble"]["method"] == "equal_weighted_mean"

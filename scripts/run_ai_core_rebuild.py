@@ -22,8 +22,11 @@ from services.ai_core.features import (
     AI_FEATURE_COLUMNS,
     AI_FEATURE_SCHEMA_VERSION,
     BASE_AI_FEATURE_COLUMNS,
+    CROSS_ASSET_FEATURE_COLUMNS,
+    VOLUME_DEPENDENT_FEATURE_COLUMNS,
     aggregate_hourly_to_4h,
     build_ai_features,
+    select_model_feature_schema,
 )
 from services.ai_core.regime import infer_hmm_regimes
 from services.ai_core.strategies import (
@@ -355,9 +358,9 @@ def _prepare_market_dataset(
     phase_minutes = int(phases[0])
     hourly_btc, discarded_tail_rows = _complete_hourly_groups(hourly_btc)
     btc_4h = aggregate_hourly_to_4h(hourly_btc)
+    cross_asset_available = eth_input is not None
     if eth_input is None:
         features = build_ai_features(btc_4h)
-        feature_names = BASE_AI_FEATURE_COLUMNS
         eth_manifest: dict[str, Any] = {
             "status": "BLOCKED_MISSING_APPROVED_CROSS_ASSET_DATASET",
             "provider_fetch_performed": False,
@@ -369,7 +372,17 @@ def _prepare_market_dataset(
     else:
         eth_4h, eth_manifest = _load_eth_4h(eth_input, btc_4h, phase_minutes)
         features = build_ai_features(btc_4h, cross_asset={"ETHUSDT": eth_4h})
-        feature_names = AI_FEATURE_COLUMNS
+    feature_names, volume_feature_status = select_model_feature_schema(
+        btc_4h, cross_asset_available=cross_asset_available
+    )
+    unavailable_features = [
+        name for name in feature_names if not features[name].notna().any()
+    ]
+    if unavailable_features:
+        raise ValueError(
+            "ai_core_selected_features_never_observed:"
+            + ",".join(unavailable_features)
+        )
     forward_return = btc_4h["close"].shift(-FORWARD_HORIZON_4H) / btc_4h["close"] - 1.0
     valid = (
         features.loc[:, list(feature_names)].notna().all(axis=1)
@@ -390,6 +403,8 @@ def _prepare_market_dataset(
         "development_rows_hourly_used_for_4h": len(hourly_btc),
         "discarded_incomplete_trailing_hourly_rows": discarded_tail_rows,
         "development_rows_4h": len(btc_4h),
+        "source_volume_positive_4h_rows": int((btc_4h["volume"] > 0).sum()),
+        "source_volume_feature_status": volume_feature_status,
         "final_holdout_used": False,
         "reserved_final_90_day_holdout_rows": 90 * 24,
         "eth_cross_asset_manifest": eth_manifest,
@@ -470,13 +485,26 @@ def _report_document(
                 "multi_window_RSI",
                 "ATR_and_true_range",
                 "realized_and_downside_volatility",
-                "volume_zscores_and_turnover",
-                "OHLCV_volume_profile_proxy",
-                "ETH_cross_asset_return_correlation_and_beta",
-            ],
+                "breakout_and_candle_shape",
+            ]
+            + (
+                ["volume_zscores_turnover_VWAP_and_volume_profile_proxy"]
+                if any(name in VOLUME_DEPENDENT_FEATURE_COLUMNS for name in feature_names)
+                else []
+            )
+            + (
+                ["ETH_cross_asset_return_correlation_and_beta"]
+                if any(name in CROSS_ASSET_FEATURE_COLUMNS for name in feature_names)
+                else []
+            ),
+            "volume_features_included": any(
+                name in VOLUME_DEPENDENT_FEATURE_COLUMNS for name in feature_names
+            ),
+            "volume_feature_status": source["source_volume_feature_status"],
             "volume_profile_limitation": (
-                "Profile features are coarse bins of candle typical price weighted by OHLCV "
-                "volume, not trade-level volume-at-price data."
+                "Profile features are coarse bins of candle typical price weighted by source "
+                "OHLCV volume, not trade-level volume-at-price data. If source volume has no "
+                "positive observations, all volume-derived features are excluded rather than imputed."
             ),
             "cross_asset_status": (
                 "INCLUDED_WITH_TIMESTAMP_PHASE_CAVEAT"

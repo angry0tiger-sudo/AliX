@@ -9,10 +9,14 @@ from services.ai_core.features import (
     BASE_AI_FEATURE_COLUMNS,
     CROSS_ASSET_FEATURE_COLUMNS,
     SENTIMENT_COLUMNS,
+    PRICE_ONLY_AI_FEATURE_COLUMNS,
+    PRICE_ONLY_EXTENDED_FEATURE_COLUMNS,
+    VOLUME_DEPENDENT_FEATURE_COLUMNS,
     _rsi,
     _volume_profile_proxy,
     aggregate_hourly_to_4h,
     build_ai_features,
+    select_model_feature_schema,
 )
 
 
@@ -64,6 +68,36 @@ def test_feature_schema_has_58_base_features_and_six_real_eth_features() -> None
     base = build_ai_features(candles_4h())
     assert all(name in base.columns for name in BASE_AI_FEATURE_COLUMNS)
     assert not set(CROSS_ASSET_FEATURE_COLUMNS).intersection(base.columns)
+
+
+def test_model_feature_selection_drops_only_unobserved_volume_groups() -> None:
+    candles = candles_4h(100)
+    candles["volume"] = 0.0
+    selected, status = select_model_feature_schema(
+        candles, cross_asset_available=False
+    )
+    assert len(selected) == 44
+    assert selected == PRICE_ONLY_AI_FEATURE_COLUMNS
+    assert status == "BLOCKED_NO_POSITIVE_SOURCE_VOLUME"
+    assert not set(selected).intersection(VOLUME_DEPENDENT_FEATURE_COLUMNS)
+
+    extended, extended_status = select_model_feature_schema(
+        candles, cross_asset_available=True
+    )
+    assert len(extended) == 50
+    assert extended == PRICE_ONLY_EXTENDED_FEATURE_COLUMNS
+    assert set(CROSS_ASSET_FEATURE_COLUMNS).issubset(extended)
+    assert extended_status == "BLOCKED_NO_POSITIVE_SOURCE_VOLUME"
+
+    candles.loc[:, "volume"] = 1.0
+    complete, complete_status = select_model_feature_schema(
+        candles, cross_asset_available=False
+    )
+    assert len(complete) == 58
+    assert complete == tuple(
+        name for name in BASE_AI_FEATURE_COLUMNS
+    )
+    assert complete_status == "SOURCE_VOLUME_POSITIVE_OBSERVATIONS_PRESENT"
 
 
 def test_feature_windows_are_causal_and_not_affected_by_future_rows() -> None:

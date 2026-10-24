@@ -145,6 +145,33 @@ CROSS_ASSET_FEATURE_COLUMNS: Final[tuple[str, ...]] = (
     "relative_strength_ethusdt_12",
 )
 
+VOLUME_DEPENDENT_FEATURE_COLUMNS: Final[tuple[str, ...]] = (
+    "volume_return_1",
+    "volume_return_6",
+    "volume_zscore_12",
+    "relative_volume_12",
+    "rolling_quote_turnover_ratio_12",
+    "volume_zscore_24",
+    "relative_volume_24",
+    "rolling_quote_turnover_ratio_24",
+    "rolling_vwap_distance_12",
+    "volume_profile_poc_distance_12",
+    "volume_profile_value_area_position_12",
+    "rolling_vwap_distance_24",
+    "volume_profile_poc_distance_24",
+    "volume_profile_value_area_position_24",
+)
+PRICE_ONLY_AI_FEATURE_COLUMNS: Final[tuple[str, ...]] = tuple(
+    name
+    for name in BASE_AI_FEATURE_COLUMNS
+    if name not in VOLUME_DEPENDENT_FEATURE_COLUMNS
+)
+PRICE_ONLY_EXTENDED_FEATURE_COLUMNS: Final[tuple[str, ...]] = tuple(
+    name
+    for name in AI_FEATURE_COLUMNS
+    if name not in VOLUME_DEPENDENT_FEATURE_COLUMNS
+)
+
 OHLCV_COLUMNS: Final[tuple[str, ...]] = (
     "date",
     "open",
@@ -169,6 +196,28 @@ _ATR_WINDOWS: Final[tuple[int, ...]] = (7, 14, 28)
 _VOLATILITY_WINDOWS: Final[tuple[int, ...]] = (6, 12, 24, 48)
 _CROSS_WINDOWS: Final[tuple[int, ...]] = (12, 24)
 _REQUIRED_CROSS_ASSETS: Final[tuple[str, ...]] = ("ETHUSDT",)
+
+
+def select_model_feature_schema(
+    candles_4h: DataFrame, *, cross_asset_available: bool
+) -> tuple[tuple[str, ...], str]:
+    """Select only feature groups supportable by observed data; never synthesize volume."""
+    if "volume" not in candles_4h.columns or candles_4h.empty:
+        raise ValueError("ai_core_feature_schema_volume_column_missing")
+    volume = pd.to_numeric(candles_4h["volume"], errors="coerce").to_numpy(dtype=float)
+    if not np.isfinite(volume).all() or np.any(volume < 0):
+        raise ValueError("ai_core_feature_schema_volume_invalid")
+    if np.any(volume > 0):
+        selected = (
+            AI_FEATURE_COLUMNS if cross_asset_available else BASE_AI_FEATURE_COLUMNS
+        )
+        return selected, "SOURCE_VOLUME_POSITIVE_OBSERVATIONS_PRESENT"
+    selected = (
+        PRICE_ONLY_EXTENDED_FEATURE_COLUMNS
+        if cross_asset_available
+        else PRICE_ONLY_AI_FEATURE_COLUMNS
+    )
+    return selected, "BLOCKED_NO_POSITIVE_SOURCE_VOLUME"
 
 
 def _validate_ohlcv(candles: DataFrame, interval_seconds: int) -> DataFrame:
@@ -458,6 +507,10 @@ __all__ = [
     "CROSS_ASSET_FEATURE_COLUMNS",
     "SENTIMENT_COLUMNS",
     "SENTIMENT_FEATURE_SCHEMA_VERSION",
+    "VOLUME_DEPENDENT_FEATURE_COLUMNS",
+    "PRICE_ONLY_AI_FEATURE_COLUMNS",
+    "PRICE_ONLY_EXTENDED_FEATURE_COLUMNS",
+    "select_model_feature_schema",
     "aggregate_hourly_to_4h",
     "build_ai_features",
 ]
