@@ -90,7 +90,7 @@ def parse_kline(payload: object) -> KlineRow:
 
 
 def _fetch_page(symbol: str, start_ms: int, end_ms: int) -> list[KlineRow]:
-    params = {
+    params: dict[str, str | int] = {
         "symbol": symbol,
         "interval": INTERVAL,
         "startTime": start_ms,
