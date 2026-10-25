@@ -363,34 +363,47 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Float32Array]):
     def _quantity_tolerance(self, price: float) -> float:
         return max(1e-12, self.initial_equity / price * 1e-12)
 
-    def _rebalance_to_quantity(self, target_quantity: float, price: float) -> None:
+    def _should_skip_rebalance(self, target_quantity: float, price: float) -> bool:
         delta = target_quantity - self._quantity
-        if delta == 0.0 or (
+        return delta == 0.0 or (
             target_quantity > 0.0 and abs(delta) <= self._quantity_tolerance(price)
-        ):
-            return
-        if not math.isfinite(target_quantity) or target_quantity < 0:
+        )
+
+    def _validate_target_quantity(self, target_quantity: float) -> None:
+        if not math.isfinite(target_quantity) or target_quantity < 0.0:
             raise ValueError("target_quantity_invalid")
 
+    def _fill_costs(
+        self, delta: float, price: float, is_buy: bool
+    ) -> tuple[float, float, float]:
         slippage_rate = self.slippage_bps_per_side / 10_000.0
         fee_rate = self.fee_bps_per_side / 10_000.0
-        is_buy = delta > 0
-        execution_price = price * (
-            1.0 + slippage_rate if is_buy else 1.0 - slippage_rate
-        )
+        price_factor = 1.0 + slippage_rate if is_buy else 1.0 - slippage_rate
+        execution_price = price * price_factor
         fee = abs(delta * execution_price) * fee_rate
         slippage_cost = abs(delta) * abs(execution_price - price)
-        next_cash = self._cash - delta * execution_price - fee
+        return execution_price, fee, slippage_cost
+
+    def _validate_rebalanced_cash(self, next_cash: float) -> None:
         if not math.isfinite(next_cash) or next_cash < -1e-7:
             raise ValueError("simulated_spot_cash_would_be_negative")
 
+    def _record_cost_basis(
+        self,
+        delta: float,
+        execution_price: float,
+        fee: float,
+        target_quantity: float,
+        is_buy: bool,
+    ) -> None:
         if is_buy:
             self._position_cost_basis += delta * execution_price + fee
         else:
             self._record_sale(-delta, execution_price, fee, target_quantity)
-        self._cash = max(0.0, next_cash)
-        self._quantity = target_quantity
-        self._total_fees += fee
+
+    def _record_fill(
+        self, delta: float, execution_price: float, slippage_cost: float, is_buy: bool
+    ) -> None:
         self._total_slippage += slippage_cost
         self._total_turnover += abs(delta * execution_price)
         self._fill_count += 1
@@ -398,6 +411,21 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Float32Array]):
             self._buy_fill_count += 1
         else:
             self._sell_fill_count += 1
+
+    def _rebalance_to_quantity(self, target_quantity: float, price: float) -> None:
+        if self._should_skip_rebalance(target_quantity, price):
+            return
+        self._validate_target_quantity(target_quantity)
+        delta = target_quantity - self._quantity
+        is_buy = delta > 0.0
+        execution_price, fee, slippage_cost = self._fill_costs(delta, price, is_buy)
+        next_cash = self._cash - delta * execution_price - fee
+        self._validate_rebalanced_cash(next_cash)
+        self._record_cost_basis(delta, execution_price, fee, target_quantity, is_buy)
+        self._cash = max(0.0, next_cash)
+        self._quantity = target_quantity
+        self._total_fees += fee
+        self._record_fill(delta, execution_price, slippage_cost, is_buy)
 
     def _legal_action_mask(self, price: float) -> dict[str, bool]:
         equity = self._equity_at(price)
@@ -428,9 +456,7 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Float32Array]):
         self._rebalance_to_quantity(target_quantity, price)
         return self._quantity > previous_quantity
 
-    def _apply_action(
-        self, action: Float32Array, current_price: float, next_open: float
-    ) -> tuple[str, str, dict[str, bool], str | None]:
+    def _validated_action_values(self, action: Float32Array) -> tuple[float, float]:
         values = np.asarray(action, dtype=np.float64)
         if values.shape != (2,) or not np.isfinite(values).all():
             raise ValueError("action_must_be_two_finite_values")
@@ -438,34 +464,51 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Float32Array]):
         size = float(values[1])
         if not -1.0 <= signal <= 1.0 or not 0.0 <= size <= 1.0:
             raise ValueError("action_outside_declared_space")
+        return signal, size
 
+    def _execute_buy_action(
+        self, size: float, next_open: float, action_mask: dict[str, bool]
+    ) -> tuple[str, str, dict[str, bool], str | None]:
+        if not action_mask["BUY"]:
+            return "BUY", "MASKED_BUY", action_mask, "position_fully_allocated"
+        if not self._target_for_buy(size, next_open):
+            return (
+                "BUY",
+                "MASKED_BUY",
+                action_mask,
+                "buy_would_not_increase_position",
+            )
+        return "BUY", "BUY", action_mask, None
+
+    def _sell_target_quantity(self, size: float, next_open: float) -> float | None:
+        if size <= 0.0:
+            return None
+        target_quantity = self._quantity * (1.0 - size)
+        if target_quantity >= self._quantity - self._quantity_tolerance(next_open):
+            return None
+        return target_quantity
+
+    def _execute_sell_action(
+        self, size: float, next_open: float, action_mask: dict[str, bool]
+    ) -> tuple[str, str, dict[str, bool], str | None]:
+        if not action_mask["SELL"]:
+            return "SELL", "MASKED_SELL", action_mask, "no_position"
+        target_quantity = self._sell_target_quantity(size, next_open)
+        if target_quantity is None:
+            reason = "zero_sell_size" if size <= 0.0 else "sell_would_not_reduce_position"
+            return "SELL", "MASKED_SELL", action_mask, reason
+        self._rebalance_to_quantity(target_quantity, next_open)
+        return "SELL", "SELL", action_mask, None
+
+    def _apply_action(
+        self, action: Float32Array, current_price: float, next_open: float
+    ) -> tuple[str, str, dict[str, bool], str | None]:
+        signal, size = self._validated_action_values(action)
         action_mask = self._legal_action_mask(current_price)
         if signal > BUY_THRESHOLD:
-            if not action_mask["BUY"]:
-                return "BUY", "MASKED_BUY", action_mask, "position_fully_allocated"
-            if not self._target_for_buy(size, next_open):
-                return (
-                    "BUY",
-                    "MASKED_BUY",
-                    action_mask,
-                    "buy_would_not_increase_position",
-                )
-            return "BUY", "BUY", action_mask, None
+            return self._execute_buy_action(size, next_open, action_mask)
         if signal < SELL_THRESHOLD:
-            if not action_mask["SELL"]:
-                return "SELL", "MASKED_SELL", action_mask, "no_position"
-            if size <= 0.0:
-                return "SELL", "MASKED_SELL", action_mask, "zero_sell_size"
-            target_quantity = self._quantity * (1.0 - size)
-            if target_quantity >= self._quantity - self._quantity_tolerance(next_open):
-                return (
-                    "SELL",
-                    "MASKED_SELL",
-                    action_mask,
-                    "sell_would_not_reduce_position",
-                )
-            self._rebalance_to_quantity(target_quantity, next_open)
-            return "SELL", "SELL", action_mask, None
+            return self._execute_sell_action(size, next_open, action_mask)
         return "HOLD", "HOLD", action_mask, None
 
     def _update_drawdown(self, bar: Float64Array) -> float:
