@@ -114,27 +114,41 @@ def _validate_manifest(manifest: dict[str, Any], csv_path: Path) -> None:
         raise ValueError("market_data_sha256_mismatch")
 
 
-def _validate_market_frame(frame: pd.DataFrame, manifest: dict[str, Any]) -> None:
-    if len(frame) != int(manifest.get("row_count", -1)):
-        raise ValueError("market_data_row_count_mismatch")
-    if len(frame) < 50_000:
-        raise ValueError("market_data_history_too_short")
+def _validate_market_timestamps(frame: pd.DataFrame) -> None:
     timestamps = frame["open_time_ms"].to_numpy(dtype=np.int64)
     if np.any(np.diff(timestamps) <= 0):
         raise ValueError("market_data_timestamps_not_strictly_increasing")
     close_times = frame["close_time_ms"].to_numpy(dtype=np.int64)
     if np.any(close_times < timestamps):
         raise ValueError("market_data_close_before_open")
+
+
+def _validate_market_numeric_fields(frame: pd.DataFrame) -> None:
     prices = frame[["open", "high", "low", "close"]].to_numpy(dtype=float)
     volume = frame["volume"].to_numpy(dtype=float)
     if not np.isfinite(prices).all() or not np.isfinite(volume).all():
         raise ValueError("market_data_contains_non_finite_values")
     if np.any(prices <= 0) or np.any(volume < 0):
         raise ValueError("market_data_contains_invalid_price_or_volume")
+
+
+def _validate_market_price_geometry(frame: pd.DataFrame) -> None:
+    prices = frame[["open", "high", "low", "close"]].to_numpy(dtype=float)
     if np.any(prices[:, 1] < prices.max(axis=1)):
         raise ValueError("market_data_high_inconsistent")
     if np.any(prices[:, 2] > prices.min(axis=1)):
         raise ValueError("market_data_low_inconsistent")
+
+
+def _validate_market_frame(frame: pd.DataFrame, manifest: dict[str, Any]) -> None:
+    row_count = len(frame)
+    if row_count != int(manifest.get("row_count", -1)):
+        raise ValueError("market_data_row_count_mismatch")
+    if row_count < 50_000:
+        raise ValueError("market_data_history_too_short")
+    _validate_market_timestamps(frame)
+    _validate_market_numeric_fields(frame)
+    _validate_market_price_geometry(frame)
 
 
 def load_verified_market_data(
