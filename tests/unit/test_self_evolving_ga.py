@@ -57,6 +57,7 @@ def test_net_expectancy_includes_both_sides_fee_and_slippage() -> None:
     positions = np.array([True, True, False, False, False])
     metrics = metrics_from_positions(opens, closes, positions, 0.5)
     assert metrics.trade_count == 1
+    assert metrics.net_expectancy is not None
     assert -0.011 < metrics.net_expectancy < -0.008
     assert metrics.win_rate == 0.0
     assert metrics.net_return < 0.0
