@@ -743,14 +743,9 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Int64Array]):
             1.0 - self.slippage_bps_per_side / 10_000.0
         )
         liquidation_fee = (
-            self._quantity
-            * liquidation_price
-            * self.fee_bps_per_side
-            / 10_000.0
+            self._quantity * liquidation_price * self.fee_bps_per_side / 10_000.0
         )
-        expected_net_liquidation = (
-            self._quantity * liquidation_price - liquidation_fee
-        )
+        expected_net_liquidation = self._quantity * liquidation_price - liquidation_fee
         if expected_net_liquidation >= self._position_cost_basis:
             return 0.0
         self._holding_loss_penalty_count += 1
@@ -763,9 +758,7 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Int64Array]):
         if closed_profit <= 0.0:
             return 0.0
         reward = (
-            DEFAULT_REALIZED_PROFIT_REWARD_SCALE
-            * closed_profit
-            / self.initial_equity
+            DEFAULT_REALIZED_PROFIT_REWARD_SCALE * closed_profit / self.initial_equity
         )
         self._realized_profit_reward_count += 1
         self._realized_profit_reward_total += reward

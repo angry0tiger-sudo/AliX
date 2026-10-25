@@ -540,7 +540,6 @@ def test_flat_hold_above_causal_moving_average_pays_opportunity_cost() -> None:
     env.close()
 
 
-
 def test_hold_underwater_position_pays_penalty_after_exit_costs() -> None:
     env = _env(
         _bars(closes=[100.0, 100.0, 90.0, 90.0, 90.0]),
@@ -561,16 +560,16 @@ def test_hold_underwater_position_pays_penalty_after_exit_costs() -> None:
     env.close()
 
 
-def test_terminal_forced_liquidation_does_not_earn_policy_realized_profit_reward() -> None:
+def test_terminal_forced_liquidation_does_not_earn_policy_realized_profit_reward() -> (
+    None
+):
     env = _env(
         _bars(closes=[100.0, 100.0, 110.0]),
         initial_equity=1_000.0,
     )
     env.reset(seed=73)
     env.step(np.asarray([ACTION_BUY, 3], dtype=np.int64))
-    _, _, terminated, _, info = env.step(
-        np.asarray([ACTION_HOLD, 0], dtype=np.int64)
-    )
+    _, _, terminated, _, info = env.step(np.asarray([ACTION_HOLD, 0], dtype=np.int64))
     assert terminated is True
     assert info["executed_action"] == "HOLD"
     assert info["reward_realized_profit"] == pytest.approx(0.0)
