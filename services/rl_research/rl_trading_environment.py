@@ -45,10 +45,7 @@ Float64Array = NDArray[np.float64]
 Float32Array = NDArray[np.float32]
 
 
-def validate_market_data(market_data: Float64Array) -> None:
-    """Fail closed on invalid candles, gaps, or non-minute timestamps."""
-
-    data = np.asarray(market_data, dtype=np.float64)
+def _validate_market_shape(data: Float64Array) -> None:
     if data.ndim != 2 or data.shape[1] != MARKET_COLUMN_COUNT:
         raise ValueError("market_data_must_have_six_columns")
     if data.shape[0] < 2:
@@ -56,12 +53,16 @@ def validate_market_data(market_data: Float64Array) -> None:
     if not np.isfinite(data).all():
         raise ValueError("market_data_contains_non_finite_values")
 
+
+def _validate_market_timestamps(data: Float64Array) -> None:
     timestamps = data[:, TIMESTAMP_COLUMN]
     if np.any(timestamps < 0) or np.any(timestamps != np.floor(timestamps)):
         raise ValueError("market_timestamps_must_be_non_negative_integers")
     if np.any(np.diff(timestamps) != INTERVAL_MS):
         raise ValueError("market_timestamps_must_be_contiguous_one_minute_bars")
 
+
+def _validate_candle_geometry(data: Float64Array) -> None:
     opening = data[:, OPEN_COLUMN]
     high = data[:, HIGH_COLUMN]
     low = data[:, LOW_COLUMN]
@@ -75,6 +76,17 @@ def validate_market_data(market_data: Float64Array) -> None:
         raise ValueError("market_low_inconsistent")
     if np.any(volume < 0):
         raise ValueError("market_volume_must_be_non_negative")
+
+
+def validate_market_data(market_data: Float64Array) -> None:
+    """Fail closed on invalid candles, gaps, or non-minute timestamps."""
+
+    data = np.asarray(market_data, dtype=np.float64)
+    _validate_market_shape(data)
+    _validate_market_timestamps(data)
+    _validate_candle_geometry(data)
+
+
 
 
 class MarketObservationScaler:
@@ -100,6 +112,49 @@ class MarketObservationScaler:
         volume_scale = median_volume if median_volume > 0 else 1.0
         return cls(price_anchor=price_anchor, volume_scale=volume_scale)
 
+
+def _finite_numeric_parameter(name: str, value: object) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{name}_must_be_numeric")
+    numeric_value = float(value)
+    if not math.isfinite(numeric_value):
+        raise ValueError(f"{name}_must_be_finite")
+    return numeric_value
+
+
+def _validate_cost_basis_points(name: str, value: object) -> None:
+    numeric_value = _finite_numeric_parameter(name, value)
+    if not 0 <= numeric_value < 10_000:
+        raise ValueError(f"{name}_out_of_range")
+
+
+def _validate_drawdown_penalties(increment: object, level: object) -> None:
+    increment_value = _finite_numeric_parameter("drawdown_increment_penalty", increment)
+    level_value = _finite_numeric_parameter("drawdown_level_penalty", level)
+    if increment_value < 0 or level_value < 0:
+        raise ValueError("drawdown_penalties_must_be_non_negative")
+
+
+def _validate_environment_configuration(
+    initial_equity: object,
+    fee_bps_per_side: object,
+    slippage_bps_per_side: object,
+    min_remaining_steps: object,
+    drawdown_increment_penalty: object,
+    drawdown_level_penalty: object,
+) -> None:
+    equity_value = _finite_numeric_parameter("initial_equity", initial_equity)
+    if equity_value <= 0:
+        raise ValueError("initial_equity_must_be_positive")
+    _validate_cost_basis_points("fee_bps_per_side", fee_bps_per_side)
+    _validate_cost_basis_points("slippage_bps_per_side", slippage_bps_per_side)
+    _validate_drawdown_penalties(drawdown_increment_penalty, drawdown_level_penalty)
+    if (
+        isinstance(min_remaining_steps, bool)
+        or not isinstance(min_remaining_steps, int)
+        or min_remaining_steps < 1
+    ):
+        raise ValueError("min_remaining_steps_must_be_positive")
 
 class BTCUSDTTradingEnv(gym.Env[Float32Array, Float32Array]):
     """Long-only, one-minute, cost-aware trading environment.
@@ -127,27 +182,14 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Float32Array]):
     ) -> None:
         super().__init__()
         validate_market_data(market_data)
-        for name, value in (
-            ("initial_equity", initial_equity),
-            ("fee_bps_per_side", fee_bps_per_side),
-            ("slippage_bps_per_side", slippage_bps_per_side),
-            ("drawdown_increment_penalty", drawdown_increment_penalty),
-            ("drawdown_level_penalty", drawdown_level_penalty),
-        ):
-            if isinstance(value, bool) or not isinstance(value, (int, float)):
-                raise ValueError(f"{name}_must_be_numeric")
-            if not math.isfinite(float(value)):
-                raise ValueError(f"{name}_must_be_finite")
-        if initial_equity <= 0:
-            raise ValueError("initial_equity_must_be_positive")
-        if not 0 <= fee_bps_per_side < 10_000:
-            raise ValueError("fee_bps_per_side_out_of_range")
-        if not 0 <= slippage_bps_per_side < 10_000:
-            raise ValueError("slippage_bps_per_side_out_of_range")
-        if drawdown_increment_penalty < 0 or drawdown_level_penalty < 0:
-            raise ValueError("drawdown_penalties_must_be_non_negative")
-        if isinstance(min_remaining_steps, bool) or min_remaining_steps < 1:
-            raise ValueError("min_remaining_steps_must_be_positive")
+        _validate_environment_configuration(
+            initial_equity,
+            fee_bps_per_side,
+            slippage_bps_per_side,
+            min_remaining_steps,
+            drawdown_increment_penalty,
+            drawdown_level_penalty,
+        )
 
         self._market_data = np.ascontiguousarray(market_data, dtype=np.float64)
         self.scaler = scaler or MarketObservationScaler.fit(self._market_data)
