@@ -56,3 +56,8 @@ This directive supersedes the earlier hard minimums of 30 training trades and 10
 - Training-only fitness determines evolutionary selection. Validation assesses the selected candidate and is not fed back into tournament ranking. Holdout remains untouched.
 - The 15% drawdown penalty and eligibility limit remain. Removing hard trade-count minima does not cancel the independent risk constraint.
 - Safety invariants stay `Champion=null`, `order_permission=false`, `trading_authorization=NO-GO`, zero private API calls and zero real-order attempts.
+
+
+## Dataset reuse directive (2026-10-25)
+
+Use the immutable two-year public BTCUSDT 1m artifact from successful research workflow run `40163897863` when available. Reuse does not waive current-run verification of CSV SHA-256, complete minute coverage, manifest schema or safety invariants. This removes repeated network acquisition from the evolutionary experiment and keeps the optimizer input stable and auditable.

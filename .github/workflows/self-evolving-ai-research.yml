@@ -65,12 +65,32 @@ jobs:
             tests/unit/test_fetch_public_minute_bars.py \
             tests/unit/test_self_evolving_ga.py -q
 
-      - name: Fetch two-year public BTCUSDT minute bars
+      - name: Download immutable two-year BTCUSDT public-data artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: self-evolving-public-minute-bars-f8070853994fd3014fbe2429bd0318749dc125e5
+          path: .prior-market-data
+          repository: ${{ github.repository }}
+          run-id: 40163897863
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Stage immutable BTCUSDT data and manifest
         run: |
-          python -m scripts.fetch_public_minute_bars \
-            --symbol BTCUSDT \
-            --months 24 \
-            --out-dir artifacts/public-minute-bars
+          python - <<'PY'
+          import shutil
+          from pathlib import Path
+
+          source = Path(".prior-market-data/public-minute-bars")
+          target = Path("artifacts/public-minute-bars")
+          csv_path = source / "binance_BTCUSDT_1m.csv"
+          manifest_path = source / "manifest.json"
+          if not csv_path.is_file() or not manifest_path.is_file():
+              raise SystemExit("immutable_two_year_market_data_artifact_incomplete")
+          target.mkdir(parents=True, exist_ok=True)
+          shutil.copy2(csv_path, target / csv_path.name)
+          shutil.copy2(manifest_path, target / manifest_path.name)
+          print("Staged immutable public data from successful research workflow run 40163897863.")
+          PY
 
       - name: Verify provenance, coverage report and immutable safety invariants
         run: |

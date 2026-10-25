@@ -38,3 +38,15 @@ This record describes the code and CI evidence contract. Actual test, data-fetch
 ## Owner Directive update: Opportunity Hunter
 
 The latest owner directive supersedes the earlier hard 30-training / 10-validation trade thresholds. It introduces soft sample confidence weighting rather than hard count rejection, profit-factor plus net-total-return fitness, retrospective missed-upside penalties for non-overlapping 24-hour rallies of at least 5%, regime-capture bonus terms, and evolved profit-activated trailing stops with dynamic regime exits. Mandatory timeframes now include 15m, 1h, 4h and 1d. Training-only fitness drives selection; validation does not influence tournament ranking, and final holdout remains untouched. The 15% drawdown constraint and all execution safety invariants remain in force.
+
+
+## Immutable dataset provenance
+
+The Opportunity Hunter run reuses the two-year public BTCUSDT 1m dataset from successful research workflow run `40163897863` (artifact `self-evolving-public-minute-bars-f8070853994fd3014fbe2429bd0318749dc125e5`) rather than repeating more than one thousand identical public API requests. The artifact manifest records:
+
+- Window: `2024-10-25T05:00:00+00:00` through `2026-10-25T04:59:00+00:00`
+- Rows / expected minute slots: `1,051,200 / 1,051,200`
+- Missing one-minute intervals: `0`; coverage: `1.0`
+- CSV SHA-256: `a2288e77d096b712dbe7b8e057a74cc6c0de9322590919131a6d43ca0864bc88`
+
+The current workflow still independently verifies CSV SHA-256, row count, gap coverage and the immutable trading-safety values before any GA work.
