@@ -180,8 +180,10 @@ def test_hard_training_trade_minimum_zeros_fitness_and_blocks_selection() -> Non
 def test_win_rate_below_50_percent_receives_heavy_fitness_penalty() -> None:
     strong_win_rate = _metrics(MIN_TRAINING_TRADES, win_rate=0.60)
     weak_win_rate = _metrics(MIN_TRAINING_TRADES, win_rate=0.25)
+    assert MIN_WIN_RATE == 0.50
     assert fitness_score(strong_win_rate) > fitness_score(weak_win_rate)
-    assert fitness_score(strong_win_rate) - fitness_score(weak_win_rate) == pytest.approx(1.25)
+    expected_penalty = 5.0 * (MIN_WIN_RATE - 0.25)
+    assert fitness_score(strong_win_rate) - fitness_score(weak_win_rate) == pytest.approx(expected_penalty)
 
 
 def test_profit_factor_and_total_return_both_affect_fitness() -> None:
@@ -354,12 +356,13 @@ def test_maximum_holding_period_forces_exit_after_configured_candles() -> None:
         closes,
         trailing_stop=0.99,
         trailing_activation=0.0,
-        max_holding_period=50,
+        max_holding_period=MAX_HOLDING_PERIOD_CANDLES,
     )
+    assert MAX_HOLDING_PERIOD_CANDLES == 50
     assert states[:1].sum() == 0
-    assert states[1:51].all()
-    assert not states[51:].any()
-    assert states.sum() == 50
+    assert states[1 : MAX_HOLDING_PERIOD_CANDLES + 1].all()
+    assert not states[MAX_HOLDING_PERIOD_CANDLES + 1 :].any()
+    assert states.sum() == MAX_HOLDING_PERIOD_CANDLES
 
 
 def test_invalid_maximum_holding_period_fails_closed() -> None:
