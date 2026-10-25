@@ -11,6 +11,8 @@ from scripts.run_deap_evolution import (
     FASTS,
     SLOWS,
     EvaluationMetrics,
+    TIMEFRAMES,
+    _economic_assessment,
     _strategy_genome,
     _thresholds,
     build_position_states,
@@ -24,7 +26,7 @@ from services.ai_core.self_evolving_genome import genome_sha256
 def test_repair_keeps_genes_in_range_and_ema_periods_ordered() -> None:
     genes = [99, 1, 7, 5, 0, 4, 5, 3, 5]
     repaired = repair_individual(genes)
-    assert tuple(repaired[:2]) == (5, 1)
+    assert tuple(repaired[:2]) == (len(TIMEFRAMES) - 1, 1)
     assert repaired[2] == 0
     assert FASTS[repaired[3]] < SLOWS[repaired[4]]
 
@@ -72,6 +74,17 @@ def test_no_completed_trades_report_expectancy_as_unavailable() -> None:
     assert metrics.net_expectancy is None
     assert metrics.win_rate == 0.0
     assert fitness_score(metrics) == -1.0
+
+
+def test_economic_assessment_rejects_low_sample_or_unvalidated_candidate() -> None:
+    training = EvaluationMetrics(1, 1.0, 0.12, 0.03, 0.01)
+    validation = EvaluationMetrics(0, 0.0, None, 0.0, 0.0)
+    result = _economic_assessment(training, validation)
+    assert result["status"] == "NO-GO"
+    assert "training_trade_count_below_minimum" in result["reasons"]
+    assert "validation_trade_count_below_minimum" in result["reasons"]
+    assert result["final_holdout_used"] is False
+    assert result["production_promotion_eligible"] is False
 
 
 def test_fitness_penalizes_drawdown_churn_and_small_samples() -> None:

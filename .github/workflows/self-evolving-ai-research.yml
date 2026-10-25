@@ -148,6 +148,7 @@ jobs:
               "top_candidate_genes": report["top_research_candidate"]["genes"],
               "training_metrics": report["top_research_candidate"]["training_metrics"],
               "validation_metrics": report["top_research_candidate"]["validation_metrics"],
+              "economic_assessment": report["economic_assessment"],
               "Champion": safety["Champion"],
               "order_permission": safety["order_permission"],
               "trading_authorization": safety["trading_authorization"],

@@ -28,7 +28,9 @@ from services.ai_core.self_evolving_genome import (
     genome_sha256,
 )
 
-TIMEFRAMES = (1, 5, 15, 60, 240, 1440)
+# Search includes 1m through 30-day bars; 30-day coverage is intentionally
+# low-sample on a six-month dataset and should normally fail economic acceptance.
+TIMEFRAMES = (1, 5, 15, 30, 60, 120, 240, 360, 720, 1440, 10080, 43200)
 LOOKBACKS = (5, 8, 13, 21, 34, 55, 89, 144)
 FASTS = (3, 5, 8, 13, 21, 34)
 SLOWS = (8, 13, 21, 34, 55, 89, 144, 233)
@@ -42,7 +44,7 @@ RSI_EXIT = (55.0, 60.0, 65.0, 70.0, 75.0, 80.0)
 EXPOSURES = (0.25, 0.50, 0.75, 0.95)
 STOPS = (0.005, 0.01, 0.015, 0.02, 0.03, 0.05)
 LOWER = (0, 0, 0, 0, 1, 0, 0, 0, 0)
-UPPER = (5, 3, 7, 5, 7, 5, 5, 3, 5)
+UPPER = (11, 3, 7, 5, 7, 5, 5, 3, 5)
 GENOME_SIZE = 9
 FEE = 25.0 / 10_000
 SLIPPAGE = 20.0 / 10_000
@@ -242,7 +244,7 @@ def build_search_context(
         timeframe: _build_features(_resample(research, timeframe))
         for timeframe in TIMEFRAMES
     }
-    if any(len(item.frame) < 20 for item in features.values()):
+    if any(len(item.frame) < 2 for item in features.values()):
         raise ValueError("insufficient_resampled_history")
     return SearchContext(features, train_cutoff_ms, validation_end_ms)
 
@@ -428,7 +430,7 @@ def _period_metrics(
         raise ValueError("evaluation_period_invalid")
     indexes = np.flatnonzero(mask)
     if len(indexes) < 2:
-        raise ValueError("evaluation_period_too_short")
+        return EvaluationMetrics(0, 0.0, None, 0.0, 0.0)
     position_key = (
         timeframe,
         0 if period == "train" else 1,
@@ -654,6 +656,37 @@ def _candidate_payload(
     }
 
 
+def _economic_assessment(
+    training: EvaluationMetrics, validation: EvaluationMetrics
+) -> dict[str, Any]:
+    """Reject candidates without minimum evidence; never authorizes production."""
+
+    reasons: list[str] = []
+    minimum_trades = 20
+    maximum_drawdown = 0.15
+    if training.trade_count < minimum_trades:
+        reasons.append("training_trade_count_below_minimum")
+    if validation.trade_count < minimum_trades:
+        reasons.append("validation_trade_count_below_minimum")
+    if validation.net_expectancy is None or validation.net_expectancy <= 0:
+        reasons.append("validation_expectancy_not_positive_or_unavailable")
+    if validation.max_drawdown > maximum_drawdown:
+        reasons.append("validation_drawdown_above_limit")
+    return {
+        "status": "NO-GO" if reasons else "OWNER_REVIEW_REQUIRED",
+        "reasons": reasons,
+        "minimum_trade_count_per_period": minimum_trades,
+        "maximum_validation_drawdown": maximum_drawdown,
+        "training_trade_count": training.trade_count,
+        "validation_trade_count": validation.trade_count,
+        "validation_expectancy": validation.net_expectancy,
+        "final_holdout_used": False,
+        "final_holdout_reserved": True,
+        "owner_approval_required": True,
+        "production_promotion_eligible": False,
+    }
+
+
 def _write_csv_outputs(
     output_dir: Path,
     history: list[dict[str, int | float]],
@@ -788,6 +821,9 @@ def run_evolution(
             "validation_metrics": asdict(validation_metrics),
             "validation_used_for_selection": False,
         },
+        "economic_assessment": _economic_assessment(
+            train_metrics, validation_metrics
+        ),
         "generation_history": history,
         "safety_invariants": {
             "Champion": None,
