@@ -207,7 +207,7 @@ def test_buy_resizes_position_and_sell_can_close_all_holdings() -> None:
     env.reset(seed=3)
     env.step(np.asarray([0.8, 0.8], dtype=np.float32))
     assert env._quantity == pytest.approx(8.0)
-    env.step(np.asarray([0.8, 0.25], dtype=np.float32))
+    env.step(np.asarray([-0.8, 0.6875], dtype=np.float32))
     assert env._quantity == pytest.approx(2.5)
     env.step(np.asarray([-0.8, 1.0], dtype=np.float32))
     assert env._quantity == pytest.approx(0.0)
