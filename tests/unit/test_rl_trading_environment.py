@@ -3,13 +3,20 @@ from __future__ import annotations
 import math
 from typing import Any
 
+import gymnasium as gym
 import numpy as np
 import pytest
 from gymnasium.utils.env_checker import check_env
 from numpy.typing import NDArray
 
 from services.rl_research.rl_trading_environment import (
+    ACTION_BUY,
+    ACTION_HOLD,
+    ACTION_SELL,
     BTCUSDTTradingEnv,
+    DEFAULT_OPPORTUNITY_COST_PENALTY,
+    MOVING_AVERAGE_WINDOW,
+    POSITION_SIZE_FRACTIONS,
     MarketObservationScaler,
     OBSERVATION_FIELDS,
     OBSERVATION_SIZE,
@@ -178,7 +185,7 @@ def test_buy_hold_and_partial_sell_execute_on_the_next_bar() -> None:
     assert observation.shape == (9,)
 
     observation, _, terminated, _, info = env.step(
-        np.asarray([0.8, 0.5], dtype=np.float32)
+        np.asarray([ACTION_BUY, 1], dtype=np.int64)
     )
     assert terminated is False
     assert info["timestamp_ms"] == int(data[1, 0])
@@ -186,14 +193,14 @@ def test_buy_hold_and_partial_sell_execute_on_the_next_bar() -> None:
     assert env._quantity == pytest.approx(5.0)
 
     observation, _, terminated, _, info = env.step(
-        np.asarray([0.0, 0.9], dtype=np.float32)
+        np.asarray([ACTION_HOLD, 0], dtype=np.int64)
     )
     assert terminated is False
     assert info["action"] == "HOLD"
     assert env._quantity == pytest.approx(5.0)
 
     observation, _, terminated, _, info = env.step(
-        np.asarray([-0.8, 0.5], dtype=np.float32)
+        np.asarray([ACTION_SELL, 1], dtype=np.int64)
     )
     assert terminated is False
     assert info["action"] == "SELL"
@@ -205,11 +212,11 @@ def test_buy_hold_and_partial_sell_execute_on_the_next_bar() -> None:
 def test_buy_resizes_position_and_sell_can_close_all_holdings() -> None:
     env = _env(_bars(), initial_equity=1_000.0)
     env.reset(seed=3)
-    env.step(np.asarray([0.8, 0.8], dtype=np.float32))
-    assert env._quantity == pytest.approx(8.0)
-    env.step(np.asarray([-0.8, 0.6875], dtype=np.float32))
-    assert env._quantity == pytest.approx(2.5)
-    env.step(np.asarray([-0.8, 1.0], dtype=np.float32))
+    env.step(np.asarray([ACTION_BUY, 2], dtype=np.int64))
+    assert env._quantity == pytest.approx(7.5)
+    env.step(np.asarray([ACTION_SELL, 2], dtype=np.int64))
+    assert env._quantity == pytest.approx(1.875)
+    env.step(np.asarray([ACTION_SELL, 3], dtype=np.int64))
     assert env._quantity == pytest.approx(0.0)
     env.close()
 
@@ -223,11 +230,11 @@ def test_terminal_liquidation_charges_fees_and_slippage() -> None:
         min_remaining_steps=1,
     )
     env.reset(seed=5)
-    env.step(np.asarray([0.8, 1.0], dtype=np.float32))
-    env.step(np.asarray([0.0, 0.0], dtype=np.float32))
-    env.step(np.asarray([0.0, 0.0], dtype=np.float32))
+    env.step(np.asarray([ACTION_BUY, 3], dtype=np.int64))
+    env.step(np.asarray([ACTION_HOLD, 0], dtype=np.int64))
+    env.step(np.asarray([ACTION_HOLD, 0], dtype=np.int64))
     _, reward, terminated, truncated, info = env.step(
-        np.asarray([0.0, 0.0], dtype=np.float32)
+        np.asarray([ACTION_HOLD, 0], dtype=np.int64)
     )
     assert terminated is True
     assert truncated is False
@@ -251,8 +258,8 @@ def test_drawdown_reward_uses_intrabar_peak_to_trough_risk() -> None:
     )
     env = _env(data, initial_equity=1_000.0)
     env.reset(seed=9)
-    env.step(np.asarray([0.8, 1.0], dtype=np.float32))
-    _, reward, terminated, _, info = env.step(np.asarray([0.0, 0.0], dtype=np.float32))
+    env.step(np.asarray([ACTION_BUY, 3], dtype=np.int64))
+    _, reward, terminated, _, info = env.step(np.asarray([ACTION_HOLD, 0], dtype=np.int64))
     assert terminated is True
     assert info["max_drawdown"] > 0.20
     assert reward < math.log(0.9) - 1.0
@@ -262,19 +269,19 @@ def test_drawdown_reward_uses_intrabar_peak_to_trough_risk() -> None:
 def test_invalid_actions_and_post_terminal_step_are_rejected() -> None:
     env = _env(_bars(), initial_equity=1_000.0)
     env.reset(seed=12)
-    with pytest.raises(ValueError, match="two_finite_values"):
+    with pytest.raises(ValueError, match="two_integer_values"):
         env.step(np.asarray([0.1], dtype=np.float32))
-    with pytest.raises(ValueError, match="outside_declared_space"):
-        env.step(np.asarray([1.1, 0.5], dtype=np.float32))
-    with pytest.raises(ValueError, match="outside_declared_space"):
-        env.step(np.asarray([0.1, 1.1], dtype=np.float32))
-    with pytest.raises(ValueError, match="two_finite_values"):
+    with pytest.raises(ValueError, match="direction_index_out_of_range"):
+        env.step(np.asarray([3, 1], dtype=np.int64))
+    with pytest.raises(ValueError, match="size_index_out_of_range"):
+        env.step(np.asarray([ACTION_BUY, 4], dtype=np.int64))
+    with pytest.raises(ValueError, match="two_integer_values"):
         env.step(np.asarray([math.nan, 0.5], dtype=np.float32))
     for _ in range(len(_bars()) - 1):
-        _, _, terminated, _, _ = env.step(np.asarray([0.0, 0.0], dtype=np.float32))
+        _, _, terminated, _, _ = env.step(np.asarray([ACTION_HOLD, 0], dtype=np.int64))
     assert terminated is True
     with pytest.raises(RuntimeError, match="already_terminated"):
-        env.step(np.asarray([0.0, 0.0], dtype=np.float32))
+        env.step(np.asarray([ACTION_HOLD, 0], dtype=np.int64))
     env.close()
 
 
@@ -313,7 +320,7 @@ def test_hold_action_pays_configured_inactivity_penalty() -> None:
     env.reset(seed=31)
     rewards: list[float] = []
     for _ in range(4):
-        _, reward, _, _, info = env.step(np.asarray([0.0, 0.0], dtype=np.float32))
+        _, reward, _, _, info = env.step(np.asarray([ACTION_HOLD, 0], dtype=np.int64))
         rewards.append(reward)
     assert rewards[:3] == pytest.approx([0.0, 0.0, 0.0])
     assert rewards[3] == pytest.approx(-0.001)
@@ -333,8 +340,8 @@ def test_profitable_completed_trade_gets_intermediate_reward_bonus() -> None:
         initial_equity=1_000.0,
     )
     env.reset(seed=32)
-    env.step(np.asarray([0.8, 1.0], dtype=np.float32))
-    _, reward, terminated, _, info = env.step(np.asarray([-0.8, 1.0], dtype=np.float32))
+    env.step(np.asarray([ACTION_BUY, 3], dtype=np.int64))
+    _, reward, terminated, _, info = env.step(np.asarray([ACTION_SELL, 3], dtype=np.int64))
     assert terminated is False
     assert info["action"] == "SELL"
     assert info["closed_trade_net_profit_this_step"] == pytest.approx(100.0)
@@ -354,8 +361,8 @@ def test_losing_completed_trade_receives_no_profit_bonus() -> None:
         initial_equity=1_000.0,
     )
     env.reset(seed=33)
-    env.step(np.asarray([0.8, 1.0], dtype=np.float32))
-    _, reward, terminated, _, info = env.step(np.asarray([-0.8, 1.0], dtype=np.float32))
+    env.step(np.asarray([ACTION_BUY, 3], dtype=np.int64))
+    _, reward, terminated, _, info = env.step(np.asarray([ACTION_SELL, 3], dtype=np.int64))
     assert terminated is False
     assert info["closed_trade_net_profit_this_step"] == pytest.approx(-100.0)
     assert info["reward_profitable_trade_bonus"] == pytest.approx(0.0)
@@ -374,12 +381,12 @@ def test_partial_realizations_accumulate_before_profitable_trade_bonus() -> None
         initial_equity=1_000.0,
     )
     env.reset(seed=34)
-    env.step(np.asarray([0.8, 1.0], dtype=np.float32))
-    _, _, _, _, partial_info = env.step(np.asarray([-0.8, 0.5], dtype=np.float32))
+    env.step(np.asarray([ACTION_BUY, 3], dtype=np.int64))
+    _, _, _, _, partial_info = env.step(np.asarray([ACTION_SELL, 1], dtype=np.int64))
     assert partial_info["closed_trade_net_profit_this_step"] is None
     assert partial_info["reward_profitable_trade_bonus"] == pytest.approx(0.0)
     _, _, terminated, _, final_info = env.step(
-        np.asarray([-0.8, 1.0], dtype=np.float32)
+        np.asarray([ACTION_SELL, 3], dtype=np.int64)
     )
     assert terminated is False
     assert final_info["closed_trade_net_profit_this_step"] == pytest.approx(150.0)
@@ -392,7 +399,7 @@ def test_sell_is_masked_when_inventory_is_empty() -> None:
     env = _env(_bars(closes=[100.0] * 6))
     env.reset(seed=41)
     for index in range(4):
-        _, reward, _, _, info = env.step(np.asarray([-0.9, 1.0], dtype=np.float32))
+        _, reward, _, _, info = env.step(np.asarray([ACTION_SELL, 3], dtype=np.int64))
         assert info["action"] == "SELL"
         assert info["executed_action"] == "MASKED_SELL"
         assert info["action_blocked"] is True
@@ -418,10 +425,10 @@ def test_sell_is_masked_when_inventory_is_empty() -> None:
 def test_buy_is_masked_when_position_is_fully_allocated() -> None:
     env = _env(_bars(closes=[100.0] * 6), initial_equity=1_000.0)
     env.reset(seed=42)
-    env.step(np.asarray([0.9, 1.0], dtype=np.float32))
+    env.step(np.asarray([ACTION_BUY, 3], dtype=np.int64))
     quantity_before = env._quantity
     fills_before = env.summary()["fill_count"]
-    _, _, _, _, info = env.step(np.asarray([0.9, 1.0], dtype=np.float32))
+    _, _, _, _, info = env.step(np.asarray([ACTION_BUY, 3], dtype=np.int64))
     assert info["action"] == "BUY"
     assert info["executed_action"] == "MASKED_BUY"
     assert info["action_blocked"] is True
@@ -437,7 +444,7 @@ def test_transaction_cost_updates_are_validated_and_apply_to_future_fills() -> N
     env = _env(_bars(closes=[100.0] * 6), initial_equity=1_000.0)
     env.reset(seed=44)
     env.set_transaction_costs(0.0, 0.0)
-    env.step(np.asarray([0.9, 1.0], dtype=np.float32))
+    env.step(np.asarray([ACTION_BUY, 3], dtype=np.int64))
     assert env.summary()["total_fees"] == pytest.approx(0.0)
     assert env.summary()["total_slippage"] == pytest.approx(0.0)
 
@@ -447,7 +454,7 @@ def test_transaction_cost_updates_are_validated_and_apply_to_future_fills() -> N
     assert env.fee_bps_per_side == pytest.approx(25.0)
     assert env.slippage_bps_per_side == pytest.approx(20.0)
 
-    env.step(np.asarray([-0.9, 1.0], dtype=np.float32))
+    env.step(np.asarray([ACTION_SELL, 3], dtype=np.int64))
     summary = env.summary()
     assert summary["total_fees"] is not None
     assert summary["total_fees"] > 0.0
@@ -457,40 +464,57 @@ def test_transaction_cost_updates_are_validated_and_apply_to_future_fills() -> N
     env.close()
 
 
-def test_buy_size_that_would_reduce_position_is_noop_not_a_legal_mask_block() -> None:
+@pytest.mark.parametrize(
+    ("size_index", "fraction"),
+    [(0, 0.25), (1, 0.50), (2, 0.75), (3, 1.00)],
+)
+def test_discrete_buy_size_spends_positive_fraction_of_cash(
+    size_index: int, fraction: float
+) -> None:
     env = _env(_bars(closes=[100.0] * 6), initial_equity=1_000.0)
     env.reset(seed=43)
-    env.step(np.asarray([0.9, 0.8], dtype=np.float32))
-    quantity_before = env._quantity
-    fills_before = env.summary()["fill_count"]
-    _, _, _, _, info = env.step(np.asarray([0.9, 0.1], dtype=np.float32))
+    _, _, _, _, info = env.step(
+        np.asarray([ACTION_BUY, size_index], dtype=np.int64)
+    )
     assert info["action"] == "BUY"
-    assert info["executed_action"] == "NOOP_BUY"
+    assert info["executed_action"] == "BUY"
     assert info["action_blocked"] is False
-    assert info["action_mask_reason"] == "buy_target_not_above_current_position"
-    assert info["legal_action_mask"]["BUY"] is True
-    assert env._quantity == pytest.approx(quantity_before)
-    assert env.summary()["fill_count"] == fills_before
-    summary = env.summary()
-    assert summary["masked_buy_action_count"] == 0
-    assert summary["buy_noop_action_count"] == 1
-    assert summary["buy_target_not_increasing_action_count"] == 1
+    assert info["requested_position_size_fraction"] == pytest.approx(fraction)
+    assert env._quantity > 0.0
+    assert env._cash == pytest.approx(1_000.0 * (1.0 - fraction))
+    assert env.summary()["buy_noop_action_count"] == 0
+    assert env.summary()["zero_size_buy_action_count"] == 0
     env.close()
 
 
-def test_zero_size_buy_is_noop_when_cash_and_legal_mask_allow_buying() -> None:
+def test_multidiscrete_action_space_has_no_zero_trade_size() -> None:
     env = _env(_bars(closes=[100.0] * 6), initial_equity=1_000.0)
+    assert isinstance(env.action_space, gym.spaces.MultiDiscrete)
+    assert env.action_space.nvec.tolist() == [3, 4]
+    assert POSITION_SIZE_FRACTIONS == (0.25, 0.5, 0.75, 1.0)
+    assert all(size > 0.0 for size in POSITION_SIZE_FRACTIONS)
     env.reset(seed=44)
-    _, _, _, _, info = env.step(np.asarray([0.9, 0.0], dtype=np.float32))
+    _, _, _, _, info = env.step(np.asarray([ACTION_BUY, 0], dtype=np.int64))
     assert info["action"] == "BUY"
-    assert info["executed_action"] == "NOOP_BUY"
-    assert info["action_blocked"] is False
-    assert info["action_mask_reason"] == "zero_buy_size"
-    assert info["legal_action_mask"]["BUY"] is True
-    summary = env.summary()
-    assert summary["masked_buy_action_count"] == 0
-    assert summary["buy_noop_action_count"] == 1
-    assert summary["zero_size_buy_action_count"] == 1
-    assert summary["invalid_action_penalty_count"] == 0
-    assert summary["fill_count"] == 0
+    assert info["executed_action"] == "BUY"
+    assert info["requested_position_size_fraction"] == pytest.approx(0.25)
+    assert env.summary()["buy_fill_count"] == 1
+    env.close()
+
+
+def test_flat_hold_above_causal_moving_average_pays_opportunity_cost() -> None:
+    closes = [100.0 + index for index in range(MOVING_AVERAGE_WINDOW + 5)]
+    env = _env(_bars(closes=closes))
+    env.reset(seed=45)
+    info: dict[str, object] = {}
+    for _ in range(MOVING_AVERAGE_WINDOW):
+        _, _, terminated, _, step_info = env.step(
+            np.asarray([ACTION_HOLD, 0], dtype=np.int64)
+        )
+        info = step_info
+        assert not terminated
+    assert info["reward_opportunity_cost_penalty"] == pytest.approx(
+        DEFAULT_OPPORTUNITY_COST_PENALTY
+    )
+    assert env.summary()["opportunity_cost_penalty_count"] == 1
     env.close()

@@ -11,10 +11,10 @@ from scripts.run_rl_trading_agent import (
     _evaluate_policy,
     _exclude_previous_holdout_window,
 )
-from services.rl_research.rl_trading_environment import MarketObservationScaler
+from services.rl_research.rl_trading_environment import ACTION_BUY, MarketObservationScaler
 
 
-def test_analysis_window_excludes_all_rows_at_or_after_previous_holdout() -> None:
+def test_pre_cutoff_window_separates_latest_holdout_tail() -> None:
     timestamps = np.asarray(
         [
             PREVIOUS_HOLDOUT_START_MS - 120_000,
@@ -41,7 +41,7 @@ def test_analysis_window_fails_closed_when_no_prior_holdout_tail_exists() -> Non
         _exclude_previous_holdout_window(data)
 
 
-class _DeterministicZeroSizeBuyPolicy:
+class _Fixed25PercentBuyPolicy:
     def predict(
         self,
         observation: NDArray[np.float32],
@@ -49,12 +49,12 @@ class _DeterministicZeroSizeBuyPolicy:
         state: Any,
         episode_start: NDArray[np.bool_],
         deterministic: bool,
-    ) -> tuple[NDArray[np.float32], Any]:
+    ) -> tuple[NDArray[np.int64], Any]:
         assert deterministic is True
-        return np.asarray([0.9, 0.0], dtype=np.float32), state
+        return np.asarray([ACTION_BUY, 0], dtype=np.int64), state
 
 
-def test_evaluation_distinguishes_zero_size_policy_from_action_mask_block() -> None:
+def test_evaluation_reports_real_discrete_size_choices_without_zero_volume_buys() -> None:
     timestamps = 1_700_000_000_000 + np.arange(6) * 60_000
     prices = np.asarray([100.0, 101.0, 102.0, 101.0, 100.0, 99.0])
     data = np.column_stack(
@@ -70,7 +70,7 @@ def test_evaluation_distinguishes_zero_size_policy_from_action_mask_block() -> N
     scaler = MarketObservationScaler.fit(data)
 
     metrics = _evaluate_policy(
-        _DeterministicZeroSizeBuyPolicy(),
+        _Fixed25PercentBuyPolicy(),
         data,
         scaler,
         fee_bps=25.0,
@@ -81,12 +81,16 @@ def test_evaluation_distinguishes_zero_size_policy_from_action_mask_block() -> N
     assert metrics["initial_equity"] == pytest.approx(10_000.0)
     assert metrics["buy_action_count"] == metrics["steps"]
     assert metrics["masked_buy_action_count"] == 0
-    assert metrics["buy_noop_action_count"] == metrics["steps"]
-    assert metrics["zero_size_buy_action_count"] == metrics["steps"]
-    assert metrics["policy_buy_zero_size_request_count"] == metrics["steps"]
-    assert metrics["invalid_action_penalty_count"] == 0
-    assert metrics["buy_fill_count"] == 0
-    assert metrics["policy_position_size_max"] == pytest.approx(0.0)
-    assert metrics["policy_action_mask_reason_counts"] == {
-        "zero_buy_size": metrics["steps"]
+    assert metrics["buy_noop_action_count"] == 0
+    assert metrics["zero_size_buy_action_count"] == 0
+    assert metrics["policy_buy_zero_size_request_count"] == 0
+    assert metrics["buy_fill_count"] == metrics["steps"]
+    assert metrics["policy_requested_trade_size_fraction_counts"] == {
+        "0.25": metrics["steps"],
+        "0.50": 0,
+        "0.75": 0,
+        "1.00": 0,
     }
+    assert metrics["policy_requested_trade_size_fraction_mean"] == pytest.approx(0.25)
+    assert metrics["invalid_action_penalty_count"] == 0
+    assert metrics["total_fees"] > 0.0

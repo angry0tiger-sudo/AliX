@@ -2,58 +2,54 @@
 
 ## Architecture decision
 
-The new research branch adds a Gymnasium environment and a Stable-Baselines3-compatible recurrent PPO policy without modifying the DEAP path. Recurrent PPO is used because the policy is intentionally restricted to chart-like OHLCV/time observations; portfolio accounting remains simulator-internal rather than becoming an extra market feature.
+The RL research branch uses a Gymnasium market environment and Stable-Baselines3-Contrib Recurrent PPO. It remains isolated from the DEAP path. Portfolio accounting stays inside the simulator and is never exposed as a policy observation.
 
 ## Environment contract
 
 - **Market input:** verified contiguous BTCUSDT Spot 1-minute candles: timestamp, open, high, low, close, volume.
-- **Observation:** normalized OHLC prices, normalized volume, and cyclical UTC time-of-day/day-of-week. Scales are fitted on training rows only. No account balance, inventory, unrealized PnL, indicator, future label, or execution state is passed to the policy.
-- **Action:** continuous two-value vector. The first component maps to Sell, Hold, or Buy; the second chooses a size between 0% and 100%. Because RecurrentPPO's continuous policy does not mask distribution logits, the environment applies a deterministic hard mask before simulated execution and reports the legal mask/reason in `info`. SELL is blocked without inventory; BUY is blocked when cash is exhausted/full allocation and whenever the target would reduce rather than increase the position. Short selling is disabled.
-- **Execution:** an action selected after bar close fills at the next bar open. Each fill pays configured per-side fees and slippage. Any residual position is liquidated with costs at an evaluation-slice boundary.
-- **Reward:** net log equity growth minus drawdown penalties, a 0.001 penalty on each step with no actual position-quantity change after three grace steps, a separate 0.001 penalty when the pre-action legal mask blocks a requested BUY/SELL, and a 0.0001 bonus only when a complete round trip closes with cumulative realized PnL positive after fees and slippage. Reward components and invalid-action penalty counts are reported separately. The bonus is not paid on partial sales or unrealized profit. This shaping can encourage churn, so activity alone is not success; net return, costs, drawdown, fills, and win/loss counts remain the evidence. Equity already includes fees and slippage; intrabar high/low marks contribute to drawdown. There is no fixed timeframe, take-profit, stop-loss, or maximum holding-period rule.
-- **Training cost curriculum:** training starts with zero fee/slippage. Only 100 policy-closed simulated round trips, counted from executed position accounting rather than action requests or forced terminal liquidation, can start a linear 100,000-environment-step ramp to configured costs. Cost updates are applied in deterministic 1,000-step increments. Validation, final holdout, and Buy & Hold baselines always use configured nonzero costs. The report records stage timesteps, stage trade counts, start/end steps, and whether the ramp was actually completed; an incomplete ramp forces economic NO-GO.
-- **Safety:** the model can emit a simulated decision only. It cannot reach exchange clients or grant order permission.
+- **Observation:** normalized OHLC prices, normalized volume, and cyclical UTC time-of-day/day-of-week. Scales are fitted on training rows only. No account balance, inventory, unrealized PnL, technical indicator, future label, or execution state is passed to the policy.
+- **Action:** discrete `MultiDiscrete([3, 4])`. Direction index maps to Hold / Buy / Sell; size index maps to 25%, 50%, 75%, or 100%. No zero-size bucket exists. BUY spends that fraction of currently available cash including costs; SELL liquidates that fraction of inventory; HOLD ignores the size index. If BUY is legal and spendable cash exists, the purchase must create a positive position change. The execution-boundary legal mask still blocks SELL without inventory and BUY when available cash is exhausted; distribution logits are not claimed to be masked.
+- **Execution:** an action selected after a completed candle fills at the next candle's open. Every fill pays configured per-side fees and slippage. Any residual position is liquidated with costs at an evaluation-slice boundary.
+- **Reward:** net log-equity growth minus worsening/level drawdown penalties, the existing 0.001 inactivity penalty after three unchanged steps, and the existing 0.001 penalty for genuinely masked BUY/SELL requests. A 0.0001 bonus is paid only when a complete round trip closes with positive cumulative realized PnL after costs. Additionally, a 0.0005 opportunity-cost penalty applies only when the agent is flat and selects HOLD while current close is above the causal 20-candle moving average. That moving average is internal reward shaping only and never part of the observation; HOLD while invested is not penalized. Reward shaping is diagnostic, not economic evidence.
+- **Training cost curriculum:** training starts with zero fee/slippage. Only 100 executed policy-closed round trips can start a linear 100,000-step ramp to configured costs, applied in 1,000-step increments. Validation, final holdout and Buy & Hold baselines always use configured nonzero costs. An incomplete curriculum forces economic NO-GO.
+- **Safety:** the model can emit simulated decisions only. It cannot reach exchange clients or grant order permission.
 
 ## Data and split protocol
 
-1. Reuse the immutable public two-year minute-bar artifact when available; otherwise fetch up to 24 calendar months from the public endpoint.
-2. Verify manifest schema, source, symbol, interval, row count, SHA-256, full coverage and exact one-minute continuity. Any missing/invalid row fails closed.
-3. Exclude the previously reported June 1, 2026 04:59 UTC to October 25, 2026 holdout window from this experiment. The new analysis window ends at the last available candle before that boundary.
-4. Split that earlier window chronologically, without shuffling: 70% training, 10% validation, 20% final holdout. The new holdout therefore does not reuse the previously reported final-holdout dates.
-5. Fit observation scaling on training rows only. The CSV/hash still refer to the full verified public dataset; the report records the excluded tail rows and exact evaluation dates.
-6. Train only on the training split, in chronological order, for at least 1,000,000 environment steps. Because training is shorter than the requested budget, it replays the same chronological training split from its beginning. Validation and final holdout rows are never used in training.
-7. Evaluate validation once for diagnostics without early stopping, checkpoint selection, or parameter tuning.
-8. Evaluate the new final holdout exactly once after training. Compare against cash and buy-and-hold under the same simulated costs. This window is disjoint from the previous holdout but is drawn from historical data used by earlier research runs; it is fresh for this model's fit, not a never-before-downloaded market sample.
+1. Reuse the immutable verified two-year public minute-bar artifact when available; otherwise fetch the public endpoint.
+2. Verify manifest schema, source, symbol, interval, row count, SHA-256, coverage and exact one-minute continuity. Invalid or missing data fails closed.
+3. For this architecture, training and validation use only rows strictly before 2026-06-01 04:59 UTC. Split that pre-cutoff period chronologically, without shuffling: 70% training, 10% validation, and leave the previous candidate's held-out interval between validation and the cutoff unused by fitting and scoring.
+4. Use the latest tail from 2026-06-01 04:59 UTC onward as the current model's final holdout. It must not enter training, scaler fit, or validation, and it is evaluated exactly once.
+5. The latest tail was inspected in earlier research. It is fresh for this model's fit, but it is not a market sample unseen by the wider research history. The report must state this explicitly.
+6. Fit scaling constants on training rows only. Train for at least 1,000,000 steps on CPU, then evaluate Validation once for diagnostics and the latest-tail Holdout once. No validation checkpoint selection or tuning.
+7. Report exact split timestamps, excluded gap rows, selected discrete size buckets, requested/masked actions, position changes, completed trades, opportunity-cost penalties, fees, slippage, net return and drawdown.
 
 ## GitHub Actions execution budget
 
-- Python 3.12, CPU-only PyTorch, pinned Gymnasium, Stable-Baselines3 and SB3-Contrib versions.
-- A 55-minute job ceiling, a single on-policy environment, bounded LSTM size, rollout/batch sizes and pip cache keyed to the research requirements. The explicit 1,000,000-step minimum replays the training split as needed within the existing ceiling; the CI/time budget is not increased and no gate is relaxed.
-- Source data is reused by artifact ID when available; a public-data download is the fallback if the retained artifact has expired.
-- Upload the source CSV/manifest, dependency freeze, model checkpoint and machine-readable report with the source commit and safety invariants.
-- Standard CI continues to compile, lint, format-check, type-check, security-scan, audit dependencies, enforce architecture/complexity contracts and run the existing unit-coverage gates. No quality gate is removed or relaxed.
+- Python 3.12, CPU-only PyTorch, pinned Gymnasium/Stable-Baselines3/SB3-Contrib, single on-policy environment, bounded LSTM, pinned dependency resolver.
+- CI must pass on the exact training commit before training starts. The training workflow checks for that exact-commit success and fails closed on timeout or failed checks.
+- The 55-minute research-workflow ceiling remains unchanged. No dependency audit, security, architecture, complexity or coverage gate is relaxed.
+- Upload the data and manifest, dependency freeze, model checkpoint and machine-readable report with commit and SHA-256 provenance.
 
 ## Acceptance criteria
 
-- The Gymnasium checker passes; invalid data, actions, timestamps, costs and accounting states fail closed.
-- Tests prove next-bar execution, position-size semantics, fee/slippage accounting, terminal liquidation, intrabar drawdown penalties, and absence of portfolio fields from observations.
-- The historical workflow verifies model reload, at least 1,000,000 training steps, full validation coverage, action/trade statistics and exactly one full final-holdout evaluation.
-- Tests prove SELL masking without inventory, BUY masking at full allocation, rejection of BUY actions that would reduce the position, and inactivity penalties based on consecutive unchanged positions rather than action labels.
-- Reward tests prove that the profitable-trade bonus is issued only after a completed round trip has positive realized PnL after costs.
-- The new holdout end timestamp is strictly earlier than the previously reported holdout start, with explicit excluded-row accounting.
-- The report provides final-holdout net profit/return, max drawdown, fees, slippage, fill count, masked requests and separate reward penalties, plus comparison to cash/buy-and-hold.
-- The entropy coefficient is explicitly recorded (initial iteration: `ent_coef=0.01`); the report proves at least 1,000,000 actual training steps and records whether 100 policy-closed trades and the entire cost ramp were reached. Incomplete curriculum is reported honestly and forces economic NO-GO.
-- \`Champion=null\`, \`order_permission=false\`, and \`trading_authorization=NO-GO\` remain invariant, even if the report is profitable.
+- Gymnasium checker passes and RecurrentPPO accepts the MultiDiscrete action space.
+- Tests prove each BUY bucket creates a positive purchase amount from available cash, no size bucket is zero, sells liquidate the selected fraction, and invalid action indices fail closed.
+- Tests prove opportunity-cost penalty is causal, applied only to flat HOLD above the moving average, and does not alter policy observations or penalize HOLD while invested.
+- At least 1,000,000 steps are trained, model save/reload passes, all selected sizes and fills are reported, and final-tail evaluation executes exactly once.
+- Holdout is disjoint from this model's training and validation; prior research exposure is disclosed rather than hidden.
+- Compare Holdout with cash and Buy & Hold after fees/slippage. Economic acceptance is evidence only and never auto-promotes.
+- `Champion = null`, `order_permission = false`, `trading_authorization = NO-GO`; zero private API calls and zero real orders.
 
 ## Phased plan
 
 | Phase | Deliverable | Exit criterion |
-| --- | --- | --- |
-| 0. Branch and contracts | Isolated branch, owner directive, dependency pins, typed simulator | DEAP unchanged; all safety fields explicit |
-| 1. Environment | Gymnasium contract, causal execution, cost ledger, drawdown reward | Unit tests and Gymnasium checker pass |
-| 2. Training | Recurrent PPO, fixed seeds, CPU budget, saved checkpoint | Model trains across the complete train split and reloads |
-| 3. Evaluation | One validation pass, one untouched holdout pass, cash/buy-and-hold baselines | Hashes/splits/metrics are machine-verified |
-| 4. Robustness research | Separate runs for multiple seeds, fee/slippage shocks and market regimes | Consistent evidence across preregistered tests |
-| 5. Shadow-only review | Non-executing prediction/report integration | Owner review; no trading authorization by default |
+|---|---|---|
+| 0. Branch and contracts | Owner directive, pinned dependencies and architecture contract | DEAP unchanged; safety invariants explicit |
+| 1. Environment | Discrete actions, next-bar execution, costs and reward accounting | Gymnasium checker and unit tests pass |
+| 2. Training | Recurrent PPO with discrete direction/size outputs | At least 1,000,000 steps and successful reload |
+| 3. Evaluation | Validation and one latest-tail Holdout pass | Hash, split, metrics and safety assertions pass |
+| 4. Robustness research | Multi-seed, cost sensitivity and market regimes | Preregistered comparisons, never auto-promotion |
+| 5. Shadow-only review | Non-executing report integration | Owner review; trading authorization remains NO-GO |
 
 A successful Actions run proves that the experiment executed and its claims are reproducible. It does not prove the policy is profitable or grant live-trading authority.

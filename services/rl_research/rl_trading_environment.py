@@ -809,6 +809,10 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Int64Array]):
         info: dict[str, Any] = {
             "timestamp_ms": int(next_bar[TIMESTAMP_COLUMN]),
             "action": requested_action,
+            "requested_position_size_index": int(np.asarray(action)[1]),
+            "requested_position_size_fraction": POSITION_SIZE_FRACTIONS[
+                int(np.asarray(action)[1])
+            ],
             "executed_action": executed_action,
             "action_blocked": executed_action.startswith("MASKED_"),
             "action_mask_reason": mask_reason,

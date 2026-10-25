@@ -1,17 +1,6 @@
 name: AliX RL Evaluation Only Existing Checkpoint
 
 on:
-  push:
-    branches:
-      - "research/rl-trading-agent"
-    paths:
-      - ".github/workflows/rl-trading-agent-evaluation-only.yml"
-      - "services/rl_research/rl_trading_environment.py"
-      - "scripts/run_rl_trading_agent.py"
-      - "scripts/evaluate_rl_trading_agent.py"
-      - "tests/unit/test_rl_trading_environment.py"
-      - "tests/unit/test_rl_trading_agent_runner.py"
-      - "docs/governance/owner-directives/2026-10-25-rl-evaluation-mask-diagnosis.md"
   workflow_dispatch:
 
 permissions:
