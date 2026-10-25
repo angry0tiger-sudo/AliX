@@ -8,6 +8,7 @@ or production champion is reachable from this experiment.
 from __future__ import annotations
 
 import argparse
+import copy
 import csv
 import hashlib
 import json
@@ -497,7 +498,7 @@ def _build_toolbox(
     toolbox.register("mate", tools.cxTwoPoint)
     toolbox.register("mutate", tools.mutUniformInt, low=LOWER, up=UPPER, indpb=0.20)
     toolbox.register("select", tools.selTournament, tournsize=3)
-    toolbox.register("clone", tools.clone)
+    toolbox.register("clone", copy.deepcopy)
     return toolbox
 
 
