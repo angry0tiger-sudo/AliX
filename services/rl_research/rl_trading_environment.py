@@ -503,8 +503,9 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Int64Array]):
             * (1.0 + self.slippage_bps_per_side / 10_000.0)
             * (1.0 + self.fee_bps_per_side / 10_000.0)
         )
-        target_quantity = target_notional / cost_adjusted_price
-        if target_quantity <= self._quantity + self._quantity_tolerance(price):
+        additional_quantity = target_notional / cost_adjusted_price
+        target_quantity = self._quantity + additional_quantity
+        if additional_quantity <= self._quantity_tolerance(price):
             return False
         previous_quantity = self._quantity
         self._rebalance_to_quantity(target_quantity, price)
