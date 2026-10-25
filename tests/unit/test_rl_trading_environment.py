@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import math
+from typing import Any
 
-import gymnasium
 import numpy as np
 import pytest
 from gymnasium.utils.env_checker import check_env
@@ -43,14 +43,11 @@ def _bars(
     ).T
 
 
-def _env(data: Float64Array, **kwargs: object) -> BTCUSDTTradingEnv:
-    return BTCUSDTTradingEnv(
-        data,
-        fee_bps_per_side=0.0,
-        slippage_bps_per_side=0.0,
-        min_remaining_steps=1,
-        **kwargs,
-    )
+def _env(data: Float64Array, **kwargs: Any) -> BTCUSDTTradingEnv:
+    kwargs.setdefault("fee_bps_per_side", 0.0)
+    kwargs.setdefault("slippage_bps_per_side", 0.0)
+    kwargs.setdefault("min_remaining_steps", 1)
+    return BTCUSDTTradingEnv(data, **kwargs)
 
 
 def test_environment_satisfies_gymnasium_contract() -> None:

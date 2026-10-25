@@ -21,7 +21,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: alix-rl-trading-agent-\${{ github.ref }}
+  group: alix-rl-trading-agent-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -55,6 +55,9 @@ jobs:
       - name: Pin pip resolver
         run: python -m pip install pip==25.2
 
+      - name: Install pinned public-data downloader dependency
+        run: python -m pip install requests==2.34.2
+
       - name: Reuse immutable two-year public minute-bars artifact
         id: reuse-market-data
         continue-on-error: true
@@ -62,9 +65,9 @@ jobs:
         with:
           name: self-evolving-public-minute-bars-6eb38e5c927f8c308aa9ee129beb66c75c9d0e11
           path: .prior-market-data
-          repository: \${{ github.repository }}
+          repository: ${{ github.repository }}
           run-id: 40183512645
-          github-token: \${{ github.token }}
+          github-token: ${{ github.token }}
 
       - name: Stage immutable data or fetch a fresh two-year public window
         shell: bash
@@ -143,7 +146,7 @@ jobs:
             --seed 20261025 \
             --fee-bps 25 \
             --slippage-bps 20 \
-            --commit-sha "\${{ github.sha }}"
+            --commit-sha "${{ github.sha }}"
 
       - name: Verify report and immutable safety invariants
         run: |
@@ -220,7 +223,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: rl-trading-agent-\${{ github.sha }}
+          name: rl-trading-agent-${{ github.sha }}
           path: |
             artifacts/public-minute-bars/*.csv
             artifacts/public-minute-bars/manifest.json
