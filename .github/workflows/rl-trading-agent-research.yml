@@ -179,7 +179,7 @@ jobs:
           assert split["final_holdout_evaluations"] == 1
           assert model["algorithm"] == "RecurrentPPO"
           assert model["model_reload_roundtrip"] == "passed"
-assert len(model["model_sha256"]) == 64
+          assert len(model["model_sha256"]) == 64
           assert model["total_timesteps_trained"] >= 100_000
           assert evaluation["final_holdout"]["steps"] == split["final_holdout_rows"] - 1
           assert evaluation["holdout_pass_count"] == 1
