@@ -427,14 +427,22 @@ def _period_metrics(
     indexes = np.flatnonzero(mask)
     if len(indexes) < 2:
         raise ValueError("evaluation_period_too_short")
-    position_key = tuple(genes[:7]) + (genes[8],)
+    position_key = (
+        timeframe,
+        0 if period == "train" else 1,
+        *genes[:7],
+        genes[8],
+    )
     cached = context.positions_cache.get(position_key)
     if cached is None:
         cached = build_position_states(
-            entry, exit_signal, features.close, STOPS[genes[8]]
+            entry[indexes],
+            exit_signal[indexes],
+            features.close[indexes],
+            STOPS[genes[8]],
         )
         context.positions_cache[position_key] = cached
-    positions = cached[indexes]
+    positions = cached
     bars = features.frame.iloc[indexes]
     return metrics_from_positions(
         bars["open"].to_numpy(dtype=np.float64),
