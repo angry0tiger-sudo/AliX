@@ -22,7 +22,9 @@ def test_repair_keeps_genes_in_range_and_ema_periods_ordered() -> None:
     repaired = repair_individual(genes)
     assert tuple(repaired[:2]) == (5, 1)
     assert repaired[2] == 0
-    assert (3, 5) in zip(range(len(repaired)), repaired)
+    from scripts.run_deap_evolution import FASTS, SLOWS
+
+    assert FASTS[repaired[3]] < SLOWS[repaired[4]]
 
 
 def test_repair_canonicalizes_inactive_ema_genes_for_other_indicators() -> None:
@@ -81,6 +83,10 @@ def test_population_and_generation_limits_fail_closed(tmp_path) -> None:
     from scripts.run_deap_evolution import run_evolution
 
     with pytest.raises(ValueError, match="population_size_must_be_between"):
-        run_evolution(tmp_path / "missing.csv", tmp_path / "missing.json", tmp_path, 99, 6)
+        run_evolution(
+            tmp_path / "missing.csv", tmp_path / "missing.json", tmp_path, 99, 6
+        )
     with pytest.raises(ValueError, match="generations_must_be_between"):
-        run_evolution(tmp_path / "missing.csv", tmp_path / "missing.json", tmp_path, 128, 11)
+        run_evolution(
+            tmp_path / "missing.csv", tmp_path / "missing.json", tmp_path, 128, 11
+        )

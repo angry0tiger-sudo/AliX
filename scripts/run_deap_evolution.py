@@ -4,6 +4,7 @@ Research only: closed-bar signals execute no earlier than the next bar open.
 The final 20% of history is excluded before feature construction; no order API
 or production champion is reachable from this experiment.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -212,12 +213,8 @@ def _build_features(bars: pd.DataFrame) -> FeatureFrame:
         )
         upper = high.shift(1).rolling(window, min_periods=window).max()
         lower = low.shift(1).rolling(window, min_periods=window).min()
-        result.upper_gap[window] = (close / upper - 1.0).to_numpy(
-            dtype=np.float64
-        )
-        result.lower_gap[window] = (close / lower - 1.0).to_numpy(
-            dtype=np.float64
-        )
+        result.upper_gap[window] = (close / upper - 1.0).to_numpy(dtype=np.float64)
+        result.lower_gap[window] = (close / lower - 1.0).to_numpy(dtype=np.float64)
         result.rsi[window] = _calc_rsi(close, window)
     ema = {
         window: close.ewm(span=window, adjust=False, min_periods=window).mean()
@@ -226,9 +223,9 @@ def _build_features(bars: pd.DataFrame) -> FeatureFrame:
     for fast in FASTS:
         for slow in SLOWS:
             if fast < slow:
-                result.ema_gap[(fast, slow)] = (
-                    ema[fast] / ema[slow] - 1.0
-                ).to_numpy(dtype=np.float64)
+                result.ema_gap[(fast, slow)] = (ema[fast] / ema[slow] - 1.0).to_numpy(
+                    dtype=np.float64
+                )
     return result
 
 
@@ -337,9 +334,7 @@ def build_position_states(
         entry = int(entry_indexes[entry_offset])
         exit_offset = int(np.searchsorted(exit_indexes, entry + 1))
         natural_exit = (
-            int(exit_indexes[exit_offset])
-            if exit_offset < len(exit_indexes)
-            else count
+            int(exit_indexes[exit_offset]) if exit_offset < len(exit_indexes) else count
         )
         stop_index = _find_stop(close, entry, natural_exit, trailing_stop)
         end = stop_index if stop_index is not None else natural_exit
@@ -400,8 +395,10 @@ def metrics_from_positions(
 ) -> EvaluationMetrics:
     """Measure completed-trade expectancy net of both sides' costs."""
 
-    if len(opens) == 0 or len(opens) != len(closes) or len(opens) != len(
-        positions_after_close
+    if (
+        len(opens) == 0
+        or len(opens) != len(closes)
+        or len(opens) != len(positions_after_close)
     ):
         raise ValueError("metric_input_length_invalid")
     open_positions = np.r_[False, positions_after_close[:-1]]
@@ -409,9 +406,7 @@ def metrics_from_positions(
     expectancy = float(np.mean(returns)) if len(returns) else -1.0
     wins = float(np.mean(returns > 0.0)) if len(returns) else 0.0
     net_return, drawdown = _portfolio_metrics(opens, closes, open_positions, exposure)
-    return EvaluationMetrics(
-        int(len(returns)), wins, expectancy, net_return, drawdown
-    )
+    return EvaluationMetrics(int(len(returns)), wins, expectancy, net_return, drawdown)
 
 
 def _period_metrics(
@@ -423,9 +418,8 @@ def _period_metrics(
     if period == "train":
         mask = features.timestamp < context.train_cutoff_ms
     elif period == "validation":
-        mask = (
-            (features.timestamp >= context.train_cutoff_ms)
-            & (features.timestamp < context.validation_end_ms)
+        mask = (features.timestamp >= context.train_cutoff_ms) & (
+            features.timestamp < context.validation_end_ms
         )
     else:
         raise ValueError("evaluation_period_invalid")
@@ -495,13 +489,13 @@ def _build_toolbox(
         creator.create("AlixResearchIndividual", list, fitness=fitness_type)
     individual_type = getattr(creator, "AlixResearchIndividual")
     toolbox = base.Toolbox()
-    toolbox.register("individual", tools.initIterate, individual_type, _random_individual)
+    toolbox.register(
+        "individual", tools.initIterate, individual_type, _random_individual
+    )
     toolbox.register("population", tools.initRepeat, list, toolbox.individual)
     toolbox.register("evaluate", _evaluate_individual, context=context, cache=cache)
     toolbox.register("mate", tools.cxTwoPoint)
-    toolbox.register(
-        "mutate", tools.mutUniformInt, low=LOWER, up=UPPER, indpb=0.20
-    )
+    toolbox.register("mutate", tools.mutUniformInt, low=LOWER, up=UPPER, indpb=0.20)
     toolbox.register("select", tools.selTournament, tournsize=3)
     toolbox.register("clone", tools.clone)
     return toolbox
@@ -532,7 +526,9 @@ def _generation_record(
 def _next_generation(
     population: Sequence[Any], toolbox: Any, crossover: float, mutation: float
 ) -> list[Any]:
-    children = [toolbox.clone(item) for item in toolbox.select(population, len(population))]
+    children = [
+        toolbox.clone(item) for item in toolbox.select(population, len(population))
+    ]
     for index in range(1, len(children), 2):
         if random.random() < crossover:
             toolbox.mate(children[index - 1], children[index])
@@ -660,8 +656,14 @@ def _write_csv_outputs(
         writer.writeheader()
         writer.writerows(history)
     fields = [
-        "rank", "gene_vector", "fitness", "trade_count", "win_rate",
-        "net_expectancy", "net_return", "max_drawdown",
+        "rank",
+        "gene_vector",
+        "fitness",
+        "trade_count",
+        "win_rate",
+        "net_expectancy",
+        "net_return",
+        "max_drawdown",
     ]
     with (output_dir / "self-evolving-ga-candidates.csv").open(
         "w", encoding="utf-8", newline=""
@@ -672,16 +674,18 @@ def _write_csv_outputs(
             repair_individual(item)
             key = tuple(item)
             score, metrics = cache[key]
-            writer.writerow({
-                "rank": rank,
-                "gene_vector": json.dumps(list(key), separators=(",", ":")),
-                "fitness": score,
-                "trade_count": metrics.trade_count,
-                "win_rate": metrics.win_rate,
-                "net_expectancy": metrics.net_expectancy,
-                "net_return": metrics.net_return,
-                "max_drawdown": metrics.max_drawdown,
-            })
+            writer.writerow(
+                {
+                    "rank": rank,
+                    "gene_vector": json.dumps(list(key), separators=(",", ":")),
+                    "fitness": score,
+                    "trade_count": metrics.trade_count,
+                    "win_rate": metrics.win_rate,
+                    "net_expectancy": metrics.net_expectancy,
+                    "net_return": metrics.net_return,
+                    "max_drawdown": metrics.max_drawdown,
+                }
+            )
 
 
 def run_evolution(
@@ -759,8 +763,12 @@ def run_evolution(
             "training_fraction": 0.70,
             "validation_fraction": 0.10,
             "final_holdout_fraction_reserved": 0.20,
-            "train_cutoff_utc": pd.to_datetime(train_cutoff_ms, unit="ms", utc=True).isoformat(),
-            "validation_end_utc": pd.to_datetime(validation_end_ms, unit="ms", utc=True).isoformat(),
+            "train_cutoff_utc": pd.to_datetime(
+                train_cutoff_ms, unit="ms", utc=True
+            ).isoformat(),
+            "validation_end_utc": pd.to_datetime(
+                validation_end_ms, unit="ms", utc=True
+            ).isoformat(),
             "final_holdout_used": False,
             "final_holdout_metrics_emitted": False,
         },
@@ -800,27 +808,41 @@ def main() -> int:
         type=Path,
         default=Path("artifacts/public-minute-bars/manifest.json"),
     )
-    parser.add_argument("--out-dir", type=Path, default=Path("artifacts/self-evolving-ga"))
+    parser.add_argument(
+        "--out-dir", type=Path, default=Path("artifacts/self-evolving-ga")
+    )
     parser.add_argument("--population", type=int, default=128)
     parser.add_argument("--generations", type=int, default=6)
     parser.add_argument("--seed", type=int, default=20261025)
     args = parser.parse_args()
     report = run_evolution(
-        args.data, args.manifest, args.out_dir,
-        population_size=args.population, generations=args.generations, seed=args.seed,
+        args.data,
+        args.manifest,
+        args.out_dir,
+        population_size=args.population,
+        generations=args.generations,
+        seed=args.seed,
     )
     candidate = report["top_research_candidate"]
-    print(json.dumps({
-        "population_size": report["population_size"],
-        "generations_completed": report["generations_completed"],
-        "unique_genomes_evaluated": report["unique_genomes_evaluated"],
-        "candidate_genes": candidate["genes"],
-        "training_metrics": candidate["training_metrics"],
-        "validation_metrics": candidate["validation_metrics"],
-        "Champion": report["safety_invariants"]["Champion"],
-        "order_permission": report["safety_invariants"]["order_permission"],
-        "trading_authorization": report["safety_invariants"]["trading_authorization"],
-    }, sort_keys=True, allow_nan=False))
+    print(
+        json.dumps(
+            {
+                "population_size": report["population_size"],
+                "generations_completed": report["generations_completed"],
+                "unique_genomes_evaluated": report["unique_genomes_evaluated"],
+                "candidate_genes": candidate["genes"],
+                "training_metrics": candidate["training_metrics"],
+                "validation_metrics": candidate["validation_metrics"],
+                "Champion": report["safety_invariants"]["Champion"],
+                "order_permission": report["safety_invariants"]["order_permission"],
+                "trading_authorization": report["safety_invariants"][
+                    "trading_authorization"
+                ],
+            },
+            sort_keys=True,
+            allow_nan=False,
+        )
+    )
     return 0
 
 
