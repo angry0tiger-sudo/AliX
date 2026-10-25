@@ -736,9 +736,7 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Float32Array]):
             self._invalid_action_penalty_for_request(requested_action, action_mask)
         )
         position_change_quantity, position_changed, inactivity_penalty = (
-            self._track_position_change(
-                previous_quantity, float(next_bar[OPEN_COLUMN])
-            )
+            self._track_position_change(previous_quantity, float(next_bar[OPEN_COLUMN]))
         )
         risk_drawdown = self._update_drawdown(next_bar)
         terminated, risk_drawdown, current_equity = self._settle_episode_step(
