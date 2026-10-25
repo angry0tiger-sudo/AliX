@@ -201,6 +201,115 @@ def _env_factory(
     return create
 
 
+def _decode_discrete_policy_action(
+    action: Any,
+) -> tuple[NDArray[np.int64], str, float]:
+    action_vector = np.asarray(action, dtype=np.int64).reshape(2)
+    direction_index, size_index = map(int, action_vector)
+    if not 0 <= direction_index < len(ACTION_NAMES):
+        raise ValueError("policy_direction_index_out_of_range")
+    if not 0 <= size_index < len(POSITION_SIZE_FRACTIONS):
+        raise ValueError("policy_size_index_out_of_range")
+    return (
+        action_vector,
+        ACTION_NAMES[direction_index],
+        POSITION_SIZE_FRACTIONS[size_index],
+    )
+
+
+def _new_policy_size_metrics() -> dict[str, Any]:
+    return {
+        "counts": {f"{fraction:.2f}": 0 for fraction in POSITION_SIZE_FRACTIONS},
+        "sum": 0.0,
+        "min": math.inf,
+        "max": -math.inf,
+        "trade_count": 0,
+    }
+
+
+def _record_policy_size(
+    metrics: dict[str, Any], requested_action: str, requested_size: float
+) -> None:
+    if requested_action not in ("BUY", "SELL"):
+        return
+    metrics["counts"][f"{requested_size:.2f}"] += 1
+    metrics["sum"] += requested_size
+    metrics["min"] = min(metrics["min"], requested_size)
+    metrics["max"] = max(metrics["max"], requested_size)
+    metrics["trade_count"] += 1
+
+
+def _run_policy_evaluation_episode(
+    model: Any,
+    env: BTCUSDTTradingEnv,
+    initial_observation: Float32Array,
+) -> dict[str, Any]:
+    observation = initial_observation
+    recurrent_state: Any = None
+    episode_start = np.asarray([True], dtype=np.bool_)
+    trace: dict[str, Any] = {
+        "reward_sum": 0.0,
+        "steps": 0,
+        "requested_size": _new_policy_size_metrics(),
+        "action_mask_reason_counts": {},
+    }
+    while True:
+        action, recurrent_state = model.predict(
+            observation,
+            state=recurrent_state,
+            episode_start=episode_start,
+            deterministic=True,
+        )
+        action_vector, requested_action, requested_size = (
+            _decode_discrete_policy_action(action)
+        )
+        _record_policy_size(trace["requested_size"], requested_action, requested_size)
+        observation, reward, terminated, truncated, info = env.step(action_vector)
+        reason = info.get("action_mask_reason")
+        if isinstance(reason, str):
+            reasons = trace["action_mask_reason_counts"]
+            reasons[reason] = reasons.get(reason, 0) + 1
+        trace["reward_sum"] += reward
+        trace["steps"] += 1
+        episode_start = np.asarray([terminated or truncated], dtype=np.bool_)
+        if terminated or truncated:
+            return trace
+
+
+def _build_policy_evaluation_result(
+    env: BTCUSDTTradingEnv, trace: dict[str, Any], seed: int
+) -> dict[str, Any]:
+    result: dict[str, Any] = env.summary()
+    sizes = trace["requested_size"]
+    trade_count = int(sizes["trade_count"])
+    result.update(
+        {
+            "steps": int(trace["steps"]),
+            "reward_sum": float(trace["reward_sum"]),
+            "evaluation_seed": seed,
+            "evaluation_passes": 1,
+            "deterministic_inference": True,
+            "policy_action_encoding": "MultiDiscrete([direction, size_index])",
+            "policy_requested_trade_size_fraction_counts": sizes["counts"],
+            "policy_requested_trade_size_fraction_mean": (
+                float(sizes["sum"]) / trade_count if trade_count else None
+            ),
+            "policy_requested_trade_size_fraction_min": (
+                float(sizes["min"]) if trade_count else None
+            ),
+            "policy_requested_trade_size_fraction_max": (
+                float(sizes["max"]) if trade_count else None
+            ),
+            "policy_requested_trade_size_action_count": trade_count,
+            "policy_buy_zero_size_request_count": 0,
+            "policy_action_mask_reason_counts": dict(
+                sorted(trace["action_mask_reason_counts"].items())
+            ),
+        }
+    )
+    return result
+
+
 def _evaluate_policy(
     model: Any,
     data: Float64Array,
@@ -217,83 +326,12 @@ def _evaluate_policy(
         slippage_bps_per_side=slippage_bps,
         random_start=False,
     )
-    observation, _ = env.reset(seed=seed)
-    recurrent_state: Any = None
-    episode_start = np.asarray([True], dtype=np.bool_)
-    reward_sum = 0.0
-    steps = 0
-    requested_size_counts = {
-        f"{fraction:.2f}": 0 for fraction in POSITION_SIZE_FRACTIONS
-    }
-    requested_size_sum = 0.0
-    requested_size_min = math.inf
-    requested_size_max = -math.inf
-    requested_trade_size_count = 0
-    action_mask_reason_counts: dict[str, int] = {}
-    while True:
-        action, recurrent_state = model.predict(
-            observation,
-            state=recurrent_state,
-            episode_start=episode_start,
-            deterministic=True,
-        )
-        action_vector = np.asarray(action, dtype=np.int64).reshape(2)
-        direction_index = int(action_vector[0])
-        size_index = int(action_vector[1])
-        if not 0 <= direction_index < len(ACTION_NAMES):
-            raise ValueError("policy_direction_index_out_of_range")
-        if not 0 <= size_index < len(POSITION_SIZE_FRACTIONS):
-            raise ValueError("policy_size_index_out_of_range")
-        requested_action = ACTION_NAMES[direction_index]
-        requested_size = POSITION_SIZE_FRACTIONS[size_index]
-        if requested_action in ("BUY", "SELL"):
-            requested_size_counts[f"{requested_size:.2f}"] += 1
-            requested_size_sum += requested_size
-            requested_size_min = min(requested_size_min, requested_size)
-            requested_size_max = max(requested_size_max, requested_size)
-            requested_trade_size_count += 1
-        observation, reward, terminated, truncated, info = env.step(action_vector)
-        reason = info.get("action_mask_reason")
-        if isinstance(reason, str):
-            action_mask_reason_counts[reason] = (
-                action_mask_reason_counts.get(reason, 0) + 1
-            )
-        reward_sum += reward
-        steps += 1
-        episode_start = np.asarray([terminated or truncated], dtype=np.bool_)
-        if terminated or truncated:
-            break
-    result: dict[str, Any] = env.summary()
-    result.update(
-        {
-            "steps": steps,
-            "reward_sum": float(reward_sum),
-            "evaluation_seed": seed,
-            "evaluation_passes": 1,
-            "deterministic_inference": True,
-            "policy_action_encoding": "MultiDiscrete([direction, size_index])",
-            "policy_requested_trade_size_fraction_counts": requested_size_counts,
-            "policy_requested_trade_size_fraction_mean": (
-                requested_size_sum / requested_trade_size_count
-                if requested_trade_size_count
-                else None
-            ),
-            "policy_requested_trade_size_fraction_min": (
-                requested_size_min if requested_trade_size_count else None
-            ),
-            "policy_requested_trade_size_fraction_max": (
-                requested_size_max if requested_trade_size_count else None
-            ),
-            "policy_requested_trade_size_action_count": requested_trade_size_count,
-            "policy_buy_zero_size_request_count": 0,
-            "policy_action_mask_reason_counts": dict(
-                sorted(action_mask_reason_counts.items())
-            ),
-        }
-    )
-    env.close()
-    return result
-
+    try:
+        observation, _ = env.reset(seed=seed)
+        trace = _run_policy_evaluation_episode(model, env, observation)
+        return _build_policy_evaluation_result(env, trace, seed)
+    finally:
+        env.close()
 
 def _evaluate_baseline(
     data: Float64Array,
