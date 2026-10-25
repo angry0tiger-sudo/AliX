@@ -394,41 +394,45 @@ def _build_cost_curriculum_callback(curriculum: TrainingCostCurriculum) -> Any:
         importlib.import_module("stable_baselines3.common.callbacks"), "BaseCallback"
     )
 
-    class CostCurriculumCallback(base_callback):
-        def __init__(self) -> None:
-            super().__init__(verbose=0)
-            self._last_costs = (0.0, 0.0)
+    def initialize_callback(self: Any) -> None:
+        base_callback.__init__(self, verbose=0)
+        self._last_costs = (0.0, 0.0)
 
-        def _on_step(self) -> bool:
-            infos = self.locals.get("infos")
-            if not isinstance(infos, list) or len(infos) != 1:
-                raise RuntimeError(
-                    "cost_curriculum_requires_single_vectorized_environment"
-                )
-            info = infos[0]
-            if not isinstance(info, dict):
-                raise RuntimeError("cost_curriculum_step_info_missing")
-            closed_trades = info.get("policy_closed_trade_count")
-            if (
-                isinstance(closed_trades, bool)
-                or not isinstance(closed_trades, int)
-                or closed_trades < 0
-            ):
-                raise RuntimeError("policy_closed_trade_count_missing_or_invalid")
-            next_fees, next_slippage = curriculum.observe_step(
-                int(self.num_timesteps), closed_trades
+    def on_training_step(self: Any) -> bool:
+        infos = self.locals.get("infos")
+        if not isinstance(infos, list) or len(infos) != 1:
+            raise RuntimeError(
+                "cost_curriculum_requires_single_vectorized_environment"
             )
-            next_costs = (next_fees, next_slippage)
-            if next_costs != self._last_costs:
-                updates = self.training_env.env_method(
-                    "set_transaction_costs", next_fees, next_slippage
-                )
-                if len(updates) != 1 or updates[0] is not None:
-                    raise RuntimeError("cost_curriculum_environment_update_failed")
-                self._last_costs = next_costs
-            return True
+        info = infos[0]
+        if not isinstance(info, dict):
+            raise RuntimeError("cost_curriculum_step_info_missing")
+        closed_trades = info.get("policy_closed_trade_count")
+        if (
+            isinstance(closed_trades, bool)
+            or not isinstance(closed_trades, int)
+            or closed_trades < 0
+        ):
+            raise RuntimeError("policy_closed_trade_count_missing_or_invalid")
+        next_fees, next_slippage = curriculum.observe_step(
+            int(self.num_timesteps), closed_trades
+        )
+        next_costs = (next_fees, next_slippage)
+        if next_costs != self._last_costs:
+            updates = self.training_env.env_method(
+                "set_transaction_costs", next_fees, next_slippage
+            )
+            if len(updates) != 1 or updates[0] is not None:
+                raise RuntimeError("cost_curriculum_environment_update_failed")
+            self._last_costs = next_costs
+        return True
 
-    return CostCurriculumCallback()
+    callback_type = type(
+        "CostCurriculumCallback",
+        (base_callback,),
+        {"__init__": initialize_callback, "_on_step": on_training_step},
+    )
+    return callback_type()
 
 
 def _train_recurrent_ppo(

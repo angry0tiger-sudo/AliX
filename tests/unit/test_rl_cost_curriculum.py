@@ -50,7 +50,9 @@ def test_episode_counter_resets_do_not_erase_prior_completed_trades() -> None:
     assert report["total_policy_closed_trade_count"] == 3
     assert report["ramp_start_timestep"] == 5
     assert report["ramp_start_after_policy_closed_trade_count"] == 3
-    assert report["closed_trades_by_stage"]["zero_cost"] == 3
+    closed_trades_by_stage = report["closed_trades_by_stage"]
+    assert isinstance(closed_trades_by_stage, dict)
+    assert closed_trades_by_stage["zero_cost"] == 3
 
 
 @pytest.mark.parametrize(

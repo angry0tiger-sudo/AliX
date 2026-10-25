@@ -449,7 +449,9 @@ def test_transaction_cost_updates_are_validated_and_apply_to_future_fills() -> N
 
     env.step(np.asarray([-0.9, 1.0], dtype=np.float32))
     summary = env.summary()
+    assert summary["total_fees"] is not None
     assert summary["total_fees"] > 0.0
+    assert summary["total_slippage"] is not None
     assert summary["total_slippage"] > 0.0
     assert summary["policy_closed_trade_count"] == 1
     env.close()
