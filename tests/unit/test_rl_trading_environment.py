@@ -443,7 +443,12 @@ def test_sell_is_masked_when_inventory_is_empty() -> None:
 
 
 def test_buy_is_masked_when_position_is_fully_allocated() -> None:
-    env = _env(_bars(closes=[100.0] * 6), initial_equity=1_000.0)
+    env = _env(
+        _bars(closes=[100.0] * 6),
+        initial_equity=1_000.0,
+        drawdown_increment_penalty=0.0,
+        drawdown_level_penalty=0.0,
+    )
     env.reset(seed=42)
     env.step(np.asarray([ACTION_BUY, 3], dtype=np.int64))
     quantity_before = env._quantity
