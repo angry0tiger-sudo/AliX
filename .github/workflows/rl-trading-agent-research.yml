@@ -1,0 +1,229 @@
+name: AliX RL Trading Agent Research
+
+on:
+  push:
+    branches:
+      - "research/rl-trading-agent"
+    paths:
+      - ".github/workflows/rl-trading-agent-research.yml"
+      - ".github/workflows/ci.yml"
+      - "requirements-rl-research.txt"
+      - "services/ai_core/rl_trading_environment.py"
+      - "scripts/run_rl_trading_agent.py"
+      - "scripts/fetch_public_minute_bars.py"
+      - "tests/unit/test_rl_trading_environment.py"
+      - "docs/knowledge_base/RL_TRADING_AGENT_ARCHITECTURE.md"
+      - "docs/governance/owner-directives/2026-10-25-rl-trading-agent.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: alix-rl-trading-agent-\${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  rl-historical-research:
+    name: Train recurrent PPO and evaluate untouched holdout
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    env:
+      ALIx_ENV: paper
+      ALIx_DRY_RUN: "true"
+      ALIx_ALLOW_LIVE_TRADING: "false"
+      ALIx_REPORTING_ENABLED: "false"
+      PYTHONUNBUFFERED: "1"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      OMP_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+    steps:
+      - name: Checkout exact commit without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.12 with pinned dependency cache
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-rl-research.txt
+
+      - name: Pin pip resolver
+        run: python -m pip install pip==25.2
+
+      - name: Reuse immutable two-year public minute-bars artifact
+        id: reuse-market-data
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: self-evolving-public-minute-bars-6eb38e5c927f8c308aa9ee129beb66c75c9d0e11
+          path: .prior-market-data
+          repository: \${{ github.repository }}
+          run-id: 40183512645
+          github-token: \${{ github.token }}
+
+      - name: Stage immutable data or fetch a fresh two-year public window
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="artifacts/public-minute-bars"
+          mkdir -p "$target"
+          if [[ -f ".prior-market-data/public-minute-bars/binance_BTCUSDT_1m.csv" && -f ".prior-market-data/public-minute-bars/manifest.json" ]]; then
+            cp ".prior-market-data/public-minute-bars/binance_BTCUSDT_1m.csv" "$target/"
+            cp ".prior-market-data/public-minute-bars/manifest.json" "$target/"
+            echo "Reused the immutable two-year public market-data artifact."
+          else
+            echo "Retained artifact unavailable; fetching up to 24 calendar months from public Spot data."
+            python -m scripts.fetch_public_minute_bars --symbol BTCUSDT --months 24 --out-dir "$target"
+          fi
+
+      - name: Install CPU-only PyTorch and pinned RL research dependencies
+        run: |
+          python -m pip install torch==2.14.1 --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -r requirements-rl-research.txt
+          python -m pip check
+
+      - name: Audit pinned RL research dependency graph
+        run: pip-audit -r requirements-rl-research.txt
+
+      - name: Run environment contract and simulation tests
+        run: python -m pytest tests/unit/test_rl_trading_environment.py -q
+
+      - name: Validate data provenance, integrity, and immutable safety invariants
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+
+          root = Path("artifacts/public-minute-bars")
+          csv_path = root / "binance_BTCUSDT_1m.csv"
+          manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+          digest = hashlib.sha256(csv_path.read_bytes()).hexdigest()
+          safety = manifest["safety_invariants"]
+          assert manifest["schema_version"] == "alix.self-evolving-data-manifest.v1"
+          assert manifest["symbol"] == "BTCUSDT"
+          assert manifest["interval"] == "1m"
+          assert manifest["row_count"] >= 1_000_000
+          assert manifest["expected_minute_slots"] == manifest["row_count"]
+          assert manifest["missing_minute_intervals_between_rows"] == 0
+          assert manifest["coverage_fraction"] == 1.0
+          assert digest == manifest["csv_sha256"]
+          assert safety["Champion"] is None
+          assert safety["order_permission"] is False
+          assert safety["trading_authorization"] == "NO-GO"
+          assert manifest["private_api_calls"] == 0
+          assert manifest["orders_or_execution_api_used"] is False
+          assert manifest["real_order_attempts"] == 0
+          print(json.dumps({
+              "symbol": manifest["symbol"],
+              "interval": manifest["interval"],
+              "start_utc": manifest["start_utc"],
+              "end_utc": manifest["end_utc"],
+              "row_count": manifest["row_count"],
+              "coverage_fraction": manifest["coverage_fraction"],
+              "csv_sha256": digest,
+              "Champion": safety["Champion"],
+              "order_permission": safety["order_permission"],
+              "trading_authorization": safety["trading_authorization"],
+          }, sort_keys=True, allow_nan=False))
+          PY
+
+      - name: Train Recurrent PPO and run one-pass validation plus final holdout
+        run: |
+          python -m scripts.run_rl_trading_agent \
+            --data artifacts/public-minute-bars/binance_BTCUSDT_1m.csv \
+            --manifest artifacts/public-minute-bars/manifest.json \
+            --out-dir artifacts/rl-agent \
+            --timesteps 0 \
+            --seed 20261025 \
+            --fee-bps 25 \
+            --slippage-bps 20 \
+            --commit-sha "\${{ github.sha }}"
+
+      - name: Verify report and immutable safety invariants
+        run: |
+          python - <<'PY'
+          import json
+          import math
+          from pathlib import Path
+
+          report = json.loads(
+              Path("artifacts/rl-agent/rl-trading-agent-report.json")
+              .read_text(encoding="utf-8")
+          )
+          safety = report["safety_invariants"]
+          split = report["split"]
+          model = report["model"]
+          evaluation = report["evaluation"]
+          assert report["schema_version"] == "alix.rl-trading-agent-report.v1"
+          assert report["run_mode"] == "historical_simulation_only"
+          assert report["dataset"]["row_count"] >= 1_000_000
+          assert report["dataset"]["coverage_fraction"] == 1.0
+          assert len(report["dataset"]["csv_sha256"]) == 64
+          assert split["training_fraction"] == 0.70
+          assert split["validation_fraction"] == 0.10
+          assert split["final_holdout_fraction"] == 0.20
+          assert split["scaler_fit_on_training_only"] is True
+          assert split["validation_used_for_model_selection"] is False
+          assert split["final_holdout_used_for_training"] is False
+          assert split["final_holdout_used_for_model_selection"] is False
+          assert split["final_holdout_evaluation_performed"] is True
+          assert split["final_holdout_evaluations"] == 1
+          assert model["algorithm"] == "RecurrentPPO"
+          assert model["model_reload_roundtrip"] == "passed"
+          assert model["total_timesteps_trained"] >= 100_000
+          assert evaluation["final_holdout"]["steps"] == split["final_holdout_rows"] - 1
+          assert evaluation["holdout_pass_count"] == 1
+          for key in ("net_profit", "net_return", "max_drawdown", "total_fees", "total_slippage"):
+              assert math.isfinite(float(evaluation["final_holdout"][key]))
+          assert report["environment"]["observation_contains_position_or_pnl"] is False
+          assert report["environment"]["observation_contains_technical_indicators"] is False
+          assert report["environment"]["execution"]["fixed_timeframe_rule"] is None
+          assert report["environment"]["execution"]["fixed_max_holding_period_candles"] is None
+          assert report["environment"]["execution"]["fixed_take_profit_rule"] is None
+          assert report["environment"]["reward"]["hard_trade_count_minimum"] is None
+          assert report["environment"]["reward"]["profit_target"] is None
+          assert safety["Champion"] is None
+          assert safety["order_permission"] is False
+          assert safety["trading_authorization"] == "NO-GO"
+          assert safety["private_api_calls"] == 0
+          assert safety["orders_or_execution_api_used"] is False
+          assert safety["real_order_attempts"] == 0
+          assert safety["model_output_is_order_permission"] is False
+          assert report["production_promotion_allowed"] is False
+          assert Path("artifacts/rl-agent/rl_trading_agent_recurrent_ppo.zip").is_file()
+          print(json.dumps({
+              "research_result": report["research_result"],
+              "dataset": report["dataset"],
+              "split": split,
+              "model": model,
+              "validation": evaluation["validation"],
+              "final_holdout": evaluation["final_holdout"],
+              "final_holdout_buy_and_hold": evaluation["final_holdout_buy_and_hold"],
+              "economic_assessment": report["economic_assessment"],
+              "safety_invariants": safety,
+          }, sort_keys=True, allow_nan=False))
+          PY
+
+      - name: Capture exact installed dependency inventory
+        if: always()
+        run: |
+          mkdir -p artifacts/rl-agent
+          python -m pip freeze | sort > artifacts/rl-agent/dependencies.txt
+
+      - name: Upload source data, model, dependencies and machine-readable report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rl-trading-agent-\${{ github.sha }}
+          path: |
+            artifacts/public-minute-bars/*.csv
+            artifacts/public-minute-bars/manifest.json
+            artifacts/rl-agent/*
+          if-no-files-found: warn
+          retention-days: 30

@@ -1,0 +1,10 @@
+# Optional offline RL research dependencies. Main runtime requirements remain unchanged.
+gymnasium==1.4.0
+stable-baselines3==2.9.0
+sb3-contrib==2.9.0
+torch==2.14.1
+numpy==2.5.4
+pandas==2.3.3
+requests==2.34.2
+pytest==9.0.3
+pip-audit==2.9.0
