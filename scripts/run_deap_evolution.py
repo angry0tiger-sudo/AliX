@@ -179,7 +179,7 @@ def _resample(data: pd.DataFrame, timeframe: int) -> pd.DataFrame:
         )
         bars = bars.loc[grouped["close"].count() == timeframe]
     bars = bars.dropna(subset=fields)
-    bars["open_time_ms"] = pd.DatetimeIndex(bars.index).asi8 // 1_000_000
+    bars["open_time_ms"] = np.asarray(bars.index, dtype="datetime64[ns]").astype(np.int64) // 1_000_000
     bars["close_time_ms"] = bars["open_time_ms"] + timeframe * 60_000 - 1
     return bars
 
