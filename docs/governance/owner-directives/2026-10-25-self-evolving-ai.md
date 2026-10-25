@@ -29,3 +29,16 @@ The target win rate above 60% is a metric, not an economic guarantee. Acceptance
 ## Implementation order
 
 Follow the phases in `docs/knowledge_base/SELF_EVOLVING_AI_ARCHITECTURE.md`. Do not combine evolutionary search and RL before each has a reproducible baseline. Keep the architecture and evidence artifacts commit-addressable. Economic failure or uncertainty leaves the system at NO-GO.
+
+
+## Owner Directive: GA eligibility, drawdown and timeframe coverage (2026-10-25)
+
+- A genome with fewer than 30 completed training trades or fewer than 10 completed validation trades has numeric fitness exactly `0.0` and is sample-ineligible.
+- Eligibility is a separate ranking dimension. Numeric zero must never allow an invalid genome to beat a valid candidate with negative fitness. Selection output excludes ineligible genomes from final candidate selection.
+- Training expectancy is the optimization score. Validation return and validation drawdown are not optimization objectives; validation trade count is used only as the explicit minimum-sample eligibility gate. The final 20% holdout is never read during evolution or candidate selection.
+- If training max drawdown exceeds 15%, apply `min(raw_score, 0.0) - 10 * (drawdown - 0.15)`, and exclude that genome from final candidate selection. Validation drawdown above 15% or non-positive validation expectancy fails economic acceptance after the training-scored candidate is selected.
+- The initial population and every generation include at least four unique genomes for each required timeframe: `1h`, `4h`, and `1d`. Report per-timeframe evaluation counts, qualification counts, best eligible fitness and rejection reasons.
+- The research path fetches up to 24 calendar months of public BTCUSDT 1-minute Spot data, validates complete coverage/gaps, and publishes source CSV plus manifest/hash as a workflow artifact. Multi-asset simulation is deferred to avoid coupling this acceptance experiment to portfolio-accounting changes.
+- The only permitted outcome is offline research. Keep `Champion=null`, `order_permission=false`, `trading_authorization=NO-GO`, zero private API calls and zero real-order attempts.
+
+These gates are fixed for the duration of an experiment and may not be weakened to obtain a passing report.

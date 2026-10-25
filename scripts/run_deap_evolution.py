@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+from collections import Counter
 import csv
 import hashlib
 import json
@@ -49,6 +50,12 @@ GENOME_SIZE = 9
 FEE = 25.0 / 10_000
 SLIPPAGE = 20.0 / 10_000
 SIDE_COST = FEE + SLIPPAGE
+MIN_TRAINING_TRADES = 30
+MIN_VALIDATION_TRADES = 10
+MAX_DRAWDOWN = 0.15
+DRAWDOWN_EXCESS_PENALTY_MULTIPLIER = 10.0
+REQUIRED_TIMEFRAMES = (60, 240, 1440)
+MIN_REQUIRED_TIMEFRAME_POPULATION = 4
 MANIFEST_SCHEMA = "alix.self-evolving-data-manifest.v1"
 
 
@@ -61,6 +68,32 @@ class EvaluationMetrics:
     max_drawdown: float
     fee_bps_per_side: float = 25.0
     slippage_bps_per_side: float = 20.0
+
+
+@dataclass(frozen=True, slots=True)
+class CandidateEvaluation:
+    """Training-scored candidate plus validation-only sample eligibility evidence."""
+
+    training: EvaluationMetrics
+    validation: EvaluationMetrics
+    fitness: float
+    eligibility_reasons: tuple[str, ...]
+
+    @property
+    def sample_eligible(self) -> bool:
+        return (
+            self.training.trade_count >= MIN_TRAINING_TRADES
+            and self.validation.trade_count >= MIN_VALIDATION_TRADES
+            and self.training.net_expectancy is not None
+        )
+
+    @property
+    def training_risk_eligible(self) -> bool:
+        return self.training.max_drawdown <= MAX_DRAWDOWN
+
+    @property
+    def selection_eligible(self) -> bool:
+        return self.sample_eligible and self.training_risk_eligible
 
 
 @dataclass(slots=True)
@@ -470,28 +503,90 @@ def _period_metrics(
     )
 
 
-def fitness_score(metrics: EvaluationMetrics) -> float:
-    """Net expectancy minus declared churn, drawdown, and low-sample penalties."""
+def _eligibility_reasons(
+    training: EvaluationMetrics, validation: EvaluationMetrics
+) -> tuple[str, ...]:
+    reasons: list[str] = []
+    if training.trade_count < MIN_TRAINING_TRADES:
+        reasons.append("training_trade_count_below_minimum")
+    if training.net_expectancy is None:
+        reasons.append("training_expectancy_unavailable")
+    if validation.trade_count < MIN_VALIDATION_TRADES:
+        reasons.append("validation_trade_count_below_minimum")
+    if training.max_drawdown > MAX_DRAWDOWN:
+        reasons.append("training_drawdown_above_limit")
+    return tuple(reasons)
 
-    if metrics.trade_count == 0 or metrics.net_expectancy is None:
-        return -1.0
-    drawdown_penalty = 0.25 * max(0.0, metrics.max_drawdown - 0.15)
-    churn_penalty = 0.00001 * max(0, metrics.trade_count - 200)
-    sample_penalty = 0.002 * max(0, 20 - metrics.trade_count) / 20
-    return metrics.net_expectancy - drawdown_penalty - churn_penalty - sample_penalty
+
+def fitness_score(
+    training: EvaluationMetrics, validation: EvaluationMetrics
+) -> float:
+    """Score training expectancy; invalid sample sizes score zero, never a win by rank."""
+
+    if (
+        training.trade_count < MIN_TRAINING_TRADES
+        or training.net_expectancy is None
+        or validation.trade_count < MIN_VALIDATION_TRADES
+    ):
+        return 0.0
+
+    churn_penalty = 0.00001 * max(0, training.trade_count - 200)
+    score = training.net_expectancy - churn_penalty
+    drawdown_excess = max(0.0, training.max_drawdown - MAX_DRAWDOWN)
+    if drawdown_excess > 0.0:
+        # High headline expectancy must not offset a breach of the drawdown limit.
+        # Risky candidates remain diagnosable but cannot become final candidates.
+        score = min(score, 0.0) - DRAWDOWN_EXCESS_PENALTY_MULTIPLIER * drawdown_excess
+    return float(score)
 
 
 def _evaluate_individual(
     individual: MutableSequence[int],
     context: SearchContext,
-    cache: dict[tuple[int, ...], tuple[float, EvaluationMetrics]],
+    cache: dict[tuple[int, ...], CandidateEvaluation],
 ) -> tuple[float]:
     repair_individual(individual)
     key = tuple(individual)
     if key not in cache:
-        metrics = _period_metrics(context, individual, "train")
-        cache[key] = (fitness_score(metrics), metrics)
-    return (cache[key][0],)
+        training = _period_metrics(context, individual, "train")
+        validation = _period_metrics(context, individual, "validation")
+        cache[key] = CandidateEvaluation(
+            training=training,
+            validation=validation,
+            fitness=fitness_score(training, validation),
+            eligibility_reasons=_eligibility_reasons(training, validation),
+        )
+    return (cache[key].fitness,)
+
+
+def _selection_priority(
+    individual: Sequence[int], cache: dict[tuple[int, ...], CandidateEvaluation]
+) -> tuple[int, int, float]:
+    result = cache.get(tuple(individual))
+    if result is None:
+        return (0, 0, float("-inf"))
+    # Eligibility precedes the numeric score: an invalid zero cannot outrank a
+    # valid candidate whose expectancy-based fitness happens to be negative.
+    return (
+        int(result.sample_eligible),
+        int(result.training_risk_eligible),
+        float(result.fitness),
+    )
+
+
+def _select_by_eligibility(
+    individuals: Sequence[Any],
+    k: int,
+    cache: dict[tuple[int, ...], CandidateEvaluation],
+    tournsize: int = 3,
+) -> list[Any]:
+    if not individuals or k < 0:
+        raise ValueError("selection_population_invalid")
+    selected: list[Any] = []
+    for _ in range(k):
+        aspirants = random.sample(individuals, min(tournsize, len(individuals)))
+        selected.append(max(aspirants, key=lambda item: _selection_priority(item, cache)))
+    return selected
 
 
 def _random_individual() -> MutableSequence[int]:
@@ -501,7 +596,7 @@ def _random_individual() -> MutableSequence[int]:
 
 def _build_toolbox(
     context: SearchContext,
-    cache: dict[tuple[int, ...], tuple[float, EvaluationMetrics]],
+    cache: dict[tuple[int, ...], CandidateEvaluation],
     seed: int,
 ) -> Any:
     try:
@@ -523,7 +618,7 @@ def _build_toolbox(
     toolbox.register("evaluate", _evaluate_individual, context=context, cache=cache)
     toolbox.register("mate", tools.cxTwoPoint)
     toolbox.register("mutate", tools.mutUniformInt, low=LOWER, up=UPPER, indpb=0.20)
-    toolbox.register("select", tools.selTournament, tournsize=3)
+    toolbox.register("select", _select_by_eligibility, cache=cache, tournsize=3)
     toolbox.register("clone", copy.deepcopy)
     return toolbox
 
@@ -534,20 +629,124 @@ def _evaluate_invalid(population: Sequence[Any], toolbox: Any) -> None:
         item.fitness.values = fitness
 
 
+def _timeframe_label(minutes: int) -> str:
+    labels = {
+        1: "1m", 5: "5m", 15: "15m", 30: "30m", 60: "1h", 120: "2h",
+        240: "4h", 360: "6h", 720: "12h", 1440: "1d", 10080: "7d", 43200: "30d",
+    }
+    return labels.get(minutes, f"{minutes}m")
+
+
+def _ensure_timeframe_coverage(
+    population: list[Any],
+    toolbox: Any,
+    cache: dict[tuple[int, ...], CandidateEvaluation],
+) -> list[Any]:
+    """Maintain a unique-genome quota for 1h, 4h and 1d each generation."""
+
+    for required_minutes in REQUIRED_TIMEFRAMES:
+        required_gene = TIMEFRAMES.index(required_minutes)
+        while sum(1 for item in population if item[0] == required_gene) < MIN_REQUIRED_TIMEFRAME_POPULATION:
+            counts = Counter(TIMEFRAMES[item[0]] for item in population)
+            replaceable = [
+                (index, item)
+                for index, item in enumerate(population)
+                if TIMEFRAMES[item[0]] not in REQUIRED_TIMEFRAMES
+                or counts[TIMEFRAMES[item[0]]] > MIN_REQUIRED_TIMEFRAME_POPULATION
+            ]
+            if not replaceable:
+                raise RuntimeError("required_timeframe_quota_cannot_be_satisfied")
+            index, _ = min(
+                replaceable, key=lambda pair: _selection_priority(pair[1], cache)
+            )
+            population_keys = {
+                tuple(item) for item_index, item in enumerate(population)
+                if item_index != index
+            }
+            replacement: Any | None = None
+            for _ in range(10_000):
+                candidate = toolbox.individual()
+                candidate[0] = required_gene
+                repair_individual(candidate)
+                key = tuple(candidate)
+                if key not in cache and key not in population_keys:
+                    replacement = candidate
+                    break
+            if replacement is None:
+                raise RuntimeError("required_timeframe_unique_genome_generation_failed")
+            population[index] = replacement
+    return population
+
+
 def _generation_record(
-    generation: int, population: Sequence[Any], unique_count: int
+    generation: int,
+    population: Sequence[Any],
+    cache: dict[tuple[int, ...], CandidateEvaluation],
 ) -> dict[str, int | float]:
     scores = np.asarray(
         [float(item.fitness.values[0]) for item in population], dtype=np.float64
     )
-    return {
+    record: dict[str, int | float] = {
         "generation": generation,
         "population_size": len(population),
         "best_fitness": float(scores.max()),
         "mean_fitness": float(scores.mean()),
         "median_fitness": float(np.median(scores)),
-        "unique_genomes_evaluated": unique_count,
+        "unique_genomes_evaluated": len(cache),
     }
+    for required_minutes in REQUIRED_TIMEFRAMES:
+        label = _timeframe_label(required_minutes)
+        required_gene = TIMEFRAMES.index(required_minutes)
+        members = [item for item in population if item[0] == required_gene]
+        results = [cache.get(tuple(item)) for item in members]
+        record[f"population_{label}"] = len(members)
+        record[f"sample_eligible_{label}"] = sum(
+            1 for item in results if item is not None and item.sample_eligible
+        )
+        record[f"selection_eligible_{label}"] = sum(
+            1 for item in results if item is not None and item.selection_eligible
+        )
+    return record
+
+
+def _timeframe_coverage_summary(
+    cache: dict[tuple[int, ...], CandidateEvaluation]
+) -> dict[str, dict[str, Any]]:
+    summary: dict[str, dict[str, Any]] = {}
+    for minutes in TIMEFRAMES:
+        label = _timeframe_label(minutes)
+        entries = [
+            (key, value) for key, value in cache.items()
+            if TIMEFRAMES[key[0]] == minutes
+        ]
+        sample_eligible = [(key, value) for key, value in entries if value.sample_eligible]
+        selection_eligible = [
+            (key, value) for key, value in entries if value.selection_eligible
+        ]
+        best = max(selection_eligible, key=lambda item: item[1].fitness, default=None)
+        rejection_counts: Counter[str] = Counter()
+        for _, value in entries:
+            if not value.sample_eligible:
+                if value.training.trade_count < MIN_TRAINING_TRADES:
+                    rejection_counts["training_trade_count_below_minimum"] += 1
+                if value.training.net_expectancy is None:
+                    rejection_counts["training_expectancy_unavailable"] += 1
+                if value.validation.trade_count < MIN_VALIDATION_TRADES:
+                    rejection_counts["validation_trade_count_below_minimum"] += 1
+            if value.training.max_drawdown > MAX_DRAWDOWN:
+                rejection_counts["training_drawdown_above_limit"] += 1
+        summary[label] = {
+            "timeframe_minutes": minutes,
+            "required": minutes in REQUIRED_TIMEFRAMES,
+            "unique_genomes_evaluated": len(entries),
+            "sample_eligible_genomes": len(sample_eligible),
+            "selection_eligible_genomes": len(selection_eligible),
+            "best_valid_fitness": best[1].fitness if best else None,
+            "best_valid_training_trade_count": best[1].training.trade_count if best else None,
+            "best_valid_validation_trade_count": best[1].validation.trade_count if best else None,
+            "rejection_reason_counts": dict(sorted(rejection_counts.items())),
+        }
+    return summary
 
 
 def _next_generation(
@@ -671,29 +870,53 @@ def _candidate_payload(
 
 
 def _economic_assessment(
-    training: EvaluationMetrics, validation: EvaluationMetrics
+    training: EvaluationMetrics | None, validation: EvaluationMetrics | None
 ) -> dict[str, Any]:
-    """Reject candidates without minimum evidence; never authorizes production."""
+    """Assess the preselected candidate; this function never authorizes production."""
+
+    if training is None or validation is None:
+        return {
+            "status": "NO-GO",
+            "reasons": [
+                "no_candidate_meets_training_validation_sample_and_training_drawdown_gates"
+            ],
+            "minimum_training_trade_count": MIN_TRAINING_TRADES,
+            "minimum_validation_trade_count": MIN_VALIDATION_TRADES,
+            "maximum_drawdown_per_period": MAX_DRAWDOWN,
+            "training_trade_count": None,
+            "validation_trade_count": None,
+            "validation_expectancy": None,
+            "final_holdout_used": False,
+            "final_holdout_reserved": True,
+            "owner_approval_required": True,
+            "production_promotion_eligible": False,
+        }
 
     reasons: list[str] = []
-    minimum_trades = 20
-    maximum_drawdown = 0.15
-    if training.trade_count < minimum_trades:
+    if training.trade_count < MIN_TRAINING_TRADES:
         reasons.append("training_trade_count_below_minimum")
-    if validation.trade_count < minimum_trades:
+    if validation.trade_count < MIN_VALIDATION_TRADES:
         reasons.append("validation_trade_count_below_minimum")
+    if training.net_expectancy is None or training.net_expectancy <= 0:
+        reasons.append("training_expectancy_not_positive_or_unavailable")
+    if training.max_drawdown > MAX_DRAWDOWN:
+        reasons.append("training_drawdown_above_limit")
     if validation.net_expectancy is None or validation.net_expectancy <= 0:
         reasons.append("validation_expectancy_not_positive_or_unavailable")
-    if validation.max_drawdown > maximum_drawdown:
+    if validation.max_drawdown > MAX_DRAWDOWN:
         reasons.append("validation_drawdown_above_limit")
     return {
         "status": "NO-GO" if reasons else "OWNER_REVIEW_REQUIRED",
         "reasons": reasons,
-        "minimum_trade_count_per_period": minimum_trades,
-        "maximum_validation_drawdown": maximum_drawdown,
+        "minimum_training_trade_count": MIN_TRAINING_TRADES,
+        "minimum_validation_trade_count": MIN_VALIDATION_TRADES,
+        "maximum_drawdown_per_period": MAX_DRAWDOWN,
         "training_trade_count": training.trade_count,
         "validation_trade_count": validation.trade_count,
+        "training_expectancy": training.net_expectancy,
         "validation_expectancy": validation.net_expectancy,
+        "training_max_drawdown": training.max_drawdown,
+        "validation_max_drawdown": validation.max_drawdown,
         "final_holdout_used": False,
         "final_holdout_reserved": True,
         "owner_approval_required": True,
@@ -704,8 +927,7 @@ def _economic_assessment(
 def _write_csv_outputs(
     output_dir: Path,
     history: list[dict[str, int | float]],
-    hall: Sequence[Any],
-    cache: dict[tuple[int, ...], tuple[float, EvaluationMetrics]],
+    ranked_candidates: Sequence[tuple[tuple[int, ...], CandidateEvaluation]],
 ) -> None:
     with (output_dir / "self-evolving-ga-history.csv").open(
         "w", encoding="utf-8", newline=""
@@ -714,34 +936,41 @@ def _write_csv_outputs(
         writer.writeheader()
         writer.writerows(history)
     fields = [
-        "rank",
-        "gene_vector",
-        "fitness",
-        "trade_count",
-        "win_rate",
-        "net_expectancy",
-        "net_return",
-        "max_drawdown",
+        "rank", "gene_vector", "timeframe", "fitness", "eligibility_status",
+        "eligibility_reasons", "training_trade_count", "validation_trade_count",
+        "training_win_rate", "validation_win_rate", "training_net_expectancy",
+        "validation_net_expectancy", "training_net_return", "validation_net_return",
+        "training_max_drawdown", "validation_max_drawdown",
     ]
     with (output_dir / "self-evolving-ga-candidates.csv").open(
         "w", encoding="utf-8", newline=""
     ) as stream:
         writer = csv.DictWriter(stream, fieldnames=fields)
         writer.writeheader()
-        for rank, item in enumerate(hall, start=1):
-            repair_individual(item)
-            key = tuple(item)
-            score, metrics = cache[key]
+        for rank, (key, result) in enumerate(ranked_candidates[:100], start=1):
+            status = (
+                "SELECTION_ELIGIBLE" if result.selection_eligible
+                else "SAMPLE_ELIGIBLE_HIGH_DRAWDOWN" if result.sample_eligible
+                else "INVALID_SAMPLE"
+            )
             writer.writerow(
                 {
                     "rank": rank,
                     "gene_vector": json.dumps(list(key), separators=(",", ":")),
-                    "fitness": score,
-                    "trade_count": metrics.trade_count,
-                    "win_rate": metrics.win_rate,
-                    "net_expectancy": metrics.net_expectancy,
-                    "net_return": metrics.net_return,
-                    "max_drawdown": metrics.max_drawdown,
+                    "timeframe": _timeframe_label(TIMEFRAMES[key[0]]),
+                    "fitness": result.fitness,
+                    "eligibility_status": status,
+                    "eligibility_reasons": ";".join(result.eligibility_reasons),
+                    "training_trade_count": result.training.trade_count,
+                    "validation_trade_count": result.validation.trade_count,
+                    "training_win_rate": result.training.win_rate,
+                    "validation_win_rate": result.validation.win_rate,
+                    "training_net_expectancy": result.training.net_expectancy,
+                    "validation_net_expectancy": result.validation.net_expectancy,
+                    "training_net_return": result.training.net_return,
+                    "validation_net_return": result.validation.net_return,
+                    "training_max_drawdown": result.training.max_drawdown,
+                    "validation_max_drawdown": result.validation.max_drawdown,
                 }
             )
 
@@ -751,44 +980,102 @@ def run_evolution(
     manifest_path: Path,
     output_dir: Path,
     population_size: int = 128,
-    generations: int = 6,
+    generations: int = 10,
     seed: int = 20261025,
 ) -> dict[str, Any]:
-    """Run six bounded generations; validation measures the winner but does not select it."""
+    """Run bounded evolution with explicit sample, risk and timeframe gates."""
 
     if not 100 <= population_size <= 200:
         raise ValueError("population_size_must_be_between_100_and_200")
-    if not 5 <= generations <= 10:
-        raise ValueError("generations_must_be_between_5_and_10")
+    if not 10 <= generations <= 20:
+        raise ValueError("generations_must_be_between_10_and_20")
     raw, manifest = load_verified_market_data(csv_path, manifest_path)
     train_cutoff_ms = int(raw["open_time_ms"].iloc[int(len(raw) * 0.70)])
     validation_end_ms = int(raw["open_time_ms"].iloc[int(len(raw) * 0.80)])
     context = build_search_context(raw, train_cutoff_ms, validation_end_ms)
-    cache: dict[tuple[int, ...], tuple[float, EvaluationMetrics]] = {}
+    cache: dict[tuple[int, ...], CandidateEvaluation] = {}
     toolbox = _build_toolbox(context, cache, seed)
-    from deap import tools
 
     population = toolbox.population(n=population_size)
-    hall = tools.HallOfFame(20)
+    _ensure_timeframe_coverage(population, toolbox, cache)
     history: list[dict[str, int | float]] = []
     for generation in range(1, generations + 1):
         if generation > 1:
             population = _next_generation(population, toolbox, 0.65, 0.35)
+            _ensure_timeframe_coverage(population, toolbox, cache)
         _evaluate_invalid(population, toolbox)
-        hall.update(population)
-        history.append(_generation_record(generation, population, len(cache)))
+        history.append(_generation_record(generation, population, cache))
 
-    best = repair_individual(hall[0])
-    best_key = tuple(best)
-    score, train_metrics = cache[best_key]
-    validation_metrics = _period_metrics(context, best, "validation")
-    candidate = _candidate_payload(best, score, train_metrics)
+    ranked_candidates = sorted(
+        cache.items(),
+        key=lambda item: (
+            int(item[1].sample_eligible),
+            int(item[1].training_risk_eligible),
+            float(item[1].fitness),
+        ),
+        reverse=True,
+    )
+    selected = [
+        (key, result)
+        for key, result in ranked_candidates
+        if result.selection_eligible
+    ]
+    if selected:
+        best_key, best_result = max(selected, key=lambda item: item[1].fitness)
+        candidate = _candidate_payload(
+            best_key, best_result.fitness, best_result.training
+        )
+        candidate["validation_metrics"] = asdict(best_result.validation)
+        candidate["validation_return_used_for_selection"] = False
+        candidate["validation_sample_count_used_for_eligibility"] = True
+        economic_assessment = _economic_assessment(
+            best_result.training, best_result.validation
+        )
+    else:
+        candidate = None
+        economic_assessment = _economic_assessment(None, None)
+
+    timeframe_coverage = _timeframe_coverage_summary(cache)
+    coverage_by_generation = {
+        _timeframe_label(minutes): {
+            "minimum_population_per_generation": min(
+                int(item[f"population_{_timeframe_label(minutes)}"])
+                for item in history
+            ),
+            "minimum_sample_eligible_population_per_generation": min(
+                int(item[f"sample_eligible_{_timeframe_label(minutes)}"])
+                for item in history
+            ),
+            "generations_with_population": sum(
+                1
+                for item in history
+                if int(item[f"population_{_timeframe_label(minutes)}"]) > 0
+            ),
+        }
+        for minutes in REQUIRED_TIMEFRAMES
+    }
+    rejected_reasons: Counter[str] = Counter(
+        reason
+        for evaluation in cache.values()
+        for reason in evaluation.eligibility_reasons
+    )
     report: dict[str, Any] = {
-        "schema_version": "alix.self-evolving-ga-report.v1",
+        "schema_version": "alix.self-evolving-ga-report.v2",
         "run_mode": "historical_simulation_only",
         "data_source": manifest.get("source_venue"),
         "symbol": manifest.get("symbol"),
         "source_interval": "1m",
+        "data_window": {
+            "start_utc": manifest.get("start_utc"),
+            "end_utc": manifest.get("end_utc"),
+            "row_count": manifest.get("row_count"),
+            "missing_minute_intervals_between_rows": manifest.get(
+                "missing_minute_intervals_between_rows"
+            ),
+            "coverage_fraction": manifest.get("coverage_fraction"),
+            "source_csv_sha256": manifest.get("csv_sha256"),
+            "manifest_created_at_utc": manifest.get("created_at_utc"),
+        },
         "source_csv_sha256": manifest.get("csv_sha256"),
         "population_size": population_size,
         "generations_requested": generations,
@@ -796,18 +1083,29 @@ def run_evolution(
         "random_seed": seed,
         "unique_genomes_evaluated": len(cache),
         "operators": {
-            "selection": "tournament_k3",
+            "selection": "eligibility-aware tournament_k3",
             "crossover": "two_point",
             "crossover_probability": 0.65,
             "mutation": "uniform_integer",
             "mutation_probability": 0.35,
             "per_gene_mutation_probability": 0.20,
+            "required_timeframe_population_per_generation": MIN_REQUIRED_TIMEFRAME_POPULATION,
         },
         "fitness_definition": {
-            "base": "mean completed-trade return after entry/exit fees and slippage",
-            "drawdown_penalty": "0.25 * max(0, max_drawdown - 0.15)",
-            "churn_penalty": "0.00001 * max(0, trade_count - 200)",
-            "small_sample_penalty": "0.002 * max(0, 20 - trade_count) / 20",
+            "base": "training mean completed-trade return after entry/exit fees and slippage",
+            "sample_gate": "fitness=0.0 and sample-ineligible if training trades < 30 or validation trades < 10",
+            "drawdown_penalty": "if training max_drawdown > 0.15: min(raw_score, 0.0) - 10.0 * (max_drawdown - 0.15)",
+            "churn_penalty": "0.00001 * max(0, training_trade_count - 200)",
+            "training_drawdown_is_selection_gate": True,
+            "validation_return_used_for_selection": False,
+            "validation_trade_count_used_for_eligibility": True,
+        },
+        "eligibility_gates": {
+            "minimum_training_trade_count": MIN_TRAINING_TRADES,
+            "minimum_validation_trade_count": MIN_VALIDATION_TRADES,
+            "maximum_drawdown": MAX_DRAWDOWN,
+            "invalid_sample_fitness": 0.0,
+            "training_drawdown_above_limit_excluded_from_final_candidate_selection": True,
         },
         "execution_assumptions": {
             "fee_bps_per_side": 25,
@@ -830,12 +1128,20 @@ def run_evolution(
             "final_holdout_used": False,
             "final_holdout_metrics_emitted": False,
         },
-        "top_research_candidate": {
-            **candidate,
-            "validation_metrics": asdict(validation_metrics),
-            "validation_used_for_selection": False,
-        },
-        "economic_assessment": _economic_assessment(train_metrics, validation_metrics),
+        "top_research_candidate": candidate,
+        "candidate_selection_method": (
+            "highest_training_fitness_among_sample_eligible_and_training_drawdown_eligible_genomes; "
+            "validation_return_not_used"
+        ),
+        "economic_assessment": economic_assessment,
+        "research_result": (
+            "NO_ECONOMICALLY_ACCEPTABLE_STRATEGY_FOUND"
+            if economic_assessment["status"] == "NO-GO"
+            else "CANDIDATE_REQUIRES_OWNER_REVIEW"
+        ),
+        "timeframe_coverage": timeframe_coverage,
+        "required_timeframe_coverage_by_generation": coverage_by_generation,
+        "genomes_rejected_by_reason": dict(sorted(rejected_reasons.items())),
         "generation_history": history,
         "safety_invariants": {
             "Champion": None,
@@ -851,7 +1157,7 @@ def run_evolution(
         json.dumps(report, indent=2, sort_keys=True, allow_nan=False) + "\n",
         encoding="utf-8",
     )
-    _write_csv_outputs(output_dir, history, hall, cache)
+    _write_csv_outputs(output_dir, history, ranked_candidates)
     return report
 
 
@@ -871,7 +1177,7 @@ def main() -> int:
         "--out-dir", type=Path, default=Path("artifacts/self-evolving-ga")
     )
     parser.add_argument("--population", type=int, default=128)
-    parser.add_argument("--generations", type=int, default=6)
+    parser.add_argument("--generations", type=int, default=10)
     parser.add_argument("--seed", type=int, default=20261025)
     args = parser.parse_args()
     report = run_evolution(
@@ -889,9 +1195,13 @@ def main() -> int:
                 "population_size": report["population_size"],
                 "generations_completed": report["generations_completed"],
                 "unique_genomes_evaluated": report["unique_genomes_evaluated"],
-                "candidate_genes": candidate["genes"],
-                "training_metrics": candidate["training_metrics"],
-                "validation_metrics": candidate["validation_metrics"],
+                "candidate_genes": candidate["genes"] if candidate else None,
+                "training_metrics": candidate["training_metrics"] if candidate else None,
+                "validation_metrics": candidate["validation_metrics"] if candidate else None,
+                "research_result": report["research_result"],
+                "economic_assessment": report["economic_assessment"],
+                "required_timeframe_coverage_by_generation": report["required_timeframe_coverage_by_generation"],
+                "genomes_rejected_by_reason": report["genomes_rejected_by_reason"],
                 "Champion": report["safety_invariants"]["Champion"],
                 "order_permission": report["safety_invariants"]["order_permission"],
                 "trading_authorization": report["safety_invariants"][

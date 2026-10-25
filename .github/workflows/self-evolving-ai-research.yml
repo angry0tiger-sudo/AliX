@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - "research/self-evolving-ai"
+      - "feat/deap-sample-gates-timeframe-coverage"
     paths:
       - ".github/workflows/self-evolving-ai-research.yml"
       - "services/ai_core/self_evolving_simulator.py"
@@ -31,7 +32,7 @@ jobs:
   simulator-and-minute-data:
     name: Causal simulator, genome contracts and public minute data
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     permissions:
       contents: read
       actions: read
@@ -64,14 +65,12 @@ jobs:
             tests/unit/test_fetch_public_minute_bars.py \
             tests/unit/test_self_evolving_ga.py -q
 
-      - name: Download immutable Phase 0-1 market-data artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: self-evolving-public-minute-bars-0f36b1e8ea7b8842b2bc62d0b6f81d808b93cc0a
-          path: artifacts/public-minute-bars
-          repository: ${{ github.repository }}
-          run-id: 40136648540
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Fetch two-year public BTCUSDT minute bars
+        run: |
+          python -m scripts.fetch_public_minute_bars \
+            --symbol BTCUSDT \
+            --months 24 \
+            --out-dir artifacts/public-minute-bars
 
       - name: Verify provenance, coverage report and immutable safety invariants
         run: |
@@ -85,7 +84,9 @@ jobs:
           safety = manifest["safety_invariants"]
           assert manifest["schema_version"] == "alix.self-evolving-data-manifest.v1"
           assert manifest["interval"] == "1m"
-          assert manifest["row_count"] > 0
+          assert manifest["row_count"] >= 1_000_000
+          assert manifest["missing_minute_intervals_between_rows"] == 0
+          assert manifest["coverage_fraction"] == 1.0
           assert len(manifest["csv_sha256"]) == 64
           assert safety["Champion"] is None
           assert safety["order_permission"] is False
@@ -116,7 +117,7 @@ jobs:
             --manifest artifacts/public-minute-bars/manifest.json \
             --out-dir artifacts/self-evolving-ga \
             --population 128 \
-            --generations 6 \
+            --generations 10 \
             --seed 20261025
 
       - name: Verify evolution report and immutable safety invariants
@@ -131,10 +132,27 @@ jobs:
           )
           safety = report["safety_invariants"]
           assert report["population_size"] == 128
-          assert report["generations_completed"] == 6
+          assert report["generations_completed"] >= 10
           assert report["unique_genomes_evaluated"] >= 128
           assert report["split"]["final_holdout_used"] is False
-          assert report["top_research_candidate"]["validation_used_for_selection"] is False
+          assert report["research_result"] in {
+              "NO_ECONOMICALLY_ACCEPTABLE_STRATEGY_FOUND",
+              "CANDIDATE_REQUIRES_OWNER_REVIEW",
+          }
+          for timeframe in ("1h", "4h", "1d"):
+              assert report["timeframe_coverage"][timeframe]["unique_genomes_evaluated"] > 0
+              assert report["required_timeframe_coverage_by_generation"][timeframe]["minimum_population_per_generation"] >= 4
+              assert report["required_timeframe_coverage_by_generation"][timeframe]["generations_with_population"] == report["generations_completed"]
+          candidate = report["top_research_candidate"]
+          if candidate is not None:
+              assert candidate["training_metrics"]["trade_count"] >= 30
+              assert candidate["validation_metrics"]["trade_count"] >= 10
+              assert candidate["training_metrics"]["max_drawdown"] <= 0.15
+              assert candidate["validation_return_used_for_selection"] is False
+              assert candidate["validation_sample_count_used_for_eligibility"] is True
+          else:
+              assert report["economic_assessment"]["status"] == "NO-GO"
+              assert "no_candidate_meets_training_validation_sample_and_training_drawdown_gates" in report["economic_assessment"]["reasons"]
           assert safety["Champion"] is None
           assert safety["order_permission"] is False
           assert safety["trading_authorization"] == "NO-GO"
@@ -145,9 +163,12 @@ jobs:
               "population_size": report["population_size"],
               "generations_completed": report["generations_completed"],
               "unique_genomes_evaluated": report["unique_genomes_evaluated"],
-              "top_candidate_genes": report["top_research_candidate"]["genes"],
-              "training_metrics": report["top_research_candidate"]["training_metrics"],
-              "validation_metrics": report["top_research_candidate"]["validation_metrics"],
+              "top_candidate_genes": report["top_research_candidate"]["genes"] if report["top_research_candidate"] else None,
+              "training_metrics": report["top_research_candidate"]["training_metrics"] if report["top_research_candidate"] else None,
+              "validation_metrics": report["top_research_candidate"]["validation_metrics"] if report["top_research_candidate"] else None,
+              "research_result": report["research_result"],
+              "timeframe_coverage": report["required_timeframe_coverage_by_generation"],
+              "genomes_rejected_by_reason": report["genomes_rejected_by_reason"],
               "economic_assessment": report["economic_assessment"],
               "Champion": safety["Champion"],
               "order_permission": safety["order_permission"],
