@@ -61,3 +61,17 @@ This directive supersedes the earlier hard minimums of 30 training trades and 10
 ## Dataset reuse directive (2026-10-25)
 
 Use the immutable two-year public BTCUSDT 1m artifact from successful research workflow run `40163897863` when available. Reuse does not waive current-run verification of CSV SHA-256, complete minute coverage, manifest schema or safety invariants. This removes repeated network acquisition from the evolutionary experiment and keeps the optimizer input stable and auditable.
+
+
+## Owner Directive amendment: active intraday Opportunity Hunter (2026-10-25)
+
+This amendment supersedes conflicting Opportunity Hunter timeframe and soft-sample clauses above for the current DEAP experiment. It is an Owner Directive; all safety, reproducibility, causal-data, holdout and quality-gate requirements remain unchanged.
+
+- The evolutionary search space is restricted to exactly `15m`, `30m`, `1h`, and `4h`. Daily, weekly, monthly and other timeframes are not candidate genes in this experiment. The same allowed timeframe set is used for per-generation coverage and the reference baseline.
+- A candidate with fewer than 100 completed training trades receives fitness exactly `0.0` and is ineligible for candidate selection. This minimum applies to training only; validation trade count is reported and remains part of economic evidence, but is not fed into tournament ranking.
+- Training win rate below 50% incurs a linear fitness penalty of `5.0 * max(0, 0.50 - win_rate)`. This penalty is additive to the existing objective and does not override the independent 15% drawdown gate.
+- A position must close after at most 50 candles of its selected timeframe. This is a fixed execution constraint, not an evolvable gene; the simulator continues to model close-confirmed signals and next-bar-open execution.
+- The report and tests must explicitly prove all four restrictions, including max holding period, minimum training trades, the win-rate penalty and the unchanged safety invariants.
+- These changes do not establish an economically acceptable strategy. All candidates remain research-only until out-of-sample, cost-aware and sufficiently sampled acceptance criteria pass.
+
+Immutable safety conditions: `Champion = null`, `order_permission = false`, `trading_authorization = NO-GO`, zero private API calls and zero real-order attempts. No quality gate may be disabled or relaxed.

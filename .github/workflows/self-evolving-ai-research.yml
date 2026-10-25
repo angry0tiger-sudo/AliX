@@ -159,19 +159,27 @@ jobs:
               "NO_ECONOMICALLY_ACCEPTABLE_STRATEGY_FOUND",
               "CANDIDATE_REQUIRES_OWNER_REVIEW",
           }
-          for timeframe in ("15m", "1h", "4h", "1d"):
+          assert set(report["timeframe_coverage"]) == {"15m", "30m", "1h", "4h"}
+          assert set(report["eligibility_gates"]["allowed_timeframes_minutes"]) == {15, 30, 60, 240}
+          assert report["fitness_definition"]["minimum_training_trade_gate"] == "fitness = 0.0 when training trade count < 100; ineligible for selection"
+          assert report["fitness_definition"]["minimum_win_rate_before_penalty"] == 0.5
+          assert report["eligibility_gates"]["minimum_completed_trade_count_enforced"] is True
+          assert report["eligibility_gates"]["minimum_training_trades"] == 100
+          assert report["execution_assumptions"]["max_holding_period_candles"] == 50
+          for timeframe in ("15m", "30m", "1h", "4h"):
               assert report["timeframe_coverage"][timeframe]["unique_genomes_evaluated"] > 0
               assert report["required_timeframe_coverage_by_generation"][timeframe]["minimum_population_per_generation"] >= 4
               assert report["required_timeframe_coverage_by_generation"][timeframe]["generations_with_population"] == report["generations_completed"]
           candidate = report["top_research_candidate"]
           if candidate is not None:
-              assert candidate["training_metrics"]["trade_count"] > 0
+              assert candidate["genes"]["timeframe_minutes"] in {15, 30, 60, 240}
+              assert candidate["training_metrics"]["trade_count"] >= 100
               assert candidate["validation_return_used_for_selection"] is False
               assert candidate["validation_sample_count_used_for_eligibility"] is False
           else:
               assert report["economic_assessment"]["status"] == "NO-GO"
           assert report["fitness_definition"]["validation_used_for_selection"] is False
-          assert report["eligibility_gates"]["minimum_completed_trade_count_enforced"] is False
+          assert report["eligibility_gates"]["minimum_completed_trade_count_enforced"] is True
           assert report["opportunity_hunter_result"]["opportunity_cost_penalty_active"] is True
           assert report["opportunity_hunter_result"]["dynamic_exit_genes_active"] is True
           assert report["same_dataset_baseline_comparison"]["comparison_is_same_dataset_and_split"] is True

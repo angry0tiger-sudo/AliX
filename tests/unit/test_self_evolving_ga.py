@@ -12,6 +12,9 @@ from scripts.run_deap_evolution import (
     EXIT_MODES,
     FASTS,
     MAX_DRAWDOWN,
+    MAX_HOLDING_PERIOD_CANDLES,
+    MIN_TRAINING_TRADES,
+    MIN_WIN_RATE,
     MIN_REQUIRED_TIMEFRAME_POPULATION,
     REQUIRED_TIMEFRAMES,
     SLOWS,
@@ -70,6 +73,8 @@ def _candidate(
     reasons = []
     if training.trade_count == 0:
         reasons.append("training_has_no_completed_trades")
+    if training.trade_count < MIN_TRAINING_TRADES:
+        reasons.append("training_trade_count_below_100")
     if training.max_drawdown > MAX_DRAWDOWN:
         reasons.append("training_drawdown_above_limit")
     if validation.trade_count == 0:
@@ -145,7 +150,7 @@ def test_profit_factor_is_gross_wins_over_gross_losses_after_costs() -> None:
         )
 
 
-def test_no_trade_candidate_reports_missed_upside_and_negative_fitness() -> None:
+def test_no_trade_candidate_reports_missed_upside_and_zero_fitness() -> None:
     opens = np.full(10, 100.0)
     closes = np.array([100, 100, 100, 106, 107, 105, 100, 101, 100, 100], dtype=float)
     positions = np.zeros(10, dtype=bool)
@@ -154,40 +159,53 @@ def test_no_trade_candidate_reports_missed_upside_and_negative_fitness() -> None
     assert metrics.net_expectancy is None
     assert metrics.profit_factor is None
     assert metrics.missed_upside_move_count >= 1
-    assert fitness_score(metrics) < 0.0
+    assert fitness_score(metrics) == 0.0
 
 
-def test_no_hard_trade_count_threshold_and_low_samples_are_scored_softly() -> None:
-    one_trade = _metrics(1, profit_factor=3.0, gross_profit=0.03, gross_loss=0.01)
-    ten_trades = _metrics(10, profit_factor=1.8, gross_profit=0.09, gross_loss=0.05)
-    assert fitness_score(one_trade) > 0
-    assert fitness_score(ten_trades) > 0
-    assert fitness_score(_metrics(1)) != 0.0
+def test_hard_training_trade_minimum_zeros_fitness_and_blocks_selection() -> None:
+    below_minimum = _metrics(
+        MIN_TRAINING_TRADES - 1, profit_factor=3.0, gross_profit=0.03, gross_loss=0.01
+    )
+    eligible = _metrics(
+        MIN_TRAINING_TRADES, profit_factor=1.8, gross_profit=0.09, gross_loss=0.05
+    )
+    assert fitness_score(below_minimum) == 0.0
+    assert fitness_score(eligible) > 0.0
+    candidate = _candidate(below_minimum, _metrics(20, profit_factor=2.0))
+    assert not candidate.sample_eligible
+    assert not candidate.selection_eligible
+    assert "training_trade_count_below_100" in candidate.eligibility_reasons
+
+
+def test_win_rate_below_50_percent_receives_heavy_fitness_penalty() -> None:
+    strong_win_rate = _metrics(MIN_TRAINING_TRADES, win_rate=0.60)
+    weak_win_rate = _metrics(MIN_TRAINING_TRADES, win_rate=0.25)
+    assert fitness_score(strong_win_rate) > fitness_score(weak_win_rate)
+    assert fitness_score(strong_win_rate) - fitness_score(weak_win_rate) == pytest.approx(1.25)
 
 
 def test_profit_factor_and_total_return_both_affect_fitness() -> None:
     low_pf = _metrics(
-        20, profit_factor=1.1, gross_profit=0.11, gross_loss=0.10, net_return=0.05
+        100, profit_factor=1.1, gross_profit=0.11, gross_loss=0.10, net_return=0.05
     )
     high_pf = _metrics(
-        20, profit_factor=2.0, gross_profit=0.20, gross_loss=0.10, net_return=0.05
+        100, profit_factor=2.0, gross_profit=0.20, gross_loss=0.10, net_return=0.05
     )
     high_return = _metrics(
-        20, profit_factor=1.1, gross_profit=0.11, gross_loss=0.10, net_return=0.25
+        100, profit_factor=1.1, gross_profit=0.11, gross_loss=0.10, net_return=0.25
     )
     assert fitness_score(high_pf) > fitness_score(low_pf)
     assert fitness_score(high_return) > fitness_score(low_pf)
 
 
 def test_opportunity_cost_penalty_reduces_fitness_for_missed_rallies() -> None:
-    active = _metrics(12, missed_count=0, missed_return=0.0)
+    active = _metrics(100, missed_count=0, missed_return=0.0)
     idle = _metrics(
-        0,
-        expectancy=None,
+        100,
         net_return=0.0,
-        profit_factor=None,
-        gross_profit=0,
-        gross_loss=0,
+        profit_factor=0.5,
+        gross_profit=0.05,
+        gross_loss=0.10,
         missed_count=3,
         missed_return=0.20,
         volatility_return=0,
@@ -198,24 +216,23 @@ def test_opportunity_cost_penalty_reduces_fitness_for_missed_rallies() -> None:
 
 
 def test_regime_capture_bonus_rewards_trend_and_high_volatility_returns() -> None:
-    base = _metrics(15, volatility_return=0.0, trend_return=0.0)
-    regime_capturer = _metrics(15, volatility_return=0.10, trend_return=0.15)
+    base = _metrics(100, volatility_return=0.0, trend_return=0.0)
+    regime_capturer = _metrics(100, volatility_return=0.10, trend_return=0.15)
     assert fitness_score(regime_capturer) > fitness_score(base)
 
 
 def test_drawdown_over_15_percent_gets_severe_penalty() -> None:
-    low_risk = _metrics(20, net_return=0.10, drawdown=0.10)
-    high_risk = _metrics(20, net_return=0.80, drawdown=0.20)
+    low_risk = _metrics(100, net_return=0.10, drawdown=0.10)
+    high_risk = _metrics(100, net_return=0.80, drawdown=0.20)
     assert fitness_score(low_risk) > fitness_score(high_risk)
 
 
-def test_economic_assessment_reports_profit_factor_target_without_hard_trade_minimums() -> (
-    None
-):
-    training = _metrics(4, profit_factor=2.0, net_return=0.10, drawdown=0.05)
-    validation = _metrics(2, profit_factor=1.7, net_return=0.04, drawdown=0.04)
+def test_economic_assessment_reports_profit_factor_and_hard_training_gate() -> None:
+    training = _metrics(100, profit_factor=2.0, net_return=0.10, drawdown=0.05)
+    validation = _metrics(20, profit_factor=1.7, net_return=0.04, drawdown=0.04)
     result = _economic_assessment(training, validation)
-    assert result["minimum_completed_trades_enforced"] is False
+    assert result["minimum_completed_trades_enforced"] is True
+    assert result["minimum_training_trades"] == MIN_TRAINING_TRADES
     assert result["validation_profit_factor_above_1_5"] is True
     assert result["final_holdout_used"] is False
     assert result["production_promotion_eligible"] is False
@@ -223,7 +240,7 @@ def test_economic_assessment_reports_profit_factor_target_without_hard_trade_min
 
 def test_economic_assessment_fails_when_profit_factor_not_above_target() -> None:
     result = _economic_assessment(
-        _metrics(4), _metrics(3, profit_factor=1.4, net_return=0.01)
+        _metrics(100), _metrics(3, profit_factor=1.4, net_return=0.01)
     )
     assert result["status"] == "NO-GO"
     assert "validation_profit_factor_not_above_1_5" in result["reasons"]
@@ -232,12 +249,13 @@ def test_economic_assessment_fails_when_profit_factor_not_above_target() -> None
 def test_no_candidate_assessment_fails_closed() -> None:
     result = _economic_assessment(None, None)
     assert result["status"] == "NO-GO"
-    assert result["minimum_completed_trades_enforced"] is False
+    assert result["minimum_completed_trades_enforced"] is True
+    assert result["minimum_training_trades"] == MIN_TRAINING_TRADES
     assert result["production_promotion_eligible"] is False
 
 
 def test_genome_description_serializes_dynamic_exit_and_trailing_genes() -> None:
-    genes = repair_individual([2, 2, 4, 0, 1, 2, 3, 1, 4, 2, 1])
+    genes = repair_individual([0, 2, 4, 0, 1, 2, 3, 1, 4, 2, 1])
     genome = _strategy_genome(genes)
     assert genome.timeframe.duration_seconds == 15 * 60
     assert genome.position_size_rule.constant == 0.5
@@ -292,7 +310,7 @@ def test_required_timeframe_quota_includes_15m_and_is_unique() -> None:
     toolbox = FakeToolbox()
     population = [
         [
-            TIMEFRAMES.index(1),
+            TIMEFRAMES.index(15),
             2,
             i % 8,
             0,
@@ -314,6 +332,44 @@ def test_required_timeframe_quota_includes_15m_and_is_unique() -> None:
         assert (
             len({tuple(item) for item in result if item[0] == gene})
             >= MIN_REQUIRED_TIMEFRAME_POPULATION
+        )
+
+
+def test_allowed_timeframes_are_intraday_only() -> None:
+    assert TIMEFRAMES == (15, 30, 60, 240)
+    assert REQUIRED_TIMEFRAMES == TIMEFRAMES
+    repaired = repair_individual([99, 2, 4, 0, 1, 2, 3, 1, 4, 2, 1])
+    assert TIMEFRAMES[repaired[0]] == 240
+
+
+def test_maximum_holding_period_forces_exit_after_configured_candles() -> None:
+    count = 70
+    entry = np.zeros(count, dtype=bool)
+    entry[1:] = True
+    exits = np.zeros(count, dtype=bool)
+    closes = np.linspace(100.0, 110.0, count)
+    states = build_position_states(
+        entry,
+        exits,
+        closes,
+        trailing_stop=0.99,
+        trailing_activation=0.0,
+        max_holding_period=50,
+    )
+    assert states[:1].sum() == 0
+    assert states[1:51].all()
+    assert not states[51:].any()
+    assert states.sum() == 50
+
+
+def test_invalid_maximum_holding_period_fails_closed() -> None:
+    with pytest.raises(ValueError, match="max_holding_period_invalid"):
+        build_position_states(
+            np.ones(3, dtype=bool),
+            np.zeros(3, dtype=bool),
+            np.ones(3),
+            trailing_stop=0.05,
+            max_holding_period=0,
         )
 
 

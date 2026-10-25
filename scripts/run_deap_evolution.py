@@ -30,8 +30,8 @@ from services.ai_core.self_evolving_genome import (
     genome_sha256,
 )
 
-# Search spans intraday to monthly bars; all fitness calculations remain offline.
-TIMEFRAMES = (1, 5, 15, 30, 60, 120, 240, 360, 720, 1440, 10080, 43200)
+# Owner Directive: constrain this Opportunity Hunter experiment to intraday bars.
+TIMEFRAMES = (15, 30, 60, 240)
 LOOKBACKS = (5, 8, 13, 21, 34, 55, 89, 144)
 FASTS = (3, 5, 8, 13, 21, 34)
 SLOWS = (8, 13, 21, 34, 55, 89, 144, 233)
@@ -52,14 +52,18 @@ EXIT_MODES = (
     "indicator_and_ema_cross",
 )
 LOWER = (0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0)
-UPPER = (11, 3, 7, 5, 7, 5, 5, 3, 5, 4, 3)
+UPPER = (3, 3, 7, 5, 7, 5, 5, 3, 5, 4, 3)
 GENOME_SIZE = 11
 FEE = 25.0 / 10_000
 SLIPPAGE = 20.0 / 10_000
 SIDE_COST = FEE + SLIPPAGE
 MAX_DRAWDOWN = 0.15
 DRAWDOWN_EXCESS_PENALTY_MULTIPLIER = 10.0
-REQUIRED_TIMEFRAMES = (15, 60, 240, 1440)
+MIN_TRAINING_TRADES = 100
+MIN_WIN_RATE = 0.50
+WIN_RATE_PENALTY_MULTIPLIER = 5.0
+MAX_HOLDING_PERIOD_CANDLES = 50
+REQUIRED_TIMEFRAMES = (15, 30, 60, 240)
 MIN_REQUIRED_TIMEFRAME_POPULATION = 4
 OPPORTUNITY_MOVE_THRESHOLD = 0.05
 OPPORTUNITY_COST_WEIGHT = 2.0
@@ -102,7 +106,8 @@ class CandidateEvaluation:
     @property
     def sample_eligible(self) -> bool:
         return (
-            self.training.trade_count > 0 and self.training.net_expectancy is not None
+            self.training.trade_count >= MIN_TRAINING_TRADES
+            and self.training.net_expectancy is not None
         )
 
     @property
@@ -443,6 +448,7 @@ def _validate_position_inputs(
     close: np.ndarray,
     trailing_stop: float,
     trailing_activation: float,
+    max_holding_period: int,
 ) -> None:
     if count := len(close):
         if len(entry_signal) != count or len(exit_signal) != count:
@@ -451,6 +457,12 @@ def _validate_position_inputs(
         raise ValueError("signal_length_mismatch")
     if not 0.0 <= trailing_stop < 1.0 or not 0.0 <= trailing_activation < 1.0:
         raise ValueError("trailing_stop_parameters_invalid")
+    if (
+        isinstance(max_holding_period, bool)
+        or not isinstance(max_holding_period, int)
+        or max_holding_period < 1
+    ):
+        raise ValueError("max_holding_period_invalid")
 
 
 def _next_position_bounds(
@@ -476,11 +488,17 @@ def build_position_states(
     close: np.ndarray,
     trailing_stop: float,
     trailing_activation: float = 0.0,
+    max_holding_period: int = MAX_HOLDING_PERIOD_CANDLES,
 ) -> np.ndarray:
-    """Build causal long/flat states with a profit-activated trailing stop."""
+    """Build causal long/flat states with a fixed maximum holding period."""
 
     _validate_position_inputs(
-        entry_signal, exit_signal, close, trailing_stop, trailing_activation
+        entry_signal,
+        exit_signal,
+        close,
+        trailing_stop,
+        trailing_activation,
+        max_holding_period,
     )
     count = len(close)
     entry_edges = entry_signal & np.r_[True, ~entry_signal[:-1]]
@@ -493,6 +511,7 @@ def build_position_states(
         if bounds is None:
             break
         entry, natural_exit = bounds
+        natural_exit = min(natural_exit, entry + max_holding_period)
         stop_index = _find_stop(
             close, entry, natural_exit, trailing_stop, trailing_activation
         )
@@ -689,6 +708,7 @@ def _period_metrics(
             features.close[indexes],
             STOPS[genes[8]],
             TRAILING_ACTIVATION[genes[9]],
+            MAX_HOLDING_PERIOD_CANDLES,
         )
         context.positions_cache[position_key] = cached
     bars = features.frame.iloc[indexes]
@@ -709,6 +729,8 @@ def _eligibility_reasons(
     reasons: list[str] = []
     if training.trade_count == 0:
         reasons.append("training_has_no_completed_trades")
+    if training.trade_count < MIN_TRAINING_TRADES:
+        reasons.append("training_trade_count_below_100")
     if training.max_drawdown > MAX_DRAWDOWN:
         reasons.append("training_drawdown_above_limit")
     if validation.trade_count == 0:
@@ -721,10 +743,12 @@ def _eligibility_reasons(
 
 
 def fitness_score(metrics: EvaluationMetrics) -> float:
-    """Bounded opportunity-hunting objective with soft sample confidence."""
+    """Score active candidates; hard-fail low samples and penalize weak win rates."""
 
     trades = metrics.trade_count
-    confidence = math.sqrt(trades / (trades + 10.0)) if trades > 0 else 0.0
+    if trades < MIN_TRAINING_TRADES:
+        return 0.0
+    confidence = math.sqrt(trades / (trades + 10.0))
     if metrics.profit_factor is not None:
         pf_for_score = min(MAX_PROFIT_FACTOR_FOR_FITNESS, metrics.profit_factor)
     elif metrics.gross_profit > 0.0 and metrics.gross_loss == 0.0:
@@ -741,11 +765,15 @@ def fitness_score(metrics: EvaluationMetrics) -> float:
         + OPPORTUNITY_EVENT_PENALTY * metrics.missed_upside_move_count
     )
     inactivity_penalty = NO_TRADE_PENALTY if trades == 0 else 0.0
+    win_rate_penalty = WIN_RATE_PENALTY_MULTIPLIER * max(
+        0.0, MIN_WIN_RATE - metrics.win_rate
+    )
     score = (
         confidence * (pf_component + return_component)
         + regime_bonus
         - opportunity_penalty
         - inactivity_penalty
+        - win_rate_penalty
     )
     drawdown_excess = max(0.0, metrics.max_drawdown - MAX_DRAWDOWN)
     if drawdown_excess > 0.0:
@@ -846,18 +874,10 @@ def _evaluate_invalid(population: Sequence[Any], toolbox: Any) -> None:
 
 def _timeframe_label(minutes: int) -> str:
     labels = {
-        1: "1m",
-        5: "5m",
         15: "15m",
         30: "30m",
         60: "1h",
-        120: "2h",
         240: "4h",
-        360: "6h",
-        720: "12h",
-        1440: "1d",
-        10080: "7d",
-        43200: "30d",
     }
     return labels.get(minutes, f"{minutes}m")
 
@@ -980,6 +1000,8 @@ def _timeframe_rejection_counts(
     for _, value in entries:
         if value.training.trade_count == 0:
             rejection_counts["training_has_no_completed_trades"] += 1
+        if value.training.trade_count < MIN_TRAINING_TRADES:
+            rejection_counts["training_trade_count_below_100"] += 1
         if value.training.max_drawdown > MAX_DRAWDOWN:
             rejection_counts["training_drawdown_above_limit"] += 1
         if value.validation.trade_count == 0:
@@ -1217,6 +1239,8 @@ def _economic_rejection_reasons(
     reasons: list[str] = []
     if training.trade_count == 0:
         reasons.append("training_has_no_completed_trades")
+    if training.trade_count < MIN_TRAINING_TRADES:
+        reasons.append("training_trade_count_below_100")
     if validation.trade_count == 0:
         reasons.append("validation_has_no_completed_trades")
     if validation.profit_factor is None or validation.profit_factor <= 1.5:
@@ -1233,13 +1257,14 @@ def _economic_rejection_reasons(
 def _economic_assessment(
     training: EvaluationMetrics | None, validation: EvaluationMetrics | None
 ) -> dict[str, Any]:
-    """Evaluate selected candidate; no hard minimum trade counts are enforced."""
+    """Evaluate the selected candidate against hard training and economic gates."""
 
     if training is None or validation is None:
         return {
             "status": "NO-GO",
-            "reasons": ["no_candidate_with_training_trades_and_drawdown_within_limit"],
-            "minimum_completed_trades_enforced": False,
+            "reasons": ["no_candidate_meets_training_trade_and_drawdown_gates"],
+            "minimum_completed_trades_enforced": True,
+            "minimum_training_trades": MIN_TRAINING_TRADES,
             "profit_factor_target": 1.5,
             "final_holdout_used": False,
             "final_holdout_reserved": True,
@@ -1250,7 +1275,8 @@ def _economic_assessment(
     return {
         "status": "NO-GO" if reasons else "OWNER_REVIEW_REQUIRED",
         "reasons": reasons,
-        "minimum_completed_trades_enforced": False,
+        "minimum_completed_trades_enforced": True,
+        "minimum_training_trades": MIN_TRAINING_TRADES,
         "profit_factor_target": 1.5,
         "training_trade_count": training.trade_count,
         "validation_trade_count": validation.trade_count,
@@ -1457,7 +1483,7 @@ def run_evolution(
     validation_end_ms = int(raw["open_time_ms"].iloc[int(len(raw) * 0.80)])
     context = build_search_context(raw, train_cutoff_ms, validation_end_ms)
     baseline_genes = [
-        TIMEFRAMES.index(10080),
+        TIMEFRAMES.index(240),
         INDICATORS.index("rsi_reversal"),
         LOOKBACKS.index(8),
         0,
@@ -1516,7 +1542,12 @@ def run_evolution(
         "fitness_definition": {
             "profit_factor_component": f"{PROFIT_FACTOR_WEIGHT} * log1p(min(profit_factor, {MAX_PROFIT_FACTOR_FOR_FITNESS}))",
             "total_return_component": f"{TOTAL_RETURN_WEIGHT} * net_total_return",
-            "soft_sample_weight": "sqrt(completed_trade_count / (completed_trade_count + 10)); no hard count threshold",
+            "minimum_training_trade_gate": f"fitness = 0.0 when training trade count < {MIN_TRAINING_TRADES}; ineligible for selection",
+            "sample_confidence_after_minimum": "sqrt(completed_trade_count / (completed_trade_count + 10))",
+            "win_rate_penalty": f"{WIN_RATE_PENALTY_MULTIPLIER} * max(0, {MIN_WIN_RATE} - win_rate)",
+            "minimum_win_rate_before_penalty": MIN_WIN_RATE,
+            "allowed_timeframes_minutes": list(TIMEFRAMES),
+            "maximum_holding_period_candles": MAX_HOLDING_PERIOD_CANDLES,
             "opportunity_cost_penalty": f"{OPPORTUNITY_COST_WEIGHT} * missed_upside_return + {OPPORTUNITY_EVENT_PENALTY} * missed_upside_move_count",
             "opportunity_definition": "non-overlapping 24h window rises at least 5%; candidate has no exposure during entire window",
             "regime_capture_bonus": f"{REGIME_CAPTURE_WEIGHT} * positive_high_volatility_return + positive_strong_trend_return",
@@ -1526,8 +1557,11 @@ def run_evolution(
             "validation_used_for_selection": False,
         },
         "eligibility_gates": {
-            "minimum_completed_trade_count_enforced": False,
-            "soft_sample_confidence": "sqrt(trade_count / (trade_count + 10))",
+            "minimum_completed_trade_count_enforced": True,
+            "minimum_training_trades": MIN_TRAINING_TRADES,
+            "minimum_validation_trades_enforced": False,
+            "allowed_timeframes_minutes": list(TIMEFRAMES),
+            "minimum_win_rate_for_penalty": MIN_WIN_RATE,
             "maximum_drawdown_for_candidate_selection": MAX_DRAWDOWN,
             "profit_factor_target_for_validation": 1.5,
             "trailing_activation_gene": True,
@@ -1537,6 +1571,8 @@ def run_evolution(
         "execution_assumptions": {
             "fee_bps_per_side": 25,
             "slippage_bps_per_side": 20,
+            "max_holding_period_candles": MAX_HOLDING_PERIOD_CANDLES,
+            "max_holding_period_basis": "selected timeframe candle count",
             "execution": "close-confirmed signal; next-bar-open fill",
             "position_model": "spot long/flat",
             "terminal_liquidation": "final close",
@@ -1557,8 +1593,8 @@ def run_evolution(
         },
         "top_research_candidate": candidate,
         "candidate_selection_method": (
-            "highest training opportunity-hunter fitness among genomes with at least one "
-            "completed training trade and training drawdown <= 15%; validation excluded from selection"
+            "highest training opportunity-hunter fitness among genomes with at least 100 "
+            "completed training trades and training drawdown <= 15%; validation excluded from selection"
         ),
         "economic_assessment": economic_assessment,
         "research_result": (
@@ -1579,7 +1615,7 @@ def run_evolution(
             "dynamic_exit_genes_active": True,
         },
         "same_dataset_baseline_comparison": {
-            "baseline_description": "previous weekly RSI-reversal candidate re-evaluated on this run's data and split",
+            "baseline_description": "RSI-reversal reference evaluated at 4h under the current timeframe policy and same data split",
             "baseline_training_metrics": asdict(baseline_training),
             "baseline_validation_metrics": asdict(baseline_validation),
             "candidate_training_trade_count": candidate["training_metrics"][
