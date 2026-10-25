@@ -23,6 +23,7 @@ from services.rl_research.rl_trading_environment import (
     BTCUSDTTradingEnv,
     DEFAULT_INACTIVITY_PENALTY,
     DEFAULT_PROFITABLE_TRADE_BONUS,
+    DEFAULT_INACTIVITY_GRACE_STEPS,
     MarketObservationScaler,
     OBSERVATION_FIELDS,
     validate_market_data,
@@ -38,6 +39,10 @@ VALIDATION_FRACTION = 0.10
 HOLDOUT_FRACTION = 0.20
 MINIMUM_ROWS = 1_051_200
 DRAWDOWN_ACCEPTANCE_LIMIT = 0.15
+PREVIOUS_HOLDOUT_START_UTC = "2026-06-01T04:59:00+00:00"
+PREVIOUS_HOLDOUT_START_MS = int(
+    datetime.fromisoformat(PREVIOUS_HOLDOUT_START_UTC).timestamp() * 1000
+)
 ALGORITHM_NAME = "RecurrentPPO"
 POLICY_NAME = "MlpLstmPolicy"
 
@@ -317,6 +322,21 @@ def _validate_cli_arguments(args: argparse.Namespace) -> None:
         raise ValueError("slippage_bps_out_of_range")
 
 
+def _exclude_previous_holdout_window(
+    data: Float64Array,
+) -> tuple[Float64Array, int]:
+    cutoff_index = int(
+        np.searchsorted(data[:, 0], PREVIOUS_HOLDOUT_START_MS, side="left")
+    )
+    excluded_rows = len(data) - cutoff_index
+    if cutoff_index <= 0 or excluded_rows <= 0:
+        raise ValueError("previous_holdout_window_not_present_in_market_data")
+    analysis_data = data[:cutoff_index]
+    if int(analysis_data[-1, 0]) >= PREVIOUS_HOLDOUT_START_MS:
+        raise ValueError("analysis_window_overlaps_previous_holdout")
+    return analysis_data, excluded_rows
+
+
 def _split_training_validation(
     data: Float64Array,
 ) -> tuple[Float64Array, Float64Array, int]:
@@ -473,7 +493,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _parse_args(argv)
     _validate_cli_arguments(args)
     data, manifest = _load_market_data(args.data, args.manifest)
-    train_data, validation_data, validation_end = _split_training_validation(data)
+    analysis_data, _ = _exclude_previous_holdout_window(data)
+    train_data, validation_data, validation_end = _split_training_validation(analysis_data)
     scaler = MarketObservationScaler.fit(train_data)
     n_steps = 1_024
     requested_steps, training_steps = _training_budget(
@@ -483,7 +504,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         train_data, scaler, args, requested_steps, training_steps, n_steps
     )
     evaluation = _evaluate_validation_and_holdout(
-        data, validation_data, validation_end, scaler, args, training.model
+        analysis_data, validation_data, validation_end, scaler, args, training.model
     )
     holdout_data = evaluation["holdout_data"]
     report = _build_report(
@@ -534,7 +555,7 @@ def _build_report(
     loaded_model: Any,
 ) -> dict[str, Any]:
     report: dict[str, Any] = {
-        "schema_version": "alix.rl-trading-agent-report.v1",
+        "schema_version": "alix.rl-trading-agent-report.v2",
         "run_mode": "historical_simulation_only",
         "commit_sha": args.commit_sha,
         "research_result": (
@@ -557,7 +578,26 @@ def _build_report(
             ),
         },
         "split": {
-            "method": "chronological_no_shuffle",
+            "method": "chronological_no_shuffle_excluding_previous_holdout",
+            "previously_reported_holdout_excluded": True,
+            "previously_reported_holdout_start_utc": PREVIOUS_HOLDOUT_START_UTC,
+            "holdout_disjoint_from_previous_holdout": (
+                float(holdout_data[-1, 0]) < PREVIOUS_HOLDOUT_START_MS
+            ),
+            "analysis_window_end_utc": _utc_from_ms(float(holdout_data[-1, 0])),
+            "analysis_window_rows": len(train_data) + len(validation_data) + len(holdout_data),
+            "rows_excluded_after_analysis_window": (
+                int(manifest["row_count"])
+                - len(train_data)
+                - len(validation_data)
+                - len(holdout_data)
+            ),
+            "holdout_novelty_note": (
+                "This holdout is disjoint from the prior June-October 2026 holdout and "
+                "is excluded from this run's train/validation splits. The underlying "
+                "public history was used by earlier research runs, so it is not a "
+                "never-before-downloaded market sample."
+            ),
             "training_fraction": TRAIN_FRACTION,
             "validation_fraction": VALIDATION_FRACTION,
             "final_holdout_fraction": HOLDOUT_FRACTION,
@@ -593,6 +633,13 @@ def _build_report(
                 "buy_semantics": "target long allocation as a fraction of equity",
                 "sell_semantics": "fraction of current holding to sell",
                 "hold_semantics": "do not rebalance",
+                "masking": {
+                    "enforcement": "deterministic_environment_execution_boundary",
+                    "policy_distribution_logits_masked": False,
+                    "sell_requires_positive_inventory": True,
+                    "buy_requires_unallocated_cash_and_must_increase_position": True,
+                    "masked_action_is_non_executable": True,
+                },
             },
             "execution": {
                 "signal_observed_after_bar_close": True,
@@ -613,7 +660,8 @@ def _build_report(
                 "equity_includes_fees_and_slippage": True,
                 "drawdown_increment_penalty": 5.0,
                 "drawdown_level_penalty": 0.01,
-                "inactivity_penalty_per_hold_step": DEFAULT_INACTIVITY_PENALTY,
+                "inactivity_penalty_per_unchanged_position_step": DEFAULT_INACTIVITY_PENALTY,
+                "inactivity_grace_steps": DEFAULT_INACTIVITY_GRACE_STEPS,
                 "profitable_trade_bonus": DEFAULT_PROFITABLE_TRADE_BONUS,
                 "profitable_trade_bonus_trigger": (
                     "completed round trip with cumulative realized PnL positive "
@@ -621,7 +669,8 @@ def _build_report(
                 ),
                 "formula": (
                     "log_net_return - 5.0 * max(0, risk_drawdown - prior_close_drawdown) "
-                    "- 0.01 * risk_drawdown - 0.001 * indicator(action == HOLD) "
+                    "- 0.01 * risk_drawdown "
+                    "- 0.001 * indicator(consecutive_unchanged_steps > 3) "
                     "+ 0.0001 * profitable_closed_trade_count"
                 ),
                 "hard_trade_count_minimum": None,

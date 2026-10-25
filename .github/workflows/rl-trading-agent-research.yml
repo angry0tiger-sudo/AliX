@@ -8,6 +8,7 @@ on:
       - ".github/workflows/rl-trading-agent-research.yml"
       - ".github/workflows/ci.yml"
       - "docs/governance/owner-directives/2026-10-25-rl-reward-shaping.md"
+      - "docs/governance/owner-directives/2026-10-25-rl-action-mask-and-holdout.md"
       - "requirements-rl-research.txt"
       - "services/rl_research/rl_trading_environment.py"
       - "scripts/run_rl_trading_agent.py"
@@ -164,7 +165,7 @@ jobs:
           split = report["split"]
           model = report["model"]
           evaluation = report["evaluation"]
-          assert report["schema_version"] == "alix.rl-trading-agent-report.v1"
+          assert report["schema_version"] == "alix.rl-trading-agent-report.v2"
           assert report["run_mode"] == "historical_simulation_only"
           assert report["dataset"]["row_count"] >= 1_051_200
           assert report["dataset"]["coverage_fraction"] == 1.0
@@ -178,17 +179,29 @@ jobs:
           assert split["final_holdout_used_for_model_selection"] is False
           assert split["final_holdout_evaluation_performed"] is True
           assert split["final_holdout_evaluations"] == 1
+          assert split["previously_reported_holdout_excluded"] is True
+          assert split["holdout_disjoint_from_previous_holdout"] is True
+          assert split["final_holdout_end_utc"] < split["previously_reported_holdout_start_utc"]
+          assert split["rows_excluded_after_analysis_window"] > 0
           assert model["algorithm"] == "RecurrentPPO"
           assert model["model_reload_roundtrip"] == "passed"
           assert len(model["model_sha256"]) == 64
           assert model["total_timesteps_trained"] >= 1_000_000
-          assert report["environment"]["reward"]["inactivity_penalty_per_hold_step"] == 0.001
+          assert report["environment"]["reward"]["inactivity_penalty_per_unchanged_position_step"] == 0.001
+          assert report["environment"]["reward"]["inactivity_grace_steps"] == 3
           assert report["environment"]["reward"]["profitable_trade_bonus"] == 0.0001
+          assert report["environment"]["action_space"]["masking"]["enforcement"] == "deterministic_environment_execution_boundary"
+          assert report["environment"]["action_space"]["masking"]["policy_distribution_logits_masked"] is False
           for split_name in ("validation", "final_holdout"):
               metrics = evaluation[split_name]
               assert metrics["buy_action_count"] >= 0
               assert metrics["sell_action_count"] >= 0
               assert metrics["hold_action_count"] >= 0
+              assert metrics["masked_buy_action_count"] >= 0
+              assert metrics["masked_sell_action_count"] >= 0
+              assert metrics["no_position_change_steps"] >= 0
+              assert metrics["max_consecutive_no_position_change_steps"] >= 0
+              assert metrics["position_change_count"] >= 0
               assert metrics["closed_trade_count"] >= 0
               assert (
                   metrics["winning_trade_count"]

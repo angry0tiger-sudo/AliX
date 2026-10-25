@@ -8,20 +8,21 @@ The new research branch adds a Gymnasium environment and a Stable-Baselines3-com
 
 - **Market input:** verified contiguous BTCUSDT Spot 1-minute candles: timestamp, open, high, low, close, volume.
 - **Observation:** normalized OHLC prices, normalized volume, and cyclical UTC time-of-day/day-of-week. Scales are fitted on training rows only. No account balance, inventory, unrealized PnL, indicator, future label, or execution state is passed to the policy.
-- **Action:** continuous two-value vector. The first component maps to Sell, Hold, or Buy; the second chooses a size between 0% and 100%. Buy targets a long allocation, Sell reduces the existing holding by the selected fraction, and Hold performs no rebalance. Short selling is disabled.
+- **Action:** continuous two-value vector. The first component maps to Sell, Hold, or Buy; the second chooses a size between 0% and 100%. Because RecurrentPPO's continuous policy does not mask distribution logits, the environment applies a deterministic hard mask before simulated execution and reports the legal mask/reason in `info`. SELL is blocked without inventory; BUY is blocked when cash is exhausted/full allocation and whenever the target would reduce rather than increase the position. Short selling is disabled.
 - **Execution:** an action selected after bar close fills at the next bar open. Each fill pays configured per-side fees and slippage. Any residual position is liquidated with costs at an evaluation-slice boundary.
-- **Reward:** net log equity growth minus drawdown penalties, a 0.001 penalty for each Hold action, and a 0.0001 bonus only when a complete round trip closes with cumulative realized PnL positive after fees and slippage. The bonus is not paid on partial sales or unrealized profit. The inactivity penalty may encourage churn, so trade count alone is not success; net return, costs, drawdown, and win/loss counts remain the evidence. Equity already includes fees and slippage; intrabar high/low marks contribute to drawdown. There is no fixed timeframe, take-profit, stop-loss, or maximum holding-period rule.
+- **Reward:** net log equity growth minus drawdown penalties, a 0.001 penalty on each step with no actual position-quantity change after three grace steps, and a 0.0001 bonus only when a complete round trip closes with cumulative realized PnL positive after fees and slippage. Invalid/masked actions and HOLD all count as inactive when they do not change inventory. The bonus is not paid on partial sales or unrealized profit. This shaping can encourage churn, so activity alone is not success; net return, costs, drawdown, and win/loss counts remain the evidence. Equity already includes fees and slippage; intrabar high/low marks contribute to drawdown. There is no fixed timeframe, take-profit, stop-loss, or maximum holding-period rule.
 - **Safety:** the model can emit a simulated decision only. It cannot reach exchange clients or grant order permission.
 
 ## Data and split protocol
 
 1. Reuse the immutable public two-year minute-bar artifact when available; otherwise fetch up to 24 calendar months from the public endpoint.
 2. Verify manifest schema, source, symbol, interval, row count, SHA-256, full coverage and exact one-minute continuity. Any missing/invalid row fails closed.
-3. Split chronologically, without shuffling: 70% training, 10% validation, 20% final holdout.
-4. Fit observation scaling on the training split only.
-5. Train only on the training split, in chronological order. Per the explicit Owner Directive, the rerun must process at least 1,000,000 environment steps. Since the training split is shorter, later episodes replay the same training split from its beginning; validation and holdout rows are never included in training. The data within each episode is neither shuffled nor synthesized.
-6. Evaluate validation once for diagnostic reporting, without early stopping, checkpoint choice, or parameter tuning.
-7. Evaluate the final holdout exactly once after training. Compare against cash and buy-and-hold under the same simulated costs.
+3. Exclude the previously reported June 1, 2026 04:59 UTC to October 25, 2026 holdout window from this experiment. The new analysis window ends at the last available candle before that boundary.
+4. Split that earlier window chronologically, without shuffling: 70% training, 10% validation, 20% final holdout. The new holdout therefore does not reuse the previously reported final-holdout dates.
+5. Fit observation scaling on training rows only. The CSV/hash still refer to the full verified public dataset; the report records the excluded tail rows and exact evaluation dates.
+6. Train only on the training split, in chronological order, for at least 1,000,000 environment steps. Because training is shorter than the requested budget, it replays the same chronological training split from its beginning. Validation and final holdout rows are never used in training.
+7. Evaluate validation once for diagnostics without early stopping, checkpoint selection, or parameter tuning.
+8. Evaluate the new final holdout exactly once after training. Compare against cash and buy-and-hold under the same simulated costs. This window is disjoint from the previous holdout but is drawn from historical data used by earlier research runs; it is fresh for this model's fit, not a never-before-downloaded market sample.
 
 ## GitHub Actions execution budget
 
@@ -36,7 +37,9 @@ The new research branch adds a Gymnasium environment and a Stable-Baselines3-com
 - The Gymnasium checker passes; invalid data, actions, timestamps, costs and accounting states fail closed.
 - Tests prove next-bar execution, position-size semantics, fee/slippage accounting, terminal liquidation, intrabar drawdown penalties, and absence of portfolio fields from observations.
 - The historical workflow verifies model reload, at least 1,000,000 training steps, full validation coverage, action/trade statistics and exactly one full final-holdout evaluation.
-- Reward-shaping tests prove Hold penalty application and that the profitable-trade bonus is issued only after a completed round trip has positive realized PnL after costs.
+- Tests prove SELL masking without inventory, BUY masking at full allocation, rejection of BUY actions that would reduce the position, and inactivity penalties based on consecutive unchanged positions rather than action labels.
+- Reward tests prove that the profitable-trade bonus is issued only after a completed round trip has positive realized PnL after costs.
+- The new holdout end timestamp is strictly earlier than the previously reported holdout start, with explicit excluded-row accounting.
 - The report provides final-holdout net profit/return, max drawdown, fees, slippage, fill count and comparison to cash/buy-and-hold.
 - \`Champion=null\`, \`order_permission=false\`, and \`trading_authorization=NO-GO\` remain invariant, even if the report is profitable.
 

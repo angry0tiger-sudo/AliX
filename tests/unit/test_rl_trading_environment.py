@@ -154,6 +154,10 @@ def test_market_data_shape_non_finite_timestamp_and_gap_fail_closed() -> None:
             "reward_shaping_parameters_must_be_non_negative",
         ),
         (
+            {"inactivity_grace_steps": -1},
+            "inactivity_grace_steps_must_be_non_negative_integer",
+        ),
+        (
             {"profitable_trade_bonus": -0.1},
             "reward_shaping_parameters_must_be_non_negative",
         ),
@@ -307,13 +311,21 @@ def test_scaler_and_summary_reject_invalid_numbers() -> None:
 def test_hold_action_pays_configured_inactivity_penalty() -> None:
     env = _env(_bars())
     env.reset(seed=31)
-    _, reward, terminated, _, info = env.step(np.asarray([0.0, 0.0], dtype=np.float32))
-    assert terminated is False
-    assert reward == pytest.approx(-0.001)
+    rewards: list[float] = []
+    for _ in range(4):
+        _, reward, _, _, info = env.step(
+            np.asarray([0.0, 0.0], dtype=np.float32)
+        )
+        rewards.append(reward)
+    assert rewards[:3] == pytest.approx([0.0, 0.0, 0.0])
+    assert rewards[3] == pytest.approx(-0.001)
     assert info["action"] == "HOLD"
+    assert info["position_changed"] is False
+    assert info["consecutive_no_position_change_steps"] == 4
     assert info["reward_inactivity_penalty"] == pytest.approx(0.001)
     assert info["reward_profitable_trade_bonus"] == pytest.approx(0.0)
-    assert env.summary()["hold_action_count"] == 1
+    assert env.summary()["hold_action_count"] == 4
+    assert env.summary()["no_position_change_steps"] == 4
     env.close()
 
 
@@ -375,4 +387,60 @@ def test_partial_realizations_accumulate_before_profitable_trade_bonus() -> None
     assert final_info["closed_trade_net_profit_this_step"] == pytest.approx(150.0)
     assert final_info["reward_profitable_trade_bonus"] == pytest.approx(0.0001)
     assert env.summary()["closed_trade_count"] == 1
+    env.close()
+
+
+
+def test_sell_is_masked_when_inventory_is_empty() -> None:
+    env = _env(_bars(closes=[100.0] * 6))
+    env.reset(seed=41)
+    for index in range(4):
+        _, reward, _, _, info = env.step(
+            np.asarray([-0.9, 1.0], dtype=np.float32)
+        )
+        assert info["action"] == "SELL"
+        assert info["executed_action"] == "MASKED_SELL"
+        assert info["action_blocked"] is True
+        assert info["action_mask_reason"] == "no_position"
+        assert info["legal_action_mask"]["SELL"] is False
+        assert info["legal_action_mask"]["HOLD"] is True
+        assert reward == pytest.approx(-0.001 if index == 3 else 0.0)
+    summary = env.summary()
+    assert summary["masked_sell_action_count"] == 4
+    assert summary["sell_action_count"] == 4
+    assert summary["fill_count"] == 0
+    assert summary["max_consecutive_no_position_change_steps"] == 4
+    env.close()
+
+
+def test_buy_is_masked_when_position_is_fully_allocated() -> None:
+    env = _env(_bars(closes=[100.0] * 6), initial_equity=1_000.0)
+    env.reset(seed=42)
+    env.step(np.asarray([0.9, 1.0], dtype=np.float32))
+    quantity_before = env._quantity
+    fills_before = env.summary()["fill_count"]
+    _, _, _, _, info = env.step(np.asarray([0.9, 1.0], dtype=np.float32))
+    assert info["action"] == "BUY"
+    assert info["executed_action"] == "MASKED_BUY"
+    assert info["action_blocked"] is True
+    assert info["action_mask_reason"] == "position_fully_allocated"
+    assert info["legal_action_mask"]["BUY"] is False
+    assert env._quantity == pytest.approx(quantity_before)
+    assert env.summary()["fill_count"] == fills_before
+    assert env.summary()["masked_buy_action_count"] == 1
+    env.close()
+
+
+def test_buy_cannot_reduce_existing_position() -> None:
+    env = _env(_bars(closes=[100.0] * 6), initial_equity=1_000.0)
+    env.reset(seed=43)
+    env.step(np.asarray([0.9, 0.8], dtype=np.float32))
+    quantity_before = env._quantity
+    fills_before = env.summary()["fill_count"]
+    _, _, _, _, info = env.step(np.asarray([0.9, 0.1], dtype=np.float32))
+    assert info["action"] == "BUY"
+    assert info["executed_action"] == "MASKED_BUY"
+    assert info["action_mask_reason"] == "buy_would_not_increase_position"
+    assert env._quantity == pytest.approx(quantity_before)
+    assert env.summary()["fill_count"] == fills_before
     env.close()
