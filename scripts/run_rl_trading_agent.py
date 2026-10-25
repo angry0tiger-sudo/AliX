@@ -21,6 +21,7 @@ from numpy.typing import NDArray
 
 from services.rl_research.rl_trading_environment import (
     BTCUSDTTradingEnv,
+    DEFAULT_INITIAL_EQUITY,
     DEFAULT_INACTIVITY_PENALTY,
     DEFAULT_INVALID_ACTION_PENALTY,
     DEFAULT_PROFITABLE_TRADE_BONUS,
@@ -185,7 +186,7 @@ def _env_factory(
         return BTCUSDTTradingEnv(
             data,
             scaler=scaler,
-            initial_equity=10_000.0,
+            initial_equity=DEFAULT_INITIAL_EQUITY,
             fee_bps_per_side=fee_bps,
             slippage_bps_per_side=slippage_bps,
             random_start=False,
@@ -205,6 +206,7 @@ def _evaluate_policy(
     env = BTCUSDTTradingEnv(
         data,
         scaler=scaler,
+        initial_equity=DEFAULT_INITIAL_EQUITY,
         fee_bps_per_side=fee_bps,
         slippage_bps_per_side=slippage_bps,
         random_start=False,
@@ -214,6 +216,14 @@ def _evaluate_policy(
     episode_start = np.asarray([True], dtype=np.bool_)
     reward_sum = 0.0
     steps = 0
+    action_signal_sum = 0.0
+    position_size_sum = 0.0
+    action_signal_min = math.inf
+    action_signal_max = -math.inf
+    position_size_min = math.inf
+    position_size_max = -math.inf
+    zero_size_buy_requests = 0
+    action_mask_reason_counts: dict[str, int] = {}
     while True:
         action, recurrent_state = model.predict(
             observation,
@@ -222,7 +232,22 @@ def _evaluate_policy(
             deterministic=True,
         )
         action_vector = np.asarray(action, dtype=np.float32).reshape(2)
-        observation, reward, terminated, truncated, _ = env.step(action_vector)
+        action_signal = float(action_vector[0])
+        position_size = float(action_vector[1])
+        action_signal_sum += action_signal
+        position_size_sum += position_size
+        action_signal_min = min(action_signal_min, action_signal)
+        action_signal_max = max(action_signal_max, action_signal)
+        position_size_min = min(position_size_min, position_size)
+        position_size_max = max(position_size_max, position_size)
+        observation, reward, terminated, truncated, info = env.step(action_vector)
+        if info["action"] == "BUY" and position_size <= 1e-8:
+            zero_size_buy_requests += 1
+        reason = info.get("action_mask_reason")
+        if isinstance(reason, str):
+            action_mask_reason_counts[reason] = (
+                action_mask_reason_counts.get(reason, 0) + 1
+            )
         reward_sum += reward
         steps += 1
         episode_start = np.asarray([terminated or truncated], dtype=np.bool_)
@@ -235,6 +260,17 @@ def _evaluate_policy(
             "reward_sum": float(reward_sum),
             "evaluation_seed": seed,
             "evaluation_passes": 1,
+            "deterministic_inference": True,
+            "policy_action_signal_mean": action_signal_sum / steps,
+            "policy_action_signal_min": action_signal_min,
+            "policy_action_signal_max": action_signal_max,
+            "policy_position_size_mean": position_size_sum / steps,
+            "policy_position_size_min": position_size_min,
+            "policy_position_size_max": position_size_max,
+            "policy_buy_zero_size_request_count": zero_size_buy_requests,
+            "policy_action_mask_reason_counts": dict(
+                sorted(action_mask_reason_counts.items())
+            ),
         }
     )
     env.close()
@@ -251,6 +287,7 @@ def _evaluate_baseline(
     env = BTCUSDTTradingEnv(
         data,
         scaler=scaler,
+        initial_equity=DEFAULT_INITIAL_EQUITY,
         fee_bps_per_side=fee_bps,
         slippage_bps_per_side=slippage_bps,
         random_start=False,
@@ -715,7 +752,8 @@ def _build_report(
                     "enforcement": "deterministic_environment_execution_boundary",
                     "policy_distribution_logits_masked": False,
                     "sell_requires_positive_inventory": True,
-                    "buy_requires_unallocated_cash_and_must_increase_position": True,
+                    "buy_requires_unallocated_cash": True,
+                    "non_increasing_buy_size_is_noop": True,
                     "masked_action_is_non_executable": True,
                 },
             },

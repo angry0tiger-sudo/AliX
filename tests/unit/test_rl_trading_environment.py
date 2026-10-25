@@ -457,7 +457,7 @@ def test_transaction_cost_updates_are_validated_and_apply_to_future_fills() -> N
     env.close()
 
 
-def test_buy_cannot_reduce_existing_position() -> None:
+def test_buy_size_that_would_reduce_position_is_noop_not_a_legal_mask_block() -> None:
     env = _env(_bars(closes=[100.0] * 6), initial_equity=1_000.0)
     env.reset(seed=43)
     env.step(np.asarray([0.9, 0.8], dtype=np.float32))
@@ -465,8 +465,32 @@ def test_buy_cannot_reduce_existing_position() -> None:
     fills_before = env.summary()["fill_count"]
     _, _, _, _, info = env.step(np.asarray([0.9, 0.1], dtype=np.float32))
     assert info["action"] == "BUY"
-    assert info["executed_action"] == "MASKED_BUY"
-    assert info["action_mask_reason"] == "buy_would_not_increase_position"
+    assert info["executed_action"] == "NOOP_BUY"
+    assert info["action_blocked"] is False
+    assert info["action_mask_reason"] == "buy_target_not_above_current_position"
+    assert info["legal_action_mask"]["BUY"] is True
     assert env._quantity == pytest.approx(quantity_before)
     assert env.summary()["fill_count"] == fills_before
+    summary = env.summary()
+    assert summary["masked_buy_action_count"] == 0
+    assert summary["buy_noop_action_count"] == 1
+    assert summary["buy_target_not_increasing_action_count"] == 1
+    env.close()
+
+
+def test_zero_size_buy_is_noop_when_cash_and_legal_mask_allow_buying() -> None:
+    env = _env(_bars(closes=[100.0] * 6), initial_equity=1_000.0)
+    env.reset(seed=44)
+    _, _, _, _, info = env.step(np.asarray([0.9, 0.0], dtype=np.float32))
+    assert info["action"] == "BUY"
+    assert info["executed_action"] == "NOOP_BUY"
+    assert info["action_blocked"] is False
+    assert info["action_mask_reason"] == "zero_buy_size"
+    assert info["legal_action_mask"]["BUY"] is True
+    summary = env.summary()
+    assert summary["masked_buy_action_count"] == 0
+    assert summary["buy_noop_action_count"] == 1
+    assert summary["zero_size_buy_action_count"] == 1
+    assert summary["invalid_action_penalty_count"] == 0
+    assert summary["fill_count"] == 0
     env.close()

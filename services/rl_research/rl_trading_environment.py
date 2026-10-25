@@ -15,6 +15,7 @@ import numpy as np
 from gymnasium import spaces
 from numpy.typing import NDArray
 
+DEFAULT_INITIAL_EQUITY = 10_000.0
 INTERVAL_MS = 60_000
 TIMESTAMP_COLUMN = 0
 OPEN_COLUMN = 1
@@ -208,7 +209,7 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Float32Array]):
         market_data: Float64Array,
         scaler: MarketObservationScaler | None = None,
         *,
-        initial_equity: float = 10_000.0,
+        initial_equity: float = DEFAULT_INITIAL_EQUITY,
         fee_bps_per_side: float = 25.0,
         slippage_bps_per_side: float = 20.0,
         random_start: bool = False,
@@ -286,6 +287,9 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Float32Array]):
         self._sell_action_count = 0
         self._hold_action_count = 0
         self._masked_buy_action_count = 0
+        self._buy_noop_action_count = 0
+        self._zero_size_buy_action_count = 0
+        self._buy_target_not_increasing_action_count = 0
         self._masked_sell_action_count = 0
         self._invalid_action_penalty_count = 0
         self._no_position_change_steps = 0
@@ -372,7 +376,9 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Float32Array]):
         self._position_cost_basis = 0.0
         self._position_realized_profit = 0.0
 
-    def _record_action(self, requested_action: str, executed_action: str) -> None:
+    def _record_action(
+        self, requested_action: str, executed_action: str, reason: str | None
+    ) -> None:
         if requested_action == "BUY":
             self._buy_action_count += 1
         elif requested_action == "SELL":
@@ -384,6 +390,12 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Float32Array]):
 
         if executed_action == "MASKED_BUY":
             self._masked_buy_action_count += 1
+        elif executed_action == "NOOP_BUY":
+            self._buy_noop_action_count += 1
+            if reason == "zero_buy_size":
+                self._zero_size_buy_action_count += 1
+            elif reason == "buy_target_not_above_current_position":
+                self._buy_target_not_increasing_action_count += 1
         elif executed_action == "MASKED_SELL":
             self._masked_sell_action_count += 1
 
@@ -498,12 +510,14 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Float32Array]):
     ) -> tuple[str, str, dict[str, bool], str | None]:
         if not action_mask["BUY"]:
             return "BUY", "MASKED_BUY", action_mask, "position_fully_allocated"
+        if size <= 0.0:
+            return "BUY", "NOOP_BUY", action_mask, "zero_buy_size"
         if not self._target_for_buy(size, next_open):
             return (
                 "BUY",
-                "MASKED_BUY",
+                "NOOP_BUY",
                 action_mask,
-                "buy_would_not_increase_position",
+                "buy_target_not_above_current_position",
             )
         return "BUY", "BUY", action_mask, None
 
@@ -604,6 +618,9 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Float32Array]):
         self._sell_action_count = 0
         self._hold_action_count = 0
         self._masked_buy_action_count = 0
+        self._buy_noop_action_count = 0
+        self._zero_size_buy_action_count = 0
+        self._buy_target_not_increasing_action_count = 0
         self._masked_sell_action_count = 0
         self._invalid_action_penalty_count = 0
         self._no_position_change_steps = 0
@@ -728,7 +745,7 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Float32Array]):
                 next_open=float(next_bar[OPEN_COLUMN]),
             )
         )
-        self._record_action(requested_action, executed_action)
+        self._record_action(requested_action, executed_action, mask_reason)
         self._policy_closed_trade_count += (
             self._closed_trade_count - closed_trades_before_action
         )
@@ -809,6 +826,11 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Float32Array]):
             "breakeven_trade_count": self._breakeven_trade_count,
             "win_rate": float(win_rate) if win_rate is not None else None,
             "masked_buy_action_count": self._masked_buy_action_count,
+            "buy_noop_action_count": self._buy_noop_action_count,
+            "zero_size_buy_action_count": self._zero_size_buy_action_count,
+            "buy_target_not_increasing_action_count": (
+                self._buy_target_not_increasing_action_count
+            ),
             "masked_sell_action_count": self._masked_sell_action_count,
             "invalid_action_penalty_count": self._invalid_action_penalty_count,
             "no_position_change_steps": self._no_position_change_steps,

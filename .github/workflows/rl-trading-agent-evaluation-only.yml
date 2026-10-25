@@ -1,0 +1,132 @@
+name: AliX RL Evaluation Only Existing Checkpoint
+
+on:
+  push:
+    branches:
+      - "research/rl-trading-agent"
+    paths:
+      - ".github/workflows/rl-trading-agent-evaluation-only.yml"
+      - "services/rl_research/rl_trading_environment.py"
+      - "scripts/run_rl_trading_agent.py"
+      - "scripts/evaluate_rl_trading_agent.py"
+      - "tests/unit/test_rl_trading_environment.py"
+      - "tests/unit/test_rl_trading_agent_runner.py"
+      - "docs/governance/owner-directives/2026-10-25-rl-evaluation-mask-diagnosis.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: alix-rl-evaluation-only-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  evaluate-existing-checkpoint:
+    name: Re-evaluate Run #26 weights without training
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ALIx_ENV: paper
+      ALIx_DRY_RUN: "true"
+      ALIx_ALLOW_LIVE_TRADING: "false"
+      ALIx_REPORTING_ENABLED: "false"
+      PYTHONUNBUFFERED: "1"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      OMP_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+    steps:
+      - name: Checkout diagnostic code without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.12 with pinned dependency cache
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-rl-research.txt
+
+      - name: Pin pip resolver
+        run: python -m pip install pip==25.2
+
+      - name: Download the exact Run #26 checkpoint and public data
+        uses: actions/download-artifact@v4
+        with:
+          name: rl-trading-agent-ea8e80c8cd2afe6306083b29adcd645c28e18818
+          path: artifacts/source-run-26
+          repository: ${{ github.repository }}
+          run-id: 40219894317
+          github-token: ${{ github.token }}
+
+      - name: Install the pinned CPU-only research runtime
+        run: |
+          python -m pip install torch==2.14.1 --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -r requirements-rl-research.txt
+          python -m pip check
+
+      - name: Run environment and evaluation contracts
+        run: >-
+          python -m pytest
+          tests/unit/test_rl_trading_environment.py
+          tests/unit/test_rl_cost_curriculum.py
+          tests/unit/test_rl_trading_agent_runner.py
+          -q
+
+      - name: Validate source checkpoint, dataset and safety invariants and evaluate only
+        run: |
+          python -m scripts.evaluate_rl_trading_agent \
+            --data artifacts/source-run-26/public-minute-bars/binance_BTCUSDT_1m.csv \
+            --manifest artifacts/source-run-26/public-minute-bars/manifest.json \
+            --model artifacts/source-run-26/rl-agent/rl_trading_agent_recurrent_ppo.zip \
+            --source-report artifacts/source-run-26/rl-agent/rl-trading-agent-report.json \
+            --out-dir artifacts/rl-agent-evaluation-only \
+            --commit-sha "${{ github.sha }}" \
+            --seed 20261025
+
+      - name: Verify evaluation result and immutable safety invariants
+        run: |
+          python - <<'PY'
+          import json
+          import math
+          from pathlib import Path
+
+          report = json.loads(Path(
+              "artifacts/rl-agent-evaluation-only/rl-trading-agent-evaluation-only.json"
+          ).read_text(encoding="utf-8"))
+          assert report["training_performed"] is False
+          assert report["model_weights_modified"] is False
+          assert report["model"]["model_sha256"] == "9cca75eb639013e4b2f48839002a456d28eebe6bb4c9b019078920494d5a8c39"
+          assert report["safety_invariants"]["Champion"] is None
+          assert report["safety_invariants"]["order_permission"] is False
+          assert report["safety_invariants"]["trading_authorization"] == "NO-GO"
+          assert report["safety_invariants"]["private_api_calls"] == 0
+          assert report["safety_invariants"]["real_order_attempts"] == 0
+          assert report["safety_invariants"]["orders_or_execution_api_used"] is False
+          evaluation = report["evaluation"]
+          for split_name in ("validation", "final_holdout"):
+              metrics = evaluation[split_name]
+              assert metrics["initial_equity"] == 10000.0
+              assert metrics["evaluation_passes"] == 1
+              for key in ("net_profit", "net_return", "max_drawdown", "total_fees", "total_slippage"):
+                  assert math.isfinite(float(metrics[key]))
+          print(json.dumps({
+              "model_sha256": report["model"]["model_sha256"],
+              "validation": evaluation["validation"],
+              "final_holdout": evaluation["final_holdout"],
+              "economic_assessment": report["economic_assessment"],
+              "safety_invariants": report["safety_invariants"],
+          }, sort_keys=True, allow_nan=False))
+          PY
+
+      - name: Upload evaluation-only report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rl-trading-agent-evaluation-only-${{ github.sha }}
+          path: artifacts/rl-agent-evaluation-only/rl-trading-agent-evaluation-only.json
+          if-no-files-found: warn
+          retention-days: 30

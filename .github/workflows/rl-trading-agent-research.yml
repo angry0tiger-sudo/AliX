@@ -32,6 +32,7 @@ concurrency:
 
 jobs:
   rl-historical-research:
+    if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[train-rl]') }}
     name: Train recurrent PPO and evaluate untouched holdout
     runs-on: ubuntu-latest
     timeout-minutes: 55
