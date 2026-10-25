@@ -333,6 +333,7 @@ def _evaluate_policy(
     finally:
         env.close()
 
+
 def _evaluate_baseline(
     data: Float64Array,
     scaler: MarketObservationScaler,
