@@ -649,7 +649,8 @@ def _build_report(
             "estimated_full_pass_equivalents": float(
                 loaded_model.num_timesteps / (len(train_data) - 1)
             ),
-            "training_replays_training_split": loaded_model.num_timesteps > len(train_data) - 1,
+            "training_replays_training_split": loaded_model.num_timesteps
+            > len(train_data) - 1,
             "n_envs": 1,
             "n_steps": n_steps,
             "batch_size": 256,

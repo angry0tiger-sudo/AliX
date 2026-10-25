@@ -509,9 +509,7 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Float32Array]):
 
         log_net_return = math.log(current_equity / previous_equity)
         worsening_drawdown = max(0.0, risk_drawdown - previous_drawdown)
-        inactivity_penalty = (
-            self.inactivity_penalty if action_name == "HOLD" else 0.0
-        )
+        inactivity_penalty = self.inactivity_penalty if action_name == "HOLD" else 0.0
         profitable_trade_bonus = (
             self.profitable_trade_bonus * self._last_step_profitable_trade_count
         )

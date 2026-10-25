@@ -302,7 +302,6 @@ def test_scaler_and_summary_reject_invalid_numbers() -> None:
     env.close()
 
 
-
 def test_hold_action_pays_configured_inactivity_penalty() -> None:
     env = _env(_bars())
     env.reset(seed=31)
@@ -323,9 +322,7 @@ def test_profitable_completed_trade_gets_intermediate_reward_bonus() -> None:
     )
     env.reset(seed=32)
     env.step(np.asarray([0.8, 1.0], dtype=np.float32))
-    _, reward, terminated, _, info = env.step(
-        np.asarray([-0.8, 1.0], dtype=np.float32)
-    )
+    _, reward, terminated, _, info = env.step(np.asarray([-0.8, 1.0], dtype=np.float32))
     assert terminated is False
     assert info["action"] == "SELL"
     assert info["closed_trade_net_profit_this_step"] == pytest.approx(100.0)
@@ -346,9 +343,7 @@ def test_losing_completed_trade_receives_no_profit_bonus() -> None:
     )
     env.reset(seed=33)
     env.step(np.asarray([0.8, 1.0], dtype=np.float32))
-    _, reward, terminated, _, info = env.step(
-        np.asarray([-0.8, 1.0], dtype=np.float32)
-    )
+    _, reward, terminated, _, info = env.step(np.asarray([-0.8, 1.0], dtype=np.float32))
     assert terminated is False
     assert info["closed_trade_net_profit_this_step"] == pytest.approx(-100.0)
     assert info["reward_profitable_trade_bonus"] == pytest.approx(0.0)
@@ -368,9 +363,7 @@ def test_partial_realizations_accumulate_before_profitable_trade_bonus() -> None
     )
     env.reset(seed=34)
     env.step(np.asarray([0.8, 1.0], dtype=np.float32))
-    _, _, _, _, partial_info = env.step(
-        np.asarray([-0.8, 0.5], dtype=np.float32)
-    )
+    _, _, _, _, partial_info = env.step(np.asarray([-0.8, 0.5], dtype=np.float32))
     assert partial_info["closed_trade_net_profit_this_step"] is None
     assert partial_info["reward_profitable_trade_bonus"] == pytest.approx(0.0)
     _, _, terminated, _, final_info = env.step(
