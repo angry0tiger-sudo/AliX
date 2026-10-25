@@ -62,6 +62,17 @@ def test_net_expectancy_includes_both_sides_fee_and_slippage() -> None:
     assert metrics.net_return < 0.0
 
 
+def test_no_completed_trades_report_expectancy_as_unavailable() -> None:
+    opens = np.full(8, 100.0)
+    closes = np.full(8, 100.0)
+    positions = np.zeros(8, dtype=bool)
+    metrics = metrics_from_positions(opens, closes, positions, 0.25)
+    assert metrics.trade_count == 0
+    assert metrics.net_expectancy is None
+    assert metrics.win_rate == 0.0
+    assert fitness_score(metrics) == -1.0
+
+
 def test_fitness_penalizes_drawdown_churn_and_small_samples() -> None:
     baseline = EvaluationMetrics(40, 0.55, 0.002, 0.05, 0.10)
     drawdown = EvaluationMetrics(40, 0.55, 0.002, 0.05, 0.40)

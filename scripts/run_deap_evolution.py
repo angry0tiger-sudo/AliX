@@ -54,7 +54,7 @@ MANIFEST_SCHEMA = "alix.self-evolving-data-manifest.v1"
 class EvaluationMetrics:
     trade_count: int
     win_rate: float
-    net_expectancy: float
+    net_expectancy: float | None
     net_return: float
     max_drawdown: float
     fee_bps_per_side: float = 25.0
@@ -179,7 +179,9 @@ def _resample(data: pd.DataFrame, timeframe: int) -> pd.DataFrame:
         )
         bars = bars.loc[grouped["close"].count() == timeframe]
     bars = bars.dropna(subset=fields)
-    bars["open_time_ms"] = np.asarray(bars.index, dtype="datetime64[ns]").astype(np.int64) // 1_000_000
+    bars["open_time_ms"] = (
+        np.asarray(bars.index, dtype="datetime64[ns]").astype(np.int64) // 1_000_000
+    )
     bars["close_time_ms"] = bars["open_time_ms"] + timeframe * 60_000 - 1
     return bars
 
@@ -404,7 +406,7 @@ def metrics_from_positions(
         raise ValueError("metric_input_length_invalid")
     open_positions = np.r_[False, positions_after_close[:-1]]
     returns = _trade_returns(opens, closes, open_positions)
-    expectancy = float(np.mean(returns)) if len(returns) else -1.0
+    expectancy = float(np.mean(returns)) if len(returns) else None
     wins = float(np.mean(returns > 0.0)) if len(returns) else 0.0
     net_return, drawdown = _portfolio_metrics(opens, closes, open_positions, exposure)
     return EvaluationMetrics(int(len(returns)), wins, expectancy, net_return, drawdown)
@@ -455,7 +457,7 @@ def _period_metrics(
 def fitness_score(metrics: EvaluationMetrics) -> float:
     """Net expectancy minus declared churn, drawdown, and low-sample penalties."""
 
-    if metrics.trade_count == 0:
+    if metrics.trade_count == 0 or metrics.net_expectancy is None:
         return -1.0
     drawdown_penalty = 0.25 * max(0.0, metrics.max_drawdown - 0.15)
     churn_penalty = 0.00001 * max(0, metrics.trade_count - 200)
