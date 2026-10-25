@@ -31,3 +31,17 @@ or timed-out check aborts training.
 - `trading_authorization = NO-GO`
 - Zero private exchange API calls, zero real order attempts, and no execution API use.
 - No automatic promotion, no weakened CI/quality/complexity/coverage gates.
+
+
+## Owner Directive: Encourage Profitable SELL Decisions
+
+**Date:** 2026-10-25  
+**Authority:** Explicit follow-up instruction. This section supersedes earlier reward coefficients for the next experiment only; safety and CI rules remain immutable.
+
+1. Increase masked-action penalty to `0.01` whenever a requested BUY or SELL is disallowed by the environment's pre-action legal mask. The action remains non-executable; do not remove the mask.
+2. Add a realized-profit reward of `0.5 * max(0, closed_trade_net_profit / initial_equity)` only if a policy-selected SELL fully closes the trade with net realized PnL positive after fees and slippage. Partial SELL and terminal forced liquidation do not earn this term.
+3. Add a `0.0001` penalty for a policy-selected HOLD while expected liquidation value after exit fees and slippage is below the current position cost basis. No such penalty applies while flat or on BUY/SELL.
+4. Set RecurrentPPO `ent_coef=0.02`. Train for at least 1,000,000 steps only after CI succeeds on the exact training commit. Report the applied coefficients and counts.
+5. Preserve full market-data integrity, cost curriculum, complexity, test and coverage gates. No automatic promotion or model championing.
+
+Safety invariants: `Champion = null`, `order_permission = false`, `trading_authorization = NO-GO`; zero private API calls, zero live orders and no execution API.
