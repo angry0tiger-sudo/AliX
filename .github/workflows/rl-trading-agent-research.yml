@@ -9,11 +9,15 @@ on:
       - ".github/workflows/ci.yml"
       - "docs/governance/owner-directives/2026-10-25-rl-reward-shaping.md"
       - "docs/governance/owner-directives/2026-10-25-rl-action-mask-and-holdout.md"
+      - "docs/governance/owner-directives/2026-10-25-rl-entropy-cost-curriculum.md"
       - "requirements-rl-research.txt"
       - "services/rl_research/rl_trading_environment.py"
+      - "services/rl_research/rl_cost_curriculum.py"
       - "scripts/run_rl_trading_agent.py"
       - "scripts/fetch_public_minute_bars.py"
       - "tests/unit/test_rl_trading_environment.py"
+      - "tests/unit/test_rl_cost_curriculum.py"
+      - "tests/unit/test_rl_trading_agent_runner.py"
       - "docs/knowledge_base/RL_TRADING_AGENT_ARCHITECTURE.md"
       - "docs/governance/owner-directives/2026-10-25-rl-trading-agent.md"
   workflow_dispatch:
@@ -95,8 +99,13 @@ jobs:
       - name: Audit pinned RL research dependency graph
         run: pip-audit -r requirements-rl-research.txt
 
-      - name: Run environment contract and simulation tests
-        run: python -m pytest tests/unit/test_rl_trading_environment.py -q
+      - name: Run environment, curriculum, and split contract tests
+        run: >-
+          python -m pytest
+          tests/unit/test_rl_trading_environment.py
+          tests/unit/test_rl_cost_curriculum.py
+          tests/unit/test_rl_trading_agent_runner.py
+          -q
 
       - name: Validate data provenance, integrity, and immutable safety invariants
         run: |
@@ -146,6 +155,7 @@ jobs:
             --out-dir artifacts/rl-agent \
             --timesteps 1000000 \
             --seed 20261025 \
+            --ent-coef 0.01 \
             --fee-bps 25 \
             --slippage-bps 20 \
             --commit-sha "${{ github.sha }}"
@@ -165,7 +175,8 @@ jobs:
           split = report["split"]
           model = report["model"]
           evaluation = report["evaluation"]
-          assert report["schema_version"] == "alix.rl-trading-agent-report.v2"
+          curriculum = report["cost_curriculum"]
+          assert report["schema_version"] == "alix.rl-trading-agent-report.v3"
           assert report["run_mode"] == "historical_simulation_only"
           assert report["dataset"]["row_count"] >= 1_051_200
           assert report["dataset"]["coverage_fraction"] == 1.0
@@ -187,7 +198,31 @@ jobs:
           assert model["model_reload_roundtrip"] == "passed"
           assert len(model["model_sha256"]) == 64
           assert model["total_timesteps_trained"] >= 1_000_000
+          assert model["ent_coef"] == 0.01
           assert report["environment"]["reward"]["inactivity_penalty_per_unchanged_position_step"] == 0.001
+          assert report["environment"]["reward"]["invalid_action_penalty_per_masked_request"] == 0.001
+          assert curriculum["initial_fee_bps_per_side"] == 0.0
+          assert curriculum["initial_slippage_bps_per_side"] == 0.0
+          assert curriculum["target_fee_bps_per_side"] == 25.0
+          assert curriculum["target_slippage_bps_per_side"] == 20.0
+          assert curriculum["minimum_completed_policy_round_trips"] == 100
+          assert curriculum["ramp_steps"] == 100_000
+          assert curriculum["ramp_update_interval_steps"] == 1_000
+          assert curriculum["training_timesteps"] == model["total_timesteps_trained"]
+          assert curriculum["minimum_trade_threshold_met"] == (
+              curriculum["total_policy_closed_trade_count"] >= 100
+          )
+          assert curriculum["ramp_started"] == (
+              curriculum["ramp_start_timestep"] is not None
+          )
+          assert curriculum["ramp_completed"] == (
+              curriculum["full_cost_start_timestep"] is not None
+              and model["total_timesteps_trained"] >= curriculum["full_cost_start_timestep"]
+          )
+          assert sum(curriculum["steps_by_stage"].values()) == model["total_timesteps_trained"]
+          assert sum(curriculum["closed_trades_by_stage"].values()) == curriculum["total_policy_closed_trade_count"]
+          if not curriculum["ramp_completed"]:
+              assert report["economic_assessment"]["status"] == "NO-GO"
           assert report["environment"]["reward"]["inactivity_grace_steps"] == 3
           assert report["environment"]["reward"]["profitable_trade_bonus"] == 0.0001
           assert report["environment"]["action_space"]["masking"]["enforcement"] == "deterministic_environment_execution_boundary"
@@ -199,6 +234,8 @@ jobs:
               assert metrics["hold_action_count"] >= 0
               assert metrics["masked_buy_action_count"] >= 0
               assert metrics["masked_sell_action_count"] >= 0
+              assert metrics["invalid_action_penalty_count"] >= 0
+              assert metrics["policy_closed_trade_count"] >= 0
               assert metrics["no_position_change_steps"] >= 0
               assert metrics["max_consecutive_no_position_change_steps"] >= 0
               assert metrics["position_change_count"] >= 0
@@ -235,6 +272,7 @@ jobs:
               "dataset": report["dataset"],
               "split": split,
               "model": model,
+              "cost_curriculum": curriculum,
               "validation": evaluation["validation"],
               "final_holdout": evaluation["final_holdout"],
               "final_holdout_buy_and_hold": evaluation["final_holdout_buy_and_hold"],

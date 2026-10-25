@@ -22,11 +22,18 @@ from numpy.typing import NDArray
 from services.rl_research.rl_trading_environment import (
     BTCUSDTTradingEnv,
     DEFAULT_INACTIVITY_PENALTY,
+    DEFAULT_INVALID_ACTION_PENALTY,
     DEFAULT_PROFITABLE_TRADE_BONUS,
     DEFAULT_INACTIVITY_GRACE_STEPS,
     MarketObservationScaler,
     OBSERVATION_FIELDS,
     validate_market_data,
+)
+from services.rl_research.rl_cost_curriculum import (
+    CURRICULUM_MINIMUM_CLOSED_TRADES,
+    CURRICULUM_RAMP_STEPS,
+    CURRICULUM_RAMP_UPDATE_INTERVAL_STEPS,
+    TrainingCostCurriculum,
 )
 
 Float64Array = NDArray[np.float64]
@@ -289,8 +296,9 @@ def _economic_assessment(
         "timeframe_gate": None,
         "automatic_promotion_allowed": False,
         "note": (
-            "This assessment is descriptive and does not authorize trading. "
-            "No trade-count minimum is used to train or score the policy."
+            "This assessment is descriptive and never authorizes trading. The "
+            "curriculum's 100 completed-policy-trade threshold only triggers the "
+            "cost ramp; it is not itself evidence of economic success."
         ),
     }
 
@@ -307,6 +315,7 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="0 trains over one chronological pass through the training split.",
     )
     parser.add_argument("--seed", type=int, default=20261025)
+    parser.add_argument("--ent-coef", type=float, default=0.01)
     parser.add_argument("--fee-bps", type=float, default=DEFAULT_FEE_BPS)
     parser.add_argument("--slippage-bps", type=float, default=DEFAULT_SLIPPAGE_BPS)
     parser.add_argument("--commit-sha", default="unknown")
@@ -316,6 +325,8 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 def _validate_cli_arguments(args: argparse.Namespace) -> None:
     if args.timesteps < 0:
         raise ValueError("timesteps_must_be_non_negative")
+    if not math.isfinite(args.ent_coef) or args.ent_coef < 0:
+        raise ValueError("ent_coef_must_be_finite_and_non_negative")
     if not math.isfinite(args.fee_bps) or not 0 <= args.fee_bps < 10_000:
         raise ValueError("fee_bps_out_of_range")
     if not math.isfinite(args.slippage_bps) or not 0 <= args.slippage_bps < 10_000:
@@ -373,6 +384,49 @@ class TrainingRun:
     requested_timesteps: int
     n_steps: int
     training_seconds: float
+    entropy_coefficient: float
+    cost_curriculum: dict[str, Any]
+
+
+def _build_cost_curriculum_callback(curriculum: TrainingCostCurriculum) -> Any:
+    """Create an SB3 callback lazily so evaluation-only imports stay lightweight."""
+    base_callback = getattr(
+        importlib.import_module("stable_baselines3.common.callbacks"), "BaseCallback"
+    )
+
+    class CostCurriculumCallback(base_callback):
+        def __init__(self) -> None:
+            super().__init__(verbose=0)
+            self._last_costs = (0.0, 0.0)
+
+        def _on_step(self) -> bool:
+            infos = self.locals.get("infos")
+            if not isinstance(infos, list) or len(infos) != 1:
+                raise RuntimeError("cost_curriculum_requires_single_vectorized_environment")
+            info = infos[0]
+            if not isinstance(info, dict):
+                raise RuntimeError("cost_curriculum_step_info_missing")
+            closed_trades = info.get("policy_closed_trade_count")
+            if (
+                isinstance(closed_trades, bool)
+                or not isinstance(closed_trades, int)
+                or closed_trades < 0
+            ):
+                raise RuntimeError("policy_closed_trade_count_missing_or_invalid")
+            next_fees, next_slippage = curriculum.observe_step(
+                int(self.num_timesteps), closed_trades
+            )
+            next_costs = (next_fees, next_slippage)
+            if next_costs != self._last_costs:
+                updates = self.training_env.env_method(
+                    "set_transaction_costs", next_fees, next_slippage
+                )
+                if len(updates) != 1 or updates[0] is not None:
+                    raise RuntimeError("cost_curriculum_environment_update_failed")
+                self._last_costs = next_costs
+            return True
+
+    return CostCurriculumCallback()
 
 
 def _train_recurrent_ppo(
@@ -395,9 +449,17 @@ def _train_recurrent_ppo(
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
     model_path = args.out_dir / "rl_trading_agent_recurrent_ppo.zip"
-    envs = dummy_vec_env(
-        [_env_factory(train_data, scaler, args.fee_bps, args.slippage_bps)]
+    curriculum = TrainingCostCurriculum(
+        target_fee_bps=args.fee_bps,
+        target_slippage_bps=args.slippage_bps,
+        minimum_closed_trades=CURRICULUM_MINIMUM_CLOSED_TRADES,
+        ramp_steps=CURRICULUM_RAMP_STEPS,
+        ramp_update_interval_steps=CURRICULUM_RAMP_UPDATE_INTERVAL_STEPS,
     )
+    envs = dummy_vec_env(
+        [_env_factory(train_data, scaler, 0.0, 0.0)]
+    )
+    callback = _build_cost_curriculum_callback(curriculum)
     envs.seed(args.seed)
     model = recurrent_ppo(
         POLICY_NAME,
@@ -408,7 +470,7 @@ def _train_recurrent_ppo(
         n_epochs=4,
         gamma=0.99,
         gae_lambda=0.95,
-        ent_coef=0.001,
+        ent_coef=args.ent_coef,
         clip_range=0.2,
         max_grad_norm=0.5,
         seed=args.seed,
@@ -427,6 +489,7 @@ def _train_recurrent_ppo(
             progress_bar=False,
             reset_num_timesteps=True,
             log_interval=10,
+            callback=callback,
         )
         model.save(str(model_path.with_suffix("")))
     finally:
@@ -444,6 +507,8 @@ def _train_recurrent_ppo(
         requested_timesteps=requested_steps,
         n_steps=n_steps,
         training_seconds=float(training_seconds),
+        entropy_coefficient=float(args.ent_coef),
+        cost_curriculum=curriculum.report(int(loaded_model.num_timesteps)),
     )
 
 
@@ -521,12 +586,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         evaluation["holdout_metrics"],
         evaluation["holdout_buy_and_hold"],
         evaluation["holdout_cash"],
-        training.requested_timesteps,
-        training.n_steps,
-        training.training_seconds,
-        training.model_path,
-        training.torch_version,
-        training.model,
+        training,
     )
     report_path = args.out_dir / "rl-trading-agent-report.json"
     report_path.write_text(
@@ -549,21 +609,33 @@ def _build_report(
     holdout_metrics: dict[str, Any],
     holdout_buy_and_hold: dict[str, Any],
     holdout_cash: dict[str, Any],
-    requested_steps: int,
-    n_steps: int,
-    training_seconds: float,
-    model_path: Path,
-    torch_version: str,
-    loaded_model: Any,
+    training: TrainingRun,
 ) -> dict[str, Any]:
+    economic_assessment = _economic_assessment(validation_metrics, holdout_metrics)
+    curriculum = training.cost_curriculum
+    minimum_trade_threshold_met = bool(curriculum["minimum_trade_threshold_met"])
+    ramp_completed = bool(curriculum["ramp_completed"])
+    economic_assessment["criteria"]["minimum_trade_threshold_met"] = (
+        minimum_trade_threshold_met
+    )
+    economic_assessment["criteria"]["training_cost_ramp_completed"] = ramp_completed
+    economic_assessment["criteria"]["training_cost_curriculum_completed"] = (
+        minimum_trade_threshold_met and ramp_completed
+    )
+    if not minimum_trade_threshold_met:
+        economic_assessment["reasons"].append("minimum_trade_threshold_not_reached")
+    if not ramp_completed:
+        economic_assessment["reasons"].append("training_cost_ramp_incomplete")
+    if not minimum_trade_threshold_met or not ramp_completed:
+        economic_assessment["status"] = "NO-GO"
+
     report: dict[str, Any] = {
-        "schema_version": "alix.rl-trading-agent-report.v2",
+        "schema_version": "alix.rl-trading-agent-report.v3",
         "run_mode": "historical_simulation_only",
         "commit_sha": args.commit_sha,
         "research_result": (
             "CANDIDATE_REQUIRES_OWNER_REVIEW"
-            if _economic_assessment(validation_metrics, holdout_metrics)["status"]
-            == "CANDIDATE_REQUIRES_OWNER_REVIEW"
+            if economic_assessment["status"] == "CANDIDATE_REQUIRES_OWNER_REVIEW"
             else "NO_ECONOMICALLY_ACCEPTABLE_STRATEGY_FOUND"
         ),
         "dataset": {
@@ -665,16 +737,21 @@ def _build_report(
                 "drawdown_increment_penalty": 5.0,
                 "drawdown_level_penalty": 0.01,
                 "inactivity_penalty_per_unchanged_position_step": DEFAULT_INACTIVITY_PENALTY,
+                "invalid_action_penalty_per_masked_request": DEFAULT_INVALID_ACTION_PENALTY,
                 "inactivity_grace_steps": DEFAULT_INACTIVITY_GRACE_STEPS,
                 "profitable_trade_bonus": DEFAULT_PROFITABLE_TRADE_BONUS,
                 "profitable_trade_bonus_trigger": (
                     "completed round trip with cumulative realized PnL positive "
                     "after entry and exit fees and slippage"
                 ),
+                "invalid_action_penalty_trigger": (
+                    "requested BUY or SELL disallowed by the pre-action legal mask"
+                ),
                 "formula": (
                     "log_net_return - 5.0 * max(0, risk_drawdown - prior_close_drawdown) "
                     "- 0.01 * risk_drawdown "
                     "- 0.001 * indicator(consecutive_unchanged_steps > 3) "
+                    "- 0.001 * indicator(masked_BUY_or_SELL_request) "
                     "+ 0.0001 * profitable_closed_trade_count"
                 ),
                 "hard_trade_count_minimum": None,
@@ -693,28 +770,36 @@ def _build_report(
             "pandas_version": pd.__version__,
             "device": "cpu",
             "seed": args.seed,
-            "requested_timesteps": requested_steps,
-            "total_timesteps_trained": int(loaded_model.num_timesteps),
+            "requested_timesteps": training.requested_timesteps,
+            "total_timesteps_trained": int(training.model.num_timesteps),
+            "ent_coef": training.entropy_coefficient,
+            "learning_rate": 3e-4,
+            "gamma": 0.99,
+            "gae_lambda": 0.95,
+            "clip_range": 0.2,
+            "max_grad_norm": 0.5,
             "training_rows": len(train_data),
             "first_pass_training_coverage_fraction": min(
-                1.0, float(loaded_model.num_timesteps) / (len(train_data) - 1)
+                1.0, float(training.model.num_timesteps) / (len(train_data) - 1)
             ),
             "estimated_full_pass_equivalents": float(
-                loaded_model.num_timesteps / (len(train_data) - 1)
+                training.model.num_timesteps / (len(train_data) - 1)
             ),
-            "training_replays_training_split": loaded_model.num_timesteps
+            "training_replays_training_split": training.model.num_timesteps
             > len(train_data) - 1,
             "n_envs": 1,
-            "n_steps": n_steps,
+            "n_steps": training.n_steps,
             "batch_size": 256,
+            "n_epochs": 4,
             "epochs_per_rollout": 4,
             "lstm_hidden_size": 64,
-            "training_seconds": float(training_seconds),
-            "model_artifact": model_path.name,
-            "model_sha256": _sha256(model_path),
+            "training_seconds": float(training.training_seconds),
+            "model_artifact": training.model_path.name,
+            "model_sha256": _sha256(training.model_path),
             "model_reload_roundtrip": "passed",
             "no_validation_checkpoint_selection": True,
         },
+        "cost_curriculum": training.cost_curriculum,
         "evaluation": {
             "validation": validation_metrics,
             "validation_buy_and_hold": validation_buy_and_hold,
@@ -728,9 +813,7 @@ def _build_report(
             ),
             "holdout_pass_count": 1,
         },
-        "economic_assessment": _economic_assessment(
-            validation_metrics, holdout_metrics
-        ),
+        "economic_assessment": economic_assessment,
         "production_promotion_allowed": False,
         "safety_invariants": {
             "Champion": None,

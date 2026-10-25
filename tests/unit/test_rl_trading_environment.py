@@ -399,10 +399,17 @@ def test_sell_is_masked_when_inventory_is_empty() -> None:
         assert info["action_mask_reason"] == "no_position"
         assert info["legal_action_mask"]["SELL"] is False
         assert info["legal_action_mask"]["HOLD"] is True
-        assert reward == pytest.approx(-0.001 if index == 3 else 0.0)
+        assert info["reward_invalid_action_penalty"] == pytest.approx(0.001)
+        assert info["invalid_action_penalty_applied"] is True
+        assert info["reward_inactivity_penalty"] == pytest.approx(
+            0.001 if index == 3 else 0.0
+        )
+        assert reward == pytest.approx(-0.001 if index < 3 else -0.002)
     summary = env.summary()
     assert summary["masked_sell_action_count"] == 4
     assert summary["sell_action_count"] == 4
+    assert summary["invalid_action_penalty_count"] == 4
+    assert summary["policy_closed_trade_count"] == 0
     assert summary["fill_count"] == 0
     assert summary["max_consecutive_no_position_change_steps"] == 4
     env.close()
@@ -423,6 +430,28 @@ def test_buy_is_masked_when_position_is_fully_allocated() -> None:
     assert env._quantity == pytest.approx(quantity_before)
     assert env.summary()["fill_count"] == fills_before
     assert env.summary()["masked_buy_action_count"] == 1
+    env.close()
+
+
+def test_transaction_cost_updates_are_validated_and_apply_to_future_fills() -> None:
+    env = _env(_bars(closes=[100.0] * 6), initial_equity=1_000.0)
+    env.reset(seed=44)
+    env.set_transaction_costs(0.0, 0.0)
+    env.step(np.asarray([0.9, 1.0], dtype=np.float32))
+    assert env.summary()["total_fees"] == pytest.approx(0.0)
+    assert env.summary()["total_slippage"] == pytest.approx(0.0)
+
+    env.set_transaction_costs(25.0, 20.0)
+    with pytest.raises(ValueError, match="slippage_bps_per_side_out_of_range"):
+        env.set_transaction_costs(10.0, 10_000.0)
+    assert env.fee_bps_per_side == pytest.approx(25.0)
+    assert env.slippage_bps_per_side == pytest.approx(20.0)
+
+    env.step(np.asarray([-0.9, 1.0], dtype=np.float32))
+    summary = env.summary()
+    assert summary["total_fees"] > 0.0
+    assert summary["total_slippage"] > 0.0
+    assert summary["policy_closed_trade_count"] == 1
     env.close()
 
 

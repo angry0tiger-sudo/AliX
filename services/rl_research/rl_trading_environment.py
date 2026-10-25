@@ -41,6 +41,7 @@ SELL_THRESHOLD = -1.0 / 3.0
 DEFAULT_DRAWDOWN_INCREMENT_PENALTY = 5.0
 DEFAULT_DRAWDOWN_LEVEL_PENALTY = 0.01
 DEFAULT_INACTIVITY_PENALTY = 0.001
+DEFAULT_INVALID_ACTION_PENALTY = 0.001
 DEFAULT_INACTIVITY_GRACE_STEPS = 3
 DEFAULT_PROFITABLE_TRADE_BONUS = 0.0001
 POSITION_FRACTION_EPSILON = 1e-9
@@ -138,7 +139,9 @@ def _validate_drawdown_penalties(increment: object, level: object) -> None:
 
 
 def _validate_reward_shaping(
-    inactivity_penalty: object, profitable_trade_bonus: object
+    inactivity_penalty: object,
+    profitable_trade_bonus: object,
+    invalid_action_penalty: object,
 ) -> None:
     inactivity_value = _finite_numeric_parameter(
         "inactivity_penalty", inactivity_penalty
@@ -146,7 +149,14 @@ def _validate_reward_shaping(
     bonus_value = _finite_numeric_parameter(
         "profitable_trade_bonus", profitable_trade_bonus
     )
-    if inactivity_value < 0 or bonus_value < 0:
+    invalid_action_value = _finite_numeric_parameter(
+        "invalid_action_penalty", invalid_action_penalty
+    )
+    if (
+        inactivity_value < 0
+        or bonus_value < 0
+        or invalid_action_value < 0
+    ):
         raise ValueError("reward_shaping_parameters_must_be_non_negative")
 
 
@@ -158,6 +168,7 @@ def _validate_environment_configuration(
     drawdown_increment_penalty: object,
     drawdown_level_penalty: object,
     inactivity_penalty: object,
+    invalid_action_penalty: object,
     inactivity_grace_steps: object,
     profitable_trade_bonus: object,
 ) -> None:
@@ -167,7 +178,9 @@ def _validate_environment_configuration(
     _validate_cost_basis_points("fee_bps_per_side", fee_bps_per_side)
     _validate_cost_basis_points("slippage_bps_per_side", slippage_bps_per_side)
     _validate_drawdown_penalties(drawdown_increment_penalty, drawdown_level_penalty)
-    _validate_reward_shaping(inactivity_penalty, profitable_trade_bonus)
+    _validate_reward_shaping(
+        inactivity_penalty, profitable_trade_bonus, invalid_action_penalty
+    )
     if (
         isinstance(inactivity_grace_steps, bool)
         or not isinstance(inactivity_grace_steps, int)
@@ -207,6 +220,7 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Float32Array]):
         drawdown_increment_penalty: float = DEFAULT_DRAWDOWN_INCREMENT_PENALTY,
         drawdown_level_penalty: float = DEFAULT_DRAWDOWN_LEVEL_PENALTY,
         inactivity_penalty: float = DEFAULT_INACTIVITY_PENALTY,
+        invalid_action_penalty: float = DEFAULT_INVALID_ACTION_PENALTY,
         inactivity_grace_steps: int = DEFAULT_INACTIVITY_GRACE_STEPS,
         profitable_trade_bonus: float = DEFAULT_PROFITABLE_TRADE_BONUS,
     ) -> None:
@@ -220,6 +234,7 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Float32Array]):
             drawdown_increment_penalty,
             drawdown_level_penalty,
             inactivity_penalty,
+            invalid_action_penalty,
             inactivity_grace_steps,
             profitable_trade_bonus,
         )
@@ -234,6 +249,7 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Float32Array]):
         self.drawdown_increment_penalty = float(drawdown_increment_penalty)
         self.drawdown_level_penalty = float(drawdown_level_penalty)
         self.inactivity_penalty = float(inactivity_penalty)
+        self.invalid_action_penalty = float(invalid_action_penalty)
         self.inactivity_grace_steps = inactivity_grace_steps
         self.profitable_trade_bonus = float(profitable_trade_bonus)
 
@@ -266,6 +282,7 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Float32Array]):
         self._last_step_profitable_trade_count = 0
         self._last_closed_trade_net_profit: float | None = None
         self._closed_trade_count = 0
+        self._policy_closed_trade_count = 0
         self._winning_trade_count = 0
         self._losing_trade_count = 0
         self._breakeven_trade_count = 0
@@ -274,11 +291,27 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Float32Array]):
         self._hold_action_count = 0
         self._masked_buy_action_count = 0
         self._masked_sell_action_count = 0
+        self._invalid_action_penalty_count = 0
         self._no_position_change_steps = 0
         self._consecutive_no_position_change_steps = 0
         self._max_consecutive_no_position_change_steps = 0
         self._position_change_count = 0
         self._final_equity: float | None = None
+
+    def set_transaction_costs(
+        self, fee_bps_per_side: float, slippage_bps_per_side: float
+    ) -> None:
+        """Atomically update simulated costs for subsequent fills only.
+
+        Fees already booked to cash and position cost basis are immutable.
+        Invalid values leave both active settings unchanged.
+        """
+        _validate_cost_basis_points("fee_bps_per_side", fee_bps_per_side)
+        _validate_cost_basis_points(
+            "slippage_bps_per_side", slippage_bps_per_side
+        )
+        self.fee_bps_per_side = float(fee_bps_per_side)
+        self.slippage_bps_per_side = float(slippage_bps_per_side)
 
     def _observation(self, index: int) -> Float32Array:
         row = self._market_data[index]
@@ -569,6 +602,7 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Float32Array]):
         self._last_step_profitable_trade_count = 0
         self._last_closed_trade_net_profit = None
         self._closed_trade_count = 0
+        self._policy_closed_trade_count = 0
         self._winning_trade_count = 0
         self._losing_trade_count = 0
         self._breakeven_trade_count = 0
@@ -577,6 +611,7 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Float32Array]):
         self._hold_action_count = 0
         self._masked_buy_action_count = 0
         self._masked_sell_action_count = 0
+        self._invalid_action_penalty_count = 0
         self._no_position_change_steps = 0
         self._consecutive_no_position_change_steps = 0
         self._max_consecutive_no_position_change_steps = 0
@@ -600,6 +635,7 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Float32Array]):
         self._last_step_profitable_trade_count = 0
         self._last_closed_trade_net_profit = None
 
+        closed_trades_before_action = self._closed_trade_count
         requested_action, executed_action, action_mask, mask_reason = (
             self._apply_action(
                 action,
@@ -608,6 +644,20 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Float32Array]):
             )
         )
         self._record_action(requested_action, executed_action)
+        self._policy_closed_trade_count += (
+            self._closed_trade_count - closed_trades_before_action
+        )
+        invalid_action_penalty_applied = (
+            requested_action == "BUY"
+            and not action_mask["BUY"]
+            or requested_action == "SELL"
+            and not action_mask["SELL"]
+        )
+        invalid_action_penalty = (
+            self.invalid_action_penalty if invalid_action_penalty_applied else 0.0
+        )
+        if invalid_action_penalty_applied:
+            self._invalid_action_penalty_count += 1
         position_change_quantity = self._quantity - previous_quantity
         position_changed = abs(position_change_quantity) > self._quantity_tolerance(
             float(next_bar[OPEN_COLUMN])
@@ -655,6 +705,7 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Float32Array]):
             - self.drawdown_increment_penalty * worsening_drawdown
             - self.drawdown_level_penalty * risk_drawdown
             - inactivity_penalty
+            - invalid_action_penalty
             + profitable_trade_bonus
         )
         if not math.isfinite(reward):
@@ -674,7 +725,10 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Float32Array]):
             "reward_net_log_return": log_net_return,
             "drawdown_for_reward": risk_drawdown,
             "reward_inactivity_penalty": inactivity_penalty,
+            "reward_invalid_action_penalty": float(invalid_action_penalty),
+            "invalid_action_penalty_applied": invalid_action_penalty_applied,
             "reward_profitable_trade_bonus": profitable_trade_bonus,
+            "policy_closed_trade_count": self._policy_closed_trade_count,
             "realized_profit_this_step": float(self._last_step_realized_profit),
             "closed_trade_net_profit_this_step": self._last_closed_trade_net_profit,
         }
@@ -709,12 +763,14 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Float32Array]):
             "sell_action_count": self._sell_action_count,
             "hold_action_count": self._hold_action_count,
             "closed_trade_count": self._closed_trade_count,
+            "policy_closed_trade_count": self._policy_closed_trade_count,
             "winning_trade_count": self._winning_trade_count,
             "losing_trade_count": self._losing_trade_count,
             "breakeven_trade_count": self._breakeven_trade_count,
             "win_rate": float(win_rate) if win_rate is not None else None,
             "masked_buy_action_count": self._masked_buy_action_count,
             "masked_sell_action_count": self._masked_sell_action_count,
+            "invalid_action_penalty_count": self._invalid_action_penalty_count,
             "no_position_change_steps": self._no_position_change_steps,
             "max_consecutive_no_position_change_steps": (
                 self._max_consecutive_no_position_change_steps
