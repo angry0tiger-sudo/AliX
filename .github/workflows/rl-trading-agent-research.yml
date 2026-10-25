@@ -22,7 +22,7 @@ permissions:
 
 concurrency:
   group: alix-rl-trading-agent-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   rl-historical-research:
@@ -111,7 +111,7 @@ jobs:
           assert manifest["schema_version"] == "alix.self-evolving-data-manifest.v1"
           assert manifest["symbol"] == "BTCUSDT"
           assert manifest["interval"] == "1m"
-          assert manifest["row_count"] >= 1_000_000
+          assert manifest["row_count"] >= 1_051_200
           assert manifest["expected_minute_slots"] == manifest["row_count"]
           assert manifest["missing_minute_intervals_between_rows"] == 0
           assert manifest["coverage_fraction"] == 1.0
@@ -165,7 +165,7 @@ jobs:
           evaluation = report["evaluation"]
           assert report["schema_version"] == "alix.rl-trading-agent-report.v1"
           assert report["run_mode"] == "historical_simulation_only"
-          assert report["dataset"]["row_count"] >= 1_000_000
+          assert report["dataset"]["row_count"] >= 1_051_200
           assert report["dataset"]["coverage_fraction"] == 1.0
           assert len(report["dataset"]["csv_sha256"]) == 64
           assert split["training_fraction"] == 0.70
@@ -179,6 +179,7 @@ jobs:
           assert split["final_holdout_evaluations"] == 1
           assert model["algorithm"] == "RecurrentPPO"
           assert model["model_reload_roundtrip"] == "passed"
+assert len(model["model_sha256"]) == 64
           assert model["total_timesteps_trained"] >= 100_000
           assert evaluation["final_holdout"]["steps"] == split["final_holdout_rows"] - 1
           assert evaluation["holdout_pass_count"] == 1

@@ -9,6 +9,7 @@ import json
 import math
 import random
 import time
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from importlib.metadata import version
 from pathlib import Path
@@ -33,7 +34,7 @@ DEFAULT_SLIPPAGE_BPS = 20.0
 TRAIN_FRACTION = 0.70
 VALIDATION_FRACTION = 0.10
 HOLDOUT_FRACTION = 0.20
-MINIMUM_ROWS = 1_000_000
+MINIMUM_ROWS = 1_051_200
 DRAWDOWN_ACCEPTANCE_LIMIT = 0.15
 ALGORITHM_NAME = "RecurrentPPO"
 POLICY_NAME = "MlpLstmPolicy"
@@ -47,44 +48,77 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _read_manifest(path: Path) -> dict[str, Any]:
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(payload, dict):
-        raise ValueError("market_manifest_must_be_object")
-    safety = payload.get("safety_invariants")
-    if not isinstance(safety, dict):
-        raise ValueError("market_manifest_safety_invariants_missing")
+def _validate_manifest_identity(payload: dict[str, Any]) -> None:
     if payload.get("schema_version") != "alix.self-evolving-data-manifest.v1":
         raise ValueError("market_manifest_schema_invalid")
     if payload.get("symbol") != "BTCUSDT" or payload.get("interval") != "1m":
         raise ValueError("market_manifest_symbol_or_interval_invalid")
     if payload.get("source_venue") != "binance_spot_public_market_data":
         raise ValueError("market_manifest_source_invalid")
-    if int(payload.get("row_count", 0)) < MINIMUM_ROWS:
+
+
+def _validate_manifest_coverage(payload: dict[str, Any]) -> None:
+    row_count = int(payload.get("row_count", 0))
+    if row_count < MINIMUM_ROWS:
         raise ValueError("market_manifest_row_count_below_minimum")
-    if int(payload.get("expected_minute_slots", 0)) != int(payload["row_count"]):
+    if int(payload.get("expected_minute_slots", 0)) != row_count:
         raise ValueError("market_manifest_expected_slots_mismatch")
     if int(payload.get("missing_minute_intervals_between_rows", -1)) != 0:
         raise ValueError("market_manifest_contains_minute_gaps")
-    if not math.isclose(
-        float(payload.get("coverage_fraction", 0.0)), 1.0, abs_tol=1e-12
-    ):
+    coverage = float(payload.get("coverage_fraction", 0.0))
+    if not math.isclose(coverage, 1.0, abs_tol=1e-12):
         raise ValueError("market_manifest_coverage_incomplete")
+
+    start_ms = int(datetime.fromisoformat(str(payload["start_utc"])).timestamp() * 1000)
+    end_ms = int(datetime.fromisoformat(str(payload["end_utc"])).timestamp() * 1000)
+    expected_range_rows = (end_ms - start_ms) // 60_000 + 1
+    if end_ms < start_ms or expected_range_rows != row_count:
+        raise ValueError("market_manifest_date_range_row_count_mismatch")
+
+
+def _validate_manifest_authorization(safety: dict[str, Any]) -> None:
     if safety.get("Champion", "invalid") is not None:
         raise ValueError("market_manifest_champion_invariant_invalid")
     if safety.get("order_permission") is not False:
         raise ValueError("market_manifest_order_permission_invariant_invalid")
     if safety.get("trading_authorization") != "NO-GO":
         raise ValueError("market_manifest_trading_authorization_invariant_invalid")
+
+
+def _validate_manifest_execution_safety(payload: dict[str, Any]) -> None:
     if payload.get("private_api_calls") != 0:
         raise ValueError("market_manifest_private_api_calls_nonzero")
     if payload.get("orders_or_execution_api_used") is not False:
         raise ValueError("market_manifest_execution_api_invariant_invalid")
     if payload.get("real_order_attempts") != 0:
         raise ValueError("market_manifest_real_order_attempts_nonzero")
-    if len(str(payload.get("csv_sha256", ""))) != 64:
+
+
+def _validate_manifest_safety(payload: dict[str, Any]) -> None:
+    safety = payload.get("safety_invariants")
+    if not isinstance(safety, dict):
+        raise ValueError("market_manifest_safety_invariants_missing")
+    _validate_manifest_authorization(safety)
+    _validate_manifest_execution_safety(payload)
+
+
+def _validate_manifest_digest(payload: dict[str, Any]) -> None:
+    digest = str(payload.get("csv_sha256", ""))
+    if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest.lower()):
         raise ValueError("market_manifest_sha256_invalid")
+
+
+def _read_manifest(path: Path) -> dict[str, Any]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("market_manifest_must_be_object")
+    _validate_manifest_identity(payload)
+    _validate_manifest_coverage(payload)
+    _validate_manifest_safety(payload)
+    _validate_manifest_digest(payload)
     return payload
+
+
 
 
 def _load_market_data(
@@ -272,8 +306,7 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    args = _parse_args(argv)
+def _validate_cli_arguments(args: argparse.Namespace) -> None:
     if args.timesteps < 0:
         raise ValueError("timesteps_must_be_non_negative")
     if not math.isfinite(args.fee_bps) or not 0 <= args.fee_bps < 10_000:
@@ -281,23 +314,48 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not math.isfinite(args.slippage_bps) or not 0 <= args.slippage_bps < 10_000:
         raise ValueError("slippage_bps_out_of_range")
 
-    data, manifest = _load_market_data(args.data, args.manifest)
+
+def _split_training_validation(
+    data: Float64Array,
+) -> tuple[Float64Array, Float64Array, int]:
     train_end = int(len(data) * TRAIN_FRACTION)
     validation_end = int(len(data) * (TRAIN_FRACTION + VALIDATION_FRACTION))
     train_data = data[:train_end]
     validation_data = data[train_end:validation_end]
     if len(train_data) < 100_000 or len(validation_data) < 10_000:
         raise ValueError("chronological_data_splits_too_small")
+    return train_data, validation_data, validation_end
 
-    # The scaler sees training candles only and is reused unchanged afterwards.
-    scaler = MarketObservationScaler.fit(train_data)
-    n_steps = 1_024
-    requested_steps = args.timesteps or (len(train_data) - 1)
-    capped_steps = min(requested_steps, len(train_data) - 1)
-    training_steps = (capped_steps // n_steps) * n_steps
-    if training_steps < n_steps:
+
+def _training_budget(
+    training_rows: int, requested_timesteps: int, rollout_steps: int
+) -> tuple[int, int]:
+    requested_steps = requested_timesteps or (training_rows - 1)
+    capped_steps = min(requested_steps, training_rows - 1)
+    training_steps = (capped_steps // rollout_steps) * rollout_steps
+    if training_steps < rollout_steps:
         raise ValueError("effective_training_timesteps_below_rollout_size")
+    return requested_steps, training_steps
 
+
+@dataclass(frozen=True, slots=True)
+class TrainingRun:
+    model: Any
+    torch_version: str
+    model_path: Path
+    requested_timesteps: int
+    n_steps: int
+    training_seconds: float
+
+
+def _train_recurrent_ppo(
+    train_data: Float64Array,
+    scaler: MarketObservationScaler,
+    args: argparse.Namespace,
+    requested_steps: int,
+    training_steps: int,
+    n_steps: int,
+) -> TrainingRun:
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch = importlib.import_module("torch")
@@ -311,14 +369,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args.out_dir.mkdir(parents=True, exist_ok=True)
     model_path = args.out_dir / "rl_trading_agent_recurrent_ppo.zip"
     envs = dummy_vec_env(
-        [
-            _env_factory(
-                train_data,
-                scaler,
-                args.fee_bps,
-                args.slippage_bps,
-            )
-        ]
+        [_env_factory(train_data, scaler, args.fee_bps, args.slippage_bps)]
     )
     envs.seed(args.seed)
     model = recurrent_ppo(
@@ -342,8 +393,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "net_arch": [64, 64],
         },
     )
-
-    training_started = time.monotonic()
+    started_at = time.monotonic()
     try:
         model.learn(
             total_timesteps=training_steps,
@@ -354,66 +404,128 @@ def main(argv: Sequence[str] | None = None) -> int:
         model.save(str(model_path.with_suffix("")))
     finally:
         envs.close()
-    training_seconds = time.monotonic() - training_started
+    training_seconds = time.monotonic() - started_at
     if not model_path.is_file():
         raise RuntimeError("trained_model_artifact_missing")
-
-    # Validation is measured once; it does not choose a checkpoint or tune knobs.
     loaded_model = recurrent_ppo.load(
-        str(model_path.with_suffix("")),
-        env=None,
-        device="cpu",
+        str(model_path.with_suffix("")), env=None, device="cpu"
     )
+    return TrainingRun(
+        model=loaded_model,
+        torch_version=str(torch.__version__),
+        model_path=model_path,
+        requested_timesteps=requested_steps,
+        n_steps=n_steps,
+        training_seconds=float(training_seconds),
+    )
+
+
+def _evaluate_validation_and_holdout(
+    data: Float64Array,
+    validation_data: Float64Array,
+    validation_end: int,
+    scaler: MarketObservationScaler,
+    args: argparse.Namespace,
+    model: Any,
+) -> dict[str, Any]:
     validation_metrics = _evaluate_policy(
-        loaded_model,
-        validation_data,
-        scaler,
-        args.fee_bps,
-        args.slippage_bps,
-        args.seed,
+        model, validation_data, scaler, args.fee_bps, args.slippage_bps, args.seed
     )
     validation_buy_and_hold = _evaluate_baseline(
-        validation_data,
-        scaler,
-        args.fee_bps,
-        args.slippage_bps,
-        "buy_and_hold",
+        validation_data, scaler, args.fee_bps, args.slippage_bps, "buy_and_hold"
     )
     validation_cash = _evaluate_baseline(
-        validation_data,
-        scaler,
-        args.fee_bps,
-        args.slippage_bps,
-        "cash",
+        validation_data, scaler, args.fee_bps, args.slippage_bps, "cash"
     )
 
-    # Only after training and validation is the untouched final 20% sliced.
+    # Slice the final holdout only after model fitting and validation evaluation.
     holdout_data = data[validation_end:]
     holdout_metrics = _evaluate_policy(
-        loaded_model,
-        holdout_data,
-        scaler,
-        args.fee_bps,
-        args.slippage_bps,
-        args.seed + 1,
+        model, holdout_data, scaler, args.fee_bps, args.slippage_bps, args.seed + 1
     )
     holdout_buy_and_hold = _evaluate_baseline(
-        holdout_data,
-        scaler,
-        args.fee_bps,
-        args.slippage_bps,
-        "buy_and_hold",
+        holdout_data, scaler, args.fee_bps, args.slippage_bps, "buy_and_hold"
     )
     holdout_cash = _evaluate_baseline(
-        holdout_data,
-        scaler,
-        args.fee_bps,
-        args.slippage_bps,
-        "cash",
+        holdout_data, scaler, args.fee_bps, args.slippage_bps, "cash"
     )
     if holdout_metrics["steps"] != len(holdout_data) - 1:
         raise RuntimeError("holdout_evaluation_did_not_cover_exactly_one_pass")
+    return {
+        "holdout_data": holdout_data,
+        "validation_metrics": validation_metrics,
+        "validation_buy_and_hold": validation_buy_and_hold,
+        "validation_cash": validation_cash,
+        "holdout_metrics": holdout_metrics,
+        "holdout_buy_and_hold": holdout_buy_and_hold,
+        "holdout_cash": holdout_cash,
+    }
 
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = _parse_args(argv)
+    _validate_cli_arguments(args)
+    data, manifest = _load_market_data(args.data, args.manifest)
+    train_data, validation_data, validation_end = _split_training_validation(data)
+    scaler = MarketObservationScaler.fit(train_data)
+    n_steps = 1_024
+    requested_steps, training_steps = _training_budget(
+        len(train_data), args.timesteps, n_steps
+    )
+    training = _train_recurrent_ppo(
+        train_data, scaler, args, requested_steps, training_steps, n_steps
+    )
+    evaluation = _evaluate_validation_and_holdout(
+        data, validation_data, validation_end, scaler, args, training.model
+    )
+    holdout_data = evaluation["holdout_data"]
+    report = _build_report(
+        args,
+        manifest,
+        train_data,
+        validation_data,
+        holdout_data,
+        evaluation["validation_metrics"],
+        evaluation["validation_buy_and_hold"],
+        evaluation["validation_cash"],
+        evaluation["holdout_metrics"],
+        evaluation["holdout_buy_and_hold"],
+        evaluation["holdout_cash"],
+        training.requested_timesteps,
+        training.n_steps,
+        training.training_seconds,
+        training.model_path,
+        training.torch_version,
+        training.model,
+    )
+    report_path = args.out_dir / "rl-trading-agent-report.json"
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True, allow_nan=False) + "\n",
+        encoding="utf-8",
+    )
+    print(json.dumps(report, sort_keys=True, allow_nan=False))
+    return 0
+
+
+def _build_report(
+    args: argparse.Namespace,
+    manifest: dict[str, Any],
+    train_data: Float64Array,
+    validation_data: Float64Array,
+    holdout_data: Float64Array,
+    validation_metrics: dict[str, Any],
+    validation_buy_and_hold: dict[str, Any],
+    validation_cash: dict[str, Any],
+    holdout_metrics: dict[str, Any],
+    holdout_buy_and_hold: dict[str, Any],
+    holdout_cash: dict[str, Any],
+    requested_steps: int,
+    n_steps: int,
+    training_seconds: float,
+    model_path: Path,
+    torch_version: str,
+    loaded_model: Any,
+) -> dict[str, Any]:
     report: dict[str, Any] = {
         "schema_version": "alix.rl-trading-agent-report.v1",
         "run_mode": "historical_simulation_only",
@@ -509,7 +621,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "stable_baselines3_version": version("stable-baselines3"),
             "sb3_contrib_version": version("sb3-contrib"),
             "gymnasium_version": version("gymnasium"),
-            "torch_version": torch.__version__,
+            "torch_version": torch_version,
             "numpy_version": np.__version__,
             "pandas_version": pd.__version__,
             "device": "cpu",
@@ -527,6 +639,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "lstm_hidden_size": 64,
             "training_seconds": float(training_seconds),
             "model_artifact": model_path.name,
+            "model_sha256": _sha256(model_path),
             "model_reload_roundtrip": "passed",
             "no_validation_checkpoint_selection": True,
         },
@@ -557,13 +670,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             "model_output_is_order_permission": False,
         },
     }
-    report_path = args.out_dir / "rl-trading-agent-report.json"
-    report_path.write_text(
-        json.dumps(report, indent=2, sort_keys=True, allow_nan=False) + "\n",
-        encoding="utf-8",
-    )
-    print(json.dumps(report, sort_keys=True, allow_nan=False))
-    return 0
+    return report
+
+
 
 
 if __name__ == "__main__":
