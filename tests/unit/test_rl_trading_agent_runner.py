@@ -11,7 +11,10 @@ from scripts.run_rl_trading_agent import (
     _evaluate_policy,
     _exclude_previous_holdout_window,
 )
-from services.rl_research.rl_trading_environment import ACTION_BUY, MarketObservationScaler
+from services.rl_research.rl_trading_environment import (
+    ACTION_BUY,
+    MarketObservationScaler,
+)
 
 
 def test_pre_cutoff_window_separates_latest_holdout_tail() -> None:
@@ -54,7 +57,9 @@ class _Fixed25PercentBuyPolicy:
         return np.asarray([ACTION_BUY, 0], dtype=np.int64), state
 
 
-def test_evaluation_reports_real_discrete_size_choices_without_zero_volume_buys() -> None:
+def test_evaluation_reports_real_discrete_size_choices_without_zero_volume_buys() -> (
+    None
+):
     timestamps = 1_700_000_000_000 + np.arange(6) * 60_000
     prices = np.asarray([100.0, 101.0, 102.0, 101.0, 100.0, 99.0])
     data = np.column_stack(

@@ -252,7 +252,7 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Int64Array]):
         self._opportunity_moving_average = np.full(len(close_prices), np.nan)
         self._opportunity_moving_average[MOVING_AVERAGE_WINDOW - 1 :] = (
             cumulative_close[MOVING_AVERAGE_WINDOW:]
-            - cumulative_close[: -MOVING_AVERAGE_WINDOW]
+            - cumulative_close[:-MOVING_AVERAGE_WINDOW]
         ) / MOVING_AVERAGE_WINDOW
         self.initial_equity = float(initial_equity)
         self.fee_bps_per_side = float(fee_bps_per_side)
@@ -267,7 +267,9 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Int64Array]):
         self.profitable_trade_bonus = float(profitable_trade_bonus)
 
         self.action_space = spaces.MultiDiscrete(
-            np.asarray([len(ACTION_NAMES), len(POSITION_SIZE_FRACTIONS)], dtype=np.int64)
+            np.asarray(
+                [len(ACTION_NAMES), len(POSITION_SIZE_FRACTIONS)], dtype=np.int64
+            )
         )
         self.observation_space = spaces.Box(
             low=np.full(OBSERVATION_SIZE, -np.inf, dtype=np.float32),
@@ -508,9 +510,7 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Int64Array]):
         self._rebalance_to_quantity(target_quantity, price)
         return self._quantity > previous_quantity
 
-    def _validated_action_values(
-        self, action: Int64Array
-    ) -> tuple[str, float, int]:
+    def _validated_action_values(self, action: Int64Array) -> tuple[str, float, int]:
         values = np.asarray(action)
         if values.shape != (2,) or values.dtype.kind not in ("i", "u"):
             raise ValueError("action_must_be_two_integer_values")

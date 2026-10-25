@@ -259,7 +259,9 @@ def test_drawdown_reward_uses_intrabar_peak_to_trough_risk() -> None:
     env = _env(data, initial_equity=1_000.0)
     env.reset(seed=9)
     env.step(np.asarray([ACTION_BUY, 3], dtype=np.int64))
-    _, reward, terminated, _, info = env.step(np.asarray([ACTION_HOLD, 0], dtype=np.int64))
+    _, reward, terminated, _, info = env.step(
+        np.asarray([ACTION_HOLD, 0], dtype=np.int64)
+    )
     assert terminated is True
     assert info["max_drawdown"] > 0.20
     assert reward < math.log(0.9) - 1.0
@@ -341,7 +343,9 @@ def test_profitable_completed_trade_gets_intermediate_reward_bonus() -> None:
     )
     env.reset(seed=32)
     env.step(np.asarray([ACTION_BUY, 3], dtype=np.int64))
-    _, reward, terminated, _, info = env.step(np.asarray([ACTION_SELL, 3], dtype=np.int64))
+    _, reward, terminated, _, info = env.step(
+        np.asarray([ACTION_SELL, 3], dtype=np.int64)
+    )
     assert terminated is False
     assert info["action"] == "SELL"
     assert info["closed_trade_net_profit_this_step"] == pytest.approx(100.0)
@@ -362,7 +366,9 @@ def test_losing_completed_trade_receives_no_profit_bonus() -> None:
     )
     env.reset(seed=33)
     env.step(np.asarray([ACTION_BUY, 3], dtype=np.int64))
-    _, reward, terminated, _, info = env.step(np.asarray([ACTION_SELL, 3], dtype=np.int64))
+    _, reward, terminated, _, info = env.step(
+        np.asarray([ACTION_SELL, 3], dtype=np.int64)
+    )
     assert terminated is False
     assert info["closed_trade_net_profit_this_step"] == pytest.approx(-100.0)
     assert info["reward_profitable_trade_bonus"] == pytest.approx(0.0)
@@ -473,9 +479,7 @@ def test_discrete_buy_size_spends_positive_fraction_of_cash(
 ) -> None:
     env = _env(_bars(closes=[100.0] * 6), initial_equity=1_000.0)
     env.reset(seed=43)
-    _, _, _, _, info = env.step(
-        np.asarray([ACTION_BUY, size_index], dtype=np.int64)
-    )
+    _, _, _, _, info = env.step(np.asarray([ACTION_BUY, size_index], dtype=np.int64))
     assert info["action"] == "BUY"
     assert info["executed_action"] == "BUY"
     assert info["action_blocked"] is False

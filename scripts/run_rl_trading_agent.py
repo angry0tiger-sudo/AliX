@@ -294,6 +294,7 @@ def _evaluate_policy(
     env.close()
     return result
 
+
 def _evaluate_baseline(
     data: Float64Array,
     scaler: MarketObservationScaler,
@@ -313,7 +314,9 @@ def _evaluate_baseline(
     steps = 0
     while True:
         if baseline == "buy_and_hold" and steps == 0:
-            action = np.asarray([ACTION_BUY, len(POSITION_SIZE_FRACTIONS) - 1], dtype=np.int64)
+            action = np.asarray(
+                [ACTION_BUY, len(POSITION_SIZE_FRACTIONS) - 1], dtype=np.int64
+            )
         else:
             action = np.asarray([ACTION_HOLD, 0], dtype=np.int64)
         _, _, terminated, truncated, _ = env.step(action)
@@ -716,7 +719,9 @@ def _build_report(
             "previous_run_candidate_holdout_start_utc": PREVIOUS_HOLDOUT_START_UTC,
             "previous_run_candidate_holdout_rows_excluded_from_current_fit": (
                 int(manifest["row_count"])
-                - len(train_data) - len(validation_data) - len(holdout_data)
+                - len(train_data)
+                - len(validation_data)
+                - len(holdout_data)
             ),
             "latest_tail_used_as_current_final_holdout": True,
             "final_holdout_exposed_in_prior_research": True,
@@ -725,13 +730,18 @@ def _build_report(
             ),
             "analysis_window_end_utc": _utc_from_ms(float(validation_data[-1, 0])),
             "analysis_window_rows": (
-                len(train_data) + len(validation_data)
+                len(train_data)
+                + len(validation_data)
                 + int(manifest["row_count"])
-                - len(train_data) - len(validation_data) - len(holdout_data)
+                - len(train_data)
+                - len(validation_data)
+                - len(holdout_data)
             ),
             "rows_excluded_between_validation_and_final_holdout": (
                 int(manifest["row_count"])
-                - len(train_data) - len(validation_data) - len(holdout_data)
+                - len(train_data)
+                - len(validation_data)
+                - len(holdout_data)
             ),
             "holdout_novelty_note": (
                 "The final holdout is the latest public-data tail beginning 2026-06-01 "
@@ -748,7 +758,8 @@ def _build_report(
             "training_fraction": TRAIN_FRACTION,
             "validation_fraction": VALIDATION_FRACTION,
             "final_holdout_fraction": HOLDOUT_FRACTION,
-            "final_holdout_fraction_actual": len(holdout_data) / int(manifest["row_count"]),
+            "final_holdout_fraction_actual": len(holdout_data)
+            / int(manifest["row_count"]),
             "training_rows": len(train_data),
             "validation_rows": len(validation_data),
             "final_holdout_rows": len(holdout_data),
