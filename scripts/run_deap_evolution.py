@@ -821,9 +821,7 @@ def run_evolution(
             "validation_metrics": asdict(validation_metrics),
             "validation_used_for_selection": False,
         },
-        "economic_assessment": _economic_assessment(
-            train_metrics, validation_metrics
-        ),
+        "economic_assessment": _economic_assessment(train_metrics, validation_metrics),
         "generation_history": history,
         "safety_invariants": {
             "Champion": None,
