@@ -405,8 +405,7 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Float32Array]):
         position_fraction = self._quantity * price / equity
         has_spendable_cash = self._cash > equity * POSITION_FRACTION_EPSILON
         can_buy = (
-            has_spendable_cash
-            and position_fraction < 1.0 - POSITION_FRACTION_EPSILON
+            has_spendable_cash and position_fraction < 1.0 - POSITION_FRACTION_EPSILON
         )
         return {"SELL": has_position, "HOLD": True, "BUY": can_buy}
 
@@ -556,10 +555,12 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Float32Array]):
         self._last_step_profitable_trade_count = 0
         self._last_closed_trade_net_profit = None
 
-        requested_action, executed_action, action_mask, mask_reason = self._apply_action(
-            action,
-            current_price=float(current_bar[CLOSE_COLUMN]),
-            next_open=float(next_bar[OPEN_COLUMN]),
+        requested_action, executed_action, action_mask, mask_reason = (
+            self._apply_action(
+                action,
+                current_price=float(current_bar[CLOSE_COLUMN]),
+                next_open=float(next_bar[OPEN_COLUMN]),
+            )
         )
         self._record_action(requested_action, executed_action)
         position_change_quantity = self._quantity - previous_quantity

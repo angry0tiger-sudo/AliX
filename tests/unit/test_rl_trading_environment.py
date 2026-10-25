@@ -313,9 +313,7 @@ def test_hold_action_pays_configured_inactivity_penalty() -> None:
     env.reset(seed=31)
     rewards: list[float] = []
     for _ in range(4):
-        _, reward, _, _, info = env.step(
-            np.asarray([0.0, 0.0], dtype=np.float32)
-        )
+        _, reward, _, _, info = env.step(np.asarray([0.0, 0.0], dtype=np.float32))
         rewards.append(reward)
     assert rewards[:3] == pytest.approx([0.0, 0.0, 0.0])
     assert rewards[3] == pytest.approx(-0.001)
@@ -390,14 +388,11 @@ def test_partial_realizations_accumulate_before_profitable_trade_bonus() -> None
     env.close()
 
 
-
 def test_sell_is_masked_when_inventory_is_empty() -> None:
     env = _env(_bars(closes=[100.0] * 6))
     env.reset(seed=41)
     for index in range(4):
-        _, reward, _, _, info = env.step(
-            np.asarray([-0.9, 1.0], dtype=np.float32)
-        )
+        _, reward, _, _, info = env.step(np.asarray([-0.9, 1.0], dtype=np.float32))
         assert info["action"] == "SELL"
         assert info["executed_action"] == "MASKED_SELL"
         assert info["action_blocked"] is True

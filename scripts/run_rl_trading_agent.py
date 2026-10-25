@@ -494,7 +494,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     _validate_cli_arguments(args)
     data, manifest = _load_market_data(args.data, args.manifest)
     analysis_data, _ = _exclude_previous_holdout_window(data)
-    train_data, validation_data, validation_end = _split_training_validation(analysis_data)
+    train_data, validation_data, validation_end = _split_training_validation(
+        analysis_data
+    )
     scaler = MarketObservationScaler.fit(train_data)
     n_steps = 1_024
     requested_steps, training_steps = _training_budget(
@@ -585,7 +587,9 @@ def _build_report(
                 float(holdout_data[-1, 0]) < PREVIOUS_HOLDOUT_START_MS
             ),
             "analysis_window_end_utc": _utc_from_ms(float(holdout_data[-1, 0])),
-            "analysis_window_rows": len(train_data) + len(validation_data) + len(holdout_data),
+            "analysis_window_rows": len(train_data)
+            + len(validation_data)
+            + len(holdout_data),
             "rows_excluded_after_analysis_window": (
                 int(manifest["row_count"])
                 - len(train_data)
