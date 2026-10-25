@@ -49,7 +49,9 @@ SELL_THRESHOLD = -1.0 / 3.0
 DEFAULT_DRAWDOWN_INCREMENT_PENALTY = 5.0
 DEFAULT_DRAWDOWN_LEVEL_PENALTY = 0.01
 DEFAULT_INACTIVITY_PENALTY = 0.001
-DEFAULT_INVALID_ACTION_PENALTY = 0.001
+DEFAULT_INVALID_ACTION_PENALTY = 0.01
+DEFAULT_HOLDING_LOSS_PENALTY = 0.0001
+DEFAULT_REALIZED_PROFIT_REWARD_SCALE = 0.5
 DEFAULT_INACTIVITY_GRACE_STEPS = 3
 DEFAULT_PROFITABLE_TRADE_BONUS = 0.0001
 POSITION_FRACTION_EPSILON = 1e-9
@@ -314,6 +316,9 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Int64Array]):
         self._position_change_count = 0
         self._final_equity: float | None = None
         self._opportunity_cost_penalty_count = 0
+        self._holding_loss_penalty_count = 0
+        self._realized_profit_reward_count = 0
+        self._realized_profit_reward_total = 0.0
 
     def set_transaction_costs(
         self, fee_bps_per_side: float, slippage_bps_per_side: float
@@ -727,6 +732,45 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Int64Array]):
         self._opportunity_cost_penalty_count += 1
         return DEFAULT_OPPORTUNITY_COST_PENALTY
 
+    def _holding_loss_penalty_for_action(
+        self, requested_action: str, current_price: float
+    ) -> float:
+        if requested_action != "HOLD":
+            return 0.0
+        if self._quantity <= self._quantity_tolerance(current_price):
+            return 0.0
+        liquidation_price = current_price * (
+            1.0 - self.slippage_bps_per_side / 10_000.0
+        )
+        liquidation_fee = (
+            self._quantity
+            * liquidation_price
+            * self.fee_bps_per_side
+            / 10_000.0
+        )
+        expected_net_liquidation = (
+            self._quantity * liquidation_price - liquidation_fee
+        )
+        if expected_net_liquidation >= self._position_cost_basis:
+            return 0.0
+        self._holding_loss_penalty_count += 1
+        return DEFAULT_HOLDING_LOSS_PENALTY
+
+    def _realized_profit_reward_for_action(self, executed_action: str) -> float:
+        if executed_action != "SELL" or self._last_closed_trade_net_profit is None:
+            return 0.0
+        closed_profit = self._last_closed_trade_net_profit
+        if closed_profit <= 0.0:
+            return 0.0
+        reward = (
+            DEFAULT_REALIZED_PROFIT_REWARD_SCALE
+            * closed_profit
+            / self.initial_equity
+        )
+        self._realized_profit_reward_count += 1
+        self._realized_profit_reward_total += reward
+        return reward
+
     def _calculate_step_reward(
         self,
         current_equity: float,
@@ -736,11 +780,14 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Int64Array]):
         inactivity_penalty: float,
         invalid_action_penalty: float,
         opportunity_cost_penalty: float,
+        holding_loss_penalty: float,
+        realized_profit_reward: float,
+        profitable_trade_bonus_count: int,
     ) -> tuple[float, float, float]:
         log_net_return = math.log(current_equity / previous_equity)
         worsening_drawdown = max(0.0, risk_drawdown - previous_drawdown)
         profitable_trade_bonus = (
-            self.profitable_trade_bonus * self._last_step_profitable_trade_count
+            self.profitable_trade_bonus * profitable_trade_bonus_count
         )
         reward = (
             log_net_return
@@ -749,6 +796,8 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Int64Array]):
             - inactivity_penalty
             - invalid_action_penalty
             - opportunity_cost_penalty
+            - holding_loss_penalty
+            + realized_profit_reward
             + profitable_trade_bonus
         )
         if not math.isfinite(reward):
@@ -786,8 +835,18 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Int64Array]):
         invalid_action_penalty_applied, invalid_action_penalty = (
             self._invalid_action_penalty_for_request(requested_action, action_mask)
         )
+        current_price = float(current_bar[CLOSE_COLUMN])
+        holding_loss_penalty = self._holding_loss_penalty_for_action(
+            requested_action, current_price
+        )
+        realized_profit_reward = self._realized_profit_reward_for_action(
+            executed_action
+        )
+        profitable_trade_bonus_count = (
+            self._last_step_profitable_trade_count if executed_action == "SELL" else 0
+        )
         opportunity_cost_penalty = self._opportunity_cost_penalty_for_action(
-            requested_action, float(current_bar[CLOSE_COLUMN])
+            requested_action, current_price
         )
         position_change_quantity, position_changed, inactivity_penalty = (
             self._track_position_change(previous_quantity, float(next_bar[OPEN_COLUMN]))
@@ -804,6 +863,9 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Int64Array]):
             inactivity_penalty,
             invalid_action_penalty,
             opportunity_cost_penalty,
+            holding_loss_penalty,
+            realized_profit_reward,
+            profitable_trade_bonus_count,
         )
 
         self._index = next_index
@@ -827,6 +889,9 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Int64Array]):
             "reward_invalid_action_penalty": float(invalid_action_penalty),
             "invalid_action_penalty_applied": invalid_action_penalty_applied,
             "reward_opportunity_cost_penalty": opportunity_cost_penalty,
+            "reward_holding_loss_penalty": holding_loss_penalty,
+            "reward_realized_profit": realized_profit_reward,
+            "realized_profit_reward_applied": realized_profit_reward > 0.0,
             "reward_profitable_trade_bonus": profitable_trade_bonus,
             "policy_closed_trade_count": self._policy_closed_trade_count,
             "realized_profit_this_step": float(self._last_step_realized_profit),
@@ -877,6 +942,9 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Int64Array]):
             "masked_sell_action_count": self._masked_sell_action_count,
             "invalid_action_penalty_count": self._invalid_action_penalty_count,
             "opportunity_cost_penalty_count": self._opportunity_cost_penalty_count,
+            "holding_loss_penalty_count": self._holding_loss_penalty_count,
+            "realized_profit_reward_count": self._realized_profit_reward_count,
+            "realized_profit_reward_total": self._realized_profit_reward_total,
             "no_position_change_steps": self._no_position_change_steps,
             "max_consecutive_no_position_change_steps": (
                 self._max_consecutive_no_position_change_steps

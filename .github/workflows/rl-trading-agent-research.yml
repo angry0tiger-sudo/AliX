@@ -206,7 +206,7 @@ jobs:
             --out-dir artifacts/rl-agent \
             --timesteps 1000000 \
             --seed 20261025 \
-            --ent-coef 0.01 \
+            --ent-coef 0.02 \
             --fee-bps 25 \
             --slippage-bps 20 \
             --commit-sha "${{ github.sha }}"
@@ -227,7 +227,7 @@ jobs:
           model = report["model"]
           evaluation = report["evaluation"]
           curriculum = report["cost_curriculum"]
-          assert report["schema_version"] == "alix.rl-trading-agent-report.v4"
+          assert report["schema_version"] == "alix.rl-trading-agent-report.v5"
           assert report["run_mode"] == "historical_simulation_only"
           assert report["dataset"]["row_count"] >= 1_051_200
           assert report["dataset"]["coverage_fraction"] == 1.0
@@ -251,9 +251,11 @@ jobs:
           assert model["model_reload_roundtrip"] == "passed"
           assert len(model["model_sha256"]) == 64
           assert model["total_timesteps_trained"] >= 1_000_000
-          assert model["ent_coef"] == 0.01
+          assert model["ent_coef"] == 0.02
           assert report["environment"]["reward"]["inactivity_penalty_per_unchanged_position_step"] == 0.001
-          assert report["environment"]["reward"]["invalid_action_penalty_per_masked_request"] == 0.001
+          assert report["environment"]["reward"]["invalid_action_penalty_per_masked_request"] == 0.01
+          assert report["environment"]["reward"]["holding_loss_penalty_per_underwater_hold"] == 0.0001
+          assert report["environment"]["reward"]["realized_profit_reward_scale_of_initial_equity"] == 0.5
           assert curriculum["initial_fee_bps_per_side"] == 0.0
           assert curriculum["initial_slippage_bps_per_side"] == 0.0
           assert curriculum["target_fee_bps_per_side"] == 25.0
@@ -298,6 +300,9 @@ jobs:
               assert metrics["invalid_action_penalty_count"] >= 0
               assert metrics["policy_buy_zero_size_request_count"] == 0
               assert metrics["opportunity_cost_penalty_count"] >= 0
+              assert metrics["holding_loss_penalty_count"] >= 0
+              assert metrics["realized_profit_reward_count"] >= 0
+              assert metrics["realized_profit_reward_total"] >= 0.0
               assert metrics["policy_requested_trade_size_action_count"] == (
                   metrics["buy_action_count"] + metrics["sell_action_count"]
               )

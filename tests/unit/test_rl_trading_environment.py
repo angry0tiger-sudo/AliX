@@ -14,7 +14,10 @@ from services.rl_research.rl_trading_environment import (
     ACTION_HOLD,
     ACTION_SELL,
     BTCUSDTTradingEnv,
+    DEFAULT_HOLDING_LOSS_PENALTY,
+    DEFAULT_INVALID_ACTION_PENALTY,
     DEFAULT_OPPORTUNITY_COST_PENALTY,
+    DEFAULT_REALIZED_PROFIT_REWARD_SCALE,
     MOVING_AVERAGE_WINDOW,
     POSITION_SIZE_FRACTIONS,
     MarketObservationScaler,
@@ -350,6 +353,10 @@ def test_profitable_completed_trade_gets_intermediate_reward_bonus() -> None:
     assert info["action"] == "SELL"
     assert info["closed_trade_net_profit_this_step"] == pytest.approx(100.0)
     assert info["reward_profitable_trade_bonus"] == pytest.approx(0.0001)
+    assert info["reward_realized_profit"] == pytest.approx(
+        DEFAULT_REALIZED_PROFIT_REWARD_SCALE * 100.0 / 1_000.0
+    )
+    assert info["realized_profit_reward_applied"] is True
     assert reward > math.log(1.1)
     summary = env.summary()
     assert summary["closed_trade_count"] == 1
@@ -372,6 +379,8 @@ def test_losing_completed_trade_receives_no_profit_bonus() -> None:
     assert terminated is False
     assert info["closed_trade_net_profit_this_step"] == pytest.approx(-100.0)
     assert info["reward_profitable_trade_bonus"] == pytest.approx(0.0)
+    assert info["reward_realized_profit"] == pytest.approx(0.0)
+    assert info["realized_profit_reward_applied"] is False
     assert reward < math.log(0.9)
     summary = env.summary()
     assert summary["closed_trade_count"] == 1
@@ -397,6 +406,9 @@ def test_partial_realizations_accumulate_before_profitable_trade_bonus() -> None
     assert terminated is False
     assert final_info["closed_trade_net_profit_this_step"] == pytest.approx(150.0)
     assert final_info["reward_profitable_trade_bonus"] == pytest.approx(0.0001)
+    assert final_info["reward_realized_profit"] == pytest.approx(
+        DEFAULT_REALIZED_PROFIT_REWARD_SCALE * 150.0 / 1_000.0
+    )
     assert env.summary()["closed_trade_count"] == 1
     env.close()
 
@@ -412,12 +424,14 @@ def test_sell_is_masked_when_inventory_is_empty() -> None:
         assert info["action_mask_reason"] == "no_position"
         assert info["legal_action_mask"]["SELL"] is False
         assert info["legal_action_mask"]["HOLD"] is True
-        assert info["reward_invalid_action_penalty"] == pytest.approx(0.001)
+        assert info["reward_invalid_action_penalty"] == pytest.approx(
+            DEFAULT_INVALID_ACTION_PENALTY
+        )
         assert info["invalid_action_penalty_applied"] is True
         assert info["reward_inactivity_penalty"] == pytest.approx(
             0.001 if index == 3 else 0.0
         )
-        assert reward == pytest.approx(-0.001 if index < 3 else -0.002)
+        assert reward == pytest.approx(-0.01 if index < 3 else -0.011)
     summary = env.summary()
     assert summary["masked_sell_action_count"] == 4
     assert summary["sell_action_count"] == 4
@@ -434,9 +448,11 @@ def test_buy_is_masked_when_position_is_fully_allocated() -> None:
     env.step(np.asarray([ACTION_BUY, 3], dtype=np.int64))
     quantity_before = env._quantity
     fills_before = env.summary()["fill_count"]
-    _, _, _, _, info = env.step(np.asarray([ACTION_BUY, 3], dtype=np.int64))
+    _, reward, _, _, info = env.step(np.asarray([ACTION_BUY, 3], dtype=np.int64))
     assert info["action"] == "BUY"
     assert info["executed_action"] == "MASKED_BUY"
+    assert reward == pytest.approx(-DEFAULT_INVALID_ACTION_PENALTY)
+    assert info["reward_invalid_action_penalty"] == pytest.approx(0.01)
     assert info["action_blocked"] is True
     assert info["action_mask_reason"] == "position_fully_allocated"
     assert info["legal_action_mask"]["BUY"] is False
@@ -521,4 +537,42 @@ def test_flat_hold_above_causal_moving_average_pays_opportunity_cost() -> None:
         DEFAULT_OPPORTUNITY_COST_PENALTY
     )
     assert env.summary()["opportunity_cost_penalty_count"] == 1
+    env.close()
+
+
+
+def test_hold_underwater_position_pays_penalty_after_exit_costs() -> None:
+    env = _env(
+        _bars(closes=[100.0, 100.0, 90.0, 90.0, 90.0]),
+        initial_equity=1_000.0,
+    )
+    env.reset(seed=72)
+    env.step(np.asarray([ACTION_BUY, 3], dtype=np.int64))
+    _, _, _, _, first_hold = env.step(np.asarray([ACTION_HOLD, 0], dtype=np.int64))
+    assert first_hold["reward_holding_loss_penalty"] == pytest.approx(0.0)
+    _, reward, _, _, losing_hold = env.step(
+        np.asarray([ACTION_HOLD, 0], dtype=np.int64)
+    )
+    assert losing_hold["reward_holding_loss_penalty"] == pytest.approx(
+        DEFAULT_HOLDING_LOSS_PENALTY
+    )
+    assert reward == pytest.approx(-DEFAULT_HOLDING_LOSS_PENALTY)
+    assert env.summary()["holding_loss_penalty_count"] == 1
+    env.close()
+
+
+def test_terminal_forced_liquidation_does_not_earn_policy_realized_profit_reward() -> None:
+    env = _env(
+        _bars(closes=[100.0, 100.0, 110.0]),
+        initial_equity=1_000.0,
+    )
+    env.reset(seed=73)
+    env.step(np.asarray([ACTION_BUY, 3], dtype=np.int64))
+    _, _, terminated, _, info = env.step(
+        np.asarray([ACTION_HOLD, 0], dtype=np.int64)
+    )
+    assert terminated is True
+    assert info["executed_action"] == "HOLD"
+    assert info["reward_realized_profit"] == pytest.approx(0.0)
+    assert info["realized_profit_reward_applied"] is False
     env.close()

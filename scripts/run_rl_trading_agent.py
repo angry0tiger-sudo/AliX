@@ -25,7 +25,9 @@ from services.rl_research.rl_trading_environment import (
     ACTION_NAMES,
     BTCUSDTTradingEnv,
     DEFAULT_INITIAL_EQUITY,
+    DEFAULT_HOLDING_LOSS_PENALTY,
     DEFAULT_OPPORTUNITY_COST_PENALTY,
+    DEFAULT_REALIZED_PROFIT_REWARD_SCALE,
     MOVING_AVERAGE_WINDOW,
     POSITION_SIZE_FRACTIONS,
     DEFAULT_INACTIVITY_PENALTY,
@@ -411,7 +413,7 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="0 trains over one chronological pass through the training split.",
     )
     parser.add_argument("--seed", type=int, default=20261025)
-    parser.add_argument("--ent-coef", type=float, default=0.01)
+    parser.add_argument("--ent-coef", type=float, default=0.02)
     parser.add_argument("--fee-bps", type=float, default=DEFAULT_FEE_BPS)
     parser.add_argument("--slippage-bps", type=float, default=DEFAULT_SLIPPAGE_BPS)
     parser.add_argument("--commit-sha", default="unknown")
@@ -732,7 +734,7 @@ def _build_report(
         economic_assessment["status"] = "NO-GO"
 
     report: dict[str, Any] = {
-        "schema_version": "alix.rl-trading-agent-report.v4",
+        "schema_version": "alix.rl-trading-agent-report.v5",
         "run_mode": "historical_simulation_only",
         "commit_sha": args.commit_sha,
         "research_result": (
@@ -867,6 +869,20 @@ def _build_report(
                 "drawdown_level_penalty": 0.01,
                 "inactivity_penalty_per_unchanged_position_step": DEFAULT_INACTIVITY_PENALTY,
                 "invalid_action_penalty_per_masked_request": DEFAULT_INVALID_ACTION_PENALTY,
+                "holding_loss_penalty_per_underwater_hold": (
+                    DEFAULT_HOLDING_LOSS_PENALTY
+                ),
+                "realized_profit_reward_scale_of_initial_equity": (
+                    DEFAULT_REALIZED_PROFIT_REWARD_SCALE
+                ),
+                "realized_profit_reward_trigger": (
+                    "positive net profit from a policy-selected SELL that fully closes "
+                    "the position; terminal forced liquidation earns no realized-profit reward"
+                ),
+                "holding_loss_penalty_trigger": (
+                    "HOLD while expected net liquidation value after exit slippage and fees "
+                    "is below the current position cost basis"
+                ),
                 "inactivity_grace_steps": DEFAULT_INACTIVITY_GRACE_STEPS,
                 "profitable_trade_bonus": DEFAULT_PROFITABLE_TRADE_BONUS,
                 "opportunity_cost_penalty_when_flat_above_sma": (
@@ -889,8 +905,11 @@ def _build_report(
                     "log_net_return - 5.0 * max(0, risk_drawdown - prior_close_drawdown) "
                     "- 0.01 * risk_drawdown "
                     "- 0.001 * indicator(consecutive_unchanged_steps > 3) "
-                    "- 0.001 * indicator(masked_BUY_or_SELL_request) "
+                    "- 0.01 * indicator(masked_BUY_or_SELL_request) "
+                    "- 0.0001 * indicator(HOLD_while_net_liquidation_is_below_cost_basis) "
                     "- 0.0005 * indicator(flat_HOLD_and_close_above_causal_SMA) "
+                    "+ 0.5 * max(0, closed_trade_net_profit / initial_equity) "
+                    " * indicator(policy_SELL_fully_closes_trade) "
                     "+ 0.0001 * profitable_closed_trade_count"
                 ),
                 "hard_trade_count_minimum": None,
