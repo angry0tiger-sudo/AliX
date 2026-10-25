@@ -113,6 +113,8 @@ def test_invalid_market_geometry_fails_closed(mutate: object, message: str) -> N
         "market_low_inconsistent": 3,
         "market_volume_must_be_non_negative": 5,
     }[message]
+    if message == "market_low_inconsistent":
+        data[:, 2] = 600.0
     data[:, column] = mutate(data)  # type: ignore[operator]
     with pytest.raises(ValueError, match=message):
         validate_market_data(data)
@@ -163,18 +165,24 @@ def test_buy_hold_and_partial_sell_execute_on_the_next_bar() -> None:
     observation, _ = env.reset(seed=2)
     assert observation.shape == (9,)
 
-    observation, _, terminated, _, info = env.step(np.asarray([0.8, 0.5], dtype=np.float32))
+    observation, _, terminated, _, info = env.step(
+        np.asarray([0.8, 0.5], dtype=np.float32)
+    )
     assert terminated is False
     assert info["timestamp_ms"] == int(data[1, 0])
     assert info["action"] == "BUY"
     assert env._quantity == pytest.approx(5.0)
 
-    observation, _, terminated, _, info = env.step(np.asarray([0.0, 0.9], dtype=np.float32))
+    observation, _, terminated, _, info = env.step(
+        np.asarray([0.0, 0.9], dtype=np.float32)
+    )
     assert terminated is False
     assert info["action"] == "HOLD"
     assert env._quantity == pytest.approx(5.0)
 
-    observation, _, terminated, _, info = env.step(np.asarray([-0.8, 0.5], dtype=np.float32))
+    observation, _, terminated, _, info = env.step(
+        np.asarray([-0.8, 0.5], dtype=np.float32)
+    )
     assert terminated is False
     assert info["action"] == "SELL"
     assert env._quantity == pytest.approx(2.5)
@@ -230,9 +238,7 @@ def test_drawdown_reward_uses_intrabar_peak_to_trough_risk() -> None:
     env = _env(data, initial_equity=1_000.0)
     env.reset(seed=9)
     env.step(np.asarray([0.8, 1.0], dtype=np.float32))
-    _, reward, terminated, _, info = env.step(
-        np.asarray([0.0, 0.0], dtype=np.float32)
-    )
+    _, reward, terminated, _, info = env.step(np.asarray([0.0, 0.0], dtype=np.float32))
     assert terminated is True
     assert info["max_drawdown"] > 0.20
     assert reward < math.log(0.9) - 1.0
