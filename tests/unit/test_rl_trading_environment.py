@@ -8,7 +8,7 @@ import pytest
 from gymnasium.utils.env_checker import check_env
 from numpy.typing import NDArray
 
-from services.ai_core.rl_trading_environment import (
+from services.rl_research.rl_trading_environment import (
     BTCUSDTTradingEnv,
     MarketObservationScaler,
     OBSERVATION_FIELDS,

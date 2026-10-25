@@ -18,7 +18,7 @@ import numpy as np
 import pandas as pd
 from numpy.typing import NDArray
 
-from services.ai_core.rl_trading_environment import (
+from services.rl_research.rl_trading_environment import (
     BTCUSDTTradingEnv,
     MarketObservationScaler,
     OBSERVATION_FIELDS,

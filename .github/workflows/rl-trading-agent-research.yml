@@ -8,7 +8,7 @@ on:
       - ".github/workflows/rl-trading-agent-research.yml"
       - ".github/workflows/ci.yml"
       - "requirements-rl-research.txt"
-      - "services/ai_core/rl_trading_environment.py"
+      - "services/rl_research/rl_trading_environment.py"
       - "scripts/run_rl_trading_agent.py"
       - "scripts/fetch_public_minute_bars.py"
       - "tests/unit/test_rl_trading_environment.py"
