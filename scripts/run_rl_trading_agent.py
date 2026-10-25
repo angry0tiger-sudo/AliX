@@ -401,9 +401,7 @@ def _build_cost_curriculum_callback(curriculum: TrainingCostCurriculum) -> Any:
     def on_training_step(self: Any) -> bool:
         infos = self.locals.get("infos")
         if not isinstance(infos, list) or len(infos) != 1:
-            raise RuntimeError(
-                "cost_curriculum_requires_single_vectorized_environment"
-            )
+            raise RuntimeError("cost_curriculum_requires_single_vectorized_environment")
         info = infos[0]
         if not isinstance(info, dict):
             raise RuntimeError("cost_curriculum_step_info_missing")
