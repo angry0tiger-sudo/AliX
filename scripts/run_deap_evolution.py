@@ -1023,7 +1023,6 @@ def _timeframe_coverage_record(
     minutes: int,
     cache: dict[tuple[int, ...], CandidateEvaluation],
 ) -> dict[str, Any]:
-    label = _timeframe_label(minutes)
     entries = [(key, value) for key, value in cache.items() if TIMEFRAMES[key[0]] == minutes]
     sample_count = sum(value.sample_eligible for _, value in entries)
     selection_eligible = [(key, value) for key, value in entries if value.selection_eligible]
