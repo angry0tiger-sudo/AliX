@@ -154,6 +154,7 @@ def _validate_environment_configuration(
     ):
         raise ValueError("min_remaining_steps_must_be_positive")
 
+
 class BTCUSDTTradingEnv(gym.Env[Float32Array, Float32Array]):
     """Long-only, one-minute, cost-aware trading environment.
 
