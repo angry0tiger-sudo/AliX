@@ -205,7 +205,10 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Float32Array]):
             math.cos(weekly_angle),
         )
         observation = np.asarray(values, dtype=np.float32)
-        if observation.shape != (OBSERVATION_SIZE,) or not np.isfinite(observation).all():
+        if (
+            observation.shape != (OBSERVATION_SIZE,)
+            or not np.isfinite(observation).all()
+        ):
             raise ValueError("market_observation_invalid")
         return observation
 
@@ -225,7 +228,9 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Float32Array]):
         slippage_rate = self.slippage_bps_per_side / 10_000.0
         fee_rate = self.fee_bps_per_side / 10_000.0
         is_buy = delta > 0
-        execution_price = price * (1.0 + slippage_rate if is_buy else 1.0 - slippage_rate)
+        execution_price = price * (
+            1.0 + slippage_rate if is_buy else 1.0 - slippage_rate
+        )
         fee = abs(delta * execution_price) * fee_rate
         slippage_cost = abs(delta) * abs(execution_price - price)
         next_cash = self._cash - delta * execution_price - fee
@@ -256,7 +261,9 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Float32Array]):
             target_quantity = target_notional / cost_adjusted_price
         self._rebalance_to_quantity(target_quantity, price)
 
-    def _apply_action(self, action: Float32Array, current_price: float, next_open: float) -> str:
+    def _apply_action(
+        self, action: Float32Array, current_price: float, next_open: float
+    ) -> str:
         values = np.asarray(action, dtype=np.float64)
         if values.shape != (2,) or not np.isfinite(values).all():
             raise ValueError("action_must_be_two_finite_values")
@@ -278,12 +285,16 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Float32Array]):
         high_equity = self._equity_at(float(bar[HIGH_COLUMN]))
         self._peak_equity = max(self._peak_equity, high_equity)
         low_equity = self._equity_at(float(bar[LOW_COLUMN]))
-        intrabar_drawdown = max(0.0, (self._peak_equity - low_equity) / self._peak_equity)
+        intrabar_drawdown = max(
+            0.0, (self._peak_equity - low_equity) / self._peak_equity
+        )
         self._max_drawdown = max(self._max_drawdown, intrabar_drawdown)
 
         close_equity = self._equity_at(float(bar[CLOSE_COLUMN]))
         self._peak_equity = max(self._peak_equity, close_equity)
-        close_drawdown = max(0.0, (self._peak_equity - close_equity) / self._peak_equity)
+        close_drawdown = max(
+            0.0, (self._peak_equity - close_equity) / self._peak_equity
+        )
         self._current_drawdown = close_drawdown
         self._max_drawdown = max(self._max_drawdown, close_drawdown)
         return max(intrabar_drawdown, close_drawdown)

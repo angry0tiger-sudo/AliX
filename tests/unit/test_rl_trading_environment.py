@@ -69,11 +69,15 @@ def test_observation_has_only_price_volume_and_time_fields() -> None:
     assert observation.shape == (9,)
     assert np.isfinite(observation).all()
     assert all(
-        any(token in name for token in ("open", "high", "low", "close", "volume", "minute_of"))
+        any(
+            token in name
+            for token in ("open", "high", "low", "close", "volume", "minute_of")
+        )
         for name in OBSERVATION_FIELDS
     )
     assert not any(
-        token in name for token in ("position", "cash", "equity", "profit", "drawdown")
+        token in name
+        for token in ("position", "cash", "equity", "profit", "drawdown")
         for name in OBSERVATION_FIELDS
     )
     assert scaler.price_anchor == pytest.approx(100.0)
@@ -101,9 +105,7 @@ def test_scaler_uses_training_only_and_handles_zero_median_volume() -> None:
         (lambda data: data[:, 5] * 0.0 - 1.0, "market_volume_must_be_non_negative"),
     ],
 )
-def test_invalid_market_geometry_fails_closed(
-    mutate: object, message: str
-) -> None:
+def test_invalid_market_geometry_fails_closed(mutate: object, message: str) -> None:
     data = _bars()
     column = {
         "market_prices_must_be_positive": 1,
@@ -141,7 +143,10 @@ def test_market_data_shape_non_finite_timestamp_and_gap_fail_closed() -> None:
         ({"initial_equity": 0.0}, "initial_equity_must_be_positive"),
         ({"fee_bps_per_side": -1.0}, "fee_bps_per_side_out_of_range"),
         ({"slippage_bps_per_side": 10_000.0}, "slippage_bps_per_side_out_of_range"),
-        ({"drawdown_increment_penalty": -1.0}, "drawdown_penalties_must_be_non_negative"),
+        (
+            {"drawdown_increment_penalty": -1.0},
+            "drawdown_penalties_must_be_non_negative",
+        ),
         ({"min_remaining_steps": 0}, "min_remaining_steps_must_be_positive"),
     ],
 )

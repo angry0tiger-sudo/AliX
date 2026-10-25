@@ -66,7 +66,9 @@ def _read_manifest(path: Path) -> dict[str, Any]:
         raise ValueError("market_manifest_expected_slots_mismatch")
     if int(payload.get("missing_minute_intervals_between_rows", -1)) != 0:
         raise ValueError("market_manifest_contains_minute_gaps")
-    if not math.isclose(float(payload.get("coverage_fraction", 0.0)), 1.0, abs_tol=1e-12):
+    if not math.isclose(
+        float(payload.get("coverage_fraction", 0.0)), 1.0, abs_tol=1e-12
+    ):
         raise ValueError("market_manifest_coverage_incomplete")
     if safety.get("Champion", "invalid") is not None:
         raise ValueError("market_manifest_champion_invariant_invalid")
@@ -113,9 +115,13 @@ def _load_market_data(
     validate_market_data(data)
     start_ms = int(data[0, 0])
     end_ms = int(data[-1, 0])
-    if start_ms != int(datetime.fromisoformat(str(manifest["start_utc"])).timestamp() * 1000):
+    if start_ms != int(
+        datetime.fromisoformat(str(manifest["start_utc"])).timestamp() * 1000
+    ):
         raise ValueError("market_manifest_start_timestamp_mismatch")
-    manifest_end_ms = int(datetime.fromisoformat(str(manifest["end_utc"])).timestamp() * 1000)
+    manifest_end_ms = int(
+        datetime.fromisoformat(str(manifest["end_utc"])).timestamp() * 1000
+    )
     if end_ms != manifest_end_ms:
         raise ValueError("market_manifest_end_timestamp_mismatch")
     return data, manifest
@@ -537,7 +543,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             ),
             "holdout_pass_count": 1,
         },
-        "economic_assessment": _economic_assessment(validation_metrics, holdout_metrics),
+        "economic_assessment": _economic_assessment(
+            validation_metrics, holdout_metrics
+        ),
         "production_promotion_allowed": False,
         "safety_invariants": {
             "Champion": None,
