@@ -20,8 +20,14 @@ import pandas as pd
 from numpy.typing import NDArray
 
 from services.rl_research.rl_trading_environment import (
+    ACTION_BUY,
+    ACTION_HOLD,
+    ACTION_NAMES,
     BTCUSDTTradingEnv,
     DEFAULT_INITIAL_EQUITY,
+    DEFAULT_OPPORTUNITY_COST_PENALTY,
+    MOVING_AVERAGE_WINDOW,
+    POSITION_SIZE_FRACTIONS,
     DEFAULT_INACTIVITY_PENALTY,
     DEFAULT_INVALID_ACTION_PENALTY,
     DEFAULT_PROFITABLE_TRADE_BONUS,
@@ -216,13 +222,13 @@ def _evaluate_policy(
     episode_start = np.asarray([True], dtype=np.bool_)
     reward_sum = 0.0
     steps = 0
-    action_signal_sum = 0.0
-    position_size_sum = 0.0
-    action_signal_min = math.inf
-    action_signal_max = -math.inf
-    position_size_min = math.inf
-    position_size_max = -math.inf
-    zero_size_buy_requests = 0
+    requested_size_counts = {
+        f"{fraction:.2f}": 0 for fraction in POSITION_SIZE_FRACTIONS
+    }
+    requested_size_sum = 0.0
+    requested_size_min = math.inf
+    requested_size_max = -math.inf
+    requested_trade_size_count = 0
     action_mask_reason_counts: dict[str, int] = {}
     while True:
         action, recurrent_state = model.predict(
@@ -231,18 +237,22 @@ def _evaluate_policy(
             episode_start=episode_start,
             deterministic=True,
         )
-        action_vector = np.asarray(action, dtype=np.float32).reshape(2)
-        action_signal = float(action_vector[0])
-        position_size = float(action_vector[1])
-        action_signal_sum += action_signal
-        position_size_sum += position_size
-        action_signal_min = min(action_signal_min, action_signal)
-        action_signal_max = max(action_signal_max, action_signal)
-        position_size_min = min(position_size_min, position_size)
-        position_size_max = max(position_size_max, position_size)
+        action_vector = np.asarray(action, dtype=np.int64).reshape(2)
+        direction_index = int(action_vector[0])
+        size_index = int(action_vector[1])
+        if not 0 <= direction_index < len(ACTION_NAMES):
+            raise ValueError("policy_direction_index_out_of_range")
+        if not 0 <= size_index < len(POSITION_SIZE_FRACTIONS):
+            raise ValueError("policy_size_index_out_of_range")
+        requested_action = ACTION_NAMES[direction_index]
+        requested_size = POSITION_SIZE_FRACTIONS[size_index]
+        if requested_action in ("BUY", "SELL"):
+            requested_size_counts[f"{requested_size:.2f}"] += 1
+            requested_size_sum += requested_size
+            requested_size_min = min(requested_size_min, requested_size)
+            requested_size_max = max(requested_size_max, requested_size)
+            requested_trade_size_count += 1
         observation, reward, terminated, truncated, info = env.step(action_vector)
-        if info["action"] == "BUY" and position_size <= 1e-8:
-            zero_size_buy_requests += 1
         reason = info.get("action_mask_reason")
         if isinstance(reason, str):
             action_mask_reason_counts[reason] = (
@@ -261,13 +271,21 @@ def _evaluate_policy(
             "evaluation_seed": seed,
             "evaluation_passes": 1,
             "deterministic_inference": True,
-            "policy_action_signal_mean": action_signal_sum / steps,
-            "policy_action_signal_min": action_signal_min,
-            "policy_action_signal_max": action_signal_max,
-            "policy_position_size_mean": position_size_sum / steps,
-            "policy_position_size_min": position_size_min,
-            "policy_position_size_max": position_size_max,
-            "policy_buy_zero_size_request_count": zero_size_buy_requests,
+            "policy_action_encoding": "MultiDiscrete([direction, size_index])",
+            "policy_requested_trade_size_fraction_counts": requested_size_counts,
+            "policy_requested_trade_size_fraction_mean": (
+                requested_size_sum / requested_trade_size_count
+                if requested_trade_size_count
+                else None
+            ),
+            "policy_requested_trade_size_fraction_min": (
+                requested_size_min if requested_trade_size_count else None
+            ),
+            "policy_requested_trade_size_fraction_max": (
+                requested_size_max if requested_trade_size_count else None
+            ),
+            "policy_requested_trade_size_action_count": requested_trade_size_count,
+            "policy_buy_zero_size_request_count": 0,
             "policy_action_mask_reason_counts": dict(
                 sorted(action_mask_reason_counts.items())
             ),
@@ -275,7 +293,6 @@ def _evaluate_policy(
     )
     env.close()
     return result
-
 
 def _evaluate_baseline(
     data: Float64Array,
@@ -296,9 +313,9 @@ def _evaluate_baseline(
     steps = 0
     while True:
         if baseline == "buy_and_hold" and steps == 0:
-            action = np.asarray([1.0, 1.0], dtype=np.float32)
+            action = np.asarray([ACTION_BUY, len(POSITION_SIZE_FRACTIONS) - 1], dtype=np.int64)
         else:
-            action = np.asarray([0.0, 0.0], dtype=np.float32)
+            action = np.asarray([ACTION_HOLD, 0], dtype=np.int64)
         _, _, terminated, truncated, _ = env.step(action)
         steps += 1
         if terminated or truncated:
@@ -552,9 +569,8 @@ def _train_recurrent_ppo(
 
 
 def _evaluate_validation_and_holdout(
-    data: Float64Array,
     validation_data: Float64Array,
-    validation_end: int,
+    holdout_data: Float64Array,
     scaler: MarketObservationScaler,
     args: argparse.Namespace,
     model: Any,
@@ -569,8 +585,7 @@ def _evaluate_validation_and_holdout(
         validation_data, scaler, args.fee_bps, args.slippage_bps, "cash"
     )
 
-    # Slice the final holdout only after model fitting and validation evaluation.
-    holdout_data = data[validation_end:]
+    # The latest tail is passed explicitly and evaluated exactly once.
     holdout_metrics = _evaluate_policy(
         model, holdout_data, scaler, args.fee_bps, args.slippage_bps, args.seed + 1
     )
@@ -597,10 +612,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _parse_args(argv)
     _validate_cli_arguments(args)
     data, manifest = _load_market_data(args.data, args.manifest)
-    analysis_data, _ = _exclude_previous_holdout_window(data)
+    pre_cutoff_data, _ = _exclude_previous_holdout_window(data)
     train_data, validation_data, validation_end = _split_training_validation(
-        analysis_data
+        pre_cutoff_data
     )
+    # Keep the previously used final-holdout segment out of both fitting and
+    # validation; use the chronologically latest tail as this model's final test.
+    new_holdout_data = data[len(pre_cutoff_data) :]
+    excluded_prior_candidate_holdout = pre_cutoff_data[validation_end:]
+    if len(new_holdout_data) < 100_000 or len(excluded_prior_candidate_holdout) == 0:
+        raise ValueError("new_holdout_or_prior_holdout_gap_too_small")
     scaler = MarketObservationScaler.fit(train_data)
     n_steps = 1_024
     requested_steps, training_steps = _training_budget(
@@ -610,7 +631,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         train_data, scaler, args, requested_steps, training_steps, n_steps
     )
     evaluation = _evaluate_validation_and_holdout(
-        analysis_data, validation_data, validation_end, scaler, args, training.model
+        validation_data, new_holdout_data, scaler, args, training.model
     )
     holdout_data = evaluation["holdout_data"]
     report = _build_report(
@@ -669,7 +690,7 @@ def _build_report(
         economic_assessment["status"] = "NO-GO"
 
     report: dict[str, Any] = {
-        "schema_version": "alix.rl-trading-agent-report.v3",
+        "schema_version": "alix.rl-trading-agent-report.v4",
         "run_mode": "historical_simulation_only",
         "commit_sha": args.commit_sha,
         "research_result": (
@@ -691,31 +712,43 @@ def _build_report(
             ),
         },
         "split": {
-            "method": "chronological_no_shuffle_excluding_previous_holdout",
-            "previously_reported_holdout_excluded": True,
-            "previously_reported_holdout_start_utc": PREVIOUS_HOLDOUT_START_UTC,
-            "holdout_disjoint_from_previous_holdout": (
-                float(holdout_data[-1, 0]) < PREVIOUS_HOLDOUT_START_MS
-            ),
-            "analysis_window_end_utc": _utc_from_ms(float(holdout_data[-1, 0])),
-            "analysis_window_rows": len(train_data)
-            + len(validation_data)
-            + len(holdout_data),
-            "rows_excluded_after_analysis_window": (
+            "method": "chronological_train_validation_with_prior-holdout-gap_and_latest-tail_test",
+            "previous_run_candidate_holdout_start_utc": PREVIOUS_HOLDOUT_START_UTC,
+            "previous_run_candidate_holdout_rows_excluded_from_current_fit": (
                 int(manifest["row_count"])
-                - len(train_data)
-                - len(validation_data)
-                - len(holdout_data)
+                - len(train_data) - len(validation_data) - len(holdout_data)
+            ),
+            "latest_tail_used_as_current_final_holdout": True,
+            "final_holdout_exposed_in_prior_research": True,
+            "final_holdout_disjoint_from_current_train_validation": (
+                float(holdout_data[0, 0]) > float(validation_data[-1, 0])
+            ),
+            "analysis_window_end_utc": _utc_from_ms(float(validation_data[-1, 0])),
+            "analysis_window_rows": (
+                len(train_data) + len(validation_data)
+                + int(manifest["row_count"])
+                - len(train_data) - len(validation_data) - len(holdout_data)
+            ),
+            "rows_excluded_between_validation_and_final_holdout": (
+                int(manifest["row_count"])
+                - len(train_data) - len(validation_data) - len(holdout_data)
             ),
             "holdout_novelty_note": (
-                "This holdout is disjoint from the prior June-October 2026 holdout and "
-                "is excluded from this run's train/validation splits. The underlying "
-                "public history was used by earlier research runs, so it is not a "
-                "never-before-downloaded market sample."
+                "The final holdout is the latest public-data tail beginning 2026-06-01 "
+                "UTC. It is untouched by this model's training and validation, but this "
+                "same calendar interval was inspected in prior research; it is not a "
+                "new-to-research market sample."
+            ),
+            "fraction_denominators": (
+                "training and validation fractions are measured against the pre-cutoff "
+                "window; final_holdout_fraction is the target fraction of the full dataset. "
+                "The previous candidate's held-out segment between validation and the "
+                "latest tail is deliberately excluded from this model's fitting and scoring."
             ),
             "training_fraction": TRAIN_FRACTION,
             "validation_fraction": VALIDATION_FRACTION,
             "final_holdout_fraction": HOLDOUT_FRACTION,
+            "final_holdout_fraction_actual": len(holdout_data) / int(manifest["row_count"]),
             "training_rows": len(train_data),
             "validation_rows": len(validation_data),
             "final_holdout_rows": len(holdout_data),
@@ -739,21 +772,27 @@ def _build_report(
             "observation_contains_position_or_pnl": False,
             "observation_contains_technical_indicators": False,
             "action_space": {
-                "type": "continuous Box",
-                "shape": [2],
-                "decision_signal_bounds": [-1.0, 1.0],
-                "position_size_bounds": [0.0, 1.0],
-                "sell_threshold": -1.0 / 3.0,
-                "buy_threshold": 1.0 / 3.0,
-                "buy_semantics": "target long allocation as a fraction of equity",
-                "sell_semantics": "fraction of current holding to sell",
-                "hold_semantics": "do not rebalance",
+                "type": "MultiDiscrete",
+                "nvec": [len(ACTION_NAMES), len(POSITION_SIZE_FRACTIONS)],
+                "direction_index_to_action": {
+                    str(index): name for index, name in enumerate(ACTION_NAMES)
+                },
+                "size_index_to_fraction": {
+                    str(index): fraction
+                    for index, fraction in enumerate(POSITION_SIZE_FRACTIONS)
+                },
+                "buy_semantics": (
+                    "spend the selected fraction of currently available cash, "
+                    "inclusive of fee and slippage costs"
+                ),
+                "sell_semantics": "sell the selected fraction of current inventory",
+                "hold_semantics": "do not rebalance; size index is ignored",
+                "zero_size_buy_allowed": False,
                 "masking": {
                     "enforcement": "deterministic_environment_execution_boundary",
                     "policy_distribution_logits_masked": False,
                     "sell_requires_positive_inventory": True,
                     "buy_requires_unallocated_cash": True,
-                    "non_increasing_buy_size_is_noop": True,
                     "masked_action_is_non_executable": True,
                 },
             },
@@ -780,6 +819,15 @@ def _build_report(
                 "invalid_action_penalty_per_masked_request": DEFAULT_INVALID_ACTION_PENALTY,
                 "inactivity_grace_steps": DEFAULT_INACTIVITY_GRACE_STEPS,
                 "profitable_trade_bonus": DEFAULT_PROFITABLE_TRADE_BONUS,
+                "opportunity_cost_penalty_when_flat_above_sma": (
+                    DEFAULT_OPPORTUNITY_COST_PENALTY
+                ),
+                "opportunity_cost_moving_average_window": MOVING_AVERAGE_WINDOW,
+                "opportunity_cost_indicator_visible_to_policy": False,
+                "opportunity_cost_penalty_trigger": (
+                    "HOLD while flat and current closed price is above the causal "
+                    "moving average computed from the last completed candles"
+                ),
                 "profitable_trade_bonus_trigger": (
                     "completed round trip with cumulative realized PnL positive "
                     "after entry and exit fees and slippage"
@@ -792,6 +840,7 @@ def _build_report(
                     "- 0.01 * risk_drawdown "
                     "- 0.001 * indicator(consecutive_unchanged_steps > 3) "
                     "- 0.001 * indicator(masked_BUY_or_SELL_request) "
+                    "- 0.0005 * indicator(flat_HOLD_and_close_above_causal_SMA) "
                     "+ 0.0001 * profitable_closed_trade_count"
                 ),
                 "hard_trade_count_minimum": None,
