@@ -90,7 +90,6 @@ class EvaluationMetrics:
     strong_trend_return: float = 0.0
 
 
-
 @dataclass(frozen=True, slots=True)
 class CandidateEvaluation:
     """Training-scored candidate using soft sample confidence, not hard count limits."""
@@ -113,7 +112,6 @@ class CandidateEvaluation:
     @property
     def selection_eligible(self) -> bool:
         return self.sample_eligible and self.training_risk_eligible
-
 
 
 @dataclass(slots=True)
@@ -1416,7 +1414,6 @@ def run_evolution(
             "dynamic_exit_mode_gene": list(EXIT_MODES),
             "missed_upside_threshold": OPPORTUNITY_MOVE_THRESHOLD,
         },
-
         "execution_assumptions": {
             "fee_bps_per_side": 25,
             "slippage_bps_per_side": 20,
