@@ -186,7 +186,10 @@ def test_economic_assessment_rejects_low_sample_or_unvalidated_candidate() -> No
 def test_no_candidate_assessment_fails_closed() -> None:
     result = _economic_assessment(None, None)
     assert result["status"] == "NO-GO"
-    assert "no_candidate_meets_training_validation_sample_and_training_drawdown_gates" in result["reasons"]
+    assert (
+        "no_candidate_meets_training_validation_sample_and_training_drawdown_gates"
+        in result["reasons"]
+    )
     assert result["final_holdout_used"] is False
     assert result["production_promotion_eligible"] is False
 

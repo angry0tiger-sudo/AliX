@@ -518,9 +518,7 @@ def _eligibility_reasons(
     return tuple(reasons)
 
 
-def fitness_score(
-    training: EvaluationMetrics, validation: EvaluationMetrics
-) -> float:
+def fitness_score(training: EvaluationMetrics, validation: EvaluationMetrics) -> float:
     """Score training expectancy; invalid sample sizes score zero, never a win by rank."""
 
     if (
@@ -585,7 +583,9 @@ def _select_by_eligibility(
     selected: list[Any] = []
     for _ in range(k):
         aspirants = random.sample(individuals, min(tournsize, len(individuals)))
-        selected.append(max(aspirants, key=lambda item: _selection_priority(item, cache)))
+        selected.append(
+            max(aspirants, key=lambda item: _selection_priority(item, cache))
+        )
     return selected
 
 
@@ -631,8 +631,18 @@ def _evaluate_invalid(population: Sequence[Any], toolbox: Any) -> None:
 
 def _timeframe_label(minutes: int) -> str:
     labels = {
-        1: "1m", 5: "5m", 15: "15m", 30: "30m", 60: "1h", 120: "2h",
-        240: "4h", 360: "6h", 720: "12h", 1440: "1d", 10080: "7d", 43200: "30d",
+        1: "1m",
+        5: "5m",
+        15: "15m",
+        30: "30m",
+        60: "1h",
+        120: "2h",
+        240: "4h",
+        360: "6h",
+        720: "12h",
+        1440: "1d",
+        10080: "7d",
+        43200: "30d",
     }
     return labels.get(minutes, f"{minutes}m")
 
@@ -646,7 +656,10 @@ def _ensure_timeframe_coverage(
 
     for required_minutes in REQUIRED_TIMEFRAMES:
         required_gene = TIMEFRAMES.index(required_minutes)
-        while sum(1 for item in population if item[0] == required_gene) < MIN_REQUIRED_TIMEFRAME_POPULATION:
+        while (
+            sum(1 for item in population if item[0] == required_gene)
+            < MIN_REQUIRED_TIMEFRAME_POPULATION
+        ):
             counts = Counter(TIMEFRAMES[item[0]] for item in population)
             replaceable = [
                 (index, item)
@@ -660,7 +673,8 @@ def _ensure_timeframe_coverage(
                 replaceable, key=lambda pair: _selection_priority(pair[1], cache)
             )
             population_keys = {
-                tuple(item) for item_index, item in enumerate(population)
+                tuple(item)
+                for item_index, item in enumerate(population)
                 if item_index != index
             }
             replacement: Any | None = None
@@ -710,16 +724,19 @@ def _generation_record(
 
 
 def _timeframe_coverage_summary(
-    cache: dict[tuple[int, ...], CandidateEvaluation]
+    cache: dict[tuple[int, ...], CandidateEvaluation],
 ) -> dict[str, dict[str, Any]]:
     summary: dict[str, dict[str, Any]] = {}
     for minutes in TIMEFRAMES:
         label = _timeframe_label(minutes)
         entries = [
-            (key, value) for key, value in cache.items()
+            (key, value)
+            for key, value in cache.items()
             if TIMEFRAMES[key[0]] == minutes
         ]
-        sample_eligible = [(key, value) for key, value in entries if value.sample_eligible]
+        sample_eligible = [
+            (key, value) for key, value in entries if value.sample_eligible
+        ]
         selection_eligible = [
             (key, value) for key, value in entries if value.selection_eligible
         ]
@@ -742,8 +759,12 @@ def _timeframe_coverage_summary(
             "sample_eligible_genomes": len(sample_eligible),
             "selection_eligible_genomes": len(selection_eligible),
             "best_valid_fitness": best[1].fitness if best else None,
-            "best_valid_training_trade_count": best[1].training.trade_count if best else None,
-            "best_valid_validation_trade_count": best[1].validation.trade_count if best else None,
+            "best_valid_training_trade_count": best[1].training.trade_count
+            if best
+            else None,
+            "best_valid_validation_trade_count": best[1].validation.trade_count
+            if best
+            else None,
             "rejection_reason_counts": dict(sorted(rejection_counts.items())),
         }
     return summary
@@ -936,11 +957,22 @@ def _write_csv_outputs(
         writer.writeheader()
         writer.writerows(history)
     fields = [
-        "rank", "gene_vector", "timeframe", "fitness", "eligibility_status",
-        "eligibility_reasons", "training_trade_count", "validation_trade_count",
-        "training_win_rate", "validation_win_rate", "training_net_expectancy",
-        "validation_net_expectancy", "training_net_return", "validation_net_return",
-        "training_max_drawdown", "validation_max_drawdown",
+        "rank",
+        "gene_vector",
+        "timeframe",
+        "fitness",
+        "eligibility_status",
+        "eligibility_reasons",
+        "training_trade_count",
+        "validation_trade_count",
+        "training_win_rate",
+        "validation_win_rate",
+        "training_net_expectancy",
+        "validation_net_expectancy",
+        "training_net_return",
+        "validation_net_return",
+        "training_max_drawdown",
+        "validation_max_drawdown",
     ]
     with (output_dir / "self-evolving-ga-candidates.csv").open(
         "w", encoding="utf-8", newline=""
@@ -949,8 +981,10 @@ def _write_csv_outputs(
         writer.writeheader()
         for rank, (key, result) in enumerate(ranked_candidates[:100], start=1):
             status = (
-                "SELECTION_ELIGIBLE" if result.selection_eligible
-                else "SAMPLE_ELIGIBLE_HIGH_DRAWDOWN" if result.sample_eligible
+                "SELECTION_ELIGIBLE"
+                if result.selection_eligible
+                else "SAMPLE_ELIGIBLE_HIGH_DRAWDOWN"
+                if result.sample_eligible
                 else "INVALID_SAMPLE"
             )
             writer.writerow(
@@ -1016,9 +1050,7 @@ def run_evolution(
         reverse=True,
     )
     selected = [
-        (key, result)
-        for key, result in ranked_candidates
-        if result.selection_eligible
+        (key, result) for key, result in ranked_candidates if result.selection_eligible
     ]
     if selected:
         best_key, best_result = max(selected, key=lambda item: item[1].fitness)
@@ -1039,8 +1071,7 @@ def run_evolution(
     coverage_by_generation = {
         _timeframe_label(minutes): {
             "minimum_population_per_generation": min(
-                int(item[f"population_{_timeframe_label(minutes)}"])
-                for item in history
+                int(item[f"population_{_timeframe_label(minutes)}"]) for item in history
             ),
             "minimum_sample_eligible_population_per_generation": min(
                 int(item[f"sample_eligible_{_timeframe_label(minutes)}"])
@@ -1196,11 +1227,17 @@ def main() -> int:
                 "generations_completed": report["generations_completed"],
                 "unique_genomes_evaluated": report["unique_genomes_evaluated"],
                 "candidate_genes": candidate["genes"] if candidate else None,
-                "training_metrics": candidate["training_metrics"] if candidate else None,
-                "validation_metrics": candidate["validation_metrics"] if candidate else None,
+                "training_metrics": candidate["training_metrics"]
+                if candidate
+                else None,
+                "validation_metrics": candidate["validation_metrics"]
+                if candidate
+                else None,
                 "research_result": report["research_result"],
                 "economic_assessment": report["economic_assessment"],
-                "required_timeframe_coverage_by_generation": report["required_timeframe_coverage_by_generation"],
+                "required_timeframe_coverage_by_generation": report[
+                    "required_timeframe_coverage_by_generation"
+                ],
                 "genomes_rejected_by_reason": report["genomes_rejected_by_reason"],
                 "Champion": report["safety_invariants"]["Champion"],
                 "order_permission": report["safety_invariants"]["order_permission"],
