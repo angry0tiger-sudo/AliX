@@ -178,7 +178,7 @@ def _resample(data: pd.DataFrame, timeframe: int) -> pd.DataFrame:
         )
         bars = bars.loc[grouped["close"].count() == timeframe]
     bars = bars.dropna(subset=fields)
-    bars["open_time_ms"] = bars.index.view("int64") // 1_000_000
+    bars["open_time_ms"] = pd.DatetimeIndex(bars.index).asi8 // 1_000_000
     bars["close_time_ms"] = bars["open_time_ms"] + timeframe * 60_000 - 1
     return bars
 
@@ -708,7 +708,7 @@ def run_evolution(
     context = build_search_context(raw, train_cutoff_ms, validation_end_ms)
     cache: dict[tuple[int, ...], tuple[float, EvaluationMetrics]] = {}
     toolbox = _build_toolbox(context, cache, seed)
-    from deap import tools  # type: ignore[import-not-found]
+    from deap import tools
 
     population = toolbox.population(n=population_size)
     hall = tools.HallOfFame(20)
