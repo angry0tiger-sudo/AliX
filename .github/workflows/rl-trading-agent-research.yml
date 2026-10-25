@@ -7,6 +7,7 @@ on:
     paths:
       - ".github/workflows/rl-trading-agent-research.yml"
       - ".github/workflows/ci.yml"
+      - "docs/governance/owner-directives/2026-10-25-rl-reward-shaping.md"
       - "requirements-rl-research.txt"
       - "services/rl_research/rl_trading_environment.py"
       - "scripts/run_rl_trading_agent.py"
@@ -142,7 +143,7 @@ jobs:
             --data artifacts/public-minute-bars/binance_BTCUSDT_1m.csv \
             --manifest artifacts/public-minute-bars/manifest.json \
             --out-dir artifacts/rl-agent \
-            --timesteps 0 \
+            --timesteps 1000000 \
             --seed 20261025 \
             --fee-bps 25 \
             --slippage-bps 20 \
@@ -180,7 +181,22 @@ jobs:
           assert model["algorithm"] == "RecurrentPPO"
           assert model["model_reload_roundtrip"] == "passed"
           assert len(model["model_sha256"]) == 64
-          assert model["total_timesteps_trained"] >= 100_000
+          assert model["total_timesteps_trained"] >= 1_000_000
+          assert report["environment"]["reward"]["inactivity_penalty_per_hold_step"] == 0.001
+          assert report["environment"]["reward"]["profitable_trade_bonus"] == 0.0001
+          for split_name in ("validation", "final_holdout"):
+              metrics = evaluation[split_name]
+              assert metrics["buy_action_count"] >= 0
+              assert metrics["sell_action_count"] >= 0
+              assert metrics["hold_action_count"] >= 0
+              assert metrics["closed_trade_count"] >= 0
+              assert (
+                  metrics["winning_trade_count"]
+                  + metrics["losing_trade_count"]
+                  + metrics["breakeven_trade_count"]
+                  == metrics["closed_trade_count"]
+              )
+              assert metrics["win_rate"] is None or 0.0 <= metrics["win_rate"] <= 1.0
           assert evaluation["final_holdout"]["steps"] == split["final_holdout_rows"] - 1
           assert evaluation["holdout_pass_count"] == 1
           for key in ("net_profit", "net_return", "max_drawdown", "total_fees", "total_slippage"):

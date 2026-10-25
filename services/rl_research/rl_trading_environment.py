@@ -40,6 +40,8 @@ BUY_THRESHOLD = 1.0 / 3.0
 SELL_THRESHOLD = -1.0 / 3.0
 DEFAULT_DRAWDOWN_INCREMENT_PENALTY = 5.0
 DEFAULT_DRAWDOWN_LEVEL_PENALTY = 0.01
+DEFAULT_INACTIVITY_PENALTY = 0.001
+DEFAULT_PROFITABLE_TRADE_BONUS = 0.0001
 
 Float64Array = NDArray[np.float64]
 Float32Array = NDArray[np.float32]
@@ -133,6 +135,19 @@ def _validate_drawdown_penalties(increment: object, level: object) -> None:
         raise ValueError("drawdown_penalties_must_be_non_negative")
 
 
+def _validate_reward_shaping(
+    inactivity_penalty: object, profitable_trade_bonus: object
+) -> None:
+    inactivity_value = _finite_numeric_parameter(
+        "inactivity_penalty", inactivity_penalty
+    )
+    bonus_value = _finite_numeric_parameter(
+        "profitable_trade_bonus", profitable_trade_bonus
+    )
+    if inactivity_value < 0 or bonus_value < 0:
+        raise ValueError("reward_shaping_parameters_must_be_non_negative")
+
+
 def _validate_environment_configuration(
     initial_equity: object,
     fee_bps_per_side: object,
@@ -140,6 +155,8 @@ def _validate_environment_configuration(
     min_remaining_steps: object,
     drawdown_increment_penalty: object,
     drawdown_level_penalty: object,
+    inactivity_penalty: object,
+    profitable_trade_bonus: object,
 ) -> None:
     equity_value = _finite_numeric_parameter("initial_equity", initial_equity)
     if equity_value <= 0:
@@ -147,6 +164,7 @@ def _validate_environment_configuration(
     _validate_cost_basis_points("fee_bps_per_side", fee_bps_per_side)
     _validate_cost_basis_points("slippage_bps_per_side", slippage_bps_per_side)
     _validate_drawdown_penalties(drawdown_increment_penalty, drawdown_level_penalty)
+    _validate_reward_shaping(inactivity_penalty, profitable_trade_bonus)
     if (
         isinstance(min_remaining_steps, bool)
         or not isinstance(min_remaining_steps, int)
@@ -178,6 +196,8 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Float32Array]):
         min_remaining_steps: int = 32_768,
         drawdown_increment_penalty: float = DEFAULT_DRAWDOWN_INCREMENT_PENALTY,
         drawdown_level_penalty: float = DEFAULT_DRAWDOWN_LEVEL_PENALTY,
+        inactivity_penalty: float = DEFAULT_INACTIVITY_PENALTY,
+        profitable_trade_bonus: float = DEFAULT_PROFITABLE_TRADE_BONUS,
     ) -> None:
         super().__init__()
         validate_market_data(market_data)
@@ -188,6 +208,8 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Float32Array]):
             min_remaining_steps,
             drawdown_increment_penalty,
             drawdown_level_penalty,
+            inactivity_penalty,
+            profitable_trade_bonus,
         )
 
         self._market_data = np.ascontiguousarray(market_data, dtype=np.float64)
@@ -199,6 +221,8 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Float32Array]):
         self.min_remaining_steps = int(min_remaining_steps)
         self.drawdown_increment_penalty = float(drawdown_increment_penalty)
         self.drawdown_level_penalty = float(drawdown_level_penalty)
+        self.inactivity_penalty = float(inactivity_penalty)
+        self.profitable_trade_bonus = float(profitable_trade_bonus)
 
         self.action_space = spaces.Box(
             low=np.asarray([-1.0, 0.0], dtype=np.float32),
@@ -223,6 +247,18 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Float32Array]):
         self._fill_count = 0
         self._buy_fill_count = 0
         self._sell_fill_count = 0
+        self._position_cost_basis = 0.0
+        self._position_realized_profit = 0.0
+        self._last_step_realized_profit = 0.0
+        self._last_step_profitable_trade_count = 0
+        self._last_closed_trade_net_profit: float | None = None
+        self._closed_trade_count = 0
+        self._winning_trade_count = 0
+        self._losing_trade_count = 0
+        self._breakeven_trade_count = 0
+        self._buy_action_count = 0
+        self._sell_action_count = 0
+        self._hold_action_count = 0
         self._final_equity: float | None = None
 
     def _observation(self, index: int) -> Float32Array:
@@ -259,6 +295,47 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Float32Array]):
             raise ValueError("simulated_equity_non_positive")
         return equity
 
+    def _record_sale(
+        self,
+        sold_quantity: float,
+        execution_price: float,
+        fee: float,
+        target_quantity: float,
+    ) -> None:
+        average_cost = self._position_cost_basis / self._quantity
+        realized_profit = sold_quantity * (execution_price - average_cost) - fee
+        self._position_cost_basis = max(
+            0.0, self._position_cost_basis - sold_quantity * average_cost
+        )
+        self._position_realized_profit += realized_profit
+        self._last_step_realized_profit += realized_profit
+        if target_quantity != 0.0:
+            return
+
+        closed_profit = self._position_realized_profit
+        self._last_closed_trade_net_profit = float(closed_profit)
+        self._closed_trade_count += 1
+        tolerance = self.initial_equity * 1e-12
+        if closed_profit > tolerance:
+            self._winning_trade_count += 1
+            self._last_step_profitable_trade_count += 1
+        elif closed_profit < -tolerance:
+            self._losing_trade_count += 1
+        else:
+            self._breakeven_trade_count += 1
+        self._position_cost_basis = 0.0
+        self._position_realized_profit = 0.0
+
+    def _record_action(self, action_name: str) -> None:
+        if action_name == "BUY":
+            self._buy_action_count += 1
+        elif action_name == "SELL":
+            self._sell_action_count += 1
+        elif action_name == "HOLD":
+            self._hold_action_count += 1
+        else:
+            raise ValueError("action_name_invalid")
+
     def _rebalance_to_quantity(self, target_quantity: float, price: float) -> None:
         delta = target_quantity - self._quantity
         if delta == 0.0:
@@ -278,6 +355,10 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Float32Array]):
         if not math.isfinite(next_cash) or next_cash < -1e-7:
             raise ValueError("simulated_spot_cash_would_be_negative")
 
+        if is_buy:
+            self._position_cost_basis += delta * execution_price + fee
+        else:
+            self._record_sale(-delta, execution_price, fee, target_quantity)
         self._cash = max(0.0, next_cash)
         self._quantity = target_quantity
         self._total_fees += fee
@@ -372,6 +453,18 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Float32Array]):
         self._fill_count = 0
         self._buy_fill_count = 0
         self._sell_fill_count = 0
+        self._position_cost_basis = 0.0
+        self._position_realized_profit = 0.0
+        self._last_step_realized_profit = 0.0
+        self._last_step_profitable_trade_count = 0
+        self._last_closed_trade_net_profit = None
+        self._closed_trade_count = 0
+        self._winning_trade_count = 0
+        self._losing_trade_count = 0
+        self._breakeven_trade_count = 0
+        self._buy_action_count = 0
+        self._sell_action_count = 0
+        self._hold_action_count = 0
         self._final_equity = None
         return self._observation(self._index), {"start_index": self._index}
 
@@ -386,12 +479,16 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Float32Array]):
         next_bar = self._market_data[next_index]
         previous_equity = self._equity_at(float(current_bar[CLOSE_COLUMN]))
         previous_drawdown = self._current_drawdown
+        self._last_step_realized_profit = 0.0
+        self._last_step_profitable_trade_count = 0
+        self._last_closed_trade_net_profit = None
 
         action_name = self._apply_action(
             action,
             current_price=float(current_bar[CLOSE_COLUMN]),
             next_open=float(next_bar[OPEN_COLUMN]),
         )
+        self._record_action(action_name)
         risk_drawdown = self._update_drawdown(next_bar)
         terminated = next_index == len(self._market_data) - 1
         if terminated:
@@ -412,10 +509,18 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Float32Array]):
 
         log_net_return = math.log(current_equity / previous_equity)
         worsening_drawdown = max(0.0, risk_drawdown - previous_drawdown)
+        inactivity_penalty = (
+            self.inactivity_penalty if action_name == "HOLD" else 0.0
+        )
+        profitable_trade_bonus = (
+            self.profitable_trade_bonus * self._last_step_profitable_trade_count
+        )
         reward = (
             log_net_return
             - self.drawdown_increment_penalty * worsening_drawdown
             - self.drawdown_level_penalty * risk_drawdown
+            - inactivity_penalty
+            + profitable_trade_bonus
         )
         if not math.isfinite(reward):
             raise ValueError("reward_non_finite")
@@ -426,18 +531,26 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Float32Array]):
             "action": action_name,
             "reward_net_log_return": log_net_return,
             "drawdown_for_reward": risk_drawdown,
+            "reward_inactivity_penalty": inactivity_penalty,
+            "reward_profitable_trade_bonus": profitable_trade_bonus,
+            "realized_profit_this_step": float(self._last_step_realized_profit),
+            "closed_trade_net_profit_this_step": self._last_closed_trade_net_profit,
         }
         if terminated:
             info.update(self.summary())
         return self._observation(self._index), float(reward), terminated, False, info
 
-    def summary(self) -> dict[str, float | int]:
-        """Return accounting evidence; never included in the market observation."""
+    def summary(self) -> dict[str, float | int | None]:
+        """Return accounting and behavior evidence; never observed by the policy."""
 
         price = float(self._market_data[self._index, CLOSE_COLUMN])
         final_equity = self._final_equity
         if final_equity is None:
             final_equity = self._equity_at(price)
+        decisive_trades = self._winning_trade_count + self._losing_trade_count
+        win_rate = (
+            self._winning_trade_count / decisive_trades if decisive_trades else None
+        )
         return {
             "initial_equity": self.initial_equity,
             "final_equity": float(final_equity),
@@ -450,4 +563,12 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Float32Array]):
             "fill_count": self._fill_count,
             "buy_fill_count": self._buy_fill_count,
             "sell_fill_count": self._sell_fill_count,
+            "buy_action_count": self._buy_action_count,
+            "sell_action_count": self._sell_action_count,
+            "hold_action_count": self._hold_action_count,
+            "closed_trade_count": self._closed_trade_count,
+            "winning_trade_count": self._winning_trade_count,
+            "losing_trade_count": self._losing_trade_count,
+            "breakeven_trade_count": self._breakeven_trade_count,
+            "win_rate": float(win_rate) if win_rate is not None else None,
         }

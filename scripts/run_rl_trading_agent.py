@@ -21,6 +21,8 @@ from numpy.typing import NDArray
 
 from services.rl_research.rl_trading_environment import (
     BTCUSDTTradingEnv,
+    DEFAULT_INACTIVITY_PENALTY,
+    DEFAULT_PROFITABLE_TRADE_BONUS,
     MarketObservationScaler,
     OBSERVATION_FIELDS,
     validate_market_data,
@@ -331,8 +333,13 @@ def _training_budget(
     training_rows: int, requested_timesteps: int, rollout_steps: int
 ) -> tuple[int, int]:
     requested_steps = requested_timesteps or (training_rows - 1)
-    capped_steps = min(requested_steps, training_rows - 1)
-    training_steps = (capped_steps // rollout_steps) * rollout_steps
+    if requested_timesteps == 0:
+        available_steps = min(requested_steps, training_rows - 1)
+        training_steps = (available_steps // rollout_steps) * rollout_steps
+    else:
+        training_steps = (
+            (requested_steps + rollout_steps - 1) // rollout_steps
+        ) * rollout_steps
     if training_steps < rollout_steps:
         raise ValueError("effective_training_timesteps_below_rollout_size")
     return requested_steps, training_steps
@@ -606,9 +613,16 @@ def _build_report(
                 "equity_includes_fees_and_slippage": True,
                 "drawdown_increment_penalty": 5.0,
                 "drawdown_level_penalty": 0.01,
+                "inactivity_penalty_per_hold_step": DEFAULT_INACTIVITY_PENALTY,
+                "profitable_trade_bonus": DEFAULT_PROFITABLE_TRADE_BONUS,
+                "profitable_trade_bonus_trigger": (
+                    "completed round trip with cumulative realized PnL positive "
+                    "after entry and exit fees and slippage"
+                ),
                 "formula": (
                     "log_net_return - 5.0 * max(0, risk_drawdown - prior_close_drawdown) "
-                    "- 0.01 * risk_drawdown"
+                    "- 0.01 * risk_drawdown - 0.001 * indicator(action == HOLD) "
+                    "+ 0.0001 * profitable_closed_trade_count"
                 ),
                 "hard_trade_count_minimum": None,
                 "profit_target": None,
@@ -632,6 +646,10 @@ def _build_report(
             "first_pass_training_coverage_fraction": min(
                 1.0, float(loaded_model.num_timesteps) / (len(train_data) - 1)
             ),
+            "estimated_full_pass_equivalents": float(
+                loaded_model.num_timesteps / (len(train_data) - 1)
+            ),
+            "training_replays_training_split": loaded_model.num_timesteps > len(train_data) - 1,
             "n_envs": 1,
             "n_steps": n_steps,
             "batch_size": 256,
