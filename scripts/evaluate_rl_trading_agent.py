@@ -7,7 +7,6 @@ import json
 from pathlib import Path
 from typing import Any, Sequence
 
-import numpy as np
 
 from services.rl_research.rl_trading_environment import (
     DEFAULT_INITIAL_EQUITY,
