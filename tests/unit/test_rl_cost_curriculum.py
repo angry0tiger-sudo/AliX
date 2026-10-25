@@ -58,7 +58,10 @@ def test_episode_counter_resets_do_not_erase_prior_completed_trades() -> None:
     [
         ({"target_fee_bps": -1.0}, "target_fee_bps_out_of_range"),
         ({"target_slippage_bps": 10_000.0}, "target_slippage_bps_out_of_range"),
-        ({"minimum_closed_trades": 0}, "minimum_closed_trades_must_be_positive_integer"),
+        (
+            {"minimum_closed_trades": 0},
+            "minimum_closed_trades_must_be_positive_integer",
+        ),
         ({"ramp_steps": 0}, "ramp_steps_must_be_positive_integer"),
         (
             {"ramp_steps": 10, "ramp_update_interval_steps": 3},

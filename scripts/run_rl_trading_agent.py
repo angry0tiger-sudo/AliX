@@ -402,7 +402,9 @@ def _build_cost_curriculum_callback(curriculum: TrainingCostCurriculum) -> Any:
         def _on_step(self) -> bool:
             infos = self.locals.get("infos")
             if not isinstance(infos, list) or len(infos) != 1:
-                raise RuntimeError("cost_curriculum_requires_single_vectorized_environment")
+                raise RuntimeError(
+                    "cost_curriculum_requires_single_vectorized_environment"
+                )
             info = infos[0]
             if not isinstance(info, dict):
                 raise RuntimeError("cost_curriculum_step_info_missing")
@@ -456,9 +458,7 @@ def _train_recurrent_ppo(
         ramp_steps=CURRICULUM_RAMP_STEPS,
         ramp_update_interval_steps=CURRICULUM_RAMP_UPDATE_INTERVAL_STEPS,
     )
-    envs = dummy_vec_env(
-        [_env_factory(train_data, scaler, 0.0, 0.0)]
-    )
+    envs = dummy_vec_env([_env_factory(train_data, scaler, 0.0, 0.0)])
     callback = _build_cost_curriculum_callback(curriculum)
     envs.seed(args.seed)
     model = recurrent_ppo(

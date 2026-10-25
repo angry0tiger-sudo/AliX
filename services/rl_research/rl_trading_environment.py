@@ -152,11 +152,7 @@ def _validate_reward_shaping(
     invalid_action_value = _finite_numeric_parameter(
         "invalid_action_penalty", invalid_action_penalty
     )
-    if (
-        inactivity_value < 0
-        or bonus_value < 0
-        or invalid_action_value < 0
-    ):
+    if inactivity_value < 0 or bonus_value < 0 or invalid_action_value < 0:
         raise ValueError("reward_shaping_parameters_must_be_non_negative")
 
 
@@ -307,9 +303,7 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Float32Array]):
         Invalid values leave both active settings unchanged.
         """
         _validate_cost_basis_points("fee_bps_per_side", fee_bps_per_side)
-        _validate_cost_basis_points(
-            "slippage_bps_per_side", slippage_bps_per_side
-        )
+        _validate_cost_basis_points("slippage_bps_per_side", slippage_bps_per_side)
         self.fee_bps_per_side = float(fee_bps_per_side)
         self.slippage_bps_per_side = float(slippage_bps_per_side)
 
