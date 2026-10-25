@@ -38,7 +38,6 @@ def test_analysis_window_fails_closed_when_no_prior_holdout_tail_exists() -> Non
         _exclude_previous_holdout_window(data)
 
 
-
 class _DeterministicZeroSizeBuyPolicy:
     def predict(self, observation, *, state, episode_start, deterministic):
         assert deterministic is True
