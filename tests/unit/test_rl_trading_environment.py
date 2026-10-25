@@ -233,7 +233,9 @@ def test_terminal_liquidation_charges_fees_and_slippage() -> None:
     assert info["total_fees"] > 0.0
     assert info["total_slippage"] > 0.0
     assert info["final_equity"] < 1_000.0
-    assert env.summary()["net_profit"] < 0.0
+    net_profit = env.summary()["net_profit"]
+    assert net_profit is not None
+    assert net_profit < 0.0
     env.close()
 
 
