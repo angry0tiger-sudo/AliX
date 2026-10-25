@@ -1,4 +1,4 @@
-name: AliX Self-Evolving AI Phase 0-1 Research
+name: AliX Self-Evolving AI Phase 0-2 Research
 
 on:
   push:
@@ -18,23 +18,13 @@ on:
       - "docs/knowledge_base/SELF_EVOLVING_AI_ARCHITECTURE.md"
       - "docs/governance/owner-directives/2026-10-25-self-evolving-ai.md"
   workflow_dispatch:
-    inputs:
-      symbol:
-        description: "Public Binance Spot symbol"
-        required: true
-        default: "BTCUSDT"
-        type: string
-      months:
-        description: "Calendar months of closed 1m bars"
-        required: true
-        default: "6"
-        type: string
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
-  group: alix-self-evolving-ai-research
+  group: alix-self-evolving-ai-research-${{ github.sha }}
   cancel-in-progress: false
 
 jobs:
@@ -44,6 +34,7 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
+      actions: read
     env:
       ALIx_ENV: paper
       ALIx_DRY_RUN: "true"
@@ -73,15 +64,14 @@ jobs:
             tests/unit/test_fetch_public_minute_bars.py \
             tests/unit/test_self_evolving_ga.py -q
 
-      - name: Fetch six calendar months of public 1m bars
-        env:
-          RESEARCH_SYMBOL: ${{ inputs.symbol || 'BTCUSDT' }}
-          RESEARCH_MONTHS: ${{ inputs.months || '6' }}
-        run: |
-          python -m scripts.fetch_public_minute_bars \
-            --symbol "$RESEARCH_SYMBOL" \
-            --months "$RESEARCH_MONTHS" \
-            --out-dir artifacts/public-minute-bars
+      - name: Download immutable Phase 0-1 market-data artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: self-evolving-public-minute-bars-0f36b1e8ea7b8842b2bc62d0b6f81d808b93cc0a
+          path: artifacts/public-minute-bars
+          repository: ${{ github.repository }}
+          run-id: 40136648540
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Verify provenance, coverage report and immutable safety invariants
         run: |
