@@ -622,6 +622,88 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Float32Array]):
             return not action_mask["SELL"]
         return False
 
+    def _invalid_action_penalty_for_request(
+        self, requested_action: str, action_mask: dict[str, bool]
+    ) -> tuple[bool, float]:
+        applied = self._requested_action_blocked_by_legal_mask(
+            requested_action, action_mask
+        )
+        if applied:
+            self._invalid_action_penalty_count += 1
+        penalty = self.invalid_action_penalty if applied else 0.0
+        return applied, penalty
+
+    def _track_position_change(
+        self, previous_quantity: float, next_open: float
+    ) -> tuple[float, bool, float]:
+        position_change_quantity = self._quantity - previous_quantity
+        position_changed = abs(position_change_quantity) > self._quantity_tolerance(
+            next_open
+        )
+        if position_changed:
+            self._consecutive_no_position_change_steps = 0
+            self._position_change_count += 1
+        else:
+            self._no_position_change_steps += 1
+            self._consecutive_no_position_change_steps += 1
+            self._max_consecutive_no_position_change_steps = max(
+                self._max_consecutive_no_position_change_steps,
+                self._consecutive_no_position_change_steps,
+            )
+        inactivity_penalty = (
+            self.inactivity_penalty
+            if self._consecutive_no_position_change_steps > self.inactivity_grace_steps
+            else 0.0
+        )
+        return position_change_quantity, position_changed, inactivity_penalty
+
+    def _settle_episode_step(
+        self, next_index: int, next_bar: Float64Array, risk_drawdown: float
+    ) -> tuple[bool, float, float]:
+        terminated = next_index == len(self._market_data) - 1
+        if terminated:
+            self._rebalance_to_quantity(0.0, float(next_bar[CLOSE_COLUMN]))
+            final_equity = self._cash
+            if not math.isfinite(final_equity) or final_equity <= 0:
+                raise ValueError("final_simulated_equity_non_positive")
+            self._final_equity = final_equity
+            terminal_drawdown = max(
+                0.0, (self._peak_equity - final_equity) / self._peak_equity
+            )
+            risk_drawdown = max(risk_drawdown, terminal_drawdown)
+            self._current_drawdown = terminal_drawdown
+            self._max_drawdown = max(self._max_drawdown, terminal_drawdown)
+            current_equity = final_equity
+        else:
+            current_equity = self._equity_at(float(next_bar[CLOSE_COLUMN]))
+        return terminated, risk_drawdown, current_equity
+
+    def _calculate_step_reward(
+        self,
+        current_equity: float,
+        previous_equity: float,
+        risk_drawdown: float,
+        previous_drawdown: float,
+        inactivity_penalty: float,
+        invalid_action_penalty: float,
+    ) -> tuple[float, float, float]:
+        log_net_return = math.log(current_equity / previous_equity)
+        worsening_drawdown = max(0.0, risk_drawdown - previous_drawdown)
+        profitable_trade_bonus = (
+            self.profitable_trade_bonus * self._last_step_profitable_trade_count
+        )
+        reward = (
+            log_net_return
+            - self.drawdown_increment_penalty * worsening_drawdown
+            - self.drawdown_level_penalty * risk_drawdown
+            - inactivity_penalty
+            - invalid_action_penalty
+            + profitable_trade_bonus
+        )
+        if not math.isfinite(reward):
+            raise ValueError("reward_non_finite")
+        return log_net_return, profitable_trade_bonus, reward
+
     def step(
         self, action: Float32Array
     ) -> tuple[Float32Array, float, bool, bool, dict[str, Any]]:
@@ -650,66 +732,26 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Float32Array]):
         self._policy_closed_trade_count += (
             self._closed_trade_count - closed_trades_before_action
         )
-        invalid_action_penalty_applied = self._requested_action_blocked_by_legal_mask(
-            requested_action, action_mask
+        invalid_action_penalty_applied, invalid_action_penalty = (
+            self._invalid_action_penalty_for_request(requested_action, action_mask)
         )
-        invalid_action_penalty = (
-            self.invalid_action_penalty if invalid_action_penalty_applied else 0.0
-        )
-        if invalid_action_penalty_applied:
-            self._invalid_action_penalty_count += 1
-        position_change_quantity = self._quantity - previous_quantity
-        position_changed = abs(position_change_quantity) > self._quantity_tolerance(
-            float(next_bar[OPEN_COLUMN])
-        )
-        if position_changed:
-            self._consecutive_no_position_change_steps = 0
-            self._position_change_count += 1
-        else:
-            self._no_position_change_steps += 1
-            self._consecutive_no_position_change_steps += 1
-            self._max_consecutive_no_position_change_steps = max(
-                self._max_consecutive_no_position_change_steps,
-                self._consecutive_no_position_change_steps,
+        position_change_quantity, position_changed, inactivity_penalty = (
+            self._track_position_change(
+                previous_quantity, float(next_bar[OPEN_COLUMN])
             )
-        inactivity_penalty = (
-            self.inactivity_penalty
-            if self._consecutive_no_position_change_steps > self.inactivity_grace_steps
-            else 0.0
         )
         risk_drawdown = self._update_drawdown(next_bar)
-        terminated = next_index == len(self._market_data) - 1
-        if terminated:
-            self._rebalance_to_quantity(0.0, float(next_bar[CLOSE_COLUMN]))
-            final_equity = self._cash
-            if not math.isfinite(final_equity) or final_equity <= 0:
-                raise ValueError("final_simulated_equity_non_positive")
-            self._final_equity = final_equity
-            terminal_drawdown = max(
-                0.0, (self._peak_equity - final_equity) / self._peak_equity
-            )
-            risk_drawdown = max(risk_drawdown, terminal_drawdown)
-            self._current_drawdown = terminal_drawdown
-            self._max_drawdown = max(self._max_drawdown, terminal_drawdown)
-            current_equity = final_equity
-        else:
-            current_equity = self._equity_at(float(next_bar[CLOSE_COLUMN]))
-
-        log_net_return = math.log(current_equity / previous_equity)
-        worsening_drawdown = max(0.0, risk_drawdown - previous_drawdown)
-        profitable_trade_bonus = (
-            self.profitable_trade_bonus * self._last_step_profitable_trade_count
+        terminated, risk_drawdown, current_equity = self._settle_episode_step(
+            next_index, next_bar, risk_drawdown
         )
-        reward = (
-            log_net_return
-            - self.drawdown_increment_penalty * worsening_drawdown
-            - self.drawdown_level_penalty * risk_drawdown
-            - inactivity_penalty
-            - invalid_action_penalty
-            + profitable_trade_bonus
+        log_net_return, profitable_trade_bonus, reward = self._calculate_step_reward(
+            current_equity,
+            previous_equity,
+            risk_drawdown,
+            previous_drawdown,
+            inactivity_penalty,
+            invalid_action_penalty,
         )
-        if not math.isfinite(reward):
-            raise ValueError("reward_non_finite")
 
         self._index = next_index
         info: dict[str, Any] = {
