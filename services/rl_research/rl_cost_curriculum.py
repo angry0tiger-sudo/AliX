@@ -19,6 +19,44 @@ def _validate_cost(name: str, value: float) -> float:
     return numeric_value
 
 
+def _validate_positive_integer(name: str, value: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError(f"{name}_must_be_positive_integer")
+    return value
+
+
+def _validate_ramp_update_interval(ramp_steps: int, interval: int) -> int:
+    if isinstance(interval, bool) or not isinstance(interval, int) or interval < 1:
+        raise ValueError("ramp_update_interval_must_divide_ramp_steps")
+    if ramp_steps % interval != 0:
+        raise ValueError("ramp_update_interval_must_divide_ramp_steps")
+    return interval
+
+
+def _validate_observation_timestep(timestep: int, last_timestep: int) -> int:
+    if isinstance(timestep, bool) or not isinstance(timestep, int) or timestep < 1:
+        raise ValueError("training_timesteps_must_be_contiguous_positive_integers")
+    if last_timestep and timestep != last_timestep + 1:
+        raise ValueError("training_timesteps_must_be_contiguous_positive_integers")
+    return timestep
+
+
+def _validate_episode_trade_count(episode_closed_trades: int) -> int:
+    if (
+        isinstance(episode_closed_trades, bool)
+        or not isinstance(episode_closed_trades, int)
+        or episode_closed_trades < 0
+    ):
+        raise ValueError("episode_closed_trade_count_must_be_non_negative_integer")
+    return episode_closed_trades
+
+
+def _episode_trade_delta(current_count: int, previous_count: int) -> int:
+    if current_count < previous_count:
+        return current_count
+    return current_count - previous_count
+
+
 @dataclass(slots=True)
 class TrainingCostCurriculum:
     """Start cost-free, then ramp to configured costs after real round trips."""
@@ -47,25 +85,13 @@ class TrainingCostCurriculum:
         self.target_slippage_bps = _validate_cost(
             "target_slippage_bps", self.target_slippage_bps
         )
-        if (
-            isinstance(self.minimum_closed_trades, bool)
-            or not isinstance(self.minimum_closed_trades, int)
-            or self.minimum_closed_trades < 1
-        ):
-            raise ValueError("minimum_closed_trades_must_be_positive_integer")
-        if (
-            isinstance(self.ramp_steps, bool)
-            or not isinstance(self.ramp_steps, int)
-            or self.ramp_steps < 1
-        ):
-            raise ValueError("ramp_steps_must_be_positive_integer")
-        if (
-            isinstance(self.ramp_update_interval_steps, bool)
-            or not isinstance(self.ramp_update_interval_steps, int)
-            or self.ramp_update_interval_steps < 1
-            or self.ramp_steps % self.ramp_update_interval_steps != 0
-        ):
-            raise ValueError("ramp_update_interval_must_divide_ramp_steps")
+        self.minimum_closed_trades = _validate_positive_integer(
+            "minimum_closed_trades", self.minimum_closed_trades
+        )
+        self.ramp_steps = _validate_positive_integer("ramp_steps", self.ramp_steps)
+        self.ramp_update_interval_steps = _validate_ramp_update_interval(
+            self.ramp_steps, self.ramp_update_interval_steps
+        )
 
     def stage_for_timestep(self, timestep: int) -> str:
         """Return the cost stage actually applied to a training decision."""
@@ -104,24 +130,13 @@ class TrainingCostCurriculum:
         The controller converts those episode-local counters into a monotonic
         aggregate and never counts forced terminal liquidations as policy trades.
         """
-        if (
-            isinstance(timestep, bool)
-            or not isinstance(timestep, int)
-            or timestep < 1
-            or (self._last_timestep and timestep != self._last_timestep + 1)
-        ):
-            raise ValueError("training_timesteps_must_be_contiguous_positive_integers")
-        if (
-            isinstance(episode_policy_closed_trades, bool)
-            or not isinstance(episode_policy_closed_trades, int)
-            or episode_policy_closed_trades < 0
-        ):
-            raise ValueError("episode_closed_trade_count_must_be_non_negative_integer")
-
-        if episode_policy_closed_trades < self._last_episode_trade_count:
-            trade_delta = episode_policy_closed_trades
-        else:
-            trade_delta = episode_policy_closed_trades - self._last_episode_trade_count
+        timestep = _validate_observation_timestep(timestep, self._last_timestep)
+        episode_policy_closed_trades = _validate_episode_trade_count(
+            episode_policy_closed_trades
+        )
+        trade_delta = _episode_trade_delta(
+            episode_policy_closed_trades, self._last_episode_trade_count
+        )
 
         stage = self.stage_for_timestep(timestep)
         self._steps_by_stage[stage] += 1

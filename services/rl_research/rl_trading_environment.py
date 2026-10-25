@@ -613,6 +613,15 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Float32Array]):
         self._final_equity = None
         return self._observation(self._index), {"start_index": self._index}
 
+    def _requested_action_blocked_by_legal_mask(
+        self, requested_action: str, action_mask: dict[str, bool]
+    ) -> bool:
+        if requested_action == "BUY":
+            return not action_mask["BUY"]
+        if requested_action == "SELL":
+            return not action_mask["SELL"]
+        return False
+
     def step(
         self, action: Float32Array
     ) -> tuple[Float32Array, float, bool, bool, dict[str, Any]]:
@@ -641,11 +650,8 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Float32Array]):
         self._policy_closed_trade_count += (
             self._closed_trade_count - closed_trades_before_action
         )
-        invalid_action_penalty_applied = (
-            requested_action == "BUY"
-            and not action_mask["BUY"]
-            or requested_action == "SELL"
-            and not action_mask["SELL"]
+        invalid_action_penalty_applied = self._requested_action_blocked_by_legal_mask(
+            requested_action, action_mask
         )
         invalid_action_penalty = (
             self.invalid_action_penalty if invalid_action_penalty_applied else 0.0
