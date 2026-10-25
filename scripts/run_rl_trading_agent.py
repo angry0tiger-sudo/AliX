@@ -765,7 +765,7 @@ def _build_report(
             "stable_baselines3_version": version("stable-baselines3"),
             "sb3_contrib_version": version("sb3-contrib"),
             "gymnasium_version": version("gymnasium"),
-            "torch_version": torch_version,
+            "torch_version": training.torch_version,
             "numpy_version": np.__version__,
             "pandas_version": pd.__version__,
             "device": "cpu",
