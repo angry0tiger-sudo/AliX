@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from scripts.run_deap_evolution import (
@@ -16,8 +17,10 @@ from scripts.run_deap_evolution import (
     CandidateEvaluation,
     EvaluationMetrics,
     TIMEFRAMES,
+    _build_features,
     _economic_assessment,
     _ensure_timeframe_coverage,
+    _resample,
     _select_by_eligibility,
     _strategy_genome,
     _thresholds,
@@ -212,6 +215,42 @@ def test_genome_description_is_serializable_and_hashable() -> None:
     assert len(genome_sha256(genome)) == 64
 
 
+def test_resampled_feature_availability_uses_candle_close_for_temporal_split() -> None:
+    count = 240
+    open_times = np.arange(count, dtype=np.int64) * 60_000
+    open_prices = 100.0 + np.arange(count, dtype=np.float64) * 0.001
+    close_prices = open_prices + 0.01
+    raw = pd.DataFrame(
+        {
+            "open_time_ms": open_times,
+            "close_time_ms": open_times + 59_999,
+            "open": open_prices,
+            "high": close_prices + 0.01,
+            "low": open_prices - 0.01,
+            "close": close_prices,
+            "volume": np.ones(count, dtype=np.float64),
+        }
+    )
+
+    bars = _resample(raw, 60)
+    features = _build_features(bars)
+    train_cutoff_ms = 150 * 60_000
+    validation_end_ms = 240 * 60_000
+
+    # The 120m-labelled hourly candle closes at 180m. It must not leak
+    # into training merely because its open label is earlier than 150m.
+    assert bars["open_time_ms"].iloc[2] < train_cutoff_ms
+    assert bars["close_time_ms"].iloc[2] >= train_cutoff_ms
+    assert features.timestamp[2] >= train_cutoff_ms
+    train_indexes = np.flatnonzero(features.timestamp < train_cutoff_ms)
+    validation_indexes = np.flatnonzero(
+        (features.timestamp >= train_cutoff_ms)
+        & (features.timestamp < validation_end_ms)
+    )
+    assert train_indexes.tolist() == [0, 1]
+    assert validation_indexes.tolist() == [2, 3]
+
+
 def test_required_timeframe_quota_is_preserved_in_population() -> None:
     class FakeToolbox:
         def __init__(self) -> None:
@@ -232,7 +271,7 @@ def test_required_timeframe_quota_is_preserved_in_population() -> None:
     for timeframe in REQUIRED_TIMEFRAMES:
         gene = TIMEFRAMES.index(timeframe)
         assert (
-            sum(1 for item in result if item[0] == gene)
+            len({tuple(item) for item in result if item[0] == gene})
             >= MIN_REQUIRED_TIMEFRAME_POPULATION
         )
 

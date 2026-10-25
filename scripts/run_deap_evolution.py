@@ -253,7 +253,9 @@ def _build_features(bars: pd.DataFrame) -> FeatureFrame:
     low = bars["low"].astype(float)
     result = FeatureFrame(
         frame=bars,
-        timestamp=bars["open_time_ms"].to_numpy(dtype=np.int64),
+        # A resampled candle is not observable until its close, not its open label.
+        # Splits and decision eligibility must use this availability timestamp.
+        timestamp=bars["close_time_ms"].to_numpy(dtype=np.int64),
         open=bars["open"].to_numpy(dtype=np.float64),
         high=bars["high"].to_numpy(dtype=np.float64),
         low=bars["low"].to_numpy(dtype=np.float64),
@@ -657,16 +659,35 @@ def _ensure_timeframe_coverage(
     for required_minutes in REQUIRED_TIMEFRAMES:
         required_gene = TIMEFRAMES.index(required_minutes)
         while (
-            sum(1 for item in population if item[0] == required_gene)
+            len(
+                {
+                    tuple(item)
+                    for item in population
+                    if item[0] == required_gene
+                }
+            )
             < MIN_REQUIRED_TIMEFRAME_POPULATION
         ):
-            counts = Counter(TIMEFRAMES[item[0]] for item in population)
-            replaceable = [
-                (index, item)
-                for index, item in enumerate(population)
-                if TIMEFRAMES[item[0]] not in REQUIRED_TIMEFRAMES
-                or counts[TIMEFRAMES[item[0]]] > MIN_REQUIRED_TIMEFRAME_POPULATION
-            ]
+            genome_frequency = Counter(tuple(item) for item in population)
+            unique_by_timeframe = {
+                minutes: {
+                    tuple(item)
+                    for item in population
+                    if TIMEFRAMES[item[0]] == minutes
+                }
+                for minutes in REQUIRED_TIMEFRAMES
+            }
+            replaceable = []
+            for index, item in enumerate(population):
+                timeframe = TIMEFRAMES[item[0]]
+                key = tuple(item)
+                if (
+                    timeframe not in REQUIRED_TIMEFRAMES
+                    or genome_frequency[key] > 1
+                    or len(unique_by_timeframe[timeframe])
+                    > MIN_REQUIRED_TIMEFRAME_POPULATION
+                ):
+                    replaceable.append((index, item))
             if not replaceable:
                 raise RuntimeError("required_timeframe_quota_cannot_be_satisfied")
             index, _ = min(

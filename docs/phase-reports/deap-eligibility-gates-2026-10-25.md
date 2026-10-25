@@ -27,3 +27,9 @@
 ## Validation status
 
 This record describes the code and CI evidence contract. Actual test, data-fetch, GA, and workflow results must be appended from the completed workflow run; this document alone is not acceptance evidence.
+
+
+## Additional integrity correction
+
+- Temporal splits are now based on each resampled candle's close/availability timestamp, not its open label. A partially elapsed higher-timeframe candle can no longer be assigned to training merely because the bucket started before the cutoff. A regression test uses a cutoff inside an hourly candle.
+- Required timeframe quotas count distinct genome vectors, not population slots. The injection step preserves at least four unique, newly evaluated 1h, 4h and 1d genomes per generation; duplicates cannot masquerade as coverage.
