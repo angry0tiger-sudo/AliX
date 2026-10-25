@@ -104,7 +104,9 @@ def _validate_manifest_safety(payload: dict[str, Any]) -> None:
 
 def _validate_manifest_digest(payload: dict[str, Any]) -> None:
     digest = str(payload.get("csv_sha256", ""))
-    if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest.lower()):
+    if len(digest) != 64 or any(
+        character not in "0123456789abcdef" for character in digest.lower()
+    ):
         raise ValueError("market_manifest_sha256_invalid")
 
 
@@ -117,8 +119,6 @@ def _read_manifest(path: Path) -> dict[str, Any]:
     _validate_manifest_safety(payload)
     _validate_manifest_digest(payload)
     return payload
-
-
 
 
 def _load_market_data(
@@ -671,8 +671,6 @@ def _build_report(
         },
     }
     return report
-
-
 
 
 if __name__ == "__main__":

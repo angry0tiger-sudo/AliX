@@ -87,8 +87,6 @@ def validate_market_data(market_data: Float64Array) -> None:
     _validate_candle_geometry(data)
 
 
-
-
 class MarketObservationScaler:
     """Fit price and volume scales on training candles only."""
 
