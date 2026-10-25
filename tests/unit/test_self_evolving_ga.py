@@ -183,7 +183,9 @@ def test_win_rate_below_50_percent_receives_heavy_fitness_penalty() -> None:
     assert MIN_WIN_RATE == 0.50
     assert fitness_score(strong_win_rate) > fitness_score(weak_win_rate)
     expected_penalty = 5.0 * (MIN_WIN_RATE - 0.25)
-    assert fitness_score(strong_win_rate) - fitness_score(weak_win_rate) == pytest.approx(expected_penalty)
+    assert fitness_score(strong_win_rate) - fitness_score(
+        weak_win_rate
+    ) == pytest.approx(expected_penalty)
 
 
 def test_profit_factor_and_total_return_both_affect_fitness() -> None:
