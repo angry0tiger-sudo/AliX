@@ -495,7 +495,9 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Float32Array]):
             return "SELL", "MASKED_SELL", action_mask, "no_position"
         target_quantity = self._sell_target_quantity(size, next_open)
         if target_quantity is None:
-            reason = "zero_sell_size" if size <= 0.0 else "sell_would_not_reduce_position"
+            reason = (
+                "zero_sell_size" if size <= 0.0 else "sell_would_not_reduce_position"
+            )
             return "SELL", "MASKED_SELL", action_mask, reason
         self._rebalance_to_quantity(target_quantity, next_open)
         return "SELL", "SELL", action_mask, None
