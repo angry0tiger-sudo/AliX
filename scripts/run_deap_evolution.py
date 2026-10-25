@@ -1610,7 +1610,8 @@ def run_evolution(
             "validation_profit_factor_above_1_5": economic_assessment.get(
                 "validation_profit_factor_above_1_5", False
             ),
-            "trade_count_minimums_enforced": False,
+            "trade_count_minimums_enforced": True,
+            "minimum_training_trades": MIN_TRAINING_TRADES,
             "opportunity_cost_penalty_active": True,
             "dynamic_exit_genes_active": True,
         },
