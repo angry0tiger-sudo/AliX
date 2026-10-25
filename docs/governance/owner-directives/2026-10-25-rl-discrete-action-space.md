@@ -14,6 +14,16 @@
 6. Disclose that the latest tail was inspected in earlier research. It is out-of-sample for this discrete-action model's fit, but not novel to the full research history. Do not describe it as unseen across all prior work.
 7. The training workflow must fail closed unless CI completes successfully for the exact training commit before any model training starts.
 
+## CI and training gate
+
+The discrete-action implementation passed full CI on commit
+`fd21ab586bae0b3f063e2fd50fb0d38ba16e952c` (run
+[40225753681](https://github.com/angry0tiger-sudo/AliX/actions/runs/40225753681)).
+Training is authorized by the owner for the follow-up commit only. The research
+workflow independently waits for a successful CI conclusion on the exact
+training commit before installing the RL runtime or starting training. A failed
+or timed-out check aborts training.
+
 ## Immutable safety invariants
 
 - `Champion = null`
