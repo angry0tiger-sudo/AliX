@@ -42,3 +42,17 @@ Follow the phases in `docs/knowledge_base/SELF_EVOLVING_AI_ARCHITECTURE.md`. Do 
 - The only permitted outcome is offline research. Keep `Champion=null`, `order_permission=false`, `trading_authorization=NO-GO`, zero private API calls and zero real-order attempts.
 
 These gates are fixed for the duration of an experiment and may not be weakened to obtain a passing report.
+
+
+## Owner Directive: Opportunity Hunter (supersedes the earlier hard 30/10 rule, 2026-10-25)
+
+This directive supersedes the earlier hard minimums of 30 training trades and 10 validation trades. No hard completed-trade-count threshold may zero out a candidate's fitness. Small samples receive continuous confidence weighting, and raw trade counts and PF are still reported.
+
+- Fitness combines profit factor, net total return, positive regime-capture returns and a penalty for missed actionable upside windows.
+- A missed-upside event is a non-overlapping 24-hour price window with a realized return of at least +5%, throughout which the candidate had no long exposure. This is a retrospective evaluation metric only, never a future-informed entry feature.
+- The genome includes a profit-activated trailing stop and a dynamic exit mode: indicator threshold, indicator-or-EMA-cross, indicator-or-close-below-trend-EMA, or indicator-and-EMA-cross. Trailing-stop and activation fractions are evolved independently.
+- 15m joins 1h, 4h and 1d as a mandatory timeframe. Report unique genomes, trades, PF, net return, missed upside and high-volatility/strong-trend capture.
+- PF is reported as undefined when gross losses are zero. Only the bounded fitness calculation may use the configured PF cap, with soft sample weighting.
+- Training-only fitness determines evolutionary selection. Validation assesses the selected candidate and is not fed back into tournament ranking. Holdout remains untouched.
+- The 15% drawdown penalty and eligibility limit remain. Removing hard trade-count minima does not cancel the independent risk constraint.
+- Safety invariants stay `Champion=null`, `order_permission=false`, `trading_authorization=NO-GO`, zero private API calls and zero real-order attempts.

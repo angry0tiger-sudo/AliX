@@ -33,3 +33,8 @@ This record describes the code and CI evidence contract. Actual test, data-fetch
 
 - Temporal splits are now based on each resampled candle's close/availability timestamp, not its open label. A partially elapsed higher-timeframe candle can no longer be assigned to training merely because the bucket started before the cutoff. A regression test uses a cutoff inside an hourly candle.
 - Required timeframe quotas count distinct genome vectors, not population slots. The injection step preserves at least four unique, newly evaluated 1h, 4h and 1d genomes per generation; duplicates cannot masquerade as coverage.
+
+
+## Owner Directive update: Opportunity Hunter
+
+The latest owner directive supersedes the earlier hard 30-training / 10-validation trade thresholds. It introduces soft sample confidence weighting rather than hard count rejection, profit-factor plus net-total-return fitness, retrospective missed-upside penalties for non-overlapping 24-hour rallies of at least 5%, regime-capture bonus terms, and evolved profit-activated trailing stops with dynamic regime exits. Mandatory timeframes now include 15m, 1h, 4h and 1d. Training-only fitness drives selection; validation does not influence tournament ranking, and final holdout remains untouched. The 15% drawdown constraint and all execution safety invariants remain in force.

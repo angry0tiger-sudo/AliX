@@ -139,20 +139,22 @@ jobs:
               "NO_ECONOMICALLY_ACCEPTABLE_STRATEGY_FOUND",
               "CANDIDATE_REQUIRES_OWNER_REVIEW",
           }
-          for timeframe in ("1h", "4h", "1d"):
+          for timeframe in ("15m", "1h", "4h", "1d"):
               assert report["timeframe_coverage"][timeframe]["unique_genomes_evaluated"] > 0
               assert report["required_timeframe_coverage_by_generation"][timeframe]["minimum_population_per_generation"] >= 4
               assert report["required_timeframe_coverage_by_generation"][timeframe]["generations_with_population"] == report["generations_completed"]
           candidate = report["top_research_candidate"]
           if candidate is not None:
-              assert candidate["training_metrics"]["trade_count"] >= 30
-              assert candidate["validation_metrics"]["trade_count"] >= 10
-              assert candidate["training_metrics"]["max_drawdown"] <= 0.15
+              assert candidate["training_metrics"]["trade_count"] > 0
               assert candidate["validation_return_used_for_selection"] is False
-              assert candidate["validation_sample_count_used_for_eligibility"] is True
+              assert candidate["validation_sample_count_used_for_eligibility"] is False
           else:
               assert report["economic_assessment"]["status"] == "NO-GO"
-              assert "no_candidate_meets_training_validation_sample_and_training_drawdown_gates" in report["economic_assessment"]["reasons"]
+          assert report["fitness_definition"]["validation_used_for_selection"] is False
+          assert report["eligibility_gates"]["minimum_completed_trade_count_enforced"] is False
+          assert report["opportunity_hunter_result"]["opportunity_cost_penalty_active"] is True
+          assert report["opportunity_hunter_result"]["dynamic_exit_genes_active"] is True
+          assert report["same_dataset_baseline_comparison"]["comparison_is_same_dataset_and_split"] is True
           assert safety["Champion"] is None
           assert safety["order_permission"] is False
           assert safety["trading_authorization"] == "NO-GO"
@@ -166,6 +168,9 @@ jobs:
               "top_candidate_genes": report["top_research_candidate"]["genes"] if report["top_research_candidate"] else None,
               "training_metrics": report["top_research_candidate"]["training_metrics"] if report["top_research_candidate"] else None,
               "validation_metrics": report["top_research_candidate"]["validation_metrics"] if report["top_research_candidate"] else None,
+              "opportunity_hunter_result": report["opportunity_hunter_result"],
+              "same_dataset_baseline_comparison": report["same_dataset_baseline_comparison"],
+              "fitness_definition": report["fitness_definition"],
               "research_result": report["research_result"],
               "timeframe_coverage": report["required_timeframe_coverage_by_generation"],
               "genomes_rejected_by_reason": report["genomes_rejected_by_reason"],

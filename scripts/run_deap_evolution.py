@@ -13,6 +13,7 @@ from collections import Counter
 import csv
 import hashlib
 import json
+import math
 import random
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -29,8 +30,7 @@ from services.ai_core.self_evolving_genome import (
     genome_sha256,
 )
 
-# Search includes 1m through 30-day bars; 30-day coverage is intentionally
-# low-sample on a six-month dataset and should normally fail economic acceptance.
+# Search spans intraday to monthly bars; all fitness calculations remain offline.
 TIMEFRAMES = (1, 5, 15, 30, 60, 120, 240, 360, 720, 1440, 10080, 43200)
 LOOKBACKS = (5, 8, 13, 21, 34, 55, 89, 144)
 FASTS = (3, 5, 8, 13, 21, 34)
@@ -44,18 +44,31 @@ RSI_ENTRY = (20.0, 25.0, 30.0, 35.0, 40.0, 45.0)
 RSI_EXIT = (55.0, 60.0, 65.0, 70.0, 75.0, 80.0)
 EXPOSURES = (0.25, 0.50, 0.75, 0.95)
 STOPS = (0.005, 0.01, 0.015, 0.02, 0.03, 0.05)
-LOWER = (0, 0, 0, 0, 1, 0, 0, 0, 0)
-UPPER = (11, 3, 7, 5, 7, 5, 5, 3, 5)
-GENOME_SIZE = 9
+TRAILING_ACTIVATION = (0.0, 0.01, 0.02, 0.03, 0.05)
+EXIT_MODES = (
+    "indicator_threshold",
+    "indicator_or_ema_cross",
+    "indicator_or_close_below_ema",
+    "indicator_and_ema_cross",
+)
+LOWER = (0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0)
+UPPER = (11, 3, 7, 5, 7, 5, 5, 3, 5, 4, 3)
+GENOME_SIZE = 11
 FEE = 25.0 / 10_000
 SLIPPAGE = 20.0 / 10_000
 SIDE_COST = FEE + SLIPPAGE
-MIN_TRAINING_TRADES = 30
-MIN_VALIDATION_TRADES = 10
 MAX_DRAWDOWN = 0.15
 DRAWDOWN_EXCESS_PENALTY_MULTIPLIER = 10.0
-REQUIRED_TIMEFRAMES = (60, 240, 1440)
+REQUIRED_TIMEFRAMES = (15, 60, 240, 1440)
 MIN_REQUIRED_TIMEFRAME_POPULATION = 4
+OPPORTUNITY_MOVE_THRESHOLD = 0.05
+OPPORTUNITY_COST_WEIGHT = 2.0
+OPPORTUNITY_EVENT_PENALTY = 0.05
+PROFIT_FACTOR_WEIGHT = 0.75
+TOTAL_RETURN_WEIGHT = 2.0
+REGIME_CAPTURE_WEIGHT = 0.5
+MAX_PROFIT_FACTOR_FOR_FITNESS = 5.0
+NO_TRADE_PENALTY = 0.15
 MANIFEST_SCHEMA = "alix.self-evolving-data-manifest.v1"
 
 
@@ -68,11 +81,19 @@ class EvaluationMetrics:
     max_drawdown: float
     fee_bps_per_side: float = 25.0
     slippage_bps_per_side: float = 20.0
+    profit_factor: float | None = None
+    gross_profit: float = 0.0
+    gross_loss: float = 0.0
+    missed_upside_move_count: int = 0
+    missed_upside_return: float = 0.0
+    high_volatility_return: float = 0.0
+    strong_trend_return: float = 0.0
+
 
 
 @dataclass(frozen=True, slots=True)
 class CandidateEvaluation:
-    """Training-scored candidate plus validation-only sample eligibility evidence."""
+    """Training-scored candidate using soft sample confidence, not hard count limits."""
 
     training: EvaluationMetrics
     validation: EvaluationMetrics
@@ -81,11 +102,7 @@ class CandidateEvaluation:
 
     @property
     def sample_eligible(self) -> bool:
-        return (
-            self.training.trade_count >= MIN_TRAINING_TRADES
-            and self.validation.trade_count >= MIN_VALIDATION_TRADES
-            and self.training.net_expectancy is not None
-        )
+        return self.training.trade_count > 0 and self.training.net_expectancy is not None
 
     @property
     def training_risk_eligible(self) -> bool:
@@ -94,6 +111,7 @@ class CandidateEvaluation:
     @property
     def selection_eligible(self) -> bool:
         return self.sample_eligible and self.training_risk_eligible
+
 
 
 @dataclass(slots=True)
@@ -109,6 +127,9 @@ class FeatureFrame:
     rsi: dict[int, np.ndarray] = field(default_factory=dict)
     upper_gap: dict[int, np.ndarray] = field(default_factory=dict)
     lower_gap: dict[int, np.ndarray] = field(default_factory=dict)
+    close_ema_gap: dict[int, np.ndarray] = field(default_factory=dict)
+    high_volatility: np.ndarray = field(default_factory=lambda: np.array([], dtype=bool))
+    strong_uptrend: np.ndarray = field(default_factory=lambda: np.array([], dtype=bool))
 
 
 @dataclass(slots=True)
@@ -261,6 +282,11 @@ def _build_features(bars: pd.DataFrame) -> FeatureFrame:
         low=bars["low"].to_numpy(dtype=np.float64),
         close=close.to_numpy(dtype=np.float64),
     )
+    timeframe = int(
+        (bars["close_time_ms"].iloc[-1] - bars["open_time_ms"].iloc[-1] + 1)
+        // 60_000
+    )
+    result.high_volatility, result.strong_uptrend = _build_regime_masks(close, timeframe)
     for window in LOOKBACKS:
         result.momentum[window] = (close / close.shift(window) - 1.0).to_numpy(
             dtype=np.float64
@@ -280,6 +306,10 @@ def _build_features(bars: pd.DataFrame) -> FeatureFrame:
                 result.ema_gap[(fast, slow)] = (ema[fast] / ema[slow] - 1.0).to_numpy(
                     dtype=np.float64
                 )
+    for slow in SLOWS:
+        result.close_ema_gap[slow] = (close / ema[slow] - 1.0).to_numpy(
+            dtype=np.float64
+        )
     return result
 
 
@@ -340,28 +370,68 @@ def _signal_masks(
     entry_threshold, exit_threshold = _thresholds(genes)
     if mode == 0:
         value = features.momentum[window]
-        return value >= entry_threshold, value <= exit_threshold
-    if mode == 1:
+        entry, indicator_exit = value >= entry_threshold, value <= exit_threshold
+    elif mode == 1:
         value = features.ema_gap[(FASTS[genes[3]], SLOWS[genes[4]])]
-        return value >= entry_threshold, value <= exit_threshold
-    if mode == 2:
+        entry, indicator_exit = value >= entry_threshold, value <= exit_threshold
+    elif mode == 2:
         value = features.rsi[window]
-        return value <= entry_threshold, value >= exit_threshold
+        entry, indicator_exit = value <= entry_threshold, value >= exit_threshold
+    else:
+        entry = features.upper_gap[window] >= entry_threshold
+        indicator_exit = features.lower_gap[window] <= exit_threshold
+    fast, slow = FASTS[genes[3]], SLOWS[genes[4]]
+    ema_cross_exit = features.ema_gap[(fast, slow)] <= 0.0
+    close_below_ema_exit = features.close_ema_gap[slow] <= 0.0
+    exit_mode = genes[10]
+    if exit_mode == 0:
+        exit_signal = indicator_exit
+    elif exit_mode == 1:
+        exit_signal = indicator_exit | ema_cross_exit
+    elif exit_mode == 2:
+        exit_signal = indicator_exit | close_below_ema_exit
+    else:
+        exit_signal = indicator_exit & ema_cross_exit
+    return entry, exit_signal
+
+
+def _build_regime_masks(
+    close: pd.Series, timeframe: int
+) -> tuple[np.ndarray, np.ndarray]:
+    """Build causal trailing volatility and positive-trend masks."""
+
+    horizon = max(2, min(1440, int(round(1440 / timeframe))))
+    returns = close.pct_change()
+    min_periods = max(2, horizon // 2)
+    rolling_vol = returns.rolling(horizon, min_periods=min_periods).std()
+    baseline_window = max(horizon, min(3 * horizon, 10_000))
+    rolling_baseline = rolling_vol.rolling(
+        baseline_window, min_periods=max(2, horizon)
+    ).mean()
+    high_volatility = (rolling_vol > rolling_baseline * 1.25).fillna(False)
+    trend_return = close / close.shift(horizon) - 1.0
+    strong_uptrend = (trend_return >= OPPORTUNITY_MOVE_THRESHOLD).fillna(False)
     return (
-        features.upper_gap[window] >= entry_threshold,
-        features.lower_gap[window] <= exit_threshold,
+        high_volatility.to_numpy(dtype=bool),
+        strong_uptrend.to_numpy(dtype=bool),
     )
 
 
+
 def _find_stop(
-    close: np.ndarray, entry: int, end: int, stop_fraction: float
+    close: np.ndarray,
+    entry: int,
+    end: int,
+    stop_fraction: float,
+    activation_fraction: float,
 ) -> int | None:
     start = entry + 1
     if start >= end:
         return None
     segment = close[start:end]
     peaks = np.maximum.accumulate(np.r_[close[entry], segment])[1:]
-    hits = np.flatnonzero(segment <= peaks * (1.0 - stop_fraction))
+    activated = peaks >= close[entry] * (1.0 + activation_fraction)
+    hits = np.flatnonzero(activated & (segment <= peaks * (1.0 - stop_fraction)))
     return int(start + hits[0]) if len(hits) else None
 
 
@@ -370,12 +440,15 @@ def build_position_states(
     exit_signal: np.ndarray,
     close: np.ndarray,
     trailing_stop: float,
+    trailing_activation: float = 0.0,
 ) -> np.ndarray:
-    """Stateful, close-confirmed strategy logic; stop executes at next bar open."""
+    """Causal signal exit plus profit-activated trailing stop; orders fill next bar."""
 
     count = len(close)
     if count == 0 or len(entry_signal) != count or len(exit_signal) != count:
         raise ValueError("signal_length_mismatch")
+    if not 0.0 <= trailing_stop < 1.0 or not 0.0 <= trailing_activation < 1.0:
+        raise ValueError("trailing_stop_parameters_invalid")
     entry_edges = entry_signal & np.r_[True, ~entry_signal[:-1]]
     entry_indexes = np.flatnonzero(entry_edges)
     exit_indexes = np.flatnonzero(exit_signal)
@@ -390,13 +463,16 @@ def build_position_states(
         natural_exit = (
             int(exit_indexes[exit_offset]) if exit_offset < len(exit_indexes) else count
         )
-        stop_index = _find_stop(close, entry, natural_exit, trailing_stop)
+        stop_index = _find_stop(
+            close, entry, natural_exit, trailing_stop, trailing_activation
+        )
         end = stop_index if stop_index is not None else natural_exit
         states[entry:end] = True
         if end >= count:
             break
         cursor = end + 1
     return states
+
 
 
 def _trade_returns(
@@ -441,13 +517,38 @@ def _portfolio_metrics(
     return float(equity[-1] - 1.0), drawdown
 
 
+def _opportunity_cost_metrics(
+    closes: np.ndarray, positions: np.ndarray, timeframe_minutes: int
+) -> tuple[int, float]:
+    """Score missed upside windows as an evaluation metric, never a trading feature."""
+
+    horizon = max(1, int(round(1440 / timeframe_minutes)))
+    missed_count = 0
+    missed_return = 0.0
+    start = 0
+    while start + horizon < len(closes):
+        end = start + horizon
+        move = float(closes[end] / closes[start] - 1.0)
+        if move >= OPPORTUNITY_MOVE_THRESHOLD:
+            if not np.any(positions[start + 1 : end + 1]):
+                missed_count += 1
+                missed_return += move
+            start = end
+        else:
+            start += 1
+    return missed_count, missed_return
+
+
 def metrics_from_positions(
     opens: np.ndarray,
     closes: np.ndarray,
     positions_after_close: np.ndarray,
     exposure: float,
+    timeframe_minutes: int = 1,
+    high_volatility_mask: np.ndarray | None = None,
+    strong_uptrend_mask: np.ndarray | None = None,
 ) -> EvaluationMetrics:
-    """Measure completed-trade expectancy net of both sides' costs."""
+    """Report PF, net equity, missed upside and regime-capture metrics."""
 
     if (
         len(opens) == 0
@@ -456,11 +557,45 @@ def metrics_from_positions(
     ):
         raise ValueError("metric_input_length_invalid")
     open_positions = np.r_[False, positions_after_close[:-1]]
-    returns = _trade_returns(opens, closes, open_positions)
-    expectancy = float(np.mean(returns)) if len(returns) else None
-    wins = float(np.mean(returns > 0.0)) if len(returns) else 0.0
+    trade_returns = _trade_returns(opens, closes, open_positions)
+    expectancy = float(np.mean(trade_returns)) if len(trade_returns) else None
+    wins = float(np.mean(trade_returns > 0.0)) if len(trade_returns) else 0.0
+    gross_profit = float(trade_returns[trade_returns > 0.0].sum())
+    gross_loss = float(-trade_returns[trade_returns < 0.0].sum())
+    profit_factor = gross_profit / gross_loss if gross_loss > 0.0 else None
     net_return, drawdown = _portfolio_metrics(opens, closes, open_positions, exposure)
-    return EvaluationMetrics(int(len(returns)), wins, expectancy, net_return, drawdown)
+    missed_count, missed_return = _opportunity_cost_metrics(
+        closes, open_positions, timeframe_minutes
+    )
+    if high_volatility_mask is None:
+        high_volatility_mask = np.zeros(len(closes), dtype=bool)
+    if strong_uptrend_mask is None:
+        strong_uptrend_mask = np.zeros(len(closes), dtype=bool)
+    if len(high_volatility_mask) != len(closes) or len(strong_uptrend_mask) != len(closes):
+        raise ValueError("regime_mask_length_invalid")
+    close_returns = np.r_[0.0, np.diff(closes) / closes[:-1]]
+    exposure_path = open_positions.astype(np.float64) * exposure
+    high_volatility_return = float(
+        np.sum(close_returns * exposure_path * high_volatility_mask)
+    )
+    strong_trend_return = float(
+        np.sum(close_returns * exposure_path * strong_uptrend_mask)
+    )
+    return EvaluationMetrics(
+        trade_count=int(len(trade_returns)),
+        win_rate=wins,
+        net_expectancy=expectancy,
+        net_return=net_return,
+        max_drawdown=drawdown,
+        profit_factor=profit_factor,
+        gross_profit=gross_profit,
+        gross_loss=gross_loss,
+        missed_upside_move_count=missed_count,
+        missed_upside_return=missed_return,
+        high_volatility_return=high_volatility_return,
+        strong_trend_return=strong_trend_return,
+    )
+
 
 
 def _period_metrics(
@@ -480,12 +615,7 @@ def _period_metrics(
     indexes = np.flatnonzero(mask)
     if len(indexes) < 2:
         return EvaluationMetrics(0, 0.0, None, 0.0, 0.0)
-    position_key = (
-        timeframe,
-        0 if period == "train" else 1,
-        *genes[:7],
-        genes[8],
-    )
+    position_key = (timeframe, 0 if period == "train" else 1, *genes[:11])
     cached = context.positions_cache.get(position_key)
     if cached is None:
         cached = build_position_states(
@@ -493,51 +623,72 @@ def _period_metrics(
             exit_signal[indexes],
             features.close[indexes],
             STOPS[genes[8]],
+            TRAILING_ACTIVATION[genes[9]],
         )
         context.positions_cache[position_key] = cached
-    positions = cached
     bars = features.frame.iloc[indexes]
     return metrics_from_positions(
         bars["open"].to_numpy(dtype=np.float64),
         bars["close"].to_numpy(dtype=np.float64),
-        positions,
+        cached,
         EXPOSURES[genes[7]],
+        timeframe_minutes=timeframe,
+        high_volatility_mask=features.high_volatility[indexes],
+        strong_uptrend_mask=features.strong_uptrend[indexes],
     )
+
 
 
 def _eligibility_reasons(
     training: EvaluationMetrics, validation: EvaluationMetrics
 ) -> tuple[str, ...]:
     reasons: list[str] = []
-    if training.trade_count < MIN_TRAINING_TRADES:
-        reasons.append("training_trade_count_below_minimum")
-    if training.net_expectancy is None:
-        reasons.append("training_expectancy_unavailable")
-    if validation.trade_count < MIN_VALIDATION_TRADES:
-        reasons.append("validation_trade_count_below_minimum")
+    if training.trade_count == 0:
+        reasons.append("training_has_no_completed_trades")
     if training.max_drawdown > MAX_DRAWDOWN:
         reasons.append("training_drawdown_above_limit")
+    if validation.trade_count == 0:
+        reasons.append("validation_has_no_completed_trades")
+    if validation.profit_factor is None or validation.profit_factor <= 1.5:
+        reasons.append("validation_profit_factor_not_above_1_5")
+    if validation.net_return <= 0.0:
+        reasons.append("validation_total_return_not_positive")
     return tuple(reasons)
 
 
-def fitness_score(training: EvaluationMetrics, validation: EvaluationMetrics) -> float:
-    """Score training expectancy; invalid sample sizes score zero, never a win by rank."""
+def fitness_score(metrics: EvaluationMetrics) -> float:
+    """Bounded opportunity-hunting objective with soft sample confidence."""
 
-    if (
-        training.trade_count < MIN_TRAINING_TRADES
-        or training.net_expectancy is None
-        or validation.trade_count < MIN_VALIDATION_TRADES
-    ):
-        return 0.0
-
-    churn_penalty = 0.00001 * max(0, training.trade_count - 200)
-    score = training.net_expectancy - churn_penalty
-    drawdown_excess = max(0.0, training.max_drawdown - MAX_DRAWDOWN)
+    trades = metrics.trade_count
+    confidence = math.sqrt(trades / (trades + 10.0)) if trades > 0 else 0.0
+    if metrics.profit_factor is not None:
+        pf_for_score = min(MAX_PROFIT_FACTOR_FOR_FITNESS, metrics.profit_factor)
+    elif metrics.gross_profit > 0.0 and metrics.gross_loss == 0.0:
+        pf_for_score = MAX_PROFIT_FACTOR_FOR_FITNESS
+    else:
+        pf_for_score = 0.0
+    pf_component = PROFIT_FACTOR_WEIGHT * math.log1p(pf_for_score)
+    return_component = TOTAL_RETURN_WEIGHT * metrics.net_return
+    regime_bonus = REGIME_CAPTURE_WEIGHT * (
+        max(0.0, metrics.high_volatility_return)
+        + max(0.0, metrics.strong_trend_return)
+    )
+    opportunity_penalty = (
+        OPPORTUNITY_COST_WEIGHT * metrics.missed_upside_return
+        + OPPORTUNITY_EVENT_PENALTY * metrics.missed_upside_move_count
+    )
+    inactivity_penalty = NO_TRADE_PENALTY if trades == 0 else 0.0
+    score = (
+        confidence * (pf_component + return_component)
+        + regime_bonus
+        - opportunity_penalty
+        - inactivity_penalty
+    )
+    drawdown_excess = max(0.0, metrics.max_drawdown - MAX_DRAWDOWN)
     if drawdown_excess > 0.0:
-        # High headline expectancy must not offset a breach of the drawdown limit.
-        # Risky candidates remain diagnosable but cannot become final candidates.
         score = min(score, 0.0) - DRAWDOWN_EXCESS_PENALTY_MULTIPLIER * drawdown_excess
     return float(score)
+
 
 
 def _evaluate_individual(
@@ -553,7 +704,7 @@ def _evaluate_individual(
         cache[key] = CandidateEvaluation(
             training=training,
             validation=validation,
-            fitness=fitness_score(training, validation),
+            fitness=fitness_score(training),
             eligibility_reasons=_eligibility_reasons(training, validation),
         )
     return (cache[key].fitness,)
@@ -751,7 +902,7 @@ def _generation_record(
 
 
 def _timeframe_coverage_summary(
-    cache: dict[tuple[int, ...], CandidateEvaluation],
+    cache: dict[tuple[int, ...], CandidateEvaluation]
 ) -> dict[str, dict[str, Any]]:
     summary: dict[str, dict[str, Any]] = {}
     for minutes in TIMEFRAMES:
@@ -761,24 +912,21 @@ def _timeframe_coverage_summary(
             for key, value in cache.items()
             if TIMEFRAMES[key[0]] == minutes
         ]
-        sample_eligible = [
-            (key, value) for key, value in entries if value.sample_eligible
-        ]
+        sample_eligible = [(key, value) for key, value in entries if value.sample_eligible]
         selection_eligible = [
             (key, value) for key, value in entries if value.selection_eligible
         ]
         best = max(selection_eligible, key=lambda item: item[1].fitness, default=None)
         rejection_counts: Counter[str] = Counter()
         for _, value in entries:
-            if not value.sample_eligible:
-                if value.training.trade_count < MIN_TRAINING_TRADES:
-                    rejection_counts["training_trade_count_below_minimum"] += 1
-                if value.training.net_expectancy is None:
-                    rejection_counts["training_expectancy_unavailable"] += 1
-                if value.validation.trade_count < MIN_VALIDATION_TRADES:
-                    rejection_counts["validation_trade_count_below_minimum"] += 1
+            if value.training.trade_count == 0:
+                rejection_counts["training_has_no_completed_trades"] += 1
             if value.training.max_drawdown > MAX_DRAWDOWN:
                 rejection_counts["training_drawdown_above_limit"] += 1
+            if value.validation.trade_count == 0:
+                rejection_counts["validation_has_no_completed_trades"] += 1
+            if value.validation.profit_factor is None or value.validation.profit_factor <= 1.5:
+                rejection_counts["validation_profit_factor_not_above_1_5"] += 1
         summary[label] = {
             "timeframe_minutes": minutes,
             "required": minutes in REQUIRED_TIMEFRAMES,
@@ -786,15 +934,16 @@ def _timeframe_coverage_summary(
             "sample_eligible_genomes": len(sample_eligible),
             "selection_eligible_genomes": len(selection_eligible),
             "best_valid_fitness": best[1].fitness if best else None,
-            "best_valid_training_trade_count": best[1].training.trade_count
-            if best
-            else None,
-            "best_valid_validation_trade_count": best[1].validation.trade_count
-            if best
-            else None,
+            "best_valid_training_trade_count": best[1].training.trade_count if best else None,
+            "best_valid_validation_trade_count": best[1].validation.trade_count if best else None,
+            "best_valid_training_profit_factor": best[1].training.profit_factor if best else None,
+            "best_valid_validation_profit_factor": best[1].validation.profit_factor if best else None,
+            "best_valid_training_net_return": best[1].training.net_return if best else None,
+            "best_valid_validation_net_return": best[1].validation.net_return if best else None,
             "rejection_reason_counts": dict(sorted(rejection_counts.items())),
         }
     return summary
+
 
 
 def _next_generation(
@@ -818,6 +967,40 @@ def _next_generation(
     return children
 
 
+def _genome_exit_rule(
+    mode: str, exit_threshold: float, exit_mode: str
+) -> ExpressionGene:
+    indicator_operator = "greater_than" if mode == "rsi_reversal" else "less_than"
+    indicator_exit = ExpressionGene(
+        indicator_operator,
+        children=(
+            ExpressionGene("feature", feature=f"{mode}_exit"),
+            ExpressionGene("constant", constant=exit_threshold),
+        ),
+    )
+    ema_exit = ExpressionGene(
+        "less_than",
+        children=(
+            ExpressionGene("feature", feature="ema_trend_gap"),
+            ExpressionGene("constant", constant=0.0),
+        ),
+    )
+    close_ema_exit = ExpressionGene(
+        "less_than",
+        children=(
+            ExpressionGene("feature", feature="close_vs_trend_ema"),
+            ExpressionGene("constant", constant=0.0),
+        ),
+    )
+    if exit_mode == "indicator_or_ema_cross":
+        return ExpressionGene("or", children=(indicator_exit, ema_exit))
+    if exit_mode == "indicator_or_close_below_ema":
+        return ExpressionGene("or", children=(indicator_exit, close_ema_exit))
+    if exit_mode == "indicator_and_ema_cross":
+        return ExpressionGene("and", children=(indicator_exit, ema_exit))
+    return indicator_exit
+
+
 def _strategy_genome(genes: Sequence[int]) -> StrategyGenome:
     timeframe_minutes = TIMEFRAMES[genes[0]]
     timeframe = TimeframeGene(timeframe_minutes, "minute")
@@ -827,14 +1010,17 @@ def _strategy_genome(genes: Sequence[int]) -> StrategyGenome:
     slow = SLOWS[genes[4]]
     entry, exit_threshold = _thresholds(genes)
     stop = STOPS[genes[8]]
+    activation = TRAILING_ACTIVATION[genes[9]]
+    exit_mode = EXIT_MODES[genes[10]]
     parameters = (float(window), float(fast), float(slow), entry, exit_threshold)
     indicators = (
         IndicatorGene("entry_signal", mode, parameters, timeframe),
         IndicatorGene(f"{mode}_exit", f"{mode}_exit", parameters, timeframe),
-        IndicatorGene("trailing_drawdown", "close_peak_drawdown", (stop,), timeframe),
+        IndicatorGene("ema_trend_gap", "ema_trend_gap", (float(fast), float(slow)), timeframe),
+        IndicatorGene("close_vs_trend_ema", "close_vs_ema", (float(slow),), timeframe),
+        IndicatorGene("trailing_drawdown", "activated_close_peak_drawdown", (stop, activation), timeframe),
     )
     entry_operator = "less_than" if mode == "rsi_reversal" else "greater_than"
-    exit_operator = "greater_than" if mode == "rsi_reversal" else "less_than"
     return StrategyGenome(
         genome_id="research_candidate_001",
         timeframe=timeframe,
@@ -846,19 +1032,14 @@ def _strategy_genome(genes: Sequence[int]) -> StrategyGenome:
                 ExpressionGene("constant", constant=entry),
             ),
         ),
-        exit_rule=ExpressionGene(
-            exit_operator,
-            children=(
-                ExpressionGene("feature", feature=f"{mode}_exit"),
-                ExpressionGene("constant", constant=exit_threshold),
-            ),
-        ),
+        exit_rule=_genome_exit_rule(mode, exit_threshold, exit_mode),
         position_size_rule=ExpressionGene("constant", constant=EXPOSURES[genes[7]]),
         stop_rule=ExpressionGene(
-            "less_than",
+            "activated_trailing_stop",
             children=(
                 ExpressionGene("feature", feature="trailing_drawdown"),
-                ExpressionGene("constant", constant=-stop),
+                ExpressionGene("constant", constant=stop),
+                ExpressionGene("constant", constant=activation),
             ),
         ),
     )
@@ -869,25 +1050,21 @@ def _condition_text(genes: Sequence[int]) -> tuple[str, str]:
     window = LOOKBACKS[genes[2]]
     entry, exit_threshold = _thresholds(genes)
     if mode == "momentum":
-        return (
-            f"{window}-bar return >= {entry:.6f}",
-            f"{window}-bar return <= {exit_threshold:.6f}",
-        )
-    if mode == "ema_gap":
+        entry_text = f"{window}-bar return >= {entry:.6f}"
+    elif mode == "ema_gap":
         fast, slow = FASTS[genes[3]], SLOWS[genes[4]]
-        return (
-            f"EMA({fast})/EMA({slow}) - 1 >= {entry:.6f}",
-            f"EMA({fast})/EMA({slow}) - 1 <= {exit_threshold:.6f}",
-        )
-    if mode == "rsi_reversal":
-        return (
-            f"RSI({window}) <= {entry:.1f}",
-            f"RSI({window}) >= {exit_threshold:.1f}",
-        )
-    return (
-        f"close/prior_{window}_bar_high - 1 >= {entry:.6f}",
-        f"close/prior_{window}_bar_low - 1 <= {exit_threshold:.6f}",
+        entry_text = f"EMA({fast})/EMA({slow}) - 1 >= {entry:.6f}"
+    elif mode == "rsi_reversal":
+        entry_text = f"RSI({window}) <= {entry:.1f}"
+    else:
+        entry_text = f"close/prior_{window}_bar_high - 1 >= {entry:.6f}"
+    exit_text = (
+        f"{EXIT_MODES[genes[10]]}; indicator threshold {exit_threshold:.6f}; "
+        f"trailing stop {STOPS[genes[8]]:.3%} activates after "
+        f"{TRAILING_ACTIVATION[genes[9]]:.3%} favorable move"
     )
+    return entry_text, exit_text
+
 
 
 def _candidate_payload(
@@ -908,11 +1085,14 @@ def _candidate_payload(
             "entry_threshold": _thresholds(genes)[0],
             "exit_threshold": _thresholds(genes)[1],
             "position_exposure": EXPOSURES[genes[7]],
-            "close_based_trailing_stop_fraction": STOPS[genes[8]],
+            "trailing_stop_fraction": STOPS[genes[8]],
+            "trailing_activation_fraction": TRAILING_ACTIVATION[genes[9]],
+            "dynamic_exit_mode": EXIT_MODES[genes[10]],
         },
         "entry_condition": entry_text,
         "exit_condition": exit_text,
         "fitness": score,
+        "fitness_objective": "profit_factor + net_total_return + regime_capture - missed_upside_opportunity_cost",
         "training_metrics": asdict(train),
     }
 
@@ -920,56 +1100,56 @@ def _candidate_payload(
 def _economic_assessment(
     training: EvaluationMetrics | None, validation: EvaluationMetrics | None
 ) -> dict[str, Any]:
-    """Assess the preselected candidate; this function never authorizes production."""
+    """Evaluate selected candidate; no hard minimum trade counts are enforced."""
 
     if training is None or validation is None:
         return {
             "status": "NO-GO",
-            "reasons": [
-                "no_candidate_meets_training_validation_sample_and_training_drawdown_gates"
-            ],
-            "minimum_training_trade_count": MIN_TRAINING_TRADES,
-            "minimum_validation_trade_count": MIN_VALIDATION_TRADES,
-            "maximum_drawdown_per_period": MAX_DRAWDOWN,
-            "training_trade_count": None,
-            "validation_trade_count": None,
-            "validation_expectancy": None,
+            "reasons": ["no_candidate_with_training_trades_and_drawdown_within_limit"],
+            "minimum_completed_trades_enforced": False,
+            "profit_factor_target": 1.5,
             "final_holdout_used": False,
             "final_holdout_reserved": True,
             "owner_approval_required": True,
             "production_promotion_eligible": False,
         }
-
     reasons: list[str] = []
-    if training.trade_count < MIN_TRAINING_TRADES:
-        reasons.append("training_trade_count_below_minimum")
-    if validation.trade_count < MIN_VALIDATION_TRADES:
-        reasons.append("validation_trade_count_below_minimum")
-    if training.net_expectancy is None or training.net_expectancy <= 0:
-        reasons.append("training_expectancy_not_positive_or_unavailable")
+    if training.trade_count == 0:
+        reasons.append("training_has_no_completed_trades")
+    if validation.trade_count == 0:
+        reasons.append("validation_has_no_completed_trades")
+    if validation.profit_factor is None or validation.profit_factor <= 1.5:
+        reasons.append("validation_profit_factor_not_above_1_5")
+    if validation.net_return <= 0.0:
+        reasons.append("validation_total_return_not_positive")
     if training.max_drawdown > MAX_DRAWDOWN:
         reasons.append("training_drawdown_above_limit")
-    if validation.net_expectancy is None or validation.net_expectancy <= 0:
-        reasons.append("validation_expectancy_not_positive_or_unavailable")
     if validation.max_drawdown > MAX_DRAWDOWN:
         reasons.append("validation_drawdown_above_limit")
     return {
         "status": "NO-GO" if reasons else "OWNER_REVIEW_REQUIRED",
         "reasons": reasons,
-        "minimum_training_trade_count": MIN_TRAINING_TRADES,
-        "minimum_validation_trade_count": MIN_VALIDATION_TRADES,
-        "maximum_drawdown_per_period": MAX_DRAWDOWN,
+        "minimum_completed_trades_enforced": False,
+        "profit_factor_target": 1.5,
         "training_trade_count": training.trade_count,
         "validation_trade_count": validation.trade_count,
-        "training_expectancy": training.net_expectancy,
-        "validation_expectancy": validation.net_expectancy,
-        "training_max_drawdown": training.max_drawdown,
-        "validation_max_drawdown": validation.max_drawdown,
+        "training_profit_factor": training.profit_factor,
+        "validation_profit_factor": validation.profit_factor,
+        "validation_profit_factor_above_1_5": (
+            validation.profit_factor is not None and validation.profit_factor > 1.5
+        ),
+        "training_total_return": training.net_return,
+        "validation_total_return": validation.net_return,
+        "training_missed_upside_moves": training.missed_upside_move_count,
+        "validation_missed_upside_moves": validation.missed_upside_move_count,
+        "training_missed_upside_return": training.missed_upside_return,
+        "validation_missed_upside_return": validation.missed_upside_return,
         "final_holdout_used": False,
         "final_holdout_reserved": True,
         "owner_approval_required": True,
         "production_promotion_eligible": False,
     }
+
 
 
 def _write_csv_outputs(
@@ -1000,6 +1180,16 @@ def _write_csv_outputs(
         "validation_net_return",
         "training_max_drawdown",
         "validation_max_drawdown",
+        "training_profit_factor",
+        "validation_profit_factor",
+        "training_missed_upside_move_count",
+        "validation_missed_upside_move_count",
+        "training_missed_upside_return",
+        "validation_missed_upside_return",
+        "training_high_volatility_return",
+        "validation_high_volatility_return",
+        "training_strong_trend_return",
+        "validation_strong_trend_return",
     ]
     with (output_dir / "self-evolving-ga-candidates.csv").open(
         "w", encoding="utf-8", newline=""
@@ -1032,6 +1222,16 @@ def _write_csv_outputs(
                     "validation_net_return": result.validation.net_return,
                     "training_max_drawdown": result.training.max_drawdown,
                     "validation_max_drawdown": result.validation.max_drawdown,
+                    "training_profit_factor": result.training.profit_factor,
+                    "validation_profit_factor": result.validation.profit_factor,
+                    "training_missed_upside_move_count": result.training.missed_upside_move_count,
+                    "validation_missed_upside_move_count": result.validation.missed_upside_move_count,
+                    "training_missed_upside_return": result.training.missed_upside_return,
+                    "validation_missed_upside_return": result.validation.missed_upside_return,
+                    "training_high_volatility_return": result.training.high_volatility_return,
+                    "validation_high_volatility_return": result.validation.high_volatility_return,
+                    "training_strong_trend_return": result.training.strong_trend_return,
+                    "validation_strong_trend_return": result.validation.strong_trend_return,
                 }
             )
 
@@ -1054,6 +1254,14 @@ def run_evolution(
     train_cutoff_ms = int(raw["open_time_ms"].iloc[int(len(raw) * 0.70)])
     validation_end_ms = int(raw["open_time_ms"].iloc[int(len(raw) * 0.80)])
     context = build_search_context(raw, train_cutoff_ms, validation_end_ms)
+    baseline_genes = [
+        TIMEFRAMES.index(10080), INDICATORS.index("rsi_reversal"),
+        LOOKBACKS.index(8), 0, 1, RSI_ENTRY.index(35.0), RSI_EXIT.index(80.0),
+        EXPOSURES.index(0.95), STOPS.index(0.05), TRAILING_ACTIVATION.index(0.0),
+        EXIT_MODES.index("indicator_threshold"),
+    ]
+    baseline_training = _period_metrics(context, baseline_genes, "train")
+    baseline_validation = _period_metrics(context, baseline_genes, "validation")
     cache: dict[tuple[int, ...], CandidateEvaluation] = {}
     toolbox = _build_toolbox(context, cache, seed)
 
@@ -1086,7 +1294,7 @@ def run_evolution(
         )
         candidate["validation_metrics"] = asdict(best_result.validation)
         candidate["validation_return_used_for_selection"] = False
-        candidate["validation_sample_count_used_for_eligibility"] = True
+        candidate["validation_sample_count_used_for_eligibility"] = False
         economic_assessment = _economic_assessment(
             best_result.training, best_result.validation
         )
@@ -1150,21 +1358,27 @@ def run_evolution(
             "required_timeframe_population_per_generation": MIN_REQUIRED_TIMEFRAME_POPULATION,
         },
         "fitness_definition": {
-            "base": "training mean completed-trade return after entry/exit fees and slippage",
-            "sample_gate": "fitness=0.0 and sample-ineligible if training trades < 30 or validation trades < 10",
+            "profit_factor_component": f"{PROFIT_FACTOR_WEIGHT} * log1p(min(profit_factor, {MAX_PROFIT_FACTOR_FOR_FITNESS}))",
+            "total_return_component": f"{TOTAL_RETURN_WEIGHT} * net_total_return",
+            "soft_sample_weight": "sqrt(completed_trade_count / (completed_trade_count + 10)); no hard count threshold",
+            "opportunity_cost_penalty": f"{OPPORTUNITY_COST_WEIGHT} * missed_upside_return + {OPPORTUNITY_EVENT_PENALTY} * missed_upside_move_count",
+            "opportunity_definition": "non-overlapping 24h window rises at least 5%; candidate has no exposure during entire window",
+            "regime_capture_bonus": f"{REGIME_CAPTURE_WEIGHT} * positive_high_volatility_return + positive_strong_trend_return",
             "drawdown_penalty": "if training max_drawdown > 0.15: min(raw_score, 0.0) - 10.0 * (max_drawdown - 0.15)",
-            "churn_penalty": "0.00001 * max(0, training_trade_count - 200)",
-            "training_drawdown_is_selection_gate": True,
-            "validation_return_used_for_selection": False,
-            "validation_trade_count_used_for_eligibility": True,
+            "no_trade_penalty": NO_TRADE_PENALTY,
+            "training_metrics_only_for_fitness_and_selection": True,
+            "validation_used_for_selection": False,
         },
         "eligibility_gates": {
-            "minimum_training_trade_count": MIN_TRAINING_TRADES,
-            "minimum_validation_trade_count": MIN_VALIDATION_TRADES,
-            "maximum_drawdown": MAX_DRAWDOWN,
-            "invalid_sample_fitness": 0.0,
-            "training_drawdown_above_limit_excluded_from_final_candidate_selection": True,
+            "minimum_completed_trade_count_enforced": False,
+            "soft_sample_confidence": "sqrt(trade_count / (trade_count + 10))",
+            "maximum_drawdown_for_candidate_selection": MAX_DRAWDOWN,
+            "profit_factor_target_for_validation": 1.5,
+            "trailing_activation_gene": True,
+            "dynamic_exit_mode_gene": list(EXIT_MODES),
+            "missed_upside_threshold": OPPORTUNITY_MOVE_THRESHOLD,
         },
+
         "execution_assumptions": {
             "fee_bps_per_side": 25,
             "slippage_bps_per_side": 20,
@@ -1188,8 +1402,8 @@ def run_evolution(
         },
         "top_research_candidate": candidate,
         "candidate_selection_method": (
-            "highest_training_fitness_among_sample_eligible_and_training_drawdown_eligible_genomes; "
-            "validation_return_not_used"
+            "highest training opportunity-hunter fitness among genomes with at least one "
+            "completed training trade and training drawdown <= 15%; validation excluded from selection"
         ),
         "economic_assessment": economic_assessment,
         "research_result": (
@@ -1197,6 +1411,31 @@ def run_evolution(
             if economic_assessment["status"] == "NO-GO"
             else "CANDIDATE_REQUIRES_OWNER_REVIEW"
         ),
+        "opportunity_hunter_result": {
+            "profit_factor_target": 1.5,
+            "validation_profit_factor": economic_assessment.get("validation_profit_factor"),
+            "validation_profit_factor_above_1_5": economic_assessment.get(
+                "validation_profit_factor_above_1_5", False
+            ),
+            "trade_count_minimums_enforced": False,
+            "opportunity_cost_penalty_active": True,
+            "dynamic_exit_genes_active": True,
+        },
+        "same_dataset_baseline_comparison": {
+            "baseline_description": "previous weekly RSI-reversal candidate re-evaluated on this run's data and split",
+            "baseline_training_metrics": asdict(baseline_training),
+            "baseline_validation_metrics": asdict(baseline_validation),
+            "candidate_training_trade_count": candidate["training_metrics"]["trade_count"] if candidate else None,
+            "candidate_validation_trade_count": candidate["validation_metrics"]["trade_count"] if candidate else None,
+            "training_trade_count_increased": (
+                candidate is not None and candidate["training_metrics"]["trade_count"] > baseline_training.trade_count
+            ),
+            "validation_trade_count_increased": (
+                candidate is not None and candidate["validation_metrics"]["trade_count"] > baseline_validation.trade_count
+            ),
+            "comparison_is_same_dataset_and_split": True,
+            "baseline_participates_in_selection": False,
+        },
         "timeframe_coverage": timeframe_coverage,
         "required_timeframe_coverage_by_generation": coverage_by_generation,
         "genomes_rejected_by_reason": dict(sorted(rejected_reasons.items())),
