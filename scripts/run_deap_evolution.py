@@ -102,7 +102,9 @@ class CandidateEvaluation:
 
     @property
     def sample_eligible(self) -> bool:
-        return self.training.trade_count > 0 and self.training.net_expectancy is not None
+        return (
+            self.training.trade_count > 0 and self.training.net_expectancy is not None
+        )
 
     @property
     def training_risk_eligible(self) -> bool:
@@ -128,7 +130,9 @@ class FeatureFrame:
     upper_gap: dict[int, np.ndarray] = field(default_factory=dict)
     lower_gap: dict[int, np.ndarray] = field(default_factory=dict)
     close_ema_gap: dict[int, np.ndarray] = field(default_factory=dict)
-    high_volatility: np.ndarray = field(default_factory=lambda: np.array([], dtype=bool))
+    high_volatility: np.ndarray = field(
+        default_factory=lambda: np.array([], dtype=bool)
+    )
     strong_uptrend: np.ndarray = field(default_factory=lambda: np.array([], dtype=bool))
 
 
@@ -283,10 +287,11 @@ def _build_features(bars: pd.DataFrame) -> FeatureFrame:
         close=close.to_numpy(dtype=np.float64),
     )
     timeframe = int(
-        (bars["close_time_ms"].iloc[-1] - bars["open_time_ms"].iloc[-1] + 1)
-        // 60_000
+        (bars["close_time_ms"].iloc[-1] - bars["open_time_ms"].iloc[-1] + 1) // 60_000
     )
-    result.high_volatility, result.strong_uptrend = _build_regime_masks(close, timeframe)
+    result.high_volatility, result.strong_uptrend = _build_regime_masks(
+        close, timeframe
+    )
     for window in LOOKBACKS:
         result.momentum[window] = (close / close.shift(window) - 1.0).to_numpy(
             dtype=np.float64
@@ -571,7 +576,9 @@ def metrics_from_positions(
         high_volatility_mask = np.zeros(len(closes), dtype=bool)
     if strong_uptrend_mask is None:
         strong_uptrend_mask = np.zeros(len(closes), dtype=bool)
-    if len(high_volatility_mask) != len(closes) or len(strong_uptrend_mask) != len(closes):
+    if len(high_volatility_mask) != len(closes) or len(strong_uptrend_mask) != len(
+        closes
+    ):
         raise ValueError("regime_mask_length_invalid")
     close_returns = np.r_[0.0, np.diff(closes) / closes[:-1]]
     exposure_path = open_positions.astype(np.float64) * exposure
@@ -670,8 +677,7 @@ def fitness_score(metrics: EvaluationMetrics) -> float:
     pf_component = PROFIT_FACTOR_WEIGHT * math.log1p(pf_for_score)
     return_component = TOTAL_RETURN_WEIGHT * metrics.net_return
     regime_bonus = REGIME_CAPTURE_WEIGHT * (
-        max(0.0, metrics.high_volatility_return)
-        + max(0.0, metrics.strong_trend_return)
+        max(0.0, metrics.high_volatility_return) + max(0.0, metrics.strong_trend_return)
     )
     opportunity_penalty = (
         OPPORTUNITY_COST_WEIGHT * metrics.missed_upside_return
@@ -813,7 +819,10 @@ def _ensure_timeframe_coverage(
 
     for required_minutes in REQUIRED_TIMEFRAMES:
         required_gene = TIMEFRAMES.index(required_minutes)
-        while _unique_timeframe_count(population, required_gene) < MIN_REQUIRED_TIMEFRAME_POPULATION:
+        while (
+            _unique_timeframe_count(population, required_gene)
+            < MIN_REQUIRED_TIMEFRAME_POPULATION
+        ):
             replaceable = _replaceable_population_members(population)
             if not replaceable:
                 raise RuntimeError("required_timeframe_quota_cannot_be_satisfied")
@@ -837,9 +846,7 @@ def _replaceable_population_members(
 ) -> list[tuple[int, Any]]:
     genome_frequency = Counter(tuple(item) for item in population)
     unique_by_timeframe = {
-        minutes: {
-            tuple(item) for item in population if TIMEFRAMES[item[0]] == minutes
-        }
+        minutes: {tuple(item) for item in population if TIMEFRAMES[item[0]] == minutes}
         for minutes in REQUIRED_TIMEFRAMES
     }
     return [
@@ -902,7 +909,7 @@ def _generation_record(
 
 
 def _timeframe_coverage_summary(
-    cache: dict[tuple[int, ...], CandidateEvaluation]
+    cache: dict[tuple[int, ...], CandidateEvaluation],
 ) -> dict[str, dict[str, Any]]:
     summary: dict[str, dict[str, Any]] = {}
     for minutes in TIMEFRAMES:
@@ -912,7 +919,9 @@ def _timeframe_coverage_summary(
             for key, value in cache.items()
             if TIMEFRAMES[key[0]] == minutes
         ]
-        sample_eligible = [(key, value) for key, value in entries if value.sample_eligible]
+        sample_eligible = [
+            (key, value) for key, value in entries if value.sample_eligible
+        ]
         selection_eligible = [
             (key, value) for key, value in entries if value.selection_eligible
         ]
@@ -925,7 +934,10 @@ def _timeframe_coverage_summary(
                 rejection_counts["training_drawdown_above_limit"] += 1
             if value.validation.trade_count == 0:
                 rejection_counts["validation_has_no_completed_trades"] += 1
-            if value.validation.profit_factor is None or value.validation.profit_factor <= 1.5:
+            if (
+                value.validation.profit_factor is None
+                or value.validation.profit_factor <= 1.5
+            ):
                 rejection_counts["validation_profit_factor_not_above_1_5"] += 1
         summary[label] = {
             "timeframe_minutes": minutes,
@@ -934,12 +946,24 @@ def _timeframe_coverage_summary(
             "sample_eligible_genomes": len(sample_eligible),
             "selection_eligible_genomes": len(selection_eligible),
             "best_valid_fitness": best[1].fitness if best else None,
-            "best_valid_training_trade_count": best[1].training.trade_count if best else None,
-            "best_valid_validation_trade_count": best[1].validation.trade_count if best else None,
-            "best_valid_training_profit_factor": best[1].training.profit_factor if best else None,
-            "best_valid_validation_profit_factor": best[1].validation.profit_factor if best else None,
-            "best_valid_training_net_return": best[1].training.net_return if best else None,
-            "best_valid_validation_net_return": best[1].validation.net_return if best else None,
+            "best_valid_training_trade_count": best[1].training.trade_count
+            if best
+            else None,
+            "best_valid_validation_trade_count": best[1].validation.trade_count
+            if best
+            else None,
+            "best_valid_training_profit_factor": best[1].training.profit_factor
+            if best
+            else None,
+            "best_valid_validation_profit_factor": best[1].validation.profit_factor
+            if best
+            else None,
+            "best_valid_training_net_return": best[1].training.net_return
+            if best
+            else None,
+            "best_valid_validation_net_return": best[1].validation.net_return
+            if best
+            else None,
             "rejection_reason_counts": dict(sorted(rejection_counts.items())),
         }
     return summary
@@ -1016,9 +1040,16 @@ def _strategy_genome(genes: Sequence[int]) -> StrategyGenome:
     indicators = (
         IndicatorGene("entry_signal", mode, parameters, timeframe),
         IndicatorGene(f"{mode}_exit", f"{mode}_exit", parameters, timeframe),
-        IndicatorGene("ema_trend_gap", "ema_trend_gap", (float(fast), float(slow)), timeframe),
+        IndicatorGene(
+            "ema_trend_gap", "ema_trend_gap", (float(fast), float(slow)), timeframe
+        ),
         IndicatorGene("close_vs_trend_ema", "close_vs_ema", (float(slow),), timeframe),
-        IndicatorGene("trailing_drawdown", "activated_close_peak_drawdown", (stop, activation), timeframe),
+        IndicatorGene(
+            "trailing_drawdown",
+            "activated_close_peak_drawdown",
+            (stop, activation),
+            timeframe,
+        ),
     )
     entry_operator = "less_than" if mode == "rsi_reversal" else "greater_than"
     return StrategyGenome(
@@ -1255,9 +1286,16 @@ def run_evolution(
     validation_end_ms = int(raw["open_time_ms"].iloc[int(len(raw) * 0.80)])
     context = build_search_context(raw, train_cutoff_ms, validation_end_ms)
     baseline_genes = [
-        TIMEFRAMES.index(10080), INDICATORS.index("rsi_reversal"),
-        LOOKBACKS.index(8), 0, 1, RSI_ENTRY.index(35.0), RSI_EXIT.index(80.0),
-        EXPOSURES.index(0.95), STOPS.index(0.05), TRAILING_ACTIVATION.index(0.0),
+        TIMEFRAMES.index(10080),
+        INDICATORS.index("rsi_reversal"),
+        LOOKBACKS.index(8),
+        0,
+        1,
+        RSI_ENTRY.index(35.0),
+        RSI_EXIT.index(80.0),
+        EXPOSURES.index(0.95),
+        STOPS.index(0.05),
+        TRAILING_ACTIVATION.index(0.0),
         EXIT_MODES.index("indicator_threshold"),
     ]
     baseline_training = _period_metrics(context, baseline_genes, "train")
@@ -1413,7 +1451,9 @@ def run_evolution(
         ),
         "opportunity_hunter_result": {
             "profit_factor_target": 1.5,
-            "validation_profit_factor": economic_assessment.get("validation_profit_factor"),
+            "validation_profit_factor": economic_assessment.get(
+                "validation_profit_factor"
+            ),
             "validation_profit_factor_above_1_5": economic_assessment.get(
                 "validation_profit_factor_above_1_5", False
             ),
@@ -1425,13 +1465,25 @@ def run_evolution(
             "baseline_description": "previous weekly RSI-reversal candidate re-evaluated on this run's data and split",
             "baseline_training_metrics": asdict(baseline_training),
             "baseline_validation_metrics": asdict(baseline_validation),
-            "candidate_training_trade_count": candidate["training_metrics"]["trade_count"] if candidate else None,
-            "candidate_validation_trade_count": candidate["validation_metrics"]["trade_count"] if candidate else None,
+            "candidate_training_trade_count": candidate["training_metrics"][
+                "trade_count"
+            ]
+            if candidate
+            else None,
+            "candidate_validation_trade_count": candidate["validation_metrics"][
+                "trade_count"
+            ]
+            if candidate
+            else None,
             "training_trade_count_increased": (
-                candidate is not None and candidate["training_metrics"]["trade_count"] > baseline_training.trade_count
+                candidate is not None
+                and candidate["training_metrics"]["trade_count"]
+                > baseline_training.trade_count
             ),
             "validation_trade_count_increased": (
-                candidate is not None and candidate["validation_metrics"]["trade_count"] > baseline_validation.trade_count
+                candidate is not None
+                and candidate["validation_metrics"]["trade_count"]
+                > baseline_validation.trade_count
             ),
             "comparison_is_same_dataset_and_split": True,
             "baseline_participates_in_selection": False,

@@ -115,7 +115,9 @@ def test_directional_thresholds_do_not_overlap_for_entry_and_exit() -> None:
 def test_dynamic_trailing_stop_has_an_evolved_activation_threshold() -> None:
     close = np.array([100.0, 101.0, 103.0, 104.0, 101.0, 100.5, 100.0])
     entry = np.array([False, True, True, True, True, True, True])
-    no_activation = build_position_states(entry, np.zeros(7, dtype=bool), close, 0.02, 0.0)
+    no_activation = build_position_states(
+        entry, np.zeros(7, dtype=bool), close, 0.02, 0.0
+    )
     delayed_activation = build_position_states(
         entry, np.zeros(7, dtype=bool), close, 0.02, 0.05
     )
@@ -164,9 +166,15 @@ def test_no_hard_trade_count_threshold_and_low_samples_are_scored_softly() -> No
 
 
 def test_profit_factor_and_total_return_both_affect_fitness() -> None:
-    low_pf = _metrics(20, profit_factor=1.1, gross_profit=0.11, gross_loss=0.10, net_return=0.05)
-    high_pf = _metrics(20, profit_factor=2.0, gross_profit=0.20, gross_loss=0.10, net_return=0.05)
-    high_return = _metrics(20, profit_factor=1.1, gross_profit=0.11, gross_loss=0.10, net_return=0.25)
+    low_pf = _metrics(
+        20, profit_factor=1.1, gross_profit=0.11, gross_loss=0.10, net_return=0.05
+    )
+    high_pf = _metrics(
+        20, profit_factor=2.0, gross_profit=0.20, gross_loss=0.10, net_return=0.05
+    )
+    high_return = _metrics(
+        20, profit_factor=1.1, gross_profit=0.11, gross_loss=0.10, net_return=0.25
+    )
     assert fitness_score(high_pf) > fitness_score(low_pf)
     assert fitness_score(high_return) > fitness_score(low_pf)
 
@@ -174,9 +182,16 @@ def test_profit_factor_and_total_return_both_affect_fitness() -> None:
 def test_opportunity_cost_penalty_reduces_fitness_for_missed_rallies() -> None:
     active = _metrics(12, missed_count=0, missed_return=0.0)
     idle = _metrics(
-        0, expectancy=None, net_return=0.0, profit_factor=None, gross_profit=0,
-        gross_loss=0, missed_count=3, missed_return=0.20,
-        volatility_return=0, trend_return=0,
+        0,
+        expectancy=None,
+        net_return=0.0,
+        profit_factor=None,
+        gross_profit=0,
+        gross_loss=0,
+        missed_count=3,
+        missed_return=0.20,
+        volatility_return=0,
+        trend_return=0,
     )
     assert fitness_score(active) > fitness_score(idle)
     assert idle.missed_upside_move_count == 3
@@ -194,7 +209,9 @@ def test_drawdown_over_15_percent_gets_severe_penalty() -> None:
     assert fitness_score(low_risk) > fitness_score(high_risk)
 
 
-def test_economic_assessment_reports_profit_factor_target_without_hard_trade_minimums() -> None:
+def test_economic_assessment_reports_profit_factor_target_without_hard_trade_minimums() -> (
+    None
+):
     training = _metrics(4, profit_factor=2.0, net_return=0.10, drawdown=0.05)
     validation = _metrics(2, profit_factor=1.7, net_return=0.04, drawdown=0.04)
     result = _economic_assessment(training, validation)
@@ -205,7 +222,9 @@ def test_economic_assessment_reports_profit_factor_target_without_hard_trade_min
 
 
 def test_economic_assessment_fails_when_profit_factor_not_above_target() -> None:
-    result = _economic_assessment(_metrics(4), _metrics(3, profit_factor=1.4, net_return=0.01))
+    result = _economic_assessment(
+        _metrics(4), _metrics(3, profit_factor=1.4, net_return=0.01)
+    )
     assert result["status"] == "NO-GO"
     assert "validation_profit_factor_not_above_1_5" in result["reasons"]
 
@@ -235,9 +254,13 @@ def test_resampled_feature_availability_uses_candle_close_for_temporal_split() -
     close_prices = open_prices + 0.01
     raw = pd.DataFrame(
         {
-            "open_time_ms": open_times, "close_time_ms": open_times + 59_999,
-            "open": open_prices, "high": close_prices + 0.01,
-            "low": open_prices - 0.01, "close": close_prices, "volume": np.ones(count),
+            "open_time_ms": open_times,
+            "close_time_ms": open_times + 59_999,
+            "open": open_prices,
+            "high": close_prices + 0.01,
+            "low": open_prices - 0.01,
+            "close": close_prices,
+            "volume": np.ones(count),
         }
     )
     bars = _resample(raw, 60)
@@ -249,7 +272,8 @@ def test_resampled_feature_availability_uses_candle_close_for_temporal_split() -
     assert features.timestamp[2] >= train_cutoff_ms
     train_indexes = np.flatnonzero(features.timestamp < train_cutoff_ms)
     validation_indexes = np.flatnonzero(
-        (features.timestamp >= train_cutoff_ms) & (features.timestamp < validation_end_ms)
+        (features.timestamp >= train_cutoff_ms)
+        & (features.timestamp < validation_end_ms)
     )
     assert train_indexes.tolist() == [0, 1]
     assert validation_indexes.tolist() == [2, 3]
@@ -267,7 +291,19 @@ def test_required_timeframe_quota_includes_15m_and_is_unique() -> None:
 
     toolbox = FakeToolbox()
     population = [
-        [TIMEFRAMES.index(1), 2, i % 8, 0, 1, i % 6, (i // 2) % 6, i % 4, i % 6, i % 5, i % 4]
+        [
+            TIMEFRAMES.index(1),
+            2,
+            i % 8,
+            0,
+            1,
+            i % 6,
+            (i // 2) % 6,
+            i % 4,
+            i % 6,
+            i % 5,
+            i % 4,
+        ]
         for i in range(20)
     ]
     result = _ensure_timeframe_coverage(population, toolbox, cache={})
@@ -275,15 +311,24 @@ def test_required_timeframe_quota_includes_15m_and_is_unique() -> None:
     assert 15 in REQUIRED_TIMEFRAMES
     for timeframe in REQUIRED_TIMEFRAMES:
         gene = TIMEFRAMES.index(timeframe)
-        assert len({tuple(item) for item in result if item[0] == gene}) >= MIN_REQUIRED_TIMEFRAME_POPULATION
+        assert (
+            len({tuple(item) for item in result if item[0] == gene})
+            >= MIN_REQUIRED_TIMEFRAME_POPULATION
+        )
 
 
 def test_population_and_generation_limits_fail_closed(tmp_path: Path) -> None:
     from scripts.run_deap_evolution import run_evolution
 
     with pytest.raises(ValueError, match="population_size_must_be_between"):
-        run_evolution(tmp_path / "missing.csv", tmp_path / "missing.json", tmp_path, 99, 10)
+        run_evolution(
+            tmp_path / "missing.csv", tmp_path / "missing.json", tmp_path, 99, 10
+        )
     with pytest.raises(ValueError, match="generations_must_be_between"):
-        run_evolution(tmp_path / "missing.csv", tmp_path / "missing.json", tmp_path, 128, 9)
+        run_evolution(
+            tmp_path / "missing.csv", tmp_path / "missing.json", tmp_path, 128, 9
+        )
     with pytest.raises(ValueError, match="generations_must_be_between"):
-        run_evolution(tmp_path / "missing.csv", tmp_path / "missing.json", tmp_path, 128, 21)
+        run_evolution(
+            tmp_path / "missing.csv", tmp_path / "missing.json", tmp_path, 128, 21
+        )
