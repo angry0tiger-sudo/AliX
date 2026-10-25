@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 import pytest
+from numpy.typing import NDArray
 
 from scripts.run_rl_trading_agent import (
     PREVIOUS_HOLDOUT_START_MS,
@@ -39,7 +42,14 @@ def test_analysis_window_fails_closed_when_no_prior_holdout_tail_exists() -> Non
 
 
 class _DeterministicZeroSizeBuyPolicy:
-    def predict(self, observation, *, state, episode_start, deterministic):
+    def predict(
+        self,
+        observation: NDArray[np.float32],
+        *,
+        state: Any,
+        episode_start: NDArray[np.bool_],
+        deterministic: bool,
+    ) -> tuple[NDArray[np.float32], Any]:
         assert deterministic is True
         return np.asarray([0.9, 0.0], dtype=np.float32), state
 
