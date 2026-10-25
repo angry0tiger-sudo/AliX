@@ -13,6 +13,8 @@ on:
       - "tests/unit/test_self_evolving_simulator.py"
       - "tests/unit/test_self_evolving_genome.py"
       - "tests/unit/test_fetch_public_minute_bars.py"
+      - "tests/unit/test_self_evolving_ga.py"
+      - "scripts/run_deap_evolution.py"
       - "docs/knowledge_base/SELF_EVOLVING_AI_ARCHITECTURE.md"
       - "docs/governance/owner-directives/2026-10-25-self-evolving-ai.md"
   workflow_dispatch:
@@ -61,14 +63,15 @@ jobs:
           python-version: "3.12"
 
       - name: Install pinned research test dependencies
-        run: python -m pip install numpy==2.5.4 pandas==2.3.3 scikit-learn==1.9.0 pytest==9.0.3 requests==2.34.2
+        run: python -m pip install numpy==2.5.4 pandas==2.3.3 scikit-learn==1.9.0 pytest==9.0.3 requests==2.34.2 deap==1.4.4
 
       - name: Run simulator, genome and public-data contract tests
         run: |
           python -m pytest \
             tests/unit/test_self_evolving_simulator.py \
             tests/unit/test_self_evolving_genome.py \
-            tests/unit/test_fetch_public_minute_bars.py -q
+            tests/unit/test_fetch_public_minute_bars.py \
+            tests/unit/test_self_evolving_ga.py -q
 
       - name: Fetch six calendar months of public 1m bars
         env:
@@ -115,6 +118,52 @@ jobs:
           }, sort_keys=True, allow_nan=False))
           PY
 
+
+      - name: Run bounded DEAP evolution on research window
+        run: |
+          python -m scripts.run_deap_evolution \
+            --data artifacts/public-minute-bars/binance_BTCUSDT_1m.csv \
+            --manifest artifacts/public-minute-bars/manifest.json \
+            --out-dir artifacts/self-evolving-ga \
+            --population 128 \
+            --generations 6 \
+            --seed 20261025
+
+      - name: Verify evolution report and immutable safety invariants
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          report = json.loads(
+              Path("artifacts/self-evolving-ga/self-evolving-ga-report.json")
+              .read_text(encoding="utf-8")
+          )
+          safety = report["safety_invariants"]
+          assert report["population_size"] == 128
+          assert report["generations_completed"] == 6
+          assert report["unique_genomes_evaluated"] >= 128
+          assert report["split"]["final_holdout_used"] is False
+          assert report["top_research_candidate"]["validation_used_for_selection"] is False
+          assert safety["Champion"] is None
+          assert safety["order_permission"] is False
+          assert safety["trading_authorization"] == "NO-GO"
+          assert safety["private_api_calls"] == 0
+          assert safety["orders_or_execution_api_used"] is False
+          assert safety["real_order_attempts"] == 0
+          print(json.dumps({
+              "population_size": report["population_size"],
+              "generations_completed": report["generations_completed"],
+              "unique_genomes_evaluated": report["unique_genomes_evaluated"],
+              "top_candidate_genes": report["top_research_candidate"]["genes"],
+              "training_metrics": report["top_research_candidate"]["training_metrics"],
+              "validation_metrics": report["top_research_candidate"]["validation_metrics"],
+              "Champion": safety["Champion"],
+              "order_permission": safety["order_permission"],
+              "trading_authorization": safety["trading_authorization"],
+          }, sort_keys=True, allow_nan=False))
+          PY
+
       - name: Upload public data and verified manifest
         if: always()
         uses: actions/upload-artifact@v4
@@ -123,5 +172,6 @@ jobs:
           path: |
             artifacts/public-minute-bars/*.csv
             artifacts/public-minute-bars/manifest.json
+            artifacts/self-evolving-ga/*
           if-no-files-found: warn
           retention-days: 30
