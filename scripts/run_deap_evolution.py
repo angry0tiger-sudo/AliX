@@ -464,7 +464,9 @@ def _next_position_bounds(
         return None
     entry = int(entry_indexes[entry_offset])
     exit_offset = int(np.searchsorted(exit_indexes, entry + 1))
-    natural_exit = int(exit_indexes[exit_offset]) if exit_offset < len(exit_indexes) else count
+    natural_exit = (
+        int(exit_indexes[exit_offset]) if exit_offset < len(exit_indexes) else count
+    )
     return entry, natural_exit
 
 
@@ -500,7 +502,6 @@ def build_position_states(
             break
         cursor = end + 1
     return states
-
 
 
 def _trade_returns(
@@ -660,7 +661,6 @@ def metrics_from_positions(
         high_volatility_return=high_volatility_return,
         strong_trend_return=strong_trend_return,
     )
-
 
 
 def _period_metrics(
@@ -973,9 +973,8 @@ def _generation_record(
     return record
 
 
-
 def _timeframe_rejection_counts(
-    entries: Sequence[tuple[tuple[int, ...], CandidateEvaluation]]
+    entries: Sequence[tuple[tuple[int, ...], CandidateEvaluation]],
 ) -> dict[str, int]:
     rejection_counts: Counter[str] = Counter()
     for _, value in entries:
@@ -985,7 +984,10 @@ def _timeframe_rejection_counts(
             rejection_counts["training_drawdown_above_limit"] += 1
         if value.validation.trade_count == 0:
             rejection_counts["validation_has_no_completed_trades"] += 1
-        if value.validation.profit_factor is None or value.validation.profit_factor <= 1.5:
+        if (
+            value.validation.profit_factor is None
+            or value.validation.profit_factor <= 1.5
+        ):
             rejection_counts["validation_profit_factor_not_above_1_5"] += 1
     return dict(sorted(rejection_counts.items()))
 
@@ -1023,9 +1025,13 @@ def _timeframe_coverage_record(
     minutes: int,
     cache: dict[tuple[int, ...], CandidateEvaluation],
 ) -> dict[str, Any]:
-    entries = [(key, value) for key, value in cache.items() if TIMEFRAMES[key[0]] == minutes]
+    entries = [
+        (key, value) for key, value in cache.items() if TIMEFRAMES[key[0]] == minutes
+    ]
     sample_count = sum(value.sample_eligible for _, value in entries)
-    selection_eligible = [(key, value) for key, value in entries if value.selection_eligible]
+    selection_eligible = [
+        (key, value) for key, value in entries if value.selection_eligible
+    ]
     best = max(selection_eligible, key=lambda item: item[1].fitness, default=None)
     record = {
         "timeframe_minutes": minutes,
@@ -1046,7 +1052,6 @@ def _timeframe_coverage_summary(
         _timeframe_label(minutes): _timeframe_coverage_record(minutes, cache)
         for minutes in TIMEFRAMES
     }
-
 
 
 def _next_generation(
@@ -1267,7 +1272,6 @@ def _economic_assessment(
     }
 
 
-
 def _write_csv_outputs(
     output_dir: Path,
     history: list[dict[str, int | float]],
@@ -1369,7 +1373,9 @@ def _run_generations(
     current_population = list(population)
     for generation in range(1, generations + 1):
         if generation > 1:
-            current_population = _next_generation(current_population, toolbox, 0.65, 0.35)
+            current_population = _next_generation(
+                current_population, toolbox, 0.65, 0.35
+            )
             _ensure_timeframe_coverage(current_population, toolbox, cache)
         _evaluate_invalid(current_population, toolbox)
         history.append(_generation_record(generation, current_population, cache))
@@ -1378,7 +1384,11 @@ def _run_generations(
 
 def _select_candidate(
     cache: dict[tuple[int, ...], CandidateEvaluation],
-) -> tuple[dict[str, Any] | None, dict[str, Any], list[tuple[tuple[int, ...], CandidateEvaluation]]]:
+) -> tuple[
+    dict[str, Any] | None,
+    dict[str, Any],
+    list[tuple[tuple[int, ...], CandidateEvaluation]],
+]:
     ranked_candidates = sorted(
         cache.items(),
         key=lambda item: (
@@ -1413,7 +1423,9 @@ def _coverage_by_generation(
         summary[label] = {
             "minimum_population_per_generation": min(population_counts),
             "minimum_sample_eligible_population_per_generation": min(sample_counts),
-            "generations_with_population": sum(count > 0 for count in population_counts),
+            "generations_with_population": sum(
+                count > 0 for count in population_counts
+            ),
         }
     return summary
 
@@ -1613,7 +1625,6 @@ def run_evolution(
     )
     _write_csv_outputs(output_dir, history, ranked_candidates)
     return report
-
 
 
 def main() -> int:
