@@ -652,6 +652,9 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Int64Array]):
         self._position_change_count = 0
         self._final_equity = None
         self._opportunity_cost_penalty_count = 0
+        self._holding_loss_penalty_count = 0
+        self._realized_profit_reward_count = 0
+        self._realized_profit_reward_total = 0.0
         return self._observation(self._index), {"start_index": self._index}
 
     def _requested_action_blocked_by_legal_mask(

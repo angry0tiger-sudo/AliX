@@ -544,6 +544,8 @@ def test_hold_underwater_position_pays_penalty_after_exit_costs() -> None:
     env = _env(
         _bars(closes=[100.0, 100.0, 90.0, 90.0, 90.0]),
         initial_equity=1_000.0,
+        drawdown_increment_penalty=0.0,
+        drawdown_level_penalty=0.0,
     )
     env.reset(seed=72)
     env.step(np.asarray([ACTION_BUY, 3], dtype=np.int64))
@@ -557,6 +559,11 @@ def test_hold_underwater_position_pays_penalty_after_exit_costs() -> None:
     )
     assert reward == pytest.approx(-DEFAULT_HOLDING_LOSS_PENALTY)
     assert env.summary()["holding_loss_penalty_count"] == 1
+    env.reset(seed=74)
+    reset_summary = env.summary()
+    assert reset_summary["holding_loss_penalty_count"] == 0
+    assert reset_summary["realized_profit_reward_count"] == 0
+    assert reset_summary["realized_profit_reward_total"] == pytest.approx(0.0)
     env.close()
 
 
