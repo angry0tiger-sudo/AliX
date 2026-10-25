@@ -649,6 +649,10 @@ def _timeframe_label(minutes: int) -> str:
     return labels.get(minutes, f"{minutes}m")
 
 
+def _unique_timeframe_count(population: Sequence[Any], timeframe_gene: int) -> int:
+    return len({tuple(item) for item in population if item[0] == timeframe_gene})
+
+
 def _ensure_timeframe_coverage(
     population: list[Any],
     toolbox: Any,
@@ -658,36 +662,8 @@ def _ensure_timeframe_coverage(
 
     for required_minutes in REQUIRED_TIMEFRAMES:
         required_gene = TIMEFRAMES.index(required_minutes)
-        while (
-            len(
-                {
-                    tuple(item)
-                    for item in population
-                    if item[0] == required_gene
-                }
-            )
-            < MIN_REQUIRED_TIMEFRAME_POPULATION
-        ):
-            genome_frequency = Counter(tuple(item) for item in population)
-            unique_by_timeframe = {
-                minutes: {
-                    tuple(item)
-                    for item in population
-                    if TIMEFRAMES[item[0]] == minutes
-                }
-                for minutes in REQUIRED_TIMEFRAMES
-            }
-            replaceable = []
-            for index, item in enumerate(population):
-                timeframe = TIMEFRAMES[item[0]]
-                key = tuple(item)
-                if (
-                    timeframe not in REQUIRED_TIMEFRAMES
-                    or genome_frequency[key] > 1
-                    or len(unique_by_timeframe[timeframe])
-                    > MIN_REQUIRED_TIMEFRAME_POPULATION
-                ):
-                    replaceable.append((index, item))
+        while _unique_timeframe_count(population, required_gene) < MIN_REQUIRED_TIMEFRAME_POPULATION:
+            replaceable = _replaceable_population_members(population)
             if not replaceable:
                 raise RuntimeError("required_timeframe_quota_cannot_be_satisfied")
             index, _ = min(
@@ -698,19 +674,49 @@ def _ensure_timeframe_coverage(
                 for item_index, item in enumerate(population)
                 if item_index != index
             }
-            replacement: Any | None = None
-            for _ in range(10_000):
-                candidate = toolbox.individual()
-                candidate[0] = required_gene
-                repair_individual(candidate)
-                key = tuple(candidate)
-                if key not in cache and key not in population_keys:
-                    replacement = candidate
-                    break
-            if replacement is None:
-                raise RuntimeError("required_timeframe_unique_genome_generation_failed")
+            replacement = _make_unique_timeframe_candidate(
+                toolbox, required_gene, population_keys, cache
+            )
             population[index] = replacement
     return population
+
+
+def _replaceable_population_members(
+    population: Sequence[Any],
+) -> list[tuple[int, Any]]:
+    genome_frequency = Counter(tuple(item) for item in population)
+    unique_by_timeframe = {
+        minutes: {
+            tuple(item) for item in population if TIMEFRAMES[item[0]] == minutes
+        }
+        for minutes in REQUIRED_TIMEFRAMES
+    }
+    return [
+        (index, item)
+        for index, item in enumerate(population)
+        if (
+            TIMEFRAMES[item[0]] not in REQUIRED_TIMEFRAMES
+            or genome_frequency[tuple(item)] > 1
+            or len(unique_by_timeframe[TIMEFRAMES[item[0]]])
+            > MIN_REQUIRED_TIMEFRAME_POPULATION
+        )
+    ]
+
+
+def _make_unique_timeframe_candidate(
+    toolbox: Any,
+    required_gene: int,
+    population_keys: set[tuple[int, ...]],
+    cache: dict[tuple[int, ...], CandidateEvaluation],
+) -> Any:
+    for _ in range(10_000):
+        candidate = toolbox.individual()
+        candidate[0] = required_gene
+        repair_individual(candidate)
+        key = tuple(candidate)
+        if key not in cache and key not in population_keys:
+            return candidate
+    raise RuntimeError("required_timeframe_unique_genome_generation_failed")
 
 
 def _generation_record(
