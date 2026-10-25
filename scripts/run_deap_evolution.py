@@ -420,7 +420,6 @@ def _build_regime_masks(
     )
 
 
-
 def _find_stop(
     close: np.ndarray,
     entry: int,
@@ -475,7 +474,6 @@ def build_position_states(
             break
         cursor = end + 1
     return states
-
 
 
 def _trade_returns(
@@ -602,7 +600,6 @@ def metrics_from_positions(
     )
 
 
-
 def _period_metrics(
     context: SearchContext, genes: Sequence[int], period: str
 ) -> EvaluationMetrics:
@@ -641,7 +638,6 @@ def _period_metrics(
         high_volatility_mask=features.high_volatility[indexes],
         strong_uptrend_mask=features.strong_uptrend[indexes],
     )
-
 
 
 def _eligibility_reasons(
@@ -692,7 +688,6 @@ def fitness_score(metrics: EvaluationMetrics) -> float:
     if drawdown_excess > 0.0:
         score = min(score, 0.0) - DRAWDOWN_EXCESS_PENALTY_MULTIPLIER * drawdown_excess
     return float(score)
-
 
 
 def _evaluate_individual(
@@ -967,7 +962,6 @@ def _timeframe_coverage_summary(
     return summary
 
 
-
 def _next_generation(
     population: Sequence[Any], toolbox: Any, crossover: float, mutation: float
 ) -> list[Any]:
@@ -1095,7 +1089,6 @@ def _condition_text(genes: Sequence[int]) -> tuple[str, str]:
     return entry_text, exit_text
 
 
-
 def _candidate_payload(
     genes: Sequence[int], score: float, train: EvaluationMetrics
 ) -> dict[str, Any]:
@@ -1178,7 +1171,6 @@ def _economic_assessment(
         "owner_approval_required": True,
         "production_promotion_eligible": False,
     }
-
 
 
 def _write_csv_outputs(
