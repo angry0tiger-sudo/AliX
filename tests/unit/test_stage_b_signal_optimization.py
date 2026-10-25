@@ -9,12 +9,11 @@ from scripts.run_stage_b_signal_optimization import (
     FEATURE_GROUPS,
     HORIZON_GRID,
     MODEL_PROFILES,
-    NEW_FEATURE_COLUMNS,
     _build_dataset,
     _common_evaluation_bounds,
-    add_signal_features,
     summarize_cost_hurdle,
 )
+from scripts.stage_b_research_features import NEW_FEATURE_COLUMNS, add_signal_features
 from services.freqai_baseline.features import FEATURE_COLUMNS
 
 
