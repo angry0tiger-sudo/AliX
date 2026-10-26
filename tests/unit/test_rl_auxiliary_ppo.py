@@ -51,7 +51,9 @@ def test_auxiliary_loss_report_keeps_guidance_out_of_evaluation() -> None:
     assert report["method"] == "recurrent_policy_combined_discrete_action_cross_entropy"
     assert report["initial_weight"] == DEFAULT_AUXILIARY_LOSS_WEIGHT
     assert report["anneal_steps"] == DEFAULT_AUXILIARY_LOSS_ANNEAL_STEPS
-    assert report["minimum_weight"] == pytest.approx(DEFAULT_AUXILIARY_LOSS_MINIMUM_WEIGHT)
+    assert report["minimum_weight"] == pytest.approx(
+        DEFAULT_AUXILIARY_LOSS_MINIMUM_WEIGHT
+    )
     assert report["effective_weight_at_training_end"] == pytest.approx(0.01)
     assert report["floor_reached"] is True
     assert report["anneal_completed"] is True

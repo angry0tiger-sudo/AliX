@@ -661,7 +661,6 @@ def _build_cost_curriculum_callback(
             ),
         }
 
-
     def record_reward_component_step(
         self: Any, timestep: int, info: dict[str, Any]
     ) -> None:
@@ -857,7 +856,9 @@ def _train_recurrent_ppo(
         sorted(
             checkpoint_dir.glob("rl_trading_agent_checkpoint_*_steps.zip"),
             key=lambda path: int(
-                path.name.removeprefix("rl_trading_agent_checkpoint_").removesuffix("_steps.zip")
+                path.name.removeprefix("rl_trading_agent_checkpoint_").removesuffix(
+                    "_steps.zip"
+                )
             ),
         )
     )
@@ -872,7 +873,9 @@ def _train_recurrent_ppo(
     )
     checkpoint_steps = [
         int(
-            path.name.removeprefix("rl_trading_agent_checkpoint_").removesuffix("_steps.zip")
+            path.name.removeprefix("rl_trading_agent_checkpoint_").removesuffix(
+                "_steps.zip"
+            )
         )
         for path in checkpoint_paths
     ]
@@ -1325,7 +1328,9 @@ def _build_report(
                 {
                     "file": f"checkpoints/{path.name}",
                     "timesteps": int(
-                        path.name.removeprefix("rl_trading_agent_checkpoint_").removesuffix("_steps.zip")
+                        path.name.removeprefix(
+                            "rl_trading_agent_checkpoint_"
+                        ).removesuffix("_steps.zip")
                     ),
                     "sha256": _sha256(path),
                     "size_bytes": path.stat().st_size,

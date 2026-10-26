@@ -94,7 +94,8 @@ def auxiliary_loss_curriculum_report(
         ),
         "floor_reached": auxiliary_loss_weight(
             int(trained_timesteps), initial_weight, anneal_steps, minimum_weight
-        ) <= minimum_weight + 1e-12,
+        )
+        <= minimum_weight + 1e-12,
         "anneal_completed": int(trained_timesteps) >= anneal_steps,
         "target_classes": {str(index): name for index, name in enumerate(ACTION_NAMES)},
         "target_rule": (

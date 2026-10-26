@@ -1180,7 +1180,8 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
             "reward_net_log_return": log_net_return,
             "reward_drawdown_increment_penalty": self.drawdown_increment_penalty
             * max(0.0, risk_drawdown - previous_drawdown),
-            "reward_drawdown_level_penalty": self.drawdown_level_penalty * risk_drawdown,
+            "reward_drawdown_level_penalty": self.drawdown_level_penalty
+            * risk_drawdown,
             "reward_total": reward,
             "drawdown_for_reward": risk_drawdown,
             "reward_inactivity_penalty": inactivity_penalty,
