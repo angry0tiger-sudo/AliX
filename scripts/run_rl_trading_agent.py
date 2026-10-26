@@ -551,13 +551,9 @@ def _entropy_coefficient_at_step(
 ) -> float:
     """Return the training-only entropy coefficient for a rollout start timestep."""
     _validate_nonnegative_integer(timestep, "entropy_timestep_invalid")
-    _validate_nonnegative_finite(
-        exploration_ent_coef, "entropy_coefficient_invalid"
-    )
+    _validate_nonnegative_finite(exploration_ent_coef, "entropy_coefficient_invalid")
     _validate_nonnegative_finite(ent_coef, "entropy_coefficient_invalid")
-    _validate_positive_integer(
-        exploration_steps, "entropy_exploration_steps_invalid"
-    )
+    _validate_positive_integer(exploration_steps, "entropy_exploration_steps_invalid")
     return float(exploration_ent_coef if timestep < exploration_steps else ent_coef)
 
 
@@ -1174,9 +1170,7 @@ def _finalize_training_economic_assessment(
     return assessment
 
 
-def _checkpoint_action_counts(
-    metrics: dict[str, Any], steps: int
-) -> dict[str, int]:
+def _checkpoint_action_counts(metrics: dict[str, Any], steps: int) -> dict[str, int]:
     """Validate the seven-class action inventory and its exact step denominator."""
     raw_counts = metrics["discrete_action_counts"]
     if not isinstance(raw_counts, dict) or set(raw_counts) != set(ACTION_NAMES):
@@ -1194,9 +1188,7 @@ def _checkpoint_action_side_counts(
     side_counts = {
         "HOLD": action_counts["HOLD"],
         "BUY": sum(action_counts[name] for name in ("BUY_25", "BUY_50", "BUY_100")),
-        "SELL": sum(
-            action_counts[name] for name in ("SELL_25", "SELL_50", "SELL_100")
-        ),
+        "SELL": sum(action_counts[name] for name in ("SELL_25", "SELL_50", "SELL_100")),
     }
     if (
         side_counts["BUY"] != int(metrics["buy_action_count"])
