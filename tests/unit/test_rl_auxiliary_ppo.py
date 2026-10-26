@@ -128,10 +128,9 @@ def test_auxiliary_loss_recurrent_ppo_training_and_reload(tmp_path: Path) -> Non
                 episode_starts,
             )
             direction_distribution = distribution.distribution[0]
-            assert (
-                direction_distribution.probs[0, forbidden_action].item()
-                == pytest.approx(0.0)
-            )
+            assert direction_distribution.probs[
+                0, forbidden_action
+            ].item() == pytest.approx(0.0)
             action, _ = model.predict(observation[0], deterministic=True)
             assert int(np.asarray(action).reshape(2)[0]) != forbidden_action
 
