@@ -16,13 +16,16 @@ import numpy as np
 
 from services.rl_research.rl_trading_environment import (
     ACTION_NAMES,
+    BUY_ACTION_INDICES,
     OBSERVATION_FIELDS,
+    POSITION_FRACTION_EPSILON,
+    SELL_ACTION_INDICES,
 )
 
 DEFAULT_AUXILIARY_LOSS_WEIGHT = 0.1
 DEFAULT_AUXILIARY_LOSS_ANNEAL_STEPS = 500_000
-GUIDANCE_ACTION_COUNT = 3
-ACTION_MASK_POSITION_EPSILON = 1e-6
+GUIDANCE_ACTION_COUNT = len(ACTION_NAMES)
+ACTION_MASK_POSITION_EPSILON = POSITION_FRACTION_EPSILON
 ACTION_MASKED_POLICY_CLASS_NAME = "ActionMaskedRecurrentActorCriticPolicy"
 
 
@@ -67,7 +70,7 @@ def auxiliary_loss_curriculum_report(
 ) -> dict[str, Any]:
     """Describe the fixed, training-only schedule in the machine-readable report."""
     return {
-        "method": "recurrent_policy_direction_cross_entropy",
+        "method": "recurrent_policy_combined_discrete_action_cross_entropy",
         "initial_weight": float(initial_weight),
         "anneal_steps": int(anneal_steps),
         "trained_timesteps": int(trained_timesteps),
@@ -75,10 +78,12 @@ def auxiliary_loss_curriculum_report(
             int(trained_timesteps), initial_weight, anneal_steps
         ),
         "anneal_completed": int(trained_timesteps) >= anneal_steps,
-        "target_classes": {"0": "HOLD", "1": "BUY", "2": "SELL"},
+        "target_classes": {
+            str(index): name for index, name in enumerate(ACTION_NAMES)
+        },
         "target_rule": (
-            "causal 20-completed-candle SMA slope; choose BUY or SELL only when "
-            "that action is legal in the current portfolio state; otherwise HOLD"
+            "causal 20-completed-candle SMA slope; train toward HOLD, BUY_25, or "
+            "SELL_25 only when the relevant action is legal in the current state"
         ),
         "validation_enabled": False,
         "final_holdout_enabled": False,
@@ -327,12 +332,16 @@ def _compute_minibatch_losses(
         rollout_data.lstm_states.pi,
         rollout_data.episode_starts,
     )
-    components = getattr(distribution, "distribution", None)
-    if not isinstance(components, list) or len(components) != 2:
-        raise ValueError("auxiliary_loss_requires_two_component_action_distribution")
-    direction_logits = components[0].logits
+    action_distribution = getattr(distribution, "distribution", None)
+    action_logits = getattr(action_distribution, "logits", None)
+    if (
+        action_logits is None
+        or action_logits.ndim != 2
+        or action_logits.shape[-1] != len(ACTION_NAMES)
+    ):
+        raise ValueError("auxiliary_loss_requires_seven_class_categorical_distribution")
     targets = rollout_data.guidance_targets.long()
-    auxiliary_loss = functional.cross_entropy(direction_logits[mask], targets[mask])
+    auxiliary_loss = functional.cross_entropy(action_logits[mask], targets[mask])
     total_loss = (
         policy_loss
         + model.ent_coef * entropy_loss
@@ -480,8 +489,6 @@ def _build_action_masked_recurrent_policy() -> Any:
 
     try:
         position_index = OBSERVATION_FIELDS.index("current_position_fraction")
-        buy_index = ACTION_NAMES.index("BUY")
-        sell_index = ACTION_NAMES.index("SELL")
     except ValueError as error:
         raise RuntimeError("action_mask_observation_contract_invalid") from error
 
@@ -530,23 +537,15 @@ def _build_action_masked_recurrent_policy() -> Any:
         )
 
     def _get_action_dist_from_latent(self: Any, latent_pi: Any) -> Any:
-        """Mask raw flattened MultiDiscrete logits before constructing the distribution."""
+        """Mask raw Discrete(7) action logits before categorical distribution creation."""
         torch = importlib.import_module("torch")
         observations = getattr(self, "_action_mask_observation", None)
         if observations is None:
             raise RuntimeError("action_mask_observation_context_missing")
 
         action_logits = self.action_net(latent_pi)
-        action_dims = getattr(self.action_dist, "action_dims", None)
-        if not isinstance(action_dims, list) or len(action_dims) != 2:
-            raise ValueError(
-                "action_mask_requires_two_component_multidiscrete_distribution"
-            )
-        if action_dims[0] != len(ACTION_NAMES):
-            raise ValueError("action_mask_direction_logits_shape_invalid")
-        if action_logits.ndim != 2 or action_logits.shape[1] != sum(action_dims):
-            raise ValueError("action_mask_flat_logits_shape_invalid")
-
+        if action_logits.ndim != 2 or action_logits.shape[1] != len(ACTION_NAMES):
+            raise ValueError("action_mask_discrete_logits_shape_invalid")
         observation_shape: Any = getattr(observations, "shape", ())
         if len(observation_shape) < 2 or observation_shape[-1] <= position_index:
             raise ValueError("action_mask_position_observation_missing")
@@ -568,11 +567,11 @@ def _build_action_masked_recurrent_policy() -> Any:
 
         fully_allocated = position_fraction >= 1.0 - ACTION_MASK_POSITION_EPSILON
         flat = position_fraction <= ACTION_MASK_POSITION_EPSILON
-        # MultiCategoricalDistribution receives one flattened tensor whose first
-        # action_dims[0] logits belong to direction; size logits remain untouched.
         masked_logits = action_logits.clone()
-        masked_logits[fully_allocated, buy_index] = -1e8
-        masked_logits[flat, sell_index] = -1e8
+        for action_index in BUY_ACTION_INDICES:
+            masked_logits[fully_allocated, action_index] = -1e8
+        for action_index in SELL_ACTION_INDICES:
+            masked_logits[flat, action_index] = -1e8
         return self.action_dist.proba_distribution(action_logits=masked_logits)
 
     policy_class = type(
