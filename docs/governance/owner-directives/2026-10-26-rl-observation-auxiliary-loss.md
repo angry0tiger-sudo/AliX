@@ -32,3 +32,8 @@ The auxiliary loss and reward guidance are training-only. Validation and final H
 - Zero private API calls and zero real order attempts. This owner directive does not authorize shadow/live routing.
 
 Owner Directive supersedes conflicting architecture prose where the latter says portfolio state is deliberately absent from all observations.
+
+
+## Run invocation
+
+The approved research invocation is a dedicated GitHub Actions push whose commit message contains `[train-rl]`. The research job must wait for a successful CI result on that exact trigger SHA before fetching training inputs or starting the optimizer. This invocation requests at least 1,000,000 CPU-only training steps, performs one Validation pass and one final Holdout pass with guidance reward and auxiliary guidance loss disabled, and preserves every safety invariant above. A successful workflow or economic metric cannot alter those invariants.
