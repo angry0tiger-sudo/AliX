@@ -226,7 +226,6 @@ def _collect_rollouts_with_guidance(
     self: Any, env: Any, callback: Any, rollout_buffer: Any, n_rollout_steps: int
 ) -> bool:
     torch = importlib.import_module("torch")
-    vec_env_module = importlib.import_module("stable_baselines3.common.vec_env")
     spaces = importlib.import_module("gymnasium.spaces")
     obs_as_tensor = getattr(
         importlib.import_module("stable_baselines3.common.utils"), "obs_as_tensor"
@@ -502,17 +501,18 @@ def build_auxiliary_recurrent_ppo() -> Any:
         },
     )
 
-    def initialize(
-        self: Any,
-        *args: Any,
-        auxiliary_loss_weight: float = DEFAULT_AUXILIARY_LOSS_WEIGHT,
-        auxiliary_loss_anneal_steps: int = DEFAULT_AUXILIARY_LOSS_ANNEAL_STEPS,
-        **kwargs: Any,
-    ) -> None:
-        auxiliary_loss_weight(0, auxiliary_loss_weight, auxiliary_loss_anneal_steps)
+    def initialize(self: Any, *args: Any, **kwargs: Any) -> None:
+        weight = float(
+            kwargs.pop("auxiliary_loss_weight", DEFAULT_AUXILIARY_LOSS_WEIGHT)
+        )
+        anneal_steps = kwargs.pop(
+            "auxiliary_loss_anneal_steps",
+            DEFAULT_AUXILIARY_LOSS_ANNEAL_STEPS,
+        )
+        auxiliary_loss_weight(0, weight, anneal_steps)
         super(auxiliary_recurrent_ppo, self).__init__(*args, **kwargs)
-        self.auxiliary_loss_weight = float(auxiliary_loss_weight)
-        self.auxiliary_loss_anneal_steps = int(auxiliary_loss_anneal_steps)
+        self.auxiliary_loss_weight = weight
+        self.auxiliary_loss_anneal_steps = int(anneal_steps)
 
     def setup_model(self: Any) -> None:
         super(auxiliary_recurrent_ppo, self)._setup_model()
