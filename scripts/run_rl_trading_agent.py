@@ -497,7 +497,7 @@ class TrainingRun:
     entropy_coefficient: float
     cost_curriculum: dict[str, Any]
     signal_guidance_curriculum: dict[str, Any]
-    auxiliary_loss_curriculum: dict[str, Any>
+    auxiliary_loss_curriculum: dict[str, Any]
 
 
 def _build_cost_curriculum_callback(
