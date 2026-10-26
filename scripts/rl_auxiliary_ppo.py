@@ -409,7 +409,7 @@ def _train_with_auxiliary_loss(self: Any) -> None:
         float(self.auxiliary_loss_weight),
         int(self.auxiliary_loss_anneal_steps),
     )
-    history = {
+    history: dict[str, list[float]] = {
         key: []
         for key in (
             "loss",
@@ -492,12 +492,12 @@ def build_auxiliary_recurrent_ppo() -> Any:
             DEFAULT_AUXILIARY_LOSS_ANNEAL_STEPS,
         )
         auxiliary_loss_weight(0, weight, anneal_steps)
-        super(auxiliary_recurrent_ppo, self).__init__(*args, **kwargs)
+        recurrent_ppo.__init__(self, *args, **kwargs)
         self.auxiliary_loss_weight = weight
         self.auxiliary_loss_anneal_steps = int(anneal_steps)
 
     def setup_model(self: Any) -> None:
-        super(auxiliary_recurrent_ppo, self)._setup_model()
+        recurrent_ppo._setup_model(self)
         original_buffer = self.rollout_buffer
         self.rollout_buffer = guidance_buffer(
             self.n_steps,

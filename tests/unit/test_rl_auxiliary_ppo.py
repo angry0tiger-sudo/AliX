@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import importlib
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -20,7 +23,7 @@ def test_auxiliary_loss_weight_anneals_linearly_to_zero() -> None:
 
 def test_auxiliary_loss_configuration_fails_closed() -> None:
     with pytest.raises(ValueError, match="timestep_must_be_integer"):
-        auxiliary_loss_weight(True)  # type: ignore[arg-type]
+        auxiliary_loss_weight(True)
     with pytest.raises(ValueError, match="timestep_must_be_non_negative"):
         auxiliary_loss_weight(-1)
     with pytest.raises(ValueError, match="weight_must_be_non_negative"):
@@ -41,10 +44,12 @@ def test_auxiliary_loss_report_keeps_guidance_out_of_evaluation() -> None:
     assert report["target_classes"] == {"0": "HOLD", "1": "BUY", "2": "SELL"}
 
 
-def test_auxiliary_loss_recurrent_ppo_training_and_reload(tmp_path) -> None:
+def test_auxiliary_loss_recurrent_ppo_training_and_reload(tmp_path: Path) -> None:
     pytest.importorskip("torch")
     pytest.importorskip("sb3_contrib")
-    from stable_baselines3.common.vec_env import DummyVecEnv
+    dummy_vec_env = getattr(
+        importlib.import_module("stable_baselines3.common.vec_env"), "DummyVecEnv"
+    )
 
     from scripts.rl_auxiliary_ppo import build_auxiliary_recurrent_ppo
     from services.rl_research.rl_trading_environment import (
@@ -66,7 +71,7 @@ def test_auxiliary_loss_recurrent_ppo_training_and_reload(tmp_path) -> None:
         )
     ).astype(np.float64)
     scaler = MarketObservationScaler.fit(data)
-    env = DummyVecEnv(
+    env = dummy_vec_env(
         [
             lambda: BTCUSDTTradingEnv(
                 data,
