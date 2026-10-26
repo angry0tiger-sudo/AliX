@@ -275,7 +275,10 @@ def _check_mask_contract(probe: dict[str, Any]) -> dict[str, Any]:
     if probabilities is None:
         probability_map = probe["post_mask_probabilities"]
         probabilities = [probability_map[name] for name in ACTION_NAMES]
-    position = float(probe["observation_position_fraction"])
+    position_value = probe.get("observation_position_fraction")
+    if position_value is None:
+        position_value = probe["current_position_fraction"]
+    position = float(position_value)
     expected = _expected_masked_indices(position)
     unexpected = _find_unexpected_masked_indices(masked, expected)
     logits_correct = _masked_logits_use_sentinel(masked, expected)
