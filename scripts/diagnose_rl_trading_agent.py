@@ -80,7 +80,10 @@ def _validate_source_artifacts(
     if args.expected_source_commit_sha != SOURCE_COMMIT_SHA:
         raise ValueError("unexpected_source_training_commit")
     expected_model_hash = source_report.get("model", {}).get("model_sha256")
-    if not isinstance(expected_model_hash, str) or _sha256(args.model) != expected_model_hash:
+    if (
+        not isinstance(expected_model_hash, str)
+        or _sha256(args.model) != expected_model_hash
+    ):
         raise ValueError("source_model_sha256_mismatch")
     if args.model.name != source_report.get("model", {}).get("model_artifact"):
         raise ValueError("source_model_filename_mismatch")
@@ -89,11 +92,22 @@ def _validate_source_artifacts(
     if source_report.get("model", {}).get("algorithm") != "RecurrentPPO":
         raise ValueError("source_model_algorithm_invalid")
     action_space = source_report.get("environment", {}).get("action_space", {})
-    if action_space.get("type") != "MultiDiscrete" or action_space.get("nvec") != [3, 4]:
+    if action_space.get("type") != "MultiDiscrete" or action_space.get("nvec") != [
+        3,
+        4,
+    ]:
         raise ValueError("source_action_space_invalid")
-    if source_report.get("environment", {}).get("observation_contains_position_or_pnl") is not False:
+    if (
+        source_report.get("environment", {}).get("observation_contains_position_or_pnl")
+        is not False
+    ):
         raise ValueError("source_observation_contract_invalid")
-    if source_report.get("environment", {}).get("observation_contains_technical_indicators") is not False:
+    if (
+        source_report.get("environment", {}).get(
+            "observation_contains_technical_indicators"
+        )
+        is not False
+    ):
         raise ValueError("source_observation_contract_invalid")
     safety = source_report.get("safety_invariants", {})
     if safety.get("Champion", "invalid") is not None:
@@ -120,13 +134,18 @@ def _entropy(probabilities: Sequence[float]) -> float:
 def _validate_probabilities(probabilities: Sequence[float], expected_size: int) -> None:
     if len(probabilities) != expected_size:
         raise ValueError("policy_probability_dimension_invalid")
-    if any(not math.isfinite(value) or value < 0.0 or value > 1.0 for value in probabilities):
+    if any(
+        not math.isfinite(value) or value < 0.0 or value > 1.0
+        for value in probabilities
+    ):
         raise ValueError("policy_probability_value_invalid")
     if not math.isclose(sum(probabilities), 1.0, rel_tol=0.0, abs_tol=1e-5):
         raise ValueError("policy_probability_sum_invalid")
 
 
-def _probability_summary(samples: dict[str, list[float]]) -> dict[str, dict[str, float]]:
+def _probability_summary(
+    samples: dict[str, list[float]],
+) -> dict[str, dict[str, float]]:
     summary: dict[str, dict[str, float]] = {}
     for name, values in samples.items():
         if not values:
@@ -162,8 +181,12 @@ def _classify_policy_modes(
     deterministic_counts: dict[str, int],
     stochastic_counts: dict[str, int],
 ) -> dict[str, str]:
-    deterministic_trades = deterministic_counts.get("BUY", 0) + deterministic_counts.get("SELL", 0)
-    stochastic_trades = stochastic_counts.get("BUY", 0) + stochastic_counts.get("SELL", 0)
+    deterministic_trades = deterministic_counts.get(
+        "BUY", 0
+    ) + deterministic_counts.get("SELL", 0)
+    stochastic_trades = stochastic_counts.get("BUY", 0) + stochastic_counts.get(
+        "SELL", 0
+    )
     if deterministic_trades == 0 and stochastic_trades > 0:
         return {
             "code": "STOCHASTIC_TRADES_ONLY",
@@ -264,7 +287,9 @@ def _run_paired_validation_diagnostic(
                     atol=1e-7,
                 ):
                     raise RuntimeError("paired_policy_observations_diverged")
-                observation_tensor, _ = model.policy.obs_to_tensor(deterministic_observation)
+                observation_tensor, _ = model.policy.obs_to_tensor(
+                    deterministic_observation
+                )
                 episode_start = torch.as_tensor(
                     [step_index == 0],
                     dtype=torch.float32,
@@ -281,14 +306,24 @@ def _run_paired_validation_diagnostic(
                         raise ValueError("policy_multicategorical_distribution_invalid")
                     direction_probabilities = [
                         float(value)
-                        for value in components[0].probs.detach().cpu().numpy().reshape(-1)
+                        for value in components[0]
+                        .probs.detach()
+                        .cpu()
+                        .numpy()
+                        .reshape(-1)
                     ]
                     size_probabilities = [
                         float(value)
-                        for value in components[1].probs.detach().cpu().numpy().reshape(-1)
+                        for value in components[1]
+                        .probs.detach()
+                        .cpu()
+                        .numpy()
+                        .reshape(-1)
                     ]
                     _validate_probabilities(direction_probabilities, len(ACTION_NAMES))
-                    _validate_probabilities(size_probabilities, len(POSITION_SIZE_FRACTIONS))
+                    _validate_probabilities(
+                        size_probabilities, len(POSITION_SIZE_FRACTIONS)
+                    )
                     deterministic_action = (
                         distribution.get_actions(deterministic=True)
                         .detach()
@@ -321,10 +356,14 @@ def _run_paired_validation_diagnostic(
 
                 row: dict[str, str | int | float] = {
                     "step_index": step_index,
-                    "timestamp_utc": _utc_from_ms(float(validation_data[step_index, 0])),
+                    "timestamp_utc": _utc_from_ms(
+                        float(validation_data[step_index, 0])
+                    ),
                     "direction_entropy": direction_entropy,
                     "size_entropy": size_entropy,
-                    "deterministic_action": str(ACTION_NAMES[int(deterministic_action[0])]),
+                    "deterministic_action": str(
+                        ACTION_NAMES[int(deterministic_action[0])]
+                    ),
                     "deterministic_size_fraction": float(
                         POSITION_SIZE_FRACTIONS[int(deterministic_action[1])]
                     ),
@@ -344,11 +383,16 @@ def _run_paired_validation_diagnostic(
                 for index, name in enumerate(ACTION_NAMES):
                     row[f"p_{name.lower()}"] = direction_probabilities[index]
                 for index, fraction in enumerate(POSITION_SIZE_FRACTIONS):
-                    row[f"p_size_{int(round(float(fraction) * 100))}"] = size_probabilities[index]
+                    row[f"p_size_{int(round(float(fraction) * 100))}"] = (
+                        size_probabilities[index]
+                    )
                 for direction_index, name in enumerate(ACTION_NAMES):
                     for size_index, fraction in enumerate(POSITION_SIZE_FRACTIONS):
                         label = f"joint_p_{name.lower()}_{int(round(float(fraction) * 100))}"
-                        row[label] = direction_probabilities[direction_index] * size_probabilities[size_index]
+                        row[label] = (
+                            direction_probabilities[direction_index]
+                            * size_probabilities[size_index]
+                        )
                 writer.writerow(row)
 
                 for mode, action in (
@@ -361,12 +405,20 @@ def _run_paired_validation_diagnostic(
                     if direction in ("BUY", "SELL"):
                         size_counts[mode][f"{int(round(fraction * 100))}%"] += 1
 
-                next_deterministic, deterministic_reward, deterministic_done, deterministic_truncated, deterministic_info = (
-                    deterministic_env.step(deterministic_action)
-                )
-                next_stochastic, stochastic_reward, stochastic_done, stochastic_truncated, stochastic_info = (
-                    stochastic_env.step(stochastic_action)
-                )
+                (
+                    next_deterministic,
+                    deterministic_reward,
+                    deterministic_done,
+                    deterministic_truncated,
+                    deterministic_info,
+                ) = deterministic_env.step(deterministic_action)
+                (
+                    next_stochastic,
+                    stochastic_reward,
+                    stochastic_done,
+                    stochastic_truncated,
+                    stochastic_info,
+                ) = stochastic_env.step(stochastic_action)
                 reward_totals["deterministic"] += float(deterministic_reward)
                 reward_totals["stochastic"] += float(stochastic_reward)
                 for mode, info in (
@@ -381,11 +433,15 @@ def _run_paired_validation_diagnostic(
                     stochastic_truncated,
                 ):
                     raise RuntimeError("paired_policy_episode_boundaries_diverged")
-                if not np.allclose(next_deterministic, next_stochastic, rtol=0.0, atol=1e-7):
+                if not np.allclose(
+                    next_deterministic, next_stochastic, rtol=0.0, atol=1e-7
+                ):
                     raise RuntimeError("paired_policy_observations_diverged_after_step")
                 is_last_step = step_index == expected_steps - 1
                 if bool(deterministic_done or deterministic_truncated) != is_last_step:
-                    raise RuntimeError("validation_episode_did_not_cover_exactly_one_pass")
+                    raise RuntimeError(
+                        "validation_episode_did_not_cover_exactly_one_pass"
+                    )
                 deterministic_observation = next_deterministic
                 stochastic_observation = next_stochastic
         mode_results: dict[str, dict[str, Any]] = {}
@@ -394,15 +450,23 @@ def _run_paired_validation_diagnostic(
             ("stochastic", stochastic_env),
         ):
             env_metrics = env.summary()
-            if env_metrics["signal_guidance_reward_count"] != 0 or env_metrics["signal_guidance_reward_total"] != 0.0:
+            if (
+                env_metrics["signal_guidance_reward_count"] != 0
+                or env_metrics["signal_guidance_reward_total"] != 0.0
+            ):
                 raise RuntimeError("guidance_reward_active_during_diagnostic")
-            trade_actions = int(action_counts[mode].get("BUY", 0) + action_counts[mode].get("SELL", 0))
+            trade_actions = int(
+                action_counts[mode].get("BUY", 0) + action_counts[mode].get("SELL", 0)
+            )
             mode_results[mode] = {
                 "policy_requested_action_distribution": _count_distribution(
                     ACTION_NAMES, action_counts[mode], expected_steps
                 ),
                 "policy_requested_trade_size_distribution": _count_distribution(
-                    [f"{int(round(float(value) * 100))}%" for value in POSITION_SIZE_FRACTIONS],
+                    [
+                        f"{int(round(float(value) * 100))}%"
+                        for value in POSITION_SIZE_FRACTIONS
+                    ],
                     size_counts[mode],
                     trade_actions,
                 ),
@@ -507,7 +571,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         },
         "probability_semantics": {
             "action_space": "MultiDiscrete([3, 4])",
-            "direction_probability_fields": list(PROBABILITY_FIELDS[: len(ACTION_NAMES)]),
+            "direction_probability_fields": list(
+                PROBABILITY_FIELDS[: len(ACTION_NAMES)]
+            ),
             "size_probability_fields": list(PROBABILITY_FIELDS[len(ACTION_NAMES) :]),
             "joint_probability_fields": list(JOINT_PROBABILITY_FIELDS),
             "joint_probability_calculation": "direction_marginal * size_marginal",
