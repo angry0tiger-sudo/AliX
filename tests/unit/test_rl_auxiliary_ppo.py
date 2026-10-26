@@ -7,7 +7,6 @@ import numpy as np
 import pytest
 
 from services.rl_research.rl_trading_environment import (
-    ACTION_BUY,
     ACTION_NAMES,
     BUY_ACTION_INDICES,
     SELL_ACTION_INDICES,
@@ -42,7 +41,7 @@ def test_auxiliary_loss_configuration_fails_closed() -> None:
 
 def test_auxiliary_loss_report_keeps_guidance_out_of_evaluation() -> None:
     report = auxiliary_loss_curriculum_report(1_000_000)
-    assert report["method"] == "recurrent_policy_direction_cross_entropy"
+    assert report["method"] == "recurrent_policy_combined_discrete_action_cross_entropy"
     assert report["initial_weight"] == DEFAULT_AUXILIARY_LOSS_WEIGHT
     assert report["anneal_steps"] == DEFAULT_AUXILIARY_LOSS_ANNEAL_STEPS
     assert report["effective_weight_at_training_end"] == pytest.approx(0.0)
