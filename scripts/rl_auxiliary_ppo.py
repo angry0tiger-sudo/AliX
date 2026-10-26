@@ -78,9 +78,7 @@ def auxiliary_loss_curriculum_report(
             int(trained_timesteps), initial_weight, anneal_steps
         ),
         "anneal_completed": int(trained_timesteps) >= anneal_steps,
-        "target_classes": {
-            str(index): name for index, name in enumerate(ACTION_NAMES)
-        },
+        "target_classes": {str(index): name for index, name in enumerate(ACTION_NAMES)},
         "target_rule": (
             "causal 20-completed-candle SMA slope; train toward HOLD, BUY_25, or "
             "SELL_25 only when the relevant action is legal in the current state"

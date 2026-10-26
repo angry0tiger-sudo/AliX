@@ -235,6 +235,7 @@ def _decode_discrete_policy_action(action: Any) -> tuple[np.int64, str, float]:
         ACTION_SIZE_BY_INDEX[action_index],
     )
 
+
 def _new_policy_size_metrics() -> dict[str, Any]:
     return {
         "counts": {f"{fraction:.2f}": 0 for fraction in POSITION_SIZE_FRACTIONS},

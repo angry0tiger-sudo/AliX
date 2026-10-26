@@ -579,8 +579,7 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Int64Array]):
         has_position = self._quantity > self._quantity_tolerance(price)
         has_spendable_cash = self._cash > equity * POSITION_FRACTION_EPSILON
         can_buy = (
-            has_spendable_cash
-            and position_fraction < 1.0 - POSITION_FRACTION_EPSILON
+            has_spendable_cash and position_fraction < 1.0 - POSITION_FRACTION_EPSILON
         )
         can_sell = has_position
         return {
@@ -616,15 +615,22 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Int64Array]):
         values = np.asarray(action)
         if values.shape not in ((), (1,)) or values.dtype.kind not in ("i", "u"):
             raise ValueError("action_must_be_one_integer_value")
-        action_index = int(values.reshape(-1)[0]) if values.shape else int(values.item())
+        action_index = (
+            int(values.reshape(-1)[0]) if values.shape else int(values.item())
+        )
         if not 0 <= action_index < len(ACTION_NAMES):
             raise ValueError("discrete_action_index_out_of_range")
         action_name = ACTION_NAMES[action_index]
         requested_action = ACTION_SIDE_BY_INDEX[action_index]
         size = ACTION_SIZE_BY_INDEX[action_index]
-        size_index = None if action_index == ACTION_HOLD else (
-            action_index - 1 if action_index <= ACTION_BUY_100
-            else action_index - ACTION_SELL_25
+        size_index = (
+            None
+            if action_index == ACTION_HOLD
+            else (
+                action_index - 1
+                if action_index <= ACTION_BUY_100
+                else action_index - ACTION_SELL_25
+            )
         )
         return action_index, action_name, requested_action, size, size_index
 
@@ -1095,8 +1101,10 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Int64Array]):
         )
         transaction_costs_this_step = max(
             0.0,
-            self._total_fees - fees_before_action
-            + self._total_slippage - slippage_before_action,
+            self._total_fees
+            - fees_before_action
+            + self._total_slippage
+            - slippage_before_action,
         )
         transaction_cost_reward_penalty = (
             DEFAULT_TRANSACTION_COST_REWARD_MULTIPLIER
