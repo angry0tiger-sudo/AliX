@@ -84,7 +84,10 @@ def _validate_source_model_metadata(source_report: dict[str, Any]) -> None:
     if model_metadata.get("algorithm") != "RecurrentPPO":
         raise ValueError("source_model_algorithm_invalid")
     action_space = source_report.get("environment", {}).get("action_space", {})
-    if action_space.get("type") != "MultiDiscrete" or action_space.get("nvec") != [3, 4]:
+    if action_space.get("type") != "MultiDiscrete" or action_space.get("nvec") != [
+        3,
+        4,
+    ]:
         raise ValueError("source_action_space_invalid")
     environment = source_report.get("environment", {})
     if environment.get("observation_contains_position_or_pnl") is not False:
@@ -144,6 +147,7 @@ def _validate_source_artifacts(
     _validate_source_dataset(source_report, manifest)
     _validate_source_safety(source_report)
     return _validate_source_model_artifact(args, source_report)
+
 
 def _entropy(probabilities: Sequence[float]) -> float:
     return -sum(value * math.log(value) for value in probabilities if value > 0.0)
@@ -381,7 +385,8 @@ def _build_probability_row(
         for size_index, fraction in enumerate(POSITION_SIZE_FRACTIONS):
             label = f"joint_p_{name.lower()}_{int(round(float(fraction) * 100))}"
             row[label] = (
-                direction_probabilities[direction_index] * size_probabilities[size_index]
+                direction_probabilities[direction_index]
+                * size_probabilities[size_index]
             )
     return row
 
@@ -406,12 +411,20 @@ def _step_paired_environments(
     stochastic_action: Any,
     mask_reasons: dict[str, Counter[str]],
 ) -> dict[str, Any]:
-    next_deterministic, deterministic_reward, deterministic_done, deterministic_truncated, deterministic_info = (
-        deterministic_env.step(deterministic_action)
-    )
-    next_stochastic, stochastic_reward, stochastic_done, stochastic_truncated, stochastic_info = (
-        stochastic_env.step(stochastic_action)
-    )
+    (
+        next_deterministic,
+        deterministic_reward,
+        deterministic_done,
+        deterministic_truncated,
+        deterministic_info,
+    ) = deterministic_env.step(deterministic_action)
+    (
+        next_stochastic,
+        stochastic_reward,
+        stochastic_done,
+        stochastic_truncated,
+        stochastic_info,
+    ) = stochastic_env.step(stochastic_action)
     for mode, info in (
         ("deterministic", deterministic_info),
         ("stochastic", stochastic_info),
@@ -571,9 +584,7 @@ def _run_paired_validation_diagnostic(
                 )
                 reward_totals["deterministic"] += step["deterministic_reward"]
                 reward_totals["stochastic"] += step["stochastic_reward"]
-                _validate_paired_step_boundary(
-                    step, step_index == expected_steps - 1
-                )
+                _validate_paired_step_boundary(step, step_index == expected_steps - 1)
                 _assert_observations_equal(
                     step["next_deterministic"],
                     step["next_stochastic"],
@@ -615,6 +626,7 @@ def _run_paired_validation_diagnostic(
     finally:
         deterministic_env.close()
         stochastic_env.close()
+
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parse_args(argv)
