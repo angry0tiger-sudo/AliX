@@ -25,6 +25,7 @@ on:
       - "docs/knowledge_base/RL_TRADING_AGENT_ARCHITECTURE.md"
       - "docs/governance/owner-directives/2026-10-25-rl-trading-agent.md"
       - "docs/governance/owner-directives/2026-10-26-rl-observation-auxiliary-loss.md"
+      - "docs/governance/owner-directives/2026-10-26-rl-policy-logit-masking.md"
   workflow_dispatch:
 
 permissions:
@@ -232,7 +233,7 @@ jobs:
           model = report["model"]
           evaluation = report["evaluation"]
           curriculum = report["cost_curriculum"]
-          assert report["schema_version"] == "alix.rl-trading-agent-report.v7"
+          assert report["schema_version"] == "alix.rl-trading-agent-report.v8"
           assert report["run_mode"] == "historical_simulation_only"
           assert report["dataset"]["row_count"] >= 1_051_200
           assert report["dataset"]["coverage_fraction"] == 1.0
@@ -253,13 +254,14 @@ jobs:
           assert split["rows_excluded_between_validation_and_final_holdout"] > 0
           assert 0.19 <= split["final_holdout_fraction_actual"] <= 0.21
           assert model["algorithm"] == "RecurrentPPO"
-          assert model["training_algorithm"] == "RecurrentPPO with annealed guidance cross-entropy"
+          assert model["training_algorithm"] == "RecurrentPPO with policy-level action-logit masking and annealed guidance cross-entropy"
           assert model["model_reload_roundtrip"] == "passed"
           assert len(model["model_sha256"]) == 64
           assert model["total_timesteps_trained"] >= 1_000_000
           assert model["ent_coef"] == 0.05
           assert report["environment"]["reward"]["inactivity_penalty_per_unchanged_position_step"] == 0.001
-          assert report["environment"]["reward"]["invalid_action_penalty_per_masked_request"] == 0.001
+          assert report["environment"]["reward"]["invalid_action_penalty_default_per_masked_request"] == 0.001
+          assert report["environment"]["reward"]["invalid_full_position_buy_penalty"] == 1.0
           assert report["environment"]["reward"]["holding_profit_reward_per_profitable_hold"] == 0.0001
           assert report["environment"]["reward"]["holding_loss_penalty_per_underwater_hold"] == 0.0001
           assert report["environment"]["reward"]["realized_profit_reward_scale_of_initial_equity"] == 0.5
@@ -320,8 +322,13 @@ jobs:
           assert action_space["nvec"] == [3, 4]
           assert list(action_space["size_index_to_fraction"].values()) == [0.25, 0.5, 0.75, 1.0]
           assert action_space["zero_size_buy_allowed"] is False
-          assert action_space["masking"]["enforcement"] == "deterministic_environment_execution_boundary"
-          assert action_space["masking"]["policy_distribution_logits_masked"] is False
+          assert action_space["masking"]["enforcement"] == "policy_distribution_logits_and_deterministic_environment_execution_boundary"
+          assert action_space["masking"]["policy_distribution_logits_masked"] is True
+          assert action_space["masking"]["position_fraction_full_threshold"] == 1.0 - 1e-6
+          assert action_space["masking"]["position_fraction_flat_threshold"] == 1e-6
+          assert action_space["masking"]["buy_logit_masked_when_position_fraction_at_or_above_full_threshold"] is True
+          assert action_space["masking"]["sell_logit_masked_when_position_fraction_at_or_below_flat_threshold"] is True
+          assert action_space["masking"]["invalid_buy_fallback_reward_penalty"] == 1.0
           assert report["environment"]["reward"]["opportunity_cost_penalty_when_flat_above_sma"] == 0.0005
           assert report["environment"]["reward"]["opportunity_cost_moving_average_window"] == 20
           assert report["environment"]["reward"]["opportunity_cost_indicator_visible_to_policy"] is False
@@ -333,6 +340,9 @@ jobs:
               assert metrics["masked_buy_action_count"] >= 0
               assert metrics["masked_sell_action_count"] >= 0
               assert metrics["invalid_action_penalty_count"] >= 0
+              assert metrics["full_position_buy_penalty_count"] >= 0
+              assert metrics["full_position_buy_penalty_total"] >= 0.0
+              assert metrics["full_position_buy_penalty_total"] == metrics["full_position_buy_penalty_count"]
               assert metrics["policy_buy_zero_size_request_count"] == 0
               assert metrics["opportunity_cost_penalty_count"] >= 0
               assert metrics["holding_loss_penalty_count"] >= 0
