@@ -343,7 +343,10 @@ jobs:
               assert metrics["invalid_action_penalty_count"] >= 0
               assert metrics["full_position_buy_penalty_count"] >= 0
               assert metrics["full_position_buy_penalty_total"] >= 0.0
-              assert metrics["full_position_buy_penalty_total"] == metrics["full_position_buy_penalty_count"]
+              assert metrics["full_position_buy_penalty_total"] == (
+                  metrics["full_position_buy_penalty_count"]
+                  * report["environment"]["reward"]["invalid_full_position_buy_penalty"]
+              )
               assert metrics["policy_buy_zero_size_request_count"] == 0
               assert metrics["opportunity_cost_penalty_count"] >= 0
               assert metrics["holding_loss_penalty_count"] >= 0
