@@ -351,6 +351,8 @@ jobs:
                   * report["environment"]["reward"]["invalid_full_position_buy_penalty"]
               )
               assert metrics["policy_buy_zero_size_request_count"] == 0
+              assert metrics["buy_noop_action_count"] >= 0
+              assert metrics["buy_target_not_increasing_action_count"] >= 0
               assert metrics["opportunity_cost_penalty_count"] >= 0
               assert metrics["holding_loss_penalty_count"] >= 0
               assert metrics["holding_profit_reward_count"] >= 0
