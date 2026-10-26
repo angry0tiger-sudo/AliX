@@ -233,7 +233,7 @@ jobs:
           model = report["model"]
           evaluation = report["evaluation"]
           curriculum = report["cost_curriculum"]
-          assert report["schema_version"] == "alix.rl-trading-agent-report.v8"
+          assert report["schema_version"] == "alix.rl-trading-agent-report.v9"
           assert report["run_mode"] == "historical_simulation_only"
           assert report["dataset"]["row_count"] >= 1_051_200
           assert report["dataset"]["coverage_fraction"] == 1.0
@@ -255,7 +255,7 @@ jobs:
           assert 0.19 <= split["final_holdout_fraction_actual"] <= 0.21
           assert model["algorithm"] == "RecurrentPPO"
           assert model["policy"] == "ActionMaskedRecurrentActorCriticPolicy"
-          assert model["training_algorithm"] == "RecurrentPPO with policy-level action-logit masking and annealed guidance cross-entropy"
+          assert model["training_algorithm"] == "RecurrentPPO with LSTM and raw-logit action masking before MultiCategorical distribution construction plus annealed guidance cross-entropy"
           assert model["model_reload_roundtrip"] == "passed"
           assert len(model["model_sha256"]) == 64
           assert model["total_timesteps_trained"] >= 1_000_000
@@ -323,8 +323,11 @@ jobs:
           assert action_space["nvec"] == [3, 4]
           assert list(action_space["size_index_to_fraction"].values()) == [0.25, 0.5, 0.75, 1.0]
           assert action_space["zero_size_buy_allowed"] is False
-          assert action_space["masking"]["enforcement"] == "policy_distribution_logits_and_deterministic_environment_execution_boundary"
+          assert action_space["masking"]["enforcement"] == "raw_direction_logits_before_multicategorical_distribution_and_environment_execution_boundary"
           assert action_space["masking"]["policy_distribution_logits_masked"] is True
+          assert action_space["masking"]["mask_applied_before_distribution_construction"] is True
+          assert action_space["masking"]["masked_logit_value"] == -1e8
+          assert action_space["masking"]["forbidden_action_probability_exactly_zero"] is True
           assert action_space["masking"]["position_fraction_full_threshold"] == 1.0 - 1e-6
           assert action_space["masking"]["position_fraction_flat_threshold"] == 1e-6
           assert action_space["masking"]["buy_logit_masked_when_position_fraction_at_or_above_full_threshold"] is True
