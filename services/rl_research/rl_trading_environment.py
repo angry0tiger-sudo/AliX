@@ -1,8 +1,8 @@
-"""Market-only Gymnasium environment for offline BTCUSDT RL research.
+"""State-aware Gymnasium environment for offline BTCUSDT RL research.
 
 Actions are chosen after a completed one-minute candle and executed at the next
-candle's open. Portfolio state is deliberately absent from observations. Cash,
-inventory, costs and risk are maintained by the simulator only.
+candle's open. Market observations include marked portfolio exposure and the
+unrealized return on the remaining position cost basis.
 """
 
 from __future__ import annotations

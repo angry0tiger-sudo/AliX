@@ -15,13 +15,16 @@ on:
       - "requirements-rl-research.txt"
       - "services/rl_research/rl_trading_environment.py"
       - "services/rl_research/rl_cost_curriculum.py"
+      - "scripts/rl_auxiliary_ppo.py"
       - "scripts/run_rl_trading_agent.py"
       - "scripts/fetch_public_minute_bars.py"
       - "tests/unit/test_rl_trading_environment.py"
       - "tests/unit/test_rl_cost_curriculum.py"
       - "tests/unit/test_rl_trading_agent_runner.py"
+      - "tests/unit/test_rl_auxiliary_ppo.py"
       - "docs/knowledge_base/RL_TRADING_AGENT_ARCHITECTURE.md"
       - "docs/governance/owner-directives/2026-10-25-rl-trading-agent.md"
+      - "docs/governance/owner-directives/2026-10-26-rl-observation-auxiliary-loss.md"
   workflow_dispatch:
 
 permissions:
@@ -37,7 +40,7 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[train-rl]') }}
     name: Train recurrent PPO and evaluate untouched holdout
     runs-on: ubuntu-latest
-    timeout-minutes: 55
+    timeout-minutes: 180
     env:
       ALIx_ENV: paper
       ALIx_DRY_RUN: "true"
@@ -157,6 +160,7 @@ jobs:
           tests/unit/test_rl_trading_environment.py
           tests/unit/test_rl_cost_curriculum.py
           tests/unit/test_rl_trading_agent_runner.py
+          tests/unit/test_rl_auxiliary_ppo.py
           -q
 
       - name: Validate data provenance, integrity, and immutable safety invariants
@@ -228,7 +232,7 @@ jobs:
           model = report["model"]
           evaluation = report["evaluation"]
           curriculum = report["cost_curriculum"]
-          assert report["schema_version"] == "alix.rl-trading-agent-report.v6"
+          assert report["schema_version"] == "alix.rl-trading-agent-report.v7"
           assert report["run_mode"] == "historical_simulation_only"
           assert report["dataset"]["row_count"] >= 1_051_200
           assert report["dataset"]["coverage_fraction"] == 1.0
@@ -249,6 +253,7 @@ jobs:
           assert split["rows_excluded_between_validation_and_final_holdout"] > 0
           assert 0.19 <= split["final_holdout_fraction_actual"] <= 0.21
           assert model["algorithm"] == "RecurrentPPO"
+          assert model["training_algorithm"] == "RecurrentPPO with annealed guidance cross-entropy"
           assert model["model_reload_roundtrip"] == "passed"
           assert len(model["model_sha256"]) == 64
           assert model["total_timesteps_trained"] >= 1_000_000
@@ -272,6 +277,15 @@ jobs:
           assert guidance["final_reward_scale"] == 0.0
           assert guidance["anneal_completed"] is True
           assert guidance["evaluation_enabled"] is False
+          auxiliary = report["auxiliary_loss_curriculum"]
+          assert auxiliary["method"] == "recurrent_policy_direction_cross_entropy"
+          assert auxiliary["initial_weight"] == 0.1
+          assert auxiliary["anneal_steps"] == 500_000
+          assert auxiliary["effective_weight_at_training_end"] == 0.0
+          assert auxiliary["anneal_completed"] is True
+          assert auxiliary["validation_enabled"] is False
+          assert auxiliary["final_holdout_enabled"] is False
+          assert auxiliary["target_classes"] == {"0": "HOLD", "1": "BUY", "2": "SELL"}
           assert guidance["rewarded_action_count"] >= 0
           assert guidance["reward_total"] >= 0.0
           assert guidance["rewarded_buy_action_count"] >= 0
@@ -346,7 +360,12 @@ jobs:
           assert evaluation["holdout_pass_count"] == 1
           for key in ("net_profit", "net_return", "max_drawdown", "total_fees", "total_slippage"):
               assert math.isfinite(float(evaluation["final_holdout"][key]))
-          assert report["environment"]["observation_contains_position_or_pnl"] is False
+          assert report["environment"]["observation_contains_position_or_pnl"] is True
+          assert "current_position_fraction" in report["environment"]["observation_fields"]
+          assert "unrealized_pnl_pct" in report["environment"]["observation_fields"]
+          assert report["environment"]["observation_semantics"]["current_position_fraction"]
+          assert "divided by total marked account equity" in report["environment"]["observation_semantics"]["current_position_fraction"]
+          assert "0.05 means +5%" in report["environment"]["observation_semantics"]["unrealized_pnl_pct"]
           assert report["environment"]["observation_contains_technical_indicators"] is False
           assert report["environment"]["execution"]["fixed_timeframe_rule"] is None
           assert report["environment"]["execution"]["fixed_max_holding_period_candles"] is None
