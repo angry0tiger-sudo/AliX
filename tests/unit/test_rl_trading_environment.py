@@ -636,8 +636,6 @@ def test_training_signal_guidance_rewards_only_legal_buy_on_rising_causal_sma() 
     assert env.summary()["signal_guidance_sell_reward_count"] == 0
     env.close()
 
-
-
 def test_portfolio_observation_tracks_marked_exposure_and_unrealized_return() -> None:
     data = _bars(closes=[100.0, 120.0, 132.0, 132.0])
     env = _env(data, initial_equity=1_000.0)
@@ -653,6 +651,29 @@ def test_portfolio_observation_tracks_marked_exposure_and_unrealized_return() ->
     assert observation[-1] == pytest.approx(0.10)
     env.close()
 
+
+
+
+def test_guidance_target_blocks_repeated_buy_when_position_is_full() -> None:
+    rising = _env(
+        _bars(closes=[100.0 + i for i in range(40)]),
+        initial_equity=1_000.0,
+    )
+    rising.reset(seed=85)
+    for _ in range(21):
+        rising.step(np.asarray([ACTION_HOLD, 0], dtype=np.int64))
+    _, _, _, _, buy_info = rising.step(
+        np.asarray([ACTION_BUY, 3], dtype=np.int64)
+    )
+    assert buy_info["guidance_target_action"] == "BUY"
+    observation, _, _, _, next_info = rising.step(
+        np.asarray([ACTION_BUY, 3], dtype=np.int64)
+    )
+    assert next_info["action_mask_reason"] == "position_fully_allocated"
+    assert next_info["guidance_target_action"] == "HOLD"
+    assert next_info["guidance_target_index"] == ACTION_HOLD
+    assert observation[-2] > 0.99
+    rising.close()
 
 def test_portfolio_observation_returns_zero_pnl_when_position_is_closed() -> None:
     data = _bars(closes=[100.0, 100.0, 100.0, 100.0])
@@ -670,7 +691,9 @@ def test_guidance_target_respects_causal_trend_and_legal_position_state() -> Non
     rising.reset(seed=83)
     latest_info: dict[str, Any] = {}
     for _ in range(25):
-        _, _, _, _, latest_info = rising.step(np.asarray([ACTION_HOLD, 0], dtype=np.int64))
+        _, _, _, _, latest_info = rising.step(
+            np.asarray([ACTION_HOLD, 0], dtype=np.int64)
+        )
     assert latest_info["guidance_target_action"] == "BUY"
     assert latest_info["guidance_target_index"] == ACTION_BUY
     rising.close()
@@ -679,10 +702,13 @@ def test_guidance_target_respects_causal_trend_and_legal_position_state() -> Non
     falling.reset(seed=84)
     latest_info = {}
     for _ in range(25):
-        _, _, _, _, latest_info = falling.step(np.asarray([ACTION_HOLD, 0], dtype=np.int64))
+        _, _, _, _, latest_info = falling.step(
+            np.asarray([ACTION_HOLD, 0], dtype=np.int64)
+        )
     assert latest_info["guidance_target_action"] == "HOLD"
     assert latest_info["guidance_target_index"] == ACTION_HOLD
     falling.close()
+
 
 def test_signal_guidance_is_disabled_by_default_and_scale_is_fail_closed() -> None:
     env = _env(_bars(closes=[100.0 + index for index in range(30)]))

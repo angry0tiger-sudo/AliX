@@ -389,7 +389,9 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Int64Array]):
         unrealized_pnl_pct = (
             position_value - self._position_cost_basis
         ) / self._position_cost_basis
-        if not math.isfinite(position_fraction) or not math.isfinite(unrealized_pnl_pct):
+        if not math.isfinite(position_fraction) or not math.isfinite(
+            unrealized_pnl_pct
+        ):
             raise ValueError("portfolio_observation_non_finite")
         return float(position_fraction), float(unrealized_pnl_pct)
 

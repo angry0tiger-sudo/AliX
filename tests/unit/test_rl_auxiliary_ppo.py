@@ -107,9 +107,9 @@ def test_auxiliary_loss_recurrent_ppo_training_and_reload(tmp_path) -> None:
             np.isin(model.rollout_buffer.guidance_targets, np.asarray([0, 1, 2]))
         )
         assert model.logger.name_to_value["train/auxiliary_loss"] >= 0.0
-        assert model.logger.name_to_value["train/auxiliary_loss_weight"] == pytest.approx(
-            0.05
-        )
+        assert model.logger.name_to_value[
+            "train/auxiliary_loss_weight"
+        ] == pytest.approx(0.05)
         checkpoint = tmp_path / "auxiliary-recurrent-policy"
         model.save(str(checkpoint))
         loaded_model = algorithm.load(str(checkpoint), env=None, device="cpu")

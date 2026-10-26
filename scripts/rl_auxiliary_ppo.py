@@ -89,9 +89,7 @@ def _validate_guidance_batch(targets: Any, n_envs: int) -> np.ndarray:
 
 def _buffer_reset(self: Any) -> None:
     super(type(self), self).reset()
-    self.guidance_targets = np.zeros(
-        (self.buffer_size, self.n_envs), dtype=np.int64
-    )
+    self.guidance_targets = np.zeros((self.buffer_size, self.n_envs), dtype=np.int64)
 
 
 def _buffer_add(
@@ -149,9 +147,7 @@ def _bootstrap_truncated_rewards(
             lstm_states.vf[0][:, index : index + 1, :].contiguous(),
             lstm_states.vf[1][:, index : index + 1, :].contiguous(),
         )
-        episode_start = torch.tensor(
-            [False], dtype=torch.float32, device=model.device
-        )
+        episode_start = torch.tensor([False], dtype=torch.float32, device=model.device)
         with torch.no_grad():
             terminal_value = model.policy.predict_values(
                 terminal_observation, critic_state, episode_start
@@ -203,9 +199,7 @@ def _collect_guided_step(
 
     if isinstance(model.action_space, spaces.Discrete):
         actions = actions.reshape(-1, 1)
-    _bootstrap_truncated_rewards(
-        model, infos, dones, rewards, next_lstm_states, torch
-    )
+    _bootstrap_truncated_rewards(model, infos, dones, rewards, next_lstm_states, torch)
     guidance_targets = _validate_guidance_batch(
         [info.get("guidance_target_index") for info in infos], env.num_envs
     )
@@ -275,9 +269,7 @@ def _collect_rollouts_with_guidance(
             lstm_states.vf,
             episode_starts,
         )
-    rollout_buffer.compute_returns_and_advantage(
-        last_values=final_values, dones=dones
-    )
+    rollout_buffer.compute_returns_and_advantage(last_values=final_values, dones=dones)
     callback.on_rollout_end()
     return True
 
@@ -292,7 +284,9 @@ def _compute_minibatch_losses(
     functional: Any,
 ) -> dict[str, Any]:
     actions = rollout_data.actions
-    if isinstance(model.action_space, importlib.import_module("gymnasium.spaces").Discrete):
+    if isinstance(
+        model.action_space, importlib.import_module("gymnasium.spaces").Discrete
+    ):
         actions = actions.long().flatten()
     mask = rollout_data.mask > 1e-8
     values, log_prob, entropy = model.policy.evaluate_actions(
@@ -309,13 +303,9 @@ def _compute_minibatch_losses(
         )
     ratio = torch.exp(log_prob - rollout_data.old_log_prob)
     loss_1 = advantages * ratio
-    loss_2 = advantages * torch.clamp(
-        ratio, 1 - clip_range, 1 + clip_range
-    )
+    loss_2 = advantages * torch.clamp(ratio, 1 - clip_range, 1 + clip_range)
     policy_loss = -torch.mean(torch.min(loss_1, loss_2)[mask])
-    clip_fraction = torch.mean(
-        (torch.abs(ratio - 1) > clip_range).float()[mask]
-    )
+    clip_fraction = torch.mean((torch.abs(ratio - 1) > clip_range).float()[mask])
     values_pred = values
     if clip_range_vf is not None:
         values_pred = rollout_data.old_values + torch.clamp(
@@ -323,9 +313,7 @@ def _compute_minibatch_losses(
         )
     value_loss = torch.mean(((rollout_data.returns - values_pred) ** 2)[mask])
     entropy_loss = (
-        -torch.mean(-log_prob[mask])
-        if entropy is None
-        else -torch.mean(entropy[mask])
+        -torch.mean(-log_prob[mask]) if entropy is None else -torch.mean(entropy[mask])
     )
     distribution, _ = model.policy.get_distribution(
         rollout_data.observations,
@@ -337,9 +325,7 @@ def _compute_minibatch_losses(
         raise ValueError("auxiliary_loss_requires_two_component_action_distribution")
     direction_logits = components[0].logits
     targets = rollout_data.guidance_targets.long()
-    auxiliary_loss = functional.cross_entropy(
-        direction_logits[mask], targets[mask]
-    )
+    auxiliary_loss = functional.cross_entropy(direction_logits[mask], targets[mask])
     total_loss = (
         policy_loss
         + model.ent_coef * entropy_loss
@@ -363,9 +349,7 @@ def _compute_minibatch_losses(
 def _optimize_minibatch(model: Any, losses: dict[str, Any], torch: Any) -> None:
     model.policy.optimizer.zero_grad()
     losses["loss"].backward()
-    torch.nn.utils.clip_grad_norm_(
-        model.policy.parameters(), model.max_grad_norm
-    )
+    torch.nn.utils.clip_grad_norm_(model.policy.parameters(), model.max_grad_norm)
     model.policy.optimizer.step()
 
 
@@ -452,19 +436,17 @@ def _train_with_auxiliary_loss(self: Any) -> None:
         if not keep_training:
             break
 
-    self.logger.record(
-        "train/entropy_loss", float(np.mean(history["entropy_loss"]))
-    )
+    self.logger.record("train/entropy_loss", float(np.mean(history["entropy_loss"])))
     self.logger.record(
         "train/policy_gradient_loss", float(np.mean(history["policy_loss"]))
     )
     self.logger.record("train/value_loss", float(np.mean(history["value_loss"])))
-    self.logger.record("train/auxiliary_loss", float(np.mean(history["auxiliary_loss"])))
+    self.logger.record(
+        "train/auxiliary_loss", float(np.mean(history["auxiliary_loss"]))
+    )
     self.logger.record("train/auxiliary_loss_weight", aux_weight)
     self.logger.record("train/approx_kl", float(np.mean(epoch_kls)))
-    self.logger.record(
-        "train/clip_fraction", float(np.mean(history["clip_fraction"]))
-    )
+    self.logger.record("train/clip_fraction", float(np.mean(history["clip_fraction"])))
     self.logger.record("train/loss", history["loss"][-1])
     explained_var = utils.explained_variance(
         self.rollout_buffer.values.flatten(),
