@@ -831,3 +831,44 @@ def test_transaction_costs_are_charged_again_in_explicit_reward_component() -> N
         info["reward_transaction_cost_penalty"]
     )
     env.close()
+
+
+
+def test_masked_combined_actions_record_blocked_execution_not_side() -> None:
+    flat = _env(_bars(closes=[100.0] * 8), initial_equity=1_000.0)
+    flat.reset(seed=95)
+    _, _, _, _, sell_info = flat.step(
+        np.asarray(ACTION_SELL_25, dtype=np.int64)
+    )
+    assert sell_info["action"] == "SELL"
+    assert sell_info["requested_discrete_action_name"] == "SELL_25"
+    assert sell_info["executed_action"] == "MASKED_SELL"
+    assert sell_info["action_blocked"] is True
+    assert sell_info["action_mask_reason"] == "no_position"
+    assert sell_info["position_changed"] is False
+    assert flat.summary()["masked_sell_action_count"] == 1
+    assert flat.summary()["fill_count"] == 0
+    flat.close()
+
+    full = _env(_bars(closes=[100.0] * 8), initial_equity=1_000.0)
+    full.reset(seed=96)
+    _, _, _, _, buy_info = full.step(
+        np.asarray(ACTION_BUY_100, dtype=np.int64)
+    )
+    assert buy_info["executed_action"] == "BUY"
+    quantity_before = full._quantity
+    fills_before = full.summary()["fill_count"]
+
+    _, _, _, _, blocked_info = full.step(
+        np.asarray(ACTION_BUY_25, dtype=np.int64)
+    )
+    assert blocked_info["action"] == "BUY"
+    assert blocked_info["requested_discrete_action_name"] == "BUY_25"
+    assert blocked_info["executed_action"] == "MASKED_BUY"
+    assert blocked_info["action_blocked"] is True
+    assert blocked_info["action_mask_reason"] == "position_fully_allocated"
+    assert blocked_info["position_changed"] is False
+    assert full._quantity == pytest.approx(quantity_before)
+    assert full.summary()["fill_count"] == fills_before
+    assert full.summary()["masked_buy_action_count"] == 1
+    full.close()
