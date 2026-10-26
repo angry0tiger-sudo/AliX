@@ -571,7 +571,7 @@ def _build_cost_curriculum_callback(
         self._guidance_reward_total = 0.0
         self._guidance_buy_reward_count = 0
         self._guidance_sell_reward_count = 0
-        self._reward_component_windows: dict[int, dict[str, Any]] = {}
+        self._reward_component_windows = {}
 
     def on_training_step(self: Any) -> bool:
         infos = self.locals.get("infos")
