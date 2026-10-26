@@ -150,5 +150,103 @@ def test_auxiliary_loss_recurrent_ppo_training_and_reload(tmp_path: Path) -> Non
         assert loaded_model.num_timesteps == 8
         assert loaded_model.auxiliary_loss_weight == pytest.approx(0.1)
         assert loaded_model.auxiliary_loss_anneal_steps == 16
+
+        # Critical regression: the serialized custom LSTM policy must still
+        # assign exactly zero probability to BUY at full position.
+        full_observation = np.zeros(
+            (1, len(OBSERVATION_FIELDS)), dtype=np.float32
+        )
+        full_observation[0, position_index] = 1.0
+        full_observation_tensor = torch.as_tensor(
+            full_observation, dtype=torch.float32
+        )
+        loaded_distribution, _ = loaded_model.policy.get_distribution(
+            full_observation_tensor,
+            (hidden.clone(), hidden.clone()),
+            episode_starts,
+        )
+        assert loaded_distribution.distribution[0].probs[0, ACTION_BUY].item() == 0.0
+        reloaded_action, _ = loaded_model.predict(
+            full_observation[0], deterministic=True
+        )
+        assert int(np.asarray(reloaded_action).reshape(2)[0]) != ACTION_BUY
+    finally:
+        env.close()
+
+
+
+def test_full_position_masks_buy_probability_to_exact_zero_before_sampling() -> None:
+    pytest.importorskip("torch")
+    pytest.importorskip("sb3_contrib")
+    torch = importlib.import_module("torch")
+    dummy_vec_env = getattr(
+        importlib.import_module("stable_baselines3.common.vec_env"), "DummyVecEnv"
+    )
+    from scripts.rl_auxiliary_ppo import build_auxiliary_recurrent_ppo
+    from services.rl_research.rl_trading_environment import (
+        BTCUSDTTradingEnv,
+        MarketObservationScaler,
+    )
+
+    timestamps = 1_700_000_000_000 + np.arange(8, dtype=np.float64) * 60_000
+    closes = np.full(8, 100.0, dtype=np.float64)
+    data = np.column_stack(
+        (
+            timestamps,
+            closes,
+            closes + 1.0,
+            closes - 1.0,
+            closes,
+            np.ones(8, dtype=np.float64),
+        )
+    )
+    scaler = MarketObservationScaler.fit(data)
+    env = dummy_vec_env(
+        [
+            lambda: BTCUSDTTradingEnv(
+                data,
+                scaler=scaler,
+                initial_equity=1_000.0,
+                fee_bps_per_side=0.0,
+                slippage_bps_per_side=0.0,
+                min_remaining_steps=1,
+                signal_guidance_reward_scale=0.0,
+            )
+        ]
+    )
+    algorithm = build_auxiliary_recurrent_ppo()
+    model = algorithm(
+        algorithm.policy_class,
+        env,
+        n_steps=4,
+        batch_size=4,
+        n_epochs=1,
+        seed=20261026,
+        device="cpu",
+        verbose=0,
+        policy_kwargs={
+            "lstm_hidden_size": 16,
+            "n_lstm_layers": 1,
+            "net_arch": [16],
+        },
+    )
+    try:
+        position_index = OBSERVATION_FIELDS.index("current_position_fraction")
+        observation = np.zeros(
+            (1, len(OBSERVATION_FIELDS)), dtype=np.float32
+        )
+        observation[0, position_index] = 1.0
+        observation_tensor = torch.as_tensor(observation, dtype=torch.float32)
+        hidden = torch.zeros((1, 1, 16), dtype=torch.float32)
+        episode_starts = torch.ones((1,), dtype=torch.float32)
+        distribution, _ = model.policy.get_distribution(
+            observation_tensor,
+            (hidden.clone(), hidden.clone()),
+            episode_starts,
+        )
+        buy_probability = distribution.distribution[0].probs[0, ACTION_BUY].item()
+        assert buy_probability == 0.0
+        action, _ = model.predict(observation[0], deterministic=True)
+        assert int(np.asarray(action).reshape(2)[0]) != ACTION_BUY
     finally:
         env.close()
