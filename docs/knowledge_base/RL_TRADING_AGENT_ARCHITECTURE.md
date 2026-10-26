@@ -55,15 +55,15 @@ The RL research branch uses a Gymnasium market environment and Stable-Baselines3
 A successful Actions run proves that the experiment executed and its claims are reproducible. It does not prove the policy is profitable or grant live-trading authority.
 
 
-## Policy-level action masking (Owner Directive, 2026-10-26)
+## Policy-level action masking (Owner Directive, 2026-10-26; report schema v9)
 
-The policy direction distribution is masked before sampling, deterministic argmax, PPO log-probability evaluation, and the training-only auxiliary cross-entropy calculation. The mask reads the explicit `current_position_fraction` feature from the same observation used by the recurrent policy; missing or misaligned observation context fails closed.
+The recurrent policy masks the flattened raw logits before constructing the MultiCategoricalDistribution. It is not enough to create an unmasked distribution and replace component distributions afterward. The direction component occupies the first three logits (HOLD, BUY, SELL); position-size logits are preserved unchanged.
 
-- At a position fraction of at least `1 - 1e-6`, BUY direction logits are set to negative infinity.
-- At a position fraction of at most `1e-6`, SELL direction logits are set to negative infinity.
-- HOLD remains legal in every state. The environment keeps its independent execution-boundary mask as defense in depth.
-- If an invalid BUY reaches the environment despite policy masking, the step reward receives a `-1.0` fallback penalty; other masked invalid actions retain the default `-0.001` penalty.
-- Tests assert the masked direction has exactly zero categorical probability in both flat and fully allocated states. Validation and final Holdout use the same policy mask but no Guidance reward or auxiliary optimization.
-- The report schema v8 makes policy masking status, thresholds, invalid-BUY fallback penalty counts, and immutable authorization locks explicit.
+- At position fraction >= 1 - 1e-6, BUY's raw direction logit is set to -1e8.
+- At position fraction <= 1e-6, SELL's raw direction logit is set to -1e8.
+- The distribution used for action sampling, deterministic selection, PPO log-probability/entropy, and auxiliary direction loss is built from the masked logits.
+- Missing or misaligned observation context fails closed. The environment keeps its independent execution-boundary mask and -1.0 invalid-BUY fallback penalty.
+- Tests assert exactly zero BUY probability when fully allocated, including after checkpoint save/reload, and assert that deterministic prediction cannot return BUY in that state.
+- Report schema v9 records pre-distribution masking and the -1e8 sentinel. It does not promote the model or authorize trading.
 
-A passing test proves the mask is enforced, not that the learned policy is profitable or that it will choose SELL at an economically useful time.
+A passing policy test proves action legality is enforced for the tested state. It is not evidence of profitability or of correct SELL/HOLD timing; buy_noop_action_count remains an independent evaluation metric.
