@@ -72,9 +72,7 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def _validate_source_identity(
-    args: argparse.Namespace, report: dict[str, Any]
-) -> None:
+def _validate_source_identity(args: argparse.Namespace, report: dict[str, Any]) -> None:
     if report.get("schema_version") != REPORT_SCHEMA:
         raise ValueError("source_report_schema_invalid")
     if report.get("commit_sha") != args.expected_source_commit_sha:
@@ -258,9 +256,7 @@ def _masked_logits_use_sentinel(
     masked_logits: Sequence[float], expected: Sequence[int]
 ) -> bool:
     return all(
-        math.isclose(
-            masked_logits[index], MASKED_LOGIT, rel_tol=0.0, abs_tol=1.0
-        )
+        math.isclose(masked_logits[index], MASKED_LOGIT, rel_tol=0.0, abs_tol=1.0)
         for index in expected
     )
 
@@ -284,9 +280,7 @@ def _check_mask_contract(probe: dict[str, Any]) -> dict[str, Any]:
     logits_correct = _masked_logits_use_sentinel(masked, expected)
     probabilities_zero = _forbidden_probabilities_are_zero(probabilities, expected)
     legal_logits_unchanged = _unmasked_logits_unchanged(raw, masked, expected)
-    probabilities_normalized = math.isclose(
-        sum(probabilities), 1.0, abs_tol=1e-5
-    )
+    probabilities_normalized = math.isclose(sum(probabilities), 1.0, abs_tol=1e-5)
     passed = (
         logits_correct
         and probabilities_zero
