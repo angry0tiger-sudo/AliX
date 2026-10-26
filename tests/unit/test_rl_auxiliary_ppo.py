@@ -6,6 +6,12 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from services.rl_research.rl_trading_environment import (
+    ACTION_BUY,
+    ACTION_SELL,
+    OBSERVATION_FIELDS,
+)
+
 from scripts.rl_auxiliary_ppo import (
     DEFAULT_AUXILIARY_LOSS_ANNEAL_STEPS,
     DEFAULT_AUXILIARY_LOSS_WEIGHT,
@@ -86,7 +92,7 @@ def test_auxiliary_loss_recurrent_ppo_training_and_reload(tmp_path: Path) -> Non
     )
     algorithm = build_auxiliary_recurrent_ppo()
     model = algorithm(
-        "MlpLstmPolicy",
+        algorithm.policy_class,
         env,
         n_steps=8,
         batch_size=4,
@@ -105,6 +111,30 @@ def test_auxiliary_loss_recurrent_ppo_training_and_reload(tmp_path: Path) -> Non
         },
     )
     try:
+        torch = importlib.import_module("torch")
+        position_index = OBSERVATION_FIELDS.index("current_position_fraction")
+        hidden = torch.zeros((1, 1, 16), dtype=torch.float32)
+        episode_starts = torch.ones((1,), dtype=torch.float32)
+        for position_fraction, forbidden_action in (
+            (0.0, ACTION_SELL),
+            (1.0, ACTION_BUY),
+        ):
+            observation = np.zeros((1, len(OBSERVATION_FIELDS)), dtype=np.float32)
+            observation[0, position_index] = position_fraction
+            observation_tensor = torch.as_tensor(observation, dtype=torch.float32)
+            distribution, _ = model.policy.get_distribution(
+                observation_tensor,
+                (hidden.clone(), hidden.clone()),
+                episode_starts,
+            )
+            direction_distribution = distribution.distribution[0]
+            assert (
+                direction_distribution.probs[0, forbidden_action].item()
+                == pytest.approx(0.0)
+            )
+            action, _ = model.predict(observation[0], deterministic=True)
+            assert int(np.asarray(action).reshape(2)[0]) != forbidden_action
+
         model.learn(total_timesteps=8, progress_bar=False)
         assert model.num_timesteps == 8
         assert model.rollout_buffer.guidance_targets.shape == (8, 1)
