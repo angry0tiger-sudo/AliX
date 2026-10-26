@@ -92,7 +92,7 @@ def _parse_training_log_line(
 
 
 def _validated_training_snapshots(
-    snapshots: dict[int, dict[str, float | int]]
+    snapshots: dict[int, dict[str, float | int]],
 ) -> list[dict[str, float | int]]:
     ordered = [snapshots[step] for step in sorted(snapshots)]
     result = [
@@ -128,9 +128,7 @@ def parse_training_logs(logs_dir: Path) -> list[dict[str, float | int]]:
     return _validated_training_snapshots(snapshots)
 
 
-def _validate_source_run_identity(
-    source_run_id: int, source_commit_sha: str
-) -> None:
+def _validate_source_run_identity(source_run_id: int, source_commit_sha: str) -> None:
     if source_run_id != EXPECTED_SOURCE_RUN_ID:
         raise ValueError("unexpected_source_run_id")
     if source_commit_sha != EXPECTED_SOURCE_COMMIT:
