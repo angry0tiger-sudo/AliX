@@ -813,7 +813,10 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Int64Array]):
     ) -> bool:
         if self.signal_guidance_reward_scale <= 0.0:
             return False
-        if requested_action not in ("BUY", "SELL") or executed_action != requested_action:
+        if (
+            requested_action not in ("BUY", "SELL")
+            or executed_action != requested_action
+        ):
             return False
         return self._index >= MOVING_AVERAGE_WINDOW
 
