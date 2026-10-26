@@ -219,9 +219,7 @@ def _evaluate_checkpoints(
     return checkpoints
 
 
-def _first_checkpoint_hold_over_90(
-    checkpoints: list[dict[str, Any]]
-) -> int | None:
+def _first_checkpoint_hold_over_90(checkpoints: list[dict[str, Any]]) -> int | None:
     for row in checkpoints:
         if row["action_distribution"]["HOLD"]["percent"] > 90.0:
             return int(row["checkpoint_timesteps"])
