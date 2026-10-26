@@ -48,6 +48,7 @@ from services.rl_research.rl_trading_environment import (
 from scripts.rl_auxiliary_ppo import (
     ACTION_MASK_POSITION_EPSILON,
     DEFAULT_AUXILIARY_LOSS_ANNEAL_STEPS,
+    DEFAULT_AUXILIARY_LOSS_MINIMUM_WEIGHT,
     DEFAULT_AUXILIARY_LOSS_WEIGHT,
     auxiliary_loss_curriculum_report,
     build_auxiliary_recurrent_ppo,
@@ -65,8 +66,10 @@ MARKET_COLUMNS = ("open_time_ms", "open", "high", "low", "close", "volume")
 DEFAULT_FEE_BPS = 25.0
 DEFAULT_SLIPPAGE_BPS = 20.0
 DEFAULT_SIGNAL_GUIDANCE_REWARD_SCALE = 0.0002
+DEFAULT_SIGNAL_GUIDANCE_REWARD_FLOOR = 0.00002
 DEFAULT_SIGNAL_GUIDANCE_ANNEAL_STEPS = 300_000
 DEFAULT_SIGNAL_GUIDANCE_UPDATE_INTERVAL_STEPS = 1_000
+TRAINING_CHECKPOINT_INTERVAL_STEPS = 100_000
 TRAIN_FRACTION = 0.70
 VALIDATION_FRACTION = 0.10
 HOLDOUT_FRACTION = 0.20
@@ -428,7 +431,7 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="0 trains over one chronological pass through the training split.",
     )
     parser.add_argument("--seed", type=int, default=20261025)
-    parser.add_argument("--ent-coef", type=float, default=0.05)
+    parser.add_argument("--ent-coef", type=float, default=0.1)
     parser.add_argument("--fee-bps", type=float, default=DEFAULT_FEE_BPS)
     parser.add_argument("--slippage-bps", type=float, default=DEFAULT_SLIPPAGE_BPS)
     parser.add_argument("--commit-sha", default="unknown")
@@ -501,6 +504,34 @@ class TrainingRun:
     cost_curriculum: dict[str, Any]
     signal_guidance_curriculum: dict[str, Any]
     auxiliary_loss_curriculum: dict[str, Any]
+    reward_component_windows: list[dict[str, Any]]
+    checkpoint_paths: tuple[Path, ...]
+
+
+def _guidance_reward_scale_at_step(
+    timestep: int,
+    initial_scale: float = DEFAULT_SIGNAL_GUIDANCE_REWARD_SCALE,
+    anneal_steps: int = DEFAULT_SIGNAL_GUIDANCE_ANNEAL_STEPS,
+    minimum_scale: float = DEFAULT_SIGNAL_GUIDANCE_REWARD_FLOOR,
+) -> float:
+    """Linearly anneal the train-only SMA guidance reward to a nonzero floor."""
+    if isinstance(timestep, bool) or not isinstance(timestep, int) or timestep < 0:
+        raise ValueError("signal_guidance_timestep_invalid")
+    if (
+        isinstance(anneal_steps, bool)
+        or not isinstance(anneal_steps, int)
+        or anneal_steps < 1
+    ):
+        raise ValueError("signal_guidance_anneal_steps_invalid")
+    if not math.isfinite(initial_scale) or initial_scale < 0.0:
+        raise ValueError("signal_guidance_initial_scale_invalid")
+    if not math.isfinite(minimum_scale) or minimum_scale < 0.0:
+        raise ValueError("signal_guidance_floor_invalid")
+    if minimum_scale > initial_scale:
+        raise ValueError("signal_guidance_floor_exceeds_initial_scale")
+    return float(
+        max(minimum_scale, initial_scale * max(0.0, 1.0 - timestep / anneal_steps))
+    )
 
 
 def _build_cost_curriculum_callback(
@@ -508,11 +539,15 @@ def _build_cost_curriculum_callback(
     initial_guidance_scale: float = DEFAULT_SIGNAL_GUIDANCE_REWARD_SCALE,
     guidance_anneal_steps: int = DEFAULT_SIGNAL_GUIDANCE_ANNEAL_STEPS,
     guidance_update_interval_steps: int = DEFAULT_SIGNAL_GUIDANCE_UPDATE_INTERVAL_STEPS,
+    guidance_reward_floor: float = DEFAULT_SIGNAL_GUIDANCE_REWARD_FLOOR,
 ) -> Any:
-    """Update costs and anneal a training-only causal trend hint."""
+    """Update costs and anneal a training-only causal trend hint to a floor."""
     if (
         not math.isfinite(initial_guidance_scale)
         or initial_guidance_scale < 0.0
+        or not math.isfinite(guidance_reward_floor)
+        or guidance_reward_floor < 0.0
+        or guidance_reward_floor > initial_guidance_scale
         or isinstance(guidance_anneal_steps, bool)
         or guidance_anneal_steps < 1
         or isinstance(guidance_update_interval_steps, bool)
@@ -530,11 +565,13 @@ def _build_cost_curriculum_callback(
         self._initial_guidance_scale = float(initial_guidance_scale)
         self._guidance_anneal_steps = guidance_anneal_steps
         self._guidance_update_interval_steps = guidance_update_interval_steps
+        self._guidance_reward_floor = float(guidance_reward_floor)
         self._last_guidance_scale = float(initial_guidance_scale)
         self._guidance_reward_count = 0
         self._guidance_reward_total = 0.0
         self._guidance_buy_reward_count = 0
         self._guidance_sell_reward_count = 0
+        self._reward_component_windows: dict[int, dict[str, Any]] = {}
 
     def on_training_step(self: Any) -> bool:
         infos = self.locals.get("infos")
@@ -551,6 +588,7 @@ def _build_cost_curriculum_callback(
         ):
             raise RuntimeError("policy_closed_trade_count_missing_or_invalid")
         timestep = int(self.num_timesteps)
+        self._record_reward_component_step(timestep, info)
         next_fees, next_slippage = curriculum.observe_step(timestep, closed_trades)
         next_costs = (next_fees, next_slippage)
         if next_costs != self._last_costs:
@@ -584,8 +622,12 @@ def _build_cost_curriculum_callback(
             timestep % self._guidance_update_interval_steps == 0
             or timestep >= self._guidance_anneal_steps
         ):
-            remaining_fraction = max(0.0, 1.0 - timestep / self._guidance_anneal_steps)
-            next_guidance_scale = self._initial_guidance_scale * remaining_fraction
+            next_guidance_scale = _guidance_reward_scale_at_step(
+                timestep,
+                self._initial_guidance_scale,
+                self._guidance_anneal_steps,
+                self._guidance_reward_floor,
+            )
             if next_guidance_scale != self._last_guidance_scale:
                 updates = self.training_env.env_method(
                     "set_signal_guidance_reward_scale", next_guidance_scale
@@ -601,11 +643,12 @@ def _build_cost_curriculum_callback(
             "initial_reward_scale": self._initial_guidance_scale,
             "anneal_steps": self._guidance_anneal_steps,
             "update_interval_steps": self._guidance_update_interval_steps,
+            "minimum_reward_scale": self._guidance_reward_floor,
             "final_reward_scale": self._last_guidance_scale,
-            "anneal_completed": (
-                timesteps >= self._guidance_anneal_steps
-                and self._last_guidance_scale == 0.0
+            "floor_reached": math.isclose(
+                self._last_guidance_scale, self._guidance_reward_floor, abs_tol=1e-12
             ),
+            "anneal_completed": timesteps >= self._guidance_anneal_steps,
             "rewarded_action_count": self._guidance_reward_count,
             "reward_total": self._guidance_reward_total,
             "rewarded_buy_action_count": self._guidance_buy_reward_count,
@@ -618,6 +661,88 @@ def _build_cost_curriculum_callback(
             ),
         }
 
+
+    def record_reward_component_step(
+        self: Any, timestep: int, info: dict[str, Any]
+    ) -> None:
+        window_index = (timestep - 1) // TRAINING_CHECKPOINT_INTERVAL_STEPS
+        window = self._reward_component_windows.get(window_index)
+        if window is None:
+            reward_keys = (
+                "reward_net_log_return",
+                "reward_drawdown_increment_penalty",
+                "reward_drawdown_level_penalty",
+                "reward_inactivity_penalty",
+                "reward_invalid_action_penalty",
+                "reward_full_position_buy_penalty",
+                "reward_opportunity_cost_penalty",
+                "reward_holding_loss_penalty",
+                "reward_holding_profit_bonus",
+                "reward_low_volatility_hold_bonus",
+                "reward_transaction_cost_penalty",
+                "reward_signal_guidance",
+                "reward_realized_profit",
+                "reward_profitable_trade_bonus",
+                "reward_total",
+            )
+            window = {
+                "start_timestep": window_index * TRAINING_CHECKPOINT_INTERVAL_STEPS + 1,
+                "end_timestep": timestep,
+                "steps": 0,
+                "reward_component_sums": {key: 0.0 for key in reward_keys},
+                "transaction_cost_sums": {
+                    "fees": 0.0,
+                    "slippage": 0.0,
+                    "combined_fees_and_slippage": 0.0,
+                },
+                "requested_action_counts": {},
+                "executed_action_counts": {},
+            }
+            self._reward_component_windows[window_index] = window
+        window["end_timestep"] = timestep
+        window["steps"] += 1
+        for key in window["reward_component_sums"]:
+            raw_value = info.get(key)
+            if (
+                isinstance(raw_value, bool)
+                or not isinstance(raw_value, (int, float))
+                or not math.isfinite(float(raw_value))
+            ):
+                raise RuntimeError(
+                    f"training_reward_component_missing_or_invalid:{key}"
+                )
+            window["reward_component_sums"][key] += float(raw_value)
+        for info_key, summary_key in (
+            ("fees_this_step", "fees"),
+            ("slippage_this_step", "slippage"),
+            ("transaction_costs_this_step", "combined_fees_and_slippage"),
+        ):
+            raw_value = info.get(info_key)
+            if (
+                isinstance(raw_value, bool)
+                or not isinstance(raw_value, (int, float))
+                or not math.isfinite(float(raw_value))
+            ):
+                raise RuntimeError(
+                    f"training_cost_component_missing_or_invalid:{info_key}"
+                )
+            window["transaction_cost_sums"][summary_key] += float(raw_value)
+        for info_key, summary_key in (
+            ("requested_discrete_action_name", "requested_action_counts"),
+            ("executed_action", "executed_action_counts"),
+        ):
+            action = info.get(info_key)
+            if not isinstance(action, str) or not action:
+                raise RuntimeError(f"training_action_telemetry_missing:{info_key}")
+            counts = window[summary_key]
+            counts[action] = counts.get(action, 0) + 1
+
+    def reward_component_report(self: Any) -> list[dict[str, Any]]:
+        return [
+            self._reward_component_windows[index]
+            for index in sorted(self._reward_component_windows)
+        ]
+
     callback_type = type(
         "CostAndSignalGuidanceCurriculumCallback",
         (base_callback,),
@@ -625,6 +750,8 @@ def _build_cost_curriculum_callback(
             "__init__": initialize_callback,
             "_on_step": on_training_step,
             "signal_guidance_report": signal_guidance_report,
+            "_record_reward_component_step": record_reward_component_step,
+            "reward_component_report": reward_component_report,
         },
     )
     return callback_type()
@@ -668,7 +795,21 @@ def _train_recurrent_ppo(
             )
         ]
     )
-    callback = _build_cost_curriculum_callback(curriculum)
+    curriculum_callback = _build_cost_curriculum_callback(curriculum)
+    checkpoint_dir = args.out_dir / "checkpoints"
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    callback_module = importlib.import_module("stable_baselines3.common.callbacks")
+    checkpoint_callback = getattr(callback_module, "CheckpointCallback")(
+        save_freq=TRAINING_CHECKPOINT_INTERVAL_STEPS,
+        save_path=str(checkpoint_dir),
+        name_prefix="rl_trading_agent_checkpoint",
+        save_replay_buffer=False,
+        save_vecnormalize=False,
+        verbose=0,
+    )
+    callback = getattr(callback_module, "CallbackList")(
+        [curriculum_callback, checkpoint_callback]
+    )
     envs.seed(args.seed)
     policy_class = getattr(recurrent_ppo, "policy_class", None)
     if not isinstance(policy_class, type):
@@ -685,6 +826,7 @@ def _train_recurrent_ppo(
         ent_coef=args.ent_coef,
         auxiliary_loss_weight=DEFAULT_AUXILIARY_LOSS_WEIGHT,
         auxiliary_loss_anneal_steps=DEFAULT_AUXILIARY_LOSS_ANNEAL_STEPS,
+        auxiliary_loss_minimum_weight=DEFAULT_AUXILIARY_LOSS_MINIMUM_WEIGHT,
         clip_range=0.2,
         max_grad_norm=0.5,
         seed=args.seed,
@@ -711,6 +853,31 @@ def _train_recurrent_ppo(
     training_seconds = time.monotonic() - started_at
     if not model_path.is_file():
         raise RuntimeError("trained_model_artifact_missing")
+    checkpoint_paths = tuple(
+        sorted(
+            checkpoint_dir.glob("rl_trading_agent_checkpoint_*_steps.zip"),
+            key=lambda path: int(
+                path.name.removeprefix("rl_trading_agent_checkpoint_").removesuffix("_steps.zip")
+            ),
+        )
+    )
+    expected_checkpoint_steps = list(
+        range(
+            TRAINING_CHECKPOINT_INTERVAL_STEPS,
+            (training_steps // TRAINING_CHECKPOINT_INTERVAL_STEPS)
+            * TRAINING_CHECKPOINT_INTERVAL_STEPS
+            + 1,
+            TRAINING_CHECKPOINT_INTERVAL_STEPS,
+        )
+    )
+    checkpoint_steps = [
+        int(
+            path.name.removeprefix("rl_trading_agent_checkpoint_").removesuffix("_steps.zip")
+        )
+        for path in checkpoint_paths
+    ]
+    if checkpoint_steps != expected_checkpoint_steps:
+        raise RuntimeError("training_checkpoint_inventory_mismatch")
     loaded_model = recurrent_ppo.load(
         str(model_path.with_suffix("")), env=None, device="cpu"
     )
@@ -723,12 +890,15 @@ def _train_recurrent_ppo(
         training_seconds=float(training_seconds),
         entropy_coefficient=float(args.ent_coef),
         cost_curriculum=curriculum.report(int(loaded_model.num_timesteps)),
-        signal_guidance_curriculum=callback.signal_guidance_report(),
+        signal_guidance_curriculum=curriculum_callback.signal_guidance_report(),
         auxiliary_loss_curriculum=auxiliary_loss_curriculum_report(
             int(loaded_model.num_timesteps),
             float(loaded_model.auxiliary_loss_weight),
             int(loaded_model.auxiliary_loss_anneal_steps),
+            float(loaded_model.auxiliary_loss_minimum_weight),
         ),
+        reward_component_windows=curriculum_callback.reward_component_report(),
+        checkpoint_paths=checkpoint_paths,
     )
 
 
@@ -854,7 +1024,7 @@ def _build_report(
         economic_assessment["status"] = "NO-GO"
 
     report: dict[str, Any] = {
-        "schema_version": "alix.rl-trading-agent-report.v10",
+        "schema_version": "alix.rl-trading-agent-report.v11",
         "run_mode": "historical_simulation_only",
         "commit_sha": args.commit_sha,
         "research_result": (
@@ -1037,9 +1207,10 @@ def _build_report(
                 "training_signal_guidance": {
                     "enabled_only_during_training": True,
                     "initial_reward_scale": DEFAULT_SIGNAL_GUIDANCE_REWARD_SCALE,
+                    "minimum_reward_scale": DEFAULT_SIGNAL_GUIDANCE_REWARD_FLOOR,
                     "anneal_steps": DEFAULT_SIGNAL_GUIDANCE_ANNEAL_STEPS,
                     "update_interval_steps": DEFAULT_SIGNAL_GUIDANCE_UPDATE_INTERVAL_STEPS,
-                    "final_reward_scale": 0.0,
+                    "final_reward_scale": DEFAULT_SIGNAL_GUIDANCE_REWARD_FLOOR,
                     "validation_enabled": False,
                     "final_holdout_enabled": False,
                     "signal_definition": (
@@ -1084,8 +1255,9 @@ def _build_report(
                     "- 0.0001 * indicator(HOLD_while_net_liquidation_is_below_cost_basis) "
                     "+ 0.0001 * indicator(HOLD_while_net_liquidation_is_above_cost_basis) "
                     "- 0.0005 * indicator(flat_HOLD_and_close_above_causal_SMA) "
-                    "+ annealed_training_only_scale * indicator(legal_BUY_when_causal_SMA_rises "
-                    "or legal_SELL_when_causal_SMA_falls) "
+                    "+ max(minimum_guidance_floor, annealed_training_only_scale) "
+                    "* indicator(legal_BUY_when_causal_SMA_rises "
+                    "or legal_SELL_when_causal_SMA_falls) 
                     "+ 0.5 * max(0, closed_trade_net_profit / initial_equity) "
                     " * indicator(policy_SELL_fully_closes_trade) "
                     "+ 0.0001 * profitable_closed_trade_count"
@@ -1129,7 +1301,7 @@ def _build_report(
             "n_epochs": 4,
             "epochs_per_rollout": 4,
             "lstm_hidden_size": 64,
-            "training_algorithm": "RecurrentPPO with LSTM, Discrete(7) combined actions, pre-Categorical logit masking, annealed seven-class guidance cross-entropy, low-volatility HOLD reward, and explicit transaction-cost reward penalty",
+            "training_algorithm": "RecurrentPPO with LSTM, Discrete(7) combined actions, pre-Categorical logit masking, floor-preserved seven-class guidance cross-entropy, minimum training-only SMA reward floor, elevated entropy coefficient, periodic checkpoints, low-volatility HOLD reward, and explicit transaction-cost reward penalty",
             "training_seconds": float(training.training_seconds),
             "model_artifact": training.model_path.name,
             "model_sha256": _sha256(training.model_path),
@@ -1139,6 +1311,28 @@ def _build_report(
         "cost_curriculum": training.cost_curriculum,
         "signal_guidance_curriculum": training.signal_guidance_curriculum,
         "auxiliary_loss_curriculum": training.auxiliary_loss_curriculum,
+        "training_reward_dynamics": {
+            "window_size_steps": TRAINING_CHECKPOINT_INTERVAL_STEPS,
+            "scope": "training_only; env.info telemetry; no validation or holdout rewards used",
+            "component_windows": training.reward_component_windows,
+        },
+        "checkpointing": {
+            "enabled": True,
+            "interval_steps": TRAINING_CHECKPOINT_INTERVAL_STEPS,
+            "directory": "checkpoints",
+            "checkpoint_count": len(training.checkpoint_paths),
+            "checkpoints": [
+                {
+                    "file": f"checkpoints/{path.name}",
+                    "timesteps": int(
+                        path.name.removeprefix("rl_trading_agent_checkpoint_").removesuffix("_steps.zip")
+                    ),
+                    "sha256": _sha256(path),
+                    "size_bytes": path.stat().st_size,
+                }
+                for path in training.checkpoint_paths
+            ],
+        },
         "evaluation": {
             "validation": validation_metrics,
             "validation_buy_and_hold": validation_buy_and_hold,

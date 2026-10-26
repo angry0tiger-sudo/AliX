@@ -24,6 +24,7 @@ from services.rl_research.rl_trading_environment import (
 
 DEFAULT_AUXILIARY_LOSS_WEIGHT = 0.1
 DEFAULT_AUXILIARY_LOSS_ANNEAL_STEPS = 500_000
+DEFAULT_AUXILIARY_LOSS_MINIMUM_WEIGHT = 0.01
 GUIDANCE_ACTION_COUNT = len(ACTION_NAMES)
 ACTION_MASK_POSITION_EPSILON = POSITION_FRACTION_EPSILON
 ACTION_MASKED_POLICY_CLASS_NAME = "ActionMaskedRecurrentActorCriticPolicy"
@@ -46,8 +47,9 @@ def auxiliary_loss_weight(
     num_timesteps: int,
     initial_weight: float = DEFAULT_AUXILIARY_LOSS_WEIGHT,
     anneal_steps: int = DEFAULT_AUXILIARY_LOSS_ANNEAL_STEPS,
+    minimum_weight: float = DEFAULT_AUXILIARY_LOSS_MINIMUM_WEIGHT,
 ) -> float:
-    """Return a linear auxiliary-loss schedule, clamped at zero after annealing."""
+    """Return a linear auxiliary-loss schedule clamped at its nonzero floor."""
     if isinstance(num_timesteps, bool) or not isinstance(num_timesteps, int):
         raise ValueError("auxiliary_loss_timestep_must_be_integer")
     if num_timesteps < 0:
@@ -60,23 +62,39 @@ def auxiliary_loss_weight(
         raise ValueError("auxiliary_loss_anneal_steps_must_be_integer")
     if anneal_steps < 1:
         raise ValueError("auxiliary_loss_anneal_steps_must_be_positive")
-    return float(initial_weight * max(0.0, 1.0 - num_timesteps / anneal_steps))
+    if isinstance(minimum_weight, bool) or not math.isfinite(minimum_weight):
+        raise ValueError("auxiliary_loss_minimum_weight_must_be_finite")
+    if minimum_weight < 0.0:
+        raise ValueError("auxiliary_loss_minimum_weight_must_be_non_negative")
+    if minimum_weight > initial_weight:
+        raise ValueError("auxiliary_loss_minimum_weight_exceeds_initial_weight")
+    return float(
+        max(
+            minimum_weight,
+            initial_weight * max(0.0, 1.0 - num_timesteps / anneal_steps),
+        )
+    )
 
 
 def auxiliary_loss_curriculum_report(
     trained_timesteps: int,
     initial_weight: float = DEFAULT_AUXILIARY_LOSS_WEIGHT,
     anneal_steps: int = DEFAULT_AUXILIARY_LOSS_ANNEAL_STEPS,
+    minimum_weight: float = DEFAULT_AUXILIARY_LOSS_MINIMUM_WEIGHT,
 ) -> dict[str, Any]:
-    """Describe the fixed, training-only schedule in the machine-readable report."""
+    """Describe the floor-preserved training-only schedule in the report."""
     return {
         "method": "recurrent_policy_combined_discrete_action_cross_entropy",
         "initial_weight": float(initial_weight),
         "anneal_steps": int(anneal_steps),
+        "minimum_weight": float(minimum_weight),
         "trained_timesteps": int(trained_timesteps),
         "effective_weight_at_training_end": auxiliary_loss_weight(
-            int(trained_timesteps), initial_weight, anneal_steps
+            int(trained_timesteps), initial_weight, anneal_steps, minimum_weight
         ),
+        "floor_reached": auxiliary_loss_weight(
+            int(trained_timesteps), initial_weight, anneal_steps, minimum_weight
+        ) <= minimum_weight + 1e-12,
         "anneal_completed": int(trained_timesteps) >= anneal_steps,
         "target_classes": {str(index): name for index, name in enumerate(ACTION_NAMES)},
         "target_rule": (
@@ -422,6 +440,7 @@ def _train_with_auxiliary_loss(self: Any) -> None:
         int(self.num_timesteps),
         float(self.auxiliary_loss_weight),
         int(self.auxiliary_loss_anneal_steps),
+        float(self.auxiliary_loss_minimum_weight),
     )
     history: dict[str, list[float]] = {
         key: []
@@ -617,10 +636,17 @@ def build_auxiliary_recurrent_ppo() -> Any:
             "auxiliary_loss_anneal_steps",
             DEFAULT_AUXILIARY_LOSS_ANNEAL_STEPS,
         )
-        auxiliary_loss_weight(0, weight, anneal_steps)
+        minimum_weight = float(
+            kwargs.pop(
+                "auxiliary_loss_minimum_weight",
+                DEFAULT_AUXILIARY_LOSS_MINIMUM_WEIGHT,
+            )
+        )
+        auxiliary_loss_weight(0, weight, anneal_steps, minimum_weight)
         recurrent_ppo.__init__(self, *args, **kwargs)
         self.auxiliary_loss_weight = weight
         self.auxiliary_loss_anneal_steps = int(anneal_steps)
+        self.auxiliary_loss_minimum_weight = minimum_weight
 
     def setup_model(self: Any) -> None:
         recurrent_ppo._setup_model(self)

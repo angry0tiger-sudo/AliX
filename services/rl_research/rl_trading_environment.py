@@ -1102,13 +1102,9 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
                 requested_action, action_name, action_mask
             )
         )
-        transaction_costs_this_step = max(
-            0.0,
-            self._total_fees
-            - fees_before_action
-            + self._total_slippage
-            - slippage_before_action,
-        )
+        fees_this_step = max(0.0, self._total_fees - fees_before_action)
+        slippage_this_step = max(0.0, self._total_slippage - slippage_before_action)
+        transaction_costs_this_step = fees_this_step + slippage_this_step
         transaction_cost_reward_penalty = (
             DEFAULT_TRANSACTION_COST_REWARD_MULTIPLIER
             * transaction_costs_this_step
@@ -1182,6 +1178,10 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
             "position_change_quantity": float(position_change_quantity),
             "consecutive_no_position_change_steps": self._consecutive_no_position_change_steps,
             "reward_net_log_return": log_net_return,
+            "reward_drawdown_increment_penalty": self.drawdown_increment_penalty
+            * max(0.0, risk_drawdown - previous_drawdown),
+            "reward_drawdown_level_penalty": self.drawdown_level_penalty * risk_drawdown,
+            "reward_total": reward,
             "drawdown_for_reward": risk_drawdown,
             "reward_inactivity_penalty": inactivity_penalty,
             "reward_invalid_action_penalty": float(invalid_action_penalty),
@@ -1200,6 +1200,8 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
             "reward_low_volatility_hold_bonus": low_volatility_hold_reward,
             "low_volatility_return_std": low_volatility_return_std,
             "reward_transaction_cost_penalty": transaction_cost_reward_penalty,
+            "fees_this_step": fees_this_step,
+            "slippage_this_step": slippage_this_step,
             "transaction_costs_this_step": transaction_costs_this_step,
             "transaction_cost_reward_multiplier": DEFAULT_TRANSACTION_COST_REWARD_MULTIPLIER,
             "reward_signal_guidance": signal_guidance_reward,
