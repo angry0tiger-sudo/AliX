@@ -574,12 +574,8 @@ def _build_cost_curriculum_callback(
             timestep % self._guidance_update_interval_steps == 0
             or timestep >= self._guidance_anneal_steps
         ):
-            remaining_fraction = max(
-                0.0, 1.0 - timestep / self._guidance_anneal_steps
-            )
-            next_guidance_scale = (
-                self._initial_guidance_scale * remaining_fraction
-            )
+            remaining_fraction = max(0.0, 1.0 - timestep / self._guidance_anneal_steps)
+            next_guidance_scale = self._initial_guidance_scale * remaining_fraction
             if next_guidance_scale != self._last_guidance_scale:
                 updates = self.training_env.env_method(
                     "set_signal_guidance_reward_scale", next_guidance_scale
