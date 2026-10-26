@@ -56,6 +56,7 @@ DEFAULT_DRAWDOWN_INCREMENT_PENALTY = 5.0
 DEFAULT_DRAWDOWN_LEVEL_PENALTY = 0.01
 DEFAULT_INACTIVITY_PENALTY = 0.001
 DEFAULT_INVALID_ACTION_PENALTY = 0.001
+DEFAULT_INVALID_FULL_POSITION_BUY_PENALTY = 1.0
 DEFAULT_HOLDING_PROFIT_REWARD = 0.0001
 DEFAULT_HOLDING_LOSS_PENALTY = 0.0001
 DEFAULT_REALIZED_PROFIT_REWARD_SCALE = 0.5
@@ -336,6 +337,7 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Int64Array]):
         self._buy_target_not_increasing_action_count = 0
         self._masked_sell_action_count = 0
         self._invalid_action_penalty_count = 0
+        self._full_position_buy_penalty_count = 0
         self._no_position_change_steps = 0
         self._consecutive_no_position_change_steps = 0
         self._max_consecutive_no_position_change_steps = 0
@@ -713,6 +715,7 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Int64Array]):
         self._buy_target_not_increasing_action_count = 0
         self._masked_sell_action_count = 0
         self._invalid_action_penalty_count = 0
+        self._full_position_buy_penalty_count = 0
         self._no_position_change_steps = 0
         self._consecutive_no_position_change_steps = 0
         self._max_consecutive_no_position_change_steps = 0
@@ -746,7 +749,13 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Int64Array]):
         )
         if applied:
             self._invalid_action_penalty_count += 1
-        penalty = self.invalid_action_penalty if applied else 0.0
+        if applied and requested_action == "BUY":
+            # Defense in depth: the policy-level mask should prevent this path,
+            # but the environment remains a fail-closed execution boundary.
+            self._full_position_buy_penalty_count += 1
+            penalty = DEFAULT_INVALID_FULL_POSITION_BUY_PENALTY
+        else:
+            penalty = self.invalid_action_penalty if applied else 0.0
         return applied, penalty
 
     def _track_position_change(
@@ -1052,6 +1061,14 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Int64Array]):
             "drawdown_for_reward": risk_drawdown,
             "reward_inactivity_penalty": inactivity_penalty,
             "reward_invalid_action_penalty": float(invalid_action_penalty),
+            "full_position_buy_penalty_applied": (
+                requested_action == "BUY" and not action_mask["BUY"]
+            ),
+            "reward_full_position_buy_penalty": float(
+                DEFAULT_INVALID_FULL_POSITION_BUY_PENALTY
+                if requested_action == "BUY" and not action_mask["BUY"]
+                else 0.0
+            ),
             "invalid_action_penalty_applied": invalid_action_penalty_applied,
             "reward_opportunity_cost_penalty": opportunity_cost_penalty,
             "reward_holding_loss_penalty": holding_loss_penalty,
@@ -1111,6 +1128,11 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Int64Array]):
             ),
             "masked_sell_action_count": self._masked_sell_action_count,
             "invalid_action_penalty_count": self._invalid_action_penalty_count,
+            "full_position_buy_penalty_count": self._full_position_buy_penalty_count,
+            "full_position_buy_penalty_total": float(
+                self._full_position_buy_penalty_count
+                * DEFAULT_INVALID_FULL_POSITION_BUY_PENALTY
+            ),
             "opportunity_cost_penalty_count": self._opportunity_cost_penalty_count,
             "holding_loss_penalty_count": self._holding_loss_penalty_count,
             "holding_profit_reward_count": self._holding_profit_reward_count,
