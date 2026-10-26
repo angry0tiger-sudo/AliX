@@ -167,4 +167,3 @@ def test_checkpoint_validation_row_reports_action_sides_and_economics(
     assert row["net_profit"] == pytest.approx(15.0)
     assert row["max_drawdown"] == pytest.approx(0.02)
     assert row["closed_trades"] == 2
-
