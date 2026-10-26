@@ -546,7 +546,7 @@ def _build_action_masked_recurrent_policy() -> Any:
         ):
             raise ValueError("action_mask_direction_logits_shape_invalid")
 
-        observation_shape = getattr(observations, "shape", ())
+        observation_shape: Any = getattr(observations, "shape", ())
         if len(observation_shape) < 2 or observation_shape[-1] <= position_index:
             raise ValueError("action_mask_position_observation_missing")
         position_fraction = (
