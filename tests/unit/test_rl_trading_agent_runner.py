@@ -54,7 +54,7 @@ class _Fixed25PercentBuyPolicy:
         deterministic: bool,
     ) -> tuple[NDArray[np.int64], Any]:
         assert deterministic is True
-        return np.asarray([ACTION_BUY, 0], dtype=np.int64), state
+        return np.asarray(ACTION_BUY, dtype=np.int64), state
 
 
 def test_evaluation_reports_real_discrete_size_choices_without_zero_volume_buys() -> (
@@ -93,7 +93,6 @@ def test_evaluation_reports_real_discrete_size_choices_without_zero_volume_buys(
     assert metrics["policy_requested_trade_size_fraction_counts"] == {
         "0.25": metrics["steps"],
         "0.50": 0,
-        "0.75": 0,
         "1.00": 0,
     }
     assert metrics["policy_requested_trade_size_fraction_mean"] == pytest.approx(0.25)
