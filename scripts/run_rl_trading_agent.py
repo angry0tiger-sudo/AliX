@@ -852,7 +852,7 @@ def _build_report(
         economic_assessment["status"] = "NO-GO"
 
     report: dict[str, Any] = {
-        "schema_version": "alix.rl-trading-agent-report.v8",
+        "schema_version": "alix.rl-trading-agent-report.v9",
         "run_mode": "historical_simulation_only",
         "commit_sha": args.commit_sha,
         "research_result": (
@@ -969,8 +969,11 @@ def _build_report(
                 "hold_semantics": "do not rebalance; size index is ignored",
                 "zero_size_buy_allowed": False,
                 "masking": {
-                    "enforcement": "policy_distribution_logits_and_deterministic_environment_execution_boundary",
+                    "enforcement": "raw_direction_logits_before_multicategorical_distribution_and_environment_execution_boundary",
                     "policy_distribution_logits_masked": True,
+                    "mask_applied_before_distribution_construction": True,
+                    "masked_logit_value": -1e8,
+                    "forbidden_action_probability_exactly_zero": True,
                     "position_fraction_full_threshold": 1.0
                     - ACTION_MASK_POSITION_EPSILON,
                     "position_fraction_flat_threshold": ACTION_MASK_POSITION_EPSILON,
@@ -1113,7 +1116,7 @@ def _build_report(
             "n_epochs": 4,
             "epochs_per_rollout": 4,
             "lstm_hidden_size": 64,
-            "training_algorithm": "RecurrentPPO with policy-level action-logit masking and annealed guidance cross-entropy",
+            "training_algorithm": "RecurrentPPO with LSTM and raw-logit action masking before MultiCategorical distribution construction plus annealed guidance cross-entropy",
             "training_seconds": float(training.training_seconds),
             "model_artifact": training.model_path.name,
             "model_sha256": _sha256(training.model_path),
