@@ -226,15 +226,14 @@ def _checkpoint_inventory(artifact_dir: Path) -> dict[str, Any]:
     )
     final_model = artifact_dir / "rl-agent" / "rl_trading_agent_recurrent_ppo.zip"
     return {
-        "checkpoint_files_found": model_files,
+        "historical_checkpoint_files_found": model_files,
         "checkpoint_count": len(model_files),
         "final_model_exists": final_model.is_file(),
         "final_model_is_not_a_historical_checkpoint": True,
-        "exact_hold_buy_crossover_recoverable": bool(model_files),
+        "exact_hold_buy_crossover_recoverable": False,
         "reason_if_unavailable": (
-            None
-            if model_files
-            else "Run #98 uploaded only the final policy; no 100k-step model snapshots exist."
+            "This audit reads archived scalar logs and does not replay checkpoint models. "
+            "The source Run #98 artifact contains no named historical step checkpoints."
         ),
     }
 
@@ -361,6 +360,15 @@ def build_report(
         _nearest_snapshot(snapshots, step)
         for step in range(100_000, 1_000_001, 100_000)
     ]
+    low_entropy_step = entropy["first_snapshot_at_or_below_0_05_nats"]
+    low_entropy_snapshot = next(
+        (
+            item
+            for item in snapshots
+            if int(item["timesteps"]) == low_entropy_step
+        ),
+        None,
+    )
     return {
         "schema_version": REPORT_SCHEMA,
         "analysis_mode": "archived_training_logs_and_existing_reports_only",
@@ -413,14 +421,16 @@ def build_report(
             ],
             "minimum_logged_entropy_nats": entropy["minimum_observed_entropy_nats"],
             "minimum_logged_entropy_timestep": entropy["minimum_observed_entropy_timestep"],
-            "auxiliary_loss_at_low_entropy_milestone": next(
-                (
-                    item["auxiliary_loss"]
-                    for item in milestones
-                    if item["nearest_logged_timestep"]
-                    == entropy["first_snapshot_at_or_below_0_05_nats"]
-                ),
-                None,
+            "auxiliary_loss_at_low_entropy_milestone": (
+                float(low_entropy_snapshot["auxiliary_loss"])
+                if low_entropy_snapshot is not None
+                else None
+            ),
+            "auxiliary_loss_weight_at_low_entropy_milestone": (
+                float(low_entropy_snapshot["auxiliary_loss_weight"])
+                if low_entropy_snapshot is not None
+                and "auxiliary_loss_weight" in low_entropy_snapshot
+                else None
             ),
             "cause_proven": False,
             "interpretation": (

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -71,7 +70,6 @@ class TrainingDynamicsAuditTests(unittest.TestCase):
                     ]
                 )
             # A short fixture is intentionally repeated to satisfy the 20-snapshot gate.
-            base = blocks[:]
             for index in range(7):
                 step = 40_960 + index * 10_240
                 blocks.extend(
@@ -84,7 +82,7 @@ class TrainingDynamicsAuditTests(unittest.TestCase):
                 )
             # Parser's minimum metric-history guard is tested separately from small fixtures.
             for index in range(20):
-                step = 100_000 + index * 10_240
+                step = 850_000 + index * 10_240
                 blocks.extend(
                     [
                         f"| total_timesteps | {step} |",

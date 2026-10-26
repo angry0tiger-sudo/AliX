@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   audit-historical-training:
-    name: Audit Run #98 logs without training
+    name: "Audit Run #98 logs without training"
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -98,15 +98,22 @@ jobs:
           from pathlib import Path
           archive = Path("artifacts/source-job-logs.zip")
           output = Path("artifacts/source-logs")
-          with zipfile.ZipFile(archive) as bundle:
-              for member in bundle.infolist():
-                  destination = (output / member.filename).resolve()
-                  if output.resolve() not in destination.parents and destination != output.resolve():
-                      raise SystemExit("unsafe_path_in_github_log_archive")
-              bundle.extractall(output)
+          output.mkdir(parents=True, exist_ok=True)
+          if zipfile.is_zipfile(archive):
+              with zipfile.ZipFile(archive) as bundle:
+                  for member in bundle.infolist():
+                      destination = (output / member.filename).resolve()
+                      if output.resolve() not in destination.parents and destination != output.resolve():
+                          raise SystemExit("unsafe_path_in_github_log_archive")
+                  bundle.extractall(output)
+          else:
+              raw_logs = archive.read_text(encoding="utf-8", errors="replace")
+              if "entropy_loss" not in raw_logs or "total_timesteps" not in raw_logs:
+                  raise SystemExit("unexpected_source_job_log_format")
+              (output / "source-training.log").write_text(raw_logs, encoding="utf-8")
           if not any(path.is_file() for path in output.rglob("*")):
               raise SystemExit("source_job_log_archive_is_empty")
-          print("Historical job logs downloaded and safely extracted.")
+          print("Historical job logs downloaded and safely extracted or staged as plain text.")
           PY
 
       - name: Run offline dynamics audit and unit tests
