@@ -253,6 +253,7 @@ def _environment(
         fee_bps_per_side=fee_bps,
         slippage_bps_per_side=slippage_bps,
         random_start=False,
+        include_portfolio_state=False,
         signal_guidance_reward_scale=0.0,
     )
 

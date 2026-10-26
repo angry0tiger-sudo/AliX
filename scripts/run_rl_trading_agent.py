@@ -1,4 +1,4 @@
-"""Train and evaluate the market-only recurrent PPO agent offline."""
+"""Train and evaluate the state-aware recurrent PPO agent offline."""
 
 from __future__ import annotations
 
@@ -38,6 +38,12 @@ from services.rl_research.rl_trading_environment import (
     MarketObservationScaler,
     OBSERVATION_FIELDS,
     validate_market_data,
+)
+from scripts.rl_auxiliary_ppo import (
+    DEFAULT_AUXILIARY_LOSS_ANNEAL_STEPS,
+    DEFAULT_AUXILIARY_LOSS_WEIGHT,
+    auxiliary_loss_curriculum_report,
+    build_auxiliary_recurrent_ppo,
 )
 from services.rl_research.rl_cost_curriculum import (
     CURRICULUM_MINIMUM_CLOSED_TRADES,
@@ -491,6 +497,7 @@ class TrainingRun:
     entropy_coefficient: float
     cost_curriculum: dict[str, Any]
     signal_guidance_curriculum: dict[str, Any]
+    auxiliary_loss_curriculum: dict[str, Any>
 
 
 def _build_cost_curriculum_callback(
@@ -633,7 +640,7 @@ def _train_recurrent_ppo(
     torch = importlib.import_module("torch")
     torch.set_num_threads(1)
     torch.manual_seed(args.seed)
-    recurrent_ppo = getattr(importlib.import_module("sb3_contrib"), "RecurrentPPO")
+    recurrent_ppo = build_auxiliary_recurrent_ppo()
     dummy_vec_env = getattr(
         importlib.import_module("stable_baselines3.common.vec_env"), "DummyVecEnv"
     )
@@ -670,6 +677,8 @@ def _train_recurrent_ppo(
         gamma=0.99,
         gae_lambda=0.95,
         ent_coef=args.ent_coef,
+        auxiliary_loss_weight=DEFAULT_AUXILIARY_LOSS_WEIGHT,
+        auxiliary_loss_anneal_steps=DEFAULT_AUXILIARY_LOSS_ANNEAL_STEPS,
         clip_range=0.2,
         max_grad_norm=0.5,
         seed=args.seed,
@@ -709,6 +718,11 @@ def _train_recurrent_ppo(
         entropy_coefficient=float(args.ent_coef),
         cost_curriculum=curriculum.report(int(loaded_model.num_timesteps)),
         signal_guidance_curriculum=callback.signal_guidance_report(),
+        auxiliary_loss_curriculum=auxiliary_loss_curriculum_report(
+            int(loaded_model.num_timesteps),
+            float(loaded_model.auxiliary_loss_weight),
+            int(loaded_model.auxiliary_loss_anneal_steps),
+        ),
     )
 
 
@@ -834,7 +848,7 @@ def _build_report(
         economic_assessment["status"] = "NO-GO"
 
     report: dict[str, Any] = {
-        "schema_version": "alix.rl-trading-agent-report.v6",
+        "schema_version": "alix.rl-trading-agent-report.v7",
         "run_mode": "historical_simulation_only",
         "commit_sha": args.commit_sha,
         "research_result": (
@@ -921,8 +935,18 @@ def _build_report(
             "standard": "Gymnasium",
             "raw_market_fields": list(MARKET_COLUMNS),
             "observation_fields": list(OBSERVATION_FIELDS),
-            "observation_contains_position_or_pnl": False,
+            "observation_contains_position_or_pnl": True,
             "observation_contains_technical_indicators": False,
+            "observation_semantics": {
+                "current_position_fraction": (
+                    "marked BTC position value divided by total marked account equity, "
+                    "clamped to [0, 1]"
+                ),
+                "unrealized_pnl_pct": (
+                    "decimal return on remaining position cost basis, including entry costs; "
+                    "0.05 means +5%, and flat positions report 0"
+                ),
+            },
             "action_space": {
                 "type": "MultiDiscrete",
                 "nvec": [len(ACTION_NAMES), len(POSITION_SIZE_FRACTIONS)],
@@ -1073,6 +1097,7 @@ def _build_report(
             "n_epochs": 4,
             "epochs_per_rollout": 4,
             "lstm_hidden_size": 64,
+            "training_algorithm": "RecurrentPPO with annealed guidance cross-entropy",
             "training_seconds": float(training.training_seconds),
             "model_artifact": training.model_path.name,
             "model_sha256": _sha256(training.model_path),
@@ -1081,6 +1106,7 @@ def _build_report(
         },
         "cost_curriculum": training.cost_curriculum,
         "signal_guidance_curriculum": training.signal_guidance_curriculum,
+        "auxiliary_loss_curriculum": training.auxiliary_loss_curriculum,
         "evaluation": {
             "validation": validation_metrics,
             "validation_buy_and_hold": validation_buy_and_hold,
