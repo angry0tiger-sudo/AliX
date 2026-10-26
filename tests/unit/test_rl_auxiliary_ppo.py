@@ -107,7 +107,7 @@ def test_auxiliary_loss_recurrent_ppo_training_and_reload(tmp_path: Path) -> Non
     try:
         model.learn(total_timesteps=8, progress_bar=False)
         assert model.num_timesteps == 8
-        assert model.rollout_buffer.guidance_targets.shape == (8,)
+        assert model.rollout_buffer.guidance_targets.shape == (8, 1)
         assert np.all(
             np.isin(model.rollout_buffer.guidance_targets, np.asarray([0, 1, 2]))
         )
