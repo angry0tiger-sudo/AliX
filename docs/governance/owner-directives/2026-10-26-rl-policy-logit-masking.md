@@ -8,9 +8,9 @@ Run #56 showed repeated BUY requests after the position was fully allocated desp
 
 ## Required behavior
 
-- Use the observed `current_position_fraction` from the 11-feature observation to mask action-direction logits before categorical sampling, deterministic selection, PPO log-probability evaluation, and the auxiliary direction-loss path.
-- Set BUY logits to negative infinity when `current_position_fraction >= 1 - 1e-6`.
-- Set SELL logits to negative infinity when `current_position_fraction <= 1e-6`.
+- Use the observed `current_position_fraction` from the 11-feature observation to mask the raw flattened direction logits before MultiCategoricalDistribution construction, categorical sampling, deterministic selection, PPO log-probability evaluation, and the auxiliary direction-loss path.
+- Set BUY logits to `-1e8` when `current_position_fraction >= 1 - 1e-6`, before constructing the categorical distribution.
+- Set SELL logits to `-1e8` when `current_position_fraction <= 1e-6`, before constructing the categorical distribution.
 - Keep HOLD always legal. Reject missing, malformed, out-of-range, or batch-misaligned mask context; do not silently fall back to an unmasked distribution.
 - Preserve the independent environment execution-boundary mask.
 - If an invalid BUY nevertheless reaches the environment while BUY is illegal, apply a `-1.0` reward penalty and emit explicit count/total metrics. Existing default penalties for other masked invalid actions remain unchanged.
