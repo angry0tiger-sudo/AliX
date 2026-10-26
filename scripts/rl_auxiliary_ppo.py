@@ -14,9 +14,16 @@ from typing import Any, NamedTuple
 
 import numpy as np
 
+from services.rl_research.rl_trading_environment import (
+    ACTION_NAMES,
+    OBSERVATION_FIELDS,
+)
+
 DEFAULT_AUXILIARY_LOSS_WEIGHT = 0.1
 DEFAULT_AUXILIARY_LOSS_ANNEAL_STEPS = 500_000
 GUIDANCE_ACTION_COUNT = 3
+ACTION_MASK_POSITION_EPSILON = 1e-6
+ACTION_MASKED_POLICY_CLASS_NAME = "ActionMaskedRecurrentActorCriticPolicy"
 
 
 class GuidanceRecurrentRolloutBufferSamples(NamedTuple):
@@ -461,6 +468,132 @@ def _train_with_auxiliary_loss(self: Any) -> None:
         self.logger.record("train/clip_range_vf", clip_range_vf)
 
 
+
+def _build_action_masked_recurrent_policy() -> Any:
+    """Create a recurrent actor-critic policy that masks illegal direction logits."""
+    policy_base = getattr(
+        importlib.import_module("sb3_contrib.common.recurrent.policies"),
+        "RecurrentActorCriticPolicy",
+    )
+    existing = globals().get(ACTION_MASKED_POLICY_CLASS_NAME)
+    if isinstance(existing, type) and issubclass(existing, policy_base):
+        return existing
+
+    try:
+        position_index = OBSERVATION_FIELDS.index("current_position_fraction")
+        buy_index = ACTION_NAMES.index("BUY")
+        sell_index = ACTION_NAMES.index("SELL")
+    except ValueError as error:
+        raise RuntimeError("action_mask_observation_contract_invalid") from error
+
+    def call_with_observation_context(
+        self: Any, method: Any, observations: Any, *args: Any, **kwargs: Any
+    ) -> Any:
+        had_context = hasattr(self, "_action_mask_observation")
+        previous_context = getattr(self, "_action_mask_observation", None)
+        self._action_mask_observation = observations
+        try:
+            return method(self, observations, *args, **kwargs)
+        finally:
+            if had_context:
+                self._action_mask_observation = previous_context
+            else:
+                delattr(self, "_action_mask_observation")
+
+    def forward(
+        self: Any,
+        obs: Any,
+        lstm_states: Any,
+        episode_starts: Any,
+        deterministic: bool = False,
+    ) -> Any:
+        return call_with_observation_context(
+            self, policy_base.forward, obs, lstm_states, episode_starts, deterministic
+        )
+
+    def evaluate_actions(
+        self: Any, obs: Any, actions: Any, lstm_states: Any, episode_starts: Any
+    ) -> Any:
+        return call_with_observation_context(
+            self, policy_base.evaluate_actions, obs, actions, lstm_states, episode_starts
+        )
+
+    def get_distribution(
+        self: Any, obs: Any, lstm_states: Any, episode_starts: Any
+    ) -> Any:
+        return call_with_observation_context(
+            self, policy_base.get_distribution, obs, lstm_states, episode_starts
+        )
+
+    def _get_action_dist_from_latent(self: Any, latent_pi: Any) -> Any:
+        torch = importlib.import_module("torch")
+        observations = getattr(self, "_action_mask_observation", None)
+        if observations is None:
+            raise RuntimeError("action_mask_observation_context_missing")
+
+        distribution = policy_base._get_action_dist_from_latent(self, latent_pi)
+        components = getattr(distribution, "distribution", None)
+        if not isinstance(components, list) or len(components) != 2:
+            raise ValueError(
+                "action_mask_requires_two_component_multidiscrete_distribution"
+            )
+        if (
+            components[0].logits.ndim != 2
+            or components[0].logits.shape[1] != len(ACTION_NAMES)
+        ):
+            raise ValueError("action_mask_direction_logits_shape_invalid")
+
+        observation_shape = getattr(observations, "shape", ())
+        if len(observation_shape) < 2 or observation_shape[-1] <= position_index:
+            raise ValueError("action_mask_position_observation_missing")
+        position_fraction = observations[..., position_index].reshape(-1).to(
+            device=components[0].logits.device,
+            dtype=components[0].logits.dtype,
+        )
+        direction_logits = components[0].logits
+        if position_fraction.numel() != direction_logits.shape[0]:
+            raise ValueError("action_mask_observation_batch_alignment_invalid")
+        if (
+            not bool(torch.isfinite(position_fraction).all().item())
+            or bool(
+                torch.any(
+                    position_fraction < -ACTION_MASK_POSITION_EPSILON
+                ).item()
+            )
+            or bool(
+                torch.any(
+                    position_fraction > 1.0 + ACTION_MASK_POSITION_EPSILON
+                ).item()
+            )
+        ):
+            raise ValueError("action_mask_position_fraction_out_of_range")
+
+        fully_allocated = (
+            position_fraction >= 1.0 - ACTION_MASK_POSITION_EPSILON
+        )
+        flat = position_fraction <= ACTION_MASK_POSITION_EPSILON
+        masked_logits = direction_logits.clone()
+        masked_logits[fully_allocated, buy_index] = -torch.inf
+        masked_logits[flat, sell_index] = -torch.inf
+        components[0] = torch.distributions.Categorical(logits=masked_logits)
+        distribution.distribution = components
+        return distribution
+
+    policy_class = type(
+        ACTION_MASKED_POLICY_CLASS_NAME,
+        (policy_base,),
+        {
+            "forward": forward,
+            "evaluate_actions": evaluate_actions,
+            "get_distribution": get_distribution,
+            "_get_action_dist_from_latent": _get_action_dist_from_latent,
+            "__module__": __name__,
+        },
+    )
+    globals()[ACTION_MASKED_POLICY_CLASS_NAME] = policy_class
+    return policy_class
+
+
 def build_auxiliary_recurrent_ppo() -> Any:
     """Build a RecurrentPPO subclass with guidance labels in its recurrent buffer."""
     recurrent_ppo = getattr(
@@ -510,6 +643,7 @@ def build_auxiliary_recurrent_ppo() -> Any:
             n_envs=self.n_envs,
         )
 
+    policy_class = _build_action_masked_recurrent_policy()
     auxiliary_recurrent_ppo = type(
         "AuxiliaryRecurrentPPO",
         (recurrent_ppo,),
@@ -518,6 +652,7 @@ def build_auxiliary_recurrent_ppo() -> Any:
             "_setup_model": setup_model,
             "collect_rollouts": _collect_rollouts_with_guidance,
             "train": _train_with_auxiliary_loss,
+            "policy_class": policy_class,
         },
     )
     return auxiliary_recurrent_ppo
