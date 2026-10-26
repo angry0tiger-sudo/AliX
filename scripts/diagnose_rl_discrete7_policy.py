@@ -72,17 +72,18 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def _validate_source_artifacts(
-    args: argparse.Namespace,
-    report: dict[str, Any],
-    manifest: dict[str, Any],
-) -> str:
+def _validate_source_identity(
+    args: argparse.Namespace, report: dict[str, Any]
+) -> None:
     if report.get("schema_version") != REPORT_SCHEMA:
         raise ValueError("source_report_schema_invalid")
     if report.get("commit_sha") != args.expected_source_commit_sha:
         raise ValueError("source_report_commit_sha_mismatch")
     if args.expected_source_commit_sha != SOURCE_COMMIT_SHA:
         raise ValueError("unexpected_source_training_commit")
+
+
+def _validate_source_action_contract(report: dict[str, Any]) -> None:
     action_space = report.get("environment", {}).get("action_space", {})
     if action_space.get("type") != "Discrete" or action_space.get("n") != 7:
         raise ValueError("source_action_space_must_be_discrete_seven")
@@ -94,13 +95,21 @@ def _validate_source_artifacts(
         raise ValueError("source_model_algorithm_invalid")
     if metadata.get("policy") != "ActionMaskedRecurrentActorCriticPolicy":
         raise ValueError("source_model_policy_invalid")
+
+
+def _validate_source_model_hash(
+    args: argparse.Namespace, report: dict[str, Any]
+) -> str:
+    metadata = report.get("model", {})
     if args.model.name != metadata.get("model_artifact"):
         raise ValueError("source_model_filename_mismatch")
     model_hash = metadata.get("model_sha256")
     if not isinstance(model_hash, str) or _sha256(args.model) != model_hash:
         raise ValueError("source_model_sha256_mismatch")
-    if manifest.get("csv_sha256") != report.get("dataset", {}).get("csv_sha256"):
-        raise ValueError("source_dataset_sha256_mismatch")
+    return model_hash
+
+
+def _validate_source_safety(report: dict[str, Any]) -> None:
     safety = report.get("safety_invariants", {})
     if (
         safety.get("Champion", "invalid") is not None
@@ -113,8 +122,19 @@ def _validate_source_artifacts(
         raise ValueError("source_safety_invariants_invalid")
     if report.get("production_promotion_allowed") is not False:
         raise ValueError("source_promotion_invariant_invalid")
-    return model_hash
 
+
+def _validate_source_artifacts(
+    args: argparse.Namespace,
+    report: dict[str, Any],
+    manifest: dict[str, Any],
+) -> str:
+    _validate_source_identity(args, report)
+    _validate_source_action_contract(report)
+    if manifest.get("csv_sha256") != report.get("dataset", {}).get("csv_sha256"):
+        raise ValueError("source_dataset_sha256_mismatch")
+    _validate_source_safety(report)
+    return _validate_source_model_hash(args, report)
 
 def _initial_actor_state(model: Any, torch: Any) -> tuple[Any, Any]:
     shape = model.policy.lstm_hidden_state_shape
@@ -210,6 +230,47 @@ def _expected_masked_indices(position_fraction: float) -> list[int]:
     return []
 
 
+def _find_unexpected_masked_indices(
+    masked_logits: Sequence[float], expected: Sequence[int]
+) -> list[int]:
+    return [
+        index
+        for index, value in enumerate(masked_logits)
+        if value <= MASKED_LOGIT / 2 and index not in expected
+    ]
+
+
+def _unmasked_logits_unchanged(
+    raw_logits: Sequence[float],
+    masked_logits: Sequence[float],
+    expected: Sequence[int],
+) -> bool:
+    for index in range(len(ACTION_NAMES)):
+        if index not in expected:
+            if not math.isclose(
+                raw_logits[index], masked_logits[index], rel_tol=1e-6, abs_tol=1e-5
+            ):
+                return False
+    return True
+
+
+def _masked_logits_use_sentinel(
+    masked_logits: Sequence[float], expected: Sequence[int]
+) -> bool:
+    return all(
+        math.isclose(
+            masked_logits[index], MASKED_LOGIT, rel_tol=0.0, abs_tol=1.0
+        )
+        for index in expected
+    )
+
+
+def _forbidden_probabilities_are_zero(
+    probabilities: Sequence[float], expected: Sequence[int]
+) -> bool:
+    return all(probabilities[index] == 0.0 for index in expected)
+
+
 def _check_mask_contract(probe: dict[str, Any]) -> dict[str, Any]:
     raw = probe["raw_logits"]
     masked = probe["masked_logits"]
@@ -219,27 +280,19 @@ def _check_mask_contract(probe: dict[str, Any]) -> dict[str, Any]:
         probabilities = [probability_map[name] for name in ACTION_NAMES]
     position = float(probe["observation_position_fraction"])
     expected = _expected_masked_indices(position)
-    unexpected_sentinels = [
-        index
-        for index, value in enumerate(masked)
-        if value <= MASKED_LOGIT / 2 and index not in expected
-    ]
-    unchanged_legal_logits = all(
-        math.isclose(raw[index], masked[index], rel_tol=1e-6, abs_tol=1e-5)
-        for index in range(len(ACTION_NAMES))
-        if index not in expected
+    unexpected = _find_unexpected_masked_indices(masked, expected)
+    logits_correct = _masked_logits_use_sentinel(masked, expected)
+    probabilities_zero = _forbidden_probabilities_are_zero(probabilities, expected)
+    legal_logits_unchanged = _unmasked_logits_unchanged(raw, masked, expected)
+    probabilities_normalized = math.isclose(
+        sum(probabilities), 1.0, abs_tol=1e-5
     )
-    masked_logits_correct = all(
-        math.isclose(masked[index], MASKED_LOGIT, rel_tol=0.0, abs_tol=1.0)
-        for index in expected
-    )
-    masked_probabilities_zero = all(probabilities[index] == 0.0 for index in expected)
     passed = (
-        masked_logits_correct
-        and masked_probabilities_zero
-        and unchanged_legal_logits
-        and not unexpected_sentinels
-        and math.isclose(sum(probabilities), 1.0, abs_tol=1e-5)
+        logits_correct
+        and probabilities_zero
+        and legal_logits_unchanged
+        and not unexpected
+        and probabilities_normalized
     )
     return {
         "passed": passed,
@@ -248,14 +301,11 @@ def _check_mask_contract(probe: dict[str, Any]) -> dict[str, Any]:
         "masked_action_probabilities": {
             ACTION_NAMES[index]: probabilities[index] for index in expected
         },
-        "masked_logits_use_sentinel": masked_logits_correct,
-        "forbidden_probabilities_exactly_zero": masked_probabilities_zero,
-        "unmasked_logits_unchanged": unchanged_legal_logits,
-        "unexpected_masked_actions": [
-            ACTION_NAMES[index] for index in unexpected_sentinels
-        ],
+        "masked_logits_use_sentinel": logits_correct,
+        "forbidden_probabilities_exactly_zero": probabilities_zero,
+        "unmasked_logits_unchanged": legal_logits_unchanged,
+        "unexpected_masked_actions": [ACTION_NAMES[index] for index in unexpected],
     }
-
 
 def _cross_entropy_from_logits(logits: Sequence[float], target: int) -> float:
     maximum = max(logits)
@@ -337,6 +387,55 @@ def _csv_rows(probes: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return rows
 
 
+def _append_counterfactual_probes(
+    probes: list[dict[str, Any]],
+    policy: Any,
+    observation: np.ndarray,
+    actor_state: tuple[Any, Any],
+    step_index: int,
+    timestamp_ms: float,
+    episode_start: bool,
+    torch: Any,
+) -> None:
+    position_index = OBSERVATION_FIELDS.index("current_position_fraction")
+    for kind, hypothetical_position in (
+        ("counterfactual_partial_position", 0.5),
+        ("counterfactual_full_position", 1.0),
+    ):
+        synthetic_observation = observation.copy()
+        synthetic_observation[position_index] = hypothetical_position
+        trace = _trace_policy_distribution(
+            policy, synthetic_observation, actor_state, episode_start, True, torch
+        )
+        probes.append(
+            _probe_record(
+                kind,
+                step_index,
+                timestamp_ms,
+                synthetic_observation,
+                trace,
+                None,
+            )
+        )
+
+
+def _validate_validation_scan(
+    tensor_matches: bool,
+    action_counts: Counter[str],
+    guidance_counts: Counter[str],
+    steps: int,
+    probes: list[dict[str, Any]],
+) -> None:
+    if not tensor_matches:
+        raise RuntimeError("position_observation_contract_failed")
+    if sum(action_counts.values()) != steps or sum(guidance_counts.values()) != steps:
+        raise RuntimeError("validation_diagnostic_step_count_mismatch")
+    if any(not probe["mask_check"]["passed"] for probe in probes):
+        raise RuntimeError("action_logit_mask_diagnostic_failed")
+    if any(probe.get("guidance_target_is_masked", False) for probe in probes):
+        raise RuntimeError("auxiliary_guidance_target_was_masked")
+
+
 def _run_validation_diagnostic(
     model: Any,
     validation_data: np.ndarray,
@@ -370,6 +469,7 @@ def _run_validation_diagnostic(
     selected_steps = set(
         np.linspace(0, steps - 1, num=min(sample_count, steps), dtype=np.int64).tolist()
     )
+    first_selected_step = min(selected_steps)
     position_index = OBSERVATION_FIELDS.index("current_position_fraction")
     action_counts: Counter[str] = Counter()
     guidance_counts: Counter[str] = Counter()
@@ -385,11 +485,8 @@ def _run_validation_diagnostic(
             position_min = min(position_min, position)
             position_max = max(position_max, position)
             position_nonzero_steps += int(position > ACTION_MASK_POSITION_EPSILON)
-            target_index = int(
-                environment._guidance_target_index(
-                    float(validation_data[step_index, CLOSE_COLUMN])
-                )
-            )
+            current_price = float(validation_data[step_index, CLOSE_COLUMN])
+            target_index = int(environment._guidance_target_index(current_price))
             guidance_counts[ACTION_NAMES[target_index]] += 1
             selected = step_index in selected_steps
             trace = _trace_policy_distribution(
@@ -409,40 +506,27 @@ def _run_validation_diagnostic(
             probability_sums += np.asarray(trace["probabilities"], dtype=np.float64)
             action_counts[trace["action_name"]] += 1
             if selected:
-                actual_probe = _probe_record(
-                    "validation_actual",
-                    step_index,
-                    float(validation_data[step_index, 0]),
-                    observation,
-                    trace,
-                    target_index,
+                probes.append(
+                    _probe_record(
+                        "validation_actual",
+                        step_index,
+                        float(validation_data[step_index, 0]),
+                        observation,
+                        trace,
+                        target_index,
+                    )
                 )
-                probes.append(actual_probe)
-                if step_index == min(selected_steps):
-                    for kind, hypothetical_position in (
-                        ("counterfactual_partial_position", 0.5),
-                        ("counterfactual_full_position", 1.0),
-                    ):
-                        synthetic_observation = observation.copy()
-                        synthetic_observation[position_index] = hypothetical_position
-                        synthetic_trace = _trace_policy_distribution(
-                            model.policy,
-                            synthetic_observation,
-                            actor_state,
-                            step_index == 0,
-                            True,
-                            torch,
-                        )
-                        probes.append(
-                            _probe_record(
-                                kind,
-                                step_index,
-                                float(validation_data[step_index, 0]),
-                                synthetic_observation,
-                                synthetic_trace,
-                                None,
-                            )
-                        )
+                if step_index == first_selected_step:
+                    _append_counterfactual_probes(
+                        probes,
+                        model.policy,
+                        observation,
+                        actor_state,
+                        step_index,
+                        float(validation_data[step_index, 0]),
+                        step_index == 0,
+                        torch,
+                    )
             next_observation, _reward, terminated, truncated, _info = environment.step(
                 np.int64(trace["action_index"])
             )
@@ -455,15 +539,9 @@ def _run_validation_diagnostic(
     finally:
         environment.close()
 
-    if not tensor_matches:
-        raise RuntimeError("position_observation_contract_failed")
-    if sum(action_counts.values()) != steps or sum(guidance_counts.values()) != steps:
-        raise RuntimeError("validation_diagnostic_step_count_mismatch")
-    if any(not probe["mask_check"]["passed"] for probe in probes):
-        raise RuntimeError("action_logit_mask_diagnostic_failed")
-    if any(probe.get("guidance_target_is_masked", False) for probe in probes):
-        raise RuntimeError("auxiliary_guidance_target_was_masked")
-
+    _validate_validation_scan(
+        tensor_matches, action_counts, guidance_counts, steps, probes
+    )
     rows = _csv_rows(probes)
     output_csv.parent.mkdir(parents=True, exist_ok=True)
     with output_csv.open("w", encoding="utf-8", newline="") as stream:
@@ -548,7 +626,6 @@ def _run_validation_diagnostic(
         },
         "csv_sha256": _sha256(output_csv),
     }
-
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parse_args(argv)
