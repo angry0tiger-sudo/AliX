@@ -269,9 +269,7 @@ def _run_paired_validation_diagnostic(
         "stochastic": Counter[str](),
     }
     reward_totals = {"deterministic": 0.0, "stochastic": 0.0}
-    samples: dict[str, list[float]] = {
-        name: [] for name in PROBABILITY_FIELDS
-    }
+    samples: dict[str, list[float]] = {name: [] for name in PROBABILITY_FIELDS}
     samples["direction_entropy"] = []
     samples["size_entropy"] = []
     output_csv.parent.mkdir(parents=True, exist_ok=True)
