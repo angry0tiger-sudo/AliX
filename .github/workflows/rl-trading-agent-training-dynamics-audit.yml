@@ -1,0 +1,150 @@
+name: AliX RL Training Dynamics Audit (No Retraining)
+
+on:
+  push:
+    branches:
+      - "research/rl-trading-agent"
+    paths:
+      - ".github/workflows/rl-trading-agent-training-dynamics-audit.yml"
+      - "scripts/audit_rl_training_dynamics.py"
+      - "tests/unit/test_rl_training_dynamics_audit.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: alix-rl-training-dynamics-audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit-historical-training:
+    name: Audit Run #98 logs without training
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      ALIx_ENV: paper
+      ALIx_DRY_RUN: "true"
+      ALIx_ALLOW_LIVE_TRADING: "false"
+      ALIx_REPORTING_ENABLED: "false"
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - name: Checkout exact audit commit without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate archived Run #98 identity
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: "40348192766"
+          EXPECTED_SOURCE_SHA: "4571691ec6b11146ea6f3a93e0cc7c9e742ec578"
+        run: |
+          set -euo pipefail
+          headers=(-H "Accept: application/vnd.github+json" -H "Authorization: Bearer $GITHUB_TOKEN" -H "X-GitHub-Api-Version: 2022-11-28")
+          curl -fsSL "${headers[@]}" "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID" -o source-run.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          run = json.loads(Path("source-run.json").read_text(encoding="utf-8"))
+          assert run["id"] == 40348192766
+          assert run["head_sha"] == "4571691ec6b11146ea6f3a93e0cc7c9e742ec578"
+          assert run["status"] == "completed"
+          assert run["conclusion"] == "success"
+          print("Archived source run identity verified; no training will be invoked.")
+          PY
+
+      - name: Download archived source model report artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: rl-trading-agent-4571691ec6b11146ea6f3a93e0cc7c9e742ec578
+          path: artifacts/source-run
+          repository: ${{ github.repository }}
+          run-id: 40348192766
+          github-token: ${{ github.token }}
+
+      - name: Download archived training job logs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: "40348192766"
+        run: |
+          set -euo pipefail
+          headers=(-H "Accept: application/vnd.github+json" -H "Authorization: Bearer $GITHUB_TOKEN" -H "X-GitHub-Api-Version: 2022-11-28")
+          curl -fsSL "${headers[@]}" "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID/jobs?per_page=100" -o source-jobs.json
+          JOB_ID="$(python - <<'PY'
+          import json
+          from pathlib import Path
+          payload = json.loads(Path("source-jobs.json").read_text(encoding="utf-8"))
+          matches = [
+              job for job in payload["jobs"]
+              if job["name"] == "Train recurrent PPO and evaluate untouched holdout"
+              and job["conclusion"] == "success"
+          ]
+          if len(matches) != 1:
+              raise SystemExit(f"expected one successful training job, found {len(matches)}")
+          print(matches[0]["id"])
+          PY
+          )"
+          mkdir -p artifacts/source-logs
+          curl -fsSL "${headers[@]}" "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/jobs/$JOB_ID/logs" -o artifacts/source-job-logs.zip
+          python - <<'PY'
+          import zipfile
+          from pathlib import Path
+          archive = Path("artifacts/source-job-logs.zip")
+          output = Path("artifacts/source-logs")
+          with zipfile.ZipFile(archive) as bundle:
+              for member in bundle.infolist():
+                  destination = (output / member.filename).resolve()
+                  if output.resolve() not in destination.parents and destination != output.resolve():
+                      raise SystemExit("unsafe_path_in_github_log_archive")
+              bundle.extractall(output)
+          if not any(path.is_file() for path in output.rglob("*")):
+              raise SystemExit("source_job_log_archive_is_empty")
+          print("Historical job logs downloaded and safely extracted.")
+          PY
+
+      - name: Run offline dynamics audit and unit tests
+        env:
+          SOURCE_RUN_ID: "40348192766"
+          SOURCE_COMMIT_SHA: "4571691ec6b11146ea6f3a93e0cc7c9e742ec578"
+        run: |
+          set -euo pipefail
+          python -m unittest discover -s tests/unit -p 'test_rl_training_dynamics_audit.py' -v
+          python -m scripts.audit_rl_training_dynamics             --logs-dir artifacts/source-logs             --source-report artifacts/source-run/rl-agent/rl-trading-agent-report.json             --source-run-metadata source-run.json             --source-artifact-dir artifacts/source-run             --out-dir artifacts/rl-training-dynamics             --source-run-id "$SOURCE_RUN_ID"             --source-commit-sha "$SOURCE_COMMIT_SHA"
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          report = json.loads(Path("artifacts/rl-training-dynamics/rl-training-dynamics-audit.json").read_text(encoding="utf-8"))
+          safety = report["safety_invariants"]
+          assert report["execution_scope"]["training_performed"] is False
+          assert report["execution_scope"]["model_weights_modified"] is False
+          assert report["execution_scope"]["new_checkpoints_created"] is False
+          assert report["execution_scope"]["final_holdout_scored_or_recomputed"] is False
+          assert report["training_entropy"]["snapshot_count"] >= 80
+          assert report["checkpoint_analysis"]["exact_timestep_when_hold_probability_exceeded_buy_probability"] is None
+          assert report["reward_component_analysis"]["per_step_training_reward_component_timeseries_available"] is False
+          assert safety["Champion"] is None
+          assert safety["order_permission"] is False
+          assert safety["trading_authorization"] == "NO-GO"
+          assert safety["private_api_calls"] == 0
+          assert safety["orders_or_execution_api_used"] is False
+          assert safety["real_order_attempts"] == 0
+          assert safety["production_promotion_allowed"] is False
+          print("Report scope and all safety invariants passed.")
+          PY
+
+      - name: Upload read-only dynamics report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rl-training-dynamics-audit-${{ github.sha }}
+          path: artifacts/rl-training-dynamics/
+          if-no-files-found: warn
+          retention-days: 30
+          compression-level: 6
