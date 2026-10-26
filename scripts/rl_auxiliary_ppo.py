@@ -468,7 +468,6 @@ def _train_with_auxiliary_loss(self: Any) -> None:
         self.logger.record("train/clip_range_vf", clip_range_vf)
 
 
-
 def _build_action_masked_recurrent_policy() -> Any:
     """Create a recurrent actor-critic policy that masks illegal direction logits."""
     policy_base = getattr(
@@ -515,7 +514,12 @@ def _build_action_masked_recurrent_policy() -> Any:
         self: Any, obs: Any, actions: Any, lstm_states: Any, episode_starts: Any
     ) -> Any:
         return call_with_observation_context(
-            self, policy_base.evaluate_actions, obs, actions, lstm_states, episode_starts
+            self,
+            policy_base.evaluate_actions,
+            obs,
+            actions,
+            lstm_states,
+            episode_starts,
         )
 
     def get_distribution(
@@ -537,40 +541,35 @@ def _build_action_masked_recurrent_policy() -> Any:
             raise ValueError(
                 "action_mask_requires_two_component_multidiscrete_distribution"
             )
-        if (
-            components[0].logits.ndim != 2
-            or components[0].logits.shape[1] != len(ACTION_NAMES)
+        if components[0].logits.ndim != 2 or components[0].logits.shape[1] != len(
+            ACTION_NAMES
         ):
             raise ValueError("action_mask_direction_logits_shape_invalid")
 
         observation_shape = getattr(observations, "shape", ())
         if len(observation_shape) < 2 or observation_shape[-1] <= position_index:
             raise ValueError("action_mask_position_observation_missing")
-        position_fraction = observations[..., position_index].reshape(-1).to(
-            device=components[0].logits.device,
-            dtype=components[0].logits.dtype,
+        position_fraction = (
+            observations[..., position_index]
+            .reshape(-1)
+            .to(
+                device=components[0].logits.device,
+                dtype=components[0].logits.dtype,
+            )
         )
         direction_logits = components[0].logits
         if position_fraction.numel() != direction_logits.shape[0]:
             raise ValueError("action_mask_observation_batch_alignment_invalid")
         if (
             not bool(torch.isfinite(position_fraction).all().item())
+            or bool(torch.any(position_fraction < -ACTION_MASK_POSITION_EPSILON).item())
             or bool(
-                torch.any(
-                    position_fraction < -ACTION_MASK_POSITION_EPSILON
-                ).item()
-            )
-            or bool(
-                torch.any(
-                    position_fraction > 1.0 + ACTION_MASK_POSITION_EPSILON
-                ).item()
+                torch.any(position_fraction > 1.0 + ACTION_MASK_POSITION_EPSILON).item()
             )
         ):
             raise ValueError("action_mask_position_fraction_out_of_range")
 
-        fully_allocated = (
-            position_fraction >= 1.0 - ACTION_MASK_POSITION_EPSILON
-        )
+        fully_allocated = position_fraction >= 1.0 - ACTION_MASK_POSITION_EPSILON
         flat = position_fraction <= ACTION_MASK_POSITION_EPSILON
         masked_logits = direction_logits.clone()
         masked_logits[fully_allocated, buy_index] = -torch.inf
