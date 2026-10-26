@@ -47,15 +47,21 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           python - <<'PY'
-          import json, os
+          import json
+          import os
           from urllib.request import Request, urlopen
+
           base = f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}"
-          headers = {"Accept":"application/vnd.github+json",
-                     "Authorization":f"Bearer {os.environ['GITHUB_TOKEN']}",
-                     "X-GitHub-Api-Version":"2022-11-28"}
+          headers = {
+              "Accept": "application/vnd.github+json",
+              "Authorization": f"Bearer {os.environ['GITHUB_TOKEN']}",
+              "X-GitHub-Api-Version": "2022-11-28",
+          }
+
           def get(url):
               with urlopen(Request(url, headers=headers), timeout=30) as response:
                   return json.load(response)
+
           run = get(f"{base}/actions/runs/{os.environ['SOURCE_RUN_ID']}")
           assert run["id"] == int(os.environ["SOURCE_RUN_ID"])
           assert run["head_sha"] == os.environ["SOURCE_SHA"]
@@ -98,13 +104,16 @@ jobs:
           python - <<'PY'
           import json
           from pathlib import Path
+
           root = Path("artifacts/source-run-105")
-          report = json.loads((root / "rl-agent/rl-trading-agent-report.json").read_text())
+          report = json.loads(
+              (root / "rl-agent/rl-trading-agent-report.json").read_text(encoding="utf-8")
+          )
           assert report["commit_sha"] == "62fc99cf92fd92cc92664cffff611024ff8fed4c"
           assert report["schema_version"] == "alix.rl-trading-agent-report.v11"
           entries = report["checkpointing"]["checkpoints"]
           expected = list(range(100000, 1000001, 100000))
-          assert [int(x["timesteps"]) for x in entries] == expected
+          assert [int(item["timesteps"]) for item in entries] == expected
           checkpoint_dir = root / "rl-agent/checkpoints"
           assert checkpoint_dir.is_dir()
           assert len(list(checkpoint_dir.glob("rl_trading_agent_checkpoint_*_steps.zip"))) == 10
@@ -124,18 +133,28 @@ jobs:
 
       - name: Evaluate all ten checkpoints on the exact Run #105 Validation split
         run: |
-          python -m scripts.sweep_rl_checkpoints             --data artifacts/source-run-105/public-minute-bars/binance_BTCUSDT_1m.csv             --manifest artifacts/source-run-105/public-minute-bars/manifest.json             --source-report artifacts/source-run-105/rl-agent/rl-trading-agent-report.json             --checkpoint-dir artifacts/source-run-105/rl-agent/checkpoints             --out-dir artifacts/rl-checkpoint-sweep             --commit-sha "${{ github.sha }}"             --source-run-id "$SOURCE_RUN_ID"
+          python -m scripts.sweep_rl_checkpoints \
+            --data artifacts/source-run-105/public-minute-bars/binance_BTCUSDT_1m.csv \
+            --manifest artifacts/source-run-105/public-minute-bars/manifest.json \
+            --source-report artifacts/source-run-105/rl-agent/rl-trading-agent-report.json \
+            --checkpoint-dir artifacts/source-run-105/rl-agent/checkpoints \
+            --out-dir artifacts/rl-checkpoint-sweep \
+            --commit-sha "${{ github.sha }}" \
+            --source-run-id "$SOURCE_RUN_ID"
 
       - name: Enforce sweep report contract and safety invariants
         run: |
           python - <<'PY'
-          import csv, json, math
+          import csv
+          import json
+          import math
           from pathlib import Path
+
           root = Path("artifacts/rl-checkpoint-sweep")
-          report = json.loads((root / "rl-checkpoint-sweep.json").read_text())
+          report = json.loads((root / "rl-checkpoint-sweep.json").read_text(encoding="utf-8"))
           assert report["checkpoint_count"] == 10
           assert len(report["checkpoints"]) == 10
-          assert [x["checkpoint_timesteps"] for x in report["checkpoints"]] == list(range(100000, 1000001, 100000))
+          assert [item["checkpoint_timesteps"] for item in report["checkpoints"]] == list(range(100000, 1000001, 100000))
           assert report["training_performed"] is False
           assert report["model_weights_modified"] is False
           assert report["new_checkpoints_created"] is False
@@ -150,7 +169,7 @@ jobs:
               assert item["evaluation_passes"] == 1
               assert item["validation_steps"] == report["validation"]["rows"] - 1
               assert set(item["action_distribution"]) == {"HOLD", "BUY", "SELL"}
-              assert sum(v["count"] for v in item["action_distribution"].values()) == item["validation_steps"]
+              assert sum(value["count"] for value in item["action_distribution"].values()) == item["validation_steps"]
               assert math.isfinite(item["net_profit"]) and math.isfinite(item["net_return"])
               assert math.isfinite(item["max_drawdown"]) and item["closed_trades"] >= 0
           safety = report["safety_invariants"]
@@ -166,14 +185,16 @@ jobs:
               "first_checkpoint_hold_over_90_percent": report["first_checkpoint_hold_over_90_percent"],
               "validation": report["validation"],
               "checkpoints": [{
-                  "timesteps": x["checkpoint_timesteps"],
-                  "hold_percent": x["action_distribution"]["HOLD"]["percent"],
-                  "buy_percent": x["action_distribution"]["BUY"]["percent"],
-                  "sell_percent": x["action_distribution"]["SELL"]["percent"],
-                  "net_profit": x["net_profit"], "net_return": x["net_return"],
-                  "max_drawdown": x["max_drawdown"], "closed_trades": x["closed_trades"]
-              } for x in report["checkpoints"]],
-              "safety_invariants": safety
+                  "timesteps": item["checkpoint_timesteps"],
+                  "hold_percent": item["action_distribution"]["HOLD"]["percent"],
+                  "buy_percent": item["action_distribution"]["BUY"]["percent"],
+                  "sell_percent": item["action_distribution"]["SELL"]["percent"],
+                  "net_profit": item["net_profit"],
+                  "net_return": item["net_return"],
+                  "max_drawdown": item["max_drawdown"],
+                  "closed_trades": item["closed_trades"],
+              } for item in report["checkpoints"]],
+              "safety_invariants": safety,
           }, sort_keys=True, allow_nan=False))
           PY
 
@@ -185,5 +206,5 @@ jobs:
           path: |
             artifacts/rl-checkpoint-sweep/rl-checkpoint-sweep.json
             artifacts/rl-checkpoint-sweep/rl-checkpoint-sweep.csv
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 30
