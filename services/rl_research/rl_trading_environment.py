@@ -16,7 +16,7 @@ from gymnasium import spaces
 from numpy.typing import NDArray
 
 DEFAULT_INITIAL_EQUITY = 10_000.0
-DEFAULT_OPPORTUNITY_COST_PENALTY = 0.0005
+DEFAULT_OPPORTUNITY_COST_PENALTY = 0.01
 MOVING_AVERAGE_WINDOW = 20
 ACTION_HOLD = 0
 ACTION_BUY_25 = 1
@@ -72,9 +72,6 @@ DEFAULT_HOLDING_LOSS_PENALTY = 0.0001
 DEFAULT_REALIZED_PROFIT_REWARD_SCALE = 0.5
 DEFAULT_INACTIVITY_GRACE_STEPS = 3
 DEFAULT_PROFITABLE_TRADE_BONUS = 0.0001
-DEFAULT_LOW_VOLATILITY_HOLD_REWARD = 0.001
-LOW_VOLATILITY_LOOKBACK = 20
-LOW_VOLATILITY_RETURN_STD_THRESHOLD = 0.002
 DEFAULT_TRANSACTION_COST_REWARD_MULTIPLIER = 1.0
 POSITION_FRACTION_EPSILON = 1e-9
 
@@ -230,8 +227,8 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
     Actions use Discrete(7): HOLD; BUY 25%, 50%, or 100% of spendable cash; and
     SELL 25%, 50%, or 100% of current inventory. Direction and size form one action.
     Execution-boundary legality remains in the environment, with policy-level masking
-    in the recurrent PPO distribution. Low-volatility HOLD reward uses completed bars
-    only; the volatility estimate is not exposed as an observation feature.
+    in the recurrent PPO distribution. Flat HOLD above the causal moving average
+    receives an opportunity-cost penalty; holding cash earns no bonus.
     """
 
     metadata = {"render_modes": []}
@@ -356,7 +353,6 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
         self._opportunity_cost_penalty_count = 0
         self._holding_loss_penalty_count = 0
         self._holding_profit_reward_count = 0
-        self._low_volatility_hold_reward_count = 0
         self._transaction_cost_reward_penalty_total = 0.0
         self._signal_guidance_reward_count = 0
         self._signal_guidance_reward_total = 0.0
@@ -793,7 +789,6 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
         self._opportunity_cost_penalty_count = 0
         self._holding_loss_penalty_count = 0
         self._holding_profit_reward_count = 0
-        self._low_volatility_hold_reward_count = 0
         self._transaction_cost_reward_penalty_total = 0.0
         self._signal_guidance_reward_count = 0
         self._signal_guidance_reward_total = 0.0
@@ -927,23 +922,6 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
         self._holding_profit_reward_count += 1
         return DEFAULT_HOLDING_PROFIT_REWARD
 
-    def _low_volatility_hold_reward_for_action(
-        self, requested_action: str
-    ) -> tuple[float, float | None]:
-        """Reward HOLD when the last 20 completed one-minute returns are calm."""
-        if requested_action != "HOLD" or self._index < LOW_VOLATILITY_LOOKBACK:
-            return 0.0, None
-        closes = self._market_data[
-            self._index - LOW_VOLATILITY_LOOKBACK : self._index + 1,
-            CLOSE_COLUMN,
-        ]
-        returns = np.diff(np.log(closes))
-        volatility = float(np.std(returns))
-        if volatility > LOW_VOLATILITY_RETURN_STD_THRESHOLD:
-            return 0.0, volatility
-        self._low_volatility_hold_reward_count += 1
-        return DEFAULT_LOW_VOLATILITY_HOLD_REWARD, volatility
-
     def _guidance_target_index(self, current_price: float) -> int:
         action_mask = self._legal_action_mask(current_price)
         if self._index < MOVING_AVERAGE_WINDOW:
@@ -1030,7 +1008,6 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
         opportunity_cost_penalty: float,
         holding_loss_penalty: float,
         holding_profit_reward: float,
-        low_volatility_hold_reward: float,
         transaction_cost_reward_penalty: float,
         signal_guidance_reward: float,
         realized_profit_reward: float,
@@ -1051,7 +1028,6 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
             - holding_loss_penalty
             - transaction_cost_reward_penalty
             + holding_profit_reward
-            + low_volatility_hold_reward
             + signal_guidance_reward
             + realized_profit_reward
             + profitable_trade_bonus
@@ -1118,9 +1094,6 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
         holding_profit_reward = self._holding_profit_reward_for_action(
             requested_action, current_price
         )
-        low_volatility_hold_reward, low_volatility_return_std = (
-            self._low_volatility_hold_reward_for_action(requested_action)
-        )
         signal_guidance_reward, signal_guidance_action = (
             self._signal_guidance_reward_for_action(requested_action, executed_action)
         )
@@ -1136,8 +1109,6 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
         position_change_quantity, position_changed, inactivity_penalty = (
             self._track_position_change(previous_quantity, float(next_bar[OPEN_COLUMN]))
         )
-        if low_volatility_hold_reward > 0.0:
-            inactivity_penalty = 0.0
 
         risk_drawdown = self._update_drawdown(next_bar)
         terminated, risk_drawdown, current_equity = self._settle_episode_step(
@@ -1153,7 +1124,6 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
             opportunity_cost_penalty,
             holding_loss_penalty,
             holding_profit_reward,
-            low_volatility_hold_reward,
             transaction_cost_reward_penalty,
             signal_guidance_reward,
             realized_profit_reward,
@@ -1198,8 +1168,6 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
             "reward_opportunity_cost_penalty": opportunity_cost_penalty,
             "reward_holding_loss_penalty": holding_loss_penalty,
             "reward_holding_profit_bonus": holding_profit_reward,
-            "reward_low_volatility_hold_bonus": low_volatility_hold_reward,
-            "low_volatility_return_std": low_volatility_return_std,
             "reward_transaction_cost_penalty": transaction_cost_reward_penalty,
             "fees_this_step": fees_this_step,
             "slippage_this_step": slippage_this_step,
@@ -1269,13 +1237,9 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
             "opportunity_cost_penalty_count": self._opportunity_cost_penalty_count,
             "holding_loss_penalty_count": self._holding_loss_penalty_count,
             "holding_profit_reward_count": self._holding_profit_reward_count,
-            "low_volatility_hold_reward_count": self._low_volatility_hold_reward_count,
             "transaction_cost_reward_penalty_total": float(
                 self._transaction_cost_reward_penalty_total
             ),
-            "low_volatility_hold_reward": DEFAULT_LOW_VOLATILITY_HOLD_REWARD,
-            "low_volatility_lookback": LOW_VOLATILITY_LOOKBACK,
-            "low_volatility_return_std_threshold": LOW_VOLATILITY_RETURN_STD_THRESHOLD,
             "transaction_cost_reward_multiplier": DEFAULT_TRANSACTION_COST_REWARD_MULTIPLIER,
             "signal_guidance_reward_count": self._signal_guidance_reward_count,
             "signal_guidance_reward_total": self._signal_guidance_reward_total,

@@ -29,7 +29,6 @@ from services.rl_research.rl_trading_environment import (
     DEFAULT_INITIAL_EQUITY,
     DEFAULT_HOLDING_LOSS_PENALTY,
     DEFAULT_HOLDING_PROFIT_REWARD,
-    DEFAULT_LOW_VOLATILITY_HOLD_REWARD,
     DEFAULT_OPPORTUNITY_COST_PENALTY,
     DEFAULT_REALIZED_PROFIT_REWARD_SCALE,
     MOVING_AVERAGE_WINDOW,
@@ -39,8 +38,6 @@ from services.rl_research.rl_trading_environment import (
     DEFAULT_PROFITABLE_TRADE_BONUS,
     DEFAULT_INACTIVITY_GRACE_STEPS,
     DEFAULT_TRANSACTION_COST_REWARD_MULTIPLIER,
-    LOW_VOLATILITY_LOOKBACK,
-    LOW_VOLATILITY_RETURN_STD_THRESHOLD,
     MarketObservationScaler,
     OBSERVATION_FIELDS,
     validate_market_data,
@@ -69,6 +66,9 @@ DEFAULT_SIGNAL_GUIDANCE_REWARD_SCALE = 0.0002
 DEFAULT_SIGNAL_GUIDANCE_REWARD_FLOOR = 0.00002
 DEFAULT_SIGNAL_GUIDANCE_ANNEAL_STEPS = 300_000
 DEFAULT_SIGNAL_GUIDANCE_UPDATE_INTERVAL_STEPS = 1_000
+DEFAULT_POST_EXPLORATION_ENT_COEF = 0.1
+DEFAULT_EXPLORATION_ENT_COEF = 0.5
+DEFAULT_EXPLORATION_STEPS = 50_000
 TRAINING_CHECKPOINT_INTERVAL_STEPS = 100_000
 TRAIN_FRACTION = 0.70
 VALIDATION_FRACTION = 0.10
@@ -431,7 +431,15 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="0 trains over one chronological pass through the training split.",
     )
     parser.add_argument("--seed", type=int, default=20261025)
-    parser.add_argument("--ent-coef", type=float, default=0.1)
+    parser.add_argument(
+        "--ent-coef", type=float, default=DEFAULT_POST_EXPLORATION_ENT_COEF
+    )
+    parser.add_argument(
+        "--exploration-ent-coef", type=float, default=DEFAULT_EXPLORATION_ENT_COEF
+    )
+    parser.add_argument(
+        "--exploration-steps", type=int, default=DEFAULT_EXPLORATION_STEPS
+    )
     parser.add_argument("--fee-bps", type=float, default=DEFAULT_FEE_BPS)
     parser.add_argument("--slippage-bps", type=float, default=DEFAULT_SLIPPAGE_BPS)
     parser.add_argument("--commit-sha", default="unknown")
@@ -443,6 +451,14 @@ def _validate_cli_arguments(args: argparse.Namespace) -> None:
         raise ValueError("timesteps_must_be_non_negative")
     if not math.isfinite(args.ent_coef) or args.ent_coef < 0:
         raise ValueError("ent_coef_must_be_finite_and_non_negative")
+    if not math.isfinite(args.exploration_ent_coef) or args.exploration_ent_coef < 0:
+        raise ValueError("exploration_ent_coef_must_be_finite_and_non_negative")
+    if (
+        isinstance(args.exploration_steps, bool)
+        or not isinstance(args.exploration_steps, int)
+        or args.exploration_steps < 1
+    ):
+        raise ValueError("exploration_steps_must_be_positive_integer")
     if not math.isfinite(args.fee_bps) or not 0 <= args.fee_bps < 10_000:
         raise ValueError("fee_bps_out_of_range")
     if not math.isfinite(args.slippage_bps) or not 0 <= args.slippage_bps < 10_000:
@@ -501,11 +517,104 @@ class TrainingRun:
     n_steps: int
     training_seconds: float
     entropy_coefficient: float
+    entropy_curriculum: dict[str, Any]
     cost_curriculum: dict[str, Any]
     signal_guidance_curriculum: dict[str, Any]
     auxiliary_loss_curriculum: dict[str, Any]
     reward_component_windows: list[dict[str, Any]]
     checkpoint_paths: tuple[Path, ...]
+
+
+def _entropy_coefficient_at_step(
+    timestep: int,
+    exploration_ent_coef: float = DEFAULT_EXPLORATION_ENT_COEF,
+    exploration_steps: int = DEFAULT_EXPLORATION_STEPS,
+    ent_coef: float = DEFAULT_POST_EXPLORATION_ENT_COEF,
+) -> float:
+    """Return the training-only entropy coefficient for a rollout start timestep."""
+    if isinstance(timestep, bool) or not isinstance(timestep, int) or timestep < 0:
+        raise ValueError("entropy_timestep_invalid")
+    if (
+        not math.isfinite(exploration_ent_coef)
+        or exploration_ent_coef < 0.0
+        or not math.isfinite(ent_coef)
+        or ent_coef < 0.0
+    ):
+        raise ValueError("entropy_coefficient_invalid")
+    if (
+        isinstance(exploration_steps, bool)
+        or not isinstance(exploration_steps, int)
+        or exploration_steps < 1
+    ):
+        raise ValueError("entropy_exploration_steps_invalid")
+    return float(exploration_ent_coef if timestep < exploration_steps else ent_coef)
+
+
+def _build_entropy_curriculum_callback(
+    exploration_ent_coef: float,
+    exploration_steps: int,
+    ent_coef: float,
+    n_steps: int,
+) -> Any:
+    """Apply a high entropy coefficient at rollout boundaries during early training."""
+    _entropy_coefficient_at_step(0, exploration_ent_coef, exploration_steps, ent_coef)
+    if isinstance(n_steps, bool) or not isinstance(n_steps, int) or n_steps < 1:
+        raise ValueError("entropy_rollout_steps_invalid")
+    base_callback = getattr(
+        importlib.import_module("stable_baselines3.common.callbacks"), "BaseCallback"
+    )
+
+    def initialize_callback(self: Any) -> None:
+        base_callback.__init__(self, verbose=0)
+        self._exploration_ent_coef = float(exploration_ent_coef)
+        self._exploration_steps = exploration_steps
+        self._post_exploration_ent_coef = float(ent_coef)
+        self._rollout_steps = n_steps
+        self._last_coefficient = float(exploration_ent_coef)
+
+    def on_rollout_start(self: Any) -> None:
+        timestep = int(self.num_timesteps)
+        coefficient = _entropy_coefficient_at_step(
+            timestep,
+            self._exploration_ent_coef,
+            self._exploration_steps,
+            self._post_exploration_ent_coef,
+        )
+        self.model.ent_coef = coefficient
+        self._last_coefficient = coefficient
+
+    def on_training_step(self: Any) -> bool:
+        return True
+
+    def report(self: Any, trained_timesteps: int) -> dict[str, Any]:
+        transition_timestep = (
+            self._exploration_steps // self._rollout_steps + 1
+        ) * self._rollout_steps
+        return {
+            "schedule": "high_entropy_then_constant_post_exploration",
+            "initial_ent_coef": self._exploration_ent_coef,
+            "requested_exploration_steps": self._exploration_steps,
+            "post_exploration_ent_coef": self._post_exploration_ent_coef,
+            "rollout_steps": self._rollout_steps,
+            "rollout_update_transition_timestep": transition_timestep,
+            "final_schedule_coefficient": self._last_coefficient,
+            "trained_timesteps": trained_timesteps,
+            "training_only": True,
+            "validation_and_holdout_guidance_enabled": False,
+            "deterministic_evaluation": True,
+        }
+
+    callback_type = type(
+        "EntropyExplorationCurriculumCallback",
+        (base_callback,),
+        {
+            "__init__": initialize_callback,
+            "_on_rollout_start": on_rollout_start,
+            "_on_step": on_training_step,
+            "report": report,
+        },
+    )
+    return callback_type()
 
 
 def _validate_guidance_timestep(timestep: int) -> None:
@@ -706,7 +815,6 @@ def _build_cost_curriculum_callback(
                 "reward_opportunity_cost_penalty",
                 "reward_holding_loss_penalty",
                 "reward_holding_profit_bonus",
-                "reward_low_volatility_hold_bonus",
                 "reward_transaction_cost_penalty",
                 "reward_signal_guidance",
                 "reward_realized_profit",
@@ -824,6 +932,9 @@ def _train_recurrent_ppo(
         ]
     )
     curriculum_callback = _build_cost_curriculum_callback(curriculum)
+    entropy_callback = _build_entropy_curriculum_callback(
+        args.exploration_ent_coef, args.exploration_steps, args.ent_coef, n_steps
+    )
     checkpoint_dir = args.out_dir / "checkpoints"
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
     callback_module = importlib.import_module("stable_baselines3.common.callbacks")
@@ -836,7 +947,7 @@ def _train_recurrent_ppo(
         verbose=0,
     )
     callback = getattr(callback_module, "CallbackList")(
-        [curriculum_callback, checkpoint_callback]
+        [curriculum_callback, entropy_callback, checkpoint_callback]
     )
     envs.seed(args.seed)
     policy_class = getattr(recurrent_ppo, "policy_class", None)
@@ -921,6 +1032,7 @@ def _train_recurrent_ppo(
         n_steps=n_steps,
         training_seconds=float(training_seconds),
         entropy_coefficient=float(args.ent_coef),
+        entropy_curriculum=entropy_callback.report(int(loaded_model.num_timesteps)),
         cost_curriculum=curriculum.report(int(loaded_model.num_timesteps)),
         signal_guidance_curriculum=curriculum_callback.signal_guidance_report(),
         auxiliary_loss_curriculum=auxiliary_loss_curriculum_report(
@@ -996,6 +1108,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     training = _train_recurrent_ppo(
         train_data, scaler, args, requested_steps, training_steps, n_steps
     )
+    checkpoint_validation_evaluation = _evaluate_checkpoint_validation(
+        training.checkpoint_paths,
+        validation_data,
+        scaler,
+        args.fee_bps,
+        args.slippage_bps,
+        args.seed,
+    )
     evaluation = _evaluate_validation_and_holdout(
         validation_data, new_holdout_data, scaler, args, training.model
     )
@@ -1013,6 +1133,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         evaluation["holdout_buy_and_hold"],
         evaluation["holdout_cash"],
         training,
+        checkpoint_validation_evaluation,
     )
     report_path = args.out_dir / "rl-trading-agent-report.json"
     report_path.write_text(
@@ -1040,6 +1161,84 @@ def _finalize_training_economic_assessment(
     if not minimum_trade_threshold_met or not ramp_completed:
         assessment["status"] = "NO-GO"
     return assessment
+
+
+def _checkpoint_validation_row(
+    checkpoint_path: Path, metrics: dict[str, Any]
+) -> dict[str, Any]:
+    """Summarize one deterministic checkpoint pass over Validation only."""
+    checkpoint_timesteps = int(
+        checkpoint_path.name.removeprefix("rl_trading_agent_checkpoint_").removesuffix(
+            "_steps.zip"
+        )
+    )
+    steps = int(metrics["steps"])
+    raw_counts = metrics["discrete_action_counts"]
+    if not isinstance(raw_counts, dict) or set(raw_counts) != set(ACTION_NAMES):
+        raise RuntimeError("checkpoint_validation_action_inventory_invalid")
+    action_counts = {name: int(raw_counts[name]) for name in ACTION_NAMES}
+    if steps < 1 or sum(action_counts.values()) != steps:
+        raise RuntimeError("checkpoint_validation_action_counts_invalid")
+    hold_count = action_counts["HOLD"]
+    buy_count = sum(
+        action_counts[name] for name in ACTION_NAMES if name.startswith("BUY_")
+    )
+    sell_count = sum(
+        action_counts[name] for name in ACTION_NAMES if name.startswith("SELL_")
+    )
+    if (
+        buy_count != int(metrics["buy_action_count"])
+        or sell_count != int(metrics["sell_action_count"])
+        or hold_count != int(metrics["hold_action_count"])
+    ):
+        raise RuntimeError("checkpoint_validation_action_side_counts_invalid")
+    return {
+        "checkpoint_timesteps": checkpoint_timesteps,
+        "checkpoint_file": checkpoint_path.name,
+        "checkpoint_sha256": _sha256(checkpoint_path),
+        "validation_steps": steps,
+        "discrete_action_counts": action_counts,
+        "action_distribution": {
+            "HOLD": {"count": hold_count, "percent": 100.0 * hold_count / steps},
+            "BUY": {"count": buy_count, "percent": 100.0 * buy_count / steps},
+            "SELL": {"count": sell_count, "percent": 100.0 * sell_count / steps},
+        },
+        "net_profit": float(metrics["net_profit"]),
+        "net_return": float(metrics["net_return"]),
+        "max_drawdown": float(metrics["max_drawdown"]),
+        "closed_trades": int(metrics["closed_trade_count"]),
+        "total_fees": float(metrics["total_fees"]),
+        "total_slippage": float(metrics["total_slippage"]),
+        "evaluation_passes": int(metrics["evaluation_passes"]),
+        "deterministic_inference": bool(metrics["deterministic_inference"]),
+    }
+
+
+def _evaluate_checkpoint_validation(
+    checkpoint_paths: tuple[Path, ...],
+    validation_data: Float64Array,
+    scaler: MarketObservationScaler,
+    fee_bps: float,
+    slippage_bps: float,
+    seed: int,
+) -> dict[str, Any]:
+    """Evaluate each saved checkpoint independently on the exact Validation split."""
+    algorithm_class = build_auxiliary_recurrent_ppo()
+    rows = []
+    for checkpoint_path in checkpoint_paths:
+        model = algorithm_class.load(str(checkpoint_path), env=None, device="cpu")
+        metrics = _evaluate_policy(
+            model, validation_data, scaler, fee_bps, slippage_bps, seed
+        )
+        rows.append(_checkpoint_validation_row(checkpoint_path, metrics))
+        del model
+    return {
+        "scope": "validation_only",
+        "checkpoint_count": len(rows),
+        "used_for_selection": False,
+        "final_holdout_scored_for_checkpoint_evaluation": False,
+        "checkpoints": rows,
+    }
 
 
 def _checkpointing_report(training: TrainingRun) -> dict[str, Any]:
@@ -1078,6 +1277,7 @@ def _build_report(
     holdout_buy_and_hold: dict[str, Any],
     holdout_cash: dict[str, Any],
     training: TrainingRun,
+    checkpoint_validation_evaluation: dict[str, Any],
 ) -> dict[str, Any]:
     economic_assessment = _finalize_training_economic_assessment(
         _economic_assessment(validation_metrics, holdout_metrics),
@@ -1085,7 +1285,7 @@ def _build_report(
     )
 
     report: dict[str, Any] = {
-        "schema_version": "alix.rl-trading-agent-report.v11",
+        "schema_version": "alix.rl-trading-agent-report.v12",
         "run_mode": "historical_simulation_only",
         "commit_sha": args.commit_sha,
         "research_result": (
@@ -1249,10 +1449,9 @@ def _build_report(
                 "holding_profit_reward_per_profitable_hold": (
                     DEFAULT_HOLDING_PROFIT_REWARD
                 ),
-                "low_volatility_hold_reward": DEFAULT_LOW_VOLATILITY_HOLD_REWARD,
-                "low_volatility_lookback_completed_candles": LOW_VOLATILITY_LOOKBACK,
-                "low_volatility_return_std_threshold": LOW_VOLATILITY_RETURN_STD_THRESHOLD,
-                "low_volatility_hold_reward_applies_only_to_HOLD": True,
+                "flat_cash_hold_bonus": 0.0,
+                "flat_cash_hold_bonus_enabled": False,
+                "low_volatility_hold_reward_removed": True,
                 "transaction_cost_reward_multiplier": DEFAULT_TRANSACTION_COST_REWARD_MULTIPLIER,
                 "transaction_cost_reward_penalty": (
                     "multiplier * (this_step_fee_cost + this_step_slippage_cost) "
@@ -1315,7 +1514,7 @@ def _build_report(
                     "- 0.001 * indicator(masked_SELL_request) "
                     "- 0.0001 * indicator(HOLD_while_net_liquidation_is_below_cost_basis) "
                     "+ 0.0001 * indicator(HOLD_while_net_liquidation_is_above_cost_basis) "
-                    "- 0.0005 * indicator(flat_HOLD_and_close_above_causal_SMA) "
+                    "- 0.01 * indicator(flat_HOLD_and_close_above_causal_SMA) "
                     "+ max(minimum_guidance_floor, annealed_training_only_scale) "
                     "* indicator(legal_BUY_when_causal_SMA_rises "
                     "or legal_SELL_when_causal_SMA_falls) "
@@ -1342,6 +1541,7 @@ def _build_report(
             "requested_timesteps": training.requested_timesteps,
             "total_timesteps_trained": int(training.model.num_timesteps),
             "ent_coef": training.entropy_coefficient,
+            "entropy_coefficient_schedule": training.entropy_curriculum,
             "learning_rate": 3e-4,
             "gamma": 0.99,
             "gae_lambda": 0.95,
@@ -1362,7 +1562,7 @@ def _build_report(
             "n_epochs": 4,
             "epochs_per_rollout": 4,
             "lstm_hidden_size": 64,
-            "training_algorithm": "RecurrentPPO with LSTM, Discrete(7) combined actions, pre-Categorical logit masking, floor-preserved seven-class guidance cross-entropy, minimum training-only SMA reward floor, elevated entropy coefficient, periodic checkpoints, low-volatility HOLD reward, and explicit transaction-cost reward penalty",
+            "training_algorithm": "RecurrentPPO with LSTM, Discrete(7) combined actions, pre-Categorical logit masking, floor-preserved seven-class guidance cross-entropy, training-only causal SMA reward, a high-entropy initial exploration phase, periodic checkpoints, no flat-cash HOLD bonus, and explicit transaction-cost reward penalty",
             "training_seconds": float(training.training_seconds),
             "model_artifact": training.model_path.name,
             "model_sha256": _sha256(training.model_path),
@@ -1378,6 +1578,7 @@ def _build_report(
             "component_windows": training.reward_component_windows,
         },
         "checkpointing": _checkpointing_report(training),
+        "checkpoint_validation_evaluation": checkpoint_validation_evaluation,
         "evaluation": {
             "validation": validation_metrics,
             "validation_buy_and_hold": validation_buy_and_hold,

@@ -11,6 +11,7 @@ on:
       - "docs/governance/owner-directives/2026-10-25-rl-action-mask-and-holdout.md"
       - "docs/governance/owner-directives/2026-10-25-rl-discrete-action-space.md"
       - "docs/governance/owner-directives/2026-10-26-rl-reward-balance-and-signal-curriculum.md"
+      - "docs/governance/owner-directives/2026-10-26-rl-hold-collapse-remediation.md"
       - "docs/governance/owner-directives/2026-10-25-rl-entropy-cost-curriculum.md"
       - "requirements-rl-research.txt"
       - "services/rl_research/rl_trading_environment.py"
@@ -215,6 +216,8 @@ jobs:
             --timesteps 1000000 \
             --seed 20261025 \
             --ent-coef 0.1 \
+            --exploration-ent-coef 0.5 \
+            --exploration-steps 50000 \
             --fee-bps 25 \
             --slippage-bps 20 \
             --commit-sha "${{ github.sha }}"
@@ -235,7 +238,7 @@ jobs:
           model = report["model"]
           evaluation = report["evaluation"]
           curriculum = report["cost_curriculum"]
-          assert report["schema_version"] == "alix.rl-trading-agent-report.v11"
+          assert report["schema_version"] == "alix.rl-trading-agent-report.v12"
           assert report["run_mode"] == "historical_simulation_only"
           assert report["dataset"]["row_count"] >= 1_051_200
           assert report["dataset"]["coverage_fraction"] == 1.0
@@ -374,7 +377,15 @@ jobs:
           assert action_space["masking"]["buy_actions_masked_when_position_fraction_at_or_above_full_threshold"] is True
           assert action_space["masking"]["sell_actions_masked_when_position_fraction_at_or_below_flat_threshold"] is True
           assert action_space["masking"]["invalid_buy_fallback_reward_penalty"] == 1.0
-          assert report["environment"]["reward"]["opportunity_cost_penalty_when_flat_above_sma"] == 0.0005
+          assert report["environment"]["reward"]["opportunity_cost_penalty_when_flat_above_sma"] == 0.01
+          assert report["environment"]["reward"]["flat_cash_hold_bonus"] == 0.0
+          assert report["environment"]["reward"]["flat_cash_hold_bonus_enabled"] is False
+          assert report["environment"]["reward"]["low_volatility_hold_reward_removed"] is True
+          entropy_schedule = model["entropy_coefficient_schedule"]
+          assert entropy_schedule["initial_ent_coef"] == 0.5
+          assert entropy_schedule["requested_exploration_steps"] == 50000
+          assert entropy_schedule["post_exploration_ent_coef"] == 0.1
+          assert entropy_schedule["rollout_update_transition_timestep"] == 50176
           assert report["environment"]["reward"]["opportunity_cost_moving_average_window"] == 20
           assert report["environment"]["reward"]["opportunity_cost_indicator_visible_to_policy"] is False
           for split_name in ("validation", "final_holdout"):
@@ -397,7 +408,7 @@ jobs:
               assert metrics["opportunity_cost_penalty_count"] >= 0
               assert metrics["holding_loss_penalty_count"] >= 0
               assert metrics["holding_profit_reward_count"] >= 0
-              assert metrics["low_volatility_hold_reward_count"] >= 0
+              assert "low_volatility_hold_reward_count" not in metrics
               assert metrics["transaction_cost_reward_penalty_total"] >= 0.0
               assert set(metrics["discrete_action_counts"]) == {
                   "HOLD", "BUY_25", "BUY_50", "BUY_100", "SELL_25", "SELL_50", "SELL_100"
@@ -446,6 +457,28 @@ jobs:
               assert checkpoint_path.is_file()
               assert len(checkpoint["sha256"]) == 64
               assert checkpoint["size_bytes"] == checkpoint_path.stat().st_size
+          checkpoint_validation = report["checkpoint_validation_evaluation"]
+          assert checkpoint_validation["scope"] == "validation_only"
+          assert checkpoint_validation["checkpoint_count"] == 10
+          assert checkpoint_validation["used_for_selection"] is False
+          assert checkpoint_validation["final_holdout_scored_for_checkpoint_evaluation"] is False
+          assert [
+              item["checkpoint_timesteps"]
+              for item in checkpoint_validation["checkpoints"]
+          ] == expected_checkpoint_steps
+          for checkpoint_result in checkpoint_validation["checkpoints"]:
+              assert checkpoint_result["validation_steps"] == evaluation["validation"]["steps"]
+              assert checkpoint_result["evaluation_passes"] == 1
+              assert checkpoint_result["deterministic_inference"] is True
+              assert sum(checkpoint_result["discrete_action_counts"].values()) == checkpoint_result["validation_steps"]
+              assert math.isclose(
+                  sum(
+                      value["percent"]
+                      for value in checkpoint_result["action_distribution"].values()
+                  ),
+                  100.0,
+                  abs_tol=1e-9,
+              )
           reward_dynamics = report["training_reward_dynamics"]
           assert reward_dynamics["window_size_steps"] == 100_000
           assert sum(window["steps"] for window in reward_dynamics["component_windows"]) == model["total_timesteps_trained"]
@@ -485,6 +518,8 @@ jobs:
               "cost_curriculum": curriculum,
               "validation": evaluation["validation"],
               "final_holdout": evaluation["final_holdout"],
+              "checkpoint_validation_evaluation": checkpoint_validation,
+              "entropy_coefficient_schedule": entropy_schedule,
               "final_holdout_buy_and_hold": evaluation["final_holdout_buy_and_hold"],
               "economic_assessment": report["economic_assessment"],
               "safety_invariants": safety,

@@ -20,12 +20,10 @@ from services.rl_research.rl_trading_environment import (
     ACTION_SELL_25,
     ACTION_SELL_50,
     ACTION_SELL_100,
-    DEFAULT_LOW_VOLATILITY_HOLD_REWARD,
     DEFAULT_TRANSACTION_COST_REWARD_MULTIPLIER,
-    LOW_VOLATILITY_LOOKBACK,
-    LOW_VOLATILITY_RETURN_STD_THRESHOLD,
     BTCUSDTTradingEnv,
     DEFAULT_HOLDING_LOSS_PENALTY,
+    DEFAULT_INACTIVITY_PENALTY,
     DEFAULT_HOLDING_PROFIT_REWARD,
     DEFAULT_INVALID_ACTION_PENALTY,
     DEFAULT_INVALID_FULL_POSITION_BUY_PENALTY,
@@ -582,6 +580,7 @@ def test_flat_hold_above_causal_moving_average_pays_opportunity_cost() -> None:
         _, _, terminated, _, step_info = env.step(_action(ACTION_HOLD, 0))
         info = step_info
         assert not terminated
+    assert DEFAULT_OPPORTUNITY_COST_PENALTY == pytest.approx(0.01)
     assert info["reward_opportunity_cost_penalty"] == pytest.approx(
         DEFAULT_OPPORTUNITY_COST_PENALTY
     )
@@ -753,38 +752,21 @@ def test_signal_guidance_is_disabled_by_default_and_scale_is_fail_closed() -> No
     env.close()
 
 
-def test_low_volatility_hold_receives_small_persistent_reward() -> None:
-    env = _env(_bars(closes=[100.0] * (LOW_VOLATILITY_LOOKBACK + 4)))
+def test_flat_cash_hold_has_no_bonus_and_keeps_inactivity_penalty() -> None:
+    env = _env(_bars(closes=[100.0] * (MOVING_AVERAGE_WINDOW + 4)))
     env.reset(seed=92)
-    rewards = []
     latest_info: dict[str, Any] = {}
-    for _ in range(LOW_VOLATILITY_LOOKBACK + 1):
-        _, reward, terminated, _, latest_info = env.step(_action(ACTION_HOLD))
-        rewards.append(reward)
+    latest_reward = 0.0
+    for _ in range(MOVING_AVERAGE_WINDOW + 1):
+        _, latest_reward, terminated, _, latest_info = env.step(_action(ACTION_HOLD))
         assert not terminated
-    assert latest_info["reward_low_volatility_hold_bonus"] == pytest.approx(
-        DEFAULT_LOW_VOLATILITY_HOLD_REWARD
+    assert "reward_low_volatility_hold_bonus" not in latest_info
+    assert "low_volatility_return_std" not in latest_info
+    assert "low_volatility_hold_reward_count" not in env.summary()
+    assert latest_info["reward_inactivity_penalty"] == pytest.approx(
+        DEFAULT_INACTIVITY_PENALTY
     )
-    assert latest_info["low_volatility_return_std"] == pytest.approx(0.0)
-    assert rewards[-1] == pytest.approx(DEFAULT_LOW_VOLATILITY_HOLD_REWARD)
-    assert env.summary()["low_volatility_hold_reward_count"] == 1
-    env.close()
-
-
-def test_high_volatility_hold_does_not_receive_low_volatility_bonus() -> None:
-    closes = [
-        100.0 if index % 2 == 0 else 110.0
-        for index in range(LOW_VOLATILITY_LOOKBACK + 4)
-    ]
-    env = _env(_bars(closes=closes))
-    env.reset(seed=93)
-    info: dict[str, Any] = {}
-    for _ in range(LOW_VOLATILITY_LOOKBACK + 1):
-        _, _, terminated, _, info = env.step(_action(ACTION_HOLD))
-        assert not terminated
-    assert info["low_volatility_return_std"] > LOW_VOLATILITY_RETURN_STD_THRESHOLD
-    assert info["reward_low_volatility_hold_bonus"] == pytest.approx(0.0)
-    assert env.summary()["low_volatility_hold_reward_count"] == 0
+    assert latest_reward == pytest.approx(-DEFAULT_INACTIVITY_PENALTY)
     env.close()
 
 
