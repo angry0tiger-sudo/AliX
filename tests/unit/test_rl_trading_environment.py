@@ -626,7 +626,9 @@ def test_training_signal_guidance_rewards_only_legal_buy_on_rising_causal_sma() 
             assert info["reward_signal_guidance"] == pytest.approx(0.0002)
             applied = True
     assert applied is True
-    assert env.summary()["signal_guidance_buy_reward_count"] > 0
+    buy_reward_count = env.summary()["signal_guidance_buy_reward_count"]
+    assert isinstance(buy_reward_count, int)
+    assert buy_reward_count > 0
     assert env.summary()["signal_guidance_sell_reward_count"] == 0
     env.close()
 
