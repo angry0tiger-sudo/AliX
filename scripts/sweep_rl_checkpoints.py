@@ -37,11 +37,8 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def _checkpoint_inventory(
-    report: dict[str, Any], checkpoint_dir: Path
-) -> list[tuple[int, Path, str]]:
-    checkpointing = report.get("checkpointing", {})
-    entries = checkpointing.get("checkpoints", [])
+def _source_checkpoint_map(report: dict[str, Any]) -> dict[int, dict[str, Any]]:
+    entries = report.get("checkpointing", {}).get("checkpoints", [])
     by_step: dict[int, dict[str, Any]] = {}
     for item in entries:
         step = int(item["timesteps"])
@@ -50,24 +47,41 @@ def _checkpoint_inventory(
         by_step[step] = item
     if set(by_step) != set(EXPECTED_STEPS):
         raise ValueError("source_report_does_not_list_exactly_ten_expected_checkpoints")
+    return by_step
 
-    inventory = []
-    for step in EXPECTED_STEPS:
-        item = by_step[step]
-        path = checkpoint_dir / f"{CHECKPOINT_PREFIX}{step}{CHECKPOINT_SUFFIX}"
-        if not path.is_file():
-            raise FileNotFoundError(f"checkpoint_missing:{path.name}")
-        digest = _sha256(path)
-        if digest != item.get("sha256"):
-            raise ValueError(f"checkpoint_sha256_mismatch:{step}")
-        inventory.append((step, path, digest))
 
-    expected_names = {item[1].name for item in inventory}
-    unexpected = [
+def _verified_checkpoint(
+    step: int, entry: dict[str, Any], checkpoint_dir: Path
+) -> tuple[int, Path, str]:
+    path = checkpoint_dir / f"{CHECKPOINT_PREFIX}{step}{CHECKPOINT_SUFFIX}"
+    if not path.is_file():
+        raise FileNotFoundError(f"checkpoint_missing:{path.name}")
+    digest = _sha256(path)
+    if digest != entry.get("sha256"):
+        raise ValueError(f"checkpoint_sha256_mismatch:{step}")
+    return step, path, digest
+
+
+def _unexpected_checkpoint_files(
+    checkpoint_dir: Path, expected_names: set[str]
+) -> list[str]:
+    return [
         path.name
         for path in checkpoint_dir.glob("*.zip")
         if path.name.startswith(CHECKPOINT_PREFIX) and path.name not in expected_names
     ]
+
+
+def _checkpoint_inventory(
+    report: dict[str, Any], checkpoint_dir: Path
+) -> list[tuple[int, Path, str]]:
+    source_entries = _source_checkpoint_map(report)
+    inventory = [
+        _verified_checkpoint(step, source_entries[step], checkpoint_dir)
+        for step in EXPECTED_STEPS
+    ]
+    expected_names = {path.name for _, path, _ in inventory}
+    unexpected = _unexpected_checkpoint_files(checkpoint_dir, expected_names)
     if unexpected:
         raise ValueError("unexpected_checkpoint_files:" + ",".join(sorted(unexpected)))
     return inventory
@@ -118,6 +132,153 @@ def _validate_source_report(report: dict[str, Any]) -> None:
         raise ValueError("source_report_safety_invariant_invalid")
 
 
+def _validate_dataset_identity(
+    manifest: dict[str, Any], source_report: dict[str, Any]
+) -> None:
+    if manifest.get("csv_sha256") != source_report.get("dataset", {}).get("csv_sha256"):
+        raise ValueError("source_dataset_hash_mismatch")
+
+
+def _validate_validation_split(
+    validation_data: Any, source_split: dict[str, Any]
+) -> None:
+    if len(validation_data) != int(source_split["validation_rows"]):
+        raise ValueError("validation_rows_do_not_match_source_run")
+    if (
+        _utc_from_ms(float(validation_data[0, 0]))
+        != source_split["validation_start_utc"]
+    ):
+        raise ValueError("validation_start_does_not_match_source_run")
+    if (
+        _utc_from_ms(float(validation_data[-1, 0]))
+        != source_split["validation_end_utc"]
+    ):
+        raise ValueError("validation_end_does_not_match_source_run")
+    if source_split.get("scaler_fit_on_training_only") is not True:
+        raise ValueError("source_scaler_contract_invalid")
+
+
+def _build_validation_context(
+    data: Any, source_report: dict[str, Any]
+) -> tuple[Any, MarketObservationScaler, int]:
+    analysis_data, excluded_rows = _exclude_previous_holdout_window(data)
+    train_data, validation_data, _ = _split_training_validation(analysis_data)
+    scaler = MarketObservationScaler.fit(train_data)
+    _validate_validation_split(validation_data, source_report["split"])
+    return validation_data, scaler, excluded_rows
+
+
+def _evaluate_checkpoints(
+    inventory: list[tuple[int, Path, str]],
+    validation_data: Any,
+    scaler: MarketObservationScaler,
+    source_report: dict[str, Any],
+) -> list[dict[str, Any]]:
+    execution = source_report["environment"]["execution"]
+    fee_bps = float(execution["fee_bps_per_side"])
+    slippage_bps = float(execution["slippage_bps_per_side"])
+    training_seed = int(source_report["model"]["seed"])
+
+    # Register the same dynamic custom policy class used during training before
+    # Stable-Baselines deserializes its serialized policy_class reference.
+    algorithm_class = build_auxiliary_recurrent_ppo()
+    checkpoints = []
+    for step, path, digest in inventory:
+        model = algorithm_class.load(str(path.with_suffix("")), env=None, device="cpu")
+        metrics = _evaluate_policy(
+            model,
+            validation_data,
+            scaler,
+            fee_bps,
+            slippage_bps,
+            seed=training_seed,
+        )
+        if metrics["steps"] != len(validation_data) - 1:
+            raise RuntimeError(f"validation_pass_contract_failed:{step}")
+        if metrics.get("evaluation_passes") != 1:
+            raise RuntimeError(f"validation_pass_count_invalid:{step}")
+
+        checkpoints.append(
+            {
+                "checkpoint_timesteps": step,
+                "checkpoint_file": path.name,
+                "checkpoint_sha256": digest,
+                "loaded": True,
+                "validation_steps": metrics["steps"],
+                "action_distribution": _action_percentages(metrics),
+                "net_profit": float(metrics["net_profit"]),
+                "net_return": float(metrics["net_return"]),
+                "max_drawdown": float(metrics["max_drawdown"]),
+                "closed_trades": int(metrics["closed_trade_count"]),
+                "total_fees": float(metrics["total_fees"]),
+                "total_slippage": float(metrics["total_slippage"]),
+                "evaluation_passes": 1,
+            }
+        )
+        del model
+    return checkpoints
+
+
+def _first_checkpoint_hold_over_90(
+    checkpoints: list[dict[str, Any]]
+) -> int | None:
+    for row in checkpoints:
+        if row["action_distribution"]["HOLD"]["percent"] > 90.0:
+            return int(row["checkpoint_timesteps"])
+    return None
+
+
+def _build_report(
+    args: argparse.Namespace,
+    source_report: dict[str, Any],
+    manifest: dict[str, Any],
+    validation_data: Any,
+    excluded_rows: int,
+    checkpoints: list[dict[str, Any]],
+    fee_bps: float,
+    slippage_bps: float,
+) -> dict[str, Any]:
+    source_split = source_report["split"]
+    return {
+        "schema_version": "alix.rl-checkpoint-sweep.v1",
+        "source_run_id": args.source_run_id,
+        "source_training_commit_sha": source_report["commit_sha"],
+        "diagnostic_commit_sha": args.commit_sha,
+        "training_performed": False,
+        "model_weights_modified": False,
+        "new_checkpoints_created": False,
+        "deterministic_inference": True,
+        "validation_only": True,
+        "final_holdout_scored_or_recomputed": False,
+        "final_holdout_used_for_selection": False,
+        "validation": {
+            "dataset_sha256": manifest["csv_sha256"],
+            "rows": len(validation_data),
+            "start_utc": source_split["validation_start_utc"],
+            "end_utc": source_split["validation_end_utc"],
+            "scaler_fit_on_training_only": True,
+            "source_validation_split_matched": True,
+            "fee_bps_per_side": fee_bps,
+            "slippage_bps_per_side": slippage_bps,
+            "excluded_rows_after_analysis_window": excluded_rows,
+        },
+        "checkpoint_count": len(checkpoints),
+        "checkpoints": checkpoints,
+        "first_checkpoint_hold_over_90_percent": _first_checkpoint_hold_over_90(
+            checkpoints
+        ),
+        "safety_invariants": {
+            "Champion": None,
+            "order_permission": False,
+            "trading_authorization": "NO-GO",
+            "private_api_calls": 0,
+            "orders_or_execution_api_used": False,
+            "real_order_attempts": 0,
+            "production_promotion_allowed": False,
+        },
+    }
+
+
 def _write_report(out_dir: Path, report: dict[str, Any]) -> None:
     json_path = out_dir / "rl-checkpoint-sweep.json"
     json_path.write_text(
@@ -164,117 +325,25 @@ def main(argv: Sequence[str] | None = None) -> int:
     _validate_source_report(source_report)
 
     data, manifest = _load_market_data(args.data, args.manifest)
-    if manifest.get("csv_sha256") != source_report.get("dataset", {}).get("csv_sha256"):
-        raise ValueError("source_dataset_hash_mismatch")
-
-    analysis_data, excluded_rows = _exclude_previous_holdout_window(data)
-    train_data, validation_data, _ = _split_training_validation(analysis_data)
-    scaler = MarketObservationScaler.fit(train_data)
-
-    source_split = source_report["split"]
-    if len(validation_data) != int(source_split["validation_rows"]):
-        raise ValueError("validation_rows_do_not_match_source_run")
-    if (
-        _utc_from_ms(float(validation_data[0, 0]))
-        != source_split["validation_start_utc"]
-    ):
-        raise ValueError("validation_start_does_not_match_source_run")
-    if (
-        _utc_from_ms(float(validation_data[-1, 0]))
-        != source_split["validation_end_utc"]
-    ):
-        raise ValueError("validation_end_does_not_match_source_run")
-    if source_split.get("scaler_fit_on_training_only") is not True:
-        raise ValueError("source_scaler_contract_invalid")
-
-    inventory = _checkpoint_inventory(source_report, args.checkpoint_dir)
-    execution = source_report["environment"]["execution"]
-    fee_bps = float(execution["fee_bps_per_side"])
-    slippage_bps = float(execution["slippage_bps_per_side"])
-    training_seed = int(source_report["model"]["seed"])
-
-    # Register the same dynamic custom policy class used during training before
-    # Stable-Baselines deserializes its serialized policy_class reference.
-    algorithm_class = build_auxiliary_recurrent_ppo()
-    checkpoints = []
-    for step, path, digest in inventory:
-        model = algorithm_class.load(str(path.with_suffix("")), env=None, device="cpu")
-        metrics = _evaluate_policy(
-            model,
-            validation_data,
-            scaler,
-            fee_bps,
-            slippage_bps,
-            seed=training_seed,
-        )
-        if metrics["steps"] != len(validation_data) - 1:
-            raise RuntimeError(f"validation_pass_contract_failed:{step}")
-        if metrics.get("evaluation_passes") != 1:
-            raise RuntimeError(f"validation_pass_count_invalid:{step}")
-
-        checkpoints.append(
-            {
-                "checkpoint_timesteps": step,
-                "checkpoint_file": path.name,
-                "checkpoint_sha256": digest,
-                "loaded": True,
-                "validation_steps": metrics["steps"],
-                "action_distribution": _action_percentages(metrics),
-                "net_profit": float(metrics["net_profit"]),
-                "net_return": float(metrics["net_return"]),
-                "max_drawdown": float(metrics["max_drawdown"]),
-                "closed_trades": int(metrics["closed_trade_count"]),
-                "total_fees": float(metrics["total_fees"]),
-                "total_slippage": float(metrics["total_slippage"]),
-                "evaluation_passes": 1,
-            }
-        )
-        del model
-
-    first_over_90 = next(
-        (
-            row["checkpoint_timesteps"]
-            for row in checkpoints
-            if row["action_distribution"]["HOLD"]["percent"] > 90.0
-        ),
-        None,
+    _validate_dataset_identity(manifest, source_report)
+    validation_data, scaler, excluded_rows = _build_validation_context(
+        data, source_report
     )
-    report = {
-        "schema_version": "alix.rl-checkpoint-sweep.v1",
-        "source_run_id": args.source_run_id,
-        "source_training_commit_sha": source_report["commit_sha"],
-        "diagnostic_commit_sha": args.commit_sha,
-        "training_performed": False,
-        "model_weights_modified": False,
-        "new_checkpoints_created": False,
-        "deterministic_inference": True,
-        "validation_only": True,
-        "final_holdout_scored_or_recomputed": False,
-        "final_holdout_used_for_selection": False,
-        "validation": {
-            "dataset_sha256": manifest["csv_sha256"],
-            "rows": len(validation_data),
-            "start_utc": source_split["validation_start_utc"],
-            "end_utc": source_split["validation_end_utc"],
-            "scaler_fit_on_training_only": True,
-            "source_validation_split_matched": True,
-            "fee_bps_per_side": fee_bps,
-            "slippage_bps_per_side": slippage_bps,
-            "excluded_rows_after_analysis_window": excluded_rows,
-        },
-        "checkpoint_count": len(checkpoints),
-        "checkpoints": checkpoints,
-        "first_checkpoint_hold_over_90_percent": first_over_90,
-        "safety_invariants": {
-            "Champion": None,
-            "order_permission": False,
-            "trading_authorization": "NO-GO",
-            "private_api_calls": 0,
-            "orders_or_execution_api_used": False,
-            "real_order_attempts": 0,
-            "production_promotion_allowed": False,
-        },
-    }
+    inventory = _checkpoint_inventory(source_report, args.checkpoint_dir)
+    checkpoints = _evaluate_checkpoints(
+        inventory, validation_data, scaler, source_report
+    )
+    execution = source_report["environment"]["execution"]
+    report = _build_report(
+        args,
+        source_report,
+        manifest,
+        validation_data,
+        excluded_rows,
+        checkpoints,
+        float(execution["fee_bps_per_side"]),
+        float(execution["slippage_bps_per_side"]),
+    )
     _write_report(args.out_dir, report)
     print(json.dumps(report, sort_keys=True, allow_nan=False))
     return 0
