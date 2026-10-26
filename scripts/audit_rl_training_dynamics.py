@@ -78,7 +78,9 @@ def parse_training_logs(logs_dir: Path) -> list[dict[str, float | int]]:
     snapshots: dict[int, dict[str, float | int]] = {}
     for path in paths:
         current_step: int | None = None
-        for original_line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        for original_line in path.read_text(
+            encoding="utf-8", errors="replace"
+        ).splitlines():
             line = ANSI_ESCAPE.sub("", original_line)
             match = TABLE_ROW.search(line)
             if match is None:
@@ -126,7 +128,10 @@ def _validate_source(
         raise ValueError("source_run_metadata_id_mismatch")
     if source_run.get("head_sha") != EXPECTED_SOURCE_COMMIT:
         raise ValueError("source_run_metadata_commit_mismatch")
-    if source_run.get("status") != "completed" or source_run.get("conclusion") != "success":
+    if (
+        source_run.get("status") != "completed"
+        or source_run.get("conclusion") != "success"
+    ):
         raise ValueError("source_training_run_not_successful")
     if source_report.get("schema_version") != EXPECTED_SOURCE_SCHEMA:
         raise ValueError("source_report_schema_mismatch")
@@ -146,9 +151,15 @@ def _validate_source(
     ):
         raise ValueError("source_safety_invariants_invalid")
     model = source_report.get("model", {})
-    if model.get("algorithm") != "RecurrentPPO" or model.get("total_timesteps_trained", 0) < 1_000_000:
+    if (
+        model.get("algorithm") != "RecurrentPPO"
+        or model.get("total_timesteps_trained", 0) < 1_000_000
+    ):
         raise ValueError("source_training_model_identity_invalid")
-    if not isinstance(model.get("model_sha256"), str) or len(model["model_sha256"]) != 64:
+    if (
+        not isinstance(model.get("model_sha256"), str)
+        or len(model["model_sha256"]) != 64
+    ):
         raise ValueError("source_model_digest_invalid")
 
 
@@ -278,7 +289,9 @@ def _reward_evidence(source_report: dict[str, Any]) -> dict[str, Any]:
             "signal_guidance_reward_total": guidance.get("reward_total"),
             "auxiliary_loss_initial_weight": auxiliary.get("initial_weight"),
             "auxiliary_loss_anneal_steps": auxiliary.get("anneal_steps"),
-            "auxiliary_loss_final_weight": auxiliary.get("effective_weight_at_training_end"),
+            "auxiliary_loss_final_weight": auxiliary.get(
+                "effective_weight_at_training_end"
+            ),
         },
         "final_validation_components_only_not_training": {
             key: validation[key] for key in final_validation_keys if key in validation
@@ -325,9 +338,7 @@ def _render_entropy_svg(entropy: dict[str, Any], target: Path) -> None:
     target.write_text(svg, encoding="utf-8")
 
 
-def _write_metrics_csv(
-    snapshots: list[dict[str, float | int]], target: Path
-) -> None:
+def _write_metrics_csv(snapshots: list[dict[str, float | int]], target: Path) -> None:
     fields = ["timesteps", *TRACKED_METRICS, "entropy_nats"]
     with target.open("w", encoding="utf-8", newline="") as stream:
         writer = csv.DictWriter(stream, fieldnames=fields, extrasaction="ignore")
@@ -352,9 +363,7 @@ def build_report(
     action_counts = final_validation.get("discrete_action_counts", {})
     hold_count = int(action_counts.get("HOLD", 0))
     buy_count = sum(
-        int(count)
-        for name, count in action_counts.items()
-        if name.startswith("BUY_")
+        int(count) for name, count in action_counts.items() if name.startswith("BUY_")
     )
     milestones = [
         _nearest_snapshot(snapshots, step)
@@ -362,11 +371,7 @@ def build_report(
     ]
     low_entropy_step = entropy["first_snapshot_at_or_below_0_05_nats"]
     low_entropy_snapshot = next(
-        (
-            item
-            for item in snapshots
-            if int(item["timesteps"]) == low_entropy_step
-        ),
+        (item for item in snapshots if int(item["timesteps"]) == low_entropy_step),
         None,
     )
     return {
@@ -376,7 +381,9 @@ def build_report(
             "workflow_run_id": source_run_id,
             "training_commit_sha": source_commit_sha,
             "training_run_conclusion": source_run.get("conclusion"),
-            "training_steps_reported_by_source": source_report["model"]["total_timesteps_trained"],
+            "training_steps_reported_by_source": source_report["model"][
+                "total_timesteps_trained"
+            ],
             "periodic_metric_interval_steps": Counter(
                 int(b["timesteps"]) - int(a["timesteps"])
                 for a, b in zip(snapshots, snapshots[1:])
@@ -420,7 +427,9 @@ def build_report(
                 "first_snapshot_at_or_below_0_05_nats"
             ],
             "minimum_logged_entropy_nats": entropy["minimum_observed_entropy_nats"],
-            "minimum_logged_entropy_timestep": entropy["minimum_observed_entropy_timestep"],
+            "minimum_logged_entropy_timestep": entropy[
+                "minimum_observed_entropy_timestep"
+            ],
             "auxiliary_loss_at_low_entropy_milestone": (
                 float(low_entropy_snapshot["auxiliary_loss"])
                 if low_entropy_snapshot is not None
@@ -464,15 +473,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         encoding="utf-8",
     )
     _write_metrics_csv(snapshots, args.out_dir / "training-metrics.csv")
-    _render_entropy_svg(report["training_entropy"], args.out_dir / "training-entropy.svg")
+    _render_entropy_svg(
+        report["training_entropy"], args.out_dir / "training-entropy.svg"
+    )
     print(
         json.dumps(
             {
                 "report": str(report_path),
                 "snapshot_count": report["training_entropy"]["snapshot_count"],
-                "first_entropy_at_or_below_0_05_nats": report[
-                    "training_entropy"
-                ]["first_snapshot_at_or_below_0_05_nats"],
+                "first_entropy_at_or_below_0_05_nats": report["training_entropy"][
+                    "first_snapshot_at_or_below_0_05_nats"
+                ],
                 "minimum_entropy_nats": report["training_entropy"][
                     "minimum_observed_entropy_nats"
                 ],

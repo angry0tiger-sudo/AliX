@@ -108,7 +108,9 @@ class TrainingDynamicsAuditTests(unittest.TestCase):
         self.assertEqual(result["minimum_observed_entropy_timestep"], 870_400)
         self.assertFalse(result["exact_zero_observed"])
 
-    def test_nearest_snapshot_reports_gap_instead_of_faking_exact_milestone(self) -> None:
+    def test_nearest_snapshot_reports_gap_instead_of_faking_exact_milestone(
+        self,
+    ) -> None:
         rows = [
             {"timesteps": 92_160, "entropy_loss": -0.5, "auxiliary_loss": 3.0},
             {"timesteps": 102_400, "entropy_loss": -0.4, "auxiliary_loss": 3.2},
