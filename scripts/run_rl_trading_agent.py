@@ -446,23 +446,41 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _validate_nonnegative_finite(value: float, error_code: str) -> None:
+    if not math.isfinite(value) or value < 0.0:
+        raise ValueError(error_code)
+
+
+def _validate_positive_integer(value: object, error_code: str) -> None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError(error_code)
+
+
+def _validate_nonnegative_integer(value: object, error_code: str) -> None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(error_code)
+
+
+def _validate_basis_points(value: float, error_code: str) -> None:
+    if not math.isfinite(value) or not 0.0 <= value < 10_000.0:
+        raise ValueError(error_code)
+
+
 def _validate_cli_arguments(args: argparse.Namespace) -> None:
     if args.timesteps < 0:
         raise ValueError("timesteps_must_be_non_negative")
-    if not math.isfinite(args.ent_coef) or args.ent_coef < 0:
-        raise ValueError("ent_coef_must_be_finite_and_non_negative")
-    if not math.isfinite(args.exploration_ent_coef) or args.exploration_ent_coef < 0:
-        raise ValueError("exploration_ent_coef_must_be_finite_and_non_negative")
-    if (
-        isinstance(args.exploration_steps, bool)
-        or not isinstance(args.exploration_steps, int)
-        or args.exploration_steps < 1
-    ):
-        raise ValueError("exploration_steps_must_be_positive_integer")
-    if not math.isfinite(args.fee_bps) or not 0 <= args.fee_bps < 10_000:
-        raise ValueError("fee_bps_out_of_range")
-    if not math.isfinite(args.slippage_bps) or not 0 <= args.slippage_bps < 10_000:
-        raise ValueError("slippage_bps_out_of_range")
+    _validate_nonnegative_finite(
+        args.ent_coef, "ent_coef_must_be_finite_and_non_negative"
+    )
+    _validate_nonnegative_finite(
+        args.exploration_ent_coef,
+        "exploration_ent_coef_must_be_finite_and_non_negative",
+    )
+    _validate_positive_integer(
+        args.exploration_steps, "exploration_steps_must_be_positive_integer"
+    )
+    _validate_basis_points(args.fee_bps, "fee_bps_out_of_range")
+    _validate_basis_points(args.slippage_bps, "slippage_bps_out_of_range")
 
 
 def _exclude_previous_holdout_window(
@@ -532,21 +550,14 @@ def _entropy_coefficient_at_step(
     ent_coef: float = DEFAULT_POST_EXPLORATION_ENT_COEF,
 ) -> float:
     """Return the training-only entropy coefficient for a rollout start timestep."""
-    if isinstance(timestep, bool) or not isinstance(timestep, int) or timestep < 0:
-        raise ValueError("entropy_timestep_invalid")
-    if (
-        not math.isfinite(exploration_ent_coef)
-        or exploration_ent_coef < 0.0
-        or not math.isfinite(ent_coef)
-        or ent_coef < 0.0
-    ):
-        raise ValueError("entropy_coefficient_invalid")
-    if (
-        isinstance(exploration_steps, bool)
-        or not isinstance(exploration_steps, int)
-        or exploration_steps < 1
-    ):
-        raise ValueError("entropy_exploration_steps_invalid")
+    _validate_nonnegative_integer(timestep, "entropy_timestep_invalid")
+    _validate_nonnegative_finite(
+        exploration_ent_coef, "entropy_coefficient_invalid"
+    )
+    _validate_nonnegative_finite(ent_coef, "entropy_coefficient_invalid")
+    _validate_positive_integer(
+        exploration_steps, "entropy_exploration_steps_invalid"
+    )
     return float(exploration_ent_coef if timestep < exploration_steps else ent_coef)
 
 
@@ -1163,6 +1174,39 @@ def _finalize_training_economic_assessment(
     return assessment
 
 
+def _checkpoint_action_counts(
+    metrics: dict[str, Any], steps: int
+) -> dict[str, int]:
+    """Validate the seven-class action inventory and its exact step denominator."""
+    raw_counts = metrics["discrete_action_counts"]
+    if not isinstance(raw_counts, dict) or set(raw_counts) != set(ACTION_NAMES):
+        raise RuntimeError("checkpoint_validation_action_inventory_invalid")
+    action_counts = {name: int(raw_counts[name]) for name in ACTION_NAMES}
+    if sum(action_counts.values()) != steps:
+        raise RuntimeError("checkpoint_validation_action_counts_invalid")
+    return action_counts
+
+
+def _checkpoint_action_side_counts(
+    metrics: dict[str, Any], action_counts: dict[str, int]
+) -> dict[str, int]:
+    """Verify aggregate HOLD/BUY/SELL counts against environment accounting."""
+    side_counts = {
+        "HOLD": action_counts["HOLD"],
+        "BUY": sum(action_counts[name] for name in ("BUY_25", "BUY_50", "BUY_100")),
+        "SELL": sum(
+            action_counts[name] for name in ("SELL_25", "SELL_50", "SELL_100")
+        ),
+    }
+    if (
+        side_counts["BUY"] != int(metrics["buy_action_count"])
+        or side_counts["SELL"] != int(metrics["sell_action_count"])
+        or side_counts["HOLD"] != int(metrics["hold_action_count"])
+    ):
+        raise RuntimeError("checkpoint_validation_action_side_counts_invalid")
+    return side_counts
+
+
 def _checkpoint_validation_row(
     checkpoint_path: Path, metrics: dict[str, Any]
 ) -> dict[str, Any]:
@@ -1173,25 +1217,10 @@ def _checkpoint_validation_row(
         )
     )
     steps = int(metrics["steps"])
-    raw_counts = metrics["discrete_action_counts"]
-    if not isinstance(raw_counts, dict) or set(raw_counts) != set(ACTION_NAMES):
-        raise RuntimeError("checkpoint_validation_action_inventory_invalid")
-    action_counts = {name: int(raw_counts[name]) for name in ACTION_NAMES}
-    if steps < 1 or sum(action_counts.values()) != steps:
+    if steps < 1:
         raise RuntimeError("checkpoint_validation_action_counts_invalid")
-    hold_count = action_counts["HOLD"]
-    buy_count = sum(
-        action_counts[name] for name in ACTION_NAMES if name.startswith("BUY_")
-    )
-    sell_count = sum(
-        action_counts[name] for name in ACTION_NAMES if name.startswith("SELL_")
-    )
-    if (
-        buy_count != int(metrics["buy_action_count"])
-        or sell_count != int(metrics["sell_action_count"])
-        or hold_count != int(metrics["hold_action_count"])
-    ):
-        raise RuntimeError("checkpoint_validation_action_side_counts_invalid")
+    action_counts = _checkpoint_action_counts(metrics, steps)
+    side_counts = _checkpoint_action_side_counts(metrics, action_counts)
     return {
         "checkpoint_timesteps": checkpoint_timesteps,
         "checkpoint_file": checkpoint_path.name,
@@ -1199,9 +1228,11 @@ def _checkpoint_validation_row(
         "validation_steps": steps,
         "discrete_action_counts": action_counts,
         "action_distribution": {
-            "HOLD": {"count": hold_count, "percent": 100.0 * hold_count / steps},
-            "BUY": {"count": buy_count, "percent": 100.0 * buy_count / steps},
-            "SELL": {"count": sell_count, "percent": 100.0 * sell_count / steps},
+            name: {
+                "count": count,
+                "percent": 100.0 * count / steps,
+            }
+            for name, count in side_counts.items()
         },
         "net_profit": float(metrics["net_profit"]),
         "net_return": float(metrics["net_return"]),
