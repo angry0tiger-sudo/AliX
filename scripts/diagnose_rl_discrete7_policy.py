@@ -270,10 +270,10 @@ def _forbidden_probabilities_are_zero(
 
 def _probe_probabilities(probe: dict[str, Any]) -> Sequence[float]:
     probabilities = probe.get("probabilities")
-    if probabilities is not None:
-        return probabilities
+    if isinstance(probabilities, (list, tuple)):
+        return [float(value) for value in probabilities]
     probability_map = probe["post_mask_probabilities"]
-    return [probability_map[name] for name in ACTION_NAMES]
+    return [float(probability_map[name]) for name in ACTION_NAMES]
 
 
 def _probe_position_fraction(probe: dict[str, Any]) -> float:
