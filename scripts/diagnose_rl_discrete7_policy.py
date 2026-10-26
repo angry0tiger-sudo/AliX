@@ -212,7 +212,10 @@ def _expected_masked_indices(position_fraction: float) -> list[int]:
 def _check_mask_contract(probe: dict[str, Any]) -> dict[str, Any]:
     raw = probe["raw_logits"]
     masked = probe["masked_logits"]
-    probabilities = probe["probabilities"]
+    probabilities = probe.get("probabilities")
+    if probabilities is None:
+        probability_map = probe["post_mask_probabilities"]
+        probabilities = [probability_map[name] for name in ACTION_NAMES]
     position = float(probe["observation_position_fraction"])
     expected = _expected_masked_indices(position)
     unexpected_sentinels = [
