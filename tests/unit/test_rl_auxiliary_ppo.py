@@ -51,6 +51,10 @@ def test_auxiliary_loss_report_keeps_guidance_out_of_evaluation() -> None:
     assert report["target_classes"] == {
         str(index): name for index, name in enumerate(ACTION_NAMES)
     }
+    assert report["trained_timesteps"] == 1_000_000
+    assert report["target_rule"].startswith("causal 20-completed-candle SMA slope")
+    assert "BUY_25" in report["target_rule"]
+    assert "SELL_25" in report["target_rule"]
 
 
 def test_auxiliary_loss_recurrent_ppo_training_and_reload(tmp_path: Path) -> None:
