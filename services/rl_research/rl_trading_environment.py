@@ -49,7 +49,8 @@ SELL_THRESHOLD = -1.0 / 3.0
 DEFAULT_DRAWDOWN_INCREMENT_PENALTY = 5.0
 DEFAULT_DRAWDOWN_LEVEL_PENALTY = 0.01
 DEFAULT_INACTIVITY_PENALTY = 0.001
-DEFAULT_INVALID_ACTION_PENALTY = 0.01
+DEFAULT_INVALID_ACTION_PENALTY = 0.001
+DEFAULT_HOLDING_PROFIT_REWARD = 0.0001
 DEFAULT_HOLDING_LOSS_PENALTY = 0.0001
 DEFAULT_REALIZED_PROFIT_REWARD_SCALE = 0.5
 DEFAULT_INACTIVITY_GRACE_STEPS = 3
@@ -231,6 +232,7 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Int64Array]):
         invalid_action_penalty: float = DEFAULT_INVALID_ACTION_PENALTY,
         inactivity_grace_steps: int = DEFAULT_INACTIVITY_GRACE_STEPS,
         profitable_trade_bonus: float = DEFAULT_PROFITABLE_TRADE_BONUS,
+        signal_guidance_reward_scale: float = 0.0,
     ) -> None:
         super().__init__()
         validate_market_data(market_data)
@@ -246,6 +248,15 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Int64Array]):
             inactivity_grace_steps,
             profitable_trade_bonus,
         )
+        if (
+            isinstance(signal_guidance_reward_scale, bool)
+            or not isinstance(signal_guidance_reward_scale, (int, float))
+            or not math.isfinite(float(signal_guidance_reward_scale))
+            or signal_guidance_reward_scale < 0.0
+        ):
+            raise ValueError(
+                "signal_guidance_reward_scale_must_be_finite_and_non_negative"
+            )
 
         self._market_data = np.ascontiguousarray(market_data, dtype=np.float64)
         self.scaler = scaler or MarketObservationScaler.fit(self._market_data)
@@ -267,6 +278,7 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Int64Array]):
         self.invalid_action_penalty = float(invalid_action_penalty)
         self.inactivity_grace_steps = inactivity_grace_steps
         self.profitable_trade_bonus = float(profitable_trade_bonus)
+        self.signal_guidance_reward_scale = float(signal_guidance_reward_scale)
 
         self.action_space = spaces.MultiDiscrete(
             np.asarray(
@@ -317,6 +329,11 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Int64Array]):
         self._final_equity: float | None = None
         self._opportunity_cost_penalty_count = 0
         self._holding_loss_penalty_count = 0
+        self._holding_profit_reward_count = 0
+        self._signal_guidance_reward_count = 0
+        self._signal_guidance_reward_total = 0.0
+        self._signal_guidance_buy_reward_count = 0
+        self._signal_guidance_sell_reward_count = 0
         self._realized_profit_reward_count = 0
         self._realized_profit_reward_total = 0.0
 
@@ -332,6 +349,19 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Int64Array]):
         _validate_cost_basis_points("slippage_bps_per_side", slippage_bps_per_side)
         self.fee_bps_per_side = float(fee_bps_per_side)
         self.slippage_bps_per_side = float(slippage_bps_per_side)
+
+    def set_signal_guidance_reward_scale(self, reward_scale: float) -> None:
+        """Change training-only shaping for subsequent actions."""
+        if (
+            isinstance(reward_scale, bool)
+            or not isinstance(reward_scale, (int, float))
+            or not math.isfinite(float(reward_scale))
+            or reward_scale < 0.0
+        ):
+            raise ValueError(
+                "signal_guidance_reward_scale_must_be_finite_and_non_negative"
+            )
+        self.signal_guidance_reward_scale = float(reward_scale)
 
     def _observation(self, index: int) -> Float32Array:
         row = self._market_data[index]
@@ -653,6 +683,11 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Int64Array]):
         self._final_equity = None
         self._opportunity_cost_penalty_count = 0
         self._holding_loss_penalty_count = 0
+        self._holding_profit_reward_count = 0
+        self._signal_guidance_reward_count = 0
+        self._signal_guidance_reward_total = 0.0
+        self._signal_guidance_buy_reward_count = 0
+        self._signal_guidance_sell_reward_count = 0
         self._realized_profit_reward_count = 0
         self._realized_profit_reward_total = 0.0
         return self._observation(self._index), {"start_index": self._index}
@@ -754,6 +789,52 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Int64Array]):
         self._holding_loss_penalty_count += 1
         return DEFAULT_HOLDING_LOSS_PENALTY
 
+    def _holding_profit_reward_for_action(
+        self, requested_action: str, current_price: float
+    ) -> float:
+        if requested_action != "HOLD":
+            return 0.0
+        if self._quantity <= self._quantity_tolerance(current_price):
+            return 0.0
+        liquidation_price = current_price * (
+            1.0 - self.slippage_bps_per_side / 10_000.0
+        )
+        liquidation_fee = (
+            self._quantity * liquidation_price * self.fee_bps_per_side / 10_000.0
+        )
+        expected_net_liquidation = self._quantity * liquidation_price - liquidation_fee
+        if expected_net_liquidation <= self._position_cost_basis:
+            return 0.0
+        self._holding_profit_reward_count += 1
+        return DEFAULT_HOLDING_PROFIT_REWARD
+
+    def _signal_guidance_reward_for_action(
+        self, requested_action: str, executed_action: str
+    ) -> tuple[float, str | None]:
+        if (
+            self.signal_guidance_reward_scale <= 0.0
+            or requested_action not in ("BUY", "SELL")
+            or executed_action != requested_action
+            or self._index < MOVING_AVERAGE_WINDOW
+        ):
+            return 0.0, None
+        current_average = float(self._opportunity_moving_average[self._index])
+        previous_average = float(self._opportunity_moving_average[self._index - 1])
+        if not math.isfinite(current_average) or not math.isfinite(previous_average):
+            return 0.0, None
+        signal_action: str | None = None
+        if current_average > previous_average and requested_action == "BUY":
+            signal_action = "BUY"
+            self._signal_guidance_buy_reward_count += 1
+        elif current_average < previous_average and requested_action == "SELL":
+            signal_action = "SELL"
+            self._signal_guidance_sell_reward_count += 1
+        if signal_action is None:
+            return 0.0, None
+        self._signal_guidance_reward_count += 1
+        self._signal_guidance_reward_total += self.signal_guidance_reward_scale
+        return self.signal_guidance_reward_scale, signal_action
+
     def _realized_profit_reward_for_action(self, executed_action: str) -> float:
         if executed_action != "SELL" or self._last_closed_trade_net_profit is None:
             return 0.0
@@ -777,6 +858,8 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Int64Array]):
         invalid_action_penalty: float,
         opportunity_cost_penalty: float,
         holding_loss_penalty: float,
+        holding_profit_reward: float,
+        signal_guidance_reward: float,
         realized_profit_reward: float,
         profitable_trade_bonus_count: int,
     ) -> tuple[float, float, float]:
@@ -793,6 +876,8 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Int64Array]):
             - invalid_action_penalty
             - opportunity_cost_penalty
             - holding_loss_penalty
+            + holding_profit_reward
+            + signal_guidance_reward
             + realized_profit_reward
             + profitable_trade_bonus
         )
@@ -835,6 +920,12 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Int64Array]):
         holding_loss_penalty = self._holding_loss_penalty_for_action(
             requested_action, current_price
         )
+        holding_profit_reward = self._holding_profit_reward_for_action(
+            requested_action, current_price
+        )
+        signal_guidance_reward, signal_guidance_action = (
+            self._signal_guidance_reward_for_action(requested_action, executed_action)
+        )
         realized_profit_reward = self._realized_profit_reward_for_action(
             executed_action
         )
@@ -860,6 +951,8 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Int64Array]):
             invalid_action_penalty,
             opportunity_cost_penalty,
             holding_loss_penalty,
+            holding_profit_reward,
+            signal_guidance_reward,
             realized_profit_reward,
             profitable_trade_bonus_count,
         )
@@ -886,6 +979,11 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Int64Array]):
             "invalid_action_penalty_applied": invalid_action_penalty_applied,
             "reward_opportunity_cost_penalty": opportunity_cost_penalty,
             "reward_holding_loss_penalty": holding_loss_penalty,
+            "reward_holding_profit_bonus": holding_profit_reward,
+            "reward_signal_guidance": signal_guidance_reward,
+            "signal_guidance_reward_applied": signal_guidance_reward > 0.0,
+            "signal_guidance_action": signal_guidance_action,
+            "signal_guidance_reward_scale": self.signal_guidance_reward_scale,
             "reward_realized_profit": realized_profit_reward,
             "realized_profit_reward_applied": realized_profit_reward > 0.0,
             "reward_profitable_trade_bonus": profitable_trade_bonus,
@@ -939,6 +1037,11 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Int64Array]):
             "invalid_action_penalty_count": self._invalid_action_penalty_count,
             "opportunity_cost_penalty_count": self._opportunity_cost_penalty_count,
             "holding_loss_penalty_count": self._holding_loss_penalty_count,
+            "holding_profit_reward_count": self._holding_profit_reward_count,
+            "signal_guidance_reward_count": self._signal_guidance_reward_count,
+            "signal_guidance_reward_total": self._signal_guidance_reward_total,
+            "signal_guidance_buy_reward_count": self._signal_guidance_buy_reward_count,
+            "signal_guidance_sell_reward_count": self._signal_guidance_sell_reward_count,
             "realized_profit_reward_count": self._realized_profit_reward_count,
             "realized_profit_reward_total": self._realized_profit_reward_total,
             "no_position_change_steps": self._no_position_change_steps,

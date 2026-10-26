@@ -26,6 +26,7 @@ from services.rl_research.rl_trading_environment import (
     BTCUSDTTradingEnv,
     DEFAULT_INITIAL_EQUITY,
     DEFAULT_HOLDING_LOSS_PENALTY,
+    DEFAULT_HOLDING_PROFIT_REWARD,
     DEFAULT_OPPORTUNITY_COST_PENALTY,
     DEFAULT_REALIZED_PROFIT_REWARD_SCALE,
     MOVING_AVERAGE_WINDOW,
@@ -50,6 +51,9 @@ Float32Array = NDArray[np.float32]
 MARKET_COLUMNS = ("open_time_ms", "open", "high", "low", "close", "volume")
 DEFAULT_FEE_BPS = 25.0
 DEFAULT_SLIPPAGE_BPS = 20.0
+DEFAULT_SIGNAL_GUIDANCE_REWARD_SCALE = 0.0002
+DEFAULT_SIGNAL_GUIDANCE_ANNEAL_STEPS = 300_000
+DEFAULT_SIGNAL_GUIDANCE_UPDATE_INTERVAL_STEPS = 1_000
 TRAIN_FRACTION = 0.70
 VALIDATION_FRACTION = 0.10
 HOLDOUT_FRACTION = 0.20
@@ -189,6 +193,7 @@ def _env_factory(
     scaler: MarketObservationScaler,
     fee_bps: float,
     slippage_bps: float,
+    signal_guidance_reward_scale: float = 0.0,
 ) -> Callable[[], BTCUSDTTradingEnv]:
     def create() -> BTCUSDTTradingEnv:
         return BTCUSDTTradingEnv(
@@ -198,6 +203,7 @@ def _env_factory(
             fee_bps_per_side=fee_bps,
             slippage_bps_per_side=slippage_bps,
             random_start=False,
+            signal_guidance_reward_scale=signal_guidance_reward_scale,
         )
 
     return create
@@ -413,7 +419,7 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="0 trains over one chronological pass through the training split.",
     )
     parser.add_argument("--seed", type=int, default=20261025)
-    parser.add_argument("--ent-coef", type=float, default=0.02)
+    parser.add_argument("--ent-coef", type=float, default=0.05)
     parser.add_argument("--fee-bps", type=float, default=DEFAULT_FEE_BPS)
     parser.add_argument("--slippage-bps", type=float, default=DEFAULT_SLIPPAGE_BPS)
     parser.add_argument("--commit-sha", default="unknown")
@@ -484,10 +490,26 @@ class TrainingRun:
     training_seconds: float
     entropy_coefficient: float
     cost_curriculum: dict[str, Any]
+    signal_guidance_curriculum: dict[str, Any]
 
 
-def _build_cost_curriculum_callback(curriculum: TrainingCostCurriculum) -> Any:
-    """Create an SB3 callback lazily so evaluation-only imports stay lightweight."""
+def _build_cost_curriculum_callback(
+    curriculum: TrainingCostCurriculum,
+    initial_guidance_scale: float = DEFAULT_SIGNAL_GUIDANCE_REWARD_SCALE,
+    guidance_anneal_steps: int = DEFAULT_SIGNAL_GUIDANCE_ANNEAL_STEPS,
+    guidance_update_interval_steps: int = DEFAULT_SIGNAL_GUIDANCE_UPDATE_INTERVAL_STEPS,
+) -> Any:
+    """Update costs and anneal a training-only causal trend hint."""
+    if (
+        not math.isfinite(initial_guidance_scale)
+        or initial_guidance_scale < 0.0
+        or isinstance(guidance_anneal_steps, bool)
+        or guidance_anneal_steps < 1
+        or isinstance(guidance_update_interval_steps, bool)
+        or guidance_update_interval_steps < 1
+        or guidance_anneal_steps % guidance_update_interval_steps != 0
+    ):
+        raise ValueError("signal_guidance_curriculum_configuration_invalid")
     base_callback = getattr(
         importlib.import_module("stable_baselines3.common.callbacks"), "BaseCallback"
     )
@@ -495,6 +517,14 @@ def _build_cost_curriculum_callback(curriculum: TrainingCostCurriculum) -> Any:
     def initialize_callback(self: Any) -> None:
         base_callback.__init__(self, verbose=0)
         self._last_costs = (0.0, 0.0)
+        self._initial_guidance_scale = float(initial_guidance_scale)
+        self._guidance_anneal_steps = guidance_anneal_steps
+        self._guidance_update_interval_steps = guidance_update_interval_steps
+        self._last_guidance_scale = float(initial_guidance_scale)
+        self._guidance_reward_count = 0
+        self._guidance_reward_total = 0.0
+        self._guidance_buy_reward_count = 0
+        self._guidance_sell_reward_count = 0
 
     def on_training_step(self: Any) -> bool:
         infos = self.locals.get("infos")
@@ -510,9 +540,8 @@ def _build_cost_curriculum_callback(curriculum: TrainingCostCurriculum) -> Any:
             or closed_trades < 0
         ):
             raise RuntimeError("policy_closed_trade_count_missing_or_invalid")
-        next_fees, next_slippage = curriculum.observe_step(
-            int(self.num_timesteps), closed_trades
-        )
+        timestep = int(self.num_timesteps)
+        next_fees, next_slippage = curriculum.observe_step(timestep, closed_trades)
         next_costs = (next_fees, next_slippage)
         if next_costs != self._last_costs:
             updates = self.training_env.env_method(
@@ -521,12 +550,76 @@ def _build_cost_curriculum_callback(curriculum: TrainingCostCurriculum) -> Any:
             if len(updates) != 1 or updates[0] is not None:
                 raise RuntimeError("cost_curriculum_environment_update_failed")
             self._last_costs = next_costs
+
+        raw_guidance_reward = info.get("reward_signal_guidance", 0.0)
+        if (
+            isinstance(raw_guidance_reward, bool)
+            or not isinstance(raw_guidance_reward, (int, float))
+            or not math.isfinite(float(raw_guidance_reward))
+            or raw_guidance_reward < 0.0
+        ):
+            raise RuntimeError("signal_guidance_reward_missing_or_invalid")
+        if raw_guidance_reward > 0.0:
+            guidance_action = info.get("signal_guidance_action")
+            if guidance_action not in ("BUY", "SELL"):
+                raise RuntimeError("signal_guidance_action_missing_or_invalid")
+            self._guidance_reward_count += 1
+            self._guidance_reward_total += float(raw_guidance_reward)
+            if guidance_action == "BUY":
+                self._guidance_buy_reward_count += 1
+            else:
+                self._guidance_sell_reward_count += 1
+
+        if (
+            timestep % self._guidance_update_interval_steps == 0
+            or timestep >= self._guidance_anneal_steps
+        ):
+            remaining_fraction = max(
+                0.0, 1.0 - timestep / self._guidance_anneal_steps
+            )
+            next_guidance_scale = (
+                self._initial_guidance_scale * remaining_fraction
+            )
+            if next_guidance_scale != self._last_guidance_scale:
+                updates = self.training_env.env_method(
+                    "set_signal_guidance_reward_scale", next_guidance_scale
+                )
+                if len(updates) != 1 or updates[0] is not None:
+                    raise RuntimeError("signal_guidance_environment_update_failed")
+                self._last_guidance_scale = next_guidance_scale
         return True
 
+    def signal_guidance_report(self: Any) -> dict[str, Any]:
+        timesteps = int(self.num_timesteps)
+        return {
+            "initial_reward_scale": self._initial_guidance_scale,
+            "anneal_steps": self._guidance_anneal_steps,
+            "update_interval_steps": self._guidance_update_interval_steps,
+            "final_reward_scale": self._last_guidance_scale,
+            "anneal_completed": (
+                timesteps >= self._guidance_anneal_steps
+                and self._last_guidance_scale == 0.0
+            ),
+            "rewarded_action_count": self._guidance_reward_count,
+            "reward_total": self._guidance_reward_total,
+            "rewarded_buy_action_count": self._guidance_buy_reward_count,
+            "rewarded_sell_action_count": self._guidance_sell_reward_count,
+            "evaluation_enabled": False,
+            "signal_definition": (
+                "causal slope of the 20-completed-candle simple moving average; "
+                "reward only a legal executed BUY when slope is positive or a legal "
+                "executed SELL when slope is negative; no opposing-action penalty"
+            ),
+        }
+
     callback_type = type(
-        "CostCurriculumCallback",
+        "CostAndSignalGuidanceCurriculumCallback",
         (base_callback,),
-        {"__init__": initialize_callback, "_on_step": on_training_step},
+        {
+            "__init__": initialize_callback,
+            "_on_step": on_training_step,
+            "signal_guidance_report": signal_guidance_report,
+        },
     )
     return callback_type()
 
@@ -558,7 +651,17 @@ def _train_recurrent_ppo(
         ramp_steps=CURRICULUM_RAMP_STEPS,
         ramp_update_interval_steps=CURRICULUM_RAMP_UPDATE_INTERVAL_STEPS,
     )
-    envs = dummy_vec_env([_env_factory(train_data, scaler, 0.0, 0.0)])
+    envs = dummy_vec_env(
+        [
+            _env_factory(
+                train_data,
+                scaler,
+                0.0,
+                0.0,
+                signal_guidance_reward_scale=DEFAULT_SIGNAL_GUIDANCE_REWARD_SCALE,
+            )
+        ]
+    )
     callback = _build_cost_curriculum_callback(curriculum)
     envs.seed(args.seed)
     model = recurrent_ppo(
@@ -609,6 +712,7 @@ def _train_recurrent_ppo(
         training_seconds=float(training_seconds),
         entropy_coefficient=float(args.ent_coef),
         cost_curriculum=curriculum.report(int(loaded_model.num_timesteps)),
+        signal_guidance_curriculum=callback.signal_guidance_report(),
     )
 
 
@@ -734,7 +838,7 @@ def _build_report(
         economic_assessment["status"] = "NO-GO"
 
     report: dict[str, Any] = {
-        "schema_version": "alix.rl-trading-agent-report.v5",
+        "schema_version": "alix.rl-trading-agent-report.v6",
         "run_mode": "historical_simulation_only",
         "commit_sha": args.commit_sha,
         "research_result": (
@@ -869,9 +973,28 @@ def _build_report(
                 "drawdown_level_penalty": 0.01,
                 "inactivity_penalty_per_unchanged_position_step": DEFAULT_INACTIVITY_PENALTY,
                 "invalid_action_penalty_per_masked_request": DEFAULT_INVALID_ACTION_PENALTY,
+                "holding_profit_reward_per_profitable_hold": (
+                    DEFAULT_HOLDING_PROFIT_REWARD
+                ),
                 "holding_loss_penalty_per_underwater_hold": (
                     DEFAULT_HOLDING_LOSS_PENALTY
                 ),
+                "holding_profit_reward_trigger": (
+                    "HOLD while an open position's expected net liquidation value after "
+                    "exit slippage and fees is above its position cost basis"
+                ),
+                "training_signal_guidance": {
+                    "enabled_only_during_training": True,
+                    "initial_reward_scale": DEFAULT_SIGNAL_GUIDANCE_REWARD_SCALE,
+                    "anneal_steps": DEFAULT_SIGNAL_GUIDANCE_ANNEAL_STEPS,
+                    "update_interval_steps": DEFAULT_SIGNAL_GUIDANCE_UPDATE_INTERVAL_STEPS,
+                    "final_reward_scale": 0.0,
+                    "validation_enabled": False,
+                    "final_holdout_enabled": False,
+                    "signal_definition": (
+                        "causal slope of the 20-completed-candle simple moving average"
+                    ),
+                },
                 "realized_profit_reward_scale_of_initial_equity": (
                     DEFAULT_REALIZED_PROFIT_REWARD_SCALE
                 ),
@@ -905,9 +1028,12 @@ def _build_report(
                     "log_net_return - 5.0 * max(0, risk_drawdown - prior_close_drawdown) "
                     "- 0.01 * risk_drawdown "
                     "- 0.001 * indicator(consecutive_unchanged_steps > 3) "
-                    "- 0.01 * indicator(masked_BUY_or_SELL_request) "
+                    "- 0.001 * indicator(masked_BUY_or_SELL_request) "
                     "- 0.0001 * indicator(HOLD_while_net_liquidation_is_below_cost_basis) "
+                    "+ 0.0001 * indicator(HOLD_while_net_liquidation_is_above_cost_basis) "
                     "- 0.0005 * indicator(flat_HOLD_and_close_above_causal_SMA) "
+                    "+ annealed_training_only_scale * indicator(legal_BUY_when_causal_SMA_rises "
+                    "or legal_SELL_when_causal_SMA_falls) "
                     "+ 0.5 * max(0, closed_trade_net_profit / initial_equity) "
                     " * indicator(policy_SELL_fully_closes_trade) "
                     "+ 0.0001 * profitable_closed_trade_count"
@@ -958,6 +1084,7 @@ def _build_report(
             "no_validation_checkpoint_selection": True,
         },
         "cost_curriculum": training.cost_curriculum,
+        "signal_guidance_curriculum": training.signal_guidance_curriculum,
         "evaluation": {
             "validation": validation_metrics,
             "validation_buy_and_hold": validation_buy_and_hold,
