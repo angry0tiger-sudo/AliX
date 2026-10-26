@@ -685,18 +685,18 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Int64Array]):
         )
         action_mask = self._legal_action_mask(current_price)
         if requested_action == "BUY":
-            executed, side, mask, reason = self._execute_buy_action(
+            _, executed_action, mask, reason = self._execute_buy_action(
                 action_name, size, next_open, action_mask, current_price
             )
         elif requested_action == "SELL":
-            executed, side, mask, reason = self._execute_sell_action(
+            _, executed_action, mask, reason = self._execute_sell_action(
                 action_name, size, next_open, action_mask
             )
         else:
-            executed, side, mask, reason = "HOLD", "HOLD", action_mask, None
+            executed_action, mask, reason = "HOLD", action_mask, None
         return (
             requested_action,
-            executed,
+            executed_action,
             mask,
             reason,
             action_index,
@@ -1259,6 +1259,10 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Int64Array]):
             "transaction_cost_reward_penalty_total": float(
                 self._transaction_cost_reward_penalty_total
             ),
+            "low_volatility_hold_reward": DEFAULT_LOW_VOLATILITY_HOLD_REWARD,
+            "low_volatility_lookback": LOW_VOLATILITY_LOOKBACK,
+            "low_volatility_return_std_threshold": LOW_VOLATILITY_RETURN_STD_THRESHOLD,
+            "transaction_cost_reward_multiplier": DEFAULT_TRANSACTION_COST_REWARD_MULTIPLIER,
             "signal_guidance_reward_count": self._signal_guidance_reward_count,
             "signal_guidance_reward_total": self._signal_guidance_reward_total,
             "signal_guidance_buy_reward_count": self._signal_guidance_buy_reward_count,
