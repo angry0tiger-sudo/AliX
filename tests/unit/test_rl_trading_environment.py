@@ -17,6 +17,7 @@ from services.rl_research.rl_trading_environment import (
     DEFAULT_HOLDING_LOSS_PENALTY,
     DEFAULT_HOLDING_PROFIT_REWARD,
     DEFAULT_INVALID_ACTION_PENALTY,
+    DEFAULT_INVALID_FULL_POSITION_BUY_PENALTY,
     DEFAULT_OPPORTUNITY_COST_PENALTY,
     DEFAULT_REALIZED_PROFIT_REWARD_SCALE,
     MOVING_AVERAGE_WINDOW,
@@ -461,14 +462,22 @@ def test_buy_is_masked_when_position_is_fully_allocated() -> None:
     _, reward, _, _, info = env.step(np.asarray([ACTION_BUY, 3], dtype=np.int64))
     assert info["action"] == "BUY"
     assert info["executed_action"] == "MASKED_BUY"
-    assert reward == pytest.approx(-DEFAULT_INVALID_ACTION_PENALTY)
-    assert info["reward_invalid_action_penalty"] == pytest.approx(0.001)
+    assert reward == pytest.approx(-DEFAULT_INVALID_FULL_POSITION_BUY_PENALTY)
+    assert info["reward_invalid_action_penalty"] == pytest.approx(
+        DEFAULT_INVALID_FULL_POSITION_BUY_PENALTY
+    )
+    assert info["reward_full_position_buy_penalty"] == pytest.approx(
+        DEFAULT_INVALID_FULL_POSITION_BUY_PENALTY
+    )
+    assert info["full_position_buy_penalty_applied"] is True
     assert info["action_blocked"] is True
     assert info["action_mask_reason"] == "position_fully_allocated"
     assert info["legal_action_mask"]["BUY"] is False
     assert env._quantity == pytest.approx(quantity_before)
     assert env.summary()["fill_count"] == fills_before
     assert env.summary()["masked_buy_action_count"] == 1
+    assert env.summary()["full_position_buy_penalty_count"] == 1
+    assert env.summary()["full_position_buy_penalty_total"] == pytest.approx(1.0)
     env.close()
 
 
