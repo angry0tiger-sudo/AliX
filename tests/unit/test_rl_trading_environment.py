@@ -636,6 +636,7 @@ def test_training_signal_guidance_rewards_only_legal_buy_on_rising_causal_sma() 
     assert env.summary()["signal_guidance_sell_reward_count"] == 0
     env.close()
 
+
 def test_portfolio_observation_tracks_marked_exposure_and_unrealized_return() -> None:
     data = _bars(closes=[100.0, 120.0, 132.0, 132.0])
     env = _env(data, initial_equity=1_000.0)
@@ -652,8 +653,6 @@ def test_portfolio_observation_tracks_marked_exposure_and_unrealized_return() ->
     env.close()
 
 
-
-
 def test_guidance_target_blocks_repeated_buy_when_position_is_full() -> None:
     rising = _env(
         _bars(closes=[100.0 + i for i in range(40)]),
@@ -662,9 +661,7 @@ def test_guidance_target_blocks_repeated_buy_when_position_is_full() -> None:
     rising.reset(seed=85)
     for _ in range(21):
         rising.step(np.asarray([ACTION_HOLD, 0], dtype=np.int64))
-    _, _, _, _, buy_info = rising.step(
-        np.asarray([ACTION_BUY, 3], dtype=np.int64)
-    )
+    _, _, _, _, buy_info = rising.step(np.asarray([ACTION_BUY, 3], dtype=np.int64))
     assert buy_info["guidance_target_action"] == "BUY"
     observation, _, _, _, next_info = rising.step(
         np.asarray([ACTION_BUY, 3], dtype=np.int64)
@@ -674,6 +671,7 @@ def test_guidance_target_blocks_repeated_buy_when_position_is_full() -> None:
     assert next_info["guidance_target_index"] == ACTION_HOLD
     assert observation[-2] > 0.99
     rising.close()
+
 
 def test_portfolio_observation_returns_zero_pnl_when_position_is_closed() -> None:
     data = _bars(closes=[100.0, 100.0, 100.0, 100.0])
