@@ -684,7 +684,10 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
         return "SELL", "SELL", action_mask, None
 
     def _apply_action(
-        self, action: Int64Array | np.int64 | int, current_price: float, next_open: float
+        self,
+        action: Int64Array | np.int64 | int,
+        current_price: float,
+        next_open: float,
     ) -> tuple[str, str, dict[str, bool], str | None, int, str, float, int | None]:
         action_index, action_name, requested_action, size, size_index = (
             self._validated_action_values(action)
