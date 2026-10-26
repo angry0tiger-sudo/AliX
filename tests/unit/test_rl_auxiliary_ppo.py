@@ -8,7 +8,9 @@ import pytest
 
 from services.rl_research.rl_trading_environment import (
     ACTION_BUY,
-    ACTION_SELL,
+    ACTION_NAMES,
+    BUY_ACTION_INDICES,
+    SELL_ACTION_INDICES,
     OBSERVATION_FIELDS,
 )
 
@@ -47,7 +49,9 @@ def test_auxiliary_loss_report_keeps_guidance_out_of_evaluation() -> None:
     assert report["anneal_completed"] is True
     assert report["validation_enabled"] is False
     assert report["final_holdout_enabled"] is False
-    assert report["target_classes"] == {"0": "HOLD", "1": "BUY", "2": "SELL"}
+    assert report["target_classes"] == {
+        str(index): name for index, name in enumerate(ACTION_NAMES)
+    }
 
 
 def test_auxiliary_loss_recurrent_ppo_training_and_reload(tmp_path: Path) -> None:
@@ -115,9 +119,9 @@ def test_auxiliary_loss_recurrent_ppo_training_and_reload(tmp_path: Path) -> Non
         position_index = OBSERVATION_FIELDS.index("current_position_fraction")
         hidden = torch.zeros((1, 1, 16), dtype=torch.float32)
         episode_starts = torch.ones((1,), dtype=torch.float32)
-        for position_fraction, forbidden_action in (
-            (0.0, ACTION_SELL),
-            (1.0, ACTION_BUY),
+        for position_fraction, forbidden_actions in (
+            (0.0, SELL_ACTION_INDICES),
+            (1.0, BUY_ACTION_INDICES),
         ):
             observation = np.zeros((1, len(OBSERVATION_FIELDS)), dtype=np.float32)
             observation[0, position_index] = position_fraction
@@ -127,18 +131,17 @@ def test_auxiliary_loss_recurrent_ppo_training_and_reload(tmp_path: Path) -> Non
                 (hidden.clone(), hidden.clone()),
                 episode_starts,
             )
-            direction_distribution = distribution.distribution[0]
-            assert direction_distribution.probs[
-                0, forbidden_action
-            ].item() == pytest.approx(0.0)
+            action_distribution = distribution.distribution
+            for forbidden_action in forbidden_actions:
+                assert action_distribution.probs[0, forbidden_action].item() == 0.0
             action, _ = model.predict(observation[0], deterministic=True)
-            assert int(np.asarray(action).reshape(2)[0]) != forbidden_action
+            assert int(np.asarray(action).reshape(-1)[0]) not in forbidden_actions
 
         model.learn(total_timesteps=8, progress_bar=False)
         assert model.num_timesteps == 8
         assert model.rollout_buffer.guidance_targets.shape == (8, 1)
         assert np.all(
-            np.isin(model.rollout_buffer.guidance_targets, np.asarray([0, 1, 2]))
+            np.isin(model.rollout_buffer.guidance_targets, np.arange(len(ACTION_NAMES)))
         )
         assert model.logger.name_to_value["train/auxiliary_loss"] >= 0.0
         assert model.logger.name_to_value[
@@ -161,11 +164,12 @@ def test_auxiliary_loss_recurrent_ppo_training_and_reload(tmp_path: Path) -> Non
             (hidden.clone(), hidden.clone()),
             episode_starts,
         )
-        assert loaded_distribution.distribution[0].probs[0, ACTION_BUY].item() == 0.0
+        for buy_action in BUY_ACTION_INDICES:
+            assert loaded_distribution.distribution.probs[0, buy_action].item() == 0.0
         reloaded_action, _ = loaded_model.predict(
             full_observation[0], deterministic=True
         )
-        assert int(np.asarray(reloaded_action).reshape(2)[0]) != ACTION_BUY
+        assert int(np.asarray(reloaded_action).reshape(-1)[0]) not in BUY_ACTION_INDICES
     finally:
         env.close()
 
@@ -232,15 +236,18 @@ def test_full_position_masks_buy_probability_to_exact_zero_before_sampling() -> 
         observation_tensor = torch.as_tensor(observation, dtype=torch.float32)
         hidden = torch.zeros((1, 1, 16), dtype=torch.float32)
         episode_starts = torch.ones((1,), dtype=torch.float32)
-        assert model.policy.action_dist.action_dims == [3, 4]
+        assert model.action_space.n == 7
         distribution, _ = model.policy.get_distribution(
             observation_tensor,
             (hidden.clone(), hidden.clone()),
             episode_starts,
         )
-        buy_probability = distribution.distribution[0].probs[0, ACTION_BUY].item()
-        assert buy_probability == 0.0
+        action_distribution = distribution.distribution
+        assert all(
+            action_distribution.probs[0, buy_action].item() == 0.0
+            for buy_action in BUY_ACTION_INDICES
+        )
         action, _ = model.predict(observation[0], deterministic=True)
-        assert int(np.asarray(action).reshape(2)[0]) != ACTION_BUY
+        assert int(np.asarray(action).reshape(-1)[0]) not in BUY_ACTION_INDICES
     finally:
         env.close()
