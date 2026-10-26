@@ -233,7 +233,7 @@ jobs:
           model = report["model"]
           evaluation = report["evaluation"]
           curriculum = report["cost_curriculum"]
-          assert report["schema_version"] == "alix.rl-trading-agent-report.v9"
+          assert report["schema_version"] == "alix.rl-trading-agent-report.v10"
           assert report["run_mode"] == "historical_simulation_only"
           assert report["dataset"]["row_count"] >= 1_051_200
           assert report["dataset"]["coverage_fraction"] == 1.0
@@ -255,7 +255,7 @@ jobs:
           assert 0.19 <= split["final_holdout_fraction_actual"] <= 0.21
           assert model["algorithm"] == "RecurrentPPO"
           assert model["policy"] == "ActionMaskedRecurrentActorCriticPolicy"
-          assert model["training_algorithm"] == "RecurrentPPO with LSTM and raw-logit action masking before MultiCategorical distribution construction plus annealed guidance cross-entropy"
+          assert model["training_algorithm"] == "RecurrentPPO with LSTM, Discrete(7) combined actions, pre-Categorical logit masking, annealed seven-class guidance cross-entropy, low-volatility HOLD reward, and explicit transaction-cost reward penalty"
           assert model["model_reload_roundtrip"] == "passed"
           assert len(model["model_sha256"]) == 64
           assert model["total_timesteps_trained"] >= 1_000_000
@@ -264,6 +264,12 @@ jobs:
           assert report["environment"]["reward"]["invalid_action_penalty_default_per_masked_request"] == 0.001
           assert report["environment"]["reward"]["invalid_full_position_buy_penalty"] == 1.0
           assert report["environment"]["reward"]["holding_profit_reward_per_profitable_hold"] == 0.0001
+          assert report["environment"]["reward"]["low_volatility_hold_reward"] == 0.001
+          assert report["environment"]["reward"]["low_volatility_lookback_completed_candles"] == 20
+          assert report["environment"]["reward"]["low_volatility_return_std_threshold"] == 0.002
+          assert report["environment"]["reward"]["low_volatility_hold_reward_applies_only_to_HOLD"] is True
+          assert report["environment"]["reward"]["transaction_cost_reward_multiplier"] == 1.0
+          assert "this_step_fee_cost + this_step_slippage_cost" in report["environment"]["reward"]["transaction_cost_reward_penalty"]
           assert report["environment"]["reward"]["holding_loss_penalty_per_underwater_hold"] == 0.0001
           assert report["environment"]["reward"]["realized_profit_reward_scale_of_initial_equity"] == 0.5
           assert report["environment"]["reward"]["training_signal_guidance"]["enabled_only_during_training"] is True
@@ -319,19 +325,38 @@ jobs:
           assert report["environment"]["reward"]["inactivity_grace_steps"] == 3
           assert report["environment"]["reward"]["profitable_trade_bonus"] == 0.0001
           action_space = report["environment"]["action_space"]
-          assert action_space["type"] == "MultiDiscrete"
-          assert action_space["nvec"] == [3, 4]
-          assert list(action_space["size_index_to_fraction"].values()) == [0.25, 0.5, 0.75, 1.0]
-          assert action_space["zero_size_buy_allowed"] is False
-          assert action_space["masking"]["enforcement"] == "raw_direction_logits_before_multicategorical_distribution_and_environment_execution_boundary"
+          assert action_space["type"] == "Discrete"
+          assert action_space["n"] == 7
+          assert action_space["index_to_action"] == {
+              "0": "HOLD",
+              "1": "BUY_25",
+              "2": "BUY_50",
+              "3": "BUY_100",
+              "4": "SELL_25",
+              "5": "SELL_50",
+              "6": "SELL_100",
+          }
+          assert action_space["size_fraction_by_action"] == {
+              "1": 0.25,
+              "2": 0.5,
+              "3": 1.0,
+              "4": 0.25,
+              "5": 0.5,
+              "6": 1.0,
+          }
+          assert action_space["zero_size_trade_actions_allowed"] is False
+          assert action_space["masking"]["enforcement"] == "custom_recurrent_policy_raw_logits_before_categorical_distribution_and_environment_execution_boundary"
           assert action_space["masking"]["policy_distribution_logits_masked"] is True
           assert action_space["masking"]["mask_applied_before_distribution_construction"] is True
           assert action_space["masking"]["masked_logit_value"] == -1e8
           assert action_space["masking"]["forbidden_action_probability_exactly_zero"] is True
-          assert action_space["masking"]["position_fraction_full_threshold"] == 1.0 - 1e-6
-          assert action_space["masking"]["position_fraction_flat_threshold"] == 1e-6
-          assert action_space["masking"]["buy_logit_masked_when_position_fraction_at_or_above_full_threshold"] is True
-          assert action_space["masking"]["sell_logit_masked_when_position_fraction_at_or_below_flat_threshold"] is True
+          assert action_space["masking"]["buy_action_indices"] == [1, 2, 3]
+          assert action_space["masking"]["sell_action_indices"] == [4, 5, 6]
+          assert action_space["masking"]["hold_action_index"] == 0
+          assert action_space["masking"]["position_fraction_full_threshold"] == 1.0 - 1e-9
+          assert action_space["masking"]["position_fraction_flat_threshold"] == 1e-9
+          assert action_space["masking"]["buy_actions_masked_when_position_fraction_at_or_above_full_threshold"] is True
+          assert action_space["masking"]["sell_actions_masked_when_position_fraction_at_or_below_flat_threshold"] is True
           assert action_space["masking"]["invalid_buy_fallback_reward_penalty"] == 1.0
           assert report["environment"]["reward"]["opportunity_cost_penalty_when_flat_above_sma"] == 0.0005
           assert report["environment"]["reward"]["opportunity_cost_moving_average_window"] == 20
@@ -356,6 +381,21 @@ jobs:
               assert metrics["opportunity_cost_penalty_count"] >= 0
               assert metrics["holding_loss_penalty_count"] >= 0
               assert metrics["holding_profit_reward_count"] >= 0
+              assert metrics["low_volatility_hold_reward_count"] >= 0
+              assert metrics["transaction_cost_reward_penalty_total"] >= 0.0
+              assert set(metrics["discrete_action_counts"]) == {
+                  "HOLD", "BUY_25", "BUY_50", "BUY_100", "SELL_25", "SELL_50", "SELL_100"
+              }
+              assert sum(metrics["discrete_action_counts"].values()) == metrics["steps"]
+              assert metrics["discrete_action_counts"]["HOLD"] == metrics["hold_action_count"]
+              assert sum(
+                  metrics["discrete_action_counts"][name]
+                  for name in ("BUY_25", "BUY_50", "BUY_100")
+              ) == metrics["buy_action_count"]
+              assert sum(
+                  metrics["discrete_action_counts"][name]
+                  for name in ("SELL_25", "SELL_50", "SELL_100")
+              ) == metrics["sell_action_count"]
               assert metrics["signal_guidance_reward_count"] == 0
               assert metrics["signal_guidance_reward_total"] == 0.0
               assert metrics["realized_profit_reward_count"] >= 0
