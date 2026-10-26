@@ -808,31 +808,49 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Int64Array]):
         self._holding_profit_reward_count += 1
         return DEFAULT_HOLDING_PROFIT_REWARD
 
+    def _signal_guidance_request_is_eligible(
+        self, requested_action: str, executed_action: str
+    ) -> bool:
+        if self.signal_guidance_reward_scale <= 0.0:
+            return False
+        if requested_action not in ("BUY", "SELL") or executed_action != requested_action:
+            return False
+        return self._index >= MOVING_AVERAGE_WINDOW
+
+    def _causal_sma_guidance_action(
+        self, requested_action: str, current_average: float, previous_average: float
+    ) -> str | None:
+        if current_average > previous_average:
+            return "BUY" if requested_action == "BUY" else None
+        if current_average < previous_average:
+            return "SELL" if requested_action == "SELL" else None
+        return None
+
+    def _record_signal_guidance_reward(self, signal_action: str) -> None:
+        if signal_action == "BUY":
+            self._signal_guidance_buy_reward_count += 1
+        else:
+            self._signal_guidance_sell_reward_count += 1
+        self._signal_guidance_reward_count += 1
+        self._signal_guidance_reward_total += self.signal_guidance_reward_scale
+
     def _signal_guidance_reward_for_action(
         self, requested_action: str, executed_action: str
     ) -> tuple[float, str | None]:
-        if (
-            self.signal_guidance_reward_scale <= 0.0
-            or requested_action not in ("BUY", "SELL")
-            or executed_action != requested_action
-            or self._index < MOVING_AVERAGE_WINDOW
+        if not self._signal_guidance_request_is_eligible(
+            requested_action, executed_action
         ):
             return 0.0, None
         current_average = float(self._opportunity_moving_average[self._index])
         previous_average = float(self._opportunity_moving_average[self._index - 1])
         if not math.isfinite(current_average) or not math.isfinite(previous_average):
             return 0.0, None
-        signal_action: str | None = None
-        if current_average > previous_average and requested_action == "BUY":
-            signal_action = "BUY"
-            self._signal_guidance_buy_reward_count += 1
-        elif current_average < previous_average and requested_action == "SELL":
-            signal_action = "SELL"
-            self._signal_guidance_sell_reward_count += 1
+        signal_action = self._causal_sma_guidance_action(
+            requested_action, current_average, previous_average
+        )
         if signal_action is None:
             return 0.0, None
-        self._signal_guidance_reward_count += 1
-        self._signal_guidance_reward_total += self.signal_guidance_reward_scale
+        self._record_signal_guidance_reward(signal_action)
         return self.signal_guidance_reward_scale, signal_action
 
     def _realized_profit_reward_for_action(self, executed_action: str) -> float:
