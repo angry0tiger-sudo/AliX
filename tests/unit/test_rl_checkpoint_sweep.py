@@ -30,7 +30,9 @@ def test_action_percentages_aggregate_each_discrete_direction() -> None:
 
 
 def test_action_percentages_fail_closed_when_counts_do_not_match_steps() -> None:
-    with pytest.raises(ValueError, match="action_count_total_does_not_match_validation_steps"):
+    with pytest.raises(
+        ValueError, match="action_count_total_does_not_match_validation_steps"
+    ):
         _action_percentages(
             {"steps": 4, "discrete_action_counts": {"HOLD": 3, "BUY_25": 2}}
         )

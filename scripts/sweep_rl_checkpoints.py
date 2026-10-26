@@ -49,9 +49,7 @@ def _checkpoint_inventory(
             raise ValueError("duplicate_checkpoint_timestep_in_source_report")
         by_step[step] = item
     if set(by_step) != set(EXPECTED_STEPS):
-        raise ValueError(
-            "source_report_does_not_list_exactly_ten_expected_checkpoints"
-        )
+        raise ValueError("source_report_does_not_list_exactly_ten_expected_checkpoints")
 
     inventory = []
     for step in EXPECTED_STEPS:
@@ -189,9 +187,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if source_split.get("scaler_fit_on_training_only") is not True:
         raise ValueError("source_scaler_contract_invalid")
 
-    inventory = _checkpoint_inventory(
-        source_report, args.checkpoint_dir
-    )
+    inventory = _checkpoint_inventory(source_report, args.checkpoint_dir)
     execution = source_report["environment"]["execution"]
     fee_bps = float(execution["fee_bps_per_side"])
     slippage_bps = float(execution["slippage_bps_per_side"])
