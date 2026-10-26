@@ -153,13 +153,9 @@ def test_auxiliary_loss_recurrent_ppo_training_and_reload(tmp_path: Path) -> Non
 
         # Critical regression: the serialized custom LSTM policy must still
         # assign exactly zero probability to BUY at full position.
-        full_observation = np.zeros(
-            (1, len(OBSERVATION_FIELDS)), dtype=np.float32
-        )
+        full_observation = np.zeros((1, len(OBSERVATION_FIELDS)), dtype=np.float32)
         full_observation[0, position_index] = 1.0
-        full_observation_tensor = torch.as_tensor(
-            full_observation, dtype=torch.float32
-        )
+        full_observation_tensor = torch.as_tensor(full_observation, dtype=torch.float32)
         loaded_distribution, _ = loaded_model.policy.get_distribution(
             full_observation_tensor,
             (hidden.clone(), hidden.clone()),
@@ -172,7 +168,6 @@ def test_auxiliary_loss_recurrent_ppo_training_and_reload(tmp_path: Path) -> Non
         assert int(np.asarray(reloaded_action).reshape(2)[0]) != ACTION_BUY
     finally:
         env.close()
-
 
 
 def test_full_position_masks_buy_probability_to_exact_zero_before_sampling() -> None:
@@ -232,9 +227,7 @@ def test_full_position_masks_buy_probability_to_exact_zero_before_sampling() -> 
     )
     try:
         position_index = OBSERVATION_FIELDS.index("current_position_fraction")
-        observation = np.zeros(
-            (1, len(OBSERVATION_FIELDS)), dtype=np.float32
-        )
+        observation = np.zeros((1, len(OBSERVATION_FIELDS)), dtype=np.float32)
         observation[0, position_index] = 1.0
         observation_tensor = torch.as_tensor(observation, dtype=torch.float32)
         hidden = torch.zeros((1, 1, 16), dtype=torch.float32)
