@@ -212,7 +212,7 @@ jobs:
             --out-dir artifacts/rl-agent \
             --timesteps 1000000 \
             --seed 20261025 \
-            --ent-coef 0.05 \
+            --ent-coef 0.1 \
             --fee-bps 25 \
             --slippage-bps 20 \
             --commit-sha "${{ github.sha }}"
@@ -233,7 +233,7 @@ jobs:
           model = report["model"]
           evaluation = report["evaluation"]
           curriculum = report["cost_curriculum"]
-          assert report["schema_version"] == "alix.rl-trading-agent-report.v10"
+          assert report["schema_version"] == "alix.rl-trading-agent-report.v11"
           assert report["run_mode"] == "historical_simulation_only"
           assert report["dataset"]["row_count"] >= 1_051_200
           assert report["dataset"]["coverage_fraction"] == 1.0
@@ -255,11 +255,11 @@ jobs:
           assert 0.19 <= split["final_holdout_fraction_actual"] <= 0.21
           assert model["algorithm"] == "RecurrentPPO"
           assert model["policy"] == "ActionMaskedRecurrentActorCriticPolicy"
-          assert model["training_algorithm"] == "RecurrentPPO with LSTM, Discrete(7) combined actions, pre-Categorical logit masking, annealed seven-class guidance cross-entropy, low-volatility HOLD reward, and explicit transaction-cost reward penalty"
+          assert model["training_algorithm"] == "RecurrentPPO with LSTM, Discrete(7) combined actions, pre-Categorical logit masking, floor-preserved seven-class guidance cross-entropy, minimum training-only SMA reward floor, elevated entropy coefficient, periodic checkpoints, low-volatility HOLD reward, and explicit transaction-cost reward penalty"
           assert model["model_reload_roundtrip"] == "passed"
           assert len(model["model_sha256"]) == 64
           assert model["total_timesteps_trained"] >= 1_000_000
-          assert model["ent_coef"] == 0.05
+          assert model["ent_coef"] == 0.1
           assert report["environment"]["reward"]["inactivity_penalty_per_unchanged_position_step"] == 0.001
           assert report["environment"]["reward"]["invalid_action_penalty_default_per_masked_request"] == 0.001
           assert report["environment"]["reward"]["invalid_full_position_buy_penalty"] == 1.0
@@ -276,21 +276,26 @@ jobs:
           assert report["environment"]["reward"]["training_signal_guidance"]["initial_reward_scale"] == 0.0002
           assert report["environment"]["reward"]["training_signal_guidance"]["anneal_steps"] == 300000
           assert report["environment"]["reward"]["training_signal_guidance"]["update_interval_steps"] == 1000
-          assert report["environment"]["reward"]["training_signal_guidance"]["final_reward_scale"] == 0.0
+          assert report["environment"]["reward"]["training_signal_guidance"]["minimum_reward_scale"] == 0.00002
+          assert report["environment"]["reward"]["training_signal_guidance"]["final_reward_scale"] == 0.00002
           assert report["environment"]["reward"]["training_signal_guidance"]["validation_enabled"] is False
           assert report["environment"]["reward"]["training_signal_guidance"]["final_holdout_enabled"] is False
           guidance = report["signal_guidance_curriculum"]
           assert guidance["initial_reward_scale"] == 0.0002
           assert guidance["anneal_steps"] == 300000
           assert guidance["update_interval_steps"] == 1000
-          assert guidance["final_reward_scale"] == 0.0
+          assert guidance["minimum_reward_scale"] == 0.00002
+          assert guidance["final_reward_scale"] == 0.00002
+          assert guidance["floor_reached"] is True
           assert guidance["anneal_completed"] is True
           assert guidance["evaluation_enabled"] is False
           auxiliary = report["auxiliary_loss_curriculum"]
           assert auxiliary["method"] == "recurrent_policy_combined_discrete_action_cross_entropy"
           assert auxiliary["initial_weight"] == 0.1
           assert auxiliary["anneal_steps"] == 500_000
-          assert auxiliary["effective_weight_at_training_end"] == 0.0
+          assert auxiliary["minimum_weight"] == 0.01
+          assert auxiliary["effective_weight_at_training_end"] == 0.01
+          assert auxiliary["floor_reached"] is True
           assert auxiliary["anneal_completed"] is True
           assert auxiliary["validation_enabled"] is False
           assert auxiliary["final_holdout_enabled"] is False
@@ -428,6 +433,27 @@ jobs:
           assert evaluation["holdout_pass_count"] == 1
           for key in ("net_profit", "net_return", "max_drawdown", "total_fees", "total_slippage"):
               assert math.isfinite(float(evaluation["final_holdout"][key]))
+          checkpointing = report["checkpointing"]
+          assert checkpointing["enabled"] is True
+          assert checkpointing["interval_steps"] == 100_000
+          assert checkpointing["checkpoint_count"] == 10
+          expected_checkpoint_steps = list(range(100_000, 1_000_001, 100_000))
+          assert [item["timesteps"] for item in checkpointing["checkpoints"]] == expected_checkpoint_steps
+          for checkpoint in checkpointing["checkpoints"]:
+              checkpoint_path = Path("artifacts/rl-agent") / checkpoint["file"]
+              assert checkpoint_path.is_file()
+              assert len(checkpoint["sha256"]) == 64
+              assert checkpoint["size_bytes"] == checkpoint_path.stat().st_size
+          reward_dynamics = report["training_reward_dynamics"]
+          assert reward_dynamics["window_size_steps"] == 100_000
+          assert sum(window["steps"] for window in reward_dynamics["component_windows"]) == model["total_timesteps_trained"]
+          assert len(reward_dynamics["component_windows"]) >= 10
+          for window in reward_dynamics["component_windows"]:
+              assert window["steps"] > 0
+              assert "reward_total" in window["reward_component_sums"]
+              assert "fees" in window["transaction_cost_sums"]
+              assert sum(window["requested_action_counts"].values()) == window["steps"]
+              assert sum(window["executed_action_counts"].values()) == window["steps"]
           assert report["environment"]["observation_contains_position_or_pnl"] is True
           assert "current_position_fraction" in report["environment"]["observation_fields"]
           assert "unrealized_pnl_pct" in report["environment"]["observation_fields"]
@@ -477,6 +503,6 @@ jobs:
           path: |
             artifacts/public-minute-bars/*.csv
             artifacts/public-minute-bars/manifest.json
-            artifacts/rl-agent/*
+            artifacts/rl-agent/
           if-no-files-found: warn
           retention-days: 30

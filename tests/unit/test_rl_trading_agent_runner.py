@@ -10,6 +10,7 @@ from scripts.run_rl_trading_agent import (
     PREVIOUS_HOLDOUT_START_MS,
     _evaluate_policy,
     _exclude_previous_holdout_window,
+    _guidance_reward_scale_at_step,
 )
 from services.rl_research.rl_trading_environment import (
     ACTION_BUY,
@@ -100,3 +101,18 @@ def test_evaluation_reports_real_discrete_size_choices_without_zero_volume_buys(
     assert metrics["signal_guidance_reward_count"] == 0
     assert metrics["signal_guidance_reward_total"] == pytest.approx(0.0)
     assert metrics["total_fees"] > 0.0
+
+
+def test_signal_guidance_reward_anneals_to_nonzero_floor() -> None:
+    assert _guidance_reward_scale_at_step(0) == pytest.approx(0.0002)
+    assert _guidance_reward_scale_at_step(150_000) == pytest.approx(0.0001)
+    assert _guidance_reward_scale_at_step(270_000) == pytest.approx(0.00002)
+    assert _guidance_reward_scale_at_step(300_000) == pytest.approx(0.00002)
+    assert _guidance_reward_scale_at_step(1_000_000) == pytest.approx(0.00002)
+
+
+def test_signal_guidance_floor_invalid_configuration_fails_closed() -> None:
+    with pytest.raises(ValueError, match="floor_exceeds_initial_scale"):
+        _guidance_reward_scale_at_step(1, initial_scale=0.0001, minimum_scale=0.0002)
+    with pytest.raises(ValueError, match="timestep_invalid"):
+        _guidance_reward_scale_at_step(-1)

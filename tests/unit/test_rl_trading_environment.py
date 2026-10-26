@@ -356,6 +356,11 @@ def test_hold_action_pays_configured_inactivity_penalty() -> None:
     assert info["position_changed"] is False
     assert info["consecutive_no_position_change_steps"] == 4
     assert info["reward_inactivity_penalty"] == pytest.approx(0.001)
+    assert info["reward_drawdown_increment_penalty"] >= 0.0
+    assert info["reward_drawdown_level_penalty"] >= 0.0
+    assert info["reward_total"] == pytest.approx(rewards[-1])
+    assert info["fees_this_step"] == pytest.approx(0.0)
+    assert info["slippage_this_step"] == pytest.approx(0.0)
     assert info["reward_profitable_trade_bonus"] == pytest.approx(0.0)
     assert env.summary()["hold_action_count"] == 4
     assert env.summary()["no_position_change_steps"] == 4

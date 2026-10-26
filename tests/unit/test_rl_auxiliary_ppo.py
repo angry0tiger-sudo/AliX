@@ -15,17 +15,20 @@ from services.rl_research.rl_trading_environment import (
 
 from scripts.rl_auxiliary_ppo import (
     DEFAULT_AUXILIARY_LOSS_ANNEAL_STEPS,
+    DEFAULT_AUXILIARY_LOSS_MINIMUM_WEIGHT,
     DEFAULT_AUXILIARY_LOSS_WEIGHT,
     auxiliary_loss_curriculum_report,
     auxiliary_loss_weight,
 )
 
 
-def test_auxiliary_loss_weight_anneals_linearly_to_zero() -> None:
+def test_auxiliary_loss_weight_anneals_to_and_preserves_floor() -> None:
     assert auxiliary_loss_weight(0) == pytest.approx(0.1)
     assert auxiliary_loss_weight(250_000) == pytest.approx(0.05)
-    assert auxiliary_loss_weight(500_000) == pytest.approx(0.0)
-    assert auxiliary_loss_weight(1_000_000) == pytest.approx(0.0)
+    assert auxiliary_loss_weight(450_000) == pytest.approx(0.01)
+    assert auxiliary_loss_weight(500_000) == pytest.approx(0.01)
+    assert auxiliary_loss_weight(1_000_000) == pytest.approx(0.01)
+    assert auxiliary_loss_weight(1_000_000, minimum_weight=0.02) == pytest.approx(0.02)
 
 
 def test_auxiliary_loss_configuration_fails_closed() -> None:
@@ -37,6 +40,10 @@ def test_auxiliary_loss_configuration_fails_closed() -> None:
         auxiliary_loss_weight(0, -0.1)
     with pytest.raises(ValueError, match="anneal_steps_must_be_positive"):
         auxiliary_loss_weight(0, 0.1, 0)
+    with pytest.raises(ValueError, match="minimum_weight_exceeds_initial_weight"):
+        auxiliary_loss_weight(0, 0.1, 10, 0.2)
+    with pytest.raises(ValueError, match="minimum_weight_must_be_non_negative"):
+        auxiliary_loss_weight(0, 0.1, 10, -0.01)
 
 
 def test_auxiliary_loss_report_keeps_guidance_out_of_evaluation() -> None:
@@ -44,7 +51,9 @@ def test_auxiliary_loss_report_keeps_guidance_out_of_evaluation() -> None:
     assert report["method"] == "recurrent_policy_combined_discrete_action_cross_entropy"
     assert report["initial_weight"] == DEFAULT_AUXILIARY_LOSS_WEIGHT
     assert report["anneal_steps"] == DEFAULT_AUXILIARY_LOSS_ANNEAL_STEPS
-    assert report["effective_weight_at_training_end"] == pytest.approx(0.0)
+    assert report["minimum_weight"] == pytest.approx(DEFAULT_AUXILIARY_LOSS_MINIMUM_WEIGHT)
+    assert report["effective_weight_at_training_end"] == pytest.approx(0.01)
+    assert report["floor_reached"] is True
     assert report["anneal_completed"] is True
     assert report["validation_enabled"] is False
     assert report["final_holdout_enabled"] is False
@@ -156,6 +165,7 @@ def test_auxiliary_loss_recurrent_ppo_training_and_reload(tmp_path: Path) -> Non
         assert loaded_model.num_timesteps == 8
         assert loaded_model.auxiliary_loss_weight == pytest.approx(0.1)
         assert loaded_model.auxiliary_loss_anneal_steps == 16
+        assert loaded_model.auxiliary_loss_minimum_weight == pytest.approx(0.01)
 
         # Critical regression: the serialized custom LSTM policy must still
         # assign exactly zero probability to BUY at full position.
