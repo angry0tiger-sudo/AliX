@@ -32,7 +32,7 @@ CLOSE_COLUMN = 4
 VOLUME_COLUMN = 5
 MARKET_COLUMN_COUNT = 6
 
-OBSERVATION_FIELDS = (
+MARKET_OBSERVATION_FIELDS = (
     "log_open_relative_to_training_anchor",
     "log_high_relative_to_training_anchor",
     "log_low_relative_to_training_anchor",
@@ -43,6 +43,12 @@ OBSERVATION_FIELDS = (
     "minute_of_week_sin",
     "minute_of_week_cos",
 )
+PORTFOLIO_OBSERVATION_FIELDS = (
+    "current_position_fraction",
+    "unrealized_pnl_pct",
+)
+OBSERVATION_FIELDS = (*MARKET_OBSERVATION_FIELDS, *PORTFOLIO_OBSERVATION_FIELDS)
+MARKET_ONLY_OBSERVATION_SIZE = len(MARKET_OBSERVATION_FIELDS)
 OBSERVATION_SIZE = len(OBSERVATION_FIELDS)
 BUY_THRESHOLD = 1.0 / 3.0
 SELL_THRESHOLD = -1.0 / 3.0
@@ -225,6 +231,7 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Int64Array]):
         fee_bps_per_side: float = 25.0,
         slippage_bps_per_side: float = 20.0,
         random_start: bool = False,
+        include_portfolio_state: bool = True,
         min_remaining_steps: int = 32_768,
         drawdown_increment_penalty: float = DEFAULT_DRAWDOWN_INCREMENT_PENALTY,
         drawdown_level_penalty: float = DEFAULT_DRAWDOWN_LEVEL_PENALTY,
@@ -235,6 +242,8 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Int64Array]):
         signal_guidance_reward_scale: float = 0.0,
     ) -> None:
         super().__init__()
+        if not isinstance(include_portfolio_state, bool):
+            raise ValueError("include_portfolio_state_must_be_boolean")
         validate_market_data(market_data)
         _validate_environment_configuration(
             initial_equity,
@@ -271,6 +280,10 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Int64Array]):
         self.fee_bps_per_side = float(fee_bps_per_side)
         self.slippage_bps_per_side = float(slippage_bps_per_side)
         self.random_start = random_start
+        self.include_portfolio_state = include_portfolio_state
+        self.observation_fields = (
+            OBSERVATION_FIELDS if include_portfolio_state else MARKET_OBSERVATION_FIELDS
+        )
         self.min_remaining_steps = int(min_remaining_steps)
         self.drawdown_increment_penalty = float(drawdown_increment_penalty)
         self.drawdown_level_penalty = float(drawdown_level_penalty)
@@ -285,9 +298,10 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Int64Array]):
                 [len(ACTION_NAMES), len(POSITION_SIZE_FRACTIONS)], dtype=np.int64
             )
         )
+        observation_size = len(self.observation_fields)
         self.observation_space = spaces.Box(
-            low=np.full(OBSERVATION_SIZE, -np.inf, dtype=np.float32),
-            high=np.full(OBSERVATION_SIZE, np.inf, dtype=np.float32),
+            low=np.full(observation_size, -np.inf, dtype=np.float32),
+            high=np.full(observation_size, np.inf, dtype=np.float32),
             dtype=np.float32,
         )
 
@@ -363,6 +377,22 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Int64Array]):
             )
         self.signal_guidance_reward_scale = float(reward_scale)
 
+    def _portfolio_observation_values(self, price: float) -> tuple[float, float]:
+        equity = self._equity_at(price)
+        position_value = self._quantity * price
+        if (
+            self._quantity <= self._quantity_tolerance(price)
+            or self._position_cost_basis <= 0.0
+        ):
+            return 0.0, 0.0
+        position_fraction = min(1.0, max(0.0, position_value / equity))
+        unrealized_pnl_pct = (
+            position_value - self._position_cost_basis
+        ) / self._position_cost_basis
+        if not math.isfinite(position_fraction) or not math.isfinite(unrealized_pnl_pct):
+            raise ValueError("portfolio_observation_non_finite")
+        return float(position_fraction), float(unrealized_pnl_pct)
+
     def _observation(self, index: int) -> Float32Array:
         row = self._market_data[index]
         anchor = self.scaler.price_anchor
@@ -383,9 +413,14 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Int64Array]):
             math.sin(weekly_angle),
             math.cos(weekly_angle),
         )
+        if self.include_portfolio_state:
+            values = (
+                *values,
+                *self._portfolio_observation_values(float(row[CLOSE_COLUMN])),
+            )
         observation = np.asarray(values, dtype=np.float32)
         if (
-            observation.shape != (OBSERVATION_SIZE,)
+            observation.shape != (len(self.observation_fields),)
             or not np.isfinite(observation).all()
         ):
             raise ValueError("market_observation_invalid")
@@ -808,6 +843,20 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Int64Array]):
         self._holding_profit_reward_count += 1
         return DEFAULT_HOLDING_PROFIT_REWARD
 
+    def _guidance_target_index(self, current_price: float) -> int:
+        action_mask = self._legal_action_mask(current_price)
+        if self._index < MOVING_AVERAGE_WINDOW:
+            return ACTION_HOLD
+        current_average = float(self._opportunity_moving_average[self._index])
+        previous_average = float(self._opportunity_moving_average[self._index - 1])
+        if not math.isfinite(current_average) or not math.isfinite(previous_average):
+            return ACTION_HOLD
+        if current_average > previous_average and action_mask["BUY"]:
+            return ACTION_BUY
+        if current_average < previous_average and action_mask["SELL"]:
+            return ACTION_SELL
+        return ACTION_HOLD
+
     def _signal_guidance_request_is_eligible(
         self, requested_action: str, executed_action: str
     ) -> bool:
@@ -915,7 +964,9 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Int64Array]):
         current_bar = self._market_data[self._index]
         next_index = self._index + 1
         next_bar = self._market_data[next_index]
-        previous_equity = self._equity_at(float(current_bar[CLOSE_COLUMN]))
+        current_price = float(current_bar[CLOSE_COLUMN])
+        guidance_target_index = self._guidance_target_index(current_price)
+        previous_equity = self._equity_at(current_price)
         previous_drawdown = self._current_drawdown
         previous_quantity = self._quantity
         self._last_step_realized_profit = 0.0
@@ -982,6 +1033,8 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Int64Array]):
         info: dict[str, Any] = {
             "timestamp_ms": int(next_bar[TIMESTAMP_COLUMN]),
             "action": requested_action,
+            "guidance_target_index": guidance_target_index,
+            "guidance_target_action": ACTION_NAMES[guidance_target_index],
             "requested_position_size_index": int(np.asarray(action)[1]),
             "requested_position_size_fraction": POSITION_SIZE_FRACTIONS[
                 int(np.asarray(action)[1])

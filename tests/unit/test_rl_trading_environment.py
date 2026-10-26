@@ -76,21 +76,25 @@ def test_observation_has_only_price_volume_and_time_fields() -> None:
     scaler = MarketObservationScaler.fit(data)
     env = _env(data, scaler=scaler)
     observation, _ = env.reset(seed=11)
-    assert len(OBSERVATION_FIELDS) == 9
-    assert observation.shape == (9,)
+    assert len(OBSERVATION_FIELDS) == 11
+    assert observation.shape == (OBSERVATION_SIZE,)
     assert np.isfinite(observation).all()
     assert all(
         any(
             token in name
             for token in ("open", "high", "low", "close", "volume", "minute_of")
         )
-        for name in OBSERVATION_FIELDS
+        for name in OBSERVATION_FIELDS[:9]
     )
-    assert not any(
-        token in name
-        for token in ("position", "cash", "equity", "profit", "drawdown")
-        for name in OBSERVATION_FIELDS
+    assert OBSERVATION_FIELDS[-2:] == (
+        "current_position_fraction",
+        "unrealized_pnl_pct",
     )
+    assert observation[-2:] == pytest.approx([0.0, 0.0])
+    legacy_env = _env(data, scaler=scaler, include_portfolio_state=False)
+    legacy_observation, _ = legacy_env.reset(seed=11)
+    assert legacy_observation.shape == (9,)
+    legacy_env.close()
     assert scaler.price_anchor == pytest.approx(100.0)
     assert scaler.volume_scale == pytest.approx(10.0)
     env.close()
@@ -186,7 +190,7 @@ def test_buy_hold_and_partial_sell_execute_on_the_next_bar() -> None:
     data = _bars()
     env = _env(data, initial_equity=1_000.0)
     observation, _ = env.reset(seed=2)
-    assert observation.shape == (9,)
+    assert observation.shape == (OBSERVATION_SIZE,)
 
     observation, _, terminated, _, info = env.step(
         np.asarray([ACTION_BUY, 1], dtype=np.int64)
@@ -209,7 +213,7 @@ def test_buy_hold_and_partial_sell_execute_on_the_next_bar() -> None:
     assert terminated is False
     assert info["action"] == "SELL"
     assert env._quantity == pytest.approx(2.5)
-    assert observation.shape == (9,)
+    assert observation.shape == (OBSERVATION_SIZE,)
     env.close()
 
 
@@ -632,6 +636,53 @@ def test_training_signal_guidance_rewards_only_legal_buy_on_rising_causal_sma() 
     assert env.summary()["signal_guidance_sell_reward_count"] == 0
     env.close()
 
+
+
+def test_portfolio_observation_tracks_marked_exposure_and_unrealized_return() -> None:
+    data = _bars(closes=[100.0, 120.0, 132.0, 132.0])
+    env = _env(data, initial_equity=1_000.0)
+    observation, _ = env.reset(seed=81)
+    assert observation[-2:] == pytest.approx([0.0, 0.0])
+
+    observation, _, _, _, _ = env.step(np.asarray([ACTION_BUY, 0], dtype=np.int64))
+    assert observation[-2] == pytest.approx(0.25)
+    assert observation[-1] == pytest.approx(0.0)
+
+    observation, _, _, _, _ = env.step(np.asarray([ACTION_HOLD, 0], dtype=np.int64))
+    assert observation[-2] == pytest.approx(275.0 / 1_025.0)
+    assert observation[-1] == pytest.approx(0.10)
+    env.close()
+
+
+def test_portfolio_observation_returns_zero_pnl_when_position_is_closed() -> None:
+    data = _bars(closes=[100.0, 100.0, 100.0, 100.0])
+    env = _env(data, initial_equity=1_000.0)
+    env.reset(seed=82)
+    env.step(np.asarray([ACTION_BUY, 3], dtype=np.int64))
+    observation, _, _, _, _ = env.step(np.asarray([ACTION_SELL, 3], dtype=np.int64))
+    assert observation[-2] == pytest.approx(0.0)
+    assert observation[-1] == pytest.approx(0.0)
+    env.close()
+
+
+def test_guidance_target_respects_causal_trend_and_legal_position_state() -> None:
+    rising = _env(_bars(closes=[100.0 + i for i in range(35)]))
+    rising.reset(seed=83)
+    latest_info: dict[str, Any] = {}
+    for _ in range(25):
+        _, _, _, _, latest_info = rising.step(np.asarray([ACTION_HOLD, 0], dtype=np.int64))
+    assert latest_info["guidance_target_action"] == "BUY"
+    assert latest_info["guidance_target_index"] == ACTION_BUY
+    rising.close()
+
+    falling = _env(_bars(closes=[140.0 - i for i in range(35)]))
+    falling.reset(seed=84)
+    latest_info = {}
+    for _ in range(25):
+        _, _, _, _, latest_info = falling.step(np.asarray([ACTION_HOLD, 0], dtype=np.int64))
+    assert latest_info["guidance_target_action"] == "HOLD"
+    assert latest_info["guidance_target_index"] == ACTION_HOLD
+    falling.close()
 
 def test_signal_guidance_is_disabled_by_default_and_scale_is_fail_closed() -> None:
     env = _env(_bars(closes=[100.0 + index for index in range(30)]))
