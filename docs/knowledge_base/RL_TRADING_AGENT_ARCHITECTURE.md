@@ -53,3 +53,17 @@ The RL research branch uses a Gymnasium market environment and Stable-Baselines3
 | 5. Shadow-only review | Non-executing report integration | Owner review; trading authorization remains NO-GO |
 
 A successful Actions run proves that the experiment executed and its claims are reproducible. It does not prove the policy is profitable or grant live-trading authority.
+
+
+## Policy-level action masking (Owner Directive, 2026-10-26)
+
+The policy direction distribution is masked before sampling, deterministic argmax, PPO log-probability evaluation, and the training-only auxiliary cross-entropy calculation. The mask reads the explicit `current_position_fraction` feature from the same observation used by the recurrent policy; missing or misaligned observation context fails closed.
+
+- At a position fraction of at least `1 - 1e-6`, BUY direction logits are set to negative infinity.
+- At a position fraction of at most `1e-6`, SELL direction logits are set to negative infinity.
+- HOLD remains legal in every state. The environment keeps its independent execution-boundary mask as defense in depth.
+- If an invalid BUY reaches the environment despite policy masking, the step reward receives a `-1.0` fallback penalty; other masked invalid actions retain the default `-0.001` penalty.
+- Tests assert the masked direction has exactly zero categorical probability in both flat and fully allocated states. Validation and final Holdout use the same policy mask but no Guidance reward or auxiliary optimization.
+- The report schema v8 makes policy masking status, thresholds, invalid-BUY fallback penalty counts, and immutable authorization locks explicit.
+
+A passing test proves the mask is enforced, not that the learned policy is profitable or that it will choose SELL at an economically useful time.
