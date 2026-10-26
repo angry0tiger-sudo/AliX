@@ -20,13 +20,16 @@ import pandas as pd
 from numpy.typing import NDArray
 
 from services.rl_research.rl_trading_environment import (
-    ACTION_BUY,
+    ACTION_BUY_100,
     ACTION_HOLD,
     ACTION_NAMES,
+    ACTION_SIDE_BY_INDEX,
+    ACTION_SIZE_BY_INDEX,
     BTCUSDTTradingEnv,
     DEFAULT_INITIAL_EQUITY,
     DEFAULT_HOLDING_LOSS_PENALTY,
     DEFAULT_HOLDING_PROFIT_REWARD,
+    DEFAULT_LOW_VOLATILITY_HOLD_REWARD,
     DEFAULT_OPPORTUNITY_COST_PENALTY,
     DEFAULT_REALIZED_PROFIT_REWARD_SCALE,
     MOVING_AVERAGE_WINDOW,
@@ -35,6 +38,9 @@ from services.rl_research.rl_trading_environment import (
     DEFAULT_INVALID_ACTION_PENALTY,
     DEFAULT_PROFITABLE_TRADE_BONUS,
     DEFAULT_INACTIVITY_GRACE_STEPS,
+    DEFAULT_TRANSACTION_COST_REWARD_MULTIPLIER,
+    LOW_VOLATILITY_LOOKBACK,
+    LOW_VOLATILITY_RETURN_STD_THRESHOLD,
     MarketObservationScaler,
     OBSERVATION_FIELDS,
     validate_market_data,
@@ -216,21 +222,18 @@ def _env_factory(
     return create
 
 
-def _decode_discrete_policy_action(
-    action: Any,
-) -> tuple[NDArray[np.int64], str, float]:
-    action_vector = np.asarray(action, dtype=np.int64).reshape(2)
-    direction_index, size_index = map(int, action_vector)
-    if not 0 <= direction_index < len(ACTION_NAMES):
-        raise ValueError("policy_direction_index_out_of_range")
-    if not 0 <= size_index < len(POSITION_SIZE_FRACTIONS):
-        raise ValueError("policy_size_index_out_of_range")
+def _decode_discrete_policy_action(action: Any) -> tuple[np.int64, str, float]:
+    values = np.asarray(action)
+    if values.shape not in ((), (1,)) or values.dtype.kind not in ("i", "u"):
+        raise ValueError("policy_action_must_be_one_integer_value")
+    action_index = int(values.reshape(-1)[0]) if values.shape else int(values.item())
+    if not 0 <= action_index < len(ACTION_NAMES):
+        raise ValueError("policy_discrete_action_index_out_of_range")
     return (
-        action_vector,
-        ACTION_NAMES[direction_index],
-        POSITION_SIZE_FRACTIONS[size_index],
+        np.asarray(action_index, dtype=np.int64),
+        ACTION_SIDE_BY_INDEX[action_index],
+        ACTION_SIZE_BY_INDEX[action_index],
     )
-
 
 def _new_policy_size_metrics() -> dict[str, Any]:
     return {
@@ -304,7 +307,7 @@ def _build_policy_evaluation_result(
             "evaluation_seed": seed,
             "evaluation_passes": 1,
             "deterministic_inference": True,
-            "policy_action_encoding": "MultiDiscrete([direction, size_index])",
+            "policy_action_encoding": "Discrete(7) combined direction-size action",
             "policy_requested_trade_size_fraction_counts": sizes["counts"],
             "policy_requested_trade_size_fraction_mean": (
                 float(sizes["sum"]) / trade_count if trade_count else None
@@ -368,11 +371,9 @@ def _evaluate_baseline(
     steps = 0
     while True:
         if baseline == "buy_and_hold" and steps == 0:
-            action = np.asarray(
-                [ACTION_BUY, len(POSITION_SIZE_FRACTIONS) - 1], dtype=np.int64
-            )
+            action = np.asarray(ACTION_BUY_100, dtype=np.int64)
         else:
-            action = np.asarray([ACTION_HOLD, 0], dtype=np.int64)
+            action = np.asarray(ACTION_HOLD, dtype=np.int64)
         _, _, terminated, truncated, _ = env.step(action)
         steps += 1
         if terminated or truncated:
@@ -852,7 +853,7 @@ def _build_report(
         economic_assessment["status"] = "NO-GO"
 
     report: dict[str, Any] = {
-        "schema_version": "alix.rl-trading-agent-report.v9",
+        "schema_version": "alix.rl-trading-agent-report.v10",
         "run_mode": "historical_simulation_only",
         "commit_sha": args.commit_sha,
         "research_result": (
@@ -952,35 +953,37 @@ def _build_report(
                 ),
             },
             "action_space": {
-                "type": "MultiDiscrete",
-                "nvec": [len(ACTION_NAMES), len(POSITION_SIZE_FRACTIONS)],
-                "direction_index_to_action": {
+                "type": "Discrete",
+                "n": len(ACTION_NAMES),
+                "index_to_action": {
                     str(index): name for index, name in enumerate(ACTION_NAMES)
                 },
-                "size_index_to_fraction": {
-                    str(index): fraction
-                    for index, fraction in enumerate(POSITION_SIZE_FRACTIONS)
+                "size_fraction_by_action": {
+                    str(index): size
+                    for index, size in enumerate(ACTION_SIZE_BY_INDEX)
+                    if size > 0.0
                 },
                 "buy_semantics": (
-                    "spend the selected fraction of currently available cash, "
-                    "inclusive of fee and slippage costs"
+                    "spend the action's fixed fraction of current available cash, "
+                    "including simulated fee and slippage costs"
                 ),
-                "sell_semantics": "sell the selected fraction of current inventory",
-                "hold_semantics": "do not rebalance; size index is ignored",
-                "zero_size_buy_allowed": False,
+                "sell_semantics": "sell the action's fixed fraction of current inventory",
+                "hold_semantics": "do not rebalance",
+                "zero_size_trade_actions_allowed": False,
                 "masking": {
-                    "enforcement": "raw_direction_logits_before_multicategorical_distribution_and_environment_execution_boundary",
+                    "enforcement": "custom_recurrent_policy_raw_logits_before_categorical_distribution_and_environment_execution_boundary",
                     "policy_distribution_logits_masked": True,
                     "mask_applied_before_distribution_construction": True,
                     "masked_logit_value": -1e8,
                     "forbidden_action_probability_exactly_zero": True,
+                    "buy_action_indices": [1, 2, 3],
+                    "sell_action_indices": [4, 5, 6],
+                    "hold_action_index": 0,
                     "position_fraction_full_threshold": 1.0
                     - ACTION_MASK_POSITION_EPSILON,
                     "position_fraction_flat_threshold": ACTION_MASK_POSITION_EPSILON,
-                    "buy_logit_masked_when_position_fraction_at_or_above_full_threshold": True,
-                    "sell_logit_masked_when_position_fraction_at_or_below_flat_threshold": True,
-                    "sell_requires_positive_inventory": True,
-                    "buy_requires_unallocated_cash": True,
+                    "buy_actions_masked_when_position_fraction_at_or_above_full_threshold": True,
+                    "sell_actions_masked_when_position_fraction_at_or_below_flat_threshold": True,
                     "masked_action_is_non_executable": True,
                     "invalid_buy_fallback_reward_penalty": 1.0,
                 },
@@ -1013,6 +1016,15 @@ def _build_report(
                 ),
                 "holding_profit_reward_per_profitable_hold": (
                     DEFAULT_HOLDING_PROFIT_REWARD
+                ),
+                "low_volatility_hold_reward": DEFAULT_LOW_VOLATILITY_HOLD_REWARD,
+                "low_volatility_lookback_completed_candles": LOW_VOLATILITY_LOOKBACK,
+                "low_volatility_return_std_threshold": LOW_VOLATILITY_RETURN_STD_THRESHOLD,
+                "low_volatility_hold_reward_applies_only_to_HOLD": True,
+                "transaction_cost_reward_multiplier": DEFAULT_TRANSACTION_COST_REWARD_MULTIPLIER,
+                "transaction_cost_reward_penalty": (
+                    "multiplier * (this_step_fee_cost + this_step_slippage_cost) "
+                    "/ previous_equity; additional shaping alongside net log-equity return"
                 ),
                 "holding_loss_penalty_per_underwater_hold": (
                     DEFAULT_HOLDING_LOSS_PENALTY
@@ -1116,7 +1128,7 @@ def _build_report(
             "n_epochs": 4,
             "epochs_per_rollout": 4,
             "lstm_hidden_size": 64,
-            "training_algorithm": "RecurrentPPO with LSTM and raw-logit action masking before MultiCategorical distribution construction plus annealed guidance cross-entropy",
+            "training_algorithm": "RecurrentPPO with LSTM, Discrete(7) combined actions, pre-Categorical logit masking, annealed seven-class guidance cross-entropy, low-volatility HOLD reward, and explicit transaction-cost reward penalty",
             "training_seconds": float(training.training_seconds),
             "model_artifact": training.model_path.name,
             "model_sha256": _sha256(training.model_path),
