@@ -268,43 +268,69 @@ def _forbidden_probabilities_are_zero(
     return all(probabilities[index] == 0.0 for index in expected)
 
 
-def _check_mask_contract(probe: dict[str, Any]) -> dict[str, Any]:
-    raw = probe["raw_logits"]
-    masked = probe["masked_logits"]
+def _probe_probabilities(probe: dict[str, Any]) -> Sequence[float]:
     probabilities = probe.get("probabilities")
-    if probabilities is None:
-        probability_map = probe["post_mask_probabilities"]
-        probabilities = [probability_map[name] for name in ACTION_NAMES]
+    if probabilities is not None:
+        return probabilities
+    probability_map = probe["post_mask_probabilities"]
+    return [probability_map[name] for name in ACTION_NAMES]
+
+
+def _probe_position_fraction(probe: dict[str, Any]) -> float:
     position_value = probe.get("observation_position_fraction")
     if position_value is None:
         position_value = probe["current_position_fraction"]
-    position = float(position_value)
-    expected = _expected_masked_indices(position)
+    return float(position_value)
+
+
+def _mask_contract_flags(
+    raw: Sequence[float],
+    masked: Sequence[float],
+    probabilities: Sequence[float],
+    expected: Sequence[int],
+) -> dict[str, Any]:
     unexpected = _find_unexpected_masked_indices(masked, expected)
     logits_correct = _masked_logits_use_sentinel(masked, expected)
     probabilities_zero = _forbidden_probabilities_are_zero(probabilities, expected)
     legal_logits_unchanged = _unmasked_logits_unchanged(raw, masked, expected)
     probabilities_normalized = math.isclose(sum(probabilities), 1.0, abs_tol=1e-5)
-    passed = (
-        logits_correct
-        and probabilities_zero
-        and legal_logits_unchanged
-        and not unexpected
-        and probabilities_normalized
-    )
     return {
-        "passed": passed,
+        "unexpected": unexpected,
+        "logits_correct": logits_correct,
+        "probabilities_zero": probabilities_zero,
+        "legal_logits_unchanged": legal_logits_unchanged,
+        "probabilities_normalized": probabilities_normalized,
+        "passed": (
+            logits_correct
+            and probabilities_zero
+            and legal_logits_unchanged
+            and not unexpected
+            and probabilities_normalized
+        ),
+    }
+
+
+def _check_mask_contract(probe: dict[str, Any]) -> dict[str, Any]:
+    raw = probe["raw_logits"]
+    masked = probe["masked_logits"]
+    probabilities = _probe_probabilities(probe)
+    position = _probe_position_fraction(probe)
+    expected = _expected_masked_indices(position)
+    checks = _mask_contract_flags(raw, masked, probabilities, expected)
+    return {
+        "passed": checks["passed"],
         "position_fraction": position,
         "expected_masked_actions": [ACTION_NAMES[index] for index in expected],
         "masked_action_probabilities": {
             ACTION_NAMES[index]: probabilities[index] for index in expected
         },
-        "masked_logits_use_sentinel": logits_correct,
-        "forbidden_probabilities_exactly_zero": probabilities_zero,
-        "unmasked_logits_unchanged": legal_logits_unchanged,
-        "unexpected_masked_actions": [ACTION_NAMES[index] for index in unexpected],
+        "masked_logits_use_sentinel": checks["logits_correct"],
+        "forbidden_probabilities_exactly_zero": checks["probabilities_zero"],
+        "unmasked_logits_unchanged": checks["legal_logits_unchanged"],
+        "unexpected_masked_actions": [
+            ACTION_NAMES[index] for index in checks["unexpected"]
+        ],
     }
-
 
 def _cross_entropy_from_logits(logits: Sequence[float], target: int) -> float:
     maximum = max(logits)
