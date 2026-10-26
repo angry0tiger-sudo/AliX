@@ -1,0 +1,189 @@
+name: AliX RL Checkpoint Sweep Diagnostic
+
+on:
+  push:
+    branches:
+      - "research/checkpoint-sweep-diagnostic"
+    paths:
+      - ".github/workflows/rl-trading-agent-checkpoint-sweep.yml"
+      - "scripts/sweep_rl_checkpoints.py"
+      - "tests/unit/test_rl_checkpoint_sweep.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: alix-rl-checkpoint-sweep-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checkpoint-sweep:
+    name: Deterministic validation-only checkpoint sweep
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      ALIx_ENV: paper
+      ALIx_DRY_RUN: "true"
+      ALIx_ALLOW_LIVE_TRADING: "false"
+      ALIx_REPORTING_ENABLED: "false"
+      PYTHONUNBUFFERED: "1"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      OMP_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+      SOURCE_RUN_ID: "40370055838"
+      SOURCE_ARTIFACT_ID: "12673717772"
+      SOURCE_SHA: "62fc99cf92fd92cc92664cffff611024ff8fed4c"
+    steps:
+      - name: Checkout diagnostic code without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Validate immutable source run and artifact identity
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import json, os
+          from urllib.request import Request, urlopen
+          base = f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}"
+          headers = {"Accept":"application/vnd.github+json",
+                     "Authorization":f"Bearer {os.environ['GITHUB_TOKEN']}",
+                     "X-GitHub-Api-Version":"2022-11-28"}
+          def get(url):
+              with urlopen(Request(url, headers=headers), timeout=30) as response:
+                  return json.load(response)
+          run = get(f"{base}/actions/runs/{os.environ['SOURCE_RUN_ID']}")
+          assert run["id"] == int(os.environ["SOURCE_RUN_ID"])
+          assert run["head_sha"] == os.environ["SOURCE_SHA"]
+          assert run["status"] == "completed" and run["conclusion"] == "success"
+          artifact = get(f"{base}/actions/artifacts/{os.environ['SOURCE_ARTIFACT_ID']}")
+          assert artifact["id"] == int(os.environ["SOURCE_ARTIFACT_ID"])
+          assert artifact["workflow_run"]["id"] == run["id"]
+          assert artifact["workflow_run"]["head_sha"] == os.environ["SOURCE_SHA"]
+          assert artifact["expired"] is False
+          print("Source Run #105 and artifact identity verified; no training will run.")
+          PY
+
+      - name: Download exact Run #105 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: rl-trading-agent-62fc99cf92fd92cc92664cffff611024ff8fed4c
+          path: artifacts/source-run-105
+          repository: ${{ github.repository }}
+          run-id: 40370055838
+          github-token: ${{ github.token }}
+
+      - name: Set up Python 3.12 with pinned dependency cache
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-rl-research.txt
+
+      - name: Pin pip resolver
+        run: python -m pip install pip==25.2
+
+      - name: Install pinned CPU-only RL research runtime
+        run: |
+          python -m pip install torch==2.14.1 --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -r requirements-rl-research.txt
+          python -m pip check
+
+      - name: Verify exact checkpoint inventory before evaluation
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          root = Path("artifacts/source-run-105")
+          report = json.loads((root / "rl-agent/rl-trading-agent-report.json").read_text())
+          assert report["commit_sha"] == "62fc99cf92fd92cc92664cffff611024ff8fed4c"
+          assert report["schema_version"] == "alix.rl-trading-agent-report.v11"
+          entries = report["checkpointing"]["checkpoints"]
+          expected = list(range(100000, 1000001, 100000))
+          assert [int(x["timesteps"]) for x in entries] == expected
+          checkpoint_dir = root / "rl-agent/checkpoints"
+          assert checkpoint_dir.is_dir()
+          assert len(list(checkpoint_dir.glob("rl_trading_agent_checkpoint_*_steps.zip"))) == 10
+          safety = report["safety_invariants"]
+          assert safety["Champion"] is None
+          assert safety["order_permission"] is False
+          assert safety["trading_authorization"] == "NO-GO"
+          assert safety["private_api_calls"] == 0
+          assert safety["real_order_attempts"] == 0
+          assert safety["orders_or_execution_api_used"] is False
+          print("Ten expected checkpoints found; safety invariants unchanged.")
+          PY
+
+      - name: Run checkpoint sweep unit and environment contracts
+        run: |
+          python -m pytest tests/unit/test_rl_checkpoint_sweep.py tests/unit/test_rl_trading_environment.py tests/unit/test_rl_trading_agent_runner.py -q
+
+      - name: Evaluate all ten checkpoints on the exact Run #105 Validation split
+        run: |
+          python -m scripts.sweep_rl_checkpoints             --data artifacts/source-run-105/public-minute-bars/binance_BTCUSDT_1m.csv             --manifest artifacts/source-run-105/public-minute-bars/manifest.json             --source-report artifacts/source-run-105/rl-agent/rl-trading-agent-report.json             --checkpoint-dir artifacts/source-run-105/rl-agent/checkpoints             --out-dir artifacts/rl-checkpoint-sweep             --commit-sha "${{ github.sha }}"             --source-run-id "$SOURCE_RUN_ID"
+
+      - name: Enforce sweep report contract and safety invariants
+        run: |
+          python - <<'PY'
+          import csv, json, math
+          from pathlib import Path
+          root = Path("artifacts/rl-checkpoint-sweep")
+          report = json.loads((root / "rl-checkpoint-sweep.json").read_text())
+          assert report["checkpoint_count"] == 10
+          assert len(report["checkpoints"]) == 10
+          assert [x["checkpoint_timesteps"] for x in report["checkpoints"]] == list(range(100000, 1000001, 100000))
+          assert report["training_performed"] is False
+          assert report["model_weights_modified"] is False
+          assert report["new_checkpoints_created"] is False
+          assert report["deterministic_inference"] is True
+          assert report["validation_only"] is True
+          assert report["final_holdout_scored_or_recomputed"] is False
+          assert report["final_holdout_used_for_selection"] is False
+          assert report["validation"]["source_validation_split_matched"] is True
+          assert report["validation"]["scaler_fit_on_training_only"] is True
+          for item in report["checkpoints"]:
+              assert item["loaded"] is True
+              assert item["evaluation_passes"] == 1
+              assert item["validation_steps"] == report["validation"]["rows"] - 1
+              assert set(item["action_distribution"]) == {"HOLD", "BUY", "SELL"}
+              assert sum(v["count"] for v in item["action_distribution"].values()) == item["validation_steps"]
+              assert math.isfinite(item["net_profit"]) and math.isfinite(item["net_return"])
+              assert math.isfinite(item["max_drawdown"]) and item["closed_trades"] >= 0
+          safety = report["safety_invariants"]
+          assert safety["Champion"] is None and safety["order_permission"] is False
+          assert safety["trading_authorization"] == "NO-GO"
+          assert safety["private_api_calls"] == 0 and safety["real_order_attempts"] == 0
+          assert safety["orders_or_execution_api_used"] is False
+          assert safety["production_promotion_allowed"] is False
+          with (root / "rl-checkpoint-sweep.csv").open(newline="", encoding="utf-8") as stream:
+              assert len(list(csv.DictReader(stream))) == 10
+          print(json.dumps({
+              "checkpoint_count": report["checkpoint_count"],
+              "first_checkpoint_hold_over_90_percent": report["first_checkpoint_hold_over_90_percent"],
+              "validation": report["validation"],
+              "checkpoints": [{
+                  "timesteps": x["checkpoint_timesteps"],
+                  "hold_percent": x["action_distribution"]["HOLD"]["percent"],
+                  "buy_percent": x["action_distribution"]["BUY"]["percent"],
+                  "sell_percent": x["action_distribution"]["SELL"]["percent"],
+                  "net_profit": x["net_profit"], "net_return": x["net_return"],
+                  "max_drawdown": x["max_drawdown"], "closed_trades": x["closed_trades"]
+              } for x in report["checkpoints"]],
+              "safety_invariants": safety
+          }, sort_keys=True, allow_nan=False))
+          PY
+
+      - name: Upload checkpoint sweep report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rl-checkpoint-sweep-${{ github.sha }}
+          path: |
+            artifacts/rl-checkpoint-sweep/rl-checkpoint-sweep.json
+            artifacts/rl-checkpoint-sweep/rl-checkpoint-sweep.csv
+          if-no-files-found: warn
+          retention-days: 30
