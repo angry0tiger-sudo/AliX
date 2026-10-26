@@ -43,6 +43,29 @@ class GuidanceRecurrentRolloutBufferSamples(NamedTuple):
     guidance_targets: Any
 
 
+def _validate_auxiliary_timestep(num_timesteps: int) -> None:
+    if isinstance(num_timesteps, bool) or not isinstance(num_timesteps, int):
+        raise ValueError("auxiliary_loss_timestep_must_be_integer")
+    if num_timesteps < 0:
+        raise ValueError("auxiliary_loss_timestep_must_be_non_negative")
+
+
+def _validate_auxiliary_anneal_steps(anneal_steps: int) -> None:
+    if isinstance(anneal_steps, bool) or not isinstance(anneal_steps, int):
+        raise ValueError("auxiliary_loss_anneal_steps_must_be_integer")
+    if anneal_steps < 1:
+        raise ValueError("auxiliary_loss_anneal_steps_must_be_positive")
+
+
+def _validate_auxiliary_weight(
+    weight: float, finite_error: str, non_negative_error: str
+) -> None:
+    if isinstance(weight, bool) or not math.isfinite(weight):
+        raise ValueError(finite_error)
+    if weight < 0.0:
+        raise ValueError(non_negative_error)
+
+
 def auxiliary_loss_weight(
     num_timesteps: int,
     initial_weight: float = DEFAULT_AUXILIARY_LOSS_WEIGHT,
@@ -50,22 +73,18 @@ def auxiliary_loss_weight(
     minimum_weight: float = DEFAULT_AUXILIARY_LOSS_MINIMUM_WEIGHT,
 ) -> float:
     """Return a linear auxiliary-loss schedule clamped at its nonzero floor."""
-    if isinstance(num_timesteps, bool) or not isinstance(num_timesteps, int):
-        raise ValueError("auxiliary_loss_timestep_must_be_integer")
-    if num_timesteps < 0:
-        raise ValueError("auxiliary_loss_timestep_must_be_non_negative")
-    if isinstance(initial_weight, bool) or not math.isfinite(initial_weight):
-        raise ValueError("auxiliary_loss_weight_must_be_finite")
-    if initial_weight < 0.0:
-        raise ValueError("auxiliary_loss_weight_must_be_non_negative")
-    if isinstance(anneal_steps, bool) or not isinstance(anneal_steps, int):
-        raise ValueError("auxiliary_loss_anneal_steps_must_be_integer")
-    if anneal_steps < 1:
-        raise ValueError("auxiliary_loss_anneal_steps_must_be_positive")
-    if isinstance(minimum_weight, bool) or not math.isfinite(minimum_weight):
-        raise ValueError("auxiliary_loss_minimum_weight_must_be_finite")
-    if minimum_weight < 0.0:
-        raise ValueError("auxiliary_loss_minimum_weight_must_be_non_negative")
+    _validate_auxiliary_timestep(num_timesteps)
+    _validate_auxiliary_anneal_steps(anneal_steps)
+    _validate_auxiliary_weight(
+        initial_weight,
+        "auxiliary_loss_weight_must_be_finite",
+        "auxiliary_loss_weight_must_be_non_negative",
+    )
+    _validate_auxiliary_weight(
+        minimum_weight,
+        "auxiliary_loss_minimum_weight_must_be_finite",
+        "auxiliary_loss_minimum_weight_must_be_non_negative",
+    )
     if minimum_weight > initial_weight:
         raise ValueError("auxiliary_loss_minimum_weight_exceeds_initial_weight")
     return float(

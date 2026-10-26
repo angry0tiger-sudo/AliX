@@ -65,46 +65,39 @@ def _number(raw: str) -> float | None:
     return value if math.isfinite(value) else None
 
 
-def parse_training_logs(logs_dir: Path) -> list[dict[str, float | int]]:
-    """Parse the historical Stable-Baselines3 progress tables."""
-    paths = sorted(
-        path
-        for path in logs_dir.rglob("*")
-        if path.is_file() and path.suffix.lower() in {".txt", ".log", ".out"}
-    )
-    if not paths:
-        raise ValueError("source_training_job_logs_not_found")
+def _parse_training_log_line(
+    original_line: str,
+    current_step: int | None,
+    snapshots: dict[int, dict[str, float | int]],
+) -> int | None:
+    line = ANSI_ESCAPE.sub("", original_line)
+    match = TABLE_ROW.search(line)
+    if match is None:
+        return current_step
+    key = " ".join(match.group(1).strip().split())
+    raw_value = match.group(2).strip()
+    if key == "total_timesteps":
+        parsed_step = _number(raw_value)
+        if parsed_step is None or not parsed_step.is_integer():
+            return None
+        next_step = int(parsed_step)
+        snapshots.setdefault(next_step, {"timesteps": next_step})
+        return next_step
+    if current_step is None or key not in TRACKED_METRICS or not raw_value:
+        return current_step
+    value = _number(raw_value)
+    if value is not None:
+        snapshots[current_step][key] = value
+    return current_step
 
-    snapshots: dict[int, dict[str, float | int]] = {}
-    for path in paths:
-        current_step: int | None = None
-        for original_line in path.read_text(
-            encoding="utf-8", errors="replace"
-        ).splitlines():
-            line = ANSI_ESCAPE.sub("", original_line)
-            match = TABLE_ROW.search(line)
-            if match is None:
-                continue
-            key = " ".join(match.group(1).strip().split())
-            raw_value = match.group(2).strip()
-            if key == "total_timesteps":
-                parsed_step = _number(raw_value)
-                if parsed_step is None or not parsed_step.is_integer():
-                    current_step = None
-                    continue
-                current_step = int(parsed_step)
-                snapshots.setdefault(current_step, {"timesteps": current_step})
-                continue
-            if current_step is None or key not in TRACKED_METRICS or not raw_value:
-                continue
-            value = _number(raw_value)
-            if value is not None:
-                snapshots[current_step][key] = value
 
-    result = [snapshots[step] for step in sorted(snapshots)]
+def _validated_training_snapshots(
+    snapshots: dict[int, dict[str, float | int]]
+) -> list[dict[str, float | int]]:
+    ordered = [snapshots[step] for step in sorted(snapshots)]
     result = [
         snapshot
-        for snapshot in result
+        for snapshot in ordered
         if "entropy_loss" in snapshot and "auxiliary_loss" in snapshot
     ]
     if len(result) < 20:
@@ -114,16 +107,37 @@ def parse_training_logs(logs_dir: Path) -> list[dict[str, float | int]]:
     return result
 
 
-def _validate_source(
-    source_report: dict[str, Any],
-    source_run: dict[str, Any],
-    source_run_id: int,
-    source_commit_sha: str,
+def parse_training_logs(logs_dir: Path) -> list[dict[str, float | int]]:
+    """Parse the historical Stable-Baselines3 progress tables."""
+    paths = sorted(
+        path
+        for path in logs_dir.rglob("*")
+        if path.is_file() and path.suffix.lower() in {".txt", ".log", ".out"}
+    )
+    if not paths:
+        raise ValueError("source_training_job_logs_not_found")
+    snapshots: dict[int, dict[str, float | int]] = {}
+    for path in paths:
+        current_step: int | None = None
+        for original_line in path.read_text(
+            encoding="utf-8", errors="replace"
+        ).splitlines():
+            current_step = _parse_training_log_line(
+                original_line, current_step, snapshots
+            )
+    return _validated_training_snapshots(snapshots)
+
+
+def _validate_source_run_identity(
+    source_run_id: int, source_commit_sha: str
 ) -> None:
     if source_run_id != EXPECTED_SOURCE_RUN_ID:
         raise ValueError("unexpected_source_run_id")
     if source_commit_sha != EXPECTED_SOURCE_COMMIT:
         raise ValueError("unexpected_source_commit")
+
+
+def _validate_run_metadata(source_run: dict[str, Any]) -> None:
     if source_run.get("id") != EXPECTED_SOURCE_RUN_ID:
         raise ValueError("source_run_metadata_id_mismatch")
     if source_run.get("head_sha") != EXPECTED_SOURCE_COMMIT:
@@ -133,14 +147,20 @@ def _validate_source(
         or source_run.get("conclusion") != "success"
     ):
         raise ValueError("source_training_run_not_successful")
+
+
+def _validate_source_report_identity(source_report: dict[str, Any]) -> None:
     if source_report.get("schema_version") != EXPECTED_SOURCE_SCHEMA:
         raise ValueError("source_report_schema_mismatch")
     if source_report.get("commit_sha") != EXPECTED_SOURCE_COMMIT:
         raise ValueError("source_report_commit_mismatch")
     if source_report.get("run_mode") != "historical_simulation_only":
         raise ValueError("source_report_run_mode_mismatch")
+
+
+def _validate_source_report_safety(source_report: dict[str, Any]) -> None:
     safety = source_report.get("safety_invariants", {})
-    if (
+    safety_is_invalid = (
         safety.get("Champion", "invalid") is not None
         or safety.get("order_permission") is not False
         or safety.get("trading_authorization") != "NO-GO"
@@ -148,19 +168,34 @@ def _validate_source(
         or safety.get("orders_or_execution_api_used") is not False
         or safety.get("real_order_attempts") != 0
         or source_report.get("production_promotion_allowed") is not False
-    ):
+    )
+    if safety_is_invalid:
         raise ValueError("source_safety_invariants_invalid")
+
+
+def _validate_source_model(source_report: dict[str, Any]) -> None:
     model = source_report.get("model", {})
     if (
         model.get("algorithm") != "RecurrentPPO"
         or model.get("total_timesteps_trained", 0) < 1_000_000
     ):
         raise ValueError("source_training_model_identity_invalid")
-    if (
-        not isinstance(model.get("model_sha256"), str)
-        or len(model["model_sha256"]) != 64
-    ):
+    digest = model.get("model_sha256")
+    if not isinstance(digest, str) or len(digest) != 64:
         raise ValueError("source_model_digest_invalid")
+
+
+def _validate_source(
+    source_report: dict[str, Any],
+    source_run: dict[str, Any],
+    source_run_id: int,
+    source_commit_sha: str,
+) -> None:
+    _validate_source_run_identity(source_run_id, source_commit_sha)
+    _validate_run_metadata(source_run)
+    _validate_source_report_identity(source_report)
+    _validate_source_report_safety(source_report)
+    _validate_source_model(source_report)
 
 
 def _entropy_summary(

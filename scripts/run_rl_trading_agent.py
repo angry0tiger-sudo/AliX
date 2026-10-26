@@ -508,6 +508,25 @@ class TrainingRun:
     checkpoint_paths: tuple[Path, ...]
 
 
+def _validate_guidance_timestep(timestep: int) -> None:
+    if isinstance(timestep, bool) or not isinstance(timestep, int) or timestep < 0:
+        raise ValueError("signal_guidance_timestep_invalid")
+
+
+def _validate_guidance_anneal_steps(anneal_steps: int) -> None:
+    if (
+        isinstance(anneal_steps, bool)
+        or not isinstance(anneal_steps, int)
+        or anneal_steps < 1
+    ):
+        raise ValueError("signal_guidance_anneal_steps_invalid")
+
+
+def _validate_guidance_scale(scale: float, error_code: str) -> None:
+    if not math.isfinite(scale) or scale < 0.0:
+        raise ValueError(error_code)
+
+
 def _guidance_reward_scale_at_step(
     timestep: int,
     initial_scale: float = DEFAULT_SIGNAL_GUIDANCE_REWARD_SCALE,
@@ -515,23 +534,40 @@ def _guidance_reward_scale_at_step(
     minimum_scale: float = DEFAULT_SIGNAL_GUIDANCE_REWARD_FLOOR,
 ) -> float:
     """Linearly anneal the train-only SMA guidance reward to a nonzero floor."""
-    if isinstance(timestep, bool) or not isinstance(timestep, int) or timestep < 0:
-        raise ValueError("signal_guidance_timestep_invalid")
-    if (
-        isinstance(anneal_steps, bool)
-        or not isinstance(anneal_steps, int)
-        or anneal_steps < 1
-    ):
-        raise ValueError("signal_guidance_anneal_steps_invalid")
-    if not math.isfinite(initial_scale) or initial_scale < 0.0:
-        raise ValueError("signal_guidance_initial_scale_invalid")
-    if not math.isfinite(minimum_scale) or minimum_scale < 0.0:
-        raise ValueError("signal_guidance_floor_invalid")
+    _validate_guidance_timestep(timestep)
+    _validate_guidance_anneal_steps(anneal_steps)
+    _validate_guidance_scale(initial_scale, "signal_guidance_initial_scale_invalid")
+    _validate_guidance_scale(minimum_scale, "signal_guidance_floor_invalid")
     if minimum_scale > initial_scale:
         raise ValueError("signal_guidance_floor_exceeds_initial_scale")
     return float(
         max(minimum_scale, initial_scale * max(0.0, 1.0 - timestep / anneal_steps))
     )
+
+
+def _validate_guidance_curriculum_configuration(
+    initial_guidance_scale: float,
+    guidance_anneal_steps: int,
+    guidance_update_interval_steps: int,
+    guidance_reward_floor: float,
+) -> None:
+    _validate_guidance_scale(
+        initial_guidance_scale, "signal_guidance_curriculum_configuration_invalid"
+    )
+    _validate_guidance_scale(
+        guidance_reward_floor, "signal_guidance_curriculum_configuration_invalid"
+    )
+    if guidance_reward_floor > initial_guidance_scale:
+        raise ValueError("signal_guidance_curriculum_configuration_invalid")
+    _validate_guidance_anneal_steps(guidance_anneal_steps)
+    if (
+        isinstance(guidance_update_interval_steps, bool)
+        or not isinstance(guidance_update_interval_steps, int)
+        or guidance_update_interval_steps < 1
+    ):
+        raise ValueError("signal_guidance_curriculum_configuration_invalid")
+    if guidance_anneal_steps % guidance_update_interval_steps != 0:
+        raise ValueError("signal_guidance_curriculum_configuration_invalid")
 
 
 def _build_cost_curriculum_callback(
@@ -542,19 +578,12 @@ def _build_cost_curriculum_callback(
     guidance_reward_floor: float = DEFAULT_SIGNAL_GUIDANCE_REWARD_FLOOR,
 ) -> Any:
     """Update costs and anneal a training-only causal trend hint to a floor."""
-    if (
-        not math.isfinite(initial_guidance_scale)
-        or initial_guidance_scale < 0.0
-        or not math.isfinite(guidance_reward_floor)
-        or guidance_reward_floor < 0.0
-        or guidance_reward_floor > initial_guidance_scale
-        or isinstance(guidance_anneal_steps, bool)
-        or guidance_anneal_steps < 1
-        or isinstance(guidance_update_interval_steps, bool)
-        or guidance_update_interval_steps < 1
-        or guidance_anneal_steps % guidance_update_interval_steps != 0
-    ):
-        raise ValueError("signal_guidance_curriculum_configuration_invalid")
+    _validate_guidance_curriculum_configuration(
+        initial_guidance_scale,
+        guidance_anneal_steps,
+        guidance_update_interval_steps,
+        guidance_reward_floor,
+    )
     base_callback = getattr(
         importlib.import_module("stable_baselines3.common.callbacks"), "BaseCallback"
     )
@@ -994,6 +1023,48 @@ def main(argv: Sequence[str] | None = None) -> int:
     return 0
 
 
+def _finalize_training_economic_assessment(
+    assessment: dict[str, Any], curriculum: dict[str, Any]
+) -> dict[str, Any]:
+    minimum_trade_threshold_met = bool(curriculum["minimum_trade_threshold_met"])
+    ramp_completed = bool(curriculum["ramp_completed"])
+    assessment["criteria"]["minimum_trade_threshold_met"] = minimum_trade_threshold_met
+    assessment["criteria"]["training_cost_ramp_completed"] = ramp_completed
+    assessment["criteria"]["training_cost_curriculum_completed"] = (
+        minimum_trade_threshold_met and ramp_completed
+    )
+    if not minimum_trade_threshold_met:
+        assessment["reasons"].append("minimum_trade_threshold_not_reached")
+    if not ramp_completed:
+        assessment["reasons"].append("training_cost_ramp_incomplete")
+    if not minimum_trade_threshold_met or not ramp_completed:
+        assessment["status"] = "NO-GO"
+    return assessment
+
+
+def _checkpointing_report(training: TrainingRun) -> dict[str, Any]:
+    checkpoint_items = []
+    for path in training.checkpoint_paths:
+        encoded_steps = path.name.removeprefix(
+            "rl_trading_agent_checkpoint_"
+        ).removesuffix("_steps.zip")
+        checkpoint_items.append(
+            {
+                "file": f"checkpoints/{path.name}",
+                "timesteps": int(encoded_steps),
+                "sha256": _sha256(path),
+                "size_bytes": path.stat().st_size,
+            }
+        )
+    return {
+        "enabled": True,
+        "interval_steps": TRAINING_CHECKPOINT_INTERVAL_STEPS,
+        "directory": "checkpoints",
+        "checkpoint_count": len(checkpoint_items),
+        "checkpoints": checkpoint_items,
+    }
+
+
 def _build_report(
     args: argparse.Namespace,
     manifest: dict[str, Any],
@@ -1008,23 +1079,10 @@ def _build_report(
     holdout_cash: dict[str, Any],
     training: TrainingRun,
 ) -> dict[str, Any]:
-    economic_assessment = _economic_assessment(validation_metrics, holdout_metrics)
-    curriculum = training.cost_curriculum
-    minimum_trade_threshold_met = bool(curriculum["minimum_trade_threshold_met"])
-    ramp_completed = bool(curriculum["ramp_completed"])
-    economic_assessment["criteria"]["minimum_trade_threshold_met"] = (
-        minimum_trade_threshold_met
+    economic_assessment = _finalize_training_economic_assessment(
+        _economic_assessment(validation_metrics, holdout_metrics),
+        training.cost_curriculum,
     )
-    economic_assessment["criteria"]["training_cost_ramp_completed"] = ramp_completed
-    economic_assessment["criteria"]["training_cost_curriculum_completed"] = (
-        minimum_trade_threshold_met and ramp_completed
-    )
-    if not minimum_trade_threshold_met:
-        economic_assessment["reasons"].append("minimum_trade_threshold_not_reached")
-    if not ramp_completed:
-        economic_assessment["reasons"].append("training_cost_ramp_incomplete")
-    if not minimum_trade_threshold_met or not ramp_completed:
-        economic_assessment["status"] = "NO-GO"
 
     report: dict[str, Any] = {
         "schema_version": "alix.rl-trading-agent-report.v11",
@@ -1319,25 +1377,7 @@ def _build_report(
             "scope": "training_only; env.info telemetry; no validation or holdout rewards used",
             "component_windows": training.reward_component_windows,
         },
-        "checkpointing": {
-            "enabled": True,
-            "interval_steps": TRAINING_CHECKPOINT_INTERVAL_STEPS,
-            "directory": "checkpoints",
-            "checkpoint_count": len(training.checkpoint_paths),
-            "checkpoints": [
-                {
-                    "file": f"checkpoints/{path.name}",
-                    "timesteps": int(
-                        path.name.removeprefix(
-                            "rl_trading_agent_checkpoint_"
-                        ).removesuffix("_steps.zip")
-                    ),
-                    "sha256": _sha256(path),
-                    "size_bytes": path.stat().st_size,
-                }
-                for path in training.checkpoint_paths
-            ],
-        },
+        "checkpointing": _checkpointing_report(training),
         "evaluation": {
             "validation": validation_metrics,
             "validation_buy_and_hold": validation_buy_and_hold,
