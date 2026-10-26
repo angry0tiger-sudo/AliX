@@ -135,7 +135,6 @@ def _validate_source_artifacts(
     return _validate_source_model_hash(args, report)
 
 
-
 def _initial_actor_state(model: Any, torch: Any) -> tuple[Any, Any]:
     shape = model.policy.lstm_hidden_state_shape
     hidden = torch.zeros(shape, dtype=torch.float32, device=model.policy.device)
@@ -304,7 +303,6 @@ def _check_mask_contract(probe: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-
 def _cross_entropy_from_logits(logits: Sequence[float], target: int) -> float:
     maximum = max(logits)
     log_normalizer = maximum + math.log(
@@ -438,9 +436,7 @@ def _action_counts_by_name(counts: Counter[str]) -> dict[str, int]:
     return {name: counts.get(name, 0) for name in ACTION_NAMES}
 
 
-def _mean_probability_map(
-    probability_sums: np.ndarray, steps: int
-) -> dict[str, float]:
+def _mean_probability_map(probability_sums: np.ndarray, steps: int) -> dict[str, float]:
     return {
         name: float(probability_sums[index] / steps)
         for index, name in enumerate(ACTION_NAMES)
@@ -470,9 +466,7 @@ def _auxiliary_loss_summary(
         "anneal_steps": source_auxiliary["anneal_steps"],
         "effective_weight_at_training_end": final_weight,
         "validation_loss_weight": 0.0,
-        "validation_enabled_in_training_config": source_auxiliary[
-            "validation_enabled"
-        ],
+        "validation_enabled_in_training_config": source_auxiliary["validation_enabled"],
         "final_holdout_enabled_in_training_config": source_auxiliary[
             "final_holdout_enabled"
         ],
@@ -692,7 +686,6 @@ def _run_validation_diagnostic(
         source_auxiliary,
         output_csv,
     )
-
 
 
 def main(argv: Sequence[str] | None = None) -> int:
