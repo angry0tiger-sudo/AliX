@@ -224,7 +224,7 @@ def _validate_environment_configuration(
         raise ValueError("min_remaining_steps_must_be_positive")
 
 
-class BTCUSDTTradingEnv(gym.Env[Float32Array, Int64Array]):
+class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
     """Long-only, one-minute, cost-aware trading environment.
 
     Actions use Discrete(7): HOLD; BUY 25%, 50%, or 100% of spendable cash; and
@@ -610,7 +610,7 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Int64Array]):
         return self._quantity > previous_quantity
 
     def _validated_action_values(
-        self, action: Int64Array | int
+        self, action: Int64Array | np.int64 | int
     ) -> tuple[int, str, str, float, int | None]:
         values = np.asarray(action)
         if values.shape not in ((), (1,)) or values.dtype.kind not in ("i", "u"):
@@ -684,7 +684,7 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Int64Array]):
         return "SELL", "SELL", action_mask, None
 
     def _apply_action(
-        self, action: Int64Array | int, current_price: float, next_open: float
+        self, action: Int64Array | np.int64 | int, current_price: float, next_open: float
     ) -> tuple[str, str, dict[str, bool], str | None, int, str, float, int | None]:
         action_index, action_name, requested_action, size, size_index = (
             self._validated_action_values(action)
@@ -1058,7 +1058,7 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, Int64Array]):
         return log_net_return, profitable_trade_bonus, reward
 
     def step(
-        self, action: Int64Array | int
+        self, action: Int64Array | np.int64 | int
     ) -> tuple[Float32Array, float, bool, bool, dict[str, Any]]:
         if self._index >= len(self._market_data) - 1:
             raise RuntimeError("environment_episode_already_terminated")

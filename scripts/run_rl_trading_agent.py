@@ -230,7 +230,7 @@ def _decode_discrete_policy_action(action: Any) -> tuple[np.int64, str, float]:
     if not 0 <= action_index < len(ACTION_NAMES):
         raise ValueError("policy_discrete_action_index_out_of_range")
     return (
-        np.asarray(action_index, dtype=np.int64),
+        np.int64(action_index),
         ACTION_SIDE_BY_INDEX[action_index],
         ACTION_SIZE_BY_INDEX[action_index],
     )
