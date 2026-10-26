@@ -86,6 +86,7 @@ def _env(data: Float64Array, **kwargs: Any) -> BTCUSDTTradingEnv:
     kwargs.setdefault("min_remaining_steps", 1)
     return BTCUSDTTradingEnv(data, **kwargs)
 
+
 def test_environment_satisfies_gymnasium_contract() -> None:
     env = _env(_bars())
     check_env(env, skip_render_check=True)
@@ -94,6 +95,7 @@ def test_environment_satisfies_gymnasium_contract() -> None:
     assert observation.dtype == np.float32
     assert info["start_index"] == 0
     env.close()
+
 
 def test_observation_has_only_price_volume_and_time_fields() -> None:
     data = _bars()
@@ -122,6 +124,7 @@ def test_observation_has_only_price_volume_and_time_fields() -> None:
     assert scaler.price_anchor == pytest.approx(100.0)
     assert scaler.volume_scale == pytest.approx(10.0)
     env.close()
+
 
 def test_scaler_uses_training_only_and_handles_zero_median_volume() -> None:
     train = _bars(closes=[100.0, 101.0, 102.0], volumes=[0.0, 0.0, 0.0])
@@ -156,6 +159,7 @@ def test_invalid_market_geometry_fails_closed(mutate: object, message: str) -> N
     data[:, column] = mutate(data)  # type: ignore[operator]
     with pytest.raises(ValueError, match=message):
         validate_market_data(data)
+
 
 def test_market_data_shape_non_finite_timestamp_and_gap_fail_closed() -> None:
     with pytest.raises(ValueError, match="six_columns"):
@@ -207,6 +211,7 @@ def test_invalid_environment_configuration_fails_closed(
     with pytest.raises(ValueError, match=message):
         _env(_bars(), **kwargs)
 
+
 def test_buy_hold_and_partial_sell_execute_on_the_next_bar() -> None:
     data = _bars()
     env = _env(data, initial_equity=1_000.0)
@@ -231,6 +236,7 @@ def test_buy_hold_and_partial_sell_execute_on_the_next_bar() -> None:
     assert observation.shape == (OBSERVATION_SIZE,)
     env.close()
 
+
 def test_buy_resizes_position_and_sell_can_close_all_holdings() -> None:
     env = _env(_bars(), initial_equity=1_000.0)
     env.reset(seed=3)
@@ -241,6 +247,7 @@ def test_buy_resizes_position_and_sell_can_close_all_holdings() -> None:
     env.step(_action(ACTION_SELL, 3))
     assert env._quantity == pytest.approx(0.0)
     env.close()
+
 
 def test_terminal_liquidation_charges_fees_and_slippage() -> None:
     env = BTCUSDTTradingEnv(
@@ -268,6 +275,7 @@ def test_terminal_liquidation_charges_fees_and_slippage() -> None:
     assert net_profit < 0.0
     env.close()
 
+
 def test_drawdown_reward_uses_intrabar_peak_to_trough_risk() -> None:
     data = _bars(
         closes=[100.0, 100.0, 90.0],
@@ -282,6 +290,7 @@ def test_drawdown_reward_uses_intrabar_peak_to_trough_risk() -> None:
     assert info["max_drawdown"] > 0.20
     assert reward < math.log(0.9) - 1.0
     env.close()
+
 
 def test_invalid_actions_and_post_terminal_step_are_rejected() -> None:
     env = _env(_bars(), initial_equity=1_000.0)
@@ -303,6 +312,7 @@ def test_invalid_actions_and_post_terminal_step_are_rejected() -> None:
         env.step(_action(ACTION_HOLD, 0))
     env.close()
 
+
 def test_random_start_is_seeded_and_explicit_start_is_validated() -> None:
     data = _bars()
     first = _env(data, random_start=True, min_remaining_steps=2)
@@ -319,6 +329,7 @@ def test_random_start_is_seeded_and_explicit_start_is_validated() -> None:
     first.close()
     second.close()
 
+
 def test_scaler_and_summary_reject_invalid_numbers() -> None:
     with pytest.raises(ValueError, match="price_anchor_must_be_positive"):
         MarketObservationScaler(0.0, 1.0)
@@ -330,6 +341,7 @@ def test_scaler_and_summary_reject_invalid_numbers() -> None:
     assert summary["final_equity"] == pytest.approx(10_000.0)
     assert summary["fill_count"] == 0
     env.close()
+
 
 def test_hold_action_pays_configured_inactivity_penalty() -> None:
     env = _env(_bars())
@@ -348,6 +360,7 @@ def test_hold_action_pays_configured_inactivity_penalty() -> None:
     assert env.summary()["hold_action_count"] == 4
     assert env.summary()["no_position_change_steps"] == 4
     env.close()
+
 
 def test_profitable_completed_trade_gets_intermediate_reward_bonus() -> None:
     env = _env(
@@ -373,6 +386,7 @@ def test_profitable_completed_trade_gets_intermediate_reward_bonus() -> None:
     assert summary["win_rate"] == pytest.approx(1.0)
     env.close()
 
+
 def test_losing_completed_trade_receives_no_profit_bonus() -> None:
     env = _env(
         _bars(closes=[100.0, 100.0, 90.0, 90.0, 90.0]),
@@ -394,6 +408,7 @@ def test_losing_completed_trade_receives_no_profit_bonus() -> None:
     assert summary["win_rate"] == pytest.approx(0.0)
     env.close()
 
+
 def test_partial_realizations_accumulate_before_profitable_trade_bonus() -> None:
     env = _env(
         _bars(closes=[100.0, 100.0, 110.0, 120.0, 120.0]),
@@ -414,6 +429,7 @@ def test_partial_realizations_accumulate_before_profitable_trade_bonus() -> None
     assert env.summary()["closed_trade_count"] == 1
     env.close()
 
+
 def test_sell_is_masked_when_inventory_is_empty() -> None:
     env = _env(_bars(closes=[100.0] * 6))
     env.reset(seed=41)
@@ -423,7 +439,7 @@ def test_sell_is_masked_when_inventory_is_empty() -> None:
         assert info["executed_action"] == "MASKED_SELL"
         assert info["action_blocked"] is True
         assert info["action_mask_reason"] == "no_position"
-            assert all(
+        assert all(
             not info["legal_action_mask"][name] for name in ("SELL_25", "SELL_50", "SELL_100")
         )
         assert info["legal_action_mask"]["HOLD"] is True
@@ -443,6 +459,7 @@ def test_sell_is_masked_when_inventory_is_empty() -> None:
     assert summary["fill_count"] == 0
     assert summary["max_consecutive_no_position_change_steps"] == 4
     env.close()
+
 
 def test_buy_is_masked_when_position_is_fully_allocated() -> None:
     env = _env(
@@ -477,6 +494,7 @@ def test_buy_is_masked_when_position_is_fully_allocated() -> None:
     assert env.summary()["full_position_buy_penalty_count"] == 1
     assert env.summary()["full_position_buy_penalty_total"] == pytest.approx(1.0)
     env.close()
+
 
 def test_transaction_cost_updates_are_validated_and_apply_to_future_fills() -> None:
     env = _env(_bars(closes=[100.0] * 6), initial_equity=1_000.0)
@@ -522,6 +540,7 @@ def test_combined_discrete_buy_size_spends_positive_fraction_of_cash(
     assert env.summary()["zero_size_buy_action_count"] == 0
     env.close()
 
+
 def test_discrete_seven_action_space_combines_direction_and_size() -> None:
     env = _env(_bars(closes=[100.0] * 6), initial_equity=1_000.0)
     assert isinstance(env.action_space, gym.spaces.Discrete)
@@ -547,6 +566,7 @@ def test_discrete_seven_action_space_combines_direction_and_size() -> None:
     assert env.summary()["buy_fill_count"] == 1
     env.close()
 
+
 def test_flat_hold_above_causal_moving_average_pays_opportunity_cost() -> None:
     closes = [100.0 + index for index in range(MOVING_AVERAGE_WINDOW + 5)]
     env = _env(_bars(closes=closes))
@@ -561,6 +581,7 @@ def test_flat_hold_above_causal_moving_average_pays_opportunity_cost() -> None:
     )
     assert env.summary()["opportunity_cost_penalty_count"] == 1
     env.close()
+
 
 def test_hold_underwater_position_pays_penalty_after_exit_costs() -> None:
     env = _env(
@@ -586,6 +607,7 @@ def test_hold_underwater_position_pays_penalty_after_exit_costs() -> None:
     assert reset_summary["realized_profit_reward_total"] == pytest.approx(0.0)
     env.close()
 
+
 def test_terminal_forced_liquidation_does_not_earn_policy_realized_profit_reward() -> (
     None
 ):
@@ -601,6 +623,7 @@ def test_terminal_forced_liquidation_does_not_earn_policy_realized_profit_reward
     assert info["reward_realized_profit"] == pytest.approx(0.0)
     assert info["realized_profit_reward_applied"] is False
     env.close()
+
 
 def test_hold_in_profitable_position_receives_balanced_small_reward() -> None:
     env = _env(
@@ -620,6 +643,7 @@ def test_hold_in_profitable_position_receives_balanced_small_reward() -> None:
     assert reward == pytest.approx(DEFAULT_HOLDING_PROFIT_REWARD)
     assert env.summary()["holding_profit_reward_count"] == 1
     env.close()
+
 
 def test_training_signal_guidance_rewards_only_legal_buy_on_rising_causal_sma() -> None:
     closes = [100.0 + index for index in range(35)]
@@ -643,6 +667,7 @@ def test_training_signal_guidance_rewards_only_legal_buy_on_rising_causal_sma() 
     assert env.summary()["signal_guidance_sell_reward_count"] == 0
     env.close()
 
+
 def test_portfolio_observation_tracks_marked_exposure_and_unrealized_return() -> None:
     data = _bars(closes=[100.0, 120.0, 132.0, 132.0])
     env = _env(data, initial_equity=1_000.0)
@@ -657,6 +682,7 @@ def test_portfolio_observation_tracks_marked_exposure_and_unrealized_return() ->
     assert observation[-2] == pytest.approx(275.0 / 1_025.0)
     assert observation[-1] == pytest.approx(0.10)
     env.close()
+
 
 def test_guidance_target_blocks_repeated_buy_when_position_is_full() -> None:
     rising = _env(
@@ -675,6 +701,7 @@ def test_guidance_target_blocks_repeated_buy_when_position_is_full() -> None:
     assert observation[-2] > 0.99
     rising.close()
 
+
 def test_portfolio_observation_returns_zero_pnl_when_position_is_closed() -> None:
     data = _bars(closes=[100.0, 100.0, 100.0, 100.0])
     env = _env(data, initial_equity=1_000.0)
@@ -684,6 +711,7 @@ def test_portfolio_observation_returns_zero_pnl_when_position_is_closed() -> Non
     assert observation[-2] == pytest.approx(0.0)
     assert observation[-1] == pytest.approx(0.0)
     env.close()
+
 
 def test_guidance_target_respects_causal_trend_and_legal_position_state() -> None:
     rising = _env(_bars(closes=[100.0 + i for i in range(35)]))
@@ -704,6 +732,7 @@ def test_guidance_target_respects_causal_trend_and_legal_position_state() -> Non
     assert latest_info["guidance_target_index"] == ACTION_HOLD
     falling.close()
 
+
 def test_signal_guidance_is_disabled_by_default_and_scale_is_fail_closed() -> None:
     env = _env(_bars(closes=[100.0 + index for index in range(30)]))
     env.reset(seed=77)
@@ -716,6 +745,7 @@ def test_signal_guidance_is_disabled_by_default_and_scale_is_fail_closed() -> No
     ):
         env.set_signal_guidance_reward_scale(-0.1)
     env.close()
+
 
 def test_low_volatility_hold_receives_small_persistent_reward() -> None:
     env = _env(_bars(closes=[100.0] * (LOW_VOLATILITY_LOOKBACK + 4)))
@@ -734,6 +764,7 @@ def test_low_volatility_hold_receives_small_persistent_reward() -> None:
     assert env.summary()["low_volatility_hold_reward_count"] == 1
     env.close()
 
+
 def test_high_volatility_hold_does_not_receive_low_volatility_bonus() -> None:
     closes = [
         100.0 if index % 2 == 0 else 110.0
@@ -749,6 +780,7 @@ def test_high_volatility_hold_does_not_receive_low_volatility_bonus() -> None:
     assert info["reward_low_volatility_hold_bonus"] == pytest.approx(0.0)
     assert env.summary()["low_volatility_hold_reward_count"] == 0
     env.close()
+
 
 def test_transaction_costs_are_charged_again_in_explicit_reward_component() -> None:
     env = BTCUSDTTradingEnv(
@@ -770,6 +802,7 @@ def test_transaction_costs_are_charged_again_in_explicit_reward_component() -> N
         info["reward_transaction_cost_penalty"]
     )
     env.close()
+
 
 def test_masked_combined_actions_record_blocked_execution_not_side() -> None:
     flat = _env(_bars(closes=[100.0] * 8), initial_equity=1_000.0)
