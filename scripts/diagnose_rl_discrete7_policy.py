@@ -134,6 +134,8 @@ def _validate_source_artifacts(
     _validate_source_safety(report)
     return _validate_source_model_hash(args, report)
 
+
+
 def _initial_actor_state(model: Any, torch: Any) -> tuple[Any, Any]:
     shape = model.policy.lstm_hidden_state_shape
     hidden = torch.zeros(shape, dtype=torch.float32, device=model.policy.device)
@@ -300,6 +302,8 @@ def _check_mask_contract(probe: dict[str, Any]) -> dict[str, Any]:
         "unmasked_logits_unchanged": legal_logits_unchanged,
         "unexpected_masked_actions": [ACTION_NAMES[index] for index in unexpected],
     }
+
+
 
 def _cross_entropy_from_logits(logits: Sequence[float], target: int) -> float:
     maximum = max(logits)
@@ -688,6 +692,8 @@ def _run_validation_diagnostic(
         source_auxiliary,
         output_csv,
     )
+
+
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parse_args(argv)
