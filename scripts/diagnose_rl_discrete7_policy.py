@@ -141,6 +141,7 @@ def _trace_policy_distribution(
     original_distribution_method: Any = None
 
     if capture_logits:
+
         def capture_raw(_module: Any, _inputs: Any, output: Any) -> None:
             raw_rows.append(output.detach().cpu().numpy().reshape(-1).tolist())
 
@@ -448,7 +449,9 @@ def _run_validation_diagnostic(
             actor_state = trace["next_actor_state"]
             observation = next_observation
             if (terminated or truncated) != (step_index == steps - 1):
-                raise RuntimeError("validation_diagnostic_did_not_cover_exactly_one_pass")
+                raise RuntimeError(
+                    "validation_diagnostic_did_not_cover_exactly_one_pass"
+                )
     finally:
         environment.close()
 
@@ -559,8 +562,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     source_split = source_report["split"]
     if (
         len(validation_data) != source_split["validation_rows"]
-        or _utc_from_ms(float(validation_data[0, 0])) != source_split["validation_start_utc"]
-        or _utc_from_ms(float(validation_data[-1, 0])) != source_split["validation_end_utc"]
+        or _utc_from_ms(float(validation_data[0, 0]))
+        != source_split["validation_start_utc"]
+        or _utc_from_ms(float(validation_data[-1, 0]))
+        != source_split["validation_end_utc"]
     ):
         raise ValueError("source_validation_split_mismatch")
     scaler = MarketObservationScaler.fit(train_data)
