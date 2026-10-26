@@ -1257,7 +1257,7 @@ def _build_report(
                     "- 0.0005 * indicator(flat_HOLD_and_close_above_causal_SMA) "
                     "+ max(minimum_guidance_floor, annealed_training_only_scale) "
                     "* indicator(legal_BUY_when_causal_SMA_rises "
-                    "or legal_SELL_when_causal_SMA_falls) 
+                    "or legal_SELL_when_causal_SMA_falls) "
                     "+ 0.5 * max(0, closed_trade_net_profit / initial_equity) "
                     " * indicator(policy_SELL_fully_closes_trade) "
                     "+ 0.0001 * profitable_closed_trade_count"
