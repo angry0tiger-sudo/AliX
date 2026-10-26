@@ -430,6 +430,137 @@ def _validate_validation_scan(
         raise RuntimeError("auxiliary_guidance_target_was_masked")
 
 
+def _action_counts_by_name(counts: Counter[str]) -> dict[str, int]:
+    return {name: counts.get(name, 0) for name in ACTION_NAMES}
+
+
+def _mean_probability_map(
+    probability_sums: np.ndarray, steps: int
+) -> dict[str, float]:
+    return {
+        name: float(probability_sums[index] / steps)
+        for index, name in enumerate(ACTION_NAMES)
+    }
+
+
+def _mean_side_probability(
+    probability_sums: np.ndarray, indices: Sequence[int], steps: int
+) -> float:
+    return float(sum(probability_sums[index] for index in indices) / steps)
+
+
+def _auxiliary_loss_summary(
+    probes: list[dict[str, Any]], source_auxiliary: dict[str, Any]
+) -> dict[str, Any]:
+    losses = [
+        float(probe["unweighted_auxiliary_cross_entropy"])
+        for probe in probes
+        if "unweighted_auxiliary_cross_entropy" in probe
+    ]
+    final_weight = float(source_auxiliary["effective_weight_at_training_end"])
+    mean_loss = float(np.mean(losses)) if losses else None
+    return {
+        "method": source_auxiliary["method"],
+        "target_classes": source_auxiliary["target_classes"],
+        "initial_weight": source_auxiliary["initial_weight"],
+        "anneal_steps": source_auxiliary["anneal_steps"],
+        "effective_weight_at_training_end": final_weight,
+        "validation_loss_weight": 0.0,
+        "validation_enabled_in_training_config": source_auxiliary[
+            "validation_enabled"
+        ],
+        "final_holdout_enabled_in_training_config": source_auxiliary[
+            "final_holdout_enabled"
+        ],
+        "validation_sampled_unweighted_cross_entropy": losses,
+        "validation_sampled_mean_unweighted_cross_entropy": mean_loss,
+        "validation_sampled_mean_weighted_loss_at_final_weight": (
+            final_weight * mean_loss if mean_loss is not None else None
+        ),
+        "interpretation": (
+            "Validation computes no gradients and applies no auxiliary-loss weight. "
+            "Sampled cross-entropy measures current policy alignment with causal "
+            "guidance labels; it cannot by itself prove that the training-only "
+            "auxiliary loss caused the HOLD collapse."
+        ),
+    }
+
+
+def _position_observation_summary(
+    position_index: int,
+    tensor_matches: bool,
+    position_min: float,
+    position_max: float,
+    nonzero_steps: int,
+    steps: int,
+    guidance_counts: Counter[str],
+) -> dict[str, Any]:
+    return {
+        "field_name": OBSERVATION_FIELDS[position_index],
+        "field_index": position_index,
+        "input_matches_observation": tensor_matches,
+        "minimum_fraction_seen": float(position_min),
+        "maximum_fraction_seen": float(position_max),
+        "nonzero_position_steps": nonzero_steps,
+        "steps_checked": steps,
+        "target_guidance_class_counts": _action_counts_by_name(guidance_counts),
+    }
+
+
+def _build_validation_result(
+    steps: int,
+    selected_steps: set[int],
+    probes: list[dict[str, Any]],
+    action_counts: Counter[str],
+    guidance_counts: Counter[str],
+    probability_sums: np.ndarray,
+    position_index: int,
+    tensor_matches: bool,
+    position_min: float,
+    position_max: float,
+    nonzero_steps: int,
+    source_auxiliary: dict[str, Any],
+    output_csv: Path,
+) -> dict[str, Any]:
+    action_summary = _action_counts_by_name(action_counts)
+    return {
+        "steps": steps,
+        "selected_actual_probe_count": len(selected_steps),
+        "recorded_probe_count": len(probes),
+        "action_counts": action_summary,
+        "mean_post_mask_probabilities": _mean_probability_map(probability_sums, steps),
+        "mean_hold_probability": float(probability_sums[0] / steps),
+        "mean_buy_probability": _mean_side_probability(
+            probability_sums, BUY_ACTION_INDICES, steps
+        ),
+        "mean_sell_probability": _mean_side_probability(
+            probability_sums, SELL_ACTION_INDICES, steps
+        ),
+        "position_observation": _position_observation_summary(
+            position_index,
+            tensor_matches,
+            position_min,
+            position_max,
+            nonzero_steps,
+            steps,
+            guidance_counts,
+        ),
+        "masking": {
+            "probe_checks_passed": True,
+            "flat_position_forbidden_actions": [
+                ACTION_NAMES[i] for i in SELL_ACTION_INDICES
+            ],
+            "full_position_forbidden_actions": [
+                ACTION_NAMES[i] for i in BUY_ACTION_INDICES
+            ],
+            "sentinel_logit": MASKED_LOGIT,
+            "probes": probes,
+        },
+        "auxiliary_loss": _auxiliary_loss_summary(probes, source_auxiliary),
+        "csv_sha256": _sha256(output_csv),
+    }
+
+
 def _run_validation_diagnostic(
     model: Any,
     validation_data: np.ndarray,
@@ -542,84 +673,21 @@ def _run_validation_diagnostic(
         writer = csv.DictWriter(stream, fieldnames=CSV_FIELDS)
         writer.writeheader()
         writer.writerows(rows)
-
-    auxiliary_cross_entropy = [
-        float(probe["unweighted_auxiliary_cross_entropy"])
-        for probe in probes
-        if "unweighted_auxiliary_cross_entropy" in probe
-    ]
-    final_weight = float(source_auxiliary["effective_weight_at_training_end"])
-    mean_cross_entropy = (
-        float(np.mean(auxiliary_cross_entropy)) if auxiliary_cross_entropy else None
+    return _build_validation_result(
+        steps,
+        selected_steps,
+        probes,
+        action_counts,
+        guidance_counts,
+        probability_sums,
+        position_index,
+        tensor_matches,
+        position_min,
+        position_max,
+        position_nonzero_steps,
+        source_auxiliary,
+        output_csv,
     )
-    return {
-        "steps": steps,
-        "selected_actual_probe_count": len(selected_steps),
-        "recorded_probe_count": len(probes),
-        "action_counts": {name: action_counts.get(name, 0) for name in ACTION_NAMES},
-        "mean_post_mask_probabilities": {
-            name: float(probability_sums[i] / steps)
-            for i, name in enumerate(ACTION_NAMES)
-        },
-        "mean_hold_probability": float(probability_sums[0] / steps),
-        "mean_buy_probability": float(
-            sum(probability_sums[i] for i in BUY_ACTION_INDICES) / steps
-        ),
-        "mean_sell_probability": float(
-            sum(probability_sums[i] for i in SELL_ACTION_INDICES) / steps
-        ),
-        "position_observation": {
-            "field_name": OBSERVATION_FIELDS[position_index],
-            "field_index": position_index,
-            "input_matches_observation": tensor_matches,
-            "minimum_fraction_seen": float(position_min),
-            "maximum_fraction_seen": float(position_max),
-            "nonzero_position_steps": position_nonzero_steps,
-            "steps_checked": steps,
-            "target_guidance_class_counts": {
-                name: guidance_counts.get(name, 0) for name in ACTION_NAMES
-            },
-        },
-        "masking": {
-            "probe_checks_passed": True,
-            "flat_position_forbidden_actions": [
-                ACTION_NAMES[i] for i in SELL_ACTION_INDICES
-            ],
-            "full_position_forbidden_actions": [
-                ACTION_NAMES[i] for i in BUY_ACTION_INDICES
-            ],
-            "sentinel_logit": MASKED_LOGIT,
-            "probes": probes,
-        },
-        "auxiliary_loss": {
-            "method": source_auxiliary["method"],
-            "target_classes": source_auxiliary["target_classes"],
-            "initial_weight": source_auxiliary["initial_weight"],
-            "anneal_steps": source_auxiliary["anneal_steps"],
-            "effective_weight_at_training_end": final_weight,
-            "validation_loss_weight": 0.0,
-            "validation_enabled_in_training_config": source_auxiliary[
-                "validation_enabled"
-            ],
-            "final_holdout_enabled_in_training_config": source_auxiliary[
-                "final_holdout_enabled"
-            ],
-            "validation_sampled_unweighted_cross_entropy": auxiliary_cross_entropy,
-            "validation_sampled_mean_unweighted_cross_entropy": mean_cross_entropy,
-            "validation_sampled_mean_weighted_loss_at_final_weight": (
-                final_weight * mean_cross_entropy
-                if mean_cross_entropy is not None
-                else None
-            ),
-            "interpretation": (
-                "Validation computes no gradients and applies no auxiliary-loss weight. "
-                "Sampled cross-entropy measures current policy alignment with causal "
-                "guidance labels; it cannot by itself prove that the training-only "
-                "auxiliary loss caused the HOLD collapse."
-            ),
-        },
-        "csv_sha256": _sha256(output_csv),
-    }
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parse_args(argv)
