@@ -40,6 +40,7 @@ from services.rl_research.rl_trading_environment import (
     validate_market_data,
 )
 from scripts.rl_auxiliary_ppo import (
+    ACTION_MASK_POSITION_EPSILON,
     DEFAULT_AUXILIARY_LOSS_ANNEAL_STEPS,
     DEFAULT_AUXILIARY_LOSS_WEIGHT,
     auxiliary_loss_curriculum_report,
@@ -70,7 +71,7 @@ PREVIOUS_HOLDOUT_START_MS = int(
     datetime.fromisoformat(PREVIOUS_HOLDOUT_START_UTC).timestamp() * 1000
 )
 ALGORITHM_NAME = "RecurrentPPO"
-POLICY_NAME = "MlpLstmPolicy"
+POLICY_NAME = "ActionMaskedRecurrentActorCriticPolicy"
 
 
 def _sha256(path: Path) -> str:
@@ -667,8 +668,11 @@ def _train_recurrent_ppo(
     )
     callback = _build_cost_curriculum_callback(curriculum)
     envs.seed(args.seed)
+    policy_class = getattr(recurrent_ppo, "policy_class", None)
+    if not isinstance(policy_class, type):
+        raise RuntimeError("action_masked_recurrent_policy_class_missing")
     model = recurrent_ppo(
-        POLICY_NAME,
+        policy_class,
         envs,
         learning_rate=3e-4,
         n_steps=n_steps,
@@ -848,7 +852,7 @@ def _build_report(
         economic_assessment["status"] = "NO-GO"
 
     report: dict[str, Any] = {
-        "schema_version": "alix.rl-trading-agent-report.v7",
+        "schema_version": "alix.rl-trading-agent-report.v8",
         "run_mode": "historical_simulation_only",
         "commit_sha": args.commit_sha,
         "research_result": (
@@ -965,11 +969,16 @@ def _build_report(
                 "hold_semantics": "do not rebalance; size index is ignored",
                 "zero_size_buy_allowed": False,
                 "masking": {
-                    "enforcement": "deterministic_environment_execution_boundary",
-                    "policy_distribution_logits_masked": False,
+                    "enforcement": "policy_distribution_logits_and_deterministic_environment_execution_boundary",
+                    "policy_distribution_logits_masked": True,
+                    "position_fraction_full_threshold": 1.0 - ACTION_MASK_POSITION_EPSILON,
+                    "position_fraction_flat_threshold": ACTION_MASK_POSITION_EPSILON,
+                    "buy_logit_masked_when_position_fraction_at_or_above_full_threshold": True,
+                    "sell_logit_masked_when_position_fraction_at_or_below_flat_threshold": True,
                     "sell_requires_positive_inventory": True,
                     "buy_requires_unallocated_cash": True,
                     "masked_action_is_non_executable": True,
+                    "invalid_buy_fallback_reward_penalty": 1.0,
                 },
             },
             "execution": {
@@ -992,7 +1001,12 @@ def _build_report(
                 "drawdown_increment_penalty": 5.0,
                 "drawdown_level_penalty": 0.01,
                 "inactivity_penalty_per_unchanged_position_step": DEFAULT_INACTIVITY_PENALTY,
-                "invalid_action_penalty_per_masked_request": DEFAULT_INVALID_ACTION_PENALTY,
+                "invalid_action_penalty_default_per_masked_request": DEFAULT_INVALID_ACTION_PENALTY,
+                "invalid_full_position_buy_penalty": 1.0,
+                "invalid_full_position_buy_penalty_trigger": (
+                    "fallback penalty when a BUY request is blocked because the "
+                    "pre-action portfolio has no legal BUY capacity"
+                ),
                 "holding_profit_reward_per_profitable_hold": (
                     DEFAULT_HOLDING_PROFIT_REWARD
                 ),
@@ -1048,7 +1062,8 @@ def _build_report(
                     "log_net_return - 5.0 * max(0, risk_drawdown - prior_close_drawdown) "
                     "- 0.01 * risk_drawdown "
                     "- 0.001 * indicator(consecutive_unchanged_steps > 3) "
-                    "- 0.001 * indicator(masked_BUY_or_SELL_request) "
+                    "- 1.0 * indicator(masked_BUY_request) "
+                    "- 0.001 * indicator(masked_SELL_request) "
                     "- 0.0001 * indicator(HOLD_while_net_liquidation_is_below_cost_basis) "
                     "+ 0.0001 * indicator(HOLD_while_net_liquidation_is_above_cost_basis) "
                     "- 0.0005 * indicator(flat_HOLD_and_close_above_causal_SMA) "
@@ -1097,7 +1112,7 @@ def _build_report(
             "n_epochs": 4,
             "epochs_per_rollout": 4,
             "lstm_hidden_size": 64,
-            "training_algorithm": "RecurrentPPO with annealed guidance cross-entropy",
+            "training_algorithm": "RecurrentPPO with policy-level action-logit masking and annealed guidance cross-entropy",
             "training_seconds": float(training.training_seconds),
             "model_artifact": training.model_path.name,
             "model_sha256": _sha256(training.model_path),
