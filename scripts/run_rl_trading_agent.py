@@ -971,7 +971,8 @@ def _build_report(
                 "masking": {
                     "enforcement": "policy_distribution_logits_and_deterministic_environment_execution_boundary",
                     "policy_distribution_logits_masked": True,
-                    "position_fraction_full_threshold": 1.0 - ACTION_MASK_POSITION_EPSILON,
+                    "position_fraction_full_threshold": 1.0
+                    - ACTION_MASK_POSITION_EPSILON,
                     "position_fraction_flat_threshold": ACTION_MASK_POSITION_EPSILON,
                     "buy_logit_masked_when_position_fraction_at_or_above_full_threshold": True,
                     "sell_logit_masked_when_position_fraction_at_or_below_flat_threshold": True,
