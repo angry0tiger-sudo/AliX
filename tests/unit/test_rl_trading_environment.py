@@ -440,7 +440,8 @@ def test_sell_is_masked_when_inventory_is_empty() -> None:
         assert info["action_blocked"] is True
         assert info["action_mask_reason"] == "no_position"
         assert all(
-            not info["legal_action_mask"][name] for name in ("SELL_25", "SELL_50", "SELL_100")
+            not info["legal_action_mask"][name]
+            for name in ("SELL_25", "SELL_50", "SELL_100")
         )
         assert info["legal_action_mask"]["HOLD"] is True
         assert info["reward_invalid_action_penalty"] == pytest.approx(
@@ -807,9 +808,7 @@ def test_transaction_costs_are_charged_again_in_explicit_reward_component() -> N
 def test_masked_combined_actions_record_blocked_execution_not_side() -> None:
     flat = _env(_bars(closes=[100.0] * 8), initial_equity=1_000.0)
     flat.reset(seed=95)
-    _, _, _, _, sell_info = flat.step(
-        np.asarray(ACTION_SELL_25, dtype=np.int64)
-    )
+    _, _, _, _, sell_info = flat.step(np.asarray(ACTION_SELL_25, dtype=np.int64))
     assert sell_info["action"] == "SELL"
     assert sell_info["requested_discrete_action_name"] == "SELL_25"
     assert sell_info["executed_action"] == "MASKED_SELL"
@@ -822,16 +821,12 @@ def test_masked_combined_actions_record_blocked_execution_not_side() -> None:
 
     full = _env(_bars(closes=[100.0] * 8), initial_equity=1_000.0)
     full.reset(seed=96)
-    _, _, _, _, buy_info = full.step(
-        np.asarray(ACTION_BUY_100, dtype=np.int64)
-    )
+    _, _, _, _, buy_info = full.step(np.asarray(ACTION_BUY_100, dtype=np.int64))
     assert buy_info["executed_action"] == "BUY"
     quantity_before = full._quantity
     fills_before = full.summary()["fill_count"]
 
-    _, _, _, _, blocked_info = full.step(
-        np.asarray(ACTION_BUY_25, dtype=np.int64)
-    )
+    _, _, _, _, blocked_info = full.step(np.asarray(ACTION_BUY_25, dtype=np.int64))
     assert blocked_info["action"] == "BUY"
     assert blocked_info["requested_discrete_action_name"] == "BUY_25"
     assert blocked_info["executed_action"] == "MASKED_BUY"
