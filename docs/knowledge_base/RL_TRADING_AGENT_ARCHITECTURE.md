@@ -66,4 +66,4 @@ The recurrent PPO policy masks the raw logits of a single seven-class categorica
 - Missing or misaligned action-mask context fails closed. Tests assert all BUY probabilities are exactly zero at full exposure, all SELL probabilities exactly zero when flat, and the distribution is preserved through checkpoint save/reload.
 - Report schema v10 records the combined action labels, masks, reward parameters, and per-action counts. It never promotes the model or authorizes live trading.
 
-These constraints prove legal action enforcement for the tested states, not profitability or correct trade timing. buy_noop_action_count, net_return, and max_drawdown remain independent acceptance evidence.
+These constraints prove legal action enforcement for the tested states, not profitability or correct trade timing. buy_noop_action_count, net_return, and max_drawdown remain independent acceptance evidence. The regression test `test_masked_combined_actions_record_blocked_execution_not_side` verifies masked BUY/SELL requests remain `MASKED_*` in `executed_action`, leave inventory unchanged, and create no fill.
