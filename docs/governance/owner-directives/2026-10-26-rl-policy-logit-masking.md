@@ -4,17 +4,17 @@ Date: 2026-10-26
 
 ## Decision
 
-Run #56 showed repeated BUY requests after the position was fully allocated despite the 11-feature observation and the auxiliary cross-entropy loss. Environment-only masking prevented execution but did not constrain the policy distribution. Retraining must therefore use policy-level action masking.
+Runs #56 and #78 showed repeated, economically destructive trade choices. Owner has directed a combined Discrete(7) action space with one categorical choice for direction and size, plus explicit reward shaping for calm-market HOLD and transaction costs.
 
 ## Required behavior
 
-- Use the observed `current_position_fraction` from the 11-feature observation to mask the raw flattened direction logits before MultiCategoricalDistribution construction, categorical sampling, deterministic selection, PPO log-probability evaluation, and the auxiliary direction-loss path.
-- Set BUY logits to `-1e8` when `current_position_fraction >= 1 - 1e-6`, before constructing the categorical distribution.
-- Set SELL logits to `-1e8` when `current_position_fraction <= 1e-6`, before constructing the categorical distribution.
+- Use the observed `current_position_fraction` from the 11-feature observation to mask the seven raw action logits before Categorical distribution construction, categorical sampling, deterministic selection, PPO log-probability evaluation, and the auxiliary seven-class cross-entropy path.
+- With the combined action space, set logits for all BUY action indices 1, 2, and 3 to `-1e8` when `current_position_fraction >= 1 - 1e-9`, before constructing the categorical distribution.
+- Set logits for all SELL action indices 4, 5, and 6 to `-1e8` when `current_position_fraction <= 1e-9`, before constructing the categorical distribution.
 - Keep HOLD always legal. Reject missing, malformed, out-of-range, or batch-misaligned mask context; do not silently fall back to an unmasked distribution.
 - Preserve the independent environment execution-boundary mask.
 - If an invalid BUY nevertheless reaches the environment while BUY is illegal, apply a `-1.0` reward penalty and emit explicit count/total metrics. Existing default penalties for other masked invalid actions remain unchanged.
-- Test exact zero probability for forbidden actions in both flat and fully allocated states; test that the fallback penalty is applied without a fill or position change.
+- Test exact zero probability for all forbidden combined actions in flat and fully allocated states; test each action's side/size mapping, no-op-free positive sizing, calm-market HOLD reward, the explicit transaction-cost penalty, and the fallback penalty without a fill or position change.
 
 ## Evaluation and safety acceptance
 
