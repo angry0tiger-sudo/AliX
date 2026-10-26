@@ -17,6 +17,8 @@ on:
       - "services/rl_research/rl_cost_curriculum.py"
       - "scripts/rl_auxiliary_ppo.py"
       - "scripts/run_rl_trading_agent.py"
+      - "scripts/audit_rl_training_dynamics.py"
+      - "tests/unit/test_rl_training_dynamics_audit.py"
       - "scripts/fetch_public_minute_bars.py"
       - "tests/unit/test_rl_trading_environment.py"
       - "tests/unit/test_rl_cost_curriculum.py"
