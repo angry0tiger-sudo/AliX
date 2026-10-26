@@ -530,21 +530,22 @@ def _build_action_masked_recurrent_policy() -> Any:
         )
 
     def _get_action_dist_from_latent(self: Any, latent_pi: Any) -> Any:
+        """Mask raw flattened MultiDiscrete logits before constructing the distribution."""
         torch = importlib.import_module("torch")
         observations = getattr(self, "_action_mask_observation", None)
         if observations is None:
             raise RuntimeError("action_mask_observation_context_missing")
 
-        distribution = policy_base._get_action_dist_from_latent(self, latent_pi)
-        components = getattr(distribution, "distribution", None)
-        if not isinstance(components, list) or len(components) != 2:
+        action_logits = self.action_net(latent_pi)
+        action_dims = getattr(self.action_dist, "action_dims", None)
+        if not isinstance(action_dims, list) or len(action_dims) != 2:
             raise ValueError(
                 "action_mask_requires_two_component_multidiscrete_distribution"
             )
-        if components[0].logits.ndim != 2 or components[0].logits.shape[1] != len(
-            ACTION_NAMES
-        ):
+        if action_dims[0] != len(ACTION_NAMES):
             raise ValueError("action_mask_direction_logits_shape_invalid")
+        if action_logits.ndim != 2 or action_logits.shape[1] != sum(action_dims):
+            raise ValueError("action_mask_flat_logits_shape_invalid")
 
         observation_shape: Any = getattr(observations, "shape", ())
         if len(observation_shape) < 2 or observation_shape[-1] <= position_index:
@@ -552,13 +553,9 @@ def _build_action_masked_recurrent_policy() -> Any:
         position_fraction = (
             observations[..., position_index]
             .reshape(-1)
-            .to(
-                device=components[0].logits.device,
-                dtype=components[0].logits.dtype,
-            )
+            .to(device=action_logits.device, dtype=action_logits.dtype)
         )
-        direction_logits = components[0].logits
-        if position_fraction.numel() != direction_logits.shape[0]:
+        if position_fraction.numel() != action_logits.shape[0]:
             raise ValueError("action_mask_observation_batch_alignment_invalid")
         if (
             not bool(torch.isfinite(position_fraction).all().item())
@@ -571,12 +568,12 @@ def _build_action_masked_recurrent_policy() -> Any:
 
         fully_allocated = position_fraction >= 1.0 - ACTION_MASK_POSITION_EPSILON
         flat = position_fraction <= ACTION_MASK_POSITION_EPSILON
-        masked_logits = direction_logits.clone()
-        masked_logits[fully_allocated, buy_index] = -torch.inf
-        masked_logits[flat, sell_index] = -torch.inf
-        components[0] = torch.distributions.Categorical(logits=masked_logits)
-        distribution.distribution = components
-        return distribution
+        # MultiCategoricalDistribution receives one flattened tensor whose first
+        # action_dims[0] logits belong to direction; size logits remain untouched.
+        masked_logits = action_logits.clone()
+        masked_logits[fully_allocated, buy_index] = -1e8
+        masked_logits[flat, sell_index] = -1e8
+        return self.action_dist.proba_distribution(action_logits=masked_logits)
 
     policy_class = type(
         ACTION_MASKED_POLICY_CLASS_NAME,
