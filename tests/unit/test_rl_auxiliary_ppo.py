@@ -232,6 +232,7 @@ def test_full_position_masks_buy_probability_to_exact_zero_before_sampling() -> 
         observation_tensor = torch.as_tensor(observation, dtype=torch.float32)
         hidden = torch.zeros((1, 1, 16), dtype=torch.float32)
         episode_starts = torch.ones((1,), dtype=torch.float32)
+        assert model.policy.action_dist.action_dims == [3, 4]
         distribution, _ = model.policy.get_distribution(
             observation_tensor,
             (hidden.clone(), hidden.clone()),
