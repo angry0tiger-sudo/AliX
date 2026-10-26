@@ -287,14 +287,23 @@ jobs:
           assert guidance["anneal_completed"] is True
           assert guidance["evaluation_enabled"] is False
           auxiliary = report["auxiliary_loss_curriculum"]
-          assert auxiliary["method"] == "recurrent_policy_direction_cross_entropy"
+          assert auxiliary["method"] == "recurrent_policy_combined_discrete_action_cross_entropy"
           assert auxiliary["initial_weight"] == 0.1
           assert auxiliary["anneal_steps"] == 500_000
           assert auxiliary["effective_weight_at_training_end"] == 0.0
           assert auxiliary["anneal_completed"] is True
           assert auxiliary["validation_enabled"] is False
           assert auxiliary["final_holdout_enabled"] is False
-          assert auxiliary["target_classes"] == {"0": "HOLD", "1": "BUY", "2": "SELL"}
+          assert auxiliary["target_classes"] == {
+              "0": "HOLD",
+              "1": "BUY_25",
+              "2": "BUY_50",
+              "3": "BUY_100",
+              "4": "SELL_25",
+              "5": "SELL_50",
+              "6": "SELL_100",
+          }
+          assert "causal 20-completed-candle SMA slope" in auxiliary["target_rule"]
           assert guidance["rewarded_action_count"] >= 0
           assert guidance["reward_total"] >= 0.0
           assert guidance["rewarded_buy_action_count"] >= 0
