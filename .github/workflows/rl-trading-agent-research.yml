@@ -254,6 +254,7 @@ jobs:
           assert split["rows_excluded_between_validation_and_final_holdout"] > 0
           assert 0.19 <= split["final_holdout_fraction_actual"] <= 0.21
           assert model["algorithm"] == "RecurrentPPO"
+          assert model["policy"] == "ActionMaskedRecurrentActorCriticPolicy"
           assert model["training_algorithm"] == "RecurrentPPO with policy-level action-logit masking and annealed guidance cross-entropy"
           assert model["model_reload_roundtrip"] == "passed"
           assert len(model["model_sha256"]) == 64
