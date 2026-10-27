@@ -342,7 +342,9 @@ def test_drawdown_reward_uses_intrabar_peak_to_trough_risk() -> None:
     _, reward, terminated, _, info = env.step(_action(ACTION_HOLD, 0))
     assert terminated is True
     assert info["max_drawdown"] > 0.20
-    assert reward < math.log(0.9) - 1.0
+    assert info["reward_drawdown_increment_penalty"] > 0.25
+    assert info["reward_drawdown_level_penalty"] > 0.0
+    assert reward < math.log(0.9) - info["reward_drawdown_increment_penalty"]
     env.close()
 
 
