@@ -21,14 +21,16 @@ def _bars(rows: int = 2_000) -> pd.DataFrame:
     high = np.maximum(open_, close) + 0.5
     low = np.minimum(open_, close) - 0.5
     volume = np.full(rows, 100.0)
-    return pd.DataFrame({
-        "timestamp": timestamp,
-        "open": open_,
-        "high": high,
-        "low": low,
-        "close": close,
-        "volume": volume,
-    })
+    return pd.DataFrame(
+        {
+            "timestamp": timestamp,
+            "open": open_,
+            "high": high,
+            "low": low,
+            "close": close,
+            "volume": volume,
+        }
+    )
 
 
 def test_teacher_output_is_causal_schema_and_valid_actions() -> None:
@@ -67,9 +69,17 @@ def test_teacher_does_not_change_past_labels_when_future_data_changes() -> None:
 )
 def test_teacher_rejects_invalid_market_data(mutator, message: str) -> None:
     with pytest.raises(ValueError, match=message):
-        generate_teacher_labels(mutator(_bars(200)), ema_span=3, swing_window=5, volume_window=10)
+        generate_teacher_labels(
+            mutator(_bars(200)), ema_span=3, swing_window=5, volume_window=10
+        )
 
 
 def test_teacher_configuration_is_bounded() -> None:
     with pytest.raises(ValueError, match="higher_timeframe_must_be_4h_or_1D"):
-        generate_teacher_labels(_bars(200), higher_timeframe="1m", ema_span=3, swing_window=5, volume_window=10)
+        generate_teacher_labels(
+            _bars(200),
+            higher_timeframe="1m",
+            ema_span=3,
+            swing_window=5,
+            volume_window=10,
+        )
