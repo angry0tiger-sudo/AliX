@@ -36,12 +36,11 @@ def test_selects_a_directional_window_from_the_high_volatility_quartile() -> Non
     assert len(selected) == 60
     assert start < 250 and end > 150
     assert metadata["selection_split"] == "training_only"
-    assert metadata["candidate_window_count"] > 1
-    assert (
-        metadata["selected_realized_volatility_per_candle"]
-        >= (metadata["volatility_threshold_per_candle"])
+    assert int(metadata["candidate_window_count"]) > 1
+    assert float(metadata["selected_realized_volatility_per_candle"]) >= float(
+        metadata["volatility_threshold_per_candle"]
     )
-    assert metadata["selected_net_return_pct"] > 0.0
+    assert float(metadata["selected_net_return_pct"]) > 0.0
     assert int(selected[0, 0]) == int(metadata["selected_start_timestamp_ms"])
     assert int(selected[-1, 0]) == int(metadata["selected_end_timestamp_ms"])
 
