@@ -57,25 +57,42 @@ def _parse_float(value: object) -> float:
         raise ValueError("binance_hourly_float_field_invalid") from None
 
 
-def parse_kline(payload: object) -> HourlyCandle:
-    """Parse one public Binance hourly candle with strict OHLCV validation."""
+def _validate_kline_shape(payload: object) -> list[object]:
     if not isinstance(payload, list) or len(payload) < 6:
         raise ValueError("binance_hourly_kline_shape_invalid")
+    return payload
 
-    timestamp_ms = _parse_integer(payload[0])
-    opened, high, low, close, volume = (
-        _parse_float(payload[index]) for index in range(1, 6)
-    )
-    prices = (opened, high, low, close)
+
+def _validate_hourly_timestamp(timestamp_ms: int) -> None:
     if timestamp_ms < 0 or timestamp_ms % HOUR_MS:
         raise ValueError("binance_hourly_timestamp_invalid")
+
+
+def _validate_hourly_prices(
+    opened: float, high: float, low: float, close: float
+) -> None:
+    prices = (opened, high, low, close)
     if any(not math.isfinite(value) or value <= 0 for value in prices):
         raise ValueError("binance_hourly_price_invalid")
-    if not math.isfinite(volume) or volume < 0:
-        raise ValueError("binance_hourly_volume_invalid")
     if high < max(opened, low, close) or low > min(opened, high, close):
         raise ValueError("binance_hourly_ohlc_invariant_failed")
 
+
+def _validate_hourly_volume(volume: float) -> None:
+    if not math.isfinite(volume) or volume < 0:
+        raise ValueError("binance_hourly_volume_invalid")
+
+
+def parse_kline(payload: object) -> HourlyCandle:
+    """Parse one public Binance hourly candle with strict OHLCV validation."""
+    values = _validate_kline_shape(payload)
+    timestamp_ms = _parse_integer(values[0])
+    opened, high, low, close, volume = (
+        _parse_float(values[index]) for index in range(1, 6)
+    )
+    _validate_hourly_timestamp(timestamp_ms)
+    _validate_hourly_prices(opened, high, low, close)
+    _validate_hourly_volume(volume)
     date = (
         datetime.fromtimestamp(timestamp_ms / 1000, UTC)
         .isoformat()

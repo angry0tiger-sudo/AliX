@@ -34,11 +34,9 @@ def _read_json_object(path: Path) -> dict[str, Any]:
     return cast(dict[str, Any], payload)
 
 
-def load_public_market_data(
-    dataset_path: Path, manifest_path: Path, commit_sha: str
-) -> tuple[pd.DataFrame, dict[str, Any]]:
-    """Validate provenance, hashes and closed safety invariants before use."""
-    manifest = _read_json_object(manifest_path)
+def _validate_market_manifest(
+    manifest: dict[str, Any], commit_sha: str
+) -> None:
     allowed_providers = {
         "Nobitex public UDF history API",
         "Binance Spot public klines API",
@@ -59,21 +57,40 @@ def load_public_market_data(
     for key, expected in expected_safety.items():
         if manifest.get(key) != expected:
             raise ValueError(f"market_manifest_safety_or_identity_mismatch:{key}")
+
+
+def _read_market_csv(
+    dataset_path: Path, manifest: dict[str, Any]
+) -> pd.DataFrame:
     observed_hash = hashlib.sha256(dataset_path.read_bytes()).hexdigest()
     if observed_hash != manifest.get("csv_sha256"):
         raise ValueError("market_csv_sha256_mismatch")
-
     frame = pd.read_csv(dataset_path)
     if "date" in frame.columns and "timestamp" not in frame.columns:
         frame = frame.rename(columns={"date": "timestamp"})
+    return frame
+
+
+def _validate_market_frame(frame: pd.DataFrame, manifest: dict[str, Any]) -> None:
     missing = set(_REQUIRED_SOURCE_COLUMNS).difference(frame.columns)
     if missing:
         raise ValueError(f"missing_market_columns:{','.join(sorted(missing))}")
     if len(frame) != manifest.get("row_count") or frame.empty:
         raise ValueError("market_csv_row_count_mismatch")
-    frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True, errors="coerce")
-    if frame["timestamp"].isna().any():
+    timestamps = pd.to_datetime(frame["timestamp"], utc=True, errors="coerce")
+    if timestamps.isna().any():
         raise ValueError("market_timestamps_invalid")
+    frame["timestamp"] = timestamps
+
+
+def load_public_market_data(
+    dataset_path: Path, manifest_path: Path, commit_sha: str
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Validate provenance, hashes and closed safety invariants before use."""
+    manifest = _read_json_object(manifest_path)
+    _validate_market_manifest(manifest, commit_sha)
+    frame = _read_market_csv(dataset_path, manifest)
+    _validate_market_frame(frame, manifest)
     return frame.loc[:, list(_REQUIRED_SOURCE_COLUMNS)].copy(), manifest
 
 
