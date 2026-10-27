@@ -171,6 +171,7 @@ jobs:
           tests/unit/test_rl_trading_environment.py
           tests/unit/test_rl_cost_curriculum.py
           tests/unit/test_rl_trading_agent_runner.py
+          tests/unit/test_rl_data_curriculum.py
           tests/unit/test_rl_auxiliary_ppo.py
           tests/unit/test_rl_checkpoint_policy_diagnostic.py
           -q
