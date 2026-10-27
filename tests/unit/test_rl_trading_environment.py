@@ -729,7 +729,11 @@ def test_training_signal_guidance_rewards_only_legal_buy_on_rising_causal_sma() 
 
 def test_portfolio_observation_tracks_marked_exposure_and_unrealized_return() -> None:
     data = _bars(closes=[100.0, 120.0, 132.0, 132.0])
-    env = _env(data, initial_equity=1_000.0)
+    env = _env(
+        data,
+        initial_equity=1_000.0,
+        minimum_holding_period_candles=15,
+    )
     observation, _ = env.reset(seed=81)
     assert observation[-3:] == pytest.approx([0.0, 0.0, 0.0])
 

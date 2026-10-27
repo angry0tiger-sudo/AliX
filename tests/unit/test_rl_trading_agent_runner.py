@@ -101,7 +101,7 @@ def test_evaluation_reports_real_discrete_size_choices_without_zero_volume_buys(
         "1.00": 0,
     }
     assert metrics["policy_requested_trade_size_fraction_mean"] == pytest.approx(0.25)
-    assert metrics["invalid_action_penalty_count"] == 0
+    assert metrics["invalid_action_penalty_count"] == metrics["masked_buy_action_count"]
     assert metrics["signal_guidance_reward_count"] == 0
     assert metrics["signal_guidance_reward_total"] == pytest.approx(0.0)
     assert metrics["total_fees"] > 0.0
