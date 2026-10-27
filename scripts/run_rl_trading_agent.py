@@ -58,10 +58,6 @@ from scripts.rl_auxiliary_ppo import (
     build_auxiliary_recurrent_ppo,
 )
 from services.rl_research.rl_cost_curriculum import TrainingTransactionCosts
-from services.rl_research.rl_data_curriculum import (
-    DEFAULT_REGIME_WINDOW_CANDLES,
-    select_high_volatility_window,
-)
 
 Float64Array = NDArray[np.float64]
 Float32Array = NDArray[np.float32]
@@ -76,7 +72,6 @@ DEFAULT_POST_EXPLORATION_ENT_COEF = 0.2
 DEFAULT_EXPLORATION_ENT_COEF = 0.2
 DEFAULT_EXPLORATION_STEPS = 50_000
 TRAINING_CHECKPOINT_INTERVAL_STEPS = 100_000
-DEFAULT_INITIAL_REGIME_STEPS = 500_000
 TRAIN_FRACTION = 0.70
 VALIDATION_FRACTION = 0.10
 HOLDOUT_FRACTION = 0.20
@@ -437,14 +432,6 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default=0,
         help="0 trains over one chronological pass through the training split.",
     )
-    parser.add_argument(
-        "--initial-regime-steps", type=int, default=DEFAULT_INITIAL_REGIME_STEPS
-    )
-    parser.add_argument(
-        "--regime-window-candles",
-        type=int,
-        default=DEFAULT_REGIME_WINDOW_CANDLES,
-    )
     parser.add_argument("--seed", type=int, default=20261025)
     parser.add_argument(
         "--ent-coef", type=float, default=DEFAULT_POST_EXPLORATION_ENT_COEF
@@ -484,12 +471,6 @@ def _validate_basis_points(value: float, error_code: str) -> None:
 def _validate_cli_arguments(args: argparse.Namespace) -> None:
     if args.timesteps < 0:
         raise ValueError("timesteps_must_be_non_negative")
-    _validate_positive_integer(
-        args.initial_regime_steps, "initial_regime_steps_must_be_positive_integer"
-    )
-    _validate_positive_integer(
-        args.regime_window_candles, "regime_window_candles_must_be_positive_integer"
-    )
     _validate_nonnegative_finite(
         args.ent_coef, "ent_coef_must_be_finite_and_non_negative"
     )
@@ -563,7 +544,6 @@ class TrainingRun:
     model_reload_verification: dict[str, Any]
     reward_component_windows: list[dict[str, Any]]
     checkpoint_paths: tuple[Path, ...]
-    data_curriculum: dict[str, Any]
 
 
 def _entropy_coefficient_at_step(
@@ -1045,44 +1025,20 @@ def _train_recurrent_ppo(
         importlib.import_module("stable_baselines3.common.vec_env"), "DummyVecEnv"
     )
 
-    initial_regime_data, regime_selection = select_high_volatility_window(
-        train_data,
-        window_candles=args.regime_window_candles,
-    )
-    bounded_stage_steps = min(args.initial_regime_steps, training_steps - n_steps)
-    initial_stage_steps = (
-        (bounded_stage_steps + n_steps - 1) // n_steps
-    ) * n_steps
-    if initial_stage_steps < n_steps or initial_stage_steps >= training_steps:
-        raise ValueError("curriculum_stage_one_must_leave_full_data_training_budget")
-
     args.out_dir.mkdir(parents=True, exist_ok=True)
     model_path = args.out_dir / "rl_trading_agent_recurrent_ppo.zip"
     transaction_costs = TrainingTransactionCosts(
         target_fee_bps=args.fee_bps,
         target_slippage_bps=args.slippage_bps,
     )
-    initial_envs = dummy_vec_env(
-        [
-            _env_factory(
-                initial_regime_data,
-                scaler,
-                args.fee_bps,
-                args.slippage_bps,
-                signal_guidance_reward_scale=DEFAULT_SIGNAL_GUIDANCE_REWARD_SCALE,
-            )
-        ]
-    )
-    full_training_envs = dummy_vec_env(
+    envs = dummy_vec_env(
         [
             _env_factory(
                 train_data,
                 scaler,
                 args.fee_bps,
                 args.slippage_bps,
-                signal_guidance_reward_scale=_guidance_reward_scale_at_step(
-                    initial_stage_steps
-                ),
+                signal_guidance_reward_scale=DEFAULT_SIGNAL_GUIDANCE_REWARD_SCALE,
             )
         ]
     )
@@ -1106,16 +1062,13 @@ def _train_recurrent_ppo(
     callback = getattr(callback_module, "CallbackList")(
         [transaction_costs_callback, entropy_callback, checkpoint_callback]
     )
-    initial_envs.seed(args.seed)
-    full_training_envs.seed(args.seed + 1)
+    envs.seed(args.seed)
     policy_class = getattr(recurrent_ppo, "policy_class", None)
     if not isinstance(policy_class, type):
-        initial_envs.close()
-        full_training_envs.close()
         raise RuntimeError("action_masked_recurrent_policy_class_missing")
     model = recurrent_ppo(
         policy_class,
-        initial_envs,
+        envs,
         learning_rate=3e-4,
         n_steps=n_steps,
         batch_size=256,
@@ -1138,36 +1091,17 @@ def _train_recurrent_ppo(
         },
     )
     started_at = time.monotonic()
-    initial_env_closed = False
     try:
         model.learn(
-            total_timesteps=initial_stage_steps,
+            total_timesteps=training_steps,
             progress_bar=False,
             reset_num_timesteps=True,
             log_interval=10,
             callback=callback,
         )
-        if int(model.num_timesteps) != initial_stage_steps:
-            raise RuntimeError("initial_regime_stage_timestep_mismatch")
-
-        model.set_env(full_training_envs, force_reset=True)
-        initial_envs.close()
-        initial_env_closed = True
-        model.learn(
-            total_timesteps=training_steps - initial_stage_steps,
-            progress_bar=False,
-            reset_num_timesteps=False,
-            log_interval=10,
-            callback=callback,
-        )
-        if int(model.num_timesteps) != training_steps:
-            raise RuntimeError("full_training_stage_timestep_mismatch")
         model.save(str(model_path.with_suffix("")))
     finally:
-        if not initial_env_closed:
-            initial_envs.close()
-        full_training_envs.close()
-
+        envs.close()
     training_seconds = time.monotonic() - started_at
     if not model_path.is_file():
         raise RuntimeError("trained_model_artifact_missing")
@@ -1207,35 +1141,6 @@ def _train_recurrent_ppo(
     reload_verification = _verify_model_reload_roundtrip(
         model, loaded_model, model_path, probe_observation
     )
-    regime_report = dict(regime_selection)
-    regime_report["selected_start_utc"] = _utc_from_ms(
-        float(initial_regime_data[0, 0])
-    )
-    regime_report["selected_end_utc"] = _utc_from_ms(
-        float(initial_regime_data[-1, 0])
-    )
-    data_curriculum = {
-        "enabled": True,
-        "selection_scope": "training_split_only",
-        "validation_used_for_regime_selection": False,
-        "final_holdout_used_for_regime_selection": False,
-        "selection_method": regime_selection["selection_method"],
-        "requested_stage_one_timesteps": int(args.initial_regime_steps),
-        "effective_stage_one_timesteps": initial_stage_steps,
-        "stage_one_rollout_alignment_extra_steps": (
-            initial_stage_steps - min(args.initial_regime_steps, training_steps - n_steps)
-        ),
-        "stage_one_training_rows": int(len(initial_regime_data)),
-        "stage_one_market_window": regime_report,
-        "stage_two_start_timestep": initial_stage_steps + 1,
-        "stage_two_first_policy_update_timestep": initial_stage_steps + n_steps,
-        "stage_two_data_scope": "full_training_split",
-        "stage_two_training_rows": int(len(train_data)),
-        "stage_two_timesteps": int(training_steps - initial_stage_steps),
-        "model_optimizer_state_continued": True,
-        "scaler_fit_on_full_training_split_only": True,
-        "training_timesteps": int(loaded_model.num_timesteps),
-    }
     return TrainingRun(
         model=loaded_model,
         torch_version=str(torch.__version__),
@@ -1258,8 +1163,8 @@ def _train_recurrent_ppo(
         model_reload_verification=reload_verification,
         reward_component_windows=transaction_costs_callback.reward_component_report(),
         checkpoint_paths=checkpoint_paths,
-        data_curriculum=data_curriculum,
     )
+
 
 def _evaluate_validation_and_holdout(
     validation_data: Float64Array,
@@ -1514,7 +1419,7 @@ def _build_report(
     )
 
     report: dict[str, Any] = {
-        "schema_version": "alix.rl-trading-agent-report.v16",
+        "schema_version": "alix.rl-trading-agent-report.v15",
         "run_mode": "historical_simulation_only",
         "commit_sha": args.commit_sha,
         "research_result": (
@@ -1823,7 +1728,7 @@ def _build_report(
             "n_epochs": 4,
             "epochs_per_rollout": 4,
             "lstm_hidden_size": 64,
-            "training_algorithm": "RecurrentPPO with LSTM, Discrete(7) combined actions, pre-Categorical logit masking, 15-candle minimum holding period, causal trailing stop activated at +3% with 2% distance, constant 0.2 entropy coefficient from step one, high-volatility training-only regime followed by full training-split curriculum, fixed configured fees and slippage from step one, floor-preserved seven-class guidance cross-entropy, training-only causal SMA reward, bounded large-profit reward, loss/stop-exit penalty exemption, periodic checkpoints, no flat-cash HOLD bonus, and 1x transaction-cost reward penalty",
+            "training_algorithm": "RecurrentPPO with LSTM, Discrete(7) combined actions, pre-Categorical logit masking, 15-candle minimum holding period, causal trailing stop activated at +3% with 2% distance, constant 0.2 entropy coefficient from step one, fixed configured fees and slippage from step one, floor-preserved seven-class guidance cross-entropy, training-only causal SMA reward, bounded large-profit reward, loss/stop-exit penalty exemption, periodic checkpoints, no flat-cash HOLD bonus, and 1x transaction-cost reward penalty",
             "training_seconds": float(training.training_seconds),
             "model_artifact": training.model_path.name,
             "model_sha256": _sha256(training.model_path),
@@ -1833,7 +1738,6 @@ def _build_report(
         },
         "training_transaction_costs": training.training_transaction_costs,
         "signal_guidance_curriculum": training.signal_guidance_curriculum,
-        "data_curriculum": training.data_curriculum,
         "auxiliary_loss_curriculum": training.auxiliary_loss_curriculum,
         "training_reward_dynamics": {
             "window_size_steps": TRAINING_CHECKPOINT_INTERVAL_STEPS,
