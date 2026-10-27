@@ -142,8 +142,11 @@ def test_teacher_position_persists_across_hold_actions() -> None:
     position = 0
     for index, action in enumerate(result["teacher_action"].to_numpy()):
         if action == ACTION_BUY:
+            assert position == 0
             position = 1
         elif action == ACTION_SELL:
-            position = -1
+            assert position == 1
+            position = 0
         expected[index] = position
     np.testing.assert_array_equal(result["teacher_position"].to_numpy(), expected)
+    assert set(np.unique(expected)).issubset({0, 1})

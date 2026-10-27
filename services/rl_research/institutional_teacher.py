@@ -172,6 +172,7 @@ def _generate_teacher_actions(
     sell_setup: pd.Series,
     cooldown_candles: int,
 ) -> tuple[NDArray[np.int8], NDArray[np.int8]]:
+    """Generate long/flat Spot transitions; SELL can only close an existing long."""
     actions = np.full(len(buy_setup), ACTION_HOLD, dtype=np.int8)
     positions = np.zeros(len(buy_setup), dtype=np.int8)
     position = 0
@@ -180,13 +181,13 @@ def _generate_teacher_actions(
         if index - last_change <= cooldown_candles:
             positions[index] = position
             continue
-        if position <= 0 and bool(buy_setup.iloc[index]):
+        if position == 0 and bool(buy_setup.iloc[index]):
             actions[index] = ACTION_BUY
             position = 1
             last_change = index
-        elif position >= 0 and bool(sell_setup.iloc[index]):
+        elif position == 1 and bool(sell_setup.iloc[index]):
             actions[index] = ACTION_SELL
-            position = -1
+            position = 0
             last_change = index
         positions[index] = position
     return actions, positions

@@ -217,62 +217,84 @@ def _validate_economic_prices_and_costs(
 ) -> None:
     if not np.isfinite(close_prices).all() or np.any(close_prices <= 0):
         raise ValueError("economic_simulation_input_invalid")
-    if fee_bps_per_side < 0 or slippage_bps_per_side < 0:
+    if (
+        not np.isfinite([fee_bps_per_side, slippage_bps_per_side]).all()
+        or fee_bps_per_side < 0
+        or slippage_bps_per_side < 0
+        or fee_bps_per_side >= 10_000
+        or slippage_bps_per_side >= 10_000
+    ):
         raise ValueError("economic_simulation_input_invalid")
 
 
-def _target_positions(actions: IntArray) -> NDArray[np.int8]:
-    positions = np.zeros(len(actions), dtype=np.int8)
-    position = 0
-    for index, action in enumerate(actions):
-        if int(action) == ACTION_BUY:
-            position = 1
-        elif int(action) == ACTION_SELL:
-            position = -1
-        elif int(action) != ACTION_HOLD:
+def mask_spot_actions(actions: IntArray) -> IntArray:
+    """Mask invalid Spot transitions: BUY enters long, SELL only closes that long."""
+    if actions.ndim != 1:
+        raise ValueError("economic_simulation_action_shape_invalid")
+
+    masked = np.full(len(actions), ACTION_HOLD, dtype=np.int64)
+    has_asset = False
+    for index, raw_action in enumerate(actions):
+        try:
+            action = int(raw_action)
+        except (TypeError, ValueError, OverflowError):
+            raise ValueError("economic_simulation_action_invalid") from None
+        if action != raw_action or action not in _ACTION_NAMES:
             raise ValueError("economic_simulation_action_invalid")
+
+        if action == ACTION_BUY and not has_asset:
+            masked[index] = ACTION_BUY
+            has_asset = True
+        elif action == ACTION_SELL and has_asset:
+            masked[index] = ACTION_SELL
+            has_asset = False
+    return masked
+
+
+def _target_positions(actions: IntArray) -> NDArray[np.int8]:
+    """Build Spot-only long/flat positions; negative positions are impossible."""
+    effective_actions = mask_spot_actions(actions)
+    positions = np.zeros(len(effective_actions), dtype=np.int8)
+    position = 0
+    for index, action in enumerate(effective_actions):
+        if action == ACTION_BUY:
+            position = 1
+        elif action == ACTION_SELL:
+            position = 0
         positions[index] = position
     return positions
 
 
-def _net_period_returns(
-    positions: NDArray[np.int8],
-    close_prices: Float64Array,
-    fee_bps_per_side: float,
-    slippage_bps_per_side: float,
-) -> tuple[Float64Array, IntArray]:
-    turnover = np.abs(
-        np.diff(np.concatenate((np.array([0], dtype=np.int8), positions)))
-    ).astype(np.int64)
-    log_returns = np.diff(np.log(close_prices))
-    transaction_cost = (fee_bps_per_side + slippage_bps_per_side) / 10_000.0
-    net_returns = (
-        positions[:-1].astype(np.float64) * log_returns
-        - turnover[:-1].astype(np.float64) * transaction_cost
-    )
-    return net_returns, turnover
-
-
 def _economic_scorecard(
-    net_returns: Float64Array,
-    turnover: IntArray,
+    equity_curve: Float64Array,
+    closed_trade_pnls: Float64Array,
+    position_change_count: int,
+    open_position_at_end: bool,
     fee_bps_per_side: float,
     slippage_bps_per_side: float,
 ) -> dict[str, Any]:
-    equity = np.concatenate((np.array([1.0]), np.exp(np.cumsum(net_returns))))
-    drawdown = equity / np.maximum.accumulate(equity) - 1.0
-    gross_profit = float(net_returns[net_returns > 0.0].sum())
-    gross_loss = float(-net_returns[net_returns < 0.0].sum())
+    drawdown = equity_curve / np.maximum.accumulate(equity_curve) - 1.0
+    winners = int(np.count_nonzero(closed_trade_pnls > 0.0))
+    losers = int(np.count_nonzero(closed_trade_pnls < 0.0))
+    closed_trade_count = int(len(closed_trade_pnls))
+    gross_profit = float(closed_trade_pnls[closed_trade_pnls > 0.0].sum())
+    gross_loss = float(-closed_trade_pnls[closed_trade_pnls < 0.0].sum())
     profit_factor = float(gross_profit / gross_loss) if gross_loss > 0.0 else None
     return {
-        "net_return_fraction": float(equity[-1] - 1.0),
+        "net_return_fraction": float(equity_curve[-1] - 1.0),
         "max_drawdown_fraction": float(max(0.0, -float(drawdown.min()))),
         "profit_factor": profit_factor,
-        "positive_period_fraction": (
-            float(np.mean(net_returns > 0.0)) if len(net_returns) else 0.0
+        "closed_trade_count": closed_trade_count,
+        "winning_trades": winners,
+        "losing_trades": losers,
+        "breakeven_trades": closed_trade_count - winners - losers,
+        "win_rate_fraction": (
+            float(winners / closed_trade_count) if closed_trade_count else None
         ),
-        "evaluated_periods": int(len(net_returns)),
-        "position_change_count": int(np.count_nonzero(turnover[:-1])),
+        "gross_profit": gross_profit,
+        "gross_loss": gross_loss,
+        "position_change_count": int(position_change_count),
+        "open_position_at_end": open_position_at_end,
         "fee_bps_per_side": float(fee_bps_per_side),
         "slippage_bps_per_side": float(slippage_bps_per_side),
     }
@@ -285,17 +307,51 @@ def simulate_economics(
     fee_bps_per_side: float = 10.0,
     slippage_bps_per_side: float = 5.0,
 ) -> dict[str, Any]:
-    """Offline long/short target-position simulation; no execution integration."""
+    """Simulate fully funded Spot long/flat trades offline; never opens a short."""
     _validate_economic_shapes(actions, close_prices)
     _validate_economic_prices_and_costs(
         close_prices, fee_bps_per_side, slippage_bps_per_side
     )
-    positions = _target_positions(actions)
-    net_returns, turnover = _net_period_returns(
-        positions, close_prices, fee_bps_per_side, slippage_bps_per_side
-    )
+    effective_actions = mask_spot_actions(actions)
+    fee_rate = fee_bps_per_side / 10_000.0
+    slippage_rate = slippage_bps_per_side / 10_000.0
+
+    cash = 1.0
+    quantity = 0.0
+    entry_equity = 0.0
+    has_asset = False
+    closed_trade_pnls: list[float] = []
+    position_change_count = 0
+    equity_values = [1.0]
+
+    for action, raw_price in zip(effective_actions, close_prices, strict=True):
+        price = float(raw_price)
+        if action == ACTION_BUY and not has_asset:
+            entry_equity = cash
+            buy_fill = price * (1.0 + slippage_rate)
+            quantity = cash / (buy_fill * (1.0 + fee_rate))
+            cash = 0.0
+            has_asset = True
+            position_change_count += 1
+        elif action == ACTION_SELL and has_asset:
+            sell_fill = price * (1.0 - slippage_rate)
+            cash = quantity * sell_fill * (1.0 - fee_rate)
+            closed_trade_pnls.append(float(cash - entry_equity))
+            quantity = 0.0
+            has_asset = False
+            entry_equity = 0.0
+            position_change_count += 1
+
+        marked_equity = quantity * price if has_asset else cash
+        equity_values.append(float(marked_equity))
+
     return _economic_scorecard(
-        net_returns, turnover, fee_bps_per_side, slippage_bps_per_side
+        np.asarray(equity_values, dtype=np.float64),
+        np.asarray(closed_trade_pnls, dtype=np.float64),
+        position_change_count,
+        has_asset,
+        fee_bps_per_side,
+        slippage_bps_per_side,
     )
 
 
@@ -561,6 +617,8 @@ def _evaluate_training_state(
     holdout_predictions = _predict_actions(
         torch, state["lstm"], state["classifier"], state["holdout_features"]
     )
+    validation_effective_actions = mask_spot_actions(validation_predictions)
+    holdout_effective_actions = mask_spot_actions(holdout_predictions)
     close_prices = frame["close"].to_numpy(dtype=np.float64)
     target_indices = prepared["target_indices"]
     validation_close = close_prices[target_indices[prepared["validation_mask"]]]
@@ -584,9 +642,11 @@ def _evaluate_training_state(
         "holdout_model_economics": simulate_economics(
             holdout_predictions, holdout_close
         ),
-        "validation_model_actions": action_distribution(validation_predictions),
+        "validation_model_actions": action_distribution(validation_effective_actions),
+        "validation_model_raw_actions": action_distribution(validation_predictions),
         "holdout_teacher_actions": action_distribution(holdout_targets),
-        "holdout_model_actions": action_distribution(holdout_predictions),
+        "holdout_model_actions": action_distribution(holdout_effective_actions),
+        "holdout_model_raw_actions": action_distribution(holdout_predictions),
     }
 
 
@@ -681,6 +741,7 @@ def _build_training_report(
             "teacher_economics": evaluation["validation_teacher_economics"],
             "model_economics": evaluation["validation_model_economics"],
             "model_action_distribution": evaluation["validation_model_actions"],
+            "raw_model_action_distribution": evaluation["validation_model_raw_actions"],
         },
         "holdout": {
             "classification_vs_teacher": evaluation["holdout_classification"],
@@ -688,6 +749,7 @@ def _build_training_report(
             "model_economics": evaluation["holdout_model_economics"],
             "teacher_action_distribution": evaluation["holdout_teacher_actions"],
             "model_action_distribution": holdout_distribution,
+            "raw_model_action_distribution": evaluation["holdout_model_raw_actions"],
             "hold_collapse": holdout_distribution["HOLD"]["fraction"] >= 0.95,
         },
         "safety": {
