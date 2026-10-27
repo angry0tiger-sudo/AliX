@@ -1050,9 +1050,7 @@ def _train_recurrent_ppo(
         window_candles=args.regime_window_candles,
     )
     bounded_stage_steps = min(args.initial_regime_steps, training_steps - n_steps)
-    initial_stage_steps = (
-        (bounded_stage_steps + n_steps - 1) // n_steps
-    ) * n_steps
+    initial_stage_steps = ((bounded_stage_steps + n_steps - 1) // n_steps) * n_steps
     if initial_stage_steps < n_steps or initial_stage_steps >= training_steps:
         raise ValueError("curriculum_stage_one_must_leave_full_data_training_budget")
 
@@ -1208,12 +1206,8 @@ def _train_recurrent_ppo(
         model, loaded_model, model_path, probe_observation
     )
     regime_report = dict(regime_selection)
-    regime_report["selected_start_utc"] = _utc_from_ms(
-        float(initial_regime_data[0, 0])
-    )
-    regime_report["selected_end_utc"] = _utc_from_ms(
-        float(initial_regime_data[-1, 0])
-    )
+    regime_report["selected_start_utc"] = _utc_from_ms(float(initial_regime_data[0, 0]))
+    regime_report["selected_end_utc"] = _utc_from_ms(float(initial_regime_data[-1, 0]))
     data_curriculum = {
         "enabled": True,
         "selection_scope": "training_split_only",
@@ -1261,6 +1255,7 @@ def _train_recurrent_ppo(
         checkpoint_paths=checkpoint_paths,
         data_curriculum=data_curriculum,
     )
+
 
 def _evaluate_validation_and_holdout(
     validation_data: Float64Array,
