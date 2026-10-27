@@ -263,7 +263,7 @@ def test_minimum_holding_period_blocks_both_sides_until_15_candles() -> None:
     env.close()
 
 
-def test_buy_hold_and_partial_sell_execute_on_the_next_bar() -> None
+def test_buy_hold_and_partial_sell_execute_on_the_next_bar() -> None:
     data = _bars()
     env = _env(data, initial_equity=1_000.0)
     observation, _ = env.reset(seed=2)
