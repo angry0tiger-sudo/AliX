@@ -16,6 +16,15 @@ ACTION_BUY = 1
 ACTION_SELL = 2
 _REQUIRED_COLUMNS = ("timestamp", "open", "high", "low", "close", "volume")
 
+DEFAULT_ATR_PERIOD = 14
+DEFAULT_MIN_ATR_COST_MULTIPLE = 2.0
+DEFAULT_FEE_BPS_PER_SIDE = 25.0
+DEFAULT_SLIPPAGE_BPS_PER_SIDE = 20.0
+DEFAULT_TAKE_PROFIT_FRACTION = 0.025
+DEFAULT_STOP_LOSS_FRACTION = 0.0125
+DEFAULT_TRAILING_TRIGGER_FRACTION = 0.01
+DEFAULT_TRAILING_DISTANCE_FRACTION = 0.005
+
 
 def _validate_timestamps(values: pd.Series) -> pd.Series:
     if pd.api.types.is_numeric_dtype(values):
@@ -57,6 +66,21 @@ def _validate_ohlcv(data: pd.DataFrame) -> pd.DataFrame:
     _validate_numeric_ohlcv(frame)
     frame["timestamp"] = _validate_timestamps(frame["timestamp"])
     return frame
+
+
+def _average_true_range_fraction(frame: pd.DataFrame, period: int) -> pd.Series:
+    """Return causal ATR divided by close, based only on completed candles."""
+    previous_close = frame["close"].shift(1)
+    true_range = pd.concat(
+        [
+            frame["high"] - frame["low"],
+            (frame["high"] - previous_close).abs(),
+            (frame["low"] - previous_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    atr = true_range.rolling(period, min_periods=period).mean()
+    return (atr / frame["close"]).astype(np.float64)
 
 
 def _higher_timeframe_bias(frame: pd.DataFrame, rule: str, ema_span: int) -> pd.Series:
@@ -183,6 +207,45 @@ def _validate_teacher_configuration(
         raise ValueError("higher_timeframe_must_be_4h_1D_or_4h+1D")
 
 
+def _validate_risk_configuration(
+    atr_period: int,
+    min_atr_cost_multiple: float,
+    take_profit_fraction: float,
+    stop_loss_fraction: float,
+    trailing_trigger_fraction: float,
+    trailing_distance_fraction: float,
+    fee_bps_per_side: float,
+    slippage_bps_per_side: float,
+) -> None:
+    _validate_integer_parameter("atr_period", atr_period, 2)
+    values = np.asarray(
+        [
+            min_atr_cost_multiple,
+            take_profit_fraction,
+            stop_loss_fraction,
+            trailing_trigger_fraction,
+            trailing_distance_fraction,
+            fee_bps_per_side,
+            slippage_bps_per_side,
+        ],
+        dtype=np.float64,
+    )
+    if not np.isfinite(values).all():
+        raise ValueError("teacher_risk_parameters_must_be_finite")
+    if (
+        min_atr_cost_multiple <= 0
+        or not 0 < take_profit_fraction < 1
+        or not 0 < stop_loss_fraction < 1
+        or not 0 < trailing_trigger_fraction < 1
+        or not 0 < trailing_distance_fraction < 1
+        or fee_bps_per_side < 0
+        or slippage_bps_per_side < 0
+        or fee_bps_per_side >= 10_000
+        or slippage_bps_per_side >= 10_000
+    ):
+        raise ValueError("teacher_risk_parameter_out_of_range")
+
+
 def _select_timeframe_biases(
     frame: pd.DataFrame, higher_timeframe: str, ema_span: int
 ) -> tuple[pd.Series, pd.Series, pd.Series]:
@@ -197,29 +260,142 @@ def _select_timeframe_biases(
 
 
 def _generate_teacher_actions(
+    frame: pd.DataFrame,
     buy_setup: pd.Series,
     sell_setup: pd.Series,
+    atr_fraction: pd.Series,
+    *,
     cooldown_candles: int,
-) -> tuple[NDArray[np.int8], NDArray[np.int8]]:
-    """Generate long/flat Spot transitions; SELL can only close an existing long."""
-    actions = np.full(len(buy_setup), ACTION_HOLD, dtype=np.int8)
-    positions = np.zeros(len(buy_setup), dtype=np.int8)
-    position = 0
+    min_atr_cost_multiple: float,
+    take_profit_fraction: float,
+    stop_loss_fraction: float,
+    trailing_trigger_fraction: float,
+    trailing_distance_fraction: float,
+    fee_bps_per_side: float,
+    slippage_bps_per_side: float,
+) -> tuple[NDArray[np.int8], NDArray[np.int8], FloatArray, list[str]]:
+    """Generate Spot transitions with ATR gating and causal TP/SL/trailing exits.
+
+    Setups are known at candle close. A new position becomes active after that
+    close; protective levels are checked against later candles only. If a candle
+    crosses both its existing stop and target, the stop is prioritized
+    conservatively because OHLC data cannot reveal intrabar path ordering.
+    """
+    count = len(frame)
+    if not (
+        len(buy_setup) == len(sell_setup) == len(atr_fraction) == count
+    ):
+        raise ValueError("teacher_action_input_length_mismatch")
+
+    actions = np.full(count, ACTION_HOLD, dtype=np.int8)
+    positions = np.zeros(count, dtype=np.int8)
+    exit_prices = np.full(count, np.nan, dtype=np.float64)
+    exit_reasons = [""] * count
+    buys = buy_setup.fillna(False).to_numpy(dtype=bool)
+    sells = sell_setup.fillna(False).to_numpy(dtype=bool)
+    atr_values = atr_fraction.to_numpy(dtype=np.float64)
+    opens = frame["open"].to_numpy(dtype=np.float64)
+    highs = frame["high"].to_numpy(dtype=np.float64)
+    lows = frame["low"].to_numpy(dtype=np.float64)
+    closes = frame["close"].to_numpy(dtype=np.float64)
+
+    fee_rate = fee_bps_per_side / 10_000.0
+    slippage_rate = slippage_bps_per_side / 10_000.0
+    cost_recovery_fraction = (
+        (1.0 + slippage_rate) * (1.0 + fee_rate)
+        / ((1.0 - slippage_rate) * (1.0 - fee_rate))
+        - 1.0
+    )
+    min_atr_fraction = (
+        min_atr_cost_multiple * (fee_bps_per_side + slippage_bps_per_side)
+        / 10_000.0
+    )
+
+    has_position = False
+    entry_price = 0.0
+    entry_index = -1
+    hard_stop = 0.0
+    stop_price = 0.0
+    target_price = 0.0
+    high_watermark = 0.0
+    active_stop_reason = "stop_loss"
     last_change = -cooldown_candles - 1
-    for index in range(len(buy_setup)):
-        if index - last_change <= cooldown_candles:
-            positions[index] = position
-            continue
-        if position == 0 and bool(buy_setup.iloc[index]):
-            actions[index] = ACTION_BUY
-            position = 1
-            last_change = index
-        elif position == 1 and bool(sell_setup.iloc[index]):
+
+    for index in range(count):
+        did_exit = False
+
+        if has_position and index > entry_index:
+            # Stops were fixed from the previous completed candle. Stop takes
+            # precedence when both stop and target appear inside the same bar.
+            if lows[index] <= stop_price:
+                fill = min(opens[index], stop_price)
+                actions[index] = ACTION_SELL
+                exit_prices[index] = fill
+                exit_reasons[index] = active_stop_reason
+                has_position = False
+                last_change = index
+                did_exit = True
+            elif highs[index] >= target_price:
+                fill = max(opens[index], target_price)
+                actions[index] = ACTION_SELL
+                exit_prices[index] = fill
+                exit_reasons[index] = "take_profit"
+                has_position = False
+                last_change = index
+                did_exit = True
+            else:
+                high_watermark = max(high_watermark, highs[index])
+                if high_watermark >= entry_price * (
+                    1.0 + trailing_trigger_fraction
+                ):
+                    cost_adjusted_breakeven = entry_price * (
+                        1.0 + cost_recovery_fraction
+                    )
+                    trailing_level = high_watermark * (
+                        1.0 - trailing_distance_fraction
+                    )
+                    candidate_stop = max(
+                        cost_adjusted_breakeven, trailing_level
+                    )
+                    if candidate_stop > stop_price + 1e-12:
+                        stop_price = candidate_stop
+                        active_stop_reason = "trailing_stop"
+
+        if (
+            has_position
+            and not did_exit
+            and sells[index]
+            and index - last_change > cooldown_candles
+        ):
             actions[index] = ACTION_SELL
-            position = 0
+            exit_prices[index] = closes[index]
+            exit_reasons[index] = "opposing_setup"
+            has_position = False
             last_change = index
-        positions[index] = position
-    return actions, positions
+            did_exit = True
+
+        if (
+            not has_position
+            and not did_exit
+            and buys[index]
+            and np.isfinite(atr_values[index])
+            and atr_values[index] >= min_atr_fraction
+            and index - last_change > cooldown_candles
+        ):
+            actions[index] = ACTION_BUY
+            has_position = True
+            entry_price = closes[index]
+            entry_index = index
+            hard_stop = entry_price * (1.0 - stop_loss_fraction)
+            stop_price = hard_stop
+            target_price = entry_price * (1.0 + take_profit_fraction)
+            high_watermark = entry_price
+            active_stop_reason = "stop_loss"
+            last_change = index
+
+        positions[index] = 1 if has_position else 0
+
+    return actions, positions, exit_prices, exit_reasons
 
 
 def _build_teacher_result(
@@ -258,17 +434,37 @@ def generate_teacher_labels(
     swing_window: int = 8,
     volume_window: int = 24,
     cooldown_candles: int = 2,
+    atr_period: int = DEFAULT_ATR_PERIOD,
+    min_atr_cost_multiple: float = DEFAULT_MIN_ATR_COST_MULTIPLE,
+    take_profit_fraction: float = DEFAULT_TAKE_PROFIT_FRACTION,
+    stop_loss_fraction: float = DEFAULT_STOP_LOSS_FRACTION,
+    trailing_trigger_fraction: float = DEFAULT_TRAILING_TRIGGER_FRACTION,
+    trailing_distance_fraction: float = DEFAULT_TRAILING_DISTANCE_FRACTION,
+    fee_bps_per_side: float = DEFAULT_FEE_BPS_PER_SIDE,
+    slippage_bps_per_side: float = DEFAULT_SLIPPAGE_BPS_PER_SIDE,
 ) -> pd.DataFrame:
-    """Return features and 3-class teacher actions (HOLD=0, BUY=1, SELL=2).
+    """Return causal Spot transitions with volatility gating and managed exits.
 
-    BUY/SELL denote desired target-position transitions, not executable orders.
-    Labels are strictly historical and are intended only for offline research.
+    BUY/SELL are research labels, not executable orders. Signals use completed
+    candles only; TP/SL and trailing checks begin on candles after entry.
     """
     _validate_teacher_configuration(
         higher_timeframe, ema_span, swing_window, volume_window, cooldown_candles
     )
+    _validate_risk_configuration(
+        atr_period,
+        min_atr_cost_multiple,
+        take_profit_fraction,
+        stop_loss_fraction,
+        trailing_trigger_fraction,
+        trailing_distance_fraction,
+        fee_bps_per_side,
+        slippage_bps_per_side,
+    )
     frame = _validate_ohlcv(data)
-    bias, bias_4h, bias_1d = _select_timeframe_biases(frame, higher_timeframe, ema_span)
+    bias, bias_4h, bias_1d = _select_timeframe_biases(
+        frame, higher_timeframe, ema_span
+    )
     (
         bullish_structure,
         bearish_structure,
@@ -286,10 +482,22 @@ def generate_teacher_labels(
         buy_volume,
         sell_volume,
     )
-    actions, positions = _generate_teacher_actions(
-        buy_setup, sell_setup, cooldown_candles
+    atr_fraction = _average_true_range_fraction(frame, atr_period)
+    actions, positions, exit_prices, exit_reasons = _generate_teacher_actions(
+        frame,
+        buy_setup,
+        sell_setup,
+        atr_fraction,
+        cooldown_candles=cooldown_candles,
+        min_atr_cost_multiple=min_atr_cost_multiple,
+        take_profit_fraction=take_profit_fraction,
+        stop_loss_fraction=stop_loss_fraction,
+        trailing_trigger_fraction=trailing_trigger_fraction,
+        trailing_distance_fraction=trailing_distance_fraction,
+        fee_bps_per_side=fee_bps_per_side,
+        slippage_bps_per_side=slippage_bps_per_side,
     )
-    return _build_teacher_result(
+    result = _build_teacher_result(
         frame,
         bias,
         bias_4h,
@@ -300,3 +508,9 @@ def generate_teacher_labels(
         actions,
         positions,
     )
+    result["teacher_atr_fraction"] = atr_fraction.to_numpy(dtype=np.float64)
+    result["teacher_setup_buy"] = buy_setup.to_numpy(dtype=bool)
+    result["teacher_setup_sell"] = sell_setup.to_numpy(dtype=bool)
+    result["teacher_exit_price"] = exit_prices
+    result["teacher_exit_reason"] = exit_reasons
+    return result
