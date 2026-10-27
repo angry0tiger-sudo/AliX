@@ -90,7 +90,7 @@ def _select_candidate_index(
     realized_volatility: NDArray[np.float64],
     signed_log_return: NDArray[np.float64],
     minimum_volatility_quantile: float,
-) -> tuple[int, float, NDArray[np.int64]]:
+) -> tuple[int, float, NDArray[np.intp]]:
     absolute_log_return = np.abs(signed_log_return)
     volatility_threshold = float(
         np.quantile(realized_volatility, minimum_volatility_quantile)
@@ -113,7 +113,7 @@ def _selected_window_metadata(
     signed_log_return: NDArray[np.float64],
     selected_candidate: int,
     volatility_threshold: float,
-    eligible: NDArray[np.int64],
+    eligible: NDArray[np.intp],
     window_candles: int,
     candidate_stride_candles: int,
     minimum_volatility_quantile: float,
@@ -153,7 +153,9 @@ def _selected_window_metadata(
         "selected_absolute_return_pct": absolute_return_pct,
         "selected_start_index": start_index,
         "selected_end_index_exclusive": end_index_exclusive,
-        "selected_start_timestamp_ms": int(training_data[start_index, TIMESTAMP_COLUMN]),
+        "selected_start_timestamp_ms": int(
+            training_data[start_index, TIMESTAMP_COLUMN]
+        ),
         "selected_end_timestamp_ms": int(
             training_data[end_index_exclusive - 1, TIMESTAMP_COLUMN]
         ),
