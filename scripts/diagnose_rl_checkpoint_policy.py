@@ -68,31 +68,68 @@ def _validate_source(
     source_report: dict[str, Any],
     manifest: dict[str, Any],
 ) -> None:
-    if args.source_run_id != SOURCE_RUN_ID:
-        raise ValueError("source_run_id_not_run_133")
-    if args.source_commit_sha != SOURCE_COMMIT_SHA:
-        raise ValueError("unexpected_run_133_commit_sha")
-    if source_report.get("schema_version") != REPORT_SCHEMA:
-        raise ValueError("source_report_schema_invalid")
-    if source_report.get("commit_sha") != SOURCE_COMMIT_SHA:
-        raise ValueError("source_report_commit_sha_mismatch")
-    if source_report.get("run_mode") != "historical_simulation_only":
-        raise ValueError("source_run_mode_invalid")
-    if source_report.get("dataset", {}).get("csv_sha256") != manifest.get("csv_sha256"):
+    _validate_source_identity(args, source_report)
+    _validate_source_dataset(source_report, manifest)
+    _validate_source_safety(source_report)
+
+
+def _validate_source_identity(
+    args: argparse.Namespace, source_report: dict[str, Any]
+) -> None:
+    checks = (
+        (args.source_run_id == SOURCE_RUN_ID, "source_run_id_not_run_133"),
+        (args.source_commit_sha == SOURCE_COMMIT_SHA, "unexpected_run_133_commit_sha"),
+        (
+            source_report.get("schema_version") == REPORT_SCHEMA,
+            "source_report_schema_invalid",
+        ),
+        (
+            source_report.get("commit_sha") == SOURCE_COMMIT_SHA,
+            "source_report_commit_sha_mismatch",
+        ),
+        (
+            source_report.get("run_mode") == "historical_simulation_only",
+            "source_run_mode_invalid",
+        ),
+    )
+    for passed, error_code in checks:
+        if not passed:
+            raise ValueError(error_code)
+
+
+def _validate_source_dataset(
+    source_report: dict[str, Any], manifest: dict[str, Any]
+) -> None:
+    dataset = source_report.get("dataset", {})
+    if dataset.get("csv_sha256") != manifest.get("csv_sha256"):
         raise ValueError("source_dataset_sha256_mismatch")
-    if source_report.get("dataset", {}).get("row_count") != manifest.get("row_count"):
+    if dataset.get("row_count") != manifest.get("row_count"):
         raise ValueError("source_dataset_row_count_mismatch")
+
+
+def _validate_source_safety(source_report: dict[str, Any]) -> None:
     safety = source_report.get("safety_invariants", {})
-    if (
-        safety.get("Champion", "invalid") is not None
-        or safety.get("order_permission") is not False
-        or safety.get("trading_authorization") != "NO-GO"
-        or safety.get("private_api_calls") != 0
-        or safety.get("orders_or_execution_api_used") is not False
-        or safety.get("real_order_attempts") != 0
-        or source_report.get("production_promotion_allowed") is not False
-    ):
-        raise ValueError("source_safety_invariants_invalid")
+    checks = (
+        (safety.get("Champion", "invalid") is None, "source_safety_champion_invalid"),
+        (safety.get("order_permission") is False, "source_safety_order_permission_invalid"),
+        (
+            safety.get("trading_authorization") == "NO-GO",
+            "source_safety_authorization_invalid",
+        ),
+        (safety.get("private_api_calls") == 0, "source_safety_private_calls_nonzero"),
+        (
+            safety.get("orders_or_execution_api_used") is False,
+            "source_safety_execution_api_used",
+        ),
+        (safety.get("real_order_attempts") == 0, "source_safety_real_orders_nonzero"),
+        (
+            source_report.get("production_promotion_allowed") is False,
+            "source_safety_promotion_allowed",
+        ),
+    )
+    for passed, error_code in checks:
+        if not passed:
+            raise ValueError(error_code)
 
 
 def _checkpoint_inventory(
@@ -145,6 +182,167 @@ def _probability_entropy(probabilities: Sequence[float]) -> float:
     return -sum(value * math.log(value) for value in probabilities if value > 0.0)
 
 
+def _validate_action_probabilities(probabilities: Sequence[float]) -> None:
+    if len(probabilities) != len(ACTION_NAMES):
+        raise ValueError("checkpoint_action_probability_dimension_invalid")
+    if not math.isclose(sum(probabilities), 1.0, abs_tol=1e-5):
+        raise ValueError("checkpoint_action_probabilities_not_normalized")
+    if any(not math.isfinite(value) or value < 0.0 for value in probabilities):
+        raise ValueError("checkpoint_action_probability_invalid")
+
+
+def _policy_distribution_step(
+    model: Any,
+    observation: np.ndarray,
+    recurrent_state: Any,
+    episode_start: bool,
+    torch: Any,
+) -> tuple[list[float], int, Any]:
+    observation_tensor, _ = model.policy.obs_to_tensor(observation)
+    episode_starts = torch.as_tensor(
+        [episode_start], dtype=torch.float32, device=model.policy.device
+    )
+    with torch.no_grad():
+        distribution, next_state = model.policy.get_distribution(
+            observation_tensor, recurrent_state, episode_starts
+        )
+        probabilities = [
+            float(value)
+            for value in (
+                distribution.distribution.probs.detach().cpu().numpy().reshape(-1)
+            )
+        ]
+        action = int(
+            distribution.get_actions(deterministic=True)
+            .detach()
+            .cpu()
+            .numpy()
+            .reshape(-1)[0]
+        )
+    _validate_action_probabilities(probabilities)
+    return probabilities, action, next_state
+
+
+def _new_policy_trace() -> dict[str, Any]:
+    return {
+        "counts": Counter({name: 0 for name in ACTION_NAMES}),
+        "probability_sums": [0.0] * len(ACTION_NAMES),
+        "entropy_sum": 0.0,
+        "hold_gt_buy_count": 0,
+        "hold_99_count": 0,
+        "first_hold_gt_buy_step": None,
+        "first_hold_99_step": None,
+        "step_count": 0,
+    }
+
+
+def _record_hold_probability_flags(
+    trace: dict[str, Any], hold_probability: float, buy_probability: float
+) -> None:
+    step_count = int(trace["step_count"])
+    if hold_probability > buy_probability:
+        trace["hold_gt_buy_count"] += 1
+        if trace["first_hold_gt_buy_step"] is None:
+            trace["first_hold_gt_buy_step"] = step_count
+    if hold_probability >= HOLD_SHARE_THRESHOLD:
+        trace["hold_99_count"] += 1
+        if trace["first_hold_99_step"] is None:
+            trace["first_hold_99_step"] = step_count
+
+
+def _record_policy_step(
+    trace: dict[str, Any], probabilities: Sequence[float], action: int
+) -> None:
+    trace["step_count"] += 1
+    for index, probability in enumerate(probabilities):
+        trace["probability_sums"][index] += probability
+    trace["entropy_sum"] += _probability_entropy(probabilities)
+    buy_probability = sum(probabilities[index] for index in BUY_ACTION_INDICES)
+    _record_hold_probability_flags(trace, probabilities[0], buy_probability)
+    trace["counts"][ACTION_NAMES[action]] += 1
+
+
+def _run_checkpoint_validation_episode(
+    model: Any, env: BTCUSDTTradingEnv, seed: int, torch: Any
+) -> dict[str, Any]:
+    trace = _new_policy_trace()
+    observation, _ = env.reset(seed=seed)
+    recurrent_state = _initial_actor_state(model, torch)
+    episode_start = True
+    while True:
+        probabilities, action, next_state = _policy_distribution_step(
+            model, observation, recurrent_state, episode_start, torch
+        )
+        _record_policy_step(trace, probabilities, action)
+        observation, _, terminated, truncated, _ = env.step(
+            np.asarray(action, dtype=np.int64)
+        )
+        recurrent_state = next_state
+        episode_start = bool(terminated or truncated)
+        if episode_start:
+            break
+    return trace
+
+
+def _checkpoint_trace_summary(
+    checkpoint_step: int,
+    checkpoint_path: Path,
+    validation_data: np.ndarray,
+    trace: dict[str, Any],
+) -> dict[str, Any]:
+    step_count = int(trace["step_count"])
+    if step_count != len(validation_data) - 1:
+        raise ValueError("checkpoint_validation_pass_length_mismatch")
+    counts: Counter[str] = trace["counts"]
+    probability_sums: list[float] = trace["probability_sums"]
+    mean_probabilities = {
+        name: probability_sums[index] / step_count
+        for index, name in enumerate(ACTION_NAMES)
+    }
+    side_probabilities = {
+        "HOLD": mean_probabilities["HOLD"],
+        "BUY": sum(
+            mean_probabilities[ACTION_NAMES[index]] for index in BUY_ACTION_INDICES
+        ),
+        "SELL": sum(
+            mean_probabilities[ACTION_NAMES[index]] for index in SELL_ACTION_INDICES
+        ),
+    }
+    action_distribution = {
+        name: {"count": counts[name], "percent": 100.0 * counts[name] / step_count}
+        for name in ACTION_NAMES
+    }
+    entropy = float(trace["entropy_sum"]) / step_count
+    return {
+        "checkpoint_timesteps": checkpoint_step,
+        "checkpoint_file": checkpoint_path.name,
+        "checkpoint_sha256": _sha256(checkpoint_path),
+        "validation_steps": step_count,
+        "deterministic_action_counts": dict(counts),
+        "deterministic_action_distribution": action_distribution,
+        "mean_probability_by_action": mean_probabilities,
+        "mean_probability_by_side": side_probabilities,
+        "mean_policy_entropy_nats": entropy,
+        "normalized_mean_policy_entropy": entropy / math.log(len(ACTION_NAMES)),
+        "hold_deterministic_action_fraction": counts["HOLD"] / step_count,
+        "hold_probability_ge_99pct_fraction": (
+            int(trace["hold_99_count"]) / step_count
+        ),
+        "hold_probability_exceeds_aggregate_buy_probability_fraction": (
+            int(trace["hold_gt_buy_count"]) / step_count
+        ),
+        "first_validation_step_where_hold_probability_exceeded_buy_probability": (
+            trace["first_hold_gt_buy_step"]
+        ),
+        "first_validation_step_where_hold_probability_reached_99pct": (
+            trace["first_hold_99_step"]
+        ),
+        "training_performed": False,
+        "final_holdout_scored_or_recomputed": False,
+        "used_for_checkpoint_selection": False,
+    }
+
+
 def _evaluate_checkpoint_policy(
     checkpoint_step: int,
     checkpoint_path: Path,
@@ -167,183 +365,86 @@ def _evaluate_checkpoint_policy(
         slippage_bps_per_side=slippage_bps,
         random_start=False,
     )
-    counts: Counter[str] = Counter({name: 0 for name in ACTION_NAMES})
-    probability_sums = [0.0] * len(ACTION_NAMES)
-    entropy_sum = 0.0
-    hold_gt_buy_count = 0
-    hold_99_count = 0
-    first_hold_gt_buy_step: int | None = None
-    first_hold_99_step: int | None = None
-    step_count = 0
-    recurrent_state = _initial_actor_state(model, torch)
-    episode_start = True
     try:
-        observation, _ = env.reset(seed=seed)
-        while True:
-            observation_tensor, _ = model.policy.obs_to_tensor(observation)
-            episode_starts = torch.as_tensor(
-                [episode_start], dtype=torch.float32, device=model.policy.device
-            )
-            with torch.no_grad():
-                distribution, next_state = model.policy.get_distribution(
-                    observation_tensor, recurrent_state, episode_starts
-                )
-                probabilities = [
-                    float(value)
-                    for value in distribution.distribution.probs.detach()
-                    .cpu()
-                    .numpy()
-                    .reshape(-1)
-                ]
-                action = int(
-                    distribution.get_actions(deterministic=True)
-                    .detach()
-                    .cpu()
-                    .numpy()
-                    .reshape(-1)[0]
-                )
-            if len(probabilities) != len(ACTION_NAMES):
-                raise ValueError("checkpoint_action_probability_dimension_invalid")
-            if not math.isclose(sum(probabilities), 1.0, abs_tol=1e-5):
-                raise ValueError("checkpoint_action_probabilities_not_normalized")
-            if any(not math.isfinite(value) or value < 0.0 for value in probabilities):
-                raise ValueError("checkpoint_action_probability_invalid")
-            step_count += 1
-            for index, probability in enumerate(probabilities):
-                probability_sums[index] += probability
-            entropy_sum += _probability_entropy(probabilities)
-            buy_probability = sum(probabilities[index] for index in BUY_ACTION_INDICES)
-            hold_probability = probabilities[0]
-            if hold_probability > buy_probability:
-                hold_gt_buy_count += 1
-                if first_hold_gt_buy_step is None:
-                    first_hold_gt_buy_step = step_count
-            if hold_probability >= HOLD_SHARE_THRESHOLD:
-                hold_99_count += 1
-                if first_hold_99_step is None:
-                    first_hold_99_step = step_count
-            counts[ACTION_NAMES[action]] += 1
-            observation, _, terminated, truncated, _ = env.step(
-                np.asarray(action, dtype=np.int64)
-            )
-            recurrent_state = next_state
-            episode_start = bool(terminated or truncated)
-            if episode_start:
-                break
+        trace = _run_checkpoint_validation_episode(model, env, seed, torch)
     finally:
         env.close()
-
-    expected_steps = len(validation_data) - 1
-    if step_count != expected_steps:
-        raise ValueError("checkpoint_validation_pass_length_mismatch")
-    mean_probabilities = {
-        name: probability_sums[index] / step_count
-        for index, name in enumerate(ACTION_NAMES)
-    }
-    side_probabilities = {
-        "HOLD": mean_probabilities["HOLD"],
-        "BUY": sum(
-            mean_probabilities[ACTION_NAMES[index]] for index in BUY_ACTION_INDICES
-        ),
-        "SELL": sum(
-            mean_probabilities[ACTION_NAMES[index]] for index in SELL_ACTION_INDICES
-        ),
-    }
-    action_distribution = {
-        name: {"count": counts[name], "percent": 100.0 * counts[name] / step_count}
-        for name in ACTION_NAMES
-    }
-    report = {
-        "checkpoint_timesteps": checkpoint_step,
-        "checkpoint_file": checkpoint_path.name,
-        "checkpoint_sha256": _sha256(checkpoint_path),
-        "validation_steps": step_count,
-        "deterministic_action_counts": dict(counts),
-        "deterministic_action_distribution": action_distribution,
-        "mean_probability_by_action": mean_probabilities,
-        "mean_probability_by_side": side_probabilities,
-        "mean_policy_entropy_nats": entropy_sum / step_count,
-        "normalized_mean_policy_entropy": (
-            entropy_sum / step_count / math.log(len(ACTION_NAMES))
-        ),
-        "hold_deterministic_action_fraction": counts["HOLD"] / step_count,
-        "hold_probability_ge_99pct_fraction": hold_99_count / step_count,
-        "hold_probability_exceeds_aggregate_buy_probability_fraction": (
-            hold_gt_buy_count / step_count
-        ),
-        "first_validation_step_where_hold_probability_exceeded_buy_probability": (
-            first_hold_gt_buy_step
-        ),
-        "first_validation_step_where_hold_probability_reached_99pct": first_hold_99_step,
-        "training_performed": False,
-        "final_holdout_scored_or_recomputed": False,
-        "used_for_checkpoint_selection": False,
-    }
     if source_report.get("safety_invariants", {}).get("Champion") is not None:
         raise ValueError("source_champion_must_remain_null")
+    row = _checkpoint_trace_summary(
+        checkpoint_step, checkpoint_path, validation_data, trace
+    )
     del model
-    return report
+    return row
+
+
+def _first_checkpoint_with_hold_over_buy(
+    rows: list[dict[str, Any]]
+) -> dict[str, Any] | None:
+    for row in rows:
+        side = row["mean_probability_by_side"]
+        if float(side["HOLD"]) > float(side["BUY"]):
+            return row
+    return None
+
+
+def _first_checkpoint_with_99pct_hold(
+    rows: list[dict[str, Any]]
+) -> dict[str, Any] | None:
+    for row in rows:
+        if float(row["hold_deterministic_action_fraction"]) >= HOLD_SHARE_THRESHOLD:
+            return row
+    return None
+
+
+def _first_persistent_hold_index(rows: list[dict[str, Any]]) -> int | None:
+    high_hold_flags = [
+        float(row["hold_deterministic_action_fraction"]) >= HOLD_SHARE_THRESHOLD
+        for row in rows
+    ]
+    for index in range(len(high_hold_flags)):
+        if all(high_hold_flags[index:]):
+            return index
+    return None
+
+
+def _checkpoint_step(row: dict[str, Any] | None) -> int | None:
+    if row is None:
+        return None
+    return int(row["checkpoint_timesteps"])
+
+
+def _previous_checkpoint_step(
+    rows: list[dict[str, Any]], persistent_index: int | None
+) -> int | None:
+    if persistent_index is None or persistent_index == 0:
+        return None
+    return int(rows[persistent_index - 1]["checkpoint_timesteps"])
 
 
 def _checkpoint_crossover_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     if not rows:
         raise ValueError("checkpoint_crossover_requires_rows")
-    hold_over_buy = next(
-        (
-            row
-            for row in rows
-            if float(row["mean_probability_by_side"]["HOLD"])
-            > float(row["mean_probability_by_side"]["BUY"])
-        ),
-        None,
-    )
-    first_99 = next(
-        (
-            row
-            for row in rows
-            if float(row["hold_deterministic_action_fraction"]) >= HOLD_SHARE_THRESHOLD
-        ),
-        None,
-    )
-    persistent_index = next(
-        (
-            index
-            for index, row in enumerate(rows)
-            if all(
-                float(later["hold_deterministic_action_fraction"])
-                >= HOLD_SHARE_THRESHOLD
-                for later in rows[index:]
-            )
-        ),
-        None,
-    )
-    hold_over_buy_step = (
-        int(hold_over_buy["checkpoint_timesteps"])
-        if hold_over_buy is not None
-        else None
-    )
-    persistent_step = (
-        int(rows[persistent_index]["checkpoint_timesteps"])
-        if persistent_index is not None
-        else None
-    )
-    previous_step = (
-        int(rows[persistent_index - 1]["checkpoint_timesteps"])
-        if persistent_index is not None and persistent_index > 0
-        else None
-    )
+    hold_over_buy = _first_checkpoint_with_hold_over_buy(rows)
+    first_99 = _first_checkpoint_with_99pct_hold(rows)
+    persistent_index = _first_persistent_hold_index(rows)
+    persistent_step = None
+    if persistent_index is not None:
+        persistent_step = int(rows[persistent_index]["checkpoint_timesteps"])
     return {
         "first_checkpoint_mean_hold_probability_exceeds_mean_buy_probability": (
-            hold_over_buy_step
+            _checkpoint_step(hold_over_buy)
         ),
         "first_checkpoint_deterministic_hold_share_at_least_99pct": (
-            int(first_99["checkpoint_timesteps"]) if first_99 is not None else None
+            _checkpoint_step(first_99)
         ),
         "first_persistent_checkpoint_with_deterministic_hold_share_at_least_99pct": (
             persistent_step
         ),
         "persistent_hold_share_threshold": HOLD_SHARE_THRESHOLD,
-        "persistent_hold_bracket_previous_checkpoint_timestep": previous_step,
+        "persistent_hold_bracket_previous_checkpoint_timestep": (
+            _previous_checkpoint_step(rows, persistent_index)
+        ),
         "exact_training_timestep_identifiable": False,
         "resolution_steps": 100_000,
         "explanation": (
