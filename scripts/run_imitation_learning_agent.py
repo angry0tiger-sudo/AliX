@@ -39,8 +39,13 @@ def load_public_market_data(
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Validate provenance, hashes and closed safety invariants before use."""
     manifest = _read_json_object(manifest_path)
+    allowed_providers = {
+        "Nobitex public UDF history API",
+        "Binance Spot public klines API",
+    }
+    if manifest.get("provider") not in allowed_providers:
+        raise ValueError("market_manifest_provider_not_approved")
     expected_safety: dict[str, Any] = {
-        "provider": "Nobitex public UDF history API",
         "public_api_only": True,
         "credentials_used": False,
         "exchange_calls": 0,

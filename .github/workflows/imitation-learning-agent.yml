@@ -9,6 +9,8 @@ on:
       - "services/rl_research/institutional_teacher.py"
       - "scripts/run_imitation_learning_agent.py"
       - "scripts/fetch_nobitex_public_ohlcv.py"
+      - "scripts/fetch_public_hourly_bars.py"
+      - "tests/unit/test_fetch_public_hourly_bars.py"
       - "tests/unit/test_institutional_teacher.py"
       - "tests/unit/test_imitation_learning_agent.py"
       - "tests/unit/test_phase10_public_market_data.py"
@@ -106,9 +108,9 @@ jobs:
           python -m pip install torch==2.14.1 --index-url https://download.pytorch.org/whl/cpu
           python -m pip check
 
-      - name: Generate immutable 730-day public hourly OHLCV dataset
+      - name: Generate immutable 730-day public Binance hourly OHLCV dataset
         run: |
-          python scripts/fetch_nobitex_public_ohlcv.py \
+          python scripts/fetch_public_hourly_bars.py \
             --days 730 \
             --output-dir "$RUNNER_TEMP/alix-market-data" \
             --commit-sha "$GITHUB_SHA"
@@ -118,8 +120,8 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}
         run: |
           python scripts/run_imitation_learning_agent.py \
-            --dataset "$RUNNER_TEMP/alix-market-data/nobitex-btcusdt-1h.csv" \
-            --manifest "$RUNNER_TEMP/alix-market-data/nobitex-btcusdt-1h.manifest.json" \
+            --dataset "$RUNNER_TEMP/alix-market-data/binance-btcusdt-1h.csv" \
+            --manifest "$RUNNER_TEMP/alix-market-data/binance-btcusdt-1h.manifest.json" \
             --output-dir "$RUNNER_TEMP/alix-imitation-output" \
             --commit-sha "$GITHUB_SHA" \
             --epochs 20 \
@@ -136,12 +138,16 @@ jobs:
           data_root = Path(os.environ["RUNNER_TEMP"]) / "alix-market-data"
           report = json.loads((root / "imitation-learning-report.json").read_text(encoding="utf-8"))
           teacher_manifest = json.loads((root / "teacher-dataset-manifest.json").read_text(encoding="utf-8"))
-          market_manifest = json.loads((data_root / "nobitex-btcusdt-1h.manifest.json").read_text(encoding="utf-8"))
+          market_manifest = json.loads((data_root / "binance-btcusdt-1h.manifest.json").read_text(encoding="utf-8"))
 
           assert report["commit_sha"] == os.environ["GITHUB_SHA"]
           assert market_manifest["commit_sha"] == os.environ["GITHUB_SHA"]
           assert report["dataset"]["source_csv_sha256"] == market_manifest["csv_sha256"]
           assert teacher_manifest["source_csv_sha256"] == market_manifest["csv_sha256"]
+          assert market_manifest["provider"] == "Binance Spot public klines API"
+          assert market_manifest["interval"] == "1h"
+          assert market_manifest["gap_count"] == 0
+          assert market_manifest["row_count"] == 730 * 24
           assert report["model"]["initialized_from_scratch"] is True
           assert report["holdout"]["classification_vs_teacher"]["sample_count"] > 0
           assert report["safety"]["Champion"] is None
