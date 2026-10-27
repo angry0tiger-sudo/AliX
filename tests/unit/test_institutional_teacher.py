@@ -49,11 +49,14 @@ def test_teacher_output_is_causal_schema_and_valid_actions() -> None:
 
 def test_teacher_does_not_change_past_labels_when_future_data_changes() -> None:
     data = _bars()
-    kwargs = {"ema_span": 3, "swing_window": 5, "volume_window": 10}
-    original = generate_teacher_labels(data, **kwargs)
+    original = generate_teacher_labels(
+        data, ema_span=3, swing_window=5, volume_window=10
+    )
     changed = data.copy()
     changed.loc[1_500:, ["open", "high", "low", "close"]] *= 1.25
-    rerun = generate_teacher_labels(changed, **kwargs)
+    rerun = generate_teacher_labels(
+        changed, ema_span=3, swing_window=5, volume_window=10
+    )
     pd.testing.assert_series_equal(
         original.loc[:1_499, "teacher_action"],
         rerun.loc[:1_499, "teacher_action"],
