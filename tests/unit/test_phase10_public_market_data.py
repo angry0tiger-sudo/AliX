@@ -129,8 +129,6 @@ def test_historical_fetch_is_bounded_rejects_gaps_and_uses_fake_transport() -> N
             days=30, now=now, request_json=gapped, sleep_fn=lambda _: None
         )
 
-
-
 def test_historical_fetch_recovers_missing_hour_from_exact_public_read() -> None:
     now = datetime(2026, 10, 23, 4, 18, tzinfo=UTC)
     expected_end = int(datetime(2026, 10, 23, 2, 30, tzinfo=UTC).timestamp())
@@ -176,6 +174,7 @@ def test_historical_fetch_recovers_missing_hour_from_exact_public_read() -> None
     assert len(rows) == 30 * 24
     assert any(row["timestamp"] == gap_timestamp for row in rows)
     assert removed[0] is True
+
 
 def test_manifest_contains_data_hash_and_closed_authorization_state(
     tmp_path: Path,

@@ -11,6 +11,7 @@ on:
       - "scripts/fetch_nobitex_public_ohlcv.py"
       - "tests/unit/test_institutional_teacher.py"
       - "tests/unit/test_imitation_learning_agent.py"
+      - "tests/unit/test_phase10_public_market_data.py"
 
 permissions:
   contents: read
