@@ -34,9 +34,7 @@ def _read_json_object(path: Path) -> dict[str, Any]:
     return cast(dict[str, Any], payload)
 
 
-def _validate_market_manifest(
-    manifest: dict[str, Any], commit_sha: str
-) -> None:
+def _validate_market_manifest(manifest: dict[str, Any], commit_sha: str) -> None:
     allowed_providers = {
         "Nobitex public UDF history API",
         "Binance Spot public klines API",
@@ -59,9 +57,7 @@ def _validate_market_manifest(
             raise ValueError(f"market_manifest_safety_or_identity_mismatch:{key}")
 
 
-def _read_market_csv(
-    dataset_path: Path, manifest: dict[str, Any]
-) -> pd.DataFrame:
+def _read_market_csv(dataset_path: Path, manifest: dict[str, Any]) -> pd.DataFrame:
     observed_hash = hashlib.sha256(dataset_path.read_bytes()).hexdigest()
     if observed_hash != manifest.get("csv_sha256"):
         raise ValueError("market_csv_sha256_mismatch")
