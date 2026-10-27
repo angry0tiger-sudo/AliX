@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -67,7 +69,9 @@ def test_teacher_does_not_change_past_labels_when_future_data_changes() -> None:
         (lambda df: df.assign(close=np.nan), "ohlcv_contains_non_finite_values"),
     ],
 )
-def test_teacher_rejects_invalid_market_data(mutator, message: str) -> None:
+def test_teacher_rejects_invalid_market_data(
+    mutator: Callable[[pd.DataFrame], pd.DataFrame], message: str
+) -> None:
     with pytest.raises(ValueError, match=message):
         generate_teacher_labels(
             mutator(_bars(200)), ema_span=3, swing_window=5, volume_window=10
