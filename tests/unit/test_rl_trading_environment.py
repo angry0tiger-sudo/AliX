@@ -731,15 +731,17 @@ def test_portfolio_observation_tracks_marked_exposure_and_unrealized_return() ->
     data = _bars(closes=[100.0, 120.0, 132.0, 132.0])
     env = _env(data, initial_equity=1_000.0)
     observation, _ = env.reset(seed=81)
-    assert observation[-2:] == pytest.approx([0.0, 0.0])
+    assert observation[-3:] == pytest.approx([0.0, 0.0, 0.0])
 
     observation, _, _, _, _ = env.step(_action(ACTION_BUY, 0))
-    assert observation[-2] == pytest.approx(0.25)
-    assert observation[-1] == pytest.approx(0.0)
+    assert observation[-3] == pytest.approx(0.25)
+    assert observation[-2] == pytest.approx(0.0)
+    assert observation[-1] == pytest.approx(1.0 / 15.0)
 
     observation, _, _, _, _ = env.step(_action(ACTION_HOLD, 0))
-    assert observation[-2] == pytest.approx(275.0 / 1_025.0)
-    assert observation[-1] == pytest.approx(0.10)
+    assert observation[-3] == pytest.approx(275.0 / 1_025.0)
+    assert observation[-2] == pytest.approx(0.10)
+    assert observation[-1] == pytest.approx(2.0 / 15.0)
     env.close()
 
 
@@ -757,7 +759,7 @@ def test_guidance_target_blocks_repeated_buy_when_position_is_full() -> None:
     assert next_info["action_mask_reason"] == "position_fully_allocated"
     assert next_info["guidance_target_action"] == "HOLD"
     assert next_info["guidance_target_index"] == ACTION_HOLD
-    assert observation[-2] > 0.99
+    assert observation[-3] > 0.99
     rising.close()
 
 
