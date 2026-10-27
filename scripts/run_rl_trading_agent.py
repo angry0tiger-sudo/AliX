@@ -1223,7 +1223,8 @@ def _train_recurrent_ppo(
         "requested_stage_one_timesteps": int(args.initial_regime_steps),
         "effective_stage_one_timesteps": initial_stage_steps,
         "stage_one_rollout_alignment_extra_steps": (
-            initial_stage_steps - min(args.initial_regime_steps, training_steps - n_steps)
+            initial_stage_steps
+            - min(args.initial_regime_steps, training_steps - n_steps)
         ),
         "stage_one_training_rows": int(len(initial_regime_data)),
         "stage_one_market_window": regime_report,
