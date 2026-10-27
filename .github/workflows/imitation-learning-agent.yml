@@ -1,0 +1,182 @@
+name: AliX Imitation Learning Research
+
+on:
+  push:
+    branches:
+      - "research/imitation-learning-agent"
+    paths:
+      - ".github/workflows/imitation-learning-agent.yml"
+      - "services/rl_research/institutional_teacher.py"
+      - "scripts/run_imitation_learning_agent.py"
+      - "scripts/fetch_nobitex_public_ohlcv.py"
+      - "tests/unit/test_institutional_teacher.py"
+      - "tests/unit/test_imitation_learning_agent.py"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: alix-imitation-learning-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  train-lstm-behavioral-cloning:
+    if: ${{ github.event_name == 'push' && contains(github.event.head_commit.message, '[train-imitation]') }}
+    name: Generate teacher dataset, train fresh LSTM, evaluate holdout
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      ALIx_ENV: paper
+      ALIx_DRY_RUN: "true"
+      ALIx_ALLOW_LIVE_TRADING: "false"
+      ALIx_REPORTING_ENABLED: "false"
+      PYTHONUNBUFFERED: "1"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      OMP_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+
+    steps:
+      - name: Checkout exact candidate commit without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Wait for successful CI on this exact SHA
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import time
+          from urllib.request import Request, urlopen
+
+          repository = os.environ["GITHUB_REPOSITORY"]
+          sha = os.environ["GITHUB_SHA"]
+          token = os.environ["GITHUB_TOKEN"]
+          deadline = time.monotonic() + 1800
+          url = (
+              f"https://api.github.com/repos/{repository}/actions/runs"
+              f"?head_sha={sha}&per_page=100"
+          )
+          while time.monotonic() < deadline:
+              request = Request(
+                  url,
+                  headers={
+                      "Accept": "application/vnd.github+json",
+                      "Authorization": f"Bearer {token}",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  },
+              )
+              with urlopen(request, timeout=20) as response:
+                  payload = json.load(response)
+              matches = [
+                  run
+                  for run in payload.get("workflow_runs", [])
+                  if run.get("name") == "AliX Continuous Integration"
+                  and run.get("head_sha") == sha
+              ]
+              if matches:
+                  latest = max(matches, key=lambda run: run.get("run_number", 0))
+                  if latest.get("status") == "completed":
+                      if latest.get("conclusion") == "success":
+                          print("Exact-SHA CI passed; public dataset generation is now allowed.")
+                          raise SystemExit(0)
+                      raise SystemExit(
+                          "Fail closed: exact-SHA CI concluded "
+                          + str(latest.get("conclusion"))
+                      )
+              time.sleep(15)
+          raise SystemExit("Fail closed: timed out waiting for exact-SHA CI success")
+          PY
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned CPU-only research dependencies
+        run: |
+          python -m pip install pip==25.2
+          python -m pip install numpy==2.5.4 pandas==2.3.3 scikit-learn==1.9.0
+          python -m pip install torch==2.14.1 --index-url https://download.pytorch.org/whl/cpu
+          python -m pip check
+
+      - name: Generate immutable 365-day public hourly OHLCV dataset
+        run: |
+          python scripts/fetch_nobitex_public_ohlcv.py \
+            --days 365 \
+            --output-dir "$RUNNER_TEMP/alix-market-data" \
+            --commit-sha "$GITHUB_SHA"
+
+      - name: Generate causal teacher labels and train the fresh LSTM
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          python scripts/run_imitation_learning_agent.py \
+            --dataset "$RUNNER_TEMP/alix-market-data/nobitex-btcusdt-1h.csv" \
+            --manifest "$RUNNER_TEMP/alix-market-data/nobitex-btcusdt-1h.manifest.json" \
+            --output-dir "$RUNNER_TEMP/alix-imitation-output" \
+            --commit-sha "$GITHUB_SHA" \
+            --epochs 20 \
+            --window 48
+
+      - name: Enforce research-only output and print final scorecard
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["RUNNER_TEMP"]) / "alix-imitation-output"
+          data_root = Path(os.environ["RUNNER_TEMP"]) / "alix-market-data"
+          report = json.loads((root / "imitation-learning-report.json").read_text(encoding="utf-8"))
+          teacher_manifest = json.loads((root / "teacher-dataset-manifest.json").read_text(encoding="utf-8"))
+          market_manifest = json.loads((data_root / "nobitex-btcusdt-1h.manifest.json").read_text(encoding="utf-8"))
+
+          assert report["commit_sha"] == os.environ["GITHUB_SHA"]
+          assert market_manifest["commit_sha"] == os.environ["GITHUB_SHA"]
+          assert report["dataset"]["source_csv_sha256"] == market_manifest["csv_sha256"]
+          assert teacher_manifest["source_csv_sha256"] == market_manifest["csv_sha256"]
+          assert report["model"]["initialized_from_scratch"] is True
+          assert report["holdout"]["classification_vs_teacher"]["sample_count"] > 0
+          assert report["safety"]["Champion"] is None
+          assert report["safety"]["order_permission"] is False
+          assert report["safety"]["trading_authorization"] == "NO-GO"
+          assert report["safety"]["real_order_attempts"] == 0
+          assert report["safety"]["exchange_calls"] == 0
+          assert market_manifest["public_api_only"] is True
+          assert market_manifest["credentials_used"] is False
+          assert market_manifest["real_order_attempts"] == 0
+          assert market_manifest["order_permission"] is False
+          assert market_manifest["Champion"] is None
+          assert market_manifest["trading_authorization"] == "NO-GO"
+          print(json.dumps({
+              "commit_sha": report["commit_sha"],
+              "teacher_dataset_rows": report["dataset"]["row_count"],
+              "teacher_actions": report["teacher"]["action_distribution"],
+              "validation_classification": report["validation"]["classification"],
+              "validation_model_economics": report["validation"]["model_economics"],
+              "holdout_classification": report["holdout"]["classification_vs_teacher"],
+              "holdout_teacher_economics": report["holdout"]["teacher_economics"],
+              "holdout_model_economics": report["holdout"]["model_economics"],
+              "holdout_model_actions": report["holdout"]["model_action_distribution"],
+              "hold_collapse": report["holdout"]["hold_collapse"],
+              "safety": report["safety"],
+              "decision": report["decision"],
+          }, indent=2, sort_keys=True))
+          PY
+
+      - name: Upload public dataset, teacher labels, model weights and scorecard
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alix-imitation-learning-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/alix-market-data/
+            ${{ runner.temp }}/alix-imitation-output/
+          if-no-files-found: warn
+          retention-days: 30
