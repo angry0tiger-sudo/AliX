@@ -21,7 +21,9 @@ def _validate_ohlcv(data: pd.DataFrame) -> pd.DataFrame:
     if missing:
         raise ValueError(f"missing_ohlcv_columns:{','.join(sorted(missing))}")
     frame = data.loc[:, _REQUIRED_COLUMNS].copy()
-    numeric = frame.loc[:, ("open", "high", "low", "close", "volume")].to_numpy(dtype=np.float64)
+    numeric = frame.loc[:, ("open", "high", "low", "close", "volume")].to_numpy(
+        dtype=np.float64
+    )
     if not np.isfinite(numeric).all():
         raise ValueError("ohlcv_contains_non_finite_values")
     timestamp = frame["timestamp"]
@@ -36,7 +38,10 @@ def _validate_ohlcv(data: pd.DataFrame) -> pd.DataFrame:
         raise ValueError("ohlc_prices_must_be_positive")
     if (frame["volume"] < 0).any():
         raise ValueError("volume_must_be_non_negative")
-    if not frame["timestamp"].is_monotonic_increasing or frame["timestamp"].duplicated().any():
+    if (
+        not frame["timestamp"].is_monotonic_increasing
+        or frame["timestamp"].duplicated().any()
+    ):
         raise ValueError("timestamps_must_be_strictly_increasing")
     if (frame["high"] < frame[["open", "low", "close"]].max(axis=1)).any():
         raise ValueError("high_below_ohlc_component")
@@ -47,15 +52,26 @@ def _validate_ohlcv(data: pd.DataFrame) -> pd.DataFrame:
 
 def _higher_timeframe_bias(frame: pd.DataFrame, rule: str, ema_span: int) -> pd.Series:
     indexed = frame.set_index("timestamp")
-    close = indexed["close"].resample(rule, label="right", closed="right").last().dropna()
+    close = (
+        indexed["close"].resample(rule, label="right", closed="right").last().dropna()
+    )
     fast = close.ewm(span=ema_span, adjust=False, min_periods=ema_span).mean()
     slow = close.ewm(span=ema_span * 3, adjust=False, min_periods=ema_span * 3).mean()
-    bias = pd.Series(np.where(fast > slow, 1, np.where(fast < slow, -1, 0)), index=close.index)
+    bias = pd.Series(
+        np.where(fast > slow, 1, np.where(fast < slow, -1, 0)), index=close.index
+    )
     # At each minute, use only the most recently completed higher-timeframe bar.
-    return bias.reindex(indexed.index, method="ffill").fillna(0).astype(np.int8).reset_index(drop=True)
+    return (
+        bias.reindex(indexed.index, method="ffill")
+        .fillna(0)
+        .astype(np.int8)
+        .reset_index(drop=True)
+    )
 
 
-def _smc_features(frame: pd.DataFrame, swing_window: int) -> tuple[pd.Series, pd.Series, pd.Series]:
+def _smc_features(
+    frame: pd.DataFrame, swing_window: int
+) -> tuple[pd.Series, pd.Series, pd.Series]:
     high = frame["high"]
     low = frame["low"]
     close = frame["close"]
@@ -83,14 +99,22 @@ def _smc_features(frame: pd.DataFrame, swing_window: int) -> tuple[pd.Series, pd
     )
     pullback_bull |= close.between(bull_ob_low, bull_ob_high)
     pullback_bear |= close.between(bear_ob_low, bear_ob_high)
-    return bos_up.fillna(False) | pullback_bull.fillna(False), bos_down.fillna(False) | pullback_bear.fillna(False), prior_high
+    return (
+        bos_up.fillna(False) | pullback_bull.fillna(False),
+        bos_down.fillna(False) | pullback_bear.fillna(False),
+        prior_high,
+    )
 
 
-def _volume_confirmations(frame: pd.DataFrame, window: int) -> tuple[pd.Series, pd.Series]:
+def _volume_confirmations(
+    frame: pd.DataFrame, window: int
+) -> tuple[pd.Series, pd.Series]:
     typical = (frame["high"] + frame["low"] + frame["close"]) / 3.0
     # Rolling VWAP avoids using future data or requiring a session-boundary assumption.
     volume_sum = frame["volume"].rolling(window, min_periods=window).sum()
-    vwap = (typical * frame["volume"]).rolling(window, min_periods=window).sum() / volume_sum.replace(0, np.nan)
+    vwap = (typical * frame["volume"]).rolling(
+        window, min_periods=window
+    ).sum() / volume_sum.replace(0, np.nan)
     # Rolling modal price-bin approximation to volume profile, using only trailing data.
     rolling_poc = frame["close"].rolling(window, min_periods=window).median()
     buy_confirm = (frame["close"] >= vwap) & (frame["close"] >= rolling_poc)
@@ -125,7 +149,9 @@ def generate_teacher_labels(
         raise ValueError("higher_timeframe_must_be_4h_or_1D")
 
     bias = _higher_timeframe_bias(frame, higher_timeframe, ema_span)
-    bullish_structure, bearish_structure, prior_high = _smc_features(frame, swing_window)
+    bullish_structure, bearish_structure, prior_high = _smc_features(
+        frame, swing_window
+    )
     buy_volume, sell_volume = _volume_confirmations(frame, volume_window)
     buy_setup = (bias > 0) & bullish_structure & buy_volume
     sell_setup = (bias < 0) & bearish_structure & sell_volume
@@ -154,5 +180,7 @@ def generate_teacher_labels(
         ["BUY", "SELL"],
         default="HOLD",
     )
-    result["teacher_position"] = np.where(actions == ACTION_BUY, 1, np.where(actions == ACTION_SELL, -1, 0))
+    result["teacher_position"] = np.where(
+        actions == ACTION_BUY, 1, np.where(actions == ACTION_SELL, -1, 0)
+    )
     return result
