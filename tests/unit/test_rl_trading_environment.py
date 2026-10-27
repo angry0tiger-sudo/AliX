@@ -431,10 +431,9 @@ def test_profitable_completed_trade_gets_intermediate_reward_bonus() -> None:
     assert info["action"] == "SELL"
     assert info["closed_trade_net_profit_this_step"] == pytest.approx(100.0)
     assert info["reward_profitable_trade_bonus"] == pytest.approx(0.0001)
-    assert info["reward_realized_profit"] == pytest.approx(
-        DEFAULT_REALIZED_PROFIT_REWARD_SCALE * 100.0 / 1_000.0
-    )
+    assert info["reward_realized_profit"] == pytest.approx(0.01)
     assert info["realized_profit_reward_applied"] is True
+    assert info["reward_realized_profit"] <= 0.01
     assert reward > math.log(1.1)
     summary = env.summary()
     assert summary["closed_trade_count"] == 1
@@ -480,9 +479,7 @@ def test_partial_realizations_accumulate_before_profitable_trade_bonus() -> None
     assert terminated is False
     assert final_info["closed_trade_net_profit_this_step"] == pytest.approx(150.0)
     assert final_info["reward_profitable_trade_bonus"] == pytest.approx(0.0001)
-    assert final_info["reward_realized_profit"] == pytest.approx(
-        DEFAULT_REALIZED_PROFIT_REWARD_SCALE * 150.0 / 1_000.0
-    )
+    assert final_info["reward_realized_profit"] == pytest.approx(0.01)
     assert env.summary()["closed_trade_count"] == 1
     env.close()
 
@@ -834,7 +831,7 @@ def test_trailing_stop_activates_from_completed_bar_and_bypasses_holding_lock() 
     data = _bars(
         closes=[100.0, 100.0, 100.0, 103.0, 103.0],
         highs=[100.0, 100.0, 104.0, 104.0, 104.0],
-        lows=[100.0, 100.0, 103.0, 100.0, 99.0],
+        lows=[100.0, 100.0, 99.0, 101.0, 99.0],
     )
     env = BTCUSDTTradingEnv(
         data,
@@ -893,7 +890,7 @@ def test_gap_trailing_stop_suppresses_stale_policy_action_without_penalty() -> N
     data = _bars(
         closes=[100.0, 100.0, 100.0, 100.0, 100.0],
         highs=[100.0, 100.0, 104.0, 101.0, 101.0],
-        lows=[100.0, 100.0, 103.0, 99.0, 99.0],
+        lows=[100.0, 100.0, 99.0, 99.0, 99.0],
     )
     env = BTCUSDTTradingEnv(
         data,

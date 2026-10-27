@@ -1390,7 +1390,7 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
         action_name = str(action_result["action_name"])
         requested_action = str(action_result["requested_action"])
         requested_size = float(action_result["requested_size"])
-        requested_size_index = int(action_result["requested_size_index"])
+        requested_size_index = action_result["requested_size_index"]
         executed_action = str(action_result["executed_action"])
         action_mask = action_result["action_mask"]
         mask_reason: str | None = action_result["mask_reason"]
