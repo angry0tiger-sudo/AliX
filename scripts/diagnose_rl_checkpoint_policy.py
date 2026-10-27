@@ -243,12 +243,10 @@ def _evaluate_checkpoint_policy(
     side_probabilities = {
         "HOLD": mean_probabilities["HOLD"],
         "BUY": sum(
-            mean_probabilities[ACTION_NAMES[index]]
-            for index in BUY_ACTION_INDICES
+            mean_probabilities[ACTION_NAMES[index]] for index in BUY_ACTION_INDICES
         ),
         "SELL": sum(
-            mean_probabilities[ACTION_NAMES[index]]
-            for index in SELL_ACTION_INDICES
+            mean_probabilities[ACTION_NAMES[index]] for index in SELL_ACTION_INDICES
         ),
     }
     action_distribution = {
@@ -292,7 +290,8 @@ def _checkpoint_crossover_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         raise ValueError("checkpoint_crossover_requires_rows")
     hold_over_buy = next(
         (
-            row for row in rows
+            row
+            for row in rows
             if float(row["mean_probability_by_side"]["HOLD"])
             > float(row["mean_probability_by_side"]["BUY"])
         ),
@@ -300,23 +299,28 @@ def _checkpoint_crossover_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     )
     first_99 = next(
         (
-            row for row in rows
+            row
+            for row in rows
             if float(row["hold_deterministic_action_fraction"]) >= HOLD_SHARE_THRESHOLD
         ),
         None,
     )
     persistent_index = next(
         (
-            index for index, row in enumerate(rows)
+            index
+            for index, row in enumerate(rows)
             if all(
-                float(later["hold_deterministic_action_fraction"]) >= HOLD_SHARE_THRESHOLD
+                float(later["hold_deterministic_action_fraction"])
+                >= HOLD_SHARE_THRESHOLD
                 for later in rows[index:]
             )
         ),
         None,
     )
     hold_over_buy_step = (
-        int(hold_over_buy["checkpoint_timesteps"]) if hold_over_buy is not None else None
+        int(hold_over_buy["checkpoint_timesteps"])
+        if hold_over_buy is not None
+        else None
     )
     persistent_step = (
         int(rows[persistent_index]["checkpoint_timesteps"])
@@ -387,9 +391,7 @@ def _write_checkpoint_csv(rows: list[dict[str, Any]], target: Path) -> None:
                 "mean_buy_probability": side["BUY"],
                 "mean_sell_probability": side["SELL"],
                 "mean_policy_entropy_nats": row["mean_policy_entropy_nats"],
-                "normalized_mean_policy_entropy": row[
-                    "normalized_mean_policy_entropy"
-                ],
+                "normalized_mean_policy_entropy": row["normalized_mean_policy_entropy"],
             }
             record.update(
                 {
@@ -420,15 +422,25 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     scaler = MarketObservationScaler.fit(train_data)
     fee_bps = float(source_report["environment"]["execution"]["fee_bps_per_side"])
-    slippage_bps = float(source_report["environment"]["execution"]["slippage_bps_per_side"])
+    slippage_bps = float(
+        source_report["environment"]["execution"]["slippage_bps_per_side"]
+    )
     seed = int(source_report["model"]["seed"])
     checkpoints = _checkpoint_inventory(args.checkpoint_dir, source_report)
     torch = importlib.import_module("torch")
     algorithm_class = build_auxiliary_recurrent_ppo()
     rows = [
         _evaluate_checkpoint_policy(
-            step, path, validation_data, scaler, fee_bps, slippage_bps,
-            seed, source_report, algorithm_class, torch
+            step,
+            path,
+            validation_data,
+            scaler,
+            fee_bps,
+            slippage_bps,
+            seed,
+            source_report,
+            algorithm_class,
+            torch,
         )
         for step, path in checkpoints
     ]

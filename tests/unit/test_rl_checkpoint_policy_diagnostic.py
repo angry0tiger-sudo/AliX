@@ -37,7 +37,9 @@ class CheckpointPolicyDiagnosticTests(unittest.TestCase):
         ]
         result = _checkpoint_crossover_summary(rows)
         self.assertEqual(
-            result["first_checkpoint_mean_hold_probability_exceeds_mean_buy_probability"],
+            result[
+                "first_checkpoint_mean_hold_probability_exceeds_mean_buy_probability"
+            ],
             200_000,
         )
         self.assertEqual(
@@ -45,7 +47,9 @@ class CheckpointPolicyDiagnosticTests(unittest.TestCase):
             300_000,
         )
         self.assertEqual(
-            result["first_persistent_checkpoint_with_deterministic_hold_share_at_least_99pct"],
+            result[
+                "first_persistent_checkpoint_with_deterministic_hold_share_at_least_99pct"
+            ],
             300_000,
         )
         self.assertEqual(
@@ -70,7 +74,9 @@ class CheckpointPolicyDiagnosticTests(unittest.TestCase):
         ]
         result = _checkpoint_crossover_summary(rows)
         self.assertIsNone(
-            result["first_persistent_checkpoint_with_deterministic_hold_share_at_least_99pct"]
+            result[
+                "first_persistent_checkpoint_with_deterministic_hold_share_at_least_99pct"
+            ]
         )
         self.assertFalse(result["exact_training_timestep_identifiable"])
 
