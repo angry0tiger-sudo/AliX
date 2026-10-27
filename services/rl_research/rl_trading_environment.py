@@ -1578,7 +1578,9 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
 
     def _summary_hold_collapse(self) -> bool:
         total_actions = sum(self._discrete_action_counts.values())
-        return total_actions > 0 and self._discrete_action_counts["HOLD"] == total_actions
+        return (
+            total_actions > 0 and self._discrete_action_counts["HOLD"] == total_actions
+        )
 
     def _summary_exit_reason_counts(self) -> dict[str, int]:
         return {
