@@ -245,6 +245,45 @@ def _fetch_single_candle_page(
     return [row for row in page if cursor <= row["timestamp"] <= stop]
 
 
+def _fetch_candle_range_recursively(
+    cursor: int,
+    stop: int,
+    *,
+    request_json: Callable[[dict[str, str]], dict[str, Any]],
+    sleep_fn: Callable[[float], None],
+) -> list[CandleRecord]:
+    """Split partial public responses into smaller windows without filling gaps."""
+    batch = _fetch_single_candle_page(cursor, stop, request_json)
+    if batch:
+        completed = _complete_candle_page(
+            cursor,
+            stop,
+            batch,
+            request_json=request_json,
+            sleep_fn=sleep_fn,
+        )
+        if completed is not None:
+            return completed
+    if stop - cursor <= 24 * INTERVAL_SECONDS:
+        if not batch:
+            raise ValueError(f"nobitex_historical_empty_page:{cursor}:{stop}")
+        raise ValueError(
+            f"nobitex_historical_gap_detected_no_interpolation:{cursor}:{stop}"
+        )
+    interval_count = (stop - cursor) // INTERVAL_SECONDS
+    midpoint = cursor + (interval_count // 2) * INTERVAL_SECONDS
+    left = _fetch_candle_range_recursively(
+        cursor, midpoint, request_json=request_json, sleep_fn=sleep_fn
+    )
+    right = _fetch_candle_range_recursively(
+        midpoint + INTERVAL_SECONDS,
+        stop,
+        request_json=request_json,
+        sleep_fn=sleep_fn,
+    )
+    return left + right
+
+
 def _fetch_complete_candle_page_with_retries(
     cursor: int,
     stop: int,
@@ -264,14 +303,11 @@ def _fetch_complete_candle_page_with_retries(
             )
             if completed is not None:
                 return completed
-        elif attempt == 2:
-            raise ValueError(f"nobitex_historical_empty_page:{cursor}:{stop}")
         if attempt < 2:
             sleep_fn(2**attempt)
-    raise ValueError(
-        f"nobitex_historical_gap_detected_no_interpolation:{cursor}:{stop}"
+    return _fetch_candle_range_recursively(
+        cursor, stop, request_json=request_json, sleep_fn=sleep_fn
     )
-
 
 def _fetch_candle_pages(
     *,
