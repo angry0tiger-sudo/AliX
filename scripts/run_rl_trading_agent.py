@@ -539,6 +539,7 @@ class TrainingRun:
     cost_curriculum: dict[str, Any]
     signal_guidance_curriculum: dict[str, Any]
     auxiliary_loss_curriculum: dict[str, Any]
+    model_reload_verification: dict[str, Any]
     reward_component_windows: list[dict[str, Any]]
     checkpoint_paths: tuple[Path, ...]
 
@@ -900,6 +901,97 @@ def _build_cost_curriculum_callback(
     return callback_type()
 
 
+def _model_policy_class_name(model: Any) -> str:
+    """Return the concrete policy class name used by the model."""
+    return type(model.policy).__name__
+
+
+def _validate_reloaded_model_identity(
+    original_model: Any, loaded_model: Any, model_path: Path
+) -> None:
+    """Fail closed when saved model identity or restored policy differs."""
+    if not model_path.is_file() or model_path.stat().st_size <= 0:
+        raise RuntimeError("trained_model_artifact_missing_or_empty")
+    if int(original_model.num_timesteps) != int(loaded_model.num_timesteps):
+        raise RuntimeError("reloaded_model_timestep_mismatch")
+    if type(original_model) is not type(loaded_model):
+        raise RuntimeError("reloaded_algorithm_class_mismatch")
+    original_policy = _model_policy_class_name(original_model)
+    loaded_policy = _model_policy_class_name(loaded_model)
+    if original_policy != POLICY_NAME or loaded_policy != POLICY_NAME:
+        raise RuntimeError("reloaded_custom_policy_class_mismatch")
+    if (
+        int(original_model.action_space.n) != len(ACTION_NAMES)
+        or int(loaded_model.action_space.n) != len(ACTION_NAMES)
+    ):
+        raise RuntimeError("reloaded_action_space_mismatch")
+
+
+def _build_reload_probe_observation(
+    train_data: Float64Array, scaler: MarketObservationScaler, seed: int
+) -> Float32Array:
+    """Build a deterministic model-reload probe from training rows only."""
+    env = BTCUSDTTradingEnv(
+        train_data,
+        scaler=scaler,
+        fee_bps_per_side=0.0,
+        slippage_bps_per_side=0.0,
+        random_start=False,
+    )
+    try:
+        observation, _ = env.reset(seed=seed)
+        return observation
+    finally:
+        env.close()
+
+
+def _assert_reload_probe_action_match(
+    original_model: Any, loaded_model: Any, probe_observation: Float32Array
+) -> int:
+    """Require identical deterministic actions before and after model reload."""
+    episode_start = np.asarray([True], dtype=np.bool_)
+    original_action, _ = original_model.predict(
+        probe_observation,
+        state=None,
+        episode_start=episode_start,
+        deterministic=True,
+    )
+    loaded_action, _ = loaded_model.predict(
+        probe_observation,
+        state=None,
+        episode_start=episode_start,
+        deterministic=True,
+    )
+    if not np.array_equal(np.asarray(original_action), np.asarray(loaded_action)):
+        raise RuntimeError("reloaded_model_deterministic_prediction_mismatch")
+    return int(np.asarray(loaded_action).reshape(-1)[0])
+
+
+def _verify_model_reload_roundtrip(
+    original_model: Any,
+    loaded_model: Any,
+    model_path: Path,
+    probe_observation: Float32Array,
+) -> dict[str, Any]:
+    """Report evidence that save/load preserved the recurrent policy."""
+    _validate_reloaded_model_identity(original_model, loaded_model, model_path)
+    probe_action = _assert_reload_probe_action_match(
+        original_model, loaded_model, probe_observation
+    )
+    return {
+        "status": "passed",
+        "model_file": model_path.name,
+        "model_sha256": _sha256(model_path),
+        "model_size_bytes": model_path.stat().st_size,
+        "trained_timesteps": int(original_model.num_timesteps),
+        "reloaded_timesteps": int(loaded_model.num_timesteps),
+        "original_policy_class": _model_policy_class_name(original_model),
+        "reloaded_policy_class": _model_policy_class_name(loaded_model),
+        "policy_class_match": True,
+        "deterministic_probe_action": probe_action,
+        "deterministic_probe_action_match": True,
+    }
+
 def _train_recurrent_ppo(
     train_data: Float64Array,
     scaler: MarketObservationScaler,
@@ -1031,6 +1123,10 @@ def _train_recurrent_ppo(
     loaded_model = recurrent_ppo.load(
         str(model_path.with_suffix("")), env=None, device="cpu"
     )
+    probe_observation = _build_reload_probe_observation(train_data, scaler, args.seed)
+    reload_verification = _verify_model_reload_roundtrip(
+        model, loaded_model, model_path, probe_observation
+    )
     return TrainingRun(
         model=loaded_model,
         torch_version=str(torch.__version__),
@@ -1048,6 +1144,7 @@ def _train_recurrent_ppo(
             int(loaded_model.auxiliary_loss_anneal_steps),
             float(loaded_model.auxiliary_loss_minimum_weight),
         ),
+        model_reload_verification=reload_verification,
         reward_component_windows=curriculum_callback.reward_component_report(),
         checkpoint_paths=checkpoint_paths,
     )
@@ -1308,7 +1405,7 @@ def _build_report(
     )
 
     report: dict[str, Any] = {
-        "schema_version": "alix.rl-trading-agent-report.v12",
+        "schema_version": "alix.rl-trading-agent-report.v13",
         "run_mode": "historical_simulation_only",
         "commit_sha": args.commit_sha,
         "research_result": (
@@ -1589,7 +1686,8 @@ def _build_report(
             "training_seconds": float(training.training_seconds),
             "model_artifact": training.model_path.name,
             "model_sha256": _sha256(training.model_path),
-            "model_reload_roundtrip": "passed",
+            "model_reload_roundtrip": training.model_reload_verification["status"],
+            "model_reload_verification": training.model_reload_verification,
             "no_validation_checkpoint_selection": True,
         },
         "cost_curriculum": training.cost_curriculum,
