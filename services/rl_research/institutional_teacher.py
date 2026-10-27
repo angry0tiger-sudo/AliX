@@ -155,12 +155,8 @@ def _teacher_setups(
     sell_volume: pd.Series,
 ) -> tuple[pd.Series, pd.Series]:
     """Allow an in-trend order-block touch without requiring BOS/FVG or volume."""
-    buy_setup = (bias > 0) & (
-        (bullish_structure & buy_volume) | bullish_ob_touch
-    )
-    sell_setup = (bias < 0) & (
-        (bearish_structure & sell_volume) | bearish_ob_touch
-    )
+    buy_setup = (bias > 0) & ((bullish_structure & buy_volume) | bullish_ob_touch)
+    sell_setup = (bias < 0) & ((bearish_structure & sell_volume) | bearish_ob_touch)
     return buy_setup.fillna(False), sell_setup.fillna(False)
 
 
