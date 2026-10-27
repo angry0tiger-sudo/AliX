@@ -194,15 +194,32 @@ def test_class_weights_fail_closed_when_train_split_lacks_a_class() -> None:
 
 
 
-def test_teacher_economic_gate_requires_validation_and_holdout_pf() -> None:
+def test_teacher_economic_gate_requires_profitability_and_signal_density() -> None:
     passing = {"profit_factor": 1.6}
     failing = {"profit_factor": 1.49}
+    sufficient_signals = {
+        "BUY": {"count": 125},
+        "HOLD": {"count": 17_270},
+        "SELL": {"count": 125},
+    }
+    sparse_signals = {
+        "BUY": {"count": 20},
+        "HOLD": {"count": 17_480},
+        "SELL": {"count": 20},
+    }
 
-    assert _teacher_backtest_gate(passing, passing)["passed"] is True
-    assert _teacher_backtest_gate(passing, failing)["passed"] is False
-    assert _teacher_backtest_gate({"profit_factor": None}, passing)[
-        "lstm_training_allowed"
-    ] is False
+    assert _teacher_backtest_gate(
+        passing, passing, sufficient_signals
+    )["passed"] is True
+    assert _teacher_backtest_gate(
+        passing, failing, sufficient_signals
+    )["passed"] is False
+    assert _teacher_backtest_gate(
+        passing, passing, sparse_signals
+    )["lstm_training_allowed"] is False
+    assert _teacher_backtest_gate(
+        {"profit_factor": None}, passing, sufficient_signals
+    )["lstm_training_allowed"] is False
 
 
 def test_economic_simulation_uses_protective_exit_fill_price() -> None:
