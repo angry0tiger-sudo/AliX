@@ -25,6 +25,10 @@ on:
       - "tests/unit/test_rl_cost_curriculum.py"
       - "tests/unit/test_rl_trading_agent_runner.py"
       - "tests/unit/test_rl_auxiliary_ppo.py"
+      - "scripts/diagnose_rl_checkpoint_policy.py"
+      - "tests/unit/test_rl_checkpoint_policy_diagnostic.py"
+      - ".github/workflows/rl-trading-agent-checkpoint-133-audit.yml"
+      - "docs/governance/owner-directives/2026-10-27-rl-drawdown-entropy-remediation.md"
       - "docs/knowledge_base/RL_TRADING_AGENT_ARCHITECTURE.md"
       - "docs/governance/owner-directives/2026-10-25-rl-trading-agent.md"
       - "docs/governance/owner-directives/2026-10-26-rl-observation-auxiliary-loss.md"
@@ -165,6 +169,7 @@ jobs:
           tests/unit/test_rl_cost_curriculum.py
           tests/unit/test_rl_trading_agent_runner.py
           tests/unit/test_rl_auxiliary_ppo.py
+          tests/unit/test_rl_checkpoint_policy_diagnostic.py
           -q
 
       - name: Validate data provenance, integrity, and immutable safety invariants
@@ -278,18 +283,19 @@ jobs:
           assert len(model["model_sha256"]) == 64
           assert model["total_timesteps_trained"] >= 1_000_000
           entropy_schedule = model["entropy_coefficient_schedule"]
-          assert model["ent_coef"] == entropy_schedule["post_exploration_ent_coef"] == 0.1
+          assert model["ent_coef"] == entropy_schedule["post_exploration_ent_coef"] == 0.2
           assert entropy_schedule["schedule"] == "constant_from_start"
-          assert entropy_schedule["initial_ent_coef"] == 0.1
+          assert entropy_schedule["initial_ent_coef"] == 0.2
           assert entropy_schedule["requested_exploration_steps"] == 0
           assert entropy_schedule["rollout_update_transition_timestep"] is None
-          assert entropy_schedule["final_schedule_coefficient"] == 0.1
+          assert entropy_schedule["final_schedule_coefficient"] == 0.2
           assert report["environment"]["reward"]["inactivity_penalty_per_unchanged_position_step"] == 0.001
           assert report["environment"]["reward"]["invalid_action_penalty_default_per_masked_request"] == 0.001
           assert report["environment"]["reward"]["invalid_full_position_buy_penalty"] == 1.0
           assert report["environment"]["reward"]["holding_profit_reward_per_profitable_hold"] == 0.0001
 
-          assert report["environment"]["reward"]["transaction_cost_reward_multiplier"] == 2.0
+          assert report["environment"]["reward"]["drawdown_increment_penalty"] == 1.5
+          assert report["environment"]["reward"]["transaction_cost_reward_multiplier"] == 1.0
           assert report["environment"]["reward"]["early_exit_reward_penalty"] == 0.0001
           assert report["environment"]["reward"]["large_profit_reward"]["return_pct_3_multiplier"] == 2.0
           assert report["environment"]["reward"]["large_profit_reward"]["return_pct_5_multiplier"] == 3.0
@@ -297,6 +303,8 @@ jobs:
           assert report["environment"]["execution"]["trailing_stop"]["distance_pct"] == 0.02
           assert report["environment"]["execution"]["trailing_stop"]["activation_pct"] == 0.03
           assert "this_step_fee_cost + this_step_slippage_cost" in report["environment"]["reward"]["transaction_cost_reward_penalty"]
+          assert report["environment"]["reward"]["transaction_cost_reward_penalty"].startswith("1 * ")
+          assert report["environment"]["reward"]["formula"].startswith("log_net_return - 1.5 * ")
           assert report["environment"]["reward"]["holding_loss_penalty_per_underwater_hold"] == 0.0001
           assert report["environment"]["reward"]["realized_profit_reward_scale_of_initial_equity"] == 0.05
           assert report["environment"]["reward"]["training_signal_guidance"]["enabled_only_during_training"] is True
@@ -400,12 +408,12 @@ jobs:
           assert "low_volatility_lookback_completed_candles" not in report["environment"]["reward"]
           assert "low_volatility_return_std_threshold" not in report["environment"]["reward"]
           entropy_schedule = model["entropy_coefficient_schedule"]
-          assert entropy_schedule["initial_ent_coef"] == 0.1
+          assert entropy_schedule["initial_ent_coef"] == 0.2
           assert entropy_schedule["requested_exploration_steps"] == 0
-          assert entropy_schedule["post_exploration_ent_coef"] == 0.1
+          assert entropy_schedule["post_exploration_ent_coef"] == 0.2
           assert entropy_schedule["schedule"] == "constant_from_start"
           assert entropy_schedule["rollout_update_transition_timestep"] is None
-          assert entropy_schedule["final_schedule_coefficient"] == 0.1
+          assert entropy_schedule["final_schedule_coefficient"] == 0.2
           assert entropy_schedule["training_only"] is True
           assert entropy_schedule["validation_and_holdout_guidance_enabled"] is False
           assert report["environment"]["reward"]["opportunity_cost_moving_average_window"] == 20

@@ -27,6 +27,8 @@ from services.rl_research.rl_trading_environment import (
     ACTION_SIZE_BY_INDEX,
     BTCUSDTTradingEnv,
     DEFAULT_INITIAL_EQUITY,
+    DEFAULT_DRAWDOWN_INCREMENT_PENALTY,
+    DEFAULT_DRAWDOWN_LEVEL_PENALTY,
     DEFAULT_MINIMUM_HOLDING_PERIOD_CANDLES,
     DEFAULT_HOLDING_LOSS_PENALTY,
     DEFAULT_HOLDING_PROFIT_REWARD,
@@ -66,8 +68,8 @@ DEFAULT_SIGNAL_GUIDANCE_REWARD_SCALE = 0.0002
 DEFAULT_SIGNAL_GUIDANCE_REWARD_FLOOR = 0.00002
 DEFAULT_SIGNAL_GUIDANCE_ANNEAL_STEPS = 300_000
 DEFAULT_SIGNAL_GUIDANCE_UPDATE_INTERVAL_STEPS = 1_000
-DEFAULT_POST_EXPLORATION_ENT_COEF = 0.1
-DEFAULT_EXPLORATION_ENT_COEF = 0.1
+DEFAULT_POST_EXPLORATION_ENT_COEF = 0.2
+DEFAULT_EXPLORATION_ENT_COEF = 0.2
 DEFAULT_EXPLORATION_STEPS = 50_000
 TRAINING_CHECKPOINT_INTERVAL_STEPS = 100_000
 TRAIN_FRACTION = 0.70
@@ -1586,8 +1588,8 @@ def _build_report(
             "reward": {
                 "net_component": "log(current_equity / previous_equity)",
                 "equity_includes_fees_and_slippage": True,
-                "drawdown_increment_penalty": 5.0,
-                "drawdown_level_penalty": 0.01,
+                "drawdown_increment_penalty": DEFAULT_DRAWDOWN_INCREMENT_PENALTY,
+                "drawdown_level_penalty": DEFAULT_DRAWDOWN_LEVEL_PENALTY,
                 "inactivity_penalty_per_unchanged_position_step": DEFAULT_INACTIVITY_PENALTY,
                 "invalid_action_penalty_default_per_masked_request": DEFAULT_INVALID_ACTION_PENALTY,
                 "invalid_full_position_buy_penalty": 1.0,
@@ -1603,7 +1605,7 @@ def _build_report(
                 "low_volatility_hold_reward_removed": True,
                 "transaction_cost_reward_multiplier": DEFAULT_TRANSACTION_COST_REWARD_MULTIPLIER,
                 "transaction_cost_reward_penalty": (
-                    "2.0 * (this_step_fee_cost + this_step_slippage_cost) "
+                    f"{DEFAULT_TRANSACTION_COST_REWARD_MULTIPLIER:g} * (this_step_fee_cost + this_step_slippage_cost) "
                     "/ previous_equity; additional shaping alongside net log-equity return"
                 ),
                 "early_exit_reward_penalty": DEFAULT_EARLY_EXIT_REWARD_PENALTY,
@@ -1668,8 +1670,9 @@ def _build_report(
                     "requested BUY or SELL disallowed by the pre-action legal mask"
                 ),
                 "formula": (
-                    "log_net_return - 5.0 * max(0, risk_drawdown - prior_close_drawdown) "
-                    "- 0.01 * risk_drawdown "
+                    f"log_net_return - {DEFAULT_DRAWDOWN_INCREMENT_PENALTY:g} * "
+                    "max(0, risk_drawdown - prior_close_drawdown) "
+                    f"- {DEFAULT_DRAWDOWN_LEVEL_PENALTY:g} * risk_drawdown "
                     "- 0.001 * indicator(consecutive_unchanged_steps > 3) "
                     "- 1.0 * indicator(masked_BUY_request) "
                     "- 0.001 * indicator(masked_SELL_request) "
@@ -1683,7 +1686,7 @@ def _build_report(
                     "when_exit_reason_is_policy_sell_only; no_loss_or_trailing_stop_penalty "
                     "+ 0.05 * max(0, closed_trade_net_profit / initial_equity) "
                     " * (1x_below_3%; 2x_at_3%; 3x_at_5%; cap_0.01) "
-                    "+ 0.0001 * profitable_closed_trade_count; transaction_cost_multiplier=2.0"
+                    f"+ 0.0001 * profitable_closed_trade_count; transaction_cost_multiplier={DEFAULT_TRANSACTION_COST_REWARD_MULTIPLIER:g}"
                 ),
                 "hard_trade_count_minimum": None,
                 "profit_target": None,
@@ -1725,7 +1728,7 @@ def _build_report(
             "n_epochs": 4,
             "epochs_per_rollout": 4,
             "lstm_hidden_size": 64,
-            "training_algorithm": "RecurrentPPO with LSTM, Discrete(7) combined actions, pre-Categorical logit masking, 15-candle minimum holding period, causal trailing stop activated at +3% with 2% distance, constant 0.1 entropy coefficient from step one, fixed configured fees and slippage from step one, floor-preserved seven-class guidance cross-entropy, training-only causal SMA reward, bounded large-profit reward, loss/stop-exit penalty exemption, periodic checkpoints, no flat-cash HOLD bonus, and 2x transaction-cost reward penalty",
+            "training_algorithm": "RecurrentPPO with LSTM, Discrete(7) combined actions, pre-Categorical logit masking, 15-candle minimum holding period, causal trailing stop activated at +3% with 2% distance, constant 0.2 entropy coefficient from step one, fixed configured fees and slippage from step one, floor-preserved seven-class guidance cross-entropy, training-only causal SMA reward, bounded large-profit reward, loss/stop-exit penalty exemption, periodic checkpoints, no flat-cash HOLD bonus, and 1x transaction-cost reward penalty",
             "training_seconds": float(training.training_seconds),
             "model_artifact": training.model_path.name,
             "model_sha256": _sha256(training.model_path),

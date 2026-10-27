@@ -21,6 +21,7 @@ from services.rl_research.rl_trading_environment import (
     ACTION_SELL_50,
     ACTION_SELL_100,
     DEFAULT_TRANSACTION_COST_REWARD_MULTIPLIER,
+    DEFAULT_DRAWDOWN_INCREMENT_PENALTY,
     BTCUSDTTradingEnv,
     DEFAULT_HOLDING_LOSS_PENALTY,
     DEFAULT_INACTIVITY_PENALTY,
@@ -224,7 +225,8 @@ def test_environment_default_minimum_holding_period_is_15_candles() -> None:
         == DEFAULT_MINIMUM_HOLDING_PERIOD_CANDLES
         == 15
     )
-    assert DEFAULT_TRANSACTION_COST_REWARD_MULTIPLIER == 2.0
+    assert DEFAULT_DRAWDOWN_INCREMENT_PENALTY == 1.5
+    assert DEFAULT_TRANSACTION_COST_REWARD_MULTIPLIER == 1.0
     assert DEFAULT_REALIZED_PROFIT_REWARD_SCALE == pytest.approx(0.05)
     observation, _ = env.reset(seed=1)
     assert observation[-1] == pytest.approx(0.0)

@@ -1,0 +1,137 @@
+name: AliX RL Run 133 Checkpoint Policy Audit
+
+on:
+  push:
+    branches:
+      - "research/rl-trading-agent"
+    paths:
+      - "scripts/diagnose_rl_checkpoint_policy.py"
+      - "tests/unit/test_rl_checkpoint_policy_diagnostic.py"
+      - ".github/workflows/rl-trading-agent-checkpoint-133-audit.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: alix-rl-run133-checkpoint-audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  run133-checkpoint-audit:
+    name: Audit Run 133 checkpoints on Validation only
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    env:
+      ALIx_ENV: paper
+      ALIx_DRY_RUN: "true"
+      ALIx_ALLOW_LIVE_TRADING: "false"
+      ALIx_REPORTING_ENABLED: "false"
+      PYTHONUNBUFFERED: "1"
+      OMP_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+      SOURCE_RUN_ID: "40477004834"
+      SOURCE_COMMIT_SHA: "10f782b71fbf374f3812b5219fa89cc9c49de2fa"
+    steps:
+      - name: Checkout audit code without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Verify immutable Run 133 identity
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          curl -fsSL \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID" \
+            -o source-run.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          run = json.loads(Path("source-run.json").read_text(encoding="utf-8"))
+          assert run["id"] == 40477004834
+          assert run["head_sha"] == "10f782b71fbf374f3812b5219fa89cc9c49de2fa"
+          assert run["status"] == "completed"
+          assert run["conclusion"] == "success"
+          print("Run #133 identity and successful completion verified.")
+          PY
+
+      - name: Download immutable Run 133 training artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: rl-trading-agent-10f782b71fbf374f3812b5219fa89cc9c49de2fa
+          path: source-run
+          repository: ${{ github.repository }}
+          run-id: 40477004834
+          github-token: ${{ github.token }}
+
+      - name: Install pinned CPU-only RL research dependencies
+        run: |
+          python -m pip install pip==25.2
+          python -m pip install torch==2.14.1 --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -r requirements-rl-research.txt
+          python -m pip check
+
+      - name: Test checkpoint crossover analysis
+        run: python -m pytest tests/unit/test_rl_checkpoint_policy_diagnostic.py -q
+
+      - name: Audit all Run 133 checkpoints on the exact Validation split
+        run: |
+          set -euo pipefail
+          python -m scripts.diagnose_rl_checkpoint_policy \
+            --data source-run/public-minute-bars/binance_BTCUSDT_1m.csv \
+            --manifest source-run/public-minute-bars/manifest.json \
+            --source-report source-run/rl-agent/rl-trading-agent-report.json \
+            --checkpoint-dir source-run/rl-agent/checkpoints \
+            --out-dir artifacts/rl-run133-checkpoint-audit \
+            --source-run-id "$SOURCE_RUN_ID" \
+            --source-commit-sha "$SOURCE_COMMIT_SHA" \
+            --diagnostic-commit-sha "$GITHUB_SHA"
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          report = json.loads(Path(
+              "artifacts/rl-run133-checkpoint-audit/rl-run133-checkpoint-policy-audit.json"
+          ).read_text(encoding="utf-8"))
+          assert report["checkpoint_count"] == 10
+          steps = [item["checkpoint_timesteps"] for item in report["checkpoints"]]
+          assert steps == list(range(100_000, 1_000_001, 100_000))
+          assert 300_000 in steps and 400_000 in steps
+          assert report["execution_scope"]["training_performed"] is False
+          assert report["execution_scope"]["final_holdout_scored_or_recomputed"] is False
+          assert report["execution_scope"]["checkpoint_used_for_selection"] is False
+          safety = report["safety_invariants"]
+          assert safety["Champion"] is None
+          assert safety["order_permission"] is False
+          assert safety["trading_authorization"] == "NO-GO"
+          assert safety["private_api_calls"] == 0
+          assert safety["orders_or_execution_api_used"] is False
+          assert safety["real_order_attempts"] == 0
+          assert safety["production_promotion_allowed"] is False
+          print(json.dumps({
+              "checkpoint_count": report["checkpoint_count"],
+              "behavior_crossover": report["behavior_crossover"],
+              "safety_invariants": safety,
+          }, sort_keys=True, allow_nan=False))
+          PY
+
+      - name: Upload Run 133 checkpoint audit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rl-run133-checkpoint-policy-audit-${{ github.sha }}
+          path: artifacts/rl-run133-checkpoint-audit/
+          if-no-files-found: warn
+          retention-days: 30
+          compression-level: 6
