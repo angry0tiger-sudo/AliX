@@ -202,14 +202,9 @@ def classification_metrics(truth: IntArray, predictions: IntArray) -> dict[str, 
     }
 
 
-def simulate_economics(
-    actions: IntArray,
-    close_prices: Float64Array,
-    *,
-    fee_bps_per_side: float = 10.0,
-    slippage_bps_per_side: float = 5.0,
-) -> dict[str, Any]:
-    """Offline long/short target-position simulation; no execution integration."""
+def _validate_economic_shapes(
+    actions: IntArray, close_prices: Float64Array
+) -> None:
     if (
         actions.ndim != 1
         or close_prices.ndim != 1
@@ -217,14 +212,18 @@ def simulate_economics(
         or len(actions) < 2
     ):
         raise ValueError("economic_simulation_shape_mismatch")
-    if (
-        not np.isfinite(close_prices).all()
-        or np.any(close_prices <= 0)
-        or fee_bps_per_side < 0
-        or slippage_bps_per_side < 0
-    ):
+
+
+def _validate_economic_prices_and_costs(
+    close_prices: Float64Array, fee_bps_per_side: float, slippage_bps_per_side: float
+) -> None:
+    if not np.isfinite(close_prices).all() or np.any(close_prices <= 0):
+        raise ValueError("economic_simulation_input_invalid")
+    if fee_bps_per_side < 0 or slippage_bps_per_side < 0:
         raise ValueError("economic_simulation_input_invalid")
 
+
+def _target_positions(actions: IntArray) -> IntArray:
     positions = np.zeros(len(actions), dtype=np.int8)
     position = 0
     for index, action in enumerate(actions):
@@ -235,16 +234,33 @@ def simulate_economics(
         elif int(action) != ACTION_HOLD:
             raise ValueError("economic_simulation_action_invalid")
         positions[index] = position
+    return positions
 
+
+def _net_period_returns(
+    positions: IntArray,
+    close_prices: Float64Array,
+    fee_bps_per_side: float,
+    slippage_bps_per_side: float,
+) -> tuple[Float64Array, IntArray]:
     turnover = np.abs(
         np.diff(np.concatenate((np.array([0], dtype=np.int8), positions)))
-    )
+    ).astype(np.int64)
     log_returns = np.diff(np.log(close_prices))
     transaction_cost = (fee_bps_per_side + slippage_bps_per_side) / 10_000.0
     net_returns = (
         positions[:-1].astype(np.float64) * log_returns
         - turnover[:-1].astype(np.float64) * transaction_cost
     )
+    return net_returns, turnover
+
+
+def _economic_scorecard(
+    net_returns: Float64Array,
+    turnover: IntArray,
+    fee_bps_per_side: float,
+    slippage_bps_per_side: float,
+) -> dict[str, Any]:
     equity = np.concatenate((np.array([1.0]), np.exp(np.cumsum(net_returns))))
     drawdown = equity / np.maximum.accumulate(equity) - 1.0
     gross_profit = float(net_returns[net_returns > 0.0].sum())
@@ -258,10 +274,110 @@ def simulate_economics(
             float(np.mean(net_returns > 0.0)) if len(net_returns) else 0.0
         ),
         "evaluated_periods": int(len(net_returns)),
-        "position_change_count": int(np.count_nonzero(turnover)),
+        "position_change_count": int(np.count_nonzero(turnover[:-1])),
         "fee_bps_per_side": float(fee_bps_per_side),
         "slippage_bps_per_side": float(slippage_bps_per_side),
     }
+
+
+def _validate_economic_shapes(
+    actions: IntArray, close_prices: Float64Array
+) -> None:
+    if (
+        actions.ndim != 1
+        or close_prices.ndim != 1
+        or len(actions) != len(close_prices)
+        or len(actions) < 2
+    ):
+        raise ValueError("economic_simulation_shape_mismatch")
+
+
+def _validate_economic_prices_and_costs(
+    close_prices: Float64Array, fee_bps_per_side: float, slippage_bps_per_side: float
+) -> None:
+    if not np.isfinite(close_prices).all() or np.any(close_prices <= 0):
+        raise ValueError("economic_simulation_input_invalid")
+    if fee_bps_per_side < 0 or slippage_bps_per_side < 0:
+        raise ValueError("economic_simulation_input_invalid")
+
+
+def _target_positions(actions: IntArray) -> IntArray:
+    positions = np.zeros(len(actions), dtype=np.int8)
+    position = 0
+    for index, action in enumerate(actions):
+        if int(action) == ACTION_BUY:
+            position = 1
+        elif int(action) == ACTION_SELL:
+            position = -1
+        elif int(action) != ACTION_HOLD:
+            raise ValueError("economic_simulation_action_invalid")
+        positions[index] = position
+    return positions
+
+
+def _net_period_returns(
+    positions: IntArray,
+    close_prices: Float64Array,
+    fee_bps_per_side: float,
+    slippage_bps_per_side: float,
+) -> tuple[Float64Array, IntArray]:
+    turnover = np.abs(
+        np.diff(np.concatenate((np.array([0], dtype=np.int8), positions)))
+    ).astype(np.int64)
+    log_returns = np.diff(np.log(close_prices))
+    transaction_cost = (fee_bps_per_side + slippage_bps_per_side) / 10_000.0
+    net_returns = (
+        positions[:-1].astype(np.float64) * log_returns
+        - turnover[:-1].astype(np.float64) * transaction_cost
+    )
+    return net_returns, turnover
+
+
+def _economic_scorecard(
+    net_returns: Float64Array,
+    turnover: IntArray,
+    fee_bps_per_side: float,
+    slippage_bps_per_side: float,
+) -> dict[str, Any]:
+    equity = np.concatenate((np.array([1.0]), np.exp(np.cumsum(net_returns))))
+    drawdown = equity / np.maximum.accumulate(equity) - 1.0
+    gross_profit = float(net_returns[net_returns > 0.0].sum())
+    gross_loss = float(-net_returns[net_returns < 0.0].sum())
+    profit_factor = float(gross_profit / gross_loss) if gross_loss > 0.0 else None
+    return {
+        "net_return_fraction": float(equity[-1] - 1.0),
+        "max_drawdown_fraction": float(max(0.0, -float(drawdown.min()))),
+        "profit_factor": profit_factor,
+        "positive_period_fraction": (
+            float(np.mean(net_returns > 0.0)) if len(net_returns) else 0.0
+        ),
+        "evaluated_periods": int(len(net_returns)),
+        "position_change_count": int(np.count_nonzero(turnover[:-1])),
+        "fee_bps_per_side": float(fee_bps_per_side),
+        "slippage_bps_per_side": float(slippage_bps_per_side),
+    }
+
+
+def simulate_economics(
+    actions: IntArray,
+    close_prices: Float64Array,
+    *,
+    fee_bps_per_side: float = 10.0,
+    slippage_bps_per_side: float = 5.0,
+) -> dict[str, Any]:
+    """Offline long/short target-position simulation; no execution integration."""
+    _validate_economic_shapes(actions, close_prices)
+    _validate_economic_prices_and_costs(
+        close_prices, fee_bps_per_side, slippage_bps_per_side
+    )
+    positions = _target_positions(actions)
+    net_returns, turnover = _net_period_returns(
+        positions, close_prices, fee_bps_per_side, slippage_bps_per_side
+    )
+    return _economic_scorecard(
+        net_returns, turnover, fee_bps_per_side, slippage_bps_per_side
+    )
+
 
 
 def _predict_actions(
@@ -277,22 +393,19 @@ def _predict_actions(
     return np.asarray(predictions, dtype=np.int64)
 
 
-def run_training(
-    dataset_path: Path,
-    manifest_path: Path,
-    output_dir: Path,
-    *,
-    commit_sha: str,
-    epochs: int = 20,
-    window: int = 48,
-) -> dict[str, Any]:
+def _validate_training_parameters(epochs: int, window: int) -> None:
     if isinstance(epochs, bool) or not 1 <= epochs <= 100:
         raise ValueError("epochs_out_of_range")
     if isinstance(window, bool) or not 8 <= window <= 256:
         raise ValueError("sequence_window_out_of_range")
-    frame, source_manifest = load_public_market_data(
-        dataset_path, manifest_path, commit_sha
-    )
+
+
+def _write_teacher_dataset(
+    frame: pd.DataFrame,
+    source_manifest: dict[str, Any],
+    output_dir: Path,
+    commit_sha: str,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
     teacher = generate_teacher_labels(
         frame,
         higher_timeframe="4h+1D",
@@ -301,10 +414,8 @@ def run_training(
         volume_window=60,
         cooldown_candles=5,
     )
-    output_dir.mkdir(parents=True, exist_ok=True)
     teacher_path = output_dir / "teacher-dataset.csv"
     teacher.to_csv(teacher_path, index=False)
-    teacher_manifest_path = output_dir / "teacher-dataset-manifest.json"
     teacher_manifest: dict[str, Any] = {
         "schema_version": "alix.imitation-teacher-dataset.v1",
         "commit_sha": commit_sha,
@@ -325,22 +436,47 @@ def run_training(
         "order_permission": False,
         "trading_authorization": "NO-GO",
     }
-    teacher_manifest_path.write_text(
+    manifest_path = output_dir / "teacher-dataset-manifest.json"
+    manifest_path.write_text(
         json.dumps(teacher_manifest, indent=2, sort_keys=True, allow_nan=False) + "\n",
         encoding="utf-8",
     )
+    return teacher, teacher_manifest
 
+
+def _validate_split_boundaries(
+    row_count: int, window: int, train_end: int, validation_end: int
+) -> None:
+    if train_end <= window or validation_end <= train_end or row_count <= validation_end:
+        raise ValueError("insufficient_rows_for_chronological_splits")
+
+
+def _validate_split_masks(
+    train_mask: NDArray[np.bool_],
+    validation_mask: NDArray[np.bool_],
+    holdout_mask: NDArray[np.bool_],
+) -> None:
+    if not train_mask.any() or not validation_mask.any() or not holdout_mask.any():
+        raise ValueError("chronological_sequence_split_empty")
+
+
+def _compute_class_weights(train_actions: IntArray) -> Float64Array:
+    class_counts = np.bincount(train_actions, minlength=3).astype(np.float64)
+    if np.any(class_counts == 0):
+        raise ValueError("teacher_train_split_missing_action_class")
+    class_weights = np.minimum(np.sqrt(len(train_actions) / (3.0 * class_counts)), 8.0)
+    return class_weights / class_weights.mean()
+
+
+def _prepare_training_data(
+    frame: pd.DataFrame, teacher: pd.DataFrame, window: int
+) -> dict[str, Any]:
     actions = teacher["teacher_action"].to_numpy(dtype=np.int64)
     features, feature_names = build_feature_matrix(frame, teacher)
     row_count = len(frame)
     train_end = int(row_count * 0.70)
     validation_end = int(row_count * 0.85)
-    if (
-        train_end <= window
-        or validation_end <= train_end
-        or row_count <= validation_end
-    ):
-        raise ValueError("insufficient_rows_for_chronological_splits")
+    _validate_split_boundaries(row_count, window, train_end, validation_end)
 
     scaler_mean = features[:train_end].mean(axis=0, dtype=np.float64)
     scaler_scale = features[:train_end].std(axis=0, dtype=np.float64)
@@ -352,33 +488,49 @@ def run_training(
     train_mask = target_indices < train_end
     validation_mask = (target_indices >= train_end) & (target_indices < validation_end)
     holdout_mask = target_indices >= validation_end
-    if not train_mask.any() or not validation_mask.any() or not holdout_mask.any():
-        raise ValueError("chronological_sequence_split_empty")
-
+    _validate_split_masks(train_mask, validation_mask, holdout_mask)
     train_actions = sequence_actions[train_mask]
-    class_counts = np.bincount(train_actions, minlength=3).astype(np.float64)
-    if np.any(class_counts == 0):
-        raise ValueError("teacher_train_split_missing_action_class")
-    class_weights = np.minimum(np.sqrt(len(train_actions) / (3.0 * class_counts)), 8.0)
-    class_weights = class_weights / class_weights.mean()
+    class_weights = _compute_class_weights(train_actions)
+    return {
+        "features": features,
+        "feature_names": feature_names,
+        "actions": actions,
+        "row_count": row_count,
+        "train_end": train_end,
+        "validation_end": validation_end,
+        "scaler_mean": scaler_mean,
+        "scaler_scale": scaler_scale,
+        "sequences": sequences,
+        "sequence_actions": sequence_actions,
+        "target_indices": target_indices,
+        "train_mask": train_mask,
+        "validation_mask": validation_mask,
+        "holdout_mask": holdout_mask,
+        "train_actions": train_actions,
+        "class_weights": class_weights,
+    }
 
-    torch = importlib.import_module("torch")
+
+def _create_training_state(torch: Any, prepared: dict[str, Any]) -> dict[str, Any]:
     torch.manual_seed(20261027)
     torch.set_num_threads(1)
+    sequences = prepared["sequences"]
+    train_mask = prepared["train_mask"]
+    validation_mask = prepared["validation_mask"]
+    holdout_mask = prepared["holdout_mask"]
     train_features = torch.tensor(sequences[train_mask], dtype=torch.float32)
-    train_targets = torch.tensor(train_actions, dtype=torch.long)
-    validation_features = sequences[validation_mask]
-    validation_targets = sequence_actions[validation_mask]
-    holdout_features = sequences[holdout_mask]
-    holdout_targets = sequence_actions[holdout_mask]
+    train_targets = torch.tensor(prepared["train_actions"], dtype=torch.long)
     train_loader = torch.utils.data.DataLoader(
         torch.utils.data.TensorDataset(train_features, train_targets),
         batch_size=128,
         shuffle=True,
         drop_last=False,
     )
-
-    feature_count = int(features.shape[1])
+    validation_features = sequences[validation_mask]
+    validation_targets = prepared["sequence_actions"][validation_mask]
+    holdout_features = sequences[holdout_mask]
+    holdout_targets = prepared["sequence_actions"][holdout_mask]
+    feature_count = int(prepared["features"].shape[1])
     hidden_size = 64
     lstm = torch.nn.LSTM(
         input_size=feature_count,
@@ -391,7 +543,41 @@ def run_training(
     optimizer = torch.optim.Adam(
         list(lstm.parameters()) + list(classifier.parameters()), lr=0.001
     )
-    loss_weights = torch.tensor(class_weights, dtype=torch.float32)
+    loss_weights = torch.tensor(prepared["class_weights"], dtype=torch.float32)
+    return {
+        "lstm": lstm,
+        "classifier": classifier,
+        "optimizer": optimizer,
+        "loss_weights": loss_weights,
+        "train_loader": train_loader,
+        "validation_features": validation_features,
+        "validation_targets": validation_targets,
+        "holdout_features": holdout_features,
+        "holdout_targets": holdout_targets,
+        "hidden_size": hidden_size,
+        "feature_count": feature_count,
+    }
+
+
+def _snapshot_model_state(model: Any) -> dict[str, Any]:
+    return {
+        name: value.detach().clone()
+        for name, value in model.state_dict().items()
+    }
+
+
+def _fit_lstm(
+    torch: Any,
+    state: dict[str, Any],
+    epochs: int,
+) -> dict[str, Any]:
+    lstm = state["lstm"]
+    classifier = state["classifier"]
+    optimizer = state["optimizer"]
+    loss_weights = state["loss_weights"]
+    train_loader = state["train_loader"]
+    validation_features = state["validation_features"]
+    validation_targets = state["validation_targets"]
     best_validation_macro_f1 = -1.0
     best_epoch = 0
     stale_epochs = 0
@@ -417,24 +603,16 @@ def run_training(
             optimizer.step()
 
         completed_epochs = epoch + 1
-        validation_predictions = _predict_actions(
+        predictions = _predict_actions(
             torch, lstm, classifier, validation_features
         )
-        validation_metrics = classification_metrics(
-            validation_targets, validation_predictions
-        )
-        score = float(validation_metrics["macro_f1"])
+        metrics = classification_metrics(validation_targets, predictions)
+        score = float(metrics["macro_f1"])
         if score > best_validation_macro_f1 + 1e-9:
             best_validation_macro_f1 = score
             best_epoch = completed_epochs
-            best_lstm_state = {
-                name: value.detach().clone()
-                for name, value in lstm.state_dict().items()
-            }
-            best_classifier_state = {
-                name: value.detach().clone()
-                for name, value in classifier.state_dict().items()
-            }
+            best_lstm_state = _snapshot_model_state(lstm)
+            best_classifier_state = _snapshot_model_state(classifier)
             stale_epochs = 0
         else:
             stale_epochs += 1
@@ -445,102 +623,152 @@ def run_training(
         raise RuntimeError("no_validation_checkpoint_was_selected")
     lstm.load_state_dict(best_lstm_state)
     classifier.load_state_dict(best_classifier_state)
+    state["best_validation_macro_f1"] = best_validation_macro_f1
+    state["best_epoch"] = best_epoch
+    state["completed_epochs"] = completed_epochs
+    return state
 
+
+def _evaluate_training_state(
+    torch: Any,
+    frame: pd.DataFrame,
+    prepared: dict[str, Any],
+    state: dict[str, Any],
+) -> dict[str, Any]:
+    validation_targets = state["validation_targets"]
+    holdout_targets = state["holdout_targets"]
     validation_predictions = _predict_actions(
-        torch, lstm, classifier, validation_features
+        torch, state["lstm"], state["classifier"], state["validation_features"]
     )
-    holdout_predictions = _predict_actions(torch, lstm, classifier, holdout_features)
+    holdout_predictions = _predict_actions(
+        torch, state["lstm"], state["classifier"], state["holdout_features"]
+    )
     close_prices = frame["close"].to_numpy(dtype=np.float64)
-    validation_close = close_prices[target_indices[validation_mask]]
-    holdout_close = close_prices[target_indices[holdout_mask]]
-    validation_teacher_economics = simulate_economics(
-        validation_targets, validation_close
-    )
-    validation_model_economics = simulate_economics(
-        validation_predictions, validation_close
-    )
-    holdout_teacher_economics = simulate_economics(holdout_targets, holdout_close)
-    holdout_model_economics = simulate_economics(holdout_predictions, holdout_close)
+    target_indices = prepared["target_indices"]
+    validation_close = close_prices[target_indices[prepared["validation_mask"]]]
+    holdout_close = close_prices[target_indices[prepared["holdout_mask"]]]
+    return {
+        "validation_predictions": validation_predictions,
+        "holdout_predictions": holdout_predictions,
+        "validation_classification": classification_metrics(
+            validation_targets, validation_predictions
+        ),
+        "holdout_classification": classification_metrics(
+            holdout_targets, holdout_predictions
+        ),
+        "validation_teacher_economics": simulate_economics(
+            validation_targets, validation_close
+        ),
+        "validation_model_economics": simulate_economics(
+            validation_predictions, validation_close
+        ),
+        "holdout_teacher_economics": simulate_economics(
+            holdout_targets, holdout_close
+        ),
+        "holdout_model_economics": simulate_economics(
+            holdout_predictions, holdout_close
+        ),
+        "validation_model_actions": action_distribution(validation_predictions),
+        "holdout_teacher_actions": action_distribution(holdout_targets),
+        "holdout_model_actions": action_distribution(holdout_predictions),
+    }
 
+
+def _save_model_artifacts(
+    torch: Any,
+    output_dir: Path,
+    commit_sha: str,
+    window: int,
+    prepared: dict[str, Any],
+    state: dict[str, Any],
+) -> str:
     model_path = output_dir / "lstm-behavioral-cloning-state.pt"
     torch.save(
         {
             "architecture": "two-layer LSTM plus linear 3-class head",
-            "lstm_state_dict": lstm.state_dict(),
-            "classifier_state_dict": classifier.state_dict(),
-            "input_features": feature_names,
+            "lstm_state_dict": state["lstm"].state_dict(),
+            "classifier_state_dict": state["classifier"].state_dict(),
+            "input_features": prepared["feature_names"],
             "window": window,
-            "hidden_size": hidden_size,
+            "hidden_size": state["hidden_size"],
             "action_map": _ACTION_NAMES,
             "initialized_from_scratch": True,
             "training_commit_sha": commit_sha,
         },
         model_path,
     )
-    scaler_path = output_dir / "feature-scaler.json"
     scaler_document = {
-        "feature_names": feature_names,
-        "mean": [float(value) for value in scaler_mean],
-        "scale": [float(value) for value in scaler_scale],
-        "fit_rows": int(train_end),
+        "feature_names": prepared["feature_names"],
+        "mean": [float(value) for value in prepared["scaler_mean"]],
+        "scale": [float(value) for value in prepared["scaler_scale"]],
+        "fit_rows": int(prepared["train_end"]),
         "fit_policy": "training_split_only",
     }
-    scaler_path.write_text(
+    (output_dir / "feature-scaler.json").write_text(
         json.dumps(scaler_document, indent=2, sort_keys=True, allow_nan=False) + "\n",
         encoding="utf-8",
     )
+    return model_path.name
 
-    holdout_distribution = action_distribution(holdout_predictions)
-    report: dict[str, Any] = {
+
+def _build_training_report(
+    commit_sha: str,
+    source_manifest: dict[str, Any],
+    teacher_manifest: dict[str, Any],
+    teacher: pd.DataFrame,
+    prepared: dict[str, Any],
+    state: dict[str, Any],
+    evaluation: dict[str, Any],
+    model_artifact: str,
+) -> dict[str, Any]:
+    row_count = int(prepared["row_count"])
+    train_end = int(prepared["train_end"])
+    validation_end = int(prepared["validation_end"])
+    holdout_distribution = evaluation["holdout_model_actions"]
+    return {
         "schema_version": "alix.imitation-learning-report.v1",
         "commit_sha": commit_sha,
         "dataset": {
             "provider": source_manifest["provider"],
             "source_csv_sha256": source_manifest["csv_sha256"],
             "teacher_csv_sha256": teacher_manifest["teacher_csv_sha256"],
-            "row_count": int(row_count),
-            "train_rows": int(train_end),
-            "validation_rows": int(validation_end - train_end),
-            "holdout_rows": int(row_count - validation_end),
-            "train_end_timestamp": str(frame.iloc[train_end - 1]["timestamp"]),
-            "validation_end_timestamp": str(
-                frame.iloc[validation_end - 1]["timestamp"]
-            ),
-            "holdout_start_timestamp": str(frame.iloc[validation_end]["timestamp"]),
+            "row_count": row_count,
+            "train_rows": train_end,
+            "validation_rows": validation_end - train_end,
+            "holdout_rows": row_count - validation_end,
+            "train_end_timestamp": str(teacher.iloc[train_end - 1]["timestamp"]),
+            "validation_end_timestamp": str(teacher.iloc[validation_end - 1]["timestamp"]),
+            "holdout_start_timestamp": str(teacher.iloc[validation_end]["timestamp"]),
         },
         "teacher": {
             "kind": "causal_ohlcv_heuristic",
             "higher_timeframe_mode": "4h+1D_confluence",
             "ground_truth_claim": False,
-            "action_distribution": action_distribution(actions),
+            "action_distribution": action_distribution(prepared["actions"]),
         },
         "model": {
             "architecture": "two-layer CPU LSTM plus linear head",
             "initialized_from_scratch": True,
-            "window_candles": int(window),
-            "input_feature_count": int(feature_count),
-            "input_features": feature_names,
-            "requested_epochs": int(epochs),
-            "completed_epochs": int(completed_epochs),
-            "best_validation_epoch": int(best_epoch),
-            "best_validation_macro_f1": float(best_validation_macro_f1),
-            "state_artifact": model_path.name,
+            "window_candles": int(prepared["sequences"].shape[1]),
+            "input_feature_count": int(state["feature_count"]),
+            "input_features": prepared["feature_names"],
+            "requested_epochs": int(state["requested_epochs"]),
+            "completed_epochs": int(state["completed_epochs"]),
+            "best_validation_epoch": int(state["best_epoch"]),
+            "best_validation_macro_f1": float(state["best_validation_macro_f1"]),
+            "state_artifact": model_artifact,
         },
         "validation": {
-            "classification": classification_metrics(
-                validation_targets, validation_predictions
-            ),
-            "teacher_economics": validation_teacher_economics,
-            "model_economics": validation_model_economics,
-            "model_action_distribution": action_distribution(validation_predictions),
+            "classification": evaluation["validation_classification"],
+            "teacher_economics": evaluation["validation_teacher_economics"],
+            "model_economics": evaluation["validation_model_economics"],
+            "model_action_distribution": evaluation["validation_model_actions"],
         },
         "holdout": {
-            "classification_vs_teacher": classification_metrics(
-                holdout_targets, holdout_predictions
-            ),
-            "teacher_economics": holdout_teacher_economics,
-            "model_economics": holdout_model_economics,
-            "teacher_action_distribution": action_distribution(holdout_targets),
+            "classification_vs_teacher": evaluation["holdout_classification"],
+            "teacher_economics": evaluation["holdout_teacher_economics"],
+            "model_economics": evaluation["holdout_model_economics"],
+            "teacher_action_distribution": evaluation["holdout_teacher_actions"],
             "model_action_distribution": holdout_distribution,
             "hold_collapse": holdout_distribution["HOLD"]["fraction"] >= 0.95,
         },
@@ -555,6 +783,44 @@ def run_training(
         },
         "decision": "RESEARCH_ONLY_NOT_PROMOTED",
     }
+
+
+def run_training(
+    dataset_path: Path,
+    manifest_path: Path,
+    output_dir: Path,
+    *,
+    commit_sha: str,
+    epochs: int = 20,
+    window: int = 48,
+) -> dict[str, Any]:
+    _validate_training_parameters(epochs, window)
+    frame, source_manifest = load_public_market_data(
+        dataset_path, manifest_path, commit_sha
+    )
+    output_dir.mkdir(parents=True, exist_ok=True)
+    teacher, teacher_manifest = _write_teacher_dataset(
+        frame, source_manifest, output_dir, commit_sha
+    )
+    prepared = _prepare_training_data(frame, teacher, window)
+    torch: Any = importlib.import_module("torch")
+    state = _create_training_state(torch, prepared)
+    state["requested_epochs"] = epochs
+    state = _fit_lstm(torch, state, epochs)
+    evaluation = _evaluate_training_state(torch, frame, prepared, state)
+    model_artifact = _save_model_artifacts(
+        torch, output_dir, commit_sha, window, prepared, state
+    )
+    report = _build_training_report(
+        commit_sha,
+        source_manifest,
+        teacher_manifest,
+        teacher,
+        prepared,
+        state,
+        evaluation,
+        model_artifact,
+    )
     report_path = output_dir / "imitation-learning-report.json"
     report_path.write_text(
         json.dumps(report, indent=2, sort_keys=True, allow_nan=False) + "\n",
@@ -564,7 +830,7 @@ def run_training(
         json.dumps(
             {
                 "commit_sha": commit_sha,
-                "teacher_dataset_rows": int(row_count),
+                "teacher_dataset_rows": int(prepared["row_count"]),
                 "teacher_action_distribution": teacher_manifest[
                     "teacher_action_distribution"
                 ],
@@ -579,6 +845,7 @@ def run_training(
         )
     )
     return report
+
 
 
 def main() -> int:

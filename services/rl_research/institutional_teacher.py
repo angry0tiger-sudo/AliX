@@ -17,38 +17,47 @@ ACTION_SELL = 2
 _REQUIRED_COLUMNS = ("timestamp", "open", "high", "low", "close", "volume")
 
 
-def _validate_ohlcv(data: pd.DataFrame) -> pd.DataFrame:
-    missing = set(_REQUIRED_COLUMNS).difference(data.columns)
-    if missing:
-        raise ValueError(f"missing_ohlcv_columns:{','.join(sorted(missing))}")
-    frame = data.loc[:, list(_REQUIRED_COLUMNS)].copy()
+def _validate_timestamps(values: pd.Series) -> pd.Series:
+    if pd.api.types.is_numeric_dtype(values):
+        timestamp = pd.to_datetime(values, unit="ms", utc=True, errors="coerce")
+    else:
+        timestamp = pd.to_datetime(values, utc=True, errors="coerce")
+    if timestamp.isna().any():
+        raise ValueError("timestamps_must_be_valid")
+    if not timestamp.is_monotonic_increasing or timestamp.duplicated().any():
+        raise ValueError("timestamps_must_be_strictly_increasing")
+    return timestamp
+
+
+def _validate_price_bounds(frame: pd.DataFrame) -> None:
+    if (frame["high"] < frame[["open", "low", "close"]].max(axis=1)).any():
+        raise ValueError("high_below_ohlc_component")
+    if (frame["low"] > frame[["open", "high", "close"]].min(axis=1)).any():
+        raise ValueError("low_above_ohlc_component")
+
+
+def _validate_numeric_ohlcv(frame: pd.DataFrame) -> None:
     numeric = frame.loc[:, ["open", "high", "low", "close", "volume"]].to_numpy(
         dtype=np.float64
     )
     if not np.isfinite(numeric).all():
         raise ValueError("ohlcv_contains_non_finite_values")
-    timestamp = frame["timestamp"]
-    if pd.api.types.is_numeric_dtype(timestamp):
-        timestamp = pd.to_datetime(timestamp, unit="ms", utc=True, errors="coerce")
-    else:
-        timestamp = pd.to_datetime(timestamp, utc=True, errors="coerce")
-    if timestamp.isna().any():
-        raise ValueError("timestamps_must_be_valid")
-    frame["timestamp"] = timestamp
     if (frame[["open", "high", "low", "close"]] <= 0).any().any():
         raise ValueError("ohlc_prices_must_be_positive")
     if (frame["volume"] < 0).any():
         raise ValueError("volume_must_be_non_negative")
-    if (
-        not frame["timestamp"].is_monotonic_increasing
-        or frame["timestamp"].duplicated().any()
-    ):
-        raise ValueError("timestamps_must_be_strictly_increasing")
-    if (frame["high"] < frame[["open", "low", "close"]].max(axis=1)).any():
-        raise ValueError("high_below_ohlc_component")
-    if (frame["low"] > frame[["open", "high", "close"]].min(axis=1)).any():
-        raise ValueError("low_above_ohlc_component")
+    _validate_price_bounds(frame)
+
+
+def _validate_ohlcv(data: pd.DataFrame) -> pd.DataFrame:
+    missing = set(_REQUIRED_COLUMNS).difference(data.columns)
+    if missing:
+        raise ValueError(f"missing_ohlcv_columns:{','.join(sorted(missing))}")
+    frame = data.loc[:, list(_REQUIRED_COLUMNS)].copy()
+    _validate_numeric_ohlcv(frame)
+    frame["timestamp"] = _validate_timestamps(frame["timestamp"])
     return frame
+
 
 
 def _higher_timeframe_bias(frame: pd.DataFrame, rule: str, ema_span: int) -> pd.Series:
@@ -123,6 +132,124 @@ def _volume_confirmations(
     return buy_confirm.fillna(False), sell_confirm.fillna(False)
 
 
+def _validate_integer_parameter(name: str, value: int, minimum: int) -> None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+        raise ValueError(f"{name}_out_of_range")
+
+
+def _validate_teacher_configuration(
+    higher_timeframe: str,
+    ema_span: int,
+    swing_window: int,
+    volume_window: int,
+    cooldown_candles: int,
+) -> None:
+    for name, value, minimum in (
+        ("ema_span", ema_span, 2),
+        ("swing_window", swing_window, 2),
+        ("volume_window", volume_window, 2),
+        ("cooldown_candles", cooldown_candles, 0),
+    ):
+        _validate_integer_parameter(name, value, minimum)
+    if higher_timeframe not in {"4h", "1D", "4h+1D"}:
+        raise ValueError("higher_timeframe_must_be_4h_1D_or_4h+1D")
+
+
+def _select_timeframe_biases(
+    frame: pd.DataFrame, higher_timeframe: str, ema_span: int
+) -> tuple[pd.Series, pd.Series, pd.Series]:
+    bias_4h = _higher_timeframe_bias(frame, "4h", ema_span)
+    bias_1d = _higher_timeframe_bias(frame, "1D", ema_span)
+    if higher_timeframe == "4h":
+        return bias_4h, bias_4h, bias_1d
+    if higher_timeframe == "1D":
+        return bias_1d, bias_4h, bias_1d
+    confluence = bias_4h.where(bias_4h == bias_1d, 0).astype(np.int8)
+    return confluence, bias_4h, bias_1d
+
+
+def _generate_teacher_actions(
+    buy_setup: pd.Series,
+    sell_setup: pd.Series,
+    cooldown_candles: int,
+) -> tuple[NDArray[np.int8], NDArray[np.int8]]:
+    actions = np.full(len(buy_setup), ACTION_HOLD, dtype=np.int8)
+    positions = np.zeros(len(buy_setup), dtype=np.int8)
+    position = 0
+    last_change = -cooldown_candles - 1
+    for index in range(len(buy_setup)):
+        if index - last_change <= cooldown_candles:
+            positions[index] = position
+            continue
+        if position <= 0 and bool(buy_setup.iloc[index]):
+            actions[index] = ACTION_BUY
+            position = 1
+            last_change = index
+        elif position >= 0 and bool(sell_setup.iloc[index]):
+            actions[index] = ACTION_SELL
+            position = -1
+            last_change = index
+        positions[index] = position
+    return actions, positions
+
+
+def _build_teacher_result(
+    frame: pd.DataFrame,
+    bias: pd.Series,
+    bias_4h: pd.Series,
+    bias_1d: pd.Series,
+    prior_high: pd.Series,
+    actions: NDArray[np.int8],
+    positions: NDArray[np.int8],
+) -> pd.DataFrame:
+    result = frame.copy()
+    result["higher_timeframe_bias"] = bias.to_numpy(dtype=np.int8)
+    result["higher_timeframe_bias_4h"] = bias_4h.to_numpy(dtype=np.int8)
+    result["higher_timeframe_bias_1d"] = bias_1d.to_numpy(dtype=np.int8)
+    result["bos_reference_high"] = prior_high.to_numpy(dtype=np.float64)
+    result["teacher_action"] = actions
+    result["teacher_action_name"] = np.select(
+        [actions == ACTION_BUY, actions == ACTION_SELL],
+        ["BUY", "SELL"],
+        default="HOLD",
+    )
+    result["teacher_position"] = positions
+    return result
+
+
+def generate_teacher_labels(
+    data: pd.DataFrame,
+    *,
+    higher_timeframe: str = "4h",
+    ema_span: int = 12,
+    swing_window: int = 20,
+    volume_window: int = 60,
+    cooldown_candles: int = 5,
+) -> pd.DataFrame:
+    """Return features and 3-class teacher actions (HOLD=0, BUY=1, SELL=2).
+
+    BUY/SELL denote desired target-position transitions, not executable orders.
+    Labels are strictly historical and are intended only for offline research.
+    """
+    _validate_teacher_configuration(
+        higher_timeframe, ema_span, swing_window, volume_window, cooldown_candles
+    )
+    frame = _validate_ohlcv(data)
+    bias, bias_4h, bias_1d = _select_timeframe_biases(
+        frame, higher_timeframe, ema_span
+    )
+    bullish_structure, bearish_structure, prior_high = _smc_features(
+        frame, swing_window
+    )
+    buy_volume, sell_volume = _volume_confirmations(frame, volume_window)
+    buy_setup = (bias > 0) & bullish_structure & buy_volume
+    sell_setup = (bias < 0) & bearish_structure & sell_volume
+    actions, positions = _generate_teacher_actions(
+        buy_setup, sell_setup, cooldown_candles
+    )
+    return _build_teacher_result(
+        frame, bias, bias_4h, bias_1d, prior_high, actions, positions
+    )
 def generate_teacher_labels(
     data: pd.DataFrame,
     *,
