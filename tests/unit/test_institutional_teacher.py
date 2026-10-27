@@ -153,6 +153,7 @@ def test_teacher_position_persists_across_hold_actions() -> None:
     np.testing.assert_array_equal(result["teacher_position"].to_numpy(), expected)
     assert set(np.unique(expected)).issubset({0, 1})
 
+
 def test_order_block_touch_uses_candle_range_not_close_only() -> None:
     data = pd.DataFrame(
         {

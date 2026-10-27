@@ -147,6 +147,7 @@ def test_win_rate_and_profit_factor_use_closed_trades_only() -> None:
     )
     assert "positive_period_fraction" not in result
 
+
 def test_class_weights_upweight_only_minority_actions_from_train_labels() -> None:
     train_actions = np.asarray(
         [ACTION_HOLD] * 1_000 + [ACTION_BUY] * 4 + [ACTION_SELL] * 5,
