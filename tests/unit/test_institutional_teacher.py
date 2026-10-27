@@ -10,6 +10,8 @@ from services.rl_research.institutional_teacher import (
     ACTION_BUY,
     ACTION_HOLD,
     ACTION_SELL,
+    _average_true_range_fraction,
+    _generate_teacher_actions,
     _smc_features,
     _teacher_setups,
     generate_teacher_labels,
@@ -187,3 +189,80 @@ def test_order_block_touch_is_valid_without_bos_fvg_or_volume() -> None:
 
     assert buy_setup.tolist() == [True, False]
     assert sell_setup.tolist() == [False, True]
+
+
+
+def test_atr_fraction_is_causal_and_uses_true_range() -> None:
+    data = _bars(80)
+    atr = _average_true_range_fraction(data, period=14)
+    changed = data.copy()
+    changed.loc[60:, ["open", "high", "low", "close"]] *= 2.0
+    rerun = _average_true_range_fraction(changed, period=14)
+    pd.testing.assert_series_equal(
+        atr.loc[:59], rerun.loc[:59], check_names=False
+    )
+    assert atr.iloc[:13].isna().all()
+    assert np.isfinite(atr.iloc[13:]).all()
+
+
+def test_low_atr_blocks_new_teacher_entries() -> None:
+    data = _bars(8).reset_index(drop=True)
+    buy_setup = pd.Series([True] * len(data))
+    sell_setup = pd.Series([False] * len(data))
+    low_atr = pd.Series([0.001] * len(data))
+
+    actions, positions, _, _ = _generate_teacher_actions(
+        data,
+        buy_setup,
+        sell_setup,
+        low_atr,
+        cooldown_candles=2,
+        min_atr_cost_multiple=2.0,
+        take_profit_fraction=0.025,
+        stop_loss_fraction=0.0125,
+        trailing_trigger_fraction=0.01,
+        trailing_distance_fraction=0.005,
+        fee_bps_per_side=25.0,
+        slippage_bps_per_side=20.0,
+    )
+
+    assert ACTION_BUY not in actions
+    assert positions.tolist() == [0] * len(data)
+
+
+def test_trailing_stop_protects_cost_adjusted_breakeven() -> None:
+    data = pd.DataFrame(
+        {
+            "timestamp": pd.date_range(
+                "2025-01-01", periods=4, freq="h", tz="UTC"
+            ),
+            "open": [100.0, 100.0, 101.0, 101.0],
+            "high": [100.0, 101.2, 101.3, 101.2],
+            "low": [100.0, 99.9, 100.8, 100.5],
+            "close": [100.0, 101.0, 101.1, 100.8],
+            "volume": [100.0] * 4,
+        }
+    )
+    buy_setup = pd.Series([True, False, False, False])
+    sell_setup = pd.Series([False] * 4)
+    atr_fraction = pd.Series([0.02] * 4)
+
+    actions, positions, exit_prices, exit_reasons = _generate_teacher_actions(
+        data,
+        buy_setup,
+        sell_setup,
+        atr_fraction,
+        cooldown_candles=2,
+        min_atr_cost_multiple=2.0,
+        take_profit_fraction=0.025,
+        stop_loss_fraction=0.0125,
+        trailing_trigger_fraction=0.01,
+        trailing_distance_fraction=0.005,
+        fee_bps_per_side=25.0,
+        slippage_bps_per_side=20.0,
+    )
+
+    assert actions.tolist() == [ACTION_BUY, ACTION_HOLD, ACTION_SELL, ACTION_HOLD]
+    assert positions.tolist() == [1, 1, 0, 0]
+    assert exit_reasons[2] == "trailing_stop"
+    assert exit_prices[2] > 100.0
