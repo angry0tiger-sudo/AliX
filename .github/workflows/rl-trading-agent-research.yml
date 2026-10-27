@@ -238,7 +238,7 @@ jobs:
           model = report["model"]
           evaluation = report["evaluation"]
           curriculum = report["cost_curriculum"]
-          assert report["schema_version"] == "alix.rl-trading-agent-report.v12"
+          assert report["schema_version"] == "alix.rl-trading-agent-report.v13"
           assert report["run_mode"] == "historical_simulation_only"
           assert report["dataset"]["row_count"] >= 1_051_200
           assert report["dataset"]["coverage_fraction"] == 1.0
@@ -260,19 +260,34 @@ jobs:
           assert 0.19 <= split["final_holdout_fraction_actual"] <= 0.21
           assert model["algorithm"] == "RecurrentPPO"
           assert model["policy"] == "ActionMaskedRecurrentActorCriticPolicy"
-          assert model["training_algorithm"] == "RecurrentPPO with LSTM, Discrete(7) combined actions, pre-Categorical logit masking, floor-preserved seven-class guidance cross-entropy, minimum training-only SMA reward floor, elevated entropy coefficient, periodic checkpoints, low-volatility HOLD reward, and explicit transaction-cost reward penalty"
+          assert "no flat-cash HOLD bonus" in model["training_algorithm"]
+          assert "low-volatility HOLD reward" not in model["training_algorithm"]
           assert model["model_reload_roundtrip"] == "passed"
+          reload_check = model["model_reload_verification"]
+          assert reload_check["status"] == "passed"
+          assert reload_check["model_file"] == model["model_artifact"]
+          assert reload_check["model_sha256"] == model["model_sha256"]
+          assert reload_check["model_size_bytes"] > 0
+          assert reload_check["trained_timesteps"] == model["total_timesteps_trained"]
+          assert reload_check["reloaded_timesteps"] == model["total_timesteps_trained"]
+          assert reload_check["original_policy_class"] == "ActionMaskedRecurrentActorCriticPolicy"
+          assert reload_check["reloaded_policy_class"] == "ActionMaskedRecurrentActorCriticPolicy"
+          assert reload_check["policy_class_match"] is True
+          assert reload_check["deterministic_probe_action_match"] is True
+          assert 0 <= reload_check["deterministic_probe_action"] < 7
           assert len(model["model_sha256"]) == 64
           assert model["total_timesteps_trained"] >= 1_000_000
-          assert model["ent_coef"] == 0.1
+          entropy_schedule = model["entropy_coefficient_schedule"]
+          assert model["ent_coef"] == entropy_schedule["post_exploration_ent_coef"] == 0.1
+          assert entropy_schedule["initial_ent_coef"] == 0.5
+          assert entropy_schedule["requested_exploration_steps"] == 50000
+          assert entropy_schedule["rollout_update_transition_timestep"] == 50176
+          assert entropy_schedule["final_schedule_coefficient"] == 0.1
           assert report["environment"]["reward"]["inactivity_penalty_per_unchanged_position_step"] == 0.001
           assert report["environment"]["reward"]["invalid_action_penalty_default_per_masked_request"] == 0.001
           assert report["environment"]["reward"]["invalid_full_position_buy_penalty"] == 1.0
           assert report["environment"]["reward"]["holding_profit_reward_per_profitable_hold"] == 0.0001
-          assert report["environment"]["reward"]["low_volatility_hold_reward"] == 0.001
-          assert report["environment"]["reward"]["low_volatility_lookback_completed_candles"] == 20
-          assert report["environment"]["reward"]["low_volatility_return_std_threshold"] == 0.002
-          assert report["environment"]["reward"]["low_volatility_hold_reward_applies_only_to_HOLD"] is True
+
           assert report["environment"]["reward"]["transaction_cost_reward_multiplier"] == 1.0
           assert "this_step_fee_cost + this_step_slippage_cost" in report["environment"]["reward"]["transaction_cost_reward_penalty"]
           assert report["environment"]["reward"]["holding_loss_penalty_per_underwater_hold"] == 0.0001
@@ -381,11 +396,17 @@ jobs:
           assert report["environment"]["reward"]["flat_cash_hold_bonus"] == 0.0
           assert report["environment"]["reward"]["flat_cash_hold_bonus_enabled"] is False
           assert report["environment"]["reward"]["low_volatility_hold_reward_removed"] is True
+          assert "low_volatility_hold_reward" not in report["environment"]["reward"]
+          assert "low_volatility_lookback_completed_candles" not in report["environment"]["reward"]
+          assert "low_volatility_return_std_threshold" not in report["environment"]["reward"]
           entropy_schedule = model["entropy_coefficient_schedule"]
           assert entropy_schedule["initial_ent_coef"] == 0.5
           assert entropy_schedule["requested_exploration_steps"] == 50000
           assert entropy_schedule["post_exploration_ent_coef"] == 0.1
           assert entropy_schedule["rollout_update_transition_timestep"] == 50176
+          assert entropy_schedule["final_schedule_coefficient"] == 0.1
+          assert entropy_schedule["training_only"] is True
+          assert entropy_schedule["validation_and_holdout_guidance_enabled"] is False
           assert report["environment"]["reward"]["opportunity_cost_moving_average_window"] == 20
           assert report["environment"]["reward"]["opportunity_cost_indicator_visible_to_policy"] is False
           for split_name in ("validation", "final_holdout"):
