@@ -21,9 +21,17 @@ def _validate_ohlcv(data: pd.DataFrame) -> pd.DataFrame:
     if missing:
         raise ValueError(f"missing_ohlcv_columns:{','.join(sorted(missing))}")
     frame = data.loc[:, _REQUIRED_COLUMNS].copy()
-    numeric = frame.loc[:, _REQUIRED_COLUMNS].to_numpy(dtype=np.float64)
+    numeric = frame.loc[:, ("open", "high", "low", "close", "volume")].to_numpy(dtype=np.float64)
     if not np.isfinite(numeric).all():
         raise ValueError("ohlcv_contains_non_finite_values")
+    timestamp = frame["timestamp"]
+    if pd.api.types.is_numeric_dtype(timestamp):
+        timestamp = pd.to_datetime(timestamp, unit="ms", utc=True, errors="coerce")
+    else:
+        timestamp = pd.to_datetime(timestamp, utc=True, errors="coerce")
+    if timestamp.isna().any():
+        raise ValueError("timestamps_must_be_valid")
+    frame["timestamp"] = timestamp
     if (frame[["open", "high", "low", "close"]] <= 0).any().any():
         raise ValueError("ohlc_prices_must_be_positive")
     if (frame["volume"] < 0).any():
