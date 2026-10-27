@@ -240,9 +240,7 @@ def _validate_signal_guidance_reward_scale(value: object) -> None:
         or not math.isfinite(float(value))
         or value < 0.0
     ):
-        raise ValueError(
-            "signal_guidance_reward_scale_must_be_finite_and_non_negative"
-        )
+        raise ValueError("signal_guidance_reward_scale_must_be_finite_and_non_negative")
 
 
 class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
@@ -278,9 +276,7 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
         signal_guidance_reward_scale: float = 0.0,
     ) -> None:
         super().__init__()
-        _validate_minimum_holding_period_candles(
-            minimum_holding_period_candles
-        )
+        _validate_minimum_holding_period_candles(minimum_holding_period_candles)
         _validate_portfolio_state_option(include_portfolio_state)
         validate_market_data(market_data)
         _validate_environment_configuration(
