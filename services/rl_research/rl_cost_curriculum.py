@@ -111,9 +111,7 @@ class TrainingTransactionCosts:
             "all_training_steps_full_cost": full_cost_applied,
             "full_cost_steps": self._steps_at_full_cost,
             "steps_by_stage": {"full_cost": self._steps_at_full_cost},
-            "closed_trades_by_stage": {
-                "full_cost": self._closed_trades_at_full_cost
-            },
+            "closed_trades_by_stage": {"full_cost": self._closed_trades_at_full_cost},
             "last_training_step_cost_stage": (
                 "full_cost" if training_timesteps else "not_started"
             ),

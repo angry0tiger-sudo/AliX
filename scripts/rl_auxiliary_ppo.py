@@ -587,9 +587,8 @@ def _build_action_masked_recurrent_policy() -> Any:
         if action_logits.ndim != 2 or action_logits.shape[1] != len(ACTION_NAMES):
             raise ValueError("action_mask_discrete_logits_shape_invalid")
         observation_shape: Any = getattr(observations, "shape", ())
-        if (
-            len(observation_shape) < 2
-            or observation_shape[-1] <= max(position_index, holding_period_index)
+        if len(observation_shape) < 2 or observation_shape[-1] <= max(
+            position_index, holding_period_index
         ):
             raise ValueError("action_mask_position_observation_missing")
         position_fraction = (

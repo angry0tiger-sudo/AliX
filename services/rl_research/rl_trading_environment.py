@@ -414,9 +414,7 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
             < self.minimum_holding_period_candles
         )
 
-    def _portfolio_observation_values(
-        self, price: float
-    ) -> tuple[float, float, float]:
+    def _portfolio_observation_values(self, price: float) -> tuple[float, float, float]:
         equity = self._equity_at(price)
         position_value = self._quantity * price
         if (
@@ -430,8 +428,7 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
         ) / self._position_cost_basis
         holding_period_fraction = min(
             1.0,
-            self._position_holding_candles(price)
-            / self.minimum_holding_period_candles,
+            self._position_holding_candles(price) / self.minimum_holding_period_candles,
         )
         if not all(
             math.isfinite(value)
