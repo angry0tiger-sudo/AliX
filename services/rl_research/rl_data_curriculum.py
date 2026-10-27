@@ -54,9 +54,7 @@ def select_high_volatility_window(
         raise ValueError("close_prices_must_be_positive")
 
     max_start = len(training_data) - window_candles
-    starts = np.arange(
-        0, max_start + 1, candidate_stride_candles, dtype=np.int64
-    )
+    starts = np.arange(0, max_start + 1, candidate_stride_candles, dtype=np.int64)
     if int(starts[-1]) != max_start:
         starts = np.append(starts, np.int64(max_start))
 
@@ -73,9 +71,7 @@ def select_high_volatility_window(
     realized_volatility = np.sqrt(
         np.maximum(squared_return_sum, 0.0) / returns_per_window
     )
-    signed_log_return = (
-        log_close[starts + returns_per_window] - log_close[starts]
-    )
+    signed_log_return = log_close[starts + returns_per_window] - log_close[starts]
     absolute_log_return = np.abs(signed_log_return)
     volatility_threshold = float(
         np.quantile(realized_volatility, minimum_volatility_quantile)
