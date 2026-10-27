@@ -250,7 +250,7 @@ def _validate_trailing_stop_configuration(distance: object, activation: object) 
         raise ValueError("trailing_stop_distance_must_be_below_activation")
 
 
-def _validate_signal_guidance_reward_scale(value: object) -> None
+def _validate_signal_guidance_reward_scale(value: object) -> None:
     if (
         isinstance(value, bool)
         or not isinstance(value, (int, float))
