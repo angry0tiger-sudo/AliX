@@ -202,87 +202,7 @@ def classification_metrics(truth: IntArray, predictions: IntArray) -> dict[str, 
     }
 
 
-def _validate_economic_shapes(
-    actions: IntArray, close_prices: Float64Array
-) -> None:
-    if (
-        actions.ndim != 1
-        or close_prices.ndim != 1
-        or len(actions) != len(close_prices)
-        or len(actions) < 2
-    ):
-        raise ValueError("economic_simulation_shape_mismatch")
-
-
-def _validate_economic_prices_and_costs(
-    close_prices: Float64Array, fee_bps_per_side: float, slippage_bps_per_side: float
-) -> None:
-    if not np.isfinite(close_prices).all() or np.any(close_prices <= 0):
-        raise ValueError("economic_simulation_input_invalid")
-    if fee_bps_per_side < 0 or slippage_bps_per_side < 0:
-        raise ValueError("economic_simulation_input_invalid")
-
-
-def _target_positions(actions: IntArray) -> IntArray:
-    positions = np.zeros(len(actions), dtype=np.int8)
-    position = 0
-    for index, action in enumerate(actions):
-        if int(action) == ACTION_BUY:
-            position = 1
-        elif int(action) == ACTION_SELL:
-            position = -1
-        elif int(action) != ACTION_HOLD:
-            raise ValueError("economic_simulation_action_invalid")
-        positions[index] = position
-    return positions
-
-
-def _net_period_returns(
-    positions: IntArray,
-    close_prices: Float64Array,
-    fee_bps_per_side: float,
-    slippage_bps_per_side: float,
-) -> tuple[Float64Array, IntArray]:
-    turnover = np.abs(
-        np.diff(np.concatenate((np.array([0], dtype=np.int8), positions)))
-    ).astype(np.int64)
-    log_returns = np.diff(np.log(close_prices))
-    transaction_cost = (fee_bps_per_side + slippage_bps_per_side) / 10_000.0
-    net_returns = (
-        positions[:-1].astype(np.float64) * log_returns
-        - turnover[:-1].astype(np.float64) * transaction_cost
-    )
-    return net_returns, turnover
-
-
-def _economic_scorecard(
-    net_returns: Float64Array,
-    turnover: IntArray,
-    fee_bps_per_side: float,
-    slippage_bps_per_side: float,
-) -> dict[str, Any]:
-    equity = np.concatenate((np.array([1.0]), np.exp(np.cumsum(net_returns))))
-    drawdown = equity / np.maximum.accumulate(equity) - 1.0
-    gross_profit = float(net_returns[net_returns > 0.0].sum())
-    gross_loss = float(-net_returns[net_returns < 0.0].sum())
-    profit_factor = float(gross_profit / gross_loss) if gross_loss > 0.0 else None
-    return {
-        "net_return_fraction": float(equity[-1] - 1.0),
-        "max_drawdown_fraction": float(max(0.0, -float(drawdown.min()))),
-        "profit_factor": profit_factor,
-        "positive_period_fraction": (
-            float(np.mean(net_returns > 0.0)) if len(net_returns) else 0.0
-        ),
-        "evaluated_periods": int(len(net_returns)),
-        "position_change_count": int(np.count_nonzero(turnover[:-1])),
-        "fee_bps_per_side": float(fee_bps_per_side),
-        "slippage_bps_per_side": float(slippage_bps_per_side),
-    }
-
-
-def _validate_economic_shapes(
-    actions: IntArray, close_prices: Float64Array
-) -> None:
+def _validate_economic_shapes(actions: IntArray, close_prices: Float64Array) -> None:
     if (
         actions.ndim != 1
         or close_prices.ndim != 1
@@ -379,7 +299,6 @@ def simulate_economics(
     )
 
 
-
 def _predict_actions(
     torch: Any, lstm: Any, classifier: Any, features: FloatArray
 ) -> IntArray:
@@ -447,7 +366,11 @@ def _write_teacher_dataset(
 def _validate_split_boundaries(
     row_count: int, window: int, train_end: int, validation_end: int
 ) -> None:
-    if train_end <= window or validation_end <= train_end or row_count <= validation_end:
+    if (
+        train_end <= window
+        or validation_end <= train_end
+        or row_count <= validation_end
+    ):
         raise ValueError("insufficient_rows_for_chronological_splits")
 
 
@@ -560,10 +483,7 @@ def _create_training_state(torch: Any, prepared: dict[str, Any]) -> dict[str, An
 
 
 def _snapshot_model_state(model: Any) -> dict[str, Any]:
-    return {
-        name: value.detach().clone()
-        for name, value in model.state_dict().items()
-    }
+    return {name: value.detach().clone() for name, value in model.state_dict().items()}
 
 
 def _fit_lstm(
@@ -603,9 +523,7 @@ def _fit_lstm(
             optimizer.step()
 
         completed_epochs = epoch + 1
-        predictions = _predict_actions(
-            torch, lstm, classifier, validation_features
-        )
+        predictions = _predict_actions(torch, lstm, classifier, validation_features)
         metrics = classification_metrics(validation_targets, predictions)
         score = float(metrics["macro_f1"])
         if score > best_validation_macro_f1 + 1e-9:
@@ -662,9 +580,7 @@ def _evaluate_training_state(
         "validation_model_economics": simulate_economics(
             validation_predictions, validation_close
         ),
-        "holdout_teacher_economics": simulate_economics(
-            holdout_targets, holdout_close
-        ),
+        "holdout_teacher_economics": simulate_economics(holdout_targets, holdout_close),
         "holdout_model_economics": simulate_economics(
             holdout_predictions, holdout_close
         ),
@@ -737,7 +653,9 @@ def _build_training_report(
             "validation_rows": validation_end - train_end,
             "holdout_rows": row_count - validation_end,
             "train_end_timestamp": str(teacher.iloc[train_end - 1]["timestamp"]),
-            "validation_end_timestamp": str(teacher.iloc[validation_end - 1]["timestamp"]),
+            "validation_end_timestamp": str(
+                teacher.iloc[validation_end - 1]["timestamp"]
+            ),
             "holdout_start_timestamp": str(teacher.iloc[validation_end]["timestamp"]),
         },
         "teacher": {
@@ -845,7 +763,6 @@ def run_training(
         )
     )
     return report
-
 
 
 def main() -> int:

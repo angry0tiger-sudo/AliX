@@ -59,7 +59,6 @@ def _validate_ohlcv(data: pd.DataFrame) -> pd.DataFrame:
     return frame
 
 
-
 def _higher_timeframe_bias(frame: pd.DataFrame, rule: str, ema_span: int) -> pd.Series:
     indexed = frame.set_index("timestamp")
     close = (
@@ -235,9 +234,7 @@ def generate_teacher_labels(
         higher_timeframe, ema_span, swing_window, volume_window, cooldown_candles
     )
     frame = _validate_ohlcv(data)
-    bias, bias_4h, bias_1d = _select_timeframe_biases(
-        frame, higher_timeframe, ema_span
-    )
+    bias, bias_4h, bias_1d = _select_timeframe_biases(frame, higher_timeframe, ema_span)
     bullish_structure, bearish_structure, prior_high = _smc_features(
         frame, swing_window
     )
