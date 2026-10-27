@@ -293,6 +293,7 @@ def _fetch_candle_pages(
             sleep_fn(1.1)
     return rows
 
+
 def _validate_historical_rows(rows: list[CandleRecord], days: int) -> None:
     rows.sort(key=lambda item: item["timestamp"])
     stamps = [row["timestamp"] for row in rows]
