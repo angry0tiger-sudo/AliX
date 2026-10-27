@@ -1344,11 +1344,16 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
         risk_drawdown = self._update_drawdown(next_bar)
         intrabar_stop_triggered = self._apply_intrabar_trailing_stop(next_bar)
         self._update_trailing_stop_from_completed_bar(next_bar)
-        invalid_action_penalty_applied, invalid_action_penalty = (
-            self._invalid_action_penalty_for_request(
-                requested_action, action_name, action_mask
+        if gap_stop_triggered:
+            # The risk exit overrides this candle's stale policy action; do not penalize it.
+            invalid_action_penalty_applied = False
+            invalid_action_penalty = 0.0
+        else:
+            invalid_action_penalty_applied, invalid_action_penalty = (
+                self._invalid_action_penalty_for_request(
+                    requested_action, action_name, action_mask
+                )
             )
-        )
         fees_this_step = max(0.0, self._total_fees - fees_before_action)
         slippage_this_step = max(0.0, self._total_slippage - slippage_before_action)
         transaction_costs_this_step = fees_this_step + slippage_this_step

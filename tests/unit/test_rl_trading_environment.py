@@ -889,7 +889,36 @@ def test_early_exit_penalty_only_applies_to_small_positive_policy_exit(
     env.close()
 
 
-def test_transaction_costs_are_charged_again_in_explicit_reward_component() -> None
+def test_gap_trailing_stop_suppresses_stale_policy_action_without_penalty() -> None:
+    data = _bars(
+        closes=[100.0, 100.0, 100.0, 100.0, 100.0],
+        highs=[100.0, 100.0, 104.0, 101.0, 101.0],
+        lows=[100.0, 100.0, 103.0, 99.0, 99.0],
+    )
+    env = BTCUSDTTradingEnv(
+        data,
+        initial_equity=1_000.0,
+        fee_bps_per_side=0.0,
+        slippage_bps_per_side=0.0,
+        min_remaining_steps=1,
+        minimum_holding_period_candles=15,
+    )
+    env.reset(seed=73)
+    env.step(np.asarray(ACTION_BUY_100, dtype=np.int64))
+    env.step(np.asarray(ACTION_HOLD, dtype=np.int64))
+    _, _, _, _, stop_info = env.step(np.asarray(ACTION_SELL_100, dtype=np.int64))
+    assert stop_info["trailing_stop_triggered_at_open"] is True
+    assert stop_info["closed_trade_exit_reason_this_step"] == "trailing_stop"
+    assert stop_info["executed_action"] == "SUPPRESSED_AFTER_TRAILING_STOP"
+    assert stop_info["action_blocked"] is True
+    assert stop_info["invalid_action_penalty_applied"] is False
+    assert stop_info["reward_invalid_action_penalty"] == 0.0
+    assert stop_info["reward_early_exit_penalty"] == 0.0
+    assert env.summary()["trailing_stop_trigger_count"] == 1
+    env.close()
+
+
+def test_transaction_costs_are_charged_again_in_explicit_reward_component() -> None:
     env = BTCUSDTTradingEnv(
         _bars(closes=[100.0] * 8),
         initial_equity=1_000.0,

@@ -234,7 +234,7 @@ def test_evaluation_reports_hold_collapse_and_empty_trade_metrics_as_null() -> N
     assert metrics["early_exit_count"] == 0
 
 
-def test_model_reload_roundtrip_records_restored_policy_identity(tmp_path: Any) -> None
+def test_model_reload_roundtrip_records_restored_policy_identity(tmp_path: Any) -> None:
     model_path = tmp_path / "rl_trading_agent_recurrent_ppo.zip"
     model_path.write_bytes(b"saved-model")
     original = _RoundtripModel(action=2)

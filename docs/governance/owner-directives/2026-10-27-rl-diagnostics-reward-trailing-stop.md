@@ -24,7 +24,7 @@ Report `average_holding_period_candles`, `average_win_percent`, `average_loss_pe
 
 ## Trailing-stop contract
 
-The long-only spot research environment uses a 3% activation threshold and 2% trailing distance from the highest high observed in a completed candle. The stop is updated only after that candle is completed and can trigger only on a subsequent candle. A gap through an already-active stop fills at next open; an intrabar low crossing the prior stop fills at the stop price. Fee/slippage accounting remains active. Trailing stop does not inspect future candles and does not authorize live orders.
+The long-only spot research environment uses a 3% activation threshold and 2% trailing distance from the highest high observed in a completed candle. The stop is updated only after that candle is completed and can trigger only on a subsequent candle. A gap through an already-active stop fills at next open and suppresses the stale policy action for that candle without charging an invalid-action penalty; an intrabar low crossing the prior stop fills at the stop price. Fee/slippage accounting remains active. Trailing stop does not inspect future candles and does not authorize live orders.
 
 ## Acceptance
 
