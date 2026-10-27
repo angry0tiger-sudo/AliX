@@ -79,7 +79,14 @@ def test_spot_sell_without_asset_is_masked_and_short_is_impossible() -> None:
     np.testing.assert_array_equal(
         effective,
         np.asarray(
-            [ACTION_HOLD, ACTION_BUY, ACTION_SELL, ACTION_HOLD, ACTION_HOLD, ACTION_BUY],
+            [
+                ACTION_HOLD,
+                ACTION_BUY,
+                ACTION_SELL,
+                ACTION_HOLD,
+                ACTION_HOLD,
+                ACTION_BUY,
+            ],
             dtype=np.int64,
         ),
     )
