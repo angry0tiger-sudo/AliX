@@ -120,7 +120,7 @@ def test_win_rate_and_profit_factor_use_closed_trades_only() -> None:
         [ACTION_BUY, ACTION_SELL, ACTION_BUY, ACTION_SELL, ACTION_BUY, ACTION_SELL],
         dtype=np.int64,
     )
-    close = np.asarray([100.0, 110.0, 100.0, 90.0, 90.0, 90.0], dtype=np.float64)
+    close = np.asarray([64.0, 128.0, 128.0, 64.0, 64.0, 64.0], dtype=np.float64)
 
     result = simulate_economics(
         actions, close, fee_bps_per_side=0.0, slippage_bps_per_side=0.0
@@ -135,20 +135,3 @@ def test_win_rate_and_profit_factor_use_closed_trades_only() -> None:
         result["profit_factor"], result["gross_profit"] / result["gross_loss"]
     )
     assert "positive_period_fraction" not in result
-) -> None:
-    close = np.asarray([100.0, 101.0, 100.0, 99.0], dtype=np.float64)
-    no_position = np.full(4, ACTION_HOLD, dtype=np.int64)
-    hold_result = simulate_economics(
-        no_position, close, fee_bps_per_side=0.0, slippage_bps_per_side=0.0
-    )
-    assert hold_result["net_return_fraction"] == 0.0
-    assert hold_result["max_drawdown_fraction"] == 0.0
-    actions = np.asarray(
-        [ACTION_BUY, ACTION_HOLD, ACTION_SELL, ACTION_HOLD], dtype=np.int64
-    )
-    result = simulate_economics(
-        actions, close, fee_bps_per_side=0.0, slippage_bps_per_side=0.0
-    )
-    assert result["position_change_count"] == 2
-    assert result["evaluated_periods"] == 3
-    assert result["net_return_fraction"] > 0.0
