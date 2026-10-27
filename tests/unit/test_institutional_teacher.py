@@ -82,7 +82,7 @@ def test_teacher_rejects_invalid_market_data(
 
 
 def test_teacher_configuration_is_bounded() -> None:
-    with pytest.raises(ValueError, match="higher_timeframe_must_be_4h_or_1D"):
+    with pytest.raises(ValueError, match="higher_timeframe_must_be_4h_1D_or_4h+1D"):
         generate_teacher_labels(
             _bars(200),
             higher_timeframe="1m",
@@ -90,3 +90,58 @@ def test_teacher_configuration_is_bounded() -> None:
             swing_window=5,
             volume_window=10,
         )
+
+
+
+def test_multi_timeframe_teacher_requires_bias_confluence() -> None:
+    data = _bars(2_000)
+    result = generate_teacher_labels(
+        data,
+        higher_timeframe="4h+1D",
+        ema_span=3,
+        swing_window=5,
+        volume_window=10,
+    )
+    assert result["higher_timeframe_bias_4h"].isin([-1, 0, 1]).all()
+    assert result["higher_timeframe_bias_1d"].isin([-1, 0, 1]).all()
+    assert result["higher_timeframe_bias"].isin([-1, 0, 1]).all()
+    active_bias = result["higher_timeframe_bias"] != 0
+    assert (
+        result.loc[active_bias, "higher_timeframe_bias_4h"]
+        == result.loc[active_bias, "higher_timeframe_bias_1d"]
+    ).all()
+
+
+def test_higher_timeframe_bias_excludes_boundary_candle() -> None:
+    data = _bars(4_000)
+    original = generate_teacher_labels(
+        data, higher_timeframe="4h", ema_span=2, swing_window=5, volume_window=10
+    )
+    changed = data.copy()
+    changed.loc[1_440, ["open", "high", "low", "close"]] *= 0.05
+    rerun = generate_teacher_labels(
+        changed, higher_timeframe="4h", ema_span=2, swing_window=5, volume_window=10
+    )
+    assert (
+        original.loc[1_440, "higher_timeframe_bias"]
+        == rerun.loc[1_440, "higher_timeframe_bias"]
+    )
+
+
+def test_teacher_position_persists_across_hold_actions() -> None:
+    result = generate_teacher_labels(
+        _bars(2_000),
+        higher_timeframe="4h+1D",
+        ema_span=3,
+        swing_window=5,
+        volume_window=10,
+    )
+    expected = np.zeros(len(result), dtype=np.int8)
+    position = 0
+    for index, action in enumerate(result["teacher_action"].to_numpy()):
+        if action == ACTION_BUY:
+            position = 1
+        elif action == ACTION_SELL:
+            position = -1
+        expected[index] = position
+    np.testing.assert_array_equal(result["teacher_position"].to_numpy(), expected)

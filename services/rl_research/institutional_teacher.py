@@ -54,7 +54,7 @@ def _validate_ohlcv(data: pd.DataFrame) -> pd.DataFrame:
 def _higher_timeframe_bias(frame: pd.DataFrame, rule: str, ema_span: int) -> pd.Series:
     indexed = frame.set_index("timestamp")
     close = (
-        indexed["close"].resample(rule, label="right", closed="right").last().dropna()
+        indexed["close"].resample(rule, label="right", closed="left").last().dropna()
     )
     fast = close.ewm(span=ema_span, adjust=False, min_periods=ema_span).mean()
     slow = close.ewm(span=ema_span * 3, adjust=False, min_periods=ema_span * 3).mean()
@@ -146,10 +146,17 @@ def generate_teacher_labels(
     ):
         if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
             raise ValueError(f"{name}_out_of_range")
-    if higher_timeframe not in {"4h", "1D"}:
-        raise ValueError("higher_timeframe_must_be_4h_or_1D")
+    if higher_timeframe not in {"4h", "1D", "4h+1D"}:
+        raise ValueError("higher_timeframe_must_be_4h_1D_or_4h+1D")
 
-    bias = _higher_timeframe_bias(frame, higher_timeframe, ema_span)
+    bias_4h = _higher_timeframe_bias(frame, "4h", ema_span)
+    bias_1d = _higher_timeframe_bias(frame, "1D", ema_span)
+    if higher_timeframe == "4h":
+        bias = bias_4h
+    elif higher_timeframe == "1D":
+        bias = bias_1d
+    else:
+        bias = bias_4h.where(bias_4h == bias_1d, 0).astype(np.int8)
     bullish_structure, bearish_structure, prior_high = _smc_features(
         frame, swing_window
     )
@@ -158,10 +165,12 @@ def generate_teacher_labels(
     sell_setup = (bias < 0) & bearish_structure & sell_volume
 
     actions = np.full(len(frame), ACTION_HOLD, dtype=np.int8)
+    positions = np.zeros(len(frame), dtype=np.int8)
     position = 0
     last_change = -cooldown_candles - 1
     for i in range(len(frame)):
         if i - last_change <= cooldown_candles:
+            positions[i] = position
             continue
         if position <= 0 and bool(buy_setup.iloc[i]):
             actions[i] = ACTION_BUY
@@ -171,9 +180,12 @@ def generate_teacher_labels(
             actions[i] = ACTION_SELL
             position = -1
             last_change = i
+        positions[i] = position
 
     result = frame.copy()
     result["higher_timeframe_bias"] = bias.to_numpy(dtype=np.int8)
+    result["higher_timeframe_bias_4h"] = bias_4h.to_numpy(dtype=np.int8)
+    result["higher_timeframe_bias_1d"] = bias_1d.to_numpy(dtype=np.int8)
     result["bos_reference_high"] = prior_high.to_numpy(dtype=np.float64)
     result["teacher_action"] = actions
     result["teacher_action_name"] = np.select(
@@ -181,7 +193,5 @@ def generate_teacher_labels(
         ["BUY", "SELL"],
         default="HOLD",
     )
-    result["teacher_position"] = np.where(
-        actions == ACTION_BUY, 1, np.where(actions == ACTION_SELL, -1, 0)
-    )
+    result["teacher_position"] = positions
     return result
