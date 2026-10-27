@@ -10,6 +10,7 @@ from scripts.run_rl_trading_agent import (
     PREVIOUS_HOLDOUT_START_MS,
     _checkpoint_validation_row,
     _entropy_coefficient_at_step,
+    _verify_model_reload_roundtrip,
     _evaluate_policy,
     _exclude_previous_holdout_window,
     _guidance_reward_scale_at_step,
@@ -167,3 +168,67 @@ def test_checkpoint_validation_row_reports_action_sides_and_economics(
     assert row["net_profit"] == pytest.approx(15.0)
     assert row["max_drawdown"] == pytest.approx(0.02)
     assert row["closed_trades"] == 2
+
+class ActionMaskedRecurrentActorCriticPolicy:
+    """Test-only stand-in named like the dynamically registered custom policy."""
+
+
+class _SevenActionSpace:
+    n = 7
+
+
+class _RoundtripModel:
+    def __init__(self, action: int = 1, timesteps: int = 100_000) -> None:
+        self.action = action
+        self.num_timesteps = timesteps
+        self.policy = ActionMaskedRecurrentActorCriticPolicy()
+        self.action_space = _SevenActionSpace()
+
+    def predict(
+        self,
+        observation: NDArray[np.float32],
+        *,
+        state: Any,
+        episode_start: NDArray[np.bool_],
+        deterministic: bool,
+    ) -> tuple[NDArray[np.int64], Any]:
+        assert deterministic is True
+        assert observation.dtype == np.float32
+        assert episode_start.tolist() == [True]
+        return np.asarray([self.action], dtype=np.int64), state
+
+
+def test_model_reload_roundtrip_records_restored_policy_identity(tmp_path: Any) -> None:
+    model_path = tmp_path / "rl_trading_agent_recurrent_ppo.zip"
+    model_path.write_bytes(b"saved-model")
+    original = _RoundtripModel(action=2)
+    restored = _RoundtripModel(action=2)
+    observation = np.zeros(11, dtype=np.float32)
+
+    evidence = _verify_model_reload_roundtrip(
+        original, restored, model_path, observation
+    )
+
+    assert evidence["status"] == "passed"
+    assert evidence["model_sha256"]
+    assert evidence["original_policy_class"] == "ActionMaskedRecurrentActorCriticPolicy"
+    assert evidence["reloaded_policy_class"] == "ActionMaskedRecurrentActorCriticPolicy"
+    assert evidence["policy_class_match"] is True
+    assert evidence["deterministic_probe_action_match"] is True
+    assert evidence["deterministic_probe_action"] == 2
+
+
+def test_model_reload_roundtrip_fails_closed_when_prediction_changes(tmp_path: Any) -> None:
+    model_path = tmp_path / "rl_trading_agent_recurrent_ppo.zip"
+    model_path.write_bytes(b"saved-model")
+    observation = np.zeros(11, dtype=np.float32)
+
+    with pytest.raises(
+        RuntimeError, match="reloaded_model_deterministic_prediction_mismatch"
+    ):
+        _verify_model_reload_roundtrip(
+            _RoundtripModel(action=1),
+            _RoundtripModel(action=3),
+            model_path,
+            observation,
+        )
