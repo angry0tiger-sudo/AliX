@@ -552,9 +552,7 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
         closed_profit = self._position_realized_profit
         self._last_closed_trade_net_profit = float(closed_profit)
         entry_cost = self._trade_entry_cost_total
-        return_pct = (
-            100.0 * closed_profit / entry_cost if entry_cost > 0.0 else None
-        )
+        return_pct = 100.0 * closed_profit / entry_cost if entry_cost > 0.0 else None
         self._last_closed_trade_return_pct = return_pct
         exit_reason = self._active_exit_reason or "policy_sell"
         self._last_closed_trade_exit_reason = exit_reason
@@ -1335,7 +1333,9 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
                 requested_size,
                 requested_size_index,
             ) = self._apply_action(
-                action, current_price=current_price, next_open=float(next_bar[OPEN_COLUMN])
+                action,
+                current_price=current_price,
+                next_open=float(next_bar[OPEN_COLUMN]),
             )
         self._record_action(action_name, requested_action, executed_action, mask_reason)
         policy_closes = self._closed_trade_count - closed_trades_before_action
@@ -1513,11 +1513,17 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
             )
             if profit < 0.0
         ]
-        gross_profit = sum(value for value in self._closed_trade_net_profits if value > 0.0)
-        gross_loss = sum(-value for value in self._closed_trade_net_profits if value < 0.0)
+        gross_profit = sum(
+            value for value in self._closed_trade_net_profits if value > 0.0
+        )
+        gross_loss = sum(
+            -value for value in self._closed_trade_net_profits if value < 0.0
+        )
         profit_factor = gross_profit / gross_loss if gross_loss > 0.0 else None
         total_actions = sum(self._discrete_action_counts.values())
-        hold_collapse = total_actions > 0 and self._discrete_action_counts["HOLD"] == total_actions
+        hold_collapse = (
+            total_actions > 0 and self._discrete_action_counts["HOLD"] == total_actions
+        )
         return {
             "initial_equity": self.initial_equity,
             "final_equity": float(final_equity),
@@ -1551,7 +1557,9 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
             "average_loss_percent": (
                 float(np.mean(losing_returns)) if losing_returns else None
             ),
-            "profit_factor": float(profit_factor) if profit_factor is not None else None,
+            "profit_factor": float(profit_factor)
+            if profit_factor is not None
+            else None,
             "early_exit_count": self._early_exit_count,
             "hold_collapse": hold_collapse,
             "flags": {"HOLD_COLLAPSE": hold_collapse},
