@@ -76,8 +76,10 @@ def parse_kline(payload: object) -> HourlyCandle:
     if high < max(opened, low, close) or low > min(opened, high, close):
         raise ValueError("binance_hourly_ohlc_invariant_failed")
 
-    date = datetime.fromtimestamp(timestamp_ms / 1000, UTC).isoformat().replace(
-        "+00:00", "Z"
+    date = (
+        datetime.fromtimestamp(timestamp_ms / 1000, UTC)
+        .isoformat()
+        .replace("+00:00", "Z")
     )
     return {
         "timestamp_ms": timestamp_ms,

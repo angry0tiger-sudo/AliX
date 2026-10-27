@@ -14,8 +14,10 @@ from scripts.fetch_public_hourly_bars import (
 
 def _row(index: int) -> HourlyCandle:
     timestamp_ms = index * HOUR_MS
-    stamp = datetime.fromtimestamp(timestamp_ms / 1000, UTC).isoformat().replace(
-        "+00:00", "Z"
+    stamp = (
+        datetime.fromtimestamp(timestamp_ms / 1000, UTC)
+        .isoformat()
+        .replace("+00:00", "Z")
     )
     return {
         "timestamp_ms": timestamp_ms,
