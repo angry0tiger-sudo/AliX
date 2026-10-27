@@ -1286,30 +1286,12 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
             raise ValueError("reward_non_finite")
         return log_net_return, profitable_trade_bonus, reward
 
-    def step(
-        self, action: Int64Array | np.int64 | int
-    ) -> tuple[Float32Array, float, bool, bool, dict[str, Any]]:
-        if self._index >= len(self._market_data) - 1:
-            raise RuntimeError("environment_episode_already_terminated")
-
-        current_bar = self._market_data[self._index]
-        next_index = self._index + 1
-        next_bar = self._market_data[next_index]
-        current_price = float(current_bar[CLOSE_COLUMN])
-        guidance_target_index = self._guidance_target_index(current_price)
-        previous_equity = self._equity_at(current_price)
-        previous_drawdown = self._current_drawdown
-        previous_quantity = self._quantity
-        fees_before_action = self._total_fees
-        slippage_before_action = self._total_slippage
-        self._last_step_realized_profit = 0.0
-        self._last_step_profitable_trade_count = 0
-        self._last_closed_trade_net_profit = None
-        self._last_closed_trade_return_pct = None
-        self._last_closed_trade_exit_reason = None
-        self._last_trailing_stop_triggered = False
-
-        mask_reason: str | None
+    def _resolve_step_action(
+        self,
+        action: Int64Array | np.int64 | int,
+        current_price: float,
+        next_bar: Float64Array,
+    ) -> dict[str, Any]:
         gap_stop_triggered = self._apply_gap_trailing_stop(float(next_bar[OPEN_COLUMN]))
         closed_trades_before_action = self._closed_trade_count
         if gap_stop_triggered:
@@ -1342,19 +1324,84 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
         policy_closes = self._closed_trade_count - closed_trades_before_action
         if policy_closes > 0 and self._last_closed_trade_exit_reason == "policy_sell":
             self._policy_closed_trade_count += policy_closes
+        return {
+            "gap_stop_triggered": gap_stop_triggered,
+            "action_index": action_index,
+            "action_name": action_name,
+            "requested_action": requested_action,
+            "requested_size": requested_size,
+            "requested_size_index": requested_size_index,
+            "executed_action": executed_action,
+            "action_mask": action_mask,
+            "mask_reason": mask_reason,
+            "action_blocked": action_blocked,
+            "full_position_buy_penalty_applied": full_position_buy_penalty_applied,
+        }
+
+    def _invalid_action_penalty_for_step(
+        self,
+        gap_stop_triggered: bool,
+        requested_action: str,
+        action_name: str,
+        action_mask: dict[str, bool],
+    ) -> tuple[bool, float]:
+        if gap_stop_triggered:
+            # Risk exits override a stale policy action and must not be penalized.
+            return False, 0.0
+        return self._invalid_action_penalty_for_request(
+            requested_action, action_name, action_mask
+        )
+
+    def _profitable_trade_bonus_count_for_step(self) -> int:
+        if self._last_closed_trade_exit_reason in ("policy_sell", "trailing_stop"):
+            return self._last_step_profitable_trade_count
+        return 0
+
+    def step(
+        self, action: Int64Array | np.int64 | int
+    ) -> tuple[Float32Array, float, bool, bool, dict[str, Any]]:
+        if self._index >= len(self._market_data) - 1:
+            raise RuntimeError("environment_episode_already_terminated")
+
+        current_bar = self._market_data[self._index]
+        next_index = self._index + 1
+        next_bar = self._market_data[next_index]
+        current_price = float(current_bar[CLOSE_COLUMN])
+        guidance_target_index = self._guidance_target_index(current_price)
+        previous_equity = self._equity_at(current_price)
+        previous_drawdown = self._current_drawdown
+        previous_quantity = self._quantity
+        fees_before_action = self._total_fees
+        slippage_before_action = self._total_slippage
+        self._last_step_realized_profit = 0.0
+        self._last_step_profitable_trade_count = 0
+        self._last_closed_trade_net_profit = None
+        self._last_closed_trade_return_pct = None
+        self._last_closed_trade_exit_reason = None
+        self._last_trailing_stop_triggered = False
+
+        action_result = self._resolve_step_action(action, current_price, next_bar)
+        gap_stop_triggered = bool(action_result["gap_stop_triggered"])
+        action_index = int(action_result["action_index"])
+        action_name = str(action_result["action_name"])
+        requested_action = str(action_result["requested_action"])
+        requested_size = float(action_result["requested_size"])
+        requested_size_index = int(action_result["requested_size_index"])
+        executed_action = str(action_result["executed_action"])
+        action_mask = action_result["action_mask"]
+        mask_reason: str | None = action_result["mask_reason"]
+        action_blocked = bool(action_result["action_blocked"])
+        full_position_buy_penalty_applied = bool(
+            action_result["full_position_buy_penalty_applied"]
+        )
         risk_drawdown = self._update_drawdown(next_bar)
         intrabar_stop_triggered = self._apply_intrabar_trailing_stop(next_bar)
         self._update_trailing_stop_from_completed_bar(next_bar)
-        if gap_stop_triggered:
-            # The risk exit overrides this candle's stale policy action; do not penalize it.
-            invalid_action_penalty_applied = False
-            invalid_action_penalty = 0.0
-        else:
-            invalid_action_penalty_applied, invalid_action_penalty = (
-                self._invalid_action_penalty_for_request(
-                    requested_action, action_name, action_mask
-                )
+        invalid_action_penalty_applied, invalid_action_penalty = (
+            self._invalid_action_penalty_for_step(
+                gap_stop_triggered, requested_action, action_name, action_mask
             )
+        )
         fees_this_step = max(0.0, self._total_fees - fees_before_action)
         slippage_this_step = max(0.0, self._total_slippage - slippage_before_action)
         transaction_costs_this_step = fees_this_step + slippage_this_step
@@ -1378,11 +1425,7 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
             executed_action
         )
         early_exit_penalty = self._early_exit_penalty_for_closed_trade()
-        profitable_trade_bonus_count = (
-            self._last_step_profitable_trade_count
-            if self._last_closed_trade_exit_reason in ("policy_sell", "trailing_stop")
-            else 0
-        )
+        profitable_trade_bonus_count = self._profitable_trade_bonus_count_for_step()
         opportunity_cost_penalty = self._opportunity_cost_penalty_for_action(
             requested_action, current_price
         )
@@ -1449,8 +1492,7 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
             ),
             "reward_full_position_buy_penalty": float(
                 DEFAULT_INVALID_FULL_POSITION_BUY_PENALTY
-                if requested_action == "BUY" and not action_mask[action_name]
-                else 0.0
+                * full_position_buy_penalty_applied
             ),
             "invalid_action_penalty_applied": invalid_action_penalty_applied,
             "reward_opportunity_cost_penalty": opportunity_cost_penalty,
@@ -1485,6 +1527,63 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
             info.update(self.summary())
         return self._observation(self._index), float(reward), terminated, False, info
 
+    def _summary_win_rate(self) -> float | None:
+        decisive_trades = self._winning_trade_count + self._losing_trade_count
+        if decisive_trades == 0:
+            return None
+        return self._winning_trade_count / decisive_trades
+
+    def _summary_average_holding_period(self) -> float | None:
+        if not self._closed_trade_holding_periods:
+            return None
+        return float(np.mean(self._closed_trade_holding_periods))
+
+    def _summary_average_trade_return(self, profitable: bool) -> float | None:
+        if profitable:
+            values = [
+                return_pct
+                for profit, return_pct in zip(
+                    self._closed_trade_net_profits,
+                    self._closed_trade_returns_percent,
+                    strict=False,
+                )
+                if profit > 0.0
+            ]
+        else:
+            values = [
+                return_pct
+                for profit, return_pct in zip(
+                    self._closed_trade_net_profits,
+                    self._closed_trade_returns_percent,
+                    strict=False,
+                )
+                if profit < 0.0
+            ]
+        if not values:
+            return None
+        return float(np.mean(values))
+
+    def _summary_profit_factor(self) -> float | None:
+        gross_profit = sum(
+            value for value in self._closed_trade_net_profits if value > 0.0
+        )
+        gross_loss = sum(
+            -value for value in self._closed_trade_net_profits if value < 0.0
+        )
+        if gross_loss <= 0.0:
+            return None
+        return float(gross_profit / gross_loss)
+
+    def _summary_hold_collapse(self) -> bool:
+        total_actions = sum(self._discrete_action_counts.values())
+        return total_actions > 0 and self._discrete_action_counts["HOLD"] == total_actions
+
+    def _summary_exit_reason_counts(self) -> dict[str, int]:
+        return {
+            reason: self._closed_trade_exit_reasons.count(reason)
+            for reason in sorted(set(self._closed_trade_exit_reasons))
+        }
+
     def summary(self) -> dict[str, Any]:
         """Return accounting and behavior evidence; never observed by the policy."""
 
@@ -1492,39 +1591,13 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
         final_equity = self._final_equity
         if final_equity is None:
             final_equity = self._equity_at(price)
-        decisive_trades = self._winning_trade_count + self._losing_trade_count
-        win_rate = (
-            self._winning_trade_count / decisive_trades if decisive_trades else None
-        )
-        winning_returns = [
-            value
-            for profit, value in zip(
-                self._closed_trade_net_profits,
-                self._closed_trade_returns_percent,
-                strict=False,
-            )
-            if profit > 0.0
-        ]
-        losing_returns = [
-            value
-            for profit, value in zip(
-                self._closed_trade_net_profits,
-                self._closed_trade_returns_percent,
-                strict=False,
-            )
-            if profit < 0.0
-        ]
-        gross_profit = sum(
-            value for value in self._closed_trade_net_profits if value > 0.0
-        )
-        gross_loss = sum(
-            -value for value in self._closed_trade_net_profits if value < 0.0
-        )
-        profit_factor = gross_profit / gross_loss if gross_loss > 0.0 else None
-        total_actions = sum(self._discrete_action_counts.values())
-        hold_collapse = (
-            total_actions > 0 and self._discrete_action_counts["HOLD"] == total_actions
-        )
+        win_rate = self._summary_win_rate()
+        average_holding_period = self._summary_average_holding_period()
+        average_win_percent = self._summary_average_trade_return(profitable=True)
+        average_loss_percent = self._summary_average_trade_return(profitable=False)
+        profit_factor = self._summary_profit_factor()
+        hold_collapse = self._summary_hold_collapse()
+        exit_reason_counts = self._summary_exit_reason_counts()
         return {
             "initial_equity": self.initial_equity,
             "final_equity": float(final_equity),
@@ -1547,27 +1620,14 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
             "losing_trade_count": self._losing_trade_count,
             "breakeven_trade_count": self._breakeven_trade_count,
             "win_rate": float(win_rate) if win_rate is not None else None,
-            "average_holding_period_candles": (
-                float(np.mean(self._closed_trade_holding_periods))
-                if self._closed_trade_holding_periods
-                else None
-            ),
-            "average_win_percent": (
-                float(np.mean(winning_returns)) if winning_returns else None
-            ),
-            "average_loss_percent": (
-                float(np.mean(losing_returns)) if losing_returns else None
-            ),
-            "profit_factor": float(profit_factor)
-            if profit_factor is not None
-            else None,
+            "average_holding_period_candles": average_holding_period,
+            "average_win_percent": average_win_percent,
+            "average_loss_percent": average_loss_percent,
+            "profit_factor": profit_factor,
             "early_exit_count": self._early_exit_count,
             "hold_collapse": hold_collapse,
             "flags": {"HOLD_COLLAPSE": hold_collapse},
-            "closed_trade_exit_reason_counts": {
-                reason: self._closed_trade_exit_reasons.count(reason)
-                for reason in sorted(set(self._closed_trade_exit_reasons))
-            },
+            "closed_trade_exit_reason_counts": exit_reason_counts,
             "early_exit_penalty_count": self._early_exit_penalty_count,
             "early_exit_penalty_total": float(self._early_exit_penalty_total),
             "trailing_stop_trigger_count": self._trailing_stop_trigger_count,
