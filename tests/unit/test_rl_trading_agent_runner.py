@@ -169,6 +169,7 @@ def test_checkpoint_validation_row_reports_action_sides_and_economics(
     assert row["max_drawdown"] == pytest.approx(0.02)
     assert row["closed_trades"] == 2
 
+
 class ActionMaskedRecurrentActorCriticPolicy:
     """Test-only stand-in named like the dynamically registered custom policy."""
 
@@ -218,7 +219,9 @@ def test_model_reload_roundtrip_records_restored_policy_identity(tmp_path: Any) 
     assert evidence["deterministic_probe_action"] == 2
 
 
-def test_model_reload_roundtrip_fails_closed_when_prediction_changes(tmp_path: Any) -> None:
+def test_model_reload_roundtrip_fails_closed_when_prediction_changes(
+    tmp_path: Any,
+) -> None:
     model_path = tmp_path / "rl_trading_agent_recurrent_ppo.zip"
     model_path.write_bytes(b"saved-model")
     observation = np.zeros(11, dtype=np.float32)
