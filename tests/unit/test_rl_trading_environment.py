@@ -224,7 +224,7 @@ def test_environment_default_minimum_holding_period_is_15_candles() -> None:
         == DEFAULT_MINIMUM_HOLDING_PERIOD_CANDLES
         == 15
     )
-    assert DEFAULT_TRANSACTION_COST_REWARD_MULTIPLIER == 5.0
+    assert DEFAULT_TRANSACTION_COST_REWARD_MULTIPLIER == 2.0
     assert DEFAULT_REALIZED_PROFIT_REWARD_SCALE == pytest.approx(0.05)
     observation, _ = env.reset(seed=1)
     assert observation[-1] == pytest.approx(0.0)
@@ -830,7 +830,66 @@ def test_flat_cash_hold_has_no_bonus_and_keeps_inactivity_penalty() -> None:
     env.close()
 
 
-def test_transaction_costs_are_charged_again_in_explicit_reward_component() -> None:
+def test_trailing_stop_activates_from_completed_bar_and_bypasses_holding_lock() -> None:
+    data = _bars(
+        closes=[100.0, 100.0, 100.0, 103.0, 103.0],
+        highs=[100.0, 100.0, 104.0, 104.0, 104.0],
+        lows=[100.0, 100.0, 103.0, 100.0, 99.0],
+    )
+    env = BTCUSDTTradingEnv(
+        data,
+        initial_equity=1_000.0,
+        fee_bps_per_side=0.0,
+        slippage_bps_per_side=0.0,
+        min_remaining_steps=1,
+        minimum_holding_period_candles=15,
+    )
+    env.reset(seed=71)
+    _, _, _, _, entry_info = env.step(np.asarray(ACTION_BUY_100, dtype=np.int64))
+    assert entry_info["trailing_stop_triggered"] is False
+    _, _, _, _, activation_info = env.step(np.asarray(ACTION_HOLD, dtype=np.int64))
+    assert activation_info["trailing_stop_active"] is True
+    assert activation_info["trailing_stop_price"] == pytest.approx(104.0 * 0.98)
+    _, _, _, _, stop_info = env.step(np.asarray(ACTION_HOLD, dtype=np.int64))
+    assert stop_info["trailing_stop_triggered"] is True
+    assert stop_info["trailing_stop_triggered_intrabar"] is True
+    assert stop_info["closed_trade_exit_reason_this_step"] == "trailing_stop"
+    assert stop_info["reward_early_exit_penalty"] == 0.0
+    metrics = env.summary()
+    assert metrics["closed_trade_count"] == 1
+    assert metrics["trailing_stop_trigger_count"] == 1
+    assert metrics["average_holding_period_candles"] == pytest.approx(2.0)
+    assert metrics["average_win_percent"] == pytest.approx(1.92)
+    assert metrics["average_loss_percent"] is None
+    assert metrics["profit_factor"] is None
+    env.close()
+
+
+@pytest.mark.parametrize(
+    ("exit_price", "expected_penalty"),
+    [(100.5, 0.0001), (98.5, 0.0)],
+)
+def test_early_exit_penalty_only_applies_to_small_positive_policy_exit(
+    exit_price: float, expected_penalty: float
+) -> None:
+    prices = [100.0, 100.0, exit_price, exit_price]
+    env = _env(_bars(closes=prices), initial_equity=1_000.0)
+    env.reset(seed=72)
+    env.step(np.asarray(ACTION_BUY_100, dtype=np.int64))
+    _, _, _, _, exit_info = env.step(np.asarray(ACTION_SELL_100, dtype=np.int64))
+    assert exit_info["closed_trade_return_percent_this_step"] == pytest.approx(
+        (exit_price / 100.0 - 1.0) * 100.0
+    )
+    assert exit_info["reward_early_exit_penalty"] == pytest.approx(expected_penalty)
+    metrics = env.summary()
+    assert metrics["early_exit_count"] == 1
+    assert metrics["early_exit_penalty_count"] == (1 if expected_penalty else 0)
+    if exit_price < 100.0:
+        assert metrics["average_loss_percent"] == pytest.approx(-1.5)
+    env.close()
+
+
+def test_transaction_costs_are_charged_again_in_explicit_reward_component() -> None
     env = BTCUSDTTradingEnv(
         _bars(closes=[100.0] * 8),
         initial_equity=1_000.0,

@@ -74,7 +74,11 @@ DEFAULT_HOLDING_LOSS_PENALTY = 0.0001
 DEFAULT_REALIZED_PROFIT_REWARD_SCALE = 0.05
 DEFAULT_INACTIVITY_GRACE_STEPS = 3
 DEFAULT_PROFITABLE_TRADE_BONUS = 0.0001
-DEFAULT_TRANSACTION_COST_REWARD_MULTIPLIER = 5.0
+DEFAULT_TRANSACTION_COST_REWARD_MULTIPLIER = 2.0
+DEFAULT_EARLY_EXIT_REWARD_PENALTY = 0.0001
+DEFAULT_LARGE_PROFIT_REWARD_CAP = 0.01
+DEFAULT_TRAILING_STOP_DISTANCE_PCT = 0.02
+DEFAULT_TRAILING_STOP_ACTIVATION_PCT = 0.03
 POSITION_FRACTION_EPSILON = 1e-9
 
 Float64Array = NDArray[np.float64]
@@ -233,7 +237,20 @@ def _validate_portfolio_state_option(value: object) -> None:
         raise ValueError("include_portfolio_state_must_be_boolean")
 
 
-def _validate_signal_guidance_reward_scale(value: object) -> None:
+def _validate_trailing_stop_configuration(distance: object, activation: object) -> None:
+    distance_value = _finite_numeric_parameter("trailing_stop_distance_pct", distance)
+    activation_value = _finite_numeric_parameter(
+        "trailing_stop_activation_pct", activation
+    )
+    if not 0.0 < distance_value < 1.0:
+        raise ValueError("trailing_stop_distance_pct_out_of_range")
+    if not 0.0 < activation_value < 1.0:
+        raise ValueError("trailing_stop_activation_pct_out_of_range")
+    if distance_value >= activation_value:
+        raise ValueError("trailing_stop_distance_must_be_below_activation")
+
+
+def _validate_signal_guidance_reward_scale(value: object) -> None
     if (
         isinstance(value, bool)
         or not isinstance(value, (int, float))
@@ -274,6 +291,8 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
         inactivity_grace_steps: int = DEFAULT_INACTIVITY_GRACE_STEPS,
         profitable_trade_bonus: float = DEFAULT_PROFITABLE_TRADE_BONUS,
         signal_guidance_reward_scale: float = 0.0,
+        trailing_stop_distance_pct: float = DEFAULT_TRAILING_STOP_DISTANCE_PCT,
+        trailing_stop_activation_pct: float = DEFAULT_TRAILING_STOP_ACTIVATION_PCT,
     ) -> None:
         super().__init__()
         _validate_minimum_holding_period_candles(minimum_holding_period_candles)
@@ -292,6 +311,9 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
             profitable_trade_bonus,
         )
         _validate_signal_guidance_reward_scale(signal_guidance_reward_scale)
+        _validate_trailing_stop_configuration(
+            trailing_stop_distance_pct, trailing_stop_activation_pct
+        )
 
         self._market_data = np.ascontiguousarray(market_data, dtype=np.float64)
         self.scaler = scaler or MarketObservationScaler.fit(self._market_data)
@@ -319,6 +341,8 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
         self.inactivity_grace_steps = inactivity_grace_steps
         self.profitable_trade_bonus = float(profitable_trade_bonus)
         self.signal_guidance_reward_scale = float(signal_guidance_reward_scale)
+        self.trailing_stop_distance_pct = float(trailing_stop_distance_pct)
+        self.trailing_stop_activation_pct = float(trailing_stop_activation_pct)
 
         self.action_space = spaces.Discrete(len(ACTION_NAMES))
         observation_size = len(self.observation_fields)
@@ -346,6 +370,24 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
         self._last_step_realized_profit = 0.0
         self._last_step_profitable_trade_count = 0
         self._last_closed_trade_net_profit: float | None = None
+        self._last_closed_trade_return_pct: float | None = None
+        self._last_closed_trade_exit_reason: str | None = None
+        self._active_exit_reason: str | None = None
+        self._trade_entry_index: int | None = None
+        self._trade_entry_reference_price: float | None = None
+        self._trade_entry_cost_total = 0.0
+        self._highest_price_since_entry: float | None = None
+        self._trailing_stop_price: float | None = None
+        self._trailing_stop_activated = False
+        self._trailing_stop_trigger_count = 0
+        self._last_trailing_stop_triggered = False
+        self._closed_trade_holding_periods: list[int] = []
+        self._closed_trade_returns_percent: list[float] = []
+        self._closed_trade_net_profits: list[float] = []
+        self._closed_trade_exit_reasons: list[str] = []
+        self._early_exit_penalty_count = 0
+        self._early_exit_penalty_total = 0.0
+        self._early_exit_count = 0
         self._closed_trade_count = 0
         self._policy_closed_trade_count = 0
         self._winning_trade_count = 0
@@ -509,6 +551,23 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
 
         closed_profit = self._position_realized_profit
         self._last_closed_trade_net_profit = float(closed_profit)
+        entry_cost = self._trade_entry_cost_total
+        return_pct = (
+            100.0 * closed_profit / entry_cost if entry_cost > 0.0 else None
+        )
+        self._last_closed_trade_return_pct = return_pct
+        exit_reason = self._active_exit_reason or "policy_sell"
+        self._last_closed_trade_exit_reason = exit_reason
+        if self._trade_entry_index is not None:
+            self._closed_trade_holding_periods.append(
+                max(1, self._index - self._trade_entry_index + 1)
+            )
+        self._closed_trade_net_profits.append(float(closed_profit))
+        self._closed_trade_exit_reasons.append(exit_reason)
+        if return_pct is not None:
+            self._closed_trade_returns_percent.append(float(return_pct))
+            if return_pct < 1.0:
+                self._early_exit_count += 1
         self._closed_trade_count += 1
         tolerance = self.initial_equity * 1e-12
         if closed_profit > tolerance:
@@ -520,6 +579,13 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
             self._breakeven_trade_count += 1
         self._position_cost_basis = 0.0
         self._position_realized_profit = 0.0
+        self._last_buy_index = None
+        self._trade_entry_index = None
+        self._trade_entry_reference_price = None
+        self._trade_entry_cost_total = 0.0
+        self._highest_price_since_entry = None
+        self._trailing_stop_price = None
+        self._trailing_stop_activated = False
 
     def _record_action(
         self,
@@ -587,7 +653,9 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
         is_buy: bool,
     ) -> None:
         if is_buy:
-            self._position_cost_basis += delta * execution_price + fee
+            entry_cost = delta * execution_price + fee
+            self._position_cost_basis += entry_cost
+            self._trade_entry_cost_total += entry_cost
         else:
             self._record_sale(-delta, execution_price, fee, target_quantity)
 
@@ -701,6 +769,7 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
                     else "insufficient_spendable_cash"
                 )
             return "BUY", "MASKED_BUY", action_mask, reason
+        was_flat = self._quantity <= self._quantity_tolerance(current_price)
         if not self._target_for_buy(size, next_open):
             return (
                 "BUY",
@@ -709,6 +778,12 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
                 "buy_target_not_above_current_position",
             )
         self._last_buy_index = self._index + 1
+        if was_flat:
+            self._trade_entry_index = self._index + 1
+            self._trade_entry_reference_price = float(next_open)
+            self._highest_price_since_entry = float(next_open)
+            self._trailing_stop_price = None
+            self._trailing_stop_activated = False
         return "BUY", "BUY", action_mask, None
 
     def _sell_target_quantity(self, size: float, next_open: float) -> float | None:
@@ -736,7 +811,11 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
         target_quantity = self._sell_target_quantity(size, next_open)
         if target_quantity is None:
             return "SELL", "MASKED_SELL", action_mask, "sell_would_not_reduce_position"
-        self._rebalance_to_quantity(target_quantity, next_open)
+        self._active_exit_reason = "policy_sell"
+        try:
+            self._rebalance_to_quantity(target_quantity, next_open)
+        finally:
+            self._active_exit_reason = None
         if self._quantity <= self._quantity_tolerance(next_open):
             self._last_buy_index = None
         return "SELL", "SELL", action_mask, None
@@ -790,6 +869,64 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
         self._max_drawdown = max(self._max_drawdown, close_drawdown)
         return max(intrabar_drawdown, close_drawdown)
 
+    def _close_for_trailing_stop(self, fill_price: float) -> None:
+        if self._quantity <= self._quantity_tolerance(fill_price):
+            return
+        self._active_exit_reason = "trailing_stop"
+        try:
+            self._rebalance_to_quantity(0.0, fill_price)
+        finally:
+            self._active_exit_reason = None
+        self._last_buy_index = None
+        self._trailing_stop_trigger_count += 1
+        self._last_trailing_stop_triggered = True
+
+    def _apply_gap_trailing_stop(self, next_open: float) -> bool:
+        if (
+            self._quantity <= self._quantity_tolerance(next_open)
+            or self._trailing_stop_price is None
+            or next_open > self._trailing_stop_price
+        ):
+            return False
+        self._close_for_trailing_stop(next_open)
+        return True
+
+    def _apply_intrabar_trailing_stop(self, bar: Float64Array) -> bool:
+        stop_price = self._trailing_stop_price
+        if (
+            self._quantity <= self._quantity_tolerance(float(bar[OPEN_COLUMN]))
+            or stop_price is None
+            or float(bar[LOW_COLUMN]) > stop_price
+        ):
+            return False
+        fill_price = min(float(bar[OPEN_COLUMN]), stop_price)
+        self._close_for_trailing_stop(fill_price)
+        return True
+
+    def _update_trailing_stop_from_completed_bar(self, bar: Float64Array) -> None:
+        if (
+            self._quantity <= self._quantity_tolerance(float(bar[CLOSE_COLUMN]))
+            or self._trade_entry_reference_price is None
+        ):
+            return
+        high = float(bar[HIGH_COLUMN])
+        if self._highest_price_since_entry is None:
+            self._highest_price_since_entry = self._trade_entry_reference_price
+        self._highest_price_since_entry = max(self._highest_price_since_entry, high)
+        activation_price = self._trade_entry_reference_price * (
+            1.0 + self.trailing_stop_activation_pct
+        )
+        if self._highest_price_since_entry < activation_price:
+            return
+        self._trailing_stop_activated = True
+        candidate = self._highest_price_since_entry * (
+            1.0 - self.trailing_stop_distance_pct
+        )
+        if self._trailing_stop_price is None:
+            self._trailing_stop_price = candidate
+        else:
+            self._trailing_stop_price = max(self._trailing_stop_price, candidate)
+
     def reset(
         self,
         *,
@@ -828,6 +965,24 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
         self._last_step_realized_profit = 0.0
         self._last_step_profitable_trade_count = 0
         self._last_closed_trade_net_profit = None
+        self._last_closed_trade_return_pct = None
+        self._last_closed_trade_exit_reason = None
+        self._active_exit_reason = None
+        self._trade_entry_index = None
+        self._trade_entry_reference_price = None
+        self._trade_entry_cost_total = 0.0
+        self._highest_price_since_entry = None
+        self._trailing_stop_price = None
+        self._trailing_stop_activated = False
+        self._trailing_stop_trigger_count = 0
+        self._last_trailing_stop_triggered = False
+        self._closed_trade_holding_periods = []
+        self._closed_trade_returns_percent = []
+        self._closed_trade_net_profits = []
+        self._closed_trade_exit_reasons = []
+        self._early_exit_penalty_count = 0
+        self._early_exit_penalty_total = 0.0
+        self._early_exit_count = 0
         self._closed_trade_count = 0
         self._policy_closed_trade_count = 0
         self._winning_trade_count = 0
@@ -919,7 +1074,11 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
     ) -> tuple[bool, float, float]:
         terminated = next_index == len(self._market_data) - 1
         if terminated:
-            self._rebalance_to_quantity(0.0, float(next_bar[CLOSE_COLUMN]))
+            self._active_exit_reason = "terminal_liquidation"
+            try:
+                self._rebalance_to_quantity(0.0, float(next_bar[CLOSE_COLUMN]))
+            finally:
+                self._active_exit_reason = None
             final_equity = self._cash
             if not math.isfinite(final_equity) or final_equity <= 0:
                 raise ValueError("final_simulated_equity_non_positive")
@@ -1049,17 +1208,44 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
         return self.signal_guidance_reward_scale, signal_action
 
     def _realized_profit_reward_for_action(self, executed_action: str) -> float:
-        if executed_action != "SELL" or self._last_closed_trade_net_profit is None:
+        del executed_action
+        if self._last_closed_trade_net_profit is None:
+            return 0.0
+        if self._last_closed_trade_exit_reason not in ("policy_sell", "trailing_stop"):
             return 0.0
         closed_profit = self._last_closed_trade_net_profit
         if closed_profit <= 0.0:
             return 0.0
-        reward = (
-            DEFAULT_REALIZED_PROFIT_REWARD_SCALE * closed_profit / self.initial_equity
+        return_pct = self._last_closed_trade_return_pct
+        multiplier = 1.0
+        if return_pct is not None and return_pct >= 5.0:
+            multiplier = 3.0
+        elif return_pct is not None and return_pct >= 3.0:
+            multiplier = 2.0
+        reward = min(
+            DEFAULT_LARGE_PROFIT_REWARD_CAP,
+            DEFAULT_REALIZED_PROFIT_REWARD_SCALE
+            * closed_profit
+            / self.initial_equity
+            * multiplier,
         )
         self._realized_profit_reward_count += 1
         self._realized_profit_reward_total += reward
         return reward
+
+    def _early_exit_penalty_for_closed_trade(self) -> float:
+        """Penalize only small positive policy exits, never loss/stop exits."""
+        return_pct = self._last_closed_trade_return_pct
+        if (
+            self._last_closed_trade_net_profit is None
+            or self._last_closed_trade_exit_reason != "policy_sell"
+            or return_pct is None
+            or not 0.0 <= return_pct < 1.0
+        ):
+            return 0.0
+        self._early_exit_penalty_count += 1
+        self._early_exit_penalty_total += DEFAULT_EARLY_EXIT_REWARD_PENALTY
+        return DEFAULT_EARLY_EXIT_REWARD_PENALTY
 
     def _calculate_step_reward(
         self,
@@ -1075,6 +1261,7 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
         transaction_cost_reward_penalty: float,
         signal_guidance_reward: float,
         realized_profit_reward: float,
+        early_exit_penalty: float,
         profitable_trade_bonus_count: int,
     ) -> tuple[float, float, float]:
         log_net_return = math.log(current_equity / previous_equity)
@@ -1091,6 +1278,7 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
             - opportunity_cost_penalty
             - holding_loss_penalty
             - transaction_cost_reward_penalty
+            - early_exit_penalty
             + holding_profit_reward
             + signal_guidance_reward
             + realized_profit_reward
@@ -1119,24 +1307,43 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
         self._last_step_realized_profit = 0.0
         self._last_step_profitable_trade_count = 0
         self._last_closed_trade_net_profit = None
+        self._last_closed_trade_return_pct = None
+        self._last_closed_trade_exit_reason = None
+        self._last_trailing_stop_triggered = False
 
+        gap_stop_triggered = self._apply_gap_trailing_stop(float(next_bar[OPEN_COLUMN]))
         closed_trades_before_action = self._closed_trade_count
-        (
-            requested_action,
-            executed_action,
-            action_mask,
-            mask_reason,
-            action_index,
-            action_name,
-            requested_size,
-            requested_size_index,
-        ) = self._apply_action(
-            action, current_price=current_price, next_open=float(next_bar[OPEN_COLUMN])
-        )
+        if gap_stop_triggered:
+            (
+                action_index,
+                action_name,
+                requested_action,
+                requested_size,
+                requested_size_index,
+            ) = self._validated_action_values(action)
+            action_mask = self._legal_action_mask(current_price)
+            executed_action = "SUPPRESSED_AFTER_TRAILING_STOP"
+            mask_reason = "trailing_stop_triggered_at_open"
+        else:
+            (
+                requested_action,
+                executed_action,
+                action_mask,
+                mask_reason,
+                action_index,
+                action_name,
+                requested_size,
+                requested_size_index,
+            ) = self._apply_action(
+                action, current_price=current_price, next_open=float(next_bar[OPEN_COLUMN])
+            )
         self._record_action(action_name, requested_action, executed_action, mask_reason)
-        self._policy_closed_trade_count += (
-            self._closed_trade_count - closed_trades_before_action
-        )
+        policy_closes = self._closed_trade_count - closed_trades_before_action
+        if policy_closes > 0 and self._last_closed_trade_exit_reason == "policy_sell":
+            self._policy_closed_trade_count += policy_closes
+        risk_drawdown = self._update_drawdown(next_bar)
+        intrabar_stop_triggered = self._apply_intrabar_trailing_stop(next_bar)
+        self._update_trailing_stop_from_completed_bar(next_bar)
         invalid_action_penalty_applied, invalid_action_penalty = (
             self._invalid_action_penalty_for_request(
                 requested_action, action_name, action_mask
@@ -1164,8 +1371,11 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
         realized_profit_reward = self._realized_profit_reward_for_action(
             executed_action
         )
+        early_exit_penalty = self._early_exit_penalty_for_closed_trade()
         profitable_trade_bonus_count = (
-            self._last_step_profitable_trade_count if executed_action == "SELL" else 0
+            self._last_step_profitable_trade_count
+            if self._last_closed_trade_exit_reason in ("policy_sell", "trailing_stop")
+            else 0
         )
         opportunity_cost_penalty = self._opportunity_cost_penalty_for_action(
             requested_action, current_price
@@ -1174,7 +1384,6 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
             self._track_position_change(previous_quantity, float(next_bar[OPEN_COLUMN]))
         )
 
-        risk_drawdown = self._update_drawdown(next_bar)
         terminated, risk_drawdown, current_equity = self._settle_episode_step(
             next_index, next_bar, risk_drawdown
         )
@@ -1191,6 +1400,7 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
             transaction_cost_reward_penalty,
             signal_guidance_reward,
             realized_profit_reward,
+            early_exit_penalty,
             profitable_trade_bonus_count,
         )
 
@@ -1205,7 +1415,8 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
             "requested_position_size_index": requested_size_index,
             "requested_position_size_fraction": requested_size,
             "executed_action": executed_action,
-            "action_blocked": executed_action.startswith("MASKED_"),
+            "action_blocked": executed_action.startswith("MASKED_")
+            or executed_action.startswith("SUPPRESSED_"),
             "action_mask_reason": mask_reason,
             "legal_action_mask": action_mask,
             "position_holding_period_candles": self._position_holding_candles(
@@ -1250,10 +1461,19 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
             "signal_guidance_reward_scale": self.signal_guidance_reward_scale,
             "reward_realized_profit": realized_profit_reward,
             "realized_profit_reward_applied": realized_profit_reward > 0.0,
+            "reward_early_exit_penalty": early_exit_penalty,
+            "early_exit_penalty_applied": early_exit_penalty > 0.0,
             "reward_profitable_trade_bonus": profitable_trade_bonus,
             "policy_closed_trade_count": self._policy_closed_trade_count,
             "realized_profit_this_step": float(self._last_step_realized_profit),
             "closed_trade_net_profit_this_step": self._last_closed_trade_net_profit,
+            "closed_trade_return_percent_this_step": self._last_closed_trade_return_pct,
+            "closed_trade_exit_reason_this_step": self._last_closed_trade_exit_reason,
+            "trailing_stop_triggered": self._last_trailing_stop_triggered,
+            "trailing_stop_triggered_at_open": gap_stop_triggered,
+            "trailing_stop_triggered_intrabar": intrabar_stop_triggered,
+            "trailing_stop_active": self._trailing_stop_activated,
+            "trailing_stop_price": self._trailing_stop_price,
         }
         if terminated:
             info.update(self.summary())
@@ -1270,6 +1490,29 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
         win_rate = (
             self._winning_trade_count / decisive_trades if decisive_trades else None
         )
+        winning_returns = [
+            value
+            for profit, value in zip(
+                self._closed_trade_net_profits,
+                self._closed_trade_returns_percent,
+                strict=False,
+            )
+            if profit > 0.0
+        ]
+        losing_returns = [
+            value
+            for profit, value in zip(
+                self._closed_trade_net_profits,
+                self._closed_trade_returns_percent,
+                strict=False,
+            )
+            if profit < 0.0
+        ]
+        gross_profit = sum(value for value in self._closed_trade_net_profits if value > 0.0)
+        gross_loss = sum(-value for value in self._closed_trade_net_profits if value < 0.0)
+        profit_factor = gross_profit / gross_loss if gross_loss > 0.0 else None
+        total_actions = sum(self._discrete_action_counts.values())
+        hold_collapse = total_actions > 0 and self._discrete_action_counts["HOLD"] == total_actions
         return {
             "initial_equity": self.initial_equity,
             "final_equity": float(final_equity),
@@ -1292,6 +1535,30 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
             "losing_trade_count": self._losing_trade_count,
             "breakeven_trade_count": self._breakeven_trade_count,
             "win_rate": float(win_rate) if win_rate is not None else None,
+            "average_holding_period_candles": (
+                float(np.mean(self._closed_trade_holding_periods))
+                if self._closed_trade_holding_periods
+                else None
+            ),
+            "average_win_percent": (
+                float(np.mean(winning_returns)) if winning_returns else None
+            ),
+            "average_loss_percent": (
+                float(np.mean(losing_returns)) if losing_returns else None
+            ),
+            "profit_factor": float(profit_factor) if profit_factor is not None else None,
+            "early_exit_count": self._early_exit_count,
+            "hold_collapse": hold_collapse,
+            "flags": {"HOLD_COLLAPSE": hold_collapse},
+            "closed_trade_exit_reason_counts": {
+                reason: self._closed_trade_exit_reasons.count(reason)
+                for reason in sorted(set(self._closed_trade_exit_reasons))
+            },
+            "early_exit_penalty_count": self._early_exit_penalty_count,
+            "early_exit_penalty_total": float(self._early_exit_penalty_total),
+            "trailing_stop_trigger_count": self._trailing_stop_trigger_count,
+            "trailing_stop_distance_pct": self.trailing_stop_distance_pct,
+            "trailing_stop_activation_pct": self.trailing_stop_activation_pct,
             "masked_buy_action_count": self._masked_buy_action_count,
             "buy_noop_action_count": self._buy_noop_action_count,
             "zero_size_buy_action_count": self._zero_size_buy_action_count,

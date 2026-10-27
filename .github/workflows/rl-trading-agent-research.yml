@@ -238,7 +238,7 @@ jobs:
           model = report["model"]
           evaluation = report["evaluation"]
           transaction_costs = report["training_transaction_costs"]
-          assert report["schema_version"] == "alix.rl-trading-agent-report.v14"
+          assert report["schema_version"] == "alix.rl-trading-agent-report.v15"
           assert report["run_mode"] == "historical_simulation_only"
           assert report["dataset"]["row_count"] >= 1_051_200
           assert report["dataset"]["coverage_fraction"] == 1.0
@@ -289,7 +289,13 @@ jobs:
           assert report["environment"]["reward"]["invalid_full_position_buy_penalty"] == 1.0
           assert report["environment"]["reward"]["holding_profit_reward_per_profitable_hold"] == 0.0001
 
-          assert report["environment"]["reward"]["transaction_cost_reward_multiplier"] == 5.0
+          assert report["environment"]["reward"]["transaction_cost_reward_multiplier"] == 2.0
+          assert report["environment"]["reward"]["early_exit_reward_penalty"] == 0.0001
+          assert report["environment"]["reward"]["large_profit_reward"]["return_pct_3_multiplier"] == 2.0
+          assert report["environment"]["reward"]["large_profit_reward"]["return_pct_5_multiplier"] == 3.0
+          assert report["environment"]["execution"]["trailing_stop"]["enabled"] is True
+          assert report["environment"]["execution"]["trailing_stop"]["distance_pct"] == 0.02
+          assert report["environment"]["execution"]["trailing_stop"]["activation_pct"] == 0.03
           assert "this_step_fee_cost + this_step_slippage_cost" in report["environment"]["reward"]["transaction_cost_reward_penalty"]
           assert report["environment"]["reward"]["holding_loss_penalty_per_underwater_hold"] == 0.0001
           assert report["environment"]["reward"]["realized_profit_reward_scale_of_initial_equity"] == 0.05
@@ -458,6 +464,16 @@ jobs:
                   == metrics["closed_trade_count"]
               )
               assert metrics["win_rate"] is None or 0.0 <= metrics["win_rate"] <= 1.0
+              assert metrics["average_holding_period_candles"] is None or metrics["average_holding_period_candles"] >= 1.0
+              assert metrics["average_win_percent"] is None or math.isfinite(float(metrics["average_win_percent"]))
+              assert metrics["average_loss_percent"] is None or float(metrics["average_loss_percent"]) < 0.0
+              assert metrics["profit_factor"] is None or (math.isfinite(float(metrics["profit_factor"])) and metrics["profit_factor"] >= 0.0)
+              assert 0 <= metrics["early_exit_count"] <= metrics["closed_trade_count"]
+              assert metrics["hold_collapse"] is (metrics["steps"] > 0 and metrics["hold_action_count"] == metrics["steps"])
+              assert metrics["flags"]["HOLD_COLLAPSE"] is metrics["hold_collapse"]
+              assert metrics["trailing_stop_trigger_count"] >= 0
+              assert metrics["trailing_stop_distance_pct"] == 0.02
+              assert metrics["trailing_stop_activation_pct"] == 0.03
           assert evaluation["final_holdout"]["steps"] == split["final_holdout_rows"] - 1
           assert evaluation["holdout_pass_count"] == 1
           for key in ("net_profit", "net_return", "max_drawdown", "total_fees", "total_slippage"):

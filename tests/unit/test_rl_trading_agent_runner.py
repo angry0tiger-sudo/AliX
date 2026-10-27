@@ -17,6 +17,7 @@ from scripts.run_rl_trading_agent import (
 )
 from services.rl_research.rl_trading_environment import (
     ACTION_BUY,
+    ACTION_HOLD,
     ACTION_NAMES,
     MarketObservationScaler,
 )
@@ -47,6 +48,19 @@ def test_analysis_window_fails_closed_when_no_prior_holdout_tail_exists() -> Non
     data = np.column_stack((timestamps, np.ones((2, 5), dtype=np.float64) * 100.0))
     with pytest.raises(ValueError, match="previous_holdout_window_not_present"):
         _exclude_previous_holdout_window(data)
+
+
+class _FixedHoldPolicy:
+    def predict(
+        self,
+        observation: NDArray[np.float32],
+        *,
+        state: Any,
+        episode_start: NDArray[np.bool_],
+        deterministic: bool,
+    ) -> tuple[NDArray[np.int64], Any]:
+        assert deterministic is True
+        return np.asarray(ACTION_HOLD, dtype=np.int64), state
 
 
 class _Fixed25PercentBuyPolicy:
@@ -199,7 +213,28 @@ class _RoundtripModel:
         return np.asarray([self.action], dtype=np.int64), state
 
 
-def test_model_reload_roundtrip_records_restored_policy_identity(tmp_path: Any) -> None:
+def test_evaluation_reports_hold_collapse_and_empty_trade_metrics_as_null() -> None:
+    timestamps = 1_700_000_000_000 + np.arange(8) * 60_000
+    prices = np.asarray([100.0, 101.0, 102.0, 101.0, 100.0, 99.0, 100.0, 101.0])
+    data = np.column_stack(
+        (timestamps, prices, prices + 1.0, prices - 1.0, prices, np.ones(8))
+    ).astype(np.float64)
+    metrics = _evaluate_policy(
+        _FixedHoldPolicy(), data, MarketObservationScaler.fit(data), 0.0, 0.0, 9
+    )
+    assert metrics["hold_collapse"] is True
+    assert metrics["flags"]["HOLD_COLLAPSE"] is True
+    assert metrics["buy_action_count"] == 0
+    assert metrics["sell_action_count"] == 0
+    assert metrics["hold_action_count"] == metrics["steps"]
+    assert metrics["average_holding_period_candles"] is None
+    assert metrics["average_win_percent"] is None
+    assert metrics["average_loss_percent"] is None
+    assert metrics["profit_factor"] is None
+    assert metrics["early_exit_count"] == 0
+
+
+def test_model_reload_roundtrip_records_restored_policy_identity(tmp_path: Any) -> None
     model_path = tmp_path / "rl_trading_agent_recurrent_ppo.zip"
     model_path.write_bytes(b"saved-model")
     original = _RoundtripModel(action=2)

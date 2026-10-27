@@ -39,6 +39,10 @@ from services.rl_research.rl_trading_environment import (
     DEFAULT_PROFITABLE_TRADE_BONUS,
     DEFAULT_INACTIVITY_GRACE_STEPS,
     DEFAULT_TRANSACTION_COST_REWARD_MULTIPLIER,
+    DEFAULT_EARLY_EXIT_REWARD_PENALTY,
+    DEFAULT_LARGE_PROFIT_REWARD_CAP,
+    DEFAULT_TRAILING_STOP_ACTIVATION_PCT,
+    DEFAULT_TRAILING_STOP_DISTANCE_PCT,
     MarketObservationScaler,
     OBSERVATION_FIELDS,
     validate_market_data,
@@ -1413,7 +1417,7 @@ def _build_report(
     )
 
     report: dict[str, Any] = {
-        "schema_version": "alix.rl-trading-agent-report.v14",
+        "schema_version": "alix.rl-trading-agent-report.v15",
         "run_mode": "historical_simulation_only",
         "commit_sha": args.commit_sha,
         "research_result": (
@@ -1569,6 +1573,15 @@ def _build_report(
                 "fixed_max_holding_period_candles": None,
                 "fixed_take_profit_rule": None,
                 "fixed_stop_loss_rule": None,
+                "trailing_stop": {
+                    "enabled": True,
+                    "distance_pct": DEFAULT_TRAILING_STOP_DISTANCE_PCT,
+                    "activation_pct": DEFAULT_TRAILING_STOP_ACTIVATION_PCT,
+                    "update_source": "completed_bar_high_only; effective_on_subsequent_bar",
+                    "gap_fill": "next_open_if_open_at_or_below_existing_stop",
+                    "intrabar_fill": "stop_price_if_low_crosses_existing_stop",
+                    "policy_sell_penalty_exempt_for_stop_exit": True,
+                },
             },
             "reward": {
                 "net_component": "log(current_equity / previous_equity)",
@@ -1590,9 +1603,21 @@ def _build_report(
                 "low_volatility_hold_reward_removed": True,
                 "transaction_cost_reward_multiplier": DEFAULT_TRANSACTION_COST_REWARD_MULTIPLIER,
                 "transaction_cost_reward_penalty": (
-                    "5.0 * (this_step_fee_cost + this_step_slippage_cost) "
+                    "2.0 * (this_step_fee_cost + this_step_slippage_cost) "
                     "/ previous_equity; additional shaping alongside net log-equity return"
                 ),
+                "early_exit_reward_penalty": DEFAULT_EARLY_EXIT_REWARD_PENALTY,
+                "early_exit_penalty_trigger": (
+                    "policy-selected full close with net trade return in [0%, 1%); "
+                    "loss exits and trailing-stop exits are always exempt"
+                ),
+                "large_profit_reward": {
+                    "base_scale_of_initial_equity": DEFAULT_REALIZED_PROFIT_REWARD_SCALE,
+                    "return_pct_3_multiplier": 2.0,
+                    "return_pct_5_multiplier": 3.0,
+                    "maximum_reward_per_trade": DEFAULT_LARGE_PROFIT_REWARD_CAP,
+                    "return_basis": "closed net profit divided by total entry costs for the trade",
+                },
                 "holding_loss_penalty_per_underwater_hold": (
                     DEFAULT_HOLDING_LOSS_PENALTY
                 ),
@@ -1654,9 +1679,11 @@ def _build_report(
                     "+ max(minimum_guidance_floor, annealed_training_only_scale) "
                     "* indicator(legal_BUY_when_causal_SMA_rises "
                     "or legal_SELL_when_causal_SMA_falls) "
-                    "+ 0.5 * max(0, closed_trade_net_profit / initial_equity) "
-                    " * indicator(policy_SELL_fully_closes_trade) "
-                    "+ 0.0001 * profitable_closed_trade_count"
+                    "- 0.0001 * indicator(policy_close_net_trade_return_in_[0%,1%)) "
+                    "when_exit_reason_is_policy_sell_only; no_loss_or_trailing_stop_penalty "
+                    "+ 0.05 * max(0, closed_trade_net_profit / initial_equity) "
+                    " * (1x_below_3%; 2x_at_3%; 3x_at_5%; cap_0.01) "
+                    "+ 0.0001 * profitable_closed_trade_count; transaction_cost_multiplier=2.0"
                 ),
                 "hard_trade_count_minimum": None,
                 "profit_target": None,
@@ -1698,7 +1725,7 @@ def _build_report(
             "n_epochs": 4,
             "epochs_per_rollout": 4,
             "lstm_hidden_size": 64,
-            "training_algorithm": "RecurrentPPO with LSTM, Discrete(7) combined actions, pre-Categorical logit masking, 15-candle minimum holding period, constant 0.1 entropy coefficient from step one, fixed configured fees and slippage from step one, floor-preserved seven-class guidance cross-entropy, training-only causal SMA reward, periodic checkpoints, no flat-cash HOLD bonus, and 5x transaction-cost reward penalty",
+            "training_algorithm": "RecurrentPPO with LSTM, Discrete(7) combined actions, pre-Categorical logit masking, 15-candle minimum holding period, causal trailing stop activated at +3% with 2% distance, constant 0.1 entropy coefficient from step one, fixed configured fees and slippage from step one, floor-preserved seven-class guidance cross-entropy, training-only causal SMA reward, bounded large-profit reward, loss/stop-exit penalty exemption, periodic checkpoints, no flat-cash HOLD bonus, and 2x transaction-cost reward penalty",
             "training_seconds": float(training.training_seconds),
             "model_artifact": training.model_path.name,
             "model_sha256": _sha256(training.model_path),
