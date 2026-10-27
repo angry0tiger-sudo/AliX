@@ -1334,8 +1334,11 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
             "executed_action": executed_action,
             "action_mask": action_mask,
             "mask_reason": mask_reason,
-            "action_blocked": action_blocked,
-            "full_position_buy_penalty_applied": full_position_buy_penalty_applied,
+            "action_blocked": executed_action.startswith("MASKED_")
+            or executed_action.startswith("SUPPRESSED_"),
+            "full_position_buy_penalty_applied": (
+                requested_action == "BUY" and not action_mask[action_name]
+            ),
         }
 
     def _invalid_action_penalty_for_step(
