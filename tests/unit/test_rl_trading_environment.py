@@ -27,6 +27,7 @@ from services.rl_research.rl_trading_environment import (
     DEFAULT_HOLDING_PROFIT_REWARD,
     DEFAULT_INVALID_ACTION_PENALTY,
     DEFAULT_INVALID_FULL_POSITION_BUY_PENALTY,
+    DEFAULT_MINIMUM_HOLDING_PERIOD_CANDLES,
     DEFAULT_OPPORTUNITY_COST_PENALTY,
     DEFAULT_REALIZED_PROFIT_REWARD_SCALE,
     MOVING_AVERAGE_WINDOW,
@@ -82,6 +83,7 @@ def _env(data: Float64Array, **kwargs: Any) -> BTCUSDTTradingEnv:
     kwargs.setdefault("fee_bps_per_side", 0.0)
     kwargs.setdefault("slippage_bps_per_side", 0.0)
     kwargs.setdefault("min_remaining_steps", 1)
+    kwargs.setdefault("minimum_holding_period_candles", 1)
     return BTCUSDTTradingEnv(data, **kwargs)
 
 
@@ -100,7 +102,7 @@ def test_observation_has_only_price_volume_and_time_fields() -> None:
     scaler = MarketObservationScaler.fit(data)
     env = _env(data, scaler=scaler)
     observation, _ = env.reset(seed=11)
-    assert len(OBSERVATION_FIELDS) == 11
+    assert len(OBSERVATION_FIELDS) == 12
     assert observation.shape == (OBSERVATION_SIZE,)
     assert np.isfinite(observation).all()
     assert all(
@@ -110,11 +112,12 @@ def test_observation_has_only_price_volume_and_time_fields() -> None:
         )
         for name in OBSERVATION_FIELDS[:9]
     )
-    assert OBSERVATION_FIELDS[-2:] == (
+    assert OBSERVATION_FIELDS[-3:] == (
         "current_position_fraction",
         "unrealized_pnl_pct",
+        "position_holding_period_fraction",
     )
-    assert observation[-2:] == pytest.approx([0.0, 0.0])
+    assert observation[-3:] == pytest.approx([0.0, 0.0, 0.0])
     legacy_env = _env(data, scaler=scaler, include_portfolio_state=False)
     legacy_observation, _ = legacy_env.reset(seed=11)
     assert legacy_observation.shape == (9,)
@@ -201,6 +204,10 @@ def test_market_data_shape_non_finite_timestamp_and_gap_fail_closed() -> None:
             "reward_shaping_parameters_must_be_non_negative",
         ),
         ({"min_remaining_steps": 0}, "min_remaining_steps_must_be_positive"),
+        (
+            {"minimum_holding_period_candles": 0},
+            "minimum_holding_period_candles_must_be_positive_integer",
+        ),
     ],
 )
 def test_invalid_environment_configuration_fails_closed(
@@ -210,7 +217,53 @@ def test_invalid_environment_configuration_fails_closed(
         _env(_bars(), **kwargs)
 
 
-def test_buy_hold_and_partial_sell_execute_on_the_next_bar() -> None:
+def test_environment_default_minimum_holding_period_is_15_candles() -> None:
+    env = BTCUSDTTradingEnv(_bars(closes=[100.0] * 24))
+    assert (
+        env.minimum_holding_period_candles
+        == DEFAULT_MINIMUM_HOLDING_PERIOD_CANDLES
+        == 15
+    )
+    assert DEFAULT_TRANSACTION_COST_REWARD_MULTIPLIER == 5.0
+    assert DEFAULT_REALIZED_PROFIT_REWARD_SCALE == pytest.approx(0.05)
+    observation, _ = env.reset(seed=1)
+    assert observation[-1] == pytest.approx(0.0)
+    env.close()
+
+
+def test_minimum_holding_period_blocks_both_sides_until_15_candles() -> None:
+    env = _env(
+        _bars(closes=[100.0] * 32),
+        initial_equity=1_000.0,
+        minimum_holding_period_candles=15,
+    )
+    env.reset(seed=2)
+    _, _, _, _, buy_info = env.step(_action(ACTION_BUY, 1))
+    assert buy_info["executed_action"] == "BUY"
+    assert buy_info["position_holding_period_candles"] == 1
+
+    _, _, _, _, lock_info = env.step(_action(ACTION_HOLD))
+    assert lock_info["minimum_holding_period_active"] is True
+    assert lock_info["position_holding_period_candles"] == 2
+    assert not lock_info["legal_action_mask"]["BUY_25"]
+    assert not lock_info["legal_action_mask"]["SELL_25"]
+
+    _, _, _, _, blocked_sell = env.step(_action(ACTION_SELL, 3))
+    assert blocked_sell["executed_action"] == "MASKED_SELL"
+    assert blocked_sell["action_mask_reason"] == "minimum_holding_period_active"
+    assert env.summary()["fill_count"] == 1
+    for _ in range(12):
+        _, _, terminated, _, _ = env.step(_action(ACTION_HOLD))
+        assert not terminated
+    assert env._position_holding_candles(100.0) == 15
+    released_mask = env._legal_action_mask(100.0)
+    assert released_mask["SELL_25"] is True
+    assert released_mask["BUY_25"] is True
+    assert env.summary()["minimum_holding_period_blocked_action_count"] == 1
+    env.close()
+
+
+def test_buy_hold_and_partial_sell_execute_on_the_next_bar() -> None
     data = _bars()
     env = _env(data, initial_equity=1_000.0)
     observation, _ = env.reset(seed=2)
@@ -254,6 +307,7 @@ def test_terminal_liquidation_charges_fees_and_slippage() -> None:
         fee_bps_per_side=25.0,
         slippage_bps_per_side=20.0,
         min_remaining_steps=1,
+        minimum_holding_period_candles=1,
     )
     env.reset(seed=5)
     env.step(_action(ACTION_BUY, 3))
@@ -777,6 +831,7 @@ def test_transaction_costs_are_charged_again_in_explicit_reward_component() -> N
         fee_bps_per_side=25.0,
         slippage_bps_per_side=20.0,
         min_remaining_steps=1,
+        minimum_holding_period_candles=1,
     )
     env.reset(seed=94)
     _, _, _, _, info = env.step(_action(ACTION_BUY, 1))

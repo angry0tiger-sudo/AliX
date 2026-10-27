@@ -526,6 +526,9 @@ def _build_action_masked_recurrent_policy() -> Any:
 
     try:
         position_index = OBSERVATION_FIELDS.index("current_position_fraction")
+        holding_period_index = OBSERVATION_FIELDS.index(
+            "position_holding_period_fraction"
+        )
     except ValueError as error:
         raise RuntimeError("action_mask_observation_contract_invalid") from error
 
@@ -584,7 +587,10 @@ def _build_action_masked_recurrent_policy() -> Any:
         if action_logits.ndim != 2 or action_logits.shape[1] != len(ACTION_NAMES):
             raise ValueError("action_mask_discrete_logits_shape_invalid")
         observation_shape: Any = getattr(observations, "shape", ())
-        if len(observation_shape) < 2 or observation_shape[-1] <= position_index:
+        if (
+            len(observation_shape) < 2
+            or observation_shape[-1] <= max(position_index, holding_period_index)
+        ):
             raise ValueError("action_mask_position_observation_missing")
         position_fraction = (
             observations[..., position_index]
@@ -602,13 +608,36 @@ def _build_action_masked_recurrent_policy() -> Any:
         ):
             raise ValueError("action_mask_position_fraction_out_of_range")
 
+        holding_period_fraction = (
+            observations[..., holding_period_index]
+            .reshape(-1)
+            .to(device=action_logits.device, dtype=action_logits.dtype)
+        )
+        if holding_period_fraction.numel() != action_logits.shape[0]:
+            raise ValueError("action_mask_observation_batch_alignment_invalid")
+        if (
+            not bool(torch.isfinite(holding_period_fraction).all().item())
+            or bool(
+                torch.any(
+                    holding_period_fraction < -ACTION_MASK_POSITION_EPSILON
+                ).item()
+            )
+            or bool(
+                torch.any(
+                    holding_period_fraction > 1.0 + ACTION_MASK_POSITION_EPSILON
+                ).item()
+            )
+        ):
+            raise ValueError("action_mask_holding_period_fraction_out_of_range")
+
         fully_allocated = position_fraction >= 1.0 - ACTION_MASK_POSITION_EPSILON
         flat = position_fraction <= ACTION_MASK_POSITION_EPSILON
+        holding_period_active = (~flat) & (holding_period_fraction < 1.0 - 1e-6)
         masked_logits = action_logits.clone()
         for action_index in BUY_ACTION_INDICES:
-            masked_logits[fully_allocated, action_index] = -1e8
+            masked_logits[fully_allocated | holding_period_active, action_index] = -1e8
         for action_index in SELL_ACTION_INDICES:
-            masked_logits[flat, action_index] = -1e8
+            masked_logits[flat | holding_period_active, action_index] = -1e8
         return self.action_dist.proba_distribution(action_logits=masked_logits)
 
     policy_class = type(

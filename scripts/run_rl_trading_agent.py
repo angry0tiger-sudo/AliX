@@ -27,6 +27,7 @@ from services.rl_research.rl_trading_environment import (
     ACTION_SIZE_BY_INDEX,
     BTCUSDTTradingEnv,
     DEFAULT_INITIAL_EQUITY,
+    DEFAULT_MINIMUM_HOLDING_PERIOD_CANDLES,
     DEFAULT_HOLDING_LOSS_PENALTY,
     DEFAULT_HOLDING_PROFIT_REWARD,
     DEFAULT_OPPORTUNITY_COST_PENALTY,
@@ -50,12 +51,7 @@ from scripts.rl_auxiliary_ppo import (
     auxiliary_loss_curriculum_report,
     build_auxiliary_recurrent_ppo,
 )
-from services.rl_research.rl_cost_curriculum import (
-    CURRICULUM_MINIMUM_CLOSED_TRADES,
-    CURRICULUM_RAMP_STEPS,
-    CURRICULUM_RAMP_UPDATE_INTERVAL_STEPS,
-    TrainingCostCurriculum,
-)
+from services.rl_research.rl_cost_curriculum import TrainingTransactionCosts
 
 Float64Array = NDArray[np.float64]
 Float32Array = NDArray[np.float32]
@@ -67,7 +63,7 @@ DEFAULT_SIGNAL_GUIDANCE_REWARD_FLOOR = 0.00002
 DEFAULT_SIGNAL_GUIDANCE_ANNEAL_STEPS = 300_000
 DEFAULT_SIGNAL_GUIDANCE_UPDATE_INTERVAL_STEPS = 1_000
 DEFAULT_POST_EXPLORATION_ENT_COEF = 0.1
-DEFAULT_EXPLORATION_ENT_COEF = 0.5
+DEFAULT_EXPLORATION_ENT_COEF = 0.1
 DEFAULT_EXPLORATION_STEPS = 50_000
 TRAINING_CHECKPOINT_INTERVAL_STEPS = 100_000
 TRAIN_FRACTION = 0.70
@@ -536,7 +532,7 @@ class TrainingRun:
     training_seconds: float
     entropy_coefficient: float
     entropy_curriculum: dict[str, Any]
-    cost_curriculum: dict[str, Any]
+    training_transaction_costs: dict[str, Any]
     signal_guidance_curriculum: dict[str, Any]
     auxiliary_loss_curriculum: dict[str, Any]
     model_reload_verification: dict[str, Any]
@@ -564,7 +560,7 @@ def _build_entropy_curriculum_callback(
     ent_coef: float,
     n_steps: int,
 ) -> Any:
-    """Apply a high entropy coefficient at rollout boundaries during early training."""
+    """Apply the configured entropy coefficient at rollout boundaries."""
     _entropy_coefficient_at_step(0, exploration_ent_coef, exploration_steps, ent_coef)
     if isinstance(n_steps, bool) or not isinstance(n_steps, int) or n_steps < 1:
         raise ValueError("entropy_rollout_steps_invalid")
@@ -596,12 +592,22 @@ def _build_entropy_curriculum_callback(
 
     def report(self: Any, trained_timesteps: int) -> dict[str, Any]:
         transition_timestep = (
-            self._exploration_steps // self._rollout_steps + 1
-        ) * self._rollout_steps
+            (self._exploration_steps // self._rollout_steps + 1) * self._rollout_steps
+            if self._exploration_ent_coef != self._post_exploration_ent_coef
+            else None
+        )
         return {
-            "schedule": "high_entropy_then_constant_post_exploration",
+            "schedule": (
+                "constant_from_start"
+                if self._exploration_ent_coef == self._post_exploration_ent_coef
+                else "initial_exploration_then_post_exploration"
+            ),
             "initial_ent_coef": self._exploration_ent_coef,
-            "requested_exploration_steps": self._exploration_steps,
+            "requested_exploration_steps": (
+                self._exploration_steps
+                if self._exploration_ent_coef != self._post_exploration_ent_coef
+                else 0
+            ),
             "post_exploration_ent_coef": self._post_exploration_ent_coef,
             "rollout_steps": self._rollout_steps,
             "rollout_update_transition_timestep": transition_timestep,
@@ -687,8 +693,8 @@ def _validate_guidance_curriculum_configuration(
         raise ValueError("signal_guidance_curriculum_configuration_invalid")
 
 
-def _build_cost_curriculum_callback(
-    curriculum: TrainingCostCurriculum,
+def _build_training_transaction_costs_callback(
+    costs_config: TrainingTransactionCosts,
     initial_guidance_scale: float = DEFAULT_SIGNAL_GUIDANCE_REWARD_SCALE,
     guidance_anneal_steps: int = DEFAULT_SIGNAL_GUIDANCE_ANNEAL_STEPS,
     guidance_update_interval_steps: int = DEFAULT_SIGNAL_GUIDANCE_UPDATE_INTERVAL_STEPS,
@@ -707,7 +713,10 @@ def _build_cost_curriculum_callback(
 
     def initialize_callback(self: Any) -> None:
         base_callback.__init__(self, verbose=0)
-        self._last_costs = (0.0, 0.0)
+        self._last_costs = (
+            costs_config.target_fee_bps,
+            costs_config.target_slippage_bps,
+        )
         self._initial_guidance_scale = float(initial_guidance_scale)
         self._guidance_anneal_steps = guidance_anneal_steps
         self._guidance_update_interval_steps = guidance_update_interval_steps
@@ -722,10 +731,10 @@ def _build_cost_curriculum_callback(
     def on_training_step(self: Any) -> bool:
         infos = self.locals.get("infos")
         if not isinstance(infos, list) or len(infos) != 1:
-            raise RuntimeError("cost_curriculum_requires_single_vectorized_environment")
+            raise RuntimeError("training_costs_requires_single_vectorized_environment")
         info = infos[0]
         if not isinstance(info, dict):
-            raise RuntimeError("cost_curriculum_step_info_missing")
+            raise RuntimeError("training_costs_step_info_missing")
         closed_trades = info.get("policy_closed_trade_count")
         if (
             isinstance(closed_trades, bool)
@@ -735,14 +744,14 @@ def _build_cost_curriculum_callback(
             raise RuntimeError("policy_closed_trade_count_missing_or_invalid")
         timestep = int(self.num_timesteps)
         self._record_reward_component_step(timestep, info)
-        next_fees, next_slippage = curriculum.observe_step(timestep, closed_trades)
+        next_fees, next_slippage = costs_config.observe_step(timestep, closed_trades)
         next_costs = (next_fees, next_slippage)
         if next_costs != self._last_costs:
             updates = self.training_env.env_method(
                 "set_transaction_costs", next_fees, next_slippage
             )
             if len(updates) != 1 or updates[0] is not None:
-                raise RuntimeError("cost_curriculum_environment_update_failed")
+                raise RuntimeError("training_cost_update_failed")
             self._last_costs = next_costs
 
         raw_guidance_reward = info.get("reward_signal_guidance", 0.0)
@@ -933,8 +942,8 @@ def _build_reload_probe_observation(
     env = BTCUSDTTradingEnv(
         train_data,
         scaler=scaler,
-        fee_bps_per_side=0.0,
-        slippage_bps_per_side=0.0,
+        fee_bps_per_side=DEFAULT_FEE_BPS,
+        slippage_bps_per_side=DEFAULT_SLIPPAGE_BPS,
         random_start=False,
     )
     try:
@@ -1012,25 +1021,24 @@ def _train_recurrent_ppo(
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
     model_path = args.out_dir / "rl_trading_agent_recurrent_ppo.zip"
-    curriculum = TrainingCostCurriculum(
+    transaction_costs = TrainingTransactionCosts(
         target_fee_bps=args.fee_bps,
         target_slippage_bps=args.slippage_bps,
-        minimum_closed_trades=CURRICULUM_MINIMUM_CLOSED_TRADES,
-        ramp_steps=CURRICULUM_RAMP_STEPS,
-        ramp_update_interval_steps=CURRICULUM_RAMP_UPDATE_INTERVAL_STEPS,
     )
     envs = dummy_vec_env(
         [
             _env_factory(
                 train_data,
                 scaler,
-                0.0,
-                0.0,
+                args.fee_bps,
+                args.slippage_bps,
                 signal_guidance_reward_scale=DEFAULT_SIGNAL_GUIDANCE_REWARD_SCALE,
             )
         ]
     )
-    curriculum_callback = _build_cost_curriculum_callback(curriculum)
+    transaction_costs_callback = _build_training_transaction_costs_callback(
+        transaction_costs
+    )
     entropy_callback = _build_entropy_curriculum_callback(
         args.exploration_ent_coef, args.exploration_steps, args.ent_coef, n_steps
     )
@@ -1046,7 +1054,7 @@ def _train_recurrent_ppo(
         verbose=0,
     )
     callback = getattr(callback_module, "CallbackList")(
-        [curriculum_callback, entropy_callback, checkpoint_callback]
+        [transaction_costs_callback, entropy_callback, checkpoint_callback]
     )
     envs.seed(args.seed)
     policy_class = getattr(recurrent_ppo, "policy_class", None)
@@ -1136,8 +1144,10 @@ def _train_recurrent_ppo(
         training_seconds=float(training_seconds),
         entropy_coefficient=float(args.ent_coef),
         entropy_curriculum=entropy_callback.report(int(loaded_model.num_timesteps)),
-        cost_curriculum=curriculum.report(int(loaded_model.num_timesteps)),
-        signal_guidance_curriculum=curriculum_callback.signal_guidance_report(),
+        training_transaction_costs=transaction_costs.report(
+            int(loaded_model.num_timesteps)
+        ),
+        signal_guidance_curriculum=transaction_costs_callback.signal_guidance_report(),
         auxiliary_loss_curriculum=auxiliary_loss_curriculum_report(
             int(loaded_model.num_timesteps),
             float(loaded_model.auxiliary_loss_weight),
@@ -1145,7 +1155,7 @@ def _train_recurrent_ppo(
             float(loaded_model.auxiliary_loss_minimum_weight),
         ),
         model_reload_verification=reload_verification,
-        reward_component_windows=curriculum_callback.reward_component_report(),
+        reward_component_windows=transaction_costs_callback.reward_component_report(),
         checkpoint_paths=checkpoint_paths,
     )
 
@@ -1249,20 +1259,18 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 def _finalize_training_economic_assessment(
-    assessment: dict[str, Any], curriculum: dict[str, Any]
+    assessment: dict[str, Any], training_transaction_costs: dict[str, Any]
 ) -> dict[str, Any]:
-    minimum_trade_threshold_met = bool(curriculum["minimum_trade_threshold_met"])
-    ramp_completed = bool(curriculum["ramp_completed"])
-    assessment["criteria"]["minimum_trade_threshold_met"] = minimum_trade_threshold_met
-    assessment["criteria"]["training_cost_ramp_completed"] = ramp_completed
-    assessment["criteria"]["training_cost_curriculum_completed"] = (
-        minimum_trade_threshold_met and ramp_completed
+    costs_applied_from_first_step = bool(
+        training_transaction_costs["initial_costs_applied_before_first_step"]
+        and training_transaction_costs["all_training_steps_full_cost"]
+        and training_transaction_costs["zero_cost_steps"] == 0
     )
-    if not minimum_trade_threshold_met:
-        assessment["reasons"].append("minimum_trade_threshold_not_reached")
-    if not ramp_completed:
-        assessment["reasons"].append("training_cost_ramp_incomplete")
-    if not minimum_trade_threshold_met or not ramp_completed:
+    assessment["criteria"]["fixed_transaction_costs_from_first_step"] = (
+        costs_applied_from_first_step
+    )
+    if not costs_applied_from_first_step:
+        assessment["reasons"].append("fixed_training_transaction_costs_not_verified")
         assessment["status"] = "NO-GO"
     return assessment
 
@@ -1401,11 +1409,11 @@ def _build_report(
 ) -> dict[str, Any]:
     economic_assessment = _finalize_training_economic_assessment(
         _economic_assessment(validation_metrics, holdout_metrics),
-        training.cost_curriculum,
+        training.training_transaction_costs,
     )
 
     report: dict[str, Any] = {
-        "schema_version": "alix.rl-trading-agent-report.v13",
+        "schema_version": "alix.rl-trading-agent-report.v14",
         "run_mode": "historical_simulation_only",
         "commit_sha": args.commit_sha,
         "research_result": (
@@ -1503,6 +1511,10 @@ def _build_report(
                     "decimal return on remaining position cost basis, including entry costs; "
                     "0.05 means +5%, and flat positions report 0"
                 ),
+                "position_holding_period_fraction": (
+                    "fraction of the configured minimum holding period elapsed, clamped "
+                    "to [0, 1]; 1 means an open position may be rebalanced"
+                ),
             },
             "action_space": {
                 "type": "Discrete",
@@ -1536,6 +1548,8 @@ def _build_report(
                     "position_fraction_flat_threshold": ACTION_MASK_POSITION_EPSILON,
                     "buy_actions_masked_when_position_fraction_at_or_above_full_threshold": True,
                     "sell_actions_masked_when_position_fraction_at_or_below_flat_threshold": True,
+                    "buy_and_sell_actions_masked_during_minimum_holding_period": True,
+                    "minimum_holding_period_feature": "position_holding_period_fraction",
                     "masked_action_is_non_executable": True,
                     "invalid_buy_fallback_reward_penalty": 1.0,
                 },
@@ -1550,6 +1564,8 @@ def _build_report(
                 "accounting_includes_slippage": True,
                 "drawdown_uses_intrabar_high_low": True,
                 "fixed_timeframe_rule": None,
+                "minimum_holding_period_candles": DEFAULT_MINIMUM_HOLDING_PERIOD_CANDLES,
+                "minimum_holding_period_enforced_by_policy_and_environment": True,
                 "fixed_max_holding_period_candles": None,
                 "fixed_take_profit_rule": None,
                 "fixed_stop_loss_rule": None,
@@ -1574,7 +1590,7 @@ def _build_report(
                 "low_volatility_hold_reward_removed": True,
                 "transaction_cost_reward_multiplier": DEFAULT_TRANSACTION_COST_REWARD_MULTIPLIER,
                 "transaction_cost_reward_penalty": (
-                    "multiplier * (this_step_fee_cost + this_step_slippage_cost) "
+                    "5.0 * (this_step_fee_cost + this_step_slippage_cost) "
                     "/ previous_equity; additional shaping alongside net log-equity return"
                 ),
                 "holding_loss_penalty_per_underwater_hold": (
@@ -1682,7 +1698,7 @@ def _build_report(
             "n_epochs": 4,
             "epochs_per_rollout": 4,
             "lstm_hidden_size": 64,
-            "training_algorithm": "RecurrentPPO with LSTM, Discrete(7) combined actions, pre-Categorical logit masking, floor-preserved seven-class guidance cross-entropy, training-only causal SMA reward, a high-entropy initial exploration phase, periodic checkpoints, no flat-cash HOLD bonus, and explicit transaction-cost reward penalty",
+            "training_algorithm": "RecurrentPPO with LSTM, Discrete(7) combined actions, pre-Categorical logit masking, 15-candle minimum holding period, constant 0.1 entropy coefficient from step one, fixed configured fees and slippage from step one, floor-preserved seven-class guidance cross-entropy, training-only causal SMA reward, periodic checkpoints, no flat-cash HOLD bonus, and 5x transaction-cost reward penalty",
             "training_seconds": float(training.training_seconds),
             "model_artifact": training.model_path.name,
             "model_sha256": _sha256(training.model_path),
@@ -1690,7 +1706,7 @@ def _build_report(
             "model_reload_verification": training.model_reload_verification,
             "no_validation_checkpoint_selection": True,
         },
-        "cost_curriculum": training.cost_curriculum,
+        "training_transaction_costs": training.training_transaction_costs,
         "signal_guidance_curriculum": training.signal_guidance_curriculum,
         "auxiliary_loss_curriculum": training.auxiliary_loss_curriculum,
         "training_reward_dynamics": {

@@ -216,7 +216,7 @@ jobs:
             --timesteps 1000000 \
             --seed 20261025 \
             --ent-coef 0.1 \
-            --exploration-ent-coef 0.5 \
+            --exploration-ent-coef 0.1 \
             --exploration-steps 50000 \
             --fee-bps 25 \
             --slippage-bps 20 \
@@ -237,8 +237,8 @@ jobs:
           split = report["split"]
           model = report["model"]
           evaluation = report["evaluation"]
-          curriculum = report["cost_curriculum"]
-          assert report["schema_version"] == "alix.rl-trading-agent-report.v13"
+          transaction_costs = report["training_transaction_costs"]
+          assert report["schema_version"] == "alix.rl-trading-agent-report.v14"
           assert report["run_mode"] == "historical_simulation_only"
           assert report["dataset"]["row_count"] >= 1_051_200
           assert report["dataset"]["coverage_fraction"] == 1.0
@@ -279,19 +279,20 @@ jobs:
           assert model["total_timesteps_trained"] >= 1_000_000
           entropy_schedule = model["entropy_coefficient_schedule"]
           assert model["ent_coef"] == entropy_schedule["post_exploration_ent_coef"] == 0.1
-          assert entropy_schedule["initial_ent_coef"] == 0.5
-          assert entropy_schedule["requested_exploration_steps"] == 50000
-          assert entropy_schedule["rollout_update_transition_timestep"] == 50176
+          assert entropy_schedule["schedule"] == "constant_from_start"
+          assert entropy_schedule["initial_ent_coef"] == 0.1
+          assert entropy_schedule["requested_exploration_steps"] == 0
+          assert entropy_schedule["rollout_update_transition_timestep"] is None
           assert entropy_schedule["final_schedule_coefficient"] == 0.1
           assert report["environment"]["reward"]["inactivity_penalty_per_unchanged_position_step"] == 0.001
           assert report["environment"]["reward"]["invalid_action_penalty_default_per_masked_request"] == 0.001
           assert report["environment"]["reward"]["invalid_full_position_buy_penalty"] == 1.0
           assert report["environment"]["reward"]["holding_profit_reward_per_profitable_hold"] == 0.0001
 
-          assert report["environment"]["reward"]["transaction_cost_reward_multiplier"] == 1.0
+          assert report["environment"]["reward"]["transaction_cost_reward_multiplier"] == 5.0
           assert "this_step_fee_cost + this_step_slippage_cost" in report["environment"]["reward"]["transaction_cost_reward_penalty"]
           assert report["environment"]["reward"]["holding_loss_penalty_per_underwater_hold"] == 0.0001
-          assert report["environment"]["reward"]["realized_profit_reward_scale_of_initial_equity"] == 0.5
+          assert report["environment"]["reward"]["realized_profit_reward_scale_of_initial_equity"] == 0.05
           assert report["environment"]["reward"]["training_signal_guidance"]["enabled_only_during_training"] is True
           assert report["environment"]["reward"]["training_signal_guidance"]["initial_reward_scale"] == 0.0002
           assert report["environment"]["reward"]["training_signal_guidance"]["anneal_steps"] == 300000
@@ -334,33 +335,26 @@ jobs:
           assert guidance["rewarded_buy_action_count"] >= 0
           assert guidance["rewarded_sell_action_count"] >= 0
           assert guidance["rewarded_buy_action_count"] + guidance["rewarded_sell_action_count"] == guidance["rewarded_action_count"]
-          assert curriculum["initial_fee_bps_per_side"] == 0.0
-          assert curriculum["initial_slippage_bps_per_side"] == 0.0
-          assert curriculum["target_fee_bps_per_side"] == 25.0
-          assert curriculum["target_slippage_bps_per_side"] == 20.0
-          assert curriculum["minimum_completed_policy_round_trips"] == 100
-          assert curriculum["ramp_steps"] == 100_000
-          assert curriculum["ramp_update_interval_steps"] == 1_000
-          assert curriculum["training_timesteps"] == model["total_timesteps_trained"]
-          assert curriculum["minimum_trade_threshold_met"] == (
-              curriculum["total_policy_closed_trade_count"] >= 100
-          )
-          assert curriculum["ramp_started"] == (
-              curriculum["ramp_start_timestep"] is not None
-          )
-          assert curriculum["ramp_completed"] == (
-              curriculum["full_cost_start_timestep"] is not None
-              and model["total_timesteps_trained"] >= curriculum["full_cost_start_timestep"]
-          )
-          assert sum(curriculum["steps_by_stage"].values()) == model["total_timesteps_trained"]
-          assert sum(curriculum["closed_trades_by_stage"].values()) == curriculum["total_policy_closed_trade_count"]
-          if not curriculum["ramp_completed"]:
-              assert report["economic_assessment"]["status"] == "NO-GO"
+          assert transaction_costs["scheme"] == "fixed_configured_costs_from_first_training_step"
+          assert transaction_costs["initial_fee_bps_per_side"] == 25.0
+          assert transaction_costs["initial_slippage_bps_per_side"] == 20.0
+          assert transaction_costs["target_fee_bps_per_side"] == 25.0
+          assert transaction_costs["target_slippage_bps_per_side"] == 20.0
+          assert transaction_costs["zero_cost_steps"] == 0
+          assert transaction_costs["ramp_steps"] == 0
+          assert transaction_costs["training_timesteps"] == model["total_timesteps_trained"]
+          assert transaction_costs["initial_costs_applied_before_first_step"] is True
+          assert transaction_costs["all_training_steps_full_cost"] is True
+          assert transaction_costs["full_cost_steps"] == model["total_timesteps_trained"]
+          assert sum(transaction_costs["steps_by_stage"].values()) == model["total_timesteps_trained"]
+          assert sum(transaction_costs["closed_trades_by_stage"].values()) == transaction_costs["total_policy_closed_trade_count"]
+          assert report["economic_assessment"]["criteria"]["fixed_transaction_costs_from_first_step"] is True
           assert report["environment"]["reward"]["inactivity_grace_steps"] == 3
           assert report["environment"]["reward"]["profitable_trade_bonus"] == 0.0001
           action_space = report["environment"]["action_space"]
           assert action_space["type"] == "Discrete"
           assert action_space["n"] == 7
+          assert action_space["masking"]["buy_and_sell_actions_masked_during_minimum_holding_period"] is True
           assert action_space["index_to_action"] == {
               "0": "HOLD",
               "1": "BUY_25",
@@ -400,10 +394,11 @@ jobs:
           assert "low_volatility_lookback_completed_candles" not in report["environment"]["reward"]
           assert "low_volatility_return_std_threshold" not in report["environment"]["reward"]
           entropy_schedule = model["entropy_coefficient_schedule"]
-          assert entropy_schedule["initial_ent_coef"] == 0.5
-          assert entropy_schedule["requested_exploration_steps"] == 50000
+          assert entropy_schedule["initial_ent_coef"] == 0.1
+          assert entropy_schedule["requested_exploration_steps"] == 0
           assert entropy_schedule["post_exploration_ent_coef"] == 0.1
-          assert entropy_schedule["rollout_update_transition_timestep"] == 50176
+          assert entropy_schedule["schedule"] == "constant_from_start"
+          assert entropy_schedule["rollout_update_transition_timestep"] is None
           assert entropy_schedule["final_schedule_coefficient"] == 0.1
           assert entropy_schedule["training_only"] is True
           assert entropy_schedule["validation_and_holdout_guidance_enabled"] is False
@@ -514,10 +509,14 @@ jobs:
           assert "current_position_fraction" in report["environment"]["observation_fields"]
           assert "unrealized_pnl_pct" in report["environment"]["observation_fields"]
           assert report["environment"]["observation_semantics"]["current_position_fraction"]
+          assert report["environment"]["observation_semantics"]["position_holding_period_fraction"]
+          assert "position_holding_period_fraction" in report["environment"]["observation_fields"]
           assert "divided by total marked account equity" in report["environment"]["observation_semantics"]["current_position_fraction"]
           assert "0.05 means +5%" in report["environment"]["observation_semantics"]["unrealized_pnl_pct"]
           assert report["environment"]["observation_contains_technical_indicators"] is False
           assert report["environment"]["execution"]["fixed_timeframe_rule"] is None
+          assert report["environment"]["execution"]["minimum_holding_period_candles"] == 15
+          assert report["environment"]["execution"]["minimum_holding_period_enforced_by_policy_and_environment"] is True
           assert report["environment"]["execution"]["fixed_max_holding_period_candles"] is None
           assert report["environment"]["execution"]["fixed_take_profit_rule"] is None
           assert report["environment"]["reward"]["hard_trade_count_minimum"] is None
@@ -536,7 +535,7 @@ jobs:
               "dataset": report["dataset"],
               "split": split,
               "model": model,
-              "cost_curriculum": curriculum,
+              "training_transaction_costs": transaction_costs,
               "validation": evaluation["validation"],
               "final_holdout": evaluation["final_holdout"],
               "checkpoint_validation_evaluation": checkpoint_validation,

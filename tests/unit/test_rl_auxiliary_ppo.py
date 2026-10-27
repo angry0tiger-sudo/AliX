@@ -131,14 +131,19 @@ def test_auxiliary_loss_recurrent_ppo_training_and_reload(tmp_path: Path) -> Non
     try:
         torch = importlib.import_module("torch")
         position_index = OBSERVATION_FIELDS.index("current_position_fraction")
+        holding_period_index = OBSERVATION_FIELDS.index(
+            "position_holding_period_fraction"
+        )
         hidden = torch.zeros((1, 1, 16), dtype=torch.float32)
         episode_starts = torch.ones((1,), dtype=torch.float32)
-        for position_fraction, forbidden_actions in (
-            (0.0, SELL_ACTION_INDICES),
-            (1.0, BUY_ACTION_INDICES),
+        for position_fraction, holding_fraction, forbidden_actions in (
+            (0.0, 0.0, SELL_ACTION_INDICES),
+            (1.0, 1.0, BUY_ACTION_INDICES),
+            (0.5, 0.5, (*BUY_ACTION_INDICES, *SELL_ACTION_INDICES)),
         ):
             observation = np.zeros((1, len(OBSERVATION_FIELDS)), dtype=np.float32)
             observation[0, position_index] = position_fraction
+            observation[0, holding_period_index] = holding_fraction
             observation_tensor = torch.as_tensor(observation, dtype=torch.float32)
             distribution, _ = model.policy.get_distribution(
                 observation_tensor,
@@ -173,6 +178,10 @@ def test_auxiliary_loss_recurrent_ppo_training_and_reload(tmp_path: Path) -> Non
         # assign exactly zero probability to BUY at full position.
         full_observation = np.zeros((1, len(OBSERVATION_FIELDS)), dtype=np.float32)
         full_observation[0, position_index] = 1.0
+        holding_period_index = OBSERVATION_FIELDS.index(
+            "position_holding_period_fraction"
+        )
+        full_observation[0, holding_period_index] = 1.0
         full_observation_tensor = torch.as_tensor(full_observation, dtype=torch.float32)
         loaded_distribution, _ = loaded_model.policy.get_distribution(
             full_observation_tensor,

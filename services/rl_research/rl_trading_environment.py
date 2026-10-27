@@ -56,6 +56,7 @@ MARKET_OBSERVATION_FIELDS = (
 PORTFOLIO_OBSERVATION_FIELDS = (
     "current_position_fraction",
     "unrealized_pnl_pct",
+    "position_holding_period_fraction",
 )
 OBSERVATION_FIELDS = (*MARKET_OBSERVATION_FIELDS, *PORTFOLIO_OBSERVATION_FIELDS)
 MARKET_ONLY_OBSERVATION_SIZE = len(MARKET_OBSERVATION_FIELDS)
@@ -67,12 +68,13 @@ DEFAULT_DRAWDOWN_LEVEL_PENALTY = 0.01
 DEFAULT_INACTIVITY_PENALTY = 0.001
 DEFAULT_INVALID_ACTION_PENALTY = 0.001
 DEFAULT_INVALID_FULL_POSITION_BUY_PENALTY = 1.0
+DEFAULT_MINIMUM_HOLDING_PERIOD_CANDLES = 15
 DEFAULT_HOLDING_PROFIT_REWARD = 0.0001
 DEFAULT_HOLDING_LOSS_PENALTY = 0.0001
-DEFAULT_REALIZED_PROFIT_REWARD_SCALE = 0.5
+DEFAULT_REALIZED_PROFIT_REWARD_SCALE = 0.05
 DEFAULT_INACTIVITY_GRACE_STEPS = 3
 DEFAULT_PROFITABLE_TRADE_BONUS = 0.0001
-DEFAULT_TRANSACTION_COST_REWARD_MULTIPLIER = 1.0
+DEFAULT_TRANSACTION_COST_REWARD_MULTIPLIER = 5.0
 POSITION_FRACTION_EPSILON = 1e-9
 
 Float64Array = NDArray[np.float64]
@@ -244,6 +246,7 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
         random_start: bool = False,
         include_portfolio_state: bool = True,
         min_remaining_steps: int = 32_768,
+        minimum_holding_period_candles: int = DEFAULT_MINIMUM_HOLDING_PERIOD_CANDLES,
         drawdown_increment_penalty: float = DEFAULT_DRAWDOWN_INCREMENT_PENALTY,
         drawdown_level_penalty: float = DEFAULT_DRAWDOWN_LEVEL_PENALTY,
         inactivity_penalty: float = DEFAULT_INACTIVITY_PENALTY,
@@ -253,6 +256,12 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
         signal_guidance_reward_scale: float = 0.0,
     ) -> None:
         super().__init__()
+        if (
+            isinstance(minimum_holding_period_candles, bool)
+            or not isinstance(minimum_holding_period_candles, int)
+            or minimum_holding_period_candles < 1
+        ):
+            raise ValueError("minimum_holding_period_candles_must_be_positive_integer")
         if not isinstance(include_portfolio_state, bool):
             raise ValueError("include_portfolio_state_must_be_boolean")
         validate_market_data(market_data)
@@ -296,6 +305,7 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
             OBSERVATION_FIELDS if include_portfolio_state else MARKET_OBSERVATION_FIELDS
         )
         self.min_remaining_steps = int(min_remaining_steps)
+        self.minimum_holding_period_candles = minimum_holding_period_candles
         self.drawdown_increment_penalty = float(drawdown_increment_penalty)
         self.drawdown_level_penalty = float(drawdown_level_penalty)
         self.inactivity_penalty = float(inactivity_penalty)
@@ -313,6 +323,7 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
         )
 
         self._index = 0
+        self._last_buy_index: int | None = None
         self._cash = self.initial_equity
         self._quantity = 0.0
         self._peak_equity = self.initial_equity
@@ -343,6 +354,7 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
         self._zero_size_buy_action_count = 0
         self._buy_target_not_increasing_action_count = 0
         self._masked_sell_action_count = 0
+        self._minimum_holding_period_blocked_action_count = 0
         self._invalid_action_penalty_count = 0
         self._full_position_buy_penalty_count = 0
         self._no_position_change_steps = 0
@@ -387,23 +399,54 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
             )
         self.signal_guidance_reward_scale = float(reward_scale)
 
-    def _portfolio_observation_values(self, price: float) -> tuple[float, float]:
+    def _position_holding_candles(self, price: float) -> int:
+        if (
+            self._quantity <= self._quantity_tolerance(price)
+            or self._last_buy_index is None
+        ):
+            return 0
+        return max(0, self._index - self._last_buy_index + 1)
+
+    def _minimum_holding_period_active(self, price: float) -> bool:
+        return (
+            self._quantity > self._quantity_tolerance(price)
+            and self._position_holding_candles(price)
+            < self.minimum_holding_period_candles
+        )
+
+    def _portfolio_observation_values(
+        self, price: float
+    ) -> tuple[float, float, float]:
         equity = self._equity_at(price)
         position_value = self._quantity * price
         if (
             self._quantity <= self._quantity_tolerance(price)
             or self._position_cost_basis <= 0.0
         ):
-            return 0.0, 0.0
+            return 0.0, 0.0, 0.0
         position_fraction = min(1.0, max(0.0, position_value / equity))
         unrealized_pnl_pct = (
             position_value - self._position_cost_basis
         ) / self._position_cost_basis
-        if not math.isfinite(position_fraction) or not math.isfinite(
-            unrealized_pnl_pct
+        holding_period_fraction = min(
+            1.0,
+            self._position_holding_candles(price)
+            / self.minimum_holding_period_candles,
+        )
+        if not all(
+            math.isfinite(value)
+            for value in (
+                position_fraction,
+                unrealized_pnl_pct,
+                holding_period_fraction,
+            )
         ):
             raise ValueError("portfolio_observation_non_finite")
-        return float(position_fraction), float(unrealized_pnl_pct)
+        return (
+            float(position_fraction),
+            float(unrealized_pnl_pct),
+            float(holding_period_fraction),
+        )
 
     def _observation(self, index: int) -> Float32Array:
         row = self._market_data[index]
@@ -501,6 +544,8 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
                 self._buy_target_not_increasing_action_count += 1
         elif executed_action == "MASKED_SELL":
             self._masked_sell_action_count += 1
+        if reason == "minimum_holding_period_active":
+            self._minimum_holding_period_blocked_action_count += 1
 
     def _quantity_tolerance(self, price: float) -> float:
         return max(1e-12, self.initial_equity / price * 1e-12)
@@ -574,10 +619,13 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
         position_fraction = self._quantity * price / equity
         has_position = self._quantity > self._quantity_tolerance(price)
         has_spendable_cash = self._cash > equity * POSITION_FRACTION_EPSILON
+        holding_period_active = self._minimum_holding_period_active(price)
         can_buy = (
-            has_spendable_cash and position_fraction < 1.0 - POSITION_FRACTION_EPSILON
+            has_spendable_cash
+            and position_fraction < 1.0 - POSITION_FRACTION_EPSILON
+            and not holding_period_active
         )
-        can_sell = has_position
+        can_sell = has_position and not holding_period_active
         return {
             "HOLD": True,
             "BUY_25": can_buy,
@@ -641,11 +689,14 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
         if not action_mask[action_name]:
             equity = self._equity_at(current_price)
             position_fraction = self._quantity * current_price / equity
-            reason = (
-                "position_fully_allocated"
-                if position_fraction >= 1.0 - POSITION_FRACTION_EPSILON
-                else "insufficient_spendable_cash"
-            )
+            if self._minimum_holding_period_active(current_price):
+                reason = "minimum_holding_period_active"
+            else:
+                reason = (
+                    "position_fully_allocated"
+                    if position_fraction >= 1.0 - POSITION_FRACTION_EPSILON
+                    else "insufficient_spendable_cash"
+                )
             return "BUY", "MASKED_BUY", action_mask, reason
         if not self._target_for_buy(size, next_open):
             return (
@@ -654,6 +705,7 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
                 action_mask,
                 "buy_target_not_above_current_position",
             )
+        self._last_buy_index = self._index + 1
         return "BUY", "BUY", action_mask, None
 
     def _sell_target_quantity(self, size: float, next_open: float) -> float | None:
@@ -672,11 +724,18 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
         action_mask: dict[str, bool],
     ) -> tuple[str, str, dict[str, bool], str | None]:
         if not action_mask[action_name]:
-            return "SELL", "MASKED_SELL", action_mask, "no_position"
+            reason = (
+                "minimum_holding_period_active"
+                if self._minimum_holding_period_active(next_open)
+                else "no_position"
+            )
+            return "SELL", "MASKED_SELL", action_mask, reason
         target_quantity = self._sell_target_quantity(size, next_open)
         if target_quantity is None:
             return "SELL", "MASKED_SELL", action_mask, "sell_would_not_reduce_position"
         self._rebalance_to_quantity(target_quantity, next_open)
+        if self._quantity <= self._quantity_tolerance(next_open):
+            self._last_buy_index = None
         return "SELL", "SELL", action_mask, None
 
     def _apply_action(
@@ -751,6 +810,7 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
 
         self._cash = self.initial_equity
         self._quantity = 0.0
+        self._last_buy_index = None
         self._peak_equity = self.initial_equity
         self._current_drawdown = 0.0
         self._max_drawdown = 0.0
@@ -779,6 +839,7 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
         self._zero_size_buy_action_count = 0
         self._buy_target_not_increasing_action_count = 0
         self._masked_sell_action_count = 0
+        self._minimum_holding_period_blocked_action_count = 0
         self._invalid_action_penalty_count = 0
         self._full_position_buy_penalty_count = 0
         self._no_position_change_steps = 0
@@ -1144,6 +1205,13 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
             "action_blocked": executed_action.startswith("MASKED_"),
             "action_mask_reason": mask_reason,
             "legal_action_mask": action_mask,
+            "position_holding_period_candles": self._position_holding_candles(
+                float(next_bar[CLOSE_COLUMN])
+            ),
+            "minimum_holding_period_candles": self.minimum_holding_period_candles,
+            "minimum_holding_period_active": self._minimum_holding_period_active(
+                float(next_bar[CLOSE_COLUMN])
+            ),
             "position_changed": position_changed,
             "position_change_quantity": float(position_change_quantity),
             "consecutive_no_position_change_steps": self._consecutive_no_position_change_steps,
@@ -1228,6 +1296,10 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
                 self._buy_target_not_increasing_action_count
             ),
             "masked_sell_action_count": self._masked_sell_action_count,
+            "minimum_holding_period_blocked_action_count": (
+                self._minimum_holding_period_blocked_action_count
+            ),
+            "minimum_holding_period_candles": self.minimum_holding_period_candles,
             "invalid_action_penalty_count": self._invalid_action_penalty_count,
             "full_position_buy_penalty_count": self._full_position_buy_penalty_count,
             "full_position_buy_penalty_total": float(

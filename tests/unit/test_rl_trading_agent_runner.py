@@ -122,9 +122,9 @@ def test_signal_guidance_floor_invalid_configuration_fails_closed() -> None:
         _guidance_reward_scale_at_step(-1)
 
 
-def test_entropy_coefficient_is_high_for_initial_exploration_only() -> None:
-    assert _entropy_coefficient_at_step(0) == pytest.approx(0.5)
-    assert _entropy_coefficient_at_step(49_999) == pytest.approx(0.5)
+def test_entropy_coefficient_is_constant_at_0_1_from_step_one() -> None:
+    assert _entropy_coefficient_at_step(0) == pytest.approx(0.1)
+    assert _entropy_coefficient_at_step(49_999) == pytest.approx(0.1)
     assert _entropy_coefficient_at_step(50_000) == pytest.approx(0.1)
     assert _entropy_coefficient_at_step(1_000_000) == pytest.approx(0.1)
 
