@@ -1467,8 +1467,7 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
             "requested_position_size_index": requested_size_index,
             "requested_position_size_fraction": requested_size,
             "executed_action": executed_action,
-            "action_blocked": executed_action.startswith("MASKED_")
-            or executed_action.startswith("SUPPRESSED_"),
+            "action_blocked": action_blocked,
             "action_mask_reason": mask_reason,
             "legal_action_mask": action_mask,
             "position_holding_period_candles": self._position_holding_candles(
