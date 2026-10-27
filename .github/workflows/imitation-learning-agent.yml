@@ -142,6 +142,13 @@ jobs:
 
           assert report["commit_sha"] == os.environ["GITHUB_SHA"]
           assert market_manifest["commit_sha"] == os.environ["GITHUB_SHA"]
+          teacher_backtest = report["teacher_backtest"]
+          assert teacher_backtest["commit_sha"] == os.environ["GITHUB_SHA"]
+          assert teacher_backtest["gate"]["passed"] is True
+          for partition in ("validation", "holdout"):
+              economics = teacher_backtest[partition]["economics"]
+              assert economics["profit_factor"] is not None
+              assert economics["profit_factor"] >= teacher_backtest["gate"]["minimum_profit_factor"]
           assert report["dataset"]["source_csv_sha256"] == market_manifest["csv_sha256"]
           assert teacher_manifest["source_csv_sha256"] == market_manifest["csv_sha256"]
           teacher_actions = report["teacher"]["action_distribution"]
@@ -174,6 +181,9 @@ jobs:
               "teacher_dataset_rows": report["dataset"]["row_count"],
               "teacher_actions": report["teacher"]["action_distribution"],
               "teacher_trade_signal_count": trade_signal_count,
+              "teacher_backtest_gate": teacher_backtest["gate"],
+              "teacher_backtest_validation": teacher_backtest["validation"]["economics"],
+              "teacher_backtest_holdout": teacher_backtest["holdout"]["economics"],
               "class_weighting": report["model"]["class_weighting"],
               "validation_classification": report["validation"]["classification"],
               "validation_model_economics": report["validation"]["model_economics"],
