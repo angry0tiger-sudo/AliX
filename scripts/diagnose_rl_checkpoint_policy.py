@@ -111,7 +111,10 @@ def _validate_source_safety(source_report: dict[str, Any]) -> None:
     safety = source_report.get("safety_invariants", {})
     checks = (
         (safety.get("Champion", "invalid") is None, "source_safety_champion_invalid"),
-        (safety.get("order_permission") is False, "source_safety_order_permission_invalid"),
+        (
+            safety.get("order_permission") is False,
+            "source_safety_order_permission_invalid",
+        ),
         (
             safety.get("trading_authorization") == "NO-GO",
             "source_safety_authorization_invalid",
@@ -379,7 +382,7 @@ def _evaluate_checkpoint_policy(
 
 
 def _first_checkpoint_with_hold_over_buy(
-    rows: list[dict[str, Any]]
+    rows: list[dict[str, Any]],
 ) -> dict[str, Any] | None:
     for row in rows:
         side = row["mean_probability_by_side"]
@@ -389,7 +392,7 @@ def _first_checkpoint_with_hold_over_buy(
 
 
 def _first_checkpoint_with_99pct_hold(
-    rows: list[dict[str, Any]]
+    rows: list[dict[str, Any]],
 ) -> dict[str, Any] | None:
     for row in rows:
         if float(row["hold_deterministic_action_fraction"]) >= HOLD_SHARE_THRESHOLD:
