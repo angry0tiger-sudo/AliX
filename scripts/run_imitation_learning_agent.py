@@ -434,7 +434,9 @@ def _simulate_teacher_segment(
 def _teacher_backtest_gate(
     validation_economics: dict[str, Any],
     holdout_economics: dict[str, Any],
+    teacher_action_distribution: dict[str, Any],
     minimum_profit_factor: float = 1.5,
+    minimum_trade_signal_count: int = 100,
 ) -> dict[str, Any]:
     def passes(economics: dict[str, Any]) -> bool:
         profit_factor = economics.get("profit_factor")
@@ -446,12 +448,24 @@ def _teacher_backtest_gate(
 
     validation_passed = passes(validation_economics)
     holdout_passed = passes(holdout_economics)
+    buy_count = int(teacher_action_distribution.get("BUY", {}).get("count", 0))
+    sell_count = int(teacher_action_distribution.get("SELL", {}).get("count", 0))
+    trade_signal_count = buy_count + sell_count
+    signal_density_passed = (
+        trade_signal_count >= minimum_trade_signal_count
+        and buy_count > 0
+        and sell_count > 0
+    )
+    passed = validation_passed and holdout_passed and signal_density_passed
     return {
         "minimum_profit_factor": minimum_profit_factor,
         "validation_passed": validation_passed,
         "holdout_passed": holdout_passed,
-        "passed": validation_passed and holdout_passed,
-        "lstm_training_allowed": validation_passed and holdout_passed,
+        "minimum_trade_signal_count": minimum_trade_signal_count,
+        "teacher_trade_signal_count": trade_signal_count,
+        "signal_density_passed": signal_density_passed,
+        "passed": passed,
+        "lstm_training_allowed": passed,
     }
 
 
@@ -947,7 +961,9 @@ def run_training(
         frame, teacher, validation_end, row_count
     )
     teacher_gate = _teacher_backtest_gate(
-        validation_teacher_economics, holdout_teacher_economics
+        validation_teacher_economics,
+        holdout_teacher_economics,
+        teacher_manifest["teacher_action_distribution"],
     )
     teacher_backtest: dict[str, Any] = {
         "schema_version": "alix.teacher-backtest-report.v1",
