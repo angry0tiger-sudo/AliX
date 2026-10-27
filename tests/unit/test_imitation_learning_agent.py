@@ -119,6 +119,8 @@ def test_economic_simulation_is_spot_only_and_cost_sensitive() -> None:
     assert result["win_rate_fraction"] == 1.0
     assert result["net_return_fraction"] > 0.0
     assert result_with_costs["net_return_fraction"] < result["net_return_fraction"]
+    assert result_with_costs["fee_bps_per_side"] == 25.0
+    assert result_with_costs["slippage_bps_per_side"] == 20.0
     assert "positive_period_fraction" not in result
 
 

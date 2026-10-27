@@ -322,8 +322,8 @@ def simulate_economics(
     actions: IntArray,
     close_prices: Float64Array,
     *,
-    fee_bps_per_side: float = 10.0,
-    slippage_bps_per_side: float = 5.0,
+    fee_bps_per_side: float = 25.0,
+    slippage_bps_per_side: float = 20.0,
 ) -> dict[str, Any]:
     """Simulate fully funded Spot long/flat trades offline; never opens a short."""
     _validate_economic_shapes(actions, close_prices)
