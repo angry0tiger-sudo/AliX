@@ -126,7 +126,9 @@ def select_high_volatility_window(
         "selected_absolute_return_pct": absolute_return_pct,
         "selected_start_index": start_index,
         "selected_end_index_exclusive": end_index_exclusive,
-        "selected_start_timestamp_ms": int(training_data[start_index, TIMESTAMP_COLUMN]),
+        "selected_start_timestamp_ms": int(
+            training_data[start_index, TIMESTAMP_COLUMN]
+        ),
         "selected_end_timestamp_ms": int(
             training_data[end_index_exclusive - 1, TIMESTAMP_COLUMN]
         ),
