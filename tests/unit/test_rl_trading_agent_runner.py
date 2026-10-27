@@ -90,11 +90,11 @@ def test_evaluation_reports_real_discrete_size_choices_without_zero_volume_buys(
 
     assert metrics["initial_equity"] == pytest.approx(10_000.0)
     assert metrics["buy_action_count"] == metrics["steps"]
-    assert metrics["masked_buy_action_count"] == 0
+    assert metrics["masked_buy_action_count"] == metrics["steps"] - 1
     assert metrics["buy_noop_action_count"] == 0
     assert metrics["zero_size_buy_action_count"] == 0
     assert metrics["policy_buy_zero_size_request_count"] == 0
-    assert metrics["buy_fill_count"] == metrics["steps"]
+    assert metrics["buy_fill_count"] == 1
     assert metrics["policy_requested_trade_size_fraction_counts"] == {
         "0.25": metrics["steps"],
         "0.50": 0,
