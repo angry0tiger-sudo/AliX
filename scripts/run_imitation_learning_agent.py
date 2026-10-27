@@ -17,6 +17,15 @@ from services.rl_research.institutional_teacher import (
     ACTION_BUY,
     ACTION_HOLD,
     ACTION_SELL,
+    DEFAULT_ATR_PERIOD,
+    DEFAULT_FEE_BPS_PER_SIDE,
+    DEFAULT_MIN_ATR_COST_MULTIPLE,
+    DEFAULT_SLIPPAGE_BPS_PER_SIDE,
+    DEFAULT_STOP_LOSS_FRACTION,
+    DEFAULT_TAKE_PROFIT_FRACTION,
+    DEFAULT_TRAILING_DISTANCE_FRACTION,
+    DEFAULT_TRAILING_TRIGGER_FRACTION,
+    _generate_teacher_actions,
     generate_teacher_labels,
 )
 
@@ -322,14 +331,23 @@ def simulate_economics(
     actions: IntArray,
     close_prices: Float64Array,
     *,
-    fee_bps_per_side: float = 25.0,
-    slippage_bps_per_side: float = 20.0,
+    exit_prices: Float64Array | None = None,
+    fee_bps_per_side: float = DEFAULT_FEE_BPS_PER_SIDE,
+    slippage_bps_per_side: float = DEFAULT_SLIPPAGE_BPS_PER_SIDE,
 ) -> dict[str, Any]:
     """Simulate fully funded Spot long/flat trades offline; never opens a short."""
     _validate_economic_shapes(actions, close_prices)
     _validate_economic_prices_and_costs(
         close_prices, fee_bps_per_side, slippage_bps_per_side
     )
+    if exit_prices is not None:
+        if exit_prices.ndim != 1 or len(exit_prices) != len(close_prices):
+            raise ValueError("economic_simulation_exit_price_shape_mismatch")
+        if np.isinf(exit_prices).any():
+            raise ValueError("economic_simulation_exit_price_invalid")
+        finite_exit_prices = exit_prices[np.isfinite(exit_prices)]
+        if np.any(finite_exit_prices <= 0):
+            raise ValueError("economic_simulation_exit_price_invalid")
     effective_actions = mask_spot_actions(actions)
     fee_rate = fee_bps_per_side / 10_000.0
     slippage_rate = slippage_bps_per_side / 10_000.0
@@ -342,7 +360,9 @@ def simulate_economics(
     position_change_count = 0
     equity_values = [1.0]
 
-    for action, raw_price in zip(effective_actions, close_prices, strict=True):
+    for index, (action, raw_price) in enumerate(
+        zip(effective_actions, close_prices, strict=True)
+    ):
         price = float(raw_price)
         if action == ACTION_BUY and not has_asset:
             entry_equity = cash
@@ -352,7 +372,10 @@ def simulate_economics(
             has_asset = True
             position_change_count += 1
         elif action == ACTION_SELL and has_asset:
-            sell_fill = price * (1.0 - slippage_rate)
+            execution_price = price
+            if exit_prices is not None and np.isfinite(exit_prices[index]):
+                execution_price = float(exit_prices[index])
+            sell_fill = execution_price * (1.0 - slippage_rate)
             cash = quantity * sell_fill * (1.0 - fee_rate)
             closed_trade_pnls.append(float(cash - entry_equity))
             quantity = 0.0
@@ -371,6 +394,65 @@ def simulate_economics(
         fee_bps_per_side,
         slippage_bps_per_side,
     )
+
+
+def _simulate_teacher_segment(
+    frame: pd.DataFrame,
+    teacher: pd.DataFrame,
+    start_index: int,
+    end_index: int,
+) -> dict[str, Any]:
+    """Backtest a fresh flat position using full-history causal setup features."""
+    if start_index < 0 or end_index > len(frame) or end_index - start_index < 2:
+        raise ValueError("teacher_backtest_segment_bounds_invalid")
+    segment = frame.iloc[start_index:end_index].reset_index(drop=True)
+    signals = teacher.iloc[start_index:end_index].reset_index(drop=True)
+    actions, _, exit_prices, _ = _generate_teacher_actions(
+        segment,
+        signals["teacher_setup_buy"],
+        signals["teacher_setup_sell"],
+        signals["teacher_atr_fraction"],
+        cooldown_candles=2,
+        min_atr_cost_multiple=DEFAULT_MIN_ATR_COST_MULTIPLE,
+        take_profit_fraction=DEFAULT_TAKE_PROFIT_FRACTION,
+        stop_loss_fraction=DEFAULT_STOP_LOSS_FRACTION,
+        trailing_trigger_fraction=DEFAULT_TRAILING_TRIGGER_FRACTION,
+        trailing_distance_fraction=DEFAULT_TRAILING_DISTANCE_FRACTION,
+        fee_bps_per_side=DEFAULT_FEE_BPS_PER_SIDE,
+        slippage_bps_per_side=DEFAULT_SLIPPAGE_BPS_PER_SIDE,
+    )
+    close_prices = segment["close"].to_numpy(dtype=np.float64)
+    return simulate_economics(
+        actions,
+        close_prices,
+        exit_prices=exit_prices,
+        fee_bps_per_side=DEFAULT_FEE_BPS_PER_SIDE,
+        slippage_bps_per_side=DEFAULT_SLIPPAGE_BPS_PER_SIDE,
+    )
+
+
+def _teacher_backtest_gate(
+    validation_economics: dict[str, Any],
+    holdout_economics: dict[str, Any],
+    minimum_profit_factor: float = 1.5,
+) -> dict[str, Any]:
+    def passes(economics: dict[str, Any]) -> bool:
+        profit_factor = economics.get("profit_factor")
+        return (
+            isinstance(profit_factor, (int, float))
+            and np.isfinite(profit_factor)
+            and float(profit_factor) >= minimum_profit_factor
+        )
+
+    validation_passed = passes(validation_economics)
+    holdout_passed = passes(holdout_economics)
+    return {
+        "minimum_profit_factor": minimum_profit_factor,
+        "validation_passed": validation_passed,
+        "holdout_passed": holdout_passed,
+        "passed": validation_passed and holdout_passed,
+        "lstm_training_allowed": validation_passed and holdout_passed,
+    }
 
 
 def _predict_actions(
@@ -417,6 +499,23 @@ def _write_teacher_dataset(
         "teacher_csv_sha256": hashlib.sha256(teacher_path.read_bytes()).hexdigest(),
         "row_count": int(len(teacher)),
         "teacher_timeframe_mode": "4h_completed_candles",
+        "teacher_risk_management": {
+            "atr_period_candles": DEFAULT_ATR_PERIOD,
+            "atr_cost_multiple": DEFAULT_MIN_ATR_COST_MULTIPLE,
+            "minimum_atr_fraction": (
+                DEFAULT_MIN_ATR_COST_MULTIPLE
+                * (DEFAULT_FEE_BPS_PER_SIDE + DEFAULT_SLIPPAGE_BPS_PER_SIDE)
+                / 10_000.0
+            ),
+            "take_profit_fraction": DEFAULT_TAKE_PROFIT_FRACTION,
+            "stop_loss_fraction": DEFAULT_STOP_LOSS_FRACTION,
+            "trailing_trigger_fraction": DEFAULT_TRAILING_TRIGGER_FRACTION,
+            "trailing_distance_fraction": DEFAULT_TRAILING_DISTANCE_FRACTION,
+            "trailing_breakeven_includes_round_trip_costs": True,
+            "stop_target_same_candle_policy": "stop_first_conservative",
+            "fee_bps_per_side": DEFAULT_FEE_BPS_PER_SIDE,
+            "slippage_bps_per_side": DEFAULT_SLIPPAGE_BPS_PER_SIDE,
+        },
         "teacher_action_distribution": action_distribution(
             teacher["teacher_action"].to_numpy(dtype=np.int64)
         ),
@@ -736,6 +835,7 @@ def _build_training_report(
     state: dict[str, Any],
     evaluation: dict[str, Any],
     model_artifact: str,
+    teacher_backtest: dict[str, Any],
 ) -> dict[str, Any]:
     row_count = int(prepared["row_count"])
     train_end = int(prepared["train_end"])
@@ -764,6 +864,7 @@ def _build_training_report(
             "ground_truth_claim": False,
             "action_distribution": action_distribution(prepared["actions"]),
         },
+        "teacher_backtest": teacher_backtest,
         "model": {
             "architecture": "two-layer CPU LSTM plus linear head",
             "initialized_from_scratch": True,
@@ -835,6 +936,71 @@ def run_training(
     teacher, teacher_manifest = _write_teacher_dataset(
         frame, source_manifest, output_dir, commit_sha
     )
+
+    row_count = len(frame)
+    train_end = int(row_count * 0.70)
+    validation_end = int(row_count * 0.85)
+    validation_teacher_economics = _simulate_teacher_segment(
+        frame, teacher, train_end, validation_end
+    )
+    holdout_teacher_economics = _simulate_teacher_segment(
+        frame, teacher, validation_end, row_count
+    )
+    teacher_gate = _teacher_backtest_gate(
+        validation_teacher_economics, holdout_teacher_economics
+    )
+    teacher_backtest: dict[str, Any] = {
+        "schema_version": "alix.teacher-backtest-report.v1",
+        "commit_sha": commit_sha,
+        "source_csv_sha256": source_manifest["csv_sha256"],
+        "teacher_csv_sha256": teacher_manifest["teacher_csv_sha256"],
+        "strategy": "ATR-filtered 4h-bias SMC with TP/SL and trailing stop",
+        "parameters": teacher_manifest["teacher_risk_management"],
+        "action_distribution": teacher_manifest["teacher_action_distribution"],
+        "validation": {
+            "row_start_inclusive": train_end,
+            "row_end_exclusive": validation_end,
+            "economics": validation_teacher_economics,
+        },
+        "holdout": {
+            "row_start_inclusive": validation_end,
+            "row_end_exclusive": row_count,
+            "economics": holdout_teacher_economics,
+        },
+        "gate": teacher_gate,
+        "safety": {
+            "Champion": None,
+            "order_permission": False,
+            "trading_authorization": "NO-GO",
+            "real_order_attempts": 0,
+            "exchange_calls": 0,
+            "private_api_calls": 0,
+            "execution_api_implemented": False,
+        },
+    }
+    teacher_backtest_path = output_dir / "teacher-backtest-report.json"
+    teacher_backtest_path.write_text(
+        json.dumps(
+            teacher_backtest, indent=2, sort_keys=True, allow_nan=False
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    print(
+        json.dumps(
+            {"teacher_backtest": teacher_backtest},
+            indent=2,
+            sort_keys=True,
+            allow_nan=False,
+        )
+    )
+    if not teacher_gate["passed"]:
+        raise RuntimeError(
+            "teacher_profit_factor_gate_failed_lstm_training_blocked"
+        )
+
+    # Only prepare model sequences and instantiate/train the LSTM after the
+    # independent validation and untouched holdout both clear the economic gate.
     prepared = _prepare_training_data(frame, teacher, window)
     torch: Any = importlib.import_module("torch")
     state = _create_training_state(torch, prepared)
@@ -853,6 +1019,7 @@ def run_training(
         state,
         evaluation,
         model_artifact,
+        teacher_backtest,
     )
     report_path = output_dir / "imitation-learning-report.json"
     report_path.write_text(
@@ -867,6 +1034,7 @@ def run_training(
                 "teacher_action_distribution": teacher_manifest[
                     "teacher_action_distribution"
                 ],
+                "teacher_backtest_gate": teacher_backtest["gate"],
                 "validation": report["validation"],
                 "holdout": report["holdout"],
                 "safety": report["safety"],
