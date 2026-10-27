@@ -225,8 +225,8 @@ jobs:
             --seed 20261025 \
             --ent-coef 0.2 \
             --exploration-ent-coef 0.2 \
-            --exploration-steps 50000 \\
-            --initial-regime-steps 500000 \\
+            --exploration-steps 50000 \
+            --initial-regime-steps 500000 \
             --regime-window-candles 120000 \
             --fee-bps 25 \
             --slippage-bps 20 \
