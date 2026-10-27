@@ -10,6 +10,7 @@ from scripts.fetch_nobitex_public_ohlcv import (
     _validate_historical_rows,
     CandleRecord,
     INTERVAL_SECONDS,
+    MAX_CANDLES_PER_REQUEST,
     fetch_historical_candles,
     ALLOWED_DAYS,
     parse_udf_payload,
