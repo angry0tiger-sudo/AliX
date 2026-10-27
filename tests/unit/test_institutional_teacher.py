@@ -117,7 +117,8 @@ def test_higher_timeframe_bias_excludes_boundary_candle() -> None:
         data, higher_timeframe="4h", ema_span=2, swing_window=5, volume_window=10
     )
     changed = data.copy()
-    changed.loc[1_440, ["open", "high", "low", "close"]] *= 0.05
+    for column in ("open", "high", "low", "close"):
+        changed.loc[1_440, column] = float(changed.loc[1_440, column]) * 0.05
     rerun = generate_teacher_labels(
         changed, higher_timeframe="4h", ema_span=2, swing_window=5, volume_window=10
     )

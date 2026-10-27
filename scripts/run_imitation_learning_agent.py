@@ -12,7 +12,6 @@ from typing import Any, cast
 import numpy as np
 import pandas as pd
 from numpy.typing import NDArray
-from sklearn.preprocessing import StandardScaler
 
 from services.rl_research.institutional_teacher import (
     ACTION_BUY,
@@ -87,7 +86,7 @@ def build_feature_matrix(
     typical = (high + low + close) / 3.0
     rolling_volume = volume.rolling(24, min_periods=1).sum().replace(0.0, np.nan)
     vwap = (typical * volume).rolling(24, min_periods=1).sum() / rolling_volume
-    log_volume = np.log1p(volume.clip(lower=0.0))
+    log_volume = pd.Series(np.log1p(volume.clip(lower=0.0)), index=frame.index)
     volume_std = log_volume.rolling(24, min_periods=2).std().replace(0.0, np.nan)
     volume_z = (log_volume - log_volume.rolling(24, min_periods=1).mean()) / volume_std
 
@@ -343,13 +342,10 @@ def run_training(
     ):
         raise ValueError("insufficient_rows_for_chronological_splits")
 
-    scaler = StandardScaler()
-    scaler.fit(features[:train_end])
-    scaler_mean = scaler.mean_
-    scaler_scale = scaler.scale_
-    if scaler_mean is None or scaler_scale is None:
-        raise RuntimeError("feature_scaler_was_not_fitted")
-    normalized = scaler.transform(features).astype(np.float32)
+    scaler_mean = features[:train_end].mean(axis=0, dtype=np.float64)
+    scaler_scale = features[:train_end].std(axis=0, dtype=np.float64)
+    scaler_scale = np.where(scaler_scale > 1e-12, scaler_scale, 1.0)
+    normalized = ((features - scaler_mean) / scaler_scale).astype(np.float32)
     sequences, sequence_actions, target_indices = make_sequences(
         normalized, actions, window
     )
