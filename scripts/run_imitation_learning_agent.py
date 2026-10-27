@@ -67,9 +67,7 @@ def load_public_market_data(
         raise ValueError(f"missing_market_columns:{','.join(sorted(missing))}")
     if len(frame) != manifest.get("row_count") or frame.empty:
         raise ValueError("market_csv_row_count_mismatch")
-    frame["timestamp"] = pd.to_datetime(
-        frame["timestamp"], utc=True, errors="coerce"
-    )
+    frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True, errors="coerce")
     if frame["timestamp"].isna().any():
         raise ValueError("market_timestamps_invalid")
     return frame.loc[:, list(_REQUIRED_SOURCE_COLUMNS)].copy(), manifest
@@ -91,9 +89,7 @@ def build_feature_matrix(
     vwap = (typical * volume).rolling(24, min_periods=1).sum() / rolling_volume
     log_volume = np.log1p(volume.clip(lower=0.0))
     volume_std = log_volume.rolling(24, min_periods=2).std().replace(0.0, np.nan)
-    volume_z = (
-        log_volume - log_volume.rolling(24, min_periods=1).mean()
-    ) / volume_std
+    volume_z = (log_volume - log_volume.rolling(24, min_periods=1).mean()) / volume_std
 
     features = pd.DataFrame(
         {
@@ -161,9 +157,7 @@ def action_distribution(actions: IntArray) -> dict[str, dict[str, int | float]]:
     return result
 
 
-def classification_metrics(
-    truth: IntArray, predictions: IntArray
-) -> dict[str, Any]:
+def classification_metrics(truth: IntArray, predictions: IntArray) -> dict[str, Any]:
     if truth.shape != predictions.shape or truth.ndim != 1:
         raise ValueError("classification_metric_shape_mismatch")
     matrix = np.zeros((3, 3), dtype=np.int64)
@@ -360,9 +354,7 @@ def run_training(
         normalized, actions, window
     )
     train_mask = target_indices < train_end
-    validation_mask = (target_indices >= train_end) & (
-        target_indices < validation_end
-    )
+    validation_mask = (target_indices >= train_end) & (target_indices < validation_end)
     holdout_mask = target_indices >= validation_end
     if not train_mask.any() or not validation_mask.any() or not holdout_mask.any():
         raise ValueError("chronological_sequence_split_empty")
@@ -371,9 +363,7 @@ def run_training(
     class_counts = np.bincount(train_actions, minlength=3).astype(np.float64)
     if np.any(class_counts == 0):
         raise ValueError("teacher_train_split_missing_action_class")
-    class_weights = np.minimum(
-        np.sqrt(len(train_actions) / (3.0 * class_counts)), 8.0
-    )
+    class_weights = np.minimum(np.sqrt(len(train_actions) / (3.0 * class_counts)), 8.0)
     class_weights = class_weights / class_weights.mean()
 
     torch = importlib.import_module("torch")
@@ -463,9 +453,7 @@ def run_training(
     validation_predictions = _predict_actions(
         torch, lstm, classifier, validation_features
     )
-    holdout_predictions = _predict_actions(
-        torch, lstm, classifier, holdout_features
-    )
+    holdout_predictions = _predict_actions(torch, lstm, classifier, holdout_features)
     close_prices = frame["close"].to_numpy(dtype=np.float64)
     validation_close = close_prices[target_indices[validation_mask]]
     holdout_close = close_prices[target_indices[holdout_mask]]
@@ -476,9 +464,7 @@ def run_training(
         validation_predictions, validation_close
     )
     holdout_teacher_economics = simulate_economics(holdout_targets, holdout_close)
-    holdout_model_economics = simulate_economics(
-        holdout_predictions, holdout_close
-    )
+    holdout_model_economics = simulate_economics(holdout_predictions, holdout_close)
 
     model_path = output_dir / "lstm-behavioral-cloning-state.pt"
     torch.save(
@@ -521,7 +507,9 @@ def run_training(
             "validation_rows": int(validation_end - train_end),
             "holdout_rows": int(row_count - validation_end),
             "train_end_timestamp": str(frame.iloc[train_end - 1]["timestamp"]),
-            "validation_end_timestamp": str(frame.iloc[validation_end - 1]["timestamp"]),
+            "validation_end_timestamp": str(
+                frame.iloc[validation_end - 1]["timestamp"]
+            ),
             "holdout_start_timestamp": str(frame.iloc[validation_end]["timestamp"]),
         },
         "teacher": {
