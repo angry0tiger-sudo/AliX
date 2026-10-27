@@ -309,6 +309,7 @@ def _fetch_complete_candle_page_with_retries(
         cursor, stop, request_json=request_json, sleep_fn=sleep_fn
     )
 
+
 def _fetch_candle_pages(
     *,
     start: int,
