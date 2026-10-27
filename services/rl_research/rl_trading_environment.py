@@ -223,6 +223,28 @@ def _validate_environment_configuration(
         raise ValueError("min_remaining_steps_must_be_positive")
 
 
+def _validate_minimum_holding_period_candles(value: object) -> None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError("minimum_holding_period_candles_must_be_positive_integer")
+
+
+def _validate_portfolio_state_option(value: object) -> None:
+    if not isinstance(value, bool):
+        raise ValueError("include_portfolio_state_must_be_boolean")
+
+
+def _validate_signal_guidance_reward_scale(value: object) -> None:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(float(value))
+        or value < 0.0
+    ):
+        raise ValueError(
+            "signal_guidance_reward_scale_must_be_finite_and_non_negative"
+        )
+
+
 class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
     """Long-only, one-minute, cost-aware trading environment.
 
@@ -256,14 +278,10 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
         signal_guidance_reward_scale: float = 0.0,
     ) -> None:
         super().__init__()
-        if (
-            isinstance(minimum_holding_period_candles, bool)
-            or not isinstance(minimum_holding_period_candles, int)
-            or minimum_holding_period_candles < 1
-        ):
-            raise ValueError("minimum_holding_period_candles_must_be_positive_integer")
-        if not isinstance(include_portfolio_state, bool):
-            raise ValueError("include_portfolio_state_must_be_boolean")
+        _validate_minimum_holding_period_candles(
+            minimum_holding_period_candles
+        )
+        _validate_portfolio_state_option(include_portfolio_state)
         validate_market_data(market_data)
         _validate_environment_configuration(
             initial_equity,
@@ -277,15 +295,7 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
             inactivity_grace_steps,
             profitable_trade_bonus,
         )
-        if (
-            isinstance(signal_guidance_reward_scale, bool)
-            or not isinstance(signal_guidance_reward_scale, (int, float))
-            or not math.isfinite(float(signal_guidance_reward_scale))
-            or signal_guidance_reward_scale < 0.0
-        ):
-            raise ValueError(
-                "signal_guidance_reward_scale_must_be_finite_and_non_negative"
-            )
+        _validate_signal_guidance_reward_scale(signal_guidance_reward_scale)
 
         self._market_data = np.ascontiguousarray(market_data, dtype=np.float64)
         self.scaler = scaler or MarketObservationScaler.fit(self._market_data)
