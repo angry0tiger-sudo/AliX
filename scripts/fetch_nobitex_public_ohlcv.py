@@ -224,6 +224,55 @@ def _complete_candle_page(
     return [rows_by_timestamp[stamp] for stamp in expected]
 
 
+def _fetch_single_candle_page(
+    cursor: int,
+    stop: int,
+    request_json: Callable[[dict[str, str]], dict[str, Any]],
+) -> list[CandleRecord]:
+    request_from = cursor - INTERVAL_SECONDS
+    request_to = stop + INTERVAL_SECONDS
+    params = {
+        "symbol": "BTCUSDT",
+        "resolution": "60",
+        "from": str(request_from),
+        "to": str(request_to),
+    }
+    page = parse_udf_payload(
+        request_json(params),
+        requested_from=request_from,
+        requested_to=request_to,
+    )
+    return [row for row in page if cursor <= row["timestamp"] <= stop]
+
+
+def _fetch_complete_candle_page_with_retries(
+    cursor: int,
+    stop: int,
+    *,
+    request_json: Callable[[dict[str, str]], dict[str, Any]],
+    sleep_fn: Callable[[float], None],
+) -> list[CandleRecord]:
+    for attempt in range(3):
+        batch = _fetch_single_candle_page(cursor, stop, request_json)
+        if batch:
+            completed = _complete_candle_page(
+                cursor,
+                stop,
+                batch,
+                request_json=request_json,
+                sleep_fn=sleep_fn,
+            )
+            if completed is not None:
+                return completed
+        elif attempt == 2:
+            raise ValueError(f"nobitex_historical_empty_page:{cursor}:{stop}")
+        if attempt < 2:
+            sleep_fn(2**attempt)
+    raise ValueError(
+        f"nobitex_historical_gap_detected_no_interpolation:{cursor}:{stop}"
+    )
+
+
 def _fetch_candle_pages(
     *,
     start: int,
@@ -235,52 +284,14 @@ def _fetch_candle_pages(
     rows: list[CandleRecord] = []
     while cursor <= end:
         stop = min(cursor + (MAX_CANDLES_PER_REQUEST - 3) * INTERVAL_SECONDS, end)
-        # Pad query bounds by one interval to tolerate providers that interpret
-        # UDF range endpoints as exclusive, but retain only the exact target window.
-        request_from = cursor - INTERVAL_SECONDS
-        request_to = stop + INTERVAL_SECONDS
-        params = {
-            "symbol": "BTCUSDT",
-            "resolution": "60",
-            "from": str(request_from),
-            "to": str(request_to),
-        }
-        batch: list[CandleRecord] = []
-        for attempt in range(3):
-            page = parse_udf_payload(
-                request_json(params),
-                requested_from=request_from,
-                requested_to=request_to,
-            )
-            batch = [row for row in page if cursor <= row["timestamp"] <= stop]
-            if not batch:
-                if attempt < 2:
-                    sleep_fn(2**attempt)
-                continue
-            completed_batch = _complete_candle_page(
-                cursor,
-                stop,
-                batch,
-                request_json=request_json,
-                sleep_fn=sleep_fn,
-            )
-            if completed_batch is not None:
-                batch = completed_batch
-                break
-            if attempt < 2:
-                sleep_fn(2**attempt)
-        else:
-            if not batch:
-                raise ValueError(f"nobitex_historical_empty_page:{cursor}:{stop}")
-            raise ValueError(
-                f"nobitex_historical_gap_detected_no_interpolation:{cursor}:{stop}"
-            )
+        batch = _fetch_complete_candle_page_with_retries(
+            cursor, stop, request_json=request_json, sleep_fn=sleep_fn
+        )
         rows.extend(batch)
         cursor = batch[-1]["timestamp"] + INTERVAL_SECONDS
         if cursor <= end:
             sleep_fn(1.1)
     return rows
-
 
 def _validate_historical_rows(rows: list[CandleRecord], days: int) -> None:
     rows.sort(key=lambda item: item["timestamp"])
