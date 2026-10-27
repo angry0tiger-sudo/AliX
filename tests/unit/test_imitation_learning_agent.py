@@ -10,6 +10,7 @@ from scripts.run_imitation_learning_agent import (
     mask_spot_actions,
     _target_positions,
     _compute_class_weights,
+    _teacher_backtest_gate,
     _weighted_cross_entropy_loss,
     simulate_economics,
 )
@@ -190,3 +191,35 @@ def test_class_weights_fail_closed_when_train_split_lacks_a_class() -> None:
         assert str(exc) == "teacher_train_split_missing_action_class"
     else:
         raise AssertionError("missing training class must fail closed")
+
+
+
+def test_teacher_economic_gate_requires_validation_and_holdout_pf() -> None:
+    passing = {"profit_factor": 1.6}
+    failing = {"profit_factor": 1.49}
+
+    assert _teacher_backtest_gate(passing, passing)["passed"] is True
+    assert _teacher_backtest_gate(passing, failing)["passed"] is False
+    assert _teacher_backtest_gate({"profit_factor": None}, passing)[
+        "lstm_training_allowed"
+    ] is False
+
+
+def test_economic_simulation_uses_protective_exit_fill_price() -> None:
+    actions = np.asarray([ACTION_BUY, ACTION_HOLD, ACTION_SELL], dtype=np.int64)
+    close = np.asarray([100.0, 101.0, 98.0], dtype=np.float64)
+    protective_exit = np.asarray([np.nan, np.nan, 100.9], dtype=np.float64)
+
+    result_at_close = simulate_economics(
+        actions, close, fee_bps_per_side=0.0, slippage_bps_per_side=0.0
+    )
+    result_at_stop = simulate_economics(
+        actions,
+        close,
+        exit_prices=protective_exit,
+        fee_bps_per_side=0.0,
+        slippage_bps_per_side=0.0,
+    )
+
+    assert result_at_close["net_return_fraction"] < 0
+    assert result_at_stop["net_return_fraction"] > 0
