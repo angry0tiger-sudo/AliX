@@ -165,7 +165,7 @@ jobs:
       - name: Audit pinned RL research dependency graph
         run: pip-audit -r requirements-rl-research.txt
 
-      - name: Run environment, high-volatility regime-curriculum, and split contract tests
+      - name: Run training-only regime-curriculum and split contract tests
         run: >-
           python -m pytest
           tests/unit/test_rl_trading_environment.py
