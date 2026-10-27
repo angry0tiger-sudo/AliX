@@ -9,6 +9,8 @@ from scripts.run_imitation_learning_agent import (
     make_sequences,
     mask_spot_actions,
     _target_positions,
+    _compute_class_weights,
+    _weighted_cross_entropy_loss,
     simulate_economics,
 )
 from services.rl_research.institutional_teacher import (
@@ -144,3 +146,46 @@ def test_win_rate_and_profit_factor_use_closed_trades_only() -> None:
         result["profit_factor"], result["gross_profit"] / result["gross_loss"]
     )
     assert "positive_period_fraction" not in result
+
+
+
+def test_class_weights_upweight_only_minority_actions_from_train_labels() -> None:
+    train_actions = np.asarray(
+        [ACTION_HOLD] * 1_000 + [ACTION_BUY] * 4 + [ACTION_SELL] * 5,
+        dtype=np.int64,
+    )
+    weights = _compute_class_weights(train_actions)
+
+    assert weights[ACTION_HOLD] == 1.0
+    assert weights[ACTION_BUY] == 25.0
+    assert weights[ACTION_SELL] == 25.0
+
+
+def test_class_weighting_changes_per_sample_loss_for_minority_actions() -> None:
+    class FakeFunctional:
+        @staticmethod
+        def cross_entropy(logits, targets, reduction):
+            assert reduction == "none"
+            return np.asarray([2.0, 2.0], dtype=np.float64)
+
+    class FakeNN:
+        functional = FakeFunctional()
+
+    class FakeTorch:
+        nn = FakeNN()
+
+    targets = np.asarray([ACTION_HOLD, ACTION_BUY], dtype=np.int64)
+    weights = np.asarray([1.0, 25.0, 25.0], dtype=np.float64)
+    loss = _weighted_cross_entropy_loss(FakeTorch, object(), targets, weights)
+
+    assert loss == 26.0
+
+
+def test_class_weights_fail_closed_when_train_split_lacks_a_class() -> None:
+    train_actions = np.asarray([ACTION_HOLD, ACTION_BUY, ACTION_HOLD], dtype=np.int64)
+    try:
+        _compute_class_weights(train_actions)
+    except ValueError as exc:
+        assert str(exc) == "teacher_train_split_missing_action_class"
+    else:
+        raise AssertionError("missing training class must fail closed")

@@ -144,6 +144,14 @@ jobs:
           assert market_manifest["commit_sha"] == os.environ["GITHUB_SHA"]
           assert report["dataset"]["source_csv_sha256"] == market_manifest["csv_sha256"]
           assert teacher_manifest["source_csv_sha256"] == market_manifest["csv_sha256"]
+          teacher_actions = report["teacher"]["action_distribution"]
+          trade_signal_count = teacher_actions["BUY"]["count"] + teacher_actions["SELL"]["count"]
+          assert trade_signal_count >= 100, (
+              "teacher_signal_density_below_target:"
+              + str(trade_signal_count)
+          )
+          assert teacher_actions["BUY"]["count"] > 0
+          assert teacher_actions["SELL"]["count"] > 0
           assert market_manifest["provider"] == "Binance Spot public klines API"
           assert market_manifest["interval"] == "1h"
           assert market_manifest["gap_count"] == 0
@@ -165,6 +173,8 @@ jobs:
               "commit_sha": report["commit_sha"],
               "teacher_dataset_rows": report["dataset"]["row_count"],
               "teacher_actions": report["teacher"]["action_distribution"],
+              "teacher_trade_signal_count": trade_signal_count,
+              "class_weighting": report["model"]["class_weighting"],
               "validation_classification": report["validation"]["classification"],
               "validation_model_economics": report["validation"]["model_economics"],
               "holdout_classification": report["holdout"]["classification_vs_teacher"],

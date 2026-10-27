@@ -401,11 +401,11 @@ def _write_teacher_dataset(
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     teacher = generate_teacher_labels(
         frame,
-        higher_timeframe="4h+1D",
-        ema_span=12,
-        swing_window=20,
-        volume_window=60,
-        cooldown_candles=5,
+        higher_timeframe="4h",
+        ema_span=6,
+        swing_window=8,
+        volume_window=24,
+        cooldown_candles=2,
     )
     teacher_path = output_dir / "teacher-dataset.csv"
     teacher.to_csv(teacher_path, index=False)
@@ -416,7 +416,7 @@ def _write_teacher_dataset(
         "source_csv_sha256": source_manifest["csv_sha256"],
         "teacher_csv_sha256": hashlib.sha256(teacher_path.read_bytes()).hexdigest(),
         "row_count": int(len(teacher)),
-        "teacher_timeframe_mode": "4h+1D_confluence",
+        "teacher_timeframe_mode": "4h_completed_candles",
         "teacher_action_distribution": action_distribution(
             teacher["teacher_action"].to_numpy(dtype=np.int64)
         ),
@@ -458,11 +458,33 @@ def _validate_split_masks(
 
 
 def _compute_class_weights(train_actions: IntArray) -> Float64Array:
+    """Set stronger BUY/SELL weights using chronological training labels only."""
+    if train_actions.ndim != 1 or len(train_actions) == 0:
+        raise ValueError("teacher_train_actions_invalid")
+    if not np.isin(train_actions, list(_ACTION_NAMES)).all():
+        raise ValueError("teacher_train_actions_invalid")
     class_counts = np.bincount(train_actions, minlength=3).astype(np.float64)
     if np.any(class_counts == 0):
         raise ValueError("teacher_train_split_missing_action_class")
-    class_weights = np.minimum(np.sqrt(len(train_actions) / (3.0 * class_counts)), 8.0)
-    return class_weights / class_weights.mean()
+
+    class_weights = np.ones(3, dtype=np.float64)
+    for action in (ACTION_BUY, ACTION_SELL):
+        class_weights[action] = min(
+            max(class_counts[ACTION_HOLD] / class_counts[action], 1.0),
+            25.0,
+        )
+    return class_weights
+
+
+def _weighted_cross_entropy_loss(
+    torch: Any, logits: Any, targets: Any, class_weights: Any
+) -> Any:
+    """Apply fixed train-derived weights before averaging the per-sample loss."""
+    per_sample_loss = torch.nn.functional.cross_entropy(
+        logits, targets, reduction="none"
+    )
+    sample_weights = class_weights[targets]
+    return (per_sample_loss * sample_weights).mean()
 
 
 def _prepare_training_data(
@@ -586,8 +608,8 @@ def _fit_lstm(
             optimizer.zero_grad(set_to_none=True)
             outputs, _ = lstm(batch_features)
             logits = classifier(outputs[:, -1, :])
-            loss = torch.nn.functional.cross_entropy(
-                logits, batch_targets, weight=loss_weights
+            loss = _weighted_cross_entropy_loss(
+                torch, logits, batch_targets, loss_weights
             )
             loss.backward()
             torch.nn.utils.clip_grad_norm_(
@@ -738,7 +760,7 @@ def _build_training_report(
         },
         "teacher": {
             "kind": "causal_ohlcv_heuristic",
-            "higher_timeframe_mode": "4h+1D_confluence",
+            "higher_timeframe_mode": "4h_completed_candles",
             "ground_truth_claim": False,
             "action_distribution": action_distribution(prepared["actions"]),
         },
@@ -752,6 +774,19 @@ def _build_training_report(
             "completed_epochs": int(state["completed_epochs"]),
             "best_validation_epoch": int(state["best_epoch"]),
             "best_validation_macro_f1": float(state["best_validation_macro_f1"]),
+            "class_weighting": {
+                "fit_partition": "chronological_train_only",
+                "loss_reduction": "mean_of_per_sample_weighted_cross_entropy",
+                "train_action_distribution": action_distribution(
+                    prepared["train_actions"]
+                ),
+                "weights_by_action": {
+                    name: float(prepared["class_weights"][action])
+                    for action, name in _ACTION_NAMES.items()
+                },
+                "applied_to_validation": False,
+                "applied_to_holdout": False,
+            },
             "state_artifact": model_artifact,
         },
         "validation": {

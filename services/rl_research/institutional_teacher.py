@@ -78,9 +78,18 @@ def _higher_timeframe_bias(frame: pd.DataFrame, rule: str, ema_span: int) -> pd.
     )
 
 
+def _overlaps_order_block(
+    low: pd.Series,
+    high: pd.Series,
+    zone_low: pd.Series,
+    zone_high: pd.Series,
+) -> pd.Series:
+    return ((low <= zone_high) & (high >= zone_low)).fillna(False)
+
+
 def _smc_features(
     frame: pd.DataFrame, swing_window: int
-) -> tuple[pd.Series, pd.Series, pd.Series]:
+) -> tuple[pd.Series, pd.Series, pd.Series, pd.Series, pd.Series]:
     high = frame["high"]
     low = frame["low"]
     close = frame["close"]
@@ -93,25 +102,30 @@ def _smc_features(
     # Three-candle fair-value gaps, confirmed only after the third candle closes.
     fvg_bull = low > high.shift(2)
     fvg_bear = high < low.shift(2)
-    # A simple last-opposing-candle proxy for order-block zones; not exchange order-book data.
+    # A last-opposing-candle proxy for order blocks, using prior candles only.
     previous_red = close.shift(1) < frame["open"].shift(1)
     previous_green = close.shift(1) > frame["open"].shift(1)
     bull_ob_low = frame["low"].shift(1).where(previous_red).ffill()
     bull_ob_high = frame["high"].shift(1).where(previous_red).ffill()
     bear_ob_low = frame["low"].shift(1).where(previous_green).ffill()
     bear_ob_high = frame["high"].shift(1).where(previous_green).ffill()
+    bullish_ob_touch = _overlaps_order_block(low, high, bull_ob_low, bull_ob_high)
+    bearish_ob_touch = _overlaps_order_block(low, high, bear_ob_low, bear_ob_high)
+
     pullback_bull = ((low <= prior_high) & (close >= prior_high)) | (
         fvg_bull & (close <= high.shift(2) + (low - high.shift(2)) * 0.5)
     )
     pullback_bear = ((high >= prior_low) & (close <= prior_low)) | (
         fvg_bear & (close >= low.shift(2) + (high - low.shift(2)) * 0.5)
     )
-    pullback_bull |= close.between(bull_ob_low, bull_ob_high)
-    pullback_bear |= close.between(bear_ob_low, bear_ob_high)
+    bullish_structure = (bos_up | pullback_bull).fillna(False)
+    bearish_structure = (bos_down | pullback_bear).fillna(False)
     return (
-        bos_up.fillna(False) | pullback_bull.fillna(False),
-        bos_down.fillna(False) | pullback_bear.fillna(False),
+        bullish_structure,
+        bearish_structure,
         prior_high,
+        bullish_ob_touch,
+        bearish_ob_touch,
     )
 
 
@@ -129,6 +143,25 @@ def _volume_confirmations(
     buy_confirm = (frame["close"] >= vwap) & (frame["close"] >= rolling_poc)
     sell_confirm = (frame["close"] <= vwap) & (frame["close"] <= rolling_poc)
     return buy_confirm.fillna(False), sell_confirm.fillna(False)
+
+
+def _teacher_setups(
+    bias: pd.Series,
+    bullish_structure: pd.Series,
+    bearish_structure: pd.Series,
+    bullish_ob_touch: pd.Series,
+    bearish_ob_touch: pd.Series,
+    buy_volume: pd.Series,
+    sell_volume: pd.Series,
+) -> tuple[pd.Series, pd.Series]:
+    """Allow an in-trend order-block touch without requiring BOS/FVG or volume."""
+    buy_setup = (bias > 0) & (
+        (bullish_structure & buy_volume) | bullish_ob_touch
+    )
+    sell_setup = (bias < 0) & (
+        (bearish_structure & sell_volume) | bearish_ob_touch
+    )
+    return buy_setup.fillna(False), sell_setup.fillna(False)
 
 
 def _validate_integer_parameter(name: str, value: int, minimum: int) -> None:
@@ -199,6 +232,8 @@ def _build_teacher_result(
     bias_4h: pd.Series,
     bias_1d: pd.Series,
     prior_high: pd.Series,
+    bullish_ob_touch: pd.Series,
+    bearish_ob_touch: pd.Series,
     actions: NDArray[np.int8],
     positions: NDArray[np.int8],
 ) -> pd.DataFrame:
@@ -207,6 +242,8 @@ def _build_teacher_result(
     result["higher_timeframe_bias_4h"] = bias_4h.to_numpy(dtype=np.int8)
     result["higher_timeframe_bias_1d"] = bias_1d.to_numpy(dtype=np.int8)
     result["bos_reference_high"] = prior_high.to_numpy(dtype=np.float64)
+    result["order_block_touch_bullish"] = bullish_ob_touch.to_numpy(dtype=bool)
+    result["order_block_touch_bearish"] = bearish_ob_touch.to_numpy(dtype=bool)
     result["teacher_action"] = actions
     result["teacher_action_name"] = np.select(
         [actions == ACTION_BUY, actions == ACTION_SELL],
@@ -221,10 +258,10 @@ def generate_teacher_labels(
     data: pd.DataFrame,
     *,
     higher_timeframe: str = "4h",
-    ema_span: int = 12,
-    swing_window: int = 20,
-    volume_window: int = 60,
-    cooldown_candles: int = 5,
+    ema_span: int = 6,
+    swing_window: int = 8,
+    volume_window: int = 24,
+    cooldown_candles: int = 2,
 ) -> pd.DataFrame:
     """Return features and 3-class teacher actions (HOLD=0, BUY=1, SELL=2).
 
@@ -236,15 +273,34 @@ def generate_teacher_labels(
     )
     frame = _validate_ohlcv(data)
     bias, bias_4h, bias_1d = _select_timeframe_biases(frame, higher_timeframe, ema_span)
-    bullish_structure, bearish_structure, prior_high = _smc_features(
-        frame, swing_window
-    )
+    (
+        bullish_structure,
+        bearish_structure,
+        prior_high,
+        bullish_ob_touch,
+        bearish_ob_touch,
+    ) = _smc_features(frame, swing_window)
     buy_volume, sell_volume = _volume_confirmations(frame, volume_window)
-    buy_setup = (bias > 0) & bullish_structure & buy_volume
-    sell_setup = (bias < 0) & bearish_structure & sell_volume
+    buy_setup, sell_setup = _teacher_setups(
+        bias,
+        bullish_structure,
+        bearish_structure,
+        bullish_ob_touch,
+        bearish_ob_touch,
+        buy_volume,
+        sell_volume,
+    )
     actions, positions = _generate_teacher_actions(
         buy_setup, sell_setup, cooldown_candles
     )
     return _build_teacher_result(
-        frame, bias, bias_4h, bias_1d, prior_high, actions, positions
+        frame,
+        bias,
+        bias_4h,
+        bias_1d,
+        prior_high,
+        bullish_ob_touch,
+        bearish_ob_touch,
+        actions,
+        positions,
     )

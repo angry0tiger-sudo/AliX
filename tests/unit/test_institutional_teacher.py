@@ -10,6 +10,8 @@ from services.rl_research.institutional_teacher import (
     ACTION_BUY,
     ACTION_HOLD,
     ACTION_SELL,
+    _smc_features,
+    _teacher_setups,
     generate_teacher_labels,
 )
 
@@ -150,3 +152,39 @@ def test_teacher_position_persists_across_hold_actions() -> None:
         expected[index] = position
     np.testing.assert_array_equal(result["teacher_position"].to_numpy(), expected)
     assert set(np.unique(expected)).issubset({0, 1})
+
+
+
+def test_order_block_touch_uses_candle_range_not_close_only() -> None:
+    data = pd.DataFrame(
+        {
+            "open": [100.0, 102.0, 103.0],
+            "high": [101.0, 102.5, 104.5],
+            "low": [99.5, 99.5, 102.5],
+            "close": [100.5, 100.0, 104.0],
+        }
+    )
+    _, _, _, bullish_touch, _ = _smc_features(data, swing_window=2)
+    assert bullish_touch.iloc[2]
+    assert data.loc[2, "close"] > data.loc[1, "high"]
+
+
+def test_order_block_touch_is_valid_without_bos_fvg_or_volume() -> None:
+    bias = pd.Series([1, -1], dtype=np.int8)
+    no_structure = pd.Series([False, False])
+    bullish_touch = pd.Series([True, False])
+    bearish_touch = pd.Series([False, True])
+    no_volume_confirmation = pd.Series([False, False])
+
+    buy_setup, sell_setup = _teacher_setups(
+        bias,
+        no_structure,
+        no_structure,
+        bullish_touch,
+        bearish_touch,
+        no_volume_confirmation,
+        no_volume_confirmation,
+    )
+
+    assert buy_setup.tolist() == [True, False]
+    assert sell_setup.tolist() == [False, True]
