@@ -3,6 +3,7 @@
 All signals use completed candles only. This is a deterministic heuristic teacher,
 not a claim that institutional order flow can be recovered from OHLCV alone.
 """
+
 from __future__ import annotations
 
 import numpy as np
