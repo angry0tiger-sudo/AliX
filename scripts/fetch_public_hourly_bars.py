@@ -156,13 +156,7 @@ def validate_historical_rows(rows: list[HourlyCandle], days: int) -> None:
         prior = stamp
 
 
-def fetch_historical_candles(
-    *,
-    days: int,
-    now: datetime,
-    request_page: Callable[[int, int], list[object]] = _request_page,
-    sleep_fn: Callable[[float], None] = time.sleep,
-) -> tuple[list[HourlyCandle], int]:
+def _validate_request_window(days: int, now: datetime) -> tuple[int, int]:
     if isinstance(days, bool) or days not in ALLOWED_DAYS:
         raise ValueError("historical_days_out_of_policy")
     if now.tzinfo is None or now.utcoffset() is None:
@@ -171,6 +165,39 @@ def fetch_historical_candles(
     now_ms = int(now.astimezone(UTC).timestamp() * 1000)
     latest_closed_open_ms = (now_ms // HOUR_MS - 1) * HOUR_MS
     start_ms = latest_closed_open_ms - (days * 24 - 1) * HOUR_MS
+    return start_ms, latest_closed_open_ms
+
+
+def _append_candles(
+    rows: list[HourlyCandle],
+    candles: list[HourlyCandle],
+    *,
+    cursor_ms: int,
+    end_ms: int,
+) -> None:
+    prior_count = len(rows)
+    for candle in candles:
+        stamp = candle["timestamp_ms"]
+        if stamp < cursor_ms or stamp > end_ms:
+            continue
+        if rows and stamp <= rows[-1]["timestamp_ms"]:
+            if stamp == rows[-1]["timestamp_ms"]:
+                continue
+            raise ValueError("binance_hourly_timestamp_order_invalid")
+        rows.append(candle)
+
+    if len(rows) == prior_count:
+        raise ValueError("binance_hourly_page_did_not_advance")
+
+
+def fetch_historical_candles(
+    *,
+    days: int,
+    now: datetime,
+    request_page: Callable[[int, int], list[object]] = _request_page,
+    sleep_fn: Callable[[float], None] = time.sleep,
+) -> tuple[list[HourlyCandle], int]:
+    start_ms, latest_closed_open_ms = _validate_request_window(days, now)
     cursor_ms = start_ms
     rows: list[HourlyCandle] = []
     page_count = 0
@@ -184,19 +211,9 @@ def fetch_historical_candles(
         )
         page_count += 1
         candles = [parse_kline(item) for item in payload]
-        prior_count = len(rows)
-        for candle in candles:
-            stamp = candle["timestamp_ms"]
-            if stamp < cursor_ms or stamp > latest_closed_open_ms:
-                continue
-            if rows and stamp <= rows[-1]["timestamp_ms"]:
-                if stamp == rows[-1]["timestamp_ms"]:
-                    continue
-                raise ValueError("binance_hourly_timestamp_order_invalid")
-            rows.append(candle)
-
-        if len(rows) == prior_count:
-            raise ValueError("binance_hourly_page_did_not_advance")
+        _append_candles(
+            rows, candles, cursor_ms=cursor_ms, end_ms=latest_closed_open_ms
+        )
         cursor_ms = rows[-1]["timestamp_ms"] + HOUR_MS
         if cursor_ms <= latest_closed_open_ms:
             sleep_fn(0.1)
