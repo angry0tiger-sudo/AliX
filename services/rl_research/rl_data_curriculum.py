@@ -15,9 +15,7 @@ DEFAULT_CANDIDATE_STRIDE_CANDLES = 1_440
 DEFAULT_VOLATILITY_QUANTILE = 0.75
 
 
-def _validate_window_shape(
-    training_data: Float64Array, window_candles: int
-) -> None:
+def _validate_window_shape(training_data: Float64Array, window_candles: int) -> None:
     if training_data.ndim != 2 or training_data.shape[1] != 6:
         raise ValueError("market_data_must_have_six_columns")
     if isinstance(window_candles, bool) or not isinstance(window_candles, int):
