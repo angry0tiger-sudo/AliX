@@ -29,6 +29,9 @@ on:
       - "tests/unit/test_rl_checkpoint_policy_diagnostic.py"
       - ".github/workflows/rl-trading-agent-checkpoint-133-audit.yml"
       - "docs/governance/owner-directives/2026-10-27-rl-drawdown-entropy-remediation.md"
+      - "docs/governance/owner-directives/2026-10-27-rl-high-volatility-data-curriculum.md"
+      - "services/rl_research/rl_data_curriculum.py"
+      - "tests/unit/test_rl_data_curriculum.py"
       - "docs/knowledge_base/RL_TRADING_AGENT_ARCHITECTURE.md"
       - "docs/governance/owner-directives/2026-10-25-rl-trading-agent.md"
       - "docs/governance/owner-directives/2026-10-26-rl-observation-auxiliary-loss.md"
@@ -220,9 +223,11 @@ jobs:
             --out-dir artifacts/rl-agent \
             --timesteps 1000000 \
             --seed 20261025 \
-            --ent-coef 0.1 \
-            --exploration-ent-coef 0.1 \
-            --exploration-steps 50000 \
+            --ent-coef 0.2 \
+            --exploration-ent-coef 0.2 \
+            --exploration-steps 50000 \\
+            --initial-regime-steps 500000 \\
+            --regime-window-candles 120000 \
             --fee-bps 25 \
             --slippage-bps 20 \
             --commit-sha "${{ github.sha }}"
@@ -243,7 +248,7 @@ jobs:
           model = report["model"]
           evaluation = report["evaluation"]
           transaction_costs = report["training_transaction_costs"]
-          assert report["schema_version"] == "alix.rl-trading-agent-report.v15"
+          assert report["schema_version"] == "alix.rl-trading-agent-report.v16"
           assert report["run_mode"] == "historical_simulation_only"
           assert report["dataset"]["row_count"] >= 1_051_200
           assert report["dataset"]["coverage_fraction"] == 1.0
@@ -252,6 +257,27 @@ jobs:
           assert split["validation_fraction"] == 0.10
           assert split["final_holdout_fraction"] == 0.20
           assert split["scaler_fit_on_training_only"] is True
+          curriculum = report["data_curriculum"]
+          assert curriculum["enabled"] is True
+          assert curriculum["selection_scope"] == "training_split_only"
+          assert curriculum["validation_used_for_regime_selection"] is False
+          assert curriculum["final_holdout_used_for_regime_selection"] is False
+          assert curriculum["requested_stage_one_timesteps"] == 500000
+          assert curriculum["effective_stage_one_timesteps"] == 500736
+          assert curriculum["stage_one_rollout_alignment_extra_steps"] == 736
+          assert curriculum["stage_one_training_rows"] == 120000
+          assert curriculum["stage_one_market_window"]["window_candles"] == 120000
+          assert curriculum["stage_one_market_window"]["selection_split"] == "training_only"
+          assert curriculum["stage_one_market_window"]["selection_method"] == "top_quartile_realized_volatility_then_max_absolute_log_return"
+          assert curriculum["stage_one_market_window"]["candidate_window_count"] > 1
+          assert curriculum["stage_one_market_window"]["selected_start_timestamp_ms"] < curriculum["stage_one_market_window"]["selected_end_timestamp_ms"]
+          assert curriculum["stage_two_data_scope"] == "full_training_split"
+          assert curriculum["stage_two_training_rows"] == split["training_rows"]
+          assert curriculum["stage_two_start_timestep"] == curriculum["effective_stage_one_timesteps"] + 1
+          assert curriculum["stage_two_first_policy_update_timestep"] == curriculum["effective_stage_one_timesteps"] + model["n_steps"]
+          assert curriculum["stage_two_timesteps"] + curriculum["effective_stage_one_timesteps"] == model["total_timesteps_trained"]
+          assert curriculum["model_optimizer_state_continued"] is True
+          assert curriculum["scaler_fit_on_full_training_split_only"] is True
           assert split["validation_used_for_model_selection"] is False
           assert split["final_holdout_used_for_training"] is False
           assert split["final_holdout_used_for_model_selection"] is False
