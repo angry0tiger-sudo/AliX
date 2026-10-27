@@ -920,10 +920,9 @@ def _validate_reloaded_model_identity(
     loaded_policy = _model_policy_class_name(loaded_model)
     if original_policy != POLICY_NAME or loaded_policy != POLICY_NAME:
         raise RuntimeError("reloaded_custom_policy_class_mismatch")
-    if (
-        int(original_model.action_space.n) != len(ACTION_NAMES)
-        or int(loaded_model.action_space.n) != len(ACTION_NAMES)
-    ):
+    if int(original_model.action_space.n) != len(ACTION_NAMES) or int(
+        loaded_model.action_space.n
+    ) != len(ACTION_NAMES):
         raise RuntimeError("reloaded_action_space_mismatch")
 
 
@@ -991,6 +990,7 @@ def _verify_model_reload_roundtrip(
         "deterministic_probe_action": probe_action,
         "deterministic_probe_action_match": True,
     }
+
 
 def _train_recurrent_ppo(
     train_data: Float64Array,
