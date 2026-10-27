@@ -22,7 +22,7 @@ from urllib.parse import urlencode
 ENDPOINT = "https://apiv2.nobitex.ir/market/udf/history"
 SCHEMA_VERSION = "alix.nobitex.public-ohlcv.v1"
 INTERVAL_SECONDS = 3600
-ALLOWED_DAYS = (30, 90, 180, 365)
+ALLOWED_DAYS = (30, 90, 180, 365, 730)
 MAX_CANDLES_PER_REQUEST = 400
 
 

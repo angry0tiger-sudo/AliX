@@ -105,10 +105,10 @@ jobs:
           python -m pip install torch==2.14.1 --index-url https://download.pytorch.org/whl/cpu
           python -m pip check
 
-      - name: Generate immutable 365-day public hourly OHLCV dataset
+      - name: Generate immutable 730-day public hourly OHLCV dataset
         run: |
           python scripts/fetch_nobitex_public_ohlcv.py \
-            --days 365 \
+            --days 730 \
             --output-dir "$RUNNER_TEMP/alix-market-data" \
             --commit-sha "$GITHUB_SHA"
 

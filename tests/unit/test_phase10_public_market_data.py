@@ -11,12 +11,17 @@ from scripts.fetch_nobitex_public_ohlcv import (
     CandleRecord,
     INTERVAL_SECONDS,
     fetch_historical_candles,
+    ALLOWED_DAYS,
     parse_udf_payload,
     write_artifacts,
 )
 from scripts.run_phase10_public_price_observation import observe_public_price
 
 UTC = timezone.utc
+
+
+def test_two_year_historical_window_is_explicitly_allowed() -> None:
+    assert 730 in ALLOWED_DAYS
 
 
 def make_payload(start: int, count: int = 2) -> dict[str, Any]:
