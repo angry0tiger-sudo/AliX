@@ -236,7 +236,7 @@ def _target_positions(actions: IntArray) -> NDArray[np.int8]:
 
 
 def _net_period_returns(
-    positions: IntArray,
+    positions: NDArray[np.int8],
     close_prices: Float64Array,
     fee_bps_per_side: float,
     slippage_bps_per_side: float,
