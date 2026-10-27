@@ -82,7 +82,7 @@ def test_teacher_rejects_invalid_market_data(
 
 
 def test_teacher_configuration_is_bounded() -> None:
-    with pytest.raises(ValueError, match="higher_timeframe_must_be_4h_1D_or_4h+1D"):
+    with pytest.raises(ValueError, match=r"higher_timeframe_must_be_4h_1D_or_4h\+1D"):
         generate_teacher_labels(
             _bars(200),
             higher_timeframe="1m",
