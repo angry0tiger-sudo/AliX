@@ -91,6 +91,7 @@ def test_teacher_configuration_is_bounded() -> None:
             volume_window=10,
         )
 
+
 def test_multi_timeframe_teacher_requires_bias_confluence() -> None:
     data = _bars(2_000)
     result = generate_teacher_labels(
