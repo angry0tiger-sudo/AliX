@@ -1294,6 +1294,7 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
     ) -> dict[str, Any]:
         gap_stop_triggered = self._apply_gap_trailing_stop(float(next_bar[OPEN_COLUMN]))
         closed_trades_before_action = self._closed_trade_count
+        mask_reason: str | None
         if gap_stop_triggered:
             (
                 action_index,
