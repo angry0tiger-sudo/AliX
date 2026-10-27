@@ -165,7 +165,7 @@ def test_order_block_touch_uses_candle_range_not_close_only() -> None:
     )
     _, _, _, bullish_touch, _ = _smc_features(data, swing_window=2)
     assert bullish_touch.iloc[2]
-    assert data.loc[2, "close"] > data.loc[1, "high"]
+    assert float(data["close"].iloc[2]) > float(data["high"].iloc[1])
 
 
 def test_order_block_touch_is_valid_without_bos_fvg_or_volume() -> None:

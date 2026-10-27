@@ -163,7 +163,9 @@ def test_class_weights_upweight_only_minority_actions_from_train_labels() -> Non
 def test_class_weighting_changes_per_sample_loss_for_minority_actions() -> None:
     class FakeFunctional:
         @staticmethod
-        def cross_entropy(logits, targets, reduction):
+        def cross_entropy(
+            logits: object, targets: np.ndarray, reduction: str
+        ) -> np.ndarray:
             assert reduction == "none"
             return np.asarray([2.0, 2.0], dtype=np.float64)
 
