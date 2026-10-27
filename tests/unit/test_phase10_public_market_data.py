@@ -62,6 +62,14 @@ def test_parser_rejects_ohlc_invalid_and_future_outside_requested_window() -> No
         )
 
 
+def _drop_timestamp(payload: dict[str, Any], timestamp: int) -> dict[str, Any]:
+    if timestamp in payload["t"]:
+        index = payload["t"].index(timestamp)
+        for key in ("t", "o", "h", "l", "c", "v"):
+            payload[key] = payload[key][:index] + payload[key][index + 1 :]
+    return payload
+
+
 def test_historical_fetch_is_bounded_rejects_gaps_and_uses_fake_transport() -> None:
     # Nobitex BTCUSDT hourly candles observed on the provider's :30 grid.
     now = datetime(2026, 10, 23, 4, 18, tzinfo=UTC)
@@ -110,19 +118,63 @@ def test_historical_fetch_is_bounded_rejects_gaps_and_uses_fake_transport() -> N
             days=10, now=now, request_json=getter, sleep_fn=lambda _: None
         )
 
+    gap_timestamp = expected_end - 100 * INTERVAL_SECONDS
+
     def gapped(params: dict[str, str]) -> dict[str, Any]:
-        response = getter(params)
-        if len(response["t"]) > 3:
-            response["t"] = response["t"][:2] + response["t"][3:]
-            for key in ("o", "h", "l", "c", "v"):
-                response[key] = response[key][:2] + response[key][3:]
-        return response
+        return _drop_timestamp(getter(params), gap_timestamp)
 
     with pytest.raises(ValueError, match="gap_detected"):
         fetch_historical_candles(
             days=30, now=now, request_json=gapped, sleep_fn=lambda _: None
         )
 
+
+
+def test_historical_fetch_recovers_missing_hour_from_exact_public_read() -> None:
+    now = datetime(2026, 10, 23, 4, 18, tzinfo=UTC)
+    expected_end = int(datetime(2026, 10, 23, 2, 30, tzinfo=UTC).timestamp())
+    gap_timestamp = expected_end - 100 * INTERVAL_SECONDS
+    removed = [False]
+
+    def getter(params: dict[str, str]) -> dict[str, Any]:
+        start, end = int(params["from"]), int(params["to"])
+        offset = INTERVAL_SECONDS // 2
+        first = (
+            (start - offset + INTERVAL_SECONDS - 1) // INTERVAL_SECONDS
+        ) * INTERVAL_SECONDS + offset
+        stamps = list(range(first, end, INTERVAL_SECONDS))
+        return {
+            "s": "ok",
+            "t": stamps,
+            "o": [100.0] * len(stamps),
+            "h": [102.0] * len(stamps),
+            "l": [99.0] * len(stamps),
+            "c": [101.0] * len(stamps),
+            "v": [5.0] * len(stamps),
+        }
+
+    def one_transient_gap(params: dict[str, str]) -> dict[str, Any]:
+        response = getter(params)
+        span = int(params["to"]) - int(params["from"])
+        if (
+            not removed[0]
+            and span < MAX_CANDLES_PER_REQUEST * INTERVAL_SECONDS
+            and span > 2 * INTERVAL_SECONDS
+            and gap_timestamp in response["t"]
+        ):
+            removed[0] = True
+            return _drop_timestamp(response, gap_timestamp)
+        return response
+
+    rows = fetch_historical_candles(
+        days=30,
+        now=now,
+        request_json=one_transient_gap,
+        sleep_fn=lambda _: None,
+    )
+    assert len(rows) == 30 * 24
+    assert any(row["timestamp"] == gap_timestamp for row in rows)
+    assert removed[0] is True
 
 def test_manifest_contains_data_hash_and_closed_authorization_state(
     tmp_path: Path,

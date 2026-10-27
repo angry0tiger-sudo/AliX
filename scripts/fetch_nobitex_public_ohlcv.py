@@ -170,6 +170,60 @@ def parse_udf_payload(
     return rows
 
 
+def _fetch_exact_candle(
+    timestamp: int,
+    *,
+    request_json: Callable[[dict[str, str]], dict[str, Any]],
+    sleep_fn: Callable[[float], None],
+) -> CandleRecord | None:
+    """Recover a single missing candle from the same public source, never interpolate."""
+    request_from = timestamp - INTERVAL_SECONDS
+    request_to = timestamp + INTERVAL_SECONDS
+    params = {
+        "symbol": "BTCUSDT",
+        "resolution": "60",
+        "from": str(request_from),
+        "to": str(request_to),
+    }
+    for attempt in range(3):
+        page = parse_udf_payload(
+            request_json(params),
+            requested_from=request_from,
+            requested_to=request_to,
+        )
+        for row in page:
+            if row["timestamp"] == timestamp:
+                return row
+        if attempt < 2:
+            sleep_fn(2**attempt)
+    return None
+
+
+def _complete_candle_page(
+    cursor: int,
+    stop: int,
+    batch: list[CandleRecord],
+    *,
+    request_json: Callable[[dict[str, str]], dict[str, Any]],
+    sleep_fn: Callable[[float], None],
+) -> list[CandleRecord] | None:
+    """Return a continuous page, repairing only with exact provider candles."""
+    expected = list(range(cursor, stop + 1, INTERVAL_SECONDS))
+    rows_by_timestamp = {row["timestamp"]: row for row in batch}
+    missing = [stamp for stamp in expected if stamp not in rows_by_timestamp]
+    if len(missing) > 5:
+        return None
+    for stamp in missing:
+        recovered = _fetch_exact_candle(
+            stamp, request_json=request_json, sleep_fn=sleep_fn
+        )
+        if recovered is not None:
+            rows_by_timestamp[stamp] = recovered
+    if any(stamp not in rows_by_timestamp for stamp in expected):
+        return None
+    return [rows_by_timestamp[stamp] for stamp in expected]
+
+
 def _fetch_candle_pages(
     *,
     start: int,
@@ -199,18 +253,33 @@ def _fetch_candle_pages(
                 requested_to=request_to,
             )
             batch = [row for row in page if cursor <= row["timestamp"] <= stop]
-            if batch:
+            if not batch:
+                if attempt < 2:
+                    sleep_fn(2**attempt)
+                continue
+            completed_batch = _complete_candle_page(
+                cursor,
+                stop,
+                batch,
+                request_json=request_json,
+                sleep_fn=sleep_fn,
+            )
+            if completed_batch is not None:
+                batch = completed_batch
                 break
             if attempt < 2:
                 sleep_fn(2**attempt)
-        if not batch:
-            raise ValueError(f"nobitex_historical_empty_page:{cursor}:{stop}")
+        else:
+            if not batch:
+                raise ValueError(f"nobitex_historical_empty_page:{cursor}:{stop}")
+            raise ValueError(
+                f"nobitex_historical_gap_detected_no_interpolation:{cursor}:{stop}"
+            )
         rows.extend(batch)
         cursor = batch[-1]["timestamp"] + INTERVAL_SECONDS
         if cursor <= end:
             sleep_fn(1.1)
     return rows
-
 
 def _validate_historical_rows(rows: list[CandleRecord], days: int) -> None:
     rows.sort(key=lambda item: item["timestamp"])
