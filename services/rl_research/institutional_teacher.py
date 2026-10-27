@@ -21,8 +21,8 @@ def _validate_ohlcv(data: pd.DataFrame) -> pd.DataFrame:
     missing = set(_REQUIRED_COLUMNS).difference(data.columns)
     if missing:
         raise ValueError(f"missing_ohlcv_columns:{','.join(sorted(missing))}")
-    frame = data.loc[:, _REQUIRED_COLUMNS].copy()
-    numeric = frame.loc[:, ("open", "high", "low", "close", "volume")].to_numpy(
+    frame = data.loc[:, list(_REQUIRED_COLUMNS)].copy()
+    numeric = frame.loc[:, ["open", "high", "low", "close", "volume"]].to_numpy(
         dtype=np.float64
     )
     if not np.isfinite(numeric).all():
