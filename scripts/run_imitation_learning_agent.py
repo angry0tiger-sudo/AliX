@@ -221,7 +221,7 @@ def _validate_economic_prices_and_costs(
         raise ValueError("economic_simulation_input_invalid")
 
 
-def _target_positions(actions: IntArray) -> IntArray:
+def _target_positions(actions: IntArray) -> NDArray[np.int8]:
     positions = np.zeros(len(actions), dtype=np.int8)
     position = 0
     for index, action in enumerate(actions):
