@@ -248,12 +248,18 @@ def _breakout_setups(
     frame: pd.DataFrame, lookback_period: int = 20
 ) -> tuple[pd.Series, pd.Series]:
     """Detect close-confirmed Donchian breaks against prior candles only."""
-    prior_high = frame["high"].shift(1).rolling(
-        lookback_period, min_periods=lookback_period
-    ).max()
-    prior_low = frame["low"].shift(1).rolling(
-        lookback_period, min_periods=lookback_period
-    ).min()
+    prior_high = (
+        frame["high"]
+        .shift(1)
+        .rolling(lookback_period, min_periods=lookback_period)
+        .max()
+    )
+    prior_low = (
+        frame["low"]
+        .shift(1)
+        .rolling(lookback_period, min_periods=lookback_period)
+        .min()
+    )
     close = frame["close"].astype(np.float64)
     buy_setup = close > prior_high
     sell_setup = close < prior_low
