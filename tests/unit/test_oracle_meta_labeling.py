@@ -32,12 +32,12 @@ def _frame(rows: int = 300) -> pd.DataFrame:
 
 
 def test_chronological_partitions_are_ordered_and_disjoint() -> None:
-    boundaries = _chronological_boundaries(1000)
-    assert boundaries["base_train_end"] == 500
-    assert boundaries["base_validation_end"] == 550
-    assert boundaries["meta_train_end"] == 700
-    assert boundaries["validation_end"] == 850
-    assert boundaries["holdout_end"] == 1000
+    boundaries = _chronological_boundaries(2000)
+    assert boundaries["base_train_end"] == 1000
+    assert boundaries["base_validation_end"] == 1100
+    assert boundaries["meta_train_end"] == 1400
+    assert boundaries["validation_end"] == 1700
+    assert boundaries["holdout_end"] == 2000
     with pytest.raises(ValueError, match="meta_labeling_temporal_partition_too_short"):
         _chronological_boundaries(100)
 
