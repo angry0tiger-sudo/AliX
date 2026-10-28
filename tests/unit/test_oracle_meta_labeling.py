@@ -191,9 +191,7 @@ def test_dsr_and_minimum_track_record_length_are_explicit_about_track_record() -
     assert mintrl["status"] == "estimated"
     minimum_length = int(mintrl["minimum_track_record_length_trades"])
     assert minimum_length >= 1
-    assert mintrl["additional_trades_required"] == max(
-        0, minimum_length - len(returns)
-    )
+    assert mintrl["additional_trades_required"] == max(0, minimum_length - len(returns))
 
 
 def test_dsr_and_mintrl_fail_closed_for_short_or_nonpositive_track_record() -> None:
