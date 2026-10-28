@@ -165,15 +165,14 @@ def build_causal_features(frame: pd.DataFrame) -> tuple[NDArray[np.float32], lis
     )
     rolling_volume_mean = log_volume.rolling(24, min_periods=1).mean()
     rolling_volume_std = log_volume.rolling(24, min_periods=2).std()
-    volume_z = (
-        (log_volume - rolling_volume_mean) / rolling_volume_std.replace(0.0, np.nan)
+    volume_z = (log_volume - rolling_volume_mean) / rolling_volume_std.replace(
+        0.0, np.nan
     )
     typical_price = (high + low + close) / 3.0
     rolling_volume_sum = volume.rolling(24, min_periods=1).sum().replace(0.0, np.nan)
-    vwap = (
-        (typical_price * volume).rolling(24, min_periods=1).sum()
-        / rolling_volume_sum
-    )
+    vwap = (typical_price * volume).rolling(
+        24, min_periods=1
+    ).sum() / rolling_volume_sum
     mean_20 = close.rolling(20, min_periods=1).mean()
     std_20 = close.rolling(20, min_periods=2).std().replace(0.0, np.nan)
 
@@ -211,9 +210,7 @@ def _validate_oracle_configuration(
 ) -> None:
     if isinstance(horizon, bool) or not 1 <= horizon <= 240:
         raise ValueError("oracle_horizon_out_of_range")
-    fractions = np.asarray(
-        [take_profit_fraction, stop_loss_fraction], dtype=np.float64
-    )
+    fractions = np.asarray([take_profit_fraction, stop_loss_fraction], dtype=np.float64)
     if (
         not np.isfinite(fractions).all()
         or np.any(fractions <= 0.0)
@@ -282,9 +279,7 @@ def _prepare_sequences(
     target_valid = labels["label_valid"].to_numpy(dtype=np.bool_)[target_indices]
     train_mask = (target_indices < train_end) & target_valid
     validation_mask = (
-        (target_indices >= train_end)
-        & (target_indices < validation_end)
-        & target_valid
+        (target_indices >= train_end) & (target_indices < validation_end) & target_valid
     )
     holdout_mask = (target_indices >= validation_end) & target_valid
     if not train_mask.any() or not validation_mask.any() or not holdout_mask.any():
@@ -392,9 +387,7 @@ def _train_lstm(
             optimizer.step()
 
         completed_epochs = epoch + 1
-        predictions = _predict_actions(
-            torch, lstm, classifier, validation_sequences
-        )
+        predictions = _predict_actions(torch, lstm, classifier, validation_sequences)
         validation_score = classification_metrics(
             validation_targets.astype(np.int64, copy=False), predictions
         )["macro_f1"]
@@ -439,7 +432,10 @@ def _economics_for_predictions(
     opens = frame["open"].to_numpy(dtype=np.float64)
     execution_prices = opens[target_indices + 1]
     closed_actions = np.concatenate(
-        [actions.astype(np.int64, copy=False), np.asarray([ACTION_SELL], dtype=np.int64)]
+        [
+            actions.astype(np.int64, copy=False),
+            np.asarray([ACTION_SELL], dtype=np.int64),
+        ]
     )
     closed_prices = np.concatenate(
         [execution_prices, np.asarray([execution_prices[-1]], dtype=np.float64)]
@@ -630,7 +626,9 @@ def run_training(
                 label_actions[label_valid]
             ),
             "valid_target_count": int(np.count_nonzero(label_valid)),
-            "invalid_target_count": int(len(label_valid) - np.count_nonzero(label_valid)),
+            "invalid_target_count": int(
+                len(label_valid) - np.count_nonzero(label_valid)
+            ),
             "feature_future_lookahead_candles": 0,
             "features_use_future_data": False,
             "label_horizon_candles": int(horizon),
@@ -708,9 +706,7 @@ def run_training(
             "row_count": int(len(frame)),
             "interval": source_manifest.get("interval", "1h"),
             "train_rows": int(prepared["train_end"]),
-            "validation_rows": int(
-                prepared["validation_end"] - prepared["train_end"]
-            ),
+            "validation_rows": int(prepared["validation_end"] - prepared["train_end"]),
             "holdout_rows": int(len(frame) - prepared["validation_end"]),
         },
         "oracle": {
