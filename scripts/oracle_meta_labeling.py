@@ -834,9 +834,7 @@ def _build_economic_gate(
     }
 
 
-def _validate_required_partition_masks(
-    masks: dict[str, NDArray[np.bool_]]
-) -> None:
+def _validate_required_partition_masks(masks: dict[str, NDArray[np.bool_]]) -> None:
     if any(not masks[name].any() for name in _PARTITIONS):
         raise ValueError("meta_labeling_required_partition_has_no_valid_labels")
 
@@ -905,9 +903,7 @@ def _write_meta_csv_outputs(output_dir: Path, context: dict[str, Any]) -> None:
     )
 
 
-def _write_meta_model_artifacts(
-    output_dir: Path, context: dict[str, Any]
-) -> Path:
+def _write_meta_model_artifacts(output_dir: Path, context: dict[str, Any]) -> Path:
     torch: Any = context["torch"]
     base = context["base"]
     feature_names = context["feature_names"]
