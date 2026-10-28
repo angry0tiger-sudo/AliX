@@ -861,9 +861,20 @@ def _build_teacher_backtest_report(
             "teacher_trade_signal_count": int(
                 diagnostic["gate"]["teacher_trade_signal_count"]
             ),
-            "validation_passed": False,
-            "holdout_passed": False,
-            "signal_density_passed": False,
+            "teacher_trade_signal_counts_by_mode": {
+                mode: int(result["gate"]["teacher_trade_signal_count"])
+                for mode, result in mode_results.items()
+            },
+            "validation_passed": any(
+                result["gate"]["validation_passed"] for result in mode_results.values()
+            ),
+            "holdout_passed": any(
+                result["gate"]["holdout_passed"] for result in mode_results.values()
+            ),
+            "signal_density_passed": any(
+                result["gate"]["signal_density_passed"]
+                for result in mode_results.values()
+            ),
             "passed": False,
             "lstm_training_allowed": False,
         }
