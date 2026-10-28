@@ -54,15 +54,11 @@ class SimulatedOcoGateway:
             )
         return tuple(result)
 
-    def fetch_my_trades(
-        self, pair: str, since_ms: int
-    ) -> Sequence[OrderMapping]:
+    def fetch_my_trades(self, pair: str, since_ms: int) -> Sequence[OrderMapping]:
         del pair, since_ms
         return ()
 
-    def fetch_oco(
-        self, pair: str, list_client_order_id: str
-    ) -> OrderMapping | None:
+    def fetch_oco(self, pair: str, list_client_order_id: str) -> OrderMapping | None:
         for position in self._store.open_positions():
             if position.pair != pair:
                 continue
@@ -111,9 +107,7 @@ class SimulatedOcoGateway:
             ],
         }
 
-    def cancel_oco(
-        self, pair: str, list_client_order_id: str
-    ) -> OrderMapping:
+    def cancel_oco(self, pair: str, list_client_order_id: str) -> OrderMapping:
         return {
             "symbol": pair,
             "listClientOrderId": list_client_order_id,

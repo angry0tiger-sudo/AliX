@@ -31,9 +31,7 @@ class MemoryStore:
     def get_protection(self, trade_id: str) -> Mapping[str, object] | None:
         return self.protections.get(trade_id)
 
-    def save_protection(
-        self, trade_id: str, record: Mapping[str, object]
-    ) -> None:
+    def save_protection(self, trade_id: str, record: Mapping[str, object]) -> None:
         self.protections[trade_id] = dict(record)
 
     def mark_externally_closed(
@@ -87,17 +85,13 @@ class FaultInjectingGateway:
             )
         return tuple(result)
 
-    def fetch_my_trades(
-        self, pair: str, since_ms: int
-    ) -> Sequence[OrderMapping]:
+    def fetch_my_trades(self, pair: str, since_ms: int) -> Sequence[OrderMapping]:
         del pair, since_ms
         if self.fail_snapshot:
             raise TimeoutError("simulated_network_disconnect")
         return tuple(self.trade_history)
 
-    def fetch_oco(
-        self, pair: str, list_client_order_id: str
-    ) -> OrderMapping | None:
+    def fetch_oco(self, pair: str, list_client_order_id: str) -> OrderMapping | None:
         del pair
         return self.lists.get(list_client_order_id)
 
@@ -133,16 +127,17 @@ class FaultInjectingGateway:
             raise TimeoutError("response_lost_after_exchange_accepted_order")
         return result
 
-    def cancel_oco(
-        self, pair: str, list_client_order_id: str
-    ) -> OrderMapping:
+    def cancel_oco(self, pair: str, list_client_order_id: str) -> OrderMapping:
         del pair
         oco = self.lists[list_client_order_id]
         oco["listOrderStatus"] = "ALL_DONE"
         reports = oco["orderReports"]
         assert isinstance(reports, list)
         for report in reports:
-            if isinstance(report, dict) and report.get("status") in {"NEW", "PARTIALLY_FILLED"}:
+            if isinstance(report, dict) and report.get("status") in {
+                "NEW",
+                "PARTIALLY_FILLED",
+            }:
                 report["status"] = "CANCELED"
         return oco
 
@@ -208,7 +203,9 @@ def test_entry_fill_creates_exchange_side_simulated_oco_only_once() -> None:
     }
 
 
-def test_restart_reconciliation_recovers_existing_protection_without_duplicate() -> None:
+def test_restart_reconciliation_recovers_existing_protection_without_duplicate() -> (
+    None
+):
     position = _position()
     store = MemoryStore([position])
     gateway = CountingSimulatedGateway(store)

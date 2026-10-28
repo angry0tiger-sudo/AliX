@@ -33,7 +33,11 @@ class LocalPosition:
     pending_exit: bool = False
 
     def __post_init__(self) -> None:
-        if not self.trade_id.strip() or not self.pair.strip() or not self.base_asset.strip():
+        if (
+            not self.trade_id.strip()
+            or not self.pair.strip()
+            or not self.base_asset.strip()
+        ):
             raise ValueError("position_identity_required")
         if not self.quantity.is_finite() or self.quantity <= 0:
             raise ValueError("position_quantity_must_be_positive")
@@ -88,9 +92,7 @@ class ExchangeGateway(Protocol):
 
     def fetch_open_orders(self) -> Sequence[OrderMapping]: ...
 
-    def fetch_my_trades(
-        self, pair: str, since_ms: int
-    ) -> Sequence[OrderMapping]: ...
+    def fetch_my_trades(self, pair: str, since_ms: int) -> Sequence[OrderMapping]: ...
 
     def fetch_oco(
         self, pair: str, list_client_order_id: str
@@ -98,9 +100,7 @@ class ExchangeGateway(Protocol):
 
     def place_oco(self, plan: ProtectionPlan) -> OrderMapping: ...
 
-    def cancel_oco(
-        self, pair: str, list_client_order_id: str
-    ) -> OrderMapping: ...
+    def cancel_oco(self, pair: str, list_client_order_id: str) -> OrderMapping: ...
 
 
 class RecoveryStore(Protocol):
@@ -110,9 +110,7 @@ class RecoveryStore(Protocol):
 
     def get_protection(self, trade_id: str) -> ProtectionRecord | None: ...
 
-    def save_protection(
-        self, trade_id: str, record: Mapping[str, object]
-    ) -> None: ...
+    def save_protection(self, trade_id: str, record: Mapping[str, object]) -> None: ...
 
     def mark_externally_closed(
         self,
@@ -200,7 +198,10 @@ def plan_from_record(
     """Validate persisted protection metadata against the local trade identity."""
     if record.get("schema_version") != PROTECTION_SCHEMA_VERSION:
         raise ValueError("protection_schema_mismatch")
-    if record.get("trade_id") != position.trade_id or record.get("pair") != position.pair:
+    if (
+        record.get("trade_id") != position.trade_id
+        or record.get("pair") != position.pair
+    ):
         raise ValueError("protection_trade_identity_mismatch")
     try:
         quantity = Decimal(str(record["quantity"]))
@@ -210,8 +211,7 @@ def plan_from_record(
     except (KeyError, ValueError, ArithmeticError) as exc:
         raise ValueError("protection_record_numeric_field_invalid") from exc
     if not all(
-        value.is_finite()
-        for value in (quantity, entry_price, stop_price, target_price)
+        value.is_finite() for value in (quantity, entry_price, stop_price, target_price)
     ):
         raise ValueError("protection_record_non_finite")
     if quantity != position.quantity:

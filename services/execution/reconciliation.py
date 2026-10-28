@@ -57,9 +57,7 @@ def _order_id(order: OrderMapping) -> str:
 
 
 def _oco_is_active(oco: OrderMapping) -> bool:
-    list_status = str(
-        oco.get("listOrderStatus", oco.get("listStatusType", ""))
-    ).upper()
+    list_status = str(oco.get("listOrderStatus", oco.get("listStatusType", ""))).upper()
     if list_status in {"EXECUTING", "EXEC_STARTED"}:
         return True
     reports = _as_mapping_sequence(oco.get("orderReports", oco.get("orders")))
@@ -328,7 +326,10 @@ class CrashRecoveryCoordinator:
                     plan,
                     status="EXIT_PENDING",
                     simulated=self.gateway.is_simulated,
-                    exchange_order_list_id=str(record.get("exchange_order_list_id") or "") or None,
+                    exchange_order_list_id=str(
+                        record.get("exchange_order_list_id") or ""
+                    )
+                    or None,
                 ),
             )
             return True
@@ -352,13 +353,17 @@ class CrashRecoveryCoordinator:
         oco = self.gateway.fetch_oco(position.pair, plan.list_client_order_id)
         if oco is not None and _oco_is_active(oco):
             self._save_status(position, plan, "PROTECTED")
-            return _PositionOutcome(protected=True, action=f"protection_confirmed:{position.trade_id}")
+            return _PositionOutcome(
+                protected=True, action=f"protection_confirmed:{position.trade_id}"
+            )
         matching_ids = {
             plan.take_profit_client_order_id,
             plan.stop_loss_client_order_id,
         }
         if any(_client_id(order) in matching_ids for order in open_orders):
-            return _PositionOutcome(issue=f"oco_list_missing_but_leg_open:{position.trade_id}")
+            return _PositionOutcome(
+                issue=f"oco_list_missing_but_leg_open:{position.trade_id}"
+            )
         result = self.gateway.place_oco(plan)
         exchange_id = result.get("orderListId")
         status = "SIMULATED_PROTECTED" if self.gateway.is_simulated else "PROTECTED"
@@ -368,10 +373,14 @@ class CrashRecoveryCoordinator:
                 plan,
                 status=status,
                 simulated=self.gateway.is_simulated,
-                exchange_order_list_id=str(exchange_id) if exchange_id is not None else None,
+                exchange_order_list_id=str(exchange_id)
+                if exchange_id is not None
+                else None,
             ),
         )
-        return _PositionOutcome(protected=True, action=f"protection_placed:{position.trade_id}")
+        return _PositionOutcome(
+            protected=True, action=f"protection_placed:{position.trade_id}"
+        )
 
     def _reconcile_position(
         self,
@@ -388,11 +397,15 @@ class CrashRecoveryCoordinator:
                 in {plan.take_profit_client_order_id, plan.stop_loss_client_order_id}
                 for order in open_orders
             ):
-                return _PositionOutcome(issue=f"exit_pending_has_open_oco_leg:{position.trade_id}")
+                return _PositionOutcome(
+                    issue=f"exit_pending_has_open_oco_leg:{position.trade_id}"
+                )
             self.store.save_protection(
                 position.trade_id,
                 record_for_plan(
-                    plan, status="PROTECTION_PENDING", simulated=self.gateway.is_simulated
+                    plan,
+                    status="PROTECTION_PENDING",
+                    simulated=self.gateway.is_simulated,
                 ),
             )
 
@@ -421,7 +434,8 @@ class CrashRecoveryCoordinator:
                     position.trade_id, external_order, closed_record
                 )
                 return _PositionOutcome(
-                    closed=True, action=f"external_oco_exit_reconciled:{position.trade_id}"
+                    closed=True,
+                    action=f"external_oco_exit_reconciled:{position.trade_id}",
                 )
 
         matching_ids = {
@@ -446,7 +460,8 @@ class CrashRecoveryCoordinator:
                 plan,
                 status="SIMULATED_PROTECTED" if self.gateway.is_simulated else status,
                 simulated=self.gateway.is_simulated,
-                exchange_order_list_id=str(record.get("exchange_order_list_id") or "") or None,
+                exchange_order_list_id=str(record.get("exchange_order_list_id") or "")
+                or None,
             ),
         )
 

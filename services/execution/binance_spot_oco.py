@@ -60,17 +60,13 @@ class BinanceSpotOcoGateway:
             raise RuntimeError("binance_open_orders_response_invalid")
         return tuple(item for item in result if isinstance(item, Mapping))
 
-    def fetch_my_trades(
-        self, pair: str, since_ms: int
-    ) -> Sequence[OrderMapping]:
+    def fetch_my_trades(self, pair: str, since_ms: int) -> Sequence[OrderMapping]:
         result = _method(self._api, "fetch_my_trades")(pair, since_ms)
         if not isinstance(result, list):
             raise RuntimeError("binance_trades_response_invalid")
         return tuple(item for item in result if isinstance(item, Mapping))
 
-    def fetch_oco(
-        self, pair: str, list_client_order_id: str
-    ) -> OrderMapping | None:
+    def fetch_oco(self, pair: str, list_client_order_id: str) -> OrderMapping | None:
         method = _method(
             self._api,
             "private_get_order_list",
@@ -135,9 +131,7 @@ class BinanceSpotOcoGateway:
             raise RuntimeError("binance_oco_placement_response_invalid")
         return mapped
 
-    def cancel_oco(
-        self, pair: str, list_client_order_id: str
-    ) -> OrderMapping:
+    def cancel_oco(self, pair: str, list_client_order_id: str) -> OrderMapping:
         result = _method(
             self._api,
             "private_delete_order_list",
