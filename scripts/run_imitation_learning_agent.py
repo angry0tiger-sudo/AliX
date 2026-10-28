@@ -424,7 +424,7 @@ def _simulate_teacher_segment(
     )
     close_prices = segment["close"].to_numpy(dtype=np.float64)
     return simulate_economics(
-        actions,
+        actions.astype(np.int64),
         close_prices,
         exit_prices=exit_prices,
         fee_bps_per_side=DEFAULT_FEE_BPS_PER_SIDE,
