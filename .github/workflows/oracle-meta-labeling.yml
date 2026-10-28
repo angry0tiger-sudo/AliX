@@ -1,0 +1,183 @@
+name: AliX Oracle Meta-Labeling Research
+
+on:
+  push:
+    branches:
+      - "research/oracle-teacher-lstm"
+    paths:
+      - ".github/workflows/oracle-meta-labeling.yml"
+      - "scripts/oracle_meta_labeling.py"
+      - "scripts/oracle_teacher_lstm.py"
+      - "scripts/run_imitation_learning_agent.py"
+      - "scripts/fetch_public_hourly_bars.py"
+      - "tests/unit/test_oracle_meta_labeling.py"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: alix-oracle-meta-labeling-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  train-meta-filter:
+    if: ${{ github.event_name == 'push' && contains(github.event.head_commit.message, '[oracle-meta-labeling]') }}
+    name: Train out-of-sample meta-filter and evaluate validation plus holdout
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      ALIx_ENV: paper
+      ALIx_DRY_RUN: "true"
+      ALIx_ALLOW_LIVE_TRADING: "false"
+      ALIx_REPORTING_ENABLED: "false"
+      PYTHONUNBUFFERED: "1"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      OMP_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+
+    steps:
+      - name: Checkout exact candidate commit without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Wait for successful CI on this exact SHA
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import time
+          from urllib.request import Request, urlopen
+
+          repository = os.environ["GITHUB_REPOSITORY"]
+          sha = os.environ["GITHUB_SHA"]
+          token = os.environ["GITHUB_TOKEN"]
+          deadline = time.monotonic() + 1800
+          url = (
+              f"https://api.github.com/repos/{repository}/actions/runs"
+              f"?head_sha={sha}&per_page=100"
+          )
+          while time.monotonic() < deadline:
+              request = Request(
+                  url,
+                  headers={
+                      "Accept": "application/vnd.github+json",
+                      "Authorization": f"Bearer {token}",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  },
+              )
+              with urlopen(request, timeout=20) as response:
+                  payload = json.load(response)
+              matches = [
+                  run for run in payload.get("workflow_runs", [])
+                  if run.get("name") == "AliX Continuous Integration"
+                  and run.get("head_sha") == sha
+              ]
+              if matches:
+                  latest = max(matches, key=lambda run: run.get("run_number", 0))
+                  if latest.get("status") == "completed":
+                      if latest.get("conclusion") == "success":
+                          print("Exact-SHA CI passed; public data generation is allowed.")
+                          raise SystemExit(0)
+                      raise SystemExit(
+                          "Fail closed: exact-SHA CI concluded "
+                          + str(latest.get("conclusion"))
+                      )
+              time.sleep(15)
+          raise SystemExit("Fail closed: timed out waiting for exact-SHA CI success")
+          PY
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned CPU-only research dependencies
+        run: |
+          python -m pip install pip==25.2
+          python -m pip install numpy==2.5.4 pandas==2.3.3 scikit-learn==1.9.0 joblib==1.5.3
+          python -m pip install torch==2.14.1 --index-url https://download.pytorch.org/whl/cpu
+          python -m pip check
+
+      - name: Generate public immutable 730-day BTC-USDT hourly dataset
+        run: |
+          python scripts/fetch_public_hourly_bars.py \
+            --days 730 \
+            --output-dir "$RUNNER_TEMP/alix-market-data" \
+            --commit-sha "$GITHUB_SHA"
+          mkdir -p "$RUNNER_TEMP/alix-meta-output"
+          cp "$RUNNER_TEMP/alix-market-data/binance-btcusdt-1h.csv" \
+            "$RUNNER_TEMP/alix-meta-output/public-market-data.csv"
+          cp "$RUNNER_TEMP/alix-market-data/binance-btcusdt-1h.manifest.json" \
+            "$RUNNER_TEMP/alix-meta-output/public-market-data-manifest.json"
+
+      - name: Train out-of-sample meta-labeling filter and evaluate untouched holdout
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          python scripts/oracle_meta_labeling.py \
+            --dataset "$RUNNER_TEMP/alix-market-data/binance-btcusdt-1h.csv" \
+            --manifest "$RUNNER_TEMP/alix-market-data/binance-btcusdt-1h.manifest.json" \
+            --output-dir "$RUNNER_TEMP/alix-meta-output" \
+            --commit-sha "$GITHUB_SHA" \
+            --epochs 20 \
+            --window 48 \
+            --horizon 24 \
+            --take-profit-fraction 0.03 \
+            --stop-loss-fraction 0.015 \
+            --seed 20261028
+
+      - name: Verify exact-SHA report and research-only safety invariants
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["RUNNER_TEMP"]) / "alix-meta-output"
+          report = json.loads(
+              (root / "oracle-meta-labeling-report.json").read_text(encoding="utf-8")
+          )
+          manifest = json.loads(
+              (root / "oracle-meta-labeling-manifest.json").read_text(encoding="utf-8")
+          )
+          assert report["commit_sha"] == os.environ["GITHUB_SHA"]
+          assert report["partitioning"]["cross_partition_labels_excluded"] is True
+          assert report["base_lstm"]["trained_only_on_base_train_partition"] is True
+          assert report["meta_model"]["training_population"].endswith("meta_train only")
+          assert report["threshold_selection"]["selected_on"] == "validation_economics_only"
+          for partition in ("validation", "holdout"):
+              economic = report[partition]["meta_filtered_economic_metrics_after_costs"]
+              assert "profit_factor" in economic
+              assert "net_return_fraction" in economic
+              assert "max_drawdown_fraction" in economic
+          for safety in (report["safety"], manifest["safety"]):
+              assert safety["Champion"] is None
+              assert safety["order_permission"] is False
+              assert safety["trading_authorization"] == "NO-GO"
+              assert safety["real_order_attempts"] == 0
+              assert safety["exchange_calls"] == 0
+              assert safety["private_api_calls"] == 0
+          assert report["decision"] == "RESEARCH_ONLY_NOT_PROMOTED"
+          print(json.dumps({
+              "threshold": report["threshold_selection"]["selected_threshold"],
+              "validation": report["validation"]["meta_filtered_economic_metrics_after_costs"],
+              "holdout": report["holdout"]["meta_filtered_economic_metrics_after_costs"],
+              "economic_gate": report["economic_gate"],
+              "safety": report["safety"],
+          }, indent=2, sort_keys=True))
+          PY
+
+      - name: Upload datasets, models and validation plus holdout reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alix-oracle-meta-labeling
+          path: ${{ runner.temp }}/alix-meta-output/*
+          if-no-files-found: warn
+          retention-days: 14
