@@ -146,11 +146,15 @@ jobs:
           teacher_backtest = report["teacher_backtest"]
           assert teacher_backtest["commit_sha"] == os.environ["GITHUB_SHA"]
           assert teacher_backtest["gate"]["minimum_trade_signal_count"] == 800
-          assert teacher_backtest["entry_mode"] in ("institutional", "trend_pullback")
-          assert report["teacher"]["entry_mode"] == teacher_backtest["entry_mode"]
+          assert set(teacher_backtest["modes"]) == {"institutional", "trend_pullback"}
+          assert teacher_backtest["selected_mode"] in teacher_backtest["modes"]
+          assert teacher_backtest["entry_mode"] == teacher_backtest["selected_mode"]
+          assert report["teacher"]["entry_mode"] == teacher_backtest["selected_mode"]
+          assert teacher_manifest["teacher_entry_mode"] == teacher_backtest["selected_mode"]
+          assert teacher_backtest["modes"][teacher_backtest["selected_mode"]]["gate"]["passed"] is True
           risk_parameters = teacher_backtest["parameters"]
-          assert risk_parameters["take_profit_fraction"] == 0.015
-          assert risk_parameters["stop_loss_fraction"] == 0.0075
+          assert risk_parameters["take_profit_fraction"] == 0.025
+          assert risk_parameters["stop_loss_fraction"] == 0.015
           assert risk_parameters["minimum_atr_fraction"] == 0.0045
           assert teacher_backtest["gate"]["passed"] is True
           for partition in ("validation", "holdout"):
@@ -195,6 +199,7 @@ jobs:
               "teacher_entry_mode": teacher_backtest["entry_mode"],
               "minimum_teacher_trade_signal_count": teacher_backtest["gate"]["minimum_trade_signal_count"],
               "teacher_backtest_gate": teacher_backtest["gate"],
+              "teacher_backtest_modes": teacher_backtest["modes"],
               "teacher_backtest_validation": teacher_backtest["validation"]["economics"],
               "teacher_backtest_holdout": teacher_backtest["holdout"]["economics"],
               "class_weighting": report["model"]["class_weighting"],
