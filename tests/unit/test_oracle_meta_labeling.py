@@ -92,7 +92,7 @@ def test_profitability_target_accounts_for_barriers_and_costs() -> None:
     labels = pd.DataFrame({
         "oracle_action": np.full(80, ACTION_HOLD, dtype=np.int64),
         "entry_price": np.full(80, 100.0),
-        "label_valid": np.ones(80, dtype=np.bool_),
+        "label_valid": np.arange(80, dtype=np.int64) + 24 < 80,
     })
     labels.loc[1, "oracle_action"] = ACTION_BUY
     labels.loc[2, "oracle_action"] = ACTION_SELL
