@@ -194,7 +194,6 @@ def test_order_block_touch_is_valid_without_bos_fvg_or_volume() -> None:
     assert sell_setup.tolist() == [False, True]
 
 
-
 def test_atr_fraction_is_causal_and_uses_true_range() -> None:
     data = _bars(80)
     atr = _average_true_range_fraction(data, period=14)
@@ -265,7 +264,6 @@ def test_trailing_stop_protects_cost_adjusted_breakeven() -> None:
     assert positions.tolist() == [1, 1, 0, 0]
     assert exit_reasons[2] == "trailing_stop"
     assert exit_prices[2] > 100.0
-
 
 
 def test_teacher_defaults_match_daily_opportunity_profile() -> None:
