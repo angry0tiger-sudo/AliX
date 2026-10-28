@@ -11,6 +11,9 @@ defusedxml==0.7.1
 joblib==1.5.3
 scikit-learn==1.9.0
 
+# Offline RL research environment dependency
+gymnasium==1.4.0
+
 # Local-first control plane runtime dependencies
 fastapi==0.158.1
 httpx2==2.16.0
