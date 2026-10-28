@@ -34,6 +34,7 @@ Float64Array = NDArray[np.float64]
 IntArray = NDArray[np.int64]
 _ACTION_NAMES = {ACTION_HOLD: "HOLD", ACTION_BUY: "BUY", ACTION_SELL: "SELL"}
 _REQUIRED_SOURCE_COLUMNS = ("timestamp", "open", "high", "low", "close", "volume")
+_MIN_TEACHER_TRADE_SIGNAL_COUNT = 800
 
 
 def _read_json_object(path: Path) -> dict[str, Any]:
@@ -436,7 +437,7 @@ def _teacher_backtest_gate(
     holdout_economics: dict[str, Any],
     teacher_action_distribution: dict[str, Any],
     minimum_profit_factor: float = 1.5,
-    minimum_trade_signal_count: int = 800,
+    minimum_trade_signal_count: int = _MIN_TEACHER_TRADE_SIGNAL_COUNT,
 ) -> dict[str, Any]:
     def passes(economics: dict[str, Any]) -> bool:
         profit_factor = economics.get("profit_factor")
@@ -495,14 +496,29 @@ def _write_teacher_dataset(
     output_dir: Path,
     commit_sha: str,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
-    teacher = generate_teacher_labels(
-        frame,
-        higher_timeframe="4h",
-        ema_span=6,
-        swing_window=8,
-        volume_window=24,
-        cooldown_candles=2,
+    teacher_config: dict[str, Any] = {
+        "higher_timeframe": "4h",
+        "ema_span": 6,
+        "swing_window": 8,
+        "volume_window": 24,
+        "cooldown_candles": 2,
+    }
+    entry_mode = "institutional"
+    teacher = generate_teacher_labels(frame, entry_mode=entry_mode, **teacher_config)
+    initial_distribution = action_distribution(
+        teacher["teacher_action"].to_numpy(dtype=np.int64)
     )
+    initial_signal_count = (
+        int(initial_distribution["BUY"]["count"])
+        + int(initial_distribution["SELL"]["count"])
+    )
+    if initial_signal_count < _MIN_TEACHER_TRADE_SIGNAL_COUNT:
+        # Keep the density target fixed; loosen only the entry definition, then
+        # subject the resulting labels to the same independent economic gates.
+        entry_mode = "trend_pullback"
+        teacher = generate_teacher_labels(
+            frame, entry_mode=entry_mode, **teacher_config
+        )
     teacher_path = output_dir / "teacher-dataset.csv"
     teacher.to_csv(teacher_path, index=False)
     teacher_manifest: dict[str, Any] = {
@@ -513,6 +529,8 @@ def _write_teacher_dataset(
         "teacher_csv_sha256": hashlib.sha256(teacher_path.read_bytes()).hexdigest(),
         "row_count": int(len(teacher)),
         "teacher_timeframe_mode": "4h_completed_candles",
+        "teacher_entry_mode": entry_mode,
+        "minimum_teacher_trade_signal_count": _MIN_TEACHER_TRADE_SIGNAL_COUNT,
         "teacher_risk_management": {
             "atr_period_candles": DEFAULT_ATR_PERIOD,
             "atr_cost_multiple": DEFAULT_MIN_ATR_COST_MULTIPLE,
@@ -875,6 +893,10 @@ def _build_training_report(
         "teacher": {
             "kind": "causal_ohlcv_heuristic",
             "higher_timeframe_mode": "4h_completed_candles",
+            "entry_mode": teacher_manifest["teacher_entry_mode"],
+            "minimum_trade_signal_count": teacher_manifest[
+                "minimum_teacher_trade_signal_count"
+            ],
             "ground_truth_claim": False,
             "action_distribution": action_distribution(prepared["actions"]),
         },
@@ -970,7 +992,8 @@ def run_training(
         "commit_sha": commit_sha,
         "source_csv_sha256": source_manifest["csv_sha256"],
         "teacher_csv_sha256": teacher_manifest["teacher_csv_sha256"],
-        "strategy": "ATR-filtered 4h-bias SMC with TP/SL and trailing stop",
+        "strategy": "ATR-filtered 4h-bias entries with TP/SL and trailing stop",
+        "entry_mode": teacher_manifest["teacher_entry_mode"],
         "parameters": teacher_manifest["teacher_risk_management"],
         "action_distribution": teacher_manifest["teacher_action_distribution"],
         "validation": {
@@ -1008,7 +1031,9 @@ def run_training(
         )
     )
     if not teacher_gate["passed"]:
-        raise RuntimeError("teacher_profit_factor_gate_failed_lstm_training_blocked")
+        raise RuntimeError(
+            "teacher_economic_or_signal_density_gate_failed_lstm_training_blocked"
+        )
 
     # Only prepare model sequences and instantiate/train the LSTM after the
     # independent validation and untouched holdout both clear the economic gate.
