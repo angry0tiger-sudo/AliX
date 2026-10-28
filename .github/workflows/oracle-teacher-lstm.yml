@@ -1,0 +1,190 @@
+name: AliX Oracle Teacher and LSTM Research
+
+on:
+  push:
+    branches:
+      - "research/oracle-teacher-lstm"
+    paths:
+      - ".github/workflows/oracle-teacher-lstm.yml"
+      - "scripts/oracle_teacher_lstm.py"
+      - "scripts/run_imitation_learning_agent.py"
+      - "scripts/fetch_public_hourly_bars.py"
+      - "tests/unit/test_oracle_teacher_lstm.py"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: alix-oracle-teacher-lstm-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  train-oracle-lstm:
+    if: ${{ github.event_name == 'push' && contains(github.event.head_commit.message, '[oracle-teacher-lstm]') }}
+    name: Generate Triple-Barrier oracle, train LSTM, evaluate untouched holdout
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      ALIx_ENV: paper
+      ALIx_DRY_RUN: "true"
+      ALIx_ALLOW_LIVE_TRADING: "false"
+      ALIx_REPORTING_ENABLED: "false"
+      PYTHONUNBUFFERED: "1"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      OMP_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+
+    steps:
+      - name: Checkout exact candidate commit without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Wait for successful CI on this exact SHA
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import time
+          from urllib.request import Request, urlopen
+
+          repository = os.environ["GITHUB_REPOSITORY"]
+          sha = os.environ["GITHUB_SHA"]
+          token = os.environ["GITHUB_TOKEN"]
+          deadline = time.monotonic() + 1800
+          url = (
+              f"https://api.github.com/repos/{repository}/actions/runs"
+              f"?head_sha={sha}&per_page=100"
+          )
+          while time.monotonic() < deadline:
+              request = Request(
+                  url,
+                  headers={
+                      "Accept": "application/vnd.github+json",
+                      "Authorization": f"Bearer {token}",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  },
+              )
+              with urlopen(request, timeout=20) as response:
+                  payload = json.load(response)
+              matches = [
+                  run
+                  for run in payload.get("workflow_runs", [])
+                  if run.get("name") == "AliX Continuous Integration"
+                  and run.get("head_sha") == sha
+              ]
+              if matches:
+                  latest = max(matches, key=lambda run: run.get("run_number", 0))
+                  if latest.get("status") == "completed":
+                      if latest.get("conclusion") == "success":
+                          print("Exact-SHA CI passed; research run may start.")
+                          raise SystemExit(0)
+                      raise SystemExit(
+                          "Fail closed: exact-SHA CI concluded "
+                          + str(latest.get("conclusion"))
+                      )
+              time.sleep(15)
+          raise SystemExit("Fail closed: timed out waiting for exact-SHA CI success")
+          PY
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned CPU-only research dependencies
+        run: |
+          python -m pip install pip==25.2
+          python -m pip install numpy==2.5.4 pandas==2.3.3 scikit-learn==1.9.0
+          python -m pip install torch==2.14.1 --index-url https://download.pytorch.org/whl/cpu
+          python -m pip check
+
+      - name: Generate immutable 730-day public Binance hourly OHLCV dataset
+        run: |
+          python scripts/fetch_public_hourly_bars.py \
+            --days 730 \
+            --output-dir "$RUNNER_TEMP/alix-market-data" \
+            --commit-sha "$GITHUB_SHA"
+          mkdir -p "$RUNNER_TEMP/alix-oracle-output"
+          cp "$RUNNER_TEMP/alix-market-data/binance-btcusdt-1h.csv" \
+            "$RUNNER_TEMP/alix-oracle-output/public-market-data.csv"
+          cp "$RUNNER_TEMP/alix-market-data/binance-btcusdt-1h.manifest.json" \
+            "$RUNNER_TEMP/alix-oracle-output/public-market-data-manifest.json"
+
+      - name: Generate oracle labels, train a fresh LSTM, evaluate validation and holdout
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          python scripts/oracle_teacher_lstm.py \
+            --dataset "$RUNNER_TEMP/alix-market-data/binance-btcusdt-1h.csv" \
+            --manifest "$RUNNER_TEMP/alix-market-data/binance-btcusdt-1h.manifest.json" \
+            --output-dir "$RUNNER_TEMP/alix-oracle-output" \
+            --commit-sha "$GITHUB_SHA" \
+            --epochs 20 \
+            --window 48 \
+            --horizon 24 \
+            --take-profit-fraction 0.03 \
+            --stop-loss-fraction 0.015 \
+            --seed 20261028
+
+      - name: Verify completed report and preserve research-only invariants
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["RUNNER_TEMP"]) / "alix-oracle-output"
+          report = json.loads(
+              (root / "oracle-teacher-lstm-report.json").read_text(encoding="utf-8")
+          )
+          label_manifest = json.loads(
+              (root / "oracle-teacher-manifest.json").read_text(encoding="utf-8")
+          )
+          assert report["commit_sha"] == os.environ["GITHUB_SHA"]
+          assert report["oracle"]["label_horizon_candles"] == 24
+          assert report["oracle"]["take_profit_fraction"] == 0.03
+          assert report["oracle"]["stop_loss_fraction"] == 0.015
+          assert report["oracle"]["boundary_crossing_labels_excluded"] is True
+          assert report["oracle"]["holdout_used_for_training_or_model_selection"] is False
+          assert report["features"]["future_data_used"] is False
+          assert report["features"]["future_lookahead_candles"] == 0
+          assert report["features"]["scaler_fit_partition"] == "training_only"
+          assert report["model"]["class_weighting"]["validation_or_holdout_used_for_weights"] is False
+          assert report["validation"]["classification_vs_oracle"]["sample_count"] > 0
+          assert report["holdout"]["classification_vs_oracle"]["sample_count"] > 0
+          for partition in ("validation", "holdout"):
+              metrics = report[partition]["economic_metrics_after_costs"]
+              assert "net_return_fraction" in metrics
+              assert "max_drawdown_fraction" in metrics
+              assert "profit_factor" in metrics
+          for safety in (report["safety"], label_manifest["safety"]):
+              assert safety["Champion"] is None
+              assert safety["order_permission"] is False
+              assert safety["trading_authorization"] == "NO-GO"
+              assert safety["real_order_attempts"] == 0
+              assert safety["exchange_calls"] == 0
+              assert safety["private_api_calls"] == 0
+          assert report["decision"] == "RESEARCH_ONLY_NOT_PROMOTED"
+          print(json.dumps({
+              "validation": report["validation"]["classification_vs_oracle"],
+              "holdout": report["holdout"]["classification_vs_oracle"],
+              "economic_gate": report["economic_gate"],
+              "safety": report["safety"],
+              "decision": report["decision"],
+          }, indent=2, sort_keys=True))
+          PY
+
+      - name: Upload oracle dataset, trained model and complete research reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alix-oracle-teacher-lstm
+          path: ${{ runner.temp }}/alix-oracle-output/*
+          if-no-files-found: warn
+          retention-days: 14
