@@ -834,146 +834,31 @@ def _build_economic_gate(
     }
 
 
-def run_meta_labeling(
-    dataset_path: Path,
-    manifest_path: Path,
-    output_dir: Path,
-    *,
-    commit_sha: str,
-    epochs: int = _EPOCHS,
-    window: int = _WINDOW,
-    horizon: int = _HORIZON,
-    take_profit: float = _TAKE_PROFIT,
-    stop_loss: float = _STOP_LOSS,
-    seed: int = _SEED,
-) -> dict[str, Any]:
-    _validate_meta_training_configuration(
-        epochs, window, horizon, take_profit, stop_loss
-    )
-    frame, source_manifest = load_public_market_data(
-        dataset_path, manifest_path, commit_sha
-    )
-    count = len(frame)
-    boundaries = _chronological_boundaries(count)
-    labels = generate_oracle_labels(
-        frame,
-        horizon=horizon,
-        take_profit_fraction=take_profit,
-        stop_loss_fraction=stop_loss,
-    )
-    raw_features, feature_names = build_causal_features(frame)
-    normalized, scaler_mean, scaler_scale = _standardize_from_training(
-        raw_features, boundaries["base_train_end"]
-    )
-    sequences, sequence_labels, target_indices = make_sequences(
-        normalized, labels["oracle_action"].to_numpy(dtype=np.int64), window
-    )
-    valid = labels["label_valid"].to_numpy(dtype=np.bool_)[target_indices]
-    masks = _partition_masks(target_indices, valid, boundaries, horizon)
+def _validate_required_partition_masks(
+    masks: dict[str, NDArray[np.bool_]]
+) -> None:
     if any(not masks[name].any() for name in _PARTITIONS):
         raise ValueError("meta_labeling_required_partition_has_no_valid_labels")
 
-    torch: Any = importlib.import_module("torch")
-    base = _fit_base_lstm(
-        torch,
-        sequences,
-        sequence_labels.astype(np.int64, copy=False),
-        masks["base_train"],
-        masks["base_validation"],
-        feature_count=int(raw_features.shape[1]),
-        epochs=epochs,
-        seed=seed,
-    )
-    probabilities = _predict_probabilities(
-        torch, base["lstm"], base["classifier"], sequences
-    )
-    base_actions = probabilities.argmax(axis=1).astype(np.int64, copy=False)
-    meta_features, meta_feature_names = _meta_feature_matrix(
-        probabilities, raw_features[target_indices], feature_names
-    )
-    targets_by_row, returns_by_row = _profitability_targets(
-        frame, labels, horizon=horizon, take_profit=take_profit, stop_loss=stop_loss
-    )
-    targets = targets_by_row[target_indices]
-    sequence_returns = returns_by_row[target_indices]
-    meta_train_positions = np.flatnonzero(
-        masks["meta_train"] & (base_actions == ACTION_BUY)
-    )
-    meta_train_features = meta_features[meta_train_positions]
-    meta_train_targets = targets[meta_train_positions]
-    model = _fit_meta_model(meta_train_features, meta_train_targets, seed=seed)
 
-    meta_probabilities = np.zeros(len(target_indices), dtype=np.float64)
-    candidates = (base_actions == ACTION_BUY) & (
-        masks["meta_train"] | masks["validation"] | masks["holdout"]
-    )
-    meta_probabilities[candidates] = _predict_profit_probability(
-        model, meta_features[candidates]
-    )
-    row_actions = np.full(count, ACTION_HOLD, dtype=np.int64)
-    row_meta_probabilities = np.zeros(count, dtype=np.float64)
-    active_positions = masks["meta_train"] | masks["validation"] | masks["holdout"]
-    active_rows = target_indices[active_positions]
-    row_actions[active_rows] = base_actions[active_positions]
-    row_meta_probabilities[active_rows] = meta_probabilities[active_positions]
+def _write_meta_csv_outputs(output_dir: Path, context: dict[str, Any]) -> None:
+    frame = context["frame"]
+    labels = context["labels"]
+    targets_by_row = context["targets_by_row"]
+    returns_by_row = context["returns_by_row"]
+    meta_train_features = context["meta_train_features"]
+    meta_feature_names = context["meta_feature_names"]
+    meta_train_targets = context["meta_train_targets"]
+    target_indices = context["target_indices"]
+    meta_train_positions = context["meta_train_positions"]
+    probabilities = context["probabilities"]
+    base_actions = context["base_actions"]
+    meta_probabilities = context["meta_probabilities"]
+    raw_gated_actions = context["raw_gated_actions"]
+    masks = context["masks"]
+    sequence_returns = context["sequence_returns"]
+    targets = context["targets"]
 
-    validation_positions = np.flatnonzero(masks["validation"])
-    holdout_positions = np.flatnonzero(masks["holdout"])
-    threshold, threshold_candidates, threshold_reason = _choose_threshold(
-        frame,
-        row_actions,
-        row_meta_probabilities,
-        start=boundaries["meta_train_end"],
-        end=boundaries["validation_end"],
-    )
-    validation_economics = _simulate_long_flat(
-        frame,
-        row_actions,
-        row_meta_probabilities,
-        threshold=threshold,
-        start=boundaries["meta_train_end"],
-        end=boundaries["validation_end"],
-        horizon=horizon,
-    )
-    holdout_economics = _simulate_long_flat(
-        frame,
-        row_actions,
-        row_meta_probabilities,
-        threshold=threshold,
-        start=boundaries["validation_end"],
-        end=count,
-        horizon=horizon,
-    )
-    raw_gated_actions = base_actions.copy()
-    reject_buys = (base_actions == ACTION_BUY) & (meta_probabilities < threshold)
-    raw_gated_actions[reject_buys] = ACTION_HOLD
-    val_base = base_actions[masks["validation"]]
-    val_gated = raw_gated_actions[masks["validation"]]
-    val_truth = sequence_labels[masks["validation"]].astype(np.int64)
-    hold_base = base_actions[masks["holdout"]]
-    hold_gated = raw_gated_actions[masks["holdout"]]
-    hold_truth = sequence_labels[masks["holdout"]].astype(np.int64)
-    val_actions_report = _partition_classification_report(
-        val_truth, val_base, val_gated
-    )
-    hold_actions_report = _partition_classification_report(
-        hold_truth, hold_base, hold_gated
-    )
-    val_meta_report = _binary_report_for_buy_positions(
-        validation_positions, base_actions, meta_probabilities, targets, threshold
-    )
-    hold_meta_report = _binary_report_for_buy_positions(
-        holdout_positions, base_actions, meta_probabilities, targets, threshold
-    )
-
-    economic_gate = _build_economic_gate(
-        validation_economics,
-        holdout_economics,
-        val_gated,
-        hold_gated,
-    )
-
-    output_dir.mkdir(parents=True, exist_ok=True)
     labels_out = pd.DataFrame(
         {
             "timestamp": frame["timestamp"].astype(str),
@@ -1019,6 +904,25 @@ def run_meta_labeling(
         output_dir / "meta-out-of-sample-predictions.csv", index=False
     )
 
+
+def _write_meta_model_artifacts(
+    output_dir: Path, context: dict[str, Any]
+) -> Path:
+    torch: Any = context["torch"]
+    base = context["base"]
+    feature_names = context["feature_names"]
+    window = context["window"]
+    commit_sha = context["commit_sha"]
+    model = context["meta_model"]
+    scaler_mean = context["scaler_mean"]
+    scaler_scale = context["scaler_scale"]
+    boundaries = context["boundaries"]
+    source_manifest = context["source_manifest"]
+    count = context["count"]
+    horizon = context["horizon"]
+    take_profit = context["take_profit"]
+    stop_loss = context["stop_loss"]
+
     model_path = output_dir / "oracle-meta-lstm-state.pt"
     torch.save(
         {
@@ -1047,7 +951,6 @@ def run_meta_labeling(
             "fit_policy": "base_lstm_training_partition_only",
         },
     )
-
     safety_manifest = {
         "Champion": None,
         "order_permission": False,
@@ -1073,6 +976,45 @@ def run_meta_labeling(
         "safety": safety_manifest,
     }
     _write_json(output_dir / "oracle-meta-labeling-manifest.json", manifest)
+    return meta_path
+
+
+def _build_meta_report(context: dict[str, Any]) -> dict[str, Any]:
+    commit_sha = context["commit_sha"]
+    source_manifest = context["source_manifest"]
+    count = context["count"]
+    boundaries = context["boundaries"]
+    horizon = context["horizon"]
+    take_profit = context["take_profit"]
+    stop_loss = context["stop_loss"]
+    targets_by_row = context["targets_by_row"]
+    labels = context["labels"]
+    masks = context["masks"]
+    feature_names = context["feature_names"]
+    window = context["window"]
+    base = context["base"]
+    epochs = context["epochs"]
+    val_truth = context["val_truth"]
+    val_base = context["val_base"]
+    hold_truth = context["hold_truth"]
+    hold_base = context["hold_base"]
+    meta_train_positions = context["meta_train_positions"]
+    meta_train_targets = context["meta_train_targets"]
+    meta_feature_names = context["meta_feature_names"]
+    val_meta_report = context["val_meta_report"]
+    hold_meta_report = context["hold_meta_report"]
+    threshold = context["threshold"]
+    threshold_candidates = context["threshold_candidates"]
+    threshold_reason = context["threshold_reason"]
+    validation_economics = context["validation_economics"]
+    holdout_economics = context["holdout_economics"]
+    val_actions_report = context["val_actions_report"]
+    hold_actions_report = context["hold_actions_report"]
+    row_actions = context["row_actions"]
+    row_meta_probabilities = context["row_meta_probabilities"]
+    economic_gate = context["economic_gate"]
+    frame = context["frame"]
+    meta_path = context["meta_path"]
 
     report = {
         "schema_version": "alix.oracle-meta-labeling-report.v1",
@@ -1234,15 +1176,209 @@ def run_meta_labeling(
         },
         "decision": "RESEARCH_ONLY_NOT_PROMOTED",
     }
+    return report
+
+
+def run_meta_labeling(
+    dataset_path: Path,
+    manifest_path: Path,
+    output_dir: Path,
+    *,
+    commit_sha: str,
+    epochs: int = _EPOCHS,
+    window: int = _WINDOW,
+    horizon: int = _HORIZON,
+    take_profit: float = _TAKE_PROFIT,
+    stop_loss: float = _STOP_LOSS,
+    seed: int = _SEED,
+) -> dict[str, Any]:
+    _validate_meta_training_configuration(
+        epochs, window, horizon, take_profit, stop_loss
+    )
+    frame, source_manifest = load_public_market_data(
+        dataset_path, manifest_path, commit_sha
+    )
+    count = len(frame)
+    boundaries = _chronological_boundaries(count)
+    labels = generate_oracle_labels(
+        frame,
+        horizon=horizon,
+        take_profit_fraction=take_profit,
+        stop_loss_fraction=stop_loss,
+    )
+    raw_features, feature_names = build_causal_features(frame)
+    normalized, scaler_mean, scaler_scale = _standardize_from_training(
+        raw_features, boundaries["base_train_end"]
+    )
+    sequences, sequence_labels, target_indices = make_sequences(
+        normalized, labels["oracle_action"].to_numpy(dtype=np.int64), window
+    )
+    valid = labels["label_valid"].to_numpy(dtype=np.bool_)[target_indices]
+    masks = _partition_masks(target_indices, valid, boundaries, horizon)
+    _validate_required_partition_masks(masks)
+
+    torch: Any = importlib.import_module("torch")
+    base = _fit_base_lstm(
+        torch,
+        sequences,
+        sequence_labels.astype(np.int64, copy=False),
+        masks["base_train"],
+        masks["base_validation"],
+        feature_count=int(raw_features.shape[1]),
+        epochs=epochs,
+        seed=seed,
+    )
+    probabilities = _predict_probabilities(
+        torch, base["lstm"], base["classifier"], sequences
+    )
+    base_actions = probabilities.argmax(axis=1).astype(np.int64, copy=False)
+    meta_features, meta_feature_names = _meta_feature_matrix(
+        probabilities, raw_features[target_indices], feature_names
+    )
+    targets_by_row, returns_by_row = _profitability_targets(
+        frame, labels, horizon=horizon, take_profit=take_profit, stop_loss=stop_loss
+    )
+    targets = targets_by_row[target_indices]
+    sequence_returns = returns_by_row[target_indices]
+    meta_train_positions = np.flatnonzero(
+        masks["meta_train"] & (base_actions == ACTION_BUY)
+    )
+    meta_train_features = meta_features[meta_train_positions]
+    meta_train_targets = targets[meta_train_positions]
+    model = _fit_meta_model(meta_train_features, meta_train_targets, seed=seed)
+
+    meta_probabilities = np.zeros(len(target_indices), dtype=np.float64)
+    candidates = (base_actions == ACTION_BUY) & (
+        masks["meta_train"] | masks["validation"] | masks["holdout"]
+    )
+    meta_probabilities[candidates] = _predict_profit_probability(
+        model, meta_features[candidates]
+    )
+    row_actions = np.full(count, ACTION_HOLD, dtype=np.int64)
+    row_meta_probabilities = np.zeros(count, dtype=np.float64)
+    active_positions = masks["meta_train"] | masks["validation"] | masks["holdout"]
+    active_rows = target_indices[active_positions]
+    row_actions[active_rows] = base_actions[active_positions]
+    row_meta_probabilities[active_rows] = meta_probabilities[active_positions]
+
+    validation_positions = np.flatnonzero(masks["validation"])
+    holdout_positions = np.flatnonzero(masks["holdout"])
+    threshold, threshold_candidates, threshold_reason = _choose_threshold(
+        frame,
+        row_actions,
+        row_meta_probabilities,
+        start=boundaries["meta_train_end"],
+        end=boundaries["validation_end"],
+    )
+    validation_economics = _simulate_long_flat(
+        frame,
+        row_actions,
+        row_meta_probabilities,
+        threshold=threshold,
+        start=boundaries["meta_train_end"],
+        end=boundaries["validation_end"],
+        horizon=horizon,
+    )
+    holdout_economics = _simulate_long_flat(
+        frame,
+        row_actions,
+        row_meta_probabilities,
+        threshold=threshold,
+        start=boundaries["validation_end"],
+        end=count,
+        horizon=horizon,
+    )
+    raw_gated_actions = base_actions.copy()
+    reject_buys = (base_actions == ACTION_BUY) & (meta_probabilities < threshold)
+    raw_gated_actions[reject_buys] = ACTION_HOLD
+    val_base = base_actions[masks["validation"]]
+    val_gated = raw_gated_actions[masks["validation"]]
+    val_truth = sequence_labels[masks["validation"]].astype(np.int64)
+    hold_base = base_actions[masks["holdout"]]
+    hold_gated = raw_gated_actions[masks["holdout"]]
+    hold_truth = sequence_labels[masks["holdout"]].astype(np.int64)
+    val_actions_report = _partition_classification_report(
+        val_truth, val_base, val_gated
+    )
+    hold_actions_report = _partition_classification_report(
+        hold_truth, hold_base, hold_gated
+    )
+    val_meta_report = _binary_report_for_buy_positions(
+        validation_positions, base_actions, meta_probabilities, targets, threshold
+    )
+    hold_meta_report = _binary_report_for_buy_positions(
+        holdout_positions, base_actions, meta_probabilities, targets, threshold
+    )
+
+    economic_gate = _build_economic_gate(
+        validation_economics,
+        holdout_economics,
+        val_gated,
+        hold_gated,
+    )
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    labels_out = pd.DataFrame(
+        {
+       output_dir.mkdir(parents=True, exist_ok=True)
+    context: dict[str, Any] = {
+        "commit_sha": commit_sha,
+        "source_manifest": source_manifest,
+        "count": count,
+        "boundaries": boundaries,
+        "horizon": horizon,
+        "take_profit": take_profit,
+        "stop_loss": stop_loss,
+        "frame": frame,
+        "labels": labels,
+        "targets_by_row": targets_by_row,
+        "returns_by_row": returns_by_row,
+        "target_indices": target_indices,
+        "meta_train_positions": meta_train_positions,
+        "meta_train_features": meta_train_features,
+        "meta_train_targets": meta_train_targets,
+        "meta_feature_names": meta_feature_names,
+        "probabilities": probabilities,
+        "base_actions": base_actions,
+        "meta_probabilities": meta_probabilities,
+        "raw_gated_actions": raw_gated_actions,
+        "masks": masks,
+        "sequence_returns": sequence_returns,
+        "targets": targets,
+        "torch": torch,
+        "base": base,
+        "feature_names": feature_names,
+        "window": window,
+        "epochs": epochs,
+        "val_truth": val_truth,
+        "val_base": val_base,
+        "hold_truth": hold_truth,
+        "hold_base": hold_base,
+        "val_meta_report": val_meta_report,
+        "hold_meta_report": hold_meta_report,
+        "threshold": threshold,
+        "threshold_candidates": threshold_candidates,
+        "threshold_reason": threshold_reason,
+        "validation_economics": validation_economics,
+        "holdout_economics": holdout_economics,
+        "val_actions_report": val_actions_report,
+        "hold_actions_report": hold_actions_report,
+        "row_actions": row_actions,
+        "row_meta_probabilities": row_meta_probabilities,
+        "economic_gate": economic_gate,
+        "meta_model": model,
+        "scaler_mean": scaler_mean,
+        "scaler_scale": scaler_scale,
+    }
+    _write_meta_csv_outputs(output_dir, context)
+    context["meta_path"] = _write_meta_model_artifacts(output_dir, context)
+    report = _build_meta_report(context)
     _validate_safety(report)
     _write_json(output_dir / "oracle-meta-labeling-report.json", report)
     print(json.dumps(report, indent=2, sort_keys=True, allow_nan=False))
     return report
 
-
-def main() -> int:
-    parser = argparse.ArgumentParser(
-        description="Train an OOS RandomForest filter for an oracle LSTM."
+ndomForest filter for an oracle LSTM."
     )
     parser.add_argument("--dataset", type=Path, required=True)
     parser.add_argument("--manifest", type=Path, required=True)
