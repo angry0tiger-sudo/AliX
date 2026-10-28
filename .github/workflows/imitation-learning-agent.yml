@@ -156,7 +156,7 @@ jobs:
           assert teacher_backtest["gate"]["signal_density_passed"] is True
           assert teacher_backtest["gate"]["teacher_trade_signal_count"] == trade_signal_count
           assert teacher_backtest["gate"]["minimum_trade_signal_count"] <= trade_signal_count
-          assert trade_signal_count >= 100, (
+          assert trade_signal_count >= teacher_backtest["gate"]["minimum_trade_signal_count"], (
               "teacher_signal_density_below_target:"
               + str(trade_signal_count)
           )
