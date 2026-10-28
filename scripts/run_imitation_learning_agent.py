@@ -779,6 +779,18 @@ def _evaluate_teacher_mode(
     holdout_economics = _simulate_teacher_segment(
         frame, teacher, validation_end, row_count
     )
+    validation_without_direct_costs = _simulate_teacher_segment(
+        frame, teacher, train_end, validation_end, include_execution_costs=False
+    )
+    holdout_without_direct_costs = _simulate_teacher_segment(
+        frame, teacher, validation_end, row_count, include_execution_costs=False
+    )
+    cost_counterfactual = _execution_cost_counterfactual_diagnosis(
+        validation_economics,
+        holdout_economics,
+        validation_without_direct_costs,
+        holdout_without_direct_costs,
+    )
     distribution = teacher_manifest["teacher_action_distribution"]
     return {
         "entry_mode": teacher_manifest["teacher_entry_mode"],
@@ -800,6 +812,11 @@ def _evaluate_teacher_mode(
         "economic_diagnosis": _mode_economic_diagnosis(
             validation_economics, holdout_economics
         ),
+        "execution_cost_counterfactual": {
+            "validation_without_direct_costs": validation_without_direct_costs,
+            "holdout_without_direct_costs": holdout_without_direct_costs,
+            "diagnosis": cost_counterfactual,
+        },
     }
 
 
