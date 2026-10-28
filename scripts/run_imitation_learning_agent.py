@@ -593,14 +593,11 @@ def _mode_economic_diagnosis(
     holdout_win_rate_below_break_even = _is_numeric_below(
         holdout_win_rate, required_win_rate
     )
-    validation_pf_below_one = _is_numeric_below(
-        validation.get("profit_factor"), 1.0
-    )
+    validation_pf_below_one = _is_numeric_below(validation.get("profit_factor"), 1.0)
     holdout_pf_below_one = _is_numeric_below(holdout.get("profit_factor"), 1.0)
     diagnosis = (
         "realized win rate below cost-adjusted break-even"
-        if validation_win_rate_below_break_even
-        and holdout_win_rate_below_break_even
+        if validation_win_rate_below_break_even and holdout_win_rate_below_break_even
         else "review per-partition PF, win rate, drawdown, and trade counts"
     )
     return {
