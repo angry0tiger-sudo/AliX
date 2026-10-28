@@ -541,6 +541,80 @@ def _teacher_risk_parameters() -> dict[str, Any]:
     }
 
 
+def _cost_adjusted_risk_diagnostics() -> dict[str, Any]:
+    fee_rate = DEFAULT_FEE_BPS_PER_SIDE / 10_000.0
+    slippage_rate = DEFAULT_SLIPPAGE_BPS_PER_SIDE / 10_000.0
+    entry_cost_factor = (1.0 + slippage_rate) * (1.0 + fee_rate)
+    exit_cost_factor = (1.0 - slippage_rate) * (1.0 - fee_rate)
+    target_factor = (
+        (1.0 + DEFAULT_TAKE_PROFIT_FRACTION) * exit_cost_factor / entry_cost_factor
+    )
+    stop_factor = (
+        (1.0 - DEFAULT_STOP_LOSS_FRACTION) * exit_cost_factor / entry_cost_factor
+    )
+    net_target_return = target_factor - 1.0
+    net_stop_return = stop_factor - 1.0
+    net_stop_loss = abs(min(0.0, net_stop_return))
+    net_target_gain = max(0.0, net_target_return)
+    break_even_win_rate = (
+        net_stop_loss / (net_stop_loss + net_target_gain)
+        if net_stop_loss + net_target_gain > 0.0
+        else None
+    )
+    return {
+        "fee_bps_per_side": DEFAULT_FEE_BPS_PER_SIDE,
+        "slippage_bps_per_side": DEFAULT_SLIPPAGE_BPS_PER_SIDE,
+        "estimated_net_return_at_tp_without_gaps": net_target_return,
+        "estimated_net_return_at_sl_without_gaps": net_stop_return,
+        "break_even_win_rate_fraction_without_gaps": break_even_win_rate,
+        "assumptions": "fully funded Spot long/flat; both-side fees and slippage; no gaps",
+    }
+
+
+def _mode_economic_diagnosis(
+    validation: dict[str, Any], holdout: dict[str, Any]
+) -> dict[str, Any]:
+    required_win_rate = _cost_adjusted_risk_diagnostics()[
+        "break_even_win_rate_fraction_without_gaps"
+    ]
+    validation_win_rate = validation.get("win_rate_fraction")
+    holdout_win_rate = holdout.get("win_rate_fraction")
+    return {
+        "cost_adjusted_break_even_win_rate_fraction": required_win_rate,
+        "validation_win_rate_fraction": validation_win_rate,
+        "holdout_win_rate_fraction": holdout_win_rate,
+        "validation_win_rate_below_break_even": (
+            isinstance(required_win_rate, (int, float))
+            and isinstance(validation_win_rate, (int, float))
+            and validation_win_rate < required_win_rate
+        ),
+        "holdout_win_rate_below_break_even": (
+            isinstance(required_win_rate, (int, float))
+            and isinstance(holdout_win_rate, (int, float))
+            and holdout_win_rate < required_win_rate
+        ),
+        "validation_pf_below_one": (
+            isinstance(validation.get("profit_factor"), (int, float))
+            and validation["profit_factor"] < 1.0
+        ),
+        "holdout_pf_below_one": (
+            isinstance(holdout.get("profit_factor"), (int, float))
+            and holdout["profit_factor"] < 1.0
+        ),
+        "diagnostic": (
+            "realized win rate below cost-adjusted break-even"
+            if (
+                isinstance(required_win_rate, (int, float))
+                and isinstance(validation_win_rate, (int, float))
+                and isinstance(holdout_win_rate, (int, float))
+                and validation_win_rate < required_win_rate
+                and holdout_win_rate < required_win_rate
+            )
+            else "review per-partition PF, win rate, drawdown, and trade counts"
+        ),
+    }
+
+
 def _write_teacher_dataset(
     frame: pd.DataFrame,
     source_manifest: dict[str, Any],
@@ -609,7 +683,6 @@ def _write_teacher_datasets(
 def _publish_selected_teacher_dataset(
     output_dir: Path,
     entry_mode: str,
-    teacher: pd.DataFrame,
     candidate_manifest: dict[str, Any],
 ) -> dict[str, Any]:
     candidate_path = output_dir / f"teacher-dataset-{entry_mode}.csv"
@@ -662,6 +735,9 @@ def _evaluate_teacher_mode(
         },
         "gate": _teacher_backtest_gate(
             validation_economics, holdout_economics, distribution
+        ),
+        "economic_diagnosis": _mode_economic_diagnosis(
+            validation_economics, holdout_economics
         ),
     }
 
@@ -733,6 +809,7 @@ def _build_teacher_backtest_report(
             "if both pass, maximize validation PF and keep holdout as a gate."
         ),
         "parameters": _teacher_risk_parameters(),
+        "cost_adjusted_risk_diagnostics": _cost_adjusted_risk_diagnostics(),
         "action_distribution": diagnostic["action_distribution"],
         "teacher_csv_sha256": diagnostic["teacher_csv_sha256"],
         "modes": mode_results,
@@ -1189,7 +1266,7 @@ def run_training(
 
     teacher, candidate_manifest = teacher_candidates[selected_mode]
     teacher_manifest = _publish_selected_teacher_dataset(
-        output_dir, selected_mode, teacher, candidate_manifest
+        output_dir, selected_mode, candidate_manifest
     )
 
     # Only prepare model sequences and instantiate/train the LSTM after the
