@@ -1139,6 +1139,59 @@ def _validate_artifact_market_hash(
         raise ValueError("meta_overfit_market_data_hash_mismatch")
 
 
+def _validated_prediction_indices(
+    frame_length: int, predictions: pd.DataFrame
+) -> IntArray:
+    if "row_index" not in predictions.columns:
+        raise ValueError("meta_overfit_prediction_schema_invalid")
+    row_indices = predictions["row_index"].to_numpy(dtype=np.int64)
+    invalid_alignment = (
+        len(row_indices) == 0
+        or predictions["row_index"].duplicated().any()
+        or np.any(row_indices < 0)
+        or np.any(row_indices >= frame_length)
+    )
+    if invalid_alignment:
+        raise ValueError("meta_overfit_prediction_row_alignment_invalid")
+    return row_indices
+
+
+def _validated_prediction_actions(predictions: pd.DataFrame) -> IntArray:
+    if "base_lstm_action" not in predictions.columns:
+        raise ValueError("meta_overfit_prediction_schema_invalid")
+    action_lookup = {"BUY": ACTION_BUY, "HOLD": ACTION_HOLD, "SELL": ACTION_SELL}
+    mapped_actions = predictions["base_lstm_action"].map(action_lookup)
+    if mapped_actions.isna().any():
+        raise ValueError("meta_overfit_prediction_action_invalid")
+    return mapped_actions.to_numpy(dtype=np.int64)
+
+
+def _validated_prediction_probabilities(predictions: pd.DataFrame) -> FloatArray:
+    if "meta_profit_probability" not in predictions.columns:
+        raise ValueError("meta_overfit_prediction_schema_invalid")
+    values = predictions["meta_profit_probability"].to_numpy(dtype=np.float64)
+    invalid_values = (
+        not np.isfinite(values).all()
+        or np.any(values < 0.0)
+        or np.any(values > 1.0)
+    )
+    if invalid_values:
+        raise ValueError("meta_overfit_prediction_probability_invalid")
+    return values
+
+
+def _validation_oos_indices(
+    row_indices: IntArray, predictions: pd.DataFrame
+) -> IntArray:
+    if "partition" not in predictions.columns:
+        raise ValueError("meta_overfit_prediction_schema_invalid")
+    partitions = predictions["partition"].astype(str).to_numpy()
+    validation_indices = np.sort(row_indices[partitions == "validation"])
+    if len(validation_indices) == 0 or np.any(np.diff(validation_indices) != 1):
+        raise ValueError("meta_overfit_validation_oos_partition_invalid")
+    return validation_indices
+
+
 def _reconstruct_oos_prediction_arrays(
     frame: pd.DataFrame, predictions: pd.DataFrame
 ) -> tuple[IntArray, FloatArray, IntArray]:
@@ -1150,35 +1203,14 @@ def _reconstruct_oos_prediction_arrays(
     }
     if not needed_columns.issubset(predictions.columns):
         raise ValueError("meta_overfit_prediction_schema_invalid")
-    row_indices = predictions["row_index"].to_numpy(dtype=np.int64)
-    if (
-        len(row_indices) == 0
-        or predictions["row_index"].duplicated().any()
-        or np.any(row_indices < 0)
-        or np.any(row_indices >= len(frame))
-    ):
-        raise ValueError("meta_overfit_prediction_row_alignment_invalid")
-    action_lookup = {"BUY": ACTION_BUY, "HOLD": ACTION_HOLD, "SELL": ACTION_SELL}
-    mapped_actions = predictions["base_lstm_action"].map(action_lookup)
-    if mapped_actions.isna().any():
-        raise ValueError("meta_overfit_prediction_action_invalid")
+    row_indices = _validated_prediction_indices(len(frame), predictions)
+    mapped_actions = _validated_prediction_actions(predictions)
+    probability_values = _validated_prediction_probabilities(predictions)
     actions = np.full(len(frame), ACTION_HOLD, dtype=np.int64)
-    actions[row_indices] = mapped_actions.to_numpy(dtype=np.int64)
+    actions[row_indices] = mapped_actions
     probabilities = np.zeros(len(frame), dtype=np.float64)
-    probability_values = predictions["meta_profit_probability"].to_numpy(
-        dtype=np.float64
-    )
-    if (
-        not np.isfinite(probability_values).all()
-        or np.any(probability_values < 0.0)
-        or np.any(probability_values > 1.0)
-    ):
-        raise ValueError("meta_overfit_prediction_probability_invalid")
     probabilities[row_indices] = probability_values
-    partitions = predictions["partition"].astype(str).to_numpy()
-    validation_indices = np.sort(row_indices[partitions == "validation"])
-    if len(validation_indices) == 0 or np.any(np.diff(validation_indices) != 1):
-        raise ValueError("meta_overfit_validation_oos_partition_invalid")
+    validation_indices = _validation_oos_indices(row_indices, predictions)
     return actions, probabilities, validation_indices
 
 
