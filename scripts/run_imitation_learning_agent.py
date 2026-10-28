@@ -571,6 +571,14 @@ def _cost_adjusted_risk_diagnostics() -> dict[str, Any]:
     }
 
 
+def _is_numeric_below(value: Any, threshold: Any) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and isinstance(threshold, (int, float))
+        and value < threshold
+    )
+
+
 def _mode_economic_diagnosis(
     validation: dict[str, Any], holdout: dict[str, Any]
 ) -> dict[str, Any]:
@@ -579,39 +587,31 @@ def _mode_economic_diagnosis(
     ]
     validation_win_rate = validation.get("win_rate_fraction")
     holdout_win_rate = holdout.get("win_rate_fraction")
+    validation_win_rate_below_break_even = _is_numeric_below(
+        validation_win_rate, required_win_rate
+    )
+    holdout_win_rate_below_break_even = _is_numeric_below(
+        holdout_win_rate, required_win_rate
+    )
+    validation_pf_below_one = _is_numeric_below(
+        validation.get("profit_factor"), 1.0
+    )
+    holdout_pf_below_one = _is_numeric_below(holdout.get("profit_factor"), 1.0)
+    diagnosis = (
+        "realized win rate below cost-adjusted break-even"
+        if validation_win_rate_below_break_even
+        and holdout_win_rate_below_break_even
+        else "review per-partition PF, win rate, drawdown, and trade counts"
+    )
     return {
         "cost_adjusted_break_even_win_rate_fraction": required_win_rate,
         "validation_win_rate_fraction": validation_win_rate,
         "holdout_win_rate_fraction": holdout_win_rate,
-        "validation_win_rate_below_break_even": (
-            isinstance(required_win_rate, (int, float))
-            and isinstance(validation_win_rate, (int, float))
-            and validation_win_rate < required_win_rate
-        ),
-        "holdout_win_rate_below_break_even": (
-            isinstance(required_win_rate, (int, float))
-            and isinstance(holdout_win_rate, (int, float))
-            and holdout_win_rate < required_win_rate
-        ),
-        "validation_pf_below_one": (
-            isinstance(validation.get("profit_factor"), (int, float))
-            and validation["profit_factor"] < 1.0
-        ),
-        "holdout_pf_below_one": (
-            isinstance(holdout.get("profit_factor"), (int, float))
-            and holdout["profit_factor"] < 1.0
-        ),
-        "diagnostic": (
-            "realized win rate below cost-adjusted break-even"
-            if (
-                isinstance(required_win_rate, (int, float))
-                and isinstance(validation_win_rate, (int, float))
-                and isinstance(holdout_win_rate, (int, float))
-                and validation_win_rate < required_win_rate
-                and holdout_win_rate < required_win_rate
-            )
-            else "review per-partition PF, win rate, drawdown, and trade counts"
-        ),
+        "validation_win_rate_below_break_even": validation_win_rate_below_break_even,
+        "holdout_win_rate_below_break_even": holdout_win_rate_below_break_even,
+        "validation_pf_below_one": validation_pf_below_one,
+        "holdout_pf_below_one": holdout_pf_below_one,
+        "diagnostic": diagnosis,
     }
 
 
