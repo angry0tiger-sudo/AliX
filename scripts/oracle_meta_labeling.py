@@ -945,12 +945,11 @@ def _rank_percentile(value: float, candidates: list[float]) -> float:
     return float((less + 0.5 * equal) / len(candidates))
 
 
-def _probability_backtest_overfitting(
+def _prepare_pbo_blocks(
     threshold_return_streams: dict[float, FloatArray],
-    *,
-    block_count: int = 6,
-    purge_candles: int = _HORIZON,
-) -> dict[str, Any]:
+    block_count: int,
+    purge_candles: int,
+) -> tuple[list[float], dict[float, list[FloatArray]]]:
     thresholds = sorted(threshold_return_streams)
     if (
         len(thresholds) < 2
@@ -965,70 +964,105 @@ def _probability_backtest_overfitting(
     stream_length = next(iter(lengths))
     if stream_length < block_count * (2 * purge_candles + 2):
         raise ValueError("meta_pbo_track_record_too_short_for_purge")
-    blocks_by_threshold: dict[float, list[FloatArray]] = {}
-    for threshold in thresholds:
-        stream = np.asarray(threshold_return_streams[threshold], dtype=np.float64)
-        if stream.ndim != 1 or not np.isfinite(stream).all():
-            raise ValueError("meta_pbo_returns_non_finite")
-        blocks: list[FloatArray] = []
-        for block in np.array_split(stream, block_count):
-            if len(block) <= 2 * purge_candles + 1:
-                raise ValueError("meta_pbo_block_too_short_after_purge")
-            trimmed = block[purge_candles : len(block) - purge_candles]
-            blocks.append(np.asarray(trimmed, dtype=np.float64))
-        blocks_by_threshold[threshold] = blocks
+    blocks_by_threshold = {
+        threshold: _purged_return_blocks(
+            threshold_return_streams[threshold], block_count, purge_candles
+        )
+        for threshold in thresholds
+    }
+    return thresholds, blocks_by_threshold
+
+
+def _purged_return_blocks(
+    returns: FloatArray, block_count: int, purge_candles: int
+) -> list[FloatArray]:
+    stream = np.asarray(returns, dtype=np.float64)
+    if stream.ndim != 1 or not np.isfinite(stream).all():
+        raise ValueError("meta_pbo_returns_non_finite")
+    blocks: list[FloatArray] = []
+    for block in np.array_split(stream, block_count):
+        if len(block) <= 2 * purge_candles + 1:
+            raise ValueError("meta_pbo_block_too_short_after_purge")
+        trimmed = block[purge_candles : len(block) - purge_candles]
+        blocks.append(np.asarray(trimmed, dtype=np.float64))
+    return blocks
+
+
+def _score_threshold_blocks(
+    blocks: list[FloatArray], selected_blocks: tuple[int, ...]
+) -> float:
+    combined = np.concatenate([blocks[index] for index in selected_blocks])
+    return _sharpe_ratio(combined)
+
+
+def _evaluate_pbo_split(
+    thresholds: list[float],
+    blocks_by_threshold: dict[float, list[FloatArray]],
+    in_sample_blocks: tuple[int, ...],
+    out_sample_blocks: tuple[int, ...],
+) -> dict[str, Any]:
+    in_scores = {
+        threshold: _score_threshold_blocks(
+            blocks_by_threshold[threshold], in_sample_blocks
+        )
+        for threshold in thresholds
+    }
+    out_scores = {
+        threshold: _score_threshold_blocks(
+            blocks_by_threshold[threshold], out_sample_blocks
+        )
+        for threshold in thresholds
+    }
+    best_in_sample_score = max(in_scores.values())
+    winners = [
+        threshold
+        for threshold in thresholds
+        if math.isclose(
+            in_scores[threshold],
+            best_in_sample_score,
+            rel_tol=1e-12,
+            abs_tol=1e-12,
+        )
+    ]
+    winning_oos_ranks = [
+        _rank_percentile(out_scores[threshold], list(out_scores.values()))
+        for threshold in winners
+    ]
+    selected_oos_rank = float(np.mean(winning_oos_ranks))
+    return {
+        "in_sample_blocks": list(in_sample_blocks),
+        "out_of_sample_blocks": list(out_sample_blocks),
+        "in_sample_winner_thresholds": winners,
+        "selected_oos_rank_percentile": selected_oos_rank,
+        "overfit": selected_oos_rank < 0.5,
+    }
+
+
+def _probability_backtest_overfitting(
+    threshold_return_streams: dict[float, FloatArray],
+    *,
+    block_count: int = 6,
+    purge_candles: int = _HORIZON,
+) -> dict[str, Any]:
+    thresholds, blocks_by_threshold = _prepare_pbo_blocks(
+        threshold_return_streams, block_count, purge_candles
+    )
     split_results: list[dict[str, Any]] = []
-    oos_rank_percentiles: list[float] = []
-    overfit_count = 0
     block_ids = tuple(range(block_count))
     for in_sample_blocks in itertools.combinations(block_ids, block_count // 2):
         in_sample_set = set(in_sample_blocks)
         out_sample_blocks = tuple(
             index for index in block_ids if index not in in_sample_set
         )
-        in_scores = {
-            threshold: _sharpe_ratio(
-                np.concatenate(
-                    [blocks_by_threshold[threshold][i] for i in in_sample_blocks]
-                )
-            )
-            for threshold in thresholds
-        }
-        out_scores = {
-            threshold: _sharpe_ratio(
-                np.concatenate(
-                    [blocks_by_threshold[threshold][i] for i in out_sample_blocks]
-                )
-            )
-            for threshold in thresholds
-        }
-        best_in_sample_score = max(in_scores.values())
-        in_sample_winners = [
-            threshold
-            for threshold in thresholds
-            if math.isclose(
-                in_scores[threshold],
-                best_in_sample_score,
-                rel_tol=1e-12,
-                abs_tol=1e-12,
-            )
-        ]
-        oos_ranks = [
-            _rank_percentile(out_scores[threshold], list(out_scores.values()))
-            for threshold in in_sample_winners
-        ]
-        selected_oos_rank = float(np.mean(oos_ranks))
-        oos_rank_percentiles.append(selected_oos_rank)
-        if selected_oos_rank < 0.5:
-            overfit_count += 1
         split_results.append(
-            {
-                "in_sample_blocks": list(in_sample_blocks),
-                "out_of_sample_blocks": list(out_sample_blocks),
-                "in_sample_winner_thresholds": in_sample_winners,
-                "selected_oos_rank_percentile": selected_oos_rank,
-            }
+            _evaluate_pbo_split(
+                thresholds,
+                blocks_by_threshold,
+                in_sample_blocks,
+                out_sample_blocks,
+            )
         )
+    overfit_count = sum(bool(result["overfit"]) for result in split_results)
     return {
         "probability": float(overfit_count / len(split_results)),
         "cscv_split_count": len(split_results),
@@ -1038,15 +1072,17 @@ def _probability_backtest_overfitting(
         "performance_metric": "nonannualized Sharpe ratio of per-candle marked-to-market equity returns",
         "method": "Combinatorially Symmetric Cross-Validation on existing Validation OOS forecasts",
         "definition": "fraction of splits where the in-sample winner has below-median out-of-sample rank",
-        "oos_rank_percentiles": oos_rank_percentiles,
+        "oos_rank_percentiles": [
+            float(result["selected_oos_rank_percentile"]) for result in split_results
+        ],
         "splits": split_results,
         "status": "estimated",
     }
 
 
-def _run_existing_oos_diagnostics(
-    artifact_dir: Path, expected_source_sha: str, diagnostics_code_sha: str
-) -> dict[str, Any]:
+def _load_diagnostic_artifact(
+    artifact_dir: Path, expected_source_sha: str
+) -> tuple[dict[str, Any], pd.DataFrame, pd.DataFrame]:
     report_path = artifact_dir / "oracle-meta-labeling-report.json"
     manifest_path = artifact_dir / "oracle-meta-labeling-manifest.json"
     market_path = artifact_dir / "public-market-data.csv"
@@ -1069,12 +1105,29 @@ def _run_existing_oos_diagnostics(
         "exchange_calls": 0,
         "private_api_calls": 0,
     }
-    if any(report.get("safety", {}).get(key) != value for key, value in safety.items()):
-        raise ValueError("meta_overfit_report_safety_invariant_breached")
-    if any(
-        manifest.get("safety", {}).get(key) != value for key, value in safety.items()
-    ):
-        raise ValueError("meta_overfit_manifest_safety_invariant_breached")
+    _validate_artifact_safety(report, manifest, safety)
+    _validate_artifact_market_hash(report, manifest, market_path)
+    frame = pd.read_csv(market_path)
+    predictions = pd.read_csv(predictions_path)
+    expected_rows = int(manifest.get("row_count", -1))
+    reported_rows = int(report.get("dataset", {}).get("row_count", -1))
+    if len(frame) != expected_rows or reported_rows != len(frame):
+        raise ValueError("meta_overfit_market_data_row_count_mismatch")
+    return report, frame, predictions
+
+
+def _validate_artifact_safety(
+    report: dict[str, Any], manifest: dict[str, Any], expected_safety: dict[str, Any]
+) -> None:
+    for name, payload in (("report", report), ("manifest", manifest)):
+        safety = payload.get("safety", {})
+        if any(safety.get(key) != value for key, value in expected_safety.items()):
+            raise ValueError(f"meta_overfit_{name}_safety_invariant_breached")
+
+
+def _validate_artifact_market_hash(
+    report: dict[str, Any], manifest: dict[str, Any], market_path: Path
+) -> None:
     actual_csv_sha = hashlib.sha256(market_path.read_bytes()).hexdigest()
     expected_csv_sha = str(manifest.get("source_csv_sha256", ""))
     report_csv_sha = str(report.get("dataset", {}).get("csv_sha256", ""))
@@ -1084,13 +1137,11 @@ def _run_existing_oos_diagnostics(
         or actual_csv_sha != report_csv_sha
     ):
         raise ValueError("meta_overfit_market_data_hash_mismatch")
-    frame = pd.read_csv(market_path)
-    predictions = pd.read_csv(predictions_path)
-    expected_rows = int(manifest.get("row_count", -1))
-    if len(frame) != expected_rows or int(
-        report.get("dataset", {}).get("row_count", -1)
-    ) != len(frame):
-        raise ValueError("meta_overfit_market_data_row_count_mismatch")
+
+
+def _reconstruct_oos_prediction_arrays(
+    frame: pd.DataFrame, predictions: pd.DataFrame
+) -> tuple[IntArray, FloatArray, IntArray]:
     needed_columns = {
         "row_index",
         "base_lstm_action",
@@ -1126,10 +1177,12 @@ def _run_existing_oos_diagnostics(
     probabilities[row_indices] = probability_values
     partitions = predictions["partition"].astype(str).to_numpy()
     validation_indices = np.sort(row_indices[partitions == "validation"])
-    if len(validation_indices) < 6 * (2 * _HORIZON + 2) or np.any(
-        np.diff(validation_indices) != 1
-    ):
+    if len(validation_indices) == 0 or np.any(np.diff(validation_indices) != 1):
         raise ValueError("meta_overfit_validation_oos_partition_invalid")
+    return actions, probabilities, validation_indices
+
+
+def _thresholds_from_report(report: dict[str, Any]) -> list[float]:
     thresholds_raw = report.get("threshold_selection", {}).get(
         "candidate_thresholds", []
     )
@@ -1138,21 +1191,32 @@ def _run_existing_oos_diagnostics(
         not 0.0 <= threshold <= 1.0 for threshold in thresholds
     ):
         raise ValueError("meta_overfit_threshold_candidates_invalid")
+    return thresholds
+
+
+def _trade_returns_from_report(report: dict[str, Any]) -> FloatArray:
     validation_metrics = report.get("validation", {}).get(
         "meta_filtered_economic_metrics_after_costs", {}
     )
     trades = validation_metrics.get("trades", [])
-    trade_returns = np.asarray(
+    return np.asarray(
         [float(trade["net_pnl_fraction"]) for trade in trades], dtype=np.float64
     )
-    dsr = _deflated_sharpe_ratio(trade_returns, len(thresholds))
-    mintrl = _minimum_track_record_length(trade_returns)
+
+
+def _validation_threshold_return_streams(
+    frame: pd.DataFrame,
+    actions: IntArray,
+    probabilities: FloatArray,
+    thresholds: list[float],
+    validation_indices: IntArray,
+    horizon: int,
+) -> dict[float, FloatArray]:
     validation_start = int(validation_indices[0])
     validation_end = int(validation_indices[-1]) + 1
-    horizon = int(
-        report.get("economic_simulation", {}).get("maximum_holding_candles", _HORIZON)
-    )
-    threshold_return_streams: dict[float, FloatArray] = {}
+    if len(validation_indices) < 6 * (2 * horizon + 2):
+        raise ValueError("meta_overfit_validation_oos_partition_invalid")
+    streams: dict[float, FloatArray] = {}
     for threshold in thresholds:
         simulated = _simulate_long_flat(
             frame,
@@ -1165,29 +1229,41 @@ def _run_existing_oos_diagnostics(
             include_equity_curve=True,
         )
         curve = np.asarray(simulated["equity_curve"], dtype=np.float64)
-        if curve.size != validation_end - validation_start + 1 or np.any(
-            curve[:-1] <= 0.0
+        if (
+            curve.size != validation_end - validation_start + 1
+            or np.any(curve[:-1] <= 0.0)
         ):
             raise ValueError("meta_overfit_validation_equity_curve_invalid")
-        threshold_return_streams[threshold] = np.asarray(
+        streams[threshold] = np.asarray(
             curve[1:] / curve[:-1] - 1.0, dtype=np.float64
         )
+    return streams
+
+
+def _build_overfit_diagnostics(
+    trade_returns: FloatArray,
+    threshold_return_streams: dict[float, FloatArray],
+    source_sha: str,
+    code_sha: str,
+) -> dict[str, Any]:
+    dsr = _deflated_sharpe_ratio(trade_returns, len(threshold_return_streams))
+    mintrl = _minimum_track_record_length(trade_returns)
     pbo = _probability_backtest_overfitting(
-        threshold_return_streams, block_count=6, purge_candles=horizon
+        threshold_return_streams, block_count=6, purge_candles=_HORIZON
     )
     dsr_probability = dsr.get("probability")
     pbo_probability = pbo.get("probability")
     dsr_failed = dsr_probability is None or float(dsr_probability) < 0.5
     pbo_failed = pbo_probability is None or float(pbo_probability) > 0.5
-    diagnostics: dict[str, Any] = {
+    return {
         "status": "OVERFIT_WARNING"
         if dsr_failed or pbo_failed
         else "NO_OVERFIT_WARNING",
-        "source_artifact_commit_sha": expected_source_sha,
-        "diagnostics_code_commit_sha": diagnostics_code_sha,
+        "source_artifact_commit_sha": source_sha,
+        "diagnostics_code_commit_sha": code_sha,
         "evaluation_scope": "existing Validation OOS predictions only; no model refit; Holdout excluded",
         "threshold_selection_performed": False,
-        "candidate_threshold_count": len(thresholds),
+        "candidate_threshold_count": len(threshold_return_streams),
         "validation_closed_trade_count": len(trade_returns),
         "dsr_below_0_5": dsr_failed,
         "pbo_above_0_5": pbo_failed,
@@ -1203,9 +1279,36 @@ def _run_existing_oos_diagnostics(
             else None
         ),
     }
+
+
+def _run_existing_oos_diagnostics(
+    artifact_dir: Path, expected_source_sha: str, diagnostics_code_sha: str
+) -> dict[str, Any]:
+    report, frame, predictions = _load_diagnostic_artifact(
+        artifact_dir, expected_source_sha
+    )
+    actions, probabilities, validation_indices = _reconstruct_oos_prediction_arrays(
+        frame, predictions
+    )
+    thresholds = _thresholds_from_report(report)
+    trade_returns = _trade_returns_from_report(report)
+    horizon = int(
+        report.get("economic_simulation", {}).get("maximum_holding_candles", _HORIZON)
+    )
+    threshold_return_streams = _validation_threshold_return_streams(
+        frame,
+        actions,
+        probabilities,
+        thresholds,
+        validation_indices,
+        horizon,
+    )
+    diagnostics = _build_overfit_diagnostics(
+        trade_returns, threshold_return_streams, expected_source_sha, diagnostics_code_sha
+    )
     report["overfit_diagnostics"] = diagnostics
     _validate_safety(report)
-    _write_json(report_path, report)
+    _write_json(artifact_dir / "oracle-meta-labeling-report.json", report)
     _write_json(artifact_dir / "oracle-meta-labeling-diagnostics.json", diagnostics)
     return diagnostics
 
