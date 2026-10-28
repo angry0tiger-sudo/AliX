@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Any
+
 import numpy as np
 import pandas as pd
 
@@ -196,7 +199,7 @@ def test_class_weights_fail_closed_when_train_split_lacks_a_class() -> None:
 
 
 def test_teacher_mode_selection_uses_validation_pf_only_among_fully_passing_modes() -> None:
-    results = {
+    results: dict[str, dict[str, Any]] = {
         "institutional": {
             "gate": {"passed": True},
             "validation": {"economics": {"profit_factor": 1.7}},
@@ -217,11 +220,9 @@ def test_teacher_mode_selection_uses_validation_pf_only_among_fully_passing_mode
 
 
 def test_both_teacher_modes_are_generated_and_saved_independently(
-    tmp_path: object,
+    tmp_path: Path,
 ) -> None:
-    from pathlib import Path
-
-    output_dir = Path(str(tmp_path))
+    output_dir = tmp_path
     candidates = _write_teacher_datasets(
         _market_frame(),
         {"provider": "Binance Spot public klines API", "csv_sha256": "test-hash"},
