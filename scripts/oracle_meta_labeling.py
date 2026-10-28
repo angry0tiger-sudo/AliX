@@ -148,6 +148,51 @@ def _predict_probabilities(
     return result
 
 
+def _train_base_epoch(
+    torch: Any,
+    lstm: Any,
+    classifier: Any,
+    loader: Any,
+    optimizer: Any,
+    loss_weights: Any,
+) -> None:
+    lstm.train()
+    classifier.train()
+    for batch_x, batch_y in loader:
+        optimizer.zero_grad(set_to_none=True)
+        outputs, _ = lstm(batch_x)
+        loss = _weighted_cross_entropy_loss(
+            torch, classifier(outputs[:, -1, :]), batch_y, loss_weights
+        )
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(
+            list(lstm.parameters()) + list(classifier.parameters()), max_norm=1.0
+        )
+        optimizer.step()
+
+
+def _base_validation_score(
+    torch: Any,
+    lstm: Any,
+    classifier: Any,
+    x_validation: Float32Array,
+    y_validation: IntArray,
+) -> float:
+    probabilities = _predict_probabilities(torch, lstm, classifier, x_validation)
+    predictions = probabilities.argmax(axis=1).astype(np.int64)
+    return float(classification_metrics(y_validation, predictions)["macro_f1"])
+
+
+def _capture_base_checkpoint(lstm: Any, classifier: Any) -> tuple[dict[str, Any], dict[str, Any]]:
+    lstm_state = {
+        key: value.detach().clone() for key, value in lstm.state_dict().items()
+    }
+    classifier_state = {
+        key: value.detach().clone() for key, value in classifier.state_dict().items()
+    }
+    return lstm_state, classifier_state
+
+
 def _fit_base_lstm(
     torch: Any,
     sequences: Float32Array,
@@ -194,35 +239,17 @@ def _fit_base_lstm(
     best_classifier: dict[str, Any] = {}
 
     for epoch in range(epochs):
-        lstm.train()
-        classifier.train()
-        for batch_x, batch_y in loader:
-            optimizer.zero_grad(set_to_none=True)
-            outputs, _ = lstm(batch_x)
-            loss = _weighted_cross_entropy_loss(
-                torch, classifier(outputs[:, -1, :]), batch_y, loss_weights
-            )
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(
-                list(lstm.parameters()) + list(classifier.parameters()), max_norm=1.0
-            )
-            optimizer.step()
+        _train_base_epoch(
+            torch, lstm, classifier, loader, optimizer, loss_weights
+        )
         completed_epochs = epoch + 1
-        validation_probs = _predict_probabilities(torch, lstm, classifier, x_validation)
-        validation_predictions = validation_probs.argmax(axis=1).astype(np.int64)
-        score = float(
-            classification_metrics(y_validation, validation_predictions)["macro_f1"]
+        score = _base_validation_score(
+            torch, lstm, classifier, x_validation, y_validation
         )
         if score > best_score + 1e-9:
             best_score = score
             best_epoch = completed_epochs
-            best_lstm = {
-                key: value.detach().clone() for key, value in lstm.state_dict().items()
-            }
-            best_classifier = {
-                key: value.detach().clone()
-                for key, value in classifier.state_dict().items()
-            }
+            best_lstm, best_classifier = _capture_base_checkpoint(lstm, classifier)
             stale_epochs = 0
         else:
             stale_epochs += 1
@@ -428,84 +455,136 @@ def _mark_to_market(
     )
 
 
-def _simulate_long_flat(
+def _validate_simulation_inputs(
     frame: pd.DataFrame,
     actions: IntArray,
     profit_probabilities: FloatArray,
-    *,
     threshold: float,
     start: int,
     end: int,
-    horizon: int = _HORIZON,
-) -> dict[str, Any]:
-    if (
-        len(actions) != len(frame)
-        or len(profit_probabilities) != len(frame)
-        or not 0 <= start < end <= len(frame)
-        or not 0 <= threshold <= 1
-    ):
+) -> None:
+    if len(actions) != len(frame) or len(profit_probabilities) != len(frame):
         raise ValueError("meta_economic_simulation_configuration_invalid")
-    opens = frame["open"].to_numpy(dtype=np.float64)
-    highs = frame["high"].to_numpy(dtype=np.float64)
-    lows = frame["low"].to_numpy(dtype=np.float64)
-    closes = frame["close"].to_numpy(dtype=np.float64)
-    cash = 1.0
-    position: dict[str, float | int] | None = None
-    pending_entry = False
-    pending_exit = False
-    trades: list[dict[str, Any]] = []
-    curve: list[float] = [1.0]
+    if not 0 <= start < end <= len(frame):
+        raise ValueError("meta_economic_simulation_configuration_invalid")
+    if not 0 <= threshold <= 1:
+        raise ValueError("meta_economic_simulation_configuration_invalid")
 
-    for index in range(start, end):
-        if position is not None and pending_exit:
-            cash, trade = _close_position(
-                position, float(opens[index]), "LSTM_SELL_EXIT", index
-            )
-            trades.append(trade)
-            position = None
-            pending_exit = False
-        if position is not None:
-            gap = _gap_exit(float(opens[index]), position)
-            if gap is not None:
-                reason, price = gap
-                cash, trade = _close_position(position, price, reason, index)
-                trades.append(trade)
-                position = None
-        if position is None and pending_entry:
-            position = _open_position(index, float(opens[index]), cash)
-        pending_entry = False
 
-        if position is not None:
-            barrier = _intrabar_exit(float(highs[index]), float(lows[index]), position)
-            if barrier is not None:
-                reason, price = barrier
-                cash, trade = _close_position(position, price, reason, index)
-                trades.append(trade)
-                position = None
-            elif index - int(position["entry_index"]) >= horizon - 1:
-                cash, trade = _close_position(
-                    position, float(closes[index]), "TIME_BARRIER", index
-                )
-                trades.append(trade)
-                position = None
-            elif actions[index] == ACTION_SELL and index + 1 < end:
-                pending_exit = True
+def _settle_pending_exit(
+    cash: float,
+    position: dict[str, float | int] | None,
+    pending_exit: bool,
+    index: int,
+    opens: FloatArray,
+    trades: list[dict[str, Any]],
+) -> tuple[float, dict[str, float | int] | None, bool]:
+    if position is None or not pending_exit:
+        return cash, position, pending_exit
+    cash, trade = _close_position(
+        position, float(opens[index]), "LSTM_SELL_EXIT", index
+    )
+    trades.append(trade)
+    return cash, None, False
 
-        if (
-            position is None
-            and index + 1 < end
-            and actions[index] == ACTION_BUY
-            and profit_probabilities[index] >= threshold
-        ):
-            pending_entry = True
-        curve.append(_mark_to_market(cash, position, float(closes[index])))
 
-    if position is not None:
+def _settle_gap_exit(
+    cash: float,
+    position: dict[str, float | int] | None,
+    index: int,
+    opens: FloatArray,
+    trades: list[dict[str, Any]],
+) -> tuple[float, dict[str, float | int] | None]:
+    if position is None:
+        return cash, None
+    gap = _gap_exit(float(opens[index]), position)
+    if gap is None:
+        return cash, position
+    reason, price = gap
+    cash, trade = _close_position(position, price, reason, index)
+    trades.append(trade)
+    return cash, None
+
+
+def _activate_pending_entry(
+    position: dict[str, float | int] | None,
+    pending_entry: bool,
+    index: int,
+    opens: FloatArray,
+    cash: float,
+) -> tuple[dict[str, float | int] | None, bool]:
+    if position is None and pending_entry:
+        return _open_position(index, float(opens[index]), cash), False
+    return position, False
+
+
+def _manage_open_position(
+    cash: float,
+    position: dict[str, float | int] | None,
+    index: int,
+    end: int,
+    horizon: int,
+    highs: FloatArray,
+    lows: FloatArray,
+    closes: FloatArray,
+    actions: IntArray,
+    trades: list[dict[str, Any]],
+) -> tuple[float, dict[str, float | int] | None, bool]:
+    if position is None:
+        return cash, None, False
+    barrier = _intrabar_exit(float(highs[index]), float(lows[index]), position)
+    if barrier is not None:
+        reason, price = barrier
+        cash, trade = _close_position(position, price, reason, index)
+        trades.append(trade)
+        return cash, None, False
+    if index - int(position["entry_index"]) >= horizon - 1:
         cash, trade = _close_position(
-            position, float(closes[end - 1]), "FORCED_PARTITION_CLOSE", end - 1
+            position, float(closes[index]), "TIME_BARRIER", index
         )
         trades.append(trade)
-        curve[-1] = cash
+        return cash, None, False
+    pending_exit = actions[index] == ACTION_SELL and index + 1 < end
+    return cash, position, bool(pending_exit)
+
+
+def _buy_signal_approved(
+    index: int,
+    end: int,
+    position: dict[str, float | int] | None,
+    actions: IntArray,
+    probabilities: FloatArray,
+    threshold: float,
+) -> bool:
+    return (
+        position is None
+        and index + 1 < end
+        and actions[index] == ACTION_BUY
+        and probabilities[index] >= threshold
+    )
+
+
+def _force_close_partition(
+    cash: float,
+    position: dict[str, float | int] | None,
+    end: int,
+    closes: FloatArray,
+    curve: list[float],
+    trades: list[dict[str, Any]],
+) -> tuple[float, list[float]]:
+    if position is None:
+        return cash, curve
+    cash, trade = _close_position(
+        position, float(closes[end - 1]), "FORCED_PARTITION_CLOSE", end - 1
+    )
+    trades.append(trade)
+    curve[-1] = cash
+    return cash, curve
+
+
+def _summarize_simulation(
+    cash: float, curve: list[float], trades: list[dict[str, Any]], horizon: int
+) -> dict[str, Any]:
     equity_curve = np.asarray(curve, dtype=np.float64)
     peaks = np.maximum.accumulate(equity_curve)
     drawdowns = np.divide(
@@ -516,14 +595,14 @@ def _simulate_long_flat(
     )
     gross_profit = float(pnls[pnls > 0].sum()) if np.any(pnls > 0) else 0.0
     gross_loss = float(-pnls[pnls < 0].sum()) if np.any(pnls < 0) else 0.0
-    pf = gross_profit / gross_loss if gross_loss > 0 else None
+    profit_factor = gross_profit / gross_loss if gross_loss > 0 else None
     return {
         "net_return_fraction": float(cash - 1.0),
         "max_drawdown_fraction": float(drawdowns.max(initial=0.0)),
-        "profit_factor": pf,
-        "profit_factor_status": "defined"
-        if pf is not None
-        else "undefined_without_losses",
+        "profit_factor": profit_factor,
+        "profit_factor_status": (
+            "defined" if profit_factor is not None else "undefined_without_losses"
+        ),
         "closed_trade_count": len(trades),
         "winning_trade_count": int(np.count_nonzero(pnls > 0)),
         "losing_trade_count": int(np.count_nonzero(pnls < 0)),
@@ -539,6 +618,49 @@ def _simulate_long_flat(
         "market_mode": "SPOT_LONG_FLAT_NO_SHORTS",
         "trades": trades,
     }
+
+
+def _simulate_long_flat(
+    frame: pd.DataFrame,
+    actions: IntArray,
+    profit_probabilities: FloatArray,
+    *,
+    threshold: float,
+    start: int,
+    end: int,
+    horizon: int = _HORIZON,
+) -> dict[str, Any]:
+    """Simulate gated Spot entries with stop/target/horizon and model SELL exits."""
+    _validate_simulation_inputs(frame, actions, profit_probabilities, threshold, start, end)
+    opens = frame["open"].to_numpy(dtype=np.float64)
+    highs = frame["high"].to_numpy(dtype=np.float64)
+    lows = frame["low"].to_numpy(dtype=np.float64)
+    closes = frame["close"].to_numpy(dtype=np.float64)
+    cash = 1.0
+    position: dict[str, float | int] | None = None
+    pending_entry = False
+    pending_exit = False
+    trades: list[dict[str, Any]] = []
+    curve: list[float] = [1.0]
+
+    for index in range(start, end):
+        cash, position, pending_exit = _settle_pending_exit(
+            cash, position, pending_exit, index, opens, trades
+        )
+        cash, position = _settle_gap_exit(cash, position, index, opens, trades)
+        position, pending_entry = _activate_pending_entry(
+            position, pending_entry, index, opens, cash
+        )
+        cash, position, pending_exit = _manage_open_position(
+            cash, position, index, end, horizon, highs, lows, closes, actions, trades
+        )
+        pending_entry = _buy_signal_approved(
+            index, end, position, actions, profit_probabilities, threshold
+        )
+        curve.append(_mark_to_market(cash, position, float(closes[index])))
+
+    cash, curve = _force_close_partition(cash, position, end, closes, curve, trades)
+    return _summarize_simulation(cash, curve, trades, horizon)
 
 
 def _choose_threshold(
@@ -643,6 +765,73 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
     )
 
 
+def _validate_meta_training_configuration(
+    epochs: int, window: int, horizon: int, take_profit: float, stop_loss: float
+) -> None:
+    if not 1 <= epochs <= 200:
+        raise ValueError("meta_labeling_training_configuration_out_of_range")
+    if not 8 <= window <= 512:
+        raise ValueError("meta_labeling_training_configuration_out_of_range")
+    if not 1 <= horizon <= 240:
+        raise ValueError("meta_labeling_training_configuration_out_of_range")
+    if not 0 < take_profit < 0.5:
+        raise ValueError("meta_labeling_barrier_fraction_out_of_range")
+    if not 0 < stop_loss < 0.5:
+        raise ValueError("meta_labeling_barrier_fraction_out_of_range")
+
+
+def _profit_factor_passed(value: Any) -> bool:
+    return value is not None and float(value) > _MINIMUM_PF
+
+
+def _drawdown_passed(metrics: dict[str, Any]) -> bool:
+    return float(metrics["max_drawdown_fraction"]) <= _MAXIMUM_DD
+
+
+def _build_economic_gate(
+    validation: dict[str, Any],
+    holdout: dict[str, Any],
+    validation_actions: IntArray,
+    holdout_actions: IntArray,
+) -> dict[str, Any]:
+    validation_economics = validation
+    holdout_economics = holdout
+    validation_pf = validation_economics["profit_factor"]
+    holdout_pf = holdout_economics["profit_factor"]
+    signal_count = int(
+        np.count_nonzero(validation_actions == ACTION_BUY)
+        + np.count_nonzero(validation_actions == ACTION_SELL)
+        + np.count_nonzero(holdout_actions == ACTION_BUY)
+        + np.count_nonzero(holdout_actions == ACTION_SELL)
+    )
+    validation_pf_passed = _profit_factor_passed(validation_pf)
+    holdout_pf_passed = _profit_factor_passed(holdout_pf)
+    validation_dd_passed = _drawdown_passed(validation_economics)
+    holdout_dd_passed = _drawdown_passed(holdout_economics)
+    signal_count_passed = signal_count > _MINIMUM_OOS_SIGNALS
+    return {
+        "passed": all(
+            [
+                validation_pf_passed,
+                holdout_pf_passed,
+                validation_dd_passed,
+                holdout_dd_passed,
+                signal_count_passed,
+            ]
+        ),
+        "minimum_profit_factor": _MINIMUM_PF,
+        "profit_factor_comparison": "strictly_greater_than_minimum",
+        "maximum_allowed_drawdown_fraction": _MAXIMUM_DD,
+        "minimum_oos_signal_count": _MINIMUM_OOS_SIGNALS,
+        "oos_signal_count": signal_count,
+        "validation_profit_factor_passed": validation_pf_passed,
+        "holdout_profit_factor_passed": holdout_pf_passed,
+        "validation_drawdown_passed": validation_dd_passed,
+        "holdout_drawdown_passed": holdout_dd_passed,
+        "signal_count_passed": signal_count_passed,
+    }
+
+
 def run_meta_labeling(
     dataset_path: Path,
     manifest_path: Path,
@@ -656,10 +845,7 @@ def run_meta_labeling(
     stop_loss: float = _STOP_LOSS,
     seed: int = _SEED,
 ) -> dict[str, Any]:
-    if not 1 <= epochs <= 200 or not 8 <= window <= 512 or not 1 <= horizon <= 240:
-        raise ValueError("meta_labeling_training_configuration_out_of_range")
-    if not 0 < take_profit < 0.5 or not 0 < stop_loss < 0.5:
-        raise ValueError("meta_labeling_barrier_fraction_out_of_range")
+    _validate_meta_training_configuration(epochs, window, horizon, take_profit, stop_loss)
     frame, source_manifest = load_public_market_data(
         dataset_path, manifest_path, commit_sha
     )
@@ -776,39 +962,12 @@ def run_meta_labeling(
         holdout_positions, base_actions, meta_probabilities, targets, threshold
     )
 
-    oos_signal_count = int(
-        np.count_nonzero(val_gated == ACTION_BUY)
-        + np.count_nonzero(val_gated == ACTION_SELL)
-        + np.count_nonzero(hold_gated == ACTION_BUY)
-        + np.count_nonzero(hold_gated == ACTION_SELL)
+    economic_gate = _build_economic_gate(
+        validation_economics,
+        holdout_economics,
+        np.concatenate([val_gated, hold_gated]),
+        np.empty(0, dtype=np.int64),
     )
-    val_pf = validation_economics["profit_factor"]
-    hold_pf = holdout_economics["profit_factor"]
-    economic_gate = {
-        "passed": bool(
-            val_pf is not None
-            and hold_pf is not None
-            and float(val_pf) > _MINIMUM_PF
-            and float(hold_pf) > _MINIMUM_PF
-            and validation_economics["max_drawdown_fraction"] <= _MAXIMUM_DD
-            and holdout_economics["max_drawdown_fraction"] <= _MAXIMUM_DD
-            and oos_signal_count > _MINIMUM_OOS_SIGNALS
-        ),
-        "minimum_profit_factor": _MINIMUM_PF,
-        "profit_factor_comparison": "strictly_greater_than_minimum",
-        "maximum_allowed_drawdown_fraction": _MAXIMUM_DD,
-        "minimum_oos_signal_count": _MINIMUM_OOS_SIGNALS,
-        "oos_signal_count": oos_signal_count,
-        "validation_profit_factor_passed": val_pf is not None
-        and float(val_pf) > _MINIMUM_PF,
-        "holdout_profit_factor_passed": hold_pf is not None
-        and float(hold_pf) > _MINIMUM_PF,
-        "validation_drawdown_passed": validation_economics["max_drawdown_fraction"]
-        <= _MAXIMUM_DD,
-        "holdout_drawdown_passed": holdout_economics["max_drawdown_fraction"]
-        <= _MAXIMUM_DD,
-        "signal_count_passed": oos_signal_count > _MINIMUM_OOS_SIGNALS,
-    }
 
     output_dir.mkdir(parents=True, exist_ok=True)
     labels_out = pd.DataFrame(
