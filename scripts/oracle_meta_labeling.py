@@ -1171,9 +1171,7 @@ def _validated_prediction_probabilities(predictions: pd.DataFrame) -> FloatArray
         raise ValueError("meta_overfit_prediction_schema_invalid")
     values = predictions["meta_profit_probability"].to_numpy(dtype=np.float64)
     invalid_values = (
-        not np.isfinite(values).all()
-        or np.any(values < 0.0)
-        or np.any(values > 1.0)
+        not np.isfinite(values).all() or np.any(values < 0.0) or np.any(values > 1.0)
     )
     if invalid_values:
         raise ValueError("meta_overfit_prediction_probability_invalid")
