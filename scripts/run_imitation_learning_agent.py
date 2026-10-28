@@ -328,6 +328,42 @@ def _economic_scorecard(
     }
 
 
+def _validate_exit_prices(
+    exit_prices: Float64Array | None, expected_count: int
+) -> None:
+    if exit_prices is None:
+        return
+    if exit_prices.ndim != 1 or len(exit_prices) != expected_count:
+        raise ValueError("economic_simulation_exit_price_shape_mismatch")
+    if np.isinf(exit_prices).any():
+        raise ValueError("economic_simulation_exit_price_invalid")
+    finite_prices = exit_prices[np.isfinite(exit_prices)]
+    if np.any(finite_prices <= 0):
+        raise ValueError("economic_simulation_exit_price_invalid")
+
+
+def _buy_spot_quantity(
+    cash: float, price: float, fee_rate: float, slippage_rate: float
+) -> float:
+    buy_fill = price * (1.0 + slippage_rate)
+    return cash / (buy_fill * (1.0 + fee_rate))
+
+
+def _sell_spot_proceeds(
+    quantity: float,
+    close_price: float,
+    index: int,
+    exit_prices: Float64Array | None,
+    fee_rate: float,
+    slippage_rate: float,
+) -> float:
+    execution_price = close_price
+    if exit_prices is not None and np.isfinite(exit_prices[index]):
+        execution_price = float(exit_prices[index])
+    sell_fill = execution_price * (1.0 - slippage_rate)
+    return quantity * sell_fill * (1.0 - fee_rate)
+
+
 def simulate_economics(
     actions: IntArray,
     close_prices: Float64Array,
@@ -341,14 +377,7 @@ def simulate_economics(
     _validate_economic_prices_and_costs(
         close_prices, fee_bps_per_side, slippage_bps_per_side
     )
-    if exit_prices is not None:
-        if exit_prices.ndim != 1 or len(exit_prices) != len(close_prices):
-            raise ValueError("economic_simulation_exit_price_shape_mismatch")
-        if np.isinf(exit_prices).any():
-            raise ValueError("economic_simulation_exit_price_invalid")
-        finite_exit_prices = exit_prices[np.isfinite(exit_prices)]
-        if np.any(finite_exit_prices <= 0):
-            raise ValueError("economic_simulation_exit_price_invalid")
+    _validate_exit_prices(exit_prices, len(close_prices))
     effective_actions = mask_spot_actions(actions)
     fee_rate = fee_bps_per_side / 10_000.0
     slippage_rate = slippage_bps_per_side / 10_000.0
@@ -367,17 +396,19 @@ def simulate_economics(
         price = float(raw_price)
         if action == ACTION_BUY and not has_asset:
             entry_equity = cash
-            buy_fill = price * (1.0 + slippage_rate)
-            quantity = cash / (buy_fill * (1.0 + fee_rate))
+            quantity = _buy_spot_quantity(cash, price, fee_rate, slippage_rate)
             cash = 0.0
             has_asset = True
             position_change_count += 1
         elif action == ACTION_SELL and has_asset:
-            execution_price = price
-            if exit_prices is not None and np.isfinite(exit_prices[index]):
-                execution_price = float(exit_prices[index])
-            sell_fill = execution_price * (1.0 - slippage_rate)
-            cash = quantity * sell_fill * (1.0 - fee_rate)
+            cash = _sell_spot_proceeds(
+                quantity,
+                price,
+                index,
+                exit_prices,
+                fee_rate,
+                slippage_rate,
+            )
             closed_trade_pnls.append(float(cash - entry_equity))
             quantity = 0.0
             has_asset = False
@@ -395,6 +426,7 @@ def simulate_economics(
         fee_bps_per_side,
         slippage_bps_per_side,
     )
+
 
 
 def _simulate_teacher_segment(
