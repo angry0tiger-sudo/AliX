@@ -243,7 +243,7 @@ def test_network_response_loss_reconciles_accepted_oco_instead_of_reposting() ->
     assert gateway.place_calls == 1
     record = store.get_protection(position.trade_id)
     assert record is not None
-    assert record["status"] == "PROTECTED"
+    assert record["status"] == "SIMULATED_PROTECTED"
 
 
 def test_missing_exchange_protection_is_recreated_deterministically() -> None:
@@ -311,6 +311,9 @@ def test_filled_exchange_oco_is_reconciled_to_closed_local_position() -> None:
     assert isinstance(tp, dict)
     tp["id"] = "SIM-TP-1"
     tp["status"] = "FILLED"
+    sl = reports[1]
+    assert isinstance(sl, dict)
+    sl["status"] = "CANCELED"
     gateway.trade_history.append(
         {
             "order": "SIM-TP-1",
