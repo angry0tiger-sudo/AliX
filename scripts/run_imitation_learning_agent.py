@@ -508,9 +508,8 @@ def _write_teacher_dataset(
     initial_distribution = action_distribution(
         teacher["teacher_action"].to_numpy(dtype=np.int64)
     )
-    initial_signal_count = (
-        int(initial_distribution["BUY"]["count"])
-        + int(initial_distribution["SELL"]["count"])
+    initial_signal_count = int(initial_distribution["BUY"]["count"]) + int(
+        initial_distribution["SELL"]["count"]
     )
     if initial_signal_count < _MIN_TEACHER_TRADE_SIGNAL_COUNT:
         # Keep the density target fixed; loosen only the entry definition, then
