@@ -326,7 +326,8 @@ def _predict_actions(
         logits = classifier(outputs[:, -1, :])
         predictions = torch.argmax(logits, dim=1)
     return cast(
-        NDArray[np.int64], predictions.detach().cpu().numpy().astype(np.int64, copy=False)
+        NDArray[np.int64],
+        predictions.detach().cpu().numpy().astype(np.int64, copy=False),
     )
 
 
