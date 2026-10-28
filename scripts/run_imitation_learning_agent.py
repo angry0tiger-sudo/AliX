@@ -996,10 +996,7 @@ def run_training(
     }
     teacher_backtest_path = output_dir / "teacher-backtest-report.json"
     teacher_backtest_path.write_text(
-        json.dumps(
-            teacher_backtest, indent=2, sort_keys=True, allow_nan=False
-        )
-        + "\n",
+        json.dumps(teacher_backtest, indent=2, sort_keys=True, allow_nan=False) + "\n",
         encoding="utf-8",
     )
     print(
@@ -1011,9 +1008,7 @@ def run_training(
         )
     )
     if not teacher_gate["passed"]:
-        raise RuntimeError(
-            "teacher_profit_factor_gate_failed_lstm_training_blocked"
-        )
+        raise RuntimeError("teacher_profit_factor_gate_failed_lstm_training_blocked")
 
     # Only prepare model sequences and instantiate/train the LSTM after the
     # independent validation and untouched holdout both clear the economic gate.
