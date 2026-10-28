@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from typing import cast
 
 import numpy as np
 import pytest
@@ -15,6 +16,7 @@ from services.rl_research.rl_trading_environment import (
     ACTION_SELL_100,
     ACTION_SELL_25,
     BTCUSDTTradingEnv,
+    Int64Array,
     MarketObservationScaler,
     _finite_numeric_parameter,
     _validate_cost_basis_points,
@@ -119,7 +121,7 @@ def test_market_validation_rejects_bad_shape_timestamps_and_candles() -> None:
     with pytest.raises(ValueError, match="market_high_inconsistent"):
         validate_market_data(bad)
     bad = market_data()
-    bad[2, 3] = bad[2, 2] + 1.0
+    bad[2, 3] = bad[2, 1] + 0.1
     with pytest.raises(ValueError, match="market_low_inconsistent"):
         validate_market_data(bad)
     bad = market_data()
@@ -373,7 +375,7 @@ def test_action_decoding_rejects_invalid_actions_and_maps_all_valid_actions() ->
         7,
     ):
         with pytest.raises(ValueError):
-            env._validated_action_values(action)
+            env._validated_action_values(cast(Int64Array | np.int64 | int, action))
     env.close()
 
 
