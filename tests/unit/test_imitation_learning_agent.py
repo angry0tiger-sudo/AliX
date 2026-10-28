@@ -11,6 +11,8 @@ from scripts.run_imitation_learning_agent import (
     _target_positions,
     _compute_class_weights,
     _teacher_backtest_gate,
+    _select_teacher_mode,
+    _write_teacher_datasets,
     _weighted_cross_entropy_loss,
     simulate_economics,
 )
@@ -191,6 +193,47 @@ def test_class_weights_fail_closed_when_train_split_lacks_a_class() -> None:
         assert str(exc) == "teacher_train_split_missing_action_class"
     else:
         raise AssertionError("missing training class must fail closed")
+
+
+def test_teacher_mode_selection_uses_validation_pf_only_among_fully_passing_modes() -> None:
+    results = {
+        "institutional": {
+            "gate": {"passed": True},
+            "validation": {"economics": {"profit_factor": 1.7}},
+        },
+        "trend_pullback": {
+            "gate": {"passed": True},
+            "validation": {"economics": {"profit_factor": 1.8}},
+        },
+    }
+    assert _select_teacher_mode(results) == "trend_pullback"
+
+    results["trend_pullback"]["gate"]["passed"] = False
+    results["trend_pullback"]["validation"]["economics"]["profit_factor"] = 9.0
+    assert _select_teacher_mode(results) == "institutional"
+
+    results["institutional"]["gate"]["passed"] = False
+    assert _select_teacher_mode(results) is None
+
+
+def test_both_teacher_modes_are_generated_and_saved_independently(
+    tmp_path: object,
+) -> None:
+    from pathlib import Path
+
+    output_dir = Path(str(tmp_path))
+    candidates = _write_teacher_datasets(
+        _market_frame(),
+        {"provider": "Binance Spot public klines API", "csv_sha256": "test-hash"},
+        output_dir,
+        "test-commit",
+    )
+    assert set(candidates) == {"institutional", "trend_pullback"}
+    for mode, (_, manifest) in candidates.items():
+        assert manifest["teacher_entry_mode"] == mode
+        assert manifest["selected_for_training"] is False
+        assert (output_dir / f"teacher-dataset-{mode}.csv").exists()
+        assert (output_dir / f"teacher-dataset-{mode}-manifest.json").exists()
 
 
 def test_teacher_economic_gate_requires_profitability_and_signal_density() -> None:
