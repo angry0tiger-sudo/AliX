@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from importlib.metadata import version
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Sequence, cast
 
 import numpy as np
 import pandas as pd
@@ -954,7 +954,7 @@ def _build_reload_probe_observation(
     )
     try:
         observation, _ = env.reset(seed=seed)
-        return observation
+        return cast(Float32Array, observation)
     finally:
         env.close()
 
