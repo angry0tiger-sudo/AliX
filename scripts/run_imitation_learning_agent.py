@@ -456,12 +456,14 @@ def _simulate_teacher_segment(
         slippage_bps_per_side=DEFAULT_SLIPPAGE_BPS_PER_SIDE,
     )
     close_prices = segment["close"].to_numpy(dtype=np.float64)
+    fee_bps = DEFAULT_FEE_BPS_PER_SIDE if include_execution_costs else 0.0
+    slippage_bps = DEFAULT_SLIPPAGE_BPS_PER_SIDE if include_execution_costs else 0.0
     return simulate_economics(
         actions.astype(np.int64),
         close_prices,
         exit_prices=exit_prices,
-        fee_bps_per_side=DEFAULT_FEE_BPS_PER_SIDE,
-        slippage_bps_per_side=DEFAULT_SLIPPAGE_BPS_PER_SIDE,
+        fee_bps_per_side=fee_bps,
+        slippage_bps_per_side=slippage_bps,
     )
 
 
