@@ -433,8 +433,10 @@ def _simulate_teacher_segment(
     teacher: pd.DataFrame,
     start_index: int,
     end_index: int,
+    *,
+    include_execution_costs: bool = True,
 ) -> dict[str, Any]:
-    """Backtest a fresh flat position using full-history causal setup features."""
+    """Backtest a fresh flat position; optionally omit direct fees and slippage."""
     if start_index < 0 or end_index > len(frame) or end_index - start_index < 2:
         raise ValueError("teacher_backtest_segment_bounds_invalid")
     segment = frame.iloc[start_index:end_index].reset_index(drop=True)
