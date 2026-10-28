@@ -275,6 +275,7 @@ def _profitability_targets(
     entries = oracle_labels["entry_price"].to_numpy(dtype=np.float64)
     closes = frame["close"].to_numpy(dtype=np.float64)
     valid = oracle_labels["label_valid"].to_numpy(dtype=np.bool_)
+    valid &= np.arange(len(frame), dtype=np.int64) + horizon < len(frame)
     targets = np.zeros(len(frame), dtype=np.int64)
     returns = np.full(len(frame), np.nan, dtype=np.float64)
     for index in np.flatnonzero(valid):
@@ -851,6 +852,32 @@ def run_meta_labeling(
         "fit_rows": int(boundaries["base_train_end"]),
         "fit_policy": "base_lstm_training_partition_only",
     })
+
+    safety_manifest = {
+        "Champion": None,
+        "order_permission": False,
+        "trading_authorization": "NO-GO",
+        "real_order_attempts": 0,
+        "exchange_calls": 0,
+        "private_api_calls": 0,
+    }
+    manifest = {
+        "schema_version": "alix.oracle-meta-labeling-manifest.v1",
+        "commit_sha": commit_sha,
+        "source_provider": source_manifest["provider"],
+        "source_csv_sha256": source_manifest["csv_sha256"],
+        "row_count": int(count),
+        "barrier_horizon_candles": int(horizon),
+        "take_profit_fraction": float(take_profit),
+        "stop_loss_fraction": float(stop_loss),
+        "round_trip_fee_and_slippage_fraction": _ROUND_TRIP_COST,
+        "base_lstm_never_trained_on_meta_rows": True,
+        "meta_model_trained_only_on_oos_base_predictions": True,
+        "validation_used_for_threshold_selection": True,
+        "holdout_used_for_training_or_threshold_selection": False,
+        "safety": safety_manifest,
+    }
+    _write_json(output_dir / "oracle-meta-labeling-manifest.json", manifest)
 
     report = {
         "schema_version": "alix.oracle-meta-labeling-report.v1",
