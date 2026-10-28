@@ -20,14 +20,16 @@ from scripts.oracle_meta_labeling import (
 
 
 def _frame(rows: int = 300) -> pd.DataFrame:
-    return pd.DataFrame({
-        "timestamp": pd.date_range("2025-01-01", periods=rows, freq="h", tz="UTC"),
-        "open": np.full(rows, 100.0),
-        "high": np.full(rows, 100.2),
-        "low": np.full(rows, 99.8),
-        "close": np.full(rows, 100.0),
-        "volume": np.full(rows, 1000.0),
-    })
+    return pd.DataFrame(
+        {
+            "timestamp": pd.date_range("2025-01-01", periods=rows, freq="h", tz="UTC"),
+            "open": np.full(rows, 100.0),
+            "high": np.full(rows, 100.2),
+            "low": np.full(rows, 99.8),
+            "close": np.full(rows, 100.0),
+            "volume": np.full(rows, 1000.0),
+        }
+    )
 
 
 def test_chronological_partitions_are_ordered_and_disjoint() -> None:
@@ -61,13 +63,19 @@ def test_partition_masks_purge_forward_labels_at_each_boundary() -> None:
 def test_meta_feature_matrix_has_probabilities_atr_and_ma_distances() -> None:
     probabilities = np.asarray([[0.2, 0.6, 0.2]], dtype=np.float32)
     names = [
-        "return_1", "atr_fraction_14", "sma_distance_6", "sma_distance_24",
-        "sma_distance_72", "sma_distance_168",
+        "return_1",
+        "atr_fraction_14",
+        "sma_distance_6",
+        "sma_distance_24",
+        "sma_distance_72",
+        "sma_distance_168",
     ]
     features = np.asarray([[0.01, 0.02, 0.03, 0.04, 0.05, 0.06]], dtype=np.float32)
     matrix, meta_names = _meta_feature_matrix(probabilities, features, names)
     assert meta_names[0:3] == [
-        "lstm_probability_buy", "lstm_probability_sell", "lstm_probability_hold"
+        "lstm_probability_buy",
+        "lstm_probability_sell",
+        "lstm_probability_hold",
     ]
     np.testing.assert_allclose(matrix[0], [0.6, 0.2, 0.2, 0.02, 0.03, 0.04, 0.05, 0.06])
 
@@ -89,11 +97,13 @@ def test_profitability_target_accounts_for_barriers_and_costs() -> None:
     frame = _frame(80)
     frame.loc[20, "close"] = 104.0
     frame.loc[30, "close"] = 90.0
-    labels = pd.DataFrame({
-        "oracle_action": np.full(80, ACTION_HOLD, dtype=np.int64),
-        "entry_price": np.full(80, 100.0),
-        "label_valid": np.arange(80, dtype=np.int64) + 24 < 80,
-    })
+    labels = pd.DataFrame(
+        {
+            "oracle_action": np.full(80, ACTION_HOLD, dtype=np.int64),
+            "entry_price": np.full(80, 100.0),
+            "label_valid": np.arange(80, dtype=np.int64) + 24 < 80,
+        }
+    )
     labels.loc[1, "oracle_action"] = ACTION_BUY
     labels.loc[2, "oracle_action"] = ACTION_SELL
     targets, returns = _profitability_targets(frame, labels, horizon=24)
@@ -105,7 +115,12 @@ def test_profitability_target_accounts_for_barriers_and_costs() -> None:
 
 
 def test_barrier_tie_is_stop_first_and_gaps_are_conservative() -> None:
-    position = {"entry_index": 10, "entry_price": 100.0, "entry_equity": 1.0, "quantity": 0.009}
+    position = {
+        "entry_index": 10,
+        "entry_price": 100.0,
+        "entry_equity": 1.0,
+        "quantity": 0.009,
+    }
     assert _gap_exit(98.0, position) == ("GAP_STOP", 98.0)
     assert _gap_exit(104.0, position) == ("GAP_TAKE_PROFIT", 104.0)
     assert _gap_exit(100.0, position) is None
@@ -146,8 +161,14 @@ def test_meta_filter_executes_approved_buy_and_respects_take_profit() -> None:
 
 def test_meta_economic_simulation_rejects_bad_input() -> None:
     frame = _frame(40)
-    with pytest.raises(ValueError, match="meta_economic_simulation_configuration_invalid"):
+    with pytest.raises(
+        ValueError, match="meta_economic_simulation_configuration_invalid"
+    ):
         _simulate_long_flat(
-            frame, np.zeros(30, dtype=np.int64), np.zeros(40),
-            threshold=0.5, start=0, end=20,
+            frame,
+            np.zeros(30, dtype=np.int64),
+            np.zeros(40),
+            threshold=0.5,
+            start=0,
+            end=20,
         )
