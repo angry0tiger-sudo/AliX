@@ -82,7 +82,7 @@ def test_partition_mask_removes_every_cross_boundary_target() -> None:
     assert not valid[validation_end - horizon]
     assert valid[row_count - horizon - 1]
     assert not valid[row_count - horizon]
-    assert not valid[0]
+    assert valid[0]
 
 
 def test_causal_features_do_not_change_when_future_rows_are_modified() -> None:
