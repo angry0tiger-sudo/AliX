@@ -367,11 +367,7 @@ class CrashRecoveryCoordinator:
 
     def _find_open_position(self, trade_id: str) -> LocalPosition | None:
         return next(
-            (
-                item
-                for item in self.store.open_positions()
-                if item.trade_id == trade_id
-            ),
+            (item for item in self.store.open_positions() if item.trade_id == trade_id),
             None,
         )
 
@@ -456,9 +452,7 @@ class CrashRecoveryCoordinator:
         open_orders: Sequence[OrderMapping],
     ) -> _PositionOutcome:
         record = self.store.get_protection(position.trade_id)
-        pending_outcome = self._resume_pending_exit(
-            position, plan, open_orders, record
-        )
+        pending_outcome = self._resume_pending_exit(position, plan, open_orders, record)
         if pending_outcome is not None:
             return pending_outcome
 
