@@ -618,11 +618,7 @@ def _mode_economic_diagnosis(
 
 def _profit_factor_above_one(economics: dict[str, Any]) -> bool:
     value = economics.get("profit_factor")
-    return (
-        isinstance(value, (int, float))
-        and np.isfinite(value)
-        and value > 1.0
-    )
+    return isinstance(value, (int, float)) and np.isfinite(value) and value > 1.0
 
 
 def _execution_cost_counterfactual_diagnosis(
@@ -646,7 +642,9 @@ def _execution_cost_counterfactual_diagnosis(
         holdout_before_costs_profitable and not holdout_after_costs_profitable
     )
     if validation_cost_flip or holdout_cost_flip:
-        interpretation = "direct fees and slippage flip at least one partition below PF 1"
+        interpretation = (
+            "direct fees and slippage flip at least one partition below PF 1"
+        )
     elif not validation_before_costs_profitable and not holdout_before_costs_profitable:
         interpretation = "trade path is unprofitable even before direct execution costs"
     else:
