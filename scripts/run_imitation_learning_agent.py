@@ -41,6 +41,7 @@ IntArray = NDArray[np.int64]
 _ACTION_NAMES = {ACTION_HOLD: "HOLD", ACTION_BUY: "BUY", ACTION_SELL: "SELL"}
 _REQUIRED_SOURCE_COLUMNS = ("timestamp", "open", "high", "low", "close", "volume")
 _MIN_TEACHER_TRADE_SIGNAL_COUNT = 800
+_MAX_TEACHER_DRAWDOWN_FRACTION = 0.15
 
 
 def _read_json_object(path: Path) -> dict[str, Any]:
@@ -492,7 +493,7 @@ def _teacher_backtest_gate(
     minimum_profit_factor: float = 1.5,
     minimum_trade_signal_count: int = _MIN_TEACHER_TRADE_SIGNAL_COUNT,
 ) -> dict[str, Any]:
-    def passes(economics: dict[str, Any]) -> bool:
+    def profit_factor_passes(economics: dict[str, Any]) -> bool:
         profit_factor = economics.get("profit_factor")
         return (
             isinstance(profit_factor, (int, float))
@@ -500,8 +501,22 @@ def _teacher_backtest_gate(
             and float(profit_factor) >= minimum_profit_factor
         )
 
-    validation_passed = passes(validation_economics)
-    holdout_passed = passes(holdout_economics)
+    def drawdown_passes(economics: dict[str, Any]) -> bool:
+        drawdown = economics.get("max_drawdown_fraction")
+        return (
+            isinstance(drawdown, (int, float))
+            and np.isfinite(drawdown)
+            and 0.0 <= float(drawdown) <= _MAX_TEACHER_DRAWDOWN_FRACTION
+        )
+
+    validation_profit_factor_passed = profit_factor_passes(validation_economics)
+    holdout_profit_factor_passed = profit_factor_passes(holdout_economics)
+    validation_drawdown_passed = drawdown_passes(validation_economics)
+    holdout_drawdown_passed = drawdown_passes(holdout_economics)
+    validation_passed = (
+        validation_profit_factor_passed and validation_drawdown_passed
+    )
+    holdout_passed = holdout_profit_factor_passed and holdout_drawdown_passed
     buy_count = int(teacher_action_distribution.get("BUY", {}).get("count", 0))
     sell_count = int(teacher_action_distribution.get("SELL", {}).get("count", 0))
     trade_signal_count = buy_count + sell_count
@@ -513,6 +528,11 @@ def _teacher_backtest_gate(
     passed = validation_passed and holdout_passed and signal_density_passed
     return {
         "minimum_profit_factor": minimum_profit_factor,
+        "maximum_allowed_drawdown_fraction": _MAX_TEACHER_DRAWDOWN_FRACTION,
+        "validation_profit_factor_passed": validation_profit_factor_passed,
+        "holdout_profit_factor_passed": holdout_profit_factor_passed,
+        "validation_drawdown_passed": validation_drawdown_passed,
+        "holdout_drawdown_passed": holdout_drawdown_passed,
         "validation_passed": validation_passed,
         "holdout_passed": holdout_passed,
         "minimum_trade_signal_count": minimum_trade_signal_count,
@@ -981,6 +1001,23 @@ def _build_teacher_backtest_report(
     else:
         gate = {
             "minimum_profit_factor": 1.5,
+            "maximum_allowed_drawdown_fraction": _MAX_TEACHER_DRAWDOWN_FRACTION,
+            "validation_profit_factor_passed": any(
+                result["gate"]["validation_profit_factor_passed"]
+                for result in mode_results.values()
+            ),
+            "holdout_profit_factor_passed": any(
+                result["gate"]["holdout_profit_factor_passed"]
+                for result in mode_results.values()
+            ),
+            "validation_drawdown_passed": any(
+                result["gate"]["validation_drawdown_passed"]
+                for result in mode_results.values()
+            ),
+            "holdout_drawdown_passed": any(
+                result["gate"]["holdout_drawdown_passed"]
+                for result in mode_results.values()
+            ),
             "minimum_trade_signal_count": _MIN_TEACHER_TRADE_SIGNAL_COUNT,
             "teacher_trade_signal_count": int(
                 diagnostic["gate"]["teacher_trade_signal_count"]
@@ -1007,13 +1044,13 @@ def _build_teacher_backtest_report(
         mode: result["gate"] for mode, result in mode_results.items()
     }
     return {
-        "schema_version": "alix.teacher-backtest-report.v2",
+        "schema_version": "alix.teacher-backtest-report.v3",
         "commit_sha": commit_sha,
         "source_csv_sha256": source_manifest["csv_sha256"],
         "strategy": (
             "independently evaluated institutional, trend-pullback, "
-            "Bollinger-20/2 plus RSI-14 mean-reversion, and Donchian-20 "
-            "breakout Spot teachers"
+            "Bollinger-20/1.5 plus RSI-14 mean-reversion, and trend-filtered "
+            "Donchian-10 breakout Spot teachers"
         ),
         "entry_mode": selected_mode,
         "selected_mode": selected_mode,

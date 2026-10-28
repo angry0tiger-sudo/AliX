@@ -155,6 +155,9 @@ jobs:
           assert set(teacher_backtest["gate"]["mode_gate_results"]) == {"institutional", "trend_pullback", "mean_reversion", "breakout"}
           for mode, result in teacher_backtest["modes"].items():
               assert result["entry_mode"] == mode
+              assert result["gate"]["maximum_allowed_drawdown_fraction"] == 0.15
+              assert result["gate"]["validation_drawdown_passed"] is True
+              assert result["gate"]["holdout_drawdown_passed"] is True
               cost_counterfactual = result["execution_cost_counterfactual"]
               assert "validation_without_direct_costs" in cost_counterfactual
               assert "holdout_without_direct_costs" in cost_counterfactual
@@ -166,6 +169,7 @@ jobs:
           assert risk_parameters == teacher_backtest["modes"][diagnostic_mode]["parameters"]
           assert cost_diagnostics == teacher_backtest["modes"][diagnostic_mode]["cost_adjusted_risk_diagnostics"]
           assert teacher_backtest["gate"]["minimum_profit_factor"] == 1.5
+          assert teacher_backtest["gate"]["maximum_allowed_drawdown_fraction"] == 0.15
           for mode, result in teacher_backtest["modes"].items():
               expected_tp = 0.015 if mode == "mean_reversion" else 0.025
               expected_sl = 0.01 if mode == "mean_reversion" else 0.015
@@ -196,6 +200,7 @@ jobs:
               economics = teacher_backtest[partition]["economics"]
               assert economics["profit_factor"] is not None
               assert economics["profit_factor"] >= teacher_backtest["gate"]["minimum_profit_factor"]
+              assert economics["max_drawdown_fraction"] <= teacher_backtest["gate"]["maximum_allowed_drawdown_fraction"]
           assert report["dataset"]["source_csv_sha256"] == market_manifest["csv_sha256"]
           assert teacher_manifest["source_csv_sha256"] == market_manifest["csv_sha256"]
           teacher_actions = report["teacher"]["action_distribution"]

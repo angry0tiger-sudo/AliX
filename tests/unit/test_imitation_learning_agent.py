@@ -348,8 +348,8 @@ def test_breakout_risk_profile_uses_existing_strict_economic_assumptions() -> No
 
 
 def test_teacher_economic_gate_requires_profitability_and_signal_density() -> None:
-    passing = {"profit_factor": 1.6}
-    failing = {"profit_factor": 1.49}
+    passing = {"profit_factor": 1.6, "max_drawdown_fraction": 0.10}
+    failing = {"profit_factor": 1.49, "max_drawdown_fraction": 0.10}
     sufficient_signals = {
         "BUY": {"count": 400},
         "HOLD": {"count": 16_720},
@@ -361,9 +361,13 @@ def test_teacher_economic_gate_requires_profitability_and_signal_density() -> No
         "SELL": {"count": 20},
     }
 
-    assert (
-        _teacher_backtest_gate(passing, passing, sufficient_signals)["passed"] is True
-    )
+    accepted = _teacher_backtest_gate(passing, passing, sufficient_signals)
+    assert accepted["passed"] is True
+    assert accepted["maximum_allowed_drawdown_fraction"] == 0.15
+    assert accepted["validation_profit_factor_passed"] is True
+    assert accepted["holdout_profit_factor_passed"] is True
+    assert accepted["validation_drawdown_passed"] is True
+    assert accepted["holdout_drawdown_passed"] is True
     assert (
         _teacher_backtest_gate(passing, failing, sufficient_signals)["passed"] is False
     )
@@ -381,7 +385,34 @@ def test_teacher_economic_gate_requires_profitability_and_signal_density() -> No
     )
 
 
-def test_economic_simulation_uses_protective_exit_fill_price() -> None:
+def test_teacher_economic_gate_fails_closed_on_excessive_or_missing_drawdown() -> None:
+    sufficient_signals = {
+        "BUY": {"count": 400},
+        "HOLD": {"count": 16_720},
+        "SELL": {"count": 400},
+    }
+    passing = {"profit_factor": 1.6, "max_drawdown_fraction": 0.10}
+    excessive_drawdown = {
+        "profit_factor": 1.6,
+        "max_drawdown_fraction": 0.150001,
+    }
+    result = _teacher_backtest_gate(
+        excessive_drawdown, passing, sufficient_signals
+    )
+    assert result["validation_profit_factor_passed"] is True
+    assert result["validation_drawdown_passed"] is False
+    assert result["validation_passed"] is False
+    assert result["passed"] is False
+    assert result["lstm_training_allowed"] is False
+
+    missing_drawdown = _teacher_backtest_gate(
+        {"profit_factor": 1.6}, passing, sufficient_signals
+    )
+    assert missing_drawdown["validation_drawdown_passed"] is False
+    assert missing_drawdown["lstm_training_allowed"] is False
+
+
+def test_economic_simulation_uses_protective_exit_fill_price() -> None
     actions = np.asarray([ACTION_BUY, ACTION_HOLD, ACTION_SELL], dtype=np.int64)
     close = np.asarray([100.0, 101.0, 98.0], dtype=np.float64)
     protective_exit = np.asarray([np.nan, np.nan, 100.9], dtype=np.float64)
