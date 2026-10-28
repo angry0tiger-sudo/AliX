@@ -217,9 +217,9 @@ def test_configuration_validators_reject_invalid_risk_and_reward_parameters() ->
     ):
         with pytest.raises(ValueError):
             _validate_trailing_stop_configuration(distance, activation)
-    for value in (True, "0.1", -0.1, float("inf")):
+    for scale_value in (True, "0.1", -0.1, float("inf")):
         with pytest.raises(ValueError, match="signal_guidance_reward_scale"):
-            _validate_signal_guidance_reward_scale(value)
+            _validate_signal_guidance_reward_scale(scale_value)
 
 
 def test_constructor_enforces_configuration_and_observation_contracts() -> None:
@@ -435,7 +435,7 @@ def test_buy_and_sell_targets_handle_partial_and_full_closes() -> None:
     assert closed[1] == "SELL"
     assert env._quantity == pytest.approx(0.0)
     assert env._last_buy_index is None
-    assert env._last_closed_trade_exit_reason == "policy_sell"
+    assert env._summary_exit_reason_counts() == {"policy_sell": 1}
     assert env._closed_trade_count == 1
     assert env._winning_trade_count == 1
 

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 from typing import cast
 
 import pytest
@@ -98,4 +97,4 @@ def test_unstarted_report_is_explicit_and_never_claims_full_cost_steps() -> None
     assert report["last_training_step_cost_stage"] == "not_started"
     assert report["status"] == "not_started_or_incomplete"
     assert report["steps_by_stage"] == {"full_cost": 0}
-    assert math.isfinite(float(report["initial_fee_bps_per_side"]))
+    assert report["initial_fee_bps_per_side"] == 1.0
