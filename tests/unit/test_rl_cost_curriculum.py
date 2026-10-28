@@ -53,15 +53,23 @@ def test_curriculum_rejects_bad_timestamps_counts_and_report_lengths() -> None:
         costs.stage_for_timestep(-1)
     with pytest.raises(ValueError, match="timestep_must_be_non_negative_integer"):
         costs.stage_for_timestep(True)
-    with pytest.raises(ValueError, match="training_timesteps_must_be_contiguous_positive_integers"):
+    with pytest.raises(
+        ValueError, match="training_timesteps_must_be_contiguous_positive_integers"
+    ):
         costs.observe_step(0, 0)
-    with pytest.raises(ValueError, match="episode_closed_trade_count_must_be_non_negative_integer"):
+    with pytest.raises(
+        ValueError, match="episode_closed_trade_count_must_be_non_negative_integer"
+    ):
         costs.observe_step(1, -1)
-    with pytest.raises(ValueError, match="episode_closed_trade_count_must_be_non_negative_integer"):
+    with pytest.raises(
+        ValueError, match="episode_closed_trade_count_must_be_non_negative_integer"
+    ):
         costs.observe_step(1, True)
 
     assert costs.observe_step(1, 2) == (25.0, 20.0)
-    with pytest.raises(ValueError, match="training_timesteps_must_be_contiguous_positive_integers"):
+    with pytest.raises(
+        ValueError, match="training_timesteps_must_be_contiguous_positive_integers"
+    ):
         costs.observe_step(3, 2)
     with pytest.raises(ValueError, match="training_cost_step_count_mismatch"):
         costs.report(0)

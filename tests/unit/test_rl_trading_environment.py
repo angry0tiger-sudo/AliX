@@ -31,9 +31,7 @@ from services.rl_research.rl_trading_environment import (
 Float64Array = NDArray[np.float64]
 
 
-def market_data(
-    rows: int = 64, trend_per_candle: float = 0.5
-) -> Float64Array:
+def market_data(rows: int = 64, trend_per_candle: float = 0.5) -> Float64Array:
     """Create deterministic, contiguous synthetic OHLCV candles."""
     index = np.arange(rows, dtype=np.float64)
     close = 100.0 + trend_per_candle * index
@@ -42,9 +40,9 @@ def market_data(
     low = close - 1.0
     volume = 10.0 + index
     timestamp = 1_700_000_000_000.0 + index * 60_000.0
-    return np.column_stack(
-        (timestamp, open_price, high, low, close, volume)
-    ).astype(np.float64)
+    return np.column_stack((timestamp, open_price, high, low, close, volume)).astype(
+        np.float64
+    )
 
 
 def make_env(
@@ -81,9 +79,7 @@ def buy_full_position(env: BTCUSDTTradingEnv) -> None:
     current_price = float(env._market_data[0, 4])
     next_open = float(env._market_data[1, 1])
     mask = env._legal_action_mask(current_price)
-    result = env._execute_buy_action(
-        "BUY_100", 1.0, next_open, mask, current_price
-    )
+    result = env._execute_buy_action("BUY_100", 1.0, next_open, mask, current_price)
     assert result[1] == "BUY"
     assert env._quantity > 0.0
     assert env._trade_entry_cost_total > 0.0
@@ -132,7 +128,9 @@ def test_market_validation_rejects_bad_shape_timestamps_and_candles() -> None:
         validate_market_data(bad)
 
 
-def test_scaler_is_fit_only_from_supplied_training_rows_and_handles_zero_volume() -> None:
+def test_scaler_is_fit_only_from_supplied_training_rows_and_handles_zero_volume() -> (
+    None
+):
     data = market_data()
     scaler = MarketObservationScaler.fit(data[:20])
     assert scaler.price_anchor == float(data[0, 4])
@@ -183,7 +181,9 @@ def test_configuration_validators_reject_invalid_risk_and_reward_parameters() ->
         (0.1, -1.0, 0.1),
         (0.1, 0.1, -1.0),
     ):
-        with pytest.raises(ValueError, match="reward_shaping_parameters_must_be_non_negative"):
+        with pytest.raises(
+            ValueError, match="reward_shaping_parameters_must_be_non_negative"
+        ):
             _validate_reward_shaping(*values)
 
     valid = (10_000.0, 25.0, 20.0, 1, 1.5, 0.01, 0.001, 0.001, 3, 0.0001)
@@ -201,7 +201,9 @@ def test_configuration_validators_reject_invalid_risk_and_reward_parameters() ->
             _validate_environment_configuration(*config)
 
     for value in (0, -1, True, 1.5):
-        with pytest.raises(ValueError, match="minimum_holding_period_candles_must_be_positive_integer"):
+        with pytest.raises(
+            ValueError, match="minimum_holding_period_candles_must_be_positive_integer"
+        ):
             _validate_minimum_holding_period_candles(value)
     with pytest.raises(ValueError, match="include_portfolio_state_must_be_boolean"):
         _validate_portfolio_state_option(1)
@@ -253,7 +255,9 @@ def test_cost_setters_are_atomic_and_guidance_scale_is_validated() -> None:
     env.close()
 
 
-def test_reset_supports_fixed_and_seeded_random_starts_and_rejects_bad_options() -> None:
+def test_reset_supports_fixed_and_seeded_random_starts_and_rejects_bad_options() -> (
+    None
+):
     env = make_env(rows=40, random_start=True, min_remaining_steps=5)
     _, info = env.reset(seed=123)
     first_start = info["start_index"]
@@ -290,7 +294,9 @@ def test_observation_and_portfolio_state_reflect_realized_inventory_state() -> N
     env._position_cost_basis = 180.0
     env._last_buy_index = 0
     env._index = 1
-    position_fraction, unrealized, holding_fraction = env._portfolio_observation_values(100.0)
+    position_fraction, unrealized, holding_fraction = env._portfolio_observation_values(
+        100.0
+    )
     assert position_fraction == pytest.approx(200.0 / 10_000.0)
     assert unrealized == pytest.approx((200.0 - 180.0) / 180.0)
     assert holding_fraction == pytest.approx(1.0)
@@ -344,14 +350,20 @@ def test_equity_fill_costs_quantity_guards_and_rebalance_accounting() -> None:
 
 def test_action_decoding_rejects_invalid_actions_and_maps_all_valid_actions() -> None:
     env = make_env()
-    assert env._validated_action_values(ACTION_HOLD) == (
-        0, "HOLD", "HOLD", 0.0, None
-    )
+    assert env._validated_action_values(ACTION_HOLD) == (0, "HOLD", "HOLD", 0.0, None)
     assert env._validated_action_values(np.array([ACTION_BUY_100], dtype=np.int64)) == (
-        3, "BUY_100", "BUY", 1.0, 2
+        3,
+        "BUY_100",
+        "BUY",
+        1.0,
+        2,
     )
     assert env._validated_action_values(ACTION_SELL_100) == (
-        6, "SELL_100", "SELL", 1.0, 2
+        6,
+        "SELL_100",
+        "SELL",
+        1.0,
+        2,
     )
     for action in (
         np.array([1.0]),
@@ -408,9 +420,7 @@ def test_buy_and_sell_targets_handle_partial_and_full_closes() -> None:
 
     assert env._sell_target_quantity(0.0, 100.0) is None
     assert env._sell_target_quantity(1.1, 100.0) is None
-    assert env._sell_target_quantity(0.25, 100.0) == pytest.approx(
-        env._quantity * 0.75
-    )
+    assert env._sell_target_quantity(0.25, 100.0) == pytest.approx(env._quantity * 0.75)
 
     env._index = 1
     mask = env._legal_action_mask(101.0)
@@ -439,8 +449,12 @@ def test_action_ledger_and_invalid_action_penalties_are_explicit() -> None:
     env = make_env()
     env._record_action("HOLD", "HOLD", "HOLD", None)
     env._record_action("BUY_25", "BUY", "MASKED_BUY", "insufficient_spendable_cash")
-    env._record_action("BUY_25", "BUY", "NOOP_BUY", "buy_target_not_above_current_position")
-    env._record_action("SELL_25", "SELL", "MASKED_SELL", "minimum_holding_period_active")
+    env._record_action(
+        "BUY_25", "BUY", "NOOP_BUY", "buy_target_not_above_current_position"
+    )
+    env._record_action(
+        "SELL_25", "SELL", "MASKED_SELL", "minimum_holding_period_active"
+    )
     assert env._hold_action_count == 1
     assert env._buy_action_count == 2
     assert env._sell_action_count == 1
@@ -487,9 +501,7 @@ def test_position_change_tracking_and_episode_settlement() -> None:
     _, changed, penalty = env._track_position_change(2.0, 100.0)
     assert not changed and penalty == pytest.approx(env.inactivity_penalty)
 
-    settled, drawdown, equity = env._settle_episode_step(
-        1, env._market_data[1], 0.01
-    )
+    settled, drawdown, equity = env._settle_episode_step(1, env._market_data[1], 0.01)
     assert not settled and equity > 0.0 and drawdown == 0.01
 
     env._quantity = 2.0
@@ -604,7 +616,9 @@ def test_opportunity_cost_holding_rewards_and_guidance_targets() -> None:
     down._cash = 9_000.0
     down._position_cost_basis = 100.0
     down._last_buy_index = 0
-    assert down._guidance_target_index(float(down._market_data[25, 4])) == ACTION_SELL_25
+    assert (
+        down._guidance_target_index(float(down._market_data[25, 4])) == ACTION_SELL_25
+    )
     downward_reward = down._signal_guidance_reward_for_action("SELL", "SELL")
     assert downward_reward[0] == pytest.approx(0.0002)
     assert downward_reward[1] == "SELL"
@@ -640,16 +654,40 @@ def test_realized_profit_early_exit_and_total_reward_validation() -> None:
     assert env._early_exit_penalty_for_closed_trade() == 0.0
 
     log_return, profitable_bonus, reward = env._calculate_step_reward(
-        10_100.0, 10_000.0, 0.02, 0.01, 0.001, 0.0, 0.0, 0.0, 0.001,
-        0.0002, 0.0001, 0.002, 0.0, 2
+        10_100.0,
+        10_000.0,
+        0.02,
+        0.01,
+        0.001,
+        0.0,
+        0.0,
+        0.0,
+        0.001,
+        0.0002,
+        0.0001,
+        0.002,
+        0.0,
+        2,
     )
     assert log_return == pytest.approx(math.log(1.01))
     assert profitable_bonus == pytest.approx(2 * env.profitable_trade_bonus)
     assert math.isfinite(reward)
     with pytest.raises(ValueError, match="reward_non_finite"):
         env._calculate_step_reward(
-            float("nan"), 10_000.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-            0.0, 0.0, 0.0, 0.0, 0
+            float("nan"),
+            10_000.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0,
         )
     env.close()
 
@@ -719,7 +757,8 @@ def test_summary_reports_trade_statistics_and_hold_collapse() -> None:
     assert summary["average_win_percent"] == pytest.approx(2.0)
     assert summary["average_loss_percent"] == pytest.approx(-1.0)
     assert summary["closed_trade_exit_reason_counts"] == {
-        "policy_sell": 2, "trailing_stop": 1
+        "policy_sell": 2,
+        "trailing_stop": 1,
     }
     assert not summary["hold_collapse"]
 
