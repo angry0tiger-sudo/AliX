@@ -270,7 +270,7 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
     receives an opportunity-cost penalty; holding cash earns no bonus.
     """
 
-    metadata = {"render_modes": []}
+    metadata: dict[str, Any] = {"render_modes": []}
 
     def __init__(
         self,
