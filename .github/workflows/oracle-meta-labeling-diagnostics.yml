@@ -126,6 +126,8 @@ jobs:
           unzip -q "$RUNNER_TEMP/alix-oracle-meta-labeling-source.zip" -d "$RUNNER_TEMP/alix-meta-source"
 
       - name: Diagnose saved validation predictions without training or Holdout selection
+        env:
+          PYTHONPATH: ${{ github.workspace }}
         run: |
           python scripts/oracle_meta_labeling.py \
             --diagnostics-artifact-dir "$RUNNER_TEMP/alix-meta-source" \
