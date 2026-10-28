@@ -6,6 +6,7 @@ import json
 import numpy as np
 import pandas as pd
 import pytest
+from pathlib import Path
 
 from scripts.oracle_teacher_lstm import ACTION_BUY, ACTION_HOLD, ACTION_SELL
 
@@ -236,7 +237,9 @@ def test_pbo_uses_purged_cscv_on_threshold_return_streams() -> None:
         )
 
 
-def test_existing_oos_diagnostics_updates_only_the_matching_artifact(tmp_path) -> None:
+def test_existing_oos_diagnostics_updates_only_the_matching_artifact(
+    tmp_path: Path,
+) -> None:
     source_sha = "a" * 40
     code_sha = "b" * 40
     artifact_dir = tmp_path
