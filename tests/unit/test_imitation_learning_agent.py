@@ -216,11 +216,14 @@ def test_execution_cost_counterfactual_distinguishes_cost_and_entry_failures() -
         {"profit_factor": 0.95, "net_return_fraction": -0.02},
         {"profit_factor": 0.97, "net_return_fraction": -0.01},
     )
-    assert not unprofitable_before_costs["validation_pf_flipped_below_one_by_direct_costs"]
-    assert not unprofitable_before_costs["holdout_pf_flipped_below_one_by_direct_costs"]
-    assert "unprofitable even before direct execution costs" in unprofitable_before_costs[
-        "interpretation"
+    assert not unprofitable_before_costs[
+        "validation_pf_flipped_below_one_by_direct_costs"
     ]
+    assert not unprofitable_before_costs["holdout_pf_flipped_below_one_by_direct_costs"]
+    assert (
+        "unprofitable even before direct execution costs"
+        in unprofitable_before_costs["interpretation"]
+    )
 
 
 def test_cost_adjusted_tp_sl_and_break_even_win_rate_are_reported() -> None:
