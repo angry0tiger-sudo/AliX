@@ -184,6 +184,33 @@ def _teacher_setups(
     return buy_setup.fillna(False), sell_setup.fillna(False)
 
 
+def _trend_pullback_setups(
+    frame: pd.DataFrame, bias: pd.Series
+) -> tuple[pd.Series, pd.Series]:
+    """Simpler causal pullback/reclaim entries aligned with the completed 4h bias."""
+    close = frame["close"]
+    fast_ema = close.ewm(span=6, adjust=False, min_periods=6).mean()
+    slow_ema = close.ewm(span=24, adjust=False, min_periods=24).mean()
+    buy_setup = (
+        (bias > 0)
+        & (close > slow_ema)
+        & (frame["low"] <= fast_ema)
+        & (close >= fast_ema)
+    )
+    sell_setup = (
+        (bias < 0)
+        & (close < slow_ema)
+        & (frame["high"] >= fast_ema)
+        & (close <= fast_ema)
+    )
+    return buy_setup.fillna(False), sell_setup.fillna(False)
+
+
+def _validate_teacher_entry_mode(entry_mode: str) -> None:
+    if entry_mode not in {"institutional", "trend_pullback"}:
+        raise ValueError("teacher_entry_mode_must_be_institutional_or_trend_pullback")
+
+
 def _validate_integer_parameter(name: str, value: int, minimum: int) -> None:
     if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
         raise ValueError(f"{name}_out_of_range")
@@ -417,6 +444,7 @@ def generate_teacher_labels(
     data: pd.DataFrame,
     *,
     higher_timeframe: str = "4h",
+    entry_mode: str = "institutional",
     ema_span: int = 6,
     swing_window: int = 8,
     volume_window: int = 24,
@@ -438,6 +466,7 @@ def generate_teacher_labels(
     _validate_teacher_configuration(
         higher_timeframe, ema_span, swing_window, volume_window, cooldown_candles
     )
+    _validate_teacher_entry_mode(entry_mode)
     _validate_risk_configuration(
         atr_period,
         min_atr_cost_multiple,
@@ -458,15 +487,18 @@ def generate_teacher_labels(
         bearish_ob_touch,
     ) = _smc_features(frame, swing_window)
     buy_volume, sell_volume = _volume_confirmations(frame, volume_window)
-    buy_setup, sell_setup = _teacher_setups(
-        bias,
-        bullish_structure,
-        bearish_structure,
-        bullish_ob_touch,
-        bearish_ob_touch,
-        buy_volume,
-        sell_volume,
-    )
+    if entry_mode == "institutional":
+        buy_setup, sell_setup = _teacher_setups(
+            bias,
+            bullish_structure,
+            bearish_structure,
+            bullish_ob_touch,
+            bearish_ob_touch,
+            buy_volume,
+            sell_volume,
+        )
+    else:
+        buy_setup, sell_setup = _trend_pullback_setups(frame, bias)
     atr_fraction = _average_true_range_fraction(frame, atr_period)
     actions, positions, exit_prices, exit_reasons = _generate_teacher_actions(
         frame,
@@ -496,6 +528,7 @@ def generate_teacher_labels(
     result["teacher_atr_fraction"] = atr_fraction.to_numpy(dtype=np.float64)
     result["teacher_setup_buy"] = buy_setup.to_numpy(dtype=bool)
     result["teacher_setup_sell"] = sell_setup.to_numpy(dtype=bool)
+    result["teacher_entry_mode"] = entry_mode
     result["teacher_exit_price"] = exit_prices
     result["teacher_exit_reason"] = exit_reasons
     return result
