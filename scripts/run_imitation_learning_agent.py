@@ -830,9 +830,7 @@ def _build_teacher_backtest_report(
     }
 
 
-def _write_teacher_backtest_report(
-    output_dir: Path, report: dict[str, Any]
-) -> None:
+def _write_teacher_backtest_report(output_dir: Path, report: dict[str, Any]) -> None:
     report_path = output_dir / "teacher-backtest-report.json"
     report_path.write_text(
         json.dumps(report, indent=2, sort_keys=True, allow_nan=False) + "\n",
@@ -843,7 +841,6 @@ def _write_teacher_backtest_report(
             {"teacher_backtest": report}, indent=2, sort_keys=True, allow_nan=False
         )
     )
-
 
 
 def _validate_split_boundaries(
