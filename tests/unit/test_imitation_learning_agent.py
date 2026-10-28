@@ -15,6 +15,7 @@ from scripts.run_imitation_learning_agent import (
     _compute_class_weights,
     _teacher_backtest_gate,
     _cost_adjusted_risk_diagnostics,
+    _execution_cost_counterfactual_diagnosis,
     _select_teacher_mode,
     _write_teacher_datasets,
     _weighted_cross_entropy_loss,
@@ -197,6 +198,29 @@ def test_class_weights_fail_closed_when_train_split_lacks_a_class() -> None:
         assert str(exc) == "teacher_train_split_missing_action_class"
     else:
         raise AssertionError("missing training class must fail closed")
+
+
+def test_execution_cost_counterfactual_distinguishes_cost_and_entry_failures() -> None:
+    profitable_before_costs = _execution_cost_counterfactual_diagnosis(
+        {"profit_factor": 0.8},
+        {"profit_factor": 0.9},
+        {"profit_factor": 1.2, "net_return_fraction": 0.08},
+        {"profit_factor": 1.1, "net_return_fraction": 0.03},
+    )
+    assert profitable_before_costs["validation_pf_flipped_below_one_by_direct_costs"]
+    assert profitable_before_costs["holdout_pf_flipped_below_one_by_direct_costs"]
+
+    unprofitable_before_costs = _execution_cost_counterfactual_diagnosis(
+        {"profit_factor": 0.8},
+        {"profit_factor": 0.9},
+        {"profit_factor": 0.95, "net_return_fraction": -0.02},
+        {"profit_factor": 0.97, "net_return_fraction": -0.01},
+    )
+    assert not unprofitable_before_costs["validation_pf_flipped_below_one_by_direct_costs"]
+    assert not unprofitable_before_costs["holdout_pf_flipped_below_one_by_direct_costs"]
+    assert "unprofitable even before direct execution costs" in unprofitable_before_costs[
+        "interpretation"
+    ]
 
 
 def test_cost_adjusted_tp_sl_and_break_even_win_rate_are_reported() -> None:
