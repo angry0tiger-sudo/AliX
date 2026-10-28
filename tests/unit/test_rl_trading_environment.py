@@ -335,8 +335,10 @@ def test_equity_fill_costs_quantity_guards_and_rebalance_accounting() -> None:
     with pytest.raises(ValueError, match="simulated_spot_cash_would_be_negative"):
         env._validate_rebalanced_cash(-1e-4)
     env._validate_rebalanced_cash(-1e-8)
+    env._cash = 0.0
+    env._quantity = 0.0
     with pytest.raises(ValueError, match="simulated_equity_non_positive"):
-        env._equity_at(100.0) if env._quantity > 0 else env._equity_at(0.0)
+        env._equity_at(100.0)
     env.close()
 
 
@@ -554,7 +556,7 @@ def test_drawdown_and_trailing_stops_cover_open_gap_and_intrabar_paths() -> None
     assert env._trailing_stop_price > first_stop
     bar[2] = 101.0
     env._update_trailing_stop_from_completed_bar(bar)
-    assert env._trailing_stop_price == pytest.approx(first_stop if bar[2] == 105.0 else 107.8)
+    assert env._trailing_stop_price == pytest.approx(107.8)
     env.close()
 
 
@@ -587,9 +589,9 @@ def test_opportunity_cost_holding_rewards_and_guidance_targets() -> None:
     assert env._causal_sma_guidance_action("SELL", 1.0, 2.0) == "SELL"
     assert env._causal_sma_guidance_action("BUY", 1.0, 2.0) is None
     assert env._causal_sma_guidance_action("BUY", 1.0, 1.0) is None
-    assert env._signal_guidance_reward_for_action("BUY", "BUY") == pytest.approx(
-        (0.0002, "BUY")
-    )
+    upward_reward = env._signal_guidance_reward_for_action("BUY", "BUY")
+    assert upward_reward[0] == pytest.approx(0.0002)
+    assert upward_reward[1] == "BUY"
     assert env._signal_guidance_reward_for_action("SELL", "SELL") == (0.0, None)
     env._record_signal_guidance_reward("SELL")
     assert env._signal_guidance_sell_reward_count == 1
@@ -603,9 +605,9 @@ def test_opportunity_cost_holding_rewards_and_guidance_targets() -> None:
     down._position_cost_basis = 100.0
     down._last_buy_index = 0
     assert down._guidance_target_index(float(down._market_data[25, 4])) == ACTION_SELL_25
-    assert down._signal_guidance_reward_for_action("SELL", "SELL") == pytest.approx(
-        (0.0002, "SELL")
-    )
+    downward_reward = down._signal_guidance_reward_for_action("SELL", "SELL")
+    assert downward_reward[0] == pytest.approx(0.0002)
+    assert downward_reward[1] == "SELL"
     down.close()
 
 
@@ -639,7 +641,7 @@ def test_realized_profit_early_exit_and_total_reward_validation() -> None:
 
     log_return, profitable_bonus, reward = env._calculate_step_reward(
         10_100.0, 10_000.0, 0.02, 0.01, 0.001, 0.0, 0.0, 0.0, 0.001,
-        0.0002, 0.0001, 0.002, 0.0, 0.0001, 2
+        0.0002, 0.0001, 0.002, 0.0, 2
     )
     assert log_return == pytest.approx(math.log(1.01))
     assert profitable_bonus == pytest.approx(2 * env.profitable_trade_bonus)
@@ -647,7 +649,7 @@ def test_realized_profit_early_exit_and_total_reward_validation() -> None:
     with pytest.raises(ValueError, match="reward_non_finite"):
         env._calculate_step_reward(
             float("nan"), 10_000.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-            0.0, 0.0, 0.0, 0.0, 0.0, 0
+            0.0, 0.0, 0.0, 0.0, 0
         )
     env.close()
 
