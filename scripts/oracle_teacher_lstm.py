@@ -11,7 +11,7 @@ import hashlib
 import importlib
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -325,7 +325,9 @@ def _predict_actions(
         outputs, _ = lstm(tensor)
         logits = classifier(outputs[:, -1, :])
         predictions = torch.argmax(logits, dim=1)
-    return predictions.detach().cpu().numpy().astype(np.int64, copy=False)
+    return cast(
+        NDArray[np.int64], predictions.detach().cpu().numpy().astype(np.int64, copy=False)
+    )
 
 
 def _train_lstm(
