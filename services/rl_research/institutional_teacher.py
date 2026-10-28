@@ -6,6 +6,8 @@ not a claim that institutional order flow can be recovered from OHLCV alone.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import numpy as np
 import pandas as pd
 from numpy.typing import NDArray
@@ -234,6 +236,20 @@ def _validate_teacher_configuration(
         raise ValueError("higher_timeframe_must_be_4h_1D_or_4h+1D")
 
 
+def _validate_positive_parameter(name: str, value: float, upper_bound: float) -> None:
+    if not np.isfinite(value):
+        raise ValueError("teacher_risk_parameters_must_be_finite")
+    if not 0 < value < upper_bound:
+        raise ValueError(f"{name}_out_of_range")
+
+
+def _validate_cost_parameter(name: str, value: float) -> None:
+    if not np.isfinite(value):
+        raise ValueError("teacher_risk_parameters_must_be_finite")
+    if value < 0 or value >= 10_000:
+        raise ValueError(f"{name}_out_of_range")
+
+
 def _validate_risk_configuration(
     atr_period: int,
     min_atr_cost_multiple: float,
@@ -245,32 +261,16 @@ def _validate_risk_configuration(
     slippage_bps_per_side: float,
 ) -> None:
     _validate_integer_parameter("atr_period", atr_period, 2)
-    values = np.asarray(
-        [
-            min_atr_cost_multiple,
-            take_profit_fraction,
-            stop_loss_fraction,
-            trailing_trigger_fraction,
-            trailing_distance_fraction,
-            fee_bps_per_side,
-            slippage_bps_per_side,
-        ],
-        dtype=np.float64,
-    )
-    if not np.isfinite(values).all():
-        raise ValueError("teacher_risk_parameters_must_be_finite")
-    if (
-        min_atr_cost_multiple <= 0
-        or not 0 < take_profit_fraction < 1
-        or not 0 < stop_loss_fraction < 1
-        or not 0 < trailing_trigger_fraction < 1
-        or not 0 < trailing_distance_fraction < 1
-        or fee_bps_per_side < 0
-        or slippage_bps_per_side < 0
-        or fee_bps_per_side >= 10_000
-        or slippage_bps_per_side >= 10_000
+    _validate_positive_parameter("min_atr_cost_multiple", min_atr_cost_multiple, np.inf)
+    for name, value in (
+        ("take_profit_fraction", take_profit_fraction),
+        ("stop_loss_fraction", stop_loss_fraction),
+        ("trailing_trigger_fraction", trailing_trigger_fraction),
+        ("trailing_distance_fraction", trailing_distance_fraction),
     ):
-        raise ValueError("teacher_risk_parameter_out_of_range")
+        _validate_positive_parameter(name, value, 1.0)
+    _validate_cost_parameter("fee_bps_per_side", fee_bps_per_side)
+    _validate_cost_parameter("slippage_bps_per_side", slippage_bps_per_side)
 
 
 def _select_timeframe_biases(
@@ -284,6 +284,139 @@ def _select_timeframe_biases(
         return bias_1d, bias_4h, bias_1d
     confluence = bias_4h.where(bias_4h == bias_1d, 0).astype(np.int8)
     return confluence, bias_4h, bias_1d
+
+
+@dataclass
+class _TeacherPositionState:
+    has_position: bool = False
+    entry_price: float = 0.0
+    entry_index: int = -1
+    stop_price: float = 0.0
+    target_price: float = 0.0
+    high_watermark: float = 0.0
+    active_stop_reason: str = "stop_loss"
+    last_change: int = -1
+
+
+def _record_teacher_exit(
+    index: int,
+    fill_price: float,
+    reason: str,
+    state: _TeacherPositionState,
+    actions: NDArray[np.int8],
+    exit_prices: FloatArray,
+    exit_reasons: list[str],
+) -> None:
+    actions[index] = ACTION_SELL
+    exit_prices[index] = fill_price
+    exit_reasons[index] = reason
+    state.has_position = False
+    state.last_change = index
+
+
+def _advance_trailing_stop(
+    high_price: float,
+    state: _TeacherPositionState,
+    trailing_trigger_fraction: float,
+    trailing_distance_fraction: float,
+    cost_recovery_fraction: float,
+) -> None:
+    state.high_watermark = max(state.high_watermark, high_price)
+    trigger_price = state.entry_price * (1.0 + trailing_trigger_fraction)
+    if state.high_watermark < trigger_price:
+        return
+    cost_adjusted_breakeven = state.entry_price * (1.0 + cost_recovery_fraction)
+    trailing_level = state.high_watermark * (1.0 - trailing_distance_fraction)
+    candidate_stop = max(cost_adjusted_breakeven, trailing_level)
+    if candidate_stop > state.stop_price + 1e-12:
+        state.stop_price = candidate_stop
+        state.active_stop_reason = "trailing_stop"
+
+
+def _check_teacher_protective_exit(
+    index: int,
+    opens: FloatArray,
+    highs: FloatArray,
+    lows: FloatArray,
+    state: _TeacherPositionState,
+    actions: NDArray[np.int8],
+    exit_prices: FloatArray,
+    exit_reasons: list[str],
+    trailing_trigger_fraction: float,
+    trailing_distance_fraction: float,
+    cost_recovery_fraction: float,
+) -> bool:
+    if not state.has_position or index <= state.entry_index:
+        return False
+    if lows[index] <= state.stop_price:
+        fill = min(opens[index], state.stop_price)
+        _record_teacher_exit(
+            index, fill, state.active_stop_reason, state, actions, exit_prices, exit_reasons
+        )
+        return True
+    if highs[index] >= state.target_price:
+        fill = max(opens[index], state.target_price)
+        _record_teacher_exit(
+            index, fill, "take_profit", state, actions, exit_prices, exit_reasons
+        )
+        return True
+    _advance_trailing_stop(
+        highs[index],
+        state,
+        trailing_trigger_fraction,
+        trailing_distance_fraction,
+        cost_recovery_fraction,
+    )
+    return False
+
+
+def _check_teacher_opposing_exit(
+    index: int,
+    sell_setup: bool,
+    close_price: float,
+    cooldown_candles: int,
+    state: _TeacherPositionState,
+    actions: NDArray[np.int8],
+    exit_prices: FloatArray,
+    exit_reasons: list[str],
+) -> bool:
+    if not state.has_position or not sell_setup:
+        return False
+    if index - state.last_change <= cooldown_candles:
+        return False
+    _record_teacher_exit(
+        index, close_price, "opposing_setup", state, actions, exit_prices, exit_reasons
+    )
+    return True
+
+
+def _try_open_teacher_position(
+    index: int,
+    buy_setup: bool,
+    atr_value: float,
+    close_price: float,
+    cooldown_candles: int,
+    min_atr_fraction: float,
+    take_profit_fraction: float,
+    stop_loss_fraction: float,
+    state: _TeacherPositionState,
+    actions: NDArray[np.int8],
+) -> None:
+    if state.has_position or not buy_setup:
+        return
+    if not np.isfinite(atr_value) or atr_value < min_atr_fraction:
+        return
+    if index - state.last_change <= cooldown_candles:
+        return
+    state.has_position = True
+    state.entry_price = close_price
+    state.entry_index = index
+    state.stop_price = close_price * (1.0 - stop_loss_fraction)
+    state.target_price = close_price * (1.0 + take_profit_fraction)
+    state.high_watermark = close_price
+    state.active_stop_reason = "stop_loss"
+    state.last_change = index
+    actions[index] = ACTION_BUY
 
 
 def _generate_teacher_actions(
@@ -311,7 +444,6 @@ def _generate_teacher_actions(
     count = len(frame)
     if not (len(buy_setup) == len(sell_setup) == len(atr_fraction) == count):
         raise ValueError("teacher_action_input_length_mismatch")
-
     actions = np.full(count, ACTION_HOLD, dtype=np.int8)
     positions = np.zeros(count, dtype=np.int8)
     exit_prices = np.full(count, np.nan, dtype=np.float64)
@@ -332,83 +464,47 @@ def _generate_teacher_actions(
     min_atr_fraction = (
         min_atr_cost_multiple * (fee_bps_per_side + slippage_bps_per_side) / 10_000.0
     )
-
-    has_position = False
-    entry_price = 0.0
-    entry_index = -1
-    stop_price = 0.0
-    target_price = 0.0
-    high_watermark = 0.0
-    active_stop_reason = "stop_loss"
-    last_change = -cooldown_candles - 1
+    state = _TeacherPositionState(last_change=-cooldown_candles - 1)
 
     for index in range(count):
-        did_exit = False
-
-        if has_position and index > entry_index:
-            # Stops were fixed from the previous completed candle. Stop takes
-            # precedence when both stop and target appear inside the same bar.
-            if lows[index] <= stop_price:
-                fill = min(opens[index], stop_price)
-                actions[index] = ACTION_SELL
-                exit_prices[index] = fill
-                exit_reasons[index] = active_stop_reason
-                has_position = False
-                last_change = index
-                did_exit = True
-            elif highs[index] >= target_price:
-                fill = max(opens[index], target_price)
-                actions[index] = ACTION_SELL
-                exit_prices[index] = fill
-                exit_reasons[index] = "take_profit"
-                has_position = False
-                last_change = index
-                did_exit = True
-            else:
-                high_watermark = max(high_watermark, highs[index])
-                if high_watermark >= entry_price * (1.0 + trailing_trigger_fraction):
-                    cost_adjusted_breakeven = entry_price * (
-                        1.0 + cost_recovery_fraction
-                    )
-                    trailing_level = high_watermark * (1.0 - trailing_distance_fraction)
-                    candidate_stop = max(cost_adjusted_breakeven, trailing_level)
-                    if candidate_stop > stop_price + 1e-12:
-                        stop_price = candidate_stop
-                        active_stop_reason = "trailing_stop"
-
-        if (
-            has_position
-            and not did_exit
-            and sells[index]
-            and index - last_change > cooldown_candles
-        ):
-            actions[index] = ACTION_SELL
-            exit_prices[index] = closes[index]
-            exit_reasons[index] = "opposing_setup"
-            has_position = False
-            last_change = index
-            did_exit = True
-
-        if (
-            not has_position
-            and not did_exit
-            and buys[index]
-            and np.isfinite(atr_values[index])
-            and atr_values[index] >= min_atr_fraction
-            and index - last_change > cooldown_candles
-        ):
-            actions[index] = ACTION_BUY
-            has_position = True
-            entry_price = closes[index]
-            entry_index = index
-            stop_price = entry_price * (1.0 - stop_loss_fraction)
-            target_price = entry_price * (1.0 + take_profit_fraction)
-            high_watermark = entry_price
-            active_stop_reason = "stop_loss"
-            last_change = index
-
-        positions[index] = 1 if has_position else 0
-
+        did_exit = _check_teacher_protective_exit(
+            index,
+            opens,
+            highs,
+            lows,
+            state,
+            actions,
+            exit_prices,
+            exit_reasons,
+            trailing_trigger_fraction,
+            trailing_distance_fraction,
+            cost_recovery_fraction,
+        )
+        if not did_exit:
+            did_exit = _check_teacher_opposing_exit(
+                index,
+                bool(sells[index]),
+                closes[index],
+                cooldown_candles,
+                state,
+                actions,
+                exit_prices,
+                exit_reasons,
+            )
+        if not did_exit:
+            _try_open_teacher_position(
+                index,
+                bool(buys[index]),
+                float(atr_values[index]),
+                closes[index],
+                cooldown_candles,
+                min_atr_fraction,
+                take_profit_fraction,
+                stop_loss_fraction,
+                state,
+                actions,
+            )
+        positions[index] = 1 if state.has_position else 0
     return actions, positions, exit_prices, exit_reasons
 
 
