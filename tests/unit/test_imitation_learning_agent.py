@@ -17,6 +17,7 @@ from scripts.run_imitation_learning_agent import (
     _cost_adjusted_risk_diagnostics,
     _execution_cost_counterfactual_diagnosis,
     _select_teacher_mode,
+    _teacher_entry_logic,
     _teacher_risk_parameters,
     _write_teacher_datasets,
     _weighted_cross_entropy_loss,
@@ -298,9 +299,20 @@ def test_all_teacher_modes_are_generated_and_saved_independently(
         assert (output_dir / f"teacher-dataset-{mode}-manifest.json").exists()
 
 
+def test_mean_reversion_entry_logic_reports_looser_thresholds() -> None:
+    logic = _teacher_entry_logic("mean_reversion")
+    assert logic["bollinger_period_candles"] == 20
+    assert logic["bollinger_standard_deviations"] == 1.5
+    assert logic["rsi_period_candles"] == 14
+    assert logic["rsi_buy_below"] == 35.0
+    assert logic["rsi_sell_above"] == 65.0
+    assert "RSI-14 < 35" in logic["buy_condition"]
+    assert "RSI-14 > 65" in logic["sell_condition"]
+
+
 def test_mean_reversion_risk_profile_uses_requested_levels_and_costs() -> None:
     risk = _teacher_risk_parameters("mean_reversion")
-    assert risk["take_profit_fraction"] == 0.02
+    assert risk["take_profit_fraction"] == 0.015
     assert risk["stop_loss_fraction"] == 0.01
     assert risk["trailing_trigger_fraction"] == 0.01
     assert risk["trailing_distance_fraction"] == 0.01
@@ -310,7 +322,7 @@ def test_mean_reversion_risk_profile_uses_requested_levels_and_costs() -> None:
     diagnostics = _cost_adjusted_risk_diagnostics(
         risk["take_profit_fraction"], risk["stop_loss_fraction"]
     )
-    assert diagnostics["take_profit_fraction"] == 0.02
+    assert diagnostics["take_profit_fraction"] == 0.015
     assert diagnostics["stop_loss_fraction"] == 0.01
     assert diagnostics["estimated_net_return_at_tp_without_gaps"] > 0.0
     assert diagnostics["estimated_net_return_at_sl_without_gaps"] < 0.0

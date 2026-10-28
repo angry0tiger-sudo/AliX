@@ -10,6 +10,11 @@ from services.rl_research.institutional_teacher import (
     ACTION_BUY,
     ACTION_HOLD,
     ACTION_SELL,
+    DEFAULT_MEAN_REVERSION_BOLLINGER_PERIOD,
+    DEFAULT_MEAN_REVERSION_BOLLINGER_STDDEV,
+    DEFAULT_MEAN_REVERSION_RSI_BUY_BELOW,
+    DEFAULT_MEAN_REVERSION_RSI_PERIOD,
+    DEFAULT_MEAN_REVERSION_RSI_SELL_ABOVE,
     DEFAULT_MIN_ATR_COST_MULTIPLE,
     DEFAULT_STOP_LOSS_FRACTION,
     DEFAULT_TAKE_PROFIT_FRACTION,
@@ -327,6 +332,14 @@ def test_breakout_setups_use_only_prior_donchian_channel() -> None:
         assert not bool(sell_setup.iloc[:20].any())
         assert bool(buy_setup.iloc[-1]) is expected_buy
         assert bool(sell_setup.iloc[-1]) is expected_sell
+
+
+def test_mean_reversion_defaults_use_looser_bands_and_rsi_thresholds() -> None:
+    assert DEFAULT_MEAN_REVERSION_BOLLINGER_PERIOD == 20
+    assert DEFAULT_MEAN_REVERSION_BOLLINGER_STDDEV == 1.5
+    assert DEFAULT_MEAN_REVERSION_RSI_PERIOD == 14
+    assert DEFAULT_MEAN_REVERSION_RSI_BUY_BELOW == 35.0
+    assert DEFAULT_MEAN_REVERSION_RSI_SELL_ABOVE == 65.0
 
 
 def test_mean_reversion_setups_require_bollinger_touch_and_rsi_extreme() -> None:

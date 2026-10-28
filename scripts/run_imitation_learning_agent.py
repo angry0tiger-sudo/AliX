@@ -19,6 +19,11 @@ from services.rl_research.institutional_teacher import (
     ACTION_SELL,
     DEFAULT_ATR_PERIOD,
     DEFAULT_FEE_BPS_PER_SIDE,
+    DEFAULT_MEAN_REVERSION_BOLLINGER_PERIOD,
+    DEFAULT_MEAN_REVERSION_BOLLINGER_STDDEV,
+    DEFAULT_MEAN_REVERSION_RSI_BUY_BELOW,
+    DEFAULT_MEAN_REVERSION_RSI_PERIOD,
+    DEFAULT_MEAN_REVERSION_RSI_SELL_ABOVE,
     DEFAULT_MIN_ATR_COST_MULTIPLE,
     DEFAULT_SLIPPAGE_BPS_PER_SIDE,
     DEFAULT_STOP_LOSS_FRACTION,
@@ -551,13 +556,22 @@ def _teacher_entry_logic(entry_mode: str) -> dict[str, Any]:
     if entry_mode == "mean_reversion":
         return {
             "strategy": "bollinger_rsi_mean_reversion",
-            "buy_condition": "low touches or crosses lower Bollinger band and RSI-14 < 30",
-            "sell_condition": "high touches or crosses upper Bollinger band and RSI-14 > 70; Spot long is closed, never shorted",
-            "bollinger_period_candles": 20,
-            "bollinger_standard_deviations": 2.0,
-            "rsi_period_candles": 14,
-            "rsi_buy_below": 30.0,
-            "rsi_sell_above": 70.0,
+            "buy_condition": (
+                f"low touches or crosses lower Bollinger band and RSI-"
+                f"{DEFAULT_MEAN_REVERSION_RSI_PERIOD} < "
+                f"{DEFAULT_MEAN_REVERSION_RSI_BUY_BELOW:g}"
+            ),
+            "sell_condition": (
+                f"high touches or crosses upper Bollinger band and RSI-"
+                f"{DEFAULT_MEAN_REVERSION_RSI_PERIOD} > "
+                f"{DEFAULT_MEAN_REVERSION_RSI_SELL_ABOVE:g}; "
+                "Spot long is closed, never shorted"
+            ),
+            "bollinger_period_candles": DEFAULT_MEAN_REVERSION_BOLLINGER_PERIOD,
+            "bollinger_standard_deviations": DEFAULT_MEAN_REVERSION_BOLLINGER_STDDEV,
+            "rsi_period_candles": DEFAULT_MEAN_REVERSION_RSI_PERIOD,
+            "rsi_buy_below": DEFAULT_MEAN_REVERSION_RSI_BUY_BELOW,
+            "rsi_sell_above": DEFAULT_MEAN_REVERSION_RSI_SELL_ABOVE,
             "signals_use_completed_candles_only": True,
             "positioning": "Spot long/flat; SELL closes an existing long only",
         }
@@ -580,7 +594,7 @@ def _teacher_entry_logic(entry_mode: str) -> dict[str, Any]:
 
 def _teacher_risk_parameters(entry_mode: str = "institutional") -> dict[str, Any]:
     if entry_mode == "mean_reversion":
-        take_profit_fraction = 0.02
+        take_profit_fraction = 0.015
         stop_loss_fraction = 0.01
         trailing_trigger_fraction = 0.01
         # At +1% high-watermark, this distance leaves the stop at cost-adjusted breakeven.

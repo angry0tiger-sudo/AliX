@@ -26,6 +26,11 @@ DEFAULT_TAKE_PROFIT_FRACTION = 0.025
 DEFAULT_STOP_LOSS_FRACTION = 0.015
 DEFAULT_TRAILING_TRIGGER_FRACTION = 0.01
 DEFAULT_TRAILING_DISTANCE_FRACTION = 0.005
+DEFAULT_MEAN_REVERSION_BOLLINGER_PERIOD = 20
+DEFAULT_MEAN_REVERSION_BOLLINGER_STDDEV = 1.5
+DEFAULT_MEAN_REVERSION_RSI_PERIOD = 14
+DEFAULT_MEAN_REVERSION_RSI_BUY_BELOW = 35.0
+DEFAULT_MEAN_REVERSION_RSI_SELL_ABOVE = 65.0
 
 
 def _validate_timestamps(values: pd.Series) -> pd.Series:
@@ -211,9 +216,9 @@ def _trend_pullback_setups(
 def _mean_reversion_setups(
     frame: pd.DataFrame,
     *,
-    bollinger_period: int = 20,
-    bollinger_stddev: float = 2.0,
-    rsi_period: int = 14,
+    bollinger_period: int = DEFAULT_MEAN_REVERSION_BOLLINGER_PERIOD,
+    bollinger_stddev: float = DEFAULT_MEAN_REVERSION_BOLLINGER_STDDEV,
+    rsi_period: int = DEFAULT_MEAN_REVERSION_RSI_PERIOD,
 ) -> tuple[pd.Series, pd.Series]:
     """Use completed-candle Bollinger touches confirmed by Wilder-style RSI."""
     close = frame["close"].astype(np.float64)
@@ -239,8 +244,12 @@ def _mean_reversion_setups(
     rsi = rsi.mask((average_loss == 0.0) & (average_gain > 0.0), 100.0)
     rsi = rsi.mask((average_gain == 0.0) & (average_loss == 0.0), 50.0)
 
-    buy_setup = (frame["low"] <= lower_band) & (rsi < 30.0)
-    sell_setup = (frame["high"] >= upper_band) & (rsi > 70.0)
+    buy_setup = (frame["low"] <= lower_band) & (
+        rsi < DEFAULT_MEAN_REVERSION_RSI_BUY_BELOW
+    )
+    sell_setup = (frame["high"] >= upper_band) & (
+        rsi > DEFAULT_MEAN_REVERSION_RSI_SELL_ABOVE
+    )
     return buy_setup.fillna(False), sell_setup.fillna(False)
 
 

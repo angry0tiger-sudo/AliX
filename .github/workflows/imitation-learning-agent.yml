@@ -167,7 +167,7 @@ jobs:
           assert cost_diagnostics == teacher_backtest["modes"][diagnostic_mode]["cost_adjusted_risk_diagnostics"]
           assert teacher_backtest["gate"]["minimum_profit_factor"] == 1.5
           for mode, result in teacher_backtest["modes"].items():
-              expected_tp = 0.02 if mode == "mean_reversion" else 0.025
+              expected_tp = 0.015 if mode == "mean_reversion" else 0.025
               expected_sl = 0.01 if mode == "mean_reversion" else 0.015
               assert result["parameters"]["take_profit_fraction"] == expected_tp
               assert result["parameters"]["stop_loss_fraction"] == expected_sl
@@ -184,10 +184,10 @@ jobs:
           assert "prior 20 candles" in breakout_logic["buy_condition"]
           mean_reversion_logic = teacher_backtest["modes"]["mean_reversion"]["entry_logic"]
           assert mean_reversion_logic["bollinger_period_candles"] == 20
-          assert mean_reversion_logic["bollinger_standard_deviations"] == 2.0
+          assert mean_reversion_logic["bollinger_standard_deviations"] == 1.5
           assert mean_reversion_logic["rsi_period_candles"] == 14
-          assert mean_reversion_logic["rsi_buy_below"] == 30.0
-          assert mean_reversion_logic["rsi_sell_above"] == 70.0
+          assert mean_reversion_logic["rsi_buy_below"] == 35.0
+          assert mean_reversion_logic["rsi_sell_above"] == 65.0
           assert teacher_backtest["parameters"]["minimum_atr_fraction"] == 0.0045
           assert teacher_backtest["gate"]["passed"] is True
           for partition in ("validation", "holdout"):
