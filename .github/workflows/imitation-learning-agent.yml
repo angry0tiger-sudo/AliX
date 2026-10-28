@@ -164,6 +164,10 @@ jobs:
           assert risk_parameters["take_profit_fraction"] == 0.025
           assert risk_parameters["stop_loss_fraction"] == 0.015
           assert risk_parameters["minimum_atr_fraction"] == 0.0045
+          assert teacher_backtest["gate"]["minimum_profit_factor"] == 1.5
+          cost_diagnostics = teacher_backtest["cost_adjusted_risk_diagnostics"]
+          assert 0.0157 < cost_diagnostics["estimated_net_return_at_tp_without_gaps"] < 0.016
+          assert -0.024 < cost_diagnostics["estimated_net_return_at_sl_without_gaps"] < -0.023
           assert teacher_backtest["gate"]["passed"] is True
           for partition in ("validation", "holdout"):
               economics = teacher_backtest[partition]["economics"]
