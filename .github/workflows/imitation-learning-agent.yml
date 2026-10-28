@@ -151,7 +151,15 @@ jobs:
           assert teacher_backtest["entry_mode"] == teacher_backtest["selected_mode"]
           assert report["teacher"]["entry_mode"] == teacher_backtest["selected_mode"]
           assert teacher_manifest["teacher_entry_mode"] == teacher_backtest["selected_mode"]
+          assert teacher_manifest["selected_for_training"] is True
+          assert set(teacher_backtest["gate"]["mode_gate_results"]) == {"institutional", "trend_pullback"}
+          for mode, result in teacher_backtest["modes"].items():
+              assert result["entry_mode"] == mode
           assert teacher_backtest["modes"][teacher_backtest["selected_mode"]]["gate"]["passed"] is True
+          break_even_win_rate = teacher_backtest["cost_adjusted_risk_diagnostics"][
+              "break_even_win_rate_fraction_without_gaps"
+          ]
+          assert 0.60 < break_even_win_rate < 0.61
           risk_parameters = teacher_backtest["parameters"]
           assert risk_parameters["take_profit_fraction"] == 0.025
           assert risk_parameters["stop_loss_fraction"] == 0.015
@@ -200,6 +208,7 @@ jobs:
               "minimum_teacher_trade_signal_count": teacher_backtest["gate"]["minimum_trade_signal_count"],
               "teacher_backtest_gate": teacher_backtest["gate"],
               "teacher_backtest_modes": teacher_backtest["modes"],
+              "cost_adjusted_risk_diagnostics": teacher_backtest["cost_adjusted_risk_diagnostics"],
               "teacher_backtest_validation": teacher_backtest["validation"]["economics"],
               "teacher_backtest_holdout": teacher_backtest["holdout"]["economics"],
               "class_weighting": report["model"]["class_weighting"],
