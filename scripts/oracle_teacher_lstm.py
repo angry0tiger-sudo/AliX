@@ -717,7 +717,9 @@ def run_training(
             "stop_loss_fraction": float(stop_loss_fraction),
             "tie_policy": "SELL_STOP_FIRST_CONSERVATIVE",
             "valid_target_count": int(np.count_nonzero(label_valid)),
-            "invalid_target_count": int(len(label_valid) - np.count_nonzero(label_valid)),
+            "invalid_target_count": int(
+                len(label_valid) - np.count_nonzero(label_valid)
+            ),
             "action_distribution": action_distribution(label_actions[label_valid]),
             "train_action_distribution": action_distribution(prepared["train_labels"]),
             "validation_action_distribution": action_distribution(
