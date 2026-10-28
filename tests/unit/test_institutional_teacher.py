@@ -201,9 +201,7 @@ def test_atr_fraction_is_causal_and_uses_true_range() -> None:
     changed = data.copy()
     changed.loc[60:, ["open", "high", "low", "close"]] *= 2.0
     rerun = _average_true_range_fraction(changed, period=14)
-    pd.testing.assert_series_equal(
-        atr.loc[:59], rerun.loc[:59], check_names=False
-    )
+    pd.testing.assert_series_equal(atr.loc[:59], rerun.loc[:59], check_names=False)
     assert atr.iloc[:13].isna().all()
     assert np.isfinite(atr.iloc[13:]).all()
 
@@ -236,9 +234,7 @@ def test_low_atr_blocks_new_teacher_entries() -> None:
 def test_trailing_stop_protects_cost_adjusted_breakeven() -> None:
     data = pd.DataFrame(
         {
-            "timestamp": pd.date_range(
-                "2025-01-01", periods=4, freq="h", tz="UTC"
-            ),
+            "timestamp": pd.date_range("2025-01-01", periods=4, freq="h", tz="UTC"),
             "open": [100.0, 100.0, 101.0, 101.0],
             "high": [100.0, 101.2, 101.3, 101.2],
             "low": [100.0, 99.9, 100.8, 100.5],
@@ -276,8 +272,4 @@ def test_teacher_defaults_match_daily_opportunity_profile() -> None:
     assert DEFAULT_TAKE_PROFIT_FRACTION == 0.015
     assert DEFAULT_STOP_LOSS_FRACTION == 0.0075
     assert DEFAULT_MIN_ATR_COST_MULTIPLE == 1.0
-    assert (
-        DEFAULT_MIN_ATR_COST_MULTIPLE
-        * (25.0 + 20.0)
-        / 10_000.0
-    ) == 0.0045
+    assert (DEFAULT_MIN_ATR_COST_MULTIPLE * (25.0 + 20.0) / 10_000.0) == 0.0045
