@@ -268,8 +268,8 @@ def test_trailing_stop_protects_cost_adjusted_breakeven() -> None:
 
 
 def test_teacher_defaults_match_daily_opportunity_profile() -> None:
-    assert DEFAULT_TAKE_PROFIT_FRACTION == 0.015
-    assert DEFAULT_STOP_LOSS_FRACTION == 0.0075
+    assert DEFAULT_TAKE_PROFIT_FRACTION == 0.025
+    assert DEFAULT_STOP_LOSS_FRACTION == 0.015
     assert DEFAULT_MIN_ATR_COST_MULTIPLE == 1.0
     assert (DEFAULT_MIN_ATR_COST_MULTIPLE * (25.0 + 20.0) / 10_000.0) == 0.0045
 
