@@ -10,6 +10,9 @@ from services.rl_research.institutional_teacher import (
     ACTION_BUY,
     ACTION_HOLD,
     ACTION_SELL,
+    DEFAULT_MIN_ATR_COST_MULTIPLE,
+    DEFAULT_STOP_LOSS_FRACTION,
+    DEFAULT_TAKE_PROFIT_FRACTION,
     _average_true_range_fraction,
     _generate_teacher_actions,
     _smc_features,
@@ -217,9 +220,9 @@ def test_low_atr_blocks_new_teacher_entries() -> None:
         sell_setup,
         low_atr,
         cooldown_candles=2,
-        min_atr_cost_multiple=2.0,
-        take_profit_fraction=0.025,
-        stop_loss_fraction=0.0125,
+        min_atr_cost_multiple=DEFAULT_MIN_ATR_COST_MULTIPLE,
+        take_profit_fraction=DEFAULT_TAKE_PROFIT_FRACTION,
+        stop_loss_fraction=DEFAULT_STOP_LOSS_FRACTION,
         trailing_trigger_fraction=0.01,
         trailing_distance_fraction=0.005,
         fee_bps_per_side=25.0,
@@ -253,9 +256,9 @@ def test_trailing_stop_protects_cost_adjusted_breakeven() -> None:
         sell_setup,
         atr_fraction,
         cooldown_candles=2,
-        min_atr_cost_multiple=2.0,
-        take_profit_fraction=0.025,
-        stop_loss_fraction=0.0125,
+        min_atr_cost_multiple=DEFAULT_MIN_ATR_COST_MULTIPLE,
+        take_profit_fraction=DEFAULT_TAKE_PROFIT_FRACTION,
+        stop_loss_fraction=DEFAULT_STOP_LOSS_FRACTION,
         trailing_trigger_fraction=0.01,
         trailing_distance_fraction=0.005,
         fee_bps_per_side=25.0,
@@ -266,3 +269,15 @@ def test_trailing_stop_protects_cost_adjusted_breakeven() -> None:
     assert positions.tolist() == [1, 1, 0, 0]
     assert exit_reasons[2] == "trailing_stop"
     assert exit_prices[2] > 100.0
+
+
+
+def test_teacher_defaults_match_daily_opportunity_profile() -> None:
+    assert DEFAULT_TAKE_PROFIT_FRACTION == 0.015
+    assert DEFAULT_STOP_LOSS_FRACTION == 0.0075
+    assert DEFAULT_MIN_ATR_COST_MULTIPLE == 1.0
+    assert (
+        DEFAULT_MIN_ATR_COST_MULTIPLE
+        * (25.0 + 20.0)
+        / 10_000.0
+    ) == 0.0045
