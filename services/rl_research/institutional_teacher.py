@@ -17,11 +17,11 @@ ACTION_SELL = 2
 _REQUIRED_COLUMNS = ("timestamp", "open", "high", "low", "close", "volume")
 
 DEFAULT_ATR_PERIOD = 14
-DEFAULT_MIN_ATR_COST_MULTIPLE = 2.0
+DEFAULT_MIN_ATR_COST_MULTIPLE = 1.0
 DEFAULT_FEE_BPS_PER_SIDE = 25.0
 DEFAULT_SLIPPAGE_BPS_PER_SIDE = 20.0
-DEFAULT_TAKE_PROFIT_FRACTION = 0.025
-DEFAULT_STOP_LOSS_FRACTION = 0.0125
+DEFAULT_TAKE_PROFIT_FRACTION = 0.015
+DEFAULT_STOP_LOSS_FRACTION = 0.0075
 DEFAULT_TRAILING_TRIGGER_FRACTION = 0.01
 DEFAULT_TRAILING_DISTANCE_FRACTION = 0.005
 
@@ -314,7 +314,6 @@ def _generate_teacher_actions(
     has_position = False
     entry_price = 0.0
     entry_index = -1
-    hard_stop = 0.0
     stop_price = 0.0
     target_price = 0.0
     high_watermark = 0.0
@@ -386,8 +385,7 @@ def _generate_teacher_actions(
             has_position = True
             entry_price = closes[index]
             entry_index = index
-            hard_stop = entry_price * (1.0 - stop_loss_fraction)
-            stop_price = hard_stop
+            stop_price = entry_price * (1.0 - stop_loss_fraction)
             target_price = entry_price * (1.0 + take_profit_fraction)
             high_watermark = entry_price
             active_stop_reason = "stop_loss"
