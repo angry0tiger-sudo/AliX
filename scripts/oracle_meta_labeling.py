@@ -8,11 +8,9 @@ import json
 from pathlib import Path
 from typing import Any, cast
 
-import joblib
 import numpy as np
 import pandas as pd
 from numpy.typing import NDArray
-from sklearn.ensemble import RandomForestClassifier
 
 from scripts.oracle_teacher_lstm import (
     ACTION_BUY,
@@ -297,12 +295,13 @@ def _fit_meta_model(
     target_labels: IntArray,
     *,
     seed: int,
-) -> RandomForestClassifier:
+) -> Any:
     if len(features) < 20 or len(np.unique(target_labels)) != 2:
         raise ValueError("meta_train_requires_at_least_20_buy_signals_and_both_classes")
     if len(features) != len(target_labels):
         raise ValueError("meta_train_target_alignment_invalid")
-    model = RandomForestClassifier(
+    sklearn_ensemble: Any = importlib.import_module("sklearn.ensemble")
+    model = sklearn_ensemble.RandomForestClassifier(
         n_estimators=250,
         max_depth=5,
         min_samples_leaf=8,
@@ -318,7 +317,7 @@ def _fit_meta_model(
 
 
 def _predict_profit_probability(
-    model: RandomForestClassifier, features: Float32Array
+    model: Any, features: Float32Array
 ) -> FloatArray:
     if len(features) == 0:
         return np.empty(0, dtype=np.float64)
@@ -330,7 +329,7 @@ def _predict_profit_probability(
         or np.any(probabilities > 1.0)
     ):
         raise ValueError("meta_probability_out_of_bounds")
-    return probabilities
+    return cast(FloatArray, probabilities)
 
 
 def _binary_metrics(truth: IntArray, predictions: IntArray) -> dict[str, Any]:
@@ -624,38 +623,6 @@ def _binary_report_for_buy_positions(
     }
 
 
-def _binary_metrics(truth: IntArray, predictions: IntArray) -> dict[str, Any]:
-    if len(truth) != len(predictions) or len(truth) == 0:
-        return {"sample_count": int(len(truth)), "macro_f1": None}
-    tp = int(np.sum((truth == 1) & (predictions == 1)))
-    fp = int(np.sum((truth == 0) & (predictions == 1)))
-    fn = int(np.sum((truth == 1) & (predictions == 0)))
-    tn = int(np.sum((truth == 0) & (predictions == 0)))
-    precision = tp / max(1, tp + fp)
-    recall = tp / max(1, tp + fn)
-    f1_pos = (
-        2 * precision * recall / (precision + recall) if precision + recall else 0.0
-    )
-    neg_precision = tn / max(1, tn + fn)
-    neg_recall = tn / max(1, tn + fp)
-    f1_neg = (
-        2 * neg_precision * neg_recall / (neg_precision + neg_recall)
-        if neg_precision + neg_recall
-        else 0.0
-    )
-    return {
-        "sample_count": len(truth),
-        "accuracy": float((tp + tn) / len(truth)),
-        "precision_profitable": float(precision),
-        "recall_profitable": float(recall),
-        "macro_f1": float((f1_pos + f1_neg) / 2.0),
-        "true_positive": tp,
-        "false_positive": fp,
-        "false_negative": fn,
-        "true_negative": tn,
-    }
-
-
 def _validate_safety(report: dict[str, Any]) -> None:
     expected = {
         "Champion": None,
@@ -907,7 +874,8 @@ def run_meta_labeling(
         model_path,
     )
     meta_path = output_dir / "meta-profitability-random-forest.joblib"
-    joblib.dump(model, meta_path)
+    joblib_module: Any = importlib.import_module("joblib")
+    joblib_module.dump(model, meta_path)
     _write_json(
         output_dir / "meta-feature-scaler.json",
         {
