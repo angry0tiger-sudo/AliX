@@ -521,11 +521,32 @@ def _validate_training_parameters(epochs: int, window: int) -> None:
         raise ValueError("sequence_window_out_of_range")
 
 
+def _teacher_risk_parameters() -> dict[str, Any]:
+    return {
+        "atr_period_candles": DEFAULT_ATR_PERIOD,
+        "atr_cost_multiple": DEFAULT_MIN_ATR_COST_MULTIPLE,
+        "minimum_atr_fraction": (
+            DEFAULT_MIN_ATR_COST_MULTIPLE
+            * (DEFAULT_FEE_BPS_PER_SIDE + DEFAULT_SLIPPAGE_BPS_PER_SIDE)
+            / 10_000.0
+        ),
+        "take_profit_fraction": DEFAULT_TAKE_PROFIT_FRACTION,
+        "stop_loss_fraction": DEFAULT_STOP_LOSS_FRACTION,
+        "trailing_trigger_fraction": DEFAULT_TRAILING_TRIGGER_FRACTION,
+        "trailing_distance_fraction": DEFAULT_TRAILING_DISTANCE_FRACTION,
+        "trailing_breakeven_includes_round_trip_costs": True,
+        "stop_target_same_candle_policy": "stop_first_conservative",
+        "fee_bps_per_side": DEFAULT_FEE_BPS_PER_SIDE,
+        "slippage_bps_per_side": DEFAULT_SLIPPAGE_BPS_PER_SIDE,
+    }
+
+
 def _write_teacher_dataset(
     frame: pd.DataFrame,
     source_manifest: dict[str, Any],
     output_dir: Path,
     commit_sha: str,
+    entry_mode: str,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     teacher_config: dict[str, Any] = {
         "higher_timeframe": "4h",
@@ -534,22 +555,8 @@ def _write_teacher_dataset(
         "volume_window": 24,
         "cooldown_candles": 2,
     }
-    entry_mode = "institutional"
     teacher = generate_teacher_labels(frame, entry_mode=entry_mode, **teacher_config)
-    initial_distribution = action_distribution(
-        teacher["teacher_action"].to_numpy(dtype=np.int64)
-    )
-    initial_signal_count = int(initial_distribution["BUY"]["count"]) + int(
-        initial_distribution["SELL"]["count"]
-    )
-    if initial_signal_count < _MIN_TEACHER_TRADE_SIGNAL_COUNT:
-        # Keep the density target fixed; loosen only the entry definition, then
-        # subject the resulting labels to the same independent economic gates.
-        entry_mode = "trend_pullback"
-        teacher = generate_teacher_labels(
-            frame, entry_mode=entry_mode, **teacher_config
-        )
-    teacher_path = output_dir / "teacher-dataset.csv"
+    teacher_path = output_dir / f"teacher-dataset-{entry_mode}.csv"
     teacher.to_csv(teacher_path, index=False)
     teacher_manifest: dict[str, Any] = {
         "schema_version": "alix.imitation-teacher-dataset.v1",
@@ -557,27 +564,13 @@ def _write_teacher_dataset(
         "source_provider": source_manifest["provider"],
         "source_csv_sha256": source_manifest["csv_sha256"],
         "teacher_csv_sha256": hashlib.sha256(teacher_path.read_bytes()).hexdigest(),
+        "teacher_csv_file": teacher_path.name,
+        "selected_for_training": False,
         "row_count": int(len(teacher)),
         "teacher_timeframe_mode": "4h_completed_candles",
         "teacher_entry_mode": entry_mode,
         "minimum_teacher_trade_signal_count": _MIN_TEACHER_TRADE_SIGNAL_COUNT,
-        "teacher_risk_management": {
-            "atr_period_candles": DEFAULT_ATR_PERIOD,
-            "atr_cost_multiple": DEFAULT_MIN_ATR_COST_MULTIPLE,
-            "minimum_atr_fraction": (
-                DEFAULT_MIN_ATR_COST_MULTIPLE
-                * (DEFAULT_FEE_BPS_PER_SIDE + DEFAULT_SLIPPAGE_BPS_PER_SIDE)
-                / 10_000.0
-            ),
-            "take_profit_fraction": DEFAULT_TAKE_PROFIT_FRACTION,
-            "stop_loss_fraction": DEFAULT_STOP_LOSS_FRACTION,
-            "trailing_trigger_fraction": DEFAULT_TRAILING_TRIGGER_FRACTION,
-            "trailing_distance_fraction": DEFAULT_TRAILING_DISTANCE_FRACTION,
-            "trailing_breakeven_includes_round_trip_costs": True,
-            "stop_target_same_candle_policy": "stop_first_conservative",
-            "fee_bps_per_side": DEFAULT_FEE_BPS_PER_SIDE,
-            "slippage_bps_per_side": DEFAULT_SLIPPAGE_BPS_PER_SIDE,
-        },
+        "teacher_risk_management": _teacher_risk_parameters(),
         "teacher_action_distribution": action_distribution(
             teacher["teacher_action"].to_numpy(dtype=np.int64)
         ),
@@ -590,12 +583,184 @@ def _write_teacher_dataset(
         "order_permission": False,
         "trading_authorization": "NO-GO",
     }
-    manifest_path = output_dir / "teacher-dataset-manifest.json"
+    manifest_path = output_dir / f"teacher-dataset-{entry_mode}-manifest.json"
     manifest_path.write_text(
         json.dumps(teacher_manifest, indent=2, sort_keys=True, allow_nan=False) + "\n",
         encoding="utf-8",
     )
     return teacher, teacher_manifest
+
+
+def _write_teacher_datasets(
+    frame: pd.DataFrame,
+    source_manifest: dict[str, Any],
+    output_dir: Path,
+    commit_sha: str,
+) -> dict[str, tuple[pd.DataFrame, dict[str, Any]]]:
+    modes = ("institutional", "trend_pullback")
+    return {
+        mode: _write_teacher_dataset(
+            frame, source_manifest, output_dir, commit_sha, mode
+        )
+        for mode in modes
+    }
+
+
+def _publish_selected_teacher_dataset(
+    output_dir: Path,
+    entry_mode: str,
+    teacher: pd.DataFrame,
+    candidate_manifest: dict[str, Any],
+) -> dict[str, Any]:
+    candidate_path = output_dir / f"teacher-dataset-{entry_mode}.csv"
+    selected_path = output_dir / "teacher-dataset.csv"
+    selected_path.write_bytes(candidate_path.read_bytes())
+    selected_manifest = dict(candidate_manifest)
+    selected_manifest.update(
+        {
+            "teacher_csv_sha256": hashlib.sha256(selected_path.read_bytes()).hexdigest(),
+            "teacher_csv_file": selected_path.name,
+            "selected_for_training": True,
+        }
+    )
+    manifest_path = output_dir / "teacher-dataset-manifest.json"
+    manifest_path.write_text(
+        json.dumps(selected_manifest, indent=2, sort_keys=True, allow_nan=False) + "\n",
+        encoding="utf-8",
+    )
+    return selected_manifest
+
+
+def _evaluate_teacher_mode(
+    frame: pd.DataFrame,
+    teacher: pd.DataFrame,
+    teacher_manifest: dict[str, Any],
+    train_end: int,
+    validation_end: int,
+) -> dict[str, Any]:
+    row_count = len(frame)
+    validation_economics = _simulate_teacher_segment(
+        frame, teacher, train_end, validation_end
+    )
+    holdout_economics = _simulate_teacher_segment(
+        frame, teacher, validation_end, row_count
+    )
+    distribution = teacher_manifest["teacher_action_distribution"]
+    return {
+        "entry_mode": teacher_manifest["teacher_entry_mode"],
+        "teacher_csv_sha256": teacher_manifest["teacher_csv_sha256"],
+        "action_distribution": distribution,
+        "validation": {
+            "row_start_inclusive": train_end,
+            "row_end_exclusive": validation_end,
+            "economics": validation_economics,
+        },
+        "holdout": {
+            "row_start_inclusive": validation_end,
+            "row_end_exclusive": row_count,
+            "economics": holdout_economics,
+        },
+        "gate": _teacher_backtest_gate(
+            validation_economics, holdout_economics, distribution
+        ),
+    }
+
+
+def _select_teacher_mode(mode_results: dict[str, dict[str, Any]]) -> str | None:
+    passing_modes = [
+        mode for mode, result in mode_results.items() if result["gate"]["passed"]
+    ]
+    if not passing_modes:
+        return None
+    return max(
+        passing_modes,
+        key=lambda mode: float(
+            mode_results[mode]["validation"]["economics"]["profit_factor"]
+        ),
+    )
+
+
+def _validation_profit_factor(mode_result: dict[str, Any]) -> float:
+    value = mode_result["validation"]["economics"].get("profit_factor")
+    if not isinstance(value, (int, float)) or not np.isfinite(value):
+        return float("-inf")
+    return float(value)
+
+
+def _build_teacher_backtest_report(
+    commit_sha: str,
+    source_manifest: dict[str, Any],
+    mode_results: dict[str, dict[str, Any]],
+    selected_mode: str | None,
+) -> dict[str, Any]:
+    diagnostic_mode = selected_mode or max(
+        mode_results, key=lambda mode: _validation_profit_factor(mode_results[mode])
+    )
+    diagnostic = mode_results[diagnostic_mode]
+    passing_modes = [
+        mode for mode, result in mode_results.items() if result["gate"]["passed"]
+    ]
+    if selected_mode is not None:
+        gate = dict(mode_results[selected_mode]["gate"])
+    else:
+        gate = {
+            "minimum_profit_factor": 1.5,
+            "minimum_trade_signal_count": _MIN_TEACHER_TRADE_SIGNAL_COUNT,
+            "teacher_trade_signal_count": int(
+                diagnostic["gate"]["teacher_trade_signal_count"]
+            ),
+            "validation_passed": False,
+            "holdout_passed": False,
+            "signal_density_passed": False,
+            "passed": False,
+            "lstm_training_allowed": False,
+        }
+    gate["passing_modes"] = passing_modes
+    gate["mode_gate_results"] = {
+        mode: result["gate"] for mode, result in mode_results.items()
+    }
+    return {
+        "schema_version": "alix.teacher-backtest-report.v2",
+        "commit_sha": commit_sha,
+        "source_csv_sha256": source_manifest["csv_sha256"],
+        "strategy": "ATR-filtered 4h-bias entries with TP/SL and trailing stop",
+        "entry_mode": selected_mode,
+        "selected_mode": selected_mode,
+        "diagnostic_mode_by_validation_pf": diagnostic_mode,
+        "selection_policy": (
+            "Evaluate both modes independently. Train only a mode that passes "
+            "the unchanged validation PF, holdout PF, and 800-signal gates; "
+            "if both pass, maximize validation PF and keep holdout as a gate."
+        ),
+        "parameters": _teacher_risk_parameters(),
+        "action_distribution": diagnostic["action_distribution"],
+        "teacher_csv_sha256": diagnostic["teacher_csv_sha256"],
+        "modes": mode_results,
+        "validation": diagnostic["validation"],
+        "holdout": diagnostic["holdout"],
+        "gate": gate,
+        "safety": {
+            "Champion": None,
+            "order_permission": False,
+            "trading_authorization": "NO-GO",
+            "real_order_attempts": 0,
+            "exchange_calls": 0,
+            "private_api_calls": 0,
+            "execution_api_implemented": False,
+        },
+    }
+
+
+def _write_teacher_backtest_report(
+    output_dir: Path, report: dict[str, Any]
+) -> None:
+    report_path = output_dir / "teacher-backtest-report.json"
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True, allow_nan=False) + "\n",
+        encoding="utf-8",
+    )
+    print(json.dumps({"teacher_backtest": report}, indent=2, sort_keys=True, allow_nan=False))
+
 
 
 def _validate_split_boundaries(
@@ -999,71 +1164,33 @@ def run_training(
         dataset_path, manifest_path, commit_sha
     )
     output_dir.mkdir(parents=True, exist_ok=True)
-    teacher, teacher_manifest = _write_teacher_dataset(
+    teacher_candidates = _write_teacher_datasets(
         frame, source_manifest, output_dir, commit_sha
     )
 
     row_count = len(frame)
     train_end = int(row_count * 0.70)
     validation_end = int(row_count * 0.85)
-    validation_teacher_economics = _simulate_teacher_segment(
-        frame, teacher, train_end, validation_end
-    )
-    holdout_teacher_economics = _simulate_teacher_segment(
-        frame, teacher, validation_end, row_count
-    )
-    teacher_gate = _teacher_backtest_gate(
-        validation_teacher_economics,
-        holdout_teacher_economics,
-        teacher_manifest["teacher_action_distribution"],
-    )
-    teacher_backtest: dict[str, Any] = {
-        "schema_version": "alix.teacher-backtest-report.v1",
-        "commit_sha": commit_sha,
-        "source_csv_sha256": source_manifest["csv_sha256"],
-        "teacher_csv_sha256": teacher_manifest["teacher_csv_sha256"],
-        "strategy": "ATR-filtered 4h-bias entries with TP/SL and trailing stop",
-        "entry_mode": teacher_manifest["teacher_entry_mode"],
-        "parameters": teacher_manifest["teacher_risk_management"],
-        "action_distribution": teacher_manifest["teacher_action_distribution"],
-        "validation": {
-            "row_start_inclusive": train_end,
-            "row_end_exclusive": validation_end,
-            "economics": validation_teacher_economics,
-        },
-        "holdout": {
-            "row_start_inclusive": validation_end,
-            "row_end_exclusive": row_count,
-            "economics": holdout_teacher_economics,
-        },
-        "gate": teacher_gate,
-        "safety": {
-            "Champion": None,
-            "order_permission": False,
-            "trading_authorization": "NO-GO",
-            "real_order_attempts": 0,
-            "exchange_calls": 0,
-            "private_api_calls": 0,
-            "execution_api_implemented": False,
-        },
+    mode_backtests = {
+        mode: _evaluate_teacher_mode(
+            frame, teacher, manifest, train_end, validation_end
+        )
+        for mode, (teacher, manifest) in teacher_candidates.items()
     }
-    teacher_backtest_path = output_dir / "teacher-backtest-report.json"
-    teacher_backtest_path.write_text(
-        json.dumps(teacher_backtest, indent=2, sort_keys=True, allow_nan=False) + "\n",
-        encoding="utf-8",
+    selected_mode = _select_teacher_mode(mode_backtests)
+    teacher_backtest = _build_teacher_backtest_report(
+        commit_sha, source_manifest, mode_backtests, selected_mode
     )
-    print(
-        json.dumps(
-            {"teacher_backtest": teacher_backtest},
-            indent=2,
-            sort_keys=True,
-            allow_nan=False,
-        )
-    )
-    if not teacher_gate["passed"]:
+    _write_teacher_backtest_report(output_dir, teacher_backtest)
+    if selected_mode is None:
         raise RuntimeError(
-            "teacher_economic_or_signal_density_gate_failed_lstm_training_blocked"
+            "no_teacher_mode_passed_validation_holdout_pf_and_signal_density_gates_lstm_training_blocked"
         )
+
+    teacher, candidate_manifest = teacher_candidates[selected_mode]
+    teacher_manifest = _publish_selected_teacher_dataset(
+        output_dir, selected_mode, teacher, candidate_manifest
+    )
 
     # Only prepare model sequences and instantiate/train the LSTM after the
     # independent validation and untouched holdout both clear the economic gate.
