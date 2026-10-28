@@ -470,14 +470,20 @@ def _simulate_teacher_segment(
         min_atr_cost_multiple=float(active_risk_parameters["atr_cost_multiple"]),
         take_profit_fraction=float(active_risk_parameters["take_profit_fraction"]),
         stop_loss_fraction=float(active_risk_parameters["stop_loss_fraction"]),
-        trailing_trigger_fraction=float(active_risk_parameters["trailing_trigger_fraction"]),
-        trailing_distance_fraction=float(active_risk_parameters["trailing_distance_fraction"]),
+        trailing_trigger_fraction=float(
+            active_risk_parameters["trailing_trigger_fraction"]
+        ),
+        trailing_distance_fraction=float(
+            active_risk_parameters["trailing_distance_fraction"]
+        ),
         fee_bps_per_side=float(active_risk_parameters["fee_bps_per_side"]),
         slippage_bps_per_side=float(active_risk_parameters["slippage_bps_per_side"]),
     )
     close_prices = segment["close"].to_numpy(dtype=np.float64)
     fee_bps = (
-        float(active_risk_parameters["fee_bps_per_side"]) if include_execution_costs else 0.0
+        float(active_risk_parameters["fee_bps_per_side"])
+        if include_execution_costs
+        else 0.0
     )
     slippage_bps = (
         float(active_risk_parameters["slippage_bps_per_side"])
@@ -491,8 +497,6 @@ def _simulate_teacher_segment(
         fee_bps_per_side=fee_bps,
         slippage_bps_per_side=slippage_bps,
     )
-
-
 
 
 def _purged_walk_forward_splits(
@@ -522,11 +526,7 @@ def _purged_walk_forward_splits(
     if not (initial_train_end < cv_region_end < validation_start < holdout_start):
         raise ValueError("purged_walk_forward_boundaries_invalid")
 
-    available = (
-        cv_region_end
-        - initial_train_end
-        - embargo_candles * (n_splits - 1)
-    )
+    available = cv_region_end - initial_train_end - embargo_candles * (n_splits - 1)
     test_width = available // n_splits
     if test_width < 24:
         raise ValueError("purged_walk_forward_test_window_too_short")
@@ -547,9 +547,7 @@ def _purged_walk_forward_splits(
                 "purge_end_exclusive": test_start,
                 "test_start_inclusive": test_start,
                 "test_end_exclusive": test_end,
-                "embargo_end_exclusive": min(
-                    cv_region_end, test_end + embargo_candles
-                ),
+                "embargo_end_exclusive": min(cv_region_end, test_end + embargo_candles),
             }
         )
         test_start = test_end + embargo_candles
@@ -615,9 +613,10 @@ def _teacher_trial_score(
         raw_pf = economics.get("profit_factor")
         if isinstance(raw_pf, (int, float)) and np.isfinite(raw_pf):
             profit_factors.append(min(float(raw_pf), 5.0))
-        elif int(economics.get("closed_trade_count", 0)) > 0 and float(
-            economics.get("gross_profit", 0.0)
-        ) > 0.0:
+        elif (
+            int(economics.get("closed_trade_count", 0)) > 0
+            and float(economics.get("gross_profit", 0.0)) > 0.0
+        ):
             profit_factors.append(5.0)
         else:
             profit_factors.append(0.0)
@@ -635,15 +634,11 @@ def _teacher_trial_score(
     median_pf = float(np.median(profit_factors))
     pf_dispersion = float(np.std(profit_factors))
     worst_drawdown = max(drawdowns)
-    penalty_over_15 = 5.0 * max(
-        0.0, worst_drawdown - _MAX_TEACHER_DRAWDOWN_FRACTION
-    )
+    penalty_over_15 = 5.0 * max(0.0, worst_drawdown - _MAX_TEACHER_DRAWDOWN_FRACTION)
     penalty_over_20 = 10.0 * max(
         0.0, worst_drawdown - _MAX_OPTIMIZATION_DRAWDOWN_FRACTION
     )
-    low_activity_penalty = 0.05 * undertraded_folds + 0.005 * max(
-        0, 100 - signal_count
-    )
+    low_activity_penalty = 0.05 * undertraded_folds + 0.005 * max(0, 100 - signal_count)
     score = (
         median_pf
         - 0.15 * pf_dispersion
@@ -716,9 +711,7 @@ def _optimize_teacher_parameters(
             rsi_period=int(parameters["rsi_period_candles"]),
             rsi_buy_below=float(parameters["rsi_buy_below"]),
             rsi_sell_above=float(parameters["rsi_sell_above"]),
-            breakout_donchian_lookback=int(
-                parameters["donchian_lookback_candles"]
-            ),
+            breakout_donchian_lookback=int(parameters["donchian_lookback_candles"]),
         )
         fold_results: list[dict[str, Any]] = []
         for fold in folds:
@@ -1983,7 +1976,9 @@ def main() -> int:
     parser.add_argument("--commit-sha", required=True)
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--window", type=int, default=48)
-    parser.add_argument("--optimization-trials", type=int, default=_DEFAULT_OPTUNA_TRIALS)
+    parser.add_argument(
+        "--optimization-trials", type=int, default=_DEFAULT_OPTUNA_TRIALS
+    )
     parser.add_argument("--optimization-seed", type=int, default=_DEFAULT_OPTUNA_SEED)
     args = parser.parse_args()
     run_training(

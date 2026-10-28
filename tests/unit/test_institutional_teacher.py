@@ -410,8 +410,6 @@ def test_mean_reversion_setups_require_bollinger_touch_and_rsi_extreme() -> None
     assert bool(sell_setup.iloc[-1])
 
 
-
-
 def test_mean_reversion_search_parameters_are_applied_and_validated() -> None:
     flat_close = np.full(39, 100.0, dtype=np.float64)
     close = np.concatenate((flat_close, np.asarray([80.0])))

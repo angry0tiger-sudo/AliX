@@ -375,9 +375,7 @@ def test_teacher_economic_gate_fails_closed_on_excessive_or_missing_drawdown() -
     assert missing_drawdown["lstm_training_allowed"] is False
 
 
-
-
-def test_purged_walk_forward_folds_are_forward_only_and_leave_validation_holdout() -> None:
+def test_purged_wfv_splits_are_forward_and_exclude_holdout() -> None:
     row_count = 10_000
     folds = _purged_walk_forward_splits(row_count)
 
@@ -421,7 +419,7 @@ def test_optuna_objective_penalizes_drawdown_above_thresholds() -> None:
     assert low_diagnostics["additional_drawdown_penalty_above_20_percent"] == 0.0
 
 
-def test_optimized_parameter_normalization_preserves_mode_specific_search_space() -> None:
+def test_optuna_parameters_are_normalized_by_mode() -> None:
     parameters = _teacher_parameter_config(
         "mean_reversion",
         {
