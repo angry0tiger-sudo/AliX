@@ -282,9 +282,7 @@ def _generate_teacher_actions(
     conservatively because OHLC data cannot reveal intrabar path ordering.
     """
     count = len(frame)
-    if not (
-        len(buy_setup) == len(sell_setup) == len(atr_fraction) == count
-    ):
+    if not (len(buy_setup) == len(sell_setup) == len(atr_fraction) == count):
         raise ValueError("teacher_action_input_length_mismatch")
 
     actions = np.full(count, ACTION_HOLD, dtype=np.int8)
@@ -301,14 +299,11 @@ def _generate_teacher_actions(
 
     fee_rate = fee_bps_per_side / 10_000.0
     slippage_rate = slippage_bps_per_side / 10_000.0
-    cost_recovery_fraction = (
-        (1.0 + slippage_rate) * (1.0 + fee_rate)
-        / ((1.0 - slippage_rate) * (1.0 - fee_rate))
-        - 1.0
-    )
+    cost_recovery_fraction = (1.0 + slippage_rate) * (1.0 + fee_rate) / (
+        (1.0 - slippage_rate) * (1.0 - fee_rate)
+    ) - 1.0
     min_atr_fraction = (
-        min_atr_cost_multiple * (fee_bps_per_side + slippage_bps_per_side)
-        / 10_000.0
+        min_atr_cost_multiple * (fee_bps_per_side + slippage_bps_per_side) / 10_000.0
     )
 
     has_position = False
@@ -344,18 +339,12 @@ def _generate_teacher_actions(
                 did_exit = True
             else:
                 high_watermark = max(high_watermark, highs[index])
-                if high_watermark >= entry_price * (
-                    1.0 + trailing_trigger_fraction
-                ):
+                if high_watermark >= entry_price * (1.0 + trailing_trigger_fraction):
                     cost_adjusted_breakeven = entry_price * (
                         1.0 + cost_recovery_fraction
                     )
-                    trailing_level = high_watermark * (
-                        1.0 - trailing_distance_fraction
-                    )
-                    candidate_stop = max(
-                        cost_adjusted_breakeven, trailing_level
-                    )
+                    trailing_level = high_watermark * (1.0 - trailing_distance_fraction)
+                    candidate_stop = max(cost_adjusted_breakeven, trailing_level)
                     if candidate_stop > stop_price + 1e-12:
                         stop_price = candidate_stop
                         active_stop_reason = "trailing_stop"
@@ -460,9 +449,7 @@ def generate_teacher_labels(
         slippage_bps_per_side,
     )
     frame = _validate_ohlcv(data)
-    bias, bias_4h, bias_1d = _select_timeframe_biases(
-        frame, higher_timeframe, ema_span
-    )
+    bias, bias_4h, bias_1d = _select_timeframe_biases(frame, higher_timeframe, ema_span)
     (
         bullish_structure,
         bearish_structure,
