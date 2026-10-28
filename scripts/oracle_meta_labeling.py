@@ -965,8 +965,8 @@ def run_meta_labeling(
     economic_gate = _build_economic_gate(
         validation_economics,
         holdout_economics,
-        np.concatenate([val_gated, hold_gated]),
-        np.empty(0, dtype=np.int64),
+        val_gated,
+        hold_gated,
     )
 
     output_dir.mkdir(parents=True, exist_ok=True)
