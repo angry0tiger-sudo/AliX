@@ -144,6 +144,7 @@ jobs:
           assert market_manifest["commit_sha"] == os.environ["GITHUB_SHA"]
           teacher_backtest = report["teacher_backtest"]
           assert teacher_backtest["commit_sha"] == os.environ["GITHUB_SHA"]
+          assert teacher_backtest["gate"]["minimum_trade_signal_count"] == 800
           assert teacher_backtest["gate"]["passed"] is True
           for partition in ("validation", "holdout"):
               economics = teacher_backtest[partition]["economics"]
