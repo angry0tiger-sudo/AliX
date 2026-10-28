@@ -4,10 +4,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from scripts.oracle_teacher_lstm import ACTION_BUY, ACTION_HOLD, ACTION_SELL
+
 from scripts.oracle_meta_labeling import (
-    ACTION_BUY,
-    ACTION_HOLD,
-    ACTION_SELL,
     _binary_metrics,
     _chronological_boundaries,
     _gap_exit,
