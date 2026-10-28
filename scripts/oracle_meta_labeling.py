@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import importlib
 import json
 from pathlib import Path
@@ -43,6 +42,8 @@ _EPOCHS = 20
 _SEED = 20261028
 _FEE_BPS = 25.0
 _SLIPPAGE_BPS = 20.0
+_FEE_BPS_PER_SIDE = _FEE_BPS
+_SLIPPAGE_BPS_PER_SIDE = _SLIPPAGE_BPS
 _ROUND_TRIP_COST = 2.0 * (_FEE_BPS + _SLIPPAGE_BPS) / 10_000.0
 _MINIMUM_PF = 1.5
 _MAXIMUM_DD = 0.15
@@ -735,8 +736,6 @@ def run_meta_labeling(
 
     validation_positions = np.flatnonzero(masks["validation"])
     holdout_positions = np.flatnonzero(masks["holdout"])
-    validation_rows = target_indices[validation_positions]
-    holdout_rows = target_indices[holdout_positions]
     threshold, threshold_candidates, threshold_reason = _choose_threshold(
         frame, row_actions, row_meta_probabilities,
         start=boundaries["meta_train_end"], end=boundaries["validation_end"],
