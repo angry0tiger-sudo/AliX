@@ -412,7 +412,7 @@ def test_teacher_economic_gate_fails_closed_on_excessive_or_missing_drawdown() -
     assert missing_drawdown["lstm_training_allowed"] is False
 
 
-def test_economic_simulation_uses_protective_exit_fill_price() -> None
+def test_economic_simulation_uses_protective_exit_fill_price() -> None:
     actions = np.asarray([ACTION_BUY, ACTION_HOLD, ACTION_SELL], dtype=np.int64)
     close = np.asarray([100.0, 101.0, 98.0], dtype=np.float64)
     protective_exit = np.asarray([np.nan, np.nan, 100.9], dtype=np.float64)
