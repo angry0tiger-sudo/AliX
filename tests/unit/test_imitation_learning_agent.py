@@ -208,18 +208,22 @@ def test_teacher_economic_gate_requires_profitability_and_signal_density() -> No
         "SELL": {"count": 20},
     }
 
-    assert _teacher_backtest_gate(
-        passing, passing, sufficient_signals
-    )["passed"] is True
-    assert _teacher_backtest_gate(
-        passing, failing, sufficient_signals
-    )["passed"] is False
-    assert _teacher_backtest_gate(
-        passing, passing, sparse_signals
-    )["lstm_training_allowed"] is False
-    assert _teacher_backtest_gate(
-        {"profit_factor": None}, passing, sufficient_signals
-    )["lstm_training_allowed"] is False
+    assert (
+        _teacher_backtest_gate(passing, passing, sufficient_signals)["passed"] is True
+    )
+    assert (
+        _teacher_backtest_gate(passing, failing, sufficient_signals)["passed"] is False
+    )
+    assert (
+        _teacher_backtest_gate(passing, passing, sparse_signals)["lstm_training_allowed"]
+        is False
+    )
+    assert (
+        _teacher_backtest_gate({"profit_factor": None}, passing, sufficient_signals)[
+            "lstm_training_allowed"
+        ]
+        is False
+    )
 
 
 def test_economic_simulation_uses_protective_exit_fill_price() -> None:
