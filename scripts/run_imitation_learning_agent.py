@@ -436,7 +436,7 @@ def _teacher_backtest_gate(
     holdout_economics: dict[str, Any],
     teacher_action_distribution: dict[str, Any],
     minimum_profit_factor: float = 1.5,
-    minimum_trade_signal_count: int = 100,
+    minimum_trade_signal_count: int = 800,
 ) -> dict[str, Any]:
     def passes(economics: dict[str, Any]) -> bool:
         profit_factor = economics.get("profit_factor")
