@@ -174,8 +174,11 @@ def _fit_base_lstm(
         drop_last=False,
     )
     lstm = torch.nn.LSTM(
-        input_size=feature_count, hidden_size=64, num_layers=2,
-        batch_first=True, dropout=0.15,
+        input_size=feature_count,
+        hidden_size=64,
+        num_layers=2,
+        batch_first=True,
+        dropout=0.15,
     )
     classifier = torch.nn.Linear(64, 3)
     optimizer = torch.optim.Adam(
@@ -207,9 +210,7 @@ def _fit_base_lstm(
             )
             optimizer.step()
         completed_epochs = epoch + 1
-        validation_probs = _predict_probabilities(
-            torch, lstm, classifier, x_validation
-        )
+        validation_probs = _predict_probabilities(torch, lstm, classifier, x_validation)
         validation_predictions = validation_probs.argmax(axis=1).astype(np.int64)
         score = float(
             classification_metrics(y_validation, validation_predictions)["macro_f1"]
@@ -341,12 +342,15 @@ def _binary_metrics(truth: IntArray, predictions: IntArray) -> dict[str, Any]:
     tn = int(np.sum((truth == 0) & (predictions == 0)))
     precision = tp / max(1, tp + fp)
     recall = tp / max(1, tp + fn)
-    f1_positive = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+    f1_positive = (
+        2 * precision * recall / (precision + recall) if precision + recall else 0.0
+    )
     neg_precision = tn / max(1, tn + fn)
     neg_recall = tn / max(1, tn + fp)
     f1_negative = (
         2 * neg_precision * neg_recall / (neg_precision + neg_recall)
-        if neg_precision + neg_recall else 0.0
+        if neg_precision + neg_recall
+        else 0.0
     )
     return {
         "sample_count": len(truth),
@@ -372,7 +376,9 @@ def _open_position(index: int, price: float, equity: float) -> dict[str, float |
     }
 
 
-def _gap_exit(price: float, position: dict[str, float | int]) -> tuple[str, float] | None:
+def _gap_exit(
+    price: float, position: dict[str, float | int]
+) -> tuple[str, float] | None:
     entry = float(position["entry_price"])
     if price <= entry * (1.0 - _STOP_LOSS):
         return "GAP_STOP", price
@@ -400,10 +406,7 @@ def _close_position(
     position: dict[str, float | int], price: float, reason: str, index: int
 ) -> tuple[float, dict[str, Any]]:
     fill = price * (1.0 - _SLIPPAGE_BPS_PER_SIDE / 10_000.0)
-    proceeds = (
-        float(position["quantity"]) * fill
-        * (1.0 - _FEE_BPS_PER_SIDE / 10_000.0)
-    )
+    proceeds = float(position["quantity"]) * fill * (1.0 - _FEE_BPS_PER_SIDE / 10_000.0)
     start_equity = float(position["entry_equity"])
     pnl = proceeds - start_equity
     return proceeds, {
@@ -422,7 +425,8 @@ def _mark_to_market(
         return cash
     liquidation_price = close * (1.0 - _SLIPPAGE_BPS_PER_SIDE / 10_000.0)
     return (
-        float(position["quantity"]) * liquidation_price
+        float(position["quantity"])
+        * liquidation_price
         * (1.0 - _FEE_BPS_PER_SIDE / 10_000.0)
     )
 
@@ -457,7 +461,9 @@ def _simulate_long_flat(
 
     for index in range(start, end):
         if position is not None and pending_exit:
-            cash, trade = _close_position(position, float(opens[index]), "LSTM_SELL_EXIT", index)
+            cash, trade = _close_position(
+                position, float(opens[index]), "LSTM_SELL_EXIT", index
+            )
             trades.append(trade)
             position = None
             pending_exit = False
@@ -508,7 +514,9 @@ def _simulate_long_flat(
     drawdowns = np.divide(
         peaks - equity_curve, peaks, out=np.zeros_like(equity_curve), where=peaks > 0
     )
-    pnls = np.asarray([trade["net_pnl_equity_units"] for trade in trades], dtype=np.float64)
+    pnls = np.asarray(
+        [trade["net_pnl_equity_units"] for trade in trades], dtype=np.float64
+    )
     gross_profit = float(pnls[pnls > 0].sum()) if np.any(pnls > 0) else 0.0
     gross_loss = float(-pnls[pnls < 0].sum()) if np.any(pnls < 0) else 0.0
     pf = gross_profit / gross_loss if gross_loss > 0 else None
@@ -516,7 +524,9 @@ def _simulate_long_flat(
         "net_return_fraction": float(cash - 1.0),
         "max_drawdown_fraction": float(drawdowns.max(initial=0.0)),
         "profit_factor": pf,
-        "profit_factor_status": "defined" if pf is not None else "undefined_without_losses",
+        "profit_factor_status": "defined"
+        if pf is not None
+        else "undefined_without_losses",
         "closed_trade_count": len(trades),
         "winning_trade_count": int(np.count_nonzero(pnls > 0)),
         "losing_trade_count": int(np.count_nonzero(pnls < 0)),
@@ -546,8 +556,12 @@ def _choose_threshold(
     eligible: list[tuple[float, float, float, float]] = []
     for threshold in _THRESHOLDS:
         metrics = _simulate_long_flat(
-            frame, actions, profit_probabilities,
-            threshold=threshold, start=start, end=end,
+            frame,
+            actions,
+            profit_probabilities,
+            threshold=threshold,
+            start=start,
+            end=end,
         )
         candidates.append({"threshold": threshold, **metrics})
         if metrics["closed_trade_count"] >= 5:
@@ -556,8 +570,12 @@ def _choose_threshold(
             excess_dd = max(0.0, float(metrics["max_drawdown_fraction"]) - _MAXIMUM_DD)
             score = capped_pf + float(metrics["net_return_fraction"]) - 5.0 * excess_dd
             eligible.append(
-                (score, float(metrics["net_return_fraction"]),
-                 -float(metrics["max_drawdown_fraction"]), threshold)
+                (
+                    score,
+                    float(metrics["net_return_fraction"]),
+                    -float(metrics["max_drawdown_fraction"]),
+                    threshold,
+                )
             )
     if not eligible:
         return 0.50, candidates, "no_threshold_reached_5_closed_trades;default_0.50"
@@ -615,12 +633,15 @@ def _binary_metrics(truth: IntArray, predictions: IntArray) -> dict[str, Any]:
     tn = int(np.sum((truth == 0) & (predictions == 0)))
     precision = tp / max(1, tp + fp)
     recall = tp / max(1, tp + fn)
-    f1_pos = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+    f1_pos = (
+        2 * precision * recall / (precision + recall) if precision + recall else 0.0
+    )
     neg_precision = tn / max(1, tn + fn)
     neg_recall = tn / max(1, tn + fp)
     f1_neg = (
         2 * neg_precision * neg_recall / (neg_precision + neg_recall)
-        if neg_precision + neg_recall else 0.0
+        if neg_precision + neg_recall
+        else 0.0
     )
     return {
         "sample_count": len(truth),
@@ -680,8 +701,10 @@ def run_meta_labeling(
     count = len(frame)
     boundaries = _chronological_boundaries(count)
     labels = generate_oracle_labels(
-        frame, horizon=horizon,
-        take_profit_fraction=take_profit, stop_loss_fraction=stop_loss,
+        frame,
+        horizon=horizon,
+        take_profit_fraction=take_profit,
+        stop_loss_fraction=stop_loss,
     )
     raw_features, feature_names = build_causal_features(frame)
     normalized, scaler_mean, scaler_scale = _standardize_from_training(
@@ -697,9 +720,14 @@ def run_meta_labeling(
 
     torch: Any = importlib.import_module("torch")
     base = _fit_base_lstm(
-        torch, sequences, sequence_labels.astype(np.int64, copy=False),
-        masks["base_train"], masks["base_validation"],
-        feature_count=int(raw_features.shape[1]), epochs=epochs, seed=seed,
+        torch,
+        sequences,
+        sequence_labels.astype(np.int64, copy=False),
+        masks["base_train"],
+        masks["base_validation"],
+        feature_count=int(raw_features.shape[1]),
+        epochs=epochs,
+        seed=seed,
     )
     probabilities = _predict_probabilities(
         torch, base["lstm"], base["classifier"], sequences
@@ -737,17 +765,29 @@ def run_meta_labeling(
     validation_positions = np.flatnonzero(masks["validation"])
     holdout_positions = np.flatnonzero(masks["holdout"])
     threshold, threshold_candidates, threshold_reason = _choose_threshold(
-        frame, row_actions, row_meta_probabilities,
-        start=boundaries["meta_train_end"], end=boundaries["validation_end"],
+        frame,
+        row_actions,
+        row_meta_probabilities,
+        start=boundaries["meta_train_end"],
+        end=boundaries["validation_end"],
     )
     validation_economics = _simulate_long_flat(
-        frame, row_actions, row_meta_probabilities, threshold=threshold,
-        start=boundaries["meta_train_end"], end=boundaries["validation_end"],
+        frame,
+        row_actions,
+        row_meta_probabilities,
+        threshold=threshold,
+        start=boundaries["meta_train_end"],
+        end=boundaries["validation_end"],
         horizon=horizon,
     )
     holdout_economics = _simulate_long_flat(
-        frame, row_actions, row_meta_probabilities, threshold=threshold,
-        start=boundaries["validation_end"], end=count, horizon=horizon,
+        frame,
+        row_actions,
+        row_meta_probabilities,
+        threshold=threshold,
+        start=boundaries["validation_end"],
+        end=count,
+        horizon=horizon,
     )
     raw_gated_actions = base_actions.copy()
     reject_buys = (base_actions == ACTION_BUY) & (meta_probabilities < threshold)
@@ -758,8 +798,12 @@ def run_meta_labeling(
     hold_base = base_actions[masks["holdout"]]
     hold_gated = raw_gated_actions[masks["holdout"]]
     hold_truth = sequence_labels[masks["holdout"]].astype(np.int64)
-    val_actions_report = _partition_classification_report(val_truth, val_base, val_gated)
-    hold_actions_report = _partition_classification_report(hold_truth, hold_base, hold_gated)
+    val_actions_report = _partition_classification_report(
+        val_truth, val_base, val_gated
+    )
+    hold_actions_report = _partition_classification_report(
+        hold_truth, hold_base, hold_gated
+    )
     val_meta_report = _binary_report_for_buy_positions(
         validation_positions, base_actions, meta_probabilities, targets, threshold
     )
@@ -777,8 +821,10 @@ def run_meta_labeling(
     hold_pf = holdout_economics["profit_factor"]
     economic_gate = {
         "passed": bool(
-            val_pf is not None and hold_pf is not None
-            and float(val_pf) > _MINIMUM_PF and float(hold_pf) > _MINIMUM_PF
+            val_pf is not None
+            and hold_pf is not None
+            and float(val_pf) > _MINIMUM_PF
+            and float(hold_pf) > _MINIMUM_PF
             and validation_economics["max_drawdown_fraction"] <= _MAXIMUM_DD
             and holdout_economics["max_drawdown_fraction"] <= _MAXIMUM_DD
             and oos_signal_count > _MINIMUM_OOS_SIGNALS
@@ -788,69 +834,90 @@ def run_meta_labeling(
         "maximum_allowed_drawdown_fraction": _MAXIMUM_DD,
         "minimum_oos_signal_count": _MINIMUM_OOS_SIGNALS,
         "oos_signal_count": oos_signal_count,
-        "validation_profit_factor_passed": val_pf is not None and float(val_pf) > _MINIMUM_PF,
-        "holdout_profit_factor_passed": hold_pf is not None and float(hold_pf) > _MINIMUM_PF,
-        "validation_drawdown_passed": validation_economics["max_drawdown_fraction"] <= _MAXIMUM_DD,
-        "holdout_drawdown_passed": holdout_economics["max_drawdown_fraction"] <= _MAXIMUM_DD,
+        "validation_profit_factor_passed": val_pf is not None
+        and float(val_pf) > _MINIMUM_PF,
+        "holdout_profit_factor_passed": hold_pf is not None
+        and float(hold_pf) > _MINIMUM_PF,
+        "validation_drawdown_passed": validation_economics["max_drawdown_fraction"]
+        <= _MAXIMUM_DD,
+        "holdout_drawdown_passed": holdout_economics["max_drawdown_fraction"]
+        <= _MAXIMUM_DD,
         "signal_count_passed": oos_signal_count > _MINIMUM_OOS_SIGNALS,
     }
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    labels_out = pd.DataFrame({
-        "timestamp": frame["timestamp"].astype(str),
-        "oracle_action": labels["oracle_action"].to_numpy(dtype=np.int64),
-        "oracle_action_name": [_ACTION_NAMES[int(v)] for v in labels["oracle_action"]],
-        "barrier_outcome": labels["barrier_outcome"].astype(str),
-        "entry_price": labels["entry_price"].to_numpy(dtype=np.float64),
-        "label_valid": labels["label_valid"].to_numpy(dtype=bool),
-        "profitable_after_costs": targets_by_row,
-        "estimated_forward_net_return_fraction": returns_by_row,
-    })
+    labels_out = pd.DataFrame(
+        {
+            "timestamp": frame["timestamp"].astype(str),
+            "oracle_action": labels["oracle_action"].to_numpy(dtype=np.int64),
+            "oracle_action_name": [
+                _ACTION_NAMES[int(v)] for v in labels["oracle_action"]
+            ],
+            "barrier_outcome": labels["barrier_outcome"].astype(str),
+            "entry_price": labels["entry_price"].to_numpy(dtype=np.float64),
+            "label_valid": labels["label_valid"].to_numpy(dtype=bool),
+            "profitable_after_costs": targets_by_row,
+            "estimated_forward_net_return_fraction": returns_by_row,
+        }
+    )
     labels_out.to_csv(output_dir / "oracle-meta-label-targets.csv", index=False)
     training_csv = pd.DataFrame(meta_train_features, columns=meta_feature_names)
     training_csv["profitable_after_costs"] = meta_train_targets
     training_csv["source_row"] = target_indices[meta_train_positions]
     training_csv.to_csv(output_dir / "meta-training-dataset.csv", index=False)
 
-    sequence_report = pd.DataFrame({
-        "row_index": target_indices,
-        "timestamp": frame["timestamp"].iloc[target_indices].astype(str).to_numpy(),
-        "base_lstm_probability_buy": probabilities[:, 1],
-        "base_lstm_probability_sell": probabilities[:, 2],
-        "base_lstm_probability_hold": probabilities[:, 0],
-        "base_lstm_action": [_ACTION_NAMES[int(v)] for v in base_actions],
-        "meta_profit_probability": meta_probabilities,
-        "meta_filtered_action": [_ACTION_NAMES[int(v)] for v in raw_gated_actions],
-        "partition": [
-            next((name for name in _PARTITIONS if masks[name][pos]), "purged_or_warmup")
-            for pos in range(len(target_indices))
-        ],
-        "profitable_after_costs_target": targets,
-        "forward_net_return_fraction": sequence_returns,
-    })
-    sequence_report.to_csv(output_dir / "meta-out-of-sample-predictions.csv", index=False)
+    sequence_report = pd.DataFrame(
+        {
+            "row_index": target_indices,
+            "timestamp": frame["timestamp"].iloc[target_indices].astype(str).to_numpy(),
+            "base_lstm_probability_buy": probabilities[:, 1],
+            "base_lstm_probability_sell": probabilities[:, 2],
+            "base_lstm_probability_hold": probabilities[:, 0],
+            "base_lstm_action": [_ACTION_NAMES[int(v)] for v in base_actions],
+            "meta_profit_probability": meta_probabilities,
+            "meta_filtered_action": [_ACTION_NAMES[int(v)] for v in raw_gated_actions],
+            "partition": [
+                next(
+                    (name for name in _PARTITIONS if masks[name][pos]),
+                    "purged_or_warmup",
+                )
+                for pos in range(len(target_indices))
+            ],
+            "profitable_after_costs_target": targets,
+            "forward_net_return_fraction": sequence_returns,
+        }
+    )
+    sequence_report.to_csv(
+        output_dir / "meta-out-of-sample-predictions.csv", index=False
+    )
 
     model_path = output_dir / "oracle-meta-lstm-state.pt"
-    torch.save({
-        "architecture": "two-layer LSTM plus linear 3-class head",
-        "lstm_state_dict": base["lstm"].state_dict(),
-        "classifier_state_dict": base["classifier"].state_dict(),
-        "input_features": feature_names,
-        "window_candles": int(window),
-        "hidden_size": int(base["hidden_size"]),
-        "action_map": _ACTION_NAMES,
-        "trained_only_before_meta_partition": True,
-        "training_commit_sha": commit_sha,
-    }, model_path)
+    torch.save(
+        {
+            "architecture": "two-layer LSTM plus linear 3-class head",
+            "lstm_state_dict": base["lstm"].state_dict(),
+            "classifier_state_dict": base["classifier"].state_dict(),
+            "input_features": feature_names,
+            "window_candles": int(window),
+            "hidden_size": int(base["hidden_size"]),
+            "action_map": _ACTION_NAMES,
+            "trained_only_before_meta_partition": True,
+            "training_commit_sha": commit_sha,
+        },
+        model_path,
+    )
     meta_path = output_dir / "meta-profitability-random-forest.joblib"
     joblib.dump(model, meta_path)
-    _write_json(output_dir / "meta-feature-scaler.json", {
-        "feature_names": feature_names,
-        "mean": [float(v) for v in scaler_mean],
-        "scale": [float(v) for v in scaler_scale],
-        "fit_rows": int(boundaries["base_train_end"]),
-        "fit_policy": "base_lstm_training_partition_only",
-    })
+    _write_json(
+        output_dir / "meta-feature-scaler.json",
+        {
+            "feature_names": feature_names,
+            "mean": [float(v) for v in scaler_mean],
+            "scale": [float(v) for v in scaler_scale],
+            "fit_rows": int(boundaries["base_train_end"]),
+            "fit_policy": "base_lstm_training_partition_only",
+        },
+    )
 
     safety_manifest = {
         "Champion": None,
@@ -889,11 +956,23 @@ def run_meta_labeling(
         },
         "partitioning": {
             "base_train": [0, boundaries["base_train_end"]],
-            "base_validation": [boundaries["base_train_end"], boundaries["base_validation_end"]],
-            "meta_train": [boundaries["base_validation_end"], boundaries["meta_train_end"]],
+            "base_validation": [
+                boundaries["base_train_end"],
+                boundaries["base_validation_end"],
+            ],
+            "meta_train": [
+                boundaries["base_validation_end"],
+                boundaries["meta_train_end"],
+            ],
             "validation": [boundaries["meta_train_end"], boundaries["validation_end"]],
             "holdout": [boundaries["validation_end"], count],
-            "percentages": {"base_train": 50, "base_validation": 5, "meta_train": 15, "validation": 15, "holdout": 15},
+            "percentages": {
+                "base_train": 50,
+                "base_validation": 5,
+                "meta_train": 15,
+                "validation": 15,
+                "holdout": 15,
+            },
             "label_horizon_purge_candles": int(horizon),
             "cross_partition_labels_excluded": True,
         },
@@ -906,8 +985,16 @@ def run_meta_labeling(
             "label_target": "positive_forward_return_after_round_trip_costs",
             "round_trip_fee_and_slippage_fraction": _ROUND_TRIP_COST,
             "profitable_label_distribution_valid_only": {
-                "profitable": int(np.count_nonzero(targets_by_row[labels["label_valid"].to_numpy(dtype=bool)] == 1)),
-                "unprofitable": int(np.count_nonzero(targets_by_row[labels["label_valid"].to_numpy(dtype=bool)] == 0)),
+                "profitable": int(
+                    np.count_nonzero(
+                        targets_by_row[labels["label_valid"].to_numpy(dtype=bool)] == 1
+                    )
+                ),
+                "unprofitable": int(
+                    np.count_nonzero(
+                        targets_by_row[labels["label_valid"].to_numpy(dtype=bool)] == 0
+                    )
+                ),
             },
         },
         "base_lstm": {
@@ -915,7 +1002,9 @@ def run_meta_labeling(
             "trained_only_on_base_train_partition": True,
             "training_rows": int(np.count_nonzero(masks["base_train"])),
             "early_stopping_rows": int(np.count_nonzero(masks["base_validation"])),
-            "meta_train_rows_not_seen_by_base_lstm": int(np.count_nonzero(masks["meta_train"])),
+            "meta_train_rows_not_seen_by_base_lstm": int(
+                np.count_nonzero(masks["meta_train"])
+            ),
             "input_features": feature_names,
             "window_candles": int(window),
             "hidden_size": int(base["hidden_size"]),
@@ -924,8 +1013,12 @@ def run_meta_labeling(
             "best_epoch": int(base["best_epoch"]),
             "best_base_validation_macro_f1": float(base["best_validation_macro_f1"]),
             "class_weights": base["class_weights"],
-            "validation": _partition_classification_report(val_truth, val_base, val_base),
-            "holdout": _partition_classification_report(hold_truth, hold_base, hold_base),
+            "validation": _partition_classification_report(
+                val_truth, val_base, val_base
+            ),
+            "holdout": _partition_classification_report(
+                hold_truth, hold_base, hold_base
+            ),
         },
         "meta_model": {
             "algorithm": "RandomForestClassifier",
@@ -955,11 +1048,18 @@ def run_meta_labeling(
             "base_vs_oracle": val_actions_report,
             "meta_profitability": val_meta_report,
             "unfiltered_economic_metrics_after_costs": _simulate_long_flat(
-                frame, row_actions, row_meta_probabilities, threshold=0.0,
-                start=boundaries["meta_train_end"], end=boundaries["validation_end"], horizon=horizon,
+                frame,
+                row_actions,
+                row_meta_probabilities,
+                threshold=0.0,
+                start=boundaries["meta_train_end"],
+                end=boundaries["validation_end"],
+                horizon=horizon,
             ),
             "meta_filtered_economic_metrics_after_costs": validation_economics,
-            "macro_f1_after_action_filter": val_actions_report["meta_filtered_classification"]["macro_f1"],
+            "macro_f1_after_action_filter": val_actions_report[
+                "meta_filtered_classification"
+            ]["macro_f1"],
         },
         "holdout": {
             "row_start_inclusive": boundaries["validation_end"],
@@ -967,11 +1067,18 @@ def run_meta_labeling(
             "base_vs_oracle": hold_actions_report,
             "meta_profitability": hold_meta_report,
             "unfiltered_economic_metrics_after_costs": _simulate_long_flat(
-                frame, row_actions, row_meta_probabilities, threshold=0.0,
-                start=boundaries["validation_end"], end=count, horizon=horizon,
+                frame,
+                row_actions,
+                row_meta_probabilities,
+                threshold=0.0,
+                start=boundaries["validation_end"],
+                end=count,
+                horizon=horizon,
             ),
             "meta_filtered_economic_metrics_after_costs": holdout_economics,
-            "macro_f1_after_action_filter": hold_actions_report["meta_filtered_classification"]["macro_f1"],
+            "macro_f1_after_action_filter": hold_actions_report[
+                "meta_filtered_classification"
+            ]["macro_f1"],
         },
         "economic_gate": economic_gate,
         "economic_simulation": {
@@ -1005,7 +1112,9 @@ def run_meta_labeling(
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Train an OOS RandomForest filter for an oracle LSTM.")
+    parser = argparse.ArgumentParser(
+        description="Train an OOS RandomForest filter for an oracle LSTM."
+    )
     parser.add_argument("--dataset", type=Path, required=True)
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
@@ -1018,11 +1127,16 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=_SEED)
     args = parser.parse_args()
     run_meta_labeling(
-        args.dataset, args.manifest, args.output_dir,
-        commit_sha=str(args.commit_sha), epochs=int(args.epochs),
-        window=int(args.window), horizon=int(args.horizon),
+        args.dataset,
+        args.manifest,
+        args.output_dir,
+        commit_sha=str(args.commit_sha),
+        epochs=int(args.epochs),
+        window=int(args.window),
+        horizon=int(args.horizon),
         take_profit=float(args.take_profit_fraction),
-        stop_loss=float(args.stop_loss_fraction), seed=int(args.seed),
+        stop_loss=float(args.stop_loss_fraction),
+        seed=int(args.seed),
     )
     return 0
 
