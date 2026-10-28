@@ -727,12 +727,8 @@ def _evaluate_optuna_trial(
         min_atr_cost_multiple=float(risk_parameters["atr_cost_multiple"]),
         take_profit_fraction=float(risk_parameters["take_profit_fraction"]),
         stop_loss_fraction=float(risk_parameters["stop_loss_fraction"]),
-        trailing_trigger_fraction=float(
-            risk_parameters["trailing_trigger_fraction"]
-        ),
-        trailing_distance_fraction=float(
-            risk_parameters["trailing_distance_fraction"]
-        ),
+        trailing_trigger_fraction=float(risk_parameters["trailing_trigger_fraction"]),
+        trailing_distance_fraction=float(risk_parameters["trailing_distance_fraction"]),
         fee_bps_per_side=float(risk_parameters["fee_bps_per_side"]),
         slippage_bps_per_side=float(risk_parameters["slippage_bps_per_side"]),
         bollinger_period=int(parameters["bollinger_period_candles"]),
