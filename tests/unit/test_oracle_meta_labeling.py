@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import hashlib
+import json
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -7,6 +10,10 @@ import pytest
 from scripts.oracle_teacher_lstm import ACTION_BUY, ACTION_HOLD, ACTION_SELL
 
 from scripts.oracle_meta_labeling import (
+    _deflated_sharpe_ratio,
+    _minimum_track_record_length,
+    _probability_backtest_overfitting,
+    _run_existing_oos_diagnostics,
     _binary_metrics,
     _chronological_boundaries,
     _gap_exit,
@@ -171,3 +178,133 @@ def test_meta_economic_simulation_rejects_bad_input() -> None:
             start=0,
             end=20,
         )
+
+
+def test_dsr_and_minimum_track_record_length_are_explicit_about_track_record() -> None:
+    returns = np.asarray(
+        [0.01, 0.02, 0.015, 0.03, 0.005, 0.02, 0.01], dtype=np.float64
+    )
+    dsr = _deflated_sharpe_ratio(returns, trial_count=11)
+    mintrl = _minimum_track_record_length(returns)
+    assert dsr["status"] == "estimated"
+    assert 0.0 <= dsr["probability"] <= 1.0
+    assert dsr["candidate_threshold_trials"] == 11
+    assert mintrl["status"] == "estimated"
+    assert mintrl["minimum_track_record_length_trades"] >= len(returns)
+    assert mintrl["additional_trades_required"] >= 0
+
+
+def test_dsr_and_mintrl_fail_closed_for_short_or_nonpositive_track_record() -> None:
+    short = _deflated_sharpe_ratio(np.asarray([0.01, -0.01]), trial_count=11)
+    assert short["probability"] is None
+    assert short["status"] == "insufficient_track_record"
+    assert _minimum_track_record_length(np.asarray([0.01, -0.01]))[
+        "minimum_track_record_length_trades"
+    ] is None
+    negative = _minimum_track_record_length(
+        np.asarray([-0.03, -0.02, -0.01, -0.04, -0.02], dtype=np.float64)
+    )
+    assert negative["minimum_track_record_length_trades"] is None
+    assert negative["status"] == "no_finite_track_length_for_nonpositive_observed_sharpe"
+    with pytest.raises(ValueError, match="meta_dsr_configuration_invalid"):
+        _deflated_sharpe_ratio(np.asarray([0.1, 0.2, 0.3]), trial_count=0)
+
+
+def test_pbo_uses_purged_cscv_on_threshold_return_streams() -> None:
+    x = np.arange(360, dtype=np.float64)
+    result = _probability_backtest_overfitting(
+        {
+            0.30: 0.002 * np.sin(x / 7.0) + 0.0005,
+            0.50: 0.0015 * np.cos(x / 9.0) - 0.0001,
+            0.70: 0.001 * np.sin(x / 5.0 + 0.5),
+        },
+        block_count=6,
+        purge_candles=12,
+    )
+    assert result["status"] == "estimated"
+    assert result["cscv_split_count"] == 20
+    assert result["block_count"] == 6
+    assert 0.0 <= result["probability"] <= 1.0
+    with pytest.raises(ValueError, match="meta_pbo_track_record_too_short_for_purge"):
+        _probability_backtest_overfitting(
+            {0.3: np.asarray([0.0] * 40), 0.5: np.asarray([0.0] * 40)},
+            block_count=6,
+            purge_candles=4,
+        )
+
+
+def test_existing_oos_diagnostics_updates_only_the_matching_artifact(tmp_path) -> None:
+    source_sha = "a" * 40
+    code_sha = "b" * 40
+    artifact_dir = tmp_path
+    x = np.arange(900, dtype=np.float64)
+    close = 100.0 + 2.0 * np.sin(x / 9.0) + 0.4 * np.sin(x / 3.0)
+    open_price = np.roll(close, 1)
+    open_price[0] = close[0]
+    frame = pd.DataFrame(
+        {
+            "timestamp": pd.date_range("2025-01-01", periods=900, freq="h", tz="UTC"),
+            "open": open_price,
+            "high": np.maximum(open_price, close) + 0.5,
+            "low": np.minimum(open_price, close) - 0.5,
+            "close": close,
+            "volume": np.full(900, 1000.0),
+        }
+    )
+    market_path = artifact_dir / "public-market-data.csv"
+    frame.to_csv(market_path, index=False)
+    source_hash = hashlib.sha256(market_path.read_bytes()).hexdigest()
+    rows = []
+    for row_index in range(50, 850):
+        step = row_index % 12
+        action = "BUY" if step in (0, 1) else "SELL" if step == 5 else "HOLD"
+        rows.append(
+            {
+                "row_index": row_index,
+                "timestamp": frame.loc[row_index, "timestamp"],
+                "base_lstm_action": action,
+                "meta_profit_probability": (row_index % 10) / 10.0,
+                "partition": "validation" if 200 <= row_index < 800 else "meta_train",
+            }
+        )
+    pd.DataFrame(rows).to_csv(artifact_dir / "meta-out-of-sample-predictions.csv", index=False)
+    safety = {
+        "Champion": None,
+        "order_permission": False,
+        "trading_authorization": "NO-GO",
+        "real_order_attempts": 0,
+        "exchange_calls": 0,
+        "private_api_calls": 0,
+    }
+    (artifact_dir / "oracle-meta-labeling-manifest.json").write_text(
+        json.dumps({"commit_sha": source_sha, "row_count": 900, "source_csv_sha256": source_hash, "safety": safety}),
+        encoding="utf-8",
+    )
+    report = {
+        "commit_sha": source_sha,
+        "dataset": {"row_count": 900, "csv_sha256": source_hash},
+        "threshold_selection": {"candidate_thresholds": [round(value, 2) for value in np.arange(0.3, 0.801, 0.05)]},
+        "validation": {
+            "meta_filtered_economic_metrics_after_costs": {
+                "trades": [
+                    {"net_pnl_fraction": value}
+                    for value in [-0.02, -0.01, 0.01, -0.015, 0.02, -0.01, 0.005]
+                ]
+            }
+        },
+        "economic_simulation": {"maximum_holding_candles": 24},
+        "safety": safety,
+        "decision": "RESEARCH_ONLY_NOT_PROMOTED",
+    }
+    report_path = artifact_dir / "oracle-meta-labeling-report.json"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    diagnostics = _run_existing_oos_diagnostics(artifact_dir, source_sha, code_sha)
+    updated = json.loads(report_path.read_text(encoding="utf-8"))
+    assert diagnostics["source_artifact_commit_sha"] == source_sha
+    assert diagnostics["diagnostics_code_commit_sha"] == code_sha
+    assert updated["overfit_diagnostics"]["status"] in ("OVERFIT_WARNING", "NO_OVERFIT_WARNING")
+    assert updated["safety"] == safety
+    assert updated["decision"] == "RESEARCH_ONLY_NOT_PROMOTED"
+    assert (artifact_dir / "oracle-meta-labeling-diagnostics.json").is_file()
+    with pytest.raises(ValueError, match="meta_overfit_source_commit_sha_mismatch"):
+        _run_existing_oos_diagnostics(artifact_dir, "c" * 40, code_sha)

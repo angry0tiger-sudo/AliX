@@ -1,0 +1,172 @@
+name: AliX Oracle Meta-Labeling Overfit Diagnostics
+
+on:
+  push:
+    branches:
+      - "research/oracle-teacher-lstm"
+    paths:
+      - ".github/workflows/oracle-meta-labeling-diagnostics.yml"
+      - "scripts/oracle_meta_labeling.py"
+      - "tests/unit/test_oracle_meta_labeling.py"
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: alix-oracle-meta-labeling-diagnostics-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  diagnose-existing-oos:
+    if: ${{ github.event_name == 'push' && contains(github.event.head_commit.message, '[meta-labeling-diagnostics]') }}
+    name: Diagnose existing OOS predictions without model refit
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ALIx_ENV: paper
+      ALIx_DRY_RUN: "true"
+      ALIx_ALLOW_LIVE_TRADING: "false"
+      ALIx_REPORTING_ENABLED: "false"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      SOURCE_RUN_ID: "40685921338"
+      SOURCE_ARTIFACT_ID: "12814747991"
+      SOURCE_SHA: "a89855f214d562573d4fed9479567beebaf1637b"
+    steps:
+      - name: Checkout diagnostic implementation on exact commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Wait for successful CI on this exact SHA
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import time
+          from urllib.request import Request, urlopen
+
+          repository = os.environ["GITHUB_REPOSITORY"]
+          sha = os.environ["GITHUB_SHA"]
+          token = os.environ["GITHUB_TOKEN"]
+          deadline = time.monotonic() + 1800
+          url = f"https://api.github.com/repos/{repository}/actions/runs?head_sha={sha}&per_page=100"
+          while time.monotonic() < deadline:
+              request = Request(
+                  url,
+                  headers={
+                      "Accept": "application/vnd.github+json",
+                      "Authorization": f"Bearer {token}",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  },
+              )
+              with urlopen(request, timeout=20) as response:
+                  payload = json.load(response)
+              matches = [
+                  run for run in payload.get("workflow_runs", [])
+                  if run.get("name") == "AliX Continuous Integration"
+                  and run.get("head_sha") == sha
+              ]
+              if matches:
+                  latest = max(matches, key=lambda run: run.get("run_number", 0))
+                  if latest.get("status") == "completed":
+                      if latest.get("conclusion") == "success":
+                          print("Exact-SHA CI passed; diagnostics may proceed.")
+                          raise SystemExit(0)
+                      raise SystemExit("Fail closed: exact-SHA CI concluded " + str(latest.get("conclusion")))
+              time.sleep(15)
+          raise SystemExit("Fail closed: timed out waiting for exact-SHA CI success")
+          PY
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned artifact-analysis dependencies only
+        run: |
+          python -m pip install pip==25.2
+          python -m pip install numpy==2.5.4 pandas==2.3.3 scikit-learn==1.9.0 joblib==1.5.3
+          python -m pip check
+
+      - name: Verify source artifact belongs to the designated research run and SHA
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/alix-meta-source"
+          curl --fail --silent --show-error \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$SOURCE_ARTIFACT_ID" \
+            -o "$RUNNER_TEMP/artifact-metadata.json"
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          metadata = json.loads(
+              Path(os.environ["RUNNER_TEMP"], "artifact-metadata.json").read_text(encoding="utf-8")
+          )
+          assert metadata["id"] == int(os.environ["SOURCE_ARTIFACT_ID"])
+          assert metadata["name"] == "alix-oracle-meta-labeling"
+          assert metadata["expired"] is False
+          assert metadata["workflow_run"]["id"] == int(os.environ["SOURCE_RUN_ID"])
+          assert metadata["workflow_run"]["head_sha"] == os.environ["SOURCE_SHA"]
+          print("Source artifact ID, run ID, name, expiry and original SHA verified.")
+          PY
+          curl --fail --silent --show-error --location \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$SOURCE_ARTIFACT_ID/zip" \
+            -o "$RUNNER_TEMP/alix-oracle-meta-labeling-source.zip"
+          unzip -q "$RUNNER_TEMP/alix-oracle-meta-labeling-source.zip" -d "$RUNNER_TEMP/alix-meta-source"
+
+      - name: Diagnose saved validation predictions without training or Holdout selection
+        run: |
+          python scripts/oracle_meta_labeling.py \
+            --diagnostics-artifact-dir "$RUNNER_TEMP/alix-meta-source" \
+            --expected-source-sha "$SOURCE_SHA" \
+            --diagnostics-code-sha "$GITHUB_SHA"
+
+      - name: Verify diagnostic report and immutable safety gates
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["RUNNER_TEMP"]) / "alix-meta-source"
+          report = json.loads((root / "oracle-meta-labeling-report.json").read_text(encoding="utf-8"))
+          diagnostic = report["overfit_diagnostics"]
+          assert report["commit_sha"] == os.environ["SOURCE_SHA"]
+          assert diagnostic["source_artifact_commit_sha"] == os.environ["SOURCE_SHA"]
+          assert diagnostic["diagnostics_code_commit_sha"] == os.environ["GITHUB_SHA"]
+          assert diagnostic["threshold_selection_performed"] is False
+          assert diagnostic["evaluation_scope"].find("Holdout excluded") >= 0
+          assert report["safety"]["Champion"] is None
+          assert report["safety"]["order_permission"] is False
+          assert report["safety"]["trading_authorization"] == "NO-GO"
+          assert report["safety"]["real_order_attempts"] == 0
+          assert report["safety"]["exchange_calls"] == 0
+          assert report["safety"]["private_api_calls"] == 0
+          print(json.dumps({
+              "status": diagnostic["status"],
+              "dsr": diagnostic["dsr"],
+              "pbo": diagnostic["pbo"],
+              "minimum_track_record_length": diagnostic["minimum_track_record_length"],
+              "safety": report["safety"],
+          }, indent=2, sort_keys=True))
+          PY
+
+      - name: Upload updated report and diagnostics with original source artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alix-oracle-meta-labeling-overfit-diagnostics
+          path: ${{ runner.temp }}/alix-meta-source/*
+          if-no-files-found: warn
+          retention-days: 14
