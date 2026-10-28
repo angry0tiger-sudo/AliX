@@ -147,6 +147,10 @@ jobs:
           assert teacher_backtest["gate"]["minimum_trade_signal_count"] == 800
           assert teacher_backtest["entry_mode"] in ("institutional", "trend_pullback")
           assert report["teacher"]["entry_mode"] == teacher_backtest["entry_mode"]
+          risk_parameters = teacher_backtest["parameters"]
+          assert risk_parameters["take_profit_fraction"] == 0.015
+          assert risk_parameters["stop_loss_fraction"] == 0.0075
+          assert risk_parameters["minimum_atr_fraction"] == 0.0045
           assert teacher_backtest["gate"]["passed"] is True
           for partition in ("validation", "holdout"):
               economics = teacher_backtest[partition]["economics"]
@@ -188,6 +192,7 @@ jobs:
               "teacher_actions": report["teacher"]["action_distribution"],
               "teacher_trade_signal_count": trade_signal_count,
               "teacher_entry_mode": teacher_backtest["entry_mode"],
+              "minimum_teacher_trade_signal_count": teacher_backtest["gate"]["minimum_trade_signal_count"],
               "teacher_backtest_gate": teacher_backtest["gate"],
               "teacher_backtest_validation": teacher_backtest["validation"]["economics"],
               "teacher_backtest_holdout": teacher_backtest["holdout"]["economics"],
