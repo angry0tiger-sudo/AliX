@@ -299,6 +299,15 @@ def test_all_teacher_modes_are_generated_and_saved_independently(
         assert (output_dir / f"teacher-dataset-{mode}-manifest.json").exists()
 
 
+def test_breakout_entry_logic_reports_donchian_and_4h_trend_filter() -> None:
+    logic = _teacher_entry_logic("breakout")
+    assert logic["donchian_lookback_candles"] == 10
+    assert "prior 10 candles" in logic["buy_condition"]
+    assert "completed 4h EMA bias is bullish" in logic["buy_condition"]
+    assert "regardless of the trend filter" in logic["sell_condition"]
+    assert logic["signals_use_completed_candles_only"] is True
+
+
 def test_mean_reversion_entry_logic_reports_looser_thresholds() -> None:
     logic = _teacher_entry_logic("mean_reversion")
     assert logic["bollinger_period_candles"] == 20

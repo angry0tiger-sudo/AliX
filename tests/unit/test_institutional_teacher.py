@@ -10,6 +10,7 @@ from services.rl_research.institutional_teacher import (
     ACTION_BUY,
     ACTION_HOLD,
     ACTION_SELL,
+    DEFAULT_BREAKOUT_DONCHIAN_LOOKBACK,
     DEFAULT_MEAN_REVERSION_BOLLINGER_PERIOD,
     DEFAULT_MEAN_REVERSION_BOLLINGER_STDDEV,
     DEFAULT_MEAN_REVERSION_RSI_BUY_BELOW,
@@ -310,6 +311,43 @@ def test_trend_pullback_fallback_generates_directional_setups() -> None:
     )
     assert sell_setup.any()
     assert not buy_setup.any()
+
+
+def test_breakout_defaults_filter_entries_by_bullish_4h_bias_only() -> None:
+    assert DEFAULT_BREAKOUT_DONCHIAN_LOOKBACK == 10
+
+    flat_close = np.full(10, 100.0, dtype=np.float64)
+    close_up = np.concatenate((flat_close, np.asarray([101.0])))
+    open_up = np.r_[close_up[0], close_up[:-1]]
+    up_frame = pd.DataFrame(
+        {
+            "close": close_up,
+            "high": np.maximum(open_up, close_up) + 0.2,
+            "low": np.minimum(open_up, close_up) - 0.2,
+        }
+    )
+    bullish_bias = pd.Series(np.ones(len(up_frame), dtype=np.int8))
+    neutral_bias = pd.Series(np.zeros(len(up_frame), dtype=np.int8))
+    buy_bullish, _ = _breakout_setups(up_frame, trend_bias=bullish_bias)
+    buy_neutral, _ = _breakout_setups(up_frame, trend_bias=neutral_bias)
+    assert bool(buy_bullish.iloc[-1])
+    assert not bool(buy_neutral.iloc[-1])
+
+    close_down = np.concatenate((flat_close, np.asarray([99.0])))
+    open_down = np.r_[close_down[0], close_down[:-1]]
+    down_frame = pd.DataFrame(
+        {
+            "close": close_down,
+            "high": np.maximum(open_down, close_down) + 0.2,
+            "low": np.minimum(open_down, close_down) - 0.2,
+        }
+    )
+    buy_down, sell_down = _breakout_setups(
+        down_frame,
+        trend_bias=pd.Series(np.ones(len(down_frame), dtype=np.int8)),
+    )
+    assert not bool(buy_down.iloc[-1])
+    assert bool(sell_down.iloc[-1])
 
 
 def test_breakout_setups_use_only_prior_donchian_channel() -> None:

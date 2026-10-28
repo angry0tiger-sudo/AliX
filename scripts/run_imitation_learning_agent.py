@@ -18,6 +18,7 @@ from services.rl_research.institutional_teacher import (
     ACTION_HOLD,
     ACTION_SELL,
     DEFAULT_ATR_PERIOD,
+    DEFAULT_BREAKOUT_DONCHIAN_LOOKBACK,
     DEFAULT_FEE_BPS_PER_SIDE,
     DEFAULT_MEAN_REVERSION_BOLLINGER_PERIOD,
     DEFAULT_MEAN_REVERSION_BOLLINGER_STDDEV,
@@ -544,12 +545,27 @@ def _validate_training_parameters(epochs: int, window: int) -> None:
 
 def _teacher_entry_logic(entry_mode: str) -> dict[str, Any]:
     if entry_mode == "breakout":
+        lookback = DEFAULT_BREAKOUT_DONCHIAN_LOOKBACK
         return {
-            "strategy": "donchian_20_breakout",
-            "buy_condition": "completed candle close exceeds the maximum high of the prior 20 candles",
-            "sell_condition": "completed candle close falls below the minimum low of the prior 20 candles; Spot long is closed, never shorted",
-            "donchian_lookback_candles": 20,
-            "breakout_confirmation": "close beyond prior-candle channel; current candle excluded from channel",
+            "strategy": f"donchian_{lookback}_breakout_4h_trend_filtered",
+            "buy_condition": (
+                f"completed candle close exceeds the maximum high of the prior "
+                f"{lookback} candles while completed 4h EMA bias is bullish"
+            ),
+            "sell_condition": (
+                f"completed candle close falls below the minimum low of the prior "
+                f"{lookback} candles; Spot long is closed, never shorted, "
+                "regardless of the trend filter"
+            ),
+            "donchian_lookback_candles": lookback,
+            "trend_filter": (
+                "new Spot entries require bullish EMA bias from completed 4h candles; "
+                "confirmed downside channel breaks remain active as exits"
+            ),
+            "breakout_confirmation": (
+                "close beyond prior-candle channel; current candle excluded from "
+                "channel; new entries require completed 4h bullish bias"
+            ),
             "signals_use_completed_candles_only": True,
             "positioning": "Spot long/flat; SELL closes an existing long only",
         }

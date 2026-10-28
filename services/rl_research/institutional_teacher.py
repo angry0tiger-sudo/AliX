@@ -19,6 +19,7 @@ ACTION_SELL = 2
 _REQUIRED_COLUMNS = ("timestamp", "open", "high", "low", "close", "volume")
 
 DEFAULT_ATR_PERIOD = 14
+DEFAULT_BREAKOUT_DONCHIAN_LOOKBACK = 10
 DEFAULT_MIN_ATR_COST_MULTIPLE = 1.0
 DEFAULT_FEE_BPS_PER_SIDE = 25.0
 DEFAULT_SLIPPAGE_BPS_PER_SIDE = 20.0
@@ -254,9 +255,11 @@ def _mean_reversion_setups(
 
 
 def _breakout_setups(
-    frame: pd.DataFrame, lookback_period: int = 20
+    frame: pd.DataFrame,
+    lookback_period: int = DEFAULT_BREAKOUT_DONCHIAN_LOOKBACK,
+    trend_bias: pd.Series | None = None,
 ) -> tuple[pd.Series, pd.Series]:
-    """Detect close-confirmed Donchian breaks against prior candles only."""
+    """Require bullish completed-timeframe bias for entries; keep channel exits active."""
     prior_high = (
         frame["high"]
         .shift(1)
@@ -272,6 +275,14 @@ def _breakout_setups(
     close = frame["close"].astype(np.float64)
     buy_setup = close > prior_high
     sell_setup = close < prior_low
+    if trend_bias is not None:
+        if len(trend_bias) != len(frame):
+            raise ValueError("breakout_trend_bias_length_mismatch")
+        bullish_bias = pd.Series(
+            trend_bias.to_numpy(dtype=np.int8) > 0,
+            index=frame.index,
+        )
+        buy_setup = buy_setup & bullish_bias
     return buy_setup.fillna(False), sell_setup.fillna(False)
 
 
@@ -678,7 +689,14 @@ def generate_teacher_labels(
     elif entry_mode == "mean_reversion":
         buy_setup, sell_setup = _mean_reversion_setups(frame)
     else:
-        buy_setup, sell_setup = _breakout_setups(frame)
+        completed_4h_bias = pd.Series(
+            bias_4h.to_numpy(dtype=np.int8),
+            index=frame.index,
+        )
+        buy_setup, sell_setup = _breakout_setups(
+            frame,
+            trend_bias=completed_4h_bias,
+        )
     atr_fraction = _average_true_range_fraction(frame, atr_period)
     actions, positions, exit_prices, exit_reasons = _generate_teacher_actions(
         frame,

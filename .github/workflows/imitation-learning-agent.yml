@@ -180,8 +180,10 @@ jobs:
               assert mode_costs["estimated_net_return_at_sl_without_gaps"] < 0.0
               assert 0.0 < mode_costs["break_even_win_rate_fraction_without_gaps"] < 1.0
           breakout_logic = teacher_backtest["modes"]["breakout"]["entry_logic"]
-          assert breakout_logic["donchian_lookback_candles"] == 20
-          assert "prior 20 candles" in breakout_logic["buy_condition"]
+          assert breakout_logic["donchian_lookback_candles"] == 10
+          assert "prior 10 candles" in breakout_logic["buy_condition"]
+          assert "completed 4h EMA bias is bullish" in breakout_logic["buy_condition"]
+          assert "regardless of the trend filter" in breakout_logic["sell_condition"]
           mean_reversion_logic = teacher_backtest["modes"]["mean_reversion"]["entry_logic"]
           assert mean_reversion_logic["bollinger_period_candles"] == 20
           assert mean_reversion_logic["bollinger_standard_deviations"] == 1.5
