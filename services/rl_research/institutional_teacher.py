@@ -208,9 +208,47 @@ def _trend_pullback_setups(
     return buy_setup.fillna(False), sell_setup.fillna(False)
 
 
+def _mean_reversion_setups(
+    frame: pd.DataFrame,
+    *,
+    bollinger_period: int = 20,
+    bollinger_stddev: float = 2.0,
+    rsi_period: int = 14,
+) -> tuple[pd.Series, pd.Series]:
+    """Use completed-candle Bollinger touches confirmed by Wilder-style RSI."""
+    close = frame["close"].astype(np.float64)
+    basis = close.rolling(bollinger_period, min_periods=bollinger_period).mean()
+    deviation = close.rolling(
+        bollinger_period, min_periods=bollinger_period
+    ).std(ddof=0)
+    lower_band = basis - bollinger_stddev * deviation
+    upper_band = basis + bollinger_stddev * deviation
+
+    changes = close.diff()
+    gains = changes.clip(lower=0.0)
+    losses = -changes.clip(upper=0.0)
+    average_gain = gains.ewm(
+        alpha=1.0 / rsi_period, adjust=False, min_periods=rsi_period
+    ).mean()
+    average_loss = losses.ewm(
+        alpha=1.0 / rsi_period, adjust=False, min_periods=rsi_period
+    ).mean()
+    relative_strength = average_gain / average_loss.replace(0.0, np.nan)
+    rsi = 100.0 - (100.0 / (1.0 + relative_strength))
+    rsi = rsi.mask((average_gain == 0.0) & (average_loss > 0.0), 0.0)
+    rsi = rsi.mask((average_loss == 0.0) & (average_gain > 0.0), 100.0)
+    rsi = rsi.mask((average_gain == 0.0) & (average_loss == 0.0), 50.0)
+
+    buy_setup = (frame["low"] <= lower_band) & (rsi < 30.0)
+    sell_setup = (frame["high"] >= upper_band) & (rsi > 70.0)
+    return buy_setup.fillna(False), sell_setup.fillna(False)
+
+
 def _validate_teacher_entry_mode(entry_mode: str) -> None:
-    if entry_mode not in {"institutional", "trend_pullback"}:
-        raise ValueError("teacher_entry_mode_must_be_institutional_or_trend_pullback")
+    if entry_mode not in {"institutional", "trend_pullback", "mean_reversion"}:
+        raise ValueError(
+            "teacher_entry_mode_must_be_institutional_trend_pullback_or_mean_reversion"
+        )
 
 
 def _validate_integer_parameter(name: str, value: int, minimum: int) -> None:
@@ -599,8 +637,10 @@ def generate_teacher_labels(
             buy_volume,
             sell_volume,
         )
-    else:
+    elif entry_mode == "trend_pullback":
         buy_setup, sell_setup = _trend_pullback_setups(frame, bias)
+    else:
+        buy_setup, sell_setup = _mean_reversion_setups(frame)
     atr_fraction = _average_true_range_fraction(frame, atr_period)
     actions, positions, exit_prices, exit_reasons = _generate_teacher_actions(
         frame,

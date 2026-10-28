@@ -17,6 +17,8 @@ from scripts.run_imitation_learning_agent import (
     _cost_adjusted_risk_diagnostics,
     _execution_cost_counterfactual_diagnosis,
     _select_teacher_mode,
+    _teacher_risk_parameters,
+    _cost_adjusted_risk_diagnostics,
     _write_teacher_datasets,
     _weighted_cross_entropy_loss,
     simulate_economics,
@@ -247,7 +249,15 @@ def test_mode_selection_uses_validation_pf_among_passing_modes() -> None:
             "gate": {"passed": True},
             "validation": {"economics": {"profit_factor": 1.8}},
         },
+        "mean_reversion": {
+            "gate": {"passed": True},
+            "validation": {"economics": {"profit_factor": 1.9}},
+        },
     }
+    assert _select_teacher_mode(results) == "mean_reversion"
+
+    results["mean_reversion"]["gate"]["passed"] = False
+    results["mean_reversion"]["validation"]["economics"]["profit_factor"] = 9.0
     assert _select_teacher_mode(results) == "trend_pullback"
 
     results["trend_pullback"]["gate"]["passed"] = False
@@ -268,12 +278,31 @@ def test_both_teacher_modes_are_generated_and_saved_independently(
         output_dir,
         "test-commit",
     )
-    assert set(candidates) == {"institutional", "trend_pullback"}
+    assert set(candidates) == {"institutional", "trend_pullback", "mean_reversion"}
     for mode, (_, manifest) in candidates.items():
         assert manifest["teacher_entry_mode"] == mode
         assert manifest["selected_for_training"] is False
         assert (output_dir / f"teacher-dataset-{mode}.csv").exists()
         assert (output_dir / f"teacher-dataset-{mode}-manifest.json").exists()
+
+
+def test_mean_reversion_risk_profile_uses_requested_levels_and_costs() -> None:
+    risk = _teacher_risk_parameters("mean_reversion")
+    assert risk["take_profit_fraction"] == 0.02
+    assert risk["stop_loss_fraction"] == 0.01
+    assert risk["trailing_trigger_fraction"] == 0.01
+    assert risk["trailing_distance_fraction"] == 0.01
+    assert risk["fee_bps_per_side"] == 25.0
+    assert risk["slippage_bps_per_side"] == 20.0
+
+    diagnostics = _cost_adjusted_risk_diagnostics(
+        risk["take_profit_fraction"], risk["stop_loss_fraction"]
+    )
+    assert diagnostics["take_profit_fraction"] == 0.02
+    assert diagnostics["stop_loss_fraction"] == 0.01
+    assert diagnostics["estimated_net_return_at_tp_without_gaps"] > 0.0
+    assert diagnostics["estimated_net_return_at_sl_without_gaps"] < 0.0
+    assert 0.0 < diagnostics["break_even_win_rate_fraction_without_gaps"] < 1.0
 
 
 def test_teacher_economic_gate_requires_profitability_and_signal_density() -> None:

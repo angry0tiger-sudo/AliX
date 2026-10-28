@@ -146,13 +146,13 @@ jobs:
           teacher_backtest = report["teacher_backtest"]
           assert teacher_backtest["commit_sha"] == os.environ["GITHUB_SHA"]
           assert teacher_backtest["gate"]["minimum_trade_signal_count"] == 800
-          assert set(teacher_backtest["modes"]) == {"institutional", "trend_pullback"}
+          assert set(teacher_backtest["modes"]) == {"institutional", "trend_pullback", "mean_reversion"}
           assert teacher_backtest["selected_mode"] in teacher_backtest["modes"]
           assert teacher_backtest["entry_mode"] == teacher_backtest["selected_mode"]
           assert report["teacher"]["entry_mode"] == teacher_backtest["selected_mode"]
           assert teacher_manifest["teacher_entry_mode"] == teacher_backtest["selected_mode"]
           assert teacher_manifest["selected_for_training"] is True
-          assert set(teacher_backtest["gate"]["mode_gate_results"]) == {"institutional", "trend_pullback"}
+          assert set(teacher_backtest["gate"]["mode_gate_results"]) == {"institutional", "trend_pullback", "mean_reversion"}
           for mode, result in teacher_backtest["modes"].items():
               assert result["entry_mode"] == mode
               cost_counterfactual = result["execution_cost_counterfactual"]
@@ -160,18 +160,32 @@ jobs:
               assert "holdout_without_direct_costs" in cost_counterfactual
               assert cost_counterfactual["diagnosis"]["interpretation"]
           assert teacher_backtest["modes"][teacher_backtest["selected_mode"]]["gate"]["passed"] is True
-          break_even_win_rate = teacher_backtest["cost_adjusted_risk_diagnostics"][
-              "break_even_win_rate_fraction_without_gaps"
-          ]
-          assert 0.60 < break_even_win_rate < 0.61
           risk_parameters = teacher_backtest["parameters"]
-          assert risk_parameters["take_profit_fraction"] == 0.025
-          assert risk_parameters["stop_loss_fraction"] == 0.015
-          assert risk_parameters["minimum_atr_fraction"] == 0.0045
-          assert teacher_backtest["gate"]["minimum_profit_factor"] == 1.5
           cost_diagnostics = teacher_backtest["cost_adjusted_risk_diagnostics"]
-          assert 0.0157 < cost_diagnostics["estimated_net_return_at_tp_without_gaps"] < 0.016
-          assert -0.024 < cost_diagnostics["estimated_net_return_at_sl_without_gaps"] < -0.023
+          diagnostic_mode = teacher_backtest["diagnostic_mode_by_validation_pf"]
+          assert risk_parameters == teacher_backtest["modes"][diagnostic_mode]["parameters"]
+          assert cost_diagnostics == teacher_backtest["modes"][diagnostic_mode]["cost_adjusted_risk_diagnostics"]
+          assert teacher_backtest["gate"]["minimum_profit_factor"] == 1.5
+          for mode, result in teacher_backtest["modes"].items():
+              expected_tp = 0.02 if mode == "mean_reversion" else 0.025
+              expected_sl = 0.01 if mode == "mean_reversion" else 0.015
+              assert result["parameters"]["take_profit_fraction"] == expected_tp
+              assert result["parameters"]["stop_loss_fraction"] == expected_sl
+              assert result["parameters"]["fee_bps_per_side"] == 25.0
+              assert result["parameters"]["slippage_bps_per_side"] == 20.0
+              mode_costs = result["cost_adjusted_risk_diagnostics"]
+              assert mode_costs["take_profit_fraction"] == expected_tp
+              assert mode_costs["stop_loss_fraction"] == expected_sl
+              assert mode_costs["estimated_net_return_at_tp_without_gaps"] > 0.0
+              assert mode_costs["estimated_net_return_at_sl_without_gaps"] < 0.0
+              assert 0.0 < mode_costs["break_even_win_rate_fraction_without_gaps"] < 1.0
+          mean_reversion_logic = teacher_backtest["modes"]["mean_reversion"]["entry_logic"]
+          assert mean_reversion_logic["bollinger_period_candles"] == 20
+          assert mean_reversion_logic["bollinger_standard_deviations"] == 2.0
+          assert mean_reversion_logic["rsi_period_candles"] == 14
+          assert mean_reversion_logic["rsi_buy_below"] == 30.0
+          assert mean_reversion_logic["rsi_sell_above"] == 70.0
+          assert teacher_backtest["parameters"]["minimum_atr_fraction"] == 0.0045
           assert teacher_backtest["gate"]["passed"] is True
           for partition in ("validation", "holdout"):
               economics = teacher_backtest[partition]["economics"]

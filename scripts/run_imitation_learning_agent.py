@@ -441,23 +441,29 @@ def _simulate_teacher_segment(
         raise ValueError("teacher_backtest_segment_bounds_invalid")
     segment = frame.iloc[start_index:end_index].reset_index(drop=True)
     signals = teacher.iloc[start_index:end_index].reset_index(drop=True)
+    entry_mode = (
+        str(signals["teacher_entry_mode"].iloc[0])
+        if "teacher_entry_mode" in signals.columns and not signals.empty
+        else "institutional"
+    )
+    risk_parameters = _teacher_risk_parameters(entry_mode)
     actions, _, exit_prices, _ = _generate_teacher_actions(
         segment,
         signals["teacher_setup_buy"],
         signals["teacher_setup_sell"],
         signals["teacher_atr_fraction"],
         cooldown_candles=2,
-        min_atr_cost_multiple=DEFAULT_MIN_ATR_COST_MULTIPLE,
-        take_profit_fraction=DEFAULT_TAKE_PROFIT_FRACTION,
-        stop_loss_fraction=DEFAULT_STOP_LOSS_FRACTION,
-        trailing_trigger_fraction=DEFAULT_TRAILING_TRIGGER_FRACTION,
-        trailing_distance_fraction=DEFAULT_TRAILING_DISTANCE_FRACTION,
-        fee_bps_per_side=DEFAULT_FEE_BPS_PER_SIDE,
-        slippage_bps_per_side=DEFAULT_SLIPPAGE_BPS_PER_SIDE,
+        min_atr_cost_multiple=float(risk_parameters["atr_cost_multiple"]),
+        take_profit_fraction=float(risk_parameters["take_profit_fraction"]),
+        stop_loss_fraction=float(risk_parameters["stop_loss_fraction"]),
+        trailing_trigger_fraction=float(risk_parameters["trailing_trigger_fraction"]),
+        trailing_distance_fraction=float(risk_parameters["trailing_distance_fraction"]),
+        fee_bps_per_side=float(risk_parameters["fee_bps_per_side"]),
+        slippage_bps_per_side=float(risk_parameters["slippage_bps_per_side"]),
     )
     close_prices = segment["close"].to_numpy(dtype=np.float64)
-    fee_bps = DEFAULT_FEE_BPS_PER_SIDE if include_execution_costs else 0.0
-    slippage_bps = DEFAULT_SLIPPAGE_BPS_PER_SIDE if include_execution_costs else 0.0
+    fee_bps = float(risk_parameters["fee_bps_per_side"]) if include_execution_costs else 0.0
+    slippage_bps = float(risk_parameters["slippage_bps_per_side"]) if include_execution_costs else 0.0
     return simulate_economics(
         actions.astype(np.int64),
         close_prices,
@@ -525,8 +531,53 @@ def _validate_training_parameters(epochs: int, window: int) -> None:
         raise ValueError("sequence_window_out_of_range")
 
 
-def _teacher_risk_parameters() -> dict[str, Any]:
+def _teacher_entry_logic(entry_mode: str) -> dict[str, Any]:
+    if entry_mode == "mean_reversion":
+        return {
+            "strategy": "bollinger_rsi_mean_reversion",
+            "buy_condition": "low touches or crosses lower Bollinger band and RSI-14 < 30",
+            "sell_condition": "high touches or crosses upper Bollinger band and RSI-14 > 70; Spot long is closed, never shorted",
+            "bollinger_period_candles": 20,
+            "bollinger_standard_deviations": 2.0,
+            "rsi_period_candles": 14,
+            "rsi_buy_below": 30.0,
+            "rsi_sell_above": 70.0,
+            "signals_use_completed_candles_only": True,
+            "positioning": "Spot long/flat; SELL closes an existing long only",
+        }
+    if entry_mode == "trend_pullback":
+        return {
+            "strategy": "trend_pullback",
+            "buy_condition": "completed-candle 4h bullish bias with EMA pullback and reclaim",
+            "sell_condition": "completed-candle 4h bearish bias with EMA pullback and reclaim; Spot long is closed, never shorted",
+            "signals_use_completed_candles_only": True,
+            "positioning": "Spot long/flat; SELL closes an existing long only",
+        }
     return {
+        "strategy": "institutional_structure_proxy",
+        "buy_condition": "completed-candle higher-timeframe bias with causal structure or order-block touch",
+        "sell_condition": "completed-candle bearish setup closes an existing Spot long",
+        "signals_use_completed_candles_only": True,
+        "positioning": "Spot long/flat; SELL closes an existing long only",
+    }
+
+
+def _teacher_risk_parameters(entry_mode: str = "institutional") -> dict[str, Any]:
+    if entry_mode == "mean_reversion":
+        take_profit_fraction = 0.02
+        stop_loss_fraction = 0.01
+        trailing_trigger_fraction = 0.01
+        # At +1% high-watermark, this distance leaves the stop at cost-adjusted breakeven.
+        trailing_distance_fraction = 0.01
+    elif entry_mode in {"institutional", "trend_pullback"}:
+        take_profit_fraction = DEFAULT_TAKE_PROFIT_FRACTION
+        stop_loss_fraction = DEFAULT_STOP_LOSS_FRACTION
+        trailing_trigger_fraction = DEFAULT_TRAILING_TRIGGER_FRACTION
+        trailing_distance_fraction = DEFAULT_TRAILING_DISTANCE_FRACTION
+    else:
+        raise ValueError("unknown_teacher_entry_mode")
+    return {
+        "entry_mode": entry_mode,
         "atr_period_candles": DEFAULT_ATR_PERIOD,
         "atr_cost_multiple": DEFAULT_MIN_ATR_COST_MULTIPLE,
         "minimum_atr_fraction": (
@@ -534,10 +585,10 @@ def _teacher_risk_parameters() -> dict[str, Any]:
             * (DEFAULT_FEE_BPS_PER_SIDE + DEFAULT_SLIPPAGE_BPS_PER_SIDE)
             / 10_000.0
         ),
-        "take_profit_fraction": DEFAULT_TAKE_PROFIT_FRACTION,
-        "stop_loss_fraction": DEFAULT_STOP_LOSS_FRACTION,
-        "trailing_trigger_fraction": DEFAULT_TRAILING_TRIGGER_FRACTION,
-        "trailing_distance_fraction": DEFAULT_TRAILING_DISTANCE_FRACTION,
+        "take_profit_fraction": take_profit_fraction,
+        "stop_loss_fraction": stop_loss_fraction,
+        "trailing_trigger_fraction": trailing_trigger_fraction,
+        "trailing_distance_fraction": trailing_distance_fraction,
         "trailing_breakeven_includes_round_trip_costs": True,
         "stop_target_same_candle_policy": "stop_first_conservative",
         "fee_bps_per_side": DEFAULT_FEE_BPS_PER_SIDE,
@@ -545,16 +596,19 @@ def _teacher_risk_parameters() -> dict[str, Any]:
     }
 
 
-def _cost_adjusted_risk_diagnostics() -> dict[str, Any]:
+def _cost_adjusted_risk_diagnostics(
+    take_profit_fraction: float = DEFAULT_TAKE_PROFIT_FRACTION,
+    stop_loss_fraction: float = DEFAULT_STOP_LOSS_FRACTION,
+) -> dict[str, Any]:
     fee_rate = DEFAULT_FEE_BPS_PER_SIDE / 10_000.0
     slippage_rate = DEFAULT_SLIPPAGE_BPS_PER_SIDE / 10_000.0
     entry_cost_factor = (1.0 + slippage_rate) * (1.0 + fee_rate)
     exit_cost_factor = (1.0 - slippage_rate) * (1.0 - fee_rate)
     target_factor = (
-        (1.0 + DEFAULT_TAKE_PROFIT_FRACTION) * exit_cost_factor / entry_cost_factor
+        (1.0 + take_profit_fraction) * exit_cost_factor / entry_cost_factor
     )
     stop_factor = (
-        (1.0 - DEFAULT_STOP_LOSS_FRACTION) * exit_cost_factor / entry_cost_factor
+        (1.0 - stop_loss_fraction) * exit_cost_factor / entry_cost_factor
     )
     net_target_return = target_factor - 1.0
     net_stop_return = stop_factor - 1.0
@@ -568,6 +622,8 @@ def _cost_adjusted_risk_diagnostics() -> dict[str, Any]:
     return {
         "fee_bps_per_side": DEFAULT_FEE_BPS_PER_SIDE,
         "slippage_bps_per_side": DEFAULT_SLIPPAGE_BPS_PER_SIDE,
+        "take_profit_fraction": float(take_profit_fraction),
+        "stop_loss_fraction": float(stop_loss_fraction),
         "estimated_net_return_at_tp_without_gaps": net_target_return,
         "estimated_net_return_at_sl_without_gaps": net_stop_return,
         "break_even_win_rate_fraction_without_gaps": break_even_win_rate,
@@ -584,11 +640,12 @@ def _is_numeric_below(value: Any, threshold: Any) -> bool:
 
 
 def _mode_economic_diagnosis(
-    validation: dict[str, Any], holdout: dict[str, Any]
+    validation: dict[str, Any],
+    holdout: dict[str, Any],
+    risk_diagnostics: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    required_win_rate = _cost_adjusted_risk_diagnostics()[
-        "break_even_win_rate_fraction_without_gaps"
-    ]
+    diagnostics = risk_diagnostics or _cost_adjusted_risk_diagnostics()
+    required_win_rate = diagnostics["break_even_win_rate_fraction_without_gaps"]
     validation_win_rate = validation.get("win_rate_fraction")
     holdout_win_rate = holdout.get("win_rate_fraction")
     validation_win_rate_below_break_even = _is_numeric_below(
@@ -679,12 +736,21 @@ def _write_teacher_dataset(
     commit_sha: str,
     entry_mode: str,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
+    risk_parameters = _teacher_risk_parameters(entry_mode)
     teacher_config: dict[str, Any] = {
         "higher_timeframe": "4h",
         "ema_span": 6,
         "swing_window": 8,
         "volume_window": 24,
         "cooldown_candles": 2,
+        "atr_period": int(risk_parameters["atr_period_candles"]),
+        "min_atr_cost_multiple": float(risk_parameters["atr_cost_multiple"]),
+        "take_profit_fraction": float(risk_parameters["take_profit_fraction"]),
+        "stop_loss_fraction": float(risk_parameters["stop_loss_fraction"]),
+        "trailing_trigger_fraction": float(risk_parameters["trailing_trigger_fraction"]),
+        "trailing_distance_fraction": float(risk_parameters["trailing_distance_fraction"]),
+        "fee_bps_per_side": float(risk_parameters["fee_bps_per_side"]),
+        "slippage_bps_per_side": float(risk_parameters["slippage_bps_per_side"]),
     }
     teacher = generate_teacher_labels(frame, entry_mode=entry_mode, **teacher_config)
     teacher_path = output_dir / f"teacher-dataset-{entry_mode}.csv"
@@ -701,7 +767,8 @@ def _write_teacher_dataset(
         "teacher_timeframe_mode": "4h_completed_candles",
         "teacher_entry_mode": entry_mode,
         "minimum_teacher_trade_signal_count": _MIN_TEACHER_TRADE_SIGNAL_COUNT,
-        "teacher_risk_management": _teacher_risk_parameters(),
+        "teacher_risk_management": risk_parameters,
+        "teacher_entry_logic": _teacher_entry_logic(entry_mode),
         "teacher_action_distribution": action_distribution(
             teacher["teacher_action"].to_numpy(dtype=np.int64)
         ),
@@ -728,7 +795,7 @@ def _write_teacher_datasets(
     output_dir: Path,
     commit_sha: str,
 ) -> dict[str, tuple[pd.DataFrame, dict[str, Any]]]:
-    modes = ("institutional", "trend_pullback")
+    modes = ("institutional", "trend_pullback", "mean_reversion")
     return {
         mode: _write_teacher_dataset(
             frame, source_manifest, output_dir, commit_sha, mode
@@ -789,9 +856,18 @@ def _evaluate_teacher_mode(
         validation_without_direct_costs,
         holdout_without_direct_costs,
     )
+    entry_mode = str(teacher_manifest["teacher_entry_mode"])
+    risk_parameters = _teacher_risk_parameters(entry_mode)
+    risk_diagnostics = _cost_adjusted_risk_diagnostics(
+        float(risk_parameters["take_profit_fraction"]),
+        float(risk_parameters["stop_loss_fraction"]),
+    )
     distribution = teacher_manifest["teacher_action_distribution"]
     return {
-        "entry_mode": teacher_manifest["teacher_entry_mode"],
+        "entry_mode": entry_mode,
+        "entry_logic": teacher_manifest.get("teacher_entry_logic", _teacher_entry_logic(entry_mode)),
+        "parameters": risk_parameters,
+        "cost_adjusted_risk_diagnostics": risk_diagnostics,
         "teacher_csv_sha256": teacher_manifest["teacher_csv_sha256"],
         "action_distribution": distribution,
         "validation": {
@@ -808,7 +884,7 @@ def _evaluate_teacher_mode(
             validation_economics, holdout_economics, distribution
         ),
         "economic_diagnosis": _mode_economic_diagnosis(
-            validation_economics, holdout_economics
+            validation_economics, holdout_economics, risk_diagnostics
         ),
         "execution_cost_counterfactual": {
             "validation_without_direct_costs": validation_without_direct_costs,
@@ -886,7 +962,10 @@ def _build_teacher_backtest_report(
         "schema_version": "alix.teacher-backtest-report.v2",
         "commit_sha": commit_sha,
         "source_csv_sha256": source_manifest["csv_sha256"],
-        "strategy": "ATR-filtered 4h-bias entries with TP/SL and trailing stop",
+        "strategy": (
+            "independently evaluated institutional, trend-pullback, and "
+            "Bollinger-20/2 plus RSI-14 mean-reversion Spot teachers"
+        ),
         "entry_mode": selected_mode,
         "selected_mode": selected_mode,
         "diagnostic_mode_by_validation_pf": diagnostic_mode,
@@ -895,8 +974,8 @@ def _build_teacher_backtest_report(
             "the unchanged validation PF, holdout PF, and 800-signal gates; "
             "if both pass, maximize validation PF and keep holdout as a gate."
         ),
-        "parameters": _teacher_risk_parameters(),
-        "cost_adjusted_risk_diagnostics": _cost_adjusted_risk_diagnostics(),
+        "parameters": diagnostic["parameters"],
+        "cost_adjusted_risk_diagnostics": diagnostic["cost_adjusted_risk_diagnostics"],
         "action_distribution": diagnostic["action_distribution"],
         "teacher_csv_sha256": diagnostic["teacher_csv_sha256"],
         "modes": mode_results,

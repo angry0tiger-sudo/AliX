@@ -18,6 +18,7 @@ from services.rl_research.institutional_teacher import (
     _smc_features,
     _teacher_setups,
     _trend_pullback_setups,
+    _mean_reversion_setups,
     generate_teacher_labels,
 )
 
@@ -305,8 +306,35 @@ def test_trend_pullback_fallback_generates_directional_setups() -> None:
     assert not buy_setup.any()
 
 
+def test_mean_reversion_setups_require_bollinger_touch_and_rsi_extreme() -> None:
+    flat_close = np.full(39, 100.0, dtype=np.float64)
+
+    oversold_close = np.concatenate((flat_close, np.asarray([80.0])))
+    oversold_open = np.r_[oversold_close[0], oversold_close[:-1]]
+    oversold = pd.DataFrame({
+        "close": oversold_close,
+        "high": np.maximum(oversold_open, oversold_close) + 0.1,
+        "low": np.minimum(oversold_open, oversold_close) - 0.1,
+    })
+    buy_setup, sell_setup = _mean_reversion_setups(oversold)
+    assert bool(buy_setup.iloc[-1])
+    assert not bool(sell_setup.iloc[-1])
+
+    overbought_close = np.concatenate((flat_close, np.asarray([120.0])))
+    overbought_open = np.r_[overbought_close[0], overbought_close[:-1]]
+    overbought = pd.DataFrame({
+        "close": overbought_close,
+        "high": np.maximum(overbought_open, overbought_close) + 0.1,
+        "low": np.minimum(overbought_open, overbought_close) - 0.1,
+    })
+    buy_setup, sell_setup = _mean_reversion_setups(overbought)
+    assert not bool(buy_setup.iloc[-1])
+    assert bool(sell_setup.iloc[-1])
+
+
 def test_teacher_rejects_unknown_entry_mode() -> None:
     with pytest.raises(
-        ValueError, match="teacher_entry_mode_must_be_institutional_or_trend_pullback"
+        ValueError,
+        match="teacher_entry_mode_must_be_institutional_trend_pullback_or_mean_reversion",
     ):
         generate_teacher_labels(_bars(200), entry_mode="unrestricted")
