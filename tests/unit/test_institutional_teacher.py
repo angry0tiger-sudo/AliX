@@ -19,6 +19,7 @@ from services.rl_research.institutional_teacher import (
     _teacher_setups,
     _trend_pullback_setups,
     _mean_reversion_setups,
+    _breakout_setups,
     generate_teacher_labels,
 )
 
@@ -306,6 +307,28 @@ def test_trend_pullback_fallback_generates_directional_setups() -> None:
     assert not buy_setup.any()
 
 
+def test_breakout_setups_use_only_prior_donchian_channel() -> None:
+    flat_close = np.full(20, 100.0, dtype=np.float64)
+    for final_close, expected_buy, expected_sell in (
+        (101.0, True, False),
+        (99.0, False, True),
+    ):
+        close = np.concatenate((flat_close, np.asarray([final_close])))
+        open_ = np.r_[close[0], close[:-1]]
+        frame = pd.DataFrame(
+            {
+                "close": close,
+                "high": np.maximum(open_, close) + 0.2,
+                "low": np.minimum(open_, close) - 0.2,
+            }
+        )
+        buy_setup, sell_setup = _breakout_setups(frame, lookback_period=20)
+        assert not bool(buy_setup.iloc[:20].any())
+        assert not bool(sell_setup.iloc[:20].any())
+        assert bool(buy_setup.iloc[-1]) is expected_buy
+        assert bool(sell_setup.iloc[-1]) is expected_sell
+
+
 def test_mean_reversion_setups_require_bollinger_touch_and_rsi_extreme() -> None:
     flat_close = np.full(39, 100.0, dtype=np.float64)
 
@@ -339,6 +362,6 @@ def test_mean_reversion_setups_require_bollinger_touch_and_rsi_extreme() -> None
 def test_teacher_rejects_unknown_entry_mode() -> None:
     with pytest.raises(
         ValueError,
-        match="teacher_entry_mode_must_be_institutional_trend_pullback_or_mean_reversion",
+        match="teacher_entry_mode_must_be_institutional_trend_pullback_mean_reversion_or_breakout",
     ):
         generate_teacher_labels(_bars(200), entry_mode="unrestricted")

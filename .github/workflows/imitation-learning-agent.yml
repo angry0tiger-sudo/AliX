@@ -146,13 +146,13 @@ jobs:
           teacher_backtest = report["teacher_backtest"]
           assert teacher_backtest["commit_sha"] == os.environ["GITHUB_SHA"]
           assert teacher_backtest["gate"]["minimum_trade_signal_count"] == 800
-          assert set(teacher_backtest["modes"]) == {"institutional", "trend_pullback", "mean_reversion"}
+          assert set(teacher_backtest["modes"]) == {"institutional", "trend_pullback", "mean_reversion", "breakout"}
           assert teacher_backtest["selected_mode"] in teacher_backtest["modes"]
           assert teacher_backtest["entry_mode"] == teacher_backtest["selected_mode"]
           assert report["teacher"]["entry_mode"] == teacher_backtest["selected_mode"]
           assert teacher_manifest["teacher_entry_mode"] == teacher_backtest["selected_mode"]
           assert teacher_manifest["selected_for_training"] is True
-          assert set(teacher_backtest["gate"]["mode_gate_results"]) == {"institutional", "trend_pullback", "mean_reversion"}
+          assert set(teacher_backtest["gate"]["mode_gate_results"]) == {"institutional", "trend_pullback", "mean_reversion", "breakout"}
           for mode, result in teacher_backtest["modes"].items():
               assert result["entry_mode"] == mode
               cost_counterfactual = result["execution_cost_counterfactual"]
@@ -179,6 +179,9 @@ jobs:
               assert mode_costs["estimated_net_return_at_tp_without_gaps"] > 0.0
               assert mode_costs["estimated_net_return_at_sl_without_gaps"] < 0.0
               assert 0.0 < mode_costs["break_even_win_rate_fraction_without_gaps"] < 1.0
+          breakout_logic = teacher_backtest["modes"]["breakout"]["entry_logic"]
+          assert breakout_logic["donchian_lookback_candles"] == 20
+          assert "prior 20 candles" in breakout_logic["buy_condition"]
           mean_reversion_logic = teacher_backtest["modes"]["mean_reversion"]["entry_logic"]
           assert mean_reversion_logic["bollinger_period_candles"] == 20
           assert mean_reversion_logic["bollinger_standard_deviations"] == 2.0

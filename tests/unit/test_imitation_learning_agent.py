@@ -252,7 +252,15 @@ def test_mode_selection_uses_validation_pf_among_passing_modes() -> None:
             "gate": {"passed": True},
             "validation": {"economics": {"profit_factor": 1.9}},
         },
+        "breakout": {
+            "gate": {"passed": True},
+            "validation": {"economics": {"profit_factor": 2.0}},
+        },
     }
+    assert _select_teacher_mode(results) == "breakout"
+
+    results["breakout"]["gate"]["passed"] = False
+    results["breakout"]["validation"]["economics"]["profit_factor"] = 9.0
     assert _select_teacher_mode(results) == "mean_reversion"
 
     results["mean_reversion"]["gate"]["passed"] = False
@@ -267,7 +275,7 @@ def test_mode_selection_uses_validation_pf_among_passing_modes() -> None:
     assert _select_teacher_mode(results) is None
 
 
-def test_both_teacher_modes_are_generated_and_saved_independently(
+def test_all_teacher_modes_are_generated_and_saved_independently(
     tmp_path: Path,
 ) -> None:
     output_dir = tmp_path
@@ -277,7 +285,12 @@ def test_both_teacher_modes_are_generated_and_saved_independently(
         output_dir,
         "test-commit",
     )
-    assert set(candidates) == {"institutional", "trend_pullback", "mean_reversion"}
+    assert set(candidates) == {
+        "institutional",
+        "trend_pullback",
+        "mean_reversion",
+        "breakout",
+    }
     for mode, (_, manifest) in candidates.items():
         assert manifest["teacher_entry_mode"] == mode
         assert manifest["selected_for_training"] is False
@@ -302,6 +315,15 @@ def test_mean_reversion_risk_profile_uses_requested_levels_and_costs() -> None:
     assert diagnostics["estimated_net_return_at_tp_without_gaps"] > 0.0
     assert diagnostics["estimated_net_return_at_sl_without_gaps"] < 0.0
     assert 0.0 < diagnostics["break_even_win_rate_fraction_without_gaps"] < 1.0
+
+
+def test_breakout_risk_profile_uses_existing_strict_economic_assumptions() -> None:
+    risk = _teacher_risk_parameters("breakout")
+    assert risk["take_profit_fraction"] == 0.025
+    assert risk["stop_loss_fraction"] == 0.015
+    assert risk["trailing_trigger_fraction"] == 0.01
+    assert risk["fee_bps_per_side"] == 25.0
+    assert risk["slippage_bps_per_side"] == 20.0
 
 
 def test_teacher_economic_gate_requires_profitability_and_signal_density() -> None:

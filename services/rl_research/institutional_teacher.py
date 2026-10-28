@@ -244,10 +244,31 @@ def _mean_reversion_setups(
     return buy_setup.fillna(False), sell_setup.fillna(False)
 
 
+def _breakout_setups(
+    frame: pd.DataFrame, lookback_period: int = 20
+) -> tuple[pd.Series, pd.Series]:
+    """Detect close-confirmed Donchian breaks against prior candles only."""
+    prior_high = frame["high"].shift(1).rolling(
+        lookback_period, min_periods=lookback_period
+    ).max()
+    prior_low = frame["low"].shift(1).rolling(
+        lookback_period, min_periods=lookback_period
+    ).min()
+    close = frame["close"].astype(np.float64)
+    buy_setup = close > prior_high
+    sell_setup = close < prior_low
+    return buy_setup.fillna(False), sell_setup.fillna(False)
+
+
 def _validate_teacher_entry_mode(entry_mode: str) -> None:
-    if entry_mode not in {"institutional", "trend_pullback", "mean_reversion"}:
+    if entry_mode not in {
+        "institutional",
+        "trend_pullback",
+        "mean_reversion",
+        "breakout",
+    }:
         raise ValueError(
-            "teacher_entry_mode_must_be_institutional_trend_pullback_or_mean_reversion"
+            "teacher_entry_mode_must_be_institutional_trend_pullback_mean_reversion_or_breakout"
         )
 
 
@@ -639,8 +660,10 @@ def generate_teacher_labels(
         )
     elif entry_mode == "trend_pullback":
         buy_setup, sell_setup = _trend_pullback_setups(frame, bias)
-    else:
+    elif entry_mode == "mean_reversion":
         buy_setup, sell_setup = _mean_reversion_setups(frame)
+    else:
+        buy_setup, sell_setup = _breakout_setups(frame)
     atr_fraction = _average_true_range_fraction(frame, atr_period)
     actions, positions, exit_prices, exit_reasons = _generate_teacher_actions(
         frame,

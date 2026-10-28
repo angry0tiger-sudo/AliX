@@ -538,6 +538,16 @@ def _validate_training_parameters(epochs: int, window: int) -> None:
 
 
 def _teacher_entry_logic(entry_mode: str) -> dict[str, Any]:
+    if entry_mode == "breakout":
+        return {
+            "strategy": "donchian_20_breakout",
+            "buy_condition": "completed candle close exceeds the maximum high of the prior 20 candles",
+            "sell_condition": "completed candle close falls below the minimum low of the prior 20 candles; Spot long is closed, never shorted",
+            "donchian_lookback_candles": 20,
+            "breakout_confirmation": "close beyond prior-candle channel; current candle excluded from channel",
+            "signals_use_completed_candles_only": True,
+            "positioning": "Spot long/flat; SELL closes an existing long only",
+        }
     if entry_mode == "mean_reversion":
         return {
             "strategy": "bollinger_rsi_mean_reversion",
@@ -575,7 +585,7 @@ def _teacher_risk_parameters(entry_mode: str = "institutional") -> dict[str, Any
         trailing_trigger_fraction = 0.01
         # At +1% high-watermark, this distance leaves the stop at cost-adjusted breakeven.
         trailing_distance_fraction = 0.01
-    elif entry_mode in {"institutional", "trend_pullback"}:
+    elif entry_mode in {"institutional", "trend_pullback", "breakout"}:
         take_profit_fraction = DEFAULT_TAKE_PROFIT_FRACTION
         stop_loss_fraction = DEFAULT_STOP_LOSS_FRACTION
         trailing_trigger_fraction = DEFAULT_TRAILING_TRIGGER_FRACTION
@@ -801,7 +811,7 @@ def _write_teacher_datasets(
     output_dir: Path,
     commit_sha: str,
 ) -> dict[str, tuple[pd.DataFrame, dict[str, Any]]]:
-    modes = ("institutional", "trend_pullback", "mean_reversion")
+    modes = ("institutional", "trend_pullback", "mean_reversion", "breakout")
     return {
         mode: _write_teacher_dataset(
             frame, source_manifest, output_dir, commit_sha, mode
@@ -971,16 +981,17 @@ def _build_teacher_backtest_report(
         "commit_sha": commit_sha,
         "source_csv_sha256": source_manifest["csv_sha256"],
         "strategy": (
-            "independently evaluated institutional, trend-pullback, and "
-            "Bollinger-20/2 plus RSI-14 mean-reversion Spot teachers"
+            "independently evaluated institutional, trend-pullback, "
+            "Bollinger-20/2 plus RSI-14 mean-reversion, and Donchian-20 "
+            "breakout Spot teachers"
         ),
         "entry_mode": selected_mode,
         "selected_mode": selected_mode,
         "diagnostic_mode_by_validation_pf": diagnostic_mode,
         "selection_policy": (
-            "Evaluate both modes independently. Train only a mode that passes "
+            "Evaluate every mode independently. Train only a mode that passes "
             "the unchanged validation PF, holdout PF, and 800-signal gates; "
-            "if both pass, maximize validation PF and keep holdout as a gate."
+            "if multiple modes pass, maximize validation PF and keep holdout as a gate."
         ),
         "parameters": diagnostic["parameters"],
         "cost_adjusted_risk_diagnostics": diagnostic["cost_adjusted_risk_diagnostics"],
