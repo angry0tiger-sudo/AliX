@@ -631,6 +631,7 @@ def _summarize_simulation(
         summary["equity_curve"] = equity_curve.tolist()
     return summary
 
+
 def _simulate_long_flat(
     frame: pd.DataFrame,
     actions: IntArray,
@@ -781,7 +782,6 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
     )
 
 
-
 def _return_moments(returns: FloatArray) -> dict[str, Any]:
     values = np.asarray(returns, dtype=np.float64)
     if values.ndim != 1 or not np.isfinite(values).all():
@@ -864,8 +864,7 @@ def _deflated_sharpe_ratio(
         euler_mascheroni = 0.5772156649015329
         expected_max_sharpe = standard_error * (
             (1.0 - euler_mascheroni) * normal.inv_cdf(1.0 - 1.0 / trial_count)
-            + euler_mascheroni
-            * normal.inv_cdf(1.0 - 1.0 / (trial_count * math.e))
+            + euler_mascheroni * normal.inv_cdf(1.0 - 1.0 / (trial_count * math.e))
         )
     z_score = (float(observed_sharpe) - expected_max_sharpe) / standard_error
     result["probability"] = float(normal.cdf(z_score))
@@ -906,12 +905,14 @@ def _minimum_track_record_length(
         result["status"] = "invalid_sharpe_sampling_variance"
         return result
     z_confidence = NormalDist().inv_cdf(confidence_level)
-    minimum_length = 1.0 + variance_factor * (
-        z_confidence / float(observed_sharpe)
-    ) ** 2
+    minimum_length = (
+        1.0 + variance_factor * (z_confidence / float(observed_sharpe)) ** 2
+    )
     result["minimum_track_record_length_trades"] = int(math.ceil(minimum_length))
     result["additional_trades_required"] = max(
-        0, int(result["minimum_track_record_length_trades"]) - int(moments["sample_count"])
+        0,
+        int(result["minimum_track_record_length_trades"])
+        - int(moments["sample_count"]),
     )
     result["status"] = "estimated"
     return result
@@ -930,8 +931,17 @@ def _sharpe_ratio(returns: FloatArray) -> float:
 def _rank_percentile(value: float, candidates: list[float]) -> float:
     if not candidates:
         raise ValueError("meta_pbo_rank_population_empty")
-    less = sum(1 for candidate in candidates if candidate < value and not math.isclose(candidate, value, rel_tol=1e-12, abs_tol=1e-12))
-    equal = sum(1 for candidate in candidates if math.isclose(candidate, value, rel_tol=1e-12, abs_tol=1e-12))
+    less = sum(
+        1
+        for candidate in candidates
+        if candidate < value
+        and not math.isclose(candidate, value, rel_tol=1e-12, abs_tol=1e-12)
+    )
+    equal = sum(
+        1
+        for candidate in candidates
+        if math.isclose(candidate, value, rel_tol=1e-12, abs_tol=1e-12)
+    )
     return float((less + 0.5 * equal) / len(candidates))
 
 
@@ -942,7 +952,12 @@ def _probability_backtest_overfitting(
     purge_candles: int = _HORIZON,
 ) -> dict[str, Any]:
     thresholds = sorted(threshold_return_streams)
-    if len(thresholds) < 2 or block_count < 4 or block_count % 2 != 0 or purge_candles < 0:
+    if (
+        len(thresholds) < 2
+        or block_count < 4
+        or block_count % 2 != 0
+        or purge_candles < 0
+    ):
         raise ValueError("meta_pbo_configuration_invalid")
     lengths = {len(threshold_return_streams[threshold]) for threshold in thresholds}
     if len(lengths) != 1:
@@ -973,13 +988,17 @@ def _probability_backtest_overfitting(
         )
         in_scores = {
             threshold: _sharpe_ratio(
-                np.concatenate([blocks_by_threshold[threshold][i] for i in in_sample_blocks])
+                np.concatenate(
+                    [blocks_by_threshold[threshold][i] for i in in_sample_blocks]
+                )
             )
             for threshold in thresholds
         }
         out_scores = {
             threshold: _sharpe_ratio(
-                np.concatenate([blocks_by_threshold[threshold][i] for i in out_sample_blocks])
+                np.concatenate(
+                    [blocks_by_threshold[threshold][i] for i in out_sample_blocks]
+                )
             )
             for threshold in thresholds
         }
@@ -1037,7 +1056,10 @@ def _run_existing_oos_diagnostics(
         raise ValueError("meta_overfit_required_artifact_missing")
     report = json.loads(report_path.read_text(encoding="utf-8"))
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    if report.get("commit_sha") != expected_source_sha or manifest.get("commit_sha") != expected_source_sha:
+    if (
+        report.get("commit_sha") != expected_source_sha
+        or manifest.get("commit_sha") != expected_source_sha
+    ):
         raise ValueError("meta_overfit_source_commit_sha_mismatch")
     safety = {
         "Champion": None,
@@ -1049,17 +1071,25 @@ def _run_existing_oos_diagnostics(
     }
     if any(report.get("safety", {}).get(key) != value for key, value in safety.items()):
         raise ValueError("meta_overfit_report_safety_invariant_breached")
-    if any(manifest.get("safety", {}).get(key) != value for key, value in safety.items()):
+    if any(
+        manifest.get("safety", {}).get(key) != value for key, value in safety.items()
+    ):
         raise ValueError("meta_overfit_manifest_safety_invariant_breached")
     actual_csv_sha = hashlib.sha256(market_path.read_bytes()).hexdigest()
     expected_csv_sha = str(manifest.get("source_csv_sha256", ""))
     report_csv_sha = str(report.get("dataset", {}).get("csv_sha256", ""))
-    if not expected_csv_sha or actual_csv_sha != expected_csv_sha or actual_csv_sha != report_csv_sha:
+    if (
+        not expected_csv_sha
+        or actual_csv_sha != expected_csv_sha
+        or actual_csv_sha != report_csv_sha
+    ):
         raise ValueError("meta_overfit_market_data_hash_mismatch")
     frame = pd.read_csv(market_path)
     predictions = pd.read_csv(predictions_path)
     expected_rows = int(manifest.get("row_count", -1))
-    if len(frame) != expected_rows or int(report.get("dataset", {}).get("row_count", -1)) != len(frame):
+    if len(frame) != expected_rows or int(
+        report.get("dataset", {}).get("row_count", -1)
+    ) != len(frame):
         raise ValueError("meta_overfit_market_data_row_count_mismatch")
     needed_columns = {
         "row_index",
@@ -1084,19 +1114,33 @@ def _run_existing_oos_diagnostics(
     actions = np.full(len(frame), ACTION_HOLD, dtype=np.int64)
     actions[row_indices] = mapped_actions.to_numpy(dtype=np.int64)
     probabilities = np.zeros(len(frame), dtype=np.float64)
-    probability_values = predictions["meta_profit_probability"].to_numpy(dtype=np.float64)
-    if not np.isfinite(probability_values).all() or np.any(probability_values < 0.0) or np.any(probability_values > 1.0):
+    probability_values = predictions["meta_profit_probability"].to_numpy(
+        dtype=np.float64
+    )
+    if (
+        not np.isfinite(probability_values).all()
+        or np.any(probability_values < 0.0)
+        or np.any(probability_values > 1.0)
+    ):
         raise ValueError("meta_overfit_prediction_probability_invalid")
     probabilities[row_indices] = probability_values
     partitions = predictions["partition"].astype(str).to_numpy()
     validation_indices = np.sort(row_indices[partitions == "validation"])
-    if len(validation_indices) < 6 * (2 * _HORIZON + 2) or np.any(np.diff(validation_indices) != 1):
+    if len(validation_indices) < 6 * (2 * _HORIZON + 2) or np.any(
+        np.diff(validation_indices) != 1
+    ):
         raise ValueError("meta_overfit_validation_oos_partition_invalid")
-    thresholds_raw = report.get("threshold_selection", {}).get("candidate_thresholds", [])
+    thresholds_raw = report.get("threshold_selection", {}).get(
+        "candidate_thresholds", []
+    )
     thresholds = sorted({float(threshold) for threshold in thresholds_raw})
-    if len(thresholds) < 2 or any(not 0.0 <= threshold <= 1.0 for threshold in thresholds):
+    if len(thresholds) < 2 or any(
+        not 0.0 <= threshold <= 1.0 for threshold in thresholds
+    ):
         raise ValueError("meta_overfit_threshold_candidates_invalid")
-    validation_metrics = report.get("validation", {}).get("meta_filtered_economic_metrics_after_costs", {})
+    validation_metrics = report.get("validation", {}).get(
+        "meta_filtered_economic_metrics_after_costs", {}
+    )
     trades = validation_metrics.get("trades", [])
     trade_returns = np.asarray(
         [float(trade["net_pnl_fraction"]) for trade in trades], dtype=np.float64
@@ -1105,7 +1149,9 @@ def _run_existing_oos_diagnostics(
     mintrl = _minimum_track_record_length(trade_returns)
     validation_start = int(validation_indices[0])
     validation_end = int(validation_indices[-1]) + 1
-    horizon = int(report.get("economic_simulation", {}).get("maximum_holding_candles", _HORIZON))
+    horizon = int(
+        report.get("economic_simulation", {}).get("maximum_holding_candles", _HORIZON)
+    )
     threshold_return_streams: dict[float, FloatArray] = {}
     for threshold in thresholds:
         simulated = _simulate_long_flat(
@@ -1119,7 +1165,9 @@ def _run_existing_oos_diagnostics(
             include_equity_curve=True,
         )
         curve = np.asarray(simulated["equity_curve"], dtype=np.float64)
-        if curve.size != validation_end - validation_start + 1 or np.any(curve[:-1] <= 0.0):
+        if curve.size != validation_end - validation_start + 1 or np.any(
+            curve[:-1] <= 0.0
+        ):
             raise ValueError("meta_overfit_validation_equity_curve_invalid")
         threshold_return_streams[threshold] = np.asarray(
             curve[1:] / curve[:-1] - 1.0, dtype=np.float64
@@ -1132,7 +1180,9 @@ def _run_existing_oos_diagnostics(
     dsr_failed = dsr_probability is None or float(dsr_probability) < 0.5
     pbo_failed = pbo_probability is None or float(pbo_probability) > 0.5
     diagnostics: dict[str, Any] = {
-        "status": "OVERFIT_WARNING" if dsr_failed or pbo_failed else "NO_OVERFIT_WARNING",
+        "status": "OVERFIT_WARNING"
+        if dsr_failed or pbo_failed
+        else "NO_OVERFIT_WARNING",
         "source_artifact_commit_sha": expected_source_sha,
         "diagnostics_code_commit_sha": diagnostics_code_sha,
         "evaluation_scope": "existing Validation OOS predictions only; no model refit; Holdout excluded",
@@ -1785,7 +1835,9 @@ def main() -> int:
     args = parser.parse_args()
     if args.diagnostics_artifact_dir is not None:
         if not args.expected_source_sha or not args.diagnostics_code_sha:
-            parser.error("diagnostics mode requires --expected-source-sha and --diagnostics-code-sha")
+            parser.error(
+                "diagnostics mode requires --expected-source-sha and --diagnostics-code-sha"
+            )
         result = _run_existing_oos_diagnostics(
             args.diagnostics_artifact_dir,
             expected_source_sha=str(args.expected_source_sha),
@@ -1793,8 +1845,15 @@ def main() -> int:
         )
         print(json.dumps(result, indent=2, sort_keys=True, allow_nan=False))
         return 0
-    if args.dataset is None or args.manifest is None or args.output_dir is None or not args.commit_sha:
-        parser.error("training mode requires --dataset, --manifest, --output-dir, and --commit-sha")
+    if (
+        args.dataset is None
+        or args.manifest is None
+        or args.output_dir is None
+        or not args.commit_sha
+    ):
+        parser.error(
+            "training mode requires --dataset, --manifest, --output-dir, and --commit-sha"
+        )
     run_meta_labeling(
         args.dataset,
         args.manifest,

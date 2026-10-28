@@ -181,9 +181,7 @@ def test_meta_economic_simulation_rejects_bad_input() -> None:
 
 
 def test_dsr_and_minimum_track_record_length_are_explicit_about_track_record() -> None:
-    returns = np.asarray(
-        [0.01, 0.02, 0.015, 0.03, 0.005, 0.02, 0.01], dtype=np.float64
-    )
+    returns = np.asarray([0.01, 0.02, 0.015, 0.03, 0.005, 0.02, 0.01], dtype=np.float64)
     dsr = _deflated_sharpe_ratio(returns, trial_count=11)
     mintrl = _minimum_track_record_length(returns)
     assert dsr["status"] == "estimated"
@@ -198,14 +196,19 @@ def test_dsr_and_mintrl_fail_closed_for_short_or_nonpositive_track_record() -> N
     short = _deflated_sharpe_ratio(np.asarray([0.01, -0.01]), trial_count=11)
     assert short["probability"] is None
     assert short["status"] == "insufficient_track_record"
-    assert _minimum_track_record_length(np.asarray([0.01, -0.01]))[
-        "minimum_track_record_length_trades"
-    ] is None
+    assert (
+        _minimum_track_record_length(np.asarray([0.01, -0.01]))[
+            "minimum_track_record_length_trades"
+        ]
+        is None
+    )
     negative = _minimum_track_record_length(
         np.asarray([-0.03, -0.02, -0.01, -0.04, -0.02], dtype=np.float64)
     )
     assert negative["minimum_track_record_length_trades"] is None
-    assert negative["status"] == "no_finite_track_length_for_nonpositive_observed_sharpe"
+    assert (
+        negative["status"] == "no_finite_track_length_for_nonpositive_observed_sharpe"
+    )
     with pytest.raises(ValueError, match="meta_dsr_configuration_invalid"):
         _deflated_sharpe_ratio(np.asarray([0.1, 0.2, 0.3]), trial_count=0)
 
@@ -267,7 +270,9 @@ def test_existing_oos_diagnostics_updates_only_the_matching_artifact(tmp_path) -
                 "partition": "validation" if 200 <= row_index < 800 else "meta_train",
             }
         )
-    pd.DataFrame(rows).to_csv(artifact_dir / "meta-out-of-sample-predictions.csv", index=False)
+    pd.DataFrame(rows).to_csv(
+        artifact_dir / "meta-out-of-sample-predictions.csv", index=False
+    )
     safety = {
         "Champion": None,
         "order_permission": False,
@@ -277,13 +282,24 @@ def test_existing_oos_diagnostics_updates_only_the_matching_artifact(tmp_path) -
         "private_api_calls": 0,
     }
     (artifact_dir / "oracle-meta-labeling-manifest.json").write_text(
-        json.dumps({"commit_sha": source_sha, "row_count": 900, "source_csv_sha256": source_hash, "safety": safety}),
+        json.dumps(
+            {
+                "commit_sha": source_sha,
+                "row_count": 900,
+                "source_csv_sha256": source_hash,
+                "safety": safety,
+            }
+        ),
         encoding="utf-8",
     )
     report = {
         "commit_sha": source_sha,
         "dataset": {"row_count": 900, "csv_sha256": source_hash},
-        "threshold_selection": {"candidate_thresholds": [round(value, 2) for value in np.arange(0.3, 0.801, 0.05)]},
+        "threshold_selection": {
+            "candidate_thresholds": [
+                round(value, 2) for value in np.arange(0.3, 0.801, 0.05)
+            ]
+        },
         "validation": {
             "meta_filtered_economic_metrics_after_costs": {
                 "trades": [
@@ -302,7 +318,10 @@ def test_existing_oos_diagnostics_updates_only_the_matching_artifact(tmp_path) -
     updated = json.loads(report_path.read_text(encoding="utf-8"))
     assert diagnostics["source_artifact_commit_sha"] == source_sha
     assert diagnostics["diagnostics_code_commit_sha"] == code_sha
-    assert updated["overfit_diagnostics"]["status"] in ("OVERFIT_WARNING", "NO_OVERFIT_WARNING")
+    assert updated["overfit_diagnostics"]["status"] in (
+        "OVERFIT_WARNING",
+        "NO_OVERFIT_WARNING",
+    )
     assert updated["safety"] == safety
     assert updated["decision"] == "RESEARCH_ONLY_NOT_PROMOTED"
     assert (artifact_dir / "oracle-meta-labeling-diagnostics.json").is_file()
