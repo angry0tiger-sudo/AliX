@@ -198,9 +198,9 @@ def test_teacher_economic_gate_requires_profitability_and_signal_density() -> No
     passing = {"profit_factor": 1.6}
     failing = {"profit_factor": 1.49}
     sufficient_signals = {
-        "BUY": {"count": 125},
-        "HOLD": {"count": 17_270},
-        "SELL": {"count": 125},
+        "BUY": {"count": 400},
+        "HOLD": {"count": 16_720},
+        "SELL": {"count": 400},
     }
     sparse_signals = {
         "BUY": {"count": 20},
