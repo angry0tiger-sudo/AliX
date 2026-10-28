@@ -1184,7 +1184,9 @@ def _validation_oos_indices(
     if "partition" not in predictions.columns:
         raise ValueError("meta_overfit_prediction_schema_invalid")
     partitions = predictions["partition"].astype(str).to_numpy()
-    validation_indices = cast(IntArray, np.sort(row_indices[partitions == "validation"]))
+    validation_indices = cast(
+        IntArray, np.sort(row_indices[partitions == "validation"])
+    )
     if len(validation_indices) == 0 or np.any(np.diff(validation_indices) != 1):
         raise ValueError("meta_overfit_validation_oos_partition_invalid")
     return validation_indices
