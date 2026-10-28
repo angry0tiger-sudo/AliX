@@ -17,6 +17,7 @@ from services.rl_research.institutional_teacher import (
     _generate_teacher_actions,
     _smc_features,
     _teacher_setups,
+    _trend_pullback_setups,
     generate_teacher_labels,
 )
 
@@ -271,3 +272,41 @@ def test_teacher_defaults_match_daily_opportunity_profile() -> None:
     assert DEFAULT_STOP_LOSS_FRACTION == 0.0075
     assert DEFAULT_MIN_ATR_COST_MULTIPLE == 1.0
     assert (DEFAULT_MIN_ATR_COST_MULTIPLE * (25.0 + 20.0) / 10_000.0) == 0.0045
+
+
+def test_trend_pullback_fallback_generates_directional_setups() -> None:
+    count = 120
+    close_up = pd.Series(100.0 + np.arange(count, dtype=np.float64) * 0.1)
+    bullish = pd.DataFrame(
+        {
+            "close": close_up,
+            "low": close_up - 0.8,
+            "high": close_up + 0.2,
+        }
+    )
+    buy_setup, sell_setup = _trend_pullback_setups(
+        bullish, pd.Series([1] * count, dtype=np.int8)
+    )
+    assert buy_setup.any()
+    assert not sell_setup.any()
+
+    close_down = close_up.iloc[::-1].reset_index(drop=True)
+    bearish = pd.DataFrame(
+        {
+            "close": close_down,
+            "low": close_down - 0.2,
+            "high": close_down + 0.8,
+        }
+    )
+    buy_setup, sell_setup = _trend_pullback_setups(
+        bearish, pd.Series([-1] * count, dtype=np.int8)
+    )
+    assert sell_setup.any()
+    assert not buy_setup.any()
+
+
+def test_teacher_rejects_unknown_entry_mode() -> None:
+    with pytest.raises(
+        ValueError, match="teacher_entry_mode_must_be_institutional_or_trend_pullback"
+    ):
+        generate_teacher_labels(_bars(200), entry_mode="unrestricted")
