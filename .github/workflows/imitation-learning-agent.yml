@@ -142,6 +142,7 @@ jobs:
 
           assert report["commit_sha"] == os.environ["GITHUB_SHA"]
           assert market_manifest["commit_sha"] == os.environ["GITHUB_SHA"]
+          # Keep daily opportunity density and both economic acceptance gates strict.
           teacher_backtest = report["teacher_backtest"]
           assert teacher_backtest["commit_sha"] == os.environ["GITHUB_SHA"]
           assert teacher_backtest["gate"]["minimum_trade_signal_count"] == 800
