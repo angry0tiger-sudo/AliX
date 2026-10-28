@@ -1229,14 +1229,11 @@ def _validation_threshold_return_streams(
             include_equity_curve=True,
         )
         curve = np.asarray(simulated["equity_curve"], dtype=np.float64)
-        if (
-            curve.size != validation_end - validation_start + 1
-            or np.any(curve[:-1] <= 0.0)
+        if curve.size != validation_end - validation_start + 1 or np.any(
+            curve[:-1] <= 0.0
         ):
             raise ValueError("meta_overfit_validation_equity_curve_invalid")
-        streams[threshold] = np.asarray(
-            curve[1:] / curve[:-1] - 1.0, dtype=np.float64
-        )
+        streams[threshold] = np.asarray(curve[1:] / curve[:-1] - 1.0, dtype=np.float64)
     return streams
 
 
@@ -1304,7 +1301,10 @@ def _run_existing_oos_diagnostics(
         horizon,
     )
     diagnostics = _build_overfit_diagnostics(
-        trade_returns, threshold_return_streams, expected_source_sha, diagnostics_code_sha
+        trade_returns,
+        threshold_return_streams,
+        expected_source_sha,
+        diagnostics_code_sha,
     )
     report["overfit_diagnostics"] = diagnostics
     _validate_safety(report)
