@@ -6,8 +6,6 @@ from collections.abc import Mapping, Sequence
 from decimal import Decimal
 
 from services.execution.contracts import (
-    CLIENT_ORDER_PREFIX,
-    LocalPosition,
     OrderMapping,
     ProtectionPlan,
     RecoveryStore,

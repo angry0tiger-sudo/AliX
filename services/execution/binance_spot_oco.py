@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from decimal import Decimal
-from typing import Any, cast
+from typing import Any
 
 from services.execution.contracts import OrderMapping, ProtectionPlan
 
@@ -85,7 +85,12 @@ class BinanceSpotOcoGateway:
             )
         except Exception as exc:
             message = str(exc).lower()
-            if "not found" in message or "unknown order" in message or "-2011" in message:
+            if (
+                "not found" in message
+                or "unknown order" in message
+                or "-2011" in message
+                or "-2021" in message
+            ):
                 return None
             raise
         mapped = _mapping(result)

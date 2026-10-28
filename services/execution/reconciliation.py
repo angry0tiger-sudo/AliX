@@ -6,7 +6,6 @@ from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Any
 
 from services.execution.contracts import (
     CLIENT_ORDER_PREFIX,
@@ -115,7 +114,8 @@ def _filled_exit_order(
         (
             _decimal(
                 trade.get("cost"),
-                _decimal(trade.get("price")) * _decimal(trade.get("amount", trade.get("qty"))),
+                _decimal(trade.get("price"))
+                * _decimal(trade.get("amount", trade.get("qty"))),
             )
             for trade in matching
         ),
@@ -127,9 +127,7 @@ def _filled_exit_order(
     if filled_quantity - position.quantity > tolerance or filled_quantity <= 0:
         return None, "oco_exit_quantity_mismatch"
     average = total_cost / filled_quantity
-    latest = max(
-        int(trade.get("timestamp") or 0) for trade in matching
-    )
+    latest = max(int(trade.get("timestamp") or 0) for trade in matching)
     order_id = str(matching[-1].get("order", matching[-1].get("orderId", "")))
     report = next((item for item in reports if _order_id(item) == order_id), {})
     normalized: dict[str, object] = {
