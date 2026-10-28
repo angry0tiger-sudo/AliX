@@ -14,6 +14,7 @@ from scripts.run_imitation_learning_agent import (
     _target_positions,
     _compute_class_weights,
     _teacher_backtest_gate,
+    _cost_adjusted_risk_diagnostics,
     _select_teacher_mode,
     _write_teacher_datasets,
     _weighted_cross_entropy_loss,
@@ -196,6 +197,17 @@ def test_class_weights_fail_closed_when_train_split_lacks_a_class() -> None:
         assert str(exc) == "teacher_train_split_missing_action_class"
     else:
         raise AssertionError("missing training class must fail closed")
+
+
+def test_cost_adjusted_tp_sl_and_break_even_win_rate_are_reported() -> None:
+    diagnostics = _cost_adjusted_risk_diagnostics()
+    target_return = diagnostics["estimated_net_return_at_tp_without_gaps"]
+    stop_return = diagnostics["estimated_net_return_at_sl_without_gaps"]
+    required_win_rate = diagnostics["break_even_win_rate_fraction_without_gaps"]
+
+    assert np.isclose(target_return, 0.0158, atol=0.0001)
+    assert np.isclose(stop_return, -0.0238, atol=0.0001)
+    assert 0.60 < required_win_rate < 0.61
 
 
 def test_teacher_mode_selection_uses_validation_pf_only_among_fully_passing_modes() -> None:
