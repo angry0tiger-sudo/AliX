@@ -183,7 +183,9 @@ def _base_validation_score(
     return float(classification_metrics(y_validation, predictions)["macro_f1"])
 
 
-def _capture_base_checkpoint(lstm: Any, classifier: Any) -> tuple[dict[str, Any], dict[str, Any]]:
+def _capture_base_checkpoint(
+    lstm: Any, classifier: Any
+) -> tuple[dict[str, Any], dict[str, Any]]:
     lstm_state = {
         key: value.detach().clone() for key, value in lstm.state_dict().items()
     }
@@ -239,9 +241,7 @@ def _fit_base_lstm(
     best_classifier: dict[str, Any] = {}
 
     for epoch in range(epochs):
-        _train_base_epoch(
-            torch, lstm, classifier, loader, optimizer, loss_weights
-        )
+        _train_base_epoch(torch, lstm, classifier, loader, optimizer, loss_weights)
         completed_epochs = epoch + 1
         score = _base_validation_score(
             torch, lstm, classifier, x_validation, y_validation
@@ -631,7 +631,9 @@ def _simulate_long_flat(
     horizon: int = _HORIZON,
 ) -> dict[str, Any]:
     """Simulate gated Spot entries with stop/target/horizon and model SELL exits."""
-    _validate_simulation_inputs(frame, actions, profit_probabilities, threshold, start, end)
+    _validate_simulation_inputs(
+        frame, actions, profit_probabilities, threshold, start, end
+    )
     opens = frame["open"].to_numpy(dtype=np.float64)
     highs = frame["high"].to_numpy(dtype=np.float64)
     lows = frame["low"].to_numpy(dtype=np.float64)
@@ -845,7 +847,9 @@ def run_meta_labeling(
     stop_loss: float = _STOP_LOSS,
     seed: int = _SEED,
 ) -> dict[str, Any]:
-    _validate_meta_training_configuration(epochs, window, horizon, take_profit, stop_loss)
+    _validate_meta_training_configuration(
+        epochs, window, horizon, take_profit, stop_loss
+    )
     frame, source_manifest = load_public_market_data(
         dataset_path, manifest_path, commit_sha
     )
