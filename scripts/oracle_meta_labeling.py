@@ -316,9 +316,7 @@ def _fit_meta_model(
     return model
 
 
-def _predict_profit_probability(
-    model: Any, features: Float32Array
-) -> FloatArray:
+def _predict_profit_probability(model: Any, features: Float32Array) -> FloatArray:
     if len(features) == 0:
         return np.empty(0, dtype=np.float64)
     positive_column = int(np.flatnonzero(model.classes_ == 1)[0])
