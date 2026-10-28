@@ -1006,10 +1006,18 @@ def _build_teacher_backtest_report(
         gate = {
             "minimum_profit_factor": 1.5,
             "maximum_allowed_drawdown_fraction": _MAX_TEACHER_DRAWDOWN_FRACTION,
-            "validation_profit_factor_passed": _any_mode_gate_passed(mode_results, "validation_profit_factor_passed"),
-            "holdout_profit_factor_passed": _any_mode_gate_passed(mode_results, "holdout_profit_factor_passed"),
-            "validation_drawdown_passed": _any_mode_gate_passed(mode_results, "validation_drawdown_passed"),
-            "holdout_drawdown_passed": _any_mode_gate_passed(mode_results, "holdout_drawdown_passed"),
+            "validation_profit_factor_passed": _any_mode_gate_passed(
+                mode_results, "validation_profit_factor_passed"
+            ),
+            "holdout_profit_factor_passed": _any_mode_gate_passed(
+                mode_results, "holdout_profit_factor_passed"
+            ),
+            "validation_drawdown_passed": _any_mode_gate_passed(
+                mode_results, "validation_drawdown_passed"
+            ),
+            "holdout_drawdown_passed": _any_mode_gate_passed(
+                mode_results, "holdout_drawdown_passed"
+            ),
             "minimum_trade_signal_count": _MIN_TEACHER_TRADE_SIGNAL_COUNT,
             "teacher_trade_signal_count": int(
                 diagnostic["gate"]["teacher_trade_signal_count"]
