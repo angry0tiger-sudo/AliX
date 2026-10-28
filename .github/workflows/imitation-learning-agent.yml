@@ -106,6 +106,7 @@ jobs:
           python -m pip install pip==25.2
           python -m pip install numpy==2.5.4 pandas==2.3.3 scikit-learn==1.9.0
           python -m pip install torch==2.14.1 --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install optuna==5.0.0
           python -m pip check
 
       - name: Generate immutable 730-day public Binance hourly OHLCV dataset
@@ -125,7 +126,9 @@ jobs:
             --output-dir "$RUNNER_TEMP/alix-imitation-output" \
             --commit-sha "$GITHUB_SHA" \
             --epochs 20 \
-            --window 48
+            --window 48 \
+            --optimization-trials 60 \
+            --optimization-seed 20261028
 
       - name: Enforce research-only output and print final scorecard
         run: |
@@ -146,60 +149,116 @@ jobs:
           teacher_backtest = report["teacher_backtest"]
           assert teacher_backtest["commit_sha"] == os.environ["GITHUB_SHA"]
           assert teacher_backtest["gate"]["minimum_trade_signal_count"] == 800
+          assert teacher_backtest["gate"]["signal_count_comparison"] == "strictly_greater_than_minimum"
           assert set(teacher_backtest["modes"]) == {"institutional", "trend_pullback", "mean_reversion", "breakout"}
+          optimization = teacher_backtest["optimization"]
+          assert optimization["schema_version"] == "alix.teacher-optimization-report.v1"
+          assert optimization["method"] == "Optuna TPE with purged walk-forward validation"
+          assert optimization["sampler"] == "TPESampler"
+          assert optimization["requested_trials"] == 60
+          assert optimization["dataset_row_count"] == market_manifest["row_count"]
+          assert optimization["search_space"]["entry_mode"] == ["mean_reversion", "breakout", "institutional"]
+          assert optimization["search_space"]["rsi_buy_below_integer"] == [20, 40]
+          assert optimization["search_space"]["rsi_sell_above"] == "100 - rsi_buy_below"
+          assert optimization["search_space"]["bollinger_stddev"] == [1.0, 3.0]
+          assert optimization["search_space"]["donchian_lookback_candles_integer"] == [10, 50]
+          assert optimization["search_space"]["take_profit_fraction"] == [0.005, 0.05]
+          assert optimization["search_space"]["stop_loss_fraction"] == [0.005, 0.05]
+          assert optimization["search_space"]["atr_cost_multiple"] == [1.0, 3.0]
+          assert optimization["completed_trials"] > 0
+          assert optimization["best_parameters"]["entry_mode"] == teacher_backtest["selected_mode"]
+          assert optimization["holdout_never_used_in_optimization"] is True
+          assert optimization["validation_never_used_in_optimization"] is True
+          assert optimization["optimization_test_blocks_end_before_validation"] is True
+          assert optimization["purge_candles"] == 72
+          assert optimization["embargo_candles"] == 48
+          assert len(optimization["folds"]) == 5
+          assert optimization["final_holdout_start_inclusive"] == teacher_backtest["holdout"]["row_start_inclusive"]
+          assert optimization["validation_start_inclusive"] == int(market_manifest["row_count"] * 0.70)
+          assert optimization["validation_end_exclusive"] == int(market_manifest["row_count"] * 0.85)
+          for fold in optimization["folds"]:
+              assert fold["purge_end_exclusive"] == fold["test_start_inclusive"]
+              assert fold["test_start_inclusive"] - fold["train_end_exclusive"] >= optimization["purge_candles"]
+              assert fold["test_end_exclusive"] <= optimization["validation_start_inclusive"]
+              assert fold["test_end_exclusive"] < optimization["final_holdout_start_inclusive"]
+          for previous, following in zip(optimization["folds"], optimization["folds"][1:]):
+              assert following["test_start_inclusive"] >= previous["embargo_end_exclusive"]
           assert teacher_backtest["selected_mode"] in teacher_backtest["modes"]
           assert teacher_backtest["entry_mode"] == teacher_backtest["selected_mode"]
           assert report["teacher"]["entry_mode"] == teacher_backtest["selected_mode"]
           assert teacher_manifest["teacher_entry_mode"] == teacher_backtest["selected_mode"]
+          assert teacher_manifest["signal_count_comparison"] == "strictly_greater_than_minimum"
           assert teacher_manifest["selected_for_training"] is True
           assert set(teacher_backtest["gate"]["mode_gate_results"]) == {"institutional", "trend_pullback", "mean_reversion", "breakout"}
           for mode, result in teacher_backtest["modes"].items():
               assert result["entry_mode"] == mode
               assert result["gate"]["maximum_allowed_drawdown_fraction"] == 0.15
-              assert result["gate"]["validation_drawdown_passed"] is True
-              assert result["gate"]["holdout_drawdown_passed"] is True
               cost_counterfactual = result["execution_cost_counterfactual"]
               assert "validation_without_direct_costs" in cost_counterfactual
               assert "holdout_without_direct_costs" in cost_counterfactual
               assert cost_counterfactual["diagnosis"]["interpretation"]
-          assert teacher_backtest["modes"][teacher_backtest["selected_mode"]]["gate"]["passed"] is True
+          selected_result = teacher_backtest["modes"][teacher_backtest["selected_mode"]]
+          assert selected_result["gate"]["passed"] is True
+          assert selected_result["gate"]["validation_profit_factor_passed"] is True
+          assert selected_result["gate"]["holdout_profit_factor_passed"] is True
+          assert selected_result["gate"]["validation_drawdown_passed"] is True
+          assert selected_result["gate"]["holdout_drawdown_passed"] is True
+          assert selected_result["gate"]["signal_density_passed"] is True
+          assert selected_result["gate"]["lstm_training_allowed"] is True
           risk_parameters = teacher_backtest["parameters"]
           cost_diagnostics = teacher_backtest["cost_adjusted_risk_diagnostics"]
-          diagnostic_mode = teacher_backtest["diagnostic_mode_by_validation_pf"]
+          diagnostic_mode = teacher_backtest["diagnostic_mode_by_wfv_objective"]
+          assert diagnostic_mode == teacher_backtest["selected_mode"]
           assert risk_parameters == teacher_backtest["modes"][diagnostic_mode]["parameters"]
           assert cost_diagnostics == teacher_backtest["modes"][diagnostic_mode]["cost_adjusted_risk_diagnostics"]
           assert teacher_backtest["gate"]["minimum_profit_factor"] == 1.5
           assert teacher_backtest["gate"]["maximum_allowed_drawdown_fraction"] == 0.15
           for mode, result in teacher_backtest["modes"].items():
-              expected_tp = 0.015 if mode == "mean_reversion" else 0.025
-              expected_sl = 0.01 if mode == "mean_reversion" else 0.015
-              assert result["parameters"]["take_profit_fraction"] == expected_tp
-              assert result["parameters"]["stop_loss_fraction"] == expected_sl
-              assert result["parameters"]["fee_bps_per_side"] == 25.0
-              assert result["parameters"]["slippage_bps_per_side"] == 20.0
+              params = result["parameters"]
+              assert 0.005 <= params["take_profit_fraction"] <= 0.05
+              assert 0.005 <= params["stop_loss_fraction"] <= 0.05
+              assert 1.0 <= params["atr_cost_multiple"] <= 3.0
+              assert params["minimum_atr_fraction"] == (
+                  params["atr_cost_multiple"]
+                  * (params["fee_bps_per_side"] + params["slippage_bps_per_side"])
+                  / 10_000.0
+              )
+              assert params["fee_bps_per_side"] == 25.0
+              assert params["slippage_bps_per_side"] == 20.0
               mode_costs = result["cost_adjusted_risk_diagnostics"]
-              assert mode_costs["take_profit_fraction"] == expected_tp
-              assert mode_costs["stop_loss_fraction"] == expected_sl
-              assert mode_costs["estimated_net_return_at_tp_without_gaps"] > 0.0
+              assert mode_costs["take_profit_fraction"] == params["take_profit_fraction"]
+              assert mode_costs["stop_loss_fraction"] == params["stop_loss_fraction"]
               assert mode_costs["estimated_net_return_at_sl_without_gaps"] < 0.0
               assert 0.0 < mode_costs["break_even_win_rate_fraction_without_gaps"] < 1.0
+          breakout_params = teacher_backtest["modes"]["breakout"]["parameters"]
+          breakout_lookback = breakout_params["donchian_lookback_candles"]
+          assert 10 <= breakout_lookback <= 50
           breakout_logic = teacher_backtest["modes"]["breakout"]["entry_logic"]
-          assert breakout_logic["donchian_lookback_candles"] == 10
-          assert "prior 10 candles" in breakout_logic["buy_condition"]
+          assert breakout_logic["donchian_lookback_candles"] == breakout_lookback
+          assert f"prior {breakout_lookback} candles" in breakout_logic["buy_condition"]
           assert "completed 4h EMA bias is bullish" in breakout_logic["buy_condition"]
           assert "regardless of the trend filter" in breakout_logic["sell_condition"]
+          mean_reversion_params = teacher_backtest["modes"]["mean_reversion"]["parameters"]
           mean_reversion_logic = teacher_backtest["modes"]["mean_reversion"]["entry_logic"]
           assert mean_reversion_logic["bollinger_period_candles"] == 20
-          assert mean_reversion_logic["bollinger_standard_deviations"] == 1.5
+          assert 1.0 <= mean_reversion_logic["bollinger_standard_deviations"] <= 3.0
+          assert mean_reversion_logic["bollinger_standard_deviations"] == mean_reversion_params["bollinger_stddev"]
           assert mean_reversion_logic["rsi_period_candles"] == 14
-          assert mean_reversion_logic["rsi_buy_below"] == 35.0
-          assert mean_reversion_logic["rsi_sell_above"] == 65.0
-          assert teacher_backtest["parameters"]["minimum_atr_fraction"] == 0.0045
+          assert 20 <= mean_reversion_logic["rsi_buy_below"] <= 40
+          assert mean_reversion_logic["rsi_buy_below"] == mean_reversion_params["rsi_buy_below"]
+          assert mean_reversion_logic["rsi_sell_above"] == 100 - mean_reversion_logic["rsi_buy_below"]
+          assert mean_reversion_logic["rsi_sell_above"] == mean_reversion_params["rsi_sell_above"]
+          assert teacher_backtest["parameters"]["minimum_atr_fraction"] == (
+              teacher_backtest["parameters"]["atr_cost_multiple"]
+              * (teacher_backtest["parameters"]["fee_bps_per_side"]
+                 + teacher_backtest["parameters"]["slippage_bps_per_side"])
+              / 10_000.0
+          )
           assert teacher_backtest["gate"]["passed"] is True
           for partition in ("validation", "holdout"):
               economics = teacher_backtest[partition]["economics"]
               assert economics["profit_factor"] is not None
-              assert economics["profit_factor"] >= teacher_backtest["gate"]["minimum_profit_factor"]
+              assert economics["profit_factor"] > teacher_backtest["gate"]["minimum_profit_factor"]
               assert economics["max_drawdown_fraction"] <= teacher_backtest["gate"]["maximum_allowed_drawdown_fraction"]
           assert report["dataset"]["source_csv_sha256"] == market_manifest["csv_sha256"]
           assert teacher_manifest["source_csv_sha256"] == market_manifest["csv_sha256"]
@@ -208,7 +267,7 @@ jobs:
           assert teacher_backtest["gate"]["signal_density_passed"] is True
           assert teacher_backtest["gate"]["teacher_trade_signal_count"] == trade_signal_count
           assert teacher_backtest["gate"]["minimum_trade_signal_count"] <= trade_signal_count
-          assert trade_signal_count >= teacher_backtest["gate"]["minimum_trade_signal_count"], (
+          assert trade_signal_count > teacher_backtest["gate"]["minimum_trade_signal_count"], (
               "teacher_signal_density_below_target:"
               + str(trade_signal_count)
           )
@@ -236,6 +295,7 @@ jobs:
               "teacher_dataset_rows": report["dataset"]["row_count"],
               "teacher_actions": report["teacher"]["action_distribution"],
               "teacher_trade_signal_count": trade_signal_count,
+              "optimization": optimization,
               "teacher_entry_mode": teacher_backtest["entry_mode"],
               "minimum_teacher_trade_signal_count": teacher_backtest["gate"]["minimum_trade_signal_count"],
               "teacher_backtest_gate": teacher_backtest["gate"],

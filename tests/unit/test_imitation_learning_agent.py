@@ -14,9 +14,11 @@ from scripts.run_imitation_learning_agent import (
     _target_positions,
     _compute_class_weights,
     _teacher_backtest_gate,
+    _purged_walk_forward_splits,
+    _teacher_trial_score,
+    _teacher_parameter_config,
     _cost_adjusted_risk_diagnostics,
     _execution_cost_counterfactual_diagnosis,
-    _select_teacher_mode,
     _teacher_entry_logic,
     _teacher_risk_parameters,
     _write_teacher_datasets,
@@ -239,43 +241,6 @@ def test_cost_adjusted_tp_sl_and_break_even_win_rate_are_reported() -> None:
     assert 0.60 < required_win_rate < 0.61
 
 
-def test_mode_selection_uses_validation_pf_among_passing_modes() -> None:
-    results: dict[str, dict[str, Any]] = {
-        "institutional": {
-            "gate": {"passed": True},
-            "validation": {"economics": {"profit_factor": 1.7}},
-        },
-        "trend_pullback": {
-            "gate": {"passed": True},
-            "validation": {"economics": {"profit_factor": 1.8}},
-        },
-        "mean_reversion": {
-            "gate": {"passed": True},
-            "validation": {"economics": {"profit_factor": 1.9}},
-        },
-        "breakout": {
-            "gate": {"passed": True},
-            "validation": {"economics": {"profit_factor": 2.0}},
-        },
-    }
-    assert _select_teacher_mode(results) == "breakout"
-
-    results["breakout"]["gate"]["passed"] = False
-    results["breakout"]["validation"]["economics"]["profit_factor"] = 9.0
-    assert _select_teacher_mode(results) == "mean_reversion"
-
-    results["mean_reversion"]["gate"]["passed"] = False
-    results["mean_reversion"]["validation"]["economics"]["profit_factor"] = 9.0
-    assert _select_teacher_mode(results) == "trend_pullback"
-
-    results["trend_pullback"]["gate"]["passed"] = False
-    results["trend_pullback"]["validation"]["economics"]["profit_factor"] = 9.0
-    assert _select_teacher_mode(results) == "institutional"
-
-    results["institutional"]["gate"]["passed"] = False
-    assert _select_teacher_mode(results) is None
-
-
 def test_all_teacher_modes_are_generated_and_saved_independently(
     tmp_path: Path,
 ) -> None:
@@ -351,9 +316,9 @@ def test_teacher_economic_gate_requires_profitability_and_signal_density() -> No
     passing = {"profit_factor": 1.6, "max_drawdown_fraction": 0.10}
     failing = {"profit_factor": 1.49, "max_drawdown_fraction": 0.10}
     sufficient_signals = {
-        "BUY": {"count": 400},
-        "HOLD": {"count": 16_720},
-        "SELL": {"count": 400},
+        "BUY": {"count": 401},
+        "HOLD": {"count": 16_718},
+        "SELL": {"count": 401},
     }
     sparse_signals = {
         "BUY": {"count": 20},
@@ -387,9 +352,9 @@ def test_teacher_economic_gate_requires_profitability_and_signal_density() -> No
 
 def test_teacher_economic_gate_fails_closed_on_excessive_or_missing_drawdown() -> None:
     sufficient_signals = {
-        "BUY": {"count": 400},
-        "HOLD": {"count": 16_720},
-        "SELL": {"count": 400},
+        "BUY": {"count": 401},
+        "HOLD": {"count": 16_718},
+        "SELL": {"count": 401},
     }
     passing = {"profit_factor": 1.6, "max_drawdown_fraction": 0.10}
     excessive_drawdown = {
@@ -408,6 +373,104 @@ def test_teacher_economic_gate_fails_closed_on_excessive_or_missing_drawdown() -
     )
     assert missing_drawdown["validation_drawdown_passed"] is False
     assert missing_drawdown["lstm_training_allowed"] is False
+
+
+
+
+def test_purged_walk_forward_folds_are_forward_only_and_leave_validation_holdout() -> None:
+    row_count = 10_000
+    folds = _purged_walk_forward_splits(row_count)
+
+    assert len(folds) == 5
+    validation_start = int(row_count * 0.70)
+    holdout_start = int(row_count * 0.85)
+    for fold in folds:
+        assert fold["train_start_inclusive"] == 0
+        assert fold["train_end_exclusive"] == fold["purge_start_inclusive"]
+        assert fold["purge_end_exclusive"] == fold["test_start_inclusive"]
+        assert fold["test_start_inclusive"] - fold["train_end_exclusive"] >= 72
+        assert fold["test_start_inclusive"] < fold["test_end_exclusive"]
+        assert fold["test_end_exclusive"] <= int(row_count * 0.65)
+        assert fold["test_end_exclusive"] <= validation_start
+        assert fold["test_end_exclusive"] < holdout_start
+
+    for previous, following in zip(folds, folds[1:]):
+        assert following["train_end_exclusive"] > previous["train_end_exclusive"]
+        assert following["test_start_inclusive"] >= previous["embargo_end_exclusive"]
+
+
+def test_optuna_objective_penalizes_drawdown_above_thresholds() -> None:
+    def fold_results(drawdown: float) -> list[dict[str, Any]]:
+        economics = {
+            "profit_factor": 1.8,
+            "gross_profit": 1.8,
+            "gross_loss": 1.0,
+            "max_drawdown_fraction": drawdown,
+            "position_change_count": 40,
+            "closed_trade_count": 10,
+        }
+        return [{"fold": index, "economics": dict(economics)} for index in range(5)]
+
+    low_score, low_diagnostics = _teacher_trial_score(fold_results(0.10))
+    high_score, high_diagnostics = _teacher_trial_score(fold_results(0.25))
+
+    assert high_score < low_score
+    assert high_diagnostics["drawdown_penalty_above_15_percent"] > 0.0
+    assert high_diagnostics["additional_drawdown_penalty_above_20_percent"] > 0.0
+    assert low_diagnostics["drawdown_penalty_above_15_percent"] == 0.0
+    assert low_diagnostics["additional_drawdown_penalty_above_20_percent"] == 0.0
+
+
+def test_optimized_parameter_normalization_preserves_mode_specific_search_space() -> None:
+    parameters = _teacher_parameter_config(
+        "mean_reversion",
+        {
+            "entry_mode": "mean_reversion",
+            "bollinger_stddev": 2.5,
+            "rsi_buy_below": 25,
+            "rsi_sell_above": 75,
+            "take_profit_fraction": 0.02,
+            "stop_loss_fraction": 0.01,
+            "atr_cost_multiple": 1.5,
+        },
+    )
+
+    assert parameters["entry_mode"] == "mean_reversion"
+    assert parameters["bollinger_stddev"] == 2.5
+    assert parameters["rsi_buy_below"] == 25
+    assert parameters["rsi_sell_above"] == 75
+    assert parameters["take_profit_fraction"] == 0.02
+    assert parameters["stop_loss_fraction"] == 0.01
+    assert parameters["atr_cost_multiple"] == 1.5
+
+
+def test_teacher_gate_uses_strict_profit_factor_and_signal_count() -> None:
+    economics = {"profit_factor": 1.5, "max_drawdown_fraction": 0.10}
+    more_than_eight_hundred_signals = {
+        "BUY": {"count": 401},
+        "HOLD": {"count": 16_718},
+        "SELL": {"count": 401},
+    }
+    exactly_eight_hundred_signals = {
+        "BUY": {"count": 400},
+        "HOLD": {"count": 16_720},
+        "SELL": {"count": 400},
+    }
+
+    pf_boundary = _teacher_backtest_gate(
+        economics, economics, more_than_eight_hundred_signals
+    )
+    signal_boundary = _teacher_backtest_gate(
+        {"profit_factor": 1.6, "max_drawdown_fraction": 0.10},
+        {"profit_factor": 1.6, "max_drawdown_fraction": 0.10},
+        exactly_eight_hundred_signals,
+    )
+
+    assert pf_boundary["validation_profit_factor_passed"] is False
+    assert pf_boundary["passed"] is False
+    assert signal_boundary["teacher_trade_signal_count"] == 800
+    assert signal_boundary["signal_density_passed"] is False
+    assert signal_boundary["passed"] is False
 
 
 def test_economic_simulation_uses_protective_exit_fill_price() -> None:

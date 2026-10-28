@@ -410,6 +410,51 @@ def test_mean_reversion_setups_require_bollinger_touch_and_rsi_extreme() -> None
     assert bool(sell_setup.iloc[-1])
 
 
+
+
+def test_mean_reversion_search_parameters_are_applied_and_validated() -> None:
+    flat_close = np.full(39, 100.0, dtype=np.float64)
+    close = np.concatenate((flat_close, np.asarray([80.0])))
+    open_ = np.r_[close[0], close[:-1]]
+    frame = pd.DataFrame(
+        {
+            "timestamp": pd.date_range(
+                "2025-01-01", periods=len(close), freq="min", tz="UTC"
+            ),
+            "open": open_,
+            "high": np.maximum(open_, close) + 0.1,
+            "low": np.minimum(open_, close) - 0.1,
+            "close": close,
+            "volume": np.full(len(close), 100.0),
+        }
+    )
+
+    result = generate_teacher_labels(
+        frame,
+        entry_mode="mean_reversion",
+        bollinger_period=20,
+        bollinger_stddev=1.0,
+        rsi_period=14,
+        rsi_buy_below=40.0,
+        rsi_sell_above=60.0,
+    )
+
+    assert bool(result["teacher_setup_buy"].iloc[-1])
+    assert not bool(result["teacher_setup_sell"].iloc[-1])
+
+    with pytest.raises(ValueError, match="bollinger_stddev_out_of_range"):
+        generate_teacher_labels(
+            frame, entry_mode="mean_reversion", bollinger_stddev=0.5
+        )
+    with pytest.raises(ValueError, match="mean_reversion_rsi_thresholds_invalid"):
+        generate_teacher_labels(
+            frame,
+            entry_mode="mean_reversion",
+            rsi_buy_below=65.0,
+            rsi_sell_above=60.0,
+        )
+
+
 def test_teacher_rejects_unknown_entry_mode() -> None:
     with pytest.raises(
         ValueError,

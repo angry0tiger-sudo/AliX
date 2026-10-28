@@ -220,6 +220,8 @@ def _mean_reversion_setups(
     bollinger_period: int = DEFAULT_MEAN_REVERSION_BOLLINGER_PERIOD,
     bollinger_stddev: float = DEFAULT_MEAN_REVERSION_BOLLINGER_STDDEV,
     rsi_period: int = DEFAULT_MEAN_REVERSION_RSI_PERIOD,
+    rsi_buy_below: float = DEFAULT_MEAN_REVERSION_RSI_BUY_BELOW,
+    rsi_sell_above: float = DEFAULT_MEAN_REVERSION_RSI_SELL_ABOVE,
 ) -> tuple[pd.Series, pd.Series]:
     """Use completed-candle Bollinger touches confirmed by Wilder-style RSI."""
     close = frame["close"].astype(np.float64)
@@ -245,12 +247,8 @@ def _mean_reversion_setups(
     rsi = rsi.mask((average_loss == 0.0) & (average_gain > 0.0), 100.0)
     rsi = rsi.mask((average_gain == 0.0) & (average_loss == 0.0), 50.0)
 
-    buy_setup = (frame["low"] <= lower_band) & (
-        rsi < DEFAULT_MEAN_REVERSION_RSI_BUY_BELOW
-    )
-    sell_setup = (frame["high"] >= upper_band) & (
-        rsi > DEFAULT_MEAN_REVERSION_RSI_SELL_ABOVE
-    )
+    buy_setup = (frame["low"] <= lower_band) & (rsi < rsi_buy_below)
+    sell_setup = (frame["high"] >= upper_band) & (rsi > rsi_sell_above)
     return buy_setup.fillna(False), sell_setup.fillna(False)
 
 
@@ -356,6 +354,29 @@ def _validate_risk_configuration(
         _validate_positive_parameter(name, value, 1.0)
     _validate_cost_parameter("fee_bps_per_side", fee_bps_per_side)
     _validate_cost_parameter("slippage_bps_per_side", slippage_bps_per_side)
+
+
+def _validate_strategy_entry_parameters(
+    bollinger_period: int,
+    bollinger_stddev: float,
+    rsi_period: int,
+    rsi_buy_below: float,
+    rsi_sell_above: float,
+    breakout_donchian_lookback: int,
+) -> None:
+    for name, value, minimum in (
+        ("bollinger_period", bollinger_period, 2),
+        ("rsi_period", rsi_period, 2),
+        ("breakout_donchian_lookback", breakout_donchian_lookback, 2),
+    ):
+        _validate_integer_parameter(name, value, minimum)
+    if not np.isfinite(bollinger_stddev) or not 1.0 <= bollinger_stddev <= 3.0:
+        raise ValueError("bollinger_stddev_out_of_range")
+    if (
+        not np.isfinite([rsi_buy_below, rsi_sell_above]).all()
+        or not 0.0 < rsi_buy_below < rsi_sell_above < 100.0
+    ):
+        raise ValueError("mean_reversion_rsi_thresholds_invalid")
 
 
 def _select_timeframe_biases(
@@ -644,6 +665,12 @@ def generate_teacher_labels(
     trailing_distance_fraction: float = DEFAULT_TRAILING_DISTANCE_FRACTION,
     fee_bps_per_side: float = DEFAULT_FEE_BPS_PER_SIDE,
     slippage_bps_per_side: float = DEFAULT_SLIPPAGE_BPS_PER_SIDE,
+    bollinger_period: int = DEFAULT_MEAN_REVERSION_BOLLINGER_PERIOD,
+    bollinger_stddev: float = DEFAULT_MEAN_REVERSION_BOLLINGER_STDDEV,
+    rsi_period: int = DEFAULT_MEAN_REVERSION_RSI_PERIOD,
+    rsi_buy_below: float = DEFAULT_MEAN_REVERSION_RSI_BUY_BELOW,
+    rsi_sell_above: float = DEFAULT_MEAN_REVERSION_RSI_SELL_ABOVE,
+    breakout_donchian_lookback: int = DEFAULT_BREAKOUT_DONCHIAN_LOOKBACK,
 ) -> pd.DataFrame:
     """Return causal Spot transitions with volatility gating and managed exits.
 
@@ -654,6 +681,14 @@ def generate_teacher_labels(
         higher_timeframe, ema_span, swing_window, volume_window, cooldown_candles
     )
     _validate_teacher_entry_mode(entry_mode)
+    _validate_strategy_entry_parameters(
+        bollinger_period,
+        bollinger_stddev,
+        rsi_period,
+        rsi_buy_below,
+        rsi_sell_above,
+        breakout_donchian_lookback,
+    )
     _validate_risk_configuration(
         atr_period,
         min_atr_cost_multiple,
@@ -687,7 +722,14 @@ def generate_teacher_labels(
     elif entry_mode == "trend_pullback":
         buy_setup, sell_setup = _trend_pullback_setups(frame, bias)
     elif entry_mode == "mean_reversion":
-        buy_setup, sell_setup = _mean_reversion_setups(frame)
+        buy_setup, sell_setup = _mean_reversion_setups(
+            frame,
+            bollinger_period=bollinger_period,
+            bollinger_stddev=bollinger_stddev,
+            rsi_period=rsi_period,
+            rsi_buy_below=rsi_buy_below,
+            rsi_sell_above=rsi_sell_above,
+        )
     else:
         completed_4h_bias = pd.Series(
             bias_4h.to_numpy(dtype=np.int8),
@@ -695,6 +737,7 @@ def generate_teacher_labels(
         )
         buy_setup, sell_setup = _breakout_setups(
             frame,
+            lookback_period=breakout_donchian_lookback,
             trend_bias=completed_4h_bias,
         )
     atr_fraction = _average_true_range_fraction(frame, atr_period)

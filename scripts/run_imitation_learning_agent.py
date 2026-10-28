@@ -42,6 +42,12 @@ _ACTION_NAMES = {ACTION_HOLD: "HOLD", ACTION_BUY: "BUY", ACTION_SELL: "SELL"}
 _REQUIRED_SOURCE_COLUMNS = ("timestamp", "open", "high", "low", "close", "volume")
 _MIN_TEACHER_TRADE_SIGNAL_COUNT = 800
 _MAX_TEACHER_DRAWDOWN_FRACTION = 0.15
+_MAX_OPTIMIZATION_DRAWDOWN_FRACTION = 0.20
+_DEFAULT_OPTUNA_TRIALS = 60
+_DEFAULT_OPTUNA_SEED = 20261028
+_WFV_FOLDS = 5
+_WFV_PURGE_CANDLES = 72
+_WFV_EMBARGO_CANDLES = 48
 
 
 def _read_json_object(path: Path) -> dict[str, Any]:
@@ -442,6 +448,7 @@ def _simulate_teacher_segment(
     end_index: int,
     *,
     include_execution_costs: bool = True,
+    risk_parameters: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Backtest a fresh flat position; optionally omit direct fees and slippage."""
     if start_index < 0 or end_index > len(frame) or end_index - start_index < 2:
@@ -453,27 +460,27 @@ def _simulate_teacher_segment(
         if "teacher_entry_mode" in signals.columns and not signals.empty
         else "institutional"
     )
-    risk_parameters = _teacher_risk_parameters(entry_mode)
+    active_risk_parameters = risk_parameters or _teacher_risk_parameters(entry_mode)
     actions, _, exit_prices, _ = _generate_teacher_actions(
         segment,
         signals["teacher_setup_buy"],
         signals["teacher_setup_sell"],
         signals["teacher_atr_fraction"],
         cooldown_candles=2,
-        min_atr_cost_multiple=float(risk_parameters["atr_cost_multiple"]),
-        take_profit_fraction=float(risk_parameters["take_profit_fraction"]),
-        stop_loss_fraction=float(risk_parameters["stop_loss_fraction"]),
-        trailing_trigger_fraction=float(risk_parameters["trailing_trigger_fraction"]),
-        trailing_distance_fraction=float(risk_parameters["trailing_distance_fraction"]),
-        fee_bps_per_side=float(risk_parameters["fee_bps_per_side"]),
-        slippage_bps_per_side=float(risk_parameters["slippage_bps_per_side"]),
+        min_atr_cost_multiple=float(active_risk_parameters["atr_cost_multiple"]),
+        take_profit_fraction=float(active_risk_parameters["take_profit_fraction"]),
+        stop_loss_fraction=float(active_risk_parameters["stop_loss_fraction"]),
+        trailing_trigger_fraction=float(active_risk_parameters["trailing_trigger_fraction"]),
+        trailing_distance_fraction=float(active_risk_parameters["trailing_distance_fraction"]),
+        fee_bps_per_side=float(active_risk_parameters["fee_bps_per_side"]),
+        slippage_bps_per_side=float(active_risk_parameters["slippage_bps_per_side"]),
     )
     close_prices = segment["close"].to_numpy(dtype=np.float64)
     fee_bps = (
-        float(risk_parameters["fee_bps_per_side"]) if include_execution_costs else 0.0
+        float(active_risk_parameters["fee_bps_per_side"]) if include_execution_costs else 0.0
     )
     slippage_bps = (
-        float(risk_parameters["slippage_bps_per_side"])
+        float(active_risk_parameters["slippage_bps_per_side"])
         if include_execution_costs
         else 0.0
     )
@@ -484,6 +491,326 @@ def _simulate_teacher_segment(
         fee_bps_per_side=fee_bps,
         slippage_bps_per_side=slippage_bps,
     )
+
+
+
+
+def _purged_walk_forward_splits(
+    row_count: int,
+    *,
+    n_splits: int = _WFV_FOLDS,
+    purge_candles: int = _WFV_PURGE_CANDLES,
+    embargo_candles: int = _WFV_EMBARGO_CANDLES,
+) -> list[dict[str, int]]:
+    """Build expanding-window folds entirely before validation and final holdout."""
+    if (
+        isinstance(row_count, bool)
+        or row_count < 1_000
+        or isinstance(n_splits, bool)
+        or n_splits < 2
+        or isinstance(purge_candles, bool)
+        or purge_candles < 1
+        or isinstance(embargo_candles, bool)
+        or embargo_candles < 1
+    ):
+        raise ValueError("purged_walk_forward_configuration_invalid")
+
+    initial_train_end = int(row_count * 0.40)
+    validation_start = int(row_count * 0.70)
+    cv_region_end = int(row_count * 0.65)
+    holdout_start = int(row_count * 0.85)
+    if not (initial_train_end < cv_region_end < validation_start < holdout_start):
+        raise ValueError("purged_walk_forward_boundaries_invalid")
+
+    available = (
+        cv_region_end
+        - initial_train_end
+        - embargo_candles * (n_splits - 1)
+    )
+    test_width = available // n_splits
+    if test_width < 24:
+        raise ValueError("purged_walk_forward_test_window_too_short")
+
+    folds: list[dict[str, int]] = []
+    test_start = initial_train_end
+    for fold_number in range(n_splits):
+        train_end = test_start - purge_candles
+        test_end = test_start + test_width
+        if train_end <= 0 or test_end > cv_region_end:
+            raise ValueError("purged_walk_forward_fold_out_of_bounds")
+        folds.append(
+            {
+                "fold": fold_number,
+                "train_start_inclusive": 0,
+                "train_end_exclusive": train_end,
+                "purge_start_inclusive": train_end,
+                "purge_end_exclusive": test_start,
+                "test_start_inclusive": test_start,
+                "test_end_exclusive": test_end,
+                "embargo_end_exclusive": min(
+                    cv_region_end, test_end + embargo_candles
+                ),
+            }
+        )
+        test_start = test_end + embargo_candles
+
+    if max(fold["test_end_exclusive"] for fold in folds) > validation_start:
+        raise ValueError("purged_walk_forward_overlaps_final_validation")
+    if max(fold["test_end_exclusive"] for fold in folds) >= holdout_start:
+        raise ValueError("purged_walk_forward_touches_final_holdout")
+    return folds
+
+
+def _suggest_teacher_parameters(trial: Any) -> dict[str, Any]:
+    entry_mode = str(
+        trial.suggest_categorical(
+            "entry_mode", ["mean_reversion", "breakout", "institutional"]
+        )
+    )
+    parameters: dict[str, Any] = {
+        "entry_mode": entry_mode,
+        "take_profit_fraction": trial.suggest_float(
+            "take_profit_fraction", 0.005, 0.05, step=0.0025
+        ),
+        "stop_loss_fraction": trial.suggest_float(
+            "stop_loss_fraction", 0.005, 0.05, step=0.0025
+        ),
+        "atr_cost_multiple": trial.suggest_float(
+            "atr_cost_multiple", 1.0, 3.0, step=0.25
+        ),
+    }
+    if entry_mode == "mean_reversion":
+        rsi_buy_below = trial.suggest_int("rsi_buy_below", 20, 40)
+        parameters.update(
+            {
+                "bollinger_period_candles": DEFAULT_MEAN_REVERSION_BOLLINGER_PERIOD,
+                "bollinger_stddev": trial.suggest_float(
+                    "bollinger_stddev", 1.0, 3.0, step=0.25
+                ),
+                "rsi_period_candles": DEFAULT_MEAN_REVERSION_RSI_PERIOD,
+                "rsi_buy_below": rsi_buy_below,
+                "rsi_sell_above": 100 - rsi_buy_below,
+            }
+        )
+    elif entry_mode == "breakout":
+        parameters["donchian_lookback_candles"] = trial.suggest_int(
+            "donchian_lookback_candles", 10, 50
+        )
+    return _teacher_parameter_config(entry_mode, parameters)
+
+
+def _teacher_trial_score(
+    fold_results: list[dict[str, Any]],
+) -> tuple[float, dict[str, Any]]:
+    if not fold_results:
+        raise ValueError("optuna_trial_has_no_walk_forward_folds")
+
+    profit_factors: list[float] = []
+    drawdowns: list[float] = []
+    signal_count = 0
+    closed_trades = 0
+    undertraded_folds = 0
+    for fold in fold_results:
+        economics = fold["economics"]
+        raw_pf = economics.get("profit_factor")
+        if isinstance(raw_pf, (int, float)) and np.isfinite(raw_pf):
+            profit_factors.append(min(float(raw_pf), 5.0))
+        elif int(economics.get("closed_trade_count", 0)) > 0 and float(
+            economics.get("gross_profit", 0.0)
+        ) > 0.0:
+            profit_factors.append(5.0)
+        else:
+            profit_factors.append(0.0)
+        drawdown = economics.get("max_drawdown_fraction")
+        drawdowns.append(
+            float(drawdown)
+            if isinstance(drawdown, (int, float)) and np.isfinite(drawdown)
+            else 1.0
+        )
+        signal_count += int(economics.get("position_change_count", 0))
+        trades = int(economics.get("closed_trade_count", 0))
+        closed_trades += trades
+        undertraded_folds += int(trades < 5)
+
+    median_pf = float(np.median(profit_factors))
+    pf_dispersion = float(np.std(profit_factors))
+    worst_drawdown = max(drawdowns)
+    penalty_over_15 = 5.0 * max(
+        0.0, worst_drawdown - _MAX_TEACHER_DRAWDOWN_FRACTION
+    )
+    penalty_over_20 = 10.0 * max(
+        0.0, worst_drawdown - _MAX_OPTIMIZATION_DRAWDOWN_FRACTION
+    )
+    low_activity_penalty = 0.05 * undertraded_folds + 0.005 * max(
+        0, 100 - signal_count
+    )
+    score = (
+        median_pf
+        - 0.15 * pf_dispersion
+        - penalty_over_15
+        - penalty_over_20
+        - low_activity_penalty
+    )
+    diagnostics = {
+        "median_capped_profit_factor": median_pf,
+        "profit_factor_standard_deviation": pf_dispersion,
+        "worst_fold_max_drawdown_fraction": float(worst_drawdown),
+        "maximum_drawdown_penalty_threshold_fraction": (
+            _MAX_OPTIMIZATION_DRAWDOWN_FRACTION
+        ),
+        "project_hard_drawdown_gate_fraction": _MAX_TEACHER_DRAWDOWN_FRACTION,
+        "drawdown_penalty_above_15_percent": float(penalty_over_15),
+        "additional_drawdown_penalty_above_20_percent": float(penalty_over_20),
+        "undertraded_fold_count": int(undertraded_folds),
+        "out_of_sample_signal_count": int(signal_count),
+        "out_of_sample_closed_trade_count": int(closed_trades),
+        "objective_value": float(score),
+    }
+    if not np.isfinite(score):
+        raise ValueError("optuna_objective_score_non_finite")
+    return float(score), diagnostics
+
+
+def _optimize_teacher_parameters(
+    frame: pd.DataFrame,
+    *,
+    trial_count: int = _DEFAULT_OPTUNA_TRIALS,
+    seed: int = _DEFAULT_OPTUNA_SEED,
+) -> dict[str, Any]:
+    """Optimize only purged walk-forward blocks ending before validation."""
+    if isinstance(trial_count, bool) or not 10 <= trial_count <= 250:
+        raise ValueError("optuna_trial_count_out_of_range")
+    optuna: Any = importlib.import_module("optuna")
+
+    row_count = len(frame)
+    folds = _purged_walk_forward_splits(row_count)
+    maximum_test_end = max(fold["test_end_exclusive"] for fold in folds)
+    optimization_frame = frame.iloc[:maximum_test_end].reset_index(drop=True)
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+    sampler = optuna.samplers.TPESampler(
+        seed=seed, n_startup_trials=min(20, max(1, trial_count // 3))
+    )
+    study = optuna.create_study(direction="maximize", sampler=sampler)
+
+    def objective(trial: Any) -> float:
+        parameters = _suggest_teacher_parameters(trial)
+        entry_mode = str(parameters["entry_mode"])
+        risk_parameters = _teacher_risk_parameters(entry_mode, parameters)
+        teacher = generate_teacher_labels(
+            optimization_frame,
+            entry_mode=entry_mode,
+            atr_period=int(risk_parameters["atr_period_candles"]),
+            min_atr_cost_multiple=float(risk_parameters["atr_cost_multiple"]),
+            take_profit_fraction=float(risk_parameters["take_profit_fraction"]),
+            stop_loss_fraction=float(risk_parameters["stop_loss_fraction"]),
+            trailing_trigger_fraction=float(
+                risk_parameters["trailing_trigger_fraction"]
+            ),
+            trailing_distance_fraction=float(
+                risk_parameters["trailing_distance_fraction"]
+            ),
+            fee_bps_per_side=float(risk_parameters["fee_bps_per_side"]),
+            slippage_bps_per_side=float(risk_parameters["slippage_bps_per_side"]),
+            bollinger_period=int(parameters["bollinger_period_candles"]),
+            bollinger_stddev=float(parameters["bollinger_stddev"]),
+            rsi_period=int(parameters["rsi_period_candles"]),
+            rsi_buy_below=float(parameters["rsi_buy_below"]),
+            rsi_sell_above=float(parameters["rsi_sell_above"]),
+            breakout_donchian_lookback=int(
+                parameters["donchian_lookback_candles"]
+            ),
+        )
+        fold_results: list[dict[str, Any]] = []
+        for fold in folds:
+            economics = _simulate_teacher_segment(
+                optimization_frame,
+                teacher,
+                fold["test_start_inclusive"],
+                fold["test_end_exclusive"],
+                risk_parameters=risk_parameters,
+            )
+            fold_results.append({**fold, "economics": economics})
+        score, diagnostics = _teacher_trial_score(fold_results)
+        trial.set_user_attr("normalized_parameters", parameters)
+        trial.set_user_attr("fold_results", fold_results)
+        trial.set_user_attr("score_diagnostics", diagnostics)
+        return score
+
+    study.optimize(objective, n_trials=trial_count, n_jobs=1, show_progress_bar=False)
+    best = study.best_trial
+    best_parameters = dict(best.user_attrs["normalized_parameters"])
+    best_folds = list(best.user_attrs["fold_results"])
+    best_diagnostics = dict(best.user_attrs["score_diagnostics"])
+    completed = sorted(
+        (
+            trial
+            for trial in study.trials
+            if trial.value is not None and trial.state.name == "COMPLETE"
+        ),
+        key=lambda trial: (
+            float(trial.value) if trial.value is not None else float("-inf")
+        ),
+        reverse=True,
+    )
+    if best.value is None:
+        raise RuntimeError("optuna_best_trial_has_no_objective_value")
+    top_trials = [
+        {
+            "trial_number": int(trial.number),
+            "objective_value": (
+                float(trial.value) if trial.value is not None else float("-inf")
+            ),
+            "parameters": dict(trial.user_attrs.get("normalized_parameters", {})),
+            "score_diagnostics": dict(trial.user_attrs.get("score_diagnostics", {})),
+        }
+        for trial in completed[:10]
+    ]
+    validation_start = int(row_count * 0.70)
+    validation_end = int(row_count * 0.85)
+    return {
+        "schema_version": "alix.teacher-optimization-report.v1",
+        "method": "Optuna TPE with purged walk-forward validation",
+        "objective": (
+            "maximize median capped out-of-sample fold Profit Factor, "
+            "penalize PF dispersion, low trading activity, and drawdowns above "
+            "the project 15% hard gate and the requested 20% penalty threshold"
+        ),
+        "sampler": "TPESampler",
+        "seed": int(seed),
+        "requested_trials": int(trial_count),
+        "completed_trials": int(len(completed)),
+        "dataset_row_count": int(row_count),
+        "search_space": {
+            "entry_mode": ["mean_reversion", "breakout", "institutional"],
+            "rsi_buy_below_integer": [20, 40],
+            "rsi_sell_above": "100 - rsi_buy_below",
+            "bollinger_stddev": [1.0, 3.0],
+            "bollinger_stddev_step": 0.25,
+            "donchian_lookback_candles_integer": [10, 50],
+            "take_profit_fraction": [0.005, 0.05],
+            "stop_loss_fraction": [0.005, 0.05],
+            "risk_fraction_step": 0.0025,
+            "atr_cost_multiple": [1.0, 3.0],
+            "atr_cost_multiple_step": 0.25,
+        },
+        "best_trial_number": int(best.number),
+        "best_objective_value": float(best.value),
+        "best_parameters": best_parameters,
+        "best_score_diagnostics": best_diagnostics,
+        "best_fold_results": best_folds,
+        "top_trials": top_trials,
+        "validation_start_inclusive": validation_start,
+        "validation_end_exclusive": validation_end,
+        "final_holdout_start_inclusive": validation_end,
+        "holdout_never_used_in_optimization": True,
+        "validation_never_used_in_optimization": True,
+        "optimization_test_blocks_end_before_validation": (
+            max(fold["test_end_exclusive"] for fold in folds) <= validation_start
+        ),
+        "purge_candles": _WFV_PURGE_CANDLES,
+        "embargo_candles": _WFV_EMBARGO_CANDLES,
+        "folds": [dict(fold) for fold in folds],
+    }
 
 
 def _teacher_backtest_gate(
@@ -498,7 +825,7 @@ def _teacher_backtest_gate(
         return (
             isinstance(profit_factor, (int, float))
             and np.isfinite(profit_factor)
-            and float(profit_factor) >= minimum_profit_factor
+            and float(profit_factor) > minimum_profit_factor
         )
 
     def drawdown_passes(economics: dict[str, Any]) -> bool:
@@ -519,7 +846,7 @@ def _teacher_backtest_gate(
     sell_count = int(teacher_action_distribution.get("SELL", {}).get("count", 0))
     trade_signal_count = buy_count + sell_count
     signal_density_passed = (
-        trade_signal_count >= minimum_trade_signal_count
+        trade_signal_count > minimum_trade_signal_count
         and buy_count > 0
         and sell_count > 0
     )
@@ -534,6 +861,7 @@ def _teacher_backtest_gate(
         "validation_passed": validation_passed,
         "holdout_passed": holdout_passed,
         "minimum_trade_signal_count": minimum_trade_signal_count,
+        "signal_count_comparison": "strictly_greater_than_minimum",
         "teacher_trade_signal_count": trade_signal_count,
         "signal_density_passed": signal_density_passed,
         "passed": passed,
@@ -561,9 +889,38 @@ def _validate_training_parameters(epochs: int, window: int) -> None:
         raise ValueError("sequence_window_out_of_range")
 
 
-def _teacher_entry_logic(entry_mode: str) -> dict[str, Any]:
+def _teacher_parameter_config(
+    entry_mode: str, optimized_parameters: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    configuration: dict[str, Any] = {
+        "entry_mode": entry_mode,
+        "bollinger_period_candles": DEFAULT_MEAN_REVERSION_BOLLINGER_PERIOD,
+        "bollinger_stddev": DEFAULT_MEAN_REVERSION_BOLLINGER_STDDEV,
+        "rsi_period_candles": DEFAULT_MEAN_REVERSION_RSI_PERIOD,
+        "rsi_buy_below": DEFAULT_MEAN_REVERSION_RSI_BUY_BELOW,
+        "rsi_sell_above": DEFAULT_MEAN_REVERSION_RSI_SELL_ABOVE,
+        "donchian_lookback_candles": DEFAULT_BREAKOUT_DONCHIAN_LOOKBACK,
+        "take_profit_fraction": (
+            0.015 if entry_mode == "mean_reversion" else DEFAULT_TAKE_PROFIT_FRACTION
+        ),
+        "stop_loss_fraction": (
+            0.01 if entry_mode == "mean_reversion" else DEFAULT_STOP_LOSS_FRACTION
+        ),
+        "atr_cost_multiple": DEFAULT_MIN_ATR_COST_MULTIPLE,
+    }
+    if optimized_parameters and optimized_parameters.get("entry_mode") == entry_mode:
+        for key in configuration:
+            if key in optimized_parameters:
+                configuration[key] = optimized_parameters[key]
+    return configuration
+
+
+def _teacher_entry_logic(
+    entry_mode: str, optimized_parameters: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    parameters = _teacher_parameter_config(entry_mode, optimized_parameters)
     if entry_mode == "breakout":
-        lookback = DEFAULT_BREAKOUT_DONCHIAN_LOOKBACK
+        lookback = int(parameters["donchian_lookback_candles"])
         return {
             "strategy": f"donchian_{lookback}_breakout_4h_trend_filtered",
             "buy_condition": (
@@ -588,24 +945,27 @@ def _teacher_entry_logic(entry_mode: str) -> dict[str, Any]:
             "positioning": "Spot long/flat; SELL closes an existing long only",
         }
     if entry_mode == "mean_reversion":
+        buy = float(parameters["rsi_buy_below"])
+        sell = float(parameters["rsi_sell_above"])
+        stddev = float(parameters["bollinger_stddev"])
+        bollinger_period = int(parameters["bollinger_period_candles"])
+        rsi_period = int(parameters["rsi_period_candles"])
         return {
             "strategy": "bollinger_rsi_mean_reversion",
             "buy_condition": (
-                f"low touches or crosses lower Bollinger band and RSI-"
-                f"{DEFAULT_MEAN_REVERSION_RSI_PERIOD} < "
-                f"{DEFAULT_MEAN_REVERSION_RSI_BUY_BELOW:g}"
+                f"low touches or crosses lower Bollinger({bollinger_period}, "
+                f"{stddev:g}) band and RSI-{rsi_period} < {buy:g}"
             ),
             "sell_condition": (
-                f"high touches or crosses upper Bollinger band and RSI-"
-                f"{DEFAULT_MEAN_REVERSION_RSI_PERIOD} > "
-                f"{DEFAULT_MEAN_REVERSION_RSI_SELL_ABOVE:g}; "
+                f"high touches or crosses upper Bollinger({bollinger_period}, "
+                f"{stddev:g}) band and RSI-{rsi_period} > {sell:g}; "
                 "Spot long is closed, never shorted"
             ),
-            "bollinger_period_candles": DEFAULT_MEAN_REVERSION_BOLLINGER_PERIOD,
-            "bollinger_standard_deviations": DEFAULT_MEAN_REVERSION_BOLLINGER_STDDEV,
-            "rsi_period_candles": DEFAULT_MEAN_REVERSION_RSI_PERIOD,
-            "rsi_buy_below": DEFAULT_MEAN_REVERSION_RSI_BUY_BELOW,
-            "rsi_sell_above": DEFAULT_MEAN_REVERSION_RSI_SELL_ABOVE,
+            "bollinger_period_candles": bollinger_period,
+            "bollinger_standard_deviations": stddev,
+            "rsi_period_candles": rsi_period,
+            "rsi_buy_below": buy,
+            "rsi_sell_above": sell,
             "signals_use_completed_candles_only": True,
             "positioning": "Spot long/flat; SELL closes an existing long only",
         }
@@ -626,37 +986,37 @@ def _teacher_entry_logic(entry_mode: str) -> dict[str, Any]:
     }
 
 
-def _teacher_risk_parameters(entry_mode: str = "institutional") -> dict[str, Any]:
+def _teacher_risk_parameters(
+    entry_mode: str = "institutional",
+    optimized_parameters: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    config = _teacher_parameter_config(entry_mode, optimized_parameters)
     if entry_mode == "mean_reversion":
-        take_profit_fraction = 0.015
-        stop_loss_fraction = 0.01
         trailing_trigger_fraction = 0.01
-        # At +1% high-watermark, this distance leaves the stop at cost-adjusted breakeven.
         trailing_distance_fraction = 0.01
     elif entry_mode in {"institutional", "trend_pullback", "breakout"}:
-        take_profit_fraction = DEFAULT_TAKE_PROFIT_FRACTION
-        stop_loss_fraction = DEFAULT_STOP_LOSS_FRACTION
         trailing_trigger_fraction = DEFAULT_TRAILING_TRIGGER_FRACTION
         trailing_distance_fraction = DEFAULT_TRAILING_DISTANCE_FRACTION
     else:
         raise ValueError("unknown_teacher_entry_mode")
+    fee_bps_per_side = DEFAULT_FEE_BPS_PER_SIDE
+    slippage_bps_per_side = DEFAULT_SLIPPAGE_BPS_PER_SIDE
+    atr_cost_multiple = float(config["atr_cost_multiple"])
     return {
         "entry_mode": entry_mode,
         "atr_period_candles": DEFAULT_ATR_PERIOD,
-        "atr_cost_multiple": DEFAULT_MIN_ATR_COST_MULTIPLE,
+        "atr_cost_multiple": atr_cost_multiple,
         "minimum_atr_fraction": (
-            DEFAULT_MIN_ATR_COST_MULTIPLE
-            * (DEFAULT_FEE_BPS_PER_SIDE + DEFAULT_SLIPPAGE_BPS_PER_SIDE)
-            / 10_000.0
+            atr_cost_multiple * (fee_bps_per_side + slippage_bps_per_side) / 10_000.0
         ),
-        "take_profit_fraction": take_profit_fraction,
-        "stop_loss_fraction": stop_loss_fraction,
+        "take_profit_fraction": float(config["take_profit_fraction"]),
+        "stop_loss_fraction": float(config["stop_loss_fraction"]),
         "trailing_trigger_fraction": trailing_trigger_fraction,
         "trailing_distance_fraction": trailing_distance_fraction,
         "trailing_breakeven_includes_round_trip_costs": True,
         "stop_target_same_candle_policy": "stop_first_conservative",
-        "fee_bps_per_side": DEFAULT_FEE_BPS_PER_SIDE,
-        "slippage_bps_per_side": DEFAULT_SLIPPAGE_BPS_PER_SIDE,
+        "fee_bps_per_side": fee_bps_per_side,
+        "slippage_bps_per_side": slippage_bps_per_side,
     }
 
 
@@ -795,8 +1155,10 @@ def _write_teacher_dataset(
     output_dir: Path,
     commit_sha: str,
     entry_mode: str,
+    optimized_parameters: dict[str, Any] | None = None,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
-    risk_parameters = _teacher_risk_parameters(entry_mode)
+    parameter_config = _teacher_parameter_config(entry_mode, optimized_parameters)
+    risk_parameters = _teacher_risk_parameters(entry_mode, optimized_parameters)
     teacher_config: dict[str, Any] = {
         "higher_timeframe": "4h",
         "ema_span": 6,
@@ -815,6 +1177,14 @@ def _write_teacher_dataset(
         ),
         "fee_bps_per_side": float(risk_parameters["fee_bps_per_side"]),
         "slippage_bps_per_side": float(risk_parameters["slippage_bps_per_side"]),
+        "bollinger_period": int(parameter_config["bollinger_period_candles"]),
+        "bollinger_stddev": float(parameter_config["bollinger_stddev"]),
+        "rsi_period": int(parameter_config["rsi_period_candles"]),
+        "rsi_buy_below": float(parameter_config["rsi_buy_below"]),
+        "rsi_sell_above": float(parameter_config["rsi_sell_above"]),
+        "breakout_donchian_lookback": int(
+            parameter_config["donchian_lookback_candles"]
+        ),
     }
     teacher = generate_teacher_labels(frame, entry_mode=entry_mode, **teacher_config)
     teacher_path = output_dir / f"teacher-dataset-{entry_mode}.csv"
@@ -831,8 +1201,10 @@ def _write_teacher_dataset(
         "teacher_timeframe_mode": "4h_completed_candles",
         "teacher_entry_mode": entry_mode,
         "minimum_teacher_trade_signal_count": _MIN_TEACHER_TRADE_SIGNAL_COUNT,
+        "signal_count_comparison": "strictly_greater_than_minimum",
+        "teacher_parameters": parameter_config,
         "teacher_risk_management": risk_parameters,
-        "teacher_entry_logic": _teacher_entry_logic(entry_mode),
+        "teacher_entry_logic": _teacher_entry_logic(entry_mode, optimized_parameters),
         "teacher_action_distribution": action_distribution(
             teacher["teacher_action"].to_numpy(dtype=np.int64)
         ),
@@ -858,11 +1230,12 @@ def _write_teacher_datasets(
     source_manifest: dict[str, Any],
     output_dir: Path,
     commit_sha: str,
+    optimized_parameters: dict[str, Any] | None = None,
 ) -> dict[str, tuple[pd.DataFrame, dict[str, Any]]]:
     modes = ("institutional", "trend_pullback", "mean_reversion", "breakout")
     return {
         mode: _write_teacher_dataset(
-            frame, source_manifest, output_dir, commit_sha, mode
+            frame, source_manifest, output_dir, commit_sha, mode, optimized_parameters
         )
         for mode in modes
     }
@@ -902,17 +1275,33 @@ def _evaluate_teacher_mode(
     validation_end: int,
 ) -> dict[str, Any]:
     row_count = len(frame)
+    entry_mode = str(teacher_manifest["teacher_entry_mode"])
+    risk_parameters = dict(
+        teacher_manifest.get(
+            "teacher_risk_management", _teacher_risk_parameters(entry_mode)
+        )
+    )
     validation_economics = _simulate_teacher_segment(
-        frame, teacher, train_end, validation_end
+        frame, teacher, train_end, validation_end, risk_parameters=risk_parameters
     )
     holdout_economics = _simulate_teacher_segment(
-        frame, teacher, validation_end, row_count
+        frame, teacher, validation_end, row_count, risk_parameters=risk_parameters
     )
     validation_without_direct_costs = _simulate_teacher_segment(
-        frame, teacher, train_end, validation_end, include_execution_costs=False
+        frame,
+        teacher,
+        train_end,
+        validation_end,
+        include_execution_costs=False,
+        risk_parameters=risk_parameters,
     )
     holdout_without_direct_costs = _simulate_teacher_segment(
-        frame, teacher, validation_end, row_count, include_execution_costs=False
+        frame,
+        teacher,
+        validation_end,
+        row_count,
+        include_execution_costs=False,
+        risk_parameters=risk_parameters,
     )
     cost_counterfactual = _execution_cost_counterfactual_diagnosis(
         validation_economics,
@@ -920,19 +1309,18 @@ def _evaluate_teacher_mode(
         validation_without_direct_costs,
         holdout_without_direct_costs,
     )
-    entry_mode = str(teacher_manifest["teacher_entry_mode"])
-    risk_parameters = _teacher_risk_parameters(entry_mode)
     risk_diagnostics = _cost_adjusted_risk_diagnostics(
         float(risk_parameters["take_profit_fraction"]),
         float(risk_parameters["stop_loss_fraction"]),
     )
     distribution = teacher_manifest["teacher_action_distribution"]
+    teacher_parameters = dict(teacher_manifest.get("teacher_parameters", {}))
     return {
         "entry_mode": entry_mode,
         "entry_logic": teacher_manifest.get(
             "teacher_entry_logic", _teacher_entry_logic(entry_mode)
         ),
-        "parameters": risk_parameters,
+        "parameters": {**teacher_parameters, **risk_parameters},
         "cost_adjusted_risk_diagnostics": risk_diagnostics,
         "teacher_csv_sha256": teacher_manifest["teacher_csv_sha256"],
         "action_distribution": distribution,
@@ -958,20 +1346,6 @@ def _evaluate_teacher_mode(
             "diagnosis": cost_counterfactual,
         },
     }
-
-
-def _select_teacher_mode(mode_results: dict[str, dict[str, Any]]) -> str | None:
-    passing_modes = [
-        mode for mode, result in mode_results.items() if result["gate"]["passed"]
-    ]
-    if not passing_modes:
-        return None
-    return max(
-        passing_modes,
-        key=lambda mode: float(
-            mode_results[mode]["validation"]["economics"]["profit_factor"]
-        ),
-    )
 
 
 def _validation_profit_factor(mode_result: dict[str, Any]) -> float:
@@ -1044,21 +1418,22 @@ def _build_teacher_backtest_report(
         mode: result["gate"] for mode, result in mode_results.items()
     }
     return {
-        "schema_version": "alix.teacher-backtest-report.v3",
+        "schema_version": "alix.teacher-backtest-report.v4",
         "commit_sha": commit_sha,
         "source_csv_sha256": source_manifest["csv_sha256"],
         "strategy": (
-            "independently evaluated institutional, trend-pullback, "
-            "Bollinger-20/1.5 plus RSI-14 mean-reversion, and trend-filtered "
-            "Donchian-10 breakout Spot teachers"
+            "Optuna-parameterized institutional proxy, trend-pullback, "
+            "Bollinger-RSI mean-reversion, and trend-filtered Donchian breakout "
+            "Spot teachers"
         ),
         "entry_mode": selected_mode,
         "selected_mode": selected_mode,
-        "diagnostic_mode_by_validation_pf": diagnostic_mode,
+        "diagnostic_mode_by_wfv_objective": diagnostic_mode,
         "selection_policy": (
-            "Evaluate every mode independently. Train only a mode that passes "
-            "the unchanged validation PF, holdout PF, and 800-signal gates; "
-            "if multiple modes pass, maximize validation PF and keep holdout as a gate."
+            "Select exactly one parameterized candidate by the Optuna purged "
+            "walk-forward objective using only rows before validation. The independent "
+            "validation segment and final holdout are acceptance-only gates and never "
+            "participate in candidate selection."
         ),
         "parameters": diagnostic["parameters"],
         "cost_adjusted_risk_diagnostics": diagnostic["cost_adjusted_risk_diagnostics"],
@@ -1480,6 +1855,18 @@ def _build_training_report(
     }
 
 
+def _teacher_gate_failure_reason(gate: dict[str, Any]) -> str:
+    required_gates = (
+        "validation_profit_factor_passed",
+        "holdout_profit_factor_passed",
+        "validation_drawdown_passed",
+        "holdout_drawdown_passed",
+        "signal_density_passed",
+    )
+    failures = [key for key in required_gates if gate.get(key) is not True]
+    return ",".join(failures) if failures else "unknown_acceptance_gate_failure"
+
+
 def run_training(
     dataset_path: Path,
     manifest_path: Path,
@@ -1488,33 +1875,48 @@ def run_training(
     commit_sha: str,
     epochs: int = 20,
     window: int = 48,
+    optimization_trials: int = _DEFAULT_OPTUNA_TRIALS,
+    optimization_seed: int = _DEFAULT_OPTUNA_SEED,
 ) -> dict[str, Any]:
     _validate_training_parameters(epochs, window)
     frame, source_manifest = load_public_market_data(
         dataset_path, manifest_path, commit_sha
     )
     output_dir.mkdir(parents=True, exist_ok=True)
-    teacher_candidates = _write_teacher_datasets(
-        frame, source_manifest, output_dir, commit_sha
-    )
-
     row_count = len(frame)
     train_end = int(row_count * 0.70)
     validation_end = int(row_count * 0.85)
+    optimization_report = _optimize_teacher_parameters(
+        frame, trial_count=optimization_trials, seed=optimization_seed
+    )
+    optimization_path = output_dir / "teacher-optimization-report.json"
+    optimization_path.write_text(
+        json.dumps(optimization_report, indent=2, sort_keys=True, allow_nan=False)
+        + "\n",
+        encoding="utf-8",
+    )
+    optimized_parameters = dict(optimization_report["best_parameters"])
+    teacher_candidates = _write_teacher_datasets(
+        frame, source_manifest, output_dir, commit_sha, optimized_parameters
+    )
     mode_backtests = {
         mode: _evaluate_teacher_mode(
             frame, teacher, manifest, train_end, validation_end
         )
         for mode, (teacher, manifest) in teacher_candidates.items()
     }
-    selected_mode = _select_teacher_mode(mode_backtests)
+    selected_mode = str(optimized_parameters["entry_mode"])
     teacher_backtest = _build_teacher_backtest_report(
         commit_sha, source_manifest, mode_backtests, selected_mode
     )
+    teacher_backtest["optimization"] = optimization_report
     _write_teacher_backtest_report(output_dir, teacher_backtest)
-    if selected_mode is None:
+    if teacher_backtest["gate"]["passed"] is not True:
+        reason = _teacher_gate_failure_reason(teacher_backtest["gate"])
         raise RuntimeError(
-            "no_teacher_mode_passed_validation_holdout_pf_and_signal_density_gates_lstm_training_blocked"
+            "optuna_wfv_best_candidate_failed_independent_validation_or_holdout_gates:"
+            + reason
+            + ":lstm_training_blocked"
         )
 
     teacher, candidate_manifest = teacher_candidates[selected_mode]
@@ -1581,6 +1983,8 @@ def main() -> int:
     parser.add_argument("--commit-sha", required=True)
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--window", type=int, default=48)
+    parser.add_argument("--optimization-trials", type=int, default=_DEFAULT_OPTUNA_TRIALS)
+    parser.add_argument("--optimization-seed", type=int, default=_DEFAULT_OPTUNA_SEED)
     args = parser.parse_args()
     run_training(
         args.dataset,
@@ -1589,6 +1993,8 @@ def main() -> int:
         commit_sha=str(args.commit_sha),
         epochs=int(args.epochs),
         window=int(args.window),
+        optimization_trials=int(args.optimization_trials),
+        optimization_seed=int(args.optimization_seed),
     )
     return 0
 
