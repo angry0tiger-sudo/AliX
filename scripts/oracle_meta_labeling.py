@@ -1318,9 +1318,6 @@ def run_meta_labeling(
     )
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    labels_out = pd.DataFrame(
-        {
-       output_dir.mkdir(parents=True, exist_ok=True)
     context: dict[str, Any] = {
         "commit_sha": commit_sha,
         "source_manifest": source_manifest,
@@ -1378,7 +1375,10 @@ def run_meta_labeling(
     print(json.dumps(report, indent=2, sort_keys=True, allow_nan=False))
     return report
 
-ndomForest filter for an oracle LSTM."
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Train an OOS RandomForest filter for an oracle LSTM."
     )
     parser.add_argument("--dataset", type=Path, required=True)
     parser.add_argument("--manifest", type=Path, required=True)
