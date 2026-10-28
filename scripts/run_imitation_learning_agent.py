@@ -691,7 +691,9 @@ def _publish_selected_teacher_dataset(
     selected_manifest = dict(candidate_manifest)
     selected_manifest.update(
         {
-            "teacher_csv_sha256": hashlib.sha256(selected_path.read_bytes()).hexdigest(),
+            "teacher_csv_sha256": hashlib.sha256(
+                selected_path.read_bytes()
+            ).hexdigest(),
             "teacher_csv_file": selected_path.name,
             "selected_for_training": True,
         }
@@ -836,7 +838,11 @@ def _write_teacher_backtest_report(
         json.dumps(report, indent=2, sort_keys=True, allow_nan=False) + "\n",
         encoding="utf-8",
     )
-    print(json.dumps({"teacher_backtest": report}, indent=2, sort_keys=True, allow_nan=False))
+    print(
+        json.dumps(
+            {"teacher_backtest": report}, indent=2, sort_keys=True, allow_nan=False
+        )
+    )
 
 
 
