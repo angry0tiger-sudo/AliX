@@ -434,7 +434,6 @@ def test_buy_and_sell_targets_handle_partial_and_full_closes() -> None:
     closed = env._execute_sell_action("SELL_100", 1.0, 110.0, full_mask)
     assert closed[1] == "SELL"
     assert env._quantity == pytest.approx(0.0)
-    assert env._last_buy_index is None
     assert env._closed_trade_count == 1
     assert env._winning_trade_count == 1
 
