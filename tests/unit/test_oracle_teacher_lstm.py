@@ -19,9 +19,7 @@ def _frame(rows: int = 1200) -> pd.DataFrame:
     open_price = np.r_[close[0], close[:-1]]
     return pd.DataFrame(
         {
-            "timestamp": pd.date_range(
-                "2024-01-01", periods=rows, freq="h", tz="UTC"
-            ),
+            "timestamp": pd.date_range("2024-01-01", periods=rows, freq="h", tz="UTC"),
             "open": open_price,
             "high": np.maximum(open_price, close) + 0.2,
             "low": np.minimum(open_price, close) - 0.2,
@@ -56,9 +54,7 @@ def test_same_candle_double_touch_uses_conservative_stop_first_rule() -> None:
     labels = generate_oracle_labels(frame, horizon=2)
 
     assert labels.loc[0, "oracle_action"] == ACTION_SELL
-    assert labels.loc[0, "barrier_outcome"] == (
-        "same_candle_both_barriers_stop_first"
-    )
+    assert labels.loc[0, "barrier_outcome"] == ("same_candle_both_barriers_stop_first")
 
 
 def test_partition_mask_removes_every_cross_boundary_target() -> None:
