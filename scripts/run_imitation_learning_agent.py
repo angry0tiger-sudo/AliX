@@ -981,6 +981,12 @@ def _validation_profit_factor(mode_result: dict[str, Any]) -> float:
     return float(value)
 
 
+def _any_mode_gate_passed(
+    mode_results: dict[str, dict[str, Any]], gate_key: str
+) -> bool:
+    return any(result["gate"][gate_key] for result in mode_results.values())
+
+
 def _build_teacher_backtest_report(
     commit_sha: str,
     source_manifest: dict[str, Any],
@@ -1000,22 +1006,10 @@ def _build_teacher_backtest_report(
         gate = {
             "minimum_profit_factor": 1.5,
             "maximum_allowed_drawdown_fraction": _MAX_TEACHER_DRAWDOWN_FRACTION,
-            "validation_profit_factor_passed": any(
-                result["gate"]["validation_profit_factor_passed"]
-                for result in mode_results.values()
-            ),
-            "holdout_profit_factor_passed": any(
-                result["gate"]["holdout_profit_factor_passed"]
-                for result in mode_results.values()
-            ),
-            "validation_drawdown_passed": any(
-                result["gate"]["validation_drawdown_passed"]
-                for result in mode_results.values()
-            ),
-            "holdout_drawdown_passed": any(
-                result["gate"]["holdout_drawdown_passed"]
-                for result in mode_results.values()
-            ),
+            "validation_profit_factor_passed": _any_mode_gate_passed(mode_results, "validation_profit_factor_passed"),
+            "holdout_profit_factor_passed": _any_mode_gate_passed(mode_results, "holdout_profit_factor_passed"),
+            "validation_drawdown_passed": _any_mode_gate_passed(mode_results, "validation_drawdown_passed"),
+            "holdout_drawdown_passed": _any_mode_gate_passed(mode_results, "holdout_drawdown_passed"),
             "minimum_trade_signal_count": _MIN_TEACHER_TRADE_SIGNAL_COUNT,
             "teacher_trade_signal_count": int(
                 diagnostic["gate"]["teacher_trade_signal_count"]
