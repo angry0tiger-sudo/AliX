@@ -154,6 +154,7 @@ wcwidth==0.9.3
 websockets==17.3
 wheel==0.48.0
 xenon==0.9.3
+xgboost-cpu==3.4.1
 yarl==1.25.1
 zlib-ng==1.0.0
 

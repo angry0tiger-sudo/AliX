@@ -1,0 +1,141 @@
+name: AliX ML Core Rebuild (CI-gated)
+
+# Manual-only by design. No push trigger can start research automatically.
+# Every downstream job MUST depend on ci-green-gate.
+on:
+  workflow_dispatch:
+    inputs:
+      run_contracts:
+        description: "Run deterministic Phase 1 data-contract tests (no market download or training)"
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: alix-ml-core-rebuild
+  cancel-in-progress: false
+
+jobs:
+  ci-green-gate:
+    name: Require full CI success for the exact SHA
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Verify CI workflow completed successfully on this exact commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from urllib.error import HTTPError, URLError
+          from urllib.request import Request, urlopen
+
+          repository = os.environ["GITHUB_REPOSITORY"]
+          target_sha = os.environ["TARGET_SHA"]
+          token = os.environ["GH_TOKEN"]
+          url = (
+              f"https://api.github.com/repos/{repository}/actions/workflows/ci.yml/runs"
+              f"?head_sha={target_sha}&per_page=100"
+          )
+          request = Request(
+              url,
+              headers={
+                  "Accept": "application/vnd.github+json",
+                  "Authorization": f"Bearer {token}",
+                  "X-GitHub-Api-Version": "2022-11-28",
+              },
+          )
+          try:
+              with urlopen(request, timeout=15) as response:
+                  payload = json.load(response)
+          except (HTTPError, URLError, TimeoutError) as error:
+              raise SystemExit(f"ci_status_lookup_failed:{type(error).__name__}") from None
+
+          successful = [
+              run
+              for run in payload.get("workflow_runs", [])
+              if run.get("head_sha") == target_sha
+              and run.get("status") == "completed"
+              and run.get("conclusion") == "success"
+          ]
+          if not successful:
+              raise SystemExit(
+                  "ci_green_gate_blocked:no completed successful ci.yml run for exact SHA "
+                  + target_sha
+              )
+          run = max(successful, key=lambda item: item.get("run_number", 0))
+          print(
+              json.dumps(
+                  {
+                      "gate": "PASS",
+                      "target_sha": target_sha,
+                      "ci_run_id": run.get("id"),
+                      "ci_run_url": run.get("html_url"),
+                      "ci_conclusion": run.get("conclusion"),
+                      "research_training_performed": False,
+                  },
+                  sort_keys=True,
+              )
+          )
+          PY
+
+  phase1-contracts:
+    name: Deterministic Phase 1 contracts (no training)
+    needs: ci-green-gate
+    if: ${{ inputs.run_contracts }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      ALIx_ENV: paper
+      ALIx_DRY_RUN: "true"
+      ALIx_ALLOW_LIVE_TRADING: "false"
+      ALIx_REPORTING_ENABLED: "false"
+      PYTHONUNBUFFERED: "1"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    steps:
+      - name: Checkout exact research commit without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Set up pinned Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install test runner only
+        run: python -m pip install pytest==9.0.3
+      - name: Run deterministic public-data and data-quality contracts
+        run: |
+          python -m pytest \
+            tests/unit/test_data_quality_gate.py \
+            tests/unit/test_phase10_public_market_data.py -q
+      - name: Confirm no economic research was run
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          print(json.dumps({
+              "commit_sha": os.environ["GITHUB_SHA"],
+              "activity": "DETERMINISTIC_CONTRACT_TESTS_ONLY",
+              "market_download_performed": False,
+              "model_training_performed": False,
+              "backtest_performed": False,
+              "Champion": None,
+              "order_permission": False,
+              "trading_authorization": "NO-GO",
+              "real_order_attempts": 0,
+              "exchange_calls": 0,
+              "private_api_calls": 0,
+          }, sort_keys=True))
+          PY
