@@ -193,7 +193,6 @@ def test_class_weights_fail_closed_when_train_split_lacks_a_class() -> None:
         raise AssertionError("missing training class must fail closed")
 
 
-
 def test_teacher_economic_gate_requires_profitability_and_signal_density() -> None:
     passing = {"profit_factor": 1.6}
     failing = {"profit_factor": 1.49}
@@ -215,7 +214,9 @@ def test_teacher_economic_gate_requires_profitability_and_signal_density() -> No
         _teacher_backtest_gate(passing, failing, sufficient_signals)["passed"] is False
     )
     assert (
-        _teacher_backtest_gate(passing, passing, sparse_signals)["lstm_training_allowed"]
+        _teacher_backtest_gate(passing, passing, sparse_signals)[
+            "lstm_training_allowed"
+        ]
         is False
     )
     assert (
