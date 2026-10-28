@@ -616,6 +616,64 @@ def _mode_economic_diagnosis(
     }
 
 
+def _profit_factor_above_one(economics: dict[str, Any]) -> bool:
+    value = economics.get("profit_factor")
+    return (
+        isinstance(value, (int, float))
+        and np.isfinite(value)
+        and value > 1.0
+    )
+
+
+def _execution_cost_counterfactual_diagnosis(
+    validation_with_costs: dict[str, Any],
+    holdout_with_costs: dict[str, Any],
+    validation_without_direct_costs: dict[str, Any],
+    holdout_without_direct_costs: dict[str, Any],
+) -> dict[str, Any]:
+    validation_before_costs_profitable = _profit_factor_above_one(
+        validation_without_direct_costs
+    )
+    holdout_before_costs_profitable = _profit_factor_above_one(
+        holdout_without_direct_costs
+    )
+    validation_after_costs_profitable = _profit_factor_above_one(validation_with_costs)
+    holdout_after_costs_profitable = _profit_factor_above_one(holdout_with_costs)
+    validation_cost_flip = (
+        validation_before_costs_profitable and not validation_after_costs_profitable
+    )
+    holdout_cost_flip = (
+        holdout_before_costs_profitable and not holdout_after_costs_profitable
+    )
+    if validation_cost_flip or holdout_cost_flip:
+        interpretation = "direct fees and slippage flip at least one partition below PF 1"
+    elif not validation_before_costs_profitable and not holdout_before_costs_profitable:
+        interpretation = "trade path is unprofitable even before direct execution costs"
+    else:
+        interpretation = "direct costs contribute, but do not explain both PF failures"
+    return {
+        "validation_profit_factor_without_direct_costs": validation_without_direct_costs.get(
+            "profit_factor"
+        ),
+        "holdout_profit_factor_without_direct_costs": holdout_without_direct_costs.get(
+            "profit_factor"
+        ),
+        "validation_net_return_without_direct_costs": validation_without_direct_costs.get(
+            "net_return_fraction"
+        ),
+        "holdout_net_return_without_direct_costs": holdout_without_direct_costs.get(
+            "net_return_fraction"
+        ),
+        "validation_pf_flipped_below_one_by_direct_costs": validation_cost_flip,
+        "holdout_pf_flipped_below_one_by_direct_costs": holdout_cost_flip,
+        "interpretation": interpretation,
+        "counterfactual_policy": (
+            "same generated actions, exit prices, and cost-aware stop/trailing decisions; "
+            "only direct fee and slippage deductions in economic accounting are removed"
+        ),
+    }
+
+
 def _write_teacher_dataset(
     frame: pd.DataFrame,
     source_manifest: dict[str, Any],
