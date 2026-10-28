@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from decimal import Decimal
 
-import pytest
 
 from services.execution.contracts import (
     LocalPosition,
