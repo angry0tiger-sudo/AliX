@@ -351,7 +351,13 @@ def _check_teacher_protective_exit(
     if lows[index] <= state.stop_price:
         fill = min(opens[index], state.stop_price)
         _record_teacher_exit(
-            index, fill, state.active_stop_reason, state, actions, exit_prices, exit_reasons
+            index,
+            fill,
+            state.active_stop_reason,
+            state,
+            actions,
+            exit_prices,
+            exit_reasons,
         )
         return True
     if highs[index] >= state.target_price:
