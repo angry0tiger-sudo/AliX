@@ -210,7 +210,7 @@ def test_cost_adjusted_tp_sl_and_break_even_win_rate_are_reported() -> None:
     assert 0.60 < required_win_rate < 0.61
 
 
-def test_teacher_mode_selection_uses_validation_pf_only_among_fully_passing_modes() -> None:
+def test_mode_selection_uses_validation_pf_among_passing_modes() -> None:
     results: dict[str, dict[str, Any]] = {
         "institutional": {
             "gate": {"passed": True},
