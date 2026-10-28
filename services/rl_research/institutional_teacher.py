@@ -218,9 +218,9 @@ def _mean_reversion_setups(
     """Use completed-candle Bollinger touches confirmed by Wilder-style RSI."""
     close = frame["close"].astype(np.float64)
     basis = close.rolling(bollinger_period, min_periods=bollinger_period).mean()
-    deviation = close.rolling(
-        bollinger_period, min_periods=bollinger_period
-    ).std(ddof=0)
+    deviation = close.rolling(bollinger_period, min_periods=bollinger_period).std(
+        ddof=0
+    )
     lower_band = basis - bollinger_stddev * deviation
     upper_band = basis + bollinger_stddev * deviation
 

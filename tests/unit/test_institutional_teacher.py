@@ -311,22 +311,26 @@ def test_mean_reversion_setups_require_bollinger_touch_and_rsi_extreme() -> None
 
     oversold_close = np.concatenate((flat_close, np.asarray([80.0])))
     oversold_open = np.r_[oversold_close[0], oversold_close[:-1]]
-    oversold = pd.DataFrame({
-        "close": oversold_close,
-        "high": np.maximum(oversold_open, oversold_close) + 0.1,
-        "low": np.minimum(oversold_open, oversold_close) - 0.1,
-    })
+    oversold = pd.DataFrame(
+        {
+            "close": oversold_close,
+            "high": np.maximum(oversold_open, oversold_close) + 0.1,
+            "low": np.minimum(oversold_open, oversold_close) - 0.1,
+        }
+    )
     buy_setup, sell_setup = _mean_reversion_setups(oversold)
     assert bool(buy_setup.iloc[-1])
     assert not bool(sell_setup.iloc[-1])
 
     overbought_close = np.concatenate((flat_close, np.asarray([120.0])))
     overbought_open = np.r_[overbought_close[0], overbought_close[:-1]]
-    overbought = pd.DataFrame({
-        "close": overbought_close,
-        "high": np.maximum(overbought_open, overbought_close) + 0.1,
-        "low": np.minimum(overbought_open, overbought_close) - 0.1,
-    })
+    overbought = pd.DataFrame(
+        {
+            "close": overbought_close,
+            "high": np.maximum(overbought_open, overbought_close) + 0.1,
+            "low": np.minimum(overbought_open, overbought_close) - 0.1,
+        }
+    )
     buy_setup, sell_setup = _mean_reversion_setups(overbought)
     assert not bool(buy_setup.iloc[-1])
     assert bool(sell_setup.iloc[-1])

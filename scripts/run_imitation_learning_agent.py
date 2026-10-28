@@ -462,8 +462,14 @@ def _simulate_teacher_segment(
         slippage_bps_per_side=float(risk_parameters["slippage_bps_per_side"]),
     )
     close_prices = segment["close"].to_numpy(dtype=np.float64)
-    fee_bps = float(risk_parameters["fee_bps_per_side"]) if include_execution_costs else 0.0
-    slippage_bps = float(risk_parameters["slippage_bps_per_side"]) if include_execution_costs else 0.0
+    fee_bps = (
+        float(risk_parameters["fee_bps_per_side"]) if include_execution_costs else 0.0
+    )
+    slippage_bps = (
+        float(risk_parameters["slippage_bps_per_side"])
+        if include_execution_costs
+        else 0.0
+    )
     return simulate_economics(
         actions.astype(np.int64),
         close_prices,
@@ -604,12 +610,8 @@ def _cost_adjusted_risk_diagnostics(
     slippage_rate = DEFAULT_SLIPPAGE_BPS_PER_SIDE / 10_000.0
     entry_cost_factor = (1.0 + slippage_rate) * (1.0 + fee_rate)
     exit_cost_factor = (1.0 - slippage_rate) * (1.0 - fee_rate)
-    target_factor = (
-        (1.0 + take_profit_fraction) * exit_cost_factor / entry_cost_factor
-    )
-    stop_factor = (
-        (1.0 - stop_loss_fraction) * exit_cost_factor / entry_cost_factor
-    )
+    target_factor = (1.0 + take_profit_fraction) * exit_cost_factor / entry_cost_factor
+    stop_factor = (1.0 - stop_loss_fraction) * exit_cost_factor / entry_cost_factor
     net_target_return = target_factor - 1.0
     net_stop_return = stop_factor - 1.0
     net_stop_loss = abs(min(0.0, net_stop_return))
@@ -747,8 +749,12 @@ def _write_teacher_dataset(
         "min_atr_cost_multiple": float(risk_parameters["atr_cost_multiple"]),
         "take_profit_fraction": float(risk_parameters["take_profit_fraction"]),
         "stop_loss_fraction": float(risk_parameters["stop_loss_fraction"]),
-        "trailing_trigger_fraction": float(risk_parameters["trailing_trigger_fraction"]),
-        "trailing_distance_fraction": float(risk_parameters["trailing_distance_fraction"]),
+        "trailing_trigger_fraction": float(
+            risk_parameters["trailing_trigger_fraction"]
+        ),
+        "trailing_distance_fraction": float(
+            risk_parameters["trailing_distance_fraction"]
+        ),
         "fee_bps_per_side": float(risk_parameters["fee_bps_per_side"]),
         "slippage_bps_per_side": float(risk_parameters["slippage_bps_per_side"]),
     }
@@ -865,7 +871,9 @@ def _evaluate_teacher_mode(
     distribution = teacher_manifest["teacher_action_distribution"]
     return {
         "entry_mode": entry_mode,
-        "entry_logic": teacher_manifest.get("teacher_entry_logic", _teacher_entry_logic(entry_mode)),
+        "entry_logic": teacher_manifest.get(
+            "teacher_entry_logic", _teacher_entry_logic(entry_mode)
+        ),
         "parameters": risk_parameters,
         "cost_adjusted_risk_diagnostics": risk_diagnostics,
         "teacher_csv_sha256": teacher_manifest["teacher_csv_sha256"],
