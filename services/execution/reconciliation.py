@@ -125,7 +125,7 @@ def _filled_exit_order(
     if filled_quantity - position.quantity > tolerance or filled_quantity <= 0:
         return None, "oco_exit_quantity_mismatch"
     average = total_cost / filled_quantity
-    latest = max(int(trade.get("timestamp") or 0) for trade in matching)
+    latest = max(int(str(trade.get("timestamp") or 0)) for trade in matching)
     order_id = str(matching[-1].get("order", matching[-1].get("orderId", "")))
     report = next((item for item in reports if _order_id(item) == order_id), {})
     normalized: dict[str, object] = {
