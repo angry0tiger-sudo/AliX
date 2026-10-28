@@ -499,6 +499,73 @@ def _simulate_teacher_segment(
     )
 
 
+def _validate_wfv_configuration(
+    row_count: int, n_splits: int, purge_candles: int, embargo_candles: int
+) -> None:
+    if isinstance(row_count, bool) or row_count < 1_000:
+        raise ValueError("purged_walk_forward_configuration_invalid")
+    if isinstance(n_splits, bool) or n_splits < 2:
+        raise ValueError("purged_walk_forward_configuration_invalid")
+    if isinstance(purge_candles, bool) or purge_candles < 1:
+        raise ValueError("purged_walk_forward_configuration_invalid")
+    if isinstance(embargo_candles, bool) or embargo_candles < 1:
+        raise ValueError("purged_walk_forward_configuration_invalid")
+
+
+def _wfv_time_boundaries(row_count: int) -> tuple[int, int, int, int]:
+    initial_train_end = int(row_count * 0.40)
+    cv_region_end = int(row_count * 0.65)
+    validation_start = int(row_count * 0.70)
+    holdout_start = int(row_count * 0.85)
+    if not (initial_train_end < cv_region_end < validation_start < holdout_start):
+        raise ValueError("purged_walk_forward_boundaries_invalid")
+    return initial_train_end, cv_region_end, validation_start, holdout_start
+
+
+def _wfv_test_width(
+    initial_train_end: int, cv_region_end: int, n_splits: int, embargo_candles: int
+) -> int:
+    available = cv_region_end - initial_train_end - embargo_candles * (n_splits - 1)
+    test_width = available // n_splits
+    if test_width < 24:
+        raise ValueError("purged_walk_forward_test_window_too_short")
+    return test_width
+
+
+def _build_purged_walk_forward_fold(
+    fold_number: int,
+    test_start: int,
+    test_width: int,
+    cv_region_end: int,
+    purge_candles: int,
+    embargo_candles: int,
+) -> dict[str, int]:
+    train_end = test_start - purge_candles
+    test_end = test_start + test_width
+    if train_end <= 0 or test_end > cv_region_end:
+        raise ValueError("purged_walk_forward_fold_out_of_bounds")
+    return {
+        "fold": fold_number,
+        "train_start_inclusive": 0,
+        "train_end_exclusive": train_end,
+        "purge_start_inclusive": train_end,
+        "purge_end_exclusive": test_start,
+        "test_start_inclusive": test_start,
+        "test_end_exclusive": test_end,
+        "embargo_end_exclusive": min(cv_region_end, test_end + embargo_candles),
+    }
+
+
+def _validate_wfv_fold_boundaries(
+    folds: list[dict[str, int]], validation_start: int, holdout_start: int
+) -> None:
+    last_test_end = max(fold["test_end_exclusive"] for fold in folds)
+    if last_test_end > validation_start:
+        raise ValueError("purged_walk_forward_overlaps_final_validation")
+    if last_test_end >= holdout_start:
+        raise ValueError("purged_walk_forward_touches_final_holdout")
+
+
 def _purged_walk_forward_splits(
     row_count: int,
     *,
@@ -507,55 +574,29 @@ def _purged_walk_forward_splits(
     embargo_candles: int = _WFV_EMBARGO_CANDLES,
 ) -> list[dict[str, int]]:
     """Build expanding-window folds entirely before validation and final holdout."""
-    if (
-        isinstance(row_count, bool)
-        or row_count < 1_000
-        or isinstance(n_splits, bool)
-        or n_splits < 2
-        or isinstance(purge_candles, bool)
-        or purge_candles < 1
-        or isinstance(embargo_candles, bool)
-        or embargo_candles < 1
-    ):
-        raise ValueError("purged_walk_forward_configuration_invalid")
-
-    initial_train_end = int(row_count * 0.40)
-    validation_start = int(row_count * 0.70)
-    cv_region_end = int(row_count * 0.65)
-    holdout_start = int(row_count * 0.85)
-    if not (initial_train_end < cv_region_end < validation_start < holdout_start):
-        raise ValueError("purged_walk_forward_boundaries_invalid")
-
-    available = cv_region_end - initial_train_end - embargo_candles * (n_splits - 1)
-    test_width = available // n_splits
-    if test_width < 24:
-        raise ValueError("purged_walk_forward_test_window_too_short")
+    _validate_wfv_configuration(row_count, n_splits, purge_candles, embargo_candles)
+    initial_train_end, cv_region_end, validation_start, holdout_start = (
+        _wfv_time_boundaries(row_count)
+    )
+    test_width = _wfv_test_width(
+        initial_train_end, cv_region_end, n_splits, embargo_candles
+    )
 
     folds: list[dict[str, int]] = []
     test_start = initial_train_end
     for fold_number in range(n_splits):
-        train_end = test_start - purge_candles
-        test_end = test_start + test_width
-        if train_end <= 0 or test_end > cv_region_end:
-            raise ValueError("purged_walk_forward_fold_out_of_bounds")
-        folds.append(
-            {
-                "fold": fold_number,
-                "train_start_inclusive": 0,
-                "train_end_exclusive": train_end,
-                "purge_start_inclusive": train_end,
-                "purge_end_exclusive": test_start,
-                "test_start_inclusive": test_start,
-                "test_end_exclusive": test_end,
-                "embargo_end_exclusive": min(cv_region_end, test_end + embargo_candles),
-            }
+        fold = _build_purged_walk_forward_fold(
+            fold_number,
+            test_start,
+            test_width,
+            cv_region_end,
+            purge_candles,
+            embargo_candles,
         )
-        test_start = test_end + embargo_candles
+        folds.append(fold)
+        test_start = fold["test_end_exclusive"] + embargo_candles
 
-    if max(fold["test_end_exclusive"] for fold in folds) > validation_start:
-        raise ValueError("purged_walk_forward_overlaps_final_validation")
-    if max(fold["test_end_exclusive"] for fold in folds) >= holdout_start:
-        raise ValueError("purged_walk_forward_touches_final_holdout")
+    _validate_wfv_fold_boundaries(folds, validation_start, holdout_start)
     return folds
 
 
@@ -666,88 +707,75 @@ def _teacher_trial_score(
     return float(score), diagnostics
 
 
-def _optimize_teacher_parameters(
-    frame: pd.DataFrame,
-    *,
-    trial_count: int = _DEFAULT_OPTUNA_TRIALS,
-    seed: int = _DEFAULT_OPTUNA_SEED,
-) -> dict[str, Any]:
-    """Optimize only purged walk-forward blocks ending before validation."""
+def _validate_optuna_trial_count(trial_count: int) -> None:
     if isinstance(trial_count, bool) or not 10 <= trial_count <= 250:
         raise ValueError("optuna_trial_count_out_of_range")
-    optuna: Any = importlib.import_module("optuna")
 
-    row_count = len(frame)
-    folds = _purged_walk_forward_splits(row_count)
-    maximum_test_end = max(fold["test_end_exclusive"] for fold in folds)
-    optimization_frame = frame.iloc[:maximum_test_end].reset_index(drop=True)
-    optuna.logging.set_verbosity(optuna.logging.WARNING)
-    sampler = optuna.samplers.TPESampler(
-        seed=seed, n_startup_trials=min(20, max(1, trial_count // 3))
-    )
-    study = optuna.create_study(direction="maximize", sampler=sampler)
 
-    def objective(trial: Any) -> float:
-        parameters = _suggest_teacher_parameters(trial)
-        entry_mode = str(parameters["entry_mode"])
-        risk_parameters = _teacher_risk_parameters(entry_mode, parameters)
-        teacher = generate_teacher_labels(
-            optimization_frame,
-            entry_mode=entry_mode,
-            atr_period=int(risk_parameters["atr_period_candles"]),
-            min_atr_cost_multiple=float(risk_parameters["atr_cost_multiple"]),
-            take_profit_fraction=float(risk_parameters["take_profit_fraction"]),
-            stop_loss_fraction=float(risk_parameters["stop_loss_fraction"]),
-            trailing_trigger_fraction=float(
-                risk_parameters["trailing_trigger_fraction"]
-            ),
-            trailing_distance_fraction=float(
-                risk_parameters["trailing_distance_fraction"]
-            ),
-            fee_bps_per_side=float(risk_parameters["fee_bps_per_side"]),
-            slippage_bps_per_side=float(risk_parameters["slippage_bps_per_side"]),
-            bollinger_period=int(parameters["bollinger_period_candles"]),
-            bollinger_stddev=float(parameters["bollinger_stddev"]),
-            rsi_period=int(parameters["rsi_period_candles"]),
-            rsi_buy_below=float(parameters["rsi_buy_below"]),
-            rsi_sell_above=float(parameters["rsi_sell_above"]),
-            breakout_donchian_lookback=int(parameters["donchian_lookback_candles"]),
-        )
-        fold_results: list[dict[str, Any]] = []
-        for fold in folds:
-            economics = _simulate_teacher_segment(
-                optimization_frame,
-                teacher,
-                fold["test_start_inclusive"],
-                fold["test_end_exclusive"],
-                risk_parameters=risk_parameters,
-            )
-            fold_results.append({**fold, "economics": economics})
-        score, diagnostics = _teacher_trial_score(fold_results)
-        trial.set_user_attr("normalized_parameters", parameters)
-        trial.set_user_attr("fold_results", fold_results)
-        trial.set_user_attr("score_diagnostics", diagnostics)
-        return score
-
-    study.optimize(objective, n_trials=trial_count, n_jobs=1, show_progress_bar=False)
-    best = study.best_trial
-    best_parameters = dict(best.user_attrs["normalized_parameters"])
-    best_folds = list(best.user_attrs["fold_results"])
-    best_diagnostics = dict(best.user_attrs["score_diagnostics"])
-    completed = sorted(
-        (
-            trial
-            for trial in study.trials
-            if trial.value is not None and trial.state.name == "COMPLETE"
+def _evaluate_optuna_trial(
+    trial: Any,
+    optimization_frame: pd.DataFrame,
+    folds: list[dict[str, int]],
+) -> float:
+    parameters = _suggest_teacher_parameters(trial)
+    entry_mode = str(parameters["entry_mode"])
+    risk_parameters = _teacher_risk_parameters(entry_mode, parameters)
+    teacher = generate_teacher_labels(
+        optimization_frame,
+        entry_mode=entry_mode,
+        atr_period=int(risk_parameters["atr_period_candles"]),
+        min_atr_cost_multiple=float(risk_parameters["atr_cost_multiple"]),
+        take_profit_fraction=float(risk_parameters["take_profit_fraction"]),
+        stop_loss_fraction=float(risk_parameters["stop_loss_fraction"]),
+        trailing_trigger_fraction=float(
+            risk_parameters["trailing_trigger_fraction"]
         ),
+        trailing_distance_fraction=float(
+            risk_parameters["trailing_distance_fraction"]
+        ),
+        fee_bps_per_side=float(risk_parameters["fee_bps_per_side"]),
+        slippage_bps_per_side=float(risk_parameters["slippage_bps_per_side"]),
+        bollinger_period=int(parameters["bollinger_period_candles"]),
+        bollinger_stddev=float(parameters["bollinger_stddev"]),
+        rsi_period=int(parameters["rsi_period_candles"]),
+        rsi_buy_below=float(parameters["rsi_buy_below"]),
+        rsi_sell_above=float(parameters["rsi_sell_above"]),
+        breakout_donchian_lookback=int(parameters["donchian_lookback_candles"]),
+    )
+    fold_results: list[dict[str, Any]] = []
+    for fold in folds:
+        economics = _simulate_teacher_segment(
+            optimization_frame,
+            teacher,
+            fold["test_start_inclusive"],
+            fold["test_end_exclusive"],
+            risk_parameters=risk_parameters,
+        )
+        fold_results.append({**fold, "economics": economics})
+    score, diagnostics = _teacher_trial_score(fold_results)
+    trial.set_user_attr("normalized_parameters", parameters)
+    trial.set_user_attr("fold_results", fold_results)
+    trial.set_user_attr("score_diagnostics", diagnostics)
+    return score
+
+
+def _completed_optuna_trials(study: Any) -> list[Any]:
+    completed = [
+        trial
+        for trial in study.trials
+        if trial.value is not None and trial.state.name == "COMPLETE"
+    ]
+    return sorted(
+        completed,
         key=lambda trial: (
             float(trial.value) if trial.value is not None else float("-inf")
         ),
         reverse=True,
     )
-    if best.value is None:
-        raise RuntimeError("optuna_best_trial_has_no_objective_value")
-    top_trials = [
+
+
+def _top_optuna_trials(completed: list[Any]) -> list[dict[str, Any]]:
+    return [
         {
             "trial_number": int(trial.number),
             "objective_value": (
@@ -758,6 +786,19 @@ def _optimize_teacher_parameters(
         }
         for trial in completed[:10]
     ]
+
+
+def _build_optuna_report(
+    study: Any,
+    row_count: int,
+    trial_count: int,
+    seed: int,
+    folds: list[dict[str, int]],
+) -> dict[str, Any]:
+    best = study.best_trial
+    if best.value is None:
+        raise RuntimeError("optuna_best_trial_has_no_objective_value")
+    completed = _completed_optuna_trials(study)
     validation_start = int(row_count * 0.70)
     validation_end = int(row_count * 0.85)
     return {
@@ -788,10 +829,10 @@ def _optimize_teacher_parameters(
         },
         "best_trial_number": int(best.number),
         "best_objective_value": float(best.value),
-        "best_parameters": best_parameters,
-        "best_score_diagnostics": best_diagnostics,
-        "best_fold_results": best_folds,
-        "top_trials": top_trials,
+        "best_parameters": dict(best.user_attrs["normalized_parameters"]),
+        "best_score_diagnostics": dict(best.user_attrs["score_diagnostics"]),
+        "best_fold_results": list(best.user_attrs["fold_results"]),
+        "top_trials": _top_optuna_trials(completed),
         "validation_start_inclusive": validation_start,
         "validation_end_exclusive": validation_end,
         "final_holdout_start_inclusive": validation_end,
@@ -804,6 +845,33 @@ def _optimize_teacher_parameters(
         "embargo_candles": _WFV_EMBARGO_CANDLES,
         "folds": [dict(fold) for fold in folds],
     }
+
+
+def _optimize_teacher_parameters(
+    frame: pd.DataFrame,
+    *,
+    trial_count: int = _DEFAULT_OPTUNA_TRIALS,
+    seed: int = _DEFAULT_OPTUNA_SEED,
+) -> dict[str, Any]:
+    """Optimize only purged walk-forward blocks ending before validation."""
+    _validate_optuna_trial_count(trial_count)
+    optuna: Any = importlib.import_module("optuna")
+    row_count = len(frame)
+    folds = _purged_walk_forward_splits(row_count)
+    maximum_test_end = max(fold["test_end_exclusive"] for fold in folds)
+    optimization_frame = frame.iloc[:maximum_test_end].reset_index(drop=True)
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+    sampler = optuna.samplers.TPESampler(
+        seed=seed, n_startup_trials=min(20, max(1, trial_count // 3))
+    )
+    study = optuna.create_study(direction="maximize", sampler=sampler)
+    study.optimize(
+        lambda trial: _evaluate_optuna_trial(trial, optimization_frame, folds),
+        n_trials=trial_count,
+        n_jobs=1,
+        show_progress_bar=False,
+    )
+    return _build_optuna_report(study, row_count, trial_count, seed, folds)
 
 
 def _teacher_backtest_gate(
