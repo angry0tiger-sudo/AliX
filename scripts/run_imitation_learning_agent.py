@@ -428,7 +428,6 @@ def simulate_economics(
     )
 
 
-
 def _simulate_teacher_segment(
     frame: pd.DataFrame,
     teacher: pd.DataFrame,
