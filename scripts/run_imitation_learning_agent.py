@@ -513,9 +513,7 @@ def _teacher_backtest_gate(
     holdout_profit_factor_passed = profit_factor_passes(holdout_economics)
     validation_drawdown_passed = drawdown_passes(validation_economics)
     holdout_drawdown_passed = drawdown_passes(holdout_economics)
-    validation_passed = (
-        validation_profit_factor_passed and validation_drawdown_passed
-    )
+    validation_passed = validation_profit_factor_passed and validation_drawdown_passed
     holdout_passed = holdout_profit_factor_passed and holdout_drawdown_passed
     buy_count = int(teacher_action_distribution.get("BUY", {}).get("count", 0))
     sell_count = int(teacher_action_distribution.get("SELL", {}).get("count", 0))

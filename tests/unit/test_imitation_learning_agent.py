@@ -396,9 +396,7 @@ def test_teacher_economic_gate_fails_closed_on_excessive_or_missing_drawdown() -
         "profit_factor": 1.6,
         "max_drawdown_fraction": 0.150001,
     }
-    result = _teacher_backtest_gate(
-        excessive_drawdown, passing, sufficient_signals
-    )
+    result = _teacher_backtest_gate(excessive_drawdown, passing, sufficient_signals)
     assert result["validation_profit_factor_passed"] is True
     assert result["validation_drawdown_passed"] is False
     assert result["validation_passed"] is False
