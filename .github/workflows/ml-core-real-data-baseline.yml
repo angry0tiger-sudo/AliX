@@ -1,0 +1,121 @@
+name: AliX ML Core Real-Data Diagnostic Baseline
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: alix-ml-core-real-data-baseline
+  cancel-in-progress: false
+
+jobs:
+  diagnostic-classification:
+    if: github.ref == 'refs/heads/research/ml-core-rebuild'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      ALIx_ENV: paper
+      ALIx_DRY_RUN: "true"
+      ALIx_ALLOW_LIVE_TRADING: "false"
+      ALIx_REPORTING_ENABLED: "false"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    steps:
+      - name: Checkout the selected research commit without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Confirm branch and safety scope
+        run: |
+          test "$GITHUB_REF" = "refs/heads/research/ml-core-rebuild"
+          test -n "$GITHUB_SHA"
+          printf 'commit_sha=%s\n' "$GITHUB_SHA"
+          printf 'scope=DIAGNOSTIC_CLASSIFICATION_ONLY\n'
+          printf 'real_order_attempts=0\nprivate_api_calls=0\n'
+
+      - name: Set up pinned Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install pinned diagnostic tree-model dependencies
+        run: |
+          python -m pip install pip==25.2
+          python -m pip install numpy==2.5.4 pandas==2.3.3 scikit-learn==1.9.0 lightgbm==4.7.0
+
+      - name: Fetch 90 days of public one-minute BTCUSDT and ETHUSDT candles
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/alix-real-market-data"
+          for symbol in BTCUSDT ETHUSDT; do
+            python scripts/fetch_nobitex_public_ohlcv.py \
+              --days 90 \
+              --symbol "$symbol" \
+              --interval 1m \
+              --output-dir "$RUNNER_TEMP/alix-real-market-data" \
+              --commit-sha "$GITHUB_SHA"
+          done
+
+      - name: Train diagnostic LightGBM classification baselines
+        run: |
+          python -m scripts.run_ml_core_real_data_baseline \
+            --input-dir "$RUNNER_TEMP/alix-real-market-data" \
+            --output "$GITHUB_WORKSPACE/alix-real-data-classification-report.json" \
+            --days 90 \
+            --commit-sha "$GITHUB_SHA"
+
+      - name: Validate classification-only report and safety invariants
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          report_path = Path("alix-real-data-classification-report.json")
+          report = json.loads(report_path.read_text(encoding="utf-8"))
+          assert report["commit_sha"] == os.environ["GITHUB_SHA"]
+          assert report["diagnostic_scope"] == "CLASSIFICATION_ONLY"
+          assert report["economic_evaluation_performed"] is False
+          assert report["economic_metrics_reported"] is False
+          assert report["experiment_count"] == 8
+          assert {item["pair"] for item in report["experiments"]} == {"BTC/USDT", "ETH/USDT"}
+          assert {item["timeframe"] for item in report["experiments"]} == {"15m", "30m", "1h", "4h"}
+          allowed_statuses = {
+              "TRAINED",
+              "SKIPPED_INSUFFICIENT_SAMPLES",
+              "SKIPPED_INSUFFICIENT_CLASS_DIVERSITY",
+          }
+          assert all(item["status"] in allowed_statuses for item in report["experiments"])
+          safety = report["safety"]
+          assert safety["public_api_only"] is True
+          assert safety["credentials_used"] is False
+          assert safety["private_api_calls"] == 0
+          assert safety["real_order_attempts"] == 0
+          assert safety["orders_or_execution_api_used"] is False
+          assert safety["Champion"] is None
+          assert safety["order_permission"] is False
+          assert safety["trading_authorization"] == "NO-GO"
+          print(json.dumps({
+              "commit_sha": report["commit_sha"],
+              "experiments": report["experiment_count"],
+              "trained_models": report["trained_models"],
+              "economic_evaluation_performed": False,
+              "private_api_calls": 0,
+              "real_order_attempts": 0,
+              "Champion": None,
+              "order_permission": False,
+              "trading_authorization": "NO-GO",
+          }, sort_keys=True))
+          PY
+
+      - name: Upload classification-only diagnostic report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alix-real-data-classification-diagnostic
+          path: alix-real-data-classification-report.json
+          if-no-files-found: warn
+          retention-days: 14
