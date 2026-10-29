@@ -13,10 +13,7 @@ from typing import Any, cast
 import numpy as np
 import pandas as pd
 from pandas import DataFrame, Series
-from sklearn.metrics import (
-    classification_report,
-    confusion_matrix as sklearn_confusion_matrix,
-)  # type: ignore[import-untyped]
+from sklearn import metrics  # type: ignore[import-untyped]
 
 from services.ml_core.adaptive_targets import apply_adaptive_triple_barrier
 from services.ml_core.causal_features import build_causal_feature_matrix
@@ -134,7 +131,7 @@ def classification_metrics(actual: Series, predicted: Series) -> dict[str, Any]:
     """Calculate class-wise and macro classification metrics only."""
     report = cast(
         dict[str, Any],
-        classification_report(
+        metrics.classification_report(
             actual.tolist(),
             predicted.tolist(),
             labels=list(LABELS),
@@ -209,7 +206,7 @@ def validation_classification_diagnostics(
     actual: Series, predicted: Series
 ) -> dict[str, Any]:
     """Return a fixed-order validation confusion matrix and prediction counts."""
-    matrix = sklearn_confusion_matrix(
+    matrix = metrics.confusion_matrix(
         actual.tolist(), predicted.tolist(), labels=list(LABELS)
     )
     return {
