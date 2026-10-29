@@ -11,7 +11,7 @@ import math
 from pathlib import Path
 import ssl
 import time
-from typing import Any, Callable
+from typing import Any, Callable, cast
 from urllib.parse import urlencode
 
 HOST = "api.binance.com"
@@ -88,7 +88,7 @@ def _validate_kline_timestamp(raw: Any, expected_ms: int) -> int:
         raise ValueError(
             f"binance_kline_timestamp_mismatch:expected={expected_ms}:actual={stamp}"
         )
-    return stamp
+    return cast(int, stamp)
 
 
 def _validated_kline_values(raw: list[Any]) -> tuple[float, float, float, float, float]:
