@@ -166,9 +166,7 @@ def _class_counts(values: Series) -> dict[str, int]:
     return {label: int((values == label).sum()) for label in LABELS}
 
 
-def _classes_below_threshold(
-    counts: dict[str, int], minimum: int
-) -> list[str]:
+def _classes_below_threshold(counts: dict[str, int], minimum: int) -> list[str]:
     """Return required classes with less than the requested sample count."""
     return [label for label in LABELS if counts[label] < minimum]
 
@@ -204,6 +202,7 @@ def sample_gate_diagnostics(
         "insufficient_train_classes": insufficient_train_classes,
         "insufficient_validation_classes": insufficient_validation_classes,
     }
+
 
 def validation_classification_diagnostics(
     actual: Series, predicted: Series
@@ -677,8 +676,10 @@ def _render_confusion_matrix_section(
     for item in experiments:
         matrix = item.get("confusion_matrix")
         for index, label in enumerate(LABELS):
-            values = ("N/A", "N/A", "N/A") if matrix is None else tuple(
-                matrix["matrix"][index]
+            values = (
+                ("N/A", "N/A", "N/A")
+                if matrix is None
+                else tuple(matrix["matrix"][index])
             )
             lines.append(
                 f"| {item['pair']} | {item['timeframe']} | {label} "
@@ -715,6 +716,7 @@ def render_markdown(report: dict[str, Any]) -> str:
         ]
     )
     return "\n".join(lines)
+
 
 def run_diagnostic(
     input_dir: Path, output_path: Path, *, days: int, commit_sha: str
