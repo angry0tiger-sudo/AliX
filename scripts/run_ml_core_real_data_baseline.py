@@ -501,7 +501,7 @@ def _insufficient_bar_result(
 def run_experiment(
     pair: str, timeframe: str, minute_candles: DataFrame
 ) -> dict[str, Any]:
-    """Fit one tree classifier for one pair/timeframe and report classification only."""
+    """Fit the primary and unweighted classifiers for one pair/timeframe."""
     bars = resample_ohlcv(minute_candles, timeframe)
     labels = apply_adaptive_triple_barrier(bars)
     if len(bars) < 100:
@@ -552,9 +552,7 @@ def run_experiment(
     train_metrics = classification_metrics(train_y, train_prediction)
     validation_metrics = classification_metrics(validation_y, validation_prediction)
 
-    always_sell_prediction = Series(
-        "SELL", index=validation_y.index, dtype=object
-    )
+    always_sell_prediction = Series("SELL", index=validation_y.index, dtype=object)
     unweighted_model = _new_classifier(class_weight=None)
     unweighted_model.fit(x_train, train_y)
     unweighted_prediction = Series(

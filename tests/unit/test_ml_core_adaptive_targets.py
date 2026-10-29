@@ -10,9 +10,9 @@ from pandas import DataFrame
 from services.ml_core.adaptive_targets import (
     ATR_PERIOD,
     EXIT_REASONS,
-    LABEL_HORIZON_CANDLES,
     K_LOWER_DEFAULT,
     K_UPPER_DEFAULT,
+    LABEL_HORIZON_CANDLES,
     apply_adaptive_triple_barrier,
     calculate_atr,
 )

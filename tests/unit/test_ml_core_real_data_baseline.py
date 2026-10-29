@@ -6,16 +6,17 @@ import pytest
 from pandas import DataFrame, Series
 
 from scripts.run_ml_core_real_data_baseline import (
+    baseline_validation_diagnostics,
     classification_metrics,
+    exit_reason_distribution,
+    label_audit_diagnostics,
     label_distribution,
     purged_temporal_indices,
     resample_ohlcv,
-    baseline_validation_diagnostics,
-    exit_reason_distribution,
-    label_audit_diagnostics,
     run_experiment,
     sample_gate_diagnostics,
     validation_classification_diagnostics,
+    _new_classifier,
 )
 
 
@@ -33,6 +34,27 @@ def minute_frame(rows: int = 65) -> DataFrame:
             "volume": np.ones(rows, dtype=float),
         }
     )
+
+
+
+def test_classifier_factory_supports_unweighted_baseline(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: list[dict[str, object]] = []
+
+    class FakeClassifier:
+        def __init__(self, **kwargs: object) -> None:
+            captured.append(kwargs)
+
+    monkeypatch.setattr(
+        "scripts.run_ml_core_real_data_baseline.importlib.import_module",
+        lambda _: type("LightGBMStub", (), {"LGBMClassifier": FakeClassifier}),
+    )
+
+    _new_classifier()
+    _new_classifier(class_weight=None)
+
+    assert captured[0]["class_weight"] == "balanced"
+    assert captured[1]["class_weight"] is None
+    assert captured[0]["random_state"] == captured[1]["random_state"] == 42
 
 
 def test_resample_uses_only_complete_candles() -> None:
@@ -119,7 +141,6 @@ def test_validation_diagnostics_report_fixed_confusion_matrix_and_predictions() 
         "count": 2,
         "percent": 50.0,
     }
-
 
 
 def test_exit_reason_distribution_is_fixed_and_rejects_unknown_reasons() -> None:
