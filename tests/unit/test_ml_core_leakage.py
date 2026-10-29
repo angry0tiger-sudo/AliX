@@ -148,7 +148,9 @@ def test_purge_embargo_validation_rejects_invalid_configuration_and_indices() ->
         create_purged_embargo_split(
             [], validation_start=5, validation_end=9, longest_feature_window=4
         )
-    with pytest.raises(ValueError, match="longest_feature_window_must_be_positive_integer"):
+    with pytest.raises(
+        ValueError, match="longest_feature_window_must_be_positive_integer"
+    ):
         create_purged_embargo_split(
             label_end_indices,
             validation_start=5,
