@@ -157,7 +157,7 @@ def test_purge_embargo_validation_rejects_invalid_configuration_and_indices() ->
         )
     with pytest.raises(ValueError, match="label_end_index_must_be_integer"):
         create_purged_embargo_split(
-            [0, 1, 2.5, 3, 4, 5, 6, 7, 8, 9],  # type: ignore[list-item]
+            [0, 1, 2.5, 3, 4, 5, 6, 7, 8, 9],
             validation_start=5,
             validation_end=6,
         )
