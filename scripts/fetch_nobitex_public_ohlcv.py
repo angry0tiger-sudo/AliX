@@ -303,9 +303,7 @@ def _fetch_candle_pages(
         # A non-empty response is not necessarily a complete page. Retry any
         # missing timestamp ranges directly rather than silently advancing the
         # cursor beyond candles that the first response omitted.
-        for gap_start, gap_end in _contiguous_timestamp_runs(
-            missing_stamps, seconds
-        ):
+        for gap_start, gap_end in _contiguous_timestamp_runs(missing_stamps, seconds):
             gap_expected = list(range(gap_start, gap_end + 1, seconds))
             gap_params = {
                 "symbol": symbol,
@@ -331,9 +329,7 @@ def _fetch_candle_pages(
                 if attempt < 2:
                     sleep_fn(2**attempt)
 
-        unresolved = [
-            stamp for stamp in expected_stamps if stamp not in page_by_stamp
-        ]
+        unresolved = [stamp for stamp in expected_stamps if stamp not in page_by_stamp]
         if unresolved:
             raise ValueError(
                 "nobitex_historical_page_incomplete:"

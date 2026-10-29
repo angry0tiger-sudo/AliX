@@ -62,7 +62,6 @@ def test_empty_page_inside_requested_window_remains_fatal() -> None:
     assert len(calls) == 4
 
 
-
 def test_partial_page_recovers_missing_prefix_without_synthetic_rows() -> None:
     start = 1_800_000_000
     end = start + 399 * 60
