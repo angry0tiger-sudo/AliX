@@ -230,3 +230,13 @@ jobs:
           python -m pip install pytest==9.0.3 sqlalchemy==2.1.6 'psycopg[binary]==3.3.2'
       - name: Test Control Plane transactions against disposable PostgreSQL
         run: pytest tests/integration/test_phase9_postgres.py -q
+
+  real-data-diagnostic:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/research/ml-core-rebuild' }}
+    needs:
+      - quality
+      - postgres-integration
+      - freqtrade-runtime-smoke
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ml-core-real-data-baseline.yml
