@@ -244,7 +244,12 @@ def _fetch_candle_pages(
             if attempt < 2:
                 sleep_fn(2**attempt)
         if not batch:
-            raise ValueError(f"nobitex_historical_empty_page:{cursor}:{stop}")
+            page_error = (
+                "nobitex_historical_empty_initial_page"
+                if cursor == start
+                else "nobitex_historical_empty_page"
+            )
+            raise ValueError(f"{page_error}:{cursor}:{stop}")
         rows.extend(batch)
         cursor = batch[-1]["timestamp"] + seconds
         if cursor <= end:

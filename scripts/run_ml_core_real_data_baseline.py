@@ -314,13 +314,44 @@ def _skipped_result(
     }
 
 
+def _insufficient_bar_result(
+    pair: str, timeframe: str, bars: DataFrame, labels: DataFrame
+) -> dict[str, Any]:
+    """Report short real-data windows without pretending a train/validation split exists."""
+    empty_distribution = label_distribution(Series(dtype=object))
+    return {
+        "pair": pair,
+        "timeframe": timeframe,
+        "status": "SKIPPED_INSUFFICIENT_SAMPLES",
+        "bar_count": int(len(bars)),
+        "train_rows": 0,
+        "validation_rows": 0,
+        "label_distribution": {
+            "train": empty_distribution,
+            "validation": empty_distribution,
+            "available_unpartitioned": label_distribution(labels["label"]),
+        },
+        "classification_metrics": None,
+        "overfitting_assessment": {
+            "status": "NOT_ASSESSED",
+            "macro_f1_gap_train_minus_validation": None,
+        },
+        "split": {
+            "status": "NOT_SPLIT_INSUFFICIENT_BARS",
+            "minimum_required_bars": 100,
+        },
+    }
+
+
 def run_experiment(
     pair: str, timeframe: str, minute_candles: DataFrame
 ) -> dict[str, Any]:
     """Fit one tree classifier for one pair/timeframe and report classification only."""
     bars = resample_ohlcv(minute_candles, timeframe)
-    features = build_causal_feature_matrix(bars)
     labels = apply_adaptive_triple_barrier(bars)
+    if len(bars) < 100:
+        return _insufficient_bar_result(pair, timeframe, bars, labels)
+    features = build_causal_feature_matrix(bars)
     train_indices, validation_indices, split_info = purged_temporal_indices(
         features, labels
     )
@@ -539,7 +570,7 @@ def render_markdown(report: dict[str, Any]) -> str:
 def run_diagnostic(
     input_dir: Path, output_path: Path, *, days: int, commit_sha: str
 ) -> dict[str, Any]:
-    if days not in (30, 90):
+    if days not in (1, 7, 30, 90):
         raise ValueError("diagnostic_days_out_of_policy")
     datasets: dict[str, DataFrame] = {}
     provenance: list[dict[str, Any]] = []
@@ -563,6 +594,20 @@ def run_diagnostic(
         "economic_evaluation_performed": False,
         "economic_metrics_reported": False,
         "requested_days": days,
+        "data_window_selection": {
+            "configured_days": int(
+                os.environ.get("ALIX_DIAGNOSTIC_CONFIGURED_DAYS", str(days))
+            ),
+            "selected_days": days,
+            "fallback_reason": os.environ.get(
+                "ALIX_DIAGNOSTIC_FALLBACK_REASON", "NONE"
+            ),
+            "policy": (
+                "Retry 30, 7, then 1 day only when the oldest requested page "
+                "is empty; empty pages inside the interval and data-quality "
+                "violations remain fatal."
+            ),
+        },
         "provider": "Nobitex public UDF history API",
         "input_datasets": provenance,
         "allowed_timeframes": list(TIMEFRAME_MINUTES),
@@ -632,7 +677,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input-dir", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--days", type=int, choices=(30, 90), default=90)
+    parser.add_argument("--days", type=int, choices=(1, 7, 30, 90), default=90)
     parser.add_argument("--commit-sha", required=True)
     args = parser.parse_args()
     report = run_diagnostic(

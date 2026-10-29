@@ -10,6 +10,7 @@ from scripts.run_ml_core_real_data_baseline import (
     label_distribution,
     purged_temporal_indices,
     resample_ohlcv,
+    run_experiment,
 )
 
 
@@ -99,3 +100,16 @@ def test_temporal_split_keeps_training_before_validation_and_purges() -> None:
     assert diagnostics["embargo_size_bars"] >= 14
     assert diagnostics["purged_train_rows"] > 0
     assert diagnostics["eligible_pre_validation_embargo_rows"] > 0
+
+
+
+def test_short_real_data_window_is_skipped_without_training() -> None:
+    result = run_experiment("BTC/USDT", "4h", minute_frame(rows=24 * 60))
+
+    assert result["status"] == "SKIPPED_INSUFFICIENT_SAMPLES"
+    assert result["bar_count"] == 6
+    assert result["train_rows"] == 0
+    assert result["validation_rows"] == 0
+    assert result["classification_metrics"] is None
+    assert result["split"]["status"] == "NOT_SPLIT_INSUFFICIENT_BARS"
+    assert result["label_distribution"]["available_unpartitioned"]["total"] == 0
