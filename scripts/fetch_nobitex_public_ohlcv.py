@@ -310,9 +310,7 @@ def _recover_one_timestamp_range(
 ) -> dict[int, CandleRecord]:
     """Request one missing range again, returning only fully recovered real rows."""
     expected = list(range(start, end + 1, seconds))
-    params = _candle_window_params(
-        symbol=symbol, seconds=seconds, start=start, end=end
-    )
+    params = _candle_window_params(symbol=symbol, seconds=seconds, start=start, end=end)
     for attempt in range(3):
         recovered = _request_filtered_candle_window(
             params, start=start, end=end, request_json=request_json
