@@ -259,11 +259,7 @@ def _request_filtered_candle_window(
         requested_from=int(params["from"]),
         requested_to=int(params["to"]),
     )
-    return {
-        row["timestamp"]: row
-        for row in page
-        if start <= row["timestamp"] <= end
-    }
+    return {row["timestamp"]: row for row in page if start <= row["timestamp"] <= end}
 
 
 def _candle_window_params(
@@ -288,9 +284,7 @@ def _fetch_page_with_retries(
 ) -> tuple[list[int], dict[int, CandleRecord], list[int]]:
     """Retry a main page and return expected, retrieved, and missing timestamps."""
     expected = list(range(start, end + 1, seconds))
-    params = _candle_window_params(
-        symbol=symbol, seconds=seconds, start=start, end=end
-    )
+    params = _candle_window_params(symbol=symbol, seconds=seconds, start=start, end=end)
     rows_by_stamp: dict[int, CandleRecord] = {}
     missing = expected
     for attempt in range(3):
