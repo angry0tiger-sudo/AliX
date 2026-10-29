@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+from inspect import signature
 import pandas as pd
 import pytest
 from pandas import DataFrame
@@ -8,8 +9,8 @@ from pandas import DataFrame
 from services.ml_core.adaptive_targets import (
     ATR_PERIOD,
     LABEL_HORIZON_CANDLES,
-    STOP_LOSS_MULTIPLIER,
-    TAKE_PROFIT_MULTIPLIER,
+    K_LOWER_DEFAULT,
+    K_UPPER_DEFAULT,
     apply_adaptive_triple_barrier,
     calculate_atr,
 )
@@ -50,15 +51,28 @@ def test_default_target_contract_is_tp_two_atr_sl_one_atr_horizon_24() -> None:
     atr = constant_atr(candles, 1.0)
     labels = apply_adaptive_triple_barrier(candles, atr_values=atr)
 
-    assert TAKE_PROFIT_MULTIPLIER == 2.0
-    assert STOP_LOSS_MULTIPLIER == 1.0
+    assert K_UPPER_DEFAULT == 2.0
+    assert K_LOWER_DEFAULT == 1.0
     assert LABEL_HORIZON_CANDLES == 24
     row = labels.iloc[10]
     assert row["take_profit_price"] == pytest.approx(102.0)
     assert row["stop_loss_price"] == pytest.approx(99.0)
     assert row["label"] == "HOLD"
     assert row["exit_reason"] == "horizon_expiry"
-    assert row["label_end_index"] == 34
+    assert row["label_end_idx"] == 34
+
+
+def test_labeler_signature_and_label_end_idx_contract() -> None:
+    parameters = signature(apply_adaptive_triple_barrier).parameters
+    assert "k_upper" in parameters
+    assert "k_lower" in parameters
+
+    candles = market_frame(40)
+    labels = apply_adaptive_triple_barrier(
+        candles, atr_values=constant_atr(candles, 1.0)
+    )
+    assert "label_end_idx" in labels.columns
+    assert "label_end_index" not in labels.columns
 
 
 def test_same_candle_collision_resolves_to_sell_stop_loss() -> None:
@@ -74,7 +88,7 @@ def test_same_candle_collision_resolves_to_sell_stop_loss() -> None:
     assert row["stop_loss_price"] == pytest.approx(99.0)
     assert row["label"] == "SELL"
     assert row["exit_reason"] == "stop_loss_collision"
-    assert row["label_end_index"] == 15
+    assert row["label_end_idx"] == 15
 
 
 def test_first_take_profit_hit_is_buy_and_stop_loss_hit_is_sell() -> None:
@@ -102,7 +116,7 @@ def test_horizon_expiry_is_hold_and_tail_without_full_horizon_is_unlabeled() -> 
 
     assert labels.iloc[14]["label"] == "HOLD"
     assert labels.iloc[14]["exit_reason"] == "horizon_expiry"
-    assert labels.iloc[14]["label_end_index"] == 38
+    assert labels.iloc[14]["label_end_idx"] == 38
     assert labels.iloc[-1]["label"] is None
     assert labels.iloc[-1]["exit_reason"] == "incomplete_horizon"
 
@@ -165,7 +179,7 @@ def test_invalid_configuration_and_malformed_ohlcv_fail_closed() -> None:
     with pytest.raises(ValueError, match="atr_period_must_be_positive_integer"):
         calculate_atr(candles, period=0)
     with pytest.raises(ValueError, match="barrier_multipliers"):
-        apply_adaptive_triple_barrier(candles, take_profit_multiplier=float("nan"))
+        apply_adaptive_triple_barrier(candles, k_upper=float("nan"))
     with pytest.raises(ValueError, match="atr_length_mismatch"):
         apply_adaptive_triple_barrier(candles, atr_values=pd.Series([1.0, 2.0]))
     with pytest.raises(ValueError, match="timezone_required"):
