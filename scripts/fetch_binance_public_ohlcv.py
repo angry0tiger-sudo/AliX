@@ -78,7 +78,7 @@ def _validate_symbol(symbol: str) -> None:
         raise ValueError("binance_symbol_out_of_policy")
 
 
-def _parse_kline(raw: Any, expected_ms: int) -> dict[str, Any]:
+def _validate_kline_timestamp(raw: Any, expected_ms: int) -> int:
     if not isinstance(raw, list) or len(raw) < 6:
         raise ValueError("binance_kline_shape_invalid")
     stamp = raw[0]
@@ -88,6 +88,10 @@ def _parse_kline(raw: Any, expected_ms: int) -> dict[str, Any]:
         raise ValueError(
             f"binance_kline_timestamp_mismatch:expected={expected_ms}:actual={stamp}"
         )
+    return stamp
+
+
+def _validated_kline_values(raw: list[Any]) -> tuple[float, float, float, float, float]:
     try:
         values = [float(value) for value in raw[1:6]]
     except (TypeError, ValueError):
@@ -99,6 +103,12 @@ def _parse_kline(raw: Any, expected_ms: int) -> dict[str, Any]:
         raise ValueError("binance_kline_price_or_volume_out_of_range")
     if high < max(opened, close) or low > min(opened, close) or high < low:
         raise ValueError("binance_kline_ohlc_invariant_failed")
+    return opened, high, low, close, volume
+
+
+def _parse_kline(raw: Any, expected_ms: int) -> dict[str, Any]:
+    stamp = _validate_kline_timestamp(raw, expected_ms)
+    opened, high, low, close, volume = _validated_kline_values(raw)
     return {
         "timestamp": stamp // 1000,
         "date": datetime.fromtimestamp(stamp / 1000, timezone.utc)
@@ -110,6 +120,56 @@ def _parse_kline(raw: Any, expected_ms: int) -> dict[str, Any]:
         "close": close,
         "volume": volume,
     }
+
+
+def _fetch_page(
+    cursor: int,
+    end_ms: int,
+    symbol: str,
+    request_json: Callable[[dict[str, str]], list[Any]],
+    sleep_fn: Callable[[float], None],
+) -> tuple[list[dict[str, Any]], int]:
+    expected_count = min(PAGE_SIZE, (end_ms - cursor) // INTERVAL_MS + 1)
+    params = {
+        "symbol": symbol,
+        "interval": "1m",
+        "startTime": str(cursor),
+        "endTime": str(end_ms),
+        "limit": str(PAGE_SIZE),
+    }
+    last_error: ValueError | None = None
+    for attempt in range(3):
+        try:
+            payload = request_json(params)
+            if len(payload) != expected_count:
+                raise ValueError(
+                    f"binance_kline_page_count_mismatch:expected={expected_count}:actual={len(payload)}:start={cursor}"
+                )
+            page = [
+                _parse_kline(item, cursor + index * INTERVAL_MS)
+                for index, item in enumerate(payload)
+            ]
+            return page, expected_count
+        except ValueError as exc:
+            last_error = exc
+            if attempt < 2:
+                sleep_fn(2**attempt)
+    assert last_error is not None
+    raise ValueError(f"{last_error}:attempts=3") from None
+
+
+def _validate_complete_window(
+    rows: list[dict[str, Any]], expected_count: int, start_ms: int, end_ms: int
+) -> None:
+    stamps = [int(row["timestamp"]) for row in rows]
+    if len(rows) != expected_count:
+        raise ValueError(
+            f"binance_historical_row_count_mismatch:expected={expected_count}:actual={len(rows)}"
+        )
+    if any(current - previous != 60 for previous, current in zip(stamps, stamps[1:])):
+        raise ValueError("binance_historical_gap_detected")
+    if stamps[0] * 1000 != start_ms or stamps[-1] * 1000 != end_ms:
+        raise ValueError("binance_historical_window_boundary_mismatch")
 
 
 def fetch_historical_candles(
@@ -127,52 +187,17 @@ def fetch_historical_candles(
     _validate_symbol(symbol)
     now_ms = int(now.astimezone(timezone.utc).timestamp() * 1000)
     end_ms = (now_ms // INTERVAL_MS) * INTERVAL_MS - INTERVAL_MS
-    count = days * 1440
-    start_ms = end_ms - (count - 1) * INTERVAL_MS
+    expected_count = days * 1440
+    start_ms = end_ms - (expected_count - 1) * INTERVAL_MS
     cursor = start_ms
     rows: list[dict[str, Any]] = []
     while cursor <= end_ms:
-        expected_count = min(PAGE_SIZE, (end_ms - cursor) // INTERVAL_MS + 1)
-        params = {
-            "symbol": symbol,
-            "interval": "1m",
-            "startTime": str(cursor),
-            "endTime": str(end_ms),
-            "limit": str(PAGE_SIZE),
-        }
-        last_error: ValueError | None = None
-        for attempt in range(3):
-            try:
-                payload = request_json(params)
-                if len(payload) != expected_count:
-                    raise ValueError(
-                        f"binance_kline_page_count_mismatch:expected={expected_count}:actual={len(payload)}:start={cursor}"
-                    )
-                page = [
-                    _parse_kline(item, cursor + i * INTERVAL_MS)
-                    for i, item in enumerate(payload)
-                ]
-                break
-            except ValueError as exc:
-                last_error = exc
-                if attempt < 2:
-                    sleep_fn(2**attempt)
-        else:
-            assert last_error is not None
-            raise ValueError(f"{last_error}:attempts=3") from None
+        page, page_count = _fetch_page(cursor, end_ms, symbol, request_json, sleep_fn)
         rows.extend(page)
-        cursor += expected_count * INTERVAL_MS
+        cursor += page_count * INTERVAL_MS
         if cursor <= end_ms:
             sleep_fn(0.15)
-    stamps = [int(row["timestamp"]) for row in rows]
-    if len(rows) != count:
-        raise ValueError(
-            f"binance_historical_row_count_mismatch:expected={count}:actual={len(rows)}"
-        )
-    if any(b - a != 60 for a, b in zip(stamps, stamps[1:])):
-        raise ValueError("binance_historical_gap_detected")
-    if stamps[0] * 1000 != start_ms or stamps[-1] * 1000 != end_ms:
-        raise ValueError("binance_historical_window_boundary_mismatch")
+    _validate_complete_window(rows, expected_count, start_ms, end_ms)
     return rows
 
 
