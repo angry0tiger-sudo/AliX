@@ -13,7 +13,7 @@ from typing import Any, cast
 import numpy as np
 import pandas as pd
 from pandas import DataFrame, Series
-from sklearn.metrics import classification_report
+from sklearn.metrics import classification_report  # type: ignore[import-untyped]
 
 from services.ml_core.adaptive_targets import apply_adaptive_triple_barrier
 from services.ml_core.causal_features import build_causal_feature_matrix

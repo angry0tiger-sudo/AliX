@@ -76,7 +76,9 @@ def test_classification_metrics_include_each_class_and_macro_scores() -> None:
 
 def test_temporal_split_keeps_training_before_validation_and_purges() -> None:
     row_count = 120
-    labels = [("BUY", index + 24) for index in range(row_count - 24)]
+    labels: list[tuple[str | None, int | None]] = [
+        ("BUY", index + 24) for index in range(row_count - 24)
+    ]
     labels.extend((None, None) for _ in range(24))
     label_frame = DataFrame(
         {
