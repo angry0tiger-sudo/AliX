@@ -49,17 +49,33 @@ def _validate_symbol(symbol: str) -> None:
         raise ValueError("nobitex_symbol_out_of_policy")
 
 
+TRANSIENT_HTTP_STATUSES = frozenset({408, 425, 429, 500, 502, 503, 504})
+MAX_HTTP_RETRIES = 5
+MAX_RETRY_DELAY_SECONDS = 30.0
+
+
+def _retry_delay_seconds(attempt: int, retry_after: str | None = None) -> float:
+    """Use Retry-After when numeric, otherwise bounded exponential backoff."""
+    try:
+        delay = float(retry_after) if retry_after is not None else float(2**attempt)
+    except (TypeError, ValueError):
+        delay = float(2**attempt)
+    return min(max(delay, 0.0), MAX_RETRY_DELAY_SECONDS)
+
+
 def request_public_json(
     params: dict[str, str], *, timeout_seconds: float = 15.0
 ) -> dict[str, Any]:
-    """Perform a verified-TLS GET to the fixed public host; redirects are not followed."""
+    """Perform a verified-TLS public GET with bounded, status-aware retries."""
     path = "/market/udf/history?" + urlencode(params)
-    for attempt in range(3):
+    last_failure = "unknown"
+    for attempt in range(MAX_HTTP_RETRIES):
         connection = HTTPSConnection(
             "apiv2.nobitex.ir",
             timeout=timeout_seconds,
             context=ssl.create_default_context(),
         )
+        retry_after: str | None = None
         try:
             connection.request(
                 "GET",
@@ -70,26 +86,29 @@ def request_public_json(
                 },
             )
             response = connection.getresponse()
-            if response.status != 200:
+            if response.status == 200:
+                payload = json.loads(response.read().decode("utf-8"))
+                if not isinstance(payload, dict):
+                    raise ValueError("public_api_payload_not_object")
+                return payload
+            if response.status not in TRANSIENT_HTTP_STATUSES:
                 raise ValueError("public_api_http_status_invalid")
-            payload = json.loads(response.read().decode("utf-8"))
-            if not isinstance(payload, dict):
-                raise ValueError("public_api_payload_not_object")
-            return payload
+            retry_after = response.getheader("Retry-After")
+            last_failure = f"http_{response.status}"
         except (
             HTTPException,
             TimeoutError,
             OSError,
             json.JSONDecodeError,
-            ValueError,
-        ):
-            if attempt == 2:
-                raise RuntimeError(
-                    "public_api_request_failed_after_bounded_retries"
-                ) from None
-            time.sleep(2**attempt)
+        ) as exc:
+            last_failure = type(exc).__name__
         finally:
             connection.close()
+        if attempt == MAX_HTTP_RETRIES - 1:
+            raise RuntimeError(
+                f"public_api_request_failed_after_bounded_retries:{last_failure}"
+            ) from None
+        time.sleep(_retry_delay_seconds(attempt, retry_after))
     raise RuntimeError("public_api_request_failed")
 
 
@@ -207,6 +226,26 @@ def _missing_intervals(stamps: list[int], seconds: int) -> int:
     return missing
 
 
+def _contiguous_timestamp_runs(
+    stamps: list[int], seconds: int
+) -> list[tuple[int, int]]:
+    """Group sorted missing candle timestamps into inclusive contiguous ranges."""
+    if not stamps:
+        return []
+    runs: list[tuple[int, int]] = []
+    run_start = stamps[0]
+    run_end = stamps[0]
+    for stamp in stamps[1:]:
+        if stamp == run_end + seconds:
+            run_end = stamp
+        else:
+            runs.append((run_start, run_end))
+            run_start = stamp
+            run_end = stamp
+    runs.append((run_start, run_end))
+    return runs
+
+
 def _fetch_candle_pages(
     *,
     start: int,
@@ -221,8 +260,9 @@ def _fetch_candle_pages(
     rows: list[CandleRecord] = []
     while cursor <= end:
         stop = min(cursor + (MAX_CANDLES_PER_REQUEST - 1) * seconds, end)
-        # Padding tolerates inclusive/exclusive UDF range handling; local filtering
-        # keeps each expected candle in exactly one page.
+        expected_stamps = list(range(cursor, stop + 1, seconds))
+        # Nobitex documents at most 500 candles per response. Keep each requested
+        # slice below that cap, with one-candle padding for UDF boundary semantics.
         request_from = cursor - seconds
         request_to = stop + seconds
         params = {
@@ -231,27 +271,78 @@ def _fetch_candle_pages(
             "from": str(request_from),
             "to": str(request_to),
         }
-        batch: list[CandleRecord] = []
+        page_by_stamp: dict[int, CandleRecord] = {}
+        missing_stamps = expected_stamps
         for attempt in range(3):
             page = parse_udf_payload(
                 request_json(params),
                 requested_from=request_from,
                 requested_to=request_to,
             )
-            batch = [row for row in page if cursor <= row["timestamp"] <= stop]
-            if batch:
+            page_by_stamp = {
+                row["timestamp"]: row
+                for row in page
+                if cursor <= row["timestamp"] <= stop
+            }
+            missing_stamps = [
+                stamp for stamp in expected_stamps if stamp not in page_by_stamp
+            ]
+            if not missing_stamps:
                 break
             if attempt < 2:
                 sleep_fn(2**attempt)
-        if not batch:
+
+        if not page_by_stamp:
             page_error = (
                 "nobitex_historical_empty_initial_page"
                 if cursor == start
                 else "nobitex_historical_empty_page"
             )
             raise ValueError(f"{page_error}:{cursor}:{stop}")
-        rows.extend(batch)
-        cursor = batch[-1]["timestamp"] + seconds
+
+        # A non-empty response is not necessarily a complete page. Retry any
+        # missing timestamp ranges directly rather than silently advancing the
+        # cursor beyond candles that the first response omitted.
+        for gap_start, gap_end in _contiguous_timestamp_runs(
+            missing_stamps, seconds
+        ):
+            gap_expected = list(range(gap_start, gap_end + 1, seconds))
+            gap_params = {
+                "symbol": symbol,
+                "resolution": str(seconds // 60),
+                "from": str(gap_start - seconds),
+                "to": str(gap_end + seconds),
+            }
+            recovered: dict[int, CandleRecord] = {}
+            for attempt in range(3):
+                gap_page = parse_udf_payload(
+                    request_json(gap_params),
+                    requested_from=int(gap_params["from"]),
+                    requested_to=int(gap_params["to"]),
+                )
+                recovered = {
+                    row["timestamp"]: row
+                    for row in gap_page
+                    if gap_start <= row["timestamp"] <= gap_end
+                }
+                if all(stamp in recovered for stamp in gap_expected):
+                    page_by_stamp.update(recovered)
+                    break
+                if attempt < 2:
+                    sleep_fn(2**attempt)
+
+        unresolved = [
+            stamp for stamp in expected_stamps if stamp not in page_by_stamp
+        ]
+        if unresolved:
+            raise ValueError(
+                "nobitex_historical_page_incomplete:"
+                f"start={cursor}:stop={stop}:missing={len(unresolved)}:"
+                f"first_missing={unresolved[0]}:last_missing={unresolved[-1]}"
+            )
+
+        rows.extend(page_by_stamp[stamp] for stamp in expected_stamps)
+        cursor = stop + seconds
         if cursor <= end:
             sleep_fn(1.1)
     return rows
@@ -278,16 +369,23 @@ def _validate_historical_rows(
         raise ValueError(
             f"nobitex_historical_gap_detected:missing_candle_intervals={missing}"
         )
+    if expected_start is not None and stamps[0] != expected_start:
+        raise ValueError(
+            "nobitex_historical_start_timestamp_mismatch:"
+            f"expected={expected_start}:actual={stamps[0]}"
+        )
+    if expected_end is not None and stamps[-1] != expected_end:
+        raise ValueError(
+            "nobitex_historical_end_timestamp_mismatch:"
+            f"expected={expected_end}:actual={stamps[-1]}"
+        )
     expected_rows = days * 24 * 3600 // seconds
     if len(stamps) != expected_rows:
         raise ValueError(
             "nobitex_historical_row_coverage_mismatch:"
-            f"expected={expected_rows}:actual={len(stamps)}"
+            f"expected={expected_rows}:actual={len(stamps)}:"
+            f"first={stamps[0]}:last={stamps[-1]}"
         )
-    if expected_start is not None and stamps[0] != expected_start:
-        raise ValueError("nobitex_historical_start_timestamp_mismatch")
-    if expected_end is not None and stamps[-1] != expected_end:
-        raise ValueError("nobitex_historical_end_timestamp_mismatch")
 
 
 def _latest_closed_candle_timestamp(
@@ -296,30 +394,33 @@ def _latest_closed_candle_timestamp(
     symbol: str,
     interval: str,
     request_json: Callable[[dict[str, str]], dict[str, Any]],
+    sleep_fn: Callable[[float], None] = time.sleep,
 ) -> int:
     """Probe the provider candle grid and select the latest fully closed candle."""
     seconds = interval_seconds(interval)
     now_epoch = int(now.astimezone(timezone.utc).timestamp())
     requested_from = now_epoch - MAX_CANDLES_PER_REQUEST * seconds
-    payload = request_json(
-        {
-            "symbol": symbol,
-            "resolution": str(seconds // 60),
-            "from": str(requested_from),
-            "to": str(now_epoch),
-        }
-    )
-    recent_rows = parse_udf_payload(
-        payload, requested_from=requested_from, requested_to=now_epoch
-    )
-    closed_stamps = [
-        row["timestamp"]
-        for row in recent_rows
-        if row["timestamp"] + seconds <= now_epoch
-    ]
-    if not closed_stamps:
-        raise ValueError("nobitex_historical_no_closed_candle")
-    return closed_stamps[-1]
+    params = {
+        "symbol": symbol,
+        "resolution": str(seconds // 60),
+        "from": str(requested_from),
+        "to": str(now_epoch),
+    }
+    for attempt in range(3):
+        payload = request_json(params)
+        recent_rows = parse_udf_payload(
+            payload, requested_from=requested_from, requested_to=now_epoch
+        )
+        closed_stamps = [
+            row["timestamp"]
+            for row in recent_rows
+            if row["timestamp"] + seconds <= now_epoch
+        ]
+        if closed_stamps:
+            return closed_stamps[-1]
+        if attempt < 2:
+            sleep_fn(2**attempt)
+    raise ValueError("nobitex_historical_no_closed_candle")
 
 
 def fetch_historical_candles(
@@ -338,7 +439,11 @@ def fetch_historical_candles(
     _validate_symbol(symbol)
     seconds = interval_seconds(interval)
     end = _latest_closed_candle_timestamp(
-        now=now, symbol=symbol, interval=interval, request_json=request_json
+        now=now,
+        symbol=symbol,
+        interval=interval,
+        request_json=request_json,
+        sleep_fn=sleep_fn,
     )
     row_count = days * 24 * 3600 // seconds
     start = end - (row_count - 1) * seconds
