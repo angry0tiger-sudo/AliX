@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import numpy as np
 import pandas as pd
 import pytest
 from pandas import DataFrame, Series
 
 from scripts.run_ml_core_real_data_baseline import (
+    _new_classifier,
     baseline_validation_diagnostics,
     classification_metrics,
     exit_reason_distribution,
@@ -16,7 +19,6 @@ from scripts.run_ml_core_real_data_baseline import (
     run_experiment,
     sample_gate_diagnostics,
     validation_classification_diagnostics,
-    _new_classifier,
 )
 
 
@@ -36,8 +38,9 @@ def minute_frame(rows: int = 65) -> DataFrame:
     )
 
 
-
-def test_classifier_factory_supports_unweighted_baseline(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_classifier_factory_supports_unweighted_baseline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     captured: list[dict[str, object]] = []
 
     class FakeClassifier:
@@ -46,7 +49,7 @@ def test_classifier_factory_supports_unweighted_baseline(monkeypatch: pytest.Mon
 
     monkeypatch.setattr(
         "scripts.run_ml_core_real_data_baseline.importlib.import_module",
-        lambda _: type("LightGBMStub", (), {"LGBMClassifier": FakeClassifier}),
+        lambda _: SimpleNamespace(LGBMClassifier=FakeClassifier),
     )
 
     _new_classifier()
