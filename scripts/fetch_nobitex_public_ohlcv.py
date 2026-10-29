@@ -246,6 +246,114 @@ def _contiguous_timestamp_runs(
     return runs
 
 
+def _request_filtered_candle_window(
+    params: dict[str, str],
+    *,
+    start: int,
+    end: int,
+    request_json: Callable[[dict[str, str]], dict[str, Any]],
+) -> dict[int, CandleRecord]:
+    """Fetch one timestamp window and retain only actual candles in its target range."""
+    page = parse_udf_payload(
+        request_json(params),
+        requested_from=int(params["from"]),
+        requested_to=int(params["to"]),
+    )
+    return {
+        row["timestamp"]: row
+        for row in page
+        if start <= row["timestamp"] <= end
+    }
+
+
+def _candle_window_params(
+    *, symbol: str, seconds: int, start: int, end: int
+) -> dict[str, str]:
+    return {
+        "symbol": symbol,
+        "resolution": str(seconds // 60),
+        "from": str(start - seconds),
+        "to": str(end + seconds),
+    }
+
+
+def _fetch_page_with_retries(
+    *,
+    start: int,
+    end: int,
+    seconds: int,
+    symbol: str,
+    request_json: Callable[[dict[str, str]], dict[str, Any]],
+    sleep_fn: Callable[[float], None],
+) -> tuple[list[int], dict[int, CandleRecord], list[int]]:
+    """Retry a main page and return expected, retrieved, and missing timestamps."""
+    expected = list(range(start, end + 1, seconds))
+    params = _candle_window_params(
+        symbol=symbol, seconds=seconds, start=start, end=end
+    )
+    rows_by_stamp: dict[int, CandleRecord] = {}
+    missing = expected
+    for attempt in range(3):
+        rows_by_stamp = _request_filtered_candle_window(
+            params, start=start, end=end, request_json=request_json
+        )
+        missing = [stamp for stamp in expected if stamp not in rows_by_stamp]
+        if not missing:
+            break
+        if attempt < 2:
+            sleep_fn(2**attempt)
+    return expected, rows_by_stamp, missing
+
+
+def _recover_one_timestamp_range(
+    *,
+    start: int,
+    end: int,
+    seconds: int,
+    symbol: str,
+    request_json: Callable[[dict[str, str]], dict[str, Any]],
+    sleep_fn: Callable[[float], None],
+) -> dict[int, CandleRecord]:
+    """Request one missing range again, returning only fully recovered real rows."""
+    expected = list(range(start, end + 1, seconds))
+    params = _candle_window_params(
+        symbol=symbol, seconds=seconds, start=start, end=end
+    )
+    for attempt in range(3):
+        recovered = _request_filtered_candle_window(
+            params, start=start, end=end, request_json=request_json
+        )
+        if all(stamp in recovered for stamp in expected):
+            return recovered
+        if attempt < 2:
+            sleep_fn(2**attempt)
+    return {}
+
+
+def _recover_missing_timestamp_ranges(
+    *,
+    missing: list[int],
+    seconds: int,
+    symbol: str,
+    request_json: Callable[[dict[str, str]], dict[str, Any]],
+    sleep_fn: Callable[[float], None],
+) -> dict[int, CandleRecord]:
+    """Retry missing contiguous ranges without filling or inventing candles."""
+    recovered: dict[int, CandleRecord] = {}
+    for gap_start, gap_end in _contiguous_timestamp_runs(missing, seconds):
+        recovered.update(
+            _recover_one_timestamp_range(
+                start=gap_start,
+                end=gap_end,
+                seconds=seconds,
+                symbol=symbol,
+                request_json=request_json,
+                sleep_fn=sleep_fn,
+            )
+        )
+    return recovered
+
+
 def _fetch_candle_pages(
     *,
     start: int,
@@ -260,38 +368,16 @@ def _fetch_candle_pages(
     rows: list[CandleRecord] = []
     while cursor <= end:
         stop = min(cursor + (MAX_CANDLES_PER_REQUEST - 1) * seconds, end)
-        expected_stamps = list(range(cursor, stop + 1, seconds))
-        # Nobitex documents at most 500 candles per response. Keep each requested
-        # slice below that cap, with one-candle padding for UDF boundary semantics.
-        request_from = cursor - seconds
-        request_to = stop + seconds
-        params = {
-            "symbol": symbol,
-            "resolution": str(seconds // 60),
-            "from": str(request_from),
-            "to": str(request_to),
-        }
-        page_by_stamp: dict[int, CandleRecord] = {}
-        missing_stamps = expected_stamps
-        for attempt in range(3):
-            page = parse_udf_payload(
-                request_json(params),
-                requested_from=request_from,
-                requested_to=request_to,
-            )
-            page_by_stamp = {
-                row["timestamp"]: row
-                for row in page
-                if cursor <= row["timestamp"] <= stop
-            }
-            missing_stamps = [
-                stamp for stamp in expected_stamps if stamp not in page_by_stamp
-            ]
-            if not missing_stamps:
-                break
-            if attempt < 2:
-                sleep_fn(2**attempt)
-
+        # The documented provider cap is 500 candles. Each slice is 400 candles,
+        # plus one-candle boundary padding, so the request remains below that cap.
+        expected, page_by_stamp, missing = _fetch_page_with_retries(
+            start=cursor,
+            end=stop,
+            seconds=seconds,
+            symbol=symbol,
+            request_json=request_json,
+            sleep_fn=sleep_fn,
+        )
         if not page_by_stamp:
             page_error = (
                 "nobitex_historical_empty_initial_page"
@@ -300,36 +386,16 @@ def _fetch_candle_pages(
             )
             raise ValueError(f"{page_error}:{cursor}:{stop}")
 
-        # A non-empty response is not necessarily a complete page. Retry any
-        # missing timestamp ranges directly rather than silently advancing the
-        # cursor beyond candles that the first response omitted.
-        for gap_start, gap_end in _contiguous_timestamp_runs(missing_stamps, seconds):
-            gap_expected = list(range(gap_start, gap_end + 1, seconds))
-            gap_params = {
-                "symbol": symbol,
-                "resolution": str(seconds // 60),
-                "from": str(gap_start - seconds),
-                "to": str(gap_end + seconds),
-            }
-            recovered: dict[int, CandleRecord] = {}
-            for attempt in range(3):
-                gap_page = parse_udf_payload(
-                    request_json(gap_params),
-                    requested_from=int(gap_params["from"]),
-                    requested_to=int(gap_params["to"]),
-                )
-                recovered = {
-                    row["timestamp"]: row
-                    for row in gap_page
-                    if gap_start <= row["timestamp"] <= gap_end
-                }
-                if all(stamp in recovered for stamp in gap_expected):
-                    page_by_stamp.update(recovered)
-                    break
-                if attempt < 2:
-                    sleep_fn(2**attempt)
-
-        unresolved = [stamp for stamp in expected_stamps if stamp not in page_by_stamp]
+        page_by_stamp.update(
+            _recover_missing_timestamp_ranges(
+                missing=missing,
+                seconds=seconds,
+                symbol=symbol,
+                request_json=request_json,
+                sleep_fn=sleep_fn,
+            )
+        )
+        unresolved = [stamp for stamp in expected if stamp not in page_by_stamp]
         if unresolved:
             raise ValueError(
                 "nobitex_historical_page_incomplete:"
@@ -337,7 +403,7 @@ def _fetch_candle_pages(
                 f"first_missing={unresolved[0]}:last_missing={unresolved[-1]}"
             )
 
-        rows.extend(page_by_stamp[stamp] for stamp in expected_stamps)
+        rows.extend(page_by_stamp[stamp] for stamp in expected)
         cursor = stop + seconds
         if cursor <= end:
             sleep_fn(1.1)
