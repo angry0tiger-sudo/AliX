@@ -117,7 +117,7 @@ def test_horizon_expiry_is_hold_and_tail_without_full_horizon_is_unlabeled() -> 
     )
 
     assert labels.iloc[14]["label"] == "HOLD"
-    assert labels.iloc[14]["exit_reason"] == "horizon_expiry"
+    assert labels.iloc[14]["exit_reason"] == "HORIZON_EXPIRY"
     assert labels.iloc[14]["label_end_idx"] == 38
     assert labels.iloc[-1]["label"] is None
     assert labels.iloc[-1]["exit_reason"] is None
