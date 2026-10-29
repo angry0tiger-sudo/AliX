@@ -198,11 +198,7 @@ def _eligible_train_indices(
 def _eligible_validation_indices(
     validation_candidates: tuple[int, ...], eligible_indices: set[int]
 ) -> list[int]:
-    return [
-        index
-        for index in validation_candidates
-        if index in eligible_indices
-    ]
+    return [index for index in validation_candidates if index in eligible_indices]
 
 
 def _split_diagnostics(
