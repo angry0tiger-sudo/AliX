@@ -36,7 +36,7 @@ def constant_atr(frame: DataFrame, value: float) -> pd.Series:
 
 def test_atr_uses_true_range_and_full_period_mean_on_known_inputs() -> None:
     candles = market_frame(15)
-    candles.loc[14, "high"] = 104.0
+    candles.loc[14, "high"] = 103.5
     atr = calculate_atr(candles, period=14)
 
     assert ATR_PERIOD == 14

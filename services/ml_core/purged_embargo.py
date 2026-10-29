@@ -86,9 +86,6 @@ def create_purged_embargo_split(
         if index < start and (index >= purge_start or label_end >= purge_start):
             purged_indices.append(index)
             continue
-        if index < start and label_end >= start:
-            purged_indices.append(index)
-            continue
         # Any post-validation sample must start after embargo; its label window
         # therefore cannot consume an embargo candle.
         train_indices.append(index)
