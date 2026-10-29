@@ -187,9 +187,7 @@ def purged_temporal_indices(
         if index in eligible_indices and index < train_limit
     ]
     validation_indices = [
-        index
-        for index in split.validation_indices
-        if index in eligible_indices
+        index for index in split.validation_indices if index in eligible_indices
     ]
     purged_rows = [
         index
@@ -321,9 +319,7 @@ def run_experiment(
     )
     train_metrics = classification_metrics(train_y, train_prediction)
     validation_metrics = classification_metrics(validation_y, validation_prediction)
-    f1_gap = round(
-        train_metrics["macro"]["f1"] - validation_metrics["macro"]["f1"], 6
-    )
+    f1_gap = round(train_metrics["macro"]["f1"] - validation_metrics["macro"]["f1"], 6)
     overfitting_status = (
         "POSSIBLE_OVERFITTING"
         if f1_gap >= OVERFIT_F1_GAP_THRESHOLD
@@ -370,7 +366,8 @@ def _load_manifested_data(
         manifest.get("credentials_used") is False,
         manifest.get("private_api_calls") == 0,
         manifest.get("real_order_attempts") == 0,
-        manifest.get("gap_policy") == "reject; no interpolation, resampling, or synthetic fill",
+        manifest.get("gap_policy")
+        == "reject; no interpolation, resampling, or synthetic fill",
     )
     if not all(checks):
         raise ValueError(f"public_data_manifest_validation_failed:{symbol}")
@@ -396,7 +393,7 @@ def _load_manifested_data(
 
 def _distribution_cell(distribution: dict[str, Any], label: str) -> str:
     row = distribution["classes"][label]
-    return f'{row["percent"]:.2f}% ({row["count"]})'
+    return f"{row['percent']:.2f}% ({row['count']})"
 
 
 def render_markdown(report: dict[str, Any]) -> str:
@@ -404,7 +401,7 @@ def render_markdown(report: dict[str, Any]) -> str:
     lines = [
         "## AliX real-data diagnostic baseline",
         "",
-        f'Commit SHA: {report["commit_sha"]}',
+        f"Commit SHA: {report['commit_sha']}",
         "",
         "Scope: classification diagnostics only. No economic metrics are calculated.",
         "",
@@ -418,12 +415,12 @@ def render_markdown(report: dict[str, Any]) -> str:
         train = distribution["train"]
         validation = distribution["validation"]
         lines.append(
-            f'| {item["pair"]} | {item["timeframe"]} | {item["train_rows"]} '
-            f'| {_distribution_cell(train, "BUY")} | {_distribution_cell(train, "SELL")} '
-            f'| {_distribution_cell(train, "HOLD")} | {item["validation_rows"]} '
-            f'| {_distribution_cell(validation, "BUY")} '
-            f'| {_distribution_cell(validation, "SELL")} '
-            f'| {_distribution_cell(validation, "HOLD")} |'
+            f"| {item['pair']} | {item['timeframe']} | {item['train_rows']} "
+            f"| {_distribution_cell(train, 'BUY')} | {_distribution_cell(train, 'SELL')} "
+            f"| {_distribution_cell(train, 'HOLD')} | {item['validation_rows']} "
+            f"| {_distribution_cell(validation, 'BUY')} "
+            f"| {_distribution_cell(validation, 'SELL')} "
+            f"| {_distribution_cell(validation, 'HOLD')} |"
         )
     lines.extend(
         [
@@ -438,19 +435,19 @@ def render_markdown(report: dict[str, Any]) -> str:
         metrics = item["classification_metrics"]
         if metrics is None:
             lines.append(
-                f'| {item["pair"]} | {item["timeframe"]} | N/A | N/A | N/A '
-                f'| N/A | N/A | N/A | N/A | {item["status"]} |'
+                f"| {item['pair']} | {item['timeframe']} | N/A | N/A | N/A "
+                f"| N/A | N/A | N/A | N/A | {item['status']} |"
             )
             continue
         train = metrics["train_in_sample"]["macro"]
         validation = metrics["validation"]["macro"]
         gap = item["overfitting_assessment"]["macro_f1_gap_train_minus_validation"]
         lines.append(
-            f'| {item["pair"]} | {item["timeframe"]} | {train["precision"]:.4f} '
-            f'| {train["recall"]:.4f} | {train["f1"]:.4f} '
-            f'| {validation["precision"]:.4f} | {validation["recall"]:.4f} '
-            f'| {validation["f1"]:.4f} | {gap:.4f} '
-            f'| {item["overfitting_assessment"]["status"]} |'
+            f"| {item['pair']} | {item['timeframe']} | {train['precision']:.4f} "
+            f"| {train['recall']:.4f} | {train['f1']:.4f} "
+            f"| {validation['precision']:.4f} | {validation['recall']:.4f} "
+            f"| {validation['f1']:.4f} | {gap:.4f} "
+            f"| {item['overfitting_assessment']['status']} |"
         )
     lines.extend(
         [
@@ -468,9 +465,9 @@ def render_markdown(report: dict[str, Any]) -> str:
         for label in LABELS:
             row = metrics["validation"]["per_class"][label]
             lines.append(
-                f'| {item["pair"]} | {item["timeframe"]} | {label} '
-                f'| {row["precision"]:.4f} | {row["recall"]:.4f} '
-                f'| {row["f1"]:.4f} | {row["support"]} |'
+                f"| {item['pair']} | {item['timeframe']} | {label} "
+                f"| {row['precision']:.4f} | {row['recall']:.4f} "
+                f"| {row['f1']:.4f} | {row['support']} |"
             )
     lines.extend(
         [
@@ -494,9 +491,7 @@ def run_diagnostic(
     datasets: dict[str, DataFrame] = {}
     provenance: list[dict[str, Any]] = []
     for symbol in SYMBOLS:
-        candles, manifest = _load_manifested_data(
-            input_dir, symbol, days, commit_sha
-        )
+        candles, manifest = _load_manifested_data(input_dir, symbol, days, commit_sha)
         datasets[symbol] = candles
         provenance.append(manifest)
 
@@ -504,9 +499,7 @@ def run_diagnostic(
     for symbol in SYMBOLS:
         pair = f"{symbol[:-4]}/USDT"
         for timeframe in TIMEFRAME_MINUTES:
-            experiments.append(
-                run_experiment(pair, timeframe, datasets[symbol])
-            )
+            experiments.append(run_experiment(pair, timeframe, datasets[symbol]))
 
     trained_count = sum(item["status"] == "TRAINED" for item in experiments)
     report: dict[str, Any] = {

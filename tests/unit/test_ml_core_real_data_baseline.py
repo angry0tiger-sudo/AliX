@@ -86,9 +86,7 @@ def test_temporal_split_keeps_training_before_validation_and_purges() -> None:
     )
     feature_frame = DataFrame({"feature": np.arange(row_count, dtype=float)})
 
-    train, validation, diagnostics = purged_temporal_indices(
-        feature_frame, label_frame
-    )
+    train, validation, diagnostics = purged_temporal_indices(feature_frame, label_frame)
 
     assert train
     assert validation
