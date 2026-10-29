@@ -266,7 +266,7 @@ class BTCUSDTTradingEnv(gym.Env[Float32Array, np.int64]):
     Actions use Discrete(7): HOLD; BUY 25%, 50%, or 100% of spendable cash; and
     SELL 25%, 50%, or 100% of current inventory. Direction and size form one action.
     Execution-boundary legality remains in the environment, with policy-level masking
-    in the recurrent PPO distribution. Flat HOLD above the causal moving average
+    in the policy action distribution. Flat HOLD above the causal moving average
     receives an opportunity-cost penalty; holding cash earns no bonus.
     """
 
