@@ -447,7 +447,6 @@ def _validate_historical_rows(
         )
 
 
-
 DAILY_CHUNK_RETRIES = 3
 DAILY_CHUNK_RETRYABLE_PREFIXES = (
     "nobitex_historical_empty_initial_page:",
