@@ -18,9 +18,10 @@ HOST = "data-api.binance.vision"
 ENDPOINT = "/api/v3/klines"
 SCHEMA_VERSION = "alix.binance.public-ohlcv.v1"
 ALLOWED_SYMBOLS = ("BTCUSDT", "ETHUSDT")
-ALLOWED_DAYS = (1, 7, 30, 90)
+ALLOWED_DAYS = (1, 7, 30, 90, 730)
 INTERVAL_MS = 60_000
 PAGE_SIZE = 1000
+PAGE_DELAY_SECONDS = 0.25
 RETRY_STATUSES = frozenset({418, 429, 500, 502, 503, 504})
 GAP_POLICY = "reject; no interpolation, resampling, or synthetic fill"
 
@@ -217,7 +218,7 @@ def fetch_historical_candles(
         rows.extend(page)
         cursor += page_count * INTERVAL_MS
         if cursor <= end_ms:
-            sleep_fn(0.15)
+            sleep_fn(PAGE_DELAY_SECONDS)
     _validate_complete_window(rows, expected_count, start_ms, end_ms)
     return rows
 
@@ -271,6 +272,8 @@ def write_artifacts(
         "missing_intervals": 0,
         "missing_minute_intervals": 0,
         "gap_policy": GAP_POLICY,
+        "fetch_page_size_candles": PAGE_SIZE,
+        "inter_page_delay_seconds": PAGE_DELAY_SECONDS,
         "csv_sha256": digest,
         "commit_sha": commit_sha,
         "data_authority": "PUBLIC_MARKET_DATA_ONLY_NOT_ACCOUNT_ORDER_OR_FILL_TRUTH",

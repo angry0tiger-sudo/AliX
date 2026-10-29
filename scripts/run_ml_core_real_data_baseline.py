@@ -13,7 +13,10 @@ from typing import Any, cast
 import numpy as np
 import pandas as pd
 from pandas import DataFrame, Series
-from sklearn.metrics import classification_report  # type: ignore[import-untyped]
+from sklearn.metrics import (
+    classification_report,
+    confusion_matrix as sklearn_confusion_matrix,
+)  # type: ignore[import-untyped]
 
 from services.ml_core.adaptive_targets import apply_adaptive_triple_barrier
 from services.ml_core.causal_features import build_causal_feature_matrix
@@ -27,7 +30,9 @@ FEATURE_WINDOW = 14
 VALIDATION_START_FRACTION = 0.70
 VALIDATION_END_FRACTION = 0.85
 OVERFIT_F1_GAP_THRESHOLD = 0.15
-REPORT_SCHEMA = "alix.ml-core.real-data-classification-diagnostic.v1"
+MIN_TRAIN_SAMPLES_PER_CLASS = 20
+MIN_VALIDATION_SAMPLES_PER_CLASS = 5
+REPORT_SCHEMA = "alix.ml-core.real-data-classification-diagnostic.v2"
 
 
 def _validated_minute_timestamps(values: Series) -> Series:
@@ -156,6 +161,65 @@ def classification_metrics(actual: Series, predicted: Series) -> dict[str, Any]:
         },
         "accuracy": round(float(report["accuracy"]), 6),
         "per_class": per_class,
+    }
+
+
+def sample_gate_diagnostics(
+    train_labels: Series, validation_labels: Series
+) -> dict[str, Any]:
+    """Reject experiments without enough examples of every required class."""
+    train_counts = {label: int((train_labels == label).sum()) for label in LABELS}
+    validation_counts = {
+        label: int((validation_labels == label).sum()) for label in LABELS
+    }
+    missing_train_classes = [
+        label for label, count in train_counts.items() if count == 0
+    ]
+    insufficient_train_classes = [
+        label
+        for label, count in train_counts.items()
+        if count < MIN_TRAIN_SAMPLES_PER_CLASS
+    ]
+    insufficient_validation_classes = [
+        label
+        for label, count in validation_counts.items()
+        if count < MIN_VALIDATION_SAMPLES_PER_CLASS
+    ]
+
+    if missing_train_classes:
+        status = "SKIPPED_INSUFFICIENT_CLASS_DIVERSITY"
+    elif insufficient_train_classes or insufficient_validation_classes:
+        status = "SKIPPED_INSUFFICIENT_SAMPLES"
+    else:
+        status = "PASS"
+
+    return {
+        "status": status,
+        "minimum_train_samples_per_class": MIN_TRAIN_SAMPLES_PER_CLASS,
+        "minimum_validation_samples_per_class": MIN_VALIDATION_SAMPLES_PER_CLASS,
+        "train_class_counts": train_counts,
+        "validation_class_counts": validation_counts,
+        "missing_train_classes": missing_train_classes,
+        "insufficient_train_classes": insufficient_train_classes,
+        "insufficient_validation_classes": insufficient_validation_classes,
+    }
+
+
+def validation_classification_diagnostics(
+    actual: Series, predicted: Series
+) -> dict[str, Any]:
+    """Return a fixed-order validation confusion matrix and prediction counts."""
+    matrix = sklearn_confusion_matrix(
+        actual.tolist(), predicted.tolist(), labels=list(LABELS)
+    )
+    return {
+        "confusion_matrix": {
+            "labels": list(LABELS),
+            "rows_are": "actual",
+            "columns_are": "predicted",
+            "matrix": [[int(value) for value in row] for row in matrix.tolist()],
+        },
+        "prediction_distribution": label_distribution(predicted),
     }
 
 
@@ -291,6 +355,7 @@ def _skipped_result(
     validation_indices: list[int],
     split_diagnostics: dict[str, int],
     reason: str,
+    sample_gate: dict[str, Any],
 ) -> dict[str, Any]:
     train_labels = labels.iloc[train_indices]["label"]
     validation_labels = labels.iloc[validation_indices]["label"]
@@ -306,6 +371,9 @@ def _skipped_result(
             "validation": label_distribution(validation_labels),
         },
         "classification_metrics": None,
+        "confusion_matrix": None,
+        "prediction_distribution": None,
+        "sample_gate": sample_gate,
         "overfitting_assessment": {
             "status": "NOT_ASSESSED",
             "macro_f1_gap_train_minus_validation": None,
@@ -332,6 +400,16 @@ def _insufficient_bar_result(
             "available_unpartitioned": label_distribution(labels["label"]),
         },
         "classification_metrics": None,
+        "confusion_matrix": None,
+        "prediction_distribution": None,
+        "sample_gate": {
+            "status": "NOT_EVALUATED",
+            "reason": "INSUFFICIENT_BARS",
+            "minimum_train_samples_per_class": MIN_TRAIN_SAMPLES_PER_CLASS,
+            "minimum_validation_samples_per_class": MIN_VALIDATION_SAMPLES_PER_CLASS,
+            "train_class_counts": None,
+            "validation_class_counts": None,
+        },
         "overfitting_assessment": {
             "status": "NOT_ASSESSED",
             "macro_f1_gap_train_minus_validation": None,
@@ -357,6 +435,7 @@ def run_experiment(
     )
     train_y = labels.iloc[train_indices]["label"]
     validation_y = labels.iloc[validation_indices]["label"]
+    sample_gate = sample_gate_diagnostics(train_y, validation_y)
 
     base_result: dict[str, Any] = {
         "pair": pair,
@@ -368,9 +447,10 @@ def run_experiment(
             "train": label_distribution(train_y),
             "validation": label_distribution(validation_y),
         },
+        "sample_gate": sample_gate,
         "split": split_info,
     }
-    if len(train_indices) < 50 or len(validation_indices) < 10:
+    if sample_gate["status"] != "PASS":
         return _skipped_result(
             pair,
             timeframe,
@@ -379,18 +459,8 @@ def run_experiment(
             train_indices,
             validation_indices,
             split_info,
-            "SKIPPED_INSUFFICIENT_SAMPLES",
-        )
-    if train_y.nunique() < 2:
-        return _skipped_result(
-            pair,
-            timeframe,
-            bars,
-            labels,
-            train_indices,
-            validation_indices,
-            split_info,
-            "SKIPPED_INSUFFICIENT_CLASS_DIVERSITY",
+            str(sample_gate["status"]),
+            sample_gate,
         )
 
     x_train = features.iloc[train_indices]
@@ -412,6 +482,7 @@ def run_experiment(
     return {
         **base_result,
         "status": "TRAINED",
+        **validation_classification_diagnostics(validation_y, validation_prediction),
         "classification_metrics": {
             "train_in_sample": train_metrics,
             "validation": validation_metrics,
@@ -452,6 +523,9 @@ def _load_manifested_data(
         manifest.get("real_order_attempts") == 0,
         manifest.get("gap_policy")
         == "reject; no interpolation, resampling, or synthetic fill",
+        manifest.get("missing_minute_intervals") == 0,
+        manifest.get("fetch_page_size_candles") == 1000,
+        manifest.get("inter_page_delay_seconds") == 0.25,
     )
     if not all(checks):
         raise ValueError(f"public_data_manifest_validation_failed:{symbol}")
@@ -465,6 +539,10 @@ def _load_manifested_data(
         "provider": manifest["provider"],
         "interval": "1m",
         "row_count": int(len(candles)),
+        "requested_days": int(manifest["requested_days"]),
+        "missing_minute_intervals": int(manifest["missing_minute_intervals"]),
+        "fetch_page_size_candles": int(manifest["fetch_page_size_candles"]),
+        "inter_page_delay_seconds": float(manifest["inter_page_delay_seconds"]),
         "start_utc": candles["date"].iloc[0].isoformat(),
         "end_utc": candles["date"].iloc[-1].isoformat(),
         "csv_sha256": csv_digest,
@@ -556,6 +634,48 @@ def render_markdown(report: dict[str, Any]) -> str:
     lines.extend(
         [
             "",
+            "### Validation prediction distribution",
+            "",
+            "| Pair | TF | Validation n | BUY % (n) | SELL % (n) | HOLD % (n) |",
+            "|---|---:|---:|---:|---:|---:|",
+        ]
+    )
+    for item in report["experiments"]:
+        predictions = item.get("prediction_distribution")
+        if predictions is None:
+            lines.append(
+                f"| {item['pair']} | {item['timeframe']} | N/A | N/A | N/A | N/A |"
+            )
+            continue
+        lines.append(
+            f"| {item['pair']} | {item['timeframe']} | {predictions['total']} "
+            f"| {_distribution_cell(predictions, 'BUY')} "
+            f"| {_distribution_cell(predictions, 'SELL')} "
+            f"| {_distribution_cell(predictions, 'HOLD')} |"
+        )
+    lines.extend(
+        [
+            "",
+            "### Validation confusion matrices",
+            "",
+            "| Pair | TF | Actual class (rows) | Predicted BUY | Predicted SELL | Predicted HOLD |",
+            "|---|---:|---|---:|---:|---:|",
+        ]
+    )
+    for item in report["experiments"]:
+        matrix = item.get("confusion_matrix")
+        for index, label in enumerate(LABELS):
+            if matrix is None:
+                values = ("N/A", "N/A", "N/A")
+            else:
+                values = tuple(matrix["matrix"][index])
+            lines.append(
+                f"| {item['pair']} | {item['timeframe']} | {label} "
+                f"| {values[0]} | {values[1]} | {values[2]} |"
+            )
+    lines.extend(
+        [
+            "",
             "The overfitting screen uses the in-sample versus validation macro-F1 gap "
             f"of {OVERFIT_F1_GAP_THRESHOLD:.2f} as a heuristic. It is not proof.",
             "",
@@ -570,7 +690,7 @@ def render_markdown(report: dict[str, Any]) -> str:
 def run_diagnostic(
     input_dir: Path, output_path: Path, *, days: int, commit_sha: str
 ) -> dict[str, Any]:
-    if days not in (1, 7, 30, 90):
+    if days not in (1, 7, 30, 90, 730):
         raise ValueError("diagnostic_days_out_of_policy")
     datasets: dict[str, DataFrame] = {}
     provenance: list[dict[str, Any]] = []
@@ -603,10 +723,19 @@ def run_diagnostic(
                 "ALIX_DIAGNOSTIC_FALLBACK_REASON", "NONE"
             ),
             "policy": (
-                "Fetch the configured window as individually validated 24-hour "
-                "chunks; retry only an incomplete chunk up to three times; "
-                "never shorten the requested window or synthesize missing candles."
+                "Fetch the configured window in individually validated pages of "
+                "at most 1,000 one-minute candles with a 0.25-second delay between "
+                "pages; retry incomplete pages and transient HTTP failures with "
+                "bounded retries; never shorten the requested window or synthesize "
+                "missing candles."
             ),
+            "fetch_page_size_candles": provenance[0]["fetch_page_size_candles"],
+            "inter_page_delay_seconds": provenance[0]["inter_page_delay_seconds"],
+        },
+        "sample_gate_policy": {
+            "minimum_train_samples_per_class": MIN_TRAIN_SAMPLES_PER_CLASS,
+            "minimum_validation_samples_per_class": MIN_VALIDATION_SAMPLES_PER_CLASS,
+            "required_classes": list(LABELS),
         },
         "provider": "Binance Spot public klines API",
         "input_datasets": provenance,
@@ -677,7 +806,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input-dir", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--days", type=int, choices=(1, 7, 30, 90), default=90)
+    parser.add_argument("--days", type=int, choices=(1, 7, 30, 90, 730), default=730)
     parser.add_argument("--commit-sha", required=True)
     args = parser.parse_args()
     report = run_diagnostic(

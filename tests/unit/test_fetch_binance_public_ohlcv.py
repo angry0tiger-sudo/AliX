@@ -33,6 +33,7 @@ def test_paginated_fetch_preserves_zero_volume_and_checks_continuity() -> None:
     end = int(now.timestamp() * 1000) - 60_000
     start = end - 1439 * 60_000
     calls: list[dict[str, str]] = []
+    sleeps: list[float] = []
 
     def provider(params: dict[str, str]) -> list[Any]:
         calls.append(params.copy())
@@ -41,7 +42,7 @@ def test_paginated_fetch_preserves_zero_volume_and_checks_continuity() -> None:
         return klines(cursor, count)
 
     rows = fetcher.fetch_historical_candles(
-        days=1, now=now, request_json=provider, sleep_fn=lambda _seconds: None
+        days=1, now=now, request_json=provider, sleep_fn=sleeps.append
     )
     assert len(rows) == 1440
     assert rows[0]["timestamp"] * 1000 == start
@@ -50,6 +51,13 @@ def test_paginated_fetch_preserves_zero_volume_and_checks_continuity() -> None:
     assert len(calls) == 2
     assert calls[1]["startTime"] == str(start + 1000 * 60_000)
     assert all(c["interval"] == "1m" and c["limit"] == "1000" for c in calls)
+    assert sleeps == [fetcher.PAGE_DELAY_SECONDS]
+
+
+def test_two_year_window_is_supported_with_bounded_page_pacing() -> None:
+    assert 730 in fetcher.ALLOWED_DAYS
+    assert fetcher.PAGE_SIZE == 1000
+    assert fetcher.PAGE_DELAY_SECONDS >= 0.25
 
 
 def test_incomplete_page_retries_then_fails_closed() -> None:

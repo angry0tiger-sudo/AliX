@@ -11,6 +11,8 @@ from scripts.run_ml_core_real_data_baseline import (
     purged_temporal_indices,
     resample_ohlcv,
     run_experiment,
+    sample_gate_diagnostics,
+    validation_classification_diagnostics,
 )
 
 
@@ -73,6 +75,47 @@ def test_classification_metrics_include_each_class_and_macro_scores() -> None:
     assert 0.0 <= metrics["macro"]["f1"] <= 1.0
     assert 0.0 <= metrics["macro"]["precision"] <= 1.0
     assert 0.0 <= metrics["macro"]["recall"] <= 1.0
+
+
+def test_sample_gate_requires_minimum_support_for_every_class() -> None:
+    train = Series(["BUY"] * 20 + ["SELL"] * 20 + ["HOLD"] * 20)
+    validation = Series(["BUY"] * 5 + ["SELL"] * 5 + ["HOLD"] * 5)
+
+    assert sample_gate_diagnostics(train, validation)["status"] == "PASS"
+
+    low_train = Series(["BUY"] * 19 + ["SELL"] * 20 + ["HOLD"] * 20)
+    train_result = sample_gate_diagnostics(low_train, validation)
+    assert train_result["status"] == "SKIPPED_INSUFFICIENT_SAMPLES"
+    assert train_result["insufficient_train_classes"] == ["BUY"]
+
+    low_validation = Series(["BUY"] * 5 + ["SELL"] * 5 + ["HOLD"] * 4)
+    validation_result = sample_gate_diagnostics(train, low_validation)
+    assert validation_result["status"] == "SKIPPED_INSUFFICIENT_SAMPLES"
+    assert validation_result["insufficient_validation_classes"] == ["HOLD"]
+
+    missing_class = Series(["BUY"] * 20 + ["SELL"] * 20)
+    diversity_result = sample_gate_diagnostics(missing_class, validation)
+    assert diversity_result["status"] == "SKIPPED_INSUFFICIENT_CLASS_DIVERSITY"
+    assert diversity_result["missing_train_classes"] == ["HOLD"]
+
+
+def test_validation_diagnostics_report_fixed_confusion_matrix_and_predictions() -> None:
+    actual = Series(["BUY", "SELL", "HOLD", "HOLD"])
+    predicted = Series(["BUY", "BUY", "SELL", "HOLD"])
+
+    diagnostics = validation_classification_diagnostics(actual, predicted)
+
+    assert diagnostics["confusion_matrix"]["labels"] == ["BUY", "SELL", "HOLD"]
+    assert diagnostics["confusion_matrix"]["matrix"] == [
+        [1, 0, 0],
+        [1, 0, 0],
+        [0, 1, 1],
+    ]
+    assert diagnostics["prediction_distribution"]["total"] == 4
+    assert diagnostics["prediction_distribution"]["classes"]["BUY"] == {
+        "count": 2,
+        "percent": 50.0,
+    }
 
 
 def test_temporal_split_keeps_training_before_validation_and_purges() -> None:
