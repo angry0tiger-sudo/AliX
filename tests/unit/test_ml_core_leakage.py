@@ -127,7 +127,7 @@ def test_embargo_excludes_exact_longest_feature_window_after_test() -> None:
     assert 19 in split.train_indices
 
 
-def test_embargo_uses_one_percent_sample_floor_when_larger_than_feature_window() -> None:
+def test_embargo_one_percent_floor_when_larger_than_feature_window() -> None:
     row_count = 250
     label_end_indices = list(range(row_count))
     split = create_purged_embargo_split(
