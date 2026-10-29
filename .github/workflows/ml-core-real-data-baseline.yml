@@ -32,9 +32,9 @@ jobs:
         run: |
           test "$GITHUB_REF" = "refs/heads/research/ml-core-rebuild"
           test -n "$GITHUB_SHA"
-          printf 'commit_sha=%s\\n' "$GITHUB_SHA"
-          printf 'scope=DIAGNOSTIC_CLASSIFICATION_ONLY\\n'
-          printf 'real_order_attempts=0\\nprivate_api_calls=0\\n'
+          printf 'commit_sha=%s\n' "$GITHUB_SHA"
+          printf 'scope=DIAGNOSTIC_CLASSIFICATION_ONLY\n'
+          printf 'real_order_attempts=0\nprivate_api_calls=0\n'
 
       - name: Set up pinned Python
         uses: actions/setup-python@v5
@@ -55,20 +55,20 @@ jobs:
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/alix-real-market-data"
           for symbol in BTCUSDT ETHUSDT; do
-            python scripts/fetch_nobitex_public_ohlcv.py \\
-              --days 30 \\
-              --symbol "$symbol" \\
-              --interval 1m \\
-              --output-dir "$RUNNER_TEMP/alix-real-market-data" \\
+            python scripts/fetch_nobitex_public_ohlcv.py \
+              --days 30 \
+              --symbol "$symbol" \
+              --interval 1m \
+              --output-dir "$RUNNER_TEMP/alix-real-market-data" \
               --commit-sha "$GITHUB_SHA"
           done
 
       - name: Train diagnostic LightGBM classification baselines
         run: |
-          python -m scripts.run_ml_core_real_data_baseline \\
-            --input-dir "$RUNNER_TEMP/alix-real-market-data" \\
-            --output "$GITHUB_WORKSPACE/alix-real-data-classification-report.json" \\
-            --days 30 \\
+          python -m scripts.run_ml_core_real_data_baseline \
+            --input-dir "$RUNNER_TEMP/alix-real-market-data" \
+            --output "$GITHUB_WORKSPACE/alix-real-data-classification-report.json" \
+            --days 30 \
             --commit-sha "$GITHUB_SHA"
 
       - name: Validate classification-only report and safety invariants
