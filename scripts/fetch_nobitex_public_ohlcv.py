@@ -238,9 +238,7 @@ def _fetch_candle_pages(
                 requested_from=request_from,
                 requested_to=request_to,
             )
-            batch = [
-                row for row in page if cursor <= row["timestamp"] <= stop
-            ]
+            batch = [row for row in page if cursor <= row["timestamp"] <= stop]
             if batch:
                 break
             if attempt < 2:

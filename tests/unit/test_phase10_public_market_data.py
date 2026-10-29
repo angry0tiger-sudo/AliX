@@ -21,9 +21,7 @@ from scripts.run_phase10_public_price_observation import observe_public_price
 UTC = timezone.utc
 
 
-def make_payload(
-    start: int, count: int = 2, *, seconds: int = 3600
-) -> dict[str, Any]:
+def make_payload(start: int, count: int = 2, *, seconds: int = 3600) -> dict[str, Any]:
     stamps = [start + i * seconds for i in range(count)]
     return {
         "s": "ok",
