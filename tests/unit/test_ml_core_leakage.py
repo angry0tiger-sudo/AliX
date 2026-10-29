@@ -89,77 +89,92 @@ def test_new_window_does_not_carry_rolling_state_from_previous_window() -> None:
     assert pd.isna(isolated_features.iloc[0]["%-return_1"])
 
 
-def test_purge_window_matches_24_candle_label_horizon_and_removes_maturing_labels() -> (
-    None
-):
-    row_count = 200
-    horizon = 24
-    label_ends = [min(index + horizon, row_count - 1) for index in range(row_count)]
+def test_purge_uses_actual_label_window_overlap_not_fixed_horizon() -> None:
+    row_count = 30
+    label_end_indices = list(range(row_count))
+    label_end_indices[5] = 12
+    label_end_indices[10] = 14
+
     split = create_purged_embargo_split(
-        label_ends,
-        validation_start=100,
-        validation_end=124,
-        label_horizon=horizon,
-        embargo_candles=1,
+        label_end_indices,
+        validation_start=10,
+        validation_end=10,
+        longest_feature_window=3,
     )
 
-    purge_start = 76
-    assert split.purge_start == purge_start
-    assert split.validation_indices == tuple(range(100, 125))
-    assert not set(range(purge_start, 100)).intersection(split.train_indices)
-    assert 55 in split.purged_indices  # this sample's label ends inside the purge zone
-    assert all(
-        label_ends[index] < purge_start for index in split.train_indices if index < 100
-    )
-    assert all(index not in split.validation_indices for index in split.train_indices)
+    assert split.validation_indices == (10,)
+    assert split.purge_start == 11
+    assert 5 in split.purged_indices
+    assert 5 not in split.train_indices
+    assert 6 in split.train_indices
 
 
-def test_embargo_reserves_at_least_one_candle_and_no_train_label_uses_it() -> None:
-    row_count = 200
-    horizon = 24
-    label_ends = [min(index + horizon, row_count - 1) for index in range(row_count)]
+def test_embargo_excludes_exact_longest_feature_window_after_test() -> None:
+    row_count = 40
+    label_end_indices = list(range(row_count))
     split = create_purged_embargo_split(
-        label_ends,
-        validation_start=100,
-        validation_end=124,
-        label_horizon=horizon,
-        embargo_candles=1,
+        label_end_indices,
+        validation_start=10,
+        validation_end=14,
+        longest_feature_window=4,
     )
 
-    assert split.embargo_indices == (125,)
-    assert 125 not in split.train_indices
-    assert 126 in split.train_indices
-    assert all(
-        not (index <= split.embargo_end and label_ends[index] >= split.embargo_start)
-        for index in split.train_indices
+    expected_embargo = tuple(range(15, 19))
+    assert split.embargo_size == 4
+    assert split.embargo_indices == expected_embargo
+    assert len(split.embargo_indices) == split.embargo_size
+    assert not set(expected_embargo).intersection(split.train_indices)
+    assert 19 in split.train_indices
+
+
+def test_embargo_uses_one_percent_sample_floor_when_larger_than_feature_window() -> None:
+    row_count = 250
+    label_end_indices = list(range(row_count))
+    split = create_purged_embargo_split(
+        label_end_indices,
+        validation_start=50,
+        validation_end=60,
+        longest_feature_window=1,
     )
+
+    assert split.embargo_size == 2
+    assert split.embargo_indices == (61, 62)
+    assert 63 in split.train_indices
 
 
 def test_purge_embargo_validation_rejects_invalid_configuration_and_indices() -> None:
-    label_ends = list(range(40))
+    label_end_indices = list(range(40))
     with pytest.raises(ValueError, match="label_end_indices_empty"):
-        create_purged_embargo_split([], validation_start=5, validation_end=9)
-    with pytest.raises(ValueError, match="label_horizon_must_be_positive_integer"):
         create_purged_embargo_split(
-            label_ends, validation_start=5, validation_end=9, label_horizon=0
+            [], validation_start=5, validation_end=9, longest_feature_window=4
         )
-    with pytest.raises(ValueError, match="embargo_candles_must_be_at_least_one"):
+    with pytest.raises(ValueError, match="longest_feature_window_must_be_positive_integer"):
         create_purged_embargo_split(
-            label_ends, validation_start=5, validation_end=9, embargo_candles=0
+            label_end_indices,
+            validation_start=5,
+            validation_end=9,
+            longest_feature_window=0,
         )
     with pytest.raises(ValueError, match="validation_window_out_of_bounds"):
-        create_purged_embargo_split(label_ends, validation_start=20, validation_end=50)
+        create_purged_embargo_split(
+            label_end_indices,
+            validation_start=20,
+            validation_end=50,
+            longest_feature_window=4,
+        )
     with pytest.raises(ValueError, match="label_end_index_out_of_bounds"):
         create_purged_embargo_split(
             [0, 1, 2, 3, 4, 5, 6, 7, 8, 10],
             validation_start=5,
             validation_end=6,
+            longest_feature_window=4,
         )
     with pytest.raises(ValueError, match="label_end_index_must_be_integer"):
         create_purged_embargo_split(
             [0, 1, 2.5, 3, 4, 5, 6, 7, 8, 9],
             validation_start=5,
             validation_end=6,
+            longest_feature_window=4,
         )
 
 
