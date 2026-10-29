@@ -39,6 +39,7 @@ def test_paginated_fetch_preserves_zero_volume_and_checks_continuity() -> None:
         cursor = int(params["startTime"])
         count = min(1000, (end - cursor) // 60_000 + 1)
         return klines(cursor, count)
+
     rows = fetcher.fetch_historical_candles(
         days=1, now=now, request_json=provider, sleep_fn=lambda _seconds: None
     )
@@ -59,6 +60,7 @@ def test_incomplete_page_retries_then_fails_closed() -> None:
         nonlocal calls
         calls += 1
         return klines(int(params["startTime"]), 2)
+
     with pytest.raises(ValueError, match="binance_kline_page_count_mismatch"):
         fetcher.fetch_historical_candles(
             days=1, now=now, request_json=incomplete, sleep_fn=lambda _seconds: None

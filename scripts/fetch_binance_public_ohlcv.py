@@ -191,7 +191,9 @@ def write_artifacts(
     count = days * 1440
     stamps = [int(row["timestamp"]) for row in rows]
     if not rows or len(rows) != count:
-        raise ValueError(f"binance_historical_row_count_mismatch:expected={count}:actual={len(rows)}")
+        raise ValueError(
+            f"binance_historical_row_count_mismatch:expected={count}:actual={len(rows)}"
+        )
     if any(b - a != 60 for a, b in zip(stamps, stamps[1:])):
         raise ValueError("binance_historical_gap_detected_before_write")
     output_dir.mkdir(parents=True, exist_ok=True)
