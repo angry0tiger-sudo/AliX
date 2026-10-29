@@ -43,9 +43,13 @@ def fake_getter(
         offset = seconds // 2
         first = ((start - offset + seconds - 1) // seconds) * seconds + offset
         stamps = list(range(first, end + 1, seconds))
-        values = [stamp for stamp in stamps]
-        if gap_symbol == params["symbol"] and len(values) > 3:
-            values.pop(2)
+        values = list(stamps)
+        latest_closed = (
+            (int(now.timestamp()) - seconds - offset) // seconds
+        ) * seconds + offset
+        targeted_gap = latest_closed - 10 * seconds
+        if gap_symbol == params["symbol"] and targeted_gap in values:
+            values.remove(targeted_gap)
         count = len(values)
         return {
             "s": "ok",
