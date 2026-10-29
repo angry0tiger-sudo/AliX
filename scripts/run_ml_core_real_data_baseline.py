@@ -161,27 +161,31 @@ def classification_metrics(actual: Series, predicted: Series) -> dict[str, Any]:
     }
 
 
+def _class_counts(values: Series) -> dict[str, int]:
+    """Count each label in the fixed classification contract."""
+    return {label: int((values == label).sum()) for label in LABELS}
+
+
+def _classes_below_threshold(
+    counts: dict[str, int], minimum: int
+) -> list[str]:
+    """Return required classes with less than the requested sample count."""
+    return [label for label in LABELS if counts[label] < minimum]
+
+
 def sample_gate_diagnostics(
     train_labels: Series, validation_labels: Series
 ) -> dict[str, Any]:
     """Reject experiments without enough examples of every required class."""
-    train_counts = {label: int((train_labels == label).sum()) for label in LABELS}
-    validation_counts = {
-        label: int((validation_labels == label).sum()) for label in LABELS
-    }
-    missing_train_classes = [
-        label for label, count in train_counts.items() if count == 0
-    ]
-    insufficient_train_classes = [
-        label
-        for label, count in train_counts.items()
-        if count < MIN_TRAIN_SAMPLES_PER_CLASS
-    ]
-    insufficient_validation_classes = [
-        label
-        for label, count in validation_counts.items()
-        if count < MIN_VALIDATION_SAMPLES_PER_CLASS
-    ]
+    train_counts = _class_counts(train_labels)
+    validation_counts = _class_counts(validation_labels)
+    missing_train_classes = _classes_below_threshold(train_counts, 1)
+    insufficient_train_classes = _classes_below_threshold(
+        train_counts, MIN_TRAIN_SAMPLES_PER_CLASS
+    )
+    insufficient_validation_classes = _classes_below_threshold(
+        validation_counts, MIN_VALIDATION_SAMPLES_PER_CLASS
+    )
 
     if missing_train_classes:
         status = "SKIPPED_INSUFFICIENT_CLASS_DIVERSITY"
@@ -200,7 +204,6 @@ def sample_gate_diagnostics(
         "insufficient_train_classes": insufficient_train_classes,
         "insufficient_validation_classes": insufficient_validation_classes,
     }
-
 
 def validation_classification_diagnostics(
     actual: Series, predicted: Series
@@ -555,21 +558,17 @@ def _distribution_cell(distribution: dict[str, Any], label: str) -> str:
     return f"{row['percent']:.2f}% ({row['count']})"
 
 
-def render_markdown(report: dict[str, Any]) -> str:
-    """Render label distributions and classification diagnostics for the Actions summary."""
+def _render_label_distribution_section(
+    experiments: list[dict[str, Any]],
+) -> list[str]:
+    """Render actual target-label distributions for every experiment."""
     lines = [
-        "## AliX real-data diagnostic baseline",
-        "",
-        f"Commit SHA: {report['commit_sha']}",
-        "",
-        "Scope: classification diagnostics only. No economic metrics are calculated.",
-        "",
         "### Label distribution",
         "",
         "| Pair | TF | Train n | BUY % (n) | SELL % (n) | HOLD % (n) | Validation n | BUY % (n) | SELL % (n) | HOLD % (n) |",
         "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
-    for item in report["experiments"]:
+    for item in experiments:
         distribution = item["label_distribution"]
         train = distribution["train"]
         validation = distribution["validation"]
@@ -581,25 +580,29 @@ def render_markdown(report: dict[str, Any]) -> str:
             f"| {_distribution_cell(validation, 'SELL')} "
             f"| {_distribution_cell(validation, 'HOLD')} |"
         )
-    lines.extend(
-        [
-            "",
-            "### Macro classification metrics and overfitting screen",
-            "",
-            "| Pair | TF | Train Precision | Train Recall | Train F1 | Validation Precision | Validation Recall | Validation F1 | F1 gap | Assessment |",
-            "|---|---:|---:|---:|---:|---:|---:|---:|---:|---|",
-        ]
-    )
-    for item in report["experiments"]:
-        metrics = item["classification_metrics"]
-        if metrics is None:
+    return lines
+
+
+def _render_macro_metrics_section(
+    experiments: list[dict[str, Any]],
+) -> list[str]:
+    """Render macro metrics and the diagnostic Train/Validation F1 gap."""
+    lines = [
+        "### Macro classification metrics and overfitting screen",
+        "",
+        "| Pair | TF | Train Precision | Train Recall | Train F1 | Validation Precision | Validation Recall | Validation F1 | F1 gap | Assessment |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---|",
+    ]
+    for item in experiments:
+        classification = item["classification_metrics"]
+        if classification is None:
             lines.append(
                 f"| {item['pair']} | {item['timeframe']} | N/A | N/A | N/A "
                 f"| N/A | N/A | N/A | N/A | {item['status']} |"
             )
             continue
-        train = metrics["train_in_sample"]["macro"]
-        validation = metrics["validation"]["macro"]
+        train = classification["train_in_sample"]["macro"]
+        validation = classification["validation"]["macro"]
         gap = item["overfitting_assessment"]["macro_f1_gap_train_minus_validation"]
         lines.append(
             f"| {item['pair']} | {item['timeframe']} | {train['precision']:.4f} "
@@ -608,36 +611,44 @@ def render_markdown(report: dict[str, Any]) -> str:
             f"| {validation['f1']:.4f} | {gap:.4f} "
             f"| {item['overfitting_assessment']['status']} |"
         )
-    lines.extend(
-        [
-            "",
-            "### Validation class-wise metrics",
-            "",
-            "| Pair | TF | Class | Precision | Recall | F1 | Support |",
-            "|---|---:|---|---:|---:|---:|---:|",
-        ]
-    )
-    for item in report["experiments"]:
-        metrics = item["classification_metrics"]
-        if metrics is None:
+    return lines
+
+
+def _render_classwise_metrics_section(
+    experiments: list[dict[str, Any]],
+) -> list[str]:
+    """Render class-wise Validation metrics with per-class support."""
+    lines = [
+        "### Validation class-wise metrics",
+        "",
+        "| Pair | TF | Class | Precision | Recall | F1 | Support |",
+        "|---|---:|---|---:|---:|---:|---:|",
+    ]
+    for item in experiments:
+        classification = item["classification_metrics"]
+        if classification is None:
             continue
         for label in LABELS:
-            row = metrics["validation"]["per_class"][label]
+            row = classification["validation"]["per_class"][label]
             lines.append(
                 f"| {item['pair']} | {item['timeframe']} | {label} "
                 f"| {row['precision']:.4f} | {row['recall']:.4f} "
                 f"| {row['f1']:.4f} | {row['support']} |"
             )
-    lines.extend(
-        [
-            "",
-            "### Validation prediction distribution",
-            "",
-            "| Pair | TF | Validation n | BUY % (n) | SELL % (n) | HOLD % (n) |",
-            "|---|---:|---:|---:|---:|---:|",
-        ]
-    )
-    for item in report["experiments"]:
+    return lines
+
+
+def _render_prediction_distribution_section(
+    experiments: list[dict[str, Any]],
+) -> list[str]:
+    """Render the model's predicted class distribution on Validation."""
+    lines = [
+        "### Validation prediction distribution",
+        "",
+        "| Pair | TF | Validation n | BUY % (n) | SELL % (n) | HOLD % (n) |",
+        "|---|---:|---:|---:|---:|---:|",
+    ]
+    for item in experiments:
         predictions = item.get("prediction_distribution")
         if predictions is None:
             lines.append(
@@ -650,26 +661,48 @@ def render_markdown(report: dict[str, Any]) -> str:
             f"| {_distribution_cell(predictions, 'SELL')} "
             f"| {_distribution_cell(predictions, 'HOLD')} |"
         )
-    lines.extend(
-        [
-            "",
-            "### Validation confusion matrices",
-            "",
-            "| Pair | TF | Actual class (rows) | Predicted BUY | Predicted SELL | Predicted HOLD |",
-            "|---|---:|---|---:|---:|---:|",
-        ]
-    )
-    for item in report["experiments"]:
+    return lines
+
+
+def _render_confusion_matrix_section(
+    experiments: list[dict[str, Any]],
+) -> list[str]:
+    """Render fixed-order Validation confusion matrices."""
+    lines = [
+        "### Validation confusion matrices",
+        "",
+        "| Pair | TF | Actual class (rows) | Predicted BUY | Predicted SELL | Predicted HOLD |",
+        "|---|---:|---|---:|---:|---:|",
+    ]
+    for item in experiments:
         matrix = item.get("confusion_matrix")
         for index, label in enumerate(LABELS):
-            if matrix is None:
-                values = ("N/A", "N/A", "N/A")
-            else:
-                values = tuple(matrix["matrix"][index])
+            values = ("N/A", "N/A", "N/A") if matrix is None else tuple(
+                matrix["matrix"][index]
+            )
             lines.append(
                 f"| {item['pair']} | {item['timeframe']} | {label} "
                 f"| {values[0]} | {values[1]} | {values[2]} |"
             )
+    return lines
+
+
+def render_markdown(report: dict[str, Any]) -> str:
+    """Render classification diagnostics for the GitHub Actions summary."""
+    experiments = report["experiments"]
+    lines = [
+        "## AliX real-data diagnostic baseline",
+        "",
+        f"Commit SHA: {report['commit_sha']}",
+        "",
+        "Scope: classification diagnostics only. No economic metrics are calculated.",
+        "",
+    ]
+    lines.extend(_render_label_distribution_section(experiments))
+    lines.extend(["", *_render_macro_metrics_section(experiments)])
+    lines.extend(["", *_render_classwise_metrics_section(experiments)])
+    lines.extend(["", *_render_prediction_distribution_section(experiments)])
+    lines.extend(["", *_render_confusion_matrix_section(experiments)])
     lines.extend(
         [
             "",
@@ -682,7 +715,6 @@ def render_markdown(report: dict[str, Any]) -> str:
         ]
     )
     return "\n".join(lines)
-
 
 def run_diagnostic(
     input_dir: Path, output_path: Path, *, days: int, commit_sha: str
