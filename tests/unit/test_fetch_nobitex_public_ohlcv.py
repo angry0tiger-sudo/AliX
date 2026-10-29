@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 import time
 
 import pytest
 
 from scripts import fetch_nobitex_public_ohlcv as fetcher
-from scripts.fetch_nobitex_public_ohlcv import _fetch_candle_pages
+from scripts.fetch_nobitex_public_ohlcv import (
+    _fetch_candle_pages,
+    fetch_historical_candles,
+)
 
 
 def test_empty_oldest_page_is_classified_for_bounded_window_fallback() -> None:
@@ -140,3 +144,65 @@ def test_request_public_json_retries_rate_limit_and_honors_retry_after(
     assert fetcher.request_public_json({"symbol": "BTCUSDT"}) == {"s": "ok"}
     assert delays == [3.0]
     assert statuses == []
+
+
+def test_fetch_history_chunks_by_day_and_retries_only_the_incomplete_day() -> None:
+    now = datetime(2026, 10, 23, 4, 18, tzinfo=timezone.utc)
+    seconds = 60
+    offset = 30
+    now_epoch = int(now.timestamp())
+    expected_end = ((now_epoch - seconds - offset) // seconds) * seconds + offset
+    expected_start = expected_end - (2 * 24 * 60 - 1) * seconds
+    second_day_start = expected_start + 24 * 60 * seconds
+    calls: list[dict[str, str]] = []
+    second_day_first_page_attempts = 0
+
+    def make_payload(stamps: list[int]) -> dict[str, Any]:
+        count = len(stamps)
+        return {
+            "s": "ok",
+            "t": stamps,
+            "o": [100.0] * count,
+            "h": [101.0] * count,
+            "l": [99.0] * count,
+            "c": [100.5] * count,
+            "v": [1.0] * count,
+        }
+
+    def provider(params: dict[str, str]) -> dict[str, Any]:
+        nonlocal second_day_first_page_attempts
+        calls.append(params.copy())
+        request_from = int(params["from"])
+        request_to = int(params["to"])
+        if request_from == second_day_start - seconds:
+            second_day_first_page_attempts += 1
+            if second_day_first_page_attempts <= 3:
+                return {"s": "no_data"}
+        first = ((request_from - offset + seconds - 1) // seconds) * seconds + offset
+        stamps = list(range(first, request_to + 1, seconds))
+        return make_payload(stamps)
+
+    rows = fetch_historical_candles(
+        days=2,
+        now=now,
+        symbol="BTCUSDT",
+        interval="1m",
+        request_json=provider,
+        sleep_fn=lambda _seconds: None,
+    )
+
+    assert len(rows) == 2 * 24 * 60
+    assert rows[0]["timestamp"] == expected_start
+    assert rows[-1]["timestamp"] == expected_end
+    assert all(
+        later["timestamp"] - earlier["timestamp"] == seconds
+        for earlier, later in zip(rows, rows[1:])
+    )
+    # The first day is fetched once; only the second day's first page is retried.
+    assert sum(int(call["from"]) == expected_start - seconds for call in calls) == 1
+    assert second_day_first_page_attempts == 4
+    assert any(
+        int(call["from"]) == second_day_start - seconds
+        and int(call["to"]) == second_day_start + (400 - 1) * seconds + seconds
+        for call in calls
+    )

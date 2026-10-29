@@ -603,9 +603,9 @@ def run_diagnostic(
                 "ALIX_DIAGNOSTIC_FALLBACK_REASON", "NONE"
             ),
             "policy": (
-                "Retry 30, 7, then 1 day only when the oldest requested page "
-                "is empty; empty pages inside the interval and data-quality "
-                "violations remain fatal."
+                "Fetch the configured window as individually validated 24-hour "
+                "chunks; retry only an incomplete chunk up to three times; "
+                "never shorten the requested window or synthesize missing candles."
             ),
         },
         "provider": "Nobitex public UDF history API",

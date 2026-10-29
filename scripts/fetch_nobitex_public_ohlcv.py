@@ -447,6 +447,97 @@ def _validate_historical_rows(
         )
 
 
+
+DAILY_CHUNK_RETRIES = 3
+DAILY_CHUNK_RETRYABLE_PREFIXES = (
+    "nobitex_historical_empty_initial_page:",
+    "nobitex_historical_empty_page:",
+    "nobitex_historical_gap_detected:",
+    "nobitex_historical_row_coverage_mismatch:",
+    "nobitex_historical_start_timestamp_mismatch:",
+    "nobitex_historical_end_timestamp_mismatch:",
+)
+
+
+def _is_retryable_daily_chunk_error(error: ValueError) -> bool:
+    """Retry only errors showing that a daily data window was empty or incomplete."""
+    return str(error).startswith(DAILY_CHUNK_RETRYABLE_PREFIXES)
+
+
+def _fetch_one_daily_chunk(
+    *,
+    start: int,
+    end: int,
+    symbol: str,
+    interval: str,
+    request_json: Callable[[dict[str, str]], dict[str, Any]],
+    sleep_fn: Callable[[float], None],
+) -> list[CandleRecord]:
+    """Fetch and fully validate one 24-hour chunk, retrying only that chunk."""
+    last_error: ValueError | None = None
+    for attempt in range(DAILY_CHUNK_RETRIES):
+        try:
+            chunk_rows = _fetch_candle_pages(
+                start=start,
+                end=end,
+                symbol=symbol,
+                interval=interval,
+                request_json=request_json,
+                sleep_fn=sleep_fn,
+            )
+            _validate_historical_rows(
+                chunk_rows,
+                1,
+                interval=interval,
+                expected_start=start,
+                expected_end=end,
+            )
+            return chunk_rows
+        except ValueError as exc:
+            if not _is_retryable_daily_chunk_error(exc):
+                raise
+            last_error = exc
+            if attempt < DAILY_CHUNK_RETRIES - 1:
+                sleep_fn(2**attempt)
+    assert last_error is not None
+    raise ValueError(
+        f"{last_error}:daily_chunk_start={start}:daily_chunk_end={end}:"
+        f"attempts={DAILY_CHUNK_RETRIES}"
+    ) from None
+
+
+def _fetch_daily_candle_chunks(
+    *,
+    start: int,
+    end: int,
+    symbol: str,
+    interval: str,
+    request_json: Callable[[dict[str, str]], dict[str, Any]],
+    sleep_fn: Callable[[float], None],
+) -> list[CandleRecord]:
+    """Fetch one logical day at a time and aggregate only complete daily chunks."""
+    seconds = interval_seconds(interval)
+    candles_per_day = 24 * 3600 // seconds
+    cursor = start
+    rows: list[CandleRecord] = []
+    while cursor <= end:
+        chunk_end = min(cursor + (candles_per_day - 1) * seconds, end)
+        chunk_rows = _fetch_one_daily_chunk(
+            start=cursor,
+            end=chunk_end,
+            symbol=symbol,
+            interval=interval,
+            request_json=request_json,
+            sleep_fn=sleep_fn,
+        )
+        rows.extend(chunk_rows)
+        cursor = chunk_end + seconds
+        if cursor <= end:
+            # Stay below the provider's request rate while progressing by day.
+            sleep_fn(1.1)
+    return rows
+
+
 def _latest_closed_candle_timestamp(
     *,
     now: datetime,
@@ -506,7 +597,7 @@ def fetch_historical_candles(
     )
     row_count = days * 24 * 3600 // seconds
     start = end - (row_count - 1) * seconds
-    rows = _fetch_candle_pages(
+    rows = _fetch_daily_candle_chunks(
         start=start,
         end=end,
         symbol=symbol,

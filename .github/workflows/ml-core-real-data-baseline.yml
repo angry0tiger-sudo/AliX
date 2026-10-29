@@ -47,53 +47,35 @@ jobs:
           python -m pip install pip==25.2
           python -m pip install numpy==2.5.4 pandas==2.3.3 scikit-learn==1.9.0 lightgbm==4.7.0
 
-      # Only an empty oldest page permits a shorter window. Any internal
-      # gap, malformed candle, or invalid OHLCV remains a hard failure.
-      - name: Fetch complete public candles with bounded historical-window fallback
+      # Fetch the configured 30-day window as individually validated 24-hour chunks.
+      # Do not hide data gaps by silently falling back to a shorter time range.
+      - name: Fetch complete public candles in retried daily chunks
         run: |
           set -euo pipefail
           data_dir="$RUNNER_TEMP/alix-real-market-data"
-          selected_days=""
-          fallback_reason="NONE"
-          for days in 30 7 1; do
-            rm -rf "$data_dir"
-            mkdir -p "$data_dir"
-            retry_window="false"
-            for symbol in BTCUSDT ETHUSDT; do
-              log_path="$RUNNER_TEMP/nobitex-fetch-${days}-${symbol}.log"
-              if python scripts/fetch_nobitex_public_ohlcv.py \
-                --days "$days" \
-                --symbol "$symbol" \
-                --interval 1m \
-                --output-dir "$data_dir" \
-                --commit-sha "$GITHUB_SHA" >"$log_path" 2>&1; then
-                cat "$log_path"
-              else
-                cat "$log_path"
-                if grep -q "nobitex_historical_empty_initial_page:" "$log_path"; then
-                  echo "::warning::Nobitex returned an empty oldest page for the ${days}-day window; trying a shorter complete window."
-                  retry_window="true"
-                  fallback_reason="NOBITEX_EMPTY_INITIAL_PAGE"
-                  break
-                fi
-                echo "Fetcher failed for ${symbol} for a reason other than an empty oldest page; refusing to downgrade or bypass data-quality checks." >&2
-                exit 1
-              fi
-            done
-            if [ "$retry_window" = "false" ]; then
-              selected_days="$days"
-              break
+          rm -rf "$data_dir"
+          mkdir -p "$data_dir"
+          for symbol in BTCUSDT ETHUSDT; do
+            log_path="$RUNNER_TEMP/nobitex-fetch-30-${symbol}.log"
+            if python scripts/fetch_nobitex_public_ohlcv.py \
+              --days 30 \
+              --symbol "$symbol" \
+              --interval 1m \
+              --output-dir "$data_dir" \
+              --commit-sha "$GITHUB_SHA" >"$log_path" 2>&1; then
+              cat "$log_path"
+            else
+              cat "$log_path"
+              echo "Fetcher failed for ${symbol}; refusing to train on incomplete real-market data." >&2
+              exit 1
             fi
           done
-          if [ -z "$selected_days" ]; then
-            echo "Nobitex did not provide a complete 1-, 7-, or 30-day window for both symbols." >&2
-            exit 1
-          fi
-          echo "ALIX_DIAGNOSTIC_DAYS=$selected_days" >> "$GITHUB_ENV"
+          echo "ALIX_DIAGNOSTIC_DAYS=30" >> "$GITHUB_ENV"
           echo "ALIX_DIAGNOSTIC_CONFIGURED_DAYS=30" >> "$GITHUB_ENV"
-          echo "ALIX_DIAGNOSTIC_FALLBACK_REASON=$fallback_reason" >> "$GITHUB_ENV"
-          printf 'selected_complete_days=%s\n' "$selected_days"
-          printf 'fallback_reason=%s\n' "$fallback_reason"
+          echo "ALIX_DIAGNOSTIC_FALLBACK_REASON=NONE" >> "$GITHUB_ENV"
+          printf 'selected_complete_days=30\n'
+          printf 'fetch_chunk_days=1\n'
+          printf 'fallback_reason=NONE\n'
 
       - name: Train diagnostic LightGBM classification baselines
         run: |
@@ -121,7 +103,7 @@ jobs:
           assert window["configured_days"] == 30
           assert window["selected_days"] == report["requested_days"]
           assert window["fallback_reason"] == os.environ["ALIX_DIAGNOSTIC_FALLBACK_REASON"]
-          assert report["requested_days"] in {1, 7, 30}
+          assert report["requested_days"] == 30
           assert report["experiment_count"] == 8
           assert {item["pair"] for item in report["experiments"]} == {"BTC/USDT", "ETH/USDT"}
           assert {item["timeframe"] for item in report["experiments"]} == {"15m", "30m", "1h", "4h"}
