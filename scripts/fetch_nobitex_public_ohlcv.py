@@ -1,7 +1,7 @@
-"""Fetch bounded public Nobitex BTCUSDT hourly candles for manual Actions research.
+"""Fetch bounded public Nobitex OHLCV candles with strict gap and hash manifests.
 
-Only GET /market/udf/history is used. No account/execution endpoints, credentials,
-orders, notification calls, or external writes are implemented.
+Only GET /market/udf/history on the fixed public host is used. No credentials,
+private endpoints, order calls, interpolation, resampling, or synthetic fill exist.
 """
 
 from __future__ import annotations
@@ -9,20 +9,21 @@ from __future__ import annotations
 import argparse
 import csv
 from datetime import datetime, timezone
-from http.client import HTTPSConnection, HTTPException
-import ssl
 import hashlib
+from http.client import HTTPSConnection, HTTPException
 import json
 import math
 from pathlib import Path
+import ssl
 import time
 from typing import Any, Callable, TypedDict, cast
 from urllib.parse import urlencode
 
 ENDPOINT = "https://apiv2.nobitex.ir/market/udf/history"
-SCHEMA_VERSION = "alix.nobitex.public-ohlcv.v1"
-INTERVAL_SECONDS = 3600
-ALLOWED_DAYS = (30, 90, 180, 365)
+SCHEMA_VERSION = "alix.nobitex.public-ohlcv.v2"
+ALLOWED_SYMBOLS = ("BTCUSDT", "ETHUSDT")
+INTERVAL_SECONDS = {"1m": 60, "1h": 3600}
+ALLOWED_DAYS = (1, 7, 30, 90, 180, 365)
 MAX_CANDLES_PER_REQUEST = 400
 
 
@@ -36,10 +37,22 @@ class CandleRecord(TypedDict):
     volume: float
 
 
+def interval_seconds(interval: str) -> int:
+    """Return the fixed interval length, rejecting unsupported resolutions."""
+    if interval not in INTERVAL_SECONDS:
+        raise ValueError("nobitex_interval_out_of_policy")
+    return INTERVAL_SECONDS[interval]
+
+
+def _validate_symbol(symbol: str) -> None:
+    if symbol not in ALLOWED_SYMBOLS:
+        raise ValueError("nobitex_symbol_out_of_policy")
+
+
 def request_public_json(
     params: dict[str, str], *, timeout_seconds: float = 15.0
 ) -> dict[str, Any]:
-    """Perform a verified-TLS GET to a fixed public host; redirects are not followed."""
+    """Perform a verified-TLS GET to the fixed public host; redirects are not followed."""
     path = "/market/udf/history?" + urlencode(params)
     for attempt in range(3):
         connection = HTTPSConnection(
@@ -53,7 +66,7 @@ def request_public_json(
                 path,
                 headers={
                     "Accept": "application/json",
-                    "User-Agent": "TraderBot/AliX-Phase10-Research",
+                    "User-Agent": "AliX-Public-OHLCV/2",
                 },
             )
             response = connection.getresponse()
@@ -63,7 +76,13 @@ def request_public_json(
             if not isinstance(payload, dict):
                 raise ValueError("public_api_payload_not_object")
             return payload
-        except (HTTPException, TimeoutError, OSError, json.JSONDecodeError, ValueError):
+        except (
+            HTTPException,
+            TimeoutError,
+            OSError,
+            json.JSONDecodeError,
+            ValueError,
+        ):
             if attempt == 2:
                 raise RuntimeError(
                     "public_api_request_failed_after_bounded_retries"
@@ -170,24 +189,45 @@ def parse_udf_payload(
     return rows
 
 
+def _missing_intervals(stamps: list[int], seconds: int) -> int:
+    """Count missing expected samples and reject non-monotonic/off-grid timestamps."""
+    missing = 0
+    previous: int | None = None
+    for stamp in stamps:
+        if previous is not None:
+            delta = stamp - previous
+            if delta <= 0:
+                if delta == 0:
+                    raise ValueError("nobitex_historical_duplicate_candle")
+                raise ValueError("nobitex_historical_timestamps_not_monotonic")
+            if delta % seconds != 0:
+                raise ValueError("nobitex_historical_timestamp_off_interval_grid")
+            missing += max(0, delta // seconds - 1)
+        previous = stamp
+    return missing
+
+
 def _fetch_candle_pages(
     *,
     start: int,
     end: int,
+    symbol: str,
+    interval: str,
     request_json: Callable[[dict[str, str]], dict[str, Any]],
     sleep_fn: Callable[[float], None],
 ) -> list[CandleRecord]:
+    seconds = interval_seconds(interval)
     cursor = start
     rows: list[CandleRecord] = []
     while cursor <= end:
-        stop = min(cursor + (MAX_CANDLES_PER_REQUEST - 3) * INTERVAL_SECONDS, end)
-        # Pad query bounds by one interval to tolerate providers that interpret
-        # UDF range endpoints as exclusive, but retain only the exact target window.
-        request_from = cursor - INTERVAL_SECONDS
-        request_to = stop + INTERVAL_SECONDS
+        stop = min(cursor + (MAX_CANDLES_PER_REQUEST - 1) * seconds, end)
+        # Padding tolerates inclusive/exclusive UDF range handling; local filtering
+        # keeps each expected candle in exactly one page.
+        request_from = cursor - seconds
+        request_to = stop + seconds
         params = {
-            "symbol": "BTCUSDT",
-            "resolution": "60",
+            "symbol": symbol,
+            "resolution": str(seconds // 60),
             "from": str(request_from),
             "to": str(request_to),
         }
@@ -198,7 +238,9 @@ def _fetch_candle_pages(
                 requested_from=request_from,
                 requested_to=request_to,
             )
-            batch = [row for row in page if cursor <= row["timestamp"] <= stop]
+            batch = [
+                row for row in page if cursor <= row["timestamp"] <= stop
+            ]
             if batch:
                 break
             if attempt < 2:
@@ -206,53 +248,71 @@ def _fetch_candle_pages(
         if not batch:
             raise ValueError(f"nobitex_historical_empty_page:{cursor}:{stop}")
         rows.extend(batch)
-        cursor = batch[-1]["timestamp"] + INTERVAL_SECONDS
+        cursor = batch[-1]["timestamp"] + seconds
         if cursor <= end:
             sleep_fn(1.1)
     return rows
 
 
-def _validate_historical_rows(rows: list[CandleRecord], days: int) -> None:
-    rows.sort(key=lambda item: item["timestamp"])
+def _validate_historical_rows(
+    rows: list[CandleRecord],
+    days: int,
+    *,
+    interval: str = "1h",
+    expected_start: int | None = None,
+    expected_end: int | None = None,
+) -> None:
+    if not rows:
+        raise ValueError("nobitex_historical_candles_empty")
+    seconds = interval_seconds(interval)
     stamps = [row["timestamp"] for row in rows]
-    if len(stamps) != len(set(stamps)):
-        raise ValueError("nobitex_historical_duplicate_candle")
-    for previous, current in zip(stamps, stamps[1:]):
-        if current - previous != INTERVAL_SECONDS:
-            raise ValueError("nobitex_historical_gap_detected_no_interpolation")
-    expected_rows = days * 24
-    if len(rows) != expected_rows:
+    missing = _missing_intervals(stamps, seconds)
+    if missing:
+        if interval == "1m":
+            raise ValueError(
+                f"nobitex_historical_gap_detected:missing_minute_intervals={missing}"
+            )
+        raise ValueError(
+            f"nobitex_historical_gap_detected:missing_candle_intervals={missing}"
+        )
+    expected_rows = days * 24 * 3600 // seconds
+    if len(stamps) != expected_rows:
         raise ValueError(
             "nobitex_historical_row_coverage_mismatch:"
-            f"expected={expected_rows}:actual={len(rows)}"
+            f"expected={expected_rows}:actual={len(stamps)}"
         )
+    if expected_start is not None and stamps[0] != expected_start:
+        raise ValueError("nobitex_historical_start_timestamp_mismatch")
+    if expected_end is not None and stamps[-1] != expected_end:
+        raise ValueError("nobitex_historical_end_timestamp_mismatch")
 
 
 def _latest_closed_candle_timestamp(
     *,
     now: datetime,
+    symbol: str,
+    interval: str,
     request_json: Callable[[dict[str, str]], dict[str, Any]],
 ) -> int:
-    """Discover the provider's candle grid and select the latest fully closed bar."""
+    """Probe the provider candle grid and select the latest fully closed candle."""
+    seconds = interval_seconds(interval)
     now_epoch = int(now.astimezone(timezone.utc).timestamp())
-    requested_from = now_epoch - MAX_CANDLES_PER_REQUEST * INTERVAL_SECONDS
+    requested_from = now_epoch - MAX_CANDLES_PER_REQUEST * seconds
     payload = request_json(
         {
-            "symbol": "BTCUSDT",
-            "resolution": "60",
+            "symbol": symbol,
+            "resolution": str(seconds // 60),
             "from": str(requested_from),
             "to": str(now_epoch),
         }
     )
     recent_rows = parse_udf_payload(
-        payload,
-        requested_from=requested_from,
-        requested_to=now_epoch,
+        payload, requested_from=requested_from, requested_to=now_epoch
     )
     closed_stamps = [
         row["timestamp"]
         for row in recent_rows
-        if row["timestamp"] + INTERVAL_SECONDS <= now_epoch
+        if row["timestamp"] + seconds <= now_epoch
     ]
     if not closed_stamps:
         raise ValueError("nobitex_historical_no_closed_candle")
@@ -263,6 +323,8 @@ def fetch_historical_candles(
     *,
     days: int,
     now: datetime,
+    symbol: str = "BTCUSDT",
+    interval: str = "1m",
     request_json: Callable[[dict[str, str]], dict[str, Any]] = request_public_json,
     sleep_fn: Callable[[float], None] = time.sleep,
 ) -> list[CandleRecord]:
@@ -270,18 +332,35 @@ def fetch_historical_candles(
         raise ValueError("historical_days_out_of_policy")
     if now.tzinfo is None or now.utcoffset() is None:
         raise ValueError("historical_cutoff_timezone_required")
-    end = _latest_closed_candle_timestamp(now=now, request_json=request_json)
-    start = end - (days * 24 - 1) * INTERVAL_SECONDS
+    _validate_symbol(symbol)
+    seconds = interval_seconds(interval)
+    end = _latest_closed_candle_timestamp(
+        now=now, symbol=symbol, interval=interval, request_json=request_json
+    )
+    row_count = days * 24 * 3600 // seconds
+    start = end - (row_count - 1) * seconds
     rows = _fetch_candle_pages(
         start=start,
         end=end,
+        symbol=symbol,
+        interval=interval,
         request_json=request_json,
         sleep_fn=sleep_fn,
     )
-    if not rows:
-        raise ValueError("nobitex_historical_candles_empty")
-    _validate_historical_rows(rows, days)
+    _validate_historical_rows(
+        rows,
+        days,
+        interval=interval,
+        expected_start=start,
+        expected_end=end,
+    )
     return rows
+
+
+def _artifact_stem(symbol: str, interval: str) -> str:
+    _validate_symbol(symbol)
+    interval_seconds(interval)
+    return f"nobitex-{symbol.lower()}-{interval}"
 
 
 def write_artifacts(
@@ -291,14 +370,29 @@ def write_artifacts(
     days: int,
     retrieved_at: datetime,
     commit_sha: str,
+    symbol: str = "BTCUSDT",
+    interval: str = "1h",
 ) -> dict[str, object]:
     if not rows:
         raise ValueError("nobitex_historical_candles_empty")
     if retrieved_at.tzinfo is None or retrieved_at.utcoffset() is None:
         raise ValueError("retrieved_at_timezone_required")
+    _validate_symbol(symbol)
+    seconds = interval_seconds(interval)
+    stamps = [int(row["timestamp"]) for row in rows]
+    missing = _missing_intervals(stamps, seconds)
+    if missing:
+        if interval == "1m":
+            raise ValueError(
+                f"nobitex_historical_gap_detected:missing_minute_intervals={missing}"
+            )
+        raise ValueError(
+            f"nobitex_historical_gap_detected:missing_candle_intervals={missing}"
+        )
     output_dir.mkdir(parents=True, exist_ok=True)
-    csv_path = output_dir / "nobitex-btcusdt-1h.csv"
-    temporary = output_dir / "nobitex-btcusdt-1h.csv.tmp"
+    stem = _artifact_stem(symbol, interval)
+    csv_path = output_dir / f"{stem}.csv"
+    temporary = output_dir / f"{stem}.csv.tmp"
     with temporary.open("w", encoding="utf-8", newline="") as stream:
         writer = csv.DictWriter(
             stream, fieldnames=("date", "open", "high", "low", "close", "volume")
@@ -317,25 +411,27 @@ def write_artifacts(
             )
     temporary.replace(csv_path)
     digest = hashlib.sha256(csv_path.read_bytes()).hexdigest()
-    stamps = [int(row["timestamp"]) for row in rows]
     manifest: dict[str, object] = {
         "schema_version": SCHEMA_VERSION,
         "provider": "Nobitex public UDF history API",
         "endpoint": "/market/udf/history",
-        "symbol": "BTCUSDT",
-        "pair": "BTC/USDT",
-        "timeframe": "1h",
+        "symbol": symbol,
+        "pair": f"{symbol[:-4]}/USDT",
+        "interval": interval,
+        "start_utc": rows[0]["date"],
+        "end_utc": rows[-1]["date"],
+        "row_count": len(rows),
         "requested_days": days,
         "retrieved_at": retrieved_at.astimezone(timezone.utc).isoformat(),
-        "first_candle_epoch": stamps[0],
-        "last_candle_epoch": stamps[-1],
-        "row_count": len(rows),
-        "gap_policy": "reject; no interpolation",
+        "missing_intervals": missing,
+        "missing_minute_intervals": missing if interval == "1m" else None,
+        "gap_policy": "reject; no interpolation, resampling, or synthetic fill",
         "csv_sha256": digest,
         "commit_sha": commit_sha,
         "data_authority": "PUBLIC_MARKET_DATA_ONLY_NOT_ACCOUNT_ORDER_OR_FILL_TRUTH",
         "public_api_only": True,
         "credentials_used": False,
+        "private_api_calls": 0,
         "exchange_calls": 0,
         "real_order_attempts": 0,
         "order_permission": False,
@@ -344,7 +440,7 @@ def write_artifacts(
         "economic_acceptance": "NO-GO",
         "trading_authorization": "NO-GO",
     }
-    (output_dir / "nobitex-btcusdt-1h.manifest.json").write_text(
+    (output_dir / f"{stem}.manifest.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True, allow_nan=False) + "\n",
         encoding="utf-8",
     )
@@ -353,18 +449,27 @@ def write_artifacts(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--days", type=int, choices=ALLOWED_DAYS, default=365)
+    parser.add_argument("--days", type=int, choices=ALLOWED_DAYS, default=30)
+    parser.add_argument("--symbol", choices=ALLOWED_SYMBOLS, default="BTCUSDT")
+    parser.add_argument("--interval", choices=tuple(INTERVAL_SECONDS), default="1m")
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--commit-sha", default="UNKNOWN")
     args = parser.parse_args()
     now = datetime.now(timezone.utc)
-    rows = fetch_historical_candles(days=args.days, now=now)
+    rows = fetch_historical_candles(
+        days=args.days,
+        now=now,
+        symbol=args.symbol,
+        interval=args.interval,
+    )
     manifest = write_artifacts(
         rows,
         output_dir=args.output_dir,
         days=args.days,
         retrieved_at=now,
         commit_sha=args.commit_sha,
+        symbol=args.symbol,
+        interval=args.interval,
     )
     print(json.dumps(manifest, sort_keys=True, allow_nan=False))
     return 0
