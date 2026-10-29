@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from numbers import Integral
 from typing import Final, Sequence
 
-MINIMUM_EMBARGO_CANDLES: Final[int] = 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,6 +19,7 @@ class PurgedEmbargoSplit:
     purge_start: int
     embargo_start: int
     embargo_end: int
+    embargo_size: int
 
 
 def _as_integer(value: object, reason: str) -> int:
@@ -92,7 +92,7 @@ def create_purged_embargo_split(
     *,
     validation_start: int,
     validation_end: int,
-    embargo_candles: int = MINIMUM_EMBARGO_CANDLES,
+    longest_feature_window: int,
 ) -> PurgedEmbargoSplit:
     """Split samples by actual label-window overlap and a post-test embargo.
 
@@ -102,7 +102,8 @@ def create_purged_embargo_split(
     """
     if not label_end_indices:
         raise ValueError("label_end_indices_empty")
-    embargo = _positive_integer(embargo_candles, "embargo_candles_must_be_at_least_one")
+    feature_window = _positive_integer(longest_feature_window, "longest_feature_window_must_be_positive_integer")
+    embargo = max(feature_window, int(0.01 * len(label_end_indices)))
     start, end = _validated_window(
         len(label_end_indices), validation_start, validation_end
     )
@@ -131,4 +132,5 @@ def create_purged_embargo_split(
         purge_start=purge_start,
         embargo_start=embargo_start,
         embargo_end=embargo_end,
+        embargo_size=embargo,
     )
