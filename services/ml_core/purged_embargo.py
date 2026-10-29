@@ -36,6 +36,49 @@ def _positive_integer(value: object, reason: str) -> int:
     return integer
 
 
+def _validated_window(
+    row_count: int, validation_start: int, validation_end: int
+) -> tuple[int, int]:
+    start = _as_integer(validation_start, "validation_start_must_be_integer")
+    end = _as_integer(validation_end, "validation_end_must_be_integer")
+    if start < 0 or end < start or end >= row_count:
+        raise ValueError("validation_window_out_of_bounds")
+    return start, end
+
+
+def _validated_label_ends(label_end_indices: Sequence[object]) -> list[int]:
+    row_count = len(label_end_indices)
+    label_ends: list[int] = []
+    for index, raw_end in enumerate(label_end_indices):
+        label_end = _as_integer(raw_end, "label_end_index_must_be_integer")
+        if label_end < index or label_end >= row_count:
+            raise ValueError("label_end_index_out_of_bounds")
+        label_ends.append(label_end)
+    return label_ends
+
+
+def _training_partition(
+    label_ends: list[int],
+    *,
+    start: int,
+    purge_start: int,
+    validation_indices: tuple[int, ...],
+    embargo_indices: tuple[int, ...],
+) -> tuple[tuple[int, ...], tuple[int, ...]]:
+    validation_set = set(validation_indices)
+    embargo_set = set(embargo_indices)
+    train_indices: list[int] = []
+    purged_indices: list[int] = []
+    for index, label_end in enumerate(label_ends):
+        if index in validation_set or index in embargo_set:
+            continue
+        if index < start and (index >= purge_start or label_end >= purge_start):
+            purged_indices.append(index)
+            continue
+        train_indices.append(index)
+    return tuple(train_indices), tuple(purged_indices)
+
+
 def create_purged_embargo_split(
     label_end_indices: Sequence[object],
     *,
@@ -44,60 +87,41 @@ def create_purged_embargo_split(
     label_horizon: int = PURGE_HORIZON_CANDLES,
     embargo_candles: int = MINIMUM_EMBARGO_CANDLES,
 ) -> PurgedEmbargoSplit:
-    """Create one time-index fold without labels overlapping purge/validation.
+    """Create a time-index fold with the full label horizon purged.
 
-    The purge zone is the `label_horizon` candles immediately before validation.
     A pre-validation training event is retained only if its label ends strictly
-    before that purge zone. The embargo reserves at least one candle directly
+    before the purge zone. The embargo reserves at least one candle directly
     after validation; neither a training event nor its label interval may consume
     data from that embargo candle.
     """
     if not label_end_indices:
         raise ValueError("label_end_indices_empty")
-    label_horizon = _positive_integer(
+    horizon = _positive_integer(
         label_horizon, "label_horizon_must_be_positive_integer"
     )
-    embargo_candles = _positive_integer(
+    embargo = _positive_integer(
         embargo_candles, "embargo_candles_must_be_at_least_one"
     )
-
-    row_count = len(label_end_indices)
-    start = _as_integer(validation_start, "validation_start_must_be_integer")
-    end = _as_integer(validation_end, "validation_end_must_be_integer")
-    if start < 0 or end < start or end >= row_count:
-        raise ValueError("validation_window_out_of_bounds")
-
-    label_ends: list[int] = []
-    for index, raw_end in enumerate(label_end_indices):
-        label_end = _as_integer(raw_end, "label_end_index_must_be_integer")
-        if label_end < index or label_end >= row_count:
-            raise ValueError("label_end_index_out_of_bounds")
-        label_ends.append(label_end)
-
-    purge_start = max(0, start - int(label_horizon))
-    embargo_start = end + 1
-    embargo_end = min(row_count - 1, end + int(embargo_candles))
+    start, end = _validated_window(
+        len(label_end_indices), validation_start, validation_end
+    )
+    label_ends = _validated_label_ends(label_end_indices)
+    purge_start = max(0, start - horizon)
     validation_indices = tuple(range(start, end + 1))
+    embargo_start = end + 1
+    embargo_end = min(len(label_ends) - 1, end + embargo)
     embargo_indices = tuple(range(embargo_start, embargo_end + 1))
-
-    train_indices: list[int] = []
-    purged_indices: list[int] = []
-    validation_set = set(validation_indices)
-    embargo_set = set(embargo_indices)
-    for index, label_end in enumerate(label_ends):
-        if index in validation_set or index in embargo_set:
-            continue
-        if index < start and (index >= purge_start or label_end >= purge_start):
-            purged_indices.append(index)
-            continue
-        # Any post-validation sample must start after embargo; its label window
-        # therefore cannot consume an embargo candle.
-        train_indices.append(index)
-
-    return PurgedEmbargoSplit(
-        train_indices=tuple(train_indices),
+    train_indices, purged_indices = _training_partition(
+        label_ends,
+        start=start,
+        purge_start=purge_start,
         validation_indices=validation_indices,
-        purged_indices=tuple(purged_indices),
+        embargo_indices=embargo_indices,
+    )
+    return PurgedEmbargoSplit(
+        train_indices=train_indices,
+        validation_indices=validation_indices,
+        purged_indices=purged_indices,
         embargo_indices=embargo_indices,
         purge_start=purge_start,
         embargo_start=embargo_start,

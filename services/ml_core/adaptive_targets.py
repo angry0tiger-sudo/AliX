@@ -30,11 +30,77 @@ _OHLCV_COLUMNS: Final[tuple[str, ...]] = (
     "volume",
 )
 _PRICE_COLUMNS: Final[tuple[str, ...]] = ("open", "high", "low", "close", "volume")
+_RESULT_COLUMNS: Final[tuple[str, ...]] = (
+    "event_index",
+    "event_timestamp",
+    "entry_price",
+    "atr",
+    "take_profit_price",
+    "stop_loss_price",
+    "label",
+    "exit_reason",
+    "label_end_index",
+)
+TargetRecord = dict[str, int | float | str | None | pd.Timestamp]
 
 
 def _positive_integer(value: int, name: str) -> None:
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         raise ValueError(f"{name}_must_be_positive_integer")
+
+
+def _validate_timestamps(values: pd.Series) -> pd.Series:
+    dates = pd.to_datetime(values, errors="coerce")
+    if dates.isna().any():
+        raise ValueError("timestamp_invalid")
+    if dates.dt.tz is None:
+        raise ValueError("timezone_required")
+    if dates.duplicated().any() or not dates.is_monotonic_increasing:
+        raise ValueError("timestamps_must_be_unique_and_increasing")
+    deltas = dates.diff().iloc[1:].dt.total_seconds().to_numpy(dtype=float)
+    if len(deltas) and not _interval_deltas_are_consistent(deltas):
+        raise ValueError("timestamp_interval_inconsistent")
+    return dates.dt.tz_convert("UTC")
+
+
+def _interval_deltas_are_consistent(deltas: np.ndarray) -> bool:
+    return (
+        bool(np.isfinite(deltas).all())
+        and not bool(np.any(deltas <= 0))
+        and bool(np.all(deltas == deltas[0]))
+    )
+
+
+def _coerce_numeric_column(result: DataFrame, name: str) -> pd.Series:
+    values = pd.to_numeric(result[name], errors="coerce")
+    if not np.isfinite(values.to_numpy(dtype=float)).all():
+        raise ValueError(f"ohlcv_non_finite:{name}")
+    return values
+
+
+def _validate_price_geometry(result: DataFrame) -> None:
+    opened = result["open"].to_numpy(dtype=float)
+    high = result["high"].to_numpy(dtype=float)
+    low = result["low"].to_numpy(dtype=float)
+    close = result["close"].to_numpy(dtype=float)
+    volume = result["volume"].to_numpy(dtype=float)
+    prices = (opened, high, low, close)
+    if any(bool(np.any(values <= 0)) for values in prices):
+        raise ValueError("ohlcv_prices_must_be_positive")
+    if np.any(volume < 0):
+        raise ValueError("ohlcv_volume_negative")
+    if _has_invalid_ohlc_geometry(opened, high, low, close):
+        raise ValueError("ohlcv_geometry_invalid")
+
+
+def _has_invalid_ohlc_geometry(
+    opened: np.ndarray, high: np.ndarray, low: np.ndarray, close: np.ndarray
+) -> bool:
+    return bool(
+        np.any(high < low)
+        or np.any(high < np.maximum(opened, close))
+        or np.any(low > np.minimum(opened, close))
+    )
 
 
 def _validated_ohlcv(candles: DataFrame) -> DataFrame:
@@ -45,54 +111,15 @@ def _validated_ohlcv(candles: DataFrame) -> DataFrame:
         raise ValueError("ohlcv_empty")
 
     result = candles.loc[:, list(_OHLCV_COLUMNS)].copy().reset_index(drop=True)
-    dates = pd.to_datetime(result["date"], errors="coerce")
-    if dates.isna().any():
-        raise ValueError("timestamp_invalid")
-    if dates.dt.tz is None:
-        raise ValueError("timezone_required")
-    if dates.duplicated().any() or not dates.is_monotonic_increasing:
-        raise ValueError("timestamps_must_be_unique_and_increasing")
-    deltas = dates.diff().iloc[1:].dt.total_seconds().to_numpy(dtype=float)
-    if len(deltas) and (
-        not np.isfinite(deltas).all()
-        or np.any(deltas <= 0)
-        or not np.all(deltas == deltas[0])
-    ):
-        raise ValueError("timestamp_interval_inconsistent")
-    result["date"] = dates.dt.tz_convert("UTC")
-
+    result["date"] = _validate_timestamps(result["date"])
     for name in _PRICE_COLUMNS:
-        values = pd.to_numeric(result[name], errors="coerce")
-        numeric = values.to_numpy(dtype=float)
-        if not np.isfinite(numeric).all():
-            raise ValueError(f"ohlcv_non_finite:{name}")
-        result[name] = values
-
-    opened = result["open"].to_numpy(dtype=float)
-    high = result["high"].to_numpy(dtype=float)
-    low = result["low"].to_numpy(dtype=float)
-    close = result["close"].to_numpy(dtype=float)
-    volume = result["volume"].to_numpy(dtype=float)
-    if (
-        np.any(opened <= 0)
-        or np.any(high <= 0)
-        or np.any(low <= 0)
-        or np.any(close <= 0)
-    ):
-        raise ValueError("ohlcv_prices_must_be_positive")
-    if np.any(volume < 0):
-        raise ValueError("ohlcv_volume_negative")
-    if (
-        np.any(high < low)
-        or np.any(high < np.maximum(opened, close))
-        or np.any(low > np.minimum(opened, close))
-    ):
-        raise ValueError("ohlcv_geometry_invalid")
+        result[name] = _coerce_numeric_column(result, name)
+    _validate_price_geometry(result)
     return result
 
 
 def calculate_atr(candles: DataFrame, period: int = ATR_PERIOD) -> pd.Series:
-    """Calculate Wilder-style true range with a simple rolling ATR mean.
+    """Calculate a full-window simple ATR mean from absolute true ranges.
 
     True range is max(high-low, abs(high-prev_close), abs(low-prev_close)).
     The first `period - 1` ATR values are NaN because a full window is required.
@@ -136,6 +163,155 @@ def _validate_barrier_configuration(
         raise ValueError("barrier_multipliers_must_be_finite_and_positive")
 
 
+def _record(
+    event_index: int,
+    event_time: pd.Timestamp,
+    entry_price: float,
+    atr: float | None,
+    take_profit_price: float | None,
+    stop_loss_price: float | None,
+    label: str | None,
+    exit_reason: str,
+    label_end_index: int | None,
+) -> TargetRecord:
+    return {
+        "event_index": event_index,
+        "event_timestamp": event_time,
+        "entry_price": entry_price,
+        "atr": atr,
+        "take_profit_price": take_profit_price,
+        "stop_loss_price": stop_loss_price,
+        "label": label,
+        "exit_reason": exit_reason,
+        "label_end_index": label_end_index,
+    }
+
+
+def _unlabeled_record(
+    event_index: int, event_time: pd.Timestamp, entry_price: float, reason: str
+) -> TargetRecord:
+    return _record(
+        event_index, event_time, entry_price, None, None, None, None, reason, None
+    )
+
+
+def _validated_atr_value(raw_atr: float) -> float:
+    if not isfinite(raw_atr):
+        raise ValueError("atr_must_be_finite")
+    if raw_atr <= 0:
+        raise ValueError("atr_must_be_positive")
+    return raw_atr
+
+
+def _barrier_prices(
+    entry_price: float,
+    atr: float,
+    take_profit_multiplier: float,
+    stop_loss_multiplier: float,
+) -> tuple[float, float]:
+    take_profit_price = entry_price + take_profit_multiplier * atr
+    stop_loss_price = entry_price - stop_loss_multiplier * atr
+    if not isfinite(take_profit_price) or not isfinite(stop_loss_price):
+        raise ValueError("atr_barrier_price_not_finite")
+    if stop_loss_price <= 0:
+        raise ValueError("atr_stop_price_not_positive")
+    return take_profit_price, stop_loss_price
+
+
+def _resolve_event_horizon(
+    normalized: DataFrame,
+    event_index: int,
+    entry_time: pd.Timestamp,
+    entry_price: float,
+    atr: float,
+    take_profit_price: float,
+    stop_loss_price: float,
+    horizon: int,
+) -> TargetRecord:
+    last_horizon_index = event_index + horizon
+    if last_horizon_index >= len(normalized):
+        return _record(
+            event_index,
+            entry_time,
+            entry_price,
+            atr,
+            take_profit_price,
+            stop_loss_price,
+            None,
+            "incomplete_horizon",
+            None,
+        )
+
+    label, exit_reason, label_end_index = _first_barrier_outcome(
+        normalized, event_index, last_horizon_index, take_profit_price, stop_loss_price
+    )
+    return _record(
+        event_index,
+        entry_time,
+        entry_price,
+        atr,
+        take_profit_price,
+        stop_loss_price,
+        label,
+        exit_reason,
+        label_end_index,
+    )
+
+
+def _first_barrier_outcome(
+    normalized: DataFrame,
+    event_index: int,
+    last_horizon_index: int,
+    take_profit_price: float,
+    stop_loss_price: float,
+) -> tuple[str, str, int]:
+    for candle_index in range(event_index + 1, last_horizon_index + 1):
+        candle = normalized.iloc[candle_index]
+        take_hit = float(candle["high"]) >= take_profit_price
+        stop_hit = float(candle["low"]) <= stop_loss_price
+        if stop_hit:
+            reason = "stop_loss_collision" if take_hit else "stop_loss"
+            return "SELL", reason, candle_index
+        if take_hit:
+            return "BUY", "take_profit", candle_index
+    return "HOLD", "horizon_expiry", last_horizon_index
+
+
+def _label_one_event(
+    normalized: DataFrame,
+    event_index: int,
+    atr_values: np.ndarray,
+    *,
+    computed_atr: bool,
+    atr_period: int,
+    horizon: int,
+    take_profit_multiplier: float,
+    stop_loss_multiplier: float,
+) -> TargetRecord:
+    entry_row = normalized.iloc[event_index]
+    entry_price = float(entry_row["close"])
+    event_time = pd.Timestamp(entry_row["date"])
+    if computed_atr and event_index < atr_period - 1:
+        return _unlabeled_record(
+            event_index, event_time, entry_price, "insufficient_atr_history"
+        )
+
+    atr = _validated_atr_value(float(atr_values[event_index]))
+    take_profit_price, stop_loss_price = _barrier_prices(
+        entry_price, atr, take_profit_multiplier, stop_loss_multiplier
+    )
+    return _resolve_event_horizon(
+        normalized,
+        event_index,
+        event_time,
+        entry_price,
+        atr,
+        take_profit_price,
+        stop_loss_price,
+        horizon,
+    )
+
+
 def apply_adaptive_triple_barrier(
     candles: DataFrame,
     *,
@@ -145,12 +321,12 @@ def apply_adaptive_triple_barrier(
     take_profit_multiplier: float = TAKE_PROFIT_MULTIPLIER,
     stop_loss_multiplier: float = STOP_LOSS_MULTIPLIER,
 ) -> DataFrame:
-    """Create BUY/SELL/HOLD outcome labels without combining them with features.
+    """Create BUY/SELL/HOLD labels while keeping future outcomes out of features.
 
     At index t, entry is close[t] and ATR[t] uses only OHLCV through t.
     Future OHLCV at t+1 ... t+horizon is inspected only to determine the label.
-    A bar touching both barriers resolves to SELL because stop-loss has priority.
-    Rows without enough ATR history or a complete future horizon have label=None.
+    Stop-loss wins when both barriers are hit on the same candle. Tail rows
+    without a complete future horizon are intentionally left unlabeled.
     """
     _validate_barrier_configuration(
         atr_period, horizon, take_profit_multiplier, stop_loss_multiplier
@@ -162,100 +338,17 @@ def apply_adaptive_triple_barrier(
         raise ValueError("atr_length_mismatch")
     atr_array = pd.to_numeric(atr_series, errors="coerce").to_numpy(dtype=float)
 
-    records: list[dict[str, int | float | str | None | pd.Timestamp]] = []
-    row_count = len(normalized)
-    for event_index in range(row_count):
-        entry_price = float(normalized.iloc[event_index]["close"])
-        event_time = pd.Timestamp(normalized.iloc[event_index]["date"])
-        current_atr = float(atr_array[event_index])
-
-        if computed_atr and event_index < atr_period - 1:
-            records.append(
-                {
-                    "event_index": event_index,
-                    "event_timestamp": event_time,
-                    "entry_price": entry_price,
-                    "atr": None,
-                    "take_profit_price": None,
-                    "stop_loss_price": None,
-                    "label": None,
-                    "exit_reason": "insufficient_atr_history",
-                    "label_end_index": None,
-                }
-            )
-            continue
-        if not isfinite(current_atr):
-            raise ValueError("atr_must_be_finite")
-        if current_atr <= 0:
-            raise ValueError("atr_must_be_positive")
-
-        take_profit_price = entry_price + take_profit_multiplier * current_atr
-        stop_loss_price = entry_price - stop_loss_multiplier * current_atr
-        if not isfinite(take_profit_price) or not isfinite(stop_loss_price):
-            raise ValueError("atr_barrier_price_not_finite")
-        if stop_loss_price <= 0:
-            raise ValueError("atr_stop_price_not_positive")
-
-        last_horizon_index = event_index + horizon
-        if last_horizon_index >= row_count:
-            records.append(
-                {
-                    "event_index": event_index,
-                    "event_timestamp": event_time,
-                    "entry_price": entry_price,
-                    "atr": current_atr,
-                    "take_profit_price": take_profit_price,
-                    "stop_loss_price": stop_loss_price,
-                    "label": None,
-                    "exit_reason": "incomplete_horizon",
-                    "label_end_index": None,
-                }
-            )
-            continue
-
-        label = "HOLD"
-        exit_reason = "horizon_expiry"
-        label_end_index = last_horizon_index
-        for candle_index in range(event_index + 1, last_horizon_index + 1):
-            candle = normalized.iloc[candle_index]
-            take_hit = float(candle["high"]) >= take_profit_price
-            stop_hit = float(candle["low"]) <= stop_loss_price
-            if stop_hit:
-                label = "SELL"
-                exit_reason = "stop_loss_collision" if take_hit else "stop_loss"
-                label_end_index = candle_index
-                break
-            if take_hit:
-                label = "BUY"
-                exit_reason = "take_profit"
-                label_end_index = candle_index
-                break
-
-        records.append(
-            {
-                "event_index": event_index,
-                "event_timestamp": event_time,
-                "entry_price": entry_price,
-                "atr": current_atr,
-                "take_profit_price": take_profit_price,
-                "stop_loss_price": stop_loss_price,
-                "label": label,
-                "exit_reason": exit_reason,
-                "label_end_index": label_end_index,
-            }
+    records = [
+        _label_one_event(
+            normalized,
+            event_index,
+            atr_array,
+            computed_atr=computed_atr,
+            atr_period=atr_period,
+            horizon=horizon,
+            take_profit_multiplier=take_profit_multiplier,
+            stop_loss_multiplier=stop_loss_multiplier,
         )
-
-    return DataFrame.from_records(
-        records,
-        columns=(
-            "event_index",
-            "event_timestamp",
-            "entry_price",
-            "atr",
-            "take_profit_price",
-            "stop_loss_price",
-            "label",
-            "exit_reason",
-            "label_end_index",
-        ),
-    )
+        for event_index in range(len(normalized))
+    ]
+    return DataFrame.from_records(records, columns=list(_RESULT_COLUMNS))
