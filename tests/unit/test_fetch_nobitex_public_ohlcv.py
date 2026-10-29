@@ -152,7 +152,7 @@ def test_fetch_history_chunks_by_day_and_retries_only_the_incomplete_day() -> No
     offset = 30
     now_epoch = int(now.timestamp())
     expected_end = ((now_epoch - seconds - offset) // seconds) * seconds + offset
-    expected_start = expected_end - (2 * 24 * 60 - 1) * seconds
+    expected_start = expected_end - (7 * 24 * 60 - 1) * seconds
     second_day_start = expected_start + 24 * 60 * seconds
     calls: list[dict[str, str]] = []
     second_day_first_page_attempts = 0
@@ -183,7 +183,7 @@ def test_fetch_history_chunks_by_day_and_retries_only_the_incomplete_day() -> No
         return make_payload(stamps)
 
     rows = fetch_historical_candles(
-        days=2,
+        days=7,
         now=now,
         symbol="BTCUSDT",
         interval="1m",
@@ -191,7 +191,7 @@ def test_fetch_history_chunks_by_day_and_retries_only_the_incomplete_day() -> No
         sleep_fn=lambda _seconds: None,
     )
 
-    assert len(rows) == 2 * 24 * 60
+    assert len(rows) == 7 * 24 * 60
     assert rows[0]["timestamp"] == expected_start
     assert rows[-1]["timestamp"] == expected_end
     assert all(
