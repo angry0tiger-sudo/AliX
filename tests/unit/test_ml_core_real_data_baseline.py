@@ -102,7 +102,6 @@ def test_temporal_split_keeps_training_before_validation_and_purges() -> None:
     assert diagnostics["eligible_pre_validation_embargo_rows"] > 0
 
 
-
 def test_short_real_data_window_is_skipped_without_training() -> None:
     result = run_experiment("BTC/USDT", "4h", minute_frame(rows=24 * 60))
 
