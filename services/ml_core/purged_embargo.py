@@ -4,8 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from numbers import Integral
-from typing import Final, Sequence
-
+from typing import Sequence
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,7 +101,9 @@ def create_purged_embargo_split(
     """
     if not label_end_indices:
         raise ValueError("label_end_indices_empty")
-    feature_window = _positive_integer(longest_feature_window, "longest_feature_window_must_be_positive_integer")
+    feature_window = _positive_integer(
+        longest_feature_window, "longest_feature_window_must_be_positive_integer"
+    )
     embargo = max(feature_window, int(0.01 * len(label_end_indices)))
     start, end = _validated_window(
         len(label_end_indices), validation_start, validation_end
