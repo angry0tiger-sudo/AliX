@@ -175,9 +175,10 @@ def test_label_audit_separates_exit_and_unlabeled_reasons() -> None:
     assert audit["labeled_events"] == 3
     assert audit["unlabeled_events"] == 1
     assert audit["exit_reason_distribution"]["total"] == 3
-    assert audit["unlabeled_reason_distribution"]["reasons"]["incomplete_horizon"][
-        "count"
-    ] == 1
+    assert (
+        audit["unlabeled_reason_distribution"]["reasons"]["incomplete_horizon"]["count"]
+        == 1
+    )
 
 
 def test_baseline_validation_diagnostics_use_fixed_class_order() -> None:
