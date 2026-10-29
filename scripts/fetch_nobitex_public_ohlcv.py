@@ -389,9 +389,14 @@ def _fetch_candle_pages(
         )
         unresolved = [stamp for stamp in expected if stamp not in page_by_stamp]
         if unresolved:
+            gap_name = (
+                "missing_minute_intervals"
+                if interval == "1m"
+                else "missing_candle_intervals"
+            )
             raise ValueError(
-                "nobitex_historical_page_incomplete:"
-                f"start={cursor}:stop={stop}:missing={len(unresolved)}:"
+                f"nobitex_historical_gap_detected:{gap_name}={len(unresolved)}:"
+                f"start={cursor}:stop={stop}:"
                 f"first_missing={unresolved[0]}:last_missing={unresolved[-1]}"
             )
 
