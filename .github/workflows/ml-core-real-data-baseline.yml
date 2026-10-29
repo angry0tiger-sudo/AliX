@@ -47,17 +47,17 @@ jobs:
           python -m pip install pip==25.2
           python -m pip install numpy==2.5.4 pandas==2.3.3 scikit-learn==1.9.0 lightgbm==4.7.0
 
-      # Fetch the configured 30-day window as individually validated 24-hour chunks.
-      # Do not hide data gaps by silently falling back to a shorter time range.
-      - name: Fetch complete public candles in retried daily chunks
+      # Binance Spot public klines are fetched in validated 1,000-candle pages.
+      # Missing or partial pages fail closed; no shorter window or synthetic fill.
+      - name: Fetch complete Binance public candles with pagination
         run: |
           set -euo pipefail
           data_dir="$RUNNER_TEMP/alix-real-market-data"
           rm -rf "$data_dir"
           mkdir -p "$data_dir"
           for symbol in BTCUSDT ETHUSDT; do
-            log_path="$RUNNER_TEMP/nobitex-fetch-30-${symbol}.log"
-            if python scripts/fetch_nobitex_public_ohlcv.py \
+            log_path="$RUNNER_TEMP/binance-fetch-30-${symbol}.log"
+            if python scripts/fetch_binance_public_ohlcv.py \
               --days 30 \
               --symbol "$symbol" \
               --interval 1m \
@@ -66,7 +66,7 @@ jobs:
               cat "$log_path"
             else
               cat "$log_path"
-              echo "Fetcher failed for ${symbol}; refusing to train on incomplete real-market data." >&2
+              echo "Binance fetcher failed for ${symbol}; refusing to train on incomplete real-market data." >&2
               exit 1
             fi
           done
@@ -74,6 +74,7 @@ jobs:
           echo "ALIX_DIAGNOSTIC_CONFIGURED_DAYS=30" >> "$GITHUB_ENV"
           echo "ALIX_DIAGNOSTIC_FALLBACK_REASON=NONE" >> "$GITHUB_ENV"
           printf 'selected_complete_days=30\n'
+          printf 'provider=Binance Spot public klines API\n'
           printf 'fetch_chunk_days=1\n'
           printf 'fallback_reason=NONE\n'
 

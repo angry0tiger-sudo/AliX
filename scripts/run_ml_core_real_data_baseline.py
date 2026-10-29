@@ -428,7 +428,7 @@ def run_experiment(
 def _load_manifested_data(
     input_dir: Path, symbol: str, days: int, commit_sha: str
 ) -> tuple[DataFrame, dict[str, Any]]:
-    stem = f"nobitex-{symbol.lower()}-1m"
+    stem = f"binance-{symbol.lower()}-1m"
     csv_path = input_dir / f"{stem}.csv"
     manifest_path = input_dir / f"{stem}.manifest.json"
     if not csv_path.is_file() or not manifest_path.is_file():
@@ -445,7 +445,7 @@ def _load_manifested_data(
         manifest.get("row_count") == expected_rows,
         manifest.get("commit_sha") == commit_sha,
         manifest.get("csv_sha256") == csv_digest,
-        manifest.get("provider") == "Nobitex public UDF history API",
+        manifest.get("provider") == "Binance Spot public klines API",
         manifest.get("public_api_only") is True,
         manifest.get("credentials_used") is False,
         manifest.get("private_api_calls") == 0,
@@ -608,7 +608,7 @@ def run_diagnostic(
                 "never shorten the requested window or synthesize missing candles."
             ),
         },
-        "provider": "Nobitex public UDF history API",
+        "provider": "Binance Spot public klines API",
         "input_datasets": provenance,
         "allowed_timeframes": list(TIMEFRAME_MINUTES),
         "labels": list(LABELS),
