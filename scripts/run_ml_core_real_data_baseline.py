@@ -30,15 +30,8 @@ OVERFIT_F1_GAP_THRESHOLD = 0.15
 REPORT_SCHEMA = "alix.ml-core.real-data-classification-diagnostic.v1"
 
 
-def _validate_minute_candles(candles: DataFrame) -> DataFrame:
-    missing = sorted(set(OHLCV_COLUMNS) - set(candles.columns))
-    if missing:
-        raise ValueError(f"ohlcv_missing_columns:{','.join(missing)}")
-    if candles.empty:
-        raise ValueError("ohlcv_empty")
-
-    result = candles.loc[:, list(OHLCV_COLUMNS)].copy().reset_index(drop=True)
-    dates = pd.to_datetime(result["date"], errors="coerce", utc=True)
+def _validated_minute_timestamps(values: Series) -> Series:
+    dates = pd.to_datetime(values, errors="coerce", utc=True)
     if dates.isna().any():
         raise ValueError("timestamp_invalid")
     if dates.duplicated().any() or not dates.is_monotonic_increasing:
@@ -46,8 +39,10 @@ def _validate_minute_candles(candles: DataFrame) -> DataFrame:
     deltas = dates.diff().iloc[1:].dt.total_seconds().to_numpy(dtype=float)
     if len(deltas) and not bool(np.all(deltas == 60.0)):
         raise ValueError("minute_data_gap_or_interval_mismatch")
-    result["date"] = dates
+    return dates
 
+
+def _validate_minute_numeric_values(result: DataFrame) -> None:
     for name in ("open", "high", "low", "close", "volume"):
         result[name] = pd.to_numeric(result[name], errors="coerce")
     values = result.loc[:, ["open", "high", "low", "close", "volume"]].to_numpy(
@@ -55,6 +50,10 @@ def _validate_minute_candles(candles: DataFrame) -> DataFrame:
     )
     if not bool(np.isfinite(values).all()):
         raise ValueError("ohlcv_value_not_finite")
+    _validate_minute_price_geometry(result)
+
+
+def _validate_minute_price_geometry(result: DataFrame) -> None:
     opened = result["open"].to_numpy(dtype=float)
     high = result["high"].to_numpy(dtype=float)
     low = result["low"].to_numpy(dtype=float)
@@ -64,12 +63,24 @@ def _validate_minute_candles(candles: DataFrame) -> DataFrame:
         raise ValueError("ohlcv_price_must_be_positive")
     if bool(np.any(volume < 0)):
         raise ValueError("ohlcv_volume_negative")
-    if bool(
+    invalid_geometry = (
         np.any(high < low)
         or np.any(high < np.maximum(opened, close))
         or np.any(low > np.minimum(opened, close))
-    ):
+    )
+    if bool(invalid_geometry):
         raise ValueError("ohlcv_geometry_invalid")
+
+
+def _validate_minute_candles(candles: DataFrame) -> DataFrame:
+    missing = sorted(set(OHLCV_COLUMNS) - set(candles.columns))
+    if missing:
+        raise ValueError(f"ohlcv_missing_columns:{','.join(missing)}")
+    if candles.empty:
+        raise ValueError("ohlcv_empty")
+    result = candles.loc[:, list(OHLCV_COLUMNS)].copy().reset_index(drop=True)
+    result["date"] = _validated_minute_timestamps(result["date"])
+    _validate_minute_numeric_values(result)
     return result
 
 
@@ -148,6 +159,79 @@ def classification_metrics(actual: Series, predicted: Series) -> dict[str, Any]:
     }
 
 
+def _validation_window(row_count: int) -> tuple[int, int]:
+    validation_start = int(row_count * VALIDATION_START_FRACTION)
+    validation_end = int(row_count * VALIDATION_END_FRACTION) - 1
+    if validation_end <= validation_start:
+        raise ValueError("validation_window_invalid")
+    return validation_start, validation_end
+
+
+def _label_end_indices(labels: DataFrame) -> list[int]:
+    return [
+        index if pd.isna(value) else int(value)
+        for index, value in enumerate(labels["label_end_idx"].tolist())
+    ]
+
+
+def _eligible_sample_indices(features: DataFrame, labels: DataFrame) -> set[int]:
+    eligible_mask = (
+        features.notna().all(axis=1)
+        & labels["label"].isin(LABELS)
+        & labels["label_end_idx"].notna()
+    )
+    return {int(index) for index in np.flatnonzero(eligible_mask.to_numpy())}
+
+
+def _eligible_train_indices(
+    train_candidates: tuple[int, ...],
+    eligible_indices: set[int],
+    train_limit: int,
+) -> list[int]:
+    return [
+        index
+        for index in train_candidates
+        if index in eligible_indices and index < train_limit
+    ]
+
+
+def _eligible_validation_indices(
+    validation_candidates: tuple[int, ...], eligible_indices: set[int]
+) -> list[int]:
+    return [
+        index
+        for index in validation_candidates
+        if index in eligible_indices
+    ]
+
+
+def _split_diagnostics(
+    split: Any,
+    eligible_indices: set[int],
+    row_count: int,
+    validation_start: int,
+    validation_end: int,
+    train_limit: int,
+) -> dict[str, int]:
+    purged_train_rows = sum(
+        index in eligible_indices and index < train_limit
+        for index in split.purged_indices
+    )
+    eligible_gap_rows = sum(
+        index in eligible_indices
+        for index in range(max(0, train_limit), validation_start)
+    )
+    return {
+        "validation_start_index": validation_start,
+        "validation_end_index": validation_end,
+        "purged_train_rows": int(purged_train_rows),
+        "embargo_size_bars": int(split.embargo_size),
+        "eligible_pre_validation_embargo_rows": int(eligible_gap_rows),
+        "post_validation_embargo_bars": len(split.embargo_indices),
+        "future_rows_excluded_for_chronology": row_count - validation_end - 1,
+    }
+
+
 def purged_temporal_indices(
     features: DataFrame, labels: DataFrame
 ) -> tuple[list[int], list[int], dict[str, int]]:
@@ -156,57 +240,30 @@ def purged_temporal_indices(
     if len(features) != row_count or row_count < 100:
         raise ValueError("insufficient_or_misaligned_rows_for_temporal_split")
 
-    validation_start = int(row_count * VALIDATION_START_FRACTION)
-    validation_end = int(row_count * VALIDATION_END_FRACTION) - 1
-    if validation_end <= validation_start:
-        raise ValueError("validation_window_invalid")
-
-    ends: list[int] = []
-    for index, value in enumerate(labels["label_end_idx"].tolist()):
-        ends.append(index if pd.isna(value) else int(value))
-
-    eligible_mask = (
-        features.notna().all(axis=1)
-        & labels["label"].isin(LABELS)
-        & labels["label_end_idx"].notna()
-    )
-    eligible_indices = {
-        int(index) for index in np.flatnonzero(eligible_mask.to_numpy())
-    }
+    validation_start, validation_end = _validation_window(row_count)
+    ends = _label_end_indices(labels)
+    eligible_indices = _eligible_sample_indices(features, labels)
     split = create_purged_embargo_split(
         ends,
         validation_start=validation_start,
         validation_end=validation_end,
         longest_feature_window=FEATURE_WINDOW,
     )
-
     train_limit = validation_start - split.embargo_size
-    train_indices = [
-        index
-        for index in split.train_indices
-        if index in eligible_indices and index < train_limit
-    ]
-    validation_indices = [
-        index for index in split.validation_indices if index in eligible_indices
-    ]
-    purged_rows = [
-        index
-        for index in split.purged_indices
-        if index in eligible_indices and index < train_limit
-    ]
-    eligible_gap_rows = sum(
-        index in eligible_indices
-        for index in range(max(0, train_limit), validation_start)
+    train_indices = _eligible_train_indices(
+        split.train_indices, eligible_indices, train_limit
     )
-    diagnostics = {
-        "validation_start_index": validation_start,
-        "validation_end_index": validation_end,
-        "purged_train_rows": len(purged_rows),
-        "embargo_size_bars": split.embargo_size,
-        "eligible_pre_validation_embargo_rows": int(eligible_gap_rows),
-        "post_validation_embargo_bars": len(split.embargo_indices),
-        "future_rows_excluded_for_chronology": row_count - validation_end - 1,
-    }
+    validation_indices = _eligible_validation_indices(
+        split.validation_indices, eligible_indices
+    )
+    diagnostics = _split_diagnostics(
+        split,
+        eligible_indices,
+        row_count,
+        validation_start,
+        validation_end,
+        train_limit,
+    )
     return train_indices, validation_indices, diagnostics
 
 
