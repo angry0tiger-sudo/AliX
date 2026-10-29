@@ -173,5 +173,5 @@ def test_feature_builder_fails_closed_on_timestamps_and_ohlcv_schema() -> None:
         build_causal_feature_matrix(naive)
     with pytest.raises(ValueError, match="timestamp_interval_inconsistent"):
         gapped = candles.copy()
-        gapped.loc[8, "date"] = gapped.loc[8, "date"] + pd.Timedelta(minutes=30)
+        gapped.loc[8, "date"] = pd.Timestamp("2026-01-01T08:30:00Z")
         build_causal_feature_matrix(gapped)

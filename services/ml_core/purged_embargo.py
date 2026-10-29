@@ -23,13 +23,21 @@ class PurgedEmbargoSplit:
     embargo_end: int
 
 
-def _positive_integer(value: int, reason: str) -> None:
-    if isinstance(value, bool) or not isinstance(value, Integral) or value < 1:
+def _as_integer(value: object, reason: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, Integral):
         raise ValueError(reason)
+    return int(value)
+
+
+def _positive_integer(value: object, reason: str) -> int:
+    integer = _as_integer(value, reason)
+    if integer < 1:
+        raise ValueError(reason)
+    return integer
 
 
 def create_purged_embargo_split(
-    label_end_indices: Sequence[int],
+    label_end_indices: Sequence[object],
     *,
     validation_start: int,
     validation_end: int,
@@ -46,26 +54,22 @@ def create_purged_embargo_split(
     """
     if not label_end_indices:
         raise ValueError("label_end_indices_empty")
-    _positive_integer(label_horizon, "label_horizon_must_be_positive_integer")
-    _positive_integer(embargo_candles, "embargo_candles_must_be_at_least_one")
+    label_horizon = _positive_integer(
+        label_horizon, "label_horizon_must_be_positive_integer"
+    )
+    embargo_candles = _positive_integer(
+        embargo_candles, "embargo_candles_must_be_at_least_one"
+    )
 
     row_count = len(label_end_indices)
-    for name, value in (
-        ("validation_start", validation_start),
-        ("validation_end", validation_end),
-    ):
-        if isinstance(value, bool) or not isinstance(value, Integral):
-            raise ValueError(f"{name}_must_be_integer")
-    start = int(validation_start)
-    end = int(validation_end)
+    start = _as_integer(validation_start, "validation_start_must_be_integer")
+    end = _as_integer(validation_end, "validation_end_must_be_integer")
     if start < 0 or end < start or end >= row_count:
         raise ValueError("validation_window_out_of_bounds")
 
     label_ends: list[int] = []
     for index, raw_end in enumerate(label_end_indices):
-        if isinstance(raw_end, bool) or not isinstance(raw_end, Integral):
-            raise ValueError("label_end_index_must_be_integer")
-        label_end = int(raw_end)
+        label_end = _as_integer(raw_end, "label_end_index_must_be_integer")
         if label_end < index or label_end >= row_count:
             raise ValueError("label_end_index_out_of_bounds")
         label_ends.append(label_end)
