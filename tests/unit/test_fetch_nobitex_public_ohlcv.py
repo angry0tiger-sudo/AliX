@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+import time
 
 import pytest
 
@@ -134,7 +135,7 @@ def test_request_public_json_retries_rate_limit_and_honors_retry_after(
             return None
 
     monkeypatch.setattr(fetcher, "HTTPSConnection", FakeConnection)
-    monkeypatch.setattr(fetcher.time, "sleep", delays.append)
+    monkeypatch.setattr(time, "sleep", delays.append)
 
     assert fetcher.request_public_json({"symbol": "BTCUSDT"}) == {"s": "ok"}
     assert delays == [3.0]
