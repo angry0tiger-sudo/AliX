@@ -73,7 +73,12 @@ def _validated_ohlcv(candles: DataFrame) -> DataFrame:
     low = result["low"].to_numpy(dtype=float)
     close = result["close"].to_numpy(dtype=float)
     volume = result["volume"].to_numpy(dtype=float)
-    if np.any(opened <= 0) or np.any(high <= 0) or np.any(low <= 0) or np.any(close <= 0):
+    if (
+        np.any(opened <= 0)
+        or np.any(high <= 0)
+        or np.any(low <= 0)
+        or np.any(close <= 0)
+    ):
         raise ValueError("ohlcv_prices_must_be_positive")
     if np.any(volume < 0):
         raise ValueError("ohlcv_volume_negative")
@@ -107,8 +112,10 @@ def calculate_atr(candles: DataFrame, period: int = ATR_PERIOD) -> pd.Series:
         ],
         axis=1,
     ).max(axis=1, skipna=True)
-    return true_range.rolling(window=period, min_periods=period).mean().rename(
-        f"atr_{period}"
+    return (
+        true_range.rolling(window=period, min_periods=period)
+        .mean()
+        .rename(f"atr_{period}")
     )
 
 

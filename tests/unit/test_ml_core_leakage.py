@@ -72,9 +72,7 @@ def test_target_is_separate_and_never_enters_feature_matrix() -> None:
 
 def test_new_window_does_not_carry_rolling_state_from_previous_window() -> None:
     previous_window = market_frame(40)
-    next_start = (
-        previous_window["date"].iloc[-1] + pd.Timedelta(hours=1)
-    ).isoformat()
+    next_start = (previous_window["date"].iloc[-1] + pd.Timedelta(hours=1)).isoformat()
     current_window = market_frame(25, start=next_start)
 
     isolated_features = build_causal_feature_matrix(current_window)
@@ -91,7 +89,9 @@ def test_new_window_does_not_carry_rolling_state_from_previous_window() -> None:
     assert pd.isna(isolated_features.iloc[0]["%-return_1"])
 
 
-def test_purge_window_matches_24_candle_label_horizon_and_removes_maturing_labels() -> None:
+def test_purge_window_matches_24_candle_label_horizon_and_removes_maturing_labels() -> (
+    None
+):
     row_count = 200
     horizon = 24
     label_ends = [min(index + horizon, row_count - 1) for index in range(row_count)]
@@ -108,7 +108,9 @@ def test_purge_window_matches_24_candle_label_horizon_and_removes_maturing_label
     assert split.validation_indices == tuple(range(100, 125))
     assert not set(range(purge_start, 100)).intersection(split.train_indices)
     assert 55 in split.purged_indices  # this sample's label ends inside the purge zone
-    assert all(label_ends[index] < purge_start for index in split.train_indices if index < 100)
+    assert all(
+        label_ends[index] < purge_start for index in split.train_indices if index < 100
+    )
     assert all(index not in split.validation_indices for index in split.train_indices)
 
 
@@ -128,10 +130,7 @@ def test_embargo_reserves_at_least_one_candle_and_no_train_label_uses_it() -> No
     assert 125 not in split.train_indices
     assert 126 in split.train_indices
     assert all(
-        not (
-            index <= split.embargo_end
-            and label_ends[index] >= split.embargo_start
-        )
+        not (index <= split.embargo_end and label_ends[index] >= split.embargo_start)
         for index in split.train_indices
     )
 

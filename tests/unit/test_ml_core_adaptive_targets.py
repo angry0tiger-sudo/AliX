@@ -127,9 +127,7 @@ def test_label_distribution_fixture_contains_buy_sell_and_hold() -> None:
 def test_zero_nan_and_extreme_atr_fail_closed() -> None:
     candles = market_frame(40)
     with pytest.raises(ValueError, match="atr_must_be_positive"):
-        apply_adaptive_triple_barrier(
-            candles, atr_values=constant_atr(candles, 0.0)
-        )
+        apply_adaptive_triple_barrier(candles, atr_values=constant_atr(candles, 0.0))
 
     invalid_atr = constant_atr(candles, 1.0)
     invalid_atr.iloc[14] = float("nan")
@@ -143,9 +141,7 @@ def test_zero_nan_and_extreme_atr_fail_closed() -> None:
     assert extreme.iloc[14]["label"] == "HOLD"
 
     with pytest.raises(ValueError, match="atr_barrier_price_not_finite"):
-        apply_adaptive_triple_barrier(
-            candles, atr_values=constant_atr(candles, 1e308)
-        )
+        apply_adaptive_triple_barrier(candles, atr_values=constant_atr(candles, 1e308))
 
 
 def test_computed_atr_warmup_is_unlabeled_and_flat_market_rejects_zero_atr() -> None:
