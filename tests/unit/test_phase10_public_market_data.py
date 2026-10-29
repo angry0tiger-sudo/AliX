@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import pytest
 
@@ -34,7 +34,9 @@ def make_payload(start: int, count: int = 2, *, seconds: int = 3600) -> dict[str
     }
 
 
-def fake_getter(now: datetime, *, gap_symbol: str | None = None):
+def fake_getter(
+    now: datetime, *, gap_symbol: str | None = None
+) -> Callable[[dict[str, str]], dict[str, Any]]:
     def getter(params: dict[str, str]) -> dict[str, Any]:
         seconds = int(params["resolution"]) * 60
         start, end = int(params["from"]), int(params["to"])
