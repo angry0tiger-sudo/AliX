@@ -96,12 +96,8 @@ def create_purged_embargo_split(
     """
     if not label_end_indices:
         raise ValueError("label_end_indices_empty")
-    horizon = _positive_integer(
-        label_horizon, "label_horizon_must_be_positive_integer"
-    )
-    embargo = _positive_integer(
-        embargo_candles, "embargo_candles_must_be_at_least_one"
-    )
+    horizon = _positive_integer(label_horizon, "label_horizon_must_be_positive_integer")
+    embargo = _positive_integer(embargo_candles, "embargo_candles_must_be_at_least_one")
     start, end = _validated_window(
         len(label_end_indices), validation_start, validation_end
     )
