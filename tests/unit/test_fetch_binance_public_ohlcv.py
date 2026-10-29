@@ -111,7 +111,9 @@ def test_request_uses_official_market_data_host_and_surfaces_http_451(
         status = 451
 
         def read(self) -> bytes:
-            return b'{"code":-1002,"msg":"Service unavailable from a restricted location"}'
+            return (
+                b'{"code":-1002,"msg":"Service unavailable from a restricted location"}'
+            )
 
         def getheader(self, name: str) -> str | None:
             return None
@@ -131,7 +133,9 @@ def test_request_uses_official_market_data_host_and_surfaces_http_451(
 
     monkeypatch.setattr(fetcher, "HTTPSConnection", FakeConnection)
 
-    with pytest.raises(RuntimeError, match="binance_public_api_restricted_location") as error:
+    with pytest.raises(
+        RuntimeError, match="binance_public_api_restricted_location"
+    ) as error:
         fetcher.request_public_json(
             {
                 "symbol": "BTCUSDT",
@@ -145,4 +149,3 @@ def test_request_uses_official_market_data_host_and_surfaces_http_451(
     assert hosts == ["data-api.binance.vision"]
     assert "status=451" in str(error.value)
     assert "restricted location" in str(error.value)
-
