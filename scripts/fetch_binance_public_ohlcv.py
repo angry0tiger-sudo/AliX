@@ -14,7 +14,7 @@ import time
 from typing import Any, Callable, cast
 from urllib.parse import urlencode
 
-HOST = "api.binance.com"
+HOST = "data-api.binance.vision"
 ENDPOINT = "/api/v3/klines"
 SCHEMA_VERSION = "alix.binance.public-ohlcv.v1"
 ALLOWED_SYMBOLS = ("BTCUSDT", "ETHUSDT")
@@ -25,10 +25,24 @@ RETRY_STATUSES = frozenset({418, 429, 500, 502, 503, 504})
 GAP_POLICY = "reject; no interpolation, resampling, or synthetic fill"
 
 
+def _http_error_detail(body: bytes) -> str:
+    """Extract a short server diagnostic without hiding HTTP failure context."""
+    decoded = body.decode("utf-8", errors="replace").strip()
+    try:
+        payload = json.loads(decoded)
+    except json.JSONDecodeError:
+        return decoded[:200] or "empty_response"
+    if isinstance(payload, dict):
+        message = payload.get("msg")
+        if isinstance(message, str) and message.strip():
+            return message.strip()[:200]
+    return decoded[:200] or "empty_response"
+
+
 def request_public_json(
     params: dict[str, str], *, timeout_seconds: float = 15.0
 ) -> list[Any]:
-    """GET public klines with TLS and bounded transient-error retries."""
+    """GET from Binance's official unauthenticated market-data-only host."""
     last_failure = "unknown"
     for attempt in range(5):
         conn = HTTPSConnection(
@@ -52,8 +66,15 @@ def request_public_json(
                     raise ValueError("binance_klines_payload_not_list")
                 return payload
             if response.status not in RETRY_STATUSES:
-                raise ValueError(
-                    f"binance_public_api_http_status_invalid:{response.status}"
+                detail = _http_error_detail(body)
+                if response.status == 451:
+                    raise RuntimeError(
+                        "binance_public_api_restricted_location:"
+                        f"status=451:host={HOST}:detail={detail}"
+                    )
+                raise RuntimeError(
+                    f"binance_public_api_http_status_invalid:{response.status}:"
+                    f"host={HOST}:detail={detail}"
                 )
             retry_after = response.getheader("Retry-After")
             last_failure = f"http_{response.status}"
@@ -237,6 +258,7 @@ def write_artifacts(
     manifest: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "provider": "Binance Spot public klines API",
+        "host": HOST,
         "endpoint": ENDPOINT,
         "symbol": symbol,
         "pair": f"{symbol[:-4]}/USDT",

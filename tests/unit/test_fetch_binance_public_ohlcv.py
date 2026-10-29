@@ -100,3 +100,49 @@ def test_manifest_hash_safety_fields_and_gap_rejection(tmp_path: Path) -> None:
             commit_sha="abc123",
             symbol="ETHUSDT",
         )
+
+
+def test_request_uses_official_market_data_host_and_surfaces_http_451(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    hosts: list[str] = []
+
+    class FakeResponse:
+        status = 451
+
+        def read(self) -> bytes:
+            return b'{"code":-1002,"msg":"Service unavailable from a restricted location"}'
+
+        def getheader(self, name: str) -> str | None:
+            return None
+
+    class FakeConnection:
+        def __init__(self, host: str, **_kwargs: Any) -> None:
+            hosts.append(host)
+
+        def request(self, *_args: Any, **_kwargs: Any) -> None:
+            return None
+
+        def getresponse(self) -> FakeResponse:
+            return FakeResponse()
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(fetcher, "HTTPSConnection", FakeConnection)
+
+    with pytest.raises(RuntimeError, match="binance_public_api_restricted_location") as error:
+        fetcher.request_public_json(
+            {
+                "symbol": "BTCUSDT",
+                "interval": "1m",
+                "startTime": "1000",
+                "endTime": "61000",
+                "limit": "1000",
+            }
+        )
+
+    assert hosts == ["data-api.binance.vision"]
+    assert "status=451" in str(error.value)
+    assert "restricted location" in str(error.value)
+
