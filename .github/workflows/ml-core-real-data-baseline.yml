@@ -98,7 +98,7 @@ jobs:
           report = json.loads(report_path.read_text(encoding="utf-8"))
           assert report["commit_sha"] == os.environ["GITHUB_SHA"]
           assert report["diagnostic_scope"] == "CLASSIFICATION_ONLY"
-          assert report["schema_version"] == "alix.ml-core.real-data-classification-diagnostic.v2"
+          assert report["schema_version"] == "alix.ml-core.real-data-classification-diagnostic.v3"
           assert report["economic_evaluation_performed"] is False
           assert report["economic_metrics_reported"] is False
           assert report["requested_days"] == int(os.environ["ALIX_DIAGNOSTIC_DAYS"])
@@ -120,8 +120,16 @@ jobs:
           assert report["data_window_selection"]["fetch_page_size_candles"] == 1000
           assert report["data_window_selection"]["inter_page_delay_seconds"] == 0.25
           assert report["sample_gate_policy"]["minimum_train_samples_per_class"] == 20
-          assert report["sample_gate_policy"]["minimum_validation_samples_per_class"] == 5
+          assert report["sample_gate_policy"]["minimum_validation_samples_per_class"] == 30
           assert report["sample_gate_policy"]["required_classes"] == ["BUY", "SELL", "HOLD"]
+          assert report["label_audit_policy"]["exit_reason_values"] == [
+              "TP_HIT", "SL_HIT", "COLLISION", "HORIZON_EXPIRY"
+          ]
+          assert report["label_audit_policy"]["unlabeled_reason_values"] == [
+              "insufficient_atr_history", "incomplete_horizon"
+          ]
+          assert report["baseline_comparisons"]["always_sell"]["predicted_label"] == "SELL"
+          assert report["baseline_comparisons"]["lightgbm_unweighted"]["class_weight"] is None
           allowed_statuses = {
               "TRAINED",
               "SKIPPED_INSUFFICIENT_SAMPLES",
@@ -131,9 +139,20 @@ jobs:
           for item in report["experiments"]:
               assert isinstance(item["train_rows"], int) and item["train_rows"] >= 0
               assert isinstance(item["validation_rows"], int) and item["validation_rows"] >= 0
+              audit = item["label_audit"]
+              assert audit["scope"] == "ALL_TARGET_BARS_BEFORE_SPLIT"
+              assert audit["exit_reason_distribution"]["total"] == audit["labeled_events"]
+              assert sum(
+                  value["count"]
+                  for value in audit["exit_reason_distribution"]["reasons"].values()
+              ) == audit["labeled_events"]
+              assert set(audit["exit_reason_distribution"]["reasons"]) == {
+                  "TP_HIT", "SL_HIT", "COLLISION", "HORIZON_EXPIRY"
+              }
+              assert audit["unlabeled_reason_distribution"]["total"] == audit["unlabeled_events"]
               gate = item["sample_gate"]
               assert gate["minimum_train_samples_per_class"] == 20
-              assert gate["minimum_validation_samples_per_class"] == 5
+              assert gate["minimum_validation_samples_per_class"] == 30
               assert set(gate["train_class_counts"] or {}) in (set(), {"BUY", "SELL", "HOLD"})
               if item["status"] == "TRAINED":
                   assert gate["status"] == "PASS"
@@ -149,11 +168,35 @@ jobs:
                   assert predictions["total"] == item["validation_rows"]
                   assert set(predictions["classes"]) == {"BUY", "SELL", "HOLD"}
                   assert sum(value["count"] for value in predictions["classes"].values()) == item["validation_rows"]
+                  comparisons = item["baseline_comparisons"]
+                  assert set(comparisons) == {"always_sell", "lightgbm_unweighted"}
+                  always_sell = comparisons["always_sell"]
+                  assert always_sell["classification_metrics"] is not None
+                  assert always_sell["prediction_distribution"]["total"] == item["validation_rows"]
+                  assert always_sell["prediction_distribution"]["classes"]["SELL"]["count"] == item["validation_rows"]
+                  assert always_sell["prediction_distribution"]["classes"]["BUY"]["count"] == 0
+                  assert always_sell["prediction_distribution"]["classes"]["HOLD"]["count"] == 0
+                  unweighted = comparisons["lightgbm_unweighted"]
+                  assert unweighted["model_parameters"]["class_weight"] is None
+                  assert unweighted["classification_metrics"] is not None
+                  assert unweighted["prediction_distribution"]["total"] == item["validation_rows"]
               else:
                   assert item["classification_metrics"] is None
                   assert item["confusion_matrix"] is None
                   assert item["prediction_distribution"] is None
+                  assert item["baseline_comparisons"] is None
                   assert gate["status"] in {"NOT_EVALUATED", item["status"]}
+          four_hour = [item for item in report["experiments"] if item["timeframe"] == "4h"]
+          assert len(four_hour) == 2
+          assert all(item["status"] == "SKIPPED_INSUFFICIENT_SAMPLES" for item in four_hour)
+          assert all(
+              "HOLD" in item["sample_gate"]["insufficient_validation_classes"]
+              and item["sample_gate"]["validation_class_counts"]["HOLD"] < 30
+              for item in four_hour
+          )
+          assert report["trained_models"] == sum(
+              item["status"] == "TRAINED" for item in report["experiments"]
+          )
           safety = report["safety"]
           assert safety["public_api_only"] is True
           assert safety["credentials_used"] is False

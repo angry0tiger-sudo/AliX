@@ -9,6 +9,7 @@ from pandas import DataFrame
 
 from services.ml_core.adaptive_targets import (
     ATR_PERIOD,
+    EXIT_REASONS,
     LABEL_HORIZON_CANDLES,
     K_LOWER_DEFAULT,
     K_UPPER_DEFAULT,
@@ -59,7 +60,7 @@ def test_default_target_contract_is_tp_two_atr_sl_one_atr_horizon_24() -> None:
     assert row["take_profit_price"] == pytest.approx(102.0)
     assert row["stop_loss_price"] == pytest.approx(99.0)
     assert row["label"] == "HOLD"
-    assert row["exit_reason"] == "horizon_expiry"
+    assert row["exit_reason"] == "HORIZON_EXPIRY"
     assert row["label_end_idx"] == 34
 
 
@@ -88,7 +89,7 @@ def test_same_candle_collision_resolves_to_sell_stop_loss() -> None:
     assert row["take_profit_price"] == pytest.approx(102.0)
     assert row["stop_loss_price"] == pytest.approx(99.0)
     assert row["label"] == "SELL"
-    assert row["exit_reason"] == "stop_loss_collision"
+    assert row["exit_reason"] == "COLLISION"
     assert row["label_end_idx"] == 15
 
 
@@ -104,9 +105,9 @@ def test_first_take_profit_hit_is_buy_and_stop_loss_hit_is_sell() -> None:
     )
 
     assert labels.iloc[0]["label"] == "BUY"
-    assert labels.iloc[0]["exit_reason"] == "take_profit"
+    assert labels.iloc[0]["exit_reason"] == "TP_HIT"
     assert labels.iloc[2]["label"] == "SELL"
-    assert labels.iloc[2]["exit_reason"] == "stop_loss"
+    assert labels.iloc[2]["exit_reason"] == "SL_HIT"
 
 
 def test_horizon_expiry_is_hold_and_tail_without_full_horizon_is_unlabeled() -> None:
@@ -119,7 +120,9 @@ def test_horizon_expiry_is_hold_and_tail_without_full_horizon_is_unlabeled() -> 
     assert labels.iloc[14]["exit_reason"] == "horizon_expiry"
     assert labels.iloc[14]["label_end_idx"] == 38
     assert labels.iloc[-1]["label"] is None
-    assert labels.iloc[-1]["exit_reason"] == "incomplete_horizon"
+    assert labels.iloc[-1]["exit_reason"] is None
+    assert labels.iloc[-1]["unlabeled_reason"] == "incomplete_horizon"
+    assert set(labels["exit_reason"].dropna().unique()) <= set(EXIT_REASONS)
 
 
 def test_label_distribution_fixture_contains_buy_sell_and_hold() -> None:
@@ -164,7 +167,8 @@ def test_computed_atr_warmup_is_unlabeled_and_flat_market_rejects_zero_atr() -> 
     labels = apply_adaptive_triple_barrier(candles)
 
     assert labels.iloc[0]["label"] is None
-    assert labels.iloc[0]["exit_reason"] == "insufficient_atr_history"
+    assert labels.iloc[0]["exit_reason"] is None
+    assert labels.iloc[0]["unlabeled_reason"] == "insufficient_atr_history"
 
     flat = candles.copy()
     flat["high"] = flat["close"]

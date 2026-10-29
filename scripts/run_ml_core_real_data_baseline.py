@@ -15,7 +15,11 @@ import pandas as pd
 from pandas import DataFrame, Series
 from sklearn import metrics  # type: ignore[import-untyped]
 
-from services.ml_core.adaptive_targets import apply_adaptive_triple_barrier
+from services.ml_core.adaptive_targets import (
+    EXIT_REASONS,
+    UNLABELED_REASONS,
+    apply_adaptive_triple_barrier,
+)
 from services.ml_core.causal_features import build_causal_feature_matrix
 from services.ml_core.purged_embargo import create_purged_embargo_split
 
@@ -28,8 +32,8 @@ VALIDATION_START_FRACTION = 0.70
 VALIDATION_END_FRACTION = 0.85
 OVERFIT_F1_GAP_THRESHOLD = 0.15
 MIN_TRAIN_SAMPLES_PER_CLASS = 20
-MIN_VALIDATION_SAMPLES_PER_CLASS = 5
-REPORT_SCHEMA = "alix.ml-core.real-data-classification-diagnostic.v2"
+MIN_VALIDATION_SAMPLES_PER_CLASS = 30
+REPORT_SCHEMA = "alix.ml-core.real-data-classification-diagnostic.v3"
 
 
 def _validated_minute_timestamps(values: Series) -> Series:
@@ -127,6 +131,66 @@ def label_distribution(values: Series) -> dict[str, Any]:
     return {"total": total, "classes": classes}
 
 
+def exit_reason_distribution(values: Series) -> dict[str, Any]:
+    """Count only the explicitly allowed reasons for labeled target events."""
+    observed = values.dropna()
+    unknown = sorted(set(observed.astype(str).tolist()) - set(EXIT_REASONS))
+    if unknown:
+        raise ValueError("exit_reason_out_of_policy")
+    total = int(len(observed))
+    counts = observed.value_counts()
+    reasons = {
+        reason: {
+            "count": int(counts.get(reason, 0)),
+            "percent": round(100.0 * int(counts.get(reason, 0)) / total, 4)
+            if total
+            else 0.0,
+        }
+        for reason in EXIT_REASONS
+    }
+    return {"total": total, "reasons": reasons}
+
+
+def unlabeled_reason_distribution(values: Series) -> dict[str, Any]:
+    """Keep incomplete target-window diagnostics separate from exit reasons."""
+    observed = values.dropna()
+    unknown = sorted(set(observed.astype(str).tolist()) - set(UNLABELED_REASONS))
+    if unknown:
+        raise ValueError("unlabeled_reason_out_of_policy")
+    total = int(len(observed))
+    counts = observed.value_counts()
+    reasons = {
+        reason: {
+            "count": int(counts.get(reason, 0)),
+            "percent": round(100.0 * int(counts.get(reason, 0)) / total, 4)
+            if total
+            else 0.0,
+        }
+        for reason in UNLABELED_REASONS
+    }
+    return {"total": total, "reasons": reasons}
+
+
+def label_audit_diagnostics(labels: DataFrame) -> dict[str, Any]:
+    """Summarize target outcomes before splitting into train and validation."""
+    exit_distribution = exit_reason_distribution(labels["exit_reason"])
+    unlabeled_distribution = unlabeled_reason_distribution(labels["unlabeled_reason"])
+    labeled_events = int(labels["label"].isin(LABELS).sum())
+    unlabeled_events = int(labels["label"].isna().sum())
+    if (
+        exit_distribution["total"] != labeled_events
+        or unlabeled_distribution["total"] != unlabeled_events
+    ):
+        raise ValueError("label_audit_count_mismatch")
+    return {
+        "scope": "ALL_TARGET_BARS_BEFORE_SPLIT",
+        "labeled_events": labeled_events,
+        "unlabeled_events": unlabeled_events,
+        "exit_reason_distribution": exit_distribution,
+        "unlabeled_reason_distribution": unlabeled_distribution,
+    }
+
+
 def classification_metrics(actual: Series, predicted: Series) -> dict[str, Any]:
     """Calculate class-wise and macro classification metrics only."""
     report = cast(
@@ -219,6 +283,16 @@ def validation_classification_diagnostics(
             "matrix": [[int(value) for value in row] for row in matrix.tolist()],
         },
         "prediction_distribution": label_distribution(predicted),
+    }
+
+
+def baseline_validation_diagnostics(
+    actual: Series, predicted: Series
+) -> dict[str, Any]:
+    """Return comparable classification-only metrics for a simple baseline."""
+    return {
+        "classification_metrics": classification_metrics(actual, predicted),
+        **validation_classification_diagnostics(actual, predicted),
     }
 
 
@@ -326,8 +400,8 @@ def purged_temporal_indices(
     return train_indices, validation_indices, diagnostics
 
 
-def _new_classifier() -> Any:
-    """Load the pinned tree classifier only inside the remote diagnostic workflow."""
+def _new_classifier(class_weight: str | None = "balanced") -> Any:
+    """Load the pinned deterministic tree classifier for one weighting policy."""
     lightgbm = importlib.import_module("lightgbm")
     classifier = getattr(lightgbm, "LGBMClassifier")
     return classifier(
@@ -336,7 +410,7 @@ def _new_classifier() -> Any:
         learning_rate=0.05,
         num_leaves=15,
         max_depth=4,
-        class_weight="balanced",
+        class_weight=class_weight,
         random_state=42,
         n_jobs=1,
         verbosity=-1,
@@ -372,6 +446,8 @@ def _skipped_result(
         "classification_metrics": None,
         "confusion_matrix": None,
         "prediction_distribution": None,
+        "baseline_comparisons": None,
+        "label_audit": label_audit_diagnostics(labels),
         "sample_gate": sample_gate,
         "overfitting_assessment": {
             "status": "NOT_ASSESSED",
@@ -401,6 +477,8 @@ def _insufficient_bar_result(
         "classification_metrics": None,
         "confusion_matrix": None,
         "prediction_distribution": None,
+        "baseline_comparisons": None,
+        "label_audit": label_audit_diagnostics(labels),
         "sample_gate": {
             "status": "NOT_EVALUATED",
             "reason": "INSUFFICIENT_BARS",
@@ -446,6 +524,7 @@ def run_experiment(
             "train": label_distribution(train_y),
             "validation": label_distribution(validation_y),
         },
+        "label_audit": label_audit_diagnostics(labels),
         "sample_gate": sample_gate,
         "split": split_info,
     }
@@ -472,6 +551,27 @@ def run_experiment(
     )
     train_metrics = classification_metrics(train_y, train_prediction)
     validation_metrics = classification_metrics(validation_y, validation_prediction)
+
+    always_sell_prediction = Series(
+        "SELL", index=validation_y.index, dtype=object
+    )
+    unweighted_model = _new_classifier(class_weight=None)
+    unweighted_model.fit(x_train, train_y)
+    unweighted_prediction = Series(
+        unweighted_model.predict(x_validation), index=validation_y.index
+    )
+    baseline_comparisons = {
+        "always_sell": {
+            "baseline_type": "constant_prediction",
+            "predicted_label": "SELL",
+            **baseline_validation_diagnostics(validation_y, always_sell_prediction),
+        },
+        "lightgbm_unweighted": {
+            "baseline_type": "lightgbm",
+            "model_parameters": {"class_weight": None},
+            **baseline_validation_diagnostics(validation_y, unweighted_prediction),
+        },
+    }
     f1_gap = round(train_metrics["macro"]["f1"] - validation_metrics["macro"]["f1"], 6)
     overfitting_status = (
         "POSSIBLE_OVERFITTING"
@@ -486,6 +586,7 @@ def run_experiment(
             "train_in_sample": train_metrics,
             "validation": validation_metrics,
         },
+        "baseline_comparisons": baseline_comparisons,
         "overfitting_assessment": {
             "status": overfitting_status,
             "macro_f1_gap_train_minus_validation": f1_gap,
@@ -768,6 +869,14 @@ def run_diagnostic(
             "minimum_validation_samples_per_class": MIN_VALIDATION_SAMPLES_PER_CLASS,
             "required_classes": list(LABELS),
         },
+        "label_audit_policy": {
+            "exit_reason_values": list(EXIT_REASONS),
+            "unlabeled_reason_values": list(UNLABELED_REASONS),
+            "distribution_scope": (
+                "All target bars before train/validation splitting; only labeled "
+                "BUY/SELL/HOLD events contribute to exit-reason counts."
+            ),
+        },
         "provider": "Binance Spot public klines API",
         "input_datasets": provenance,
         "allowed_timeframes": list(TIMEFRAME_MINUTES),
@@ -775,10 +884,28 @@ def run_diagnostic(
         "model": {
             "family": "LightGBM LGBMClassifier",
             "n_estimators": 80,
+            "learning_rate": 0.05,
             "max_depth": 4,
             "num_leaves": 15,
             "random_state": 42,
             "class_weight": "balanced",
+        },
+        "baseline_comparisons": {
+            "always_sell": {
+                "type": "constant_prediction",
+                "predicted_label": "SELL",
+                "metrics_scope": "VALIDATION_ONLY",
+            },
+            "lightgbm_unweighted": {
+                "family": "LightGBM LGBMClassifier",
+                "n_estimators": 80,
+                "learning_rate": 0.05,
+                "max_depth": 4,
+                "num_leaves": 15,
+                "random_state": 42,
+                "class_weight": None,
+                "metrics_scope": "VALIDATION_ONLY",
+            },
         },
         "split_policy": {
             "validation_start_fraction": VALIDATION_START_FRACTION,

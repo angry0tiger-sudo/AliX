@@ -10,6 +10,9 @@ from scripts.run_ml_core_real_data_baseline import (
     label_distribution,
     purged_temporal_indices,
     resample_ohlcv,
+    baseline_validation_diagnostics,
+    exit_reason_distribution,
+    label_audit_diagnostics,
     run_experiment,
     sample_gate_diagnostics,
     validation_classification_diagnostics,
@@ -79,7 +82,7 @@ def test_classification_metrics_include_each_class_and_macro_scores() -> None:
 
 def test_sample_gate_requires_minimum_support_for_every_class() -> None:
     train = Series(["BUY"] * 20 + ["SELL"] * 20 + ["HOLD"] * 20)
-    validation = Series(["BUY"] * 5 + ["SELL"] * 5 + ["HOLD"] * 5)
+    validation = Series(["BUY"] * 30 + ["SELL"] * 30 + ["HOLD"] * 30)
 
     assert sample_gate_diagnostics(train, validation)["status"] == "PASS"
 
@@ -88,7 +91,7 @@ def test_sample_gate_requires_minimum_support_for_every_class() -> None:
     assert train_result["status"] == "SKIPPED_INSUFFICIENT_SAMPLES"
     assert train_result["insufficient_train_classes"] == ["BUY"]
 
-    low_validation = Series(["BUY"] * 5 + ["SELL"] * 5 + ["HOLD"] * 4)
+    low_validation = Series(["BUY"] * 30 + ["SELL"] * 30 + ["HOLD"] * 29)
     validation_result = sample_gate_diagnostics(train, low_validation)
     assert validation_result["status"] == "SKIPPED_INSUFFICIENT_SAMPLES"
     assert validation_result["insufficient_validation_classes"] == ["HOLD"]
@@ -116,6 +119,56 @@ def test_validation_diagnostics_report_fixed_confusion_matrix_and_predictions() 
         "count": 2,
         "percent": 50.0,
     }
+
+
+
+def test_exit_reason_distribution_is_fixed_and_rejects_unknown_reasons() -> None:
+    distribution = exit_reason_distribution(
+        Series(["TP_HIT", "SL_HIT", "COLLISION", "HORIZON_EXPIRY", None])
+    )
+
+    assert distribution["total"] == 4
+    assert distribution["reasons"]["TP_HIT"] == {"count": 1, "percent": 25.0}
+    assert distribution["reasons"]["SL_HIT"]["count"] == 1
+    assert distribution["reasons"]["COLLISION"]["count"] == 1
+    assert distribution["reasons"]["HORIZON_EXPIRY"]["count"] == 1
+    with pytest.raises(ValueError, match="exit_reason_out_of_policy"):
+        exit_reason_distribution(Series(["take_profit"]))
+
+
+def test_label_audit_separates_exit_and_unlabeled_reasons() -> None:
+    labels = DataFrame(
+        {
+            "label": ["BUY", "SELL", "HOLD", None],
+            "exit_reason": ["TP_HIT", "SL_HIT", "HORIZON_EXPIRY", None],
+            "unlabeled_reason": [None, None, None, "incomplete_horizon"],
+        }
+    )
+
+    audit = label_audit_diagnostics(labels)
+
+    assert audit["scope"] == "ALL_TARGET_BARS_BEFORE_SPLIT"
+    assert audit["labeled_events"] == 3
+    assert audit["unlabeled_events"] == 1
+    assert audit["exit_reason_distribution"]["total"] == 3
+    assert audit["unlabeled_reason_distribution"]["reasons"]["incomplete_horizon"][
+        "count"
+    ] == 1
+
+
+def test_baseline_validation_diagnostics_use_fixed_class_order() -> None:
+    actual = Series(["BUY", "SELL", "HOLD", "SELL"])
+    predicted = Series(["SELL"] * len(actual))
+
+    baseline = baseline_validation_diagnostics(actual, predicted)
+
+    assert baseline["classification_metrics"]["per_class"]["SELL"]["support"] == 2
+    assert baseline["prediction_distribution"]["classes"]["SELL"]["count"] == 4
+    assert baseline["confusion_matrix"]["matrix"] == [
+        [0, 1, 0],
+        [0, 2, 0],
+        [0, 1, 0],
+    ]
 
 
 def test_temporal_split_keeps_training_before_validation_and_purges() -> None:

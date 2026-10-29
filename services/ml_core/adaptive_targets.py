@@ -20,6 +20,16 @@ ATR_PERIOD: Final[int] = 14
 K_UPPER_DEFAULT: Final[float] = 2.0
 K_LOWER_DEFAULT: Final[float] = 1.0
 LABEL_HORIZON_CANDLES: Final[int] = 24
+EXIT_REASONS: Final[tuple[str, ...]] = (
+    "TP_HIT",
+    "SL_HIT",
+    "COLLISION",
+    "HORIZON_EXPIRY",
+)
+UNLABELED_REASONS: Final[tuple[str, ...]] = (
+    "insufficient_atr_history",
+    "incomplete_horizon",
+)
 
 _OHLCV_COLUMNS: Final[tuple[str, ...]] = (
     "date",
@@ -39,6 +49,7 @@ _RESULT_COLUMNS: Final[tuple[str, ...]] = (
     "stop_loss_price",
     "label",
     "exit_reason",
+    "unlabeled_reason",
     "label_end_idx",
 )
 TargetRecord = dict[str, int | float | str | None | pd.Timestamp]
@@ -171,8 +182,9 @@ def _record(
     take_profit_price: float | None,
     stop_loss_price: float | None,
     label: str | None,
-    exit_reason: str,
+    exit_reason: str | None,
     label_end_idx: int | None,
+    unlabeled_reason: str | None = None,
 ) -> TargetRecord:
     return {
         "event_index": event_index,
@@ -183,6 +195,7 @@ def _record(
         "stop_loss_price": stop_loss_price,
         "label": label,
         "exit_reason": exit_reason,
+        "unlabeled_reason": unlabeled_reason,
         "label_end_idx": label_end_idx,
     }
 
@@ -191,7 +204,16 @@ def _unlabeled_record(
     event_index: int, event_time: pd.Timestamp, entry_price: float, reason: str
 ) -> TargetRecord:
     return _record(
-        event_index, event_time, entry_price, None, None, None, None, reason, None
+        event_index,
+        event_time,
+        entry_price,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        reason,
     )
 
 
@@ -238,8 +260,9 @@ def _resolve_event_horizon(
             take_profit_price,
             stop_loss_price,
             None,
-            "incomplete_horizon",
             None,
+            None,
+            "incomplete_horizon",
         )
 
     label, exit_reason, label_end_idx = _first_barrier_outcome(
@@ -270,11 +293,11 @@ def _first_barrier_outcome(
         take_hit = float(candle["high"]) >= take_profit_price
         stop_hit = float(candle["low"]) <= stop_loss_price
         if stop_hit:
-            reason = "stop_loss_collision" if take_hit else "stop_loss"
+            reason = "COLLISION" if take_hit else "SL_HIT"
             return "SELL", reason, candle_index
         if take_hit:
-            return "BUY", "take_profit", candle_index
-    return "HOLD", "horizon_expiry", last_horizon_index
+            return "BUY", "TP_HIT", candle_index
+    return "HOLD", "HORIZON_EXPIRY", last_horizon_index
 
 
 def _label_one_event(
