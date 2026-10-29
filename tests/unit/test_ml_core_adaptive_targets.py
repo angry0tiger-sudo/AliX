@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import numpy as np
 from inspect import signature
+
+import numpy as np
 import pandas as pd
 import pytest
 from pandas import DataFrame
