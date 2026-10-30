@@ -230,7 +230,7 @@ def test_validate_minute_candles_rejects_nonfinite_geometry_and_count() -> None:
     with pytest.raises(ValueError, match="ohlcv_value_not_finite"):
         validate_minute_candles(invalid, len(invalid))
     invalid = data.copy()
-    invalid.loc[10, "low"] = invalid.loc[10, "high"] + 1.0
+    invalid.at[10, "low"] = float(invalid.at[10, "high"]) + 1.0
     with pytest.raises(ValueError, match="ohlcv_geometry_invalid"):
         validate_minute_candles(invalid, len(invalid))
     with pytest.raises(ValueError, match="minute_candle_count_mismatch"):

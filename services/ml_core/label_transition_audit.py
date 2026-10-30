@@ -55,7 +55,16 @@ def _mapping(value: Any, error: str) -> dict[str, Any]:
 def _integer(value: Any, error: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         raise ValueError(error)
-    return value
+    return cast(int, value)
+
+
+def _number(value: Any, error: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(error)
+    result = float(value)
+    if not np.isfinite(result):
+        raise ValueError(error)
+    return result
 
 
 def validate_v4c_report(
@@ -91,8 +100,8 @@ def validate_v4c_report(
             raise ValueError("v4c_scenario_out_of_policy")
         observed_scenarios[name] = (
             _integer(scenario.get("horizon_candles"), "v4c_horizon_invalid"),
-            float(scenario.get("take_profit_multiplier")),
-            float(scenario.get("stop_loss_multiplier")),
+            _number(scenario.get("take_profit_multiplier"), "v4c_take_profit_multiplier_invalid"),
+            _number(scenario.get("stop_loss_multiplier"), "v4c_stop_loss_multiplier_invalid"),
         )
     if observed_scenarios != SCENARIOS:
         raise ValueError("v4c_scenario_geometry_mismatch")
@@ -130,8 +139,8 @@ def validate_v4c_report(
         barrier = _mapping(item.get("triple_barrier"), "v4c_barrier_metadata_missing")
         actual = (
             _integer(barrier.get("horizon_candles"), "v4c_horizon_invalid"),
-            float(barrier.get("take_profit_multiplier")),
-            float(barrier.get("stop_loss_multiplier")),
+            _number(barrier.get("take_profit_multiplier"), "v4c_take_profit_multiplier_invalid"),
+            _number(barrier.get("stop_loss_multiplier"), "v4c_stop_loss_multiplier_invalid"),
         )
         if actual != expected:
             raise ValueError("v4c_experiment_barrier_mismatch")
@@ -351,7 +360,10 @@ def _validate_serialized_validation(
                 raise ValueError("v4c_validation_row_index_mismatch")
             if row.get("actual_label") != labels.iloc[row_index]["label"]:
                 raise ValueError("v4c_validation_actual_label_mismatch")
-            timestamp = pd.Timestamp(row.get("timestamp"))
+            raw_timestamp = row.get("timestamp")
+            if not isinstance(raw_timestamp, str):
+                raise ValueError("v4c_validation_timestamp_invalid")
+            timestamp = pd.Timestamp(raw_timestamp)
             if timestamp != pd.Timestamp(bars["date"].iloc[row_index]):
                 raise ValueError("v4c_validation_timestamp_mismatch")
 
