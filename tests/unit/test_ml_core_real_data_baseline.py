@@ -404,7 +404,9 @@ def test_threshold_diagnostics_skip_small_calibration_support() -> None:
     actual = Series(["HOLD", "BUY", "SELL", "HOLD", "BUY"] * 20)
     probabilities = np.tile(np.asarray([[0.2, 0.2, 0.6]]), (len(actual), 1))
 
-    result = threshold_optimization_diagnostics(actual, probabilities, 0.20)
+    result = threshold_optimization_diagnostics(
+        actual, probabilities, calibration_fraction=0.20
+    )
 
     assert result["status"] == "SKIPPED_INSUFFICIENT_CALIBRATION_SAMPLES"
     assert result["selected_threshold"] is None
