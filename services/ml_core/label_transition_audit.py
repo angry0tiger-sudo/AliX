@@ -176,9 +176,7 @@ def _legacy_experiment_key(item: dict[str, Any]) -> tuple[str, str, str]:
 def _validate_legacy_experiment(item: dict[str, Any]) -> None:
     status = item.get("status")
     if status == "TRAINED":
-        variants = _mapping(
-            item.get("model_variants"), "legacy_trained_models_missing"
-        )
+        variants = _mapping(item.get("model_variants"), "legacy_trained_models_missing")
         expected_policies = {
             "weight_none",
             "weight_balanced",

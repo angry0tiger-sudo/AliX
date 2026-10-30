@@ -240,7 +240,10 @@ def fetch_historical_candles(
         if end_ms < start_ms:
             raise ValueError("historical_window_end_before_start")
         interval_ms = end_ms - start_ms
-        if interval_ms % INTERVAL_MS or interval_ms // INTERVAL_MS + 1 != expected_count:
+        if (
+            interval_ms % INTERVAL_MS
+            or interval_ms // INTERVAL_MS + 1 != expected_count
+        ):
             raise ValueError("historical_window_does_not_match_requested_days")
     else:
         now_ms = int(now.astimezone(timezone.utc).timestamp() * 1000)
@@ -349,8 +352,16 @@ def main() -> int:
     if (args.start_utc is None) != (args.end_utc is None):
         parser.error("--start-utc and --end-utc must be supplied together")
     now = datetime.now(timezone.utc)
-    start_utc = _parse_utc_datetime(args.start_utc, "historical_start_utc") if args.start_utc else None
-    end_utc = _parse_utc_datetime(args.end_utc, "historical_end_utc") if args.end_utc else None
+    start_utc = (
+        _parse_utc_datetime(args.start_utc, "historical_start_utc")
+        if args.start_utc
+        else None
+    )
+    end_utc = (
+        _parse_utc_datetime(args.end_utc, "historical_end_utc")
+        if args.end_utc
+        else None
+    )
     rows = fetch_historical_candles(
         days=args.days,
         now=now,

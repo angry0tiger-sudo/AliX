@@ -158,6 +158,7 @@ def test_request_uses_official_market_data_host_and_surfaces_http_451(
     assert "status=451" in str(error.value)
     assert "restricted location" in str(error.value)
 
+
 def test_fetch_historical_candles_uses_exact_inclusive_utc_window() -> None:
     start = datetime(2024, 10, 30, 12, 5, tzinfo=timezone.utc)
     end = start + timedelta(days=1) - timedelta(minutes=1)
@@ -196,7 +197,9 @@ def test_fetch_historical_candles_rejects_partial_or_misaligned_exact_windows() 
             days=1, now=now, start_utc=start, request_json=lambda _params: []
         )
 
-    with pytest.raises(ValueError, match="historical_window_does_not_match_requested_days"):
+    with pytest.raises(
+        ValueError, match="historical_window_does_not_match_requested_days"
+    ):
         fetcher.fetch_historical_candles(
             days=7,
             now=now,

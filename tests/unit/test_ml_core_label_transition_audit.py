@@ -176,13 +176,14 @@ def _mini_report(frames: dict[str, DataFrame]) -> dict[str, Any]:
     }
 
 
-
-
-
 def _mini_legacy_report(frames: dict[str, DataFrame]) -> dict[str, Any]:
     current = _mini_report(frames)
     baseline_experiments = [
-        {key: value for key, value in item.items() if key not in {"scenario", "triple_barrier"}}
+        {
+            key: value
+            for key, value in item.items()
+            if key not in {"scenario", "triple_barrier"}
+        }
         for item in current["experiments"]
         if item["scenario"] == "Baseline"
     ]
@@ -455,6 +456,7 @@ def test_build_transition_audit_checks_serialized_validation_labels() -> None:
     ] = "SELL"
     with pytest.raises(ValueError, match="v4c_validation_actual_label_mismatch"):
         build_transition_audit(report, frames)
+
 
 def test_legacy_v4_report_rebuilds_both_horizons_without_training() -> None:
     frames = {symbol: minute_frame(days=20) for symbol in SYMBOLS}
