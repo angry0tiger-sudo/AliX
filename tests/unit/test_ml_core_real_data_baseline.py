@@ -523,6 +523,66 @@ def test_probability_quality_metrics_compute_brier_ece_auc_and_average_precision
     assert result["hold_pr_auc"] == 1.0
 
 
+@pytest.mark.parametrize(
+    "calibration_bins",
+    [True, 0, 1, 1.5],
+)
+def test_probability_quality_metrics_reject_invalid_calibration_bins(
+    calibration_bins: Any,
+) -> None:
+    actual = Series(["HOLD", "BUY"])
+    probabilities = np.asarray([[0.1, 0.1, 0.8], [0.8, 0.1, 0.1]])
+
+    with pytest.raises(
+        ValueError, match="calibration_bins_must_be_integer_at_least_two"
+    ):
+        probability_quality_metrics(
+            actual, probabilities, calibration_bins=calibration_bins
+        )
+
+
+def test_probability_quality_metrics_reject_invalid_probability_shape() -> None:
+    with pytest.raises(ValueError, match="classifier_probability_shape_invalid"):
+        probability_quality_metrics(
+            Series(["HOLD", "BUY"]), np.asarray([[0.1, 0.1, 0.8]])
+        )
+
+
+def test_probability_quality_metrics_reject_unknown_actual_label() -> None:
+    with pytest.raises(ValueError, match="probability_metrics_labels_invalid"):
+        probability_quality_metrics(
+            Series(["HOLD", "UNKNOWN"]), np.asarray([[0.1, 0.1, 0.8], [0.8, 0.1, 0.1]])
+        )
+
+
+def test_barrier_scenario_validation_rejects_empty_and_duplicate_names() -> None:
+    with pytest.raises(ValueError, match="barrier_scenarios_empty"):
+        _validate_barrier_scenarios([])
+
+    scenario = {
+        "name": "Baseline",
+        "horizon_candles": 24,
+        "take_profit_multiplier": 2.0,
+        "stop_loss_multiplier": 1.0,
+    }
+    with pytest.raises(
+        ValueError, match="barrier_scenario_name_missing_or_duplicate"
+    ):
+        _validate_barrier_scenarios([scenario, scenario.copy()])
+
+
+@pytest.mark.parametrize("horizon", [True, 0, -1, 1.5])
+def test_barrier_scenario_validation_rejects_invalid_horizon(horizon: Any) -> None:
+    scenario = {
+        "name": "Baseline",
+        "horizon_candles": horizon,
+        "take_profit_multiplier": 2.0,
+        "stop_loss_multiplier": 1.0,
+    }
+    with pytest.raises(ValueError, match="horizon_candles_must_be_positive_integer"):
+        _validate_barrier_scenarios([scenario])
+
+
 def test_probability_quality_metrics_return_null_auc_without_both_hold_classes() -> (
     None
 ):

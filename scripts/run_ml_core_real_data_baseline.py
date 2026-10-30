@@ -430,13 +430,10 @@ def _expected_calibration_error(
     return weighted_error
 
 
-def probability_quality_metrics(
-    actual: Series,
-    probabilities: np.ndarray,
-    *,
-    calibration_bins: int = 10,
-) -> dict[str, Any]:
-    """Report multiclass/HOLD Brier, ECE, HOLD ROC-AUC and PR-AUC."""
+def _validated_probability_metric_matrix(
+    actual: Series, probabilities: np.ndarray, calibration_bins: int
+) -> np.ndarray:
+    """Validate probability-metric inputs and return the ordered class matrix."""
     if (
         isinstance(calibration_bins, bool)
         or not isinstance(calibration_bins, int)
@@ -449,33 +446,64 @@ def probability_quality_metrics(
     _validate_probability_values(matrix)
     if not bool(actual.isin(LABELS).all()):
         raise ValueError("probability_metrics_labels_invalid")
+    return matrix
 
+
+def _probability_metric_targets(
+    actual: Series,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return one-hot multiclass targets and the binary HOLD target."""
     actual_values = actual.to_numpy(dtype=object)
     one_hot = np.column_stack([actual_values == label for label in LABELS]).astype(
         float
     )
-    multiclass_brier = float(np.mean(np.sum((matrix - one_hot) ** 2, axis=1)))
     hold_targets = (actual_values == "HOLD").astype(float)
-    hold_probabilities = matrix[:, LABELS.index("HOLD")]
-    hold_brier = float(np.mean((hold_probabilities - hold_targets) ** 2))
+    return one_hot, hold_targets
 
-    per_class_ece: dict[str, float | None] = {}
-    for class_index, label in enumerate(LABELS):
-        per_class_ece[label] = _expected_calibration_error(
+
+def _per_class_calibration_errors(
+    one_hot: np.ndarray, matrix: np.ndarray, calibration_bins: int
+) -> dict[str, float | None]:
+    """Compute ECE independently for every class in the fixed label order."""
+    return {
+        label: _expected_calibration_error(
             one_hot[:, class_index], matrix[:, class_index], calibration_bins
         )
+        for class_index, label in enumerate(LABELS)
+    }
+
+
+def _hold_probability_ranking_metrics(
+    hold_targets: np.ndarray, hold_probabilities: np.ndarray
+) -> tuple[float | None, float | None]:
+    """Return HOLD ROC-AUC and average precision only when both outcomes exist."""
+    if int(np.unique(hold_targets).size) != 2:
+        return None, None
+    return (
+        float(metrics.roc_auc_score(hold_targets, hold_probabilities)),
+        float(metrics.average_precision_score(hold_targets, hold_probabilities)),
+    )
+
+
+def probability_quality_metrics(
+    actual: Series,
+    probabilities: np.ndarray,
+    *,
+    calibration_bins: int = 10,
+) -> dict[str, Any]:
+    """Report multiclass/HOLD Brier, ECE, HOLD ROC-AUC and PR-AUC."""
+    matrix = _validated_probability_metric_matrix(
+        actual, probabilities, calibration_bins
+    )
+    one_hot, hold_targets = _probability_metric_targets(actual)
+    hold_probabilities = matrix[:, LABELS.index("HOLD")]
+    multiclass_brier = float(np.mean(np.sum((matrix - one_hot) ** 2, axis=1)))
+    hold_brier = float(np.mean((hold_probabilities - hold_targets) ** 2))
+    per_class_ece = _per_class_calibration_errors(one_hot, matrix, calibration_bins)
     valid_class_ece = [value for value in per_class_ece.values() if value is not None]
     multiclass_ece = float(np.mean(valid_class_ece)) if valid_class_ece else None
-    has_both_hold_outcomes = int(np.unique(hold_targets).size) == 2
-    hold_auc = (
-        float(metrics.roc_auc_score(hold_targets, hold_probabilities))
-        if has_both_hold_outcomes
-        else None
-    )
-    hold_pr_auc = (
-        float(metrics.average_precision_score(hold_targets, hold_probabilities))
-        if has_both_hold_outcomes
-        else None
+    hold_auc, hold_pr_auc = _hold_probability_ranking_metrics(
+        hold_targets, hold_probabilities
     )
     return {
         "sample_count": int(len(actual)),
@@ -508,8 +536,6 @@ def probability_quality_metrics(
         "hold_auc": round(hold_auc, 8) if hold_auc is not None else None,
         "hold_pr_auc": round(hold_pr_auc, 8) if hold_pr_auc is not None else None,
     }
-
-
 def probability_diagnostics_by_temporal_segment(
     actual: Series,
     probabilities: np.ndarray,
@@ -1607,45 +1633,49 @@ def parse_barrier_scenario(value: str) -> dict[str, Any]:
         raise argparse.ArgumentTypeError(str(error)) from error
 
 
+def _validated_barrier_multiplier(value: Any, field_name: str) -> float:
+    """Validate and normalize one finite positive barrier multiplier."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{field_name}_must_be_finite_and_positive")
+    normalized = float(value)
+    if not np.isfinite(normalized) or normalized <= 0:
+        raise ValueError(f"{field_name}_must_be_finite_and_positive")
+    return normalized
+
+
+def _validated_barrier_scenario(
+    scenario: dict[str, Any], names: set[str]
+) -> dict[str, Any]:
+    """Validate one barrier scenario and register its unique name."""
+    name = scenario.get("name")
+    horizon = scenario.get("horizon_candles")
+    if not isinstance(name, str) or not name.strip() or name in names:
+        raise ValueError("barrier_scenario_name_missing_or_duplicate")
+    if isinstance(horizon, bool) or not isinstance(horizon, int) or horizon < 1:
+        raise ValueError("horizon_candles_must_be_positive_integer")
+    take_profit_value = _validated_barrier_multiplier(
+        scenario.get("take_profit_multiplier"), "take_profit_multiplier"
+    )
+    stop_loss_value = _validated_barrier_multiplier(
+        scenario.get("stop_loss_multiplier"), "stop_loss_multiplier"
+    )
+    names.add(name)
+    return {
+        "name": name,
+        "horizon_candles": horizon,
+        "take_profit_multiplier": take_profit_value,
+        "stop_loss_multiplier": stop_loss_value,
+    }
+
+
 def _validate_barrier_scenarios(
     scenarios: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     """Validate scenario names and positive numeric barrier settings."""
     if not scenarios:
         raise ValueError("barrier_scenarios_empty")
-    validated: list[dict[str, Any]] = []
     names: set[str] = set()
-    for scenario in scenarios:
-        name = scenario.get("name")
-        horizon = scenario.get("horizon_candles")
-        take_profit = scenario.get("take_profit_multiplier")
-        stop_loss = scenario.get("stop_loss_multiplier")
-        if not isinstance(name, str) or not name.strip() or name in names:
-            raise ValueError("barrier_scenario_name_missing_or_duplicate")
-        if isinstance(horizon, bool) or not isinstance(horizon, int) or horizon < 1:
-            raise ValueError("horizon_candles_must_be_positive_integer")
-        if isinstance(take_profit, bool) or not isinstance(take_profit, (int, float)):
-            raise ValueError("take_profit_multiplier_must_be_finite_and_positive")
-        take_profit_value = float(take_profit)
-        if not np.isfinite(take_profit_value) or take_profit_value <= 0:
-            raise ValueError("take_profit_multiplier_must_be_finite_and_positive")
-        if isinstance(stop_loss, bool) or not isinstance(stop_loss, (int, float)):
-            raise ValueError("stop_loss_multiplier_must_be_finite_and_positive")
-        stop_loss_value = float(stop_loss)
-        if not np.isfinite(stop_loss_value) or stop_loss_value <= 0:
-            raise ValueError("stop_loss_multiplier_must_be_finite_and_positive")
-        names.add(name)
-        validated.append(
-            {
-                "name": name,
-                "horizon_candles": horizon,
-                "take_profit_multiplier": take_profit_value,
-                "stop_loss_multiplier": stop_loss_value,
-            }
-        )
-    return validated
-
-
+    return [_validated_barrier_scenario(scenario, names) for scenario in scenarios]
 def _default_barrier_scenarios() -> list[dict[str, Any]]:
     """Return the requested Baseline and Short_Horizon defaults."""
     return [
