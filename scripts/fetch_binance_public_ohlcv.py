@@ -100,6 +100,28 @@ def _validate_symbol(symbol: str) -> None:
         raise ValueError("binance_symbol_out_of_policy")
 
 
+def _parse_utc_datetime(value: str, name: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        raise ValueError(f"{name}_invalid") from None
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError(f"{name}_timezone_required")
+    epoch_ms = int(parsed.astimezone(timezone.utc).timestamp() * 1000)
+    if epoch_ms % INTERVAL_MS:
+        raise ValueError(f"{name}_must_align_to_minute")
+    return datetime.fromtimestamp(epoch_ms / 1000, timezone.utc)
+
+
+def _datetime_epoch_ms(value: datetime, name: str) -> int:
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError(f"{name}_timezone_required")
+    epoch_ms = int(value.astimezone(timezone.utc).timestamp() * 1000)
+    if epoch_ms % INTERVAL_MS:
+        raise ValueError(f"{name}_must_align_to_minute")
+    return epoch_ms
+
+
 def _validate_kline_timestamp(raw: Any, expected_ms: int) -> int:
     if not isinstance(raw, list) or len(raw) < 6:
         raise ValueError("binance_kline_shape_invalid")
@@ -201,16 +223,29 @@ def fetch_historical_candles(
     symbol: str = "BTCUSDT",
     request_json: Callable[[dict[str, str]], list[Any]] = request_public_json,
     sleep_fn: Callable[[float], None] = time.sleep,
+    start_utc: datetime | None = None,
+    end_utc: datetime | None = None,
 ) -> list[dict[str, Any]]:
     if isinstance(days, bool) or days not in ALLOWED_DAYS:
         raise ValueError("historical_days_out_of_policy")
+    if (start_utc is None) != (end_utc is None):
+        raise ValueError("historical_window_requires_both_boundaries")
     if now.tzinfo is None or now.utcoffset() is None:
         raise ValueError("historical_cutoff_timezone_required")
     _validate_symbol(symbol)
-    now_ms = int(now.astimezone(timezone.utc).timestamp() * 1000)
-    end_ms = (now_ms // INTERVAL_MS) * INTERVAL_MS - INTERVAL_MS
     expected_count = days * 1440
-    start_ms = end_ms - (expected_count - 1) * INTERVAL_MS
+    if start_utc is not None and end_utc is not None:
+        start_ms = _datetime_epoch_ms(start_utc, "historical_start_utc")
+        end_ms = _datetime_epoch_ms(end_utc, "historical_end_utc")
+        if end_ms < start_ms:
+            raise ValueError("historical_window_end_before_start")
+        interval_ms = end_ms - start_ms
+        if interval_ms % INTERVAL_MS or interval_ms // INTERVAL_MS + 1 != expected_count:
+            raise ValueError("historical_window_does_not_match_requested_days")
+    else:
+        now_ms = int(now.astimezone(timezone.utc).timestamp() * 1000)
+        end_ms = (now_ms // INTERVAL_MS) * INTERVAL_MS - INTERVAL_MS
+        start_ms = end_ms - (expected_count - 1) * INTERVAL_MS
     cursor = start_ms
     rows: list[dict[str, Any]] = []
     while cursor <= end_ms:
@@ -302,9 +337,27 @@ def main() -> int:
     parser.add_argument("--interval", choices=("1m",), default="1m")
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--commit-sha", default="UNKNOWN")
+    parser.add_argument(
+        "--start-utc",
+        help="Optional exact inclusive UTC candle-open timestamp from a source manifest.",
+    )
+    parser.add_argument(
+        "--end-utc",
+        help="Optional exact inclusive UTC candle-open timestamp from a source manifest.",
+    )
     args = parser.parse_args()
+    if (args.start_utc is None) != (args.end_utc is None):
+        parser.error("--start-utc and --end-utc must be supplied together")
     now = datetime.now(timezone.utc)
-    rows = fetch_historical_candles(days=args.days, now=now, symbol=args.symbol)
+    start_utc = _parse_utc_datetime(args.start_utc, "historical_start_utc") if args.start_utc else None
+    end_utc = _parse_utc_datetime(args.end_utc, "historical_end_utc") if args.end_utc else None
+    rows = fetch_historical_candles(
+        days=args.days,
+        now=now,
+        symbol=args.symbol,
+        start_utc=start_utc,
+        end_utc=end_utc,
+    )
     manifest = write_artifacts(
         rows,
         output_dir=args.output_dir,
