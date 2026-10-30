@@ -169,12 +169,11 @@ def _validate_barrier_configuration(
     _positive_integer(atr_period, "atr_period")
     _positive_integer(horizon_candles, "horizon_candles")
     if (
-        not isfinite(float(take_profit_multiplier))
-        or not isfinite(float(stop_loss_multiplier))
-        or take_profit_multiplier <= 0
-        or stop_loss_multiplier <= 0
+        not isfinite(float(take_profit_multiplier)) or take_profit_multiplier <= 0
     ):
-        raise ValueError("barrier_multipliers_must_be_finite_and_positive")
+        raise ValueError("take_profit_multiplier_must_be_finite_and_positive")
+    if not isfinite(float(stop_loss_multiplier)) or stop_loss_multiplier <= 0:
+        raise ValueError("stop_loss_multiplier_must_be_finite_and_positive")
 
 
 def _record(

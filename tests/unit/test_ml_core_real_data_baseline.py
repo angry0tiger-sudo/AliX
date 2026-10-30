@@ -210,7 +210,7 @@ def test_baseline_validation_diagnostics_use_fixed_class_order() -> None:
     ]
 
 
-def test_temporal_split_keeps_training_before_validation_and_purges() -> None:
+def test_temporal_split_keeps_training_before_validation_and_embargoes_horizon() -> None:
     row_count = 120
     labels: list[tuple[str | None, int | None]] = [
         ("BUY", index + 24) for index in range(row_count - 24)
@@ -232,9 +232,10 @@ def test_temporal_split_keeps_training_before_validation_and_purges() -> None:
     assert min(validation) >= diagnostics["validation_start_index"]
     assert max(validation) <= diagnostics["validation_end_index"]
     assert set(train).isdisjoint(validation)
-    assert diagnostics["embargo_size_bars"] >= 14
-    assert diagnostics["purged_train_rows"] > 0
-    assert diagnostics["eligible_pre_validation_embargo_rows"] > 0
+    assert diagnostics["embargo_size_bars"] == 24
+    assert diagnostics["label_horizon_candles"] == 24
+    assert diagnostics["purged_train_rows"] == 0
+    assert diagnostics["eligible_pre_validation_embargo_rows"] == 24
 
 
 def test_short_real_data_window_is_skipped_without_training() -> None:
