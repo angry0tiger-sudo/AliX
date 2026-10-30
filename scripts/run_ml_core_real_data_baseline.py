@@ -536,6 +536,8 @@ def probability_quality_metrics(
         "hold_auc": round(hold_auc, 8) if hold_auc is not None else None,
         "hold_pr_auc": round(hold_pr_auc, 8) if hold_pr_auc is not None else None,
     }
+
+
 def probability_diagnostics_by_temporal_segment(
     actual: Series,
     probabilities: np.ndarray,
@@ -1676,6 +1678,8 @@ def _validate_barrier_scenarios(
         raise ValueError("barrier_scenarios_empty")
     names: set[str] = set()
     return [_validated_barrier_scenario(scenario, names) for scenario in scenarios]
+
+
 def _default_barrier_scenarios() -> list[dict[str, Any]]:
     """Return the requested Baseline and Short_Horizon defaults."""
     return [

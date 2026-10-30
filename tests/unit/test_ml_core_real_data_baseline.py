@@ -565,9 +565,7 @@ def test_barrier_scenario_validation_rejects_empty_and_duplicate_names() -> None
         "take_profit_multiplier": 2.0,
         "stop_loss_multiplier": 1.0,
     }
-    with pytest.raises(
-        ValueError, match="barrier_scenario_name_missing_or_duplicate"
-    ):
+    with pytest.raises(ValueError, match="barrier_scenario_name_missing_or_duplicate"):
         _validate_barrier_scenarios([scenario, scenario.copy()])
 
 
