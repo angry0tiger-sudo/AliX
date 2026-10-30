@@ -452,10 +452,6 @@ def test_diagnostic_report_unweighted_policy_uses_top_level_class_weight_field()
         calibration_fraction=0.20,
         minimum_hold_precision=0.40,
         minimum_hold_recall=0.20,
-        barrier_scenarios=[
-            {"name": "Baseline", "horizon_candles": 24, "take_profit_multiplier": 2.0, "stop_loss_multiplier": 1.0},
-            {"name": "Short_Horizon", "horizon_candles": 12, "take_profit_multiplier": 2.0, "stop_loss_multiplier": 1.0},
-        ],
         policy_specs=weighting_policy_specs(),
     )
 
