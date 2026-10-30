@@ -67,10 +67,7 @@ def _number(value: Any, error: str) -> float:
     return result
 
 
-def validate_v4c_report(
-    report: dict[str, Any],
-) -> dict[tuple[str, str, str], dict[str, Any]]:
-    """Validate provenance, experiment matrix, scenario geometry and safety gates."""
+def _validate_report_identity(report: dict[str, Any]) -> None:
     if report.get("schema_version") != REPORT_SCHEMA:
         raise ValueError("v4c_report_schema_mismatch")
     if report.get("commit_sha") != SOURCE_COMMIT:
@@ -78,6 +75,8 @@ def validate_v4c_report(
     if report.get("experiment_count") != 16:
         raise ValueError("v4c_experiment_count_mismatch")
 
+
+def _validate_report_window(report: dict[str, Any]) -> None:
     window = _mapping(
         report.get("data_window_selection"), "data_window_metadata_missing"
     )
@@ -85,32 +84,121 @@ def validate_v4c_report(
     if selected_days < 1 or selected_days != report.get("requested_days"):
         raise ValueError("v4c_data_window_mismatch")
 
+
+def _validate_report_safety(report: dict[str, Any]) -> None:
     safety = _mapping(report.get("safety"), "safety_metadata_missing")
     if any(safety.get(key) != value for key, value in SAFE_VALUES.items()):
         raise ValueError("v4c_safety_invariant_violation")
 
-    scenario_rows = report.get("triple_barrier_scenarios")
-    if not isinstance(scenario_rows, list):
+
+def _parse_scenario(raw: Any) -> tuple[str, tuple[int, float, float]]:
+    scenario = _mapping(raw, "v4c_scenario_metadata_invalid")
+    name = str(scenario.get("name"))
+    if name not in SCENARIOS:
+        raise ValueError("v4c_scenario_out_of_policy")
+    geometry = (
+        _integer(scenario.get("horizon_candles"), "v4c_horizon_invalid"),
+        _number(
+            scenario.get("take_profit_multiplier"),
+            "v4c_take_profit_multiplier_invalid",
+        ),
+        _number(
+            scenario.get("stop_loss_multiplier"),
+            "v4c_stop_loss_multiplier_invalid",
+        ),
+    )
+    return name, geometry
+
+
+def _validate_report_scenarios(report: dict[str, Any]) -> None:
+    rows = report.get("triple_barrier_scenarios")
+    if not isinstance(rows, list):
         raise ValueError("v4c_scenario_metadata_missing")
-    observed_scenarios: dict[str, tuple[int, float, float]] = {}
-    for raw in scenario_rows:
-        scenario = _mapping(raw, "v4c_scenario_metadata_invalid")
-        name = str(scenario.get("name"))
-        if name not in SCENARIOS:
-            raise ValueError("v4c_scenario_out_of_policy")
-        observed_scenarios[name] = (
-            _integer(scenario.get("horizon_candles"), "v4c_horizon_invalid"),
-            _number(
-                scenario.get("take_profit_multiplier"),
-                "v4c_take_profit_multiplier_invalid",
-            ),
-            _number(
-                scenario.get("stop_loss_multiplier"), "v4c_stop_loss_multiplier_invalid"
-            ),
-        )
-    if observed_scenarios != SCENARIOS:
+    observed = dict(_parse_scenario(row) for row in rows)
+    if observed != SCENARIOS:
         raise ValueError("v4c_scenario_geometry_mismatch")
 
+
+def _experiment_key(item: dict[str, Any]) -> tuple[str, str, str]:
+    pair = str(item.get("pair"))
+    symbol = next(
+        (
+            candidate
+            for candidate, pair_name in PAIR_NAMES.items()
+            if pair_name == pair
+        ),
+        "",
+    )
+    timeframe = str(item.get("timeframe"))
+    scenario_name = str(item.get("scenario"))
+    if (
+        symbol not in SYMBOLS
+        or timeframe not in TIMEFRAMES
+        or scenario_name not in SCENARIOS
+    ):
+        raise ValueError("v4c_experiment_key_out_of_policy")
+    return symbol, timeframe, scenario_name
+
+
+def _validate_experiment_barrier(
+    item: dict[str, Any], scenario_name: str
+) -> None:
+    expected = SCENARIOS[scenario_name]
+    barrier = _mapping(item.get("triple_barrier"), "v4c_barrier_metadata_missing")
+    actual = (
+        _integer(barrier.get("horizon_candles"), "v4c_horizon_invalid"),
+        _number(
+            barrier.get("take_profit_multiplier"),
+            "v4c_take_profit_multiplier_invalid",
+        ),
+        _number(
+            barrier.get("stop_loss_multiplier"),
+            "v4c_stop_loss_multiplier_invalid",
+        ),
+    )
+    if actual != expected:
+        raise ValueError("v4c_experiment_barrier_mismatch")
+
+
+def _validate_experiment_status(item: dict[str, Any]) -> tuple[int, int]:
+    status = item.get("status")
+    if status == "TRAINED":
+        variants = _mapping(item.get("model_variants"), "v4c_trained_models_missing")
+        if set(variants) != set(WEIGHTING_POLICIES):
+            raise ValueError("v4c_weighting_policy_matrix_invalid")
+        return 1, len(variants)
+    skipped_statuses = {
+        "SKIPPED_INSUFFICIENT_SAMPLES",
+        "SKIPPED_INSUFFICIENT_CLASS_DIVERSITY",
+    }
+    if status in skipped_statuses:
+        if item.get("model_variants") is not None:
+            raise ValueError("v4c_skipped_experiment_has_models")
+        return 0, 0
+    raise ValueError("v4c_experiment_status_invalid")
+
+
+def _expected_experiment_keys() -> set[tuple[str, str, str]]:
+    return {
+        (symbol, timeframe, scenario)
+        for symbol in SYMBOLS
+        for timeframe in TIMEFRAMES
+        for scenario in SCENARIOS
+    }
+
+
+def _validate_trained_counts(
+    report: dict[str, Any], trained_experiments: int, trained_models: int
+) -> None:
+    if report.get("trained_experiments") != trained_experiments:
+        raise ValueError("v4c_trained_experiment_count_mismatch")
+    if report.get("trained_models") != trained_models:
+        raise ValueError("v4c_trained_model_count_mismatch")
+
+
+def _index_report_experiments(
+    report: dict[str, Any],
+) -> dict[tuple[str, str, str], dict[str, Any]]:
     raw_experiments = report.get("experiments")
     if not isinstance(raw_experiments, list) or len(raw_experiments) != 16:
         raise ValueError("v4c_experiment_matrix_invalid")
@@ -120,84 +208,33 @@ def validate_v4c_report(
     trained_models = 0
     for raw in raw_experiments:
         item = _mapping(raw, "v4c_experiment_invalid")
-        pair = str(item.get("pair"))
-        symbol = next(
-            (
-                candidate
-                for candidate, pair_name in PAIR_NAMES.items()
-                if pair_name == pair
-            ),
-            "",
-        )
-        timeframe = str(item.get("timeframe"))
-        scenario_name = str(item.get("scenario"))
-        if (
-            symbol not in SYMBOLS
-            or timeframe not in TIMEFRAMES
-            or scenario_name not in SCENARIOS
-        ):
-            raise ValueError("v4c_experiment_key_out_of_policy")
-        key = (symbol, timeframe, scenario_name)
+        key = _experiment_key(item)
         if key in indexed:
             raise ValueError("v4c_duplicate_experiment")
-        expected = SCENARIOS[scenario_name]
-        barrier = _mapping(item.get("triple_barrier"), "v4c_barrier_metadata_missing")
-        actual = (
-            _integer(barrier.get("horizon_candles"), "v4c_horizon_invalid"),
-            _number(
-                barrier.get("take_profit_multiplier"),
-                "v4c_take_profit_multiplier_invalid",
-            ),
-            _number(
-                barrier.get("stop_loss_multiplier"), "v4c_stop_loss_multiplier_invalid"
-            ),
-        )
-        if actual != expected:
-            raise ValueError("v4c_experiment_barrier_mismatch")
-
-        status = item.get("status")
-        if status == "TRAINED":
-            trained_experiments += 1
-            variants = _mapping(
-                item.get("model_variants"), "v4c_trained_models_missing"
-            )
-            if set(variants) != set(WEIGHTING_POLICIES):
-                raise ValueError("v4c_weighting_policy_matrix_invalid")
-            trained_models += len(variants)
-        elif status in {
-            "SKIPPED_INSUFFICIENT_SAMPLES",
-            "SKIPPED_INSUFFICIENT_CLASS_DIVERSITY",
-        }:
-            if item.get("model_variants") is not None:
-                raise ValueError("v4c_skipped_experiment_has_models")
-        else:
-            raise ValueError("v4c_experiment_status_invalid")
+        _validate_experiment_barrier(item, key[2])
+        trained, models = _validate_experiment_status(item)
+        trained_experiments += trained
+        trained_models += models
         indexed[key] = item
 
-    expected_keys = {
-        (symbol, timeframe, scenario)
-        for symbol in SYMBOLS
-        for timeframe in TIMEFRAMES
-        for scenario in SCENARIOS
-    }
-    if set(indexed) != expected_keys:
+    if set(indexed) != _expected_experiment_keys():
         raise ValueError("v4c_experiment_matrix_incomplete")
-    if report.get("trained_experiments") != trained_experiments:
-        raise ValueError("v4c_trained_experiment_count_mismatch")
-    if report.get("trained_models") != trained_models:
-        raise ValueError("v4c_trained_model_count_mismatch")
+    _validate_trained_counts(report, trained_experiments, trained_models)
     return indexed
 
 
-def validate_minute_candles(candles: DataFrame, expected_rows: int) -> DataFrame:
-    """Validate the original gap-free one-minute source before any resampling."""
-    missing = sorted(set(MINUTE_COLUMNS) - set(candles.columns))
-    if missing:
-        raise ValueError(f"ohlcv_missing_columns:{','.join(missing)}")
-    if candles.empty:
-        raise ValueError("ohlcv_empty")
+def validate_v4c_report(
+    report: dict[str, Any],
+) -> dict[tuple[str, str, str], dict[str, Any]]:
+    """Validate provenance, experiment matrix, scenario geometry and safety gates."""
+    _validate_report_identity(report)
+    _validate_report_window(report)
+    _validate_report_safety(report)
+    _validate_report_scenarios(report)
+    return _index_report_experiments(report)
 
-    result = candles.loc[:, list(MINUTE_COLUMNS)].copy().reset_index(drop=True)
+
+def _validate_minute_timestamps(result: DataFrame) -> None:
     dates = pd.to_datetime(result["date"], errors="coerce", utc=True)
     if dates.isna().any():
         raise ValueError("timestamp_invalid")
@@ -208,13 +245,8 @@ def validate_minute_candles(candles: DataFrame, expected_rows: int) -> DataFrame
         raise ValueError("minute_data_gap_or_interval_mismatch")
     result["date"] = dates
 
-    for name in ("open", "high", "low", "close", "volume"):
-        result[name] = pd.to_numeric(result[name], errors="coerce")
-    numeric = result.loc[:, ["open", "high", "low", "close", "volume"]].to_numpy(
-        dtype=float
-    )
-    if not bool(np.isfinite(numeric).all()):
-        raise ValueError("ohlcv_value_not_finite")
+
+def _validate_minute_geometry(result: DataFrame) -> None:
     opened = result["open"].to_numpy(dtype=float)
     high = result["high"].to_numpy(dtype=float)
     low = result["low"].to_numpy(dtype=float)
@@ -224,12 +256,36 @@ def validate_minute_candles(candles: DataFrame, expected_rows: int) -> DataFrame
         raise ValueError("ohlcv_price_must_be_positive")
     if bool(np.any(volume < 0)):
         raise ValueError("ohlcv_volume_negative")
-    if bool(
+    invalid_geometry = (
         np.any(high < low)
         or np.any(high < np.maximum(opened, close))
         or np.any(low > np.minimum(opened, close))
-    ):
+    )
+    if bool(invalid_geometry):
         raise ValueError("ohlcv_geometry_invalid")
+
+
+def _validate_minute_numeric_values(result: DataFrame) -> None:
+    for name in ("open", "high", "low", "close", "volume"):
+        result[name] = pd.to_numeric(result[name], errors="coerce")
+    numeric = result.loc[:, ["open", "high", "low", "close", "volume"]].to_numpy(
+        dtype=float
+    )
+    if not bool(np.isfinite(numeric).all()):
+        raise ValueError("ohlcv_value_not_finite")
+    _validate_minute_geometry(result)
+
+
+def validate_minute_candles(candles: DataFrame, expected_rows: int) -> DataFrame:
+    """Validate the original gap-free one-minute source before any resampling."""
+    missing = sorted(set(MINUTE_COLUMNS) - set(candles.columns))
+    if missing:
+        raise ValueError(f"ohlcv_missing_columns:{','.join(missing)}")
+    if candles.empty:
+        raise ValueError("ohlcv_empty")
+    result = candles.loc[:, list(MINUTE_COLUMNS)].copy().reset_index(drop=True)
+    _validate_minute_timestamps(result)
+    _validate_minute_numeric_values(result)
     if len(result) != expected_rows:
         raise ValueError("minute_candle_count_mismatch")
     return result
@@ -378,6 +434,55 @@ def _validate_serialized_validation(
                 raise ValueError("v4c_validation_timestamp_mismatch")
 
 
+def _transition_event(
+    index: int, bars: DataFrame, baseline_labels: DataFrame, short_labels: DataFrame
+) -> dict[str, Any] | None:
+    baseline = baseline_labels.iloc[index]
+    short = short_labels.iloc[index]
+    direction = str(baseline["label"])
+    if direction not in {"BUY", "SELL"} or str(short["label"]) != "HOLD":
+        return None
+    offset = int(baseline["label_end_idx"]) - index
+    if not 13 <= offset <= 24:
+        raise ValueError("transition_hit_offset_out_of_late_window")
+    if short["exit_reason"] != "HORIZON_EXPIRY":
+        raise ValueError("short_horizon_hold_reason_mismatch")
+    if int(short["label_end_idx"]) - index != 12:
+        raise ValueError("short_horizon_expiry_offset_mismatch")
+    reason = str(baseline["exit_reason"])
+    if direction == "BUY" and reason != "TP_HIT":
+        raise ValueError("baseline_buy_exit_reason_mismatch")
+    if direction == "SELL" and reason not in {"SL_HIT", "COLLISION"}:
+        raise ValueError("baseline_sell_exit_reason_mismatch")
+    return _serialize_transition_event(index, offset, direction, reason, bars)
+
+
+def _serialize_transition_event(
+    index: int,
+    offset: int,
+    direction: str,
+    reason: str,
+    bars: DataFrame,
+) -> dict[str, Any]:
+    bucket = "13-18" if offset <= 18 else "19-24"
+    hit_index = int(index + offset)
+    return {
+        "row_index": int(index),
+        "event_timestamp": pd.Timestamp(bars["date"].iloc[index]).isoformat(),
+        "baseline_label": direction,
+        "short_horizon_label": "HOLD",
+        "short_horizon_exit_reason": "HORIZON_EXPIRY",
+        "late_hit_candle_offset": offset,
+        "late_hit_bucket": bucket,
+        "first_touch_direction": direction,
+        "first_touch_reason": reason,
+        "first_touch_row_index": hit_index,
+        "first_touch_timestamp": pd.Timestamp(
+            bars["date"].iloc[hit_index]
+        ).isoformat(),
+    }
+
+
 def collect_transition_events(
     bars: DataFrame,
     baseline_labels: DataFrame,
@@ -387,45 +492,9 @@ def collect_transition_events(
     """Return only 24-candle directional hits that become 12-candle HOLD expiry."""
     events: list[dict[str, Any]] = []
     for index in validation_indices:
-        baseline = baseline_labels.iloc[index]
-        short = short_labels.iloc[index]
-        baseline_label = str(baseline["label"])
-        short_label = str(short["label"])
-        if baseline_label not in {"BUY", "SELL"} or short_label != "HOLD":
-            continue
-
-        offset = int(baseline["label_end_idx"]) - index
-        if not 13 <= offset <= 24:
-            raise ValueError("transition_hit_offset_out_of_late_window")
-        if short["exit_reason"] != "HORIZON_EXPIRY":
-            raise ValueError("short_horizon_hold_reason_mismatch")
-        if int(short["label_end_idx"]) - index != 12:
-            raise ValueError("short_horizon_expiry_offset_mismatch")
-        reason = str(baseline["exit_reason"])
-        if baseline_label == "BUY" and reason != "TP_HIT":
-            raise ValueError("baseline_buy_exit_reason_mismatch")
-        if baseline_label == "SELL" and reason not in {"SL_HIT", "COLLISION"}:
-            raise ValueError("baseline_sell_exit_reason_mismatch")
-
-        bucket = "13-18" if offset <= 18 else "19-24"
-        hit_index = int(baseline["label_end_idx"])
-        events.append(
-            {
-                "row_index": int(index),
-                "event_timestamp": pd.Timestamp(bars["date"].iloc[index]).isoformat(),
-                "baseline_label": baseline_label,
-                "short_horizon_label": "HOLD",
-                "short_horizon_exit_reason": "HORIZON_EXPIRY",
-                "late_hit_candle_offset": offset,
-                "late_hit_bucket": bucket,
-                "first_touch_direction": baseline_label,
-                "first_touch_reason": reason,
-                "first_touch_row_index": hit_index,
-                "first_touch_timestamp": pd.Timestamp(
-                    bars["date"].iloc[hit_index]
-                ).isoformat(),
-            }
-        )
+        event = _transition_event(index, bars, baseline_labels, short_labels)
+        if event is not None:
+            events.append(event)
     return events
 
 
@@ -445,6 +514,128 @@ def _transition_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _source_data_metadata(
+    candles: DataFrame, source_hash: str | None
+) -> dict[str, Any]:
+    return {
+        "minute_rows": len(candles),
+        "first_timestamp": pd.Timestamp(candles["date"].iloc[0]).isoformat(),
+        "last_timestamp": pd.Timestamp(candles["date"].iloc[-1]).isoformat(),
+        "sha256": source_hash,
+    }
+
+
+def _scenario_validation_data(
+    bars: DataFrame,
+    experiment: dict[str, Any],
+    scenario_name: str,
+    start: int,
+    end: int,
+) -> tuple[DataFrame, list[int]]:
+    split = _mapping(experiment.get("split"), "v4c_split_metadata_missing")
+    if split.get("validation_start_index") != start:
+        raise ValueError("v4c_validation_start_index_mismatch")
+    if split.get("validation_end_index") != end:
+        raise ValueError("v4c_validation_end_index_mismatch")
+    horizon, take_profit, stop_loss = SCENARIOS[scenario_name]
+    labels = apply_adaptive_triple_barrier(
+        bars,
+        horizon_candles=horizon,
+        take_profit_multiplier=take_profit,
+        stop_loss_multiplier=stop_loss,
+    )
+    _validate_label_audit(labels, experiment)
+    indices = _eligible_indices(bars, labels, start, end)
+    if experiment.get("validation_rows") != len(indices):
+        raise ValueError("v4c_validation_eligible_row_count_mismatch")
+    _validate_label_distribution(labels, indices, experiment)
+    if experiment.get("status") == "TRAINED":
+        _validate_serialized_validation(experiment, labels, bars, indices)
+    return labels, indices
+
+
+def _pair_experiments(
+    indexed: dict[tuple[str, str, str], dict[str, Any]],
+    symbol: str,
+    timeframe: str,
+) -> dict[str, dict[str, Any]]:
+    return {
+        scenario: indexed[(symbol, timeframe, scenario)] for scenario in SCENARIOS
+    }
+
+
+def _audit_timeframe(
+    symbol: str,
+    timeframe: str,
+    candles: DataFrame,
+    indexed: dict[tuple[str, str, str], dict[str, Any]],
+) -> dict[str, Any]:
+    bars = resample_minute_candles(candles, timeframe)
+    pair_results = _pair_experiments(indexed, symbol, timeframe)
+    if any(item.get("bar_count") != len(bars) for item in pair_results.values()):
+        raise ValueError("v4c_resampled_bar_count_mismatch")
+    start = int(len(bars) * VALIDATION_START_FRACTION)
+    end = int(len(bars) * VALIDATION_END_FRACTION) - 1
+    if end <= start:
+        raise ValueError("v4c_validation_window_invalid")
+
+    labels_by_scenario: dict[str, DataFrame] = {}
+    indices_by_scenario: dict[str, list[int]] = {}
+    for scenario_name in SCENARIOS:
+        labels, indices = _scenario_validation_data(
+            bars, pair_results[scenario_name], scenario_name, start, end
+        )
+        labels_by_scenario[scenario_name] = labels
+        indices_by_scenario[scenario_name] = indices
+
+    validation_indices = sorted(
+        set(indices_by_scenario["Baseline"])
+        & set(indices_by_scenario["Short_Horizon"])
+    )
+    events = collect_transition_events(
+        bars,
+        labels_by_scenario["Baseline"],
+        labels_by_scenario["Short_Horizon"],
+        validation_indices,
+    )
+    return {
+        "symbol": symbol,
+        "pair": PAIR_NAMES[symbol],
+        "timeframe": timeframe,
+        "validation_window": {
+            "start_row_index": start,
+            "end_row_index": end,
+            "shared_eligible_rows": len(validation_indices),
+        },
+        "baseline": {
+            "horizon_candles": SCENARIOS["Baseline"][0],
+            "status": pair_results["Baseline"]["status"],
+        },
+        "short_horizon": {
+            "horizon_candles": SCENARIOS["Short_Horizon"][0],
+            "status": pair_results["Short_Horizon"]["status"],
+        },
+        "transition_summary": _transition_summary(events),
+        "events": events,
+    }
+
+
+def _audit_symbol(
+    symbol: str,
+    raw_candles: DataFrame,
+    expected_minute_rows: int,
+    source_hash: str | None,
+    indexed: dict[tuple[str, str, str], dict[str, Any]],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    candles = validate_minute_candles(raw_candles, expected_minute_rows)
+    source_metadata = _source_data_metadata(candles, source_hash)
+    results = [
+        _audit_timeframe(symbol, timeframe, candles, indexed)
+        for timeframe in TIMEFRAMES
+    ]
+    return source_metadata, results
+
+
 def build_transition_audit(
     report: dict[str, Any],
     minute_frames: dict[str, DataFrame],
@@ -452,102 +643,27 @@ def build_transition_audit(
 ) -> dict[str, Any]:
     """Rebuild both V4-C label sets from source OHLCV and audit the validation window."""
     indexed = validate_v4c_report(report)
-    selected_days = _integer(
-        _mapping(
-            report.get("data_window_selection"), "data_window_metadata_missing"
-        ).get("selected_days"),
-        "selected_days_invalid",
-    )
+    window = _mapping(report.get("data_window_selection"), "data_window_metadata_missing")
+    selected_days = _integer(window.get("selected_days"), "selected_days_invalid")
     expected_minute_rows = selected_days * 24 * 60
     results: list[dict[str, Any]] = []
     source_data: dict[str, Any] = {}
-
+    hashes = source_hashes or {}
     for symbol in SYMBOLS:
         if symbol not in minute_frames:
             raise ValueError(f"minute_data_missing:{symbol}")
-        candles = validate_minute_candles(minute_frames[symbol], expected_minute_rows)
-        source_data[symbol] = {
-            "minute_rows": len(candles),
-            "first_timestamp": pd.Timestamp(candles["date"].iloc[0]).isoformat(),
-            "last_timestamp": pd.Timestamp(candles["date"].iloc[-1]).isoformat(),
-            "sha256": (source_hashes or {}).get(symbol),
-        }
-        for timeframe in TIMEFRAMES:
-            bars = resample_minute_candles(candles, timeframe)
-            pair_results = {
-                scenario: indexed[(symbol, timeframe, scenario)]
-                for scenario in SCENARIOS
-            }
-            if any(
-                item.get("bar_count") != len(bars) for item in pair_results.values()
-            ):
-                raise ValueError("v4c_resampled_bar_count_mismatch")
+        source_data[symbol], symbol_results = _audit_symbol(
+            symbol,
+            minute_frames[symbol],
+            expected_minute_rows,
+            hashes.get(symbol),
+            indexed,
+        )
+        results.extend(symbol_results)
 
-            start = int(len(bars) * VALIDATION_START_FRACTION)
-            end = int(len(bars) * VALIDATION_END_FRACTION) - 1
-            if end <= start:
-                raise ValueError("v4c_validation_window_invalid")
-
-            labels_by_scenario: dict[str, DataFrame] = {}
-            indices_by_scenario: dict[str, list[int]] = {}
-            for scenario_name, (horizon, take_profit, stop_loss) in SCENARIOS.items():
-                experiment = pair_results[scenario_name]
-                split = _mapping(experiment.get("split"), "v4c_split_metadata_missing")
-                if split.get("validation_start_index") != start:
-                    raise ValueError("v4c_validation_start_index_mismatch")
-                if split.get("validation_end_index") != end:
-                    raise ValueError("v4c_validation_end_index_mismatch")
-                labels = apply_adaptive_triple_barrier(
-                    bars,
-                    horizon_candles=horizon,
-                    take_profit_multiplier=take_profit,
-                    stop_loss_multiplier=stop_loss,
-                )
-                _validate_label_audit(labels, experiment)
-                valid_indices = _eligible_indices(bars, labels, start, end)
-                if experiment.get("validation_rows") != len(valid_indices):
-                    raise ValueError("v4c_validation_eligible_row_count_mismatch")
-                _validate_label_distribution(labels, valid_indices, experiment)
-                if experiment.get("status") == "TRAINED":
-                    _validate_serialized_validation(
-                        experiment, labels, bars, valid_indices
-                    )
-                labels_by_scenario[scenario_name] = labels
-                indices_by_scenario[scenario_name] = valid_indices
-
-            validation_indices = sorted(
-                set(indices_by_scenario["Baseline"])
-                & set(indices_by_scenario["Short_Horizon"])
-            )
-            events = collect_transition_events(
-                bars,
-                labels_by_scenario["Baseline"],
-                labels_by_scenario["Short_Horizon"],
-                validation_indices,
-            )
-            results.append(
-                {
-                    "symbol": symbol,
-                    "pair": PAIR_NAMES[symbol],
-                    "timeframe": timeframe,
-                    "validation_window": {
-                        "start_row_index": start,
-                        "end_row_index": end,
-                        "shared_eligible_rows": len(validation_indices),
-                    },
-                    "baseline": {
-                        "horizon_candles": SCENARIOS["Baseline"][0],
-                        "status": pair_results["Baseline"]["status"],
-                    },
-                    "short_horizon": {
-                        "horizon_candles": SCENARIOS["Short_Horizon"][0],
-                        "status": pair_results["Short_Horizon"]["status"],
-                    },
-                    "transition_summary": _transition_summary(events),
-                    "events": events,
-                }
-            )
-
+    all_events = [
+        event for experiment in results for event in experiment["events"]
+    ]
     return {
         "schema_version": AUDIT_SCHEMA,
         "source_artifact": {
@@ -562,9 +678,7 @@ def build_transition_audit(
             "while Short_Horizon label is HOLD/HORIZON_EXPIRY at candle 12."
         ),
         "experiments": results,
-        "aggregate_transition_summary": _transition_summary(
-            [event for experiment in results for event in experiment["events"]]
-        ),
+        "aggregate_transition_summary": _transition_summary(all_events),
         "safety": dict(SAFE_VALUES),
         "model_training_performed": False,
         "production_target_modified": False,
