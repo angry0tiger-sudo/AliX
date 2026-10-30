@@ -542,9 +542,7 @@ def optimize_hold_threshold(
     )
     grid = _threshold_search_grid()
     if not feasible:
-        return _no_feasible_threshold_result(
-            grid, minimum_precision, minimum_recall
-        )
+        return _no_feasible_threshold_result(grid, minimum_precision, minimum_recall)
     selected = max(
         feasible,
         key=lambda item: (item["f1"], item["precision"], item["threshold"]),
@@ -639,9 +637,7 @@ def _selected_threshold_diagnostics(
     forward_evaluation = _threshold_validation_evaluation(
         forward_y, forward_p, threshold
     )
-    full_evaluation = _threshold_validation_evaluation(
-        actual, probabilities, threshold
-    )
+    full_evaluation = _threshold_validation_evaluation(actual, probabilities, threshold)
     result["calibration"]["selected_calibration_metrics"] = {
         "classification_metrics": calibration_evaluation["classification_metrics"],
         "hold_metrics": calibration_evaluation["hold_metrics"],
@@ -1421,9 +1417,7 @@ def _load_diagnostic_datasets(
     datasets: dict[str, DataFrame] = {}
     provenance: list[dict[str, Any]] = []
     for symbol in SYMBOLS:
-        candles, manifest = _load_manifested_data(
-            input_dir, symbol, days, commit_sha
-        )
+        candles, manifest = _load_manifested_data(input_dir, symbol, days, commit_sha)
         datasets[symbol] = candles
         provenance.append(manifest)
     return datasets, provenance
@@ -1647,9 +1641,7 @@ def run_diagnostic(
         minimum_hold_precision,
         minimum_hold_recall,
     )
-    datasets, provenance = _load_diagnostic_datasets(
-        input_dir, days, commit_sha
-    )
+    datasets, provenance = _load_diagnostic_datasets(input_dir, days, commit_sha)
     experiments = _run_diagnostic_experiments(
         datasets,
         hold_weight_multiplier=hold_weight_multiplier,
@@ -1671,7 +1663,6 @@ def run_diagnostic(
     _write_diagnostic_report(report, output_path)
     _print_diagnostic_completion(report, output_path, commit_sha)
     return report
-
 
 
 def main() -> int:
