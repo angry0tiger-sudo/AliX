@@ -100,8 +100,13 @@ def validate_v4c_report(
             raise ValueError("v4c_scenario_out_of_policy")
         observed_scenarios[name] = (
             _integer(scenario.get("horizon_candles"), "v4c_horizon_invalid"),
-            _number(scenario.get("take_profit_multiplier"), "v4c_take_profit_multiplier_invalid"),
-            _number(scenario.get("stop_loss_multiplier"), "v4c_stop_loss_multiplier_invalid"),
+            _number(
+                scenario.get("take_profit_multiplier"),
+                "v4c_take_profit_multiplier_invalid",
+            ),
+            _number(
+                scenario.get("stop_loss_multiplier"), "v4c_stop_loss_multiplier_invalid"
+            ),
         )
     if observed_scenarios != SCENARIOS:
         raise ValueError("v4c_scenario_geometry_mismatch")
@@ -139,8 +144,13 @@ def validate_v4c_report(
         barrier = _mapping(item.get("triple_barrier"), "v4c_barrier_metadata_missing")
         actual = (
             _integer(barrier.get("horizon_candles"), "v4c_horizon_invalid"),
-            _number(barrier.get("take_profit_multiplier"), "v4c_take_profit_multiplier_invalid"),
-            _number(barrier.get("stop_loss_multiplier"), "v4c_stop_loss_multiplier_invalid"),
+            _number(
+                barrier.get("take_profit_multiplier"),
+                "v4c_take_profit_multiplier_invalid",
+            ),
+            _number(
+                barrier.get("stop_loss_multiplier"), "v4c_stop_loss_multiplier_invalid"
+            ),
         )
         if actual != expected:
             raise ValueError("v4c_experiment_barrier_mismatch")
