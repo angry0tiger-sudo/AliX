@@ -99,7 +99,7 @@ def test_purge_uses_actual_label_window_overlap_not_fixed_horizon() -> None:
         label_end_indices,
         validation_start=10,
         validation_end=10,
-        longest_feature_window=3,
+        label_horizon_candles=3,
     )
 
     assert split.validation_indices == (10,)
@@ -109,14 +109,14 @@ def test_purge_uses_actual_label_window_overlap_not_fixed_horizon() -> None:
     assert 6 in split.train_indices
 
 
-def test_embargo_excludes_exact_longest_feature_window_after_test() -> None:
+def test_embargo_excludes_exact_label_horizon_candles_after_test() -> None:
     row_count = 40
     label_end_indices = list(range(row_count))
     split = create_purged_embargo_split(
         label_end_indices,
         validation_start=10,
         validation_end=14,
-        longest_feature_window=4,
+        label_horizon_candles=4,
     )
 
     expected_embargo = tuple(range(15, 19))
@@ -127,56 +127,63 @@ def test_embargo_excludes_exact_longest_feature_window_after_test() -> None:
     assert 19 in split.train_indices
 
 
-def test_embargo_one_percent_floor_when_larger_than_feature_window() -> None:
+def test_embargo_tracks_configured_horizon_exactly() -> None:
     row_count = 250
     label_end_indices = list(range(row_count))
-    split = create_purged_embargo_split(
+    short_split = create_purged_embargo_split(
         label_end_indices,
         validation_start=50,
         validation_end=60,
-        longest_feature_window=1,
+        label_horizon_candles=12,
+    )
+    baseline_split = create_purged_embargo_split(
+        label_end_indices,
+        validation_start=50,
+        validation_end=60,
+        label_horizon_candles=24,
     )
 
-    assert split.embargo_size == 2
-    assert split.embargo_indices == (61, 62)
-    assert 63 in split.train_indices
+    assert short_split.embargo_size == 12
+    assert short_split.embargo_indices == tuple(range(61, 73))
+    assert baseline_split.embargo_size == 24
+    assert baseline_split.embargo_indices == tuple(range(61, 85))
 
 
 def test_purge_embargo_validation_rejects_invalid_configuration_and_indices() -> None:
     label_end_indices = list(range(40))
     with pytest.raises(ValueError, match="label_end_indices_empty"):
         create_purged_embargo_split(
-            [], validation_start=5, validation_end=9, longest_feature_window=4
+            [], validation_start=5, validation_end=9, label_horizon_candles=4
         )
     with pytest.raises(
-        ValueError, match="longest_feature_window_must_be_positive_integer"
+        ValueError, match="label_horizon_candles_must_be_positive_integer"
     ):
         create_purged_embargo_split(
             label_end_indices,
             validation_start=5,
             validation_end=9,
-            longest_feature_window=0,
+            label_horizon_candles=0,
         )
     with pytest.raises(ValueError, match="validation_window_out_of_bounds"):
         create_purged_embargo_split(
             label_end_indices,
             validation_start=20,
             validation_end=50,
-            longest_feature_window=4,
+            label_horizon_candles=4,
         )
     with pytest.raises(ValueError, match="label_end_index_out_of_bounds"):
         create_purged_embargo_split(
             [0, 1, 2, 3, 4, 5, 6, 7, 8, 10],
             validation_start=5,
             validation_end=6,
-            longest_feature_window=4,
+            label_horizon_candles=4,
         )
     with pytest.raises(ValueError, match="label_end_index_must_be_integer"):
         create_purged_embargo_split(
             [0, 1, 2.5, 3, 4, 5, 6, 7, 8, 9],
             validation_start=5,
             validation_end=6,
-            longest_feature_window=4,
+            label_horizon_candles=4,
         )
 
 

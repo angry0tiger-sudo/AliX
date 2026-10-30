@@ -17,6 +17,9 @@ from sklearn import metrics  # type: ignore[import-untyped]
 
 from services.ml_core.adaptive_targets import (
     EXIT_REASONS,
+    LABEL_HORIZON_CANDLES,
+    STOP_LOSS_MULTIPLIER_DEFAULT,
+    TAKE_PROFIT_MULTIPLIER_DEFAULT,
     UNLABELED_REASONS,
     apply_adaptive_triple_barrier,
 )
@@ -27,7 +30,6 @@ SYMBOLS = ("BTCUSDT", "ETHUSDT")
 TIMEFRAME_MINUTES = {"15m": 15, "30m": 30, "1h": 60, "4h": 240}
 LABELS = ("BUY", "SELL", "HOLD")
 OHLCV_COLUMNS = ("date", "open", "high", "low", "close", "volume")
-FEATURE_WINDOW = 14
 VALIDATION_START_FRACTION = 0.70
 VALIDATION_END_FRACTION = 0.85
 OVERFIT_F1_GAP_THRESHOLD = 0.15
@@ -35,12 +37,16 @@ MIN_TRAIN_SAMPLES_PER_CLASS = 20
 MIN_VALIDATION_SAMPLES_PER_CLASS = 30
 MIN_CALIBRATION_HOLD_SAMPLES = 30
 MIN_CALIBRATION_NON_HOLD_SAMPLES = 30
-DEFAULT_HOLD_WEIGHT_MULTIPLIER = 3.0
 DEFAULT_CALIBRATION_FRACTION = 0.20
 DEFAULT_MINIMUM_HOLD_PRECISION = 0.40
 DEFAULT_MINIMUM_HOLD_RECALL = 0.20
 HOLD_THRESHOLD_GRID_STEPS = 201
-REPORT_SCHEMA = "alix.ml-core.real-data-classification-diagnostic.v4"
+WEIGHTING_POLICY_NAMES = ("weight_none", "weight_balanced")
+DEFAULT_BARRIER_SCENARIOS = (
+    ("Baseline", LABEL_HORIZON_CANDLES, TAKE_PROFIT_MULTIPLIER_DEFAULT, STOP_LOSS_MULTIPLIER_DEFAULT),
+    ("Short_Horizon", 12, TAKE_PROFIT_MULTIPLIER_DEFAULT, STOP_LOSS_MULTIPLIER_DEFAULT),
+)
+REPORT_SCHEMA = "alix.ml-core.real-data-classification-diagnostic.v5"
 
 
 def _validated_minute_timestamps(values: Series) -> Series:
@@ -303,23 +309,11 @@ def baseline_validation_diagnostics(
     }
 
 
-def weighting_policy_specs(hold_weight_multiplier: float) -> dict[str, dict[str, Any]]:
-    """Return unweighted, fully balanced, and controlled HOLD-weight policies."""
-    if (
-        isinstance(hold_weight_multiplier, bool)
-        or not isinstance(hold_weight_multiplier, (int, float))
-        or not np.isfinite(float(hold_weight_multiplier))
-        or hold_weight_multiplier <= 0
-    ):
-        raise ValueError("hold_weight_multiplier_must_be_finite_and_positive")
-    multiplier = float(hold_weight_multiplier)
+def weighting_policy_specs() -> dict[str, dict[str, Any]]:
+    """Return only the approved unweighted and fully balanced policies."""
     return {
-        "weight_none": {"class_weight": None, "hold_weight_multiplier": None},
-        "weight_balanced": {"class_weight": "balanced", "hold_weight_multiplier": None},
-        "weight_intermediate": {
-            "class_weight": {"BUY": 1.0, "SELL": 1.0, "HOLD": multiplier},
-            "hold_weight_multiplier": multiplier,
-        },
+        "weight_none": {"class_weight": None},
+        "weight_balanced": {"class_weight": "balanced"},
     }
 
 
@@ -410,6 +404,118 @@ def hold_class_metrics(actual: Series, predicted: Series) -> dict[str, int | flo
         "true_positives": tp,
         "false_positives": fp,
         "false_negatives": fn,
+    }
+
+
+def _expected_calibration_error(
+    targets: np.ndarray, probabilities: np.ndarray, bin_count: int
+) -> float | None:
+    """Compute equal-width ECE for one binary target/probability series."""
+    if len(targets) == 0 or len(targets) != len(probabilities):
+        return None
+    bin_indices = np.minimum((probabilities * bin_count).astype(int), bin_count - 1)
+    weighted_error = 0.0
+    for bin_index in range(bin_count):
+        selected = bin_indices == bin_index
+        if not bool(selected.any()):
+            continue
+        confidence = float(np.mean(probabilities[selected]))
+        observed_rate = float(np.mean(targets[selected]))
+        weighted_error += float(np.mean(selected)) * abs(confidence - observed_rate)
+    return weighted_error
+
+
+def probability_quality_metrics(
+    actual: Series,
+    probabilities: np.ndarray,
+    *,
+    calibration_bins: int = 10,
+) -> dict[str, Any]:
+    """Report multiclass/HOLD Brier, ECE, HOLD ROC-AUC and PR-AUC."""
+    if (
+        isinstance(calibration_bins, bool)
+        or not isinstance(calibration_bins, int)
+        or calibration_bins < 2
+    ):
+        raise ValueError("calibration_bins_must_be_integer_at_least_two")
+    matrix = np.asarray(probabilities, dtype=float)
+    if matrix.ndim != 2 or matrix.shape != (len(actual), len(LABELS)):
+        raise ValueError("classifier_probability_shape_invalid")
+    _validate_probability_values(matrix)
+    if not bool(actual.isin(LABELS).all()):
+        raise ValueError("probability_metrics_labels_invalid")
+
+    actual_values = actual.to_numpy(dtype=object)
+    one_hot = np.column_stack([actual_values == label for label in LABELS]).astype(float)
+    multiclass_brier = float(np.mean(np.sum((matrix - one_hot) ** 2, axis=1)))
+    hold_targets = (actual_values == "HOLD").astype(float)
+    hold_probabilities = matrix[:, LABELS.index("HOLD")]
+    hold_brier = float(np.mean((hold_probabilities - hold_targets) ** 2))
+
+    per_class_ece: dict[str, float | None] = {}
+    for class_index, label in enumerate(LABELS):
+        per_class_ece[label] = _expected_calibration_error(
+            one_hot[:, class_index], matrix[:, class_index], calibration_bins
+        )
+    valid_class_ece = [value for value in per_class_ece.values() if value is not None]
+    multiclass_ece = float(np.mean(valid_class_ece)) if valid_class_ece else None
+    has_both_hold_outcomes = int(np.unique(hold_targets).size) == 2
+    hold_auc = (
+        float(metrics.roc_auc_score(hold_targets, hold_probabilities))
+        if has_both_hold_outcomes else None
+    )
+    hold_pr_auc = (
+        float(metrics.average_precision_score(hold_targets, hold_probabilities))
+        if has_both_hold_outcomes else None
+    )
+    return {
+        "sample_count": int(len(actual)),
+        "support": {
+            "hold_positive": int(np.count_nonzero(hold_targets)),
+            "non_hold_negative": int(len(hold_targets) - np.count_nonzero(hold_targets)),
+        },
+        "brier_score": {
+            "multiclass": round(multiclass_brier, 8),
+            "hold_binary": round(hold_brier, 8),
+        },
+        "ece": {
+            "multiclass_macro": round(multiclass_ece, 8) if multiclass_ece is not None else None,
+            "hold_binary": (
+                round(per_class_ece["HOLD"], 8)
+                if per_class_ece["HOLD"] is not None else None
+            ),
+            "per_class": {
+                label: round(value, 8) if value is not None else None
+                for label, value in per_class_ece.items()
+            },
+            "bin_count": calibration_bins,
+            "binning": "equal_width_probability_bins",
+        },
+        "hold_auc": round(hold_auc, 8) if hold_auc is not None else None,
+        "hold_pr_auc": round(hold_pr_auc, 8) if hold_pr_auc is not None else None,
+    }
+
+
+def probability_diagnostics_by_temporal_segment(
+    actual: Series,
+    probabilities: np.ndarray,
+    *,
+    calibration_fraction: float,
+) -> dict[str, Any]:
+    """Compute probability metrics on disjoint chronological segments."""
+    _validate_calibration_fraction(calibration_fraction)
+    count = max(1, int(np.floor(len(actual) * calibration_fraction)))
+    if count >= len(actual):
+        raise ValueError("calibration_split_leaves_no_forward_validation_rows")
+    return {
+        "calibration": probability_quality_metrics(
+            actual.iloc[:count], probabilities[:count]
+        ),
+        "forward_validation": probability_quality_metrics(
+            actual.iloc[count:], probabilities[count:]
+        ),
+        "calibration_fraction": float(calibration_fraction),
+        "calibration_overlap": False,
     }
 
 
@@ -801,6 +907,7 @@ def _split_diagnostics(
         "validation_end_index": validation_end,
         "purged_train_rows": int(purged_train_rows),
         "embargo_size_bars": int(split.embargo_size),
+        "label_horizon_candles": int(split.embargo_size),
         "eligible_pre_validation_embargo_rows": int(eligible_gap_rows),
         "post_validation_embargo_bars": len(split.embargo_indices),
         "future_rows_excluded_for_chronology": row_count - validation_end - 1,
@@ -808,9 +915,12 @@ def _split_diagnostics(
 
 
 def purged_temporal_indices(
-    features: DataFrame, labels: DataFrame
+    features: DataFrame,
+    labels: DataFrame,
+    *,
+    horizon_candles: int = LABEL_HORIZON_CANDLES,
 ) -> tuple[list[int], list[int], dict[str, int]]:
-    """Create a chronological split, actual-label-window purge, and conservative gap."""
+    """Split chronologically, purge overlapping labels, and embargo label horizon."""
     row_count = len(labels)
     if len(features) != row_count or row_count < 100:
         raise ValueError("insufficient_or_misaligned_rows_for_temporal_split")
@@ -822,7 +932,7 @@ def purged_temporal_indices(
         ends,
         validation_start=validation_start,
         validation_end=validation_end,
-        longest_feature_window=FEATURE_WINDOW,
+        label_horizon_candles=horizon_candles,
     )
     train_limit = validation_start - split.embargo_size
     train_indices = _eligible_train_indices(
@@ -951,28 +1061,45 @@ def run_experiment(
     timeframe: str,
     minute_candles: DataFrame,
     *,
-    hold_weight_multiplier: float = DEFAULT_HOLD_WEIGHT_MULTIPLIER,
+    scenario_name: str = "Baseline",
+    horizon_candles: int = LABEL_HORIZON_CANDLES,
+    take_profit_multiplier: float = TAKE_PROFIT_MULTIPLIER_DEFAULT,
+    stop_loss_multiplier: float = STOP_LOSS_MULTIPLIER_DEFAULT,
     calibration_fraction: float = DEFAULT_CALIBRATION_FRACTION,
     minimum_hold_precision: float = DEFAULT_MINIMUM_HOLD_PRECISION,
     minimum_hold_recall: float = DEFAULT_MINIMUM_HOLD_RECALL,
 ) -> dict[str, Any]:
-    """Fit the three weighting policies and threshold-calibrate each from time-ordered data."""
-    policy_specs = weighting_policy_specs(hold_weight_multiplier)
+    """Fit only None/Balanced policies independently for one barrier scenario."""
+    policies = weighting_policy_specs()
+    barrier_config = {
+        "horizon_candles": horizon_candles,
+        "take_profit_multiplier": float(take_profit_multiplier),
+        "stop_loss_multiplier": float(stop_loss_multiplier),
+    }
     bars = resample_ohlcv(minute_candles, timeframe)
-    labels = apply_adaptive_triple_barrier(bars)
+    labels = apply_adaptive_triple_barrier(
+        bars,
+        horizon_candles=horizon_candles,
+        take_profit_multiplier=take_profit_multiplier,
+        stop_loss_multiplier=stop_loss_multiplier,
+    )
     if len(bars) < 100:
-        return _insufficient_bar_result(pair, timeframe, bars, labels)
+        result = _insufficient_bar_result(pair, timeframe, bars, labels)
+        result.update({"scenario": scenario_name, "triple_barrier": barrier_config})
+        return result
+
     features = build_causal_feature_matrix(bars)
     train_indices, validation_indices, split_info = purged_temporal_indices(
-        features, labels
+        features, labels, horizon_candles=horizon_candles
     )
     train_y = labels.iloc[train_indices]["label"]
     validation_y = labels.iloc[validation_indices]["label"]
     sample_gate = sample_gate_diagnostics(train_y, validation_y)
-
     base_result: dict[str, Any] = {
         "pair": pair,
         "timeframe": timeframe,
+        "scenario": scenario_name,
+        "triple_barrier": barrier_config,
         "bar_count": int(len(bars)),
         "train_rows": int(len(train_indices)),
         "validation_rows": int(len(validation_indices)),
@@ -985,22 +1112,17 @@ def run_experiment(
         "split": split_info,
     }
     if sample_gate["status"] != "PASS":
-        return _skipped_result(
-            pair,
-            timeframe,
-            bars,
-            labels,
-            train_indices,
-            validation_indices,
-            split_info,
-            str(sample_gate["status"]),
-            sample_gate,
+        result = _skipped_result(
+            pair, timeframe, bars, labels, train_indices, validation_indices,
+            split_info, str(sample_gate["status"]), sample_gate
         )
+        result.update({"scenario": scenario_name, "triple_barrier": barrier_config})
+        return result
 
     x_train = features.iloc[train_indices]
     x_validation = features.iloc[validation_indices]
     variants: dict[str, Any] = {}
-    for name, policy in policy_specs.items():
+    for name, policy in policies.items():
         model = _new_classifier(class_weight=policy["class_weight"])
         model.fit(x_train, train_y)
         train_probabilities = ordered_probability_matrix(model, x_train)
@@ -1019,20 +1141,19 @@ def run_experiment(
             minimum_recall=minimum_hold_recall,
         )
         variants[name] = {
-            "model_parameters": {
-                "class_weight": policy["class_weight"],
-                "hold_weight_multiplier": policy["hold_weight_multiplier"],
-            },
+            "model_parameters": {"class_weight": policy["class_weight"]},
             "classification_metrics": {
                 "train_in_sample": classification_metrics(train_y, train_prediction),
-                "validation": classification_metrics(
-                    validation_y, validation_prediction
-                ),
+                "validation": classification_metrics(validation_y, validation_prediction),
             },
             **validation_classification_diagnostics(
                 validation_y, validation_prediction
             ),
             "hold_metrics": hold_class_metrics(validation_y, validation_prediction),
+            "probability_diagnostics": probability_diagnostics_by_temporal_segment(
+                validation_y, validation_probabilities,
+                calibration_fraction=calibration_fraction,
+            ),
             "threshold_optimization": threshold_diagnostics,
             "validation_probabilities": _serialize_validation_probabilities(
                 bars, validation_indices, validation_y, validation_probabilities
@@ -1052,9 +1173,7 @@ def run_experiment(
             "baseline_type": "lightgbm",
             "model_variant": "weight_none",
             "model_parameters": {"class_weight": None},
-            "classification_metrics": unweighted["classification_metrics"][
-                "validation"
-            ],
+            "classification_metrics": unweighted["classification_metrics"]["validation"],
             "confusion_matrix": unweighted["confusion_matrix"],
             "prediction_distribution": unweighted["prediction_distribution"],
         },
@@ -1062,7 +1181,7 @@ def run_experiment(
     train_f1 = balanced["classification_metrics"]["train_in_sample"]["macro"]["f1"]
     validation_f1 = balanced["classification_metrics"]["validation"]["macro"]["f1"]
     f1_gap = round(train_f1 - validation_f1, 6)
-    status = (
+    assessment = (
         "POSSIBLE_OVERFITTING"
         if f1_gap >= OVERFIT_F1_GAP_THRESHOLD
         else "NO_LARGE_MACRO_F1_GAP_OBSERVED"
@@ -1078,13 +1197,12 @@ def run_experiment(
         "threshold_optimization": balanced["threshold_optimization"],
         "baseline_comparisons": baseline_comparisons,
         "overfitting_assessment": {
-            "status": status,
+            "status": assessment,
             "macro_f1_gap_train_minus_validation": f1_gap,
             "heuristic_threshold": OVERFIT_F1_GAP_THRESHOLD,
             "caveat": "Single chronological split; diagnostic heuristic, not a statistical proof.",
         },
     }
-
 
 def _load_manifested_data(
     input_dir: Path, symbol: str, days: int, commit_sha: str
@@ -1240,7 +1358,7 @@ def _render_weighting_metrics_section(
     ]
     for item in experiments:
         variants = item.get("model_variants")
-        for name in ("weight_none", "weight_balanced", "weight_intermediate"):
+        for name in WEIGHTING_POLICY_NAMES:
             if variants is None:
                 lines.append(
                     f"| {item['pair']} | {item['timeframe']} | {name} "
@@ -1270,7 +1388,7 @@ def _render_threshold_optimization_section(
     ]
     for item in experiments:
         variants = item.get("model_variants")
-        for name in ("weight_none", "weight_balanced", "weight_intermediate"):
+        for name in WEIGHTING_POLICY_NAMES:
             if variants is None:
                 lines.append(
                     f"| {item['pair']} | {item['timeframe']} | {name} "
@@ -1362,6 +1480,42 @@ def _render_confusion_matrix_section(
     return lines
 
 
+def _format_probability_metric(value: float | None) -> str:
+    """Format nullable probability metrics as N/A."""
+    return f"{value:.4f}" if value is not None else "N/A"
+
+
+def _render_probability_diagnostics_section(
+    experiments: list[dict[str, Any]],
+) -> list[str]:
+    """Render calibration and forward probability metrics for every fitted model."""
+    lines = [
+        "### Probability quality diagnostics",
+        "",
+        "| Pair | TF | Scenario | Policy | Segment | Brier multi | Brier HOLD | ECE multi | ECE HOLD | HOLD AUC | HOLD PR-AUC |",
+        "|---|---:|---|---|---|---:|---:|---:|---:|---:|---:|",
+    ]
+    for item in experiments:
+        variants = item.get("model_variants")
+        if variants is None:
+            continue
+        for name in WEIGHTING_POLICY_NAMES:
+            diagnostic = variants[name]["probability_diagnostics"]
+            for segment in ("calibration", "forward_validation"):
+                values = diagnostic[segment]
+                lines.append(
+                    f"| {item['pair']} | {item['timeframe']} | {item['scenario']} "
+                    f"| {name} | {segment} "
+                    f"| {_format_probability_metric(values['brier_score']['multiclass'])} "
+                    f"| {_format_probability_metric(values['brier_score']['hold_binary'])} "
+                    f"| {_format_probability_metric(values['ece']['multiclass_macro'])} "
+                    f"| {_format_probability_metric(values['ece']['hold_binary'])} "
+                    f"| {_format_probability_metric(values['hold_auc'])} "
+                    f"| {_format_probability_metric(values['hold_pr_auc'])} |"
+                )
+    return lines
+
+
 def render_markdown(report: dict[str, Any]) -> str:
     """Render classification diagnostics for the GitHub Actions summary."""
     experiments = report["experiments"]
@@ -1378,6 +1532,7 @@ def render_markdown(report: dict[str, Any]) -> str:
     lines.extend(["", *_render_classwise_metrics_section(experiments)])
     lines.extend(["", *_render_weighting_metrics_section(experiments)])
     lines.extend(["", *_render_threshold_optimization_section(experiments)])
+    lines.extend(["", *_render_probability_diagnostics_section(experiments)])
     lines.extend(["", *_render_prediction_distribution_section(experiments)])
     lines.extend(["", *_render_confusion_matrix_section(experiments)])
     lines.extend(
@@ -1396,18 +1551,84 @@ def render_markdown(report: dict[str, Any]) -> str:
 
 def _validate_diagnostic_parameters(
     days: int,
-    hold_weight_multiplier: float,
     calibration_fraction: float,
     minimum_hold_precision: float,
     minimum_hold_recall: float,
 ) -> dict[str, dict[str, Any]]:
-    """Validate the configuration and return the canonical weighting policies."""
+    """Validate run parameters and return only approved weighting policies."""
     if days not in (1, 7, 30, 90, 730):
         raise ValueError("diagnostic_days_out_of_policy")
-    policies = weighting_policy_specs(hold_weight_multiplier)
     _validate_calibration_fraction(calibration_fraction)
     _validate_threshold_constraints(minimum_hold_precision, minimum_hold_recall)
-    return policies
+    return weighting_policy_specs()
+
+
+def parse_barrier_scenario(value: str) -> dict[str, Any]:
+    """Parse a NAME:HORIZON:TP:SL scenario supplied by workflow or CLI."""
+    parts = value.split(":")
+    if len(parts) != 4:
+        raise argparse.ArgumentTypeError("scenario_must_be_NAME_HORIZON_TP_SL")
+    try:
+        scenario = {
+            "name": parts[0].strip(),
+            "horizon_candles": int(parts[1]),
+            "take_profit_multiplier": float(parts[2]),
+            "stop_loss_multiplier": float(parts[3]),
+        }
+        return _validate_barrier_scenarios([scenario])[0]
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(str(error)) from error
+
+
+def _validate_barrier_scenarios(
+    scenarios: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Validate scenario names and positive numeric barrier settings."""
+    if not scenarios:
+        raise ValueError("barrier_scenarios_empty")
+    validated: list[dict[str, Any]] = []
+    names: set[str] = set()
+    for scenario in scenarios:
+        name = scenario.get("name")
+        horizon = scenario.get("horizon_candles")
+        take_profit = scenario.get("take_profit_multiplier")
+        stop_loss = scenario.get("stop_loss_multiplier")
+        if not isinstance(name, str) or not name.strip() or name in names:
+            raise ValueError("barrier_scenario_name_missing_or_duplicate")
+        if isinstance(horizon, bool) or not isinstance(horizon, int) or horizon < 1:
+            raise ValueError("horizon_candles_must_be_positive_integer")
+        for value, field_name in (
+            (take_profit, "take_profit_multiplier"),
+            (stop_loss, "stop_loss_multiplier"),
+        ):
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not np.isfinite(float(value))
+                or value <= 0
+            ):
+                raise ValueError(f"{field_name}_must_be_finite_and_positive")
+        names.add(name)
+        validated.append({
+            "name": name,
+            "horizon_candles": horizon,
+            "take_profit_multiplier": float(take_profit),
+            "stop_loss_multiplier": float(stop_loss),
+        })
+    return validated
+
+
+def _default_barrier_scenarios() -> list[dict[str, Any]]:
+    """Return the requested Baseline and Short_Horizon defaults."""
+    return [
+        {
+            "name": name,
+            "horizon_candles": horizon,
+            "take_profit_multiplier": take_profit,
+            "stop_loss_multiplier": stop_loss,
+        }
+        for name, horizon, take_profit, stop_loss in DEFAULT_BARRIER_SCENARIOS
+    ]
 
 
 def _load_diagnostic_datasets(
@@ -1426,27 +1647,31 @@ def _load_diagnostic_datasets(
 def _run_diagnostic_experiments(
     datasets: dict[str, DataFrame],
     *,
-    hold_weight_multiplier: float,
+    barrier_scenarios: list[dict[str, Any]],
     calibration_fraction: float,
     minimum_hold_precision: float,
     minimum_hold_recall: float,
 ) -> list[dict[str, Any]]:
-    """Run the approved pair/timeframe grid with the supplied v4 policies."""
+    """Train both policies independently for each pair/timeframe/scenario."""
     experiments: list[dict[str, Any]] = []
     for symbol in SYMBOLS:
         pair = f"{symbol[:-4]}/USDT"
         for timeframe in TIMEFRAME_MINUTES:
-            experiments.append(
-                run_experiment(
-                    pair,
-                    timeframe,
-                    datasets[symbol],
-                    hold_weight_multiplier=hold_weight_multiplier,
-                    calibration_fraction=calibration_fraction,
-                    minimum_hold_precision=minimum_hold_precision,
-                    minimum_hold_recall=minimum_hold_recall,
+            for scenario in barrier_scenarios:
+                experiments.append(
+                    run_experiment(
+                        pair,
+                        timeframe,
+                        datasets[symbol],
+                        scenario_name=scenario["name"],
+                        horizon_candles=scenario["horizon_candles"],
+                        take_profit_multiplier=scenario["take_profit_multiplier"],
+                        stop_loss_multiplier=scenario["stop_loss_multiplier"],
+                        calibration_fraction=calibration_fraction,
+                        minimum_hold_precision=minimum_hold_precision,
+                        minimum_hold_recall=minimum_hold_recall,
+                    )
                 )
-            )
     return experiments
 
 
@@ -1456,14 +1681,15 @@ def _build_diagnostic_report(
     commit_sha: str,
     provenance: list[dict[str, Any]],
     experiments: list[dict[str, Any]],
-    hold_weight_multiplier: float,
+    barrier_scenarios: list[dict[str, Any]],
     calibration_fraction: float,
     minimum_hold_precision: float,
     minimum_hold_recall: float,
     policy_specs: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
-    """Construct the v4 diagnostic report without performing economic evaluation."""
-    trained_count = sum(item["status"] == "TRAINED" for item in experiments)
+    """Construct the v5 report for independently trained barrier scenarios."""
+    trained_experiments = sum(item["status"] == "TRAINED" for item in experiments)
+    trained_models = sum(len(item["model_variants"] or {}) for item in experiments)
     return {
         "schema_version": REPORT_SCHEMA,
         "commit_sha": commit_sha,
@@ -1473,19 +1699,13 @@ def _build_diagnostic_report(
         "economic_metrics_reported": False,
         "requested_days": days,
         "data_window_selection": {
-            "configured_days": int(
-                os.environ.get("ALIX_DIAGNOSTIC_CONFIGURED_DAYS", str(days))
-            ),
+            "configured_days": int(os.environ.get("ALIX_DIAGNOSTIC_CONFIGURED_DAYS", str(days))),
             "selected_days": days,
-            "fallback_reason": os.environ.get(
-                "ALIX_DIAGNOSTIC_FALLBACK_REASON", "NONE"
-            ),
+            "fallback_reason": os.environ.get("ALIX_DIAGNOSTIC_FALLBACK_REASON", "NONE"),
             "policy": (
-                "Fetch the configured window in individually validated pages of "
-                "at most 1,000 one-minute candles with a 0.25-second delay between "
-                "pages; retry incomplete pages and transient HTTP failures with "
-                "bounded retries; never shorten the requested window or synthesize "
-                "missing candles."
+                "Fetch the configured window in validated pages of at most 1,000 "
+                "one-minute candles with a 0.25-second delay; reject gaps and never "
+                "shorten the requested window or synthesize missing candles."
             ),
             "fetch_page_size_candles": provenance[0]["fetch_page_size_candles"],
             "inter_page_delay_seconds": provenance[0]["inter_page_delay_seconds"],
@@ -1507,6 +1727,7 @@ def _build_diagnostic_report(
         "input_datasets": provenance,
         "allowed_timeframes": list(TIMEFRAME_MINUTES),
         "labels": list(LABELS),
+        "triple_barrier_scenarios": barrier_scenarios,
         "model": {
             "family": "LightGBM LGBMClassifier",
             "n_estimators": 80,
@@ -1518,28 +1739,33 @@ def _build_diagnostic_report(
             "primary_variant": "weight_balanced",
         },
         "weighting_policy": {
-            "hold_weight_multiplier": float(hold_weight_multiplier),
             "policies": {
-                name: {
-                    "class_weight": spec["class_weight"],
-                    "hold_weight_multiplier": spec["hold_weight_multiplier"],
-                }
+                name: {"class_weight": spec["class_weight"]}
                 for name, spec in policy_specs.items()
             },
+            "excluded_policy": "weight_intermediate",
+            "excluded_policy_reason": (
+                "Removed from the model-fitting grid after lower Macro-F1 and "
+                "near-zero HOLD recall in the V4 diagnostic."
+            ),
         },
         "calibration_policy": {
             "fraction_of_validation": float(calibration_fraction),
             "temporal_position": "FIRST_CHRONOLOGICAL_SEGMENT_OF_VALIDATION",
-            "reason": (
-                "Calibration precedes forward threshold evaluation. Using the final "
-                "Validation segment to tune a threshold and then scoring all of "
-                "Validation would leak calibration observations into evaluation."
-            ),
             "minimum_hold_support": MIN_CALIBRATION_HOLD_SAMPLES,
             "minimum_non_hold_support": MIN_CALIBRATION_NON_HOLD_SAMPLES,
             "minimum_hold_precision": float(minimum_hold_precision),
             "minimum_hold_recall": float(minimum_hold_recall),
             "threshold_grid_steps": HOLD_THRESHOLD_GRID_STEPS,
+            "probability_diagnostics": [
+                "multiclass_brier_score",
+                "hold_binary_brier_score",
+                "multiclass_macro_ece",
+                "hold_binary_ece",
+                "hold_auc",
+                "hold_pr_auc",
+            ],
+            "ece_bin_count": 10,
             "primary_evaluation_scope": "POST_CALIBRATION_REMAINING_VALIDATION",
             "full_validation_scope": "DESCRIPTIVE_ONLY_INCLUDES_CALIBRATION_ROWS",
         },
@@ -1564,15 +1790,13 @@ def _build_diagnostic_report(
             "validation_start_fraction": VALIDATION_START_FRACTION,
             "validation_end_fraction": VALIDATION_END_FRACTION,
             "chronological_training_only": True,
-            "label_window_purge": "create_purged_embargo_split",
-            "pre_validation_embargo": True,
-            "post_validation_embargo": True,
-            "label_horizon_candles": 24,
-            "atr_period": 14,
-            "take_profit_atr_multiple": 2.0,
-            "stop_loss_atr_multiple": 1.0,
+            "label_window_purge": "actual_label_end_idx_overlap",
+            "pre_validation_embargo": "exact_label_horizon_candles",
+            "post_validation_embargo": "exact_label_horizon_candles",
+            "feature_lookback_is_causal": True,
         },
-        "trained_models": trained_count,
+        "trained_experiments": trained_experiments,
+        "trained_models": trained_models,
         "experiment_count": len(experiments),
         "experiments": experiments,
         "safety": {
@@ -1611,6 +1835,7 @@ def _print_diagnostic_completion(
                 "report_path": str(output_path),
                 "commit_sha": commit_sha,
                 "experiment_count": report["experiment_count"],
+                "trained_experiments": report["trained_experiments"],
                 "trained_models": report["trained_models"],
                 "economic_evaluation_performed": False,
                 "Champion": None,
@@ -1628,23 +1853,22 @@ def run_diagnostic(
     *,
     days: int,
     commit_sha: str,
-    hold_weight_multiplier: float = DEFAULT_HOLD_WEIGHT_MULTIPLIER,
     calibration_fraction: float = DEFAULT_CALIBRATION_FRACTION,
     minimum_hold_precision: float = DEFAULT_MINIMUM_HOLD_PRECISION,
     minimum_hold_recall: float = DEFAULT_MINIMUM_HOLD_RECALL,
+    barrier_scenarios: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Execute the classification-only real-data diagnostic and persist v4 output."""
+    """Run classification diagnostics independently across configured scenarios."""
     policy_specs = _validate_diagnostic_parameters(
-        days,
-        hold_weight_multiplier,
-        calibration_fraction,
-        minimum_hold_precision,
-        minimum_hold_recall,
+        days, calibration_fraction, minimum_hold_precision, minimum_hold_recall
+    )
+    scenarios = _validate_barrier_scenarios(
+        barrier_scenarios if barrier_scenarios is not None else _default_barrier_scenarios()
     )
     datasets, provenance = _load_diagnostic_datasets(input_dir, days, commit_sha)
     experiments = _run_diagnostic_experiments(
         datasets,
-        hold_weight_multiplier=hold_weight_multiplier,
+        barrier_scenarios=scenarios,
         calibration_fraction=calibration_fraction,
         minimum_hold_precision=minimum_hold_precision,
         minimum_hold_recall=minimum_hold_recall,
@@ -1654,7 +1878,7 @@ def run_diagnostic(
         commit_sha=commit_sha,
         provenance=provenance,
         experiments=experiments,
-        hold_weight_multiplier=hold_weight_multiplier,
+        barrier_scenarios=scenarios,
         calibration_fraction=calibration_fraction,
         minimum_hold_precision=minimum_hold_precision,
         minimum_hold_recall=minimum_hold_recall,
@@ -1672,14 +1896,7 @@ def main() -> int:
     parser.add_argument("--days", type=int, choices=(1, 7, 30, 90, 730), default=730)
     parser.add_argument("--commit-sha", required=True)
     parser.add_argument(
-        "--hold-weight-multiplier",
-        type=float,
-        default=DEFAULT_HOLD_WEIGHT_MULTIPLIER,
-    )
-    parser.add_argument(
-        "--calibration-fraction",
-        type=float,
-        default=DEFAULT_CALIBRATION_FRACTION,
+        "--calibration-fraction", type=float, default=DEFAULT_CALIBRATION_FRACTION
     )
     parser.add_argument(
         "--minimum-hold-precision",
@@ -1691,18 +1908,31 @@ def main() -> int:
         type=float,
         default=DEFAULT_MINIMUM_HOLD_RECALL,
     )
+    parser.add_argument(
+        "--scenario",
+        action="append",
+        type=parse_barrier_scenario,
+        dest="barrier_scenarios",
+        help="Repeat NAME:HORIZON_CANDLES:TAKE_PROFIT_MULTIPLIER:STOP_LOSS_MULTIPLIER.",
+    )
     args = parser.parse_args()
+    scenarios = (
+        args.barrier_scenarios
+        if args.barrier_scenarios is not None
+        else _default_barrier_scenarios()
+    )
     report = run_diagnostic(
         args.input_dir,
         args.output,
         days=args.days,
         commit_sha=args.commit_sha,
-        hold_weight_multiplier=args.hold_weight_multiplier,
         calibration_fraction=args.calibration_fraction,
         minimum_hold_precision=args.minimum_hold_precision,
         minimum_hold_recall=args.minimum_hold_recall,
+        barrier_scenarios=scenarios,
     )
-    if report["experiment_count"] != 8:
+    expected_experiments = len(SYMBOLS) * len(TIMEFRAME_MINUTES) * len(scenarios)
+    if report["experiment_count"] != expected_experiments:
         raise RuntimeError("diagnostic_experiment_count_mismatch")
     return 0
 

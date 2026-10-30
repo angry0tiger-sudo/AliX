@@ -27,6 +27,8 @@ from scripts.run_ml_core_real_data_baseline import (
     predictions_from_probabilities,
     split_validation_for_calibration,
     threshold_optimization_diagnostics,
+    probability_quality_metrics,
+    probability_diagnostics_by_temporal_segment,
     weighting_policy_specs,
     _serialize_validation_probabilities,
 )
@@ -245,25 +247,13 @@ def test_short_real_data_window_is_skipped_without_training() -> None:
     assert result["label_distribution"]["available_unpartitioned"]["total"] == 0
 
 
-def test_weighting_policy_specs_apply_only_the_configured_hold_multiplier() -> None:
-    policies = weighting_policy_specs(3.0)
+def test_weighting_policy_specs_expose_only_none_and_balanced() -> None:
+    policies = weighting_policy_specs()
 
-    assert policies["weight_none"]["class_weight"] is None
-    assert policies["weight_balanced"]["class_weight"] == "balanced"
-    assert policies["weight_intermediate"]["class_weight"] == {
-        "BUY": 1.0,
-        "SELL": 1.0,
-        "HOLD": 3.0,
-    }
-    assert policies["weight_intermediate"]["hold_weight_multiplier"] == 3.0
+    assert set(policies) == {"weight_none", "weight_balanced"}
+    assert policies["weight_none"] == {"class_weight": None}
+    assert policies["weight_balanced"] == {"class_weight": "balanced"}
 
-
-@pytest.mark.parametrize("invalid", [0.0, -1.0, float("nan"), float("inf"), True])
-def test_weighting_policy_rejects_invalid_hold_multipliers(invalid: float) -> None:
-    with pytest.raises(
-        ValueError, match="hold_weight_multiplier_must_be_finite_and_positive"
-    ):
-        weighting_policy_specs(invalid)
 
 
 def test_probability_matrix_is_reordered_to_fixed_label_contract() -> None:
@@ -455,13 +445,67 @@ def test_diagnostic_report_unweighted_policy_uses_top_level_class_weight_field()
             }
         ],
         experiments=[],
-        hold_weight_multiplier=3.0,
+        barrier_scenarios=[
+            {"name": "Baseline", "horizon_candles": 24, "take_profit_multiplier": 2.0, "stop_loss_multiplier": 1.0},
+            {"name": "Short_Horizon", "horizon_candles": 12, "take_profit_multiplier": 2.0, "stop_loss_multiplier": 1.0},
+        ],
         calibration_fraction=0.20,
         minimum_hold_precision=0.40,
         minimum_hold_recall=0.20,
-        policy_specs=weighting_policy_specs(3.0),
+        barrier_scenarios=[
+            {"name": "Baseline", "horizon_candles": 24, "take_profit_multiplier": 2.0, "stop_loss_multiplier": 1.0},
+            {"name": "Short_Horizon", "horizon_candles": 12, "take_profit_multiplier": 2.0, "stop_loss_multiplier": 1.0},
+        ],
+        policy_specs=weighting_policy_specs(),
     )
 
     unweighted = report["baseline_comparisons"]["lightgbm_unweighted"]
     assert unweighted["class_weight"] is None
     assert "model_parameters" not in unweighted
+
+
+
+def test_probability_quality_metrics_compute_brier_ece_auc_and_average_precision() -> None:
+    actual = Series(["HOLD", "HOLD", "BUY", "SELL"])
+    probabilities = np.asarray(
+        [
+            [0.05, 0.05, 0.90],
+            [0.10, 0.10, 0.80],
+            [0.80, 0.10, 0.10],
+            [0.10, 0.80, 0.10],
+        ]
+    )
+    result = probability_quality_metrics(actual, probabilities)
+
+    assert result["sample_count"] == 4
+    assert result["support"] == {"hold_positive": 2, "non_hold_negative": 2}
+    assert result["brier_score"]["multiclass"] == pytest.approx(0.04875, abs=1e-8)
+    assert result["brier_score"]["hold_binary"] == pytest.approx(0.0175, abs=1e-8)
+    assert result["ece"]["hold_binary"] is not None
+    assert result["ece"]["multiclass_macro"] is not None
+    assert result["hold_auc"] == 1.0
+    assert result["hold_pr_auc"] == 1.0
+
+
+def test_probability_quality_metrics_return_null_auc_without_both_hold_classes() -> None:
+    actual = Series(["BUY", "SELL", "BUY"])
+    probabilities = np.asarray(
+        [[0.8, 0.1, 0.1], [0.1, 0.8, 0.1], [0.7, 0.2, 0.1]]
+    )
+    result = probability_quality_metrics(actual, probabilities)
+
+    assert result["hold_auc"] is None
+    assert result["hold_pr_auc"] is None
+    assert result["brier_score"]["hold_binary"] is not None
+
+
+def test_probability_metrics_use_disjoint_calibration_and_forward_rows() -> None:
+    actual = Series(["HOLD", "BUY", "HOLD", "SELL", "BUY"] * 20)
+    probabilities = np.tile(np.asarray([[0.2, 0.2, 0.6]]), (len(actual), 1))
+    result = probability_diagnostics_by_temporal_segment(
+        actual, probabilities, calibration_fraction=0.20
+    )
+
+    assert result["calibration"]["sample_count"] == 20
+    assert result["forward_validation"]["sample_count"] == 80
+    assert result["calibration_overlap"] is False

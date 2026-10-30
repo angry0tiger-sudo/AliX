@@ -91,20 +91,19 @@ def create_purged_embargo_split(
     *,
     validation_start: int,
     validation_end: int,
-    longest_feature_window: int,
+    label_horizon_candles: int = 24,
 ) -> PurgedEmbargoSplit:
-    """Split samples by actual label-window overlap and a post-test embargo.
+    """Purge overlapping event labels and embargo exactly one label horizon.
 
     Each sample's forward label window is [index + 1, label_end_indices[index]].
-    Any candidate training window overlapping a test sample's forward window is
-    purged. Test and embargo rows are excluded from the training indices.
+    Candidate training windows overlapping validation label windows are purged.
+    Pre-validation and post-validation embargo both equal the configured horizon.
     """
     if not label_end_indices:
         raise ValueError("label_end_indices_empty")
-    feature_window = _positive_integer(
-        longest_feature_window, "longest_feature_window_must_be_positive_integer"
+    embargo = _positive_integer(
+        label_horizon_candles, "label_horizon_candles_must_be_positive_integer"
     )
-    embargo = max(feature_window, int(0.01 * len(label_end_indices)))
     start, end = _validated_window(
         len(label_end_indices), validation_start, validation_end
     )

@@ -66,8 +66,9 @@ def test_default_target_contract_is_tp_two_atr_sl_one_atr_horizon_24() -> None:
 
 def test_labeler_signature_and_label_end_idx_contract() -> None:
     parameters = signature(apply_adaptive_triple_barrier).parameters
-    assert "k_upper" in parameters
-    assert "k_lower" in parameters
+    assert "horizon_candles" in parameters
+    assert "take_profit_multiplier" in parameters
+    assert "stop_loss_multiplier" in parameters
 
     candles = market_frame(40)
     labels = apply_adaptive_triple_barrier(
@@ -100,7 +101,7 @@ def test_first_take_profit_hit_is_buy_and_stop_loss_hit_is_sell() -> None:
     labels = apply_adaptive_triple_barrier(
         candles,
         atr_values=constant_atr(candles, 1.0),
-        horizon=3,
+        horizon_candles=3,
         atr_period=1,
     )
 
@@ -113,7 +114,7 @@ def test_first_take_profit_hit_is_buy_and_stop_loss_hit_is_sell() -> None:
 def test_horizon_expiry_is_hold_and_tail_without_full_horizon_is_unlabeled() -> None:
     candles = market_frame(40)
     labels = apply_adaptive_triple_barrier(
-        candles, atr_values=constant_atr(candles, 1.0), horizon=24
+        candles, atr_values=constant_atr(candles, 1.0), horizon_candles=24
     )
 
     assert labels.iloc[14]["label"] == "HOLD"
@@ -132,7 +133,7 @@ def test_label_distribution_fixture_contains_buy_sell_and_hold() -> None:
     labels = apply_adaptive_triple_barrier(
         candles,
         atr_values=constant_atr(candles, 1.0),
-        horizon=3,
+        horizon_candles=3,
         atr_period=1,
     )
     observed = set(labels["label"].dropna().tolist())
@@ -179,12 +180,12 @@ def test_computed_atr_warmup_is_unlabeled_and_flat_market_rejects_zero_atr() -> 
 
 def test_invalid_configuration_and_malformed_ohlcv_fail_closed() -> None:
     candles = market_frame(40)
-    with pytest.raises(ValueError, match="horizon_must_be_positive_integer"):
-        apply_adaptive_triple_barrier(candles, horizon=0)
+    with pytest.raises(ValueError, match="horizon_candles_must_be_positive_integer"):
+        apply_adaptive_triple_barrier(candles, horizon_candles=0)
     with pytest.raises(ValueError, match="atr_period_must_be_positive_integer"):
         calculate_atr(candles, period=0)
     with pytest.raises(ValueError, match="barrier_multipliers"):
-        apply_adaptive_triple_barrier(candles, k_upper=float("nan"))
+        apply_adaptive_triple_barrier(candles, take_profit_multiplier=float("nan"))
     with pytest.raises(ValueError, match="atr_length_mismatch"):
         apply_adaptive_triple_barrier(candles, atr_values=pd.Series([1.0, 2.0]))
     with pytest.raises(ValueError, match="timezone_required"):
@@ -195,3 +196,36 @@ def test_invalid_configuration_and_malformed_ohlcv_fail_closed() -> None:
         invalid = candles.copy()
         invalid.loc[2, "close"] = float("nan")
         calculate_atr(invalid)
+
+
+
+def test_short_horizon_and_custom_barrier_multipliers_are_applied() -> None:
+    candles = market_frame(40)
+    labels = apply_adaptive_triple_barrier(
+        candles,
+        atr_values=constant_atr(candles, 1.0),
+        horizon_candles=12,
+        take_profit_multiplier=3.0,
+        stop_loss_multiplier=1.5,
+    )
+
+    row = labels.iloc[10]
+    assert row["take_profit_price"] == pytest.approx(103.0)
+    assert row["stop_loss_price"] == pytest.approx(98.5)
+    assert row["label"] == "HOLD"
+    assert row["label_end_idx"] == 22
+
+
+def test_new_barrier_parameters_reject_invalid_values() -> None:
+    candles = market_frame(40)
+    atr = constant_atr(candles, 1.0)
+    with pytest.raises(ValueError, match="horizon_candles_must_be_positive_integer"):
+        apply_adaptive_triple_barrier(candles, atr_values=atr, horizon_candles=0)
+    with pytest.raises(ValueError, match="take_profit_multiplier"):
+        apply_adaptive_triple_barrier(
+            candles, atr_values=atr, take_profit_multiplier=0.0
+        )
+    with pytest.raises(ValueError, match="stop_loss_multiplier"):
+        apply_adaptive_triple_barrier(
+            candles, atr_values=atr, stop_loss_multiplier=float("inf")
+        )

@@ -1,9 +1,9 @@
 """ATR-adaptive Triple-Barrier labels for offline research only.
 
-The canonical target geometry is absolute-price ATR(14): TP = 2 * ATR and
-SL = 1 * ATR. Labels inspect only the next 24 candles after each entry close.
-When TP and SL are both touched on one candle, stop-loss wins. Incomplete
-ATR history or an incomplete 24-candle future horizon is left unlabeled.
+The default target geometry is absolute-price ATR(14): TP = 2 * ATR and
+SL = 1 * ATR over the next 24 candles. Horizon and both barrier multipliers
+are explicit per-run inputs. When TP and SL are both touched on one candle,
+stop-loss wins. Incomplete ATR history or future horizon is left unlabeled.
 This module does not create features, train models, or place orders.
 """
 
@@ -17,9 +17,12 @@ import pandas as pd
 from pandas import DataFrame
 
 ATR_PERIOD: Final[int] = 14
-K_UPPER_DEFAULT: Final[float] = 2.0
-K_LOWER_DEFAULT: Final[float] = 1.0
+TAKE_PROFIT_MULTIPLIER_DEFAULT: Final[float] = 2.0
+STOP_LOSS_MULTIPLIER_DEFAULT: Final[float] = 1.0
 LABEL_HORIZON_CANDLES: Final[int] = 24
+# Backward-compatible constant aliases.
+K_UPPER_DEFAULT: Final[float] = TAKE_PROFIT_MULTIPLIER_DEFAULT
+K_LOWER_DEFAULT: Final[float] = STOP_LOSS_MULTIPLIER_DEFAULT
 EXIT_REASONS: Final[tuple[str, ...]] = (
     "TP_HIT",
     "SL_HIT",
@@ -159,17 +162,17 @@ def calculate_atr(candles: DataFrame, period: int = ATR_PERIOD) -> pd.Series:
 
 def _validate_barrier_configuration(
     atr_period: int,
-    horizon: int,
-    k_upper: float,
-    k_lower: float,
+    horizon_candles: int,
+    take_profit_multiplier: float,
+    stop_loss_multiplier: float,
 ) -> None:
     _positive_integer(atr_period, "atr_period")
-    _positive_integer(horizon, "horizon")
+    _positive_integer(horizon_candles, "horizon_candles")
     if (
-        not isfinite(float(k_upper))
-        or not isfinite(float(k_lower))
-        or k_upper <= 0
-        or k_lower <= 0
+        not isfinite(float(take_profit_multiplier))
+        or not isfinite(float(stop_loss_multiplier))
+        or take_profit_multiplier <= 0
+        or stop_loss_multiplier <= 0
     ):
         raise ValueError("barrier_multipliers_must_be_finite_and_positive")
 
@@ -228,11 +231,11 @@ def _validated_atr_value(raw_atr: float) -> float:
 def _barrier_prices(
     entry_price: float,
     atr: float,
-    k_upper: float,
-    k_lower: float,
+    take_profit_multiplier: float,
+    stop_loss_multiplier: float,
 ) -> tuple[float, float]:
-    take_profit_price = entry_price + k_upper * atr
-    stop_loss_price = entry_price - k_lower * atr
+    take_profit_price = entry_price + take_profit_multiplier * atr
+    stop_loss_price = entry_price - stop_loss_multiplier * atr
     if not isfinite(take_profit_price) or not isfinite(stop_loss_price):
         raise ValueError("atr_barrier_price_not_finite")
     if stop_loss_price <= 0:
@@ -248,9 +251,9 @@ def _resolve_event_horizon(
     atr: float,
     take_profit_price: float,
     stop_loss_price: float,
-    horizon: int,
+    horizon_candles: int,
 ) -> TargetRecord:
-    last_horizon_index = event_index + horizon
+    last_horizon_index = event_index + horizon_candles
     if last_horizon_index >= len(normalized):
         return _record(
             event_index,
@@ -307,9 +310,9 @@ def _label_one_event(
     *,
     computed_atr: bool,
     atr_period: int,
-    horizon: int,
-    k_upper: float,
-    k_lower: float,
+    horizon_candles: int,
+    take_profit_multiplier: float,
+    stop_loss_multiplier: float,
 ) -> TargetRecord:
     entry_row = normalized.iloc[event_index]
     entry_price = float(entry_row["close"])
@@ -321,7 +324,7 @@ def _label_one_event(
 
     atr = _validated_atr_value(float(atr_values[event_index]))
     take_profit_price, stop_loss_price = _barrier_prices(
-        entry_price, atr, k_upper, k_lower
+        entry_price, atr, take_profit_multiplier, stop_loss_multiplier
     )
     return _resolve_event_horizon(
         normalized,
@@ -331,7 +334,7 @@ def _label_one_event(
         atr,
         take_profit_price,
         stop_loss_price,
-        horizon,
+        horizon_candles,
     )
 
 
@@ -340,18 +343,18 @@ def apply_adaptive_triple_barrier(
     *,
     atr_values: pd.Series | None = None,
     atr_period: int = ATR_PERIOD,
-    horizon: int = LABEL_HORIZON_CANDLES,
-    k_upper: float = K_UPPER_DEFAULT,
-    k_lower: float = K_LOWER_DEFAULT,
+    horizon_candles: int = LABEL_HORIZON_CANDLES,
+    take_profit_multiplier: float = TAKE_PROFIT_MULTIPLIER_DEFAULT,
+    stop_loss_multiplier: float = STOP_LOSS_MULTIPLIER_DEFAULT,
 ) -> DataFrame:
     """Create BUY/SELL/HOLD labels while keeping future outcomes out of features.
 
     At index t, entry is close[t] and ATR[t] uses only OHLCV through t.
-    Future OHLCV at t+1 ... t+horizon is inspected only to determine the label.
+    Future OHLCV at t+1 ... t+horizon_candles is inspected only to determine the label.
     Stop-loss wins when both barriers are hit on the same candle. Tail rows
     without a complete future horizon are intentionally left unlabeled.
     """
-    _validate_barrier_configuration(atr_period, horizon, k_upper, k_lower)
+    _validate_barrier_configuration(atr_period, horizon_candles, take_profit_multiplier, stop_loss_multiplier)
     normalized = _validated_ohlcv(candles)
     computed_atr = atr_values is None
     atr_series = calculate_atr(normalized, atr_period) if computed_atr else atr_values
@@ -366,9 +369,9 @@ def apply_adaptive_triple_barrier(
             atr_array,
             computed_atr=computed_atr,
             atr_period=atr_period,
-            horizon=horizon,
-            k_upper=k_upper,
-            k_lower=k_lower,
+            horizon_candles=horizon_candles,
+            take_profit_multiplier=take_profit_multiplier,
+            stop_loss_multiplier=stop_loss_multiplier,
         )
         for event_index in range(len(normalized))
     ]
