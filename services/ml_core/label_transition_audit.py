@@ -793,8 +793,12 @@ def _validate_source_dataset_metadata(
         or dataset.get("csv_sha256") != source_hash
     ):
         raise ValueError("source_dataset_metadata_mismatch")
-    start = pd.Timestamp(dataset.get("start_utc"))
-    end = pd.Timestamp(dataset.get("end_utc"))
+    raw_start = dataset.get("start_utc")
+    raw_end = dataset.get("end_utc")
+    if not isinstance(raw_start, str) or not isinstance(raw_end, str):
+        raise ValueError("source_dataset_timestamp_invalid")
+    start = pd.Timestamp(raw_start)
+    end = pd.Timestamp(raw_end)
     actual_start = pd.Timestamp(candles["date"].iloc[0])
     actual_end = pd.Timestamp(candles["date"].iloc[-1])
     if start.tzinfo is None or end.tzinfo is None:
