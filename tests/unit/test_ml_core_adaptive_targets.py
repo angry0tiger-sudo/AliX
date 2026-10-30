@@ -184,7 +184,9 @@ def test_invalid_configuration_and_malformed_ohlcv_fail_closed() -> None:
         apply_adaptive_triple_barrier(candles, horizon_candles=0)
     with pytest.raises(ValueError, match="atr_period_must_be_positive_integer"):
         calculate_atr(candles, period=0)
-    with pytest.raises(ValueError, match="barrier_multipliers"):
+    with pytest.raises(
+        ValueError, match="take_profit_multiplier_must_be_finite_and_positive"
+    ):
         apply_adaptive_triple_barrier(candles, take_profit_multiplier=float("nan"))
     with pytest.raises(ValueError, match="atr_length_mismatch"):
         apply_adaptive_triple_barrier(candles, atr_values=pd.Series([1.0, 2.0]))
