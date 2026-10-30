@@ -122,11 +122,7 @@ def _validate_report_scenarios(report: dict[str, Any]) -> None:
 def _experiment_key(item: dict[str, Any]) -> tuple[str, str, str]:
     pair = str(item.get("pair"))
     symbol = next(
-        (
-            candidate
-            for candidate, pair_name in PAIR_NAMES.items()
-            if pair_name == pair
-        ),
+        (candidate for candidate, pair_name in PAIR_NAMES.items() if pair_name == pair),
         "",
     )
     timeframe = str(item.get("timeframe"))
@@ -140,9 +136,7 @@ def _experiment_key(item: dict[str, Any]) -> tuple[str, str, str]:
     return symbol, timeframe, scenario_name
 
 
-def _validate_experiment_barrier(
-    item: dict[str, Any], scenario_name: str
-) -> None:
+def _validate_experiment_barrier(item: dict[str, Any], scenario_name: str) -> None:
     expected = SCENARIOS[scenario_name]
     barrier = _mapping(item.get("triple_barrier"), "v4c_barrier_metadata_missing")
     actual = (
@@ -477,9 +471,7 @@ def _serialize_transition_event(
         "first_touch_direction": direction,
         "first_touch_reason": reason,
         "first_touch_row_index": hit_index,
-        "first_touch_timestamp": pd.Timestamp(
-            bars["date"].iloc[hit_index]
-        ).isoformat(),
+        "first_touch_timestamp": pd.Timestamp(bars["date"].iloc[hit_index]).isoformat(),
     }
 
 
@@ -559,9 +551,7 @@ def _pair_experiments(
     symbol: str,
     timeframe: str,
 ) -> dict[str, dict[str, Any]]:
-    return {
-        scenario: indexed[(symbol, timeframe, scenario)] for scenario in SCENARIOS
-    }
+    return {scenario: indexed[(symbol, timeframe, scenario)] for scenario in SCENARIOS}
 
 
 def _audit_timeframe(
@@ -589,8 +579,7 @@ def _audit_timeframe(
         indices_by_scenario[scenario_name] = indices
 
     validation_indices = sorted(
-        set(indices_by_scenario["Baseline"])
-        & set(indices_by_scenario["Short_Horizon"])
+        set(indices_by_scenario["Baseline"]) & set(indices_by_scenario["Short_Horizon"])
     )
     events = collect_transition_events(
         bars,
@@ -643,7 +632,9 @@ def build_transition_audit(
 ) -> dict[str, Any]:
     """Rebuild both V4-C label sets from source OHLCV and audit the validation window."""
     indexed = validate_v4c_report(report)
-    window = _mapping(report.get("data_window_selection"), "data_window_metadata_missing")
+    window = _mapping(
+        report.get("data_window_selection"), "data_window_metadata_missing"
+    )
     selected_days = _integer(window.get("selected_days"), "selected_days_invalid")
     expected_minute_rows = selected_days * 24 * 60
     results: list[dict[str, Any]] = []
@@ -661,9 +652,7 @@ def build_transition_audit(
         )
         results.extend(symbol_results)
 
-    all_events = [
-        event for experiment in results for event in experiment["events"]
-    ]
+    all_events = [event for experiment in results for event in experiment["events"]]
     return {
         "schema_version": AUDIT_SCHEMA,
         "source_artifact": {
