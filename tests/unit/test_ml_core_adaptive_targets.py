@@ -198,7 +198,6 @@ def test_invalid_configuration_and_malformed_ohlcv_fail_closed() -> None:
         calculate_atr(invalid)
 
 
-
 def test_short_horizon_and_custom_barrier_multipliers_are_applied() -> None:
     candles = market_frame(40)
     labels = apply_adaptive_triple_barrier(

@@ -43,7 +43,12 @@ DEFAULT_MINIMUM_HOLD_RECALL = 0.20
 HOLD_THRESHOLD_GRID_STEPS = 201
 WEIGHTING_POLICY_NAMES = ("weight_none", "weight_balanced")
 DEFAULT_BARRIER_SCENARIOS = (
-    ("Baseline", LABEL_HORIZON_CANDLES, TAKE_PROFIT_MULTIPLIER_DEFAULT, STOP_LOSS_MULTIPLIER_DEFAULT),
+    (
+        "Baseline",
+        LABEL_HORIZON_CANDLES,
+        TAKE_PROFIT_MULTIPLIER_DEFAULT,
+        STOP_LOSS_MULTIPLIER_DEFAULT,
+    ),
     ("Short_Horizon", 12, TAKE_PROFIT_MULTIPLIER_DEFAULT, STOP_LOSS_MULTIPLIER_DEFAULT),
 )
 REPORT_SCHEMA = "alix.ml-core.real-data-classification-diagnostic.v5"
@@ -446,7 +451,9 @@ def probability_quality_metrics(
         raise ValueError("probability_metrics_labels_invalid")
 
     actual_values = actual.to_numpy(dtype=object)
-    one_hot = np.column_stack([actual_values == label for label in LABELS]).astype(float)
+    one_hot = np.column_stack([actual_values == label for label in LABELS]).astype(
+        float
+    )
     multiclass_brier = float(np.mean(np.sum((matrix - one_hot) ** 2, axis=1)))
     hold_targets = (actual_values == "HOLD").astype(float)
     hold_probabilities = matrix[:, LABELS.index("HOLD")]
@@ -462,27 +469,34 @@ def probability_quality_metrics(
     has_both_hold_outcomes = int(np.unique(hold_targets).size) == 2
     hold_auc = (
         float(metrics.roc_auc_score(hold_targets, hold_probabilities))
-        if has_both_hold_outcomes else None
+        if has_both_hold_outcomes
+        else None
     )
     hold_pr_auc = (
         float(metrics.average_precision_score(hold_targets, hold_probabilities))
-        if has_both_hold_outcomes else None
+        if has_both_hold_outcomes
+        else None
     )
     return {
         "sample_count": int(len(actual)),
         "support": {
             "hold_positive": int(np.count_nonzero(hold_targets)),
-            "non_hold_negative": int(len(hold_targets) - np.count_nonzero(hold_targets)),
+            "non_hold_negative": int(
+                len(hold_targets) - np.count_nonzero(hold_targets)
+            ),
         },
         "brier_score": {
             "multiclass": round(multiclass_brier, 8),
             "hold_binary": round(hold_brier, 8),
         },
         "ece": {
-            "multiclass_macro": round(multiclass_ece, 8) if multiclass_ece is not None else None,
+            "multiclass_macro": round(multiclass_ece, 8)
+            if multiclass_ece is not None
+            else None,
             "hold_binary": (
                 round(per_class_ece["HOLD"], 8)
-                if per_class_ece["HOLD"] is not None else None
+                if per_class_ece["HOLD"] is not None
+                else None
             ),
             "per_class": {
                 label: round(value, 8) if value is not None else None
@@ -1113,8 +1127,15 @@ def run_experiment(
     }
     if sample_gate["status"] != "PASS":
         result = _skipped_result(
-            pair, timeframe, bars, labels, train_indices, validation_indices,
-            split_info, str(sample_gate["status"]), sample_gate
+            pair,
+            timeframe,
+            bars,
+            labels,
+            train_indices,
+            validation_indices,
+            split_info,
+            str(sample_gate["status"]),
+            sample_gate,
         )
         result.update({"scenario": scenario_name, "triple_barrier": barrier_config})
         return result
@@ -1144,14 +1165,17 @@ def run_experiment(
             "model_parameters": {"class_weight": policy["class_weight"]},
             "classification_metrics": {
                 "train_in_sample": classification_metrics(train_y, train_prediction),
-                "validation": classification_metrics(validation_y, validation_prediction),
+                "validation": classification_metrics(
+                    validation_y, validation_prediction
+                ),
             },
             **validation_classification_diagnostics(
                 validation_y, validation_prediction
             ),
             "hold_metrics": hold_class_metrics(validation_y, validation_prediction),
             "probability_diagnostics": probability_diagnostics_by_temporal_segment(
-                validation_y, validation_probabilities,
+                validation_y,
+                validation_probabilities,
                 calibration_fraction=calibration_fraction,
             ),
             "threshold_optimization": threshold_diagnostics,
@@ -1173,7 +1197,9 @@ def run_experiment(
             "baseline_type": "lightgbm",
             "model_variant": "weight_none",
             "model_parameters": {"class_weight": None},
-            "classification_metrics": unweighted["classification_metrics"]["validation"],
+            "classification_metrics": unweighted["classification_metrics"][
+                "validation"
+            ],
             "confusion_matrix": unweighted["confusion_matrix"],
             "prediction_distribution": unweighted["prediction_distribution"],
         },
@@ -1203,6 +1229,7 @@ def run_experiment(
             "caveat": "Single chronological split; diagnostic heuristic, not a statistical proof.",
         },
     }
+
 
 def _load_manifested_data(
     input_dir: Path, symbol: str, days: int, commit_sha: str
@@ -1609,12 +1636,14 @@ def _validate_barrier_scenarios(
             ):
                 raise ValueError(f"{field_name}_must_be_finite_and_positive")
         names.add(name)
-        validated.append({
-            "name": name,
-            "horizon_candles": horizon,
-            "take_profit_multiplier": float(take_profit),
-            "stop_loss_multiplier": float(stop_loss),
-        })
+        validated.append(
+            {
+                "name": name,
+                "horizon_candles": horizon,
+                "take_profit_multiplier": float(take_profit),
+                "stop_loss_multiplier": float(stop_loss),
+            }
+        )
     return validated
 
 
@@ -1699,9 +1728,13 @@ def _build_diagnostic_report(
         "economic_metrics_reported": False,
         "requested_days": days,
         "data_window_selection": {
-            "configured_days": int(os.environ.get("ALIX_DIAGNOSTIC_CONFIGURED_DAYS", str(days))),
+            "configured_days": int(
+                os.environ.get("ALIX_DIAGNOSTIC_CONFIGURED_DAYS", str(days))
+            ),
             "selected_days": days,
-            "fallback_reason": os.environ.get("ALIX_DIAGNOSTIC_FALLBACK_REASON", "NONE"),
+            "fallback_reason": os.environ.get(
+                "ALIX_DIAGNOSTIC_FALLBACK_REASON", "NONE"
+            ),
             "policy": (
                 "Fetch the configured window in validated pages of at most 1,000 "
                 "one-minute candles with a 0.25-second delay; reject gaps and never "
@@ -1863,7 +1896,9 @@ def run_diagnostic(
         days, calibration_fraction, minimum_hold_precision, minimum_hold_recall
     )
     scenarios = _validate_barrier_scenarios(
-        barrier_scenarios if barrier_scenarios is not None else _default_barrier_scenarios()
+        barrier_scenarios
+        if barrier_scenarios is not None
+        else _default_barrier_scenarios()
     )
     datasets, provenance = _load_diagnostic_datasets(input_dir, days, commit_sha)
     experiments = _run_diagnostic_experiments(

@@ -354,7 +354,9 @@ def apply_adaptive_triple_barrier(
     Stop-loss wins when both barriers are hit on the same candle. Tail rows
     without a complete future horizon are intentionally left unlabeled.
     """
-    _validate_barrier_configuration(atr_period, horizon_candles, take_profit_multiplier, stop_loss_multiplier)
+    _validate_barrier_configuration(
+        atr_period, horizon_candles, take_profit_multiplier, stop_loss_multiplier
+    )
     normalized = _validated_ohlcv(candles)
     computed_atr = atr_values is None
     atr_series = calculate_atr(normalized, atr_period) if computed_atr else atr_values

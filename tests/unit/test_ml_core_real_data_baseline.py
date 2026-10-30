@@ -255,7 +255,6 @@ def test_weighting_policy_specs_expose_only_none_and_balanced() -> None:
     assert policies["weight_balanced"] == {"class_weight": "balanced"}
 
 
-
 def test_probability_matrix_is_reordered_to_fixed_label_contract() -> None:
     class FakeModel:
         classes_ = np.asarray(["BUY", "HOLD", "SELL"])
@@ -446,8 +445,18 @@ def test_diagnostic_report_unweighted_policy_uses_top_level_class_weight_field()
         ],
         experiments=[],
         barrier_scenarios=[
-            {"name": "Baseline", "horizon_candles": 24, "take_profit_multiplier": 2.0, "stop_loss_multiplier": 1.0},
-            {"name": "Short_Horizon", "horizon_candles": 12, "take_profit_multiplier": 2.0, "stop_loss_multiplier": 1.0},
+            {
+                "name": "Baseline",
+                "horizon_candles": 24,
+                "take_profit_multiplier": 2.0,
+                "stop_loss_multiplier": 1.0,
+            },
+            {
+                "name": "Short_Horizon",
+                "horizon_candles": 12,
+                "take_profit_multiplier": 2.0,
+                "stop_loss_multiplier": 1.0,
+            },
         ],
         calibration_fraction=0.20,
         minimum_hold_precision=0.40,
@@ -460,8 +469,9 @@ def test_diagnostic_report_unweighted_policy_uses_top_level_class_weight_field()
     assert "model_parameters" not in unweighted
 
 
-
-def test_probability_quality_metrics_compute_brier_ece_auc_and_average_precision() -> None:
+def test_probability_quality_metrics_compute_brier_ece_auc_and_average_precision() -> (
+    None
+):
     actual = Series(["HOLD", "HOLD", "BUY", "SELL"])
     probabilities = np.asarray(
         [
@@ -483,11 +493,11 @@ def test_probability_quality_metrics_compute_brier_ece_auc_and_average_precision
     assert result["hold_pr_auc"] == 1.0
 
 
-def test_probability_quality_metrics_return_null_auc_without_both_hold_classes() -> None:
+def test_probability_quality_metrics_return_null_auc_without_both_hold_classes() -> (
+    None
+):
     actual = Series(["BUY", "SELL", "BUY"])
-    probabilities = np.asarray(
-        [[0.8, 0.1, 0.1], [0.1, 0.8, 0.1], [0.7, 0.2, 0.1]]
-    )
+    probabilities = np.asarray([[0.8, 0.1, 0.1], [0.1, 0.8, 0.1], [0.7, 0.2, 0.1]])
     result = probability_quality_metrics(actual, probabilities)
 
     assert result["hold_auc"] is None
