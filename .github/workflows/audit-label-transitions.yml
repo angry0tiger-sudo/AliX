@@ -51,9 +51,8 @@ jobs:
           python -m pip install pip==25.2
           python -m pip install numpy==2.5.4 pandas==2.3.3
 
-      # Run #1433 supplies the exact source data window and original CSV hashes.
-      # Downloading this small reference first is required to avoid comparing
-      # a newly shifted 730-day window with the historical V4 baseline report.
+      # Run #1433 contains the exact source window and hashes. It is downloaded
+      # first so the subsequent Binance requests reproduce that historical window.
       - name: Pin and download the Run #1433 baseline report artifact
         id: source_report
         run: |
@@ -86,8 +85,7 @@ jobs:
           print("source_artifact_id=12978226236")
           PY
 
-          gh run download "$source_run_id"             --repo "$GITHUB_REPOSITORY"             --name alix-real-data-classification-diagnostic             --dir "$source_dir"
-
+          gh run download "$source_run_id" --repo "$GITHUB_REPOSITORY" --name alix-real-data-classification-diagnostic --dir "$source_dir"
           report_path="$source_dir/alix-real-data-classification-report.json"
           test -s "$report_path"
           echo "report_path=$report_path" >> "$GITHUB_OUTPUT"
@@ -134,7 +132,7 @@ jobs:
           assert len(datasets) == 2
           indexed = {item["symbol"]: item for item in datasets}
           assert set(indexed) == {"BTCUSDT", "ETHUSDT"}
-          rows = 730 * 24 * 60
+          expected_rows = 730 * 24 * 60
           with open(output_path, "a", encoding="utf-8") as output:
               for symbol, prefix in (("BTCUSDT", "btc"), ("ETHUSDT", "eth")):
                   item = indexed[symbol]
@@ -142,7 +140,7 @@ jobs:
                   assert item["provider"] == "Binance Spot public klines API"
                   assert item["interval"] == "1m"
                   assert item["requested_days"] == 730
-                  assert item["row_count"] == rows
+                  assert item["row_count"] == expected_rows
                   assert item["missing_minute_intervals"] == 0
                   assert item["public_api_only"] is True
                   assert item["credentials_used"] is False
@@ -155,7 +153,7 @@ jobs:
                   end = end.astimezone(timezone.utc)
                   assert int(start.timestamp()) % 60 == 0
                   assert int(end.timestamp()) % 60 == 0
-                  assert int((end - start).total_seconds()) == (rows - 1) * 60
+                  assert int((end - start).total_seconds()) == (expected_rows - 1) * 60
                   output.write(f"{prefix}_start_utc={item['start_utc']}\n")
                   output.write(f"{prefix}_end_utc={item['end_utc']}\n")
                   output.write(f"{prefix}_csv_sha256={digest}\n")
@@ -170,10 +168,19 @@ jobs:
           mkdir -p "$data_dir"
 
           for symbol in BTCUSDT ETHUSDT; do
-            prefix="btc"
-            if [ "$symbol" = "ETHUSDT" ]; then prefix="eth"; fi
+            if [ "$symbol" = "ETHUSDT" ]; then
+              start_utc="${{ steps.source_report.outputs.eth_start_utc }}"
+              end_utc="${{ steps.source_report.outputs.eth_end_utc }}"
+              expected_sha="${{ steps.source_report.outputs.eth_csv_sha256 }}"
+            else
+              start_utc="${{ steps.source_report.outputs.btc_start_utc }}"
+              end_utc="${{ steps.source_report.outputs.btc_end_utc }}"
+              expected_sha="${{ steps.source_report.outputs.btc_csv_sha256 }}"
+            fi
+
             log_path="$RUNNER_TEMP/v4d-fetch-$symbol.log"
-            if python scripts/fetch_binance_public_ohlcv.py               --days 730               --symbol "$symbol"               --interval 1m               --start-utc "${{ steps.source_report.outputs.btc_start_utc }}"               --end-utc "${{ steps.source_report.outputs.btc_end_utc }}"               --output-dir "$data_dir"               --commit-sha "$GITHUB_SHA" >"$log_path" 2>&1; then
+            fetch_args=(--days 730 --symbol "$symbol" --interval 1m --start-utc "$start_utc" --end-utc "$end_utc" --output-dir "$data_dir" --commit-sha "$GITHUB_SHA")
+            if python scripts/fetch_binance_public_ohlcv.py "${fetch_args[@]}" >"$log_path" 2>&1; then
               cat "$log_path"
             else
               cat "$log_path"
@@ -183,15 +190,8 @@ jobs:
 
             csv_path="$data_dir/binance-${symbol,,}-1m.csv"
             manifest_path="$data_dir/binance-${symbol,,}-1m.manifest.json"
-            if [ "$symbol" = "ETHUSDT" ]; then
-              expected_sha="${{ steps.source_report.outputs.eth_csv_sha256 }}"
-              expected_start="${{ steps.source_report.outputs.eth_start_utc }}"
-              expected_end="${{ steps.source_report.outputs.eth_end_utc }}"
-            else
-              expected_sha="${{ steps.source_report.outputs.btc_csv_sha256 }}"
-              expected_start="${{ steps.source_report.outputs.btc_start_utc }}"
-              expected_end="${{ steps.source_report.outputs.btc_end_utc }}"
-            fi
+            expected_start="$start_utc"
+            expected_end="$end_utc"
             actual_sha="$(sha256sum "$csv_path" | cut -d' ' -f1)"
             test "$actual_sha" = "$expected_sha"
 
@@ -223,7 +223,7 @@ jobs:
           set -euo pipefail
           data_dir="${{ steps.market_data.outputs.data_dir }}"
           report_path="${{ steps.source_report.outputs.report_path }}"
-          python -m scripts.audit_ml_core_label_transitions             --report "$report_path"             --btc-1m-csv "$data_dir/binance-btcusdt-1m.csv"             --eth-1m-csv "$data_dir/binance-ethusdt-1m.csv"             --output "$GITHUB_WORKSPACE/alix-v4d-label-transition-audit.json"
+          python -m scripts.audit_ml_core_label_transitions --report "$report_path" --btc-1m-csv "$data_dir/binance-btcusdt-1m.csv" --eth-1m-csv "$data_dir/binance-ethusdt-1m.csv" --output "$GITHUB_WORKSPACE/alix-v4d-label-transition-audit.json"
 
       - name: Validate Transition Audit schema and safety invariants
         run: |
