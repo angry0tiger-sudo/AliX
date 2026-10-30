@@ -210,7 +210,9 @@ def test_baseline_validation_diagnostics_use_fixed_class_order() -> None:
     ]
 
 
-def test_temporal_split_keeps_training_before_validation_and_embargoes_horizon() -> None:
+def test_temporal_split_keeps_training_before_validation_and_embargoes_horizon() -> (
+    None
+):
     row_count = 120
     labels: list[tuple[str | None, int | None]] = [
         ("BUY", index + 24) for index in range(row_count - 24)
