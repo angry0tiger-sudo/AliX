@@ -144,11 +144,12 @@ def _mini_report(frames: dict[str, DataFrame]) -> dict[str, Any]:
                         },
                     }
                 )
+    selected_days = len(next(iter(frames.values()))) // 1440
     return {
         "schema_version": "alix.ml-core.real-data-classification-diagnostic.v5",
         "commit_sha": "ac428dd94383173570fe3cf8af510e5b0941336e",
-        "requested_days": 1,
-        "data_window_selection": {"selected_days": 1},
+        "requested_days": selected_days,
+        "data_window_selection": {"selected_days": selected_days},
         "experiment_count": 16,
         "experiments": experiments,
         "triple_barrier_scenarios": [
@@ -284,7 +285,7 @@ def test_collect_transition_events_rejects_inconsistent_hit_semantics() -> None:
 
 
 def test_build_transition_audit_checks_all_experiments_and_safety() -> None:
-    frames = {symbol: minute_frame() for symbol in SYMBOLS}
+    frames = {symbol: minute_frame(days=20) for symbol in SYMBOLS}
     report = _mini_report(frames)
 
     result = build_transition_audit(report, frames)
@@ -301,7 +302,7 @@ def test_build_transition_audit_checks_all_experiments_and_safety() -> None:
 
 
 def test_build_transition_audit_detects_source_mismatch_and_missing_symbol() -> None:
-    frames = {symbol: minute_frame() for symbol in SYMBOLS}
+    frames = {symbol: minute_frame(days=20) for symbol in SYMBOLS}
     report = _mini_report(frames)
     short_source = {"BTCUSDT": frames["BTCUSDT"]}
     with pytest.raises(ValueError, match="minute_data_missing:ETHUSDT"):
@@ -334,7 +335,7 @@ def test_validate_v4c_report_rejects_provenance_scenario_and_safety_changes() ->
 
 
 def test_build_transition_audit_checks_serialized_validation_labels() -> None:
-    frames = {symbol: minute_frame() for symbol in SYMBOLS}
+    frames = {symbol: minute_frame(days=20) for symbol in SYMBOLS}
     report = _mini_report(frames)
     target = next(
         item
