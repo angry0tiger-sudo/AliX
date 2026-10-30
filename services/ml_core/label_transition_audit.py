@@ -20,8 +20,13 @@ from services.ml_core.adaptive_targets import (
 from services.ml_core.causal_features import build_causal_feature_matrix
 
 REPORT_SCHEMA = "alix.ml-core.real-data-classification-diagnostic.v5"
+LEGACY_REPORT_SCHEMA = "alix.ml-core.real-data-classification-diagnostic.v4"
 AUDIT_SCHEMA = "alix.ml-core.label-transition-audit.v1"
 SOURCE_COMMIT = "ac428dd94383173570fe3cf8af510e5b0941336e"
+LEGACY_SOURCE_COMMIT = "5f874e6f56436a9b79bbc8adbfec1cf4fd31e4b9"
+SOURCE_RUN_NUMBER = 1433
+SOURCE_RUN_ID = 41052324389
+SOURCE_ARTIFACT_ID = 12978226236
 SYMBOLS = ("BTCUSDT", "ETHUSDT")
 PAIR_NAMES = {"BTCUSDT": "BTC/USDT", "ETHUSDT": "ETH/USDT"}
 TIMEFRAMES = {"15m": 15, "30m": 30, "1h": 60, "4h": 240}
@@ -117,6 +122,111 @@ def _validate_report_scenarios(report: dict[str, Any]) -> None:
     observed = dict(_parse_scenario(row) for row in rows)
     if observed != SCENARIOS:
         raise ValueError("v4c_scenario_geometry_mismatch")
+
+
+def _validate_legacy_report_identity(report: dict[str, Any]) -> None:
+    if report.get("schema_version") != LEGACY_REPORT_SCHEMA:
+        raise ValueError("legacy_report_schema_mismatch")
+    if report.get("commit_sha") != LEGACY_SOURCE_COMMIT:
+        raise ValueError("legacy_report_commit_mismatch")
+    if report.get("diagnostic_scope") != "CLASSIFICATION_ONLY":
+        raise ValueError("legacy_report_scope_mismatch")
+    if report.get("training_scope") != "DIAGNOSTIC_CLASSIFICATION_ONLY":
+        raise ValueError("legacy_report_training_scope_mismatch")
+    if report.get("experiment_count") != 8:
+        raise ValueError("legacy_report_experiment_count_mismatch")
+    if report.get("economic_evaluation_performed") is not False:
+        raise ValueError("legacy_report_economic_scope_violation")
+    if report.get("economic_metrics_reported") is not False:
+        raise ValueError("legacy_report_economic_metrics_violation")
+
+
+def _validate_legacy_target_policy(report: dict[str, Any]) -> None:
+    policy = _mapping(report.get("split_policy"), "legacy_split_policy_missing")
+    expected = {
+        "atr_period": 14,
+        "chronological_training_only": True,
+        "label_horizon_candles": 24,
+        "label_window_purge": "create_purged_embargo_split",
+        "post_validation_embargo": True,
+        "pre_validation_embargo": True,
+        "stop_loss_atr_multiple": 1.0,
+        "take_profit_atr_multiple": 2.0,
+        "validation_end_fraction": VALIDATION_END_FRACTION,
+        "validation_start_fraction": VALIDATION_START_FRACTION,
+    }
+    if policy != expected:
+        raise ValueError("legacy_report_target_policy_mismatch")
+    if report.get("labels") != list(LABELS):
+        raise ValueError("legacy_report_label_contract_mismatch")
+
+
+def _legacy_experiment_key(item: dict[str, Any]) -> tuple[str, str, str]:
+    pair = str(item.get("pair"))
+    symbol = next(
+        (candidate for candidate, pair_name in PAIR_NAMES.items() if pair_name == pair),
+        "",
+    )
+    timeframe = str(item.get("timeframe"))
+    if symbol not in SYMBOLS or timeframe not in TIMEFRAMES:
+        raise ValueError("legacy_experiment_key_out_of_policy")
+    return symbol, timeframe, "Baseline"
+
+
+def _validate_legacy_experiment(item: dict[str, Any]) -> None:
+    status = item.get("status")
+    if status == "TRAINED":
+        variants = _mapping(
+            item.get("model_variants"), "legacy_trained_models_missing"
+        )
+        expected_policies = {
+            "weight_none",
+            "weight_balanced",
+            "weight_intermediate",
+        }
+        if set(variants) != expected_policies:
+            raise ValueError("legacy_weighting_policy_matrix_invalid")
+        for variant in variants.values():
+            model = _mapping(variant, "legacy_model_variant_invalid")
+            rows = model.get("validation_probabilities")
+            if not isinstance(rows, list):
+                raise ValueError("legacy_validation_probabilities_missing")
+    elif status == "SKIPPED_INSUFFICIENT_SAMPLES":
+        if item.get("model_variants") is not None:
+            raise ValueError("legacy_skipped_experiment_has_models")
+    else:
+        raise ValueError("legacy_experiment_status_invalid")
+
+    _integer(item.get("bar_count"), "legacy_bar_count_invalid")
+    _integer(item.get("train_rows"), "legacy_train_rows_invalid")
+    _integer(item.get("validation_rows"), "legacy_validation_rows_invalid")
+    split = _mapping(item.get("split"), "legacy_split_metadata_missing")
+    _integer(split.get("validation_start_index"), "legacy_validation_start_invalid")
+    _integer(split.get("validation_end_index"), "legacy_validation_end_invalid")
+
+
+def _index_legacy_report(
+    report: dict[str, Any],
+) -> dict[tuple[str, str, str], dict[str, Any]]:
+    raw_experiments = report.get("experiments")
+    if not isinstance(raw_experiments, list) or len(raw_experiments) != 8:
+        raise ValueError("legacy_experiment_matrix_invalid")
+    indexed: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for raw in raw_experiments:
+        item = _mapping(raw, "legacy_experiment_invalid")
+        key = _legacy_experiment_key(item)
+        if key in indexed:
+            raise ValueError("legacy_duplicate_experiment")
+        _validate_legacy_experiment(item)
+        indexed[key] = item
+    expected = {
+        (symbol, timeframe, "Baseline")
+        for symbol in SYMBOLS
+        for timeframe in TIMEFRAMES
+    }
+    if set(indexed) != expected:
+        raise ValueError("legacy_experiment_matrix_incomplete")
+    return indexed
 
 
 def _experiment_key(item: dict[str, Any]) -> tuple[str, str, str]:
@@ -220,12 +330,19 @@ def _index_report_experiments(
 def validate_v4c_report(
     report: dict[str, Any],
 ) -> dict[tuple[str, str, str], dict[str, Any]]:
-    """Validate provenance, experiment matrix, scenario geometry and safety gates."""
-    _validate_report_identity(report)
+    """Validate either the V4-C v5 report or the pinned V4 v4 source artifact."""
+    schema = report.get("schema_version")
     _validate_report_window(report)
     _validate_report_safety(report)
-    _validate_report_scenarios(report)
-    return _index_report_experiments(report)
+    if schema == REPORT_SCHEMA:
+        _validate_report_identity(report)
+        _validate_report_scenarios(report)
+        return _index_report_experiments(report)
+    if schema == LEGACY_REPORT_SCHEMA:
+        _validate_legacy_report_identity(report)
+        _validate_legacy_target_policy(report)
+        return _index_legacy_report(report)
+    raise ValueError("v4c_report_schema_mismatch")
 
 
 def _validate_minute_timestamps(result: DataFrame) -> None:
