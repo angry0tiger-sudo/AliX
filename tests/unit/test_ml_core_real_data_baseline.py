@@ -244,7 +244,6 @@ def test_short_real_data_window_is_skipped_without_training() -> None:
     assert result["label_distribution"]["available_unpartitioned"]["total"] == 0
 
 
-
 def test_weighting_policy_specs_apply_only_the_configured_hold_multiplier() -> None:
     policies = weighting_policy_specs(3.0)
 
@@ -281,9 +280,7 @@ def test_probability_matrix_is_reordered_to_fixed_label_contract() -> None:
 
 
 def test_predictions_from_probabilities_uses_fixed_label_order() -> None:
-    probabilities = np.asarray(
-        [[0.2, 0.1, 0.7], [0.1, 0.8, 0.1], [0.7, 0.2, 0.1]]
-    )
+    probabilities = np.asarray([[0.2, 0.1, 0.7], [0.1, 0.8, 0.1], [0.7, 0.2, 0.1]])
 
     predicted = predictions_from_probabilities(probabilities)
 
@@ -335,7 +332,9 @@ def test_hold_threshold_optimizer_meets_precision_and_recall_constraints() -> No
     assert result["feasible_threshold_count"] > 0
 
 
-def test_hold_threshold_optimizer_fails_closed_when_constraints_are_infeasible() -> None:
+def test_hold_threshold_optimizer_fails_closed_when_constraints_are_infeasible() -> (
+    None
+):
     actual = Series(["HOLD", "HOLD", "BUY", "SELL"])
     probabilities = np.asarray(
         [
@@ -378,9 +377,7 @@ def test_threshold_diagnostics_evaluate_later_validation_rows_without_overlap() 
     actual = Series(actual_values, index=range(1000, 1300))
     probabilities = np.asarray(
         [
-            [0.05, 0.05, 0.90]
-            if label == "HOLD"
-            else [0.80, 0.10, 0.10]
+            [0.05, 0.05, 0.90] if label == "HOLD" else [0.80, 0.10, 0.10]
             for label in actual_values
         ]
     )
@@ -421,9 +418,7 @@ def test_probability_serialization_preserves_row_timestamp_and_class_order() -> 
     actual = Series(["BUY", "HOLD"])
     probabilities = np.asarray([[0.8, 0.1, 0.1], [0.1, 0.2, 0.7]])
 
-    records = _serialize_validation_probabilities(
-        bars, [0, 1], actual, probabilities
-    )
+    records = _serialize_validation_probabilities(bars, [0, 1], actual, probabilities)
 
     assert records[0]["row_index"] == 0
     assert records[0]["actual_label"] == "BUY"

@@ -454,10 +454,9 @@ def optimize_hold_threshold(
     for threshold in np.linspace(0.0, 1.0, HOLD_THRESHOLD_GRID_STEPS):
         prediction = hold_threshold_predictions(matrix, float(threshold), actual.index)
         hold_metrics = hold_class_metrics(actual, prediction)
-        if (
-            hold_metrics["precision"] >= float(minimum_precision)
-            and hold_metrics["recall"] >= float(minimum_recall)
-        ):
+        if hold_metrics["precision"] >= float(minimum_precision) and hold_metrics[
+            "recall"
+        ] >= float(minimum_recall):
             feasible.append({"threshold": round(float(threshold), 6), **hold_metrics})
     grid = {
         "minimum": 0.0,
@@ -544,7 +543,8 @@ def threshold_optimization_diagnostics(
             "full_validation_including_calibration": None,
         }
     selection = optimize_hold_threshold(
-        calibration_y, calibration_p,
+        calibration_y,
+        calibration_p,
         minimum_precision=minimum_precision,
         minimum_recall=minimum_recall,
     )
@@ -910,9 +910,7 @@ def run_experiment(
             **validation_classification_diagnostics(
                 validation_y, validation_prediction
             ),
-            "hold_metrics": hold_class_metrics(
-                validation_y, validation_prediction
-            ),
+            "hold_metrics": hold_class_metrics(validation_y, validation_prediction),
             "threshold_optimization": threshold_diagnostics,
             "validation_probabilities": _serialize_validation_probabilities(
                 bars, validation_indices, validation_y, validation_probabilities
@@ -921,16 +919,12 @@ def run_experiment(
 
     balanced = variants["weight_balanced"]
     unweighted = variants["weight_none"]
-    always_sell_prediction = Series(
-        "SELL", index=validation_y.index, dtype=object
-    )
+    always_sell_prediction = Series("SELL", index=validation_y.index, dtype=object)
     baseline_comparisons = {
         "always_sell": {
             "baseline_type": "constant_prediction",
             "predicted_label": "SELL",
-            **baseline_validation_diagnostics(
-                validation_y, always_sell_prediction
-            ),
+            **baseline_validation_diagnostics(validation_y, always_sell_prediction),
         },
         "lightgbm_unweighted": {
             "baseline_type": "lightgbm",
@@ -968,7 +962,6 @@ def run_experiment(
             "caveat": "Single chronological split; diagnostic heuristic, not a statistical proof.",
         },
     }
-
 
 
 def _load_manifested_data(
@@ -1165,9 +1158,7 @@ def _render_threshold_optimization_section(
             threshold = variants[name]["threshold_optimization"]
             selection = threshold.get("calibration", {}).get("threshold_selection")
             selected = (
-                selection.get("selected_calibration_metrics")
-                if selection
-                else None
+                selection.get("selected_calibration_metrics") if selection else None
             )
             calibration_pr = (
                 f"{selected['precision']:.3f}/{selected['recall']:.3f}"
