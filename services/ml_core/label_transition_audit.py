@@ -58,7 +58,9 @@ def _integer(value: Any, error: str) -> int:
     return value
 
 
-def validate_v4c_report(report: dict[str, Any]) -> dict[tuple[str, str, str], dict[str, Any]]:
+def validate_v4c_report(
+    report: dict[str, Any],
+) -> dict[tuple[str, str, str], dict[str, Any]]:
     """Validate provenance, experiment matrix, scenario geometry and safety gates."""
     if report.get("schema_version") != REPORT_SCHEMA:
         raise ValueError("v4c_report_schema_mismatch")
@@ -67,7 +69,9 @@ def validate_v4c_report(report: dict[str, Any]) -> dict[tuple[str, str, str], di
     if report.get("experiment_count") != 16:
         raise ValueError("v4c_experiment_count_mismatch")
 
-    window = _mapping(report.get("data_window_selection"), "data_window_metadata_missing")
+    window = _mapping(
+        report.get("data_window_selection"), "data_window_metadata_missing"
+    )
     selected_days = _integer(window.get("selected_days"), "selected_days_invalid")
     if selected_days < 1 or selected_days != report.get("requested_days"):
         raise ValueError("v4c_data_window_mismatch")
@@ -104,12 +108,20 @@ def validate_v4c_report(report: dict[str, Any]) -> dict[tuple[str, str, str], di
         item = _mapping(raw, "v4c_experiment_invalid")
         pair = str(item.get("pair"))
         symbol = next(
-            (candidate for candidate, pair_name in PAIR_NAMES.items() if pair_name == pair),
+            (
+                candidate
+                for candidate, pair_name in PAIR_NAMES.items()
+                if pair_name == pair
+            ),
             "",
         )
         timeframe = str(item.get("timeframe"))
         scenario_name = str(item.get("scenario"))
-        if symbol not in SYMBOLS or timeframe not in TIMEFRAMES or scenario_name not in SCENARIOS:
+        if (
+            symbol not in SYMBOLS
+            or timeframe not in TIMEFRAMES
+            or scenario_name not in SCENARIOS
+        ):
             raise ValueError("v4c_experiment_key_out_of_policy")
         key = (symbol, timeframe, scenario_name)
         if key in indexed:
@@ -127,7 +139,9 @@ def validate_v4c_report(report: dict[str, Any]) -> dict[tuple[str, str, str], di
         status = item.get("status")
         if status == "TRAINED":
             trained_experiments += 1
-            variants = _mapping(item.get("model_variants"), "v4c_trained_models_missing")
+            variants = _mapping(
+                item.get("model_variants"), "v4c_trained_models_missing"
+            )
             if set(variants) != set(WEIGHTING_POLICIES):
                 raise ValueError("v4c_weighting_policy_matrix_invalid")
             trained_models += len(variants)
@@ -233,7 +247,9 @@ def _label_audit_counts(labels: DataFrame) -> dict[str, Any]:
     return {
         "labeled_events": int(labeled.sum()),
         "unlabeled_events": int(labels["label"].isna().sum()),
-        "exit_reasons": {reason: int((exits == reason).sum()) for reason in EXIT_REASONS},
+        "exit_reasons": {
+            reason: int((exits == reason).sum()) for reason in EXIT_REASONS
+        },
         "unlabeled_reasons": {
             reason: int((unlabeled == reason).sum()) for reason in UNLABELED_REASONS
         },
@@ -244,9 +260,9 @@ def _validate_label_audit(labels: DataFrame, experiment: dict[str, Any]) -> None
     actual = _label_audit_counts(labels)
     reported = _mapping(experiment.get("label_audit"), "v4c_label_audit_missing")
     exits = _mapping(
-        _mapping(reported.get("exit_reason_distribution"), "v4c_exit_audit_missing").get(
-            "reasons"
-        ),
+        _mapping(
+            reported.get("exit_reason_distribution"), "v4c_exit_audit_missing"
+        ).get("reasons"),
         "v4c_exit_reason_counts_missing",
     )
     unlabeled = _mapping(
@@ -264,7 +280,9 @@ def _validate_label_audit(labels: DataFrame, experiment: dict[str, Any]) -> None
         if actual["exit_reasons"][reason] != exits.get(reason, {}).get("count"):
             raise ValueError("v4c_exit_reason_count_mismatch")
     for reason in UNLABELED_REASONS:
-        if actual["unlabeled_reasons"][reason] != unlabeled.get(reason, {}).get("count"):
+        if actual["unlabeled_reasons"][reason] != unlabeled.get(reason, {}).get(
+            "count"
+        ):
             raise ValueError("v4c_unlabeled_reason_count_mismatch")
 
 
@@ -291,12 +309,14 @@ def _validate_label_distribution(
 ) -> None:
     observed = labels.iloc[indices]["label"]
     distribution = _mapping(
-        _mapping(experiment.get("label_distribution"), "v4c_label_distribution_missing").get(
-            "validation"
-        ),
+        _mapping(
+            experiment.get("label_distribution"), "v4c_label_distribution_missing"
+        ).get("validation"),
         "v4c_validation_label_distribution_missing",
     )
-    classes = _mapping(distribution.get("classes"), "v4c_validation_label_counts_missing")
+    classes = _mapping(
+        distribution.get("classes"), "v4c_validation_label_counts_missing"
+    )
     if distribution.get("total") != len(indices):
         raise ValueError("v4c_validation_row_count_mismatch")
     for label in LABELS:
@@ -324,7 +344,9 @@ def _validate_serialized_validation(
             raise ValueError("v4c_validation_probability_rows_mismatch")
         for raw, expected_index in zip(raw_rows, expected_indices, strict=True):
             row = _mapping(raw, "v4c_validation_probability_row_invalid")
-            row_index = _integer(row.get("row_index"), "v4c_validation_row_index_invalid")
+            row_index = _integer(
+                row.get("row_index"), "v4c_validation_row_index_invalid"
+            )
             if row_index != expected_index:
                 raise ValueError("v4c_validation_row_index_mismatch")
             if row.get("actual_label") != labels.iloc[row_index]["label"]:
@@ -409,9 +431,9 @@ def build_transition_audit(
     """Rebuild both V4-C label sets from source OHLCV and audit the validation window."""
     indexed = validate_v4c_report(report)
     selected_days = _integer(
-        _mapping(report.get("data_window_selection"), "data_window_metadata_missing").get(
-            "selected_days"
-        ),
+        _mapping(
+            report.get("data_window_selection"), "data_window_metadata_missing"
+        ).get("selected_days"),
         "selected_days_invalid",
     )
     expected_minute_rows = selected_days * 24 * 60
@@ -434,7 +456,9 @@ def build_transition_audit(
                 scenario: indexed[(symbol, timeframe, scenario)]
                 for scenario in SCENARIOS
             }
-            if any(item.get("bar_count") != len(bars) for item in pair_results.values()):
+            if any(
+                item.get("bar_count") != len(bars) for item in pair_results.values()
+            ):
                 raise ValueError("v4c_resampled_bar_count_mismatch")
 
             start = int(len(bars) * VALIDATION_START_FRACTION)

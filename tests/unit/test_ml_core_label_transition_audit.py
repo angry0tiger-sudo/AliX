@@ -26,6 +26,7 @@ from services.ml_core.label_transition_audit import (
     validate_v4c_report,
 )
 
+
 def minute_frame(days: int = 1) -> DataFrame:
     rows = days * 24 * 60
     dates = pd.date_range("2026-01-01T00:00:00Z", periods=rows, freq="min")
@@ -45,7 +46,9 @@ def minute_frame(days: int = 1) -> DataFrame:
 
 def _distribution(labels: DataFrame, indices: list[int]) -> dict[str, Any]:
     observed = labels.iloc[indices]["label"]
-    counts = {label: int((observed == label).sum()) for label in ("BUY", "SELL", "HOLD")}
+    counts = {
+        label: int((observed == label).sum()) for label in ("BUY", "SELL", "HOLD")
+    }
     return {
         "total": len(indices),
         "classes": {
@@ -95,7 +98,8 @@ def _mini_report(frames: dict[str, DataFrame]) -> dict[str, Any]:
             features_start = int(len(bars) * 0.70)
             features_end = int(len(bars) * 0.85) - 1
             features = __import__(
-                "services.ml_core.causal_features", fromlist=["build_causal_feature_matrix"]
+                "services.ml_core.causal_features",
+                fromlist=["build_causal_feature_matrix"],
             ).build_causal_feature_matrix(bars)
             for scenario, (horizon, take_profit, stop_loss) in SCENARIOS.items():
                 labels = apply_adaptive_triple_barrier(
@@ -214,7 +218,9 @@ def test_validate_minute_candles_rejects_missing_columns_and_gaps() -> None:
     with pytest.raises(ValueError, match="ohlcv_missing_columns"):
         validate_minute_candles(data.drop(columns=["volume"]), len(data))
     with pytest.raises(ValueError, match="minute_data_gap_or_interval_mismatch"):
-        validate_minute_candles(data.drop(index=100).reset_index(drop=True), len(data) - 1)
+        validate_minute_candles(
+            data.drop(index=100).reset_index(drop=True), len(data) - 1
+        )
 
 
 def test_validate_minute_candles_rejects_nonfinite_geometry_and_count() -> None:
@@ -289,7 +295,9 @@ def test_build_transition_audit_checks_all_experiments_and_safety() -> None:
     assert result["model_training_performed"] is False
     assert result["safety"]["Champion"] is None
     assert result["safety"]["trading_authorization"] == "NO-GO"
-    assert all(item["transition_summary"]["total"] == 0 for item in result["experiments"])
+    assert all(
+        item["transition_summary"]["total"] == 0 for item in result["experiments"]
+    )
 
 
 def test_build_transition_audit_detects_source_mismatch_and_missing_symbol() -> None:
@@ -331,7 +339,8 @@ def test_build_transition_audit_checks_serialized_validation_labels() -> None:
     target = next(
         item
         for item in report["experiments"]
-        if item["pair"] == "BTC/USDT" and item["timeframe"] == "15m"
+        if item["pair"] == "BTC/USDT"
+        and item["timeframe"] == "15m"
         and item["scenario"] == "Baseline"
     )
     bars = resample_minute_candles(frames["BTCUSDT"], "15m")
