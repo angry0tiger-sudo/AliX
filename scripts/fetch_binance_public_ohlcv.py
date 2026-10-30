@@ -216,6 +216,71 @@ def _validate_complete_window(
         raise ValueError("binance_historical_window_boundary_mismatch")
 
 
+def _validate_fetch_request(
+    days: int, now: datetime, symbol: str, start_utc: datetime | None, end_utc: datetime | None
+) -> int:
+    if isinstance(days, bool) or days not in ALLOWED_DAYS:
+        raise ValueError("historical_days_out_of_policy")
+    if (start_utc is None) != (end_utc is None):
+        raise ValueError("historical_window_requires_both_boundaries")
+    if now.tzinfo is None or now.utcoffset() is None:
+        raise ValueError("historical_cutoff_timezone_required")
+    _validate_symbol(symbol)
+    return days * 1440
+
+
+def _exact_historical_bounds(
+    start_utc: datetime, end_utc: datetime, expected_count: int
+) -> tuple[int, int]:
+    start_ms = _datetime_epoch_ms(start_utc, "historical_start_utc")
+    end_ms = _datetime_epoch_ms(end_utc, "historical_end_utc")
+    if end_ms < start_ms:
+        raise ValueError("historical_window_end_before_start")
+    interval_ms = end_ms - start_ms
+    expected_interval = (expected_count - 1) * INTERVAL_MS
+    if interval_ms != expected_interval:
+        raise ValueError("historical_window_does_not_match_requested_days")
+    return start_ms, end_ms
+
+
+def _rolling_historical_bounds(
+    now: datetime, expected_count: int
+) -> tuple[int, int]:
+    now_ms = int(now.astimezone(timezone.utc).timestamp() * 1000)
+    end_ms = (now_ms // INTERVAL_MS) * INTERVAL_MS - INTERVAL_MS
+    start_ms = end_ms - (expected_count - 1) * INTERVAL_MS
+    return start_ms, end_ms
+
+
+def _resolve_historical_bounds(
+    now: datetime,
+    expected_count: int,
+    start_utc: datetime | None,
+    end_utc: datetime | None,
+) -> tuple[int, int]:
+    if start_utc is not None and end_utc is not None:
+        return _exact_historical_bounds(start_utc, end_utc, expected_count)
+    return _rolling_historical_bounds(now, expected_count)
+
+
+def _fetch_historical_pages(
+    start_ms: int,
+    end_ms: int,
+    symbol: str,
+    request_json: Callable[[dict[str, str]], list[Any]],
+    sleep_fn: Callable[[float], None],
+) -> list[dict[str, Any]]:
+    cursor = start_ms
+    rows: list[dict[str, Any]] = []
+    while cursor <= end_ms:
+        page, page_count = _fetch_page(cursor, end_ms, symbol, request_json, sleep_fn)
+        rows.extend(page)
+        cursor += page_count * INTERVAL_MS
+        if cursor <= end_ms:
+            sleep_fn(PAGE_DELAY_SECONDS)
+    return rows
+
+
 def fetch_historical_candles(
     *,
     days: int,
@@ -226,37 +291,13 @@ def fetch_historical_candles(
     start_utc: datetime | None = None,
     end_utc: datetime | None = None,
 ) -> list[dict[str, Any]]:
-    if isinstance(days, bool) or days not in ALLOWED_DAYS:
-        raise ValueError("historical_days_out_of_policy")
-    if (start_utc is None) != (end_utc is None):
-        raise ValueError("historical_window_requires_both_boundaries")
-    if now.tzinfo is None or now.utcoffset() is None:
-        raise ValueError("historical_cutoff_timezone_required")
-    _validate_symbol(symbol)
-    expected_count = days * 1440
-    if start_utc is not None and end_utc is not None:
-        start_ms = _datetime_epoch_ms(start_utc, "historical_start_utc")
-        end_ms = _datetime_epoch_ms(end_utc, "historical_end_utc")
-        if end_ms < start_ms:
-            raise ValueError("historical_window_end_before_start")
-        interval_ms = end_ms - start_ms
-        if (
-            interval_ms % INTERVAL_MS
-            or interval_ms // INTERVAL_MS + 1 != expected_count
-        ):
-            raise ValueError("historical_window_does_not_match_requested_days")
-    else:
-        now_ms = int(now.astimezone(timezone.utc).timestamp() * 1000)
-        end_ms = (now_ms // INTERVAL_MS) * INTERVAL_MS - INTERVAL_MS
-        start_ms = end_ms - (expected_count - 1) * INTERVAL_MS
-    cursor = start_ms
-    rows: list[dict[str, Any]] = []
-    while cursor <= end_ms:
-        page, page_count = _fetch_page(cursor, end_ms, symbol, request_json, sleep_fn)
-        rows.extend(page)
-        cursor += page_count * INTERVAL_MS
-        if cursor <= end_ms:
-            sleep_fn(PAGE_DELAY_SECONDS)
+    expected_count = _validate_fetch_request(days, now, symbol, start_utc, end_utc)
+    start_ms, end_ms = _resolve_historical_bounds(
+        now, expected_count, start_utc, end_utc
+    )
+    rows = _fetch_historical_pages(
+        start_ms, end_ms, symbol, request_json, sleep_fn
+    )
     _validate_complete_window(rows, expected_count, start_ms, end_ms)
     return rows
 

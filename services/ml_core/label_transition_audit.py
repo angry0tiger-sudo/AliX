@@ -758,41 +758,43 @@ def _audit_timeframe(
     }
 
 
-def _validate_source_dataset_metadata(
-    report: dict[str, Any],
-    symbol: str,
-    candles: DataFrame,
-    source_hash: str | None,
-) -> None:
+def _find_source_dataset(
+    report: dict[str, Any], symbol: str
+) -> dict[str, Any]:
     datasets = report.get("input_datasets")
-    if source_hash is None:
-        return
     if not isinstance(datasets, list) or len(datasets) != len(SYMBOLS):
         raise ValueError("source_dataset_metadata_missing")
-    dataset = next(
-        (
-            _mapping(item, "source_dataset_metadata_invalid")
-            for item in datasets
-            if isinstance(item, dict) and item.get("symbol") == symbol
-        ),
-        None,
-    )
-    if dataset is None:
-        raise ValueError("source_dataset_symbol_missing")
-    selected_days = _integer(report.get("requested_days"), "requested_days_invalid")
+    for item in datasets:
+        if isinstance(item, dict) and item.get("symbol") == symbol:
+            return _mapping(item, "source_dataset_metadata_invalid")
+    raise ValueError("source_dataset_symbol_missing")
+
+
+def _validate_source_dataset_identity(
+    dataset: dict[str, Any],
+    symbol: str,
+    selected_days: int,
+    source_hash: str,
+) -> None:
     expected_rows = selected_days * 1440
-    if (
-        dataset.get("pair") != PAIR_NAMES[symbol]
-        or dataset.get("provider") != "Binance Spot public klines API"
-        or dataset.get("interval") != "1m"
-        or dataset.get("requested_days") != selected_days
-        or dataset.get("row_count") != expected_rows
-        or dataset.get("missing_minute_intervals") != 0
-        or dataset.get("public_api_only") is not True
-        or dataset.get("credentials_used") is not False
-        or dataset.get("csv_sha256") != source_hash
-    ):
+    matches = (
+        dataset.get("pair") == PAIR_NAMES[symbol]
+        and dataset.get("provider") == "Binance Spot public klines API"
+        and dataset.get("interval") == "1m"
+        and dataset.get("requested_days") == selected_days
+        and dataset.get("row_count") == expected_rows
+        and dataset.get("missing_minute_intervals") == 0
+        and dataset.get("public_api_only") is True
+        and dataset.get("credentials_used") is False
+        and dataset.get("csv_sha256") == source_hash
+    )
+    if not matches:
         raise ValueError("source_dataset_metadata_mismatch")
+
+
+def _validate_source_dataset_window(
+    dataset: dict[str, Any], candles: DataFrame
+) -> None:
     raw_start = dataset.get("start_utc")
     raw_end = dataset.get("end_utc")
     if not isinstance(raw_start, str) or not isinstance(raw_end, str):
@@ -805,6 +807,20 @@ def _validate_source_dataset_metadata(
         raise ValueError("source_dataset_timestamp_timezone_missing")
     if start.tz_convert("UTC") != actual_start or end.tz_convert("UTC") != actual_end:
         raise ValueError("source_dataset_window_mismatch")
+
+
+def _validate_source_dataset_metadata(
+    report: dict[str, Any],
+    symbol: str,
+    candles: DataFrame,
+    source_hash: str | None,
+) -> None:
+    if source_hash is None:
+        return
+    selected_days = _integer(report.get("requested_days"), "requested_days_invalid")
+    dataset = _find_source_dataset(report, symbol)
+    _validate_source_dataset_identity(dataset, symbol, selected_days, source_hash)
+    _validate_source_dataset_window(dataset, candles)
 
 
 def _audit_symbol(
