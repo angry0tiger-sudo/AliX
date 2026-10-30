@@ -342,22 +342,34 @@ def split_validation_for_calibration(
     return validation_indices[:count], validation_indices[count:]
 
 
+def _model_probability_classes(model: Any) -> list[str]:
+    """Return and validate the classifier's class labels."""
+    classes = [str(value) for value in model.classes_]
+    if len(classes) != len(LABELS) or set(classes) != set(LABELS):
+        raise ValueError("classifier_probability_classes_invalid")
+    return classes
+
+
+def _validate_probability_values(probabilities: np.ndarray) -> None:
+    """Reject probabilities that are non-finite, out of bounds, or unnormalized."""
+    valid = (
+        bool(np.isfinite(probabilities).all())
+        and not bool(np.any(probabilities < 0.0))
+        and not bool(np.any(probabilities > 1.0))
+        and bool(np.allclose(probabilities.sum(axis=1), 1.0, atol=1e-6))
+    )
+    if not valid:
+        raise ValueError("classifier_probabilities_invalid")
+
+
 def ordered_probability_matrix(model: Any, features: DataFrame) -> np.ndarray:
     """Return predict_proba columns in the fixed BUY, SELL, HOLD order."""
     raw = np.asarray(model.predict_proba(features), dtype=float)
-    classes = [str(value) for value in model.classes_]
+    classes = _model_probability_classes(model)
     if raw.ndim != 2 or raw.shape != (len(features), len(classes)):
         raise ValueError("classifier_probability_shape_invalid")
-    if len(classes) != len(LABELS) or set(classes) != set(LABELS):
-        raise ValueError("classifier_probability_classes_invalid")
     ordered = raw[:, [classes.index(label) for label in LABELS]]
-    if (
-        not bool(np.isfinite(ordered).all())
-        or bool(np.any(ordered < 0.0))
-        or bool(np.any(ordered > 1.0))
-        or not bool(np.allclose(ordered.sum(axis=1), 1.0, atol=1e-6))
-    ):
-        raise ValueError("classifier_probabilities_invalid")
+    _validate_probability_values(ordered)
     return ordered
 
 
@@ -426,6 +438,91 @@ def hold_threshold_predictions(
     return Series(predicted.tolist(), index=index, dtype=object)
 
 
+def _validate_threshold_constraints(
+    minimum_precision: float, minimum_recall: float
+) -> None:
+    """Validate both HOLD operating-point constraints."""
+    for value, name in (
+        (minimum_precision, "minimum_precision"),
+        (minimum_recall, "minimum_recall"),
+    ):
+        valid = (
+            not isinstance(value, bool)
+            and isinstance(value, (int, float))
+            and np.isfinite(float(value))
+            and 0.0 <= value <= 1.0
+        )
+        if not valid:
+            raise ValueError(f"{name}_must_be_between_zero_and_one")
+
+
+def _feasible_hold_thresholds(
+    actual: Series,
+    probabilities: np.ndarray,
+    minimum_precision: float,
+    minimum_recall: float,
+) -> list[dict[str, Any]]:
+    """Enumerate threshold candidates satisfying the HOLD precision/recall floors."""
+    feasible: list[dict[str, Any]] = []
+    for threshold in np.linspace(0.0, 1.0, HOLD_THRESHOLD_GRID_STEPS):
+        prediction = hold_threshold_predictions(
+            probabilities, float(threshold), actual.index
+        )
+        hold_metrics = hold_class_metrics(actual, prediction)
+        meets_precision = hold_metrics["precision"] >= minimum_precision
+        meets_recall = hold_metrics["recall"] >= minimum_recall
+        if meets_precision and meets_recall:
+            feasible.append({"threshold": round(float(threshold), 6), **hold_metrics})
+    return feasible
+
+
+def _threshold_search_grid() -> dict[str, float | int]:
+    """Describe the deterministic threshold search grid."""
+    return {
+        "minimum": 0.0,
+        "maximum": 1.0,
+        "steps": HOLD_THRESHOLD_GRID_STEPS,
+        "increment": round(1.0 / (HOLD_THRESHOLD_GRID_STEPS - 1), 6),
+    }
+
+
+def _threshold_selection_result(
+    selected: dict[str, Any],
+    feasible_count: int,
+    grid: dict[str, float | int],
+    minimum_precision: float,
+    minimum_recall: float,
+) -> dict[str, Any]:
+    """Serialize the selected feasible operating point."""
+    return {
+        "status": "SELECTED",
+        "selected_threshold": float(selected["threshold"]),
+        "feasible_threshold_count": feasible_count,
+        "search_grid": grid,
+        "minimum_hold_precision": float(minimum_precision),
+        "minimum_hold_recall": float(minimum_recall),
+        "selected_calibration_metrics": selected,
+        "selection_objective": "MAXIMIZE_HOLD_F1_THEN_PRECISION_THEN_THRESHOLD",
+    }
+
+
+def _no_feasible_threshold_result(
+    grid: dict[str, float | int],
+    minimum_precision: float,
+    minimum_recall: float,
+) -> dict[str, Any]:
+    """Represent an infeasible threshold search without relaxing its constraints."""
+    return {
+        "status": "NO_FEASIBLE_THRESHOLD",
+        "selected_threshold": None,
+        "feasible_threshold_count": 0,
+        "search_grid": grid,
+        "minimum_hold_precision": float(minimum_precision),
+        "minimum_hold_recall": float(minimum_recall),
+        "selected_calibration_metrics": None,
+    }
+
+
 def optimize_hold_threshold(
     actual: Series,
     probabilities: np.ndarray,
@@ -434,60 +531,132 @@ def optimize_hold_threshold(
     minimum_recall: float = DEFAULT_MINIMUM_HOLD_RECALL,
 ) -> dict[str, Any]:
     """Maximize HOLD F1 while satisfying the configured precision and recall floors."""
-    for value, name in (
-        (minimum_precision, "minimum_precision"),
-        (minimum_recall, "minimum_recall"),
-    ):
-        if (
-            isinstance(value, bool)
-            or not isinstance(value, (int, float))
-            or not np.isfinite(float(value))
-            or not 0.0 <= value <= 1.0
-        ):
-            raise ValueError(f"{name}_must_be_between_zero_and_one")
+    _validate_threshold_constraints(minimum_precision, minimum_recall)
     matrix = np.asarray(probabilities, dtype=float)
     if matrix.ndim != 2 or matrix.shape != (len(actual), len(LABELS)):
         raise ValueError("classifier_probability_shape_invalid")
     if len(actual) == 0:
         raise ValueError("threshold_calibration_set_empty")
-    feasible: list[dict[str, Any]] = []
-    for threshold in np.linspace(0.0, 1.0, HOLD_THRESHOLD_GRID_STEPS):
-        prediction = hold_threshold_predictions(matrix, float(threshold), actual.index)
-        hold_metrics = hold_class_metrics(actual, prediction)
-        if hold_metrics["precision"] >= float(minimum_precision) and hold_metrics[
-            "recall"
-        ] >= float(minimum_recall):
-            feasible.append({"threshold": round(float(threshold), 6), **hold_metrics})
-    grid = {
-        "minimum": 0.0,
-        "maximum": 1.0,
-        "steps": HOLD_THRESHOLD_GRID_STEPS,
-        "increment": round(1.0 / (HOLD_THRESHOLD_GRID_STEPS - 1), 6),
-    }
+    feasible = _feasible_hold_thresholds(
+        actual, matrix, float(minimum_precision), float(minimum_recall)
+    )
+    grid = _threshold_search_grid()
     if not feasible:
-        return {
-            "status": "NO_FEASIBLE_THRESHOLD",
-            "selected_threshold": None,
-            "feasible_threshold_count": 0,
-            "search_grid": grid,
-            "minimum_hold_precision": float(minimum_precision),
-            "minimum_hold_recall": float(minimum_recall),
-            "selected_calibration_metrics": None,
-        }
+        return _no_feasible_threshold_result(
+            grid, minimum_precision, minimum_recall
+        )
     selected = max(
         feasible,
         key=lambda item: (item["f1"], item["precision"], item["threshold"]),
     )
+    return _threshold_selection_result(
+        selected, len(feasible), grid, minimum_precision, minimum_recall
+    )
+
+
+def _validate_calibration_fraction(calibration_fraction: float) -> None:
+    """Require a chronological calibration fraction strictly below one half."""
+    valid = (
+        not isinstance(calibration_fraction, bool)
+        and isinstance(calibration_fraction, (int, float))
+        and np.isfinite(float(calibration_fraction))
+        and 0.0 < calibration_fraction < 0.5
+    )
+    if not valid:
+        raise ValueError("calibration_fraction_must_be_between_zero_and_half")
+
+
+def _calibration_metadata(calibration_y: Series) -> dict[str, Any]:
+    """Describe the calibration slice and its support policy."""
     return {
-        "status": "SELECTED",
-        "selected_threshold": float(selected["threshold"]),
-        "feasible_threshold_count": len(feasible),
-        "search_grid": grid,
-        "minimum_hold_precision": float(minimum_precision),
-        "minimum_hold_recall": float(minimum_recall),
-        "selected_calibration_metrics": selected,
-        "selection_objective": "MAXIMIZE_HOLD_F1_THEN_PRECISION_THEN_THRESHOLD",
+        "row_count": int(len(calibration_y)),
+        "start_row_index": int(calibration_y.index[0]),
+        "end_row_index": int(calibration_y.index[-1]),
+        "temporal_position": "FIRST_CHRONOLOGICAL_SEGMENT_OF_VALIDATION",
+        "label_distribution": label_distribution(calibration_y),
+        "minimum_hold_support": MIN_CALIBRATION_HOLD_SAMPLES,
+        "minimum_non_hold_support": MIN_CALIBRATION_NON_HOLD_SAMPLES,
     }
+
+
+def _calibration_support_is_sufficient(calibration_y: Series) -> bool:
+    """Require adequate positive and negative HOLD calibration support."""
+    counts = _class_counts(calibration_y)
+    hold_count = counts["HOLD"]
+    non_hold_count = len(calibration_y) - hold_count
+    return (
+        hold_count >= MIN_CALIBRATION_HOLD_SAMPLES
+        and non_hold_count >= MIN_CALIBRATION_NON_HOLD_SAMPLES
+    )
+
+
+def _threshold_diagnostics_base(
+    status: str,
+    selected_threshold: float | None,
+    constraints: dict[str, float],
+    metadata: dict[str, Any],
+) -> dict[str, Any]:
+    """Create a stable threshold diagnostics payload for selected and skipped cases."""
+    return {
+        "status": status,
+        "selected_threshold": selected_threshold,
+        "constraints": constraints,
+        "calibration": metadata,
+        "post_calibration_validation": None,
+        "full_validation_including_calibration": None,
+    }
+
+
+def _threshold_validation_evaluation(
+    actual: Series,
+    probabilities: np.ndarray,
+    threshold: float,
+) -> dict[str, Any]:
+    """Evaluate one thresholded series with class and HOLD diagnostics."""
+    predicted = hold_threshold_predictions(probabilities, threshold, actual.index)
+    return {
+        "row_count": int(len(actual)),
+        "classification_metrics": classification_metrics(actual, predicted),
+        "hold_metrics": hold_class_metrics(actual, predicted),
+        **validation_classification_diagnostics(actual, predicted),
+    }
+
+
+def _selected_threshold_diagnostics(
+    actual: Series,
+    calibration_y: Series,
+    forward_y: Series,
+    calibration_p: np.ndarray,
+    forward_p: np.ndarray,
+    probabilities: np.ndarray,
+    threshold: float,
+    result: dict[str, Any],
+) -> dict[str, Any]:
+    """Attach calibration, forward-only, and full-Validation threshold evaluations."""
+    calibration_evaluation = _threshold_validation_evaluation(
+        calibration_y, calibration_p, threshold
+    )
+    forward_evaluation = _threshold_validation_evaluation(
+        forward_y, forward_p, threshold
+    )
+    full_evaluation = _threshold_validation_evaluation(
+        actual, probabilities, threshold
+    )
+    result["calibration"]["selected_calibration_metrics"] = {
+        "classification_metrics": calibration_evaluation["classification_metrics"],
+        "hold_metrics": calibration_evaluation["hold_metrics"],
+    }
+    result["post_calibration_validation"] = {
+        **forward_evaluation,
+        "start_row_index": int(forward_y.index[0]),
+        "calibration_overlap": False,
+    }
+    result["full_validation_including_calibration"] = {
+        **full_evaluation,
+        "calibration_overlap": True,
+        "evaluation_scope": "DESCRIPTIVE_ONLY_INCLUDES_CALIBRATION_ROWS",
+    }
+    return result
 
 
 def threshold_optimization_diagnostics(
@@ -499,13 +668,7 @@ def threshold_optimization_diagnostics(
     minimum_recall: float = DEFAULT_MINIMUM_HOLD_RECALL,
 ) -> dict[str, Any]:
     """Calibrate on early Validation rows, then score later rows without overlap."""
-    if (
-        isinstance(calibration_fraction, bool)
-        or not isinstance(calibration_fraction, (int, float))
-        or not np.isfinite(float(calibration_fraction))
-        or not 0.0 < calibration_fraction < 0.5
-    ):
-        raise ValueError("calibration_fraction_must_be_between_zero_and_half")
+    _validate_calibration_fraction(calibration_fraction)
     matrix = np.asarray(probabilities, dtype=float)
     if matrix.ndim != 2 or matrix.shape != (len(actual), len(LABELS)):
         raise ValueError("classifier_probability_shape_invalid")
@@ -516,79 +679,42 @@ def threshold_optimization_diagnostics(
     forward_y = actual.iloc[count:]
     calibration_p = matrix[:count]
     forward_p = matrix[count:]
-    counts = _class_counts(calibration_y)
-    metadata = {
-        "row_count": int(len(calibration_y)),
-        "start_row_index": int(calibration_y.index[0]),
-        "end_row_index": int(calibration_y.index[-1]),
-        "temporal_position": "FIRST_CHRONOLOGICAL_SEGMENT_OF_VALIDATION",
-        "label_distribution": label_distribution(calibration_y),
-        "minimum_hold_support": MIN_CALIBRATION_HOLD_SAMPLES,
-        "minimum_non_hold_support": MIN_CALIBRATION_NON_HOLD_SAMPLES,
-    }
+    metadata = _calibration_metadata(calibration_y)
     constraints = {
         "minimum_hold_precision": float(minimum_precision),
         "minimum_hold_recall": float(minimum_recall),
     }
-    if (
-        counts["HOLD"] < MIN_CALIBRATION_HOLD_SAMPLES
-        or len(calibration_y) - counts["HOLD"] < MIN_CALIBRATION_NON_HOLD_SAMPLES
-    ):
-        return {
-            "status": "SKIPPED_INSUFFICIENT_CALIBRATION_SAMPLES",
-            "selected_threshold": None,
-            "constraints": constraints,
-            "calibration": metadata,
-            "post_calibration_validation": None,
-            "full_validation_including_calibration": None,
-        }
+    if not _calibration_support_is_sufficient(calibration_y):
+        return _threshold_diagnostics_base(
+            "SKIPPED_INSUFFICIENT_CALIBRATION_SAMPLES",
+            None,
+            constraints,
+            metadata,
+        )
     selection = optimize_hold_threshold(
         calibration_y,
         calibration_p,
         minimum_precision=minimum_precision,
         minimum_recall=minimum_recall,
     )
-    result: dict[str, Any] = {
-        "status": selection["status"],
-        "selected_threshold": selection["selected_threshold"],
-        "constraints": constraints,
-        "calibration": {**metadata, "threshold_selection": selection},
-        "post_calibration_validation": None,
-        "full_validation_including_calibration": None,
-    }
+    result = _threshold_diagnostics_base(
+        str(selection["status"]),
+        selection["selected_threshold"],
+        constraints,
+        {**metadata, "threshold_selection": selection},
+    )
     if selection["status"] != "SELECTED":
         return result
-    threshold = float(selection["selected_threshold"])
-    calibration_prediction = hold_threshold_predictions(
-        calibration_p, threshold, calibration_y.index
+    return _selected_threshold_diagnostics(
+        actual,
+        calibration_y,
+        forward_y,
+        calibration_p,
+        forward_p,
+        matrix,
+        float(selection["selected_threshold"]),
+        result,
     )
-    forward_prediction = hold_threshold_predictions(
-        forward_p, threshold, forward_y.index
-    )
-    full_prediction = hold_threshold_predictions(matrix, threshold, actual.index)
-    result["calibration"]["selected_calibration_metrics"] = {
-        "classification_metrics": classification_metrics(
-            calibration_y, calibration_prediction
-        ),
-        "hold_metrics": hold_class_metrics(calibration_y, calibration_prediction),
-    }
-    result["post_calibration_validation"] = {
-        "row_count": int(len(forward_y)),
-        "start_row_index": int(forward_y.index[0]),
-        "calibration_overlap": False,
-        "classification_metrics": classification_metrics(forward_y, forward_prediction),
-        "hold_metrics": hold_class_metrics(forward_y, forward_prediction),
-        **validation_classification_diagnostics(forward_y, forward_prediction),
-    }
-    result["full_validation_including_calibration"] = {
-        "row_count": int(len(actual)),
-        "calibration_overlap": True,
-        "evaluation_scope": "DESCRIPTIVE_ONLY_INCLUDES_CALIBRATION_ROWS",
-        "classification_metrics": classification_metrics(actual, full_prediction),
-        "hold_metrics": hold_class_metrics(actual, full_prediction),
-        **validation_classification_diagnostics(actual, full_prediction),
-    }
-    return result
 
 
 def _serialize_validation_probabilities(
