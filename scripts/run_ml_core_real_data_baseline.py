@@ -1113,6 +1113,91 @@ def _render_classwise_metrics_section(
     return lines
 
 
+def _render_weighting_metrics_section(
+    experiments: list[dict[str, Any]],
+) -> list[str]:
+    """Render raw argmax metrics for each weighting policy."""
+    lines = [
+        "### Controlled weighting comparison (raw argmax)",
+        "",
+        "| Pair | TF | Weighting policy | Macro-F1 | HOLD precision | HOLD recall | HOLD F1 |",
+        "|---|---:|---|---:|---:|---:|---:|",
+    ]
+    for item in experiments:
+        variants = item.get("model_variants")
+        for name in ("weight_none", "weight_balanced", "weight_intermediate"):
+            if variants is None:
+                lines.append(
+                    f"| {item['pair']} | {item['timeframe']} | {name} "
+                    f"| N/A | N/A | N/A | N/A |"
+                )
+                continue
+            variant = variants[name]
+            macro_f1 = variant["classification_metrics"]["validation"]["macro"]["f1"]
+            hold = variant["hold_metrics"]
+            lines.append(
+                f"| {item['pair']} | {item['timeframe']} | {name} "
+                f"| {macro_f1:.4f} | {hold['precision']:.4f} "
+                f"| {hold['recall']:.4f} | {hold['f1']:.4f} |"
+            )
+    return lines
+
+
+def _render_threshold_optimization_section(
+    experiments: list[dict[str, Any]],
+) -> list[str]:
+    """Render threshold selection and non-overlapping forward metrics."""
+    lines = [
+        "### HOLD threshold calibration",
+        "",
+        "| Pair | TF | Weighting policy | Status | Threshold | Calibration P/R | Forward Validation P/R | Full Validation P/R (overlap) |",
+        "|---|---:|---|---|---:|---:|---:|---:|",
+    ]
+    for item in experiments:
+        variants = item.get("model_variants")
+        for name in ("weight_none", "weight_balanced", "weight_intermediate"):
+            if variants is None:
+                lines.append(
+                    f"| {item['pair']} | {item['timeframe']} | {name} "
+                    f"| {item['status']} | N/A | N/A | N/A | N/A |"
+                )
+                continue
+            threshold = variants[name]["threshold_optimization"]
+            selection = threshold.get("calibration", {}).get("threshold_selection")
+            selected = (
+                selection.get("selected_calibration_metrics")
+                if selection
+                else None
+            )
+            calibration_pr = (
+                f"{selected['precision']:.3f}/{selected['recall']:.3f}"
+                if selected
+                else "N/A"
+            )
+            forward = threshold.get("post_calibration_validation")
+            forward_pr = (
+                f"{forward['hold_metrics']['precision']:.3f}/"
+                f"{forward['hold_metrics']['recall']:.3f}"
+                if forward
+                else "N/A"
+            )
+            full = threshold.get("full_validation_including_calibration")
+            full_pr = (
+                f"{full['hold_metrics']['precision']:.3f}/"
+                f"{full['hold_metrics']['recall']:.3f}"
+                if full
+                else "N/A"
+            )
+            value = threshold.get("selected_threshold")
+            value_text = f"{value:.3f}" if value is not None else "N/A"
+            lines.append(
+                f"| {item['pair']} | {item['timeframe']} | {name} "
+                f"| {threshold['status']} | {value_text} "
+                f"| {calibration_pr} | {forward_pr} | {full_pr} |"
+            )
+    return lines
+
+
 def _render_prediction_distribution_section(
     experiments: list[dict[str, Any]],
 ) -> list[str]:
@@ -1178,6 +1263,8 @@ def render_markdown(report: dict[str, Any]) -> str:
     lines.extend(_render_label_distribution_section(experiments))
     lines.extend(["", *_render_macro_metrics_section(experiments)])
     lines.extend(["", *_render_classwise_metrics_section(experiments)])
+    lines.extend(["", *_render_weighting_metrics_section(experiments)])
+    lines.extend(["", *_render_threshold_optimization_section(experiments)])
     lines.extend(["", *_render_prediction_distribution_section(experiments)])
     lines.extend(["", *_render_confusion_matrix_section(experiments)])
     lines.extend(
@@ -1195,10 +1282,37 @@ def render_markdown(report: dict[str, Any]) -> str:
 
 
 def run_diagnostic(
-    input_dir: Path, output_path: Path, *, days: int, commit_sha: str
+    input_dir: Path,
+    output_path: Path,
+    *,
+    days: int,
+    commit_sha: str,
+    hold_weight_multiplier: float = DEFAULT_HOLD_WEIGHT_MULTIPLIER,
+    calibration_fraction: float = DEFAULT_CALIBRATION_FRACTION,
+    minimum_hold_precision: float = DEFAULT_MINIMUM_HOLD_PRECISION,
+    minimum_hold_recall: float = DEFAULT_MINIMUM_HOLD_RECALL,
 ) -> dict[str, Any]:
     if days not in (1, 7, 30, 90, 730):
         raise ValueError("diagnostic_days_out_of_policy")
+    policy_specs = weighting_policy_specs(hold_weight_multiplier)
+    if (
+        isinstance(calibration_fraction, bool)
+        or not isinstance(calibration_fraction, (int, float))
+        or not np.isfinite(float(calibration_fraction))
+        or not 0.0 < calibration_fraction < 0.5
+    ):
+        raise ValueError("calibration_fraction_must_be_between_zero_and_half")
+    for value, name in (
+        (minimum_hold_precision, "minimum_hold_precision"),
+        (minimum_hold_recall, "minimum_hold_recall"),
+    ):
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not np.isfinite(float(value))
+            or not 0.0 <= value <= 1.0
+        ):
+            raise ValueError(f"{name}_must_be_between_zero_and_one")
     datasets: dict[str, DataFrame] = {}
     provenance: list[dict[str, Any]] = []
     for symbol in SYMBOLS:
@@ -1210,7 +1324,17 @@ def run_diagnostic(
     for symbol in SYMBOLS:
         pair = f"{symbol[:-4]}/USDT"
         for timeframe in TIMEFRAME_MINUTES:
-            experiments.append(run_experiment(pair, timeframe, datasets[symbol]))
+            experiments.append(
+                run_experiment(
+                    pair,
+                    timeframe,
+                    datasets[symbol],
+                    hold_weight_multiplier=hold_weight_multiplier,
+                    calibration_fraction=calibration_fraction,
+                    minimum_hold_precision=minimum_hold_precision,
+                    minimum_hold_recall=minimum_hold_recall,
+                )
+            )
 
     trained_count = sum(item["status"] == "TRAINED" for item in experiments)
     report: dict[str, Any] = {
@@ -1264,6 +1388,33 @@ def run_diagnostic(
             "num_leaves": 15,
             "random_state": 42,
             "class_weight": "balanced",
+            "primary_variant": "weight_balanced",
+        },
+        "weighting_policy": {
+            "hold_weight_multiplier": float(hold_weight_multiplier),
+            "policies": {
+                name: {
+                    "class_weight": spec["class_weight"],
+                    "hold_weight_multiplier": spec["hold_weight_multiplier"],
+                }
+                for name, spec in policy_specs.items()
+            },
+        },
+        "calibration_policy": {
+            "fraction_of_validation": float(calibration_fraction),
+            "temporal_position": "FIRST_CHRONOLOGICAL_SEGMENT_OF_VALIDATION",
+            "reason": (
+                "Calibration precedes forward threshold evaluation. Using the final "
+                "Validation segment to tune a threshold and then scoring all of "
+                "Validation would leak calibration observations into evaluation."
+            ),
+            "minimum_hold_support": MIN_CALIBRATION_HOLD_SAMPLES,
+            "minimum_non_hold_support": MIN_CALIBRATION_NON_HOLD_SAMPLES,
+            "minimum_hold_precision": float(minimum_hold_precision),
+            "minimum_hold_recall": float(minimum_hold_recall),
+            "threshold_grid_steps": HOLD_THRESHOLD_GRID_STEPS,
+            "primary_evaluation_scope": "POST_CALIBRATION_REMAINING_VALIDATION",
+            "full_validation_scope": "DESCRIPTIVE_ONLY_INCLUDES_CALIBRATION_ROWS",
         },
         "baseline_comparisons": {
             "always_sell": {
@@ -1341,12 +1492,36 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--days", type=int, choices=(1, 7, 30, 90, 730), default=730)
     parser.add_argument("--commit-sha", required=True)
+    parser.add_argument(
+        "--hold-weight-multiplier",
+        type=float,
+        default=DEFAULT_HOLD_WEIGHT_MULTIPLIER,
+    )
+    parser.add_argument(
+        "--calibration-fraction",
+        type=float,
+        default=DEFAULT_CALIBRATION_FRACTION,
+    )
+    parser.add_argument(
+        "--minimum-hold-precision",
+        type=float,
+        default=DEFAULT_MINIMUM_HOLD_PRECISION,
+    )
+    parser.add_argument(
+        "--minimum-hold-recall",
+        type=float,
+        default=DEFAULT_MINIMUM_HOLD_RECALL,
+    )
     args = parser.parse_args()
     report = run_diagnostic(
         args.input_dir,
         args.output,
         days=args.days,
         commit_sha=args.commit_sha,
+        hold_weight_multiplier=args.hold_weight_multiplier,
+        calibration_fraction=args.calibration_fraction,
+        minimum_hold_precision=args.minimum_hold_precision,
+        minimum_hold_recall=args.minimum_hold_recall,
     )
     if report["experiment_count"] != 8:
         raise RuntimeError("diagnostic_experiment_count_mismatch")
