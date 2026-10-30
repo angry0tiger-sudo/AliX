@@ -1272,45 +1272,46 @@ def render_markdown(report: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def run_diagnostic(
-    input_dir: Path,
-    output_path: Path,
-    *,
+def _validate_diagnostic_parameters(
     days: int,
-    commit_sha: str,
-    hold_weight_multiplier: float = DEFAULT_HOLD_WEIGHT_MULTIPLIER,
-    calibration_fraction: float = DEFAULT_CALIBRATION_FRACTION,
-    minimum_hold_precision: float = DEFAULT_MINIMUM_HOLD_PRECISION,
-    minimum_hold_recall: float = DEFAULT_MINIMUM_HOLD_RECALL,
-) -> dict[str, Any]:
+    hold_weight_multiplier: float,
+    calibration_fraction: float,
+    minimum_hold_precision: float,
+    minimum_hold_recall: float,
+) -> dict[str, dict[str, Any]]:
+    """Validate the configuration and return the canonical weighting policies."""
     if days not in (1, 7, 30, 90, 730):
         raise ValueError("diagnostic_days_out_of_policy")
-    policy_specs = weighting_policy_specs(hold_weight_multiplier)
-    if (
-        isinstance(calibration_fraction, bool)
-        or not isinstance(calibration_fraction, (int, float))
-        or not np.isfinite(float(calibration_fraction))
-        or not 0.0 < calibration_fraction < 0.5
-    ):
-        raise ValueError("calibration_fraction_must_be_between_zero_and_half")
-    for value, name in (
-        (minimum_hold_precision, "minimum_hold_precision"),
-        (minimum_hold_recall, "minimum_hold_recall"),
-    ):
-        if (
-            isinstance(value, bool)
-            or not isinstance(value, (int, float))
-            or not np.isfinite(float(value))
-            or not 0.0 <= value <= 1.0
-        ):
-            raise ValueError(f"{name}_must_be_between_zero_and_one")
+    policies = weighting_policy_specs(hold_weight_multiplier)
+    _validate_calibration_fraction(calibration_fraction)
+    _validate_threshold_constraints(minimum_hold_precision, minimum_hold_recall)
+    return policies
+
+
+def _load_diagnostic_datasets(
+    input_dir: Path, days: int, commit_sha: str
+) -> tuple[dict[str, DataFrame], list[dict[str, Any]]]:
+    """Load and validate manifested public datasets for each approved symbol."""
     datasets: dict[str, DataFrame] = {}
     provenance: list[dict[str, Any]] = []
     for symbol in SYMBOLS:
-        candles, manifest = _load_manifested_data(input_dir, symbol, days, commit_sha)
+        candles, manifest = _load_manifested_data(
+            input_dir, symbol, days, commit_sha
+        )
         datasets[symbol] = candles
         provenance.append(manifest)
+    return datasets, provenance
 
+
+def _run_diagnostic_experiments(
+    datasets: dict[str, DataFrame],
+    *,
+    hold_weight_multiplier: float,
+    calibration_fraction: float,
+    minimum_hold_precision: float,
+    minimum_hold_recall: float,
+) -> list[dict[str, Any]]:
+    """Run the approved pair/timeframe grid with the supplied v4 policies."""
     experiments: list[dict[str, Any]] = []
     for symbol in SYMBOLS:
         pair = f"{symbol[:-4]}/USDT"
@@ -1326,9 +1327,24 @@ def run_diagnostic(
                     minimum_hold_recall=minimum_hold_recall,
                 )
             )
+    return experiments
 
+
+def _build_diagnostic_report(
+    *,
+    days: int,
+    commit_sha: str,
+    provenance: list[dict[str, Any]],
+    experiments: list[dict[str, Any]],
+    hold_weight_multiplier: float,
+    calibration_fraction: float,
+    minimum_hold_precision: float,
+    minimum_hold_recall: float,
+    policy_specs: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Construct the v4 diagnostic report without performing economic evaluation."""
     trained_count = sum(item["status"] == "TRAINED" for item in experiments)
-    report: dict[str, Any] = {
+    return {
         "schema_version": REPORT_SCHEMA,
         "commit_sha": commit_sha,
         "diagnostic_scope": "CLASSIFICATION_ONLY",
@@ -1450,6 +1466,10 @@ def run_diagnostic(
             "trading_authorization": "NO-GO",
         },
     }
+
+
+def _write_diagnostic_report(report: dict[str, Any], output_path: Path) -> None:
+    """Persist JSON and its matching GitHub Step Summary."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(
         json.dumps(report, indent=2, sort_keys=True, allow_nan=False) + "\n",
@@ -1459,13 +1479,19 @@ def run_diagnostic(
     if summary_path:
         with Path(summary_path).open("a", encoding="utf-8") as summary:
             summary.write(render_markdown(report))
+
+
+def _print_diagnostic_completion(
+    report: dict[str, Any], output_path: Path, commit_sha: str
+) -> None:
+    """Emit a compact machine-readable completion record."""
     print(
         json.dumps(
             {
                 "report_path": str(output_path),
                 "commit_sha": commit_sha,
-                "experiment_count": len(experiments),
-                "trained_models": trained_count,
+                "experiment_count": report["experiment_count"],
+                "trained_models": report["trained_models"],
                 "economic_evaluation_performed": False,
                 "Champion": None,
                 "order_permission": False,
@@ -1474,7 +1500,52 @@ def run_diagnostic(
             sort_keys=True,
         )
     )
+
+
+def run_diagnostic(
+    input_dir: Path,
+    output_path: Path,
+    *,
+    days: int,
+    commit_sha: str,
+    hold_weight_multiplier: float = DEFAULT_HOLD_WEIGHT_MULTIPLIER,
+    calibration_fraction: float = DEFAULT_CALIBRATION_FRACTION,
+    minimum_hold_precision: float = DEFAULT_MINIMUM_HOLD_PRECISION,
+    minimum_hold_recall: float = DEFAULT_MINIMUM_HOLD_RECALL,
+) -> dict[str, Any]:
+    """Execute the classification-only real-data diagnostic and persist v4 output."""
+    policy_specs = _validate_diagnostic_parameters(
+        days,
+        hold_weight_multiplier,
+        calibration_fraction,
+        minimum_hold_precision,
+        minimum_hold_recall,
+    )
+    datasets, provenance = _load_diagnostic_datasets(
+        input_dir, days, commit_sha
+    )
+    experiments = _run_diagnostic_experiments(
+        datasets,
+        hold_weight_multiplier=hold_weight_multiplier,
+        calibration_fraction=calibration_fraction,
+        minimum_hold_precision=minimum_hold_precision,
+        minimum_hold_recall=minimum_hold_recall,
+    )
+    report = _build_diagnostic_report(
+        days=days,
+        commit_sha=commit_sha,
+        provenance=provenance,
+        experiments=experiments,
+        hold_weight_multiplier=hold_weight_multiplier,
+        calibration_fraction=calibration_fraction,
+        minimum_hold_precision=minimum_hold_precision,
+        minimum_hold_recall=minimum_hold_recall,
+        policy_specs=policy_specs,
+    )
+    _write_diagnostic_report(report, output_path)
+    _print_diagnostic_completion(report, output_path, commit_sha)
     return report
+
 
 
 def main() -> int:
