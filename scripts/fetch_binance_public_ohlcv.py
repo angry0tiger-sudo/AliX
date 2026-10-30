@@ -217,7 +217,11 @@ def _validate_complete_window(
 
 
 def _validate_fetch_request(
-    days: int, now: datetime, symbol: str, start_utc: datetime | None, end_utc: datetime | None
+    days: int,
+    now: datetime,
+    symbol: str,
+    start_utc: datetime | None,
+    end_utc: datetime | None,
 ) -> int:
     if isinstance(days, bool) or days not in ALLOWED_DAYS:
         raise ValueError("historical_days_out_of_policy")
@@ -243,9 +247,7 @@ def _exact_historical_bounds(
     return start_ms, end_ms
 
 
-def _rolling_historical_bounds(
-    now: datetime, expected_count: int
-) -> tuple[int, int]:
+def _rolling_historical_bounds(now: datetime, expected_count: int) -> tuple[int, int]:
     now_ms = int(now.astimezone(timezone.utc).timestamp() * 1000)
     end_ms = (now_ms // INTERVAL_MS) * INTERVAL_MS - INTERVAL_MS
     start_ms = end_ms - (expected_count - 1) * INTERVAL_MS
@@ -295,9 +297,7 @@ def fetch_historical_candles(
     start_ms, end_ms = _resolve_historical_bounds(
         now, expected_count, start_utc, end_utc
     )
-    rows = _fetch_historical_pages(
-        start_ms, end_ms, symbol, request_json, sleep_fn
-    )
+    rows = _fetch_historical_pages(start_ms, end_ms, symbol, request_json, sleep_fn)
     _validate_complete_window(rows, expected_count, start_ms, end_ms)
     return rows
 

@@ -758,9 +758,7 @@ def _audit_timeframe(
     }
 
 
-def _find_source_dataset(
-    report: dict[str, Any], symbol: str
-) -> dict[str, Any]:
+def _find_source_dataset(report: dict[str, Any], symbol: str) -> dict[str, Any]:
     datasets = report.get("input_datasets")
     if not isinstance(datasets, list) or len(datasets) != len(SYMBOLS):
         raise ValueError("source_dataset_metadata_missing")
