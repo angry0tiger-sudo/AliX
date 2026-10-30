@@ -33,7 +33,14 @@ VALIDATION_END_FRACTION = 0.85
 OVERFIT_F1_GAP_THRESHOLD = 0.15
 MIN_TRAIN_SAMPLES_PER_CLASS = 20
 MIN_VALIDATION_SAMPLES_PER_CLASS = 30
-REPORT_SCHEMA = "alix.ml-core.real-data-classification-diagnostic.v3"
+MIN_CALIBRATION_HOLD_SAMPLES = 30
+MIN_CALIBRATION_NON_HOLD_SAMPLES = 30
+DEFAULT_HOLD_WEIGHT_MULTIPLIER = 3.0
+DEFAULT_CALIBRATION_FRACTION = 0.20
+DEFAULT_MINIMUM_HOLD_PRECISION = 0.40
+DEFAULT_MINIMUM_HOLD_RECALL = 0.20
+HOLD_THRESHOLD_GRID_STEPS = 201
+REPORT_SCHEMA = "alix.ml-core.real-data-classification-diagnostic.v4"
 
 
 def _validated_minute_timestamps(values: Series) -> Series:
@@ -294,6 +301,319 @@ def baseline_validation_diagnostics(
         "classification_metrics": classification_metrics(actual, predicted),
         **validation_classification_diagnostics(actual, predicted),
     }
+
+
+def weighting_policy_specs(hold_weight_multiplier: float) -> dict[str, dict[str, Any]]:
+    """Return unweighted, fully balanced, and controlled HOLD-weight policies."""
+    if (
+        isinstance(hold_weight_multiplier, bool)
+        or not isinstance(hold_weight_multiplier, (int, float))
+        or not np.isfinite(float(hold_weight_multiplier))
+        or hold_weight_multiplier <= 0
+    ):
+        raise ValueError("hold_weight_multiplier_must_be_finite_and_positive")
+    multiplier = float(hold_weight_multiplier)
+    return {
+        "weight_none": {"class_weight": None, "hold_weight_multiplier": None},
+        "weight_balanced": {"class_weight": "balanced", "hold_weight_multiplier": None},
+        "weight_intermediate": {
+            "class_weight": {"BUY": 1.0, "SELL": 1.0, "HOLD": multiplier},
+            "hold_weight_multiplier": multiplier,
+        },
+    }
+
+
+def split_validation_for_calibration(
+    validation_indices: list[int], calibration_fraction: float
+) -> tuple[list[int], list[int]]:
+    """Use early Validation rows for threshold calibration and later rows for testing."""
+    if (
+        isinstance(calibration_fraction, bool)
+        or not isinstance(calibration_fraction, (int, float))
+        or not np.isfinite(float(calibration_fraction))
+        or not 0.0 < calibration_fraction < 0.5
+    ):
+        raise ValueError("calibration_fraction_must_be_between_zero_and_half")
+    if len(validation_indices) < 2:
+        raise ValueError("validation_rows_insufficient_for_calibration_split")
+    count = max(1, int(np.floor(len(validation_indices) * calibration_fraction)))
+    if count >= len(validation_indices):
+        raise ValueError("calibration_split_leaves_no_forward_validation_rows")
+    return validation_indices[:count], validation_indices[count:]
+
+
+def ordered_probability_matrix(model: Any, features: DataFrame) -> np.ndarray:
+    """Return predict_proba columns in the fixed BUY, SELL, HOLD order."""
+    raw = np.asarray(model.predict_proba(features), dtype=float)
+    classes = [str(value) for value in model.classes_]
+    if raw.ndim != 2 or raw.shape != (len(features), len(classes)):
+        raise ValueError("classifier_probability_shape_invalid")
+    if len(classes) != len(LABELS) or set(classes) != set(LABELS):
+        raise ValueError("classifier_probability_classes_invalid")
+    ordered = raw[:, [classes.index(label) for label in LABELS]]
+    if (
+        not bool(np.isfinite(ordered).all())
+        or bool(np.any(ordered < 0.0))
+        or bool(np.any(ordered > 1.0))
+        or not bool(np.allclose(ordered.sum(axis=1), 1.0, atol=1e-6))
+    ):
+        raise ValueError("classifier_probabilities_invalid")
+    return ordered
+
+
+def predictions_from_probabilities(
+    probabilities: np.ndarray, index: pd.Index | None = None
+) -> Series:
+    """Use fixed-order argmax as the unthresholded three-class decision."""
+    matrix = np.asarray(probabilities, dtype=float)
+    if matrix.ndim != 2 or matrix.shape[1] != len(LABELS):
+        raise ValueError("classifier_probability_shape_invalid")
+    return Series(
+        [LABELS[int(value)] for value in np.argmax(matrix, axis=1)],
+        index=index,
+        dtype=object,
+    )
+
+
+def hold_class_metrics(actual: Series, predicted: Series) -> dict[str, int | float]:
+    """Return binary HOLD precision, recall, F1 and confusion counts."""
+    if len(actual) != len(predicted):
+        raise ValueError("hold_metric_series_length_mismatch")
+    actual_hold = actual.to_numpy(dtype=object) == "HOLD"
+    predicted_hold = predicted.to_numpy(dtype=object) == "HOLD"
+    tp = int(np.count_nonzero(actual_hold & predicted_hold))
+    fp = int(np.count_nonzero(~actual_hold & predicted_hold))
+    fn = int(np.count_nonzero(actual_hold & ~predicted_hold))
+    support = int(np.count_nonzero(actual_hold))
+    predicted_support = int(np.count_nonzero(predicted_hold))
+    precision = tp / predicted_support if predicted_support else 0.0
+    recall = tp / support if support else 0.0
+    f1 = 2.0 * precision * recall / (precision + recall) if precision + recall else 0.0
+    return {
+        "precision": round(precision, 6),
+        "recall": round(recall, 6),
+        "f1": round(f1, 6),
+        "support": support,
+        "predicted_support": predicted_support,
+        "true_positives": tp,
+        "false_positives": fp,
+        "false_negatives": fn,
+    }
+
+
+def hold_threshold_predictions(
+    probabilities: np.ndarray, threshold: float, index: pd.Index | None = None
+) -> Series:
+    """Retain HOLD only when it wins argmax and clears the probability threshold."""
+    if (
+        isinstance(threshold, bool)
+        or not isinstance(threshold, (int, float))
+        or not np.isfinite(float(threshold))
+        or not 0.0 <= threshold <= 1.0
+    ):
+        raise ValueError("hold_threshold_must_be_between_zero_and_one")
+    matrix = np.asarray(probabilities, dtype=float)
+    if (
+        matrix.ndim != 2
+        or matrix.shape[1] != len(LABELS)
+        or not bool(np.isfinite(matrix).all())
+    ):
+        raise ValueError("classifier_probability_shape_invalid")
+    non_hold = np.where(matrix[:, 0] >= matrix[:, 1], 0, 1)
+    predicted = np.asarray([LABELS[int(value)] for value in non_hold], dtype=object)
+    is_top = matrix[:, 2] > np.max(matrix[:, :2], axis=1)
+    predicted[(matrix[:, 2] >= float(threshold)) & is_top] = "HOLD"
+    return Series(predicted.tolist(), index=index, dtype=object)
+
+
+def optimize_hold_threshold(
+    actual: Series,
+    probabilities: np.ndarray,
+    *,
+    minimum_precision: float = DEFAULT_MINIMUM_HOLD_PRECISION,
+    minimum_recall: float = DEFAULT_MINIMUM_HOLD_RECALL,
+) -> dict[str, Any]:
+    """Maximize HOLD F1 while satisfying the configured precision and recall floors."""
+    for value, name in (
+        (minimum_precision, "minimum_precision"),
+        (minimum_recall, "minimum_recall"),
+    ):
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not np.isfinite(float(value))
+            or not 0.0 <= value <= 1.0
+        ):
+            raise ValueError(f"{name}_must_be_between_zero_and_one")
+    matrix = np.asarray(probabilities, dtype=float)
+    if matrix.ndim != 2 or matrix.shape != (len(actual), len(LABELS)):
+        raise ValueError("classifier_probability_shape_invalid")
+    if len(actual) == 0:
+        raise ValueError("threshold_calibration_set_empty")
+    feasible: list[dict[str, Any]] = []
+    for threshold in np.linspace(0.0, 1.0, HOLD_THRESHOLD_GRID_STEPS):
+        prediction = hold_threshold_predictions(matrix, float(threshold), actual.index)
+        hold_metrics = hold_class_metrics(actual, prediction)
+        if (
+            hold_metrics["precision"] >= float(minimum_precision)
+            and hold_metrics["recall"] >= float(minimum_recall)
+        ):
+            feasible.append({"threshold": round(float(threshold), 6), **hold_metrics})
+    grid = {
+        "minimum": 0.0,
+        "maximum": 1.0,
+        "steps": HOLD_THRESHOLD_GRID_STEPS,
+        "increment": round(1.0 / (HOLD_THRESHOLD_GRID_STEPS - 1), 6),
+    }
+    if not feasible:
+        return {
+            "status": "NO_FEASIBLE_THRESHOLD",
+            "selected_threshold": None,
+            "feasible_threshold_count": 0,
+            "search_grid": grid,
+            "minimum_hold_precision": float(minimum_precision),
+            "minimum_hold_recall": float(minimum_recall),
+            "selected_calibration_metrics": None,
+        }
+    selected = max(
+        feasible,
+        key=lambda item: (item["f1"], item["precision"], item["threshold"]),
+    )
+    return {
+        "status": "SELECTED",
+        "selected_threshold": float(selected["threshold"]),
+        "feasible_threshold_count": len(feasible),
+        "search_grid": grid,
+        "minimum_hold_precision": float(minimum_precision),
+        "minimum_hold_recall": float(minimum_recall),
+        "selected_calibration_metrics": selected,
+        "selection_objective": "MAXIMIZE_HOLD_F1_THEN_PRECISION_THEN_THRESHOLD",
+    }
+
+
+def threshold_optimization_diagnostics(
+    actual: Series,
+    probabilities: np.ndarray,
+    *,
+    calibration_fraction: float = DEFAULT_CALIBRATION_FRACTION,
+    minimum_precision: float = DEFAULT_MINIMUM_HOLD_PRECISION,
+    minimum_recall: float = DEFAULT_MINIMUM_HOLD_RECALL,
+) -> dict[str, Any]:
+    """Calibrate on early Validation rows, then score later rows without overlap."""
+    if (
+        isinstance(calibration_fraction, bool)
+        or not isinstance(calibration_fraction, (int, float))
+        or not np.isfinite(float(calibration_fraction))
+        or not 0.0 < calibration_fraction < 0.5
+    ):
+        raise ValueError("calibration_fraction_must_be_between_zero_and_half")
+    matrix = np.asarray(probabilities, dtype=float)
+    if matrix.ndim != 2 or matrix.shape != (len(actual), len(LABELS)):
+        raise ValueError("classifier_probability_shape_invalid")
+    count = max(1, int(np.floor(len(actual) * calibration_fraction)))
+    if count >= len(actual):
+        raise ValueError("calibration_split_leaves_no_forward_validation_rows")
+    calibration_y = actual.iloc[:count]
+    forward_y = actual.iloc[count:]
+    calibration_p = matrix[:count]
+    forward_p = matrix[count:]
+    counts = _class_counts(calibration_y)
+    metadata = {
+        "row_count": int(len(calibration_y)),
+        "start_row_index": int(calibration_y.index[0]),
+        "end_row_index": int(calibration_y.index[-1]),
+        "temporal_position": "FIRST_CHRONOLOGICAL_SEGMENT_OF_VALIDATION",
+        "label_distribution": label_distribution(calibration_y),
+        "minimum_hold_support": MIN_CALIBRATION_HOLD_SAMPLES,
+        "minimum_non_hold_support": MIN_CALIBRATION_NON_HOLD_SAMPLES,
+    }
+    constraints = {
+        "minimum_hold_precision": float(minimum_precision),
+        "minimum_hold_recall": float(minimum_recall),
+    }
+    if (
+        counts["HOLD"] < MIN_CALIBRATION_HOLD_SAMPLES
+        or len(calibration_y) - counts["HOLD"] < MIN_CALIBRATION_NON_HOLD_SAMPLES
+    ):
+        return {
+            "status": "SKIPPED_INSUFFICIENT_CALIBRATION_SAMPLES",
+            "selected_threshold": None,
+            "constraints": constraints,
+            "calibration": metadata,
+            "post_calibration_validation": None,
+            "full_validation_including_calibration": None,
+        }
+    selection = optimize_hold_threshold(
+        calibration_y, calibration_p,
+        minimum_precision=minimum_precision,
+        minimum_recall=minimum_recall,
+    )
+    result: dict[str, Any] = {
+        "status": selection["status"],
+        "selected_threshold": selection["selected_threshold"],
+        "constraints": constraints,
+        "calibration": {**metadata, "threshold_selection": selection},
+        "post_calibration_validation": None,
+        "full_validation_including_calibration": None,
+    }
+    if selection["status"] != "SELECTED":
+        return result
+    threshold = float(selection["selected_threshold"])
+    calibration_prediction = hold_threshold_predictions(
+        calibration_p, threshold, calibration_y.index
+    )
+    forward_prediction = hold_threshold_predictions(
+        forward_p, threshold, forward_y.index
+    )
+    full_prediction = hold_threshold_predictions(matrix, threshold, actual.index)
+    result["calibration"]["selected_calibration_metrics"] = {
+        "classification_metrics": classification_metrics(
+            calibration_y, calibration_prediction
+        ),
+        "hold_metrics": hold_class_metrics(calibration_y, calibration_prediction),
+    }
+    result["post_calibration_validation"] = {
+        "row_count": int(len(forward_y)),
+        "start_row_index": int(forward_y.index[0]),
+        "calibration_overlap": False,
+        "classification_metrics": classification_metrics(forward_y, forward_prediction),
+        "hold_metrics": hold_class_metrics(forward_y, forward_prediction),
+        **validation_classification_diagnostics(forward_y, forward_prediction),
+    }
+    result["full_validation_including_calibration"] = {
+        "row_count": int(len(actual)),
+        "calibration_overlap": True,
+        "evaluation_scope": "DESCRIPTIVE_ONLY_INCLUDES_CALIBRATION_ROWS",
+        "classification_metrics": classification_metrics(actual, full_prediction),
+        "hold_metrics": hold_class_metrics(actual, full_prediction),
+        **validation_classification_diagnostics(actual, full_prediction),
+    }
+    return result
+
+
+def _serialize_validation_probabilities(
+    bars: DataFrame,
+    validation_indices: list[int],
+    actual: Series,
+    probabilities: np.ndarray,
+) -> list[dict[str, Any]]:
+    """Persist rounded per-row probabilities with source timestamp and row index."""
+    records: list[dict[str, Any]] = []
+    for row_index, actual_label, row_probs in zip(
+        validation_indices, actual.tolist(), probabilities, strict=True
+    ):
+        records.append(
+            {
+                "row_index": int(row_index),
+                "timestamp": pd.Timestamp(bars["date"].iloc[row_index]).isoformat(),
+                "actual_label": str(actual_label),
+                "probabilities": {
+                    label: round(float(row_probs[position]), 8)
+                    for position, label in enumerate(LABELS)
+                },
+            }
+        )
+    return records
 
 
 def _validation_window(row_count: int) -> tuple[int, int]:
