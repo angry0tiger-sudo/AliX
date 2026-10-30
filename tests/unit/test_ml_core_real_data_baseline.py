@@ -442,7 +442,6 @@ def test_hold_class_metrics_count_false_positives_and_false_negatives() -> None:
     assert result["recall"] == 0.5
 
 
-
 def test_diagnostic_report_unweighted_policy_uses_top_level_class_weight_field() -> (
     None
 ):
