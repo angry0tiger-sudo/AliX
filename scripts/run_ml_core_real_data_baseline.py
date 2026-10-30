@@ -720,7 +720,9 @@ def purged_temporal_indices(
     return train_indices, validation_indices, diagnostics
 
 
-def _new_classifier(class_weight: str | None = "balanced") -> Any:
+def _new_classifier(
+    class_weight: str | dict[str, float] | None = "balanced",
+) -> Any:
     """Load the pinned deterministic tree classifier for one weighting policy."""
     lightgbm = importlib.import_module("lightgbm")
     classifier = getattr(lightgbm, "LGBMClassifier")
@@ -767,6 +769,8 @@ def _skipped_result(
         "confusion_matrix": None,
         "prediction_distribution": None,
         "baseline_comparisons": None,
+        "model_variants": None,
+        "threshold_optimization": None,
         "label_audit": label_audit_diagnostics(labels),
         "sample_gate": sample_gate,
         "overfitting_assessment": {
@@ -798,6 +802,8 @@ def _insufficient_bar_result(
         "confusion_matrix": None,
         "prediction_distribution": None,
         "baseline_comparisons": None,
+        "model_variants": None,
+        "threshold_optimization": None,
         "label_audit": label_audit_diagnostics(labels),
         "sample_gate": {
             "status": "NOT_EVALUATED",
@@ -819,9 +825,17 @@ def _insufficient_bar_result(
 
 
 def run_experiment(
-    pair: str, timeframe: str, minute_candles: DataFrame
+    pair: str,
+    timeframe: str,
+    minute_candles: DataFrame,
+    *,
+    hold_weight_multiplier: float = DEFAULT_HOLD_WEIGHT_MULTIPLIER,
+    calibration_fraction: float = DEFAULT_CALIBRATION_FRACTION,
+    minimum_hold_precision: float = DEFAULT_MINIMUM_HOLD_PRECISION,
+    minimum_hold_recall: float = DEFAULT_MINIMUM_HOLD_RECALL,
 ) -> dict[str, Any]:
-    """Fit the primary and unweighted classifiers for one pair/timeframe."""
+    """Fit the three weighting policies and threshold-calibrate each from time-ordered data."""
+    policy_specs = weighting_policy_specs(hold_weight_multiplier)
     bars = resample_ohlcv(minute_candles, timeframe)
     labels = apply_adaptive_triple_barrier(bars)
     if len(bars) < 100:
@@ -863,35 +877,76 @@ def run_experiment(
 
     x_train = features.iloc[train_indices]
     x_validation = features.iloc[validation_indices]
-    model = _new_classifier()
-    model.fit(x_train, train_y)
-    train_prediction = pd.Series(model.predict(x_train), index=train_y.index)
-    validation_prediction = pd.Series(
-        model.predict(x_validation), index=validation_y.index
-    )
-    train_metrics = classification_metrics(train_y, train_prediction)
-    validation_metrics = classification_metrics(validation_y, validation_prediction)
+    variants: dict[str, Any] = {}
+    for name, policy in policy_specs.items():
+        model = _new_classifier(class_weight=policy["class_weight"])
+        model.fit(x_train, train_y)
+        train_probabilities = ordered_probability_matrix(model, x_train)
+        validation_probabilities = ordered_probability_matrix(model, x_validation)
+        train_prediction = predictions_from_probabilities(
+            train_probabilities, train_y.index
+        )
+        validation_prediction = predictions_from_probabilities(
+            validation_probabilities, validation_y.index
+        )
+        threshold_diagnostics = threshold_optimization_diagnostics(
+            validation_y,
+            validation_probabilities,
+            calibration_fraction=calibration_fraction,
+            minimum_precision=minimum_hold_precision,
+            minimum_recall=minimum_hold_recall,
+        )
+        variants[name] = {
+            "model_parameters": {
+                "class_weight": policy["class_weight"],
+                "hold_weight_multiplier": policy["hold_weight_multiplier"],
+            },
+            "classification_metrics": {
+                "train_in_sample": classification_metrics(train_y, train_prediction),
+                "validation": classification_metrics(
+                    validation_y, validation_prediction
+                ),
+            },
+            **validation_classification_diagnostics(
+                validation_y, validation_prediction
+            ),
+            "hold_metrics": hold_class_metrics(
+                validation_y, validation_prediction
+            ),
+            "threshold_optimization": threshold_diagnostics,
+            "validation_probabilities": _serialize_validation_probabilities(
+                bars, validation_indices, validation_y, validation_probabilities
+            ),
+        }
 
-    always_sell_prediction = Series("SELL", index=validation_y.index, dtype=object)
-    unweighted_model = _new_classifier(class_weight=None)
-    unweighted_model.fit(x_train, train_y)
-    unweighted_prediction = Series(
-        unweighted_model.predict(x_validation), index=validation_y.index
+    balanced = variants["weight_balanced"]
+    unweighted = variants["weight_none"]
+    always_sell_prediction = Series(
+        "SELL", index=validation_y.index, dtype=object
     )
     baseline_comparisons = {
         "always_sell": {
             "baseline_type": "constant_prediction",
             "predicted_label": "SELL",
-            **baseline_validation_diagnostics(validation_y, always_sell_prediction),
+            **baseline_validation_diagnostics(
+                validation_y, always_sell_prediction
+            ),
         },
         "lightgbm_unweighted": {
             "baseline_type": "lightgbm",
+            "model_variant": "weight_none",
             "model_parameters": {"class_weight": None},
-            **baseline_validation_diagnostics(validation_y, unweighted_prediction),
+            "classification_metrics": unweighted["classification_metrics"][
+                "validation"
+            ],
+            "confusion_matrix": unweighted["confusion_matrix"],
+            "prediction_distribution": unweighted["prediction_distribution"],
         },
     }
-    f1_gap = round(train_metrics["macro"]["f1"] - validation_metrics["macro"]["f1"], 6)
-    overfitting_status = (
+    train_f1 = balanced["classification_metrics"]["train_in_sample"]["macro"]["f1"]
+    validation_f1 = balanced["classification_metrics"]["validation"]["macro"]["f1"]
+    f1_gap = round(train_f1 - validation_f1, 6)
+    status = (
         "POSSIBLE_OVERFITTING"
         if f1_gap >= OVERFIT_F1_GAP_THRESHOLD
         else "NO_LARGE_MACRO_F1_GAP_OBSERVED"
@@ -899,19 +954,21 @@ def run_experiment(
     return {
         **base_result,
         "status": "TRAINED",
-        **validation_classification_diagnostics(validation_y, validation_prediction),
-        "classification_metrics": {
-            "train_in_sample": train_metrics,
-            "validation": validation_metrics,
-        },
+        "classification_metrics": balanced["classification_metrics"],
+        "confusion_matrix": balanced["confusion_matrix"],
+        "prediction_distribution": balanced["prediction_distribution"],
+        "hold_metrics": balanced["hold_metrics"],
+        "model_variants": variants,
+        "threshold_optimization": balanced["threshold_optimization"],
         "baseline_comparisons": baseline_comparisons,
         "overfitting_assessment": {
-            "status": overfitting_status,
+            "status": status,
             "macro_f1_gap_train_minus_validation": f1_gap,
             "heuristic_threshold": OVERFIT_F1_GAP_THRESHOLD,
             "caveat": "Single chronological split; diagnostic heuristic, not a statistical proof.",
         },
     }
+
 
 
 def _load_manifested_data(
