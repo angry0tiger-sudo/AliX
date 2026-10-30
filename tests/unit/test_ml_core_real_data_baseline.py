@@ -8,6 +8,7 @@ import pytest
 from pandas import DataFrame, Series
 
 from scripts.run_ml_core_real_data_baseline import (
+    _build_diagnostic_report,
     _new_classifier,
     baseline_validation_diagnostics,
     classification_metrics,
@@ -439,3 +440,29 @@ def test_hold_class_metrics_count_false_positives_and_false_negatives() -> None:
     assert result["false_negatives"] == 1
     assert result["precision"] == 0.5
     assert result["recall"] == 0.5
+
+
+
+def test_diagnostic_report_unweighted_policy_uses_top_level_class_weight_field() -> (
+    None
+):
+    report = _build_diagnostic_report(
+        days=730,
+        commit_sha="a" * 40,
+        provenance=[
+            {
+                "fetch_page_size_candles": 1000,
+                "inter_page_delay_seconds": 0.25,
+            }
+        ],
+        experiments=[],
+        hold_weight_multiplier=3.0,
+        calibration_fraction=0.20,
+        minimum_hold_precision=0.40,
+        minimum_hold_recall=0.20,
+        policy_specs=weighting_policy_specs(3.0),
+    )
+
+    unweighted = report["baseline_comparisons"]["lightgbm_unweighted"]
+    assert unweighted["class_weight"] is None
+    assert "model_parameters" not in unweighted

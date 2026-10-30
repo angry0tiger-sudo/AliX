@@ -133,7 +133,7 @@ jobs:
               "insufficient_atr_history", "incomplete_horizon"
           ]
           assert report["baseline_comparisons"]["always_sell"]["predicted_label"] == "SELL"
-          assert report["baseline_comparisons"]["lightgbm_unweighted"]["model_parameters"]["class_weight"] is None
+          assert report["baseline_comparisons"]["lightgbm_unweighted"]["class_weight"] is None
           weighting = report["weighting_policy"]
           assert weighting["hold_weight_multiplier"] == 3.0
           assert set(weighting["policies"]) == {
