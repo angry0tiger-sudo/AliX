@@ -520,10 +520,13 @@ def _validate_serialized_validation(
     labels: DataFrame,
     bars: DataFrame,
     indices: list[int],
+    weighting_policies: tuple[str, ...] = WEIGHTING_POLICIES,
 ) -> None:
     variants = _mapping(experiment.get("model_variants"), "v4c_trained_models_missing")
     expected_indices = indices
-    for policy in WEIGHTING_POLICIES:
+    if set(variants) != set(weighting_policies):
+        raise ValueError("validation_weighting_policy_matrix_invalid")
+    for policy in weighting_policies:
         variant = _mapping(variants.get(policy), "v4c_model_variant_missing")
         raw_rows = variant.get("validation_probabilities")
         if not isinstance(raw_rows, list) or len(raw_rows) != len(expected_indices):
@@ -640,6 +643,9 @@ def _scenario_validation_data(
     scenario_name: str,
     start: int,
     end: int,
+    *,
+    validate_reference: bool = True,
+    weighting_policies: tuple[str, ...] = WEIGHTING_POLICIES,
 ) -> tuple[DataFrame, list[int]]:
     split = _mapping(experiment.get("split"), "v4c_split_metadata_missing")
     if split.get("validation_start_index") != start:
@@ -653,13 +659,17 @@ def _scenario_validation_data(
         take_profit_multiplier=take_profit,
         stop_loss_multiplier=stop_loss,
     )
-    _validate_label_audit(labels, experiment)
+    if validate_reference:
+        _validate_label_audit(labels, experiment)
     indices = _eligible_indices(bars, labels, start, end)
-    if experiment.get("validation_rows") != len(indices):
-        raise ValueError("v4c_validation_eligible_row_count_mismatch")
-    _validate_label_distribution(labels, indices, experiment)
-    if experiment.get("status") == "TRAINED":
-        _validate_serialized_validation(experiment, labels, bars, indices)
+    if validate_reference:
+        if experiment.get("validation_rows") != len(indices):
+            raise ValueError("v4c_validation_eligible_row_count_mismatch")
+        _validate_label_distribution(labels, indices, experiment)
+        if experiment.get("status") == "TRAINED":
+            _validate_serialized_validation(
+                experiment, labels, bars, indices, weighting_policies
+            )
     return labels, indices
 
 
@@ -678,7 +688,17 @@ def _audit_timeframe(
     indexed: dict[tuple[str, str, str], dict[str, Any]],
 ) -> dict[str, Any]:
     bars = resample_minute_candles(candles, timeframe)
-    pair_results = _pair_experiments(indexed, symbol, timeframe)
+    baseline_key = (symbol, timeframe, "Baseline")
+    short_key = (symbol, timeframe, "Short_Horizon")
+    legacy_reference = short_key not in indexed
+    if legacy_reference:
+        baseline_experiment = indexed[baseline_key]
+        pair_results = {
+            "Baseline": baseline_experiment,
+            "Short_Horizon": baseline_experiment,
+        }
+    else:
+        pair_results = _pair_experiments(indexed, symbol, timeframe)
     if any(item.get("bar_count") != len(bars) for item in pair_results.values()):
         raise ValueError("v4c_resampled_bar_count_mismatch")
     start = int(len(bars) * VALIDATION_START_FRACTION)
@@ -690,7 +710,17 @@ def _audit_timeframe(
     indices_by_scenario: dict[str, list[int]] = {}
     for scenario_name in SCENARIOS:
         labels, indices = _scenario_validation_data(
-            bars, pair_results[scenario_name], scenario_name, start, end
+            bars,
+            pair_results[scenario_name],
+            scenario_name,
+            start,
+            end,
+            validate_reference=not legacy_reference or scenario_name == "Baseline",
+            weighting_policies=(
+                ("weight_none", "weight_balanced", "weight_intermediate")
+                if legacy_reference
+                else WEIGHTING_POLICIES
+            ),
         )
         labels_by_scenario[scenario_name] = labels
         indices_by_scenario[scenario_name] = indices
@@ -719,11 +749,60 @@ def _audit_timeframe(
         },
         "short_horizon": {
             "horizon_candles": SCENARIOS["Short_Horizon"][0],
-            "status": pair_results["Short_Horizon"]["status"],
+            "status": (
+                "AUDIT_ONLY_NO_MODEL"
+                if legacy_reference
+                else pair_results["Short_Horizon"]["status"]
+            ),
         },
         "transition_summary": _transition_summary(events),
         "events": events,
     }
+
+
+def _validate_source_dataset_metadata(
+    report: dict[str, Any],
+    symbol: str,
+    candles: DataFrame,
+    source_hash: str | None,
+) -> None:
+    datasets = report.get("input_datasets")
+    if source_hash is None:
+        return
+    if not isinstance(datasets, list) or len(datasets) != len(SYMBOLS):
+        raise ValueError("source_dataset_metadata_missing")
+    dataset = next(
+        (
+            _mapping(item, "source_dataset_metadata_invalid")
+            for item in datasets
+            if isinstance(item, dict) and item.get("symbol") == symbol
+        ),
+        None,
+    )
+    if dataset is None:
+        raise ValueError("source_dataset_symbol_missing")
+    selected_days = _integer(report.get("requested_days"), "requested_days_invalid")
+    expected_rows = selected_days * 1440
+    if (
+        dataset.get("pair") != PAIR_NAMES[symbol]
+        or dataset.get("provider") != "Binance Spot public klines API"
+        or dataset.get("interval") != "1m"
+        or dataset.get("requested_days") != selected_days
+        or dataset.get("row_count") != expected_rows
+        or dataset.get("missing_minute_intervals") != 0
+        or dataset.get("public_api_only") is not True
+        or dataset.get("credentials_used") is not False
+        or dataset.get("csv_sha256") != source_hash
+    ):
+        raise ValueError("source_dataset_metadata_mismatch")
+    start = pd.Timestamp(dataset.get("start_utc"))
+    end = pd.Timestamp(dataset.get("end_utc"))
+    actual_start = pd.Timestamp(candles["date"].iloc[0])
+    actual_end = pd.Timestamp(candles["date"].iloc[-1])
+    if start.tzinfo is None or end.tzinfo is None:
+        raise ValueError("source_dataset_timestamp_timezone_missing")
+    if start.tz_convert("UTC") != actual_start or end.tz_convert("UTC") != actual_end:
+        raise ValueError("source_dataset_window_mismatch")
 
 
 def _audit_symbol(
@@ -760,6 +839,9 @@ def build_transition_audit(
     for symbol in SYMBOLS:
         if symbol not in minute_frames:
             raise ValueError(f"minute_data_missing:{symbol}")
+        _validate_source_dataset_metadata(
+            report, symbol, minute_frames[symbol], hashes.get(symbol)
+        )
         source_data[symbol], symbol_results = _audit_symbol(
             symbol,
             minute_frames[symbol],
@@ -773,12 +855,19 @@ def build_transition_audit(
     return {
         "schema_version": AUDIT_SCHEMA,
         "source_artifact": {
-            "schema_version": REPORT_SCHEMA,
-            "commit_sha": SOURCE_COMMIT,
+            "schema_version": report["schema_version"],
+            "commit_sha": report["commit_sha"],
             "requested_days": report["requested_days"],
+            "source_run_number": SOURCE_RUN_NUMBER,
+            "source_run_id": SOURCE_RUN_ID,
+            "source_artifact_id": SOURCE_ARTIFACT_ID,
         },
         "source_data": source_data,
-        "audit_scope": "V4_C_CHRONOLOGICAL_VALIDATION_WINDOW",
+        "audit_scope": (
+            "LEGACY_V4_BASELINE_24_VS_REBUILT_SHORT_HORIZON_12"
+            if report["schema_version"] == LEGACY_REPORT_SCHEMA
+            else "V4_C_CHRONOLOGICAL_VALIDATION_WINDOW"
+        ),
         "transition_definition": (
             "Baseline label BUY/SELL with first TP/SL touch at candles 13-24, "
             "while Short_Horizon label is HOLD/HORIZON_EXPIRY at candle 12."
