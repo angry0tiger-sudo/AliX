@@ -30,14 +30,14 @@ from services.ml_core.label_transition_audit import (
 def minute_frame(days: int = 1) -> DataFrame:
     rows = days * 24 * 60
     dates = pd.date_range("2026-01-01T00:00:00Z", periods=rows, freq="min")
-    opened = 100.0 + np.arange(rows, dtype=float) * 0.0001
-    close = opened + 0.0001
+    opened = np.full(rows, 100.0, dtype=float)
+    close = np.full(rows, 100.0, dtype=float)
     return DataFrame(
         {
             "date": dates,
             "open": opened,
-            "high": close + 0.01,
-            "low": opened - 0.01,
+            "high": close + 0.001,
+            "low": opened - 0.001,
             "close": close,
             "volume": np.ones(rows, dtype=float),
         }
