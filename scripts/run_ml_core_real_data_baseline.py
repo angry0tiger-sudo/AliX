@@ -1624,24 +1624,23 @@ def _validate_barrier_scenarios(
             raise ValueError("barrier_scenario_name_missing_or_duplicate")
         if isinstance(horizon, bool) or not isinstance(horizon, int) or horizon < 1:
             raise ValueError("horizon_candles_must_be_positive_integer")
-        for value, field_name in (
-            (take_profit, "take_profit_multiplier"),
-            (stop_loss, "stop_loss_multiplier"),
-        ):
-            if (
-                isinstance(value, bool)
-                or not isinstance(value, (int, float))
-                or not np.isfinite(float(value))
-                or value <= 0
-            ):
-                raise ValueError(f"{field_name}_must_be_finite_and_positive")
+        if isinstance(take_profit, bool) or not isinstance(take_profit, (int, float)):
+            raise ValueError("take_profit_multiplier_must_be_finite_and_positive")
+        take_profit_value = float(take_profit)
+        if not np.isfinite(take_profit_value) or take_profit_value <= 0:
+            raise ValueError("take_profit_multiplier_must_be_finite_and_positive")
+        if isinstance(stop_loss, bool) or not isinstance(stop_loss, (int, float)):
+            raise ValueError("stop_loss_multiplier_must_be_finite_and_positive")
+        stop_loss_value = float(stop_loss)
+        if not np.isfinite(stop_loss_value) or stop_loss_value <= 0:
+            raise ValueError("stop_loss_multiplier_must_be_finite_and_positive")
         names.add(name)
         validated.append(
             {
                 "name": name,
                 "horizon_candles": horizon,
-                "take_profit_multiplier": float(take_profit),
-                "stop_loss_multiplier": float(stop_loss),
+                "take_profit_multiplier": take_profit_value,
+                "stop_loss_multiplier": stop_loss_value,
             }
         )
     return validated

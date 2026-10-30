@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -10,6 +11,7 @@ from pandas import DataFrame, Series
 from scripts.run_ml_core_real_data_baseline import (
     _build_diagnostic_report,
     _new_classifier,
+    _validate_barrier_scenarios,
     baseline_validation_diagnostics,
     classification_metrics,
     exit_reason_distribution,
@@ -253,6 +255,34 @@ def test_weighting_policy_specs_expose_only_none_and_balanced() -> None:
     assert set(policies) == {"weight_none", "weight_balanced"}
     assert policies["weight_none"] == {"class_weight": None}
     assert policies["weight_balanced"] == {"class_weight": "balanced"}
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("take_profit_multiplier", None),
+        ("take_profit_multiplier", True),
+        ("take_profit_multiplier", 0.0),
+        ("take_profit_multiplier", float("nan")),
+        ("stop_loss_multiplier", None),
+        ("stop_loss_multiplier", True),
+        ("stop_loss_multiplier", 0.0),
+        ("stop_loss_multiplier", float("inf")),
+    ],
+)
+def test_barrier_scenario_validation_rejects_invalid_multipliers(
+    field: str, value: Any
+) -> None:
+    scenario: dict[str, Any] = {
+        "name": "Baseline",
+        "horizon_candles": 24,
+        "take_profit_multiplier": 2.0,
+        "stop_loss_multiplier": 1.0,
+    }
+    scenario[field] = value
+
+    with pytest.raises(ValueError, match=f"{field}_must_be_finite_and_positive"):
+        _validate_barrier_scenarios([scenario])
 
 
 def test_probability_matrix_is_reordered_to_fixed_label_contract() -> None:
