@@ -1,5 +1,5 @@
 from __future__ import annotations
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 from pathlib import Path
@@ -157,3 +157,59 @@ def test_request_uses_official_market_data_host_and_surfaces_http_451(
     assert hosts == ["data-api.binance.vision"]
     assert "status=451" in str(error.value)
     assert "restricted location" in str(error.value)
+
+def test_fetch_historical_candles_uses_exact_inclusive_utc_window() -> None:
+    start = datetime(2024, 10, 30, 12, 5, tzinfo=timezone.utc)
+    end = start + timedelta(days=1) - timedelta(minutes=1)
+    calls: list[dict[str, str]] = []
+
+    def provider(params: dict[str, str]) -> list[Any]:
+        calls.append(params.copy())
+        cursor = int(params["startTime"])
+        end_ms = int(params["endTime"])
+        count = min(1000, (end_ms - cursor) // fetcher.INTERVAL_MS + 1)
+        return klines(cursor, count)
+
+    rows = fetcher.fetch_historical_candles(
+        days=1,
+        now=datetime(2026, 10, 31, 12, 0, tzinfo=timezone.utc),
+        start_utc=start,
+        end_utc=end,
+        request_json=provider,
+        sleep_fn=lambda _seconds: None,
+    )
+
+    assert len(rows) == 1440
+    assert rows[0]["date"] == "2024-10-30T12:05:00Z"
+    assert rows[-1]["date"] == "2024-10-31T12:04:00Z"
+    assert calls[0]["startTime"] == str(int(start.timestamp() * 1000))
+    assert calls[-1]["endTime"] == str(int(end.timestamp() * 1000))
+
+
+def test_fetch_historical_candles_rejects_partial_or_misaligned_exact_windows() -> None:
+    now = datetime(2026, 10, 31, 12, 0, tzinfo=timezone.utc)
+    start = datetime(2024, 10, 30, 12, 5, tzinfo=timezone.utc)
+    end = start + timedelta(days=1) - timedelta(minutes=1)
+
+    with pytest.raises(ValueError, match="historical_window_requires_both_boundaries"):
+        fetcher.fetch_historical_candles(
+            days=1, now=now, start_utc=start, request_json=lambda _params: []
+        )
+
+    with pytest.raises(ValueError, match="historical_window_does_not_match_requested_days"):
+        fetcher.fetch_historical_candles(
+            days=7,
+            now=now,
+            start_utc=start,
+            end_utc=end,
+            request_json=lambda _params: [],
+        )
+
+    with pytest.raises(ValueError, match="historical_start_utc_must_align_to_minute"):
+        fetcher.fetch_historical_candles(
+            days=1,
+            now=now,
+            start_utc=start.replace(second=1),
+            end_utc=end,
+            request_json=lambda _params: [],
+        )

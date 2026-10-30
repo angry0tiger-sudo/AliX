@@ -176,6 +176,77 @@ def _mini_report(frames: dict[str, DataFrame]) -> dict[str, Any]:
     }
 
 
+
+
+
+def _mini_legacy_report(frames: dict[str, DataFrame]) -> dict[str, Any]:
+    current = _mini_report(frames)
+    baseline_experiments = [
+        {key: value for key, value in item.items() if key not in {"scenario", "triple_barrier"}}
+        for item in current["experiments"]
+        if item["scenario"] == "Baseline"
+    ]
+    datasets = []
+    for symbol in SYMBOLS:
+        frame = frames[symbol]
+        datasets.append(
+            {
+                "symbol": symbol,
+                "pair": PAIR_NAMES[symbol],
+                "provider": "Binance Spot public klines API",
+                "interval": "1m",
+                "requested_days": current["requested_days"],
+                "row_count": len(frame),
+                "missing_minute_intervals": 0,
+                "public_api_only": True,
+                "credentials_used": False,
+                "start_utc": pd.Timestamp(frame["date"].iloc[0]).isoformat(),
+                "end_utc": pd.Timestamp(frame["date"].iloc[-1]).isoformat(),
+                "csv_sha256": "a" * 64,
+            }
+        )
+    return {
+        "schema_version": "alix.ml-core.real-data-classification-diagnostic.v4",
+        "commit_sha": "5f874e6f56436a9b79bbc8adbfec1cf4fd31e4b9",
+        "diagnostic_scope": "CLASSIFICATION_ONLY",
+        "training_scope": "DIAGNOSTIC_CLASSIFICATION_ONLY",
+        "economic_evaluation_performed": False,
+        "economic_metrics_reported": False,
+        "requested_days": current["requested_days"],
+        "experiment_count": 8,
+        "data_window_selection": {
+            "configured_days": current["requested_days"],
+            "selected_days": current["requested_days"],
+            "fallback_reason": "NONE",
+        },
+        "input_datasets": datasets,
+        "labels": ["BUY", "SELL", "HOLD"],
+        "split_policy": {
+            "atr_period": 14,
+            "chronological_training_only": True,
+            "label_horizon_candles": 24,
+            "label_window_purge": "create_purged_embargo_split",
+            "post_validation_embargo": True,
+            "pre_validation_embargo": True,
+            "stop_loss_atr_multiple": 1.0,
+            "take_profit_atr_multiple": 2.0,
+            "validation_end_fraction": 0.85,
+            "validation_start_fraction": 0.70,
+        },
+        "experiments": baseline_experiments,
+        "safety": {
+            "Champion": None,
+            "credentials_used": False,
+            "order_permission": False,
+            "orders_or_execution_api_used": False,
+            "private_api_calls": 0,
+            "public_api_only": True,
+            "real_order_attempts": 0,
+            "trading_authorization": "NO-GO",
+        },
+    }
+
+
 def _manual_labels(
     bars: DataFrame,
     offsets: list[int],
@@ -384,3 +455,48 @@ def test_build_transition_audit_checks_serialized_validation_labels() -> None:
     ] = "SELL"
     with pytest.raises(ValueError, match="v4c_validation_actual_label_mismatch"):
         build_transition_audit(report, frames)
+
+def test_legacy_v4_report_rebuilds_both_horizons_without_training() -> None:
+    frames = {symbol: minute_frame(days=20) for symbol in SYMBOLS}
+    report = _mini_legacy_report(frames)
+
+    indexed = validate_v4c_report(report)
+    result = build_transition_audit(report, frames)
+
+    assert len(indexed) == 8
+    assert len(result["experiments"]) == 8
+    assert result["source_artifact"]["schema_version"] == (
+        "alix.ml-core.real-data-classification-diagnostic.v4"
+    )
+    assert result["source_artifact"]["commit_sha"] == (
+        "5f874e6f56436a9b79bbc8adbfec1cf4fd31e4b9"
+    )
+    assert all(
+        item["short_horizon"]["status"] == "AUDIT_ONLY_NO_MODEL"
+        for item in result["experiments"]
+    )
+    assert result["model_training_performed"] is False
+    assert result["safety"]["Champion"] is None
+    assert result["safety"]["private_api_calls"] == 0
+    assert result["safety"]["trading_authorization"] == "NO-GO"
+
+
+def test_legacy_v4_report_fails_closed_on_source_hash_mismatch() -> None:
+    frames = {symbol: minute_frame(days=20) for symbol in SYMBOLS}
+    report = _mini_legacy_report(frames)
+
+    with pytest.raises(ValueError, match="source_dataset_metadata_mismatch"):
+        build_transition_audit(
+            report,
+            frames,
+            {"BTCUSDT": "b" * 64, "ETHUSDT": "a" * 64},
+        )
+
+
+def test_legacy_v4_report_fails_closed_on_wrong_horizon_policy() -> None:
+    frames = {symbol: minute_frame(days=20) for symbol in SYMBOLS}
+    report = _mini_legacy_report(frames)
+    report["split_policy"]["label_horizon_candles"] = 12
+
+    with pytest.raises(ValueError, match="legacy_report_target_policy_mismatch"):
+        validate_v4c_report(report)
