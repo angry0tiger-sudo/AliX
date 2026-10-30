@@ -85,7 +85,11 @@ jobs:
             --input-dir "$RUNNER_TEMP/alix-real-market-data" \
             --output "$GITHUB_WORKSPACE/alix-real-data-classification-report.json" \
             --days "$ALIX_DIAGNOSTIC_DAYS" \
-            --commit-sha "$GITHUB_SHA"
+            --commit-sha "$GITHUB_SHA" \
+            --hold-weight-multiplier 3.0 \
+            --calibration-fraction 0.20 \
+            --minimum-hold-precision 0.40 \
+            --minimum-hold-recall 0.20
 
       - name: Validate classification-only report and safety invariants
         run: |
@@ -98,7 +102,7 @@ jobs:
           report = json.loads(report_path.read_text(encoding="utf-8"))
           assert report["commit_sha"] == os.environ["GITHUB_SHA"]
           assert report["diagnostic_scope"] == "CLASSIFICATION_ONLY"
-          assert report["schema_version"] == "alix.ml-core.real-data-classification-diagnostic.v3"
+          assert report["schema_version"] == "alix.ml-core.real-data-classification-diagnostic.v4"
           assert report["economic_evaluation_performed"] is False
           assert report["economic_metrics_reported"] is False
           assert report["requested_days"] == int(os.environ["ALIX_DIAGNOSTIC_DAYS"])
@@ -129,7 +133,24 @@ jobs:
               "insufficient_atr_history", "incomplete_horizon"
           ]
           assert report["baseline_comparisons"]["always_sell"]["predicted_label"] == "SELL"
-          assert report["baseline_comparisons"]["lightgbm_unweighted"]["class_weight"] is None
+          assert report["baseline_comparisons"]["lightgbm_unweighted"]["model_parameters"]["class_weight"] is None
+          weighting = report["weighting_policy"]
+          assert weighting["hold_weight_multiplier"] == 3.0
+          assert set(weighting["policies"]) == {
+              "weight_none", "weight_balanced", "weight_intermediate"
+          }
+          assert weighting["policies"]["weight_none"]["class_weight"] is None
+          assert weighting["policies"]["weight_balanced"]["class_weight"] == "balanced"
+          assert weighting["policies"]["weight_intermediate"]["class_weight"] == {
+              "BUY": 1.0, "SELL": 1.0, "HOLD": 3.0
+          }
+          calibration_policy = report["calibration_policy"]
+          assert calibration_policy["fraction_of_validation"] == 0.20
+          assert calibration_policy["temporal_position"] == (
+              "FIRST_CHRONOLOGICAL_SEGMENT_OF_VALIDATION"
+          )
+          assert calibration_policy["minimum_hold_precision"] == 0.40
+          assert calibration_policy["minimum_hold_recall"] == 0.20
           allowed_statuses = {
               "TRAINED",
               "SKIPPED_INSUFFICIENT_SAMPLES",
@@ -180,7 +201,57 @@ jobs:
                   assert unweighted["model_parameters"]["class_weight"] is None
                   assert unweighted["classification_metrics"] is not None
                   assert unweighted["prediction_distribution"]["total"] == item["validation_rows"]
+                  variants = item["model_variants"]
+                  assert set(variants) == {
+                      "weight_none", "weight_balanced", "weight_intermediate"
+                  }
+                  for variant in variants.values():
+                      assert variant["classification_metrics"]["validation"] is not None
+                      assert variant["prediction_distribution"]["total"] == item["validation_rows"]
+                      probabilities = variant["validation_probabilities"]
+                      assert len(probabilities) == item["validation_rows"]
+                      assert all(
+                          set(row["probabilities"]) == {"BUY", "SELL", "HOLD"}
+                          and row["actual_label"] in {"BUY", "SELL", "HOLD"}
+                          and abs(sum(row["probabilities"].values()) - 1.0) < 1e-5
+                          and all(0.0 <= value <= 1.0 for value in row["probabilities"].values())
+                          for row in probabilities
+                      )
+                      threshold = variant["threshold_optimization"]
+                      assert threshold["status"] in {
+                          "SELECTED",
+                          "NO_FEASIBLE_THRESHOLD",
+                          "SKIPPED_INSUFFICIENT_CALIBRATION_SAMPLES",
+                      }
+                      assert threshold["constraints"]["minimum_hold_precision"] == 0.40
+                      assert threshold["constraints"]["minimum_hold_recall"] == 0.20
+                      assert threshold["calibration"]["temporal_position"] == (
+                          "FIRST_CHRONOLOGICAL_SEGMENT_OF_VALIDATION"
+                      )
+                      forward = threshold["post_calibration_validation"]
+                      assert (
+                          threshold["calibration"]["row_count"]
+                          + (
+                              forward["row_count"]
+                              if forward is not None
+                              else item["validation_rows"] - threshold["calibration"]["row_count"]
+                          )
+                          == item["validation_rows"]
+                      )
+                      if threshold["status"] == "SELECTED":
+                          assert 0.0 <= threshold["selected_threshold"] <= 1.0
+                          selected = threshold["calibration"]["selected_calibration_metrics"]["hold_metrics"]
+                          assert selected["precision"] >= 0.40
+                          assert selected["recall"] >= 0.20
+                          assert forward["calibration_overlap"] is False
+                          assert threshold["full_validation_including_calibration"]["calibration_overlap"] is True
+                      else:
+                          assert threshold["selected_threshold"] is None
+                          assert forward is None
+                          assert threshold["full_validation_including_calibration"] is None
               else:
+                  assert item["model_variants"] is None
+                  assert item["threshold_optimization"] is None
                   assert item["classification_metrics"] is None
                   assert item["confusion_matrix"] is None
                   assert item["prediction_distribution"] is None
