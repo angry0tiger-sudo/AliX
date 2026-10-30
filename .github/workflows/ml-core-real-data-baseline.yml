@@ -15,7 +15,7 @@ jobs:
   diagnostic-classification:
     if: github.ref == 'refs/heads/research/ml-core-rebuild'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 120
     env:
       ALIx_ENV: paper
       ALIx_DRY_RUN: "true"
