@@ -50,6 +50,8 @@ jobs:
       ALIx_REPORTING_ENABLED: "false"
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
       GH_TOKEN: ${{ github.token }}
+      ALIX_TAKE_PROFIT_MULTIPLIER: ${{ inputs.take_profit_multiplier == '' && '2.0' || inputs.take_profit_multiplier }}
+      ALIX_STOP_LOSS_MULTIPLIER: ${{ inputs.stop_loss_multiplier == '' && '1.0' || inputs.stop_loss_multiplier }}
     steps:
       - name: Require standard CI success for this exact V4-E research commit
         env:
@@ -186,9 +188,6 @@ jobs:
           echo "ALIX_DIAGNOSTIC_FALLBACK_REASON=NONE" >> "$GITHUB_ENV"
 
       - name: Train V4-E hierarchical 12-candle diagnostics
-        env:
-          ALIX_TAKE_PROFIT_MULTIPLIER: ${{ inputs.take_profit_multiplier == '' && '2.0' || inputs.take_profit_multiplier }}
-          ALIX_STOP_LOSS_MULTIPLIER: ${{ inputs.stop_loss_multiplier == '' && '1.0' || inputs.stop_loss_multiplier }}
         run: |
           python -m scripts.run_ml_core_real_data_baseline \
             --input-dir "$RUNNER_TEMP/alix-v4e-market-data" \
