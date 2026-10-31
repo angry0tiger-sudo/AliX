@@ -143,13 +143,13 @@ jobs:
           test "$GITHUB_REF" = "refs/heads/research/ml-core-v4e-hierarchical-target"
           test "$GITHUB_SHA" = "$TARGET_SHA"
           test -n "$GITHUB_SHA"
-          printf 'commit_sha=%s\n' "$GITHUB_SHA"
-          printf 'scope=DIAGNOSTIC_CLASSIFICATION_ONLY\n'
-          printf 'target_architecture=HIERARCHICAL_HIT_THEN_DIRECTION\n'
-          printf 'target_horizon_candles=12\n'
-          printf 'model_training_performed=false_until_this_manual_workflow_runs\n'
-          printf 'private_api_calls=0\nreal_order_attempts=0\n'
-          printf 'trading_authorization=NO-GO\n'
+          printf 'commit_sha=%s\\n' "$GITHUB_SHA"
+          printf 'scope=DIAGNOSTIC_CLASSIFICATION_ONLY\\n'
+          printf 'target_architecture=HIERARCHICAL_HIT_THEN_DIRECTION\\n'
+          printf 'target_horizon_candles=12\\n'
+          printf 'model_training_performed=false_until_this_manual_workflow_runs\\n'
+          printf 'private_api_calls=0\\nreal_order_attempts=0\\n'
+          printf 'trading_authorization=NO-GO\\n'
 
       - name: Set up pinned Python
         uses: actions/setup-python@v5
@@ -170,11 +170,11 @@ jobs:
           mkdir -p "$data_dir"
           for symbol in BTCUSDT ETHUSDT; do
             log_path="$RUNNER_TEMP/v4e-fetch-730-${symbol}.log"
-            if python scripts/fetch_binance_public_ohlcv.py \
-              --days 730 \
-              --symbol "$symbol" \
-              --interval 1m \
-              --output-dir "$data_dir" \
+            if python scripts/fetch_binance_public_ohlcv.py \\
+              --days 730 \\
+              --symbol "$symbol" \\
+              --interval 1m \\
+              --output-dir "$data_dir" \\
               --commit-sha "$GITHUB_SHA" >"$log_path" 2>&1; then
               cat "$log_path"
             else
@@ -189,15 +189,16 @@ jobs:
 
       - name: Train V4-E hierarchical 12-candle diagnostics
         run: |
-          python -m scripts.run_ml_core_real_data_baseline \
-            --input-dir "$RUNNER_TEMP/alix-v4e-market-data" \
-            --output "$GITHUB_WORKSPACE/alix-v4e-hierarchical-classification-report.json" \
-            --days "$ALIX_DIAGNOSTIC_DAYS" \
-            --commit-sha "$GITHUB_SHA" \
-            --scenario "Hierarchical_12_Candle:12:$ALIX_TAKE_PROFIT_MULTIPLIER:$ALIX_STOP_LOSS_MULTIPLIER" \
-            --calibration-fraction 0.20 \
-            --minimum-hold-precision 0.40 \
+          python -m scripts.run_ml_core_real_data_baseline \\
+            --input-dir "$RUNNER_TEMP/alix-v4e-market-data" \\
+            --output "$GITHUB_WORKSPACE/alix-v4e-hierarchical-classification-report.json" \\
+            --days "$ALIX_DIAGNOSTIC_DAYS" \\
+            --commit-sha "$GITHUB_SHA" \\
+            --scenario "Hierarchical_12_Candle:12:$ALIX_TAKE_PROFIT_MULTIPLIER:$ALIX_STOP_LOSS_MULTIPLIER" \\
+            --calibration-fraction 0.20 \\
+            --minimum-hold-precision 0.40 \\
             --minimum-hold-recall 0.20
+          echo "ALIX_TRAIN_STEP_SUMMARY=$GITHUB_STEP_SUMMARY" >> "$GITHUB_ENV"
 
       - name: Validate V4-E hierarchical report and safety invariants
         run: |
@@ -319,12 +320,13 @@ jobs:
       - name: Verify GitHub Step Summary contains V4-E metrics
         run: |
           set -euo pipefail
-          test -s "$GITHUB_STEP_SUMMARY"
-          grep -q "V4-E hierarchical metrics" "$GITHUB_STEP_SUMMARY"
-          grep -q "Stage 1 and Stage 2 probability quality" "$GITHUB_STEP_SUMMARY"
-          grep -q "Controlled comparison: hierarchical vs same-target three-class LightGBM" "$GITHUB_STEP_SUMMARY"
-          grep -q "Validation confusion matrices" "$GITHUB_STEP_SUMMARY"
-          grep -q "Validation prediction distribution" "$GITHUB_STEP_SUMMARY"
+          test -n "$ALIX_TRAIN_STEP_SUMMARY"
+          test -s "$ALIX_TRAIN_STEP_SUMMARY"
+          grep -q "V4-E hierarchical metrics" "$ALIX_TRAIN_STEP_SUMMARY"
+          grep -q "Stage 1 and Stage 2 probability quality" "$ALIX_TRAIN_STEP_SUMMARY"
+          grep -q "Controlled comparison: hierarchical vs same-target three-class LightGBM" "$ALIX_TRAIN_STEP_SUMMARY"
+          grep -q "Validation confusion matrices" "$ALIX_TRAIN_STEP_SUMMARY"
+          grep -q "Validation prediction distribution" "$ALIX_TRAIN_STEP_SUMMARY"
 
       - name: Upload V4-E hierarchical diagnostic report
         if: always()
