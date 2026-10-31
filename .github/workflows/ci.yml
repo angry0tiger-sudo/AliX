@@ -238,5 +238,6 @@ jobs:
       - postgres-integration
       - freqtrade-runtime-smoke
     permissions:
+      actions: read
       contents: read
     uses: ./.github/workflows/ml-core-real-data-baseline.yml
