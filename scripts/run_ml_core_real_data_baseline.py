@@ -617,6 +617,9 @@ def _hierarchical_metrics(
     combined_validation_actual: Series,
     combined_train_prediction: Series,
     combined_validation_prediction: Series,
+    stage1_validation_probabilities: np.ndarray,
+    stage2_validation_actual_probabilities: np.ndarray,
+    calibration_fraction: float,
 ) -> dict[str, Any]:
     return {
         "stage1_hit_classifier": {
@@ -634,6 +637,13 @@ def _hierarchical_metrics(
                 stage1_validation_prediction,
                 negative_label="NO_HIT",
                 positive_label="HIT",
+            ),
+            "probability_diagnostics": binary_probability_diagnostics_by_temporal_segment(
+                stage1_validation,
+                stage1_validation_probabilities[:, 1],
+                negative_label="NO_HIT",
+                positive_label="HIT",
+                calibration_fraction=calibration_fraction,
             ),
         },
         "stage2_direction_classifier": {
@@ -654,6 +664,13 @@ def _hierarchical_metrics(
                 stage2_validation_prediction,
                 negative_label="SELL",
                 positive_label="BUY",
+            ),
+            "probability_diagnostics": binary_probability_diagnostics_by_temporal_segment(
+                stage2_validation,
+                stage2_validation_actual_probabilities[:, 1],
+                negative_label="SELL",
+                positive_label="BUY",
+                calibration_fraction=calibration_fraction,
             ),
         },
         "combined_three_class": {
@@ -730,6 +747,90 @@ def _expected_calibration_error(
         observed_rate = float(np.mean(targets[selected]))
         weighted_error += float(np.mean(selected)) * abs(confidence - observed_rate)
     return weighted_error
+
+
+def binary_probability_quality_metrics(
+    actual: Series,
+    positive_probabilities: np.ndarray,
+    *,
+    negative_label: str,
+    positive_label: str,
+    calibration_bins: int = 10,
+) -> dict[str, Any]:
+    """Report positive-class Brier score and ECE for one binary stage."""
+    if (
+        isinstance(calibration_bins, bool)
+        or not isinstance(calibration_bins, int)
+        or calibration_bins < 2
+    ):
+        raise ValueError("calibration_bins_must_be_integer_at_least_two")
+    targets = pd.to_numeric(actual, errors="coerce").to_numpy(dtype=float)
+    probabilities = np.asarray(positive_probabilities, dtype=float)
+    if (
+        probabilities.ndim != 1
+        or probabilities.shape != targets.shape
+        or len(targets) == 0
+        or not bool(np.isfinite(targets).all())
+        or not bool(np.isin(targets, (0.0, 1.0)).all())
+        or not bool(np.isfinite(probabilities).all())
+        or bool(np.any(probabilities < 0.0))
+        or bool(np.any(probabilities > 1.0))
+    ):
+        raise ValueError("binary_probability_metrics_inputs_invalid")
+
+    positive_support = int(np.count_nonzero(targets))
+    negative_support = int(len(targets) - positive_support)
+    brier_score = float(np.mean((probabilities - targets) ** 2))
+    ece = _expected_calibration_error(targets, probabilities, calibration_bins)
+    return {
+        "sample_count": int(len(targets)),
+        "negative_label": negative_label,
+        "positive_label": positive_label,
+        "support": {
+            negative_label: negative_support,
+            positive_label: positive_support,
+        },
+        "brier_score": round(brier_score, 8),
+        "ece": round(ece, 8) if ece is not None else None,
+        "bin_count": calibration_bins,
+        "binning": "equal_width_positive_class_probability_bins",
+    }
+
+
+def binary_probability_diagnostics_by_temporal_segment(
+    actual: Series,
+    positive_probabilities: np.ndarray,
+    *,
+    negative_label: str,
+    positive_label: str,
+    calibration_fraction: float,
+) -> dict[str, Any]:
+    """Evaluate one binary stage on disjoint chronological validation segments."""
+    _validate_calibration_fraction(calibration_fraction)
+    probabilities = np.asarray(positive_probabilities, dtype=float)
+    if probabilities.ndim != 1 or probabilities.shape[0] != len(actual):
+        raise ValueError("binary_probability_metrics_inputs_invalid")
+    count = max(1, int(np.floor(len(actual) * calibration_fraction)))
+    if count >= len(actual):
+        raise ValueError("calibration_split_leaves_no_forward_validation_rows")
+    return {
+        "negative_label": negative_label,
+        "positive_label": positive_label,
+        "calibration": binary_probability_quality_metrics(
+            actual.iloc[:count],
+            probabilities[:count],
+            negative_label=negative_label,
+            positive_label=positive_label,
+        ),
+        "forward_validation": binary_probability_quality_metrics(
+            actual.iloc[count:],
+            probabilities[count:],
+            negative_label=negative_label,
+            positive_label=positive_label,
+        ),
+        "calibration_fraction": float(calibration_fraction),
+        "calibration_overlap": False,
+    }
 
 
 def _validated_probability_metric_matrix(
@@ -1611,6 +1712,9 @@ def run_experiment(
             validation_y,
             combined_train_prediction,
             combined_validation_prediction,
+            stage1_validation_probabilities,
+            stage2_validation_actual_probabilities,
+            calibration_fraction,
         )
         threshold_diagnostics = threshold_optimization_diagnostics(
             validation_y,
@@ -1619,6 +1723,49 @@ def run_experiment(
             minimum_precision=minimum_hold_precision,
             minimum_recall=minimum_hold_recall,
         )
+        three_class_model = _new_classifier(
+            class_weight=policy["class_weight"]
+        )
+        three_class_model.fit(x_train, train_y)
+        three_class_train_probabilities = ordered_probability_matrix(
+            three_class_model, x_train
+        )
+        three_class_validation_probabilities = ordered_probability_matrix(
+            three_class_model, x_validation
+        )
+        three_class_train_prediction = predictions_from_probabilities(
+            three_class_train_probabilities, train_y.index
+        )
+        three_class_validation_prediction = predictions_from_probabilities(
+            three_class_validation_probabilities, validation_y.index
+        )
+        three_class_baseline = {
+            "model_parameters": {
+                "architecture": "FLAT_THREE_CLASS_REFERENCE",
+                "objective": "multiclass",
+                "class_weight": policy["class_weight"],
+                "target": "label",
+                "target_horizon_candles": HIERARCHICAL_HORIZON_CANDLES,
+                "fit_scope": "ALL_ELIGIBLE_TRAIN_ROWS",
+            },
+            "classification_metrics": {
+                "train_in_sample": classification_metrics(
+                    train_y, three_class_train_prediction
+                ),
+                "validation": classification_metrics(
+                    validation_y, three_class_validation_prediction
+                ),
+            },
+            **validation_classification_diagnostics(
+                validation_y, three_class_validation_prediction
+            ),
+            "probability_diagnostics": probability_diagnostics_by_temporal_segment(
+                validation_y,
+                three_class_validation_probabilities,
+                calibration_fraction=calibration_fraction,
+            ),
+        }
+
         variants[name] = {
             "model_parameters": {
                 "architecture": "HIERARCHICAL_HIT_THEN_DIRECTION",
@@ -1634,6 +1781,7 @@ def run_experiment(
                 },
             },
             "hierarchical_metrics": hierarchical_metrics,
+            "three_class_baseline": three_class_baseline,
             "classification_metrics": {
                 "train_in_sample": classification_metrics(
                     train_y, combined_train_prediction
@@ -1687,6 +1835,17 @@ def run_experiment(
             ],
             "confusion_matrix": unweighted["confusion_matrix"],
             "prediction_distribution": unweighted["prediction_distribution"],
+        },
+        "three_class_same_12c": {
+            "baseline_type": "lightgbm_multiclass_same_v4e_target",
+            "target_horizon_candles": HIERARCHICAL_HORIZON_CANDLES,
+            "comparison_contract": (
+                "SAME_LABELS_FEATURES_TEMPORAL_SPLIT_AND_WEIGHTING_POLICY"
+            ),
+            "model_variants": {
+                name: variants[name]["three_class_baseline"]
+                for name in WEIGHTING_POLICY_NAMES
+            },
         },
     }
     train_f1 = balanced["classification_metrics"]["train_in_sample"]["macro"]["f1"]
@@ -2060,6 +2219,77 @@ def _render_hierarchical_metrics_section(
     return lines
 
 
+def _render_stage_probability_diagnostics_section(
+    experiments: list[dict[str, Any]],
+) -> list[str]:
+    """Render binary Brier/ECE for Stage 1 and Stage 2 on disjoint time segments."""
+    lines = [
+        "### Stage 1 and Stage 2 probability quality",
+        "",
+        "| Pair | TF | Policy | Stage | Segment | n | Brier (positive class) | ECE (positive class) |",
+        "|---|---:|---|---|---|---:|---:|---:|",
+    ]
+    stage_specs = (
+        ("stage1_hit_classifier", "Stage 1 HIT"),
+        ("stage2_direction_classifier", "Stage 2 BUY given HIT"),
+    )
+    for item in experiments:
+        variants = item.get("model_variants")
+        if variants is None:
+            continue
+        for policy_name in WEIGHTING_POLICY_NAMES:
+            hierarchical = variants[policy_name]["hierarchical_metrics"]
+            for stage_key, stage_label in stage_specs:
+                diagnostic = hierarchical[stage_key]["probability_diagnostics"]
+                for segment in ("calibration", "forward_validation"):
+                    values = diagnostic[segment]
+                    lines.append(
+                        f"| {item['pair']} | {item['timeframe']} | {policy_name} "
+                        f"| {stage_label} | {segment} | {values['sample_count']} "
+                        f"| {_format_probability_metric(values['brier_score'])} "
+                        f"| {_format_probability_metric(values['ece'])} |"
+                    )
+    return lines
+
+
+def _render_same_target_baseline_comparison_section(
+    experiments: list[dict[str, Any]],
+) -> list[str]:
+    """Compare hierarchy with a flat classifier using identical 12-candle labels."""
+    lines = [
+        "### Controlled comparison: hierarchical vs same-target three-class LightGBM",
+        "",
+        "Both models use identical V4-E 12-candle labels, features, purged temporal "
+        "split, and weighting policy. Metrics are raw argmax Validation results.",
+        "",
+        "| Pair | TF | Policy | Model | Macro-F1 | BUY F1 | SELL F1 | HOLD F1 | Delta Macro-F1 vs flat |",
+        "|---|---:|---|---|---:|---:|---:|---:|---:|",
+    ]
+    for item in experiments:
+        variants = item.get("model_variants")
+        if variants is None:
+            continue
+        for policy_name in WEIGHTING_POLICY_NAMES:
+            variant = variants[policy_name]
+            hierarchical = variant["classification_metrics"]["validation"]
+            flat = variant["three_class_baseline"]["classification_metrics"][
+                "validation"
+            ]
+            delta = hierarchical["macro"]["f1"] - flat["macro"]["f1"]
+            for model_name, classification, model_delta in (
+                ("Hierarchical 2-stage", hierarchical, delta),
+                ("Flat 3-class", flat, 0.0),
+            ):
+                rows = classification["per_class"]
+                lines.append(
+                    f"| {item['pair']} | {item['timeframe']} | {policy_name} "
+                    f"| {model_name} | {classification['macro']['f1']:.4f} "
+                    f"| {rows['BUY']['f1']:.4f} | {rows['SELL']['f1']:.4f} "
+                    f"| {rows['HOLD']['f1']:.4f} | {model_delta:+.4f} |"
+                )
+    return lines
+
+
 def render_markdown(report: dict[str, Any]) -> str:
     """Render classification diagnostics for the GitHub Actions summary."""
     experiments = report["experiments"]
@@ -2078,6 +2308,10 @@ def render_markdown(report: dict[str, Any]) -> str:
     lines.extend(["", *_render_weighting_metrics_section(experiments)])
     lines.extend(["", *_render_threshold_optimization_section(experiments)])
     lines.extend(["", *_render_probability_diagnostics_section(experiments)])
+    lines.extend(["", *_render_stage_probability_diagnostics_section(experiments)])
+    lines.extend(
+        ["", *_render_same_target_baseline_comparison_section(experiments)]
+    )
     lines.extend(["", *_render_prediction_distribution_section(experiments)])
     lines.extend(["", *_render_confusion_matrix_section(experiments)])
     lines.extend(
@@ -2241,7 +2475,7 @@ def _build_diagnostic_report(
 ) -> dict[str, Any]:
     """Construct the v6 report for the two-stage hierarchical target."""
     trained_experiments = sum(item["status"] == "TRAINED" for item in experiments)
-    trained_models = sum(2 * len(item["model_variants"] or {}) for item in experiments)
+    trained_models = sum(3 * len(item["model_variants"] or {}) for item in experiments)
     return {
         "schema_version": REPORT_SCHEMA,
         "commit_sha": commit_sha,
@@ -2313,11 +2547,14 @@ def _build_diagnostic_report(
         "labels": list(LABELS),
         "triple_barrier_scenarios": barrier_scenarios,
         "model": {
-            "family": "Two LightGBM LGBMClassifier binary models per weighting policy",
+            "family": (
+                "Two LightGBM binary stages plus one same-target three-class "
+                "reference model per weighting policy"
+            ),
             "architecture": "HIERARCHICAL_HIT_THEN_DIRECTION",
             "stage1_objective": "binary",
             "stage2_objective": "binary",
-            "models_per_weighting_policy": 2,
+            "models_per_weighting_policy": 3,
             "n_estimators": 80,
             "learning_rate": 0.05,
             "max_depth": 4,
@@ -2375,6 +2612,15 @@ def _build_diagnostic_report(
                 "num_leaves": 15,
                 "random_state": 42,
                 "class_weight": None,
+                "metrics_scope": "VALIDATION_ONLY",
+            },
+            "three_class_same_12c": {
+                "family": "One LightGBM multiclass reference model per weighting policy",
+                "architecture": "FLAT_THREE_CLASS_REFERENCE",
+                "objective": "multiclass",
+                "target_horizon_candles": HIERARCHICAL_HORIZON_CANDLES,
+                "same_labels_features_and_split": True,
+                "models_per_weighting_policy": 1,
                 "metrics_scope": "VALIDATION_ONLY",
             },
         },

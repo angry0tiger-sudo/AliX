@@ -19,6 +19,8 @@ from scripts.run_ml_core_real_data_baseline import (
     _new_binary_classifier,
     binary_probability_matrix,
     binary_classification_metrics,
+    binary_probability_quality_metrics,
+    binary_probability_diagnostics_by_temporal_segment,
     combine_hierarchical_probabilities,
     hierarchical_sample_gate_diagnostics,
     _default_barrier_scenarios,
@@ -619,6 +621,59 @@ def test_probability_metrics_use_disjoint_calibration_and_forward_rows() -> None
     assert result["calibration_overlap"] is False
 
 
+def test_binary_probability_quality_metrics_compute_brier_and_ece() -> None:
+    actual = Series([0, 1, 0, 1])
+    probabilities = np.asarray([0.1, 0.8, 0.4, 0.6])
+    result = binary_probability_quality_metrics(
+        actual,
+        probabilities,
+        negative_label="NO_HIT",
+        positive_label="HIT",
+    )
+
+    assert result["sample_count"] == 4
+    assert result["support"] == {"NO_HIT": 2, "HIT": 2}
+    assert result["brier_score"] == pytest.approx(0.0925, abs=1e-8)
+    assert result["ece"] is not None
+    assert result["positive_label"] == "HIT"
+
+
+def test_binary_probability_metrics_use_disjoint_temporal_segments() -> None:
+    actual = Series([0, 1] * 10)
+    probabilities = np.tile(np.asarray([0.2, 0.8]), 10)
+    result = binary_probability_diagnostics_by_temporal_segment(
+        actual,
+        probabilities,
+        negative_label="SELL",
+        positive_label="BUY",
+        calibration_fraction=0.20,
+    )
+
+    assert result["calibration"]["sample_count"] == 4
+    assert result["forward_validation"]["sample_count"] == 16
+    assert result["calibration_overlap"] is False
+    assert result["calibration"]["brier_score"] is not None
+    assert result["forward_validation"]["ece"] is not None
+
+
+def test_binary_probability_metrics_reject_non_finite_and_out_of_range_inputs() -> None:
+    actual = Series([0, 1])
+    with pytest.raises(ValueError, match="binary_probability_metrics_inputs_invalid"):
+        binary_probability_quality_metrics(
+            actual,
+            np.asarray([0.2, np.inf]),
+            negative_label="NO_HIT",
+            positive_label="HIT",
+        )
+    with pytest.raises(ValueError, match="binary_probability_metrics_inputs_invalid"):
+        binary_probability_quality_metrics(
+            actual,
+            np.asarray([0.2, 1.1]),
+            negative_label="NO_HIT",
+            positive_label="HIT",
+        )
+
+
 def test_binary_classifier_factory_uses_deterministic_binary_objective(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -773,6 +828,23 @@ def test_run_experiment_fits_both_binary_models_and_reports_all_stage_metrics(
         "scripts.run_ml_core_real_data_baseline._new_binary_classifier",
         lambda class_weight: FakeBinaryClassifier(class_weight),
     )
+
+    class FakeMulticlassClassifier:
+        def __init__(self, class_weight: str | None) -> None:
+            self.class_weight = class_weight
+            self.classes_ = np.asarray(["BUY", "SELL", "HOLD"])
+
+        def fit(self, x: DataFrame, y: Series) -> None:
+            fits.append(len(x))
+            assert len(x) == len(y)
+
+        def predict_proba(self, x: DataFrame) -> np.ndarray:
+            return np.tile(np.asarray([[0.3, 0.4, 0.3]]), (len(x), 1))
+
+    monkeypatch.setattr(
+        "scripts.run_ml_core_real_data_baseline._new_classifier",
+        lambda class_weight: FakeMulticlassClassifier(class_weight),
+    )
     # Supply 30 BUY and 30 SELL Hit rows in Validation to satisfy the Stage-2 gate.
     monkeypatch.setattr(
         "scripts.run_ml_core_real_data_baseline.apply_adaptive_hierarchical_targets",
@@ -811,10 +883,32 @@ def test_run_experiment_fits_both_binary_models_and_reports_all_stage_metrics(
         horizon_candles=12,
     )
     assert result["status"] == "TRAINED"
-    assert len(fits) == 4  # two stages times two existing weighting policies
+    assert len(fits) == 6  # two binary stages plus one flat reference per policy
     assert result["hierarchical_metrics"]["stage1_hit_classifier"]["validation"]
     assert result["hierarchical_metrics"]["stage2_direction_classifier"]["validation"]
     assert result["hierarchical_metrics"]["combined_three_class"]["validation"]
+    assert result["baseline_comparisons"]["three_class_same_12c"][
+        "target_horizon_candles"
+    ] == 12
+    assert set(
+        result["baseline_comparisons"]["three_class_same_12c"]["model_variants"]
+    ) == {"weight_none", "weight_balanced"}
     for variant in result["model_variants"].values():
+        assert variant["three_class_baseline"]["classification_metrics"]["validation"]
+        assert variant["three_class_baseline"]["confusion_matrix"]["matrix"]
+        assert (
+            variant["hierarchical_metrics"]["stage1_hit_classifier"][
+                "probability_diagnostics"
+            ]["forward_validation"]["sample_count"] > 0
+        )
+        assert (
+            variant["hierarchical_metrics"]["stage2_direction_classifier"][
+                "probability_diagnostics"
+            ]["forward_validation"]["sample_count"]
+            == result["stage2_validation_rows"]
+            - variant["hierarchical_metrics"]["stage2_direction_classifier"][
+                "probability_diagnostics"
+            ]["calibration"]["sample_count"]
+        )
         for row in variant["validation_probabilities"]:
             assert sum(row["probabilities"].values()) == pytest.approx(1.0, abs=1e-5)

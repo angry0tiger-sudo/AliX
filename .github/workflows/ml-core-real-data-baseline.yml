@@ -1,6 +1,9 @@
 name: AliX V4-E Hierarchical Real-Data Baseline
 
 on:
+  push:
+    branches:
+      - research/ml-core-v4e-hierarchical-target
   workflow_dispatch:
     inputs:
       take_profit_multiplier:
@@ -28,6 +31,7 @@ on:
         default: 1.0
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
@@ -45,16 +49,97 @@ jobs:
       ALIx_ALLOW_LIVE_TRADING: "false"
       ALIx_REPORTING_ENABLED: "false"
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Checkout the V4-E research commit without persisted credentials
+      - name: Require standard CI success for this exact V4-E research commit
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          TARGET_SHA: ${{ github.sha }}
+          TARGET_BRANCH: ${{ github.ref_name }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import time
+          from urllib.error import HTTPError, URLError
+          from urllib.request import Request, urlopen
+
+          repository = os.environ["GITHUB_REPOSITORY"]
+          target_sha = os.environ["TARGET_SHA"]
+          target_branch = os.environ["TARGET_BRANCH"]
+          token = os.environ["GH_TOKEN"]
+          if target_branch != "research/ml-core-v4e-hierarchical-target":
+              raise SystemExit("unsupported_v4e_training_branch:" + target_branch)
+          deadline = time.monotonic() + 90 * 60
+          url = (
+              f"https://api.github.com/repos/{repository}/actions/workflows/ci.yml/runs"
+              f"?head_sha={target_sha}&per_page=100"
+          )
+
+          while time.monotonic() < deadline:
+              request = Request(
+                  url,
+                  headers={
+                      "Accept": "application/vnd.github+json",
+                      "Authorization": f"Bearer {token}",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  },
+              )
+              try:
+                  with urlopen(request, timeout=20) as response:
+                      payload = json.load(response)
+              except (HTTPError, URLError, TimeoutError) as error:
+                  raise SystemExit(
+                      f"ci_status_lookup_failed:{type(error).__name__}"
+                  ) from None
+
+              matching = [
+                  run for run in payload.get("workflow_runs", [])
+                  if run.get("head_sha") == target_sha
+                  and run.get("head_branch") == target_branch
+                  and run.get("event") == "push"
+              ]
+              if matching:
+                  latest = max(
+                      matching,
+                      key=lambda item: (
+                          item.get("run_number", 0),
+                          item.get("run_attempt", 0),
+                      ),
+                  )
+                  if latest.get("status") == "completed":
+                      if latest.get("conclusion") != "success":
+                          raise SystemExit(
+                              "ci_green_gate_blocked:"
+                              + str(latest.get("conclusion"))
+                              + ":"
+                              + target_sha
+                          )
+                      print(json.dumps({
+                          "gate": "PASS",
+                          "target_sha": target_sha,
+                          "ci_run_id": latest.get("id"),
+                          "ci_run_url": latest.get("html_url"),
+                          "ci_conclusion": latest.get("conclusion"),
+                      }, sort_keys=True))
+                      break
+              time.sleep(30)
+          else:
+              raise SystemExit("ci_green_gate_timeout:" + target_sha)
+          PY
+
+      - name: Checkout the exact V4-E research commit without persisted credentials
         uses: actions/checkout@v4
         with:
           persist-credentials: false
 
       - name: Confirm V4-E branch, target contract, and safety scope
+        env:
+          TARGET_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           test "$GITHUB_REF" = "refs/heads/research/ml-core-v4e-hierarchical-target"
+          test "$GITHUB_SHA" = "$TARGET_SHA"
           test -n "$GITHUB_SHA"
           printf 'commit_sha=%s\n' "$GITHUB_SHA"
           printf 'scope=DIAGNOSTIC_CLASSIFICATION_ONLY\n'
@@ -101,13 +186,16 @@ jobs:
           echo "ALIX_DIAGNOSTIC_FALLBACK_REASON=NONE" >> "$GITHUB_ENV"
 
       - name: Train V4-E hierarchical 12-candle diagnostics
+        env:
+          ALIX_TAKE_PROFIT_MULTIPLIER: ${{ inputs.take_profit_multiplier == '' && '2.0' || inputs.take_profit_multiplier }}
+          ALIX_STOP_LOSS_MULTIPLIER: ${{ inputs.stop_loss_multiplier == '' && '1.0' || inputs.stop_loss_multiplier }}
         run: |
           python -m scripts.run_ml_core_real_data_baseline \
             --input-dir "$RUNNER_TEMP/alix-v4e-market-data" \
             --output "$GITHUB_WORKSPACE/alix-v4e-hierarchical-classification-report.json" \
             --days "$ALIX_DIAGNOSTIC_DAYS" \
             --commit-sha "$GITHUB_SHA" \
-            --scenario "Hierarchical_12_Candle:12:${{ inputs.take_profit_multiplier }}:${{ inputs.stop_loss_multiplier }}" \
+            --scenario "Hierarchical_12_Candle:12:$ALIX_TAKE_PROFIT_MULTIPLIER:$ALIX_STOP_LOSS_MULTIPLIER" \
             --calibration-fraction 0.20 \
             --minimum-hold-precision 0.40 \
             --minimum-hold-recall 0.20
@@ -133,8 +221,8 @@ jobs:
           assert report["triple_barrier_scenarios"] == [{
               "name": "Hierarchical_12_Candle",
               "horizon_candles": 12,
-              "take_profit_multiplier": float("${{ inputs.take_profit_multiplier }}"),
-              "stop_loss_multiplier": float("${{ inputs.stop_loss_multiplier }}"),
+              "take_profit_multiplier": float(os.environ["ALIX_TAKE_PROFIT_MULTIPLIER"]),
+              "stop_loss_multiplier": float(os.environ["ALIX_STOP_LOSS_MULTIPLIER"]),
           }]
           policy = report["hierarchical_target_policy"]
           assert policy["horizon_candles"] == 12
@@ -159,8 +247,9 @@ jobs:
           assert report["model"]["architecture"] == "HIERARCHICAL_HIT_THEN_DIRECTION"
           assert report["model"]["stage1_objective"] == "binary"
           assert report["model"]["stage2_objective"] == "binary"
+          assert report["model"]["models_per_weighting_policy"] == 3
           assert report["trained_models"] == sum(
-              2 * len(item["model_variants"] or {})
+              3 * len(item["model_variants"] or {})
               for item in report["experiments"]
           )
           allowed_statuses = {
@@ -185,6 +274,16 @@ jobs:
                   assert item["hierarchical_metrics"]["combined_three_class"]["evaluation_scope"] == "ALL_ROWS_USING_PREDICTED_STAGE1_PROBABILITY"
                   assert item["stage2_training_rows"] < item["train_rows"]
                   assert item["stage2_validation_rows"] < item["validation_rows"]
+                  assert item["hierarchical_metrics"]["stage1_hit_classifier"]["probability_diagnostics"]["forward_validation"]["brier_score"] is not None
+                  assert item["hierarchical_metrics"]["stage1_hit_classifier"]["probability_diagnostics"]["forward_validation"]["ece"] is not None
+                  assert item["hierarchical_metrics"]["stage2_direction_classifier"]["probability_diagnostics"]["forward_validation"]["brier_score"] is not None
+                  assert item["hierarchical_metrics"]["stage2_direction_classifier"]["probability_diagnostics"]["forward_validation"]["ece"] is not None
+                  for variant in item["model_variants"].values():
+                      assert variant["three_class_baseline"]["model_parameters"]["objective"] == "multiclass"
+                      assert variant["three_class_baseline"]["model_parameters"]["target_horizon_candles"] == 12
+                      assert variant["three_class_baseline"]["classification_metrics"]["validation"] is not None
+                      assert variant["three_class_baseline"]["confusion_matrix"]["matrix"]
+                      assert variant["three_class_baseline"]["prediction_distribution"]["total"] == item["validation_rows"]
                   for variant in item["model_variants"].values():
                       assert variant["model_parameters"]["stage1"]["objective"] == "binary"
                       assert variant["model_parameters"]["stage2"]["objective"] == "binary"
@@ -217,6 +316,16 @@ jobs:
               "real_order_attempts": 0,
           }, sort_keys=True))
           PY
+
+      - name: Verify GitHub Step Summary contains V4-E metrics
+        run: |
+          set -euo pipefail
+          test -s "$GITHUB_STEP_SUMMARY"
+          grep -q "V4-E hierarchical metrics" "$GITHUB_STEP_SUMMARY"
+          grep -q "Stage 1 and Stage 2 probability quality" "$GITHUB_STEP_SUMMARY"
+          grep -q "Controlled comparison: hierarchical vs same-target three-class LightGBM" "$GITHUB_STEP_SUMMARY"
+          grep -q "Validation confusion matrices" "$GITHUB_STEP_SUMMARY"
+          grep -q "Validation prediction distribution" "$GITHUB_STEP_SUMMARY"
 
       - name: Upload V4-E hierarchical diagnostic report
         if: always()
