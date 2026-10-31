@@ -651,11 +651,11 @@ def test_binary_probability_matrix_reorders_classes_to_zero_one() -> None:
     probabilities = binary_probability_matrix(
         FakeModel(), DataFrame({"feature": [1.0, 2.0]})
     )
-    assert probabilities.tolist() == pytest.approx([[0.3, 0.7], [0.8, 0.2]])
+    np.testing.assert_allclose(probabilities, [[0.3, 0.7], [0.8, 0.2]])
 
 
 def test_hierarchical_probability_composition_is_normalized() -> None:
-    stage1 = np.asarray([[0.0, 0.8], [0.0, 0.3]])
+    stage1 = np.asarray([[0.2, 0.8], [0.7, 0.3]])
     stage2 = np.asarray([[0.25, 0.75], [0.6, 0.4]])
     result = combine_hierarchical_probabilities(stage1, stage2)
     assert result.tolist() == pytest.approx([[0.60, 0.20, 0.20], [0.12, 0.18, 0.70]])
@@ -724,7 +724,7 @@ def test_default_scenario_is_exactly_one_12_candle_hierarchical_target() -> None
 def test_run_experiment_fits_both_binary_models_and_reports_all_stage_metrics(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    frame = minute_frame(15 * 15)
+    frame = minute_frame(15 * 240)
     bars = resample_ohlcv(frame, "15m")
     # Create repeated, deterministic first hits in the 12-candle label horizon.
     for index in range(1, len(bars), 4):
@@ -750,7 +750,7 @@ def test_run_experiment_fits_both_binary_models_and_reports_all_stage_metrics(
         "scripts.run_ml_core_real_data_baseline.purged_temporal_indices",
         lambda features, labels, *, horizon_candles: (
             list(range(0, 100)),
-            list(range(120, 190)),
+            list(range(120, 240)),
             {"status": "PASS", "embargo_size_bars": horizon_candles},
         ),
     )
@@ -773,7 +773,7 @@ def test_run_experiment_fits_both_binary_models_and_reports_all_stage_metrics(
         "scripts.run_ml_core_real_data_baseline._new_binary_classifier",
         lambda class_weight: FakeBinaryClassifier(class_weight),
     )
-    # Ensure both hit and no-hit samples are abundant in both splits.
+    # Supply 30 BUY and 30 SELL Hit rows in Validation to satisfy the Stage-2 gate.
     monkeypatch.setattr(
         "scripts.run_ml_core_real_data_baseline.apply_adaptive_hierarchical_targets",
         lambda data, **kwargs: DataFrame(

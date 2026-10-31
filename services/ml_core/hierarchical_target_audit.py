@@ -304,7 +304,7 @@ def _validate_one_label_end_index(row: pd.Series, position: int) -> int | None:
         _validate_unlabeled_end_index(row)
         return None
     offset = _validated_target_end_offset(row["label_end_idx"], position)
-    _validate_label_offset_semantics(label, row["unlabeled_reason"], offset)
+    _validate_label_offset_semantics(label, row["exit_reason"], offset)
     return offset
 
 
