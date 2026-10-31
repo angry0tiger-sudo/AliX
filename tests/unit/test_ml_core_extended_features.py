@@ -167,7 +167,9 @@ def test_flat_zero_range_candles_produce_finite_adx_and_bollinger_width() -> Non
     assert groups["Trend"].iloc[-1]["%-trend_adx_14"] == pytest.approx(0.0)
     assert groups["Trend"].iloc[-1]["%-trend_plus_di_14"] == pytest.approx(0.0)
     assert groups["Trend"].iloc[-1]["%-trend_minus_di_14"] == pytest.approx(0.0)
-    assert groups["Volatility"].iloc[-1]["%-volatility_bollinger_bandwidth_20"] == pytest.approx(0.0)
+    assert groups["Volatility"].iloc[-1][
+        "%-volatility_bollinger_bandwidth_20"
+    ] == pytest.approx(0.0)
     assert not any(
         np.isinf(frame.to_numpy(dtype=np.float64)).any() for frame in groups.values()
     )

@@ -8,7 +8,9 @@ import numpy as np
 import pandas as pd
 from pandas import DataFrame, Series
 
-from services.freqai_baseline.features import FEATURE_COLUMNS as BASELINE_FEATURE_COLUMNS
+from services.freqai_baseline.features import (
+    FEATURE_COLUMNS as BASELINE_FEATURE_COLUMNS,
+)
 from services.ml_core.causal_features import build_causal_feature_matrix
 
 EXTENDED_FEATURE_SCHEMA_VERSION: Final[str] = "alix.ml-core.extended-features.v1"
@@ -177,14 +179,10 @@ def _trend_features(data: DataFrame) -> DataFrame:
     smoothed_positive_dm = _wilder_average(positive_dm, 14)
     smoothed_negative_dm = _wilder_average(negative_dm, 14)
     positive_di = (
-        100.0
-        * smoothed_positive_dm
-        / smoothed_range.where(smoothed_range > 0.0)
+        100.0 * smoothed_positive_dm / smoothed_range.where(smoothed_range > 0.0)
     ).where(smoothed_range.notna())
     negative_di = (
-        100.0
-        * smoothed_negative_dm
-        / smoothed_range.where(smoothed_range > 0.0)
+        100.0 * smoothed_negative_dm / smoothed_range.where(smoothed_range > 0.0)
     ).where(smoothed_range.notna())
     positive_di = positive_di.mask(smoothed_range.eq(0.0), 0.0)
     negative_di = negative_di.mask(smoothed_range.eq(0.0), 0.0)
@@ -222,12 +220,8 @@ def _volatility_features(data: DataFrame) -> DataFrame:
     rolling_std = close.rolling(20, min_periods=20).std(ddof=0)
     return DataFrame(
         {
-            "%-volatility_realized_12": returns.rolling(
-                12, min_periods=12
-            ).std(ddof=0),
-            "%-volatility_realized_24": returns.rolling(
-                24, min_periods=24
-            ).std(ddof=0),
+            "%-volatility_realized_12": returns.rolling(12, min_periods=12).std(ddof=0),
+            "%-volatility_realized_24": returns.rolling(24, min_periods=24).std(ddof=0),
             "%-volatility_bollinger_bandwidth_20": (
                 4.0 * rolling_std / rolling_mean.where(rolling_mean > 0.0)
             ),
@@ -253,15 +247,14 @@ def _volume_features(data: DataFrame) -> DataFrame:
     obv_imbalance = signed_volume / total_volume.where(total_volume > 0.0)
 
     high_low_range = high - low
-    money_flow_multiplier = (
-        (2.0 * close - high - low) / high_low_range.where(high_low_range > 0.0)
+    money_flow_multiplier = (2.0 * close - high - low) / high_low_range.where(
+        high_low_range > 0.0
     )
     money_flow_multiplier = money_flow_multiplier.mask(high_low_range.eq(0.0), 0.0)
     money_flow_volume = money_flow_multiplier * volume
-    chaikin_money_flow = (
-        money_flow_volume.rolling(20, min_periods=20).sum()
-        / total_volume.where(total_volume > 0.0)
-    )
+    chaikin_money_flow = money_flow_volume.rolling(
+        20, min_periods=20
+    ).sum() / total_volume.where(total_volume > 0.0)
     return DataFrame(
         {
             "%-volume_relative_20": relative_volume,

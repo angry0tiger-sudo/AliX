@@ -1179,7 +1179,9 @@ def run_experiment(
             raise ValueError("prepared_feature_profiles_require_prepared_bars")
         if tuple(prepared_feature_profiles) != FEATURE_PROFILE_ORDER:
             raise ValueError("prepared_feature_profile_contract_mismatch")
-        if any(len(matrix) != len(bars) for matrix in prepared_feature_profiles.values()):
+        if any(
+            len(matrix) != len(bars) for matrix in prepared_feature_profiles.values()
+        ):
             raise ValueError("prepared_feature_profile_length_mismatch")
         features = prepared_feature_profiles[feature_profile]
         split_features = prepared_feature_profiles["Combined"]
@@ -1332,6 +1334,7 @@ def run_experiment(
             "caveat": "Single chronological split; diagnostic heuristic, not a statistical proof.",
         },
     }
+
 
 def _load_manifested_data(
     input_dir: Path, symbol: str, days: int, commit_sha: str
@@ -1941,7 +1944,9 @@ def _build_feature_ablation_summary(
             "mean_forward_hold_recall": _mean_metric(forward_hold_recall),
             "forward_metric_experiment_count": forward_count,
             "forward_acceptance_pass_experiment_count": accepted_count,
-            "forward_acceptance_status": "PASS" if complete_pass else "NOT_MET_OR_INCOMPLETE",
+            "forward_acceptance_status": "PASS"
+            if complete_pass
+            else "NOT_MET_OR_INCOMPLETE",
         }
 
     baseline = profile_summary["Baseline"]
@@ -1972,7 +1977,9 @@ def _build_feature_ablation_summary(
         {
             "feature_profile": profile,
             "mean_forward_hold_precision": values["mean_forward_hold_precision"],
-            "forward_metric_experiment_count": values["forward_metric_experiment_count"],
+            "forward_metric_experiment_count": values[
+                "forward_metric_experiment_count"
+            ],
         }
         for profile, values in profile_summary.items()
         if values["mean_forward_hold_precision"] is not None

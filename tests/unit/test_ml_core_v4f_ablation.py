@@ -91,7 +91,9 @@ def test_ablation_orchestration_reuses_one_prepared_matrix_per_pair_timeframe(
 
     assert len(result) == 40
     assert preparation_count == {"resample": 8, "features": 8}
-    assert [call["feature_profile"] for call in calls[:5]] == list(FEATURE_PROFILE_ORDER)
+    assert [call["feature_profile"] for call in calls[:5]] == list(
+        FEATURE_PROFILE_ORDER
+    )
     for start in range(0, len(calls), len(FEATURE_PROFILE_ORDER)):
         group = calls[start : start + len(FEATURE_PROFILE_ORDER)]
         assert len({id(item["prepared_bars"]) for item in group}) == 1
@@ -113,9 +115,7 @@ def _trained_experiment(
         "timeframe": "1h",
         "scenario": "V4F_Flat_12_Candle",
         "status": "TRAINED",
-        "classification_metrics": {
-            "validation": {"macro": {"f1": macro_f1}}
-        },
+        "classification_metrics": {"validation": {"macro": {"f1": macro_f1}}},
         "hold_metrics": {"precision": raw_precision},
         "threshold_optimization": {
             "post_calibration_validation": {
@@ -128,7 +128,9 @@ def _trained_experiment(
     }
 
 
-def test_feature_ablation_summary_uses_forward_hold_metrics_and_baseline_deltas() -> None:
+def test_feature_ablation_summary_uses_forward_hold_metrics_and_baseline_deltas() -> (
+    None
+):
     experiments = [
         _trained_experiment(
             "Baseline",
@@ -172,8 +174,14 @@ def test_feature_ablation_summary_uses_forward_hold_metrics_and_baseline_deltas(
     assert result["highest_mean_forward_hold_precision_profile"] == "Combined"
     assert result["profiles"]["Baseline+Trend"]["forward_acceptance_status"] == "PASS"
     assert result["profiles"]["Combined"]["forward_acceptance_status"] == "PASS"
-    assert result["profiles"]["Combined"]["mean_validation_macro_f1_delta_vs_baseline"] == 0.05
-    assert result["profiles"]["Combined"]["mean_forward_hold_precision_delta_vs_baseline"] == 0.07
+    assert (
+        result["profiles"]["Combined"]["mean_validation_macro_f1_delta_vs_baseline"]
+        == 0.05
+    )
+    assert (
+        result["profiles"]["Combined"]["mean_forward_hold_precision_delta_vs_baseline"]
+        == 0.07
+    )
     assert result["combined_forward_acceptance"] == "PASS"
 
 
@@ -190,5 +198,8 @@ def test_feature_ablation_summary_fails_closed_without_forward_metrics() -> None
     result = _build_feature_ablation_summary([experiment])
 
     assert result["profiles"]["Combined"]["forward_metric_experiment_count"] == 0
-    assert result["profiles"]["Combined"]["forward_acceptance_status"] == "NOT_MET_OR_INCOMPLETE"
+    assert (
+        result["profiles"]["Combined"]["forward_acceptance_status"]
+        == "NOT_MET_OR_INCOMPLETE"
+    )
     assert result["combined_forward_acceptance"] == "NOT_MET_OR_INCOMPLETE"
