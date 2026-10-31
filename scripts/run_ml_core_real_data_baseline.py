@@ -2005,7 +2005,7 @@ def _build_feature_ablation_summary(
     }
 
 
-def _build_diagnostic_report(def _build_diagnostic_report(
+def _build_diagnostic_report(
     *,
     days: int,
     commit_sha: str,
