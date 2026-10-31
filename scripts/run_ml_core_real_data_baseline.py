@@ -2054,7 +2054,7 @@ def run_experiment(
         stop_loss_multiplier,
     )
     if "early_result" in prepared:
-        return prepared["early_result"]
+        return cast(dict[str, Any], prepared["early_result"])
     if prepared["sample_gate"]["status"] != "PASS":
         return _build_skipped_hierarchical_experiment(
             pair, timeframe, scenario_name, prepared
