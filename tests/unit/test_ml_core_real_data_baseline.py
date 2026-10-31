@@ -8,6 +8,11 @@ import pandas as pd
 import pytest
 from pandas import DataFrame, Series
 
+from services.ml_core.adaptive_targets import (
+    STAGE1_TARGET_COLUMN,
+    STAGE2_TARGET_COLUMN,
+)
+
 from scripts.run_ml_core_real_data_baseline import (
     _build_diagnostic_report,
     _new_classifier,
