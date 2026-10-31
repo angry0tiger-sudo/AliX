@@ -1121,6 +1121,180 @@ def _insufficient_bar_result(
     }
 
 
+def _prepare_experiment_bars_and_labels(
+    minute_candles: DataFrame,
+    timeframe: str,
+    *,
+    horizon_candles: int,
+    take_profit_multiplier: float,
+    stop_loss_multiplier: float,
+    prepared_bars: DataFrame | None,
+    prepared_labels: DataFrame | None,
+) -> tuple[DataFrame, DataFrame]:
+    """Resolve precomputed or freshly generated bars and their matching labels."""
+    if (prepared_bars is None) != (prepared_labels is None):
+        raise ValueError("prepared_bars_and_labels_must_be_provided_together")
+    if prepared_bars is None:
+        bars = resample_ohlcv(minute_candles, timeframe)
+        labels = apply_adaptive_triple_barrier(
+            bars,
+            horizon_candles=horizon_candles,
+            take_profit_multiplier=take_profit_multiplier,
+            stop_loss_multiplier=stop_loss_multiplier,
+        )
+    else:
+        if prepared_labels is None:
+            raise ValueError("prepared_labels_missing")
+        bars = prepared_bars
+        labels = prepared_labels
+    if len(bars) != len(labels):
+        raise ValueError("prepared_bars_labels_length_mismatch")
+    return bars, labels
+
+
+def _prepare_experiment_feature_matrices(
+    bars: DataFrame,
+    feature_profile: str,
+    prepared_feature_profiles: dict[str, DataFrame] | None,
+) -> tuple[DataFrame, DataFrame]:
+    """Resolve model features and the common feature mask used for splitting."""
+    if prepared_feature_profiles is not None:
+        if tuple(prepared_feature_profiles) != FEATURE_PROFILE_ORDER:
+            raise ValueError("prepared_feature_profile_contract_mismatch")
+        if any(
+            len(matrix) != len(bars) for matrix in prepared_feature_profiles.values()
+        ):
+            raise ValueError("prepared_feature_profile_length_mismatch")
+        return (
+            prepared_feature_profiles[feature_profile],
+            prepared_feature_profiles["Combined"],
+        )
+    if feature_profile == "Baseline":
+        baseline = build_causal_feature_matrix(bars)
+        return baseline, baseline
+    profile_matrices = build_feature_profiles(bars)
+    return profile_matrices[feature_profile], profile_matrices["Combined"]
+
+
+def _fit_experiment_variants(
+    features: DataFrame,
+    bars: DataFrame,
+    train_indices: list[int],
+    validation_indices: list[int],
+    train_y: Series,
+    validation_y: Series,
+    *,
+    feature_profile: str,
+    feature_count: int,
+    calibration_fraction: float,
+    minimum_hold_precision: float,
+    minimum_hold_recall: float,
+) -> dict[str, Any]:
+    """Fit every approved class-weight variant on one feature profile."""
+    variants: dict[str, Any] = {}
+    for name, policy in weighting_policy_specs().items():
+        model = _new_classifier(class_weight=policy["class_weight"])
+        x_train = features.iloc[train_indices]
+        x_validation = features.iloc[validation_indices]
+        model.fit(x_train, train_y)
+        train_probabilities = ordered_probability_matrix(model, x_train)
+        validation_probabilities = ordered_probability_matrix(model, x_validation)
+        train_prediction = predictions_from_probabilities(
+            train_probabilities, train_y.index
+        )
+        validation_prediction = predictions_from_probabilities(
+            validation_probabilities, validation_y.index
+        )
+        threshold_diagnostics = threshold_optimization_diagnostics(
+            validation_y,
+            validation_probabilities,
+            calibration_fraction=calibration_fraction,
+            minimum_precision=minimum_hold_precision,
+            minimum_recall=minimum_hold_recall,
+        )
+        variants[name] = {
+            "model_parameters": {
+                "class_weight": policy["class_weight"],
+                "feature_profile": feature_profile,
+                "feature_count": feature_count,
+            },
+            "classification_metrics": {
+                "train_in_sample": classification_metrics(train_y, train_prediction),
+                "validation": classification_metrics(
+                    validation_y, validation_prediction
+                ),
+            },
+            **validation_classification_diagnostics(
+                validation_y, validation_prediction
+            ),
+            "hold_metrics": hold_class_metrics(validation_y, validation_prediction),
+            "probability_diagnostics": probability_diagnostics_by_temporal_segment(
+                validation_y,
+                validation_probabilities,
+                calibration_fraction=calibration_fraction,
+            ),
+            "threshold_optimization": threshold_diagnostics,
+            "validation_probabilities": _serialize_validation_probabilities(
+                bars, validation_indices, validation_y, validation_probabilities
+            ),
+        }
+    return variants
+
+
+def _build_trained_experiment_result(
+    base_result: dict[str, Any],
+    train_y: Series,
+    validation_y: Series,
+    variants: dict[str, Any],
+) -> dict[str, Any]:
+    """Assemble the trained result and unchanged balanced-model diagnostics."""
+    balanced = variants["weight_balanced"]
+    unweighted = variants["weight_none"]
+    always_sell_prediction = Series("SELL", index=validation_y.index, dtype=object)
+    baseline_comparisons = {
+        "always_sell": {
+            "baseline_type": "constant_prediction",
+            "predicted_label": "SELL",
+            **baseline_validation_diagnostics(validation_y, always_sell_prediction),
+        },
+        "lightgbm_unweighted": {
+            "baseline_type": "lightgbm",
+            "model_variant": "weight_none",
+            "model_parameters": {"class_weight": None},
+            "classification_metrics": unweighted["classification_metrics"][
+                "validation"
+            ],
+            "confusion_matrix": unweighted["confusion_matrix"],
+            "prediction_distribution": unweighted["prediction_distribution"],
+        },
+    }
+    train_f1 = balanced["classification_metrics"]["train_in_sample"]["macro"]["f1"]
+    validation_f1 = balanced["classification_metrics"]["validation"]["macro"]["f1"]
+    f1_gap = round(train_f1 - validation_f1, 6)
+    assessment = (
+        "POSSIBLE_OVERFITTING"
+        if f1_gap >= OVERFIT_F1_GAP_THRESHOLD
+        else "NO_LARGE_MACRO_F1_GAP_OBSERVED"
+    )
+    return {
+        **base_result,
+        "status": "TRAINED",
+        "classification_metrics": balanced["classification_metrics"],
+        "confusion_matrix": balanced["confusion_matrix"],
+        "prediction_distribution": balanced["prediction_distribution"],
+        "hold_metrics": balanced["hold_metrics"],
+        "model_variants": variants,
+        "threshold_optimization": balanced["threshold_optimization"],
+        "baseline_comparisons": baseline_comparisons,
+        "overfitting_assessment": {
+            "status": assessment,
+            "macro_f1_gap_train_minus_validation": f1_gap,
+            "heuristic_threshold": OVERFIT_F1_GAP_THRESHOLD,
+            "caveat": "Single chronological split; diagnostic heuristic, not a statistical proof.",
+        },
+    }
+
+
 def run_experiment(
     pair: str,
     timeframe: str,
@@ -1139,30 +1313,21 @@ def run_experiment(
     prepared_feature_profiles: dict[str, DataFrame] | None = None,
 ) -> dict[str, Any]:
     """Fit one feature profile on a shared causal sample and fixed target split."""
-    policies = weighting_policy_specs()
     profile_metadata = _feature_profile_diagnostics(feature_profile)
     barrier_config = {
         "horizon_candles": horizon_candles,
         "take_profit_multiplier": float(take_profit_multiplier),
         "stop_loss_multiplier": float(stop_loss_multiplier),
     }
-    if (prepared_bars is None) != (prepared_labels is None):
-        raise ValueError("prepared_bars_and_labels_must_be_provided_together")
-    if prepared_bars is None:
-        bars = resample_ohlcv(minute_candles, timeframe)
-        labels = apply_adaptive_triple_barrier(
-            bars,
-            horizon_candles=horizon_candles,
-            take_profit_multiplier=take_profit_multiplier,
-            stop_loss_multiplier=stop_loss_multiplier,
-        )
-    else:
-        bars = prepared_bars
-        if prepared_labels is None:
-            raise ValueError("prepared_labels_missing")
-        labels = prepared_labels
-    if len(bars) != len(labels):
-        raise ValueError("prepared_bars_labels_length_mismatch")
+    bars, labels = _prepare_experiment_bars_and_labels(
+        minute_candles,
+        timeframe,
+        horizon_candles=horizon_candles,
+        take_profit_multiplier=take_profit_multiplier,
+        stop_loss_multiplier=stop_loss_multiplier,
+        prepared_bars=prepared_bars,
+        prepared_labels=prepared_labels,
+    )
     if len(bars) < 100:
         result = _insufficient_bar_result(pair, timeframe, bars, labels)
         result.update(
@@ -1174,25 +1339,9 @@ def run_experiment(
         )
         return result
 
-    if prepared_feature_profiles is not None:
-        if prepared_bars is None:
-            raise ValueError("prepared_feature_profiles_require_prepared_bars")
-        if tuple(prepared_feature_profiles) != FEATURE_PROFILE_ORDER:
-            raise ValueError("prepared_feature_profile_contract_mismatch")
-        if any(
-            len(matrix) != len(bars) for matrix in prepared_feature_profiles.values()
-        ):
-            raise ValueError("prepared_feature_profile_length_mismatch")
-        features = prepared_feature_profiles[feature_profile]
-        split_features = prepared_feature_profiles["Combined"]
-    elif feature_profile == "Baseline":
-        features = build_causal_feature_matrix(bars)
-        split_features = features
-    else:
-        profile_matrices = build_feature_profiles(bars)
-        features = profile_matrices[feature_profile]
-        split_features = profile_matrices["Combined"]
-
+    features, split_features = _prepare_experiment_feature_matrices(
+        bars, feature_profile, prepared_feature_profiles
+    )
     train_indices, validation_indices, split_info = purged_temporal_indices(
         split_features, labels, horizon_candles=horizon_candles
     )
@@ -1241,101 +1390,22 @@ def run_experiment(
         result.update(base_result)
         return result
 
-    x_train = features.iloc[train_indices]
-    x_validation = features.iloc[validation_indices]
-    variants: dict[str, Any] = {}
-    for name, policy in policies.items():
-        model = _new_classifier(class_weight=policy["class_weight"])
-        model.fit(x_train, train_y)
-        train_probabilities = ordered_probability_matrix(model, x_train)
-        validation_probabilities = ordered_probability_matrix(model, x_validation)
-        train_prediction = predictions_from_probabilities(
-            train_probabilities, train_y.index
-        )
-        validation_prediction = predictions_from_probabilities(
-            validation_probabilities, validation_y.index
-        )
-        threshold_diagnostics = threshold_optimization_diagnostics(
-            validation_y,
-            validation_probabilities,
-            calibration_fraction=calibration_fraction,
-            minimum_precision=minimum_hold_precision,
-            minimum_recall=minimum_hold_recall,
-        )
-        variants[name] = {
-            "model_parameters": {
-                "class_weight": policy["class_weight"],
-                "feature_profile": feature_profile,
-                "feature_count": len(profile_metadata["feature_columns"]),
-            },
-            "classification_metrics": {
-                "train_in_sample": classification_metrics(train_y, train_prediction),
-                "validation": classification_metrics(
-                    validation_y, validation_prediction
-                ),
-            },
-            **validation_classification_diagnostics(
-                validation_y, validation_prediction
-            ),
-            "hold_metrics": hold_class_metrics(validation_y, validation_prediction),
-            "probability_diagnostics": probability_diagnostics_by_temporal_segment(
-                validation_y,
-                validation_probabilities,
-                calibration_fraction=calibration_fraction,
-            ),
-            "threshold_optimization": threshold_diagnostics,
-            "validation_probabilities": _serialize_validation_probabilities(
-                bars, validation_indices, validation_y, validation_probabilities
-            ),
-        }
-
-    balanced = variants["weight_balanced"]
-    unweighted = variants["weight_none"]
-    always_sell_prediction = Series("SELL", index=validation_y.index, dtype=object)
-    baseline_comparisons = {
-        "always_sell": {
-            "baseline_type": "constant_prediction",
-            "predicted_label": "SELL",
-            **baseline_validation_diagnostics(validation_y, always_sell_prediction),
-        },
-        "lightgbm_unweighted": {
-            "baseline_type": "lightgbm",
-            "model_variant": "weight_none",
-            "model_parameters": {"class_weight": None},
-            "classification_metrics": unweighted["classification_metrics"][
-                "validation"
-            ],
-            "confusion_matrix": unweighted["confusion_matrix"],
-            "prediction_distribution": unweighted["prediction_distribution"],
-        },
-    }
-    train_f1 = balanced["classification_metrics"]["train_in_sample"]["macro"]["f1"]
-    validation_f1 = balanced["classification_metrics"]["validation"]["macro"]["f1"]
-    f1_gap = round(train_f1 - validation_f1, 6)
-    assessment = (
-        "POSSIBLE_OVERFITTING"
-        if f1_gap >= OVERFIT_F1_GAP_THRESHOLD
-        else "NO_LARGE_MACRO_F1_GAP_OBSERVED"
+    variants = _fit_experiment_variants(
+        features,
+        bars,
+        train_indices,
+        validation_indices,
+        train_y,
+        validation_y,
+        feature_profile=feature_profile,
+        feature_count=int(profile_metadata["feature_count"]),
+        calibration_fraction=calibration_fraction,
+        minimum_hold_precision=minimum_hold_precision,
+        minimum_hold_recall=minimum_hold_recall,
     )
-    return {
-        **base_result,
-        "status": "TRAINED",
-        "classification_metrics": balanced["classification_metrics"],
-        "confusion_matrix": balanced["confusion_matrix"],
-        "prediction_distribution": balanced["prediction_distribution"],
-        "hold_metrics": balanced["hold_metrics"],
-        "model_variants": variants,
-        "threshold_optimization": balanced["threshold_optimization"],
-        "baseline_comparisons": baseline_comparisons,
-        "overfitting_assessment": {
-            "status": assessment,
-            "macro_f1_gap_train_minus_validation": f1_gap,
-            "heuristic_threshold": OVERFIT_F1_GAP_THRESHOLD,
-            "caveat": "Single chronological split; diagnostic heuristic, not a statistical proof.",
-        },
-    }
-
-
+    return _build_trained_experiment_result(
+        base_result, train_y, validation_y, variants
+    )
 def _load_manifested_data(
     input_dir: Path, symbol: str, days: int, commit_sha: str
 ) -> tuple[DataFrame, dict[str, Any]]:
@@ -1893,67 +1963,68 @@ def _mean_metric(values: list[float]) -> float | None:
     return round(float(np.mean(np.asarray(values, dtype=float))), 6)
 
 
-def _build_feature_ablation_summary(
-    experiments: list[dict[str, Any]],
+def _summarize_feature_profile(
+    rows: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Summarize profile effects against the nine-feature Baseline control."""
-    profile_summary: dict[str, Any] = {}
-    for profile in FEATURE_PROFILE_ORDER:
-        rows = [item for item in experiments if item.get("feature_profile") == profile]
-        trained = [item for item in rows if item.get("status") == "TRAINED"]
-        macro_values: list[float] = []
-        raw_hold_precision: list[float] = []
-        forward_hold_precision: list[float] = []
-        forward_hold_recall: list[float] = []
-        accepted_count = 0
-        for item in trained:
-            classification = item["classification_metrics"]["validation"]
-            macro_values.append(float(classification["macro"]["f1"]))
-            raw_hold_precision.append(float(item["hold_metrics"]["precision"]))
-            threshold = item.get("threshold_optimization") or {}
-            forward = threshold.get("post_calibration_validation")
-            forward_hold = forward.get("hold_metrics") if forward is not None else None
-            if forward_hold is None:
-                continue
-            precision = float(forward_hold["precision"])
-            recall = float(forward_hold["recall"])
-            forward_hold_precision.append(precision)
-            forward_hold_recall.append(recall)
-            if (
-                precision >= DEFAULT_MINIMUM_HOLD_PRECISION
-                and recall >= DEFAULT_MINIMUM_HOLD_RECALL
-            ):
-                accepted_count += 1
-
-        forward_count = len(forward_hold_precision)
-        complete_pass = (
-            bool(rows)
-            and len(trained) == len(rows)
-            and forward_count == len(rows)
-            and accepted_count == len(rows)
+    """Aggregate one profile's forward metrics and acceptance completeness."""
+    trained = [item for item in rows if item.get("status") == "TRAINED"]
+    macro_values: list[float] = []
+    raw_hold_precision: list[float] = []
+    forward_hold_precision: list[float] = []
+    forward_hold_recall: list[float] = []
+    accepted_count = 0
+    for item in trained:
+        classification = item["classification_metrics"]["validation"]
+        macro_values.append(float(classification["macro"]["f1"]))
+        raw_hold_precision.append(float(item["hold_metrics"]["precision"]))
+        threshold = item.get("threshold_optimization") or {}
+        forward = threshold.get("post_calibration_validation")
+        forward_hold = forward.get("hold_metrics") if forward is not None else None
+        if forward_hold is None:
+            continue
+        precision = float(forward_hold["precision"])
+        recall = float(forward_hold["recall"])
+        forward_hold_precision.append(precision)
+        forward_hold_recall.append(recall)
+        accepted_count += int(
+            precision >= DEFAULT_MINIMUM_HOLD_PRECISION
+            and recall >= DEFAULT_MINIMUM_HOLD_RECALL
         )
-        profile_summary[profile] = {
-            "experiment_count": len(rows),
-            "trained_experiment_count": len(trained),
-            "skipped_experiment_count": len(rows) - len(trained),
-            "mean_validation_macro_f1": _mean_metric(macro_values),
-            "mean_validation_hold_precision_raw_argmax": _mean_metric(
-                raw_hold_precision
-            ),
-            "mean_forward_hold_precision": _mean_metric(forward_hold_precision),
-            "mean_forward_hold_recall": _mean_metric(forward_hold_recall),
-            "forward_metric_experiment_count": forward_count,
-            "forward_acceptance_pass_experiment_count": accepted_count,
-            "forward_acceptance_status": "PASS"
-            if complete_pass
-            else "NOT_MET_OR_INCOMPLETE",
-        }
 
+    forward_count = len(forward_hold_precision)
+    complete_pass = (
+        bool(rows)
+        and len(trained) == len(rows)
+        and forward_count == len(rows)
+        and accepted_count == len(rows)
+    )
+    return {
+        "experiment_count": len(rows),
+        "trained_experiment_count": len(trained),
+        "skipped_experiment_count": len(rows) - len(trained),
+        "mean_validation_macro_f1": _mean_metric(macro_values),
+        "mean_validation_hold_precision_raw_argmax": _mean_metric(
+            raw_hold_precision
+        ),
+        "mean_forward_hold_precision": _mean_metric(forward_hold_precision),
+        "mean_forward_hold_recall": _mean_metric(forward_hold_recall),
+        "forward_metric_experiment_count": forward_count,
+        "forward_acceptance_pass_experiment_count": accepted_count,
+        "forward_acceptance_status": "PASS"
+        if complete_pass
+        else "NOT_MET_OR_INCOMPLETE",
+    }
+
+
+def _add_feature_profile_baseline_deltas(
+    profile_summary: dict[str, dict[str, Any]],
+) -> None:
+    """Add comparable Macro-F1 and forward HOLD deltas versus Baseline."""
     baseline = profile_summary["Baseline"]
     baseline_macro = baseline["mean_validation_macro_f1"]
     baseline_forward_precision = baseline["mean_forward_hold_precision"]
     baseline_forward_recall = baseline["mean_forward_hold_recall"]
-    for profile, values in profile_summary.items():
+    for values in profile_summary.values():
         macro = values["mean_validation_macro_f1"]
         forward_precision = values["mean_forward_hold_precision"]
         forward_recall = values["mean_forward_hold_recall"]
@@ -1973,6 +2044,11 @@ def _build_feature_ablation_summary(
             else None
         )
 
+
+def _rank_feature_profiles_by_forward_precision(
+    profile_summary: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Rank complete forward-supported profiles by HOLD Precision."""
     ranking = [
         {
             "feature_profile": profile,
@@ -1991,6 +2067,25 @@ def _build_feature_ablation_summary(
         ),
         reverse=True,
     )
+    return ranking
+
+
+def _build_feature_ablation_summary(
+    experiments: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Summarize profile effects against the nine-feature Baseline control."""
+    profile_summary = {
+        profile: _summarize_feature_profile(
+            [
+                item
+                for item in experiments
+                if item.get("feature_profile") == profile
+            ]
+        )
+        for profile in FEATURE_PROFILE_ORDER
+    }
+    _add_feature_profile_baseline_deltas(profile_summary)
+    ranking = _rank_feature_profiles_by_forward_precision(profile_summary)
     return {
         "aggregation_policy": (
             "Unweighted means across pair/timeframe/scenario experiments; "
@@ -2010,7 +2105,6 @@ def _build_feature_ablation_summary(
             "forward_acceptance_status"
         ],
     }
-
 
 def _build_diagnostic_report(
     *,

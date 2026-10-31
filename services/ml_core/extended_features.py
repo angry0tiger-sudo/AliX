@@ -90,14 +90,8 @@ def feature_profile_manifest() -> list[dict[str, object]]:
     ]
 
 
-def _validated_ohlcv(candles: DataFrame) -> DataFrame:
-    missing = sorted(set(OHLCV_COLUMNS) - set(candles.columns))
-    if missing:
-        raise ValueError(f"ohlcv_missing_columns:{','.join(missing)}")
-    if candles.empty:
-        raise ValueError("ohlcv_empty")
-
-    data = candles.loc[:, list(OHLCV_COLUMNS)].copy().reset_index(drop=True)
+def _validated_utc_timestamps(data: DataFrame) -> Series:
+    """Validate a causal, strictly increasing timestamp sequence."""
     dates = pd.to_datetime(data["date"], errors="coerce")
     if dates.isna().any():
         raise ValueError("timestamp_invalid")
@@ -113,16 +107,11 @@ def _validated_ohlcv(candles: DataFrame) -> DataFrame:
         or not bool(np.all(deltas == deltas[0]))
     ):
         raise ValueError("timestamp_interval_inconsistent")
-    data["date"] = utc_dates
+    return utc_dates
 
-    for name in ("open", "high", "low", "close", "volume"):
-        data[name] = pd.to_numeric(data[name], errors="coerce")
-    values = data.loc[:, ["open", "high", "low", "close", "volume"]].to_numpy(
-        dtype=np.float64
-    )
-    if not bool(np.isfinite(values).all()):
-        raise ValueError("ohlcv_value_not_finite")
 
+def _validate_price_volume_geometry(data: DataFrame) -> None:
+    """Reject impossible prices, negative volume, and invalid candle geometry."""
     opened = data["open"].to_numpy(dtype=np.float64)
     high = data["high"].to_numpy(dtype=np.float64)
     low = data["low"].to_numpy(dtype=np.float64)
@@ -132,15 +121,38 @@ def _validated_ohlcv(candles: DataFrame) -> DataFrame:
         raise ValueError("ohlcv_price_must_be_positive")
     if bool(np.any(volume < 0.0)):
         raise ValueError("ohlcv_volume_negative")
-    if bool(
+    invalid_geometry = (
         np.any(high < low)
         or np.any(high < np.maximum(opened, close))
         or np.any(low > np.minimum(opened, close))
-    ):
+    )
+    if bool(invalid_geometry):
         raise ValueError("ohlcv_geometry_invalid")
+
+
+def _validate_numeric_ohlcv(data: DataFrame) -> None:
+    """Normalize OHLCV numbers and reject non-finite values."""
+    for name in ("open", "high", "low", "close", "volume"):
+        data[name] = pd.to_numeric(data[name], errors="coerce")
+    values = data.loc[:, ["open", "high", "low", "close", "volume"]].to_numpy(
+        dtype=np.float64
+    )
+    if not bool(np.isfinite(values).all()):
+        raise ValueError("ohlcv_value_not_finite")
+    _validate_price_volume_geometry(data)
+
+
+def _validated_ohlcv(candles: DataFrame) -> DataFrame:
+    missing = sorted(set(OHLCV_COLUMNS) - set(candles.columns))
+    if missing:
+        raise ValueError(f"ohlcv_missing_columns:{','.join(missing)}")
+    if candles.empty:
+        raise ValueError("ohlcv_empty")
+
+    data = candles.loc[:, list(OHLCV_COLUMNS)].copy().reset_index(drop=True)
+    data["date"] = _validated_utc_timestamps(data)
+    _validate_numeric_ohlcv(data)
     return data
-
-
 def _wilder_average(values: Series, period: int) -> Series:
     """Calculate a causal Wilder-style exponential average."""
     return values.ewm(
