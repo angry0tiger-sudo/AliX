@@ -887,9 +887,10 @@ def test_run_experiment_fits_both_binary_models_and_reports_all_stage_metrics(
     assert result["hierarchical_metrics"]["stage1_hit_classifier"]["validation"]
     assert result["hierarchical_metrics"]["stage2_direction_classifier"]["validation"]
     assert result["hierarchical_metrics"]["combined_three_class"]["validation"]
-    assert result["baseline_comparisons"]["three_class_same_12c"][
-        "target_horizon_candles"
-    ] == 12
+    assert (
+        result["baseline_comparisons"]["three_class_same_12c"]["target_horizon_candles"]
+        == 12
+    )
     assert set(
         result["baseline_comparisons"]["three_class_same_12c"]["model_variants"]
     ) == {"weight_none", "weight_balanced"}
@@ -899,7 +900,8 @@ def test_run_experiment_fits_both_binary_models_and_reports_all_stage_metrics(
         assert (
             variant["hierarchical_metrics"]["stage1_hit_classifier"][
                 "probability_diagnostics"
-            ]["forward_validation"]["sample_count"] > 0
+            ]["forward_validation"]["sample_count"]
+            > 0
         )
         assert (
             variant["hierarchical_metrics"]["stage2_direction_classifier"][

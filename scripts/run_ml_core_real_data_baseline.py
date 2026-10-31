@@ -1723,9 +1723,7 @@ def run_experiment(
             minimum_precision=minimum_hold_precision,
             minimum_recall=minimum_hold_recall,
         )
-        three_class_model = _new_classifier(
-            class_weight=policy["class_weight"]
-        )
+        three_class_model = _new_classifier(class_weight=policy["class_weight"])
         three_class_model.fit(x_train, train_y)
         three_class_train_probabilities = ordered_probability_matrix(
             three_class_model, x_train
@@ -2309,9 +2307,7 @@ def render_markdown(report: dict[str, Any]) -> str:
     lines.extend(["", *_render_threshold_optimization_section(experiments)])
     lines.extend(["", *_render_probability_diagnostics_section(experiments)])
     lines.extend(["", *_render_stage_probability_diagnostics_section(experiments)])
-    lines.extend(
-        ["", *_render_same_target_baseline_comparison_section(experiments)]
-    )
+    lines.extend(["", *_render_same_target_baseline_comparison_section(experiments)])
     lines.extend(["", *_render_prediction_distribution_section(experiments)])
     lines.extend(["", *_render_confusion_matrix_section(experiments)])
     lines.extend(
