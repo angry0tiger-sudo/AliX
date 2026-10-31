@@ -1339,6 +1339,8 @@ def run_experiment(
         )
         return result
 
+    if prepared_feature_profiles is not None and prepared_bars is None:
+        raise ValueError("prepared_feature_profiles_require_prepared_bars")
     features, split_features = _prepare_experiment_feature_matrices(
         bars, feature_profile, prepared_feature_profiles
     )
