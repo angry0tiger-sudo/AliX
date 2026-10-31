@@ -1732,16 +1732,12 @@ def _fit_hierarchical_binary_probabilities(
     return {
         "stage1_train": binary_probability_matrix(stage1_model, x_train),
         "stage1_validation": binary_probability_matrix(stage1_model, x_validation),
-        "stage2_train_actual": binary_probability_matrix(
-            stage2_model, x_stage2_train
-        ),
+        "stage2_train_actual": binary_probability_matrix(stage2_model, x_stage2_train),
         "stage2_validation_actual": binary_probability_matrix(
             stage2_model, x_stage2_validation
         ),
         "stage2_train_all": binary_probability_matrix(stage2_model, x_train),
-        "stage2_validation_all": binary_probability_matrix(
-            stage2_model, x_validation
-        ),
+        "stage2_validation_all": binary_probability_matrix(stage2_model, x_validation),
     }
 
 
@@ -1808,7 +1804,9 @@ def _fit_flat_three_class_baseline(
     model.fit(x_train, train_y)
     train_probabilities = ordered_probability_matrix(model, x_train)
     validation_probabilities = ordered_probability_matrix(model, x_validation)
-    train_prediction = predictions_from_probabilities(train_probabilities, train_y.index)
+    train_prediction = predictions_from_probabilities(
+        train_probabilities, train_y.index
+    )
     validation_prediction = predictions_from_probabilities(
         validation_probabilities, validation_y.index
     )
