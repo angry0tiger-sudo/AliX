@@ -2036,9 +2036,7 @@ def _summarize_feature_profile(
         float(item["classification_metrics"]["validation"]["macro"]["f1"])
         for item in trained
     ]
-    raw_hold_precision = [
-        float(item["hold_metrics"]["precision"]) for item in trained
-    ]
+    raw_hold_precision = [float(item["hold_metrics"]["precision"]) for item in trained]
     forward_hold_precision = [precision for precision, _ in forward_metrics]
     forward_hold_recall = [recall for _, recall in forward_metrics]
     forward_count = len(forward_metrics)
@@ -2059,6 +2057,7 @@ def _summarize_feature_profile(
             len(rows), len(trained), forward_count, accepted_count
         ),
     }
+
 
 def _add_feature_profile_baseline_deltas(
     profile_summary: dict[str, dict[str, Any]],
