@@ -698,10 +698,13 @@ def test_hierarchical_sample_gate_requires_both_stage_two_classes() -> None:
         stage1_train, stage1_validation, stage2_train, stage2_validation
     )
     assert failed["status"] == "SKIPPED_INSUFFICIENT_SAMPLES"
-    assert failed["stage2_direction_classifier"]["insufficient_train_classes"] == ["SELL"]
+    assert failed["stage2_direction_classifier"]["insufficient_train_classes"] == [
+        "SELL"
+    ]
 
     passed = hierarchical_sample_gate_diagnostics(
-        stage1_train, stage1_validation,
+        stage1_train,
+        stage1_validation,
         Series([0] * 20 + [1] * 25),
         stage2_validation,
     )
@@ -773,12 +776,27 @@ def test_run_experiment_fits_both_binary_models_and_reports_all_stage_metrics(
         "scripts.run_ml_core_real_data_baseline.apply_adaptive_hierarchical_targets",
         lambda data, **kwargs: DataFrame(
             {
-                "label": ["BUY" if i % 4 == 0 else "SELL" if i % 4 == 1 else "HOLD" for i in range(len(data))],
-                "exit_reason": ["TP_HIT" if i % 4 == 0 else "SL_HIT" if i % 4 == 1 else "HORIZON_EXPIRY" for i in range(len(data))],
+                "label": [
+                    "BUY" if i % 4 == 0 else "SELL" if i % 4 == 1 else "HOLD"
+                    for i in range(len(data))
+                ],
+                "exit_reason": [
+                    "TP_HIT"
+                    if i % 4 == 0
+                    else "SL_HIT"
+                    if i % 4 == 1
+                    else "HORIZON_EXPIRY"
+                    for i in range(len(data))
+                ],
                 "unlabeled_reason": [None] * len(data),
                 "label_end_idx": [min(i + 12, len(data) - 1) for i in range(len(data))],
-                STAGE1_TARGET_COLUMN: [1.0 if i % 4 in (0, 1) else 0.0 for i in range(len(data))],
-                STAGE2_TARGET_COLUMN: [1.0 if i % 4 == 0 else 0.0 if i % 4 == 1 else np.nan for i in range(len(data))],
+                STAGE1_TARGET_COLUMN: [
+                    1.0 if i % 4 in (0, 1) else 0.0 for i in range(len(data))
+                ],
+                STAGE2_TARGET_COLUMN: [
+                    1.0 if i % 4 == 0 else 0.0 if i % 4 == 1 else np.nan
+                    for i in range(len(data))
+                ],
             }
         ),
     )

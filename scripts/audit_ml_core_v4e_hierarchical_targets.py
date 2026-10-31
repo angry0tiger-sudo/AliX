@@ -26,7 +26,9 @@ def main() -> int:
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary = output.with_suffix(output.suffix + ".tmp")
     temporary.write_text(
-        json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False)
+        json.dumps(
+            report, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False
+        )
         + "\n",
         encoding="utf-8",
     )

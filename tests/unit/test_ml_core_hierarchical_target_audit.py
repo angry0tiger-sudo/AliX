@@ -82,9 +82,7 @@ def write_manifested_dataset(
         "economic_acceptance": "NO-GO",
         "trading_authorization": "NO-GO",
     }
-    manifest_path.write_text(
-        json.dumps(manifest, sort_keys=True), encoding="utf-8"
-    )
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
 
 
 def target_frame(rows: int = 80) -> DataFrame:
@@ -133,9 +131,7 @@ def test_load_manifested_dataset_rejects_manifest_and_hash_mismatch(
     manifest["private_api_calls"] = 0
     manifest["host"] = "untrusted.example"
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
-    with pytest.raises(
-        ValueError, match="public_data_manifest_validation_failed:host"
-    ):
+    with pytest.raises(ValueError, match="public_data_manifest_validation_failed:host"):
         load_manifested_dataset(
             tmp_path, symbol="BTCUSDT", days=1, commit_sha=COMMIT_SHA
         )
@@ -229,7 +225,9 @@ def test_minute_frame_rejects_price_volume_and_timestamp_contracts() -> None:
 
     invalid = minute_frame(20)
     invalid.loc[5, "date"] = invalid.loc[4, "date"]
-    with pytest.raises(ValueError, match="public_data_timestamps_not_unique_and_increasing"):
+    with pytest.raises(
+        ValueError, match="public_data_timestamps_not_unique_and_increasing"
+    ):
         audit._validate_minute_frame(invalid, expected_rows=20)
 
 
@@ -253,9 +251,7 @@ def test_resample_fails_closed_on_source_gaps_and_missing_bar_intervals() -> Non
 def test_hierarchical_audit_confirms_late_hits_remain_no_hit() -> None:
     candles = target_frame()
     candles.loc[33, "high"] = 103.0
-    result = audit_hierarchical_targets(
-        candles, pair="BTC/USDT", timeframe="15m"
-    )
+    result = audit_hierarchical_targets(candles, pair="BTC/USDT", timeframe="15m")
     assert result["target_contract_status"] == "PASS"
     assert result["late_hit_transition_count_13_to_24"] > 0
     assert result["stage1_distribution"]["NO_HIT"] > 0
@@ -274,9 +270,7 @@ def test_hierarchical_audit_fails_closed_on_stage1_and_stage2_mismatch(
 
     monkeypatch.setattr(audit, "apply_adaptive_hierarchical_targets", broken_stage1)
     with pytest.raises(ValueError, match="hierarchical_stage1_mapping_invalid"):
-        audit_hierarchical_targets(
-            target_frame(), pair="BTC/USDT", timeframe="15m"
-        )
+        audit_hierarchical_targets(target_frame(), pair="BTC/USDT", timeframe="15m")
 
     def broken_stage2(candles: DataFrame) -> DataFrame:
         result = original(candles)
@@ -285,16 +279,12 @@ def test_hierarchical_audit_fails_closed_on_stage1_and_stage2_mismatch(
 
     monkeypatch.setattr(audit, "apply_adaptive_hierarchical_targets", broken_stage2)
     with pytest.raises(ValueError, match="hierarchical_stage2_mapping_invalid"):
-        audit_hierarchical_targets(
-            target_frame(), pair="BTC/USDT", timeframe="15m"
-        )
+        audit_hierarchical_targets(target_frame(), pair="BTC/USDT", timeframe="15m")
 
 
 def test_hierarchical_audit_rejects_invalid_scope_and_pair() -> None:
     with pytest.raises(ValueError, match="entry_timeframe_out_of_policy"):
-        audit_hierarchical_targets(
-            target_frame(), pair="BTC/USDT", timeframe="1d"
-        )
+        audit_hierarchical_targets(target_frame(), pair="BTC/USDT", timeframe="1d")
     with pytest.raises(ValueError, match="pair_invalid"):
         audit_hierarchical_targets(target_frame(), pair="", timeframe="15m")
 
@@ -367,11 +357,17 @@ def test_late_hit_validator_rejects_a_short_horizon_direction() -> None:
 
 
 def test_late_hit_validator_rejects_missing_or_out_of_range_end_indices() -> None:
-    short = DataFrame([{"label": "HOLD", "exit_reason": "HORIZON_EXPIRY", "label_end_idx": 12}])
+    short = DataFrame(
+        [{"label": "HOLD", "exit_reason": "HORIZON_EXPIRY", "label_end_idx": 12}]
+    )
     with pytest.raises(ValueError, match="legacy_hit_end_index_missing"):
-        audit._count_late_hits(short, DataFrame([{"label": "BUY", "label_end_idx": None}]))
+        audit._count_late_hits(
+            short, DataFrame([{"label": "BUY", "label_end_idx": None}])
+        )
     with pytest.raises(ValueError, match="legacy_hit_end_index_out_of_horizon"):
-        audit._count_late_hits(short, DataFrame([{"label": "BUY", "label_end_idx": 25}]))
+        audit._count_late_hits(
+            short, DataFrame([{"label": "BUY", "label_end_idx": 25}])
+        )
 
 
 def test_run_audit_emits_eight_experiments_and_preserves_safety(
@@ -379,12 +375,13 @@ def test_run_audit_emits_eight_experiments_and_preserves_safety(
 ) -> None:
     write_manifested_dataset(tmp_path, symbol="BTCUSDT")
     write_manifested_dataset(tmp_path, symbol="ETHUSDT")
-    report = run_hierarchical_target_audit(
-        tmp_path, days=1, commit_sha=COMMIT_SHA
-    )
+    report = run_hierarchical_target_audit(tmp_path, days=1, commit_sha=COMMIT_SHA)
     assert report["experiment_count"] == 8
     assert {item["timeframe"] for item in report["experiments"]} == {
-        "15m", "30m", "1h", "4h"
+        "15m",
+        "30m",
+        "1h",
+        "4h",
     }
     assert report["model_training_performed"] is False
     assert report["safety"]["Champion"] is None
@@ -396,6 +393,4 @@ def test_run_audit_emits_eight_experiments_and_preserves_safety(
 
 def test_run_audit_rejects_unknown_horizon_scope(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="public_data_days_out_of_policy"):
-        run_hierarchical_target_audit(
-            tmp_path, days=0, commit_sha=COMMIT_SHA
-        )
+        run_hierarchical_target_audit(tmp_path, days=0, commit_sha=COMMIT_SHA)

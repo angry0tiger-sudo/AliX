@@ -236,7 +236,6 @@ def test_new_barrier_parameters_reject_invalid_values() -> None:
         )
 
 
-
 def test_hierarchical_stage1_and_stage2_map_tp_hit_to_buy() -> None:
     candles = market_frame(20)
     candles.loc[12, "high"] = 103.0

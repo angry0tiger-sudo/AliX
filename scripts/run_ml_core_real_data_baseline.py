@@ -374,8 +374,6 @@ def ordered_probability_matrix(model: Any, features: DataFrame) -> np.ndarray:
     return ordered
 
 
-
-
 def binary_classification_metrics(
     actual: Series,
     predicted: Series,
@@ -450,15 +448,15 @@ def _binary_gate_diagnostics(
         negative_label: int((validation == 0).sum()),
         positive_label: int((validation == 1).sum()),
     }
-    missing_train = [
-        label for label, count in train_counts.items() if count == 0
-    ]
+    missing_train = [label for label, count in train_counts.items() if count == 0]
     insufficient_train = [
-        label for label, count in train_counts.items()
+        label
+        for label, count in train_counts.items()
         if count < MIN_TRAIN_SAMPLES_PER_CLASS
     ]
     insufficient_validation = [
-        label for label, count in validation_counts.items()
+        label
+        for label, count in validation_counts.items()
         if count < MIN_VALIDATION_SAMPLES_PER_CLASS
     ]
     if missing_train:
@@ -499,11 +497,14 @@ def hierarchical_sample_gate_diagnostics(
         positive_label="BUY",
     )
     failures = [
-        name for name, gate in (("stage1", stage1), ("stage2", stage2))
+        name
+        for name, gate in (("stage1", stage1), ("stage2", stage2))
         if gate["status"] != "PASS"
     ]
     return {
-        "status": "PASS" if not failures else (
+        "status": "PASS"
+        if not failures
+        else (
             "SKIPPED_INSUFFICIENT_CLASS_DIVERSITY"
             if any(
                 gate["status"] == "SKIPPED_INSUFFICIENT_CLASS_DIVERSITY"
@@ -600,12 +601,16 @@ def _hierarchical_metrics(
             "class_mapping": {"0": "NO_HIT", "1": "HIT"},
             "evaluation_scope": "ALL_ELIGIBLE_TRAIN_OR_VALIDATION_ROWS",
             "train_in_sample": binary_classification_metrics(
-                stage1_train, stage1_train_prediction,
-                negative_label="NO_HIT", positive_label="HIT",
+                stage1_train,
+                stage1_train_prediction,
+                negative_label="NO_HIT",
+                positive_label="HIT",
             ),
             "validation": binary_classification_metrics(
-                stage1_validation, stage1_validation_prediction,
-                negative_label="NO_HIT", positive_label="HIT",
+                stage1_validation,
+                stage1_validation_prediction,
+                negative_label="NO_HIT",
+                positive_label="HIT",
             ),
         },
         "stage2_direction_classifier": {
@@ -616,12 +621,16 @@ def _hierarchical_metrics(
             "train_samples": int(len(stage2_train)),
             "validation_samples": int(len(stage2_validation)),
             "train_in_sample": binary_classification_metrics(
-                stage2_train, stage2_train_prediction,
-                negative_label="SELL", positive_label="BUY",
+                stage2_train,
+                stage2_train_prediction,
+                negative_label="SELL",
+                positive_label="BUY",
             ),
             "validation": binary_classification_metrics(
-                stage2_validation, stage2_validation_prediction,
-                negative_label="SELL", positive_label="BUY",
+                stage2_validation,
+                stage2_validation_prediction,
+                negative_label="SELL",
+                positive_label="BUY",
             ),
         },
         "combined_three_class": {
@@ -1398,11 +1407,13 @@ def run_experiment(
     )
     if len(bars) < 100:
         result = _insufficient_bar_result(pair, timeframe, bars, labels)
-        result.update({
-            "scenario": scenario_name,
-            "triple_barrier": barrier_config,
-            "hierarchical_metrics": None,
-        })
+        result.update(
+            {
+                "scenario": scenario_name,
+                "triple_barrier": barrier_config,
+                "hierarchical_metrics": None,
+            }
+        )
         return result
 
     features = build_causal_feature_matrix(bars)
@@ -1412,18 +1423,24 @@ def run_experiment(
     train_y = labels.iloc[train_indices]["label"]
     validation_y = labels.iloc[validation_indices]["label"]
     stage1_train = labels.iloc[train_indices][STAGE1_TARGET_COLUMN].astype(int)
-    stage1_validation = labels.iloc[validation_indices][STAGE1_TARGET_COLUMN].astype(int)
+    stage1_validation = labels.iloc[validation_indices][STAGE1_TARGET_COLUMN].astype(
+        int
+    )
 
     stage2_train_indices = [
-        index for index in train_indices
+        index
+        for index in train_indices
         if labels.iloc[index][STAGE1_TARGET_COLUMN] == 1.0
     ]
     stage2_validation_indices = [
-        index for index in validation_indices
+        index
+        for index in validation_indices
         if labels.iloc[index][STAGE1_TARGET_COLUMN] == 1.0
     ]
     stage2_train = labels.iloc[stage2_train_indices][STAGE2_TARGET_COLUMN].astype(int)
-    stage2_validation = labels.iloc[stage2_validation_indices][STAGE2_TARGET_COLUMN].astype(int)
+    stage2_validation = labels.iloc[stage2_validation_indices][
+        STAGE2_TARGET_COLUMN
+    ].astype(int)
 
     sample_gate = hierarchical_sample_gate_diagnostics(
         stage1_train, stage1_validation, stage2_train, stage2_validation
@@ -1471,18 +1488,29 @@ def run_experiment(
     }
     if sample_gate["status"] != "PASS":
         result = _skipped_result(
-            pair, timeframe, bars, labels, train_indices, validation_indices,
-            split_info, str(sample_gate["status"]), sample_gate,
+            pair,
+            timeframe,
+            bars,
+            labels,
+            train_indices,
+            validation_indices,
+            split_info,
+            str(sample_gate["status"]),
+            sample_gate,
         )
-        result.update({
-            "scenario": scenario_name,
-            "triple_barrier": barrier_config,
-            "target_architecture": "HIERARCHICAL_HIT_THEN_DIRECTION",
-            "hierarchical_target_distribution": base_result["hierarchical_target_distribution"],
-            "stage2_training_rows": int(len(stage2_train_indices)),
-            "stage2_validation_rows": int(len(stage2_validation_indices)),
-            "hierarchical_metrics": None,
-        })
+        result.update(
+            {
+                "scenario": scenario_name,
+                "triple_barrier": barrier_config,
+                "target_architecture": "HIERARCHICAL_HIT_THEN_DIRECTION",
+                "hierarchical_target_distribution": base_result[
+                    "hierarchical_target_distribution"
+                ],
+                "stage2_training_rows": int(len(stage2_train_indices)),
+                "stage2_validation_rows": int(len(stage2_validation_indices)),
+                "hierarchical_metrics": None,
+            }
+        )
         return result
 
     x_train = features.iloc[train_indices]
@@ -1507,7 +1535,9 @@ def run_experiment(
         stage2_validation_actual_probabilities = binary_probability_matrix(
             stage2_model, x_stage2_validation
         )
-        stage2_train_all_probabilities = binary_probability_matrix(stage2_model, x_train)
+        stage2_train_all_probabilities = binary_probability_matrix(
+            stage2_model, x_train
+        )
         stage2_validation_all_probabilities = binary_probability_matrix(
             stage2_model, x_validation
         )
@@ -1602,7 +1632,10 @@ def run_experiment(
             ),
             "threshold_optimization": threshold_diagnostics,
             "validation_probabilities": _serialize_validation_probabilities(
-                bars, validation_indices, validation_y, combined_validation_probabilities
+                bars,
+                validation_indices,
+                validation_y,
+                combined_validation_probabilities,
             ),
         }
 
@@ -1626,7 +1659,9 @@ def run_experiment(
             },
             "class_weight": None,
             "hierarchical_metrics": unweighted["hierarchical_metrics"],
-            "classification_metrics": unweighted["classification_metrics"]["validation"],
+            "classification_metrics": unweighted["classification_metrics"][
+                "validation"
+            ],
             "confusion_matrix": unweighted["confusion_matrix"],
             "prediction_distribution": unweighted["prediction_distribution"],
         },
@@ -1657,8 +1692,6 @@ def run_experiment(
             "caveat": "Single chronological split; diagnostic heuristic, not a statistical proof.",
         },
     }
-
-
 
 
 def _load_manifested_data(
@@ -1971,7 +2004,6 @@ def _render_probability_diagnostics_section(
                     f"| {_format_probability_metric(values['hold_pr_auc'])} |"
                 )
     return lines
-
 
 
 def _render_hierarchical_metrics_section(

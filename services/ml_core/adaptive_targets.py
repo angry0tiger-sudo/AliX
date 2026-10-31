@@ -380,7 +380,6 @@ def apply_adaptive_triple_barrier(
     return DataFrame.from_records(records, columns=list(_RESULT_COLUMNS))
 
 
-
 def apply_adaptive_hierarchical_targets(
     candles: DataFrame,
     *,
