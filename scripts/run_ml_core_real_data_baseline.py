@@ -1408,6 +1408,8 @@ def run_experiment(
     return _build_trained_experiment_result(
         base_result, train_y, validation_y, variants
     )
+
+
 def _load_manifested_data(
     input_dir: Path, symbol: str, days: int, commit_sha: str
 ) -> tuple[DataFrame, dict[str, Any]]:
@@ -2005,9 +2007,7 @@ def _summarize_feature_profile(
         "trained_experiment_count": len(trained),
         "skipped_experiment_count": len(rows) - len(trained),
         "mean_validation_macro_f1": _mean_metric(macro_values),
-        "mean_validation_hold_precision_raw_argmax": _mean_metric(
-            raw_hold_precision
-        ),
+        "mean_validation_hold_precision_raw_argmax": _mean_metric(raw_hold_precision),
         "mean_forward_hold_precision": _mean_metric(forward_hold_precision),
         "mean_forward_hold_recall": _mean_metric(forward_hold_recall),
         "forward_metric_experiment_count": forward_count,
@@ -2078,11 +2078,7 @@ def _build_feature_ablation_summary(
     """Summarize profile effects against the nine-feature Baseline control."""
     profile_summary = {
         profile: _summarize_feature_profile(
-            [
-                item
-                for item in experiments
-                if item.get("feature_profile") == profile
-            ]
+            [item for item in experiments if item.get("feature_profile") == profile]
         )
         for profile in FEATURE_PROFILE_ORDER
     }
@@ -2107,6 +2103,7 @@ def _build_feature_ablation_summary(
             "forward_acceptance_status"
         ],
     }
+
 
 def _build_diagnostic_report(
     *,

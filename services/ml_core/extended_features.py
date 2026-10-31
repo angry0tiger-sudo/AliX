@@ -153,6 +153,8 @@ def _validated_ohlcv(candles: DataFrame) -> DataFrame:
     data["date"] = _validated_utc_timestamps(data)
     _validate_numeric_ohlcv(data)
     return data
+
+
 def _wilder_average(values: Series, period: int) -> Series:
     """Calculate a causal Wilder-style exponential average."""
     return values.ewm(
