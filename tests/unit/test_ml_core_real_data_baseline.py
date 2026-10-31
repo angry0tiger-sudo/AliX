@@ -619,7 +619,6 @@ def test_probability_metrics_use_disjoint_calibration_and_forward_rows() -> None
     assert result["calibration_overlap"] is False
 
 
-
 def test_binary_classifier_factory_uses_deterministic_binary_objective(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
