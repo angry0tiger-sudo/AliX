@@ -1967,40 +1967,83 @@ def _mean_metric(values: list[float]) -> float | None:
     return round(float(np.mean(np.asarray(values, dtype=float))), 6)
 
 
+def _trained_profile_experiments(
+    rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Select successful experiments for one feature profile."""
+    return [item for item in rows if item.get("status") == "TRAINED"]
+
+
+def _forward_hold_metrics(
+    experiment: dict[str, Any],
+) -> tuple[float, float] | None:
+    """Extract post-calibration forward HOLD Precision and Recall."""
+    threshold = experiment.get("threshold_optimization") or {}
+    forward = threshold.get("post_calibration_validation")
+    if forward is None:
+        return None
+    hold_metrics = forward.get("hold_metrics")
+    if hold_metrics is None:
+        return None
+    return float(hold_metrics["precision"]), float(hold_metrics["recall"])
+
+
+def _collect_forward_hold_metrics(
+    trained: list[dict[str, Any]],
+) -> list[tuple[float, float]]:
+    """Collect only complete post-calibration forward HOLD metrics."""
+    return [
+        values
+        for item in trained
+        if (values := _forward_hold_metrics(item)) is not None
+    ]
+
+
+def _forward_hold_acceptance_pass(metrics: tuple[float, float]) -> bool:
+    """Require both configured forward HOLD thresholds."""
+    precision, recall = metrics
+    return (
+        precision >= DEFAULT_MINIMUM_HOLD_PRECISION
+        and recall >= DEFAULT_MINIMUM_HOLD_RECALL
+    )
+
+
+def _forward_acceptance_status(
+    experiment_count: int,
+    trained_count: int,
+    forward_count: int,
+    accepted_count: int,
+) -> str:
+    """Fail closed when any experiment or forward metric is missing."""
+    if experiment_count == 0:
+        return "NOT_MET_OR_INCOMPLETE"
+    if trained_count != experiment_count:
+        return "NOT_MET_OR_INCOMPLETE"
+    if forward_count != experiment_count:
+        return "NOT_MET_OR_INCOMPLETE"
+    if accepted_count != experiment_count:
+        return "NOT_MET_OR_INCOMPLETE"
+    return "PASS"
+
+
 def _summarize_feature_profile(
     rows: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Aggregate one profile's forward metrics and acceptance completeness."""
-    trained = [item for item in rows if item.get("status") == "TRAINED"]
-    macro_values: list[float] = []
-    raw_hold_precision: list[float] = []
-    forward_hold_precision: list[float] = []
-    forward_hold_recall: list[float] = []
-    accepted_count = 0
-    for item in trained:
-        classification = item["classification_metrics"]["validation"]
-        macro_values.append(float(classification["macro"]["f1"]))
-        raw_hold_precision.append(float(item["hold_metrics"]["precision"]))
-        threshold = item.get("threshold_optimization") or {}
-        forward = threshold.get("post_calibration_validation")
-        forward_hold = forward.get("hold_metrics") if forward is not None else None
-        if forward_hold is None:
-            continue
-        precision = float(forward_hold["precision"])
-        recall = float(forward_hold["recall"])
-        forward_hold_precision.append(precision)
-        forward_hold_recall.append(recall)
-        accepted_count += int(
-            precision >= DEFAULT_MINIMUM_HOLD_PRECISION
-            and recall >= DEFAULT_MINIMUM_HOLD_RECALL
-        )
-
-    forward_count = len(forward_hold_precision)
-    complete_pass = (
-        bool(rows)
-        and len(trained) == len(rows)
-        and forward_count == len(rows)
-        and accepted_count == len(rows)
+    """Aggregate one profile's metrics without mixing raw and forward scopes."""
+    trained = _trained_profile_experiments(rows)
+    forward_metrics = _collect_forward_hold_metrics(trained)
+    macro_values = [
+        float(item["classification_metrics"]["validation"]["macro"]["f1"])
+        for item in trained
+    ]
+    raw_hold_precision = [
+        float(item["hold_metrics"]["precision"]) for item in trained
+    ]
+    forward_hold_precision = [precision for precision, _ in forward_metrics]
+    forward_hold_recall = [recall for _, recall in forward_metrics]
+    forward_count = len(forward_metrics)
+    accepted_count = sum(
+        _forward_hold_acceptance_pass(values) for values in forward_metrics
     )
     return {
         "experiment_count": len(rows),
@@ -2012,11 +2055,10 @@ def _summarize_feature_profile(
         "mean_forward_hold_recall": _mean_metric(forward_hold_recall),
         "forward_metric_experiment_count": forward_count,
         "forward_acceptance_pass_experiment_count": accepted_count,
-        "forward_acceptance_status": "PASS"
-        if complete_pass
-        else "NOT_MET_OR_INCOMPLETE",
+        "forward_acceptance_status": _forward_acceptance_status(
+            len(rows), len(trained), forward_count, accepted_count
+        ),
     }
-
 
 def _add_feature_profile_baseline_deltas(
     profile_summary: dict[str, dict[str, Any]],
