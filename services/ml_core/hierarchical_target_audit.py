@@ -274,30 +274,43 @@ def _nullable_values_match(actual: pd.Series, expected: np.ndarray) -> bool:
     )
 
 
-def _validate_one_label_end_index(row: pd.Series, position: int) -> int | None:
-    label = row["label"]
+def _validate_unlabeled_end_index(row: pd.Series) -> None:
     end_value = row["label_end_idx"]
     reason = row["unlabeled_reason"]
-    if pd.isna(label):
-        if not pd.isna(end_value) or reason not in UNLABELED_REASONS:
-            raise ValueError("hierarchical_unlabeled_row_contract_invalid")
-        return None
+    if not pd.isna(end_value) or reason not in UNLABELED_REASONS:
+        raise ValueError("hierarchical_unlabeled_row_contract_invalid")
+
+
+def _validated_target_end_offset(end_value: Any, position: int) -> int:
     if pd.isna(end_value):
         raise ValueError("hierarchical_label_end_index_missing")
     end_number = float(end_value)
     if not np.isfinite(end_number) or not end_number.is_integer():
         raise ValueError("hierarchical_label_end_index_invalid")
-
     offset = int(end_number) - position
     if offset < 1 or offset > HIERARCHICAL_HORIZON_CANDLES:
         raise ValueError("hierarchical_label_end_index_out_of_horizon")
+    return offset
+
+
+def _validate_label_offset_semantics(
+    label: Any, reason: Any, offset: int
+) -> None:
     if label == "HOLD" and offset != HIERARCHICAL_HORIZON_CANDLES:
         raise ValueError("hierarchical_no_hit_end_index_invalid")
     is_directional_hit = label in ("BUY", "SELL")
     if is_directional_hit and reason not in EXIT_REASONS[:3]:
         raise ValueError("hierarchical_hit_exit_reason_invalid")
-    return offset
 
+
+def _validate_one_label_end_index(row: pd.Series, position: int) -> int | None:
+    label = row["label"]
+    if pd.isna(label):
+        _validate_unlabeled_end_index(row)
+        return None
+    offset = _validated_target_end_offset(row["label_end_idx"], position)
+    _validate_label_offset_semantics(label, row["unlabeled_reason"], offset)
+    return offset
 
 def _validate_label_end_indices(targets: DataFrame) -> int:
     maximum_offset = 0
