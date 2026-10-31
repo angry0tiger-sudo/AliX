@@ -17,11 +17,14 @@ from sklearn import metrics  # type: ignore[import-untyped]
 
 from services.ml_core.adaptive_targets import (
     EXIT_REASONS,
+    HIERARCHICAL_HORIZON_CANDLES,
     LABEL_HORIZON_CANDLES,
+    STAGE1_TARGET_COLUMN,
+    STAGE2_TARGET_COLUMN,
     STOP_LOSS_MULTIPLIER_DEFAULT,
     TAKE_PROFIT_MULTIPLIER_DEFAULT,
     UNLABELED_REASONS,
-    apply_adaptive_triple_barrier,
+    apply_adaptive_hierarchical_targets,
 )
 from services.ml_core.causal_features import build_causal_feature_matrix
 from services.ml_core.purged_embargo import create_purged_embargo_split
@@ -44,14 +47,13 @@ HOLD_THRESHOLD_GRID_STEPS = 201
 WEIGHTING_POLICY_NAMES = ("weight_none", "weight_balanced")
 DEFAULT_BARRIER_SCENARIOS = (
     (
-        "Baseline",
-        LABEL_HORIZON_CANDLES,
+        "Hierarchical_12_Candle",
+        HIERARCHICAL_HORIZON_CANDLES,
         TAKE_PROFIT_MULTIPLIER_DEFAULT,
         STOP_LOSS_MULTIPLIER_DEFAULT,
     ),
-    ("Short_Horizon", 12, TAKE_PROFIT_MULTIPLIER_DEFAULT, STOP_LOSS_MULTIPLIER_DEFAULT),
 )
-REPORT_SCHEMA = "alix.ml-core.real-data-classification-diagnostic.v5"
+REPORT_SCHEMA = "alix.ml-core.real-data-classification-diagnostic.v6"
 
 
 def _validated_minute_timestamps(values: Series) -> Series:
@@ -370,6 +372,274 @@ def ordered_probability_matrix(model: Any, features: DataFrame) -> np.ndarray:
     ordered = raw[:, [classes.index(label) for label in LABELS]]
     _validate_probability_values(ordered)
     return ordered
+
+
+
+
+def binary_classification_metrics(
+    actual: Series,
+    predicted: Series,
+    *,
+    negative_label: str,
+    positive_label: str,
+) -> dict[str, Any]:
+    """Return fixed-order binary Precision/Recall/F1 and support diagnostics."""
+    if len(actual) == 0 or len(actual) != len(predicted):
+        raise ValueError("binary_classification_rows_invalid")
+    actual_values = pd.to_numeric(actual, errors="coerce")
+    predicted_values = pd.to_numeric(predicted, errors="coerce")
+    if (
+        actual_values.isna().any()
+        or predicted_values.isna().any()
+        or not set(actual_values.astype(int).unique()).issubset({0, 1})
+        or not set(predicted_values.astype(int).unique()).issubset({0, 1})
+    ):
+        raise ValueError("binary_classification_labels_invalid")
+    report = cast(
+        dict[str, Any],
+        metrics.classification_report(
+            actual_values.astype(int).tolist(),
+            predicted_values.astype(int).tolist(),
+            labels=[0, 1],
+            target_names=[negative_label, positive_label],
+            output_dict=True,
+            zero_division=0,
+        ),
+    )
+    macro = report["macro avg"]
+    return {
+        "labels": {"0": negative_label, "1": positive_label},
+        "macro": {
+            "precision": round(float(macro["precision"]), 6),
+            "recall": round(float(macro["recall"]), 6),
+            "f1": round(float(macro["f1-score"]), 6),
+        },
+        "accuracy": round(float(report["accuracy"]), 6),
+        "per_class": {
+            label: {
+                "precision": round(float(report[label]["precision"]), 6),
+                "recall": round(float(report[label]["recall"]), 6),
+                "f1": round(float(report[label]["f1-score"]), 6),
+                "support": int(report[label]["support"]),
+            }
+            for label in (negative_label, positive_label)
+        },
+    }
+
+
+def _binary_gate_diagnostics(
+    train_targets: Series,
+    validation_targets: Series,
+    *,
+    negative_label: str,
+    positive_label: str,
+) -> dict[str, Any]:
+    train = pd.to_numeric(train_targets, errors="coerce")
+    validation = pd.to_numeric(validation_targets, errors="coerce")
+    if train.isna().any() or validation.isna().any():
+        raise ValueError("binary_sample_gate_unlabeled_target")
+    if not set(train.astype(int).unique()).issubset({0, 1}) or not set(
+        validation.astype(int).unique()
+    ).issubset({0, 1}):
+        raise ValueError("binary_sample_gate_target_out_of_policy")
+    train_counts = {
+        negative_label: int((train == 0).sum()),
+        positive_label: int((train == 1).sum()),
+    }
+    validation_counts = {
+        negative_label: int((validation == 0).sum()),
+        positive_label: int((validation == 1).sum()),
+    }
+    missing_train = [
+        label for label, count in train_counts.items() if count == 0
+    ]
+    insufficient_train = [
+        label for label, count in train_counts.items()
+        if count < MIN_TRAIN_SAMPLES_PER_CLASS
+    ]
+    insufficient_validation = [
+        label for label, count in validation_counts.items()
+        if count < MIN_VALIDATION_SAMPLES_PER_CLASS
+    ]
+    if missing_train:
+        status = "SKIPPED_INSUFFICIENT_CLASS_DIVERSITY"
+    elif insufficient_train or insufficient_validation:
+        status = "SKIPPED_INSUFFICIENT_SAMPLES"
+    else:
+        status = "PASS"
+    return {
+        "status": status,
+        "minimum_train_samples_per_class": MIN_TRAIN_SAMPLES_PER_CLASS,
+        "minimum_validation_samples_per_class": MIN_VALIDATION_SAMPLES_PER_CLASS,
+        "train_class_counts": train_counts,
+        "validation_class_counts": validation_counts,
+        "missing_train_classes": missing_train,
+        "insufficient_train_classes": insufficient_train,
+        "insufficient_validation_classes": insufficient_validation,
+    }
+
+
+def hierarchical_sample_gate_diagnostics(
+    stage1_train: Series,
+    stage1_validation: Series,
+    stage2_train: Series,
+    stage2_validation: Series,
+) -> dict[str, Any]:
+    """Require adequate support for both classifiers before fitting either one."""
+    stage1 = _binary_gate_diagnostics(
+        stage1_train,
+        stage1_validation,
+        negative_label="NO_HIT",
+        positive_label="HIT",
+    )
+    stage2 = _binary_gate_diagnostics(
+        stage2_train,
+        stage2_validation,
+        negative_label="SELL",
+        positive_label="BUY",
+    )
+    failures = [
+        name for name, gate in (("stage1", stage1), ("stage2", stage2))
+        if gate["status"] != "PASS"
+    ]
+    return {
+        "status": "PASS" if not failures else (
+            "SKIPPED_INSUFFICIENT_CLASS_DIVERSITY"
+            if any(
+                gate["status"] == "SKIPPED_INSUFFICIENT_CLASS_DIVERSITY"
+                for gate in (stage1, stage2)
+            )
+            else "SKIPPED_INSUFFICIENT_SAMPLES"
+        ),
+        "gate_behavior": "BOTH_STAGES_MUST_PASS_BEFORE_ANY_MODEL_FIT",
+        "failed_stages": failures,
+        "minimum_train_samples_per_class": MIN_TRAIN_SAMPLES_PER_CLASS,
+        "minimum_validation_samples_per_class": MIN_VALIDATION_SAMPLES_PER_CLASS,
+        "stage1_hit_classifier": stage1,
+        "stage2_direction_classifier": stage2,
+    }
+
+
+def binary_probability_matrix(model: Any, features: DataFrame) -> np.ndarray:
+    """Return predict_proba columns in numeric class order [0, 1]."""
+    raw = np.asarray(model.predict_proba(features), dtype=float)
+    classes = [int(value) for value in model.classes_]
+    if len(classes) != 2 or set(classes) != {0, 1}:
+        raise ValueError("binary_classifier_probability_classes_invalid")
+    if raw.ndim != 2 or raw.shape != (len(features), 2):
+        raise ValueError("classifier_probability_shape_invalid")
+    ordered = raw[:, [classes.index(0), classes.index(1)]]
+    _validate_probability_values(ordered)
+    return ordered
+
+
+def combine_hierarchical_probabilities(
+    stage1_probabilities: np.ndarray,
+    stage2_probabilities: np.ndarray,
+) -> np.ndarray:
+    """Compose [BUY, SELL, HOLD] from P(HIT) and P(direction | HIT)."""
+    stage1 = np.asarray(stage1_probabilities, dtype=float)
+    stage2 = np.asarray(stage2_probabilities, dtype=float)
+    if (
+        stage1.ndim != 2
+        or stage2.ndim != 2
+        or stage1.shape[1] != 2
+        or stage2.shape[1] != 2
+        or stage1.shape[0] != stage2.shape[0]
+    ):
+        raise ValueError("hierarchical_probability_shape_invalid")
+    _validate_probability_values(stage1)
+    _validate_probability_values(stage2)
+    hit_probability = stage1[:, 1]
+    buy_probability = hit_probability * stage2[:, 1]
+    sell_probability = hit_probability * stage2[:, 0]
+    hold_probability = 1.0 - hit_probability
+    combined = np.column_stack((buy_probability, sell_probability, hold_probability))
+    _validate_probability_values(combined)
+    return combined
+
+
+def _new_binary_classifier(
+    class_weight: str | dict[str, float] | None = "balanced",
+) -> Any:
+    """Load the pinned deterministic binary LightGBM classifier."""
+    lightgbm = importlib.import_module("lightgbm")
+    classifier = getattr(lightgbm, "LGBMClassifier")
+    return classifier(
+        objective="binary",
+        n_estimators=80,
+        learning_rate=0.05,
+        num_leaves=15,
+        max_depth=4,
+        class_weight=class_weight,
+        random_state=42,
+        n_jobs=1,
+        verbosity=-1,
+        deterministic=True,
+        force_col_wise=True,
+    )
+
+
+def _hierarchical_metrics(
+    stage1_train: Series,
+    stage1_validation: Series,
+    stage1_train_prediction: Series,
+    stage1_validation_prediction: Series,
+    stage2_train: Series,
+    stage2_validation: Series,
+    stage2_train_prediction: Series,
+    stage2_validation_prediction: Series,
+    combined_train_actual: Series,
+    combined_validation_actual: Series,
+    combined_train_prediction: Series,
+    combined_validation_prediction: Series,
+) -> dict[str, Any]:
+    return {
+        "stage1_hit_classifier": {
+            "target": STAGE1_TARGET_COLUMN,
+            "class_mapping": {"0": "NO_HIT", "1": "HIT"},
+            "evaluation_scope": "ALL_ELIGIBLE_TRAIN_OR_VALIDATION_ROWS",
+            "train_in_sample": binary_classification_metrics(
+                stage1_train, stage1_train_prediction,
+                negative_label="NO_HIT", positive_label="HIT",
+            ),
+            "validation": binary_classification_metrics(
+                stage1_validation, stage1_validation_prediction,
+                negative_label="NO_HIT", positive_label="HIT",
+            ),
+        },
+        "stage2_direction_classifier": {
+            "target": STAGE2_TARGET_COLUMN,
+            "class_mapping": {"0": "SELL", "1": "BUY"},
+            "condition": "STAGE1_TARGET_EQUALS_1",
+            "evaluation_scope": "ACTUAL_STAGE1_HIT_ROWS_ONLY",
+            "train_samples": int(len(stage2_train)),
+            "validation_samples": int(len(stage2_validation)),
+            "train_in_sample": binary_classification_metrics(
+                stage2_train, stage2_train_prediction,
+                negative_label="SELL", positive_label="BUY",
+            ),
+            "validation": binary_classification_metrics(
+                stage2_validation, stage2_validation_prediction,
+                negative_label="SELL", positive_label="BUY",
+            ),
+        },
+        "combined_three_class": {
+            "class_order": list(LABELS),
+            "evaluation_scope": "ALL_ROWS_USING_PREDICTED_STAGE1_PROBABILITY",
+            "probability_composition": {
+                "P_BUY": "P_HIT * P_BUY_GIVEN_HIT",
+                "P_SELL": "P_HIT * P_SELL_GIVEN_HIT",
+                "P_HOLD": "1 - P_HIT",
+            },
+            "train_in_sample": classification_metrics(
+                combined_train_actual, combined_train_prediction
+            ),
+            "validation": classification_metrics(
+                combined_validation_actual, combined_validation_prediction
+            ),
+        },
+    }
 
 
 def predictions_from_probabilities(
@@ -1103,45 +1373,67 @@ def run_experiment(
     timeframe: str,
     minute_candles: DataFrame,
     *,
-    scenario_name: str = "Baseline",
-    horizon_candles: int = LABEL_HORIZON_CANDLES,
+    scenario_name: str = "Hierarchical_12_Candle",
+    horizon_candles: int = HIERARCHICAL_HORIZON_CANDLES,
     take_profit_multiplier: float = TAKE_PROFIT_MULTIPLIER_DEFAULT,
     stop_loss_multiplier: float = STOP_LOSS_MULTIPLIER_DEFAULT,
     calibration_fraction: float = DEFAULT_CALIBRATION_FRACTION,
     minimum_hold_precision: float = DEFAULT_MINIMUM_HOLD_PRECISION,
     minimum_hold_recall: float = DEFAULT_MINIMUM_HOLD_RECALL,
 ) -> dict[str, Any]:
-    """Fit only None/Balanced policies independently for one barrier scenario."""
+    """Train separate hit and conditional-direction classifiers for V4-E."""
+    if horizon_candles != HIERARCHICAL_HORIZON_CANDLES:
+        raise ValueError("hierarchical_horizon_must_be_12")
     policies = weighting_policy_specs()
     barrier_config = {
-        "horizon_candles": horizon_candles,
+        "horizon_candles": int(horizon_candles),
         "take_profit_multiplier": float(take_profit_multiplier),
         "stop_loss_multiplier": float(stop_loss_multiplier),
     }
     bars = resample_ohlcv(minute_candles, timeframe)
-    labels = apply_adaptive_triple_barrier(
+    labels = apply_adaptive_hierarchical_targets(
         bars,
-        horizon_candles=horizon_candles,
         take_profit_multiplier=take_profit_multiplier,
         stop_loss_multiplier=stop_loss_multiplier,
     )
     if len(bars) < 100:
         result = _insufficient_bar_result(pair, timeframe, bars, labels)
-        result.update({"scenario": scenario_name, "triple_barrier": barrier_config})
+        result.update({
+            "scenario": scenario_name,
+            "triple_barrier": barrier_config,
+            "hierarchical_metrics": None,
+        })
         return result
 
     features = build_causal_feature_matrix(bars)
     train_indices, validation_indices, split_info = purged_temporal_indices(
-        features, labels, horizon_candles=horizon_candles
+        features, labels, horizon_candles=HIERARCHICAL_HORIZON_CANDLES
     )
     train_y = labels.iloc[train_indices]["label"]
     validation_y = labels.iloc[validation_indices]["label"]
-    sample_gate = sample_gate_diagnostics(train_y, validation_y)
+    stage1_train = labels.iloc[train_indices][STAGE1_TARGET_COLUMN].astype(int)
+    stage1_validation = labels.iloc[validation_indices][STAGE1_TARGET_COLUMN].astype(int)
+
+    stage2_train_indices = [
+        index for index in train_indices
+        if labels.iloc[index][STAGE1_TARGET_COLUMN] == 1.0
+    ]
+    stage2_validation_indices = [
+        index for index in validation_indices
+        if labels.iloc[index][STAGE1_TARGET_COLUMN] == 1.0
+    ]
+    stage2_train = labels.iloc[stage2_train_indices][STAGE2_TARGET_COLUMN].astype(int)
+    stage2_validation = labels.iloc[stage2_validation_indices][STAGE2_TARGET_COLUMN].astype(int)
+
+    sample_gate = hierarchical_sample_gate_diagnostics(
+        stage1_train, stage1_validation, stage2_train, stage2_validation
+    )
     base_result: dict[str, Any] = {
         "pair": pair,
         "timeframe": timeframe,
         "scenario": scenario_name,
         "triple_barrier": barrier_config,
+        "target_architecture": "HIERARCHICAL_HIT_THEN_DIRECTION",
         "bar_count": int(len(bars)),
         "train_rows": int(len(train_indices)),
         "validation_rows": int(len(validation_indices)),
@@ -1149,66 +1441,168 @@ def run_experiment(
             "train": label_distribution(train_y),
             "validation": label_distribution(validation_y),
         },
+        "hierarchical_target_distribution": {
+            "train": {
+                "stage1": {
+                    "NO_HIT": int((stage1_train == 0).sum()),
+                    "HIT": int((stage1_train == 1).sum()),
+                },
+                "stage2_hit_rows": {
+                    "SELL": int((stage2_train == 0).sum()),
+                    "BUY": int((stage2_train == 1).sum()),
+                },
+            },
+            "validation": {
+                "stage1": {
+                    "NO_HIT": int((stage1_validation == 0).sum()),
+                    "HIT": int((stage1_validation == 1).sum()),
+                },
+                "stage2_hit_rows": {
+                    "SELL": int((stage2_validation == 0).sum()),
+                    "BUY": int((stage2_validation == 1).sum()),
+                },
+            },
+        },
         "label_audit": label_audit_diagnostics(labels),
         "sample_gate": sample_gate,
         "split": split_info,
+        "stage2_training_rows": int(len(stage2_train_indices)),
+        "stage2_validation_rows": int(len(stage2_validation_indices)),
     }
     if sample_gate["status"] != "PASS":
         result = _skipped_result(
-            pair,
-            timeframe,
-            bars,
-            labels,
-            train_indices,
-            validation_indices,
-            split_info,
-            str(sample_gate["status"]),
-            sample_gate,
+            pair, timeframe, bars, labels, train_indices, validation_indices,
+            split_info, str(sample_gate["status"]), sample_gate,
         )
-        result.update({"scenario": scenario_name, "triple_barrier": barrier_config})
+        result.update({
+            "scenario": scenario_name,
+            "triple_barrier": barrier_config,
+            "target_architecture": "HIERARCHICAL_HIT_THEN_DIRECTION",
+            "hierarchical_target_distribution": base_result["hierarchical_target_distribution"],
+            "stage2_training_rows": int(len(stage2_train_indices)),
+            "stage2_validation_rows": int(len(stage2_validation_indices)),
+            "hierarchical_metrics": None,
+        })
         return result
 
     x_train = features.iloc[train_indices]
     x_validation = features.iloc[validation_indices]
+    x_stage2_train = features.iloc[stage2_train_indices]
+    x_stage2_validation = features.iloc[stage2_validation_indices]
     variants: dict[str, Any] = {}
+
     for name, policy in policies.items():
-        model = _new_classifier(class_weight=policy["class_weight"])
-        model.fit(x_train, train_y)
-        train_probabilities = ordered_probability_matrix(model, x_train)
-        validation_probabilities = ordered_probability_matrix(model, x_validation)
-        train_prediction = predictions_from_probabilities(
-            train_probabilities, train_y.index
+        stage1_model = _new_binary_classifier(class_weight=policy["class_weight"])
+        stage2_model = _new_binary_classifier(class_weight=policy["class_weight"])
+        stage1_model.fit(x_train, stage1_train)
+        stage2_model.fit(x_stage2_train, stage2_train)
+
+        stage1_train_probabilities = binary_probability_matrix(stage1_model, x_train)
+        stage1_validation_probabilities = binary_probability_matrix(
+            stage1_model, x_validation
         )
-        validation_prediction = predictions_from_probabilities(
-            validation_probabilities, validation_y.index
+        stage2_train_actual_probabilities = binary_probability_matrix(
+            stage2_model, x_stage2_train
+        )
+        stage2_validation_actual_probabilities = binary_probability_matrix(
+            stage2_model, x_stage2_validation
+        )
+        stage2_train_all_probabilities = binary_probability_matrix(stage2_model, x_train)
+        stage2_validation_all_probabilities = binary_probability_matrix(
+            stage2_model, x_validation
+        )
+
+        stage1_train_prediction = Series(
+            np.argmax(stage1_train_probabilities, axis=1),
+            index=stage1_train.index,
+            dtype=int,
+        )
+        stage1_validation_prediction = Series(
+            np.argmax(stage1_validation_probabilities, axis=1),
+            index=stage1_validation.index,
+            dtype=int,
+        )
+        stage2_train_prediction = Series(
+            np.argmax(stage2_train_actual_probabilities, axis=1),
+            index=stage2_train.index,
+            dtype=int,
+        )
+        stage2_validation_prediction = Series(
+            np.argmax(stage2_validation_actual_probabilities, axis=1),
+            index=stage2_validation.index,
+            dtype=int,
+        )
+
+        combined_train_probabilities = combine_hierarchical_probabilities(
+            stage1_train_probabilities, stage2_train_all_probabilities
+        )
+        combined_validation_probabilities = combine_hierarchical_probabilities(
+            stage1_validation_probabilities, stage2_validation_all_probabilities
+        )
+        combined_train_prediction = predictions_from_probabilities(
+            combined_train_probabilities, train_y.index
+        )
+        combined_validation_prediction = predictions_from_probabilities(
+            combined_validation_probabilities, validation_y.index
+        )
+        hierarchical_metrics = _hierarchical_metrics(
+            stage1_train,
+            stage1_validation,
+            stage1_train_prediction,
+            stage1_validation_prediction,
+            stage2_train,
+            stage2_validation,
+            stage2_train_prediction,
+            stage2_validation_prediction,
+            train_y,
+            validation_y,
+            combined_train_prediction,
+            combined_validation_prediction,
         )
         threshold_diagnostics = threshold_optimization_diagnostics(
             validation_y,
-            validation_probabilities,
+            combined_validation_probabilities,
             calibration_fraction=calibration_fraction,
             minimum_precision=minimum_hold_precision,
             minimum_recall=minimum_hold_recall,
         )
         variants[name] = {
-            "model_parameters": {"class_weight": policy["class_weight"]},
+            "model_parameters": {
+                "architecture": "HIERARCHICAL_HIT_THEN_DIRECTION",
+                "stage1": {
+                    "objective": "binary",
+                    "class_weight": policy["class_weight"],
+                    "fit_scope": "ALL_ELIGIBLE_TRAIN_ROWS",
+                },
+                "stage2": {
+                    "objective": "binary",
+                    "class_weight": policy["class_weight"],
+                    "fit_scope": "STAGE1_TARGET_EQUALS_1_ONLY",
+                },
+            },
+            "hierarchical_metrics": hierarchical_metrics,
             "classification_metrics": {
-                "train_in_sample": classification_metrics(train_y, train_prediction),
+                "train_in_sample": classification_metrics(
+                    train_y, combined_train_prediction
+                ),
                 "validation": classification_metrics(
-                    validation_y, validation_prediction
+                    validation_y, combined_validation_prediction
                 ),
             },
             **validation_classification_diagnostics(
-                validation_y, validation_prediction
+                validation_y, combined_validation_prediction
             ),
-            "hold_metrics": hold_class_metrics(validation_y, validation_prediction),
+            "hold_metrics": hold_class_metrics(
+                validation_y, combined_validation_prediction
+            ),
             "probability_diagnostics": probability_diagnostics_by_temporal_segment(
                 validation_y,
-                validation_probabilities,
+                combined_validation_probabilities,
                 calibration_fraction=calibration_fraction,
             ),
             "threshold_optimization": threshold_diagnostics,
             "validation_probabilities": _serialize_validation_probabilities(
-                bars, validation_indices, validation_y, validation_probabilities
+                bars, validation_indices, validation_y, combined_validation_probabilities
             ),
         }
 
@@ -1222,12 +1616,17 @@ def run_experiment(
             **baseline_validation_diagnostics(validation_y, always_sell_prediction),
         },
         "lightgbm_unweighted": {
-            "baseline_type": "lightgbm",
+            "baseline_type": "lightgbm_hierarchical",
             "model_variant": "weight_none",
-            "model_parameters": {"class_weight": None},
-            "classification_metrics": unweighted["classification_metrics"][
-                "validation"
-            ],
+            "model_parameters": {
+                "architecture": "HIERARCHICAL_HIT_THEN_DIRECTION",
+                "stage1_objective": "binary",
+                "stage2_objective": "binary",
+                "class_weight": None,
+            },
+            "class_weight": None,
+            "hierarchical_metrics": unweighted["hierarchical_metrics"],
+            "classification_metrics": unweighted["classification_metrics"]["validation"],
             "confusion_matrix": unweighted["confusion_matrix"],
             "prediction_distribution": unweighted["prediction_distribution"],
         },
@@ -1244,6 +1643,7 @@ def run_experiment(
         **base_result,
         "status": "TRAINED",
         "classification_metrics": balanced["classification_metrics"],
+        "hierarchical_metrics": balanced["hierarchical_metrics"],
         "confusion_matrix": balanced["confusion_matrix"],
         "prediction_distribution": balanced["prediction_distribution"],
         "hold_metrics": balanced["hold_metrics"],
@@ -1257,6 +1657,8 @@ def run_experiment(
             "caveat": "Single chronological split; diagnostic heuristic, not a statistical proof.",
         },
     }
+
+
 
 
 def _load_manifested_data(
@@ -1571,11 +1973,43 @@ def _render_probability_diagnostics_section(
     return lines
 
 
+
+def _render_hierarchical_metrics_section(
+    experiments: list[dict[str, Any]],
+) -> list[str]:
+    """Render per-stage and composed validation Precision/Recall/F1."""
+    lines = [
+        "### V4-E hierarchical metrics",
+        "",
+        "| Pair | TF | Stage 1 Hit F1 | Stage 1 Hit Precision | Stage 1 Hit Recall | Stage 2 Direction F1 | Stage 2 Direction Precision | Stage 2 Direction Recall | Combined F1 | Combined Precision | Combined Recall | Stage 2 n |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+    ]
+    for item in experiments:
+        hierarchical = item.get("hierarchical_metrics")
+        if not hierarchical:
+            lines.append(
+                f"| {item['pair']} | {item['timeframe']} | N/A | N/A | N/A | "
+                f"N/A | N/A | N/A | N/A | N/A | N/A | {item.get('stage2_validation_rows', 0)} |"
+            )
+            continue
+        stage1 = hierarchical["stage1_hit_classifier"]["validation"]["macro"]
+        stage2 = hierarchical["stage2_direction_classifier"]["validation"]["macro"]
+        combined = hierarchical["combined_three_class"]["validation"]["macro"]
+        lines.append(
+            f"| {item['pair']} | {item['timeframe']} "
+            f"| {stage1['f1']:.4f} | {stage1['precision']:.4f} | {stage1['recall']:.4f} "
+            f"| {stage2['f1']:.4f} | {stage2['precision']:.4f} | {stage2['recall']:.4f} "
+            f"| {combined['f1']:.4f} | {combined['precision']:.4f} | {combined['recall']:.4f} "
+            f"| {hierarchical['stage2_direction_classifier']['validation_samples']} |"
+        )
+    return lines
+
+
 def render_markdown(report: dict[str, Any]) -> str:
     """Render classification diagnostics for the GitHub Actions summary."""
     experiments = report["experiments"]
     lines = [
-        "## AliX real-data diagnostic baseline",
+        "## AliX V4-E hierarchical real-data diagnostic",
         "",
         f"Commit SHA: {report['commit_sha']}",
         "",
@@ -1583,6 +2017,7 @@ def render_markdown(report: dict[str, Any]) -> str:
         "",
     ]
     lines.extend(_render_label_distribution_section(experiments))
+    lines.extend(["", *_render_hierarchical_metrics_section(experiments)])
     lines.extend(["", *_render_macro_metrics_section(experiments)])
     lines.extend(["", *_render_classwise_metrics_section(experiments)])
     lines.extend(["", *_render_weighting_metrics_section(experiments)])
@@ -1681,7 +2116,7 @@ def _validate_barrier_scenarios(
 
 
 def _default_barrier_scenarios() -> list[dict[str, Any]]:
-    """Return the requested Baseline and Short_Horizon defaults."""
+    """Return the fixed 12-candle V4-E hierarchical scenario."""
     return [
         {
             "name": name,
@@ -1749,9 +2184,9 @@ def _build_diagnostic_report(
     minimum_hold_recall: float,
     policy_specs: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
-    """Construct the v5 report for independently trained barrier scenarios."""
+    """Construct the v6 report for the two-stage hierarchical target."""
     trained_experiments = sum(item["status"] == "TRAINED" for item in experiments)
-    trained_models = sum(len(item["model_variants"] or {}) for item in experiments)
+    trained_models = sum(2 * len(item["model_variants"] or {}) for item in experiments)
     return {
         "schema_version": REPORT_SCHEMA,
         "commit_sha": commit_sha,
@@ -1769,7 +2204,9 @@ def _build_diagnostic_report(
                 "ALIX_DIAGNOSTIC_FALLBACK_REASON", "NONE"
             ),
             "policy": (
-                "Fetch the configured window in validated pages of at most 1,000 "
+                "V4-E hierarchical classification only; features use causal history "
+                "and target labels are bounded to 12 future candles. Fetch the configured "
+                "window in validated pages of at most 1,000 "
                 "one-minute candles with a 0.25-second delay; reject gaps and never "
                 "shorten the requested window or synthesize missing candles."
             ),
@@ -1779,7 +2216,33 @@ def _build_diagnostic_report(
         "sample_gate_policy": {
             "minimum_train_samples_per_class": MIN_TRAIN_SAMPLES_PER_CLASS,
             "minimum_validation_samples_per_class": MIN_VALIDATION_SAMPLES_PER_CLASS,
-            "required_classes": list(LABELS),
+            "stage1_required_classes": ["NO_HIT", "HIT"],
+            "stage2_required_classes": ["SELL", "BUY"],
+            "required_classes": {
+                "stage1": ["NO_HIT", "HIT"],
+                "stage2": ["SELL", "BUY"],
+            },
+            "gate_behavior": "BOTH_STAGES_MUST_PASS_BEFORE_ANY_MODEL_FIT",
+        },
+        "hierarchical_target_policy": {
+            "architecture": "HIERARCHICAL_HIT_THEN_DIRECTION",
+            "horizon_candles": HIERARCHICAL_HORIZON_CANDLES,
+            "stage1_target_column": STAGE1_TARGET_COLUMN,
+            "stage1_semantics": {
+                "1": "TP_OR_SL_FIRST_TOUCHED_WITHIN_CANDLES_1_TO_12",
+                "0": "NO_HIT_BY_CANDLE_12_INCLUDING_ANY_LATER_HIT_AT_13_TO_24",
+                "unlabeled": list(UNLABELED_REASONS),
+            },
+            "stage2_target_column": STAGE2_TARGET_COLUMN,
+            "stage2_condition": "STAGE1_TARGET_EQUALS_1",
+            "stage2_mapping": {"1": "BUY_TP_HIT", "0": "SELL_SL_HIT_OR_COLLISION"},
+            "stage2_no_hit_value": None,
+            "collision_policy": "STOP_LOSS_WINS_AND_IS_MAPPED_TO_SELL",
+            "inference_probabilities": {
+                "P_BUY": "P_HIT * P_BUY_GIVEN_HIT",
+                "P_SELL": "P_HIT * P_SELL_GIVEN_HIT",
+                "P_HOLD": "1 - P_HIT",
+            },
         },
         "label_audit_policy": {
             "exit_reason_values": list(EXIT_REASONS),
@@ -1795,7 +2258,11 @@ def _build_diagnostic_report(
         "labels": list(LABELS),
         "triple_barrier_scenarios": barrier_scenarios,
         "model": {
-            "family": "LightGBM LGBMClassifier",
+            "family": "Two LightGBM LGBMClassifier binary models per weighting policy",
+            "architecture": "HIERARCHICAL_HIT_THEN_DIRECTION",
+            "stage1_objective": "binary",
+            "stage2_objective": "binary",
+            "models_per_weighting_policy": 2,
             "n_estimators": 80,
             "learning_rate": 0.05,
             "max_depth": 4,
@@ -1842,7 +2309,11 @@ def _build_diagnostic_report(
                 "metrics_scope": "VALIDATION_ONLY",
             },
             "lightgbm_unweighted": {
-                "family": "LightGBM LGBMClassifier",
+                "family": "Two LightGBM LGBMClassifier binary models",
+                "architecture": "HIERARCHICAL_HIT_THEN_DIRECTION",
+                "stage1_objective": "binary",
+                "stage2_objective": "binary",
+                "models_per_weighting_policy": 2,
                 "n_estimators": 80,
                 "learning_rate": 0.05,
                 "max_depth": 4,
@@ -1856,6 +2327,7 @@ def _build_diagnostic_report(
             "validation_start_fraction": VALIDATION_START_FRACTION,
             "validation_end_fraction": VALIDATION_END_FRACTION,
             "chronological_training_only": True,
+            "label_horizon_candles": HIERARCHICAL_HORIZON_CANDLES,
             "label_window_purge": "actual_label_end_idx_overlap",
             "pre_validation_embargo": "exact_label_horizon_candles",
             "post_validation_embargo": "exact_label_horizon_candles",

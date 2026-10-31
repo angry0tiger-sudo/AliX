@@ -11,6 +11,12 @@ from pandas import DataFrame, Series
 from scripts.run_ml_core_real_data_baseline import (
     _build_diagnostic_report,
     _new_classifier,
+    _new_binary_classifier,
+    binary_probability_matrix,
+    binary_classification_metrics,
+    combine_hierarchical_probabilities,
+    hierarchical_sample_gate_diagnostics,
+    _default_barrier_scenarios,
     _validate_barrier_scenarios,
     baseline_validation_diagnostics,
     classification_metrics,
@@ -606,3 +612,184 @@ def test_probability_metrics_use_disjoint_calibration_and_forward_rows() -> None
     assert result["calibration"]["sample_count"] == 20
     assert result["forward_validation"]["sample_count"] == 80
     assert result["calibration_overlap"] is False
+
+
+
+def test_binary_classifier_factory_uses_deterministic_binary_objective(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[dict[str, object]] = []
+
+    class FakeClassifier:
+        def __init__(self, **kwargs: object) -> None:
+            captured.append(kwargs)
+
+    monkeypatch.setattr(
+        "scripts.run_ml_core_real_data_baseline.importlib.import_module",
+        lambda _: SimpleNamespace(LGBMClassifier=FakeClassifier),
+    )
+    _new_binary_classifier()
+    _new_binary_classifier(class_weight=None)
+    assert captured[0]["objective"] == "binary"
+    assert captured[0]["class_weight"] == "balanced"
+    assert captured[1]["class_weight"] is None
+    assert captured[0]["random_state"] == 42
+
+
+def test_binary_probability_matrix_reorders_classes_to_zero_one() -> None:
+    class FakeModel:
+        classes_ = np.asarray([1, 0])
+
+        @staticmethod
+        def predict_proba(_: DataFrame) -> np.ndarray:
+            return np.asarray([[0.7, 0.3], [0.2, 0.8]])
+
+    probabilities = binary_probability_matrix(
+        FakeModel(), DataFrame({"feature": [1.0, 2.0]})
+    )
+    assert probabilities.tolist() == pytest.approx([[0.3, 0.7], [0.8, 0.2]])
+
+
+def test_hierarchical_probability_composition_is_normalized() -> None:
+    stage1 = np.asarray([[0.0, 0.8], [0.0, 0.3]])
+    stage2 = np.asarray([[0.25, 0.75], [0.6, 0.4]])
+    result = combine_hierarchical_probabilities(stage1, stage2)
+    assert result.tolist() == pytest.approx([[0.60, 0.20, 0.20], [0.12, 0.18, 0.70]])
+    assert result.sum(axis=1).tolist() == pytest.approx([1.0, 1.0])
+
+
+@pytest.mark.parametrize(
+    "stage1,stage2",
+    [
+        (np.asarray([[0.5, 0.5]]), np.asarray([[1.0, 0.0], [0.0, 1.0]])),
+        (np.asarray([[0.5, 0.5, 0.0]]), np.asarray([[1.0, 0.0]])),
+    ],
+)
+def test_hierarchical_probability_composition_rejects_invalid_shapes(
+    stage1: np.ndarray, stage2: np.ndarray
+) -> None:
+    with pytest.raises(ValueError, match="hierarchical_probability_shape_invalid"):
+        combine_hierarchical_probabilities(stage1, stage2)
+
+
+def test_binary_metrics_report_precision_recall_f1_for_each_stage() -> None:
+    actual = Series([0, 0, 1, 1])
+    predicted = Series([0, 1, 1, 1])
+    result = binary_classification_metrics(
+        actual, predicted, negative_label="NO_HIT", positive_label="HIT"
+    )
+    assert result["per_class"]["NO_HIT"]["support"] == 2
+    assert result["macro"]["precision"] == pytest.approx(0.833333, abs=1e-6)
+    assert result["macro"]["recall"] == pytest.approx(0.75, abs=1e-6)
+    assert result["macro"]["f1"] == pytest.approx(0.733333, abs=1e-6)
+
+
+def test_hierarchical_sample_gate_requires_both_stage_two_classes() -> None:
+    stage1_train = Series([0] * 30 + [1] * 30)
+    stage1_validation = Series([0] * 35 + [1] * 35)
+    stage2_train = Series([0] * 19 + [1] * 25)
+    stage2_validation = Series([0] * 31 + [1] * 31)
+    failed = hierarchical_sample_gate_diagnostics(
+        stage1_train, stage1_validation, stage2_train, stage2_validation
+    )
+    assert failed["status"] == "SKIPPED_INSUFFICIENT_SAMPLES"
+    assert failed["stage2_direction_classifier"]["insufficient_train_classes"] == ["SELL"]
+
+    passed = hierarchical_sample_gate_diagnostics(
+        stage1_train, stage1_validation,
+        Series([0] * 20 + [1] * 25),
+        stage2_validation,
+    )
+    assert passed["status"] == "PASS"
+
+
+def test_default_scenario_is_exactly_one_12_candle_hierarchical_target() -> None:
+    scenarios = _default_barrier_scenarios()
+    assert len(scenarios) == 1
+    assert scenarios[0] == {
+        "name": "Hierarchical_12_Candle",
+        "horizon_candles": 12,
+        "take_profit_multiplier": 2.0,
+        "stop_loss_multiplier": 1.0,
+    }
+
+
+def test_run_experiment_fits_both_binary_models_and_reports_all_stage_metrics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    frame = minute_frame(15 * 15)
+    bars = resample_ohlcv(frame, "15m")
+    # Create repeated, deterministic first hits in the 12-candle label horizon.
+    for index in range(1, len(bars), 4):
+        if index < len(bars):
+            bars.loc[index, "high"] = bars.loc[index, "close"] + 3.0
+    monkeypatch.setattr(
+        "scripts.run_ml_core_real_data_baseline.resample_ohlcv",
+        lambda _candles, _timeframe: bars,
+    )
+    monkeypatch.setattr(
+        "scripts.run_ml_core_real_data_baseline.build_causal_feature_matrix",
+        lambda data: DataFrame(
+            {
+                "feature_a": np.linspace(0.0, 1.0, len(data)),
+                "feature_b": np.linspace(1.0, 0.0, len(data)),
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        "scripts.run_ml_core_real_data_baseline.purged_temporal_indices",
+        lambda features, labels, *, horizon_candles: (
+            list(range(0, 100)),
+            list(range(120, 190)),
+            {"status": "PASS", "embargo_size_bars": horizon_candles},
+        ),
+    )
+    fits: list[int] = []
+
+    class FakeBinaryClassifier:
+        def __init__(self, class_weight: str | None) -> None:
+            self.class_weight = class_weight
+
+        def fit(self, x: DataFrame, y: Series) -> None:
+            fits.append(len(x))
+            assert len(x) == len(y)
+            self.classes_ = np.asarray([0, 1])
+
+        def predict_proba(self, x: DataFrame) -> np.ndarray:
+            hit = 0.45 if self.class_weight is None else 0.5
+            return np.tile(np.asarray([[1.0 - hit, hit]]), (len(x), 1))
+
+    monkeypatch.setattr(
+        "scripts.run_ml_core_real_data_baseline._new_binary_classifier",
+        lambda class_weight: FakeBinaryClassifier(class_weight),
+    )
+    # Ensure both hit and no-hit samples are abundant in both splits.
+    monkeypatch.setattr(
+        "scripts.run_ml_core_real_data_baseline.apply_adaptive_hierarchical_targets",
+        lambda data, **kwargs: DataFrame(
+            {
+                "label": ["BUY" if i % 4 == 0 else "SELL" if i % 4 == 1 else "HOLD" for i in range(len(data))],
+                "exit_reason": ["TP_HIT" if i % 4 == 0 else "SL_HIT" if i % 4 == 1 else "HORIZON_EXPIRY" for i in range(len(data))],
+                "unlabeled_reason": [None] * len(data),
+                "label_end_idx": [min(i + 12, len(data) - 1) for i in range(len(data))],
+                STAGE1_TARGET_COLUMN: [1.0 if i % 4 in (0, 1) else 0.0 for i in range(len(data))],
+                STAGE2_TARGET_COLUMN: [1.0 if i % 4 == 0 else 0.0 if i % 4 == 1 else np.nan for i in range(len(data))],
+            }
+        ),
+    )
+    # Fake classifier training is intentionally test-only; no real estimator is constructed.
+    result = run_experiment(
+        "BTC/USDT",
+        "15m",
+        frame,
+        scenario_name="Hierarchical_12_Candle",
+        horizon_candles=12,
+    )
+    assert result["status"] == "TRAINED"
+    assert len(fits) == 4  # two stages times two existing weighting policies
+    assert result["hierarchical_metrics"]["stage1_hit_classifier"]["validation"]
+    assert result["hierarchical_metrics"]["stage2_direction_classifier"]["validation"]
+    assert result["hierarchical_metrics"]["combined_three_class"]["validation"]
+    for variant in result["model_variants"].values():
+        for row in variant["validation_probabilities"]:
+            assert sum(row["probabilities"].values()) == pytest.approx(1.0, abs=1e-5)

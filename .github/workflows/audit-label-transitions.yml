@@ -1,10 +1,11 @@
-name: AliX V4-D Label Transition Audit
+name: AliX V4-D/V4-E Label Transition Audit
 
 on:
   workflow_dispatch:
   push:
     branches:
       - research/ml-core-v4d-label-semantics
+      - research/ml-core-v4e-hierarchical-target
 
 permissions:
   actions: read
@@ -16,7 +17,7 @@ concurrency:
 
 jobs:
   audit-label-transitions:
-    if: github.ref == 'refs/heads/research/ml-core-v4d-label-semantics'
+    if: github.ref == 'refs/heads/research/ml-core-v4d-label-semantics' || github.ref == 'refs/heads/research/ml-core-v4e-hierarchical-target'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
@@ -27,21 +28,101 @@ jobs:
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Checkout the V4-D research commit without persisted credentials
+      - name: Checkout the selected V4-D/V4-E research commit without persisted credentials
         uses: actions/checkout@v4
         with:
           persist-credentials: false
 
-      - name: Confirm research branch and audit-only safety scope
+      - name: Confirm selected research branch and audit-only safety scope
         run: |
           set -euo pipefail
-          test "$GITHUB_REF" = "refs/heads/research/ml-core-v4d-label-semantics"
+          case "$GITHUB_REF" in
+            "refs/heads/research/ml-core-v4d-label-semantics"|"refs/heads/research/ml-core-v4e-hierarchical-target") ;;
+            *) echo "unsupported_audit_branch:$GITHUB_REF" >&2; exit 1 ;;
+          esac
           test -n "$GITHUB_SHA"
           printf 'commit_sha=%s\n' "$GITHUB_SHA"
           printf 'scope=LABEL_TRANSITION_AUDIT_ONLY\n'
           printf 'model_training_performed=false\n'
           printf 'private_api_calls=0\nreal_order_attempts=0\n'
           printf 'trading_authorization=NO-GO\n'
+
+      - name: Require standard CI success for this exact research commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          TARGET_SHA: ${{ github.sha }}
+          TARGET_BRANCH: ${{ github.ref_name }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import time
+          from urllib.error import HTTPError, URLError
+          from urllib.request import Request, urlopen
+
+          repository = os.environ["GITHUB_REPOSITORY"]
+          target_sha = os.environ["TARGET_SHA"]
+          target_branch = os.environ["TARGET_BRANCH"]
+          token = os.environ["GH_TOKEN"]
+          deadline = time.monotonic() + 90 * 60
+          url = (
+              f"https://api.github.com/repos/{repository}/actions/workflows/ci.yml/runs"
+              f"?head_sha={target_sha}&per_page=100"
+          )
+
+          while time.monotonic() < deadline:
+              request = Request(
+                  url,
+                  headers={
+                      "Accept": "application/vnd.github+json",
+                      "Authorization": f"Bearer {token}",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  },
+              )
+              try:
+                  with urlopen(request, timeout=20) as response:
+                      payload = json.load(response)
+              except (HTTPError, URLError, TimeoutError) as error:
+                  raise SystemExit(
+                      f"ci_status_lookup_failed:{type(error).__name__}"
+                  ) from None
+
+              matching = [
+                  run for run in payload.get("workflow_runs", [])
+                  if run.get("head_sha") == target_sha
+                  and run.get("head_branch") == target_branch
+                  and run.get("event") == "push"
+              ]
+              if matching:
+                  latest = max(
+                      matching,
+                      key=lambda item: (
+                          item.get("run_number", 0),
+                          item.get("run_attempt", 0),
+                      ),
+                  )
+                  if latest.get("status") == "completed":
+                      if latest.get("conclusion") != "success":
+                          raise SystemExit(
+                              "ci_green_gate_blocked:"
+                              + str(latest.get("conclusion"))
+                              + ":"
+                              + target_sha
+                          )
+                      print(json.dumps({
+                          "gate": "PASS",
+                          "target_sha": target_sha,
+                          "ci_run_id": latest.get("id"),
+                          "ci_run_url": latest.get("html_url"),
+                          "ci_conclusion": latest.get("conclusion"),
+                          "model_training_performed": False,
+                      }, sort_keys=True))
+                      break
+              time.sleep(30)
+          else:
+              raise SystemExit("ci_green_gate_timeout:" + target_sha)
+          PY
 
       - name: Set up pinned Python
         uses: actions/setup-python@v5

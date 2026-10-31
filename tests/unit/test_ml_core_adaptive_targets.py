@@ -13,6 +13,10 @@ from services.ml_core.adaptive_targets import (
     K_LOWER_DEFAULT,
     K_UPPER_DEFAULT,
     LABEL_HORIZON_CANDLES,
+    HIERARCHICAL_HORIZON_CANDLES,
+    STAGE1_TARGET_COLUMN,
+    STAGE2_TARGET_COLUMN,
+    apply_adaptive_hierarchical_targets,
     apply_adaptive_triple_barrier,
     calculate_atr,
 )
@@ -230,3 +234,60 @@ def test_new_barrier_parameters_reject_invalid_values() -> None:
         apply_adaptive_triple_barrier(
             candles, atr_values=atr, stop_loss_multiplier=float("inf")
         )
+
+
+
+def test_hierarchical_stage1_and_stage2_map_tp_hit_to_buy() -> None:
+    candles = market_frame(20)
+    candles.loc[12, "high"] = 103.0
+    targets = apply_adaptive_hierarchical_targets(
+        candles, atr_values=constant_atr(candles, 1.0)
+    )
+    assert HIERARCHICAL_HORIZON_CANDLES == 12
+    assert targets.iloc[0]["label"] == "BUY"
+    assert targets.iloc[0]["exit_reason"] == "TP_HIT"
+    assert targets.iloc[0][STAGE1_TARGET_COLUMN] == 1.0
+    assert targets.iloc[0][STAGE2_TARGET_COLUMN] == 1.0
+
+
+def test_hierarchical_sl_and_collision_map_to_sell_direction() -> None:
+    candles = market_frame(20)
+    candles.loc[4, "low"] = 98.0
+    candles.loc[6, "high"] = 103.0
+    candles.loc[6, "low"] = 98.0
+    targets = apply_adaptive_hierarchical_targets(
+        candles, atr_values=constant_atr(candles, 1.0)
+    )
+    assert targets.iloc[3][STAGE1_TARGET_COLUMN] == 1.0
+    assert targets.iloc[3][STAGE2_TARGET_COLUMN] == 0.0
+    assert targets.iloc[5]["exit_reason"] == "COLLISION"
+    assert targets.iloc[5][STAGE1_TARGET_COLUMN] == 1.0
+    assert targets.iloc[5][STAGE2_TARGET_COLUMN] == 0.0
+
+
+@pytest.mark.parametrize("late_offset", [13, 24])
+def test_hierarchical_late_hit_is_no_hit_at_the_12_candle_boundary(
+    late_offset: int,
+) -> None:
+    candles = market_frame(30)
+    candles.loc[late_offset, "high"] = 103.0
+    targets = apply_adaptive_hierarchical_targets(
+        candles, atr_values=constant_atr(candles, 1.0)
+    )
+    assert targets.iloc[0]["label"] == "HOLD"
+    assert targets.iloc[0]["exit_reason"] == "HORIZON_EXPIRY"
+    assert targets.iloc[0]["label_end_idx"] == 12
+    assert targets.iloc[0][STAGE1_TARGET_COLUMN] == 0.0
+    assert np.isnan(targets.iloc[0][STAGE2_TARGET_COLUMN])
+
+
+def test_hierarchical_no_hit_is_zero_and_incomplete_tail_is_unlabeled() -> None:
+    candles = market_frame(20)
+    targets = apply_adaptive_hierarchical_targets(
+        candles, atr_values=constant_atr(candles, 1.0)
+    )
+    assert targets.iloc[1][STAGE1_TARGET_COLUMN] == 0.0
+    assert np.isnan(targets.iloc[1][STAGE2_TARGET_COLUMN])
+    assert np.isnan(targets.iloc[-1][STAGE1_TARGET_COLUMN])
+    assert np.isnan(targets.iloc[-1][STAGE2_TARGET_COLUMN])
+    assert targets.iloc[-1]["unlabeled_reason"] == "incomplete_horizon"

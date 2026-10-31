@@ -4,7 +4,7 @@ The default target geometry is absolute-price ATR(14): TP = 2 * ATR and
 SL = 1 * ATR over the next 24 candles. Horizon and both barrier multipliers
 are explicit per-run inputs. When TP and SL are both touched on one candle,
 stop-loss wins. Incomplete ATR history or future horizon is left unlabeled.
-This module does not create features, train models, or place orders.
+V4-E adds separate 12-candle hierarchical hit and conditional-direction targets. This module does not create features, train models, or place orders.
 """
 
 from __future__ import annotations
@@ -20,6 +20,9 @@ ATR_PERIOD: Final[int] = 14
 TAKE_PROFIT_MULTIPLIER_DEFAULT: Final[float] = 2.0
 STOP_LOSS_MULTIPLIER_DEFAULT: Final[float] = 1.0
 LABEL_HORIZON_CANDLES: Final[int] = 24
+HIERARCHICAL_HORIZON_CANDLES: Final[int] = 12
+STAGE1_TARGET_COLUMN: Final[str] = "stage1_hit_target"
+STAGE2_TARGET_COLUMN: Final[str] = "stage2_direction_target"
 # Backward-compatible constant aliases.
 K_UPPER_DEFAULT: Final[float] = TAKE_PROFIT_MULTIPLIER_DEFAULT
 K_LOWER_DEFAULT: Final[float] = STOP_LOSS_MULTIPLIER_DEFAULT
@@ -375,3 +378,48 @@ def apply_adaptive_triple_barrier(
         for event_index in range(len(normalized))
     ]
     return DataFrame.from_records(records, columns=list(_RESULT_COLUMNS))
+
+
+
+def apply_adaptive_hierarchical_targets(
+    candles: DataFrame,
+    *,
+    atr_values: pd.Series | None = None,
+    atr_period: int = ATR_PERIOD,
+    take_profit_multiplier: float = TAKE_PROFIT_MULTIPLIER_DEFAULT,
+    stop_loss_multiplier: float = STOP_LOSS_MULTIPLIER_DEFAULT,
+) -> DataFrame:
+    """Create V4-E 12-candle hit and conditional-direction targets.
+
+    Stage 1 is 1 when TP or SL is first touched within candles 1..12, and 0
+    when the complete 12-candle window expires without a hit. Any later hit
+    in candles 13..24 remains Stage 1 = 0 because it was not observable at
+    the 12-candle decision boundary.
+
+    Stage 2 is 1 for BUY/TP_HIT and 0 for SELL/SL_HIT or COLLISION, but is
+    NaN whenever Stage 1 is not 1. The existing stop-loss-wins collision
+    policy is preserved. Incomplete horizons and invalid ATR warm-up rows
+    remain unlabeled in both stages.
+    """
+    outcomes = apply_adaptive_triple_barrier(
+        candles,
+        atr_values=atr_values,
+        atr_period=atr_period,
+        horizon_candles=HIERARCHICAL_HORIZON_CANDLES,
+        take_profit_multiplier=take_profit_multiplier,
+        stop_loss_multiplier=stop_loss_multiplier,
+    )
+    labels = outcomes["label"]
+    complete = labels.isin(("BUY", "SELL", "HOLD"))
+    hit = labels.isin(("BUY", "SELL"))
+
+    stage1 = pd.Series(np.nan, index=outcomes.index, dtype=float)
+    stage1.loc[complete] = hit.loc[complete].astype(float)
+
+    stage2 = pd.Series(np.nan, index=outcomes.index, dtype=float)
+    stage2.loc[hit & labels.eq("BUY")] = 1.0
+    stage2.loc[hit & labels.eq("SELL")] = 0.0
+
+    outcomes[STAGE1_TARGET_COLUMN] = stage1
+    outcomes[STAGE2_TARGET_COLUMN] = stage2
+    return outcomes

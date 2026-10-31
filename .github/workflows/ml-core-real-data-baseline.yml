@@ -1,61 +1,15 @@
-name: AliX ML Core Real-Data Diagnostic Baseline
+name: AliX V4-E Hierarchical Real-Data Baseline
 
 on:
   workflow_dispatch:
     inputs:
-      baseline_horizon_candles:
-        description: "Baseline Triple-Barrier horizon in candles"
-        type: number
-        required: false
-        default: 24
-      baseline_take_profit_multiplier:
-        description: "Baseline take-profit ATR multiplier"
+      take_profit_multiplier:
+        description: "12-candle take-profit ATR multiplier"
         type: number
         required: false
         default: 2.0
-      baseline_stop_loss_multiplier:
-        description: "Baseline stop-loss ATR multiplier"
-        type: number
-        required: false
-        default: 1.0
-      short_horizon_candles:
-        description: "Short_Horizon Triple-Barrier horizon in candles"
-        type: number
-        required: false
-        default: 12
-      short_take_profit_multiplier:
-        description: "Short_Horizon take-profit ATR multiplier"
-        type: number
-        required: false
-        default: 2.0
-      short_stop_loss_multiplier:
-        description: "Short_Horizon stop-loss ATR multiplier"
-        type: number
-        required: false
-        default: 1.0
-  workflow_call:
-    inputs:
-      baseline_horizon_candles:
-        type: number
-        required: false
-        default: 24
-      baseline_take_profit_multiplier:
-        type: number
-        required: false
-        default: 2.0
-      baseline_stop_loss_multiplier:
-        type: number
-        required: false
-        default: 1.0
-      short_horizon_candles:
-        type: number
-        required: false
-        default: 12
-      short_take_profit_multiplier:
-        type: number
-        required: false
-        default: 2.0
-      short_stop_loss_multiplier:
+      stop_loss_multiplier:
+        description: "12-candle stop-loss ATR multiplier"
         type: number
         required: false
         default: 1.0
@@ -64,12 +18,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: alix-ml-core-real-data-baseline
+  group: alix-v4e-hierarchical-real-data-baseline
   cancel-in-progress: false
 
 jobs:
   diagnostic-classification:
-    if: github.ref == 'refs/heads/research/ml-core-rebuild'
+    if: github.ref == 'refs/heads/research/ml-core-v4e-hierarchical-target'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
@@ -79,18 +33,23 @@ jobs:
       ALIx_REPORTING_ENABLED: "false"
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
     steps:
-      - name: Checkout the selected research commit without persisted credentials
+      - name: Checkout the V4-E research commit without persisted credentials
         uses: actions/checkout@v4
         with:
           persist-credentials: false
 
-      - name: Confirm branch and safety scope
+      - name: Confirm V4-E branch, target contract, and safety scope
         run: |
-          test "$GITHUB_REF" = "refs/heads/research/ml-core-rebuild"
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/research/ml-core-v4e-hierarchical-target"
           test -n "$GITHUB_SHA"
           printf 'commit_sha=%s\n' "$GITHUB_SHA"
           printf 'scope=DIAGNOSTIC_CLASSIFICATION_ONLY\n'
-          printf 'real_order_attempts=0\nprivate_api_calls=0\n'
+          printf 'target_architecture=HIERARCHICAL_HIT_THEN_DIRECTION\n'
+          printf 'target_horizon_candles=12\n'
+          printf 'model_training_performed=false_until_this_manual_workflow_runs\n'
+          printf 'private_api_calls=0\nreal_order_attempts=0\n'
+          printf 'trading_authorization=NO-GO\n'
 
       - name: Set up pinned Python
         uses: actions/setup-python@v5
@@ -103,16 +62,14 @@ jobs:
           python -m pip install pip==25.2
           python -m pip install numpy==2.5.4 pandas==2.3.3 scikit-learn==1.9.0 lightgbm==4.7.0
 
-      # Binance Spot public klines are fetched in validated 1,000-candle pages.
-      # Missing or partial pages fail closed; no shorter window or synthetic fill.
-      - name: Fetch complete Binance public candles with pagination
+      - name: Fetch complete Binance public 1-minute candles
         run: |
           set -euo pipefail
-          data_dir="$RUNNER_TEMP/alix-real-market-data"
+          data_dir="$RUNNER_TEMP/alix-v4e-market-data"
           rm -rf "$data_dir"
           mkdir -p "$data_dir"
           for symbol in BTCUSDT ETHUSDT; do
-            log_path="$RUNNER_TEMP/binance-fetch-730-${symbol}.log"
+            log_path="$RUNNER_TEMP/v4e-fetch-730-${symbol}.log"
             if python scripts/fetch_binance_public_ohlcv.py \
               --days 730 \
               --symbol "$symbol" \
@@ -122,109 +79,77 @@ jobs:
               cat "$log_path"
             else
               cat "$log_path"
-              echo "Binance fetcher failed for ${symbol}; refusing to train on incomplete real-market data." >&2
+              echo "Binance fetch failed for ${symbol}; refusing partial data." >&2
               exit 1
             fi
           done
           echo "ALIX_DIAGNOSTIC_DAYS=730" >> "$GITHUB_ENV"
           echo "ALIX_DIAGNOSTIC_CONFIGURED_DAYS=730" >> "$GITHUB_ENV"
           echo "ALIX_DIAGNOSTIC_FALLBACK_REASON=NONE" >> "$GITHUB_ENV"
-          printf 'selected_complete_days=730\n'
-          printf 'provider=Binance Spot public klines API\n'
-          printf 'fetch_page_size_candles=1000\n'
-          printf 'inter_page_delay_seconds=0.25\n'
-          printf 'fallback_reason=NONE\n'
 
-      - name: Train independent Baseline and Short_Horizon model grids
+      - name: Train V4-E hierarchical 12-candle diagnostics
         run: |
           python -m scripts.run_ml_core_real_data_baseline \
-            --input-dir "$RUNNER_TEMP/alix-real-market-data" \
-            --output "$GITHUB_WORKSPACE/alix-real-data-classification-report.json" \
+            --input-dir "$RUNNER_TEMP/alix-v4e-market-data" \
+            --output "$GITHUB_WORKSPACE/alix-v4e-hierarchical-classification-report.json" \
             --days "$ALIX_DIAGNOSTIC_DAYS" \
             --commit-sha "$GITHUB_SHA" \
-            --scenario "Baseline:${{ inputs.baseline_horizon_candles }}:${{ inputs.baseline_take_profit_multiplier }}:${{ inputs.baseline_stop_loss_multiplier }}" \
-            --scenario "Short_Horizon:${{ inputs.short_horizon_candles }}:${{ inputs.short_take_profit_multiplier }}:${{ inputs.short_stop_loss_multiplier }}" \
+            --scenario "Hierarchical_12_Candle:12:${{ inputs.take_profit_multiplier }}:${{ inputs.stop_loss_multiplier }}" \
             --calibration-fraction 0.20 \
             --minimum-hold-precision 0.40 \
             --minimum-hold-recall 0.20
 
-      - name: Validate classification-only report and safety invariants
+      - name: Validate V4-E hierarchical report and safety invariants
         run: |
           python - <<'PY'
           import json
           import os
           from pathlib import Path
 
-          report_path = Path("alix-real-data-classification-report.json")
-          report = json.loads(report_path.read_text(encoding="utf-8"))
+          report = json.loads(
+              Path("alix-v4e-hierarchical-classification-report.json").read_text(
+                  encoding="utf-8"
+              )
+          )
+          assert report["schema_version"] == "alix.ml-core.real-data-classification-diagnostic.v6"
           assert report["commit_sha"] == os.environ["GITHUB_SHA"]
           assert report["diagnostic_scope"] == "CLASSIFICATION_ONLY"
-          assert report["schema_version"] == "alix.ml-core.real-data-classification-diagnostic.v5"
           assert report["economic_evaluation_performed"] is False
           assert report["economic_metrics_reported"] is False
-          assert report["requested_days"] == int(os.environ["ALIX_DIAGNOSTIC_DAYS"])
-          window = report["data_window_selection"]
-          assert window["configured_days"] == 730
-          assert window["selected_days"] == report["requested_days"]
-          assert window["fallback_reason"] == os.environ["ALIX_DIAGNOSTIC_FALLBACK_REASON"]
-          assert report["requested_days"] == 730
-          assert report["experiment_count"] == 16
-          assert report["triple_barrier_scenarios"] == [
-              {
-                  "name": "Baseline",
-                  "horizon_candles": int("${{ inputs.baseline_horizon_candles }}"),
-                  "take_profit_multiplier": float("${{ inputs.baseline_take_profit_multiplier }}"),
-                  "stop_loss_multiplier": float("${{ inputs.baseline_stop_loss_multiplier }}"),
-              },
-              {
-                  "name": "Short_Horizon",
-                  "horizon_candles": int("${{ inputs.short_horizon_candles }}"),
-                  "take_profit_multiplier": float("${{ inputs.short_take_profit_multiplier }}"),
-                  "stop_loss_multiplier": float("${{ inputs.short_stop_loss_multiplier }}"),
-              },
-          ]
-          assert {item["scenario"] for item in report["experiments"]} == {
-              "Baseline", "Short_Horizon"
+          assert report["experiment_count"] == 8
+          assert report["triple_barrier_scenarios"] == [{
+              "name": "Hierarchical_12_Candle",
+              "horizon_candles": 12,
+              "take_profit_multiplier": float("${{ inputs.take_profit_multiplier }}"),
+              "stop_loss_multiplier": float("${{ inputs.stop_loss_multiplier }}"),
+          }]
+          policy = report["hierarchical_target_policy"]
+          assert policy["horizon_candles"] == 12
+          assert policy["stage1_target_column"] == "stage1_hit_target"
+          assert policy["stage1_semantics"]["1"] == "TP_OR_SL_FIRST_TOUCHED_WITHIN_CANDLES_1_TO_12"
+          assert policy["stage1_semantics"]["0"] == "NO_HIT_BY_CANDLE_12_INCLUDING_ANY_LATER_HIT_AT_13_TO_24"
+          assert policy["stage2_target_column"] == "stage2_direction_target"
+          assert policy["stage2_condition"] == "STAGE1_TARGET_EQUALS_1"
+          assert policy["stage2_mapping"] == {"1": "BUY_TP_HIT", "0": "SELL_SL_HIT_OR_COLLISION"}
+          assert policy["stage2_no_hit_value"] is None
+          assert policy["inference_probabilities"] == {
+              "P_BUY": "P_HIT * P_BUY_GIVEN_HIT",
+              "P_SELL": "P_HIT * P_SELL_GIVEN_HIT",
+              "P_HOLD": "1 - P_HIT",
           }
-          assert all(
-              item["split"]["embargo_size_bars"]
-              == item["triple_barrier"]["horizon_candles"]
+          gate_policy = report["sample_gate_policy"]
+          assert gate_policy["stage1_required_classes"] == ["NO_HIT", "HIT"]
+          assert gate_policy["stage2_required_classes"] == ["SELL", "BUY"]
+          assert gate_policy["minimum_train_samples_per_class"] == 20
+          assert gate_policy["minimum_validation_samples_per_class"] == 30
+          assert gate_policy["gate_behavior"] == "BOTH_STAGES_MUST_PASS_BEFORE_ANY_MODEL_FIT"
+          assert report["model"]["architecture"] == "HIERARCHICAL_HIT_THEN_DIRECTION"
+          assert report["model"]["stage1_objective"] == "binary"
+          assert report["model"]["stage2_objective"] == "binary"
+          assert report["trained_models"] == sum(
+              2 * len(item["model_variants"] or {})
               for item in report["experiments"]
           )
-          assert {item["pair"] for item in report["experiments"]} == {"BTC/USDT", "ETH/USDT"}
-          assert {item["timeframe"] for item in report["experiments"]} == {"15m", "30m", "1h", "4h"}
-          assert len(report["input_datasets"]) == 2
-          for dataset in report["input_datasets"]:
-              assert dataset["requested_days"] == 730
-              assert dataset["row_count"] == 730 * 24 * 60
-              assert dataset["missing_minute_intervals"] == 0
-              assert dataset["fetch_page_size_candles"] == 1000
-              assert dataset["inter_page_delay_seconds"] == 0.25
-          assert report["data_window_selection"]["fetch_page_size_candles"] == 1000
-          assert report["data_window_selection"]["inter_page_delay_seconds"] == 0.25
-          assert report["sample_gate_policy"]["minimum_train_samples_per_class"] == 20
-          assert report["sample_gate_policy"]["minimum_validation_samples_per_class"] == 30
-          assert report["sample_gate_policy"]["required_classes"] == ["BUY", "SELL", "HOLD"]
-          assert report["label_audit_policy"]["exit_reason_values"] == [
-              "TP_HIT", "SL_HIT", "COLLISION", "HORIZON_EXPIRY"
-          ]
-          assert report["label_audit_policy"]["unlabeled_reason_values"] == [
-              "insufficient_atr_history", "incomplete_horizon"
-          ]
-          assert report["baseline_comparisons"]["always_sell"]["predicted_label"] == "SELL"
-          assert report["baseline_comparisons"]["lightgbm_unweighted"]["class_weight"] is None
-          weighting = report["weighting_policy"]
-          assert set(weighting["policies"]) == {"weight_none", "weight_balanced"}
-          assert weighting["policies"]["weight_none"]["class_weight"] is None
-          assert weighting["policies"]["weight_balanced"]["class_weight"] == "balanced"
-          assert weighting["excluded_policy"] == "weight_intermediate"
-          calibration_policy = report["calibration_policy"]
-          assert calibration_policy["fraction_of_validation"] == 0.20
-          assert calibration_policy["temporal_position"] == (
-              "FIRST_CHRONOLOGICAL_SEGMENT_OF_VALIDATION"
-          )
-          assert calibration_policy["minimum_hold_precision"] == 0.40
-          assert calibration_policy["minimum_hold_recall"] == 0.20
           allowed_statuses = {
               "TRAINED",
               "SKIPPED_INSUFFICIENT_SAMPLES",
@@ -232,156 +157,59 @@ jobs:
           }
           assert all(item["status"] in allowed_statuses for item in report["experiments"])
           for item in report["experiments"]:
-              assert isinstance(item["train_rows"], int) and item["train_rows"] >= 0
-              assert isinstance(item["validation_rows"], int) and item["validation_rows"] >= 0
-              audit = item["label_audit"]
-              assert audit["scope"] == "ALL_TARGET_BARS_BEFORE_SPLIT"
-              assert audit["exit_reason_distribution"]["total"] == audit["labeled_events"]
-              assert sum(
-                  value["count"]
-                  for value in audit["exit_reason_distribution"]["reasons"].values()
-              ) == audit["labeled_events"]
-              assert set(audit["exit_reason_distribution"]["reasons"]) == {
-                  "TP_HIT", "SL_HIT", "COLLISION", "HORIZON_EXPIRY"
-              }
-              assert audit["unlabeled_reason_distribution"]["total"] == audit["unlabeled_events"]
-              gate = item["sample_gate"]
-              assert gate["minimum_train_samples_per_class"] == 20
-              assert gate["minimum_validation_samples_per_class"] == 30
-              assert set(gate["train_class_counts"] or {}) in (set(), {"BUY", "SELL", "HOLD"})
+              assert item["triple_barrier"]["horizon_candles"] == 12
+              assert item["sample_gate"]["gate_behavior"] == "BOTH_STAGES_MUST_PASS_BEFORE_ANY_MODEL_FIT"
               if item["status"] == "TRAINED":
-                  assert gate["status"] == "PASS"
-                  assert item["classification_metrics"] is not None
-                  confusion = item["confusion_matrix"]
-                  assert confusion["labels"] == ["BUY", "SELL", "HOLD"]
-                  assert confusion["rows_are"] == "actual"
-                  assert confusion["columns_are"] == "predicted"
-                  assert len(confusion["matrix"]) == 3
-                  assert all(len(row) == 3 for row in confusion["matrix"])
-                  assert sum(sum(row) for row in confusion["matrix"]) == item["validation_rows"]
-                  predictions = item["prediction_distribution"]
-                  assert predictions["total"] == item["validation_rows"]
-                  assert set(predictions["classes"]) == {"BUY", "SELL", "HOLD"}
-                  assert sum(value["count"] for value in predictions["classes"].values()) == item["validation_rows"]
-                  comparisons = item["baseline_comparisons"]
-                  assert set(comparisons) == {"always_sell", "lightgbm_unweighted"}
-                  always_sell = comparisons["always_sell"]
-                  assert always_sell["classification_metrics"] is not None
-                  assert always_sell["prediction_distribution"]["total"] == item["validation_rows"]
-                  assert always_sell["prediction_distribution"]["classes"]["SELL"]["count"] == item["validation_rows"]
-                  assert always_sell["prediction_distribution"]["classes"]["BUY"]["count"] == 0
-                  assert always_sell["prediction_distribution"]["classes"]["HOLD"]["count"] == 0
-                  unweighted = comparisons["lightgbm_unweighted"]
-                  assert unweighted["model_parameters"]["class_weight"] is None
-                  assert unweighted["classification_metrics"] is not None
-                  assert unweighted["prediction_distribution"]["total"] == item["validation_rows"]
-                  variants = item["model_variants"]
-                  assert set(variants) == {"weight_none", "weight_balanced"}
-                  for variant in variants.values():
-                      diagnostic = variant["probability_diagnostics"]
-                      assert set(diagnostic) == {
-                          "calibration", "forward_validation",
-                          "calibration_fraction", "calibration_overlap"
-                      }
-                      assert diagnostic["calibration_overlap"] is False
-                      for segment in ("calibration", "forward_validation"):
-                          values = diagnostic[segment]
-                          assert values["sample_count"] > 0
-                          assert set(values["brier_score"]) == {"multiclass", "hold_binary"}
-                          assert set(values["ece"]) == {
-                              "multiclass_macro", "hold_binary", "per_class",
-                              "bin_count", "binning"
-                          }
-                          assert values["ece"]["bin_count"] == 10
-                          assert values["hold_auc"] is None or 0.0 <= values["hold_auc"] <= 1.0
-                          assert values["hold_pr_auc"] is None or 0.0 <= values["hold_pr_auc"] <= 1.0
+                  assert item["sample_gate"]["status"] == "PASS"
+                  assert set(item["model_variants"]) == {"weight_none", "weight_balanced"}
+                  assert item["hierarchical_metrics"] is not None
+                  assert set(item["hierarchical_metrics"]) == {
+                      "stage1_hit_classifier",
+                      "stage2_direction_classifier",
+                      "combined_three_class",
+                  }
+                  assert item["hierarchical_metrics"]["stage2_direction_classifier"]["evaluation_scope"] == "ACTUAL_STAGE1_HIT_ROWS_ONLY"
+                  assert item["hierarchical_metrics"]["combined_three_class"]["evaluation_scope"] == "ALL_ROWS_USING_PREDICTED_STAGE1_PROBABILITY"
+                  assert item["stage2_training_rows"] < item["train_rows"]
+                  assert item["stage2_validation_rows"] < item["validation_rows"]
+                  for variant in item["model_variants"].values():
+                      assert variant["model_parameters"]["stage1"]["objective"] == "binary"
+                      assert variant["model_parameters"]["stage2"]["objective"] == "binary"
                       assert variant["classification_metrics"]["validation"] is not None
-                      assert variant["prediction_distribution"]["total"] == item["validation_rows"]
-                      probabilities = variant["validation_probabilities"]
-                      assert len(probabilities) == item["validation_rows"]
-                      assert all(
-                          set(row["probabilities"]) == {"BUY", "SELL", "HOLD"}
-                          and row["actual_label"] in {"BUY", "SELL", "HOLD"}
-                          and abs(sum(row["probabilities"].values()) - 1.0) < 1e-5
-                          and all(0.0 <= value <= 1.0 for value in row["probabilities"].values())
-                          for row in probabilities
-                      )
-                      threshold = variant["threshold_optimization"]
-                      assert threshold["status"] in {
-                          "SELECTED",
-                          "NO_FEASIBLE_THRESHOLD",
-                          "SKIPPED_INSUFFICIENT_CALIBRATION_SAMPLES",
-                      }
-                      assert threshold["constraints"]["minimum_hold_precision"] == 0.40
-                      assert threshold["constraints"]["minimum_hold_recall"] == 0.20
-                      assert threshold["calibration"]["temporal_position"] == (
-                          "FIRST_CHRONOLOGICAL_SEGMENT_OF_VALIDATION"
-                      )
-                      forward = threshold["post_calibration_validation"]
-                      assert (
-                          threshold["calibration"]["row_count"]
-                          + (
-                              forward["row_count"]
-                              if forward is not None
-                              else item["validation_rows"] - threshold["calibration"]["row_count"]
-                          )
-                          == item["validation_rows"]
-                      )
-                      if threshold["status"] == "SELECTED":
-                          assert 0.0 <= threshold["selected_threshold"] <= 1.0
-                          selected = threshold["calibration"]["selected_calibration_metrics"]["hold_metrics"]
-                          assert selected["precision"] >= 0.40
-                          assert selected["recall"] >= 0.20
-                          assert forward["calibration_overlap"] is False
-                          assert threshold["full_validation_including_calibration"]["calibration_overlap"] is True
-                      else:
-                          assert threshold["selected_threshold"] is None
-                          assert forward is None
-                          assert threshold["full_validation_including_calibration"] is None
+                      assert len(variant["validation_probabilities"]) == item["validation_rows"]
+                      for row in variant["validation_probabilities"]:
+                          probs = row["probabilities"]
+                          assert set(probs) == {"BUY", "SELL", "HOLD"}
+                          assert abs(sum(probs.values()) - 1.0) < 1e-5
+                          assert all(0.0 <= value <= 1.0 for value in probs.values())
               else:
                   assert item["model_variants"] is None
-                  assert item["threshold_optimization"] is None
-                  assert item["classification_metrics"] is None
-                  assert item["confusion_matrix"] is None
-                  assert item["prediction_distribution"] is None
-                  assert item["baseline_comparisons"] is None
-                  assert gate["status"] in {"NOT_EVALUATED", item["status"]}
-          four_hour = [item for item in report["experiments"] if item["timeframe"] == "4h"]
-          assert len(four_hour) == 4
-          for item in four_hour:
-              if item["status"] == "SKIPPED_INSUFFICIENT_SAMPLES":
-                  assert item["sample_gate"]["status"] == "SKIPPED_INSUFFICIENT_SAMPLES"
-          assert report["trained_models"] == sum(
-              len(item["model_variants"] or {}) for item in report["experiments"]
-          )
+                  assert item["hierarchical_metrics"] is None
+                  assert item["sample_gate"]["status"] == item["status"]
           safety = report["safety"]
-          assert safety["public_api_only"] is True
-          assert safety["credentials_used"] is False
-          assert safety["private_api_calls"] == 0
-          assert safety["real_order_attempts"] == 0
-          assert safety["orders_or_execution_api_used"] is False
           assert safety["Champion"] is None
           assert safety["order_permission"] is False
+          assert safety["private_api_calls"] == 0
+          assert safety["real_order_attempts"] == 0
           assert safety["trading_authorization"] == "NO-GO"
+          assert safety["orders_or_execution_api_used"] is False
           print(json.dumps({
-              "commit_sha": report["commit_sha"],
-              "requested_days": report["requested_days"],
+              "schema_version": report["schema_version"],
               "experiments": report["experiment_count"],
               "trained_models": report["trained_models"],
-              "economic_evaluation_performed": False,
+              "model_training_performed": True,
+              "Champion": None,
+              "trading_authorization": "NO-GO",
               "private_api_calls": 0,
               "real_order_attempts": 0,
-              "Champion": None,
-              "order_permission": False,
-              "trading_authorization": "NO-GO",
           }, sort_keys=True))
           PY
 
-      - name: Upload classification-only diagnostic report
+      - name: Upload V4-E hierarchical diagnostic report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: alix-real-data-classification-diagnostic
-          path: alix-real-data-classification-report.json
+          name: alix-v4e-hierarchical-classification-diagnostic
+          path: alix-v4e-hierarchical-classification-report.json
           if-no-files-found: warn
           retention-days: 14
