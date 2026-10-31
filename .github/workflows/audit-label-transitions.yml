@@ -1,11 +1,10 @@
-name: AliX V4-D/V4-E Label Transition Audit
+name: AliX V4-D Label Transition Audit
 
 on:
   workflow_dispatch:
   push:
     branches:
       - research/ml-core-v4d-label-semantics
-      - research/ml-core-v4e-hierarchical-target
 
 permissions:
   actions: read
@@ -17,7 +16,7 @@ concurrency:
 
 jobs:
   audit-label-transitions:
-    if: github.ref == 'refs/heads/research/ml-core-v4d-label-semantics' || github.ref == 'refs/heads/research/ml-core-v4e-hierarchical-target'
+    if: github.ref == 'refs/heads/research/ml-core-v4d-label-semantics'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
@@ -28,7 +27,7 @@ jobs:
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Checkout the selected V4-D/V4-E research commit without persisted credentials
+      - name: Checkout the selected V4-D research commit without persisted credentials
         uses: actions/checkout@v4
         with:
           persist-credentials: false
@@ -37,12 +36,12 @@ jobs:
         run: |
           set -euo pipefail
           case "$GITHUB_REF" in
-            "refs/heads/research/ml-core-v4d-label-semantics"|"refs/heads/research/ml-core-v4e-hierarchical-target") ;;
+            "refs/heads/research/ml-core-v4d-label-semantics") ;;
             *) echo "unsupported_audit_branch:$GITHUB_REF" >&2; exit 1 ;;
           esac
           test -n "$GITHUB_SHA"
           printf 'commit_sha=%s\n' "$GITHUB_SHA"
-          printf 'scope=LABEL_TRANSITION_AUDIT_ONLY\n'
+          printf 'scope=V4_D_LABEL_TRANSITION_AUDIT_ONLY\n'
           printf 'model_training_performed=false\n'
           printf 'private_api_calls=0\nreal_order_attempts=0\n'
           printf 'trading_authorization=NO-GO\n'

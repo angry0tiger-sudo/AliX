@@ -1,0 +1,274 @@
+name: AliX V4-E Hierarchical Target Audit
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - research/ml-core-v4e-hierarchical-target
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: alix-v4e-hierarchical-target-audit
+  cancel-in-progress: false
+
+jobs:
+  audit-hierarchical-targets:
+    if: github.ref == 'refs/heads/research/ml-core-v4e-hierarchical-target'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      ALIx_ENV: paper
+      ALIx_DRY_RUN: "true"
+      ALIx_ALLOW_LIVE_TRADING: "false"
+      ALIx_REPORTING_ENABLED: "false"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Require standard CI success for this exact V4-E research commit
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          TARGET_SHA: ${{ github.sha }}
+          TARGET_BRANCH: ${{ github.ref_name }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import time
+          from urllib.error import HTTPError, URLError
+          from urllib.request import Request, urlopen
+
+          repository = os.environ["GITHUB_REPOSITORY"]
+          target_sha = os.environ["TARGET_SHA"]
+          target_branch = os.environ["TARGET_BRANCH"]
+          token = os.environ["GH_TOKEN"]
+          if target_branch != "research/ml-core-v4e-hierarchical-target":
+              raise SystemExit("unsupported_v4e_audit_branch:" + target_branch)
+          deadline = time.monotonic() + 90 * 60
+          url = (
+              f"https://api.github.com/repos/{repository}/actions/workflows/ci.yml/runs"
+              f"?head_sha={target_sha}&per_page=100"
+          )
+
+          while time.monotonic() < deadline:
+              request = Request(
+                  url,
+                  headers={
+                      "Accept": "application/vnd.github+json",
+                      "Authorization": f"Bearer {token}",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  },
+              )
+              try:
+                  with urlopen(request, timeout=20) as response:
+                      payload = json.load(response)
+              except (HTTPError, URLError, TimeoutError) as error:
+                  raise SystemExit(
+                      f"ci_status_lookup_failed:{type(error).__name__}"
+                  ) from None
+
+              matching = [
+                  run for run in payload.get("workflow_runs", [])
+                  if run.get("head_sha") == target_sha
+                  and run.get("head_branch") == target_branch
+                  and run.get("event") == "push"
+              ]
+              if matching:
+                  latest = max(
+                      matching,
+                      key=lambda item: (
+                          item.get("run_number", 0),
+                          item.get("run_attempt", 0),
+                      ),
+                  )
+                  if latest.get("status") == "completed":
+                      if latest.get("conclusion") != "success":
+                          raise SystemExit(
+                              "ci_green_gate_blocked:"
+                              + str(latest.get("conclusion"))
+                              + ":"
+                              + target_sha
+                          )
+                      print(json.dumps({
+                          "gate": "PASS",
+                          "target_sha": target_sha,
+                          "ci_run_id": latest.get("id"),
+                          "ci_run_url": latest.get("html_url"),
+                          "ci_conclusion": latest.get("conclusion"),
+                          "model_training_performed": False,
+                      }, sort_keys=True))
+                      break
+              time.sleep(30)
+          else:
+              raise SystemExit("ci_green_gate_timeout:" + target_sha)
+          PY
+
+      - name: Checkout the exact V4-E research commit without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Confirm V4-E branch and audit-only safety scope
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/research/ml-core-v4e-hierarchical-target"
+          test -n "$GITHUB_SHA"
+          printf 'commit_sha=%s\n' "$GITHUB_SHA"
+          printf 'scope=V4_E_HIERARCHICAL_TARGET_CONTRACT_ONLY\n'
+          printf 'model_training_performed=false\n'
+          printf 'feature_matrix_built=false\n'
+          printf 'private_api_calls=0\nreal_order_attempts=0\n'
+          printf 'Champion=null\norder_permission=false\n'
+          printf 'trading_authorization=NO-GO\n'
+
+      - name: Set up pinned Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install pinned audit-only numerical dependencies
+        run: |
+          python -m pip install pip==25.2
+          python -m pip install numpy==2.5.4 pandas==2.3.3
+
+      - name: Fetch complete Binance public 1-minute candles
+        run: |
+          set -euo pipefail
+          data_dir="$RUNNER_TEMP/alix-v4e-target-audit-data"
+          rm -rf "$data_dir"
+          mkdir -p "$data_dir"
+          for symbol in BTCUSDT ETHUSDT; do
+            log_path="$RUNNER_TEMP/v4e-target-audit-$symbol.log"
+            if python scripts/fetch_binance_public_ohlcv.py \
+              --days 730 \
+              --symbol "$symbol" \
+              --interval 1m \
+              --output-dir "$data_dir" \
+              --commit-sha "$GITHUB_SHA" >"$log_path" 2>&1; then
+              cat "$log_path"
+            else
+              cat "$log_path"
+              echo "Binance public data fetch failed for $symbol; refusing partial input." >&2
+              exit 1
+            fi
+          done
+          echo "ALIX_V4E_TARGET_AUDIT_DATA_DIR=$data_dir" >> "$GITHUB_ENV"
+
+      - name: Audit V4-E hierarchical targets across all allowed entry timeframes
+        run: |
+          python -m scripts.audit_ml_core_v4e_hierarchical_targets \
+            --input-dir "$ALIX_V4E_TARGET_AUDIT_DATA_DIR" \
+            --output "$GITHUB_WORKSPACE/alix-v4e-hierarchical-target-audit.json" \
+            --days 730 \
+            --commit-sha "$GITHUB_SHA"
+
+      - name: Validate V4-E target audit schema and safety invariants
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          report = json.loads(
+              Path("alix-v4e-hierarchical-target-audit.json").read_text(
+                  encoding="utf-8"
+              )
+          )
+          assert report["schema_version"] == (
+              "alix.ml-core.hierarchical-target-audit.v1"
+          )
+          assert report["commit_sha"] == os.environ["GITHUB_SHA"]
+          assert report["audit_scope"] == "V4_E_HIERARCHICAL_TARGET_CONTRACT_ONLY"
+          assert report["requested_days"] == 730
+          assert report["experiment_count"] == 8
+          assert report["allowed_entry_timeframes"] == ["15m", "30m", "1h", "4h"]
+          assert report["target_architecture"] == "HIERARCHICAL_HIT_THEN_DIRECTION"
+          assert report["target_horizon_candles"] == 12
+          assert report["model_training_performed"] is False
+          assert report["feature_matrix_built"] is False
+          assert report["economic_evaluation_performed"] is False
+          assert report["production_target_modified"] is False
+          indexed = {item["symbol"]: item for item in report["input_datasets"]}
+          assert set(indexed) == {"BTCUSDT", "ETHUSDT"}
+          for item in indexed.values():
+              assert item["requested_days"] == 730
+              assert item["row_count"] == 730 * 24 * 60
+              assert item["missing_minute_intervals"] == 0
+              assert item["public_api_only"] is True
+              assert item["credentials_used"] is False
+              assert item["private_api_calls"] == 0
+              assert item["real_order_attempts"] == 0
+              assert len(item["csv_sha256"]) == 64
+              assert len(item["manifest_sha256"]) == 64
+          expected = {
+              (pair, timeframe)
+              for pair in ("BTC/USDT", "ETH/USDT")
+              for timeframe in ("15m", "30m", "1h", "4h")
+          }
+          observed = {
+              (item["pair"], item["timeframe"])
+              for item in report["experiments"]
+          }
+          assert observed == expected
+          assert all(
+              item["target_contract_status"] == "PASS"
+              and item["maximum_observed_label_offset"] <= 12
+              for item in report["experiments"]
+          )
+          safety = report["safety"]
+          assert safety["Champion"] is None
+          assert safety["order_permission"] is False
+          assert safety["private_api_calls"] == 0
+          assert safety["real_order_attempts"] == 0
+          assert safety["orders_or_execution_api_used"] is False
+          assert safety["trading_authorization"] == "NO-GO"
+          print(json.dumps({
+              "schema_version": report["schema_version"],
+              "experiment_count": report["experiment_count"],
+              "late_hit_transition_count_13_to_24": report[
+                  "late_hit_transition_count_13_to_24"
+              ],
+              "model_training_performed": False,
+              "Champion": None,
+              "trading_authorization": "NO-GO",
+          }, sort_keys=True))
+          PY
+
+      - name: Publish compact target audit summary
+        run: |
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          from pathlib import Path
+
+          report = json.loads(
+              Path("alix-v4e-hierarchical-target-audit.json").read_text(
+                  encoding="utf-8"
+              )
+          )
+          print("## V4-E Hierarchical Target Audit")
+          print()
+          print(f"- Commit: `{report['commit_sha']}`")
+          print(f"- Experiments: {report['experiment_count']}")
+          print(
+              "- Late hits at candles 13-24 correctly remaining No-Hit: "
+              f"{report['late_hit_transition_count_13_to_24']}"
+          )
+          print("- Model training: false")
+          print("- Trading authorization: NO-GO")
+          print()
+          print("```json")
+          print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
+          print("```")
+          PY
+
+      - name: Upload V4-E hierarchical target audit artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alix-v4e-hierarchical-target-audit
+          path: alix-v4e-hierarchical-target-audit.json
+          if-no-files-found: warn
+          retention-days: 14
