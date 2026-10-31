@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import pandas as pd
 from pandas import DataFrame
 
 from scripts.run_ml_core_real_data_baseline import (
