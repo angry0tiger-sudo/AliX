@@ -255,7 +255,7 @@ def _nullable_values_match(actual: pd.Series, expected: np.ndarray) -> bool:
 
 def _validate_label_end_indices(targets: DataFrame) -> int:
     maximum_offset = 0
-    for index, row in targets.iterrows():
+    for position, (_, row) in enumerate(targets.iterrows()):
         label = row["label"]
         end_value = row["label_end_idx"]
         reason = row["unlabeled_reason"]
@@ -268,7 +268,7 @@ def _validate_label_end_indices(targets: DataFrame) -> int:
         end_number = float(end_value)
         if not np.isfinite(end_number) or not end_number.is_integer():
             raise ValueError("hierarchical_label_end_index_invalid")
-        offset = int(end_number) - int(index)
+        offset = int(end_number) - position
         if offset < 1 or offset > HIERARCHICAL_HORIZON_CANDLES:
             raise ValueError("hierarchical_label_end_index_out_of_horizon")
         if label == "HOLD" and offset != HIERARCHICAL_HORIZON_CANDLES:
@@ -281,16 +281,16 @@ def _validate_label_end_indices(targets: DataFrame) -> int:
 
 def _count_late_hits(short_targets: DataFrame, long_targets: DataFrame) -> int:
     late_count = 0
-    for index, row in long_targets.iterrows():
+    for position, (_, row) in enumerate(long_targets.iterrows()):
         if row["label"] not in ("BUY", "SELL"):
             continue
         end_value = row["label_end_idx"]
         if pd.isna(end_value):
             raise ValueError("legacy_hit_end_index_missing")
-        offset = int(end_value) - int(index)
+        offset = int(end_value) - position
         if offset < 1 or offset > LABEL_HORIZON_CANDLES:
             raise ValueError("legacy_hit_end_index_out_of_horizon")
-        short = short_targets.iloc[index]
+        short = short_targets.iloc[position]
         if offset <= HIERARCHICAL_HORIZON_CANDLES:
             if short["label"] != row["label"] or short["label_end_idx"] != end_value:
                 raise ValueError("hierarchical_early_hit_mismatch")
@@ -298,7 +298,7 @@ def _count_late_hits(short_targets: DataFrame, long_targets: DataFrame) -> int:
             if (
                 short["label"] != "HOLD"
                 or short["exit_reason"] != "HORIZON_EXPIRY"
-                or short["label_end_idx"] != index + HIERARCHICAL_HORIZON_CANDLES
+                or short["label_end_idx"] != position + HIERARCHICAL_HORIZON_CANDLES
             ):
                 raise ValueError("hierarchical_late_hit_must_remain_no_hit")
             late_count += 1

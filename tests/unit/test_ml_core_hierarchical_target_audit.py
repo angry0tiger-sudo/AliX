@@ -10,6 +10,7 @@ import pytest
 from pandas import DataFrame
 
 from services.ml_core import hierarchical_target_audit as audit
+from services.ml_core.adaptive_targets import apply_adaptive_hierarchical_targets
 from services.ml_core.hierarchical_target_audit import (
     audit_hierarchical_targets,
     load_manifested_dataset,
@@ -197,7 +198,9 @@ def test_minute_frame_rejects_schema_count_gap_and_invalid_values() -> None:
         audit._validate_minute_frame(minute_frame(20), expected_rows=21)
 
     frame = minute_frame(20)
-    frame.loc[10, "date"] = frame.loc[10, "date"] + pd.Timedelta(seconds=30)
+    frame.loc[10, "date"] = pd.Timestamp(frame["date"].iloc[10]) + pd.Timedelta(
+        seconds=30
+    )
     with pytest.raises(ValueError, match="public_data_minute_gap_detected"):
         audit._validate_minute_frame(frame, expected_rows=20)
 
@@ -261,7 +264,7 @@ def test_hierarchical_audit_confirms_late_hits_remain_no_hit() -> None:
 def test_hierarchical_audit_fails_closed_on_stage1_and_stage2_mismatch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    original = audit.apply_adaptive_hierarchical_targets
+    original = apply_adaptive_hierarchical_targets
 
     def broken_stage1(candles: DataFrame) -> DataFrame:
         result = original(candles)

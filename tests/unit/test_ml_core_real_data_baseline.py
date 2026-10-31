@@ -729,7 +729,10 @@ def test_run_experiment_fits_both_binary_models_and_reports_all_stage_metrics(
     # Create repeated, deterministic first hits in the 12-candle label horizon.
     for index in range(1, len(bars), 4):
         if index < len(bars):
-            bars.loc[index, "high"] = bars.loc[index, "close"] + 3.0
+            close_price = pd.to_numeric(bars["close"], errors="coerce").to_numpy(
+                dtype=float
+            )[index]
+            bars.loc[index, "high"] = close_price + 3.0
     monkeypatch.setattr(
         "scripts.run_ml_core_real_data_baseline.resample_ohlcv",
         lambda _candles, _timeframe: bars,
