@@ -1,0 +1,298 @@
+name: AliX V4-D Label Transition Audit
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: alix-v4d-label-transition-audit
+  cancel-in-progress: false
+
+jobs:
+  audit-label-transitions:
+    if: github.ref == 'refs/heads/research/ml-core-v4d-label-semantics'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      ALIx_ENV: paper
+      ALIx_DRY_RUN: "true"
+      ALIx_ALLOW_LIVE_TRADING: "false"
+      ALIx_REPORTING_ENABLED: "false"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout the V4-D research commit without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Confirm research branch and audit-only safety scope
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/research/ml-core-v4d-label-semantics"
+          test -n "$GITHUB_SHA"
+          printf 'commit_sha=%s\n' "$GITHUB_SHA"
+          printf 'scope=LABEL_TRANSITION_AUDIT_ONLY\n'
+          printf 'model_training_performed=false\n'
+          printf 'private_api_calls=0\nreal_order_attempts=0\n'
+          printf 'trading_authorization=NO-GO\n'
+
+      - name: Set up pinned Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install audit-only numerical dependencies
+        run: |
+          python -m pip install pip==25.2
+          python -m pip install numpy==2.5.4 pandas==2.3.3
+
+      # Run #1433 contains the exact source window and hashes. It is downloaded
+      # first so the subsequent Binance requests reproduce that historical window.
+      - name: Pin and download the Run #1433 baseline report artifact
+        id: source_report
+        run: |
+          set -euo pipefail
+          source_run_id="41052324389"
+          source_artifact_id="12978226236"
+          source_dir="$RUNNER_TEMP/v4d-source-report"
+          rm -rf "$source_dir"
+          mkdir -p "$source_dir"
+
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$source_run_id" > "$RUNNER_TEMP/source-run.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$source_artifact_id" > "$RUNNER_TEMP/source-artifact.json"
+
+          python - "$RUNNER_TEMP/source-run.json" "$RUNNER_TEMP/source-artifact.json" <<'PY'
+          import json
+          import sys
+
+          run = json.load(open(sys.argv[1], encoding="utf-8"))
+          artifact = json.load(open(sys.argv[2], encoding="utf-8"))
+          assert run["id"] == 41052324389
+          assert run["run_number"] == 1433
+          assert run["head_branch"] == "research/ml-core-rebuild"
+          assert run["head_sha"] == "5f874e6f56436a9b79bbc8adbfec1cf4fd31e4b9"
+          assert run["conclusion"] == "success"
+          assert artifact["id"] == 12978226236
+          assert artifact["name"] == "alix-real-data-classification-diagnostic"
+          assert artifact["expired"] is False
+          print("source_run_number=1433")
+          print("source_run_id=41052324389")
+          print("source_artifact_id=12978226236")
+          PY
+
+          gh run download "$source_run_id" --repo "$GITHUB_REPOSITORY" --name alix-real-data-classification-diagnostic --dir "$source_dir"
+          report_path="$source_dir/alix-real-data-classification-report.json"
+          test -s "$report_path"
+          echo "report_path=$report_path" >> "$GITHUB_OUTPUT"
+
+          python - "$report_path" "$GITHUB_OUTPUT" <<'PY'
+          from datetime import datetime, timezone
+          import json
+          import sys
+
+          report_path, output_path = sys.argv[1:3]
+          report = json.load(open(report_path, encoding="utf-8"))
+          assert report["schema_version"] == "alix.ml-core.real-data-classification-diagnostic.v4"
+          assert report["commit_sha"] == "5f874e6f56436a9b79bbc8adbfec1cf4fd31e4b9"
+          assert report["diagnostic_scope"] == "CLASSIFICATION_ONLY"
+          assert report["training_scope"] == "DIAGNOSTIC_CLASSIFICATION_ONLY"
+          assert report["requested_days"] == 730
+          assert report["experiment_count"] == 8
+          assert report["economic_evaluation_performed"] is False
+          assert report["economic_metrics_reported"] is False
+          assert report["data_window_selection"]["selected_days"] == 730
+          assert report["data_window_selection"]["fallback_reason"] == "NONE"
+          assert report["split_policy"] == {
+              "atr_period": 14,
+              "chronological_training_only": True,
+              "label_horizon_candles": 24,
+              "label_window_purge": "create_purged_embargo_split",
+              "post_validation_embargo": True,
+              "pre_validation_embargo": True,
+              "stop_loss_atr_multiple": 1.0,
+              "take_profit_atr_multiple": 2.0,
+              "validation_end_fraction": 0.85,
+              "validation_start_fraction": 0.70,
+          }
+
+          safety = report["safety"]
+          assert safety["Champion"] is None
+          assert safety["order_permission"] is False
+          assert safety["private_api_calls"] == 0
+          assert safety["real_order_attempts"] == 0
+          assert safety["orders_or_execution_api_used"] is False
+          assert safety["trading_authorization"] == "NO-GO"
+
+          datasets = report["input_datasets"]
+          assert len(datasets) == 2
+          indexed = {item["symbol"]: item for item in datasets}
+          assert set(indexed) == {"BTCUSDT", "ETHUSDT"}
+          expected_rows = 730 * 24 * 60
+          with open(output_path, "a", encoding="utf-8") as output:
+              for symbol, prefix in (("BTCUSDT", "btc"), ("ETHUSDT", "eth")):
+                  item = indexed[symbol]
+                  assert item["pair"] == f"{symbol[:-4]}/USDT"
+                  assert item["provider"] == "Binance Spot public klines API"
+                  assert item["interval"] == "1m"
+                  assert item["requested_days"] == 730
+                  assert item["row_count"] == expected_rows
+                  assert item["missing_minute_intervals"] == 0
+                  assert item["public_api_only"] is True
+                  assert item["credentials_used"] is False
+                  digest = item["csv_sha256"]
+                  assert isinstance(digest, str) and len(digest) == 64
+                  start = datetime.fromisoformat(item["start_utc"].replace("Z", "+00:00"))
+                  end = datetime.fromisoformat(item["end_utc"].replace("Z", "+00:00"))
+                  assert start.tzinfo is not None and end.tzinfo is not None
+                  start = start.astimezone(timezone.utc)
+                  end = end.astimezone(timezone.utc)
+                  assert int(start.timestamp()) % 60 == 0
+                  assert int(end.timestamp()) % 60 == 0
+                  assert int((end - start).total_seconds()) == (expected_rows - 1) * 60
+                  output.write(f"{prefix}_start_utc={item['start_utc']}\n")
+                  output.write(f"{prefix}_end_utc={item['end_utc']}\n")
+                  output.write(f"{prefix}_csv_sha256={digest}\n")
+          PY
+
+      - name: Fetch the exact original Binance public 1-minute windows
+        id: market_data
+        run: |
+          set -euo pipefail
+          data_dir="$RUNNER_TEMP/v4d-market-data"
+          rm -rf "$data_dir"
+          mkdir -p "$data_dir"
+
+          for symbol in BTCUSDT ETHUSDT; do
+            if [ "$symbol" = "ETHUSDT" ]; then
+              start_utc="${{ steps.source_report.outputs.eth_start_utc }}"
+              end_utc="${{ steps.source_report.outputs.eth_end_utc }}"
+              expected_sha="${{ steps.source_report.outputs.eth_csv_sha256 }}"
+            else
+              start_utc="${{ steps.source_report.outputs.btc_start_utc }}"
+              end_utc="${{ steps.source_report.outputs.btc_end_utc }}"
+              expected_sha="${{ steps.source_report.outputs.btc_csv_sha256 }}"
+            fi
+
+            log_path="$RUNNER_TEMP/v4d-fetch-$symbol.log"
+            fetch_args=(--days 730 --symbol "$symbol" --interval 1m --start-utc "$start_utc" --end-utc "$end_utc" --output-dir "$data_dir" --commit-sha "$GITHUB_SHA")
+            if python scripts/fetch_binance_public_ohlcv.py "${fetch_args[@]}" >"$log_path" 2>&1; then
+              cat "$log_path"
+            else
+              cat "$log_path"
+              echo "Binance public fetch failed for $symbol; refusing partial or shifted-window audit." >&2
+              exit 1
+            fi
+
+            csv_path="$data_dir/binance-${symbol,,}-1m.csv"
+            manifest_path="$data_dir/binance-${symbol,,}-1m.manifest.json"
+            expected_start="$start_utc"
+            expected_end="$end_utc"
+            actual_sha="$(sha256sum "$csv_path" | cut -d' ' -f1)"
+            test "$actual_sha" = "$expected_sha"
+
+            python - "$manifest_path" "$expected_sha" "$expected_start" "$expected_end" <<'PY'
+          import json
+          import sys
+
+          manifest = json.load(open(sys.argv[1], encoding="utf-8"))
+          assert manifest["csv_sha256"] == sys.argv[2]
+          assert manifest["start_utc"].replace("Z", "+00:00") == sys.argv[3].replace("Z", "+00:00")
+          assert manifest["end_utc"].replace("Z", "+00:00") == sys.argv[4].replace("Z", "+00:00")
+          assert manifest["row_count"] == 730 * 24 * 60
+          assert manifest["requested_days"] == 730
+          assert manifest["missing_minute_intervals"] == 0
+          assert manifest["public_api_only"] is True
+          assert manifest["credentials_used"] is False
+          assert manifest["private_api_calls"] == 0
+          assert manifest["real_order_attempts"] == 0
+          assert manifest["Champion"] is None
+          assert manifest["order_permission"] is False
+          assert manifest["trading_authorization"] == "NO-GO"
+          PY
+          done
+
+          echo "data_dir=$data_dir" >> "$GITHUB_OUTPUT"
+
+      - name: Run offline 24-to-12 candle label Transition Audit
+        run: |
+          set -euo pipefail
+          data_dir="${{ steps.market_data.outputs.data_dir }}"
+          report_path="${{ steps.source_report.outputs.report_path }}"
+          python -m scripts.audit_ml_core_label_transitions --report "$report_path" --btc-1m-csv "$data_dir/binance-btcusdt-1m.csv" --eth-1m-csv "$data_dir/binance-ethusdt-1m.csv" --output "$GITHUB_WORKSPACE/alix-v4d-label-transition-audit.json"
+
+      - name: Validate Transition Audit schema and safety invariants
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path("alix-v4d-label-transition-audit.json")
+          audit = json.loads(path.read_text(encoding="utf-8"))
+          assert audit["schema_version"] == "alix.ml-core.label-transition-audit.v1"
+          assert audit["source_artifact"]["source_run_number"] == 1433
+          assert audit["source_artifact"]["source_run_id"] == 41052324389
+          assert audit["source_artifact"]["source_artifact_id"] == 12978226236
+          assert audit["source_artifact"]["schema_version"] == (
+              "alix.ml-core.real-data-classification-diagnostic.v4"
+          )
+          assert audit["audit_scope"] == (
+              "LEGACY_V4_BASELINE_24_VS_REBUILT_SHORT_HORIZON_12"
+          )
+          assert len(audit["experiments"]) == 8
+          assert audit["model_training_performed"] is False
+          assert audit["production_target_modified"] is False
+
+          total = 0
+          for experiment in audit["experiments"]:
+              summary = experiment["transition_summary"]
+              assert summary["total"] == sum(summary["late_hit_candle_buckets"].values())
+              assert summary["total"] == sum(summary["first_touch_direction_counts"].values())
+              assert summary["total"] == sum(summary["first_touch_reason_counts"].values())
+              assert experiment["baseline"]["horizon_candles"] == 24
+              assert experiment["short_horizon"]["horizon_candles"] == 12
+              assert experiment["short_horizon"]["status"] == "AUDIT_ONLY_NO_MODEL"
+              for event in experiment["events"]:
+                  assert 13 <= event["late_hit_candle_offset"] <= 24
+                  expected_bucket = (
+                      "13-18" if event["late_hit_candle_offset"] <= 18 else "19-24"
+                  )
+                  assert event["late_hit_bucket"] == expected_bucket
+                  assert event["short_horizon_label"] == "HOLD"
+                  assert event["short_horizon_exit_reason"] == "HORIZON_EXPIRY"
+              total += summary["total"]
+
+          aggregate = audit["aggregate_transition_summary"]
+          assert aggregate["total"] == total
+          assert aggregate["late_hit_candle_buckets"]["13-18"] + (
+              aggregate["late_hit_candle_buckets"]["19-24"]
+          ) == total
+          safety = audit["safety"]
+          assert safety["Champion"] is None
+          assert safety["order_permission"] is False
+          assert safety["private_api_calls"] == 0
+          assert safety["real_order_attempts"] == 0
+          assert safety["trading_authorization"] == "NO-GO"
+          print(json.dumps({
+              "source_run_number": 1433,
+              "experiments": len(audit["experiments"]),
+              "late_transitions": total,
+              "buckets": aggregate["late_hit_candle_buckets"],
+              "model_training_performed": False,
+              "Champion": None,
+              "trading_authorization": "NO-GO",
+          }, sort_keys=True))
+          PY
+
+      - name: Upload V4-D label Transition Audit JSON
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alix-v4d-label-transition-audit
+          path: alix-v4d-label-transition-audit.json
+          if-no-files-found: error
+          retention-days: 30
