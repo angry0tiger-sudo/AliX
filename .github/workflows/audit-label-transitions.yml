@@ -2,6 +2,9 @@ name: AliX V4-D Label Transition Audit
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - research/ml-core-v4d-label-semantics
 
 permissions:
   actions: read
@@ -287,6 +290,383 @@ jobs:
               "trading_authorization": "NO-GO",
           }, sort_keys=True))
           PY
+
+      # GITHUB_STEP_SUMMARY is limited to 1 MiB per step. The audit JSON can be larger,
+      # so publish its compact, byte-preserving representation in bounded sections.
+      - name: Prepare compact JSON for bounded Step Summary sections
+        id: summary_parts
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          report_path = Path("alix-v4d-label-transition-audit.json")
+          raw = report_path.read_bytes()
+          report = json.loads(raw)
+          payload = json.dumps(report, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+          part_size = 400 * 1024
+          max_parts = 18
+          output_dir = Path(os.environ["RUNNER_TEMP"]) / "v4d-summary-parts"
+          if output_dir.exists():
+              for child in output_dir.iterdir():
+                  if child.is_file():
+                      child.unlink()
+          output_dir.mkdir(parents=True, exist_ok=True)
+
+          chunks = []
+          offset = 0
+          while offset < len(payload):
+              end = min(offset + part_size, len(payload))
+              while end < len(payload) and end > offset and (payload[end] & 0xC0) == 0x80:
+                  end -= 1
+              if end <= offset:
+                  raise RuntimeError("Could not split UTF-8 JSON at a safe byte boundary")
+              chunks.append(payload[offset:end])
+              offset = end
+
+          if len(chunks) > max_parts:
+              (output_dir / "part-count.txt").write_text("0", encoding="utf-8")
+              (output_dir / "overflow.md").write_text(
+                  "### V4-D Transition Audit Results\n\n"
+                  "The complete JSON exceeded the safe Step Summary display budget. "
+                  "The validated full JSON is still available in the `alix-v4d-label-transition-audit` artifact.\n",
+                  encoding="utf-8",
+              )
+              print(f"summary_parts=0;required_parts={len(chunks)};artifact_preserved=true")
+          else:
+              for index, chunk in enumerate(chunks, start=1):
+                  (output_dir / f"part-{index:02d}.jsonpart").write_bytes(chunk)
+              (output_dir / "part-count.txt").write_text(str(len(chunks)), encoding="utf-8")
+              (output_dir / "metadata.md").write_text(
+                  "### V4-D Transition Audit Results\n\n"
+                  f"- Original JSON size: {len(raw):,} bytes\n"
+                  f"- Compact JSON size: {len(payload):,} bytes\n"
+                  f"- Compact JSON SHA-256: `{hashlib.sha256(payload).hexdigest()}`\n"
+                  f"- Display sections: {len(chunks)}\n\n"
+                  "The complete JSON is split across the numbered code blocks below. "
+                  "Concatenate the code-block contents in numerical order to reconstruct the valid JSON document.\n",
+                  encoding="utf-8",
+              )
+              print(f"summary_parts={len(chunks)};compact_json_bytes={len(payload)}")
+          PY
+
+      - name: Report Step Summary display overflow
+        if: success()
+        run: |
+          set -euo pipefail
+          notice="$RUNNER_TEMP/v4d-summary-parts/overflow.md"
+          if [ -f "$notice" ]; then
+            cat "$notice" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Print Audit Results to Step Summary (Part 01)
+        if: success()
+        run: |
+          set -euo pipefail
+          summary_dir="$RUNNER_TEMP/v4d-summary-parts"
+          part_path="$summary_dir/part-01.jsonpart"
+          if [ -f "$part_path" ]; then
+            part_count="$(cat "$summary_dir/part-count.txt")"
+            {
+              if [ "01" = "01" ]; then cat "$summary_dir/metadata.md"; fi
+              printf '\n#### JSON section 01 of %s\n\n' "$part_count"
+              printf '```json\n'
+              cat "$part_path"
+              printf '\n```\n'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Print Audit Results to Step Summary (Part 02)
+        if: success()
+        run: |
+          set -euo pipefail
+          summary_dir="$RUNNER_TEMP/v4d-summary-parts"
+          part_path="$summary_dir/part-02.jsonpart"
+          if [ -f "$part_path" ]; then
+            part_count="$(cat "$summary_dir/part-count.txt")"
+            {
+              if [ "02" = "01" ]; then cat "$summary_dir/metadata.md"; fi
+              printf '\n#### JSON section 02 of %s\n\n' "$part_count"
+              printf '```json\n'
+              cat "$part_path"
+              printf '\n```\n'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Print Audit Results to Step Summary (Part 03)
+        if: success()
+        run: |
+          set -euo pipefail
+          summary_dir="$RUNNER_TEMP/v4d-summary-parts"
+          part_path="$summary_dir/part-03.jsonpart"
+          if [ -f "$part_path" ]; then
+            part_count="$(cat "$summary_dir/part-count.txt")"
+            {
+              if [ "03" = "01" ]; then cat "$summary_dir/metadata.md"; fi
+              printf '\n#### JSON section 03 of %s\n\n' "$part_count"
+              printf '```json\n'
+              cat "$part_path"
+              printf '\n```\n'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Print Audit Results to Step Summary (Part 04)
+        if: success()
+        run: |
+          set -euo pipefail
+          summary_dir="$RUNNER_TEMP/v4d-summary-parts"
+          part_path="$summary_dir/part-04.jsonpart"
+          if [ -f "$part_path" ]; then
+            part_count="$(cat "$summary_dir/part-count.txt")"
+            {
+              if [ "04" = "01" ]; then cat "$summary_dir/metadata.md"; fi
+              printf '\n#### JSON section 04 of %s\n\n' "$part_count"
+              printf '```json\n'
+              cat "$part_path"
+              printf '\n```\n'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Print Audit Results to Step Summary (Part 05)
+        if: success()
+        run: |
+          set -euo pipefail
+          summary_dir="$RUNNER_TEMP/v4d-summary-parts"
+          part_path="$summary_dir/part-05.jsonpart"
+          if [ -f "$part_path" ]; then
+            part_count="$(cat "$summary_dir/part-count.txt")"
+            {
+              if [ "05" = "01" ]; then cat "$summary_dir/metadata.md"; fi
+              printf '\n#### JSON section 05 of %s\n\n' "$part_count"
+              printf '```json\n'
+              cat "$part_path"
+              printf '\n```\n'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Print Audit Results to Step Summary (Part 06)
+        if: success()
+        run: |
+          set -euo pipefail
+          summary_dir="$RUNNER_TEMP/v4d-summary-parts"
+          part_path="$summary_dir/part-06.jsonpart"
+          if [ -f "$part_path" ]; then
+            part_count="$(cat "$summary_dir/part-count.txt")"
+            {
+              if [ "06" = "01" ]; then cat "$summary_dir/metadata.md"; fi
+              printf '\n#### JSON section 06 of %s\n\n' "$part_count"
+              printf '```json\n'
+              cat "$part_path"
+              printf '\n```\n'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Print Audit Results to Step Summary (Part 07)
+        if: success()
+        run: |
+          set -euo pipefail
+          summary_dir="$RUNNER_TEMP/v4d-summary-parts"
+          part_path="$summary_dir/part-07.jsonpart"
+          if [ -f "$part_path" ]; then
+            part_count="$(cat "$summary_dir/part-count.txt")"
+            {
+              if [ "07" = "01" ]; then cat "$summary_dir/metadata.md"; fi
+              printf '\n#### JSON section 07 of %s\n\n' "$part_count"
+              printf '```json\n'
+              cat "$part_path"
+              printf '\n```\n'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Print Audit Results to Step Summary (Part 08)
+        if: success()
+        run: |
+          set -euo pipefail
+          summary_dir="$RUNNER_TEMP/v4d-summary-parts"
+          part_path="$summary_dir/part-08.jsonpart"
+          if [ -f "$part_path" ]; then
+            part_count="$(cat "$summary_dir/part-count.txt")"
+            {
+              if [ "08" = "01" ]; then cat "$summary_dir/metadata.md"; fi
+              printf '\n#### JSON section 08 of %s\n\n' "$part_count"
+              printf '```json\n'
+              cat "$part_path"
+              printf '\n```\n'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Print Audit Results to Step Summary (Part 09)
+        if: success()
+        run: |
+          set -euo pipefail
+          summary_dir="$RUNNER_TEMP/v4d-summary-parts"
+          part_path="$summary_dir/part-09.jsonpart"
+          if [ -f "$part_path" ]; then
+            part_count="$(cat "$summary_dir/part-count.txt")"
+            {
+              if [ "09" = "01" ]; then cat "$summary_dir/metadata.md"; fi
+              printf '\n#### JSON section 09 of %s\n\n' "$part_count"
+              printf '```json\n'
+              cat "$part_path"
+              printf '\n```\n'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Print Audit Results to Step Summary (Part 10)
+        if: success()
+        run: |
+          set -euo pipefail
+          summary_dir="$RUNNER_TEMP/v4d-summary-parts"
+          part_path="$summary_dir/part-10.jsonpart"
+          if [ -f "$part_path" ]; then
+            part_count="$(cat "$summary_dir/part-count.txt")"
+            {
+              if [ "10" = "01" ]; then cat "$summary_dir/metadata.md"; fi
+              printf '\n#### JSON section 10 of %s\n\n' "$part_count"
+              printf '```json\n'
+              cat "$part_path"
+              printf '\n```\n'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Print Audit Results to Step Summary (Part 11)
+        if: success()
+        run: |
+          set -euo pipefail
+          summary_dir="$RUNNER_TEMP/v4d-summary-parts"
+          part_path="$summary_dir/part-11.jsonpart"
+          if [ -f "$part_path" ]; then
+            part_count="$(cat "$summary_dir/part-count.txt")"
+            {
+              if [ "11" = "01" ]; then cat "$summary_dir/metadata.md"; fi
+              printf '\n#### JSON section 11 of %s\n\n' "$part_count"
+              printf '```json\n'
+              cat "$part_path"
+              printf '\n```\n'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Print Audit Results to Step Summary (Part 12)
+        if: success()
+        run: |
+          set -euo pipefail
+          summary_dir="$RUNNER_TEMP/v4d-summary-parts"
+          part_path="$summary_dir/part-12.jsonpart"
+          if [ -f "$part_path" ]; then
+            part_count="$(cat "$summary_dir/part-count.txt")"
+            {
+              if [ "12" = "01" ]; then cat "$summary_dir/metadata.md"; fi
+              printf '\n#### JSON section 12 of %s\n\n' "$part_count"
+              printf '```json\n'
+              cat "$part_path"
+              printf '\n```\n'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Print Audit Results to Step Summary (Part 13)
+        if: success()
+        run: |
+          set -euo pipefail
+          summary_dir="$RUNNER_TEMP/v4d-summary-parts"
+          part_path="$summary_dir/part-13.jsonpart"
+          if [ -f "$part_path" ]; then
+            part_count="$(cat "$summary_dir/part-count.txt")"
+            {
+              if [ "13" = "01" ]; then cat "$summary_dir/metadata.md"; fi
+              printf '\n#### JSON section 13 of %s\n\n' "$part_count"
+              printf '```json\n'
+              cat "$part_path"
+              printf '\n```\n'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Print Audit Results to Step Summary (Part 14)
+        if: success()
+        run: |
+          set -euo pipefail
+          summary_dir="$RUNNER_TEMP/v4d-summary-parts"
+          part_path="$summary_dir/part-14.jsonpart"
+          if [ -f "$part_path" ]; then
+            part_count="$(cat "$summary_dir/part-count.txt")"
+            {
+              if [ "14" = "01" ]; then cat "$summary_dir/metadata.md"; fi
+              printf '\n#### JSON section 14 of %s\n\n' "$part_count"
+              printf '```json\n'
+              cat "$part_path"
+              printf '\n```\n'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Print Audit Results to Step Summary (Part 15)
+        if: success()
+        run: |
+          set -euo pipefail
+          summary_dir="$RUNNER_TEMP/v4d-summary-parts"
+          part_path="$summary_dir/part-15.jsonpart"
+          if [ -f "$part_path" ]; then
+            part_count="$(cat "$summary_dir/part-count.txt")"
+            {
+              if [ "15" = "01" ]; then cat "$summary_dir/metadata.md"; fi
+              printf '\n#### JSON section 15 of %s\n\n' "$part_count"
+              printf '```json\n'
+              cat "$part_path"
+              printf '\n```\n'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Print Audit Results to Step Summary (Part 16)
+        if: success()
+        run: |
+          set -euo pipefail
+          summary_dir="$RUNNER_TEMP/v4d-summary-parts"
+          part_path="$summary_dir/part-16.jsonpart"
+          if [ -f "$part_path" ]; then
+            part_count="$(cat "$summary_dir/part-count.txt")"
+            {
+              if [ "16" = "01" ]; then cat "$summary_dir/metadata.md"; fi
+              printf '\n#### JSON section 16 of %s\n\n' "$part_count"
+              printf '```json\n'
+              cat "$part_path"
+              printf '\n```\n'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Print Audit Results to Step Summary (Part 17)
+        if: success()
+        run: |
+          set -euo pipefail
+          summary_dir="$RUNNER_TEMP/v4d-summary-parts"
+          part_path="$summary_dir/part-17.jsonpart"
+          if [ -f "$part_path" ]; then
+            part_count="$(cat "$summary_dir/part-count.txt")"
+            {
+              if [ "17" = "01" ]; then cat "$summary_dir/metadata.md"; fi
+              printf '\n#### JSON section 17 of %s\n\n' "$part_count"
+              printf '```json\n'
+              cat "$part_path"
+              printf '\n```\n'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Print Audit Results to Step Summary (Part 18)
+        if: success()
+        run: |
+          set -euo pipefail
+          summary_dir="$RUNNER_TEMP/v4d-summary-parts"
+          part_path="$summary_dir/part-18.jsonpart"
+          if [ -f "$part_path" ]; then
+            part_count="$(cat "$summary_dir/part-count.txt")"
+            {
+              if [ "18" = "01" ]; then cat "$summary_dir/metadata.md"; fi
+              printf '\n#### JSON section 18 of %s\n\n' "$part_count"
+              printf '```json\n'
+              cat "$part_path"
+              printf '\n```\n'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Upload V4-D label Transition Audit JSON
         if: success()
