@@ -749,6 +749,45 @@ def _expected_calibration_error(
     return weighted_error
 
 
+def _validate_binary_calibration_bins(calibration_bins: int) -> None:
+    """Reject invalid equal-width calibration bin counts."""
+    if (
+        isinstance(calibration_bins, bool)
+        or not isinstance(calibration_bins, int)
+        or calibration_bins < 2
+    ):
+        raise ValueError("calibration_bins_must_be_integer_at_least_two")
+
+
+def _validated_binary_targets(actual: Series) -> np.ndarray:
+    """Return finite binary numeric targets in their original temporal order."""
+    targets = pd.to_numeric(actual, errors="coerce").to_numpy(dtype=float)
+    if len(targets) == 0 or not bool(np.isfinite(targets).all()):
+        raise ValueError("binary_probability_metrics_inputs_invalid")
+    if not bool(np.isin(targets, (0.0, 1.0)).all()):
+        raise ValueError("binary_probability_metrics_inputs_invalid")
+    return targets
+
+
+def _validated_binary_probability_vector(
+    raw_probabilities: np.ndarray, expected_count: int
+) -> np.ndarray:
+    """Validate the positive-class probability vector without changing row order."""
+    probabilities = np.asarray(raw_probabilities, dtype=float)
+    if probabilities.ndim != 1 or probabilities.shape[0] != expected_count:
+        raise ValueError("binary_probability_metrics_inputs_invalid")
+    if not bool(np.isfinite(probabilities).all()):
+        raise ValueError("binary_probability_metrics_inputs_invalid")
+    if bool(np.any(probabilities < 0.0)) or bool(np.any(probabilities > 1.0)):
+        raise ValueError("binary_probability_metrics_inputs_invalid")
+    return probabilities
+
+
+def _rounded_optional_metric(value: float | None) -> float | None:
+    """Round an optional probability diagnostic consistently."""
+    return round(value, 8) if value is not None else None
+
+
 def binary_probability_quality_metrics(
     actual: Series,
     positive_probabilities: np.ndarray,
@@ -758,26 +797,11 @@ def binary_probability_quality_metrics(
     calibration_bins: int = 10,
 ) -> dict[str, Any]:
     """Report positive-class Brier score and ECE for one binary stage."""
-    if (
-        isinstance(calibration_bins, bool)
-        or not isinstance(calibration_bins, int)
-        or calibration_bins < 2
-    ):
-        raise ValueError("calibration_bins_must_be_integer_at_least_two")
-    targets = pd.to_numeric(actual, errors="coerce").to_numpy(dtype=float)
-    probabilities = np.asarray(positive_probabilities, dtype=float)
-    if (
-        probabilities.ndim != 1
-        or probabilities.shape != targets.shape
-        or len(targets) == 0
-        or not bool(np.isfinite(targets).all())
-        or not bool(np.isin(targets, (0.0, 1.0)).all())
-        or not bool(np.isfinite(probabilities).all())
-        or bool(np.any(probabilities < 0.0))
-        or bool(np.any(probabilities > 1.0))
-    ):
-        raise ValueError("binary_probability_metrics_inputs_invalid")
-
+    _validate_binary_calibration_bins(calibration_bins)
+    targets = _validated_binary_targets(actual)
+    probabilities = _validated_binary_probability_vector(
+        positive_probabilities, len(targets)
+    )
     positive_support = int(np.count_nonzero(targets))
     negative_support = int(len(targets) - positive_support)
     brier_score = float(np.mean((probabilities - targets) ** 2))
@@ -791,7 +815,7 @@ def binary_probability_quality_metrics(
             positive_label: positive_support,
         },
         "brier_score": round(brier_score, 8),
-        "ece": round(ece, 8) if ece is not None else None,
+        "ece": _rounded_optional_metric(ece),
         "bin_count": calibration_bins,
         "binning": "equal_width_positive_class_probability_bins",
     }
@@ -1501,45 +1525,10 @@ def _insufficient_bar_result(
     }
 
 
-def run_experiment(
-    pair: str,
-    timeframe: str,
-    minute_candles: DataFrame,
-    *,
-    scenario_name: str = "Hierarchical_12_Candle",
-    horizon_candles: int = HIERARCHICAL_HORIZON_CANDLES,
-    take_profit_multiplier: float = TAKE_PROFIT_MULTIPLIER_DEFAULT,
-    stop_loss_multiplier: float = STOP_LOSS_MULTIPLIER_DEFAULT,
-    calibration_fraction: float = DEFAULT_CALIBRATION_FRACTION,
-    minimum_hold_precision: float = DEFAULT_MINIMUM_HOLD_PRECISION,
-    minimum_hold_recall: float = DEFAULT_MINIMUM_HOLD_RECALL,
+def _prepare_hierarchical_split_context(
+    bars: DataFrame, labels: DataFrame
 ) -> dict[str, Any]:
-    """Train separate hit and conditional-direction classifiers for V4-E."""
-    if horizon_candles != HIERARCHICAL_HORIZON_CANDLES:
-        raise ValueError("hierarchical_horizon_must_be_12")
-    policies = weighting_policy_specs()
-    barrier_config = {
-        "horizon_candles": int(horizon_candles),
-        "take_profit_multiplier": float(take_profit_multiplier),
-        "stop_loss_multiplier": float(stop_loss_multiplier),
-    }
-    bars = resample_ohlcv(minute_candles, timeframe)
-    labels = apply_adaptive_hierarchical_targets(
-        bars,
-        take_profit_multiplier=take_profit_multiplier,
-        stop_loss_multiplier=stop_loss_multiplier,
-    )
-    if len(bars) < 100:
-        result = _insufficient_bar_result(pair, timeframe, bars, labels)
-        result.update(
-            {
-                "scenario": scenario_name,
-                "triple_barrier": barrier_config,
-                "hierarchical_metrics": None,
-            }
-        )
-        return result
-
+    """Create the causal feature matrix and purged chronological partitions."""
     features = build_causal_feature_matrix(bars)
     train_indices, validation_indices, split_info = purged_temporal_indices(
         features, labels, horizon_candles=HIERARCHICAL_HORIZON_CANDLES
@@ -1550,7 +1539,6 @@ def run_experiment(
     stage1_validation = labels.iloc[validation_indices][STAGE1_TARGET_COLUMN].astype(
         int
     )
-
     stage2_train_indices = [
         index
         for index in train_indices
@@ -1565,22 +1553,49 @@ def run_experiment(
     stage2_validation = labels.iloc[stage2_validation_indices][
         STAGE2_TARGET_COLUMN
     ].astype(int)
+    return {
+        "features": features,
+        "train_indices": train_indices,
+        "validation_indices": validation_indices,
+        "split_info": split_info,
+        "train_y": train_y,
+        "validation_y": validation_y,
+        "stage1_train": stage1_train,
+        "stage1_validation": stage1_validation,
+        "stage2_train_indices": stage2_train_indices,
+        "stage2_validation_indices": stage2_validation_indices,
+        "stage2_train": stage2_train,
+        "stage2_validation": stage2_validation,
+    }
 
-    sample_gate = hierarchical_sample_gate_diagnostics(
-        stage1_train, stage1_validation, stage2_train, stage2_validation
-    )
-    base_result: dict[str, Any] = {
+
+def _build_hierarchical_base_result(
+    pair: str,
+    timeframe: str,
+    scenario_name: str,
+    barrier_config: dict[str, Any],
+    bars: DataFrame,
+    labels: DataFrame,
+    context: dict[str, Any],
+    sample_gate: dict[str, Any],
+) -> dict[str, Any]:
+    """Build shared target, split, and sample-gate diagnostics."""
+    stage1_train = context["stage1_train"]
+    stage1_validation = context["stage1_validation"]
+    stage2_train = context["stage2_train"]
+    stage2_validation = context["stage2_validation"]
+    return {
         "pair": pair,
         "timeframe": timeframe,
         "scenario": scenario_name,
         "triple_barrier": barrier_config,
         "target_architecture": "HIERARCHICAL_HIT_THEN_DIRECTION",
         "bar_count": int(len(bars)),
-        "train_rows": int(len(train_indices)),
-        "validation_rows": int(len(validation_indices)),
+        "train_rows": int(len(context["train_indices"])),
+        "validation_rows": int(len(context["validation_indices"])),
         "label_distribution": {
-            "train": label_distribution(train_y),
-            "validation": label_distribution(validation_y),
+            "train": label_distribution(context["train_y"]),
+            "validation": label_distribution(context["validation_y"]),
         },
         "hierarchical_target_distribution": {
             "train": {
@@ -1606,212 +1621,332 @@ def run_experiment(
         },
         "label_audit": label_audit_diagnostics(labels),
         "sample_gate": sample_gate,
-        "split": split_info,
-        "stage2_training_rows": int(len(stage2_train_indices)),
-        "stage2_validation_rows": int(len(stage2_validation_indices)),
+        "split": context["split_info"],
+        "stage2_training_rows": int(len(context["stage2_train_indices"])),
+        "stage2_validation_rows": int(len(context["stage2_validation_indices"])),
     }
-    if sample_gate["status"] != "PASS":
-        result = _skipped_result(
-            pair,
-            timeframe,
-            bars,
-            labels,
-            train_indices,
-            validation_indices,
-            split_info,
-            str(sample_gate["status"]),
-            sample_gate,
-        )
-        result.update(
-            {
+
+
+def _prepare_hierarchical_experiment(
+    pair: str,
+    timeframe: str,
+    minute_candles: DataFrame,
+    scenario_name: str,
+    barrier_config: dict[str, Any],
+    take_profit_multiplier: float,
+    stop_loss_multiplier: float,
+) -> dict[str, Any]:
+    """Build targets, temporal context, sample gates, and shared report fields."""
+    bars = resample_ohlcv(minute_candles, timeframe)
+    labels = apply_adaptive_hierarchical_targets(
+        bars,
+        take_profit_multiplier=take_profit_multiplier,
+        stop_loss_multiplier=stop_loss_multiplier,
+    )
+    if len(bars) < 100:
+        return {
+            "early_result": {
+                **_insufficient_bar_result(pair, timeframe, bars, labels),
                 "scenario": scenario_name,
                 "triple_barrier": barrier_config,
-                "target_architecture": "HIERARCHICAL_HIT_THEN_DIRECTION",
-                "hierarchical_target_distribution": base_result[
-                    "hierarchical_target_distribution"
-                ],
-                "stage2_training_rows": int(len(stage2_train_indices)),
-                "stage2_validation_rows": int(len(stage2_validation_indices)),
                 "hierarchical_metrics": None,
             }
-        )
-        return result
+        }
 
-    x_train = features.iloc[train_indices]
-    x_validation = features.iloc[validation_indices]
-    x_stage2_train = features.iloc[stage2_train_indices]
-    x_stage2_validation = features.iloc[stage2_validation_indices]
-    variants: dict[str, Any] = {}
+    context = _prepare_hierarchical_split_context(bars, labels)
+    sample_gate = hierarchical_sample_gate_diagnostics(
+        context["stage1_train"],
+        context["stage1_validation"],
+        context["stage2_train"],
+        context["stage2_validation"],
+    )
+    base_result = _build_hierarchical_base_result(
+        pair,
+        timeframe,
+        scenario_name,
+        barrier_config,
+        bars,
+        labels,
+        context,
+        sample_gate,
+    )
+    return {
+        "bars": bars,
+        "labels": labels,
+        "context": context,
+        "sample_gate": sample_gate,
+        "base_result": base_result,
+    }
 
-    for name, policy in policies.items():
-        stage1_model = _new_binary_classifier(class_weight=policy["class_weight"])
-        stage2_model = _new_binary_classifier(class_weight=policy["class_weight"])
-        stage1_model.fit(x_train, stage1_train)
-        stage2_model.fit(x_stage2_train, stage2_train)
 
-        stage1_train_probabilities = binary_probability_matrix(stage1_model, x_train)
-        stage1_validation_probabilities = binary_probability_matrix(
-            stage1_model, x_validation
-        )
-        stage2_train_actual_probabilities = binary_probability_matrix(
+def _build_skipped_hierarchical_experiment(
+    pair: str,
+    timeframe: str,
+    scenario_name: str,
+    prepared: dict[str, Any],
+) -> dict[str, Any]:
+    """Return the existing fail-closed skipped result when either stage gate fails."""
+    context = prepared["context"]
+    base_result = prepared["base_result"]
+    result = _skipped_result(
+        pair,
+        timeframe,
+        prepared["bars"],
+        prepared["labels"],
+        context["train_indices"],
+        context["validation_indices"],
+        context["split_info"],
+        str(prepared["sample_gate"]["status"]),
+        prepared["sample_gate"],
+    )
+    result.update(
+        {
+            "scenario": scenario_name,
+            "triple_barrier": base_result["triple_barrier"],
+            "target_architecture": "HIERARCHICAL_HIT_THEN_DIRECTION",
+            "hierarchical_target_distribution": base_result[
+                "hierarchical_target_distribution"
+            ],
+            "stage2_training_rows": base_result["stage2_training_rows"],
+            "stage2_validation_rows": base_result["stage2_validation_rows"],
+            "hierarchical_metrics": None,
+        }
+    )
+    return result
+
+
+def _fit_hierarchical_binary_probabilities(
+    context: dict[str, Any],
+    class_weight: str | dict[str, float] | None,
+) -> dict[str, np.ndarray]:
+    """Fit both binary stages and produce actual-hit and all-row probabilities."""
+    features = context["features"]
+    x_train = features.iloc[context["train_indices"]]
+    x_validation = features.iloc[context["validation_indices"]]
+    x_stage2_train = features.iloc[context["stage2_train_indices"]]
+    x_stage2_validation = features.iloc[context["stage2_validation_indices"]]
+    stage1_model = _new_binary_classifier(class_weight=class_weight)
+    stage2_model = _new_binary_classifier(class_weight=class_weight)
+    stage1_model.fit(x_train, context["stage1_train"])
+    stage2_model.fit(x_stage2_train, context["stage2_train"])
+    return {
+        "stage1_train": binary_probability_matrix(stage1_model, x_train),
+        "stage1_validation": binary_probability_matrix(stage1_model, x_validation),
+        "stage2_train_actual": binary_probability_matrix(
             stage2_model, x_stage2_train
-        )
-        stage2_validation_actual_probabilities = binary_probability_matrix(
+        ),
+        "stage2_validation_actual": binary_probability_matrix(
             stage2_model, x_stage2_validation
-        )
-        stage2_train_all_probabilities = binary_probability_matrix(
-            stage2_model, x_train
-        )
-        stage2_validation_all_probabilities = binary_probability_matrix(
+        ),
+        "stage2_train_all": binary_probability_matrix(stage2_model, x_train),
+        "stage2_validation_all": binary_probability_matrix(
             stage2_model, x_validation
-        )
+        ),
+    }
 
-        stage1_train_prediction = Series(
-            np.argmax(stage1_train_probabilities, axis=1),
-            index=stage1_train.index,
-            dtype=int,
-        )
-        stage1_validation_prediction = Series(
-            np.argmax(stage1_validation_probabilities, axis=1),
-            index=stage1_validation.index,
-            dtype=int,
-        )
-        stage2_train_prediction = Series(
-            np.argmax(stage2_train_actual_probabilities, axis=1),
-            index=stage2_train.index,
-            dtype=int,
-        )
-        stage2_validation_prediction = Series(
-            np.argmax(stage2_validation_actual_probabilities, axis=1),
-            index=stage2_validation.index,
-            dtype=int,
-        )
 
-        combined_train_probabilities = combine_hierarchical_probabilities(
-            stage1_train_probabilities, stage2_train_all_probabilities
-        )
-        combined_validation_probabilities = combine_hierarchical_probabilities(
-            stage1_validation_probabilities, stage2_validation_all_probabilities
-        )
-        combined_train_prediction = predictions_from_probabilities(
+def _hierarchical_probability_predictions(
+    context: dict[str, Any], probabilities: dict[str, np.ndarray]
+) -> dict[str, Any]:
+    """Compose the final BUY/SELL/HOLD probabilities and raw argmax predictions."""
+    train_y = context["train_y"]
+    validation_y = context["validation_y"]
+    stage1_train_prediction = Series(
+        np.argmax(probabilities["stage1_train"], axis=1),
+        index=context["stage1_train"].index,
+        dtype=int,
+    )
+    stage1_validation_prediction = Series(
+        np.argmax(probabilities["stage1_validation"], axis=1),
+        index=context["stage1_validation"].index,
+        dtype=int,
+    )
+    stage2_train_prediction = Series(
+        np.argmax(probabilities["stage2_train_actual"], axis=1),
+        index=context["stage2_train"].index,
+        dtype=int,
+    )
+    stage2_validation_prediction = Series(
+        np.argmax(probabilities["stage2_validation_actual"], axis=1),
+        index=context["stage2_validation"].index,
+        dtype=int,
+    )
+    combined_train_probabilities = combine_hierarchical_probabilities(
+        probabilities["stage1_train"], probabilities["stage2_train_all"]
+    )
+    combined_validation_probabilities = combine_hierarchical_probabilities(
+        probabilities["stage1_validation"], probabilities["stage2_validation_all"]
+    )
+    return {
+        "stage1_train_prediction": stage1_train_prediction,
+        "stage1_validation_prediction": stage1_validation_prediction,
+        "stage2_train_prediction": stage2_train_prediction,
+        "stage2_validation_prediction": stage2_validation_prediction,
+        "combined_train_probabilities": combined_train_probabilities,
+        "combined_validation_probabilities": combined_validation_probabilities,
+        "combined_train_prediction": predictions_from_probabilities(
             combined_train_probabilities, train_y.index
-        )
-        combined_validation_prediction = predictions_from_probabilities(
+        ),
+        "combined_validation_prediction": predictions_from_probabilities(
             combined_validation_probabilities, validation_y.index
-        )
-        hierarchical_metrics = _hierarchical_metrics(
-            stage1_train,
-            stage1_validation,
-            stage1_train_prediction,
-            stage1_validation_prediction,
-            stage2_train,
-            stage2_validation,
-            stage2_train_prediction,
-            stage2_validation_prediction,
-            train_y,
+        ),
+    }
+
+
+def _fit_flat_three_class_baseline(
+    context: dict[str, Any],
+    class_weight: str | dict[str, float] | None,
+    calibration_fraction: float,
+) -> dict[str, Any]:
+    """Fit the same-target three-class LightGBM reference for a fair comparison."""
+    features = context["features"]
+    train_y = context["train_y"]
+    validation_y = context["validation_y"]
+    x_train = features.iloc[context["train_indices"]]
+    x_validation = features.iloc[context["validation_indices"]]
+    model = _new_classifier(class_weight=class_weight)
+    model.fit(x_train, train_y)
+    train_probabilities = ordered_probability_matrix(model, x_train)
+    validation_probabilities = ordered_probability_matrix(model, x_validation)
+    train_prediction = predictions_from_probabilities(train_probabilities, train_y.index)
+    validation_prediction = predictions_from_probabilities(
+        validation_probabilities, validation_y.index
+    )
+    return {
+        "model_parameters": {
+            "architecture": "FLAT_THREE_CLASS_REFERENCE",
+            "objective": "multiclass",
+            "class_weight": class_weight,
+            "target": "label",
+            "target_horizon_candles": HIERARCHICAL_HORIZON_CANDLES,
+            "fit_scope": "ALL_ELIGIBLE_TRAIN_ROWS",
+        },
+        "classification_metrics": {
+            "train_in_sample": classification_metrics(train_y, train_prediction),
+            "validation": classification_metrics(validation_y, validation_prediction),
+        },
+        **validation_classification_diagnostics(validation_y, validation_prediction),
+        "probability_diagnostics": probability_diagnostics_by_temporal_segment(
             validation_y,
-            combined_train_prediction,
-            combined_validation_prediction,
-            stage1_validation_probabilities,
-            stage2_validation_actual_probabilities,
-            calibration_fraction,
-        )
-        threshold_diagnostics = threshold_optimization_diagnostics(
-            validation_y,
-            combined_validation_probabilities,
+            validation_probabilities,
             calibration_fraction=calibration_fraction,
-            minimum_precision=minimum_hold_precision,
-            minimum_recall=minimum_hold_recall,
-        )
-        three_class_model = _new_classifier(class_weight=policy["class_weight"])
-        three_class_model.fit(x_train, train_y)
-        three_class_train_probabilities = ordered_probability_matrix(
-            three_class_model, x_train
-        )
-        three_class_validation_probabilities = ordered_probability_matrix(
-            three_class_model, x_validation
-        )
-        three_class_train_prediction = predictions_from_probabilities(
-            three_class_train_probabilities, train_y.index
-        )
-        three_class_validation_prediction = predictions_from_probabilities(
-            three_class_validation_probabilities, validation_y.index
-        )
-        three_class_baseline = {
-            "model_parameters": {
-                "architecture": "FLAT_THREE_CLASS_REFERENCE",
-                "objective": "multiclass",
-                "class_weight": policy["class_weight"],
-                "target": "label",
-                "target_horizon_candles": HIERARCHICAL_HORIZON_CANDLES,
+        ),
+    }
+
+
+def _fit_hierarchical_weighting_variant(
+    context: dict[str, Any],
+    bars: DataFrame,
+    class_weight: str | dict[str, float] | None,
+    calibration_fraction: float,
+    minimum_hold_precision: float,
+    minimum_hold_recall: float,
+) -> dict[str, Any]:
+    """Fit, evaluate, and serialize one hierarchical weighting-policy variant."""
+    probabilities = _fit_hierarchical_binary_probabilities(context, class_weight)
+    predictions = _hierarchical_probability_predictions(context, probabilities)
+    hierarchical_metrics = _hierarchical_metrics(
+        context["stage1_train"],
+        context["stage1_validation"],
+        predictions["stage1_train_prediction"],
+        predictions["stage1_validation_prediction"],
+        context["stage2_train"],
+        context["stage2_validation"],
+        predictions["stage2_train_prediction"],
+        predictions["stage2_validation_prediction"],
+        context["train_y"],
+        context["validation_y"],
+        predictions["combined_train_prediction"],
+        predictions["combined_validation_prediction"],
+        probabilities["stage1_validation"],
+        probabilities["stage2_validation_actual"],
+        calibration_fraction,
+    )
+    threshold_diagnostics = threshold_optimization_diagnostics(
+        context["validation_y"],
+        predictions["combined_validation_probabilities"],
+        calibration_fraction=calibration_fraction,
+        minimum_precision=minimum_hold_precision,
+        minimum_recall=minimum_hold_recall,
+    )
+    three_class_baseline = _fit_flat_three_class_baseline(
+        context, class_weight, calibration_fraction
+    )
+    train_y = context["train_y"]
+    validation_y = context["validation_y"]
+    return {
+        "model_parameters": {
+            "architecture": "HIERARCHICAL_HIT_THEN_DIRECTION",
+            "stage1": {
+                "objective": "binary",
+                "class_weight": class_weight,
                 "fit_scope": "ALL_ELIGIBLE_TRAIN_ROWS",
             },
-            "classification_metrics": {
-                "train_in_sample": classification_metrics(
-                    train_y, three_class_train_prediction
-                ),
-                "validation": classification_metrics(
-                    validation_y, three_class_validation_prediction
-                ),
+            "stage2": {
+                "objective": "binary",
+                "class_weight": class_weight,
+                "fit_scope": "STAGE1_TARGET_EQUALS_1_ONLY",
             },
-            **validation_classification_diagnostics(
-                validation_y, three_class_validation_prediction
+        },
+        "hierarchical_metrics": hierarchical_metrics,
+        "three_class_baseline": three_class_baseline,
+        "classification_metrics": {
+            "train_in_sample": classification_metrics(
+                train_y, predictions["combined_train_prediction"]
             ),
-            "probability_diagnostics": probability_diagnostics_by_temporal_segment(
-                validation_y,
-                three_class_validation_probabilities,
-                calibration_fraction=calibration_fraction,
+            "validation": classification_metrics(
+                validation_y, predictions["combined_validation_prediction"]
             ),
-        }
+        },
+        **validation_classification_diagnostics(
+            validation_y, predictions["combined_validation_prediction"]
+        ),
+        "hold_metrics": hold_class_metrics(
+            validation_y, predictions["combined_validation_prediction"]
+        ),
+        "probability_diagnostics": probability_diagnostics_by_temporal_segment(
+            validation_y,
+            predictions["combined_validation_probabilities"],
+            calibration_fraction=calibration_fraction,
+        ),
+        "threshold_optimization": threshold_diagnostics,
+        "validation_probabilities": _serialize_validation_probabilities(
+            bars,
+            context["validation_indices"],
+            validation_y,
+            predictions["combined_validation_probabilities"],
+        ),
+    }
 
-        variants[name] = {
-            "model_parameters": {
-                "architecture": "HIERARCHICAL_HIT_THEN_DIRECTION",
-                "stage1": {
-                    "objective": "binary",
-                    "class_weight": policy["class_weight"],
-                    "fit_scope": "ALL_ELIGIBLE_TRAIN_ROWS",
-                },
-                "stage2": {
-                    "objective": "binary",
-                    "class_weight": policy["class_weight"],
-                    "fit_scope": "STAGE1_TARGET_EQUALS_1_ONLY",
-                },
-            },
-            "hierarchical_metrics": hierarchical_metrics,
-            "three_class_baseline": three_class_baseline,
-            "classification_metrics": {
-                "train_in_sample": classification_metrics(
-                    train_y, combined_train_prediction
-                ),
-                "validation": classification_metrics(
-                    validation_y, combined_validation_prediction
-                ),
-            },
-            **validation_classification_diagnostics(
-                validation_y, combined_validation_prediction
-            ),
-            "hold_metrics": hold_class_metrics(
-                validation_y, combined_validation_prediction
-            ),
-            "probability_diagnostics": probability_diagnostics_by_temporal_segment(
-                validation_y,
-                combined_validation_probabilities,
-                calibration_fraction=calibration_fraction,
-            ),
-            "threshold_optimization": threshold_diagnostics,
-            "validation_probabilities": _serialize_validation_probabilities(
-                bars,
-                validation_indices,
-                validation_y,
-                combined_validation_probabilities,
-            ),
-        }
 
-    balanced = variants["weight_balanced"]
+def _fit_hierarchical_variants(
+    context: dict[str, Any],
+    bars: DataFrame,
+    calibration_fraction: float,
+    minimum_hold_precision: float,
+    minimum_hold_recall: float,
+) -> dict[str, Any]:
+    """Fit both approved weighting policies without changing the sample gates."""
+    return {
+        name: _fit_hierarchical_weighting_variant(
+            context,
+            bars,
+            policy["class_weight"],
+            calibration_fraction,
+            minimum_hold_precision,
+            minimum_hold_recall,
+        )
+        for name, policy in weighting_policy_specs().items()
+    }
+
+
+def _build_hierarchical_baseline_comparisons(
+    validation_y: Series, variants: dict[str, Any]
+) -> dict[str, Any]:
+    """Expose constant, unweighted hierarchical, and same-target flat baselines."""
     unweighted = variants["weight_none"]
     always_sell_prediction = Series("SELL", index=validation_y.index, dtype=object)
-    baseline_comparisons = {
+    return {
         "always_sell": {
             "baseline_type": "constant_prediction",
             "predicted_label": "SELL",
@@ -1846,14 +1981,33 @@ def run_experiment(
             },
         },
     }
-    train_f1 = balanced["classification_metrics"]["train_in_sample"]["macro"]["f1"]
-    validation_f1 = balanced["classification_metrics"]["validation"]["macro"]["f1"]
+
+
+def _overfitting_assessment(variant: dict[str, Any]) -> dict[str, Any]:
+    """Compare in-sample and Validation macro-F1 using the fixed heuristic."""
+    train_f1 = variant["classification_metrics"]["train_in_sample"]["macro"]["f1"]
+    validation_f1 = variant["classification_metrics"]["validation"]["macro"]["f1"]
     f1_gap = round(train_f1 - validation_f1, 6)
-    assessment = (
+    status = (
         "POSSIBLE_OVERFITTING"
         if f1_gap >= OVERFIT_F1_GAP_THRESHOLD
         else "NO_LARGE_MACRO_F1_GAP_OBSERVED"
     )
+    return {
+        "status": status,
+        "macro_f1_gap_train_minus_validation": f1_gap,
+        "heuristic_threshold": OVERFIT_F1_GAP_THRESHOLD,
+        "caveat": "Single chronological split; diagnostic heuristic, not a statistical proof.",
+    }
+
+
+def _build_trained_hierarchical_result(
+    base_result: dict[str, Any],
+    validation_y: Series,
+    variants: dict[str, Any],
+) -> dict[str, Any]:
+    """Assemble the trained experiment report using the balanced model as primary."""
+    balanced = variants["weight_balanced"]
     return {
         **base_result,
         "status": "TRAINED",
@@ -1864,14 +2018,59 @@ def run_experiment(
         "hold_metrics": balanced["hold_metrics"],
         "model_variants": variants,
         "threshold_optimization": balanced["threshold_optimization"],
-        "baseline_comparisons": baseline_comparisons,
-        "overfitting_assessment": {
-            "status": assessment,
-            "macro_f1_gap_train_minus_validation": f1_gap,
-            "heuristic_threshold": OVERFIT_F1_GAP_THRESHOLD,
-            "caveat": "Single chronological split; diagnostic heuristic, not a statistical proof.",
-        },
+        "baseline_comparisons": _build_hierarchical_baseline_comparisons(
+            validation_y, variants
+        ),
+        "overfitting_assessment": _overfitting_assessment(balanced),
     }
+
+
+def run_experiment(
+    pair: str,
+    timeframe: str,
+    minute_candles: DataFrame,
+    *,
+    scenario_name: str = "Hierarchical_12_Candle",
+    horizon_candles: int = HIERARCHICAL_HORIZON_CANDLES,
+    take_profit_multiplier: float = TAKE_PROFIT_MULTIPLIER_DEFAULT,
+    stop_loss_multiplier: float = STOP_LOSS_MULTIPLIER_DEFAULT,
+    calibration_fraction: float = DEFAULT_CALIBRATION_FRACTION,
+    minimum_hold_precision: float = DEFAULT_MINIMUM_HOLD_PRECISION,
+    minimum_hold_recall: float = DEFAULT_MINIMUM_HOLD_RECALL,
+) -> dict[str, Any]:
+    """Train separate hit and conditional-direction classifiers for V4-E."""
+    if horizon_candles != HIERARCHICAL_HORIZON_CANDLES:
+        raise ValueError("hierarchical_horizon_must_be_12")
+    barrier_config = {
+        "horizon_candles": int(horizon_candles),
+        "take_profit_multiplier": float(take_profit_multiplier),
+        "stop_loss_multiplier": float(stop_loss_multiplier),
+    }
+    prepared = _prepare_hierarchical_experiment(
+        pair,
+        timeframe,
+        minute_candles,
+        scenario_name,
+        barrier_config,
+        take_profit_multiplier,
+        stop_loss_multiplier,
+    )
+    if "early_result" in prepared:
+        return prepared["early_result"]
+    if prepared["sample_gate"]["status"] != "PASS":
+        return _build_skipped_hierarchical_experiment(
+            pair, timeframe, scenario_name, prepared
+        )
+    variants = _fit_hierarchical_variants(
+        prepared["context"],
+        prepared["bars"],
+        calibration_fraction,
+        minimum_hold_precision,
+        minimum_hold_recall,
+    )
+    return _build_trained_hierarchical_result(
+        prepared["base_result"], prepared["context"]["validation_y"], variants
+    )
 
 
 def _load_manifested_data(
