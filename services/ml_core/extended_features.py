@@ -241,7 +241,8 @@ def _volume_features(data: DataFrame) -> DataFrame:
     volume_zscore = (volume - rolling_mean) / rolling_std.where(rolling_std > 0.0)
     volume_zscore = volume_zscore.mask(rolling_std.eq(0.0), 0.0)
 
-    direction = np.sign(close.diff()).fillna(0.0)
+    price_change = close.diff().fillna(0.0)
+    direction = price_change.gt(0.0).astype(float) - price_change.lt(0.0).astype(float)
     signed_volume = (direction * volume).rolling(20, min_periods=20).sum()
     total_volume = volume.rolling(20, min_periods=20).sum()
     obv_imbalance = signed_volume / total_volume.where(total_volume > 0.0)

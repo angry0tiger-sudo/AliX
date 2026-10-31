@@ -51,7 +51,9 @@ def test_profile_contract_preserves_nine_column_baseline() -> None:
     assert len(profiles["Baseline+Volume"].columns) == 13
     assert len(profiles["Combined"].columns) == 24
     assert [item["name"] for item in manifest] == list(FEATURE_PROFILE_ORDER)
-    assert all(item["feature_count"] == len(item["columns"]) for item in manifest)
+    for item in manifest:
+        assert isinstance(item["columns"], list)
+        assert item["feature_count"] == len(item["columns"])
 
 
 def test_extended_groups_are_finite_after_their_rolling_warmup() -> None:
@@ -186,7 +188,7 @@ def test_invalid_ohlcv_schema_and_numeric_values_fail_closed() -> None:
         build_extended_feature_groups(invalid_numeric)
 
     invalid_geometry = candles.copy()
-    invalid_geometry.loc[20, "high"] = invalid_geometry.loc[20, "low"] - 1.0
+    invalid_geometry.loc[20, "high"] = 0.5
     with pytest.raises(ValueError, match="ohlcv_geometry_invalid"):
         build_extended_feature_groups(invalid_geometry)
 
@@ -204,7 +206,7 @@ def test_invalid_timestamps_fail_closed() -> None:
         build_extended_feature_groups(duplicated)
 
     irregular = candles.copy()
-    irregular.loc[20, "date"] = irregular.loc[20, "date"] + pd.Timedelta(minutes=10)
+    irregular.loc[20, "date"] = pd.Timestamp("2026-01-01T20:10:00Z")
     with pytest.raises(ValueError, match="timestamp_interval_inconsistent"):
         build_extended_feature_groups(irregular)
 
