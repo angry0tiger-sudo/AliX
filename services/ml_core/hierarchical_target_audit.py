@@ -119,11 +119,7 @@ def _validate_price_ranges(candles: DataFrame) -> None:
     close = candles["close"].to_numpy(dtype=float)
     volume = candles["volume"].to_numpy(dtype=float)
     invalid_prices = (
-        (opened <= 0)
-        | (high <= 0)
-        | (low <= 0)
-        | (close <= 0)
-        | (volume < 0)
+        (opened <= 0) | (high <= 0) | (low <= 0) | (close <= 0) | (volume < 0)
     )
     if invalid_prices.any():
         raise ValueError("public_data_price_or_volume_out_of_range")
@@ -155,6 +151,7 @@ def _validate_minute_frame(candles: DataFrame, *, expected_rows: int) -> DataFra
     _validate_price_ranges(result)
     _validate_ohlc_geometry(result)
     return result.loc[:, list(OHLCV_COLUMNS)].reset_index(drop=True)
+
 
 def load_manifested_dataset(
     input_dir: Path,
@@ -293,9 +290,7 @@ def _validated_target_end_offset(end_value: Any, position: int) -> int:
     return offset
 
 
-def _validate_label_offset_semantics(
-    label: Any, reason: Any, offset: int
-) -> None:
+def _validate_label_offset_semantics(label: Any, reason: Any, offset: int) -> None:
     if label == "HOLD" and offset != HIERARCHICAL_HORIZON_CANDLES:
         raise ValueError("hierarchical_no_hit_end_index_invalid")
     is_directional_hit = label in ("BUY", "SELL")
@@ -311,6 +306,7 @@ def _validate_one_label_end_index(row: pd.Series, position: int) -> int | None:
     offset = _validated_target_end_offset(row["label_end_idx"], position)
     _validate_label_offset_semantics(label, row["unlabeled_reason"], offset)
     return offset
+
 
 def _validate_label_end_indices(targets: DataFrame) -> int:
     maximum_offset = 0
@@ -346,8 +342,7 @@ def _validate_late_hit_row(
     late_hit_mismatch = (
         short_row["label"] != "HOLD"
         or short_row["exit_reason"] != "HORIZON_EXPIRY"
-        or short_row["label_end_idx"]
-        != position + HIERARCHICAL_HORIZON_CANDLES
+        or short_row["label_end_idx"] != position + HIERARCHICAL_HORIZON_CANDLES
     )
     if late_hit_mismatch:
         raise ValueError("hierarchical_late_hit_must_remain_no_hit")
@@ -363,6 +358,7 @@ def _count_late_hits(short_targets: DataFrame, long_targets: DataFrame) -> int:
         if _validate_late_hit_row(short_row, row, position):
             late_count += 1
     return late_count
+
 
 def audit_hierarchical_targets(
     candles: DataFrame, *, pair: str, timeframe: str

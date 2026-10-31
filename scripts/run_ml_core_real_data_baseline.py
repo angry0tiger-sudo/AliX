@@ -499,6 +499,7 @@ def _binary_gate_diagnostics(
         "insufficient_validation_classes": insufficient_validation,
     }
 
+
 def hierarchical_sample_gate_diagnostics(
     stage1_train: Series,
     stage1_validation: Series,
