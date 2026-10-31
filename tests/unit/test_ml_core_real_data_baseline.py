@@ -658,7 +658,7 @@ def test_hierarchical_probability_composition_is_normalized() -> None:
     stage1 = np.asarray([[0.2, 0.8], [0.7, 0.3]])
     stage2 = np.asarray([[0.25, 0.75], [0.6, 0.4]])
     result = combine_hierarchical_probabilities(stage1, stage2)
-    assert result.tolist() == pytest.approx([[0.60, 0.20, 0.20], [0.12, 0.18, 0.70]])
+    np.testing.assert_allclose(result, [[0.60, 0.20, 0.20], [0.12, 0.18, 0.70]])
     assert result.sum(axis=1).tolist() == pytest.approx([1.0, 1.0])
 
 

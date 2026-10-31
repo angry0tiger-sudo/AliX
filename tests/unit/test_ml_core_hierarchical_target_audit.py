@@ -307,6 +307,7 @@ def test_hierarchical_audit_rejects_invalid_scope_and_pair() -> None:
             {
                 "label": "HOLD",
                 "label_end_idx": 12.5,
+                "exit_reason": "HORIZON_EXPIRY",
                 "unlabeled_reason": None,
             },
             "hierarchical_label_end_index_invalid",
@@ -315,6 +316,7 @@ def test_hierarchical_audit_rejects_invalid_scope_and_pair() -> None:
             {
                 "label": "HOLD",
                 "label_end_idx": 11,
+                "exit_reason": "HORIZON_EXPIRY",
                 "unlabeled_reason": None,
             },
             "hierarchical_no_hit_end_index_invalid",
@@ -323,6 +325,7 @@ def test_hierarchical_audit_rejects_invalid_scope_and_pair() -> None:
             {
                 "label": "BUY",
                 "label_end_idx": None,
+                "exit_reason": "TP_HIT",
                 "unlabeled_reason": None,
             },
             "hierarchical_label_end_index_missing",
@@ -331,7 +334,8 @@ def test_hierarchical_audit_rejects_invalid_scope_and_pair() -> None:
             {
                 "label": "SELL",
                 "label_end_idx": 2,
-                "unlabeled_reason": "unexpected",
+                "exit_reason": "unexpected",
+                "unlabeled_reason": None,
             },
             "hierarchical_hit_exit_reason_invalid",
         ),
