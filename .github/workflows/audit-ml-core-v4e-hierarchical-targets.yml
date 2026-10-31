@@ -111,6 +111,8 @@ jobs:
           persist-credentials: false
 
       - name: Confirm V4-E branch and audit-only safety scope
+        env:
+          TARGET_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           test "$GITHUB_REF" = "refs/heads/research/ml-core-v4e-hierarchical-target"
