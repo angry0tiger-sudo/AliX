@@ -1,0 +1,277 @@
+name: AliX V4-F Feature Ablation Real-Data Baseline
+
+on:
+  push:
+    branches:
+      - research/ml-core-v4f-feature-engineering
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: alix-v4f-feature-ablation-real-data
+  cancel-in-progress: false
+
+jobs:
+  feature-ablation:
+    if: github.ref == 'refs/heads/research/ml-core-v4f-feature-engineering'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      ALIx_ENV: paper
+      ALIx_DRY_RUN: "true"
+      ALIx_ALLOW_LIVE_TRADING: "false"
+      ALIx_REPORTING_ENABLED: "false"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Require standard CI success for this exact V4-F research commit
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          TARGET_SHA: ${{ github.sha }}
+          TARGET_BRANCH: ${{ github.ref_name }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import time
+          from urllib.error import HTTPError, URLError
+          from urllib.request import Request, urlopen
+
+          repository = os.environ["GITHUB_REPOSITORY"]
+          target_sha = os.environ["TARGET_SHA"]
+          target_branch = os.environ["TARGET_BRANCH"]
+          token = os.environ["GH_TOKEN"]
+          if target_branch != "research/ml-core-v4f-feature-engineering":
+              raise SystemExit("unsupported_v4f_training_branch:" + target_branch)
+          deadline = time.monotonic() + 90 * 60
+          url = (
+              f"https://api.github.com/repos/{repository}/actions/workflows/ci.yml/runs"
+              f"?head_sha={target_sha}&per_page=100"
+          )
+          while time.monotonic() < deadline:
+              request = Request(
+                  url,
+                  headers={
+                      "Accept": "application/vnd.github+json",
+                      "Authorization": f"Bearer {token}",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  },
+              )
+              try:
+                  with urlopen(request, timeout=20) as response:
+                      payload = json.load(response)
+              except (HTTPError, URLError, TimeoutError) as error:
+                  raise SystemExit(
+                      f"ci_status_lookup_failed:{type(error).__name__}"
+                  ) from None
+
+              matching = [
+                  run for run in payload.get("workflow_runs", [])
+                  if run.get("head_sha") == target_sha
+                  and run.get("head_branch") == target_branch
+                  and run.get("event") == "push"
+              ]
+              if matching:
+                  latest = max(
+                      matching,
+                      key=lambda item: (
+                          item.get("run_number", 0),
+                          item.get("run_attempt", 0),
+                      ),
+                  )
+                  if latest.get("status") == "completed":
+                      if latest.get("conclusion") != "success":
+                          raise SystemExit(
+                              "ci_green_gate_blocked:"
+                              + str(latest.get("conclusion"))
+                              + ":"
+                              + target_sha
+                          )
+                      print(json.dumps({
+                          "gate": "PASS",
+                          "target_sha": target_sha,
+                          "ci_run_id": latest.get("id"),
+                          "ci_run_url": latest.get("html_url"),
+                          "ci_conclusion": latest.get("conclusion"),
+                      }, sort_keys=True))
+                      break
+              time.sleep(30)
+          else:
+              raise SystemExit("ci_green_gate_timeout:" + target_sha)
+          PY
+
+      - name: Checkout the exact V4-F research commit without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Confirm V4-F branch, target contract, and safety scope
+        env:
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/research/ml-core-v4f-feature-engineering"
+          test "$GITHUB_SHA" = "$TARGET_SHA"
+          test -n "$GITHUB_SHA"
+          printf 'commit_sha=%s\n' "$GITHUB_SHA"
+          printf 'scope=DIAGNOSTIC_CLASSIFICATION_ONLY\n'
+          printf 'feature_profiles=5\n'
+          printf 'target_horizon_candles=12\n'
+          printf 'economic_evaluation_performed=false\n'
+          printf 'private_api_calls=0\nreal_order_attempts=0\n'
+          printf 'Champion=null\norder_permission=false\ntrading_authorization=NO-GO\n'
+
+      - name: Set up pinned Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install pinned diagnostic tree-model dependencies
+        run: |
+          python -m pip install pip==25.2
+          python -m pip install numpy==2.5.4 pandas==2.3.3 scikit-learn==1.9.0 lightgbm==4.7.0
+
+      - name: Fetch complete Binance public 1-minute candles
+        run: |
+          set -euo pipefail
+          data_dir="$RUNNER_TEMP/alix-v4f-market-data"
+          rm -rf "$data_dir"
+          mkdir -p "$data_dir"
+          for symbol in BTCUSDT ETHUSDT; do
+            log_path="$RUNNER_TEMP/v4f-fetch-730-${symbol}.log"
+            if python scripts/fetch_binance_public_ohlcv.py \
+              --days 730 \
+              --symbol "$symbol" \
+              --interval 1m \
+              --output-dir "$data_dir" \
+              --commit-sha "$GITHUB_SHA" >"$log_path" 2>&1; then
+              cat "$log_path"
+            else
+              cat "$log_path"
+              echo "Binance fetch failed for ${symbol}; refusing partial data." >&2
+              exit 1
+            fi
+          done
+          echo "ALIX_DIAGNOSTIC_DAYS=730" >> "$GITHUB_ENV"
+          echo "ALIX_DIAGNOSTIC_CONFIGURED_DAYS=730" >> "$GITHUB_ENV"
+          echo "ALIX_DIAGNOSTIC_FALLBACK_REASON=NONE" >> "$GITHUB_ENV"
+
+      - name: Train all five V4-F feature ablation profiles on flat 12-candle labels
+        run: |
+          python -m scripts.run_ml_core_real_data_baseline \
+            --input-dir "$RUNNER_TEMP/alix-v4f-market-data" \
+            --output "$GITHUB_WORKSPACE/alix-v4f-feature-ablation-report.json" \
+            --days "$ALIX_DIAGNOSTIC_DAYS" \
+            --commit-sha "$GITHUB_SHA" \
+            --scenario "V4F_Flat_12_Candle:12:2.0:1.0" \
+            --feature-ablation \
+            --calibration-fraction 0.20 \
+            --minimum-hold-precision 0.40 \
+            --minimum-hold-recall 0.20
+          echo "ALIX_TRAIN_STEP_SUMMARY=$GITHUB_STEP_SUMMARY" >> "$GITHUB_ENV"
+
+      - name: Validate V4-F report, profile coverage, common sample splits, and safety
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          report = json.loads(
+              Path("alix-v4f-feature-ablation-report.json").read_text(encoding="utf-8")
+          )
+          assert report["schema_version"] == "alix.ml-core.real-data-feature-ablation.v1"
+          assert report["commit_sha"] == os.environ["GITHUB_SHA"]
+          assert report["diagnostic_scope"] == "CLASSIFICATION_ONLY"
+          assert report["economic_evaluation_performed"] is False
+          assert report["economic_metrics_reported"] is False
+          assert report["requested_days"] == 730
+          assert report["experiment_count"] == 40
+          assert report["triple_barrier_scenarios"] == [{
+              "name": "V4F_Flat_12_Candle",
+              "horizon_candles": 12,
+              "take_profit_multiplier": 2.0,
+              "stop_loss_multiplier": 1.0,
+          }]
+          profiles = report["feature_engineering"]["profile_manifest"]
+          expected_profiles = [
+              "Baseline",
+              "Baseline+Trend",
+              "Baseline+Volatility",
+              "Baseline+Volume",
+              "Combined",
+          ]
+          assert [item["name"] for item in profiles] == expected_profiles
+          assert [item["feature_count"] for item in profiles] == [9, 17, 12, 13, 24]
+          assert report["feature_ablation_summary"]["profiles"].keys() == set(expected_profiles)
+          assert len(report["input_datasets"]) == 2
+          for dataset in report["input_datasets"]:
+              assert dataset["requested_days"] == 730
+              assert dataset["row_count"] == 730 * 24 * 60
+              assert dataset["missing_minute_intervals"] == 0
+              assert dataset["public_api_only"] is True
+              assert dataset["credentials_used"] is False
+          grouped = {}
+          allowed_statuses = {
+              "TRAINED",
+              "SKIPPED_INSUFFICIENT_SAMPLES",
+              "SKIPPED_INSUFFICIENT_CLASS_DIVERSITY",
+          }
+          for item in report["experiments"]:
+              assert item["scenario"] == "V4F_Flat_12_Candle"
+              assert item["triple_barrier"]["horizon_candles"] == 12
+              assert item["feature_profile"] in expected_profiles
+              assert item["feature_count"] in {9, 17, 12, 13, 24}
+              assert item["status"] in allowed_statuses
+              assert item["sample_signature_sha256"]
+              key = (item["pair"], item["timeframe"], item["scenario"])
+              grouped.setdefault(key, []).append(item)
+          assert len(grouped) == 8
+          for items in grouped.values():
+              assert {item["feature_profile"] for item in items} == set(expected_profiles)
+              assert len({item["sample_signature_sha256"] for item in items}) == 1
+          safety = report["safety"]
+          assert safety["Champion"] is None
+          assert safety["order_permission"] is False
+          assert safety["private_api_calls"] == 0
+          assert safety["real_order_attempts"] == 0
+          assert safety["trading_authorization"] == "NO-GO"
+          assert safety["orders_or_execution_api_used"] is False
+          print(json.dumps({
+              "schema_version": report["schema_version"],
+              "experiments": report["experiment_count"],
+              "trained_experiments": report["trained_experiments"],
+              "trained_models": report["trained_models"],
+              "feature_profiles": expected_profiles,
+              "Champion": None,
+              "trading_authorization": "NO-GO",
+              "economic_evaluation_performed": False,
+              "private_api_calls": 0,
+              "real_order_attempts": 0,
+          }, sort_keys=True))
+          PY
+
+      - name: Verify GitHub Step Summary contains V4-F ablation metrics
+        run: |
+          set -euo pipefail
+          test -n "$ALIX_TRAIN_STEP_SUMMARY"
+          test -s "$ALIX_TRAIN_STEP_SUMMARY"
+          grep -q "Feature ablation summary" "$ALIX_TRAIN_STEP_SUMMARY"
+          grep -q "Baseline+Trend" "$ALIX_TRAIN_STEP_SUMMARY"
+          grep -q "Baseline+Volatility" "$ALIX_TRAIN_STEP_SUMMARY"
+          grep -q "Baseline+Volume" "$ALIX_TRAIN_STEP_SUMMARY"
+          grep -q "Combined" "$ALIX_TRAIN_STEP_SUMMARY"
+          grep -q "Highest mean forward HOLD Precision profile" "$ALIX_TRAIN_STEP_SUMMARY"
+
+      - name: Upload V4-F feature ablation diagnostic report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alix-v4f-feature-ablation-diagnostic
+          path: alix-v4f-feature-ablation-report.json
+          if-no-files-found: warn
+          retention-days: 14

@@ -24,6 +24,14 @@ from services.ml_core.adaptive_targets import (
     apply_adaptive_triple_barrier,
 )
 from services.ml_core.causal_features import build_causal_feature_matrix
+from services.ml_core.extended_features import (
+    EXTENDED_FEATURE_SCHEMA_VERSION,
+    FEATURE_PROFILE_ORDER,
+    build_feature_profiles,
+    feature_profile_columns,
+    feature_profile_groups,
+    feature_profile_manifest,
+)
 from services.ml_core.purged_embargo import create_purged_embargo_split
 
 SYMBOLS = ("BTCUSDT", "ETHUSDT")
@@ -52,6 +60,21 @@ DEFAULT_BARRIER_SCENARIOS = (
     ("Short_Horizon", 12, TAKE_PROFIT_MULTIPLIER_DEFAULT, STOP_LOSS_MULTIPLIER_DEFAULT),
 )
 REPORT_SCHEMA = "alix.ml-core.real-data-classification-diagnostic.v5"
+FEATURE_ABLATION_REPORT_SCHEMA = "alix.ml-core.real-data-feature-ablation.v1"
+
+
+def _feature_profile_diagnostics(profile: str) -> dict[str, Any]:
+    """Return stable, hashed feature-profile provenance for one experiment."""
+    columns = feature_profile_columns(profile)
+    column_digest = hashlib.sha256("\n".join(columns).encode("utf-8")).hexdigest()
+    return {
+        "feature_profile": profile,
+        "feature_groups": list(feature_profile_groups(profile)),
+        "feature_schema_version": EXTENDED_FEATURE_SCHEMA_VERSION,
+        "feature_count": len(columns),
+        "feature_columns": list(columns),
+        "feature_columns_sha256": column_digest,
+    }
 
 
 def _validated_minute_timestamps(values: Series) -> Series:
@@ -1110,33 +1133,79 @@ def run_experiment(
     calibration_fraction: float = DEFAULT_CALIBRATION_FRACTION,
     minimum_hold_precision: float = DEFAULT_MINIMUM_HOLD_PRECISION,
     minimum_hold_recall: float = DEFAULT_MINIMUM_HOLD_RECALL,
+    feature_profile: str = "Baseline",
+    prepared_bars: DataFrame | None = None,
+    prepared_labels: DataFrame | None = None,
+    prepared_feature_profiles: dict[str, DataFrame] | None = None,
 ) -> dict[str, Any]:
-    """Fit only None/Balanced policies independently for one barrier scenario."""
+    """Fit one feature profile on a shared causal sample and fixed target split."""
     policies = weighting_policy_specs()
+    profile_metadata = _feature_profile_diagnostics(feature_profile)
     barrier_config = {
         "horizon_candles": horizon_candles,
         "take_profit_multiplier": float(take_profit_multiplier),
         "stop_loss_multiplier": float(stop_loss_multiplier),
     }
-    bars = resample_ohlcv(minute_candles, timeframe)
-    labels = apply_adaptive_triple_barrier(
-        bars,
-        horizon_candles=horizon_candles,
-        take_profit_multiplier=take_profit_multiplier,
-        stop_loss_multiplier=stop_loss_multiplier,
-    )
+    if (prepared_bars is None) != (prepared_labels is None):
+        raise ValueError("prepared_bars_and_labels_must_be_provided_together")
+    if prepared_bars is None:
+        bars = resample_ohlcv(minute_candles, timeframe)
+        labels = apply_adaptive_triple_barrier(
+            bars,
+            horizon_candles=horizon_candles,
+            take_profit_multiplier=take_profit_multiplier,
+            stop_loss_multiplier=stop_loss_multiplier,
+        )
+    else:
+        bars = prepared_bars
+        if prepared_labels is None:
+            raise ValueError("prepared_labels_missing")
+        labels = prepared_labels
+    if len(bars) != len(labels):
+        raise ValueError("prepared_bars_labels_length_mismatch")
     if len(bars) < 100:
         result = _insufficient_bar_result(pair, timeframe, bars, labels)
-        result.update({"scenario": scenario_name, "triple_barrier": barrier_config})
+        result.update(
+            {
+                "scenario": scenario_name,
+                "triple_barrier": barrier_config,
+                **profile_metadata,
+            }
+        )
         return result
 
-    features = build_causal_feature_matrix(bars)
+    if prepared_feature_profiles is not None:
+        if prepared_bars is None:
+            raise ValueError("prepared_feature_profiles_require_prepared_bars")
+        if tuple(prepared_feature_profiles) != FEATURE_PROFILE_ORDER:
+            raise ValueError("prepared_feature_profile_contract_mismatch")
+        if any(len(matrix) != len(bars) for matrix in prepared_feature_profiles.values()):
+            raise ValueError("prepared_feature_profile_length_mismatch")
+        features = prepared_feature_profiles[feature_profile]
+        split_features = prepared_feature_profiles["Combined"]
+    elif feature_profile == "Baseline":
+        features = build_causal_feature_matrix(bars)
+        split_features = features
+    else:
+        profile_matrices = build_feature_profiles(bars)
+        features = profile_matrices[feature_profile]
+        split_features = profile_matrices["Combined"]
+
     train_indices, validation_indices, split_info = purged_temporal_indices(
-        features, labels, horizon_candles=horizon_candles
+        split_features, labels, horizon_candles=horizon_candles
     )
     train_y = labels.iloc[train_indices]["label"]
     validation_y = labels.iloc[validation_indices]["label"]
     sample_gate = sample_gate_diagnostics(train_y, validation_y)
+    sample_signature = hashlib.sha256(
+        json.dumps(
+            {
+                "train_indices": train_indices,
+                "validation_indices": validation_indices,
+            },
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
     base_result: dict[str, Any] = {
         "pair": pair,
         "timeframe": timeframe,
@@ -1145,6 +1214,8 @@ def run_experiment(
         "bar_count": int(len(bars)),
         "train_rows": int(len(train_indices)),
         "validation_rows": int(len(validation_indices)),
+        "sample_signature_sha256": sample_signature,
+        **profile_metadata,
         "label_distribution": {
             "train": label_distribution(train_y),
             "validation": label_distribution(validation_y),
@@ -1165,7 +1236,7 @@ def run_experiment(
             str(sample_gate["status"]),
             sample_gate,
         )
-        result.update({"scenario": scenario_name, "triple_barrier": barrier_config})
+        result.update(base_result)
         return result
 
     x_train = features.iloc[train_indices]
@@ -1190,7 +1261,11 @@ def run_experiment(
             minimum_recall=minimum_hold_recall,
         )
         variants[name] = {
-            "model_parameters": {"class_weight": policy["class_weight"]},
+            "model_parameters": {
+                "class_weight": policy["class_weight"],
+                "feature_profile": feature_profile,
+                "feature_count": len(profile_metadata["feature_columns"]),
+            },
             "classification_metrics": {
                 "train_in_sample": classification_metrics(train_y, train_prediction),
                 "validation": classification_metrics(
@@ -1257,7 +1332,6 @@ def run_experiment(
             "caveat": "Single chronological split; diagnostic heuristic, not a statistical proof.",
         },
     }
-
 
 def _load_manifested_data(
     input_dir: Path, symbol: str, days: int, commit_sha: str
@@ -1590,6 +1664,39 @@ def render_markdown(report: dict[str, Any]) -> str:
     lines.extend(["", *_render_probability_diagnostics_section(experiments)])
     lines.extend(["", *_render_prediction_distribution_section(experiments)])
     lines.extend(["", *_render_confusion_matrix_section(experiments)])
+    ablation_summary = report.get("feature_ablation_summary")
+    if ablation_summary is not None:
+        profile_rows = ablation_summary["profiles"]
+        lines.extend(
+            [
+                "",
+                "### Feature ablation summary (balanced LightGBM primary)",
+                "",
+                "| Profile | Trained | Mean Macro-F1 | Delta Macro-F1 vs Baseline | Mean forward HOLD Precision | Mean forward HOLD Recall | Forward acceptance |",
+                "|---|---:|---:|---:|---:|---:|---|",
+            ]
+        )
+        for profile in FEATURE_PROFILE_ORDER:
+            values = profile_rows[profile]
+            lines.append(
+                f"| {profile} | {values['trained_experiment_count']}/"
+                f"{values['experiment_count']} | "
+                f"{_format_probability_metric(values['mean_validation_macro_f1'])} | "
+                f"{_format_probability_metric(values['mean_validation_macro_f1_delta_vs_baseline'])} | "
+                f"{_format_probability_metric(values['mean_forward_hold_precision'])} | "
+                f"{_format_probability_metric(values['mean_forward_hold_recall'])} | "
+                f"{values['forward_acceptance_status']} |"
+            )
+        lines.extend(
+            [
+                "",
+                "Highest mean forward HOLD Precision profile: "
+                f"{ablation_summary['highest_mean_forward_hold_precision_profile'] or 'N/A'}.",
+                "Combined forward HOLD acceptance: "
+                f"{ablation_summary['combined_forward_acceptance']}.",
+                "",
+            ]
+        )
     lines.extend(
         [
             "",
@@ -1713,31 +1820,192 @@ def _run_diagnostic_experiments(
     calibration_fraction: float,
     minimum_hold_precision: float,
     minimum_hold_recall: float,
+    feature_profile_names: tuple[str, ...] = ("Baseline",),
 ) -> list[dict[str, Any]]:
-    """Train both policies independently for each pair/timeframe/scenario."""
+    """Train selected feature profiles over identical target and eligible samples."""
+    if not feature_profile_names or len(set(feature_profile_names)) != len(
+        feature_profile_names
+    ):
+        raise ValueError("feature_profile_selection_invalid")
+    for profile in feature_profile_names:
+        feature_profile_columns(profile)
+
     experiments: list[dict[str, Any]] = []
     for symbol in SYMBOLS:
         pair = f"{symbol[:-4]}/USDT"
         for timeframe in TIMEFRAME_MINUTES:
-            for scenario in barrier_scenarios:
-                experiments.append(
-                    run_experiment(
-                        pair,
-                        timeframe,
-                        datasets[symbol],
-                        scenario_name=scenario["name"],
-                        horizon_candles=scenario["horizon_candles"],
-                        take_profit_multiplier=scenario["take_profit_multiplier"],
-                        stop_loss_multiplier=scenario["stop_loss_multiplier"],
-                        calibration_fraction=calibration_fraction,
-                        minimum_hold_precision=minimum_hold_precision,
-                        minimum_hold_recall=minimum_hold_recall,
+            if feature_profile_names == ("Baseline",):
+                for scenario in barrier_scenarios:
+                    experiments.append(
+                        run_experiment(
+                            pair,
+                            timeframe,
+                            datasets[symbol],
+                            scenario_name=scenario["name"],
+                            horizon_candles=scenario["horizon_candles"],
+                            take_profit_multiplier=scenario["take_profit_multiplier"],
+                            stop_loss_multiplier=scenario["stop_loss_multiplier"],
+                            calibration_fraction=calibration_fraction,
+                            minimum_hold_precision=minimum_hold_precision,
+                            minimum_hold_recall=minimum_hold_recall,
+                        )
                     )
+                continue
+
+            bars = resample_ohlcv(datasets[symbol], timeframe)
+            profile_matrices = build_feature_profiles(bars)
+            for scenario in barrier_scenarios:
+                labels = apply_adaptive_triple_barrier(
+                    bars,
+                    horizon_candles=scenario["horizon_candles"],
+                    take_profit_multiplier=scenario["take_profit_multiplier"],
+                    stop_loss_multiplier=scenario["stop_loss_multiplier"],
                 )
+                for profile in feature_profile_names:
+                    experiments.append(
+                        run_experiment(
+                            pair,
+                            timeframe,
+                            datasets[symbol],
+                            scenario_name=scenario["name"],
+                            horizon_candles=scenario["horizon_candles"],
+                            take_profit_multiplier=scenario["take_profit_multiplier"],
+                            stop_loss_multiplier=scenario["stop_loss_multiplier"],
+                            calibration_fraction=calibration_fraction,
+                            minimum_hold_precision=minimum_hold_precision,
+                            minimum_hold_recall=minimum_hold_recall,
+                            feature_profile=profile,
+                            prepared_bars=bars,
+                            prepared_labels=labels,
+                            prepared_feature_profiles=profile_matrices,
+                        )
+                    )
     return experiments
 
 
-def _build_diagnostic_report(
+def _mean_metric(values: list[float]) -> float | None:
+    """Return a rounded unweighted mean, preserving empty support as null."""
+    if not values:
+        return None
+    return round(float(np.mean(np.asarray(values, dtype=float))), 6)
+
+
+def _build_feature_ablation_summary(
+    experiments: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Summarize profile effects against the nine-feature Baseline control."""
+    profile_summary: dict[str, Any] = {}
+    for profile in FEATURE_PROFILE_ORDER:
+        rows = [item for item in experiments if item.get("feature_profile") == profile]
+        trained = [item for item in rows if item.get("status") == "TRAINED"]
+        macro_values: list[float] = []
+        raw_hold_precision: list[float] = []
+        forward_hold_precision: list[float] = []
+        forward_hold_recall: list[float] = []
+        accepted_count = 0
+        for item in trained:
+            classification = item["classification_metrics"]["validation"]
+            macro_values.append(float(classification["macro"]["f1"]))
+            raw_hold_precision.append(float(item["hold_metrics"]["precision"]))
+            threshold = item.get("threshold_optimization") or {}
+            forward = threshold.get("post_calibration_validation")
+            forward_hold = forward.get("hold_metrics") if forward is not None else None
+            if forward_hold is None:
+                continue
+            precision = float(forward_hold["precision"])
+            recall = float(forward_hold["recall"])
+            forward_hold_precision.append(precision)
+            forward_hold_recall.append(recall)
+            if (
+                precision >= DEFAULT_MINIMUM_HOLD_PRECISION
+                and recall >= DEFAULT_MINIMUM_HOLD_RECALL
+            ):
+                accepted_count += 1
+
+        forward_count = len(forward_hold_precision)
+        complete_pass = (
+            bool(rows)
+            and len(trained) == len(rows)
+            and forward_count == len(rows)
+            and accepted_count == len(rows)
+        )
+        profile_summary[profile] = {
+            "experiment_count": len(rows),
+            "trained_experiment_count": len(trained),
+            "skipped_experiment_count": len(rows) - len(trained),
+            "mean_validation_macro_f1": _mean_metric(macro_values),
+            "mean_validation_hold_precision_raw_argmax": _mean_metric(
+                raw_hold_precision
+            ),
+            "mean_forward_hold_precision": _mean_metric(forward_hold_precision),
+            "mean_forward_hold_recall": _mean_metric(forward_hold_recall),
+            "forward_metric_experiment_count": forward_count,
+            "forward_acceptance_pass_experiment_count": accepted_count,
+            "forward_acceptance_status": "PASS" if complete_pass else "NOT_MET_OR_INCOMPLETE",
+        }
+
+    baseline = profile_summary["Baseline"]
+    baseline_macro = baseline["mean_validation_macro_f1"]
+    baseline_forward_precision = baseline["mean_forward_hold_precision"]
+    baseline_forward_recall = baseline["mean_forward_hold_recall"]
+    for profile, values in profile_summary.items():
+        macro = values["mean_validation_macro_f1"]
+        forward_precision = values["mean_forward_hold_precision"]
+        forward_recall = values["mean_forward_hold_recall"]
+        values["mean_validation_macro_f1_delta_vs_baseline"] = (
+            round(macro - baseline_macro, 6)
+            if macro is not None and baseline_macro is not None
+            else None
+        )
+        values["mean_forward_hold_precision_delta_vs_baseline"] = (
+            round(forward_precision - baseline_forward_precision, 6)
+            if forward_precision is not None and baseline_forward_precision is not None
+            else None
+        )
+        values["mean_forward_hold_recall_delta_vs_baseline"] = (
+            round(forward_recall - baseline_forward_recall, 6)
+            if forward_recall is not None and baseline_forward_recall is not None
+            else None
+        )
+
+    ranking = [
+        {
+            "feature_profile": profile,
+            "mean_forward_hold_precision": values["mean_forward_hold_precision"],
+            "forward_metric_experiment_count": values["forward_metric_experiment_count"],
+        }
+        for profile, values in profile_summary.items()
+        if values["mean_forward_hold_precision"] is not None
+    ]
+    ranking.sort(
+        key=lambda item: (
+            item["forward_metric_experiment_count"],
+            item["mean_forward_hold_precision"],
+        ),
+        reverse=True,
+    )
+    return {
+        "aggregation_policy": (
+            "Unweighted means across pair/timeframe/scenario experiments; "
+            "forward HOLD metrics use only the post-calibration validation segment."
+        ),
+        "baseline_reference": (
+            "The Baseline profile is the unchanged nine-column V4-D feature set, "
+            "trained with the same 12-candle labels, target bars, split, sample mask, "
+            "classifier settings, and weighting policies as the extended profiles."
+        ),
+        "profiles": profile_summary,
+        "ranking_by_forward_hold_precision": ranking,
+        "highest_mean_forward_hold_precision_profile": (
+            ranking[0]["feature_profile"] if ranking else None
+        ),
+        "combined_forward_acceptance": profile_summary["Combined"][
+            "forward_acceptance_status"
+        ],
+    }
+
+
+def _build_diagnostic_report(def _build_diagnostic_report(
     *,
     days: int,
     commit_sha: str,
@@ -1748,12 +2016,15 @@ def _build_diagnostic_report(
     minimum_hold_precision: float,
     minimum_hold_recall: float,
     policy_specs: dict[str, dict[str, Any]],
+    feature_ablation: bool = False,
 ) -> dict[str, Any]:
-    """Construct the v5 report for independently trained barrier scenarios."""
+    """Construct a classification-only report, including optional feature ablation."""
     trained_experiments = sum(item["status"] == "TRAINED" for item in experiments)
     trained_models = sum(len(item["model_variants"] or {}) for item in experiments)
     return {
-        "schema_version": REPORT_SCHEMA,
+        "schema_version": (
+            FEATURE_ABLATION_REPORT_SCHEMA if feature_ablation else REPORT_SCHEMA
+        ),
         "commit_sha": commit_sha,
         "diagnostic_scope": "CLASSIFICATION_ONLY",
         "training_scope": "DIAGNOSTIC_CLASSIFICATION_ONLY",
@@ -1794,6 +2065,24 @@ def _build_diagnostic_report(
         "allowed_timeframes": list(TIMEFRAME_MINUTES),
         "labels": list(LABELS),
         "triple_barrier_scenarios": barrier_scenarios,
+        "feature_engineering": {
+            "enabled": feature_ablation,
+            "schema_version": EXTENDED_FEATURE_SCHEMA_VERSION,
+            "profile_manifest": feature_profile_manifest(),
+            "point_in_time": True,
+            "warmup_policy": (
+                "Leading rolling-window warm-up rows remain null and are excluded; "
+                "no backfill, interpolation, centered windows, or future values are used."
+            ),
+            "common_sample_policy": (
+                "For feature ablation, all profiles use the finite-row intersection "
+                "of the Combined feature matrix before the same purged chronological split."
+            ),
+            "volume_semantics": (
+                "Relative volume, volume z-score, normalized OBV, and Chaikin money "
+                "flow are OHLCV-derived proxies; they are not aggressor-side order-flow data."
+            ),
+        },
         "model": {
             "family": "LightGBM LGBMClassifier",
             "n_estimators": 80,
@@ -1865,6 +2154,9 @@ def _build_diagnostic_report(
         "trained_models": trained_models,
         "experiment_count": len(experiments),
         "experiments": experiments,
+        "feature_ablation_summary": (
+            _build_feature_ablation_summary(experiments) if feature_ablation else None
+        ),
         "safety": {
             "public_api_only": True,
             "credentials_used": False,
@@ -1923,8 +2215,9 @@ def run_diagnostic(
     minimum_hold_precision: float = DEFAULT_MINIMUM_HOLD_PRECISION,
     minimum_hold_recall: float = DEFAULT_MINIMUM_HOLD_RECALL,
     barrier_scenarios: list[dict[str, Any]] | None = None,
+    feature_ablation: bool = False,
 ) -> dict[str, Any]:
-    """Run classification diagnostics independently across configured scenarios."""
+    """Run classification diagnostics, optionally across all approved feature profiles."""
     policy_specs = _validate_diagnostic_parameters(
         days, calibration_fraction, minimum_hold_precision, minimum_hold_recall
     )
@@ -1933,6 +2226,10 @@ def run_diagnostic(
         if barrier_scenarios is not None
         else _default_barrier_scenarios()
     )
+    if feature_ablation and (
+        len(scenarios) != 1 or scenarios[0]["horizon_candles"] != 12
+    ):
+        raise ValueError("feature_ablation_requires_one_12_candle_scenario")
     datasets, provenance = _load_diagnostic_datasets(input_dir, days, commit_sha)
     experiments = _run_diagnostic_experiments(
         datasets,
@@ -1940,6 +2237,9 @@ def run_diagnostic(
         calibration_fraction=calibration_fraction,
         minimum_hold_precision=minimum_hold_precision,
         minimum_hold_recall=minimum_hold_recall,
+        feature_profile_names=(
+            FEATURE_PROFILE_ORDER if feature_ablation else ("Baseline",)
+        ),
     )
     report = _build_diagnostic_report(
         days=days,
@@ -1951,6 +2251,7 @@ def run_diagnostic(
         minimum_hold_precision=minimum_hold_precision,
         minimum_hold_recall=minimum_hold_recall,
         policy_specs=policy_specs,
+        feature_ablation=feature_ablation,
     )
     _write_diagnostic_report(report, output_path)
     _print_diagnostic_completion(report, output_path, commit_sha)
@@ -1977,6 +2278,11 @@ def main() -> int:
         default=DEFAULT_MINIMUM_HOLD_RECALL,
     )
     parser.add_argument(
+        "--feature-ablation",
+        action="store_true",
+        help="Train the five fixed V4-F feature profiles using one 12-candle target.",
+    )
+    parser.add_argument(
         "--scenario",
         action="append",
         type=parse_barrier_scenario,
@@ -1998,8 +2304,14 @@ def main() -> int:
         minimum_hold_precision=args.minimum_hold_precision,
         minimum_hold_recall=args.minimum_hold_recall,
         barrier_scenarios=scenarios,
+        feature_ablation=args.feature_ablation,
     )
-    expected_experiments = len(SYMBOLS) * len(TIMEFRAME_MINUTES) * len(scenarios)
+    expected_experiments = (
+        len(SYMBOLS)
+        * len(TIMEFRAME_MINUTES)
+        * len(scenarios)
+        * (len(FEATURE_PROFILE_ORDER) if args.feature_ablation else 1)
+    )
     if report["experiment_count"] != expected_experiments:
         raise RuntimeError("diagnostic_experiment_count_mismatch")
     return 0
