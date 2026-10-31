@@ -308,7 +308,7 @@ def _validate_label_end_indices(targets: DataFrame) -> int:
     return maximum_offset
 
 
-def _validated_late_hit_offset(end_value: object, position: int) -> int:
+def _validated_late_hit_offset(end_value: Any, position: int) -> int:
     if pd.isna(end_value):
         raise ValueError("legacy_hit_end_index_missing")
     offset = int(end_value) - position
