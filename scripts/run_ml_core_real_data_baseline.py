@@ -425,29 +425,28 @@ def binary_classification_metrics(
     }
 
 
-def _binary_gate_diagnostics(
-    train_targets: Series,
-    validation_targets: Series,
-    *,
-    negative_label: str,
-    positive_label: str,
-) -> dict[str, Any]:
-    train = pd.to_numeric(train_targets, errors="coerce")
-    validation = pd.to_numeric(validation_targets, errors="coerce")
-    if train.isna().any() or validation.isna().any():
+def _validated_binary_gate_targets(targets: Series) -> Series:
+    numeric = pd.to_numeric(targets, errors="coerce")
+    if numeric.isna().any():
         raise ValueError("binary_sample_gate_unlabeled_target")
-    if not set(train.astype(int).unique()).issubset({0, 1}) or not set(
-        validation.astype(int).unique()
-    ).issubset({0, 1}):
+    classes = set(numeric.astype(int).unique())
+    if not classes.issubset({0, 1}):
         raise ValueError("binary_sample_gate_target_out_of_policy")
-    train_counts = {
-        negative_label: int((train == 0).sum()),
-        positive_label: int((train == 1).sum()),
+    return numeric
+
+
+def _binary_gate_class_counts(
+    targets: Series, *, negative_label: str, positive_label: str
+) -> dict[str, int]:
+    return {
+        negative_label: int((targets == 0).sum()),
+        positive_label: int((targets == 1).sum()),
     }
-    validation_counts = {
-        negative_label: int((validation == 0).sum()),
-        positive_label: int((validation == 1).sum()),
-    }
+
+
+def _binary_gate_failure_details(
+    train_counts: dict[str, int], validation_counts: dict[str, int]
+) -> tuple[str, list[str], list[str], list[str]]:
     missing_train = [label for label, count in train_counts.items() if count == 0]
     insufficient_train = [
         label
@@ -465,6 +464,30 @@ def _binary_gate_diagnostics(
         status = "SKIPPED_INSUFFICIENT_SAMPLES"
     else:
         status = "PASS"
+    return status, missing_train, insufficient_train, insufficient_validation
+
+
+def _binary_gate_diagnostics(
+    train_targets: Series,
+    validation_targets: Series,
+    *,
+    negative_label: str,
+    positive_label: str,
+) -> dict[str, Any]:
+    train = _validated_binary_gate_targets(train_targets)
+    validation = _validated_binary_gate_targets(validation_targets)
+    train_counts = _binary_gate_class_counts(
+        train, negative_label=negative_label, positive_label=positive_label
+    )
+    validation_counts = _binary_gate_class_counts(
+        validation, negative_label=negative_label, positive_label=positive_label
+    )
+    (
+        status,
+        missing_train,
+        insufficient_train,
+        insufficient_validation,
+    ) = _binary_gate_failure_details(train_counts, validation_counts)
     return {
         "status": status,
         "minimum_train_samples_per_class": MIN_TRAIN_SAMPLES_PER_CLASS,
@@ -475,7 +498,6 @@ def _binary_gate_diagnostics(
         "insufficient_train_classes": insufficient_train,
         "insufficient_validation_classes": insufficient_validation,
     }
-
 
 def hierarchical_sample_gate_diagnostics(
     stage1_train: Series,

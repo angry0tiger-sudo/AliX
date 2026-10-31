@@ -89,6 +89,60 @@ def _validate_manifest(
         raise ValueError("public_data_manifest_validation_failed:" + ",".join(failures))
 
 
+def _validate_minute_timestamps(candles: DataFrame) -> pd.Series:
+    dates = pd.to_datetime(candles["date"], errors="coerce", utc=True)
+    if dates.isna().any():
+        raise ValueError("public_data_timestamp_invalid")
+    if dates.duplicated().any() or not dates.is_monotonic_increasing:
+        raise ValueError("public_data_timestamps_not_unique_and_increasing")
+    timestamp_ns = dates.astype("int64").to_numpy()
+    has_minute_gap = len(timestamp_ns) > 1 and not np.all(
+        np.diff(timestamp_ns) == 60_000_000_000
+    )
+    if has_minute_gap:
+        raise ValueError("public_data_minute_gap_detected")
+    return dates
+
+
+def _validate_finite_price_values(candles: DataFrame) -> None:
+    for column in ("open", "high", "low", "close", "volume"):
+        values = pd.to_numeric(candles[column], errors="coerce")
+        if not np.isfinite(values.to_numpy(dtype=float)).all():
+            raise ValueError(f"public_data_non_finite:{column}")
+        candles[column] = values
+
+
+def _validate_price_ranges(candles: DataFrame) -> None:
+    opened = candles["open"].to_numpy(dtype=float)
+    high = candles["high"].to_numpy(dtype=float)
+    low = candles["low"].to_numpy(dtype=float)
+    close = candles["close"].to_numpy(dtype=float)
+    volume = candles["volume"].to_numpy(dtype=float)
+    invalid_prices = (
+        (opened <= 0)
+        | (high <= 0)
+        | (low <= 0)
+        | (close <= 0)
+        | (volume < 0)
+    )
+    if invalid_prices.any():
+        raise ValueError("public_data_price_or_volume_out_of_range")
+
+
+def _validate_ohlc_geometry(candles: DataFrame) -> None:
+    opened = candles["open"].to_numpy(dtype=float)
+    high = candles["high"].to_numpy(dtype=float)
+    low = candles["low"].to_numpy(dtype=float)
+    close = candles["close"].to_numpy(dtype=float)
+    invalid_geometry = (
+        (high < low)
+        | (high < np.maximum(opened, close))
+        | (low > np.minimum(opened, close))
+    )
+    if invalid_geometry.any():
+        raise ValueError("public_data_ohlc_geometry_invalid")
+
+
 def _validate_minute_frame(candles: DataFrame, *, expected_rows: int) -> DataFrame:
     if tuple(candles.columns) != OHLCV_COLUMNS:
         raise ValueError("public_data_ohlcv_schema_invalid")
@@ -96,44 +150,11 @@ def _validate_minute_frame(candles: DataFrame, *, expected_rows: int) -> DataFra
         raise ValueError("public_data_row_count_mismatch")
 
     result = candles.copy()
-    dates = pd.to_datetime(result["date"], errors="coerce", utc=True)
-    if dates.isna().any():
-        raise ValueError("public_data_timestamp_invalid")
-    if dates.duplicated().any() or not dates.is_monotonic_increasing:
-        raise ValueError("public_data_timestamps_not_unique_and_increasing")
-    timestamp_ns = dates.astype("int64").to_numpy()
-    if len(timestamp_ns) > 1 and not np.all(np.diff(timestamp_ns) == 60_000_000_000):
-        raise ValueError("public_data_minute_gap_detected")
-    result["date"] = dates
-
-    for column in ("open", "high", "low", "close", "volume"):
-        values = pd.to_numeric(result[column], errors="coerce")
-        numeric = values.to_numpy(dtype=float)
-        if not np.isfinite(numeric).all():
-            raise ValueError(f"public_data_non_finite:{column}")
-        result[column] = values
-
-    opened = result["open"].to_numpy(dtype=float)
-    high = result["high"].to_numpy(dtype=float)
-    low = result["low"].to_numpy(dtype=float)
-    close = result["close"].to_numpy(dtype=float)
-    volume = result["volume"].to_numpy(dtype=float)
-    if (
-        np.any(opened <= 0)
-        or np.any(high <= 0)
-        or np.any(low <= 0)
-        or np.any(close <= 0)
-        or np.any(volume < 0)
-    ):
-        raise ValueError("public_data_price_or_volume_out_of_range")
-    if (
-        np.any(high < low)
-        or np.any(high < np.maximum(opened, close))
-        or np.any(low > np.minimum(opened, close))
-    ):
-        raise ValueError("public_data_ohlc_geometry_invalid")
+    result["date"] = _validate_minute_timestamps(result)
+    _validate_finite_price_values(result)
+    _validate_price_ranges(result)
+    _validate_ohlc_geometry(result)
     return result.loc[:, list(OHLCV_COLUMNS)].reset_index(drop=True)
-
 
 def load_manifested_dataset(
     input_dir: Path,
@@ -253,30 +274,71 @@ def _nullable_values_match(actual: pd.Series, expected: np.ndarray) -> bool:
     )
 
 
+def _validate_one_label_end_index(row: pd.Series, position: int) -> int | None:
+    label = row["label"]
+    end_value = row["label_end_idx"]
+    reason = row["unlabeled_reason"]
+    if pd.isna(label):
+        if not pd.isna(end_value) or reason not in UNLABELED_REASONS:
+            raise ValueError("hierarchical_unlabeled_row_contract_invalid")
+        return None
+    if pd.isna(end_value):
+        raise ValueError("hierarchical_label_end_index_missing")
+    end_number = float(end_value)
+    if not np.isfinite(end_number) or not end_number.is_integer():
+        raise ValueError("hierarchical_label_end_index_invalid")
+
+    offset = int(end_number) - position
+    if offset < 1 or offset > HIERARCHICAL_HORIZON_CANDLES:
+        raise ValueError("hierarchical_label_end_index_out_of_horizon")
+    if label == "HOLD" and offset != HIERARCHICAL_HORIZON_CANDLES:
+        raise ValueError("hierarchical_no_hit_end_index_invalid")
+    is_directional_hit = label in ("BUY", "SELL")
+    if is_directional_hit and reason not in EXIT_REASONS[:3]:
+        raise ValueError("hierarchical_hit_exit_reason_invalid")
+    return offset
+
+
 def _validate_label_end_indices(targets: DataFrame) -> int:
     maximum_offset = 0
     for position, (_, row) in enumerate(targets.iterrows()):
-        label = row["label"]
-        end_value = row["label_end_idx"]
-        reason = row["unlabeled_reason"]
-        if pd.isna(label):
-            if not pd.isna(end_value) or reason not in UNLABELED_REASONS:
-                raise ValueError("hierarchical_unlabeled_row_contract_invalid")
-            continue
-        if pd.isna(end_value):
-            raise ValueError("hierarchical_label_end_index_missing")
-        end_number = float(end_value)
-        if not np.isfinite(end_number) or not end_number.is_integer():
-            raise ValueError("hierarchical_label_end_index_invalid")
-        offset = int(end_number) - position
-        if offset < 1 or offset > HIERARCHICAL_HORIZON_CANDLES:
-            raise ValueError("hierarchical_label_end_index_out_of_horizon")
-        if label == "HOLD" and offset != HIERARCHICAL_HORIZON_CANDLES:
-            raise ValueError("hierarchical_no_hit_end_index_invalid")
-        if label in ("BUY", "SELL") and reason not in EXIT_REASONS[:3]:
-            raise ValueError("hierarchical_hit_exit_reason_invalid")
-        maximum_offset = max(maximum_offset, offset)
+        offset = _validate_one_label_end_index(row, position)
+        if offset is not None:
+            maximum_offset = max(maximum_offset, offset)
     return maximum_offset
+
+
+def _validated_late_hit_offset(end_value: object, position: int) -> int:
+    if pd.isna(end_value):
+        raise ValueError("legacy_hit_end_index_missing")
+    offset = int(end_value) - position
+    if offset < 1 or offset > LABEL_HORIZON_CANDLES:
+        raise ValueError("legacy_hit_end_index_out_of_horizon")
+    return offset
+
+
+def _validate_late_hit_row(
+    short_row: pd.Series, long_row: pd.Series, position: int
+) -> bool:
+    offset = _validated_late_hit_offset(long_row["label_end_idx"], position)
+    if offset <= HIERARCHICAL_HORIZON_CANDLES:
+        early_hit_mismatch = (
+            short_row["label"] != long_row["label"]
+            or short_row["label_end_idx"] != long_row["label_end_idx"]
+        )
+        if early_hit_mismatch:
+            raise ValueError("hierarchical_early_hit_mismatch")
+        return False
+
+    late_hit_mismatch = (
+        short_row["label"] != "HOLD"
+        or short_row["exit_reason"] != "HORIZON_EXPIRY"
+        or short_row["label_end_idx"]
+        != position + HIERARCHICAL_HORIZON_CANDLES
+    )
+    if late_hit_mismatch:
+        raise ValueError("hierarchical_late_hit_must_remain_no_hit")
+    return True
 
 
 def _count_late_hits(short_targets: DataFrame, long_targets: DataFrame) -> int:
@@ -284,26 +346,10 @@ def _count_late_hits(short_targets: DataFrame, long_targets: DataFrame) -> int:
     for position, (_, row) in enumerate(long_targets.iterrows()):
         if row["label"] not in ("BUY", "SELL"):
             continue
-        end_value = row["label_end_idx"]
-        if pd.isna(end_value):
-            raise ValueError("legacy_hit_end_index_missing")
-        offset = int(end_value) - position
-        if offset < 1 or offset > LABEL_HORIZON_CANDLES:
-            raise ValueError("legacy_hit_end_index_out_of_horizon")
-        short = short_targets.iloc[position]
-        if offset <= HIERARCHICAL_HORIZON_CANDLES:
-            if short["label"] != row["label"] or short["label_end_idx"] != end_value:
-                raise ValueError("hierarchical_early_hit_mismatch")
-        else:
-            if (
-                short["label"] != "HOLD"
-                or short["exit_reason"] != "HORIZON_EXPIRY"
-                or short["label_end_idx"] != position + HIERARCHICAL_HORIZON_CANDLES
-            ):
-                raise ValueError("hierarchical_late_hit_must_remain_no_hit")
+        short_row = short_targets.iloc[position]
+        if _validate_late_hit_row(short_row, row, position):
             late_count += 1
     return late_count
-
 
 def audit_hierarchical_targets(
     candles: DataFrame, *, pair: str, timeframe: str
