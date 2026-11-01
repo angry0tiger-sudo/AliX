@@ -214,8 +214,13 @@ def test_resampling_requires_complete_bars_and_preserves_ohlcv() -> None:
     assert bars.iloc[0]["high"] == 101.0
     with pytest.raises(ValueError, match="timeframe"):
         resample_ohlcv(minute, "1m")
-    with pytest.raises(ValueError, match="gap"):
-        resample_ohlcv(minute.drop(index=5), "15m")
+    incomplete_first_bar = resample_ohlcv(minute.drop(index=5), "15m")
+    assert len(incomplete_first_bar) == 1
+    assert incomplete_first_bar.iloc[0]["date"] == pd.Timestamp(
+        "2026-01-01T00:15:00Z"
+    )
+    with pytest.raises(ValueError, match="resampled_bars_empty"):
+        resample_ohlcv(minute.drop(index=[5, 20]), "15m")
 
 
 def test_long_round_trip_charges_fee_and_slippage_on_both_sides() -> None:
