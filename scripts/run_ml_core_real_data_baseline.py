@@ -2704,24 +2704,73 @@ def _rank_feature_profiles_by_forward_precision(
     return ranking
 
 
-def _build_feature_ablation_summary(
-    experiments: list[dict[str, Any]],
-    profile_names: tuple[str, ...] = FEATURE_PROFILE_ORDER,
-) -> dict[str, Any]:
-    """Summarize selected profiles against the unchanged nine-feature Baseline."""
+def _validate_feature_summary_profiles(
+    profile_names: tuple[str, ...],
+) -> None:
     if not profile_names or "Baseline" not in profile_names:
         raise ValueError("feature_profile_summary_contract_invalid")
-    profile_summary = {
+
+
+def _summarize_selected_feature_profiles(
+    experiments: list[dict[str, Any]],
+    profile_names: tuple[str, ...],
+) -> dict[str, dict[str, Any]]:
+    summaries = {
         profile: _summarize_feature_profile(
             [item for item in experiments if item.get("feature_profile") == profile]
         )
         for profile in profile_names
     }
-    _add_feature_profile_baseline_deltas(profile_summary)
-    ranking = _rank_feature_profiles_by_forward_precision(profile_summary)
-    primary_extended = next(
+    _add_feature_profile_baseline_deltas(summaries)
+    return summaries
+
+
+def _primary_extended_profile(profile_names: tuple[str, ...]) -> str | None:
+    return next(
         (profile for profile in profile_names if profile != "Baseline"), None
     )
+
+
+def _feature_summary_acceptance_fields(
+    profile_summary: dict[str, dict[str, Any]],
+    primary_extended: str | None,
+) -> dict[str, Any]:
+    primary_status = (
+        profile_summary[primary_extended]["forward_acceptance_status"]
+        if primary_extended is not None
+        else None
+    )
+    combined_status = (
+        profile_summary["Combined"]["forward_acceptance_status"]
+        if "Combined" in profile_summary
+        else None
+    )
+    return {
+        "primary_extended_profile": primary_extended,
+        "primary_extended_forward_acceptance": primary_status,
+        "combined_forward_acceptance": combined_status,
+    }
+
+
+def _feature_summary_ranking_fields(
+    ranking: list[dict[str, Any]],
+) -> dict[str, Any]:
+    winner = ranking[0]["feature_profile"] if ranking else None
+    return {
+        "ranking_by_forward_hold_precision": ranking,
+        "highest_mean_forward_hold_precision_profile": winner,
+    }
+
+
+def _build_feature_ablation_summary(
+    experiments: list[dict[str, Any]],
+    profile_names: tuple[str, ...] = FEATURE_PROFILE_ORDER,
+) -> dict[str, Any]:
+    """Summarize selected profiles against the unchanged nine-feature Baseline."""
+    _validate_feature_summary_profiles(profile_names)
+    profile_summary = _summarize_selected_feature_profiles(experiments, profile_names)
+    ranking = _rank_feature_profiles_by_forward_precision(profile_summary)
+    primary_extended = _primary_extended_profile(profile_names)
     return {
         "aggregation_policy": (
             "Unweighted means across pair/timeframe/fold experiments; forward HOLD "
@@ -2737,23 +2786,9 @@ def _build_feature_ablation_summary(
             "common sample mask, classifier settings, and weighting policies."
         ),
         "profiles": profile_summary,
-        "ranking_by_forward_hold_precision": ranking,
-        "highest_mean_forward_hold_precision_profile": (
-            ranking[0]["feature_profile"] if ranking else None
-        ),
-        "primary_extended_profile": primary_extended,
-        "primary_extended_forward_acceptance": (
-            profile_summary[primary_extended]["forward_acceptance_status"]
-            if primary_extended is not None
-            else None
-        ),
-        "combined_forward_acceptance": (
-            profile_summary["Combined"]["forward_acceptance_status"]
-            if "Combined" in profile_summary
-            else None
-        ),
+        **_feature_summary_ranking_fields(ranking),
+        **_feature_summary_acceptance_fields(profile_summary, primary_extended),
     }
-
 
 def _build_diagnostic_report(
     *,
