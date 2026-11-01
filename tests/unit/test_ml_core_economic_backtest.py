@@ -24,8 +24,14 @@ def _bars(rows: int = 5, prices: list[float] | None = None) -> DataFrame:
     values = prices or [100.0] * rows
     dates = pd.date_range("2026-01-01T00:00:00Z", periods=rows, freq="15min")
     return DataFrame(
-        {"date": dates, "open": values, "close": values, "high": values,
-         "low": values, "volume": [10.0] * rows}
+        {
+            "date": dates,
+            "open": values,
+            "close": values,
+            "high": values,
+            "low": values,
+            "volume": [10.0] * rows,
+        }
     )
 
 
@@ -53,8 +59,10 @@ def test_source_report_and_market_manifest_fail_closed() -> None:
         "experiment_count": 48,
         "acceptance_policy": {"status": "MET", "strict_acceptance_count": 13},
         "safety": {
-            "Champion": None, "order_permission": False,
-            "trading_authorization": "NO-GO", "private_api_calls": 0,
+            "Champion": None,
+            "order_permission": False,
+            "trading_authorization": "NO-GO",
+            "private_api_calls": 0,
             "real_order_attempts": 0,
         },
     }
@@ -63,17 +71,27 @@ def test_source_report_and_market_manifest_fail_closed() -> None:
     with pytest.raises(ValueError, match="source_report"):
         validate_source_report(bad)
     source = {
-        "symbol": "BTCUSDT", "requested_days": 1, "row_count": 1440,
-        "start_utc": "2026-01-01T00:00:00Z", "end_utc": "2026-01-01T23:59:00Z",
+        "symbol": "BTCUSDT",
+        "requested_days": 1,
+        "row_count": 1440,
+        "start_utc": "2026-01-01T00:00:00+00:00",
+        "end_utc": "2026-01-01T23:59:00+00:00",
         "csv_sha256": "abc",
     }
     current = {
-        "symbol": "BTCUSDT", "interval": "1m", "requested_days": 1,
-        "row_count": 1440, "start_utc": "2026-01-01T00:00:00Z",
-        "end_utc": "2026-01-01T23:59:00Z", "csv_sha256": "abc",
-        "commit_sha": "new-sha", "public_api_only": True,
-        "credentials_used": False, "missing_minute_intervals": 0,
-        "private_api_calls": 0, "real_order_attempts": 0,
+        "symbol": "BTCUSDT",
+        "interval": "1m",
+        "requested_days": 1,
+        "row_count": 1440,
+        "start_utc": "2026-01-01T00:00:00Z",
+        "end_utc": "2026-01-01T23:59:00Z",
+        "csv_sha256": "abc",
+        "commit_sha": "new-sha",
+        "public_api_only": True,
+        "credentials_used": False,
+        "missing_minute_intervals": 0,
+        "private_api_calls": 0,
+        "real_order_attempts": 0,
     }
     validate_market_manifest(source, current, current_commit_sha="new-sha")
     current["csv_sha256"] = "different"
@@ -84,10 +102,16 @@ def test_source_report_and_market_manifest_fail_closed() -> None:
 def test_candidate_extraction_requires_exact_thirteen_forward_passes() -> None:
     variants: dict[str, Any] = {}
     records = [
-        {"row_index": 10, "timestamp": "2026-01-01T00:00:00+00:00",
-         "probabilities": {"BUY": 0.6, "SELL": 0.2, "HOLD": 0.2}},
-        {"row_index": 11, "timestamp": "2026-01-01T00:15:00+00:00",
-         "probabilities": {"BUY": 0.2, "SELL": 0.2, "HOLD": 0.6}},
+        {
+            "row_index": 10,
+            "timestamp": "2026-01-01T00:00:00+00:00",
+            "probabilities": {"BUY": 0.6, "SELL": 0.2, "HOLD": 0.2},
+        },
+        {
+            "row_index": 11,
+            "timestamp": "2026-01-01T00:15:00+00:00",
+            "probabilities": {"BUY": 0.2, "SELL": 0.2, "HOLD": 0.6},
+        },
     ]
     for index in range(13):
         variants[str(index)] = {
@@ -95,29 +119,37 @@ def test_candidate_extraction_requires_exact_thirteen_forward_passes() -> None:
                 "selected_threshold": 0.5,
                 "post_calibration_validation": {
                     "hold_metrics": {"precision": 0.41, "recall": 0.21},
-                    "start_row_index": 10, "row_count": 2,
+                    "start_row_index": 10,
+                    "row_count": 2,
                 },
             },
-            "hyperparameter_tuning": {
-                "selected_parameters": {"learning_rate": 0.05}
-            },
+            "hyperparameter_tuning": {"selected_parameters": {"learning_rate": 0.05}},
             "validation_probabilities": records,
         }
     report = {
         "schema_version": "alix.ml-core.v4h-tuning-geometry.v1",
         "commit_sha": "e34861c4873b7cc2170aaaf6c79ed9b464df0a9",
         "diagnostic_scope": "CLASSIFICATION_ONLY",
-        "economic_evaluation_performed": False, "trained_models": 96,
+        "economic_evaluation_performed": False,
+        "trained_models": 96,
         "experiment_count": 48,
         "acceptance_policy": {"status": "MET", "strict_acceptance_count": 13},
-        "safety": {"Champion": None, "order_permission": False,
-                   "trading_authorization": "NO-GO", "private_api_calls": 0,
-                   "real_order_attempts": 0},
-        "experiments": [{
-            "scenario": "V4H_Tighter_SL", "pair": "BTC/USDT",
-            "timeframe": "15m", "feature_profile": "Baseline",
-            "model_variants": variants,
-        }],
+        "safety": {
+            "Champion": None,
+            "order_permission": False,
+            "trading_authorization": "NO-GO",
+            "private_api_calls": 0,
+            "real_order_attempts": 0,
+        },
+        "experiments": [
+            {
+                "scenario": "V4H_Tighter_SL",
+                "pair": "BTC/USDT",
+                "timeframe": "15m",
+                "feature_profile": "Baseline",
+                "model_variants": variants,
+            }
+        ],
     }
     assert len(extract_qualifying_candidates(report)) == 13
     report["experiments"][0]["model_variants"].pop("12")
@@ -137,13 +169,20 @@ def test_probability_signal_matches_v4h_hold_and_direction_policy() -> None:
 
 def test_forward_signals_use_only_ordered_persisted_forward_rows() -> None:
     candidate = {
-        "timeframe": "15m", "selected_hold_threshold": 0.5,
+        "timeframe": "15m",
+        "selected_hold_threshold": 0.5,
         "forward_row_count": 2,
         "probability_records": [
-            {"row_index": 10, "timestamp": "2026-01-01T00:00:00+00:00",
-             "probabilities": {"BUY": 0.7, "SELL": 0.2, "HOLD": 0.1}},
-            {"row_index": 11, "timestamp": "2026-01-01T00:15:00+00:00",
-             "probabilities": {"BUY": 0.1, "SELL": 0.2, "HOLD": 0.7}},
+            {
+                "row_index": 10,
+                "timestamp": "2026-01-01T00:00:00+00:00",
+                "probabilities": {"BUY": 0.7, "SELL": 0.2, "HOLD": 0.1},
+            },
+            {
+                "row_index": 11,
+                "timestamp": "2026-01-01T00:15:00+00:00",
+                "probabilities": {"BUY": 0.1, "SELL": 0.2, "HOLD": 0.7},
+            },
         ],
     }
     signals = build_forward_signals(candidate)
@@ -157,8 +196,14 @@ def test_forward_signals_use_only_ordered_persisted_forward_rows() -> None:
 def test_resampling_requires_complete_bars_and_preserves_ohlcv() -> None:
     dates = pd.date_range("2026-01-01T00:00:00Z", periods=30, freq="1min")
     minute = DataFrame(
-        {"date": dates, "open": [100.0] * 30, "high": [101.0] * 30,
-         "low": [99.0] * 30, "close": [100.5] * 30, "volume": [1.0] * 30}
+        {
+            "date": dates,
+            "open": [100.0] * 30,
+            "high": [101.0] * 30,
+            "low": [99.0] * 30,
+            "close": [100.5] * 30,
+            "volume": [1.0] * 30,
+        }
     )
     bars = resample_ohlcv(minute, "15m")
     assert len(bars) == 2
@@ -191,7 +236,12 @@ def test_hold_never_opens_and_closes_an_existing_position() -> None:
     bars = _bars(4, [100.0, 100.0, 110.0, 110.0])
     hold_only = simulate_signals(
         bars,
-        [{"execution_timestamp": pd.Timestamp("2026-01-01T00:15:00Z"), "signal": "HOLD"}],
+        [
+            {
+                "execution_timestamp": pd.Timestamp("2026-01-01T00:15:00Z"),
+                "signal": "HOLD",
+            }
+        ],
         ExecutionConfig(),
     )
     assert hold_only["trades"] == []
@@ -199,8 +249,14 @@ def test_hold_never_opens_and_closes_an_existing_position() -> None:
     close_existing = simulate_signals(
         bars,
         [
-            {"execution_timestamp": pd.Timestamp("2026-01-01T00:15:00Z"), "signal": "BUY"},
-            {"execution_timestamp": pd.Timestamp("2026-01-01T00:30:00Z"), "signal": "HOLD"},
+            {
+                "execution_timestamp": pd.Timestamp("2026-01-01T00:15:00Z"),
+                "signal": "BUY",
+            },
+            {
+                "execution_timestamp": pd.Timestamp("2026-01-01T00:30:00Z"),
+                "signal": "HOLD",
+            },
         ],
         ExecutionConfig(),
     )
@@ -213,8 +269,14 @@ def test_signal_reversal_closes_and_opens_a_new_direction() -> None:
     result = simulate_signals(
         bars,
         [
-            {"execution_timestamp": pd.Timestamp("2026-01-01T00:15:00Z"), "signal": "BUY"},
-            {"execution_timestamp": pd.Timestamp("2026-01-01T00:30:00Z"), "signal": "SELL"},
+            {
+                "execution_timestamp": pd.Timestamp("2026-01-01T00:15:00Z"),
+                "signal": "BUY",
+            },
+            {
+                "execution_timestamp": pd.Timestamp("2026-01-01T00:30:00Z"),
+                "signal": "SELL",
+            },
         ],
         ExecutionConfig(),
     )
@@ -235,9 +297,18 @@ def test_profit_factor_and_drawdown_are_net_of_costs_and_peak_to_trough() -> Non
     result = simulate_signals(
         bars,
         [
-            {"execution_timestamp": pd.Timestamp("2026-01-01T00:15:00Z"), "signal": "BUY"},
-            {"execution_timestamp": pd.Timestamp("2026-01-01T00:30:00Z"), "signal": "HOLD"},
-            {"execution_timestamp": pd.Timestamp("2026-01-01T00:45:00Z"), "signal": "SELL"},
+            {
+                "execution_timestamp": pd.Timestamp("2026-01-01T00:15:00Z"),
+                "signal": "BUY",
+            },
+            {
+                "execution_timestamp": pd.Timestamp("2026-01-01T00:30:00Z"),
+                "signal": "HOLD",
+            },
+            {
+                "execution_timestamp": pd.Timestamp("2026-01-01T00:45:00Z"),
+                "signal": "SELL",
+            },
         ],
         ExecutionConfig(),
     )
@@ -252,13 +323,23 @@ def test_execution_rejects_misaligned_or_invalid_signals() -> None:
     with pytest.raises(ValueError, match="timestamp_mismatch"):
         simulate_signals(
             bars,
-            [{"execution_timestamp": pd.Timestamp("2026-01-02T00:00:00Z"), "signal": "BUY"}],
+            [
+                {
+                    "execution_timestamp": pd.Timestamp("2026-01-02T00:00:00Z"),
+                    "signal": "BUY",
+                }
+            ],
             ExecutionConfig(),
         )
     with pytest.raises(ValueError, match="contract"):
         simulate_signals(
             bars,
-            [{"execution_timestamp": pd.Timestamp("2026-01-01T00:15:00Z"), "signal": "WAIT"}],
+            [
+                {
+                    "execution_timestamp": pd.Timestamp("2026-01-01T00:15:00Z"),
+                    "signal": "WAIT",
+                }
+            ],
             ExecutionConfig(),
         )
     with pytest.raises(ValueError, match="bars_or_signals"):
