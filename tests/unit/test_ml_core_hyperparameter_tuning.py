@@ -3,7 +3,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 from pandas import DataFrame, Series
-from typing import Any, cast
+from sklearn.base import BaseEstimator  # type: ignore[import-untyped]
+from typing import cast
 
 from services.ml_core.hyperparameter_tuning import (
     HYPERPARAMETER_DISTRIBUTIONS,
@@ -12,7 +13,7 @@ from services.ml_core.hyperparameter_tuning import (
 )
 
 
-class DeterministicClassifier:
+class DeterministicClassifier(BaseEstimator):  # type: ignore[misc]
     def __init__(
         self,
         num_leaves: int = 15,
@@ -26,23 +27,6 @@ class DeterministicClassifier:
         self.min_child_samples = min_child_samples
         self.class_weight = class_weight
         self.max_depth = max_depth
-
-    def get_params(self, deep: bool = True) -> dict[str, Any]:
-        return {
-            "num_leaves": self.num_leaves,
-            "learning_rate": self.learning_rate,
-            "min_child_samples": self.min_child_samples,
-            "class_weight": self.class_weight,
-            "max_depth": self.max_depth,
-        }
-
-    def set_params(self, **parameters: Any) -> DeterministicClassifier:
-        valid_parameters = self.get_params()
-        for name, value in parameters.items():
-            if name not in valid_parameters:
-                raise ValueError(f"unknown_estimator_parameter:{name}")
-            setattr(self, name, value)
-        return self
 
     def fit(self, features: DataFrame, labels: Series) -> DeterministicClassifier:
         assert len(features) == len(labels)
