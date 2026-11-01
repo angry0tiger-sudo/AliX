@@ -468,7 +468,7 @@ def test_trade_management_config_rejects_invalid_assumptions() -> None:
         validate_trade_management_config(TradeManagementConfig(atr_period=0))
     with pytest.raises(ValueError, match="horizon_candles"):
         validate_trade_management_config(TradeManagementConfig(horizon_candles=0))
-    with pytest.raises(ValueError, match="multipliers"):
+    with pytest.raises(ValueError, match="must_be_finite"):
         validate_trade_management_config(
             TradeManagementConfig(take_profit_atr_multiplier=float("nan"))
         )
@@ -496,7 +496,13 @@ def test_atr_take_profit_stop_loss_and_same_candle_collision() -> None:
             "execution_timestamp": dates[1],
             "signal": "BUY",
             "buy_probability": 0.8,
-        }
+        },
+        {
+            "signal_timestamp": dates[1],
+            "execution_timestamp": dates[2],
+            "signal": "HOLD",
+            "buy_probability": 0.2,
+        },
     ]
     management = TradeManagementConfig(atr_period=1)
     take_profit = _simulate(
