@@ -2482,6 +2482,72 @@ def _run_diagnostic_experiments(
                 )
     return experiments
 
+def _mean_metric(values: list[float]) -> float | None:
+    """Return a rounded unweighted mean, preserving empty support as null."""
+    if not values:
+        return None
+    return round(float(np.mean(np.asarray(values, dtype=float))), 6)
+
+
+def _trained_profile_experiments(
+    rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Select successful experiments for one feature profile."""
+    return [item for item in rows if item.get("status") == "TRAINED"]
+
+
+def _forward_hold_metrics(
+    experiment: dict[str, Any],
+) -> tuple[float, float] | None:
+    """Extract post-calibration forward HOLD Precision and Recall."""
+    threshold = experiment.get("threshold_optimization") or {}
+    forward = threshold.get("post_calibration_validation")
+    if forward is None:
+        return None
+    hold_metrics = forward.get("hold_metrics")
+    if hold_metrics is None:
+        return None
+    return float(hold_metrics["precision"]), float(hold_metrics["recall"])
+
+
+def _collect_forward_hold_metrics(
+    trained: list[dict[str, Any]],
+) -> list[tuple[float, float]]:
+    """Collect only complete post-calibration forward HOLD metrics."""
+    return [
+        values
+        for item in trained
+        if (values := _forward_hold_metrics(item)) is not None
+    ]
+
+
+def _forward_hold_acceptance_pass(metrics: tuple[float, float]) -> bool:
+    """Require both configured forward HOLD thresholds."""
+    precision, recall = metrics
+    return (
+        precision >= DEFAULT_MINIMUM_HOLD_PRECISION
+        and recall >= DEFAULT_MINIMUM_HOLD_RECALL
+    )
+
+
+def _forward_acceptance_status(
+    experiment_count: int,
+    trained_count: int,
+    forward_count: int,
+    accepted_count: int,
+) -> str:
+    """Fail closed when any experiment or forward metric is missing."""
+    if experiment_count == 0:
+        return "NOT_MET_OR_INCOMPLETE"
+    if trained_count != experiment_count:
+        return "NOT_MET_OR_INCOMPLETE"
+    if forward_count != experiment_count:
+        return "NOT_MET_OR_INCOMPLETE"
+    if accepted_count != experiment_count:
+        return "NOT_MET_OR_INCOMPLETE"
+    return "PASS"
+
+
 def _summarize_feature_profile(
     rows: list[dict[str, Any]],
 ) -> dict[str, Any]:
