@@ -25,13 +25,13 @@ jobs:
       ALIx_ALLOW_LIVE_TRADING: "false"
       ALIx_REPORTING_ENABLED: "false"
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
-      GH_TOKEN: \${{ github.token }}
+      GH_TOKEN: ${{ github.token }}
     steps:
       - name: Require standard CI success for this exact V4-I commit
         env:
-          GITHUB_REPOSITORY: \${{ github.repository }}
-          TARGET_SHA: \${{ github.sha }}
-          TARGET_BRANCH: \${{ github.ref_name }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          TARGET_SHA: ${{ github.sha }}
+          TARGET_BRANCH: ${{ github.ref_name }}
         run: |
           python - <<'PY'
           import json
@@ -111,14 +111,14 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: alix-v4h-tuning-geometry-diagnostic
-          path: \${{ runner.temp }}/v4h-source
-          repository: \${{ github.repository }}
+          path: ${{ runner.temp }}/v4h-source
+          repository: ${{ github.repository }}
           run-id: 41293168191
-          github-token: \${{ github.token }}
+          github-token: ${{ github.token }}
 
       - name: Validate source artifact and export exact data windows
         env:
-          SOURCE_REPORT: \${{ runner.temp }}/v4h-source/alix-v4h-tuning-geometry-report.json
+          SOURCE_REPORT: ${{ runner.temp }}/v4h-source/alix-v4h-tuning-geometry-report.json
         run: |
           python - <<'PY'
           import json
@@ -172,16 +172,16 @@ jobs:
 
       - name: Fetch byte-identical V4-H public market candles
         env:
-          DATA_DIR: \${{ runner.temp }}/alix-v4i-market-data
+          DATA_DIR: ${{ runner.temp }}/alix-v4i-market-data
         run: |
           set -euo pipefail
           rm -rf "$DATA_DIR"
           mkdir -p "$DATA_DIR"
           for symbol in BTCUSDT ETHUSDT; do
-            start_var="\${symbol}_START_UTC"
-            end_var="\${symbol}_END_UTC"
-            start_utc="\${!start_var}"
-            end_utc="\${!end_var}"
+            start_var="${symbol}_START_UTC"
+            end_var="${symbol}_END_UTC"
+            start_utc="${!start_var}"
+            end_utc="${!end_var}"
             python scripts/fetch_binance_public_ohlcv.py \
               --days 730 \
               --symbol "$symbol" \
@@ -194,9 +194,9 @@ jobs:
 
       - name: Replay 13 persisted V4-H candidates and verify Step Summary
         env:
-          SOURCE_REPORT: \${{ runner.temp }}/v4h-source/alix-v4h-tuning-geometry-report.json
-          DATA_DIR: \${{ runner.temp }}/alix-v4i-market-data
-          OUTPUT_REPORT: \${{ github.workspace }}/alix-v4i-economic-evaluation-report.json
+          SOURCE_REPORT: ${{ runner.temp }}/v4h-source/alix-v4h-tuning-geometry-report.json
+          DATA_DIR: ${{ runner.temp }}/alix-v4i-market-data
+          OUTPUT_REPORT: ${{ github.workspace }}/alix-v4i-economic-evaluation-report.json
         run: |
           set -euo pipefail
           python -m scripts.run_ml_core_v4i_economic_evaluation \
@@ -209,7 +209,7 @@ jobs:
             --slippage-bps 20 \
             --position-fraction 1.0 \
             --maximum-drawdown 0.15
-          summary_path="\${GITHUB_STEP_SUMMARY:?missing_GITHUB_STEP_SUMMARY}"
+          summary_path="${GITHUB_STEP_SUMMARY:?missing_GITHUB_STEP_SUMMARY}"
           test -s "$summary_path"
           grep -Fq "AliX V4-I Economic Evaluation" "$summary_path"
           grep -Fq "Profit Factor" "$summary_path"
@@ -218,8 +218,8 @@ jobs:
 
       - name: Validate V4-I economic report and safety invariants
         env:
-          OUTPUT_REPORT: \${{ github.workspace }}/alix-v4i-economic-evaluation-report.json
-          TARGET_SHA: \${{ github.sha }}
+          OUTPUT_REPORT: ${{ github.workspace }}/alix-v4i-economic-evaluation-report.json
+          TARGET_SHA: ${{ github.sha }}
         run: |
           python - <<'PY'
           import json
