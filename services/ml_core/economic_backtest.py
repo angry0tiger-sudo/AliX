@@ -1172,7 +1172,9 @@ def simulate_signals(
         },
         "confidence_filter": {
             "threshold": management.confidence_threshold,
-            "raw_buy_signal_count": sum(item["raw_signal"] == "BUY" for item in signals),
+            "raw_buy_signal_count": sum(
+                item.get("raw_signal", item["signal"]) == "BUY" for item in signals
+            ),
             "accepted_buy_signal_count": sum(item["signal"] == "BUY" for item in signals),
             "rejected_buy_signal_count": sum(
                 item["signal"] == NO_ENTRY_SIGNAL for item in signals
