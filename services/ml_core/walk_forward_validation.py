@@ -312,11 +312,11 @@ def create_walk_forward_folds(
 ) -> tuple[WalkForwardFold, ...]:
     """Create expanding train windows and disjoint tail-calibration / forward-test windows.
 
-    The three default test windows cover 60%-70%, 70%-80%, and 80%-90% of
-    the chronological rows. Calibration is taken from the tail of the history
-    preceding each test window and is excluded from model fitting. Training is
-    purged against the combined calibration/test span and embargoed by the
-    complete target-label horizon before calibration.
+    Test windows partition the 60%-90% chronological interval into equal,
+    non-overlapping segments according to fold_count. Calibration is taken from
+    the tail of the history preceding each test window and excluded from model
+    fitting. Training is purged against the combined calibration/test span and
+    embargoed by the complete target-label horizon before calibration.
     """
     folds = _validated_fold_count(fold_count)
     horizon = _positive_integer(

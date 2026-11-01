@@ -3026,7 +3026,7 @@ def _build_split_policy_report(
         "pre_validation_embargo": "exact_label_horizon_candles",
         "post_validation_embargo": "exact_label_horizon_candles",
         "fold_test_window_policy": (
-            "THREE_NON_OVERLAPPING_CHRONOLOGICAL_WINDOWS"
+            f"{walk_forward_folds}_NON_OVERLAPPING_CHRONOLOGICAL_WINDOWS"
             if is_walk_forward
             else "SINGLE_CHRONOLOGICAL_VALIDATION_WINDOW"
         ),

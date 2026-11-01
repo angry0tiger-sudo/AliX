@@ -11,7 +11,7 @@ from scripts.run_ml_core_real_data_baseline import (
 from services.ml_core.walk_forward_validation import WalkForwardFold
 
 
-def test_v4g_orchestration_runs_only_two_profiles_over_three_folds(
+def test_v4g_orchestration_runs_only_two_profiles_over_five_folds(
     monkeypatch: Any,
 ) -> None:
     bars = DataFrame({"date": range(1200), "close": range(1200)})
@@ -33,7 +33,7 @@ def test_v4g_orchestration_runs_only_two_profiles_over_three_folds(
             test_indices=(40, 41, 42),
             diagnostics={"fold_index": index},
         )
-        for index in (1, 2, 3)
+        for index in (1, 2, 3, 4, 5)
     )
     calls: list[dict[str, Any]] = []
     fold_builder_calls: list[dict[str, Any]] = []
@@ -126,18 +126,18 @@ def test_v4g_orchestration_runs_only_two_profiles_over_three_folds(
         minimum_hold_precision=0.40,
         minimum_hold_recall=0.20,
         feature_profile_names=V4G_FEATURE_PROFILE_ORDER,
-        walk_forward_folds=3,
+        walk_forward_folds=5,
     )
 
-    assert len(result) == 48
-    assert len(calls) == 48
+    assert len(result) == 80
+    assert len(calls) == 80
     assert len(fold_builder_calls) == 8
     assert len(profile_builder_calls) == 8
     assert all(names == V4G_FEATURE_PROFILE_ORDER for names in profile_builder_calls)
     assert all(
         parameters
         == {
-            "fold_count": 3,
+            "fold_count": 5,
             "label_horizon_candles": 12,
             "calibration_fraction": 0.20,
         }
@@ -149,5 +149,5 @@ def test_v4g_orchestration_runs_only_two_profiles_over_three_folds(
         for timeframe in ("15m", "30m", "1h", "4h")
     }
     assert {(item["fold_index"], item["feature_profile"]) for item in result} == {
-        (fold, profile) for fold in (1, 2, 3) for profile in V4G_FEATURE_PROFILE_ORDER
+        (fold, profile) for fold in (1, 2, 3, 4, 5) for profile in V4G_FEATURE_PROFILE_ORDER
     }

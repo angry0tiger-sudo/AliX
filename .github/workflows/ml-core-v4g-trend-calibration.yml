@@ -12,13 +12,13 @@ permissions:
 
 concurrency:
   group: alix-v4g-trend-walk-forward-calibration
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   trend-walk-forward:
     if: github.ref == 'refs/heads/research/ml-core-v4g-trend-calibration'
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 180
     env:
       ALIx_ENV: paper
       ALIx_DRY_RUN: "true"
@@ -120,7 +120,7 @@ jobs:
           printf 'scope=CLASSIFICATION_ONLY\n'
           printf 'feature_profiles=Baseline,Baseline+Trend\n'
           printf 'feature_counts=9,17\n'
-          printf 'walk_forward_folds=3\n'
+          printf 'walk_forward_folds=5\n'
           printf 'target_horizon_candles=12\n'
           printf 'calibration_minimum_hold_samples=30\n'
           printf 'minimum_hold_precision=0.40\nminimum_hold_recall=0.20\n'
@@ -164,7 +164,7 @@ jobs:
           echo "ALIX_DIAGNOSTIC_CONFIGURED_DAYS=730" >> "$GITHUB_ENV"
           echo "ALIX_DIAGNOSTIC_FALLBACK_REASON=NONE" >> "$GITHUB_ENV"
 
-      - name: Train Baseline and Baseline+Trend across three purged walk-forward folds
+      - name: Train Baseline and Baseline+Trend across five purged walk-forward folds
         run: |
           python -m scripts.run_ml_core_real_data_baseline \
             --input-dir "$RUNNER_TEMP/alix-v4g-market-data" \
@@ -173,7 +173,7 @@ jobs:
             --commit-sha "$GITHUB_SHA" \
             --scenario "V4G_Flat_12_Candle:12:2.0:1.0" \
             --feature-ablation \
-            --walk-forward-folds 3 \
+            --walk-forward-folds 5 \
             --calibration-fraction 0.20 \
             --minimum-hold-precision 0.40 \
             --minimum-hold-recall 0.20
@@ -195,7 +195,7 @@ jobs:
           assert report["economic_evaluation_performed"] is False
           assert report["economic_metrics_reported"] is False
           assert report["requested_days"] == 730
-          assert report["experiment_count"] == 48
+          assert report["experiment_count"] == 80
           assert report["triple_barrier_scenarios"] == [{
               "name": "V4G_Flat_12_Candle",
               "horizon_candles": 12,
@@ -208,7 +208,7 @@ jobs:
           assert [item["name"] for item in manifest] == expected_profiles
           assert [item["feature_count"] for item in manifest] == [9, 17]
           assert report["validation_design"]["method"] == "EXPANDING_WINDOW_WALK_FORWARD"
-          assert report["validation_design"]["fold_count"] == 3
+          assert report["validation_design"]["fold_count"] == 5
           assert report["validation_design"]["calibration_is_excluded_from_model_fit"] is True
           assert report["validation_design"]["minimum_calibration_hold_samples"] == 30
           assert report["validation_design"]["minimum_calibration_non_hold_samples"] == 30
@@ -223,7 +223,7 @@ jobs:
           assert report["calibration_policy"]["full_validation_scope"] == "NOT_COMPUTED_FOR_WALK_FORWARD"
           assert report["split_policy"]["validation_start_fraction"] == 0.60
           assert report["split_policy"]["validation_end_fraction"] == 0.90
-          assert report["split_policy"]["fold_test_window_policy"] == "THREE_NON_OVERLAPPING_CHRONOLOGICAL_WINDOWS"
+          assert report["split_policy"]["fold_test_window_policy"] == "FIVE_NON_OVERLAPPING_CHRONOLOGICAL_WINDOWS"
           assert report["split_policy"]["calibration_is_disjoint_from_test"] is True
           assert len(report["input_datasets"]) == 2
           for dataset in report["input_datasets"]:
@@ -246,7 +246,7 @@ jobs:
               assert item["feature_profile"] in expected_profiles
               assert item["feature_count"] == (9 if item["feature_profile"] == "Baseline" else 17)
               assert item["status"] in allowed_statuses
-              assert item["fold_index"] in {1, 2, 3}
+              assert item["fold_index"] in {1, 2, 3, 4, 5}
               assert item["sample_signature_sha256"]
               fold = item["fold"]
               assert fold["train_calibration_test_indices_disjoint"] is True
@@ -273,13 +273,13 @@ jobs:
                           forward = threshold["post_calibration_validation"]
                           assert forward["evaluation_scope"] == "WALK_FORWARD_TEST_ONLY"
                           assert forward["calibration_overlap"] is False
-          assert len(grouped) == 24
+          assert len(grouped) == 40
           for items in grouped.values():
               assert len(items) == 2
               assert {item["feature_profile"] for item in items} == set(expected_profiles)
               assert len({item["sample_signature_sha256"] for item in items}) == 1
-          assert report["walk_forward_summary"]["fold_count"] == 3
-          assert len(report["walk_forward_summary"]["folds"]) == 3
+          assert report["walk_forward_summary"]["fold_count"] == 5
+          assert len(report["walk_forward_summary"]["folds"]) == 5
           safety = report["safety"]
           assert report["trained_models"] == sum(
               len(item["model_variants"] or {}) for item in report["experiments"]
@@ -296,7 +296,7 @@ jobs:
               "trained_experiments": report["trained_experiments"],
               "trained_models": report["trained_models"],
               "profiles": expected_profiles,
-              "folds": 3,
+              "folds": 5,
               "Champion": None,
               "trading_authorization": "NO-GO",
               "economic_evaluation_performed": False,

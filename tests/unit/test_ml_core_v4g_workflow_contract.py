@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 
-def test_v4g_workflow_is_push_gated_two_profile_three_fold_and_fail_closed() -> None:
+def test_v4g_workflow_is_push_gated_two_profile_five_fold_and_fail_closed() -> None:
     workflow_path = (
         Path(__file__).resolve().parents[2]
         / ".github"
@@ -16,10 +16,10 @@ def test_v4g_workflow_is_push_gated_two_profile_three_fold_and_fail_closed() -> 
     assert "      - research/ml-core-v4g-trend-calibration\n" in workflow
     assert "Require standard CI success for this exact V4-G research commit" in workflow
     assert "--feature-ablation" in workflow
-    assert "--walk-forward-folds 3" in workflow
+    assert "--walk-forward-folds 5" in workflow
     assert '"V4G_Flat_12_Candle:12:2.0:1.0"' in workflow
     assert "Baseline+Trend" in workflow
-    assert "48" in workflow
+    assert "80" in workflow
     assert "economic_evaluation_performed" in workflow
     assert "Champion" in workflow
     assert "trading_authorization" in workflow
