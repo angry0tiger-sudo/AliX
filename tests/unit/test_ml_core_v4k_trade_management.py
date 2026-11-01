@@ -57,9 +57,7 @@ def _baseline_report() -> dict[str, Any]:
                 "byte_identical_to_v4h": True,
             },
         ],
-        "candidates": [
-            {"candidate_id": f"candidate-{index}"} for index in range(13)
-        ],
+        "candidates": [{"candidate_id": f"candidate-{index}"} for index in range(13)],
         "safety": {
             "Champion": None,
             "order_permission": False,
@@ -80,7 +78,9 @@ def test_trade_management_defaults_match_v4h_tighter_sl_geometry() -> None:
 
 
 def test_trade_management_config_exposes_confidence_threshold() -> None:
-    assert trade_management_config(confidence_threshold=0.50).confidence_threshold == 0.50
+    assert (
+        trade_management_config(confidence_threshold=0.50).confidence_threshold == 0.50
+    )
 
 
 def test_trade_management_config_rejects_invalid_parameters() -> None:

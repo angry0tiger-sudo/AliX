@@ -538,9 +538,7 @@ def build_forward_signals(
         buy, sell, hold = _validated_probability_values(probabilities)
         raw_signal = probability_to_signal(probabilities, threshold)
         confidence_passed = (
-            raw_signal != "BUY"
-            or confidence_floor is None
-            or buy >= confidence_floor
+            raw_signal != "BUY" or confidence_floor is None or buy >= confidence_floor
         )
         signal = raw_signal if confidence_passed else NO_ENTRY_SIGNAL
         signals.append(
@@ -554,7 +552,11 @@ def build_forward_signals(
                 "sell_probability": sell,
                 "hold_probability": hold,
                 "directional_confidence": (
-                    buy if raw_signal == "BUY" else sell if raw_signal == "SELL" else None
+                    buy
+                    if raw_signal == "BUY"
+                    else sell
+                    if raw_signal == "SELL"
+                    else None
                 ),
                 "confidence_threshold": confidence_floor,
                 "confidence_passed": confidence_passed,
@@ -842,7 +844,10 @@ def _index_execution_signals(
         if signal_index < 0 or signal_index + 1 != execution_index:
             raise ValueError("economic_signal_next_bar_alignment_invalid")
         signal = item.get("signal")
-        if signal not in (*LABELS, NO_ENTRY_SIGNAL) or execution_index in action_by_index:
+        if (
+            signal not in (*LABELS, NO_ENTRY_SIGNAL)
+            or execution_index in action_by_index
+        ):
             raise ValueError("economic_signal_contract_invalid")
         item["signal_index"] = signal_index
         action_by_index[execution_index] = item
@@ -973,7 +978,9 @@ def _open_for_signal(
     _append_equity_event(state, timestamp, marked_equity, "POSITION_OPENED")
 
 
-def _gap_barrier_touch(position: OpenPosition, bar: Any) -> tuple[str, float, str] | None:
+def _gap_barrier_touch(
+    position: OpenPosition, bar: Any
+) -> tuple[str, float, str] | None:
     """Detect a barrier already crossed at the next candle open."""
     opened = float(bar["open"])
     if opened <= position.stop_loss_price:
@@ -1144,9 +1151,7 @@ def simulate_signals(
                 normalized,
             )
         _close_on_barrier(state, bar, timestamp, index, config, gap_first=False)
-        _close_on_vertical_barrier(
-            state, bar, timestamp, index, management, config
-        )
+        _close_on_vertical_barrier(state, bar, timestamp, index, management, config)
         _mark_execution_bar_close(state, bar, timestamp)
     final_bar = normalized.iloc[last_index]
     _force_close_forward_window(
@@ -1175,7 +1180,9 @@ def simulate_signals(
             "raw_buy_signal_count": sum(
                 item.get("raw_signal", item["signal"]) == "BUY" for item in signals
             ),
-            "accepted_buy_signal_count": sum(item["signal"] == "BUY" for item in signals),
+            "accepted_buy_signal_count": sum(
+                item["signal"] == "BUY" for item in signals
+            ),
             "rejected_buy_signal_count": sum(
                 item["signal"] == NO_ENTRY_SIGNAL for item in signals
             ),

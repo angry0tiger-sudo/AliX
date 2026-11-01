@@ -33,15 +33,29 @@ V4J_CSV_SHA = "ac9de8c14df17a6eb4cf7581135004737b15b94e662a87593d2e6ce5e3c92b0d"
 V4H_REPORT_SHA = "3f3c08c583fabb6c91fcdee81c036db6c92a988cdf2537306813af97e89de6a0"
 V4K_SCHEMA = "alix.ml-core.v4k-trade-management.v1"
 CSV_FIELDS = (
-    "candidate_id", "pair", "timeframe",
-    "v4j_profit_factor", "v4k_profit_factor", "profit_factor_delta",
-    "v4j_max_drawdown_percent", "v4k_max_drawdown_percent",
-    "max_drawdown_delta_percentage_points", "v4j_trade_count", "v4k_trade_count",
-    "trade_count_reduction", "trade_count_reduction_percent",
-    "v4j_net_return_percent", "v4k_net_return_percent",
-    "v4k_total_fees_usd", "v4k_total_slippage_cost_usd",
-    "tp_exit_count", "sl_exit_count", "collision_exit_count",
-    "horizon_exit_count", "sell_exit_count", "confidence_rejected_buy_signals",
+    "candidate_id",
+    "pair",
+    "timeframe",
+    "v4j_profit_factor",
+    "v4k_profit_factor",
+    "profit_factor_delta",
+    "v4j_max_drawdown_percent",
+    "v4k_max_drawdown_percent",
+    "max_drawdown_delta_percentage_points",
+    "v4j_trade_count",
+    "v4k_trade_count",
+    "trade_count_reduction",
+    "trade_count_reduction_percent",
+    "v4j_net_return_percent",
+    "v4k_net_return_percent",
+    "v4k_total_fees_usd",
+    "v4k_total_slippage_cost_usd",
+    "tp_exit_count",
+    "sl_exit_count",
+    "collision_exit_count",
+    "horizon_exit_count",
+    "sell_exit_count",
+    "confidence_rejected_buy_signals",
     "economic_candidate_gate_passed",
 )
 
@@ -144,9 +158,7 @@ def _data_provenance_matches(
     )
 
 
-def _candidate_ids_match(
-    baseline: dict[str, Any], expected_ids: list[str]
-) -> bool:
+def _candidate_ids_match(baseline: dict[str, Any], expected_ids: list[str]) -> bool:
     """Require exact candidate identity and ordering."""
     candidates = baseline.get("candidates")
     if not isinstance(candidates, list) or len(candidates) != len(expected_ids):
@@ -275,7 +287,9 @@ def _baseline_metrics(candidate: dict[str, Any]) -> dict[str, Any]:
     """Get the V4-J realistic Spot-only metrics for one candidate."""
     profiles = candidate.get("spot_only_profiles")
     realistic = profiles.get("realistic") if isinstance(profiles, dict) else None
-    if not isinstance(realistic, dict) or not isinstance(realistic.get("metrics"), dict):
+    if not isinstance(realistic, dict) or not isinstance(
+        realistic.get("metrics"), dict
+    ):
         raise ValueError("v4j_baseline_realistic_metrics_missing")
     directions = realistic.get("trade_direction_counts")
     if not isinstance(directions, dict) or directions.get("SHORT") != 0:
@@ -322,10 +336,16 @@ def _candidate_result(
     directions = _validate_trade_ledger(result["trades"], management)
     baseline = _baseline_metrics(baseline_candidate)
     current = result["metrics"]
-    before_count, after_count = int(baseline["trade_count"]), int(current["trade_count"])
+    before_count, after_count = (
+        int(baseline["trade_count"]),
+        int(current["trade_count"]),
+    )
     reduction = before_count - after_count
     reduction_pct = round(100.0 * reduction / before_count, 8) if before_count else None
-    before_pf, after_pf = baseline["profit_factor_net_of_costs"], current["profit_factor_net_of_costs"]
+    before_pf, after_pf = (
+        baseline["profit_factor_net_of_costs"],
+        current["profit_factor_net_of_costs"],
+    )
     pf_delta = (
         round(float(after_pf) - float(before_pf), 8)
         if after_pf is not None and before_pf is not None
@@ -388,7 +408,9 @@ def _aggregate(candidates: list[dict[str, Any]]) -> dict[str, Any]:
         for item in candidates
         if item["v4k_result"]["metrics"]["profit_factor_net_of_costs"] is not None
     ]
-    before_dd = [float(item["v4j_baseline"]["max_drawdown_percent"]) for item in candidates]
+    before_dd = [
+        float(item["v4j_baseline"]["max_drawdown_percent"]) for item in candidates
+    ]
     after_dd = [
         float(item["v4k_result"]["metrics"]["max_drawdown_percent"])
         for item in candidates
@@ -525,7 +547,9 @@ def _build_report(
             "passed_candidate_count": aggregate[
                 "v4k_economic_gate_passed_candidate_count"
             ],
-            "status": "MET" if aggregate["v4k_economic_gate_passed_candidate_count"] else "NOT_MET",
+            "status": "MET"
+            if aggregate["v4k_economic_gate_passed_candidate_count"]
+            else "NOT_MET",
         },
         "validation_bias_caveat": (
             "V4-K replays the same V4-H Forward-Validation probabilities and candidate "
@@ -668,7 +692,10 @@ def run_v4k_trade_management(
     """Replay persisted V4-H probabilities and compare against immutable V4-J."""
     source_report = _load_json(source_report_path)
     baseline_report = _load_json(baseline_report_path)
-    source_digest, baseline_digest = _digest(source_report_path), _digest(baseline_report_path)
+    source_digest, baseline_digest = (
+        _digest(source_report_path),
+        _digest(baseline_report_path),
+    )
     csv_digest = _digest(baseline_csv_path)
     if source_digest != V4H_REPORT_SHA:
         raise ValueError("v4h_source_report_digest_mismatch")
