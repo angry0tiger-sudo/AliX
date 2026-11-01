@@ -590,11 +590,7 @@ def _open_position(
     entry_slippage = quantity * abs(entry_fill - reference_price)
     take_profit = entry_fill + management.take_profit_atr_multiplier * atr_value
     stop_loss = entry_fill - management.stop_loss_atr_multiplier * atr_value
-    if (
-        not np.isfinite(take_profit)
-        or not np.isfinite(stop_loss)
-        or stop_loss <= 0
-    ):
+    if not np.isfinite(take_profit) or not np.isfinite(stop_loss) or stop_loss <= 0:
         raise ValueError("economic_atr_barrier_price_invalid")
     position = OpenPosition(
         direction=direction,
@@ -1215,9 +1211,7 @@ def evaluate_candidate(
     signals = build_forward_signals(
         candidate, confidence_threshold=management.confidence_threshold
     )
-    replay = simulate_signals(
-        bars, signals, config, trade_management_config=management
-    )
+    replay = simulate_signals(bars, signals, config, trade_management_config=management)
     return {
         "candidate_id": candidate["candidate_id"],
         "scenario": candidate["scenario"],
