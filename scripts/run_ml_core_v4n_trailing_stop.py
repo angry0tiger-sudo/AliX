@@ -174,9 +174,7 @@ def _validate_trade_barrier_geometry(trade: dict[str, Any]) -> None:
 
 def _validate_trade_trailing_stop(trade: dict[str, Any]) -> None:
     """Enforce a non-loosening stop and a non-negative step counter."""
-    if float(trade["stop_loss_price"]) + 1e-9 < float(
-        trade["initial_stop_loss_price"]
-    ):
+    if float(trade["stop_loss_price"]) + 1e-9 < float(trade["initial_stop_loss_price"]):
         raise RuntimeError("v4n_trailing_stop_monotonicity_invariant_violation")
     if int(trade["trailing_stop_steps"]) < 0:
         raise RuntimeError("v4n_trailing_stop_steps_invalid")
@@ -265,9 +263,7 @@ def _candidate_drawdowns(
     return active, all_candidates
 
 
-def _sum_count_maps(
-    results: list[dict[str, Any]], field: str
-) -> dict[str, int]:
+def _sum_count_maps(results: list[dict[str, Any]], field: str) -> dict[str, int]:
     """Sum one named exit-count mapping across independent candidate replays."""
     total: dict[str, int] = {}
     for result in results:
@@ -296,8 +292,7 @@ def _gate_pass_counts(
 ) -> tuple[int, int, int]:
     """Count candidates meeting PF, drawdown, and combined economic gates."""
     passed = sum(
-        bool(result["metrics"]["economic_candidate_gate_passed"])
-        for result in results
+        bool(result["metrics"]["economic_candidate_gate_passed"]) for result in results
     )
     pf_passed = sum(
         result["metrics"]["profit_factor_net_of_costs"] is not None
