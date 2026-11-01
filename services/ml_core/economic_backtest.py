@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import timedelta
 import hashlib
 import json
@@ -42,13 +42,16 @@ class ExecutionConfig:
 
 @dataclass(frozen=True)
 class TradeManagementConfig:
-    """V4-H Triple-Barrier geometry and directional entry-confidence policy."""
+    """Triple-Barrier geometry, entry confidence, and optional causal trailing stop."""
 
     atr_period: int = ATR_PERIOD
     take_profit_atr_multiplier: float = 2.0
     stop_loss_atr_multiplier: float = 1.5
     horizon_candles: int = 12
     confidence_threshold: float = 0.55
+    trailing_stop_enabled: bool = False
+    trailing_activation_atr: float = 1.0
+    trailing_step_atr: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -69,6 +72,10 @@ class OpenPosition:
     entry_bar_index: int
     entry_confidence: float
     atr_reference_timestamp: str
+    initial_stop_loss_price: float
+    high_water_mark: float
+    trailing_stop_active: bool
+    trailing_stop_steps: int
 
 
 def validate_execution_config(config: ExecutionConfig) -> None:
@@ -107,14 +114,30 @@ def _validate_trade_barrier_multipliers(config: TradeManagementConfig) -> None:
         raise ValueError("economic_atr_multipliers_must_be_positive")
 
 
+def _validate_trailing_stop_settings(config: TradeManagementConfig) -> None:
+    """Reject malformed trailing-stop enablement, activation, or step settings."""
+    if not isinstance(config.trailing_stop_enabled, bool):
+        raise ValueError("economic_trailing_stop_enabled_invalid")
+    values = (config.trailing_activation_atr, config.trailing_step_atr)
+    if any(isinstance(value, bool) for value in values):
+        raise ValueError("economic_trailing_stop_settings_invalid")
+    try:
+        valid = all(np.isfinite(float(value)) and float(value) > 0 for value in values)
+    except (TypeError, ValueError, OverflowError):
+        valid = False
+    if not valid:
+        raise ValueError("economic_trailing_stop_settings_invalid")
+
+
 def validate_trade_management_config(config: TradeManagementConfig) -> None:
-    """Reject invalid ATR, barrier, horizon, or confidence assumptions."""
+    """Reject invalid ATR, barrier, horizon, confidence, or trailing assumptions."""
     _require_positive_integer(config.atr_period, "economic_atr_period_invalid")
     _require_positive_integer(
         config.horizon_candles, "economic_horizon_candles_invalid"
     )
     _validate_trade_barrier_multipliers(config)
     _validate_confidence_threshold(config.confidence_threshold)
+    _validate_trailing_stop_settings(config)
 
 
 def _source_report_metadata_is_approved(report: dict[str, Any]) -> bool:
@@ -615,6 +638,10 @@ def _open_position(
         entry_bar_index=entry_bar_index,
         entry_confidence=entry_confidence,
         atr_reference_timestamp=atr_reference_timestamp.isoformat(),
+        initial_stop_loss_price=stop_loss,
+        high_water_mark=entry_fill,
+        trailing_stop_active=False,
+        trailing_stop_steps=0,
     )
     marked_equity = equity - entry_fee - entry_slippage
     if marked_equity <= 0:
@@ -635,6 +662,46 @@ def _mark_position(position: OpenPosition, mark_price: float) -> float:
         - position.entry_fee
         - position.entry_slippage_cost
     )
+
+
+def _stop_exit_type(position: OpenPosition) -> str:
+    """Classify the protective stop that was active when an exit occurred."""
+    if not position.trailing_stop_active:
+        return "INITIAL_STOP"
+    if position.trailing_stop_steps == 0:
+        return "BREAKEVEN_STOP"
+    return "TRAILING_STOP"
+
+
+def _stop_exit_reason(position: OpenPosition, collision: bool) -> str:
+    """Preserve stop-first collisions while identifying trailing-stop exits."""
+    if collision:
+        return "COLLISION"
+    return {
+        "INITIAL_STOP": "SL_HIT",
+        "BREAKEVEN_STOP": "BREAKEVEN_STOP_HIT",
+        "TRAILING_STOP": "TRAILING_STOP_HIT",
+    }[_stop_exit_type(position)]
+
+
+def _net_breakeven_reference_price(
+    position: OpenPosition, config: ExecutionConfig
+) -> float:
+    """Solve the exit reference price that offsets both-side fees and slippage."""
+    fee_rate = config.fee_bps / 10_000.0
+    slippage_rate = config.slippage_bps / 10_000.0
+    denominator = 1.0 - (fee_rate * (1.0 - slippage_rate) + slippage_rate)
+    if denominator <= 0 or position.quantity <= 0:
+        raise ValueError("economic_trailing_breakeven_unreachable")
+    entry_cost_per_unit = (
+        position.entry_fee + position.entry_slippage_cost
+    ) / position.quantity
+    reference_price = (
+        position.entry_reference_price + entry_cost_per_unit
+    ) / denominator
+    if not np.isfinite(reference_price) or reference_price <= 0:
+        raise ValueError("economic_trailing_breakeven_unreachable")
+    return reference_price
 
 
 def _close_position(
@@ -667,6 +734,16 @@ def _close_position(
     bars_held = exit_bar_index - position.entry_bar_index + 1
     if bars_held < 1:
         raise RuntimeError("economic_position_holding_index_invalid")
+    stop_exit_type = (
+        _stop_exit_type(position)
+        if reason in {"SL_HIT", "BREAKEVEN_STOP_HIT", "TRAILING_STOP_HIT", "COLLISION"}
+        else None
+    )
+    breakeven_stop_price = (
+        _net_breakeven_reference_price(position, config)
+        if position.trailing_stop_active
+        else None
+    )
     trade = {
         "direction": "LONG" if position.direction == 1 else "SHORT",
         "entry_timestamp": position.entry_timestamp,
@@ -676,8 +753,18 @@ def _close_position(
         "entry_atr_reference_timestamp": position.atr_reference_timestamp,
         "atr_value": round(position.atr_value, 10),
         "barrier_reference_price": round(position.entry_fill_price, 10),
+        "initial_stop_loss_price": round(position.initial_stop_loss_price, 10),
         "stop_loss_price": round(position.stop_loss_price, 10),
         "take_profit_price": round(position.take_profit_price, 10),
+        "high_water_mark": round(position.high_water_mark, 10),
+        "trailing_stop_active": position.trailing_stop_active,
+        "trailing_stop_steps": position.trailing_stop_steps,
+        "breakeven_stop_price": (
+            round(breakeven_stop_price, 10)
+            if breakeven_stop_price is not None
+            else None
+        ),
+        "stop_exit_type": stop_exit_type,
         "entry_confidence": round(position.entry_confidence, 10),
         "bars_held": bars_held,
         "exit_reference_price": round(reference_price, 10),
@@ -1010,10 +1097,10 @@ def _open_for_signal(
 def _gap_barrier_touch(
     position: OpenPosition, bar: Any
 ) -> tuple[str, float, str] | None:
-    """Detect a barrier already crossed at the next candle open."""
+    """Detect an opening gap through the initial or currently ratcheted stop."""
     opened = float(bar["open"])
     if opened <= position.stop_loss_price:
-        return "SL_HIT", opened, "OPEN_GAP"
+        return _stop_exit_reason(position, False), opened, "OPEN_GAP"
     if opened >= position.take_profit_price:
         return "TP_HIT", opened, "OPEN_GAP"
     return None
@@ -1023,11 +1110,11 @@ def _intrabar_barrier_touch(
     position: OpenPosition,
     bar: Any,
 ) -> tuple[str, float, str] | None:
-    """Resolve OHLC touches; a same-candle SL/TP collision conservatively stops."""
+    """Resolve OHLC touches with stop-first collision handling."""
     stop_hit = float(bar["low"]) <= position.stop_loss_price
     take_hit = float(bar["high"]) >= position.take_profit_price
     if stop_hit:
-        reason = "COLLISION" if take_hit else "SL_HIT"
+        reason = _stop_exit_reason(position, take_hit)
         trigger = "INTRABAR_COLLISION" if take_hit else "INTRABAR_STOP"
         return reason, position.stop_loss_price, trigger
     if take_hit:
@@ -1057,6 +1144,40 @@ def _close_on_barrier(
     reason, reference_price, trigger = touch
     return _close_state_position(
         state, reference_price, timestamp, bar_index, reason, trigger, config
+    )
+
+
+def _update_trailing_stop_after_completed_bar(
+    state: _SimulationState,
+    bar: Any,
+    config: ExecutionConfig,
+    management: TradeManagementConfig,
+) -> None:
+    """Ratchet the stop after a completed bar; the new stop applies next bar."""
+    position = state.position
+    if position is None or not management.trailing_stop_enabled:
+        return
+    high_water_mark = max(position.high_water_mark, float(bar["high"]))
+    activation_price = (
+        position.entry_fill_price
+        + management.trailing_activation_atr * position.atr_value
+    )
+    if high_water_mark < activation_price:
+        state.position = replace(position, high_water_mark=high_water_mark)
+        return
+    step_size = management.trailing_step_atr * position.atr_value
+    steps = int(
+        np.floor((high_water_mark - activation_price) / step_size + 1e-12)
+    )
+    steps = max(position.trailing_stop_steps, steps)
+    breakeven = _net_breakeven_reference_price(position, config)
+    proposed_stop = breakeven + steps * step_size
+    state.position = replace(
+        position,
+        high_water_mark=high_water_mark,
+        trailing_stop_active=True,
+        trailing_stop_steps=steps,
+        stop_loss_price=max(position.stop_loss_price, proposed_stop),
     )
 
 
@@ -1184,6 +1305,7 @@ def _process_execution_bar(
             normalized,
         )
     _close_on_barrier(state, bar, timestamp, index, config, gap_first=False)
+    _update_trailing_stop_after_completed_bar(state, bar, config, management)
     _close_on_vertical_barrier(state, bar, timestamp, index, management, config)
     _mark_execution_bar_close(state, bar, timestamp)
 
@@ -1203,11 +1325,20 @@ def _simulation_exit_summary(
 ) -> dict[str, Any]:
     """Build exit-reason and confidence-filter counters for a candidate replay."""
     exit_reasons = sorted({str(item["exit_reason"]) for item in trades})
+    stop_types = ("INITIAL_STOP", "BREAKEVEN_STOP", "TRAILING_STOP")
+    stop_exit_type_counts = {
+        stop_type: sum(item.get("stop_exit_type") == stop_type for item in trades)
+        for stop_type in stop_types
+    }
     return {
         "exit_reason_counts": {
             reason: sum(item["exit_reason"] == reason for item in trades)
             for reason in exit_reasons
         },
+        "stop_exit_type_counts": stop_exit_type_counts,
+        "initial_stop_exit_count": stop_exit_type_counts["INITIAL_STOP"],
+        "breakeven_stop_exit_count": stop_exit_type_counts["BREAKEVEN_STOP"],
+        "trailing_stop_exit_count": stop_exit_type_counts["TRAILING_STOP"],
         "confidence_filter": {
             "threshold": None,
             "raw_buy_signal_count": sum(
@@ -1273,6 +1404,13 @@ def simulate_signals(
             "take_profit_atr_multiplier": management.take_profit_atr_multiplier,
             "stop_loss_atr_multiplier": management.stop_loss_atr_multiplier,
             "horizon_candles": management.horizon_candles,
+            "trailing_stop_enabled": management.trailing_stop_enabled,
+            "trailing_activation_atr": management.trailing_activation_atr,
+            "trailing_step_atr": management.trailing_step_atr,
+            "trailing_stop_update_policy": (
+                "COMPLETED_BAR_HIGH_NEXT_BAR_EFFECTIVE"
+            ),
+            "trailing_breakeven_policy": "NET_OF_BOTH_SIDE_FEES_AND_SLIPPAGE",
             "barrier_reference": "ACTUAL_NEXT_BAR_ENTRY_FILL",
             "atr_reference": "SIGNAL_BAR_CLOSE_ONLY",
             "same_candle_collision_policy": "STOP_LOSS_WINS",
@@ -1370,6 +1508,9 @@ def evaluate_candidate_confidence_sweep(
             stop_loss_atr_multiplier=base.stop_loss_atr_multiplier,
             horizon_candles=base.horizon_candles,
             confidence_threshold=threshold,
+            trailing_stop_enabled=base.trailing_stop_enabled,
+            trailing_activation_atr=base.trailing_activation_atr,
+            trailing_step_atr=base.trailing_step_atr,
         )
         results.append(
             {
@@ -1383,6 +1524,11 @@ def evaluate_candidate_confidence_sweep(
 
 
 V4M_CONFIDENCE_THRESHOLD = 0.60
+V4N_CONFIDENCE_THRESHOLD = 0.60
+V4N_STOP_LOSS_ATR_MULTIPLIER = 2.0
+V4N_TAKE_PROFIT_ATR_MULTIPLIER = 3.0
+V4N_TRAILING_ACTIVATION_ATR = 1.0
+V4N_TRAILING_STEP_ATR = 1.0
 # Each tuple is ordered (stop_loss_atr_multiplier, take_profit_atr_multiplier).
 V4M_TP_SL_GEOMETRIES = (
     (2.0, 2.0),
@@ -1462,6 +1608,9 @@ def evaluate_candidate_tp_sl_sweep(
             stop_loss_atr_multiplier=stop_loss,
             horizon_candles=base.horizon_candles,
             confidence_threshold=V4M_CONFIDENCE_THRESHOLD,
+            trailing_stop_enabled=base.trailing_stop_enabled,
+            trailing_activation_atr=base.trailing_activation_atr,
+            trailing_step_atr=base.trailing_step_atr,
         )
         results.append(
             {
