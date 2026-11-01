@@ -50,9 +50,7 @@ def _training_fixture(
         {"signal": [index % 3 for index in indices]},
         index=indices,
     )
-    label_end_indices = [
-        min(index + 12, rows - 1) for index in range(rows)
-    ]
+    label_end_indices = [min(index + 12, rows - 1) for index in range(rows)]
     return features, labels, indices, label_end_indices
 
 
@@ -86,9 +84,7 @@ def test_inner_time_series_folds_are_chronological_and_purged() -> None:
         folds, diagnostics, strict=True
     ):
         fit_rows = [training_indices[index] for index in fit_positions]
-        validation_rows = [
-            training_indices[index] for index in validation_positions
-        ]
+        validation_rows = [training_indices[index] for index in validation_positions]
         assert fit_rows
         assert validation_rows
         assert max(fit_rows) < min(validation_rows)
@@ -96,9 +92,10 @@ def test_inner_time_series_folds_are_chronological_and_purged() -> None:
             validation_rows
         )
         assert max(fit_rows) < min(validation_rows) - 12
-        assert detail["maximum_training_label_end_index"] < detail[
-            "validation_start_index"
-        ]
+        assert (
+            detail["maximum_training_label_end_index"]
+            < detail["validation_start_index"]
+        )
         assert detail["pre_validation_embargo_candles"] == 12
 
 
@@ -143,18 +140,20 @@ def test_inner_cv_uses_only_supplied_outer_train_rows_and_is_deterministic() -> 
     assert first["final_refit_scope"] == "FULL_OUTER_TRAIN_ONLY"
     assert first["candidate_results"] == second["candidate_results"]
     assert first["selected_parameters"] == second["selected_parameters"]
-    assert len(
-        {
-            tuple(sorted(item["parameters"].items()))
-            for item in first["candidate_results"]
-        }
-    ) == 9
+    assert (
+        len(
+            {
+                tuple(sorted(item["parameters"].items()))
+                for item in first["candidate_results"]
+            }
+        )
+        == 9
+    )
     assert first["selected_parameters"] in [
         item["parameters"] for item in first["candidate_results"]
     ]
     assert all(
-        item["maximum_training_label_end_index"]
-        < item["validation_start_index"]
+        item["maximum_training_label_end_index"] < item["validation_start_index"]
         for item in first["inner_cv_folds"]
     )
 

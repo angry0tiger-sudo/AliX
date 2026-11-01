@@ -411,8 +411,8 @@ def _variant_metric_record(
     if not isinstance(variant, dict):
         return None
     forward = _forward_hold_metrics(experiment, policy)
-    macro = variant.get("classification_metrics", {}).get("validation", {}).get(
-        "macro", {}
+    macro = (
+        variant.get("classification_metrics", {}).get("validation", {}).get("macro", {})
     )
     tuning = variant.get("hyperparameter_tuning") or {}
     return {
@@ -513,7 +513,9 @@ def _aggregate_parameter_candidates(
         "ranking_tiebreaker": "MACRO_F1",
         "candidates_ranked_by_hold_precision": by_precision,
         "candidates_ranked_by_macro_f1": by_macro,
-        "best_by_mean_inner_cv_hold_precision": by_precision[0] if by_precision else None,
+        "best_by_mean_inner_cv_hold_precision": by_precision[0]
+        if by_precision
+        else None,
         "best_by_mean_inner_cv_macro_f1": by_macro[0] if by_macro else None,
     }
 
@@ -573,9 +575,7 @@ def _build_geometry_summary(
 ) -> list[dict[str, Any]]:
     summary: list[dict[str, Any]] = []
     for scenario_name, _, _, _ in V4H_SCENARIO_CONTRACT:
-        records = [
-            item for item in metric_records if item["scenario"] == scenario_name
-        ]
+        records = [item for item in metric_records if item["scenario"] == scenario_name]
         precisions = [
             float(item["hold_precision"])
             for item in records
@@ -587,9 +587,7 @@ def _build_geometry_summary(
             if item["hold_recall"] is not None
         ]
         macro_scores = [
-            float(item["macro_f1"])
-            for item in records
-            if item["macro_f1"] is not None
+            float(item["macro_f1"]) for item in records if item["macro_f1"] is not None
         ]
         acceptance_count = sum(
             item["hold_precision"] is not None
@@ -662,17 +660,13 @@ def build_v4h_report(
     candidate_summary = _aggregate_parameter_candidates(experiments)
     geometry_summary = _build_geometry_summary(experiments, metric_records)
     trained_experiments = sum(item.get("status") == "TRAINED" for item in experiments)
-    trained_models = sum(
-        len(item.get("model_variants") or {}) for item in experiments
-    )
+    trained_models = sum(len(item.get("model_variants") or {}) for item in experiments)
     all_candidate_fit_count = sum(
         int(variant.get("hyperparameter_tuning", {}).get("candidate_fit_count", 0))
         for experiment in experiments
         for variant in (experiment.get("model_variants") or {}).values()
     )
-    acceptance_count = sum(
-        item["strict_acceptance_count"] for item in geometry_summary
-    )
+    acceptance_count = sum(item["strict_acceptance_count"] for item in geometry_summary)
     return {
         "schema_version": V4H_REPORT_SCHEMA,
         "commit_sha": commit_sha,

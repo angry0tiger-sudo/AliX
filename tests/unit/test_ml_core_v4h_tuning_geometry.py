@@ -12,9 +12,7 @@ from services.ml_core.adaptive_targets import apply_adaptive_triple_barrier
 
 
 def _market_frame(rows: int = 40) -> DataFrame:
-    dates = pd.date_range(
-        "2026-01-01T00:00:00Z", periods=rows, freq="15min"
-    )
+    dates = pd.date_range("2026-01-01T00:00:00Z", periods=rows, freq="15min")
     close = np.full(rows, 100.0)
     return DataFrame(
         {
@@ -28,7 +26,9 @@ def _market_frame(rows: int = 40) -> DataFrame:
     )
 
 
-def test_v4h_geometry_contract_preserves_three_approved_twelve_candle_scenarios() -> None:
+def test_v4h_geometry_contract_preserves_three_approved_twelve_candle_scenarios() -> (
+    None
+):
     assert v4h._v4h_scenarios() == [
         {
             "name": "V4H_Current",
@@ -96,9 +96,7 @@ def test_v4h_orchestration_creates_exactly_forty_eight_experiments(
     )
     features = {
         "Baseline": DataFrame({"base": range(1200)}),
-        "Baseline+Trend": DataFrame(
-            {"base": range(1200), "trend": range(1200)}
-        ),
+        "Baseline+Trend": DataFrame({"base": range(1200), "trend": range(1200)}),
     }
     profile_calls: list[tuple[str, ...]] = []
     label_calls: list[dict[str, Any]] = []
@@ -130,9 +128,7 @@ def test_v4h_orchestration_creates_exactly_forty_eight_experiments(
         assert prepared_bars is bars
         assert prepared_labels is labels
         assert feature_matrices is features
-        experiment_calls.append(
-            {"pair": pair, "timeframe": timeframe, **kwargs}
-        )
+        experiment_calls.append({"pair": pair, "timeframe": timeframe, **kwargs})
         return {
             "pair": pair,
             "timeframe": timeframe,
@@ -240,9 +236,10 @@ def test_v4h_report_aggregates_candidate_metrics_and_target_balance() -> None:
     assert report["hyperparameter_tuning"]["candidate_fit_count"] == 96 * 27
     candidates = report["hyperparameter_tuning"]["candidate_summary"]
     assert candidates["candidate_combinations_evaluated"] == 9
-    assert candidates["best_by_mean_inner_cv_hold_precision"][
-        "parameters"
-    ] == candidate_parameters[-1]
+    assert (
+        candidates["best_by_mean_inner_cv_hold_precision"]["parameters"]
+        == candidate_parameters[-1]
+    )
     assert len(report["geometry_summary"]) == 3
     for geometry in report["geometry_summary"]:
         assert geometry["experiment_count"] == 16
