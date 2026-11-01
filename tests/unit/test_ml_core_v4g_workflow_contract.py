@@ -39,6 +39,6 @@ def test_v4g_workflow_declares_exactly_five_test_windows_and_eighty_runs() -> No
 
     assert "--walk-forward-folds 5" in workflow
     assert 'assert report["experiment_count"] == 80' in workflow
-    assert 'assert len(grouped) == 40' in workflow
+    assert "assert len(grouped) == 40" in workflow
     assert 'assert report["walk_forward_summary"]["fold_count"] == 5' in workflow
     assert 'assert len(report["walk_forward_summary"]["folds"]) == 5' in workflow
