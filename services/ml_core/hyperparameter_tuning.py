@@ -30,7 +30,13 @@ def _positive_integer(value: object, reason: str) -> int:
     return int(value)
 
 
-def _label_end_index(value: object, row_index: int) -> int:
+def _nonnegative_integer(value: object, reason: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, Integral) or int(value) < 0:
+        raise ValueError(reason)
+    return int(value)
+
+
+def _label_end_index(value: object, row_index: int, row_count: int) -> int:
     if isinstance(value, bool):
         raise ValueError("tuning_label_end_index_invalid")
     try:
@@ -40,7 +46,7 @@ def _label_end_index(value: object, row_index: int) -> int:
     if not isfinite(numeric) or not numeric.is_integer():
         raise ValueError("tuning_label_end_index_invalid")
     end_index = int(numeric)
-    if end_index < row_index:
+    if end_index < row_index or end_index >= row_count:
         raise ValueError("tuning_label_end_index_invalid")
     return end_index
 
@@ -49,7 +55,7 @@ def _training_rows(
     training_indices: Sequence[int],
     label_end_indices: Sequence[object],
 ) -> tuple[np.ndarray, np.ndarray]:
-    if not training_indices:
+    if len(training_indices) == 0:
         raise ValueError("tuning_training_indices_empty")
     rows: list[int] = []
     ends: list[int] = []
@@ -63,7 +69,11 @@ def _training_rows(
             raise ValueError("tuning_training_index_invalid")
         row_index = int(raw_index)
         rows.append(row_index)
-        ends.append(_label_end_index(label_end_indices[row_index], row_index))
+        ends.append(
+            _label_end_index(
+                label_end_indices[row_index], row_index, len(label_end_indices)
+            )
+        )
     if rows != sorted(set(rows)):
         raise ValueError("tuning_training_indices_must_be_unique_and_increasing")
     return np.asarray(rows, dtype=int), np.asarray(ends, dtype=int)
@@ -259,7 +269,7 @@ def tune_lightgbm_classifier(
     """Tune on outer Train only, then refit the chosen estimator on all outer Train."""
     iterations = _positive_integer(n_iter, "tuning_random_search_iterations_invalid")
     split_count = _positive_integer(n_splits, "tuning_inner_cv_split_count_invalid")
-    seed = _positive_integer(random_state + 1, "tuning_random_state_invalid") - 1
+    seed = _nonnegative_integer(random_state, "tuning_random_state_invalid")
     if iterations > 27:
         raise ValueError("tuning_random_search_iterations_out_of_policy")
     if (
