@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 from pandas import DataFrame, Series
-from sklearn.base import BaseEstimator
+from sklearn.base import BaseEstimator  # type: ignore[import-untyped]
 
 from services.ml_core.hyperparameter_tuning import (
     HYPERPARAMETER_DISTRIBUTIONS,
