@@ -1432,6 +1432,7 @@ def validate_tp_sl_geometries(
         validated.append(pair)
     return tuple(validated)
 
+
 def evaluate_candidate_tp_sl_sweep(
     candidate: dict[str, Any],
     bars: DataFrame,
