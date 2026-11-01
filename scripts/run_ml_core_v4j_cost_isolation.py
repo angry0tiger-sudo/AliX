@@ -102,6 +102,98 @@ def cost_profile_configs(
     return configurations
 
 
+def _baseline_dataset_map(
+    report: dict[str, Any],
+) -> dict[str, dict[str, Any]] | None:
+    """Return validated market-data manifest entries indexed by symbol."""
+    datasets = report.get("input_datasets")
+    if not isinstance(datasets, list):
+        return None
+    if any(not isinstance(item, dict) for item in datasets):
+        return None
+    return {str(item.get("symbol")): item for item in datasets}
+
+
+def _baseline_data_provenance_matches(
+    report: dict[str, Any],
+    source_report: dict[str, Any],
+) -> bool:
+    """Require exact BTC and ETH source data identity with V4-H."""
+    source_datasets = _baseline_dataset_map(source_report)
+    baseline_datasets = _baseline_dataset_map(report)
+    expected_symbols = {"BTCUSDT", "ETHUSDT"}
+    if source_datasets is None or baseline_datasets is None:
+        return False
+    if set(source_datasets) != expected_symbols:
+        return False
+    if set(baseline_datasets) != expected_symbols:
+        return False
+    for symbol in expected_symbols:
+        source_item = source_datasets[symbol]
+        baseline_item = baseline_datasets[symbol]
+        if baseline_item.get("byte_identical_to_v4h") is not True:
+            return False
+        if baseline_item.get("csv_sha256") != source_item.get("csv_sha256"):
+            return False
+    return True
+
+
+def _baseline_candidate_ids_match(
+    candidates: list[Any],
+    expected_candidate_ids: list[str],
+) -> bool:
+    """Require the exact persisted candidate identity and ordering."""
+    if len(candidates) != len(expected_candidate_ids):
+        return False
+    for candidate, expected_id in zip(candidates, expected_candidate_ids, strict=True):
+        if not isinstance(candidate, dict):
+            return False
+        if candidate.get("candidate_id") != expected_id:
+            return False
+    return True
+
+
+def _baseline_safety_is_closed(safety: dict[str, Any]) -> bool:
+    """Verify all V4-I baseline safety invariants remain closed."""
+    checks = (
+        safety.get("Champion") is None,
+        safety.get("order_permission") is False,
+        safety.get("trading_authorization") == "NO-GO",
+        safety.get("private_api_calls") == 0,
+        safety.get("real_order_attempts") == 0,
+    )
+    return all(checks)
+
+
+def _baseline_execution_contract_matches(
+    assumptions: dict[str, Any],
+) -> bool:
+    """Require V4-I's historical short-enabled realistic execution contract."""
+    checks = (
+        assumptions.get("sell_semantics") == "OPEN_SHORT",
+        assumptions.get("fee_bps_per_side") == 25.0,
+        assumptions.get("slippage_bps_per_side") == 20.0,
+    )
+    return all(checks)
+
+
+def _baseline_identity_contract_matches(report: dict[str, Any]) -> bool:
+    """Verify the immutable V4-I report version and source run identity."""
+    checks = (
+        report.get("schema_version") == V4I_BASELINE_SCHEMA,
+        report.get("commit_sha") == V4I_BASELINE_SHA,
+        report.get("source_v4h_commit_sha") == V4H_SOURCE_SHA,
+        report.get("source_v4h_run_id") == V4H_SOURCE_RUN_ID,
+        report.get("candidate_count") == 13,
+        report.get("source_v4h_candidate_count") == 13,
+        report.get("economic_evaluation_performed") is True,
+        report.get("model_training_performed") is False,
+        report.get("model_inference_performed") is False,
+        report.get("persisted_probability_replay_only") is True,
+    )
+    return all(checks)
+
+
 def validate_v4i_baseline(
     report: dict[str, Any],
     expected_candidate_ids: list[str],
@@ -115,44 +207,14 @@ def validate_v4i_baseline(
         raise ValueError("v4i_baseline_report_contract_invalid")
     if not isinstance(candidates, list):
         raise ValueError("v4i_baseline_report_contract_invalid")
-    actual_ids = [str(item.get("candidate_id")) for item in candidates]
-    source_datasets = {
-        str(item.get("symbol")): item
-        for item in source_report.get("input_datasets", [])
-    }
-    baseline_datasets = {
-        str(item.get("symbol")): item for item in report.get("input_datasets", [])
-    }
-    dataset_match = set(source_datasets) == {"BTCUSDT", "ETHUSDT"}
-    dataset_match = dataset_match and set(baseline_datasets) == set(source_datasets)
-    if dataset_match:
-        dataset_match = all(
-            baseline_datasets[symbol].get("byte_identical_to_v4h") is True
-            and baseline_datasets[symbol].get("csv_sha256")
-            == source_datasets[symbol].get("csv_sha256")
-            for symbol in source_datasets
+    valid = all(
+        (
+            _baseline_identity_contract_matches(report),
+            _baseline_candidate_ids_match(candidates, expected_candidate_ids),
+            _baseline_execution_contract_matches(assumptions),
+            _baseline_safety_is_closed(safety),
+            _baseline_data_provenance_matches(report, source_report),
         )
-    valid = (
-        report.get("schema_version") == V4I_BASELINE_SCHEMA
-        and report.get("commit_sha") == V4I_BASELINE_SHA
-        and report.get("source_v4h_commit_sha") == V4H_SOURCE_SHA
-        and report.get("source_v4h_run_id") == V4H_SOURCE_RUN_ID
-        and report.get("candidate_count") == 13
-        and report.get("source_v4h_candidate_count") == 13
-        and report.get("economic_evaluation_performed") is True
-        and report.get("model_training_performed") is False
-        and report.get("model_inference_performed") is False
-        and report.get("persisted_probability_replay_only") is True
-        and actual_ids == expected_candidate_ids
-        and assumptions.get("sell_semantics") == "OPEN_SHORT"
-        and assumptions.get("fee_bps_per_side") == 25.0
-        and assumptions.get("slippage_bps_per_side") == 20.0
-        and safety.get("Champion") is None
-        and safety.get("order_permission") is False
-        and safety.get("trading_authorization") == "NO-GO"
-        and safety.get("private_api_calls") == 0
-        and safety.get("real_order_attempts") == 0
-        and dataset_match
     )
     if not valid:
         raise ValueError("v4i_baseline_report_contract_invalid")
@@ -637,6 +699,8 @@ def run_v4j_cost_isolation(
     candidate_ids = [str(item["candidate_id"]) for item in candidates]
     validate_v4i_baseline(baseline_report, candidate_ids, source_report)
     source_digest = hashlib.sha256(source_bytes).hexdigest()
+    if baseline_report.get("source_v4h_report_sha256") != source_digest:
+        raise ValueError("v4i_baseline_source_report_digest_mismatch")
     configs = cost_profile_configs()
     bars_cache, provenance = _market_bars_for_candidates(
         candidates, source_report, input_dir, commit_sha
