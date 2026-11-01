@@ -217,6 +217,14 @@ jobs:
           assert report["calibration_policy"]["minimum_hold_support"] == 30
           assert report["calibration_policy"]["minimum_hold_precision"] == 0.40
           assert report["calibration_policy"]["minimum_hold_recall"] == 0.20
+          assert report["calibration_policy"]["fraction_of_pre_test_history"] == 0.20
+          assert report["calibration_policy"]["fraction_of_validation"] is None
+          assert report["calibration_policy"]["primary_evaluation_scope"] == "WALK_FORWARD_TEST_ONLY"
+          assert report["calibration_policy"]["full_validation_scope"] == "NOT_COMPUTED_FOR_WALK_FORWARD"
+          assert report["split_policy"]["validation_start_fraction"] == 0.60
+          assert report["split_policy"]["validation_end_fraction"] == 0.90
+          assert report["split_policy"]["fold_test_window_policy"] == "THREE_NON_OVERLAPPING_CHRONOLOGICAL_WINDOWS"
+          assert report["split_policy"]["calibration_is_disjoint_from_test"] is True
           assert len(report["input_datasets"]) == 2
           for dataset in report["input_datasets"]:
               assert dataset["requested_days"] == 730

@@ -2833,7 +2833,16 @@ def _build_diagnostic_report(
             ),
         },
         "calibration_policy": {
-            "fraction_of_validation": float(calibration_fraction),
+            "fraction_of_validation": (
+                float(calibration_fraction)
+                if walk_forward_folds is None
+                else None
+            ),
+            "fraction_of_pre_test_history": (
+                float(calibration_fraction)
+                if walk_forward_folds is not None
+                else None
+            ),
             "temporal_position": (
                 "TAIL_OF_PRE_TEST_TRAIN_EXCLUDED_FROM_MODEL_FIT"
                 if walk_forward_folds is not None
@@ -2853,8 +2862,16 @@ def _build_diagnostic_report(
                 "hold_pr_auc",
             ],
             "ece_bin_count": 10,
-            "primary_evaluation_scope": "POST_CALIBRATION_REMAINING_VALIDATION",
-            "full_validation_scope": "DESCRIPTIVE_ONLY_INCLUDES_CALIBRATION_ROWS",
+            "primary_evaluation_scope": (
+                "WALK_FORWARD_TEST_ONLY"
+                if walk_forward_folds is not None
+                else "POST_CALIBRATION_REMAINING_VALIDATION"
+            ),
+            "full_validation_scope": (
+                "NOT_COMPUTED_FOR_WALK_FORWARD"
+                if walk_forward_folds is not None
+                else "DESCRIPTIVE_ONLY_INCLUDES_CALIBRATION_ROWS"
+            ),
         },
         "baseline_comparisons": {
             "always_sell": {
@@ -2874,12 +2891,22 @@ def _build_diagnostic_report(
             },
         },
         "split_policy": {
-            "validation_start_fraction": VALIDATION_START_FRACTION,
-            "validation_end_fraction": VALIDATION_END_FRACTION,
+            "validation_start_fraction": (
+                0.60 if walk_forward_folds is not None else VALIDATION_START_FRACTION
+            ),
+            "validation_end_fraction": (
+                0.90 if walk_forward_folds is not None else VALIDATION_END_FRACTION
+            ),
             "chronological_training_only": True,
             "label_window_purge": "actual_label_end_idx_overlap",
             "pre_validation_embargo": "exact_label_horizon_candles",
             "post_validation_embargo": "exact_label_horizon_candles",
+            "fold_test_window_policy": (
+                "THREE_NON_OVERLAPPING_CHRONOLOGICAL_WINDOWS"
+                if walk_forward_folds is not None
+                else "SINGLE_CHRONOLOGICAL_VALIDATION_WINDOW"
+            ),
+            "calibration_is_disjoint_from_test": walk_forward_folds is not None,
             "feature_lookback_is_causal": True,
         },
         "validation_design": {
