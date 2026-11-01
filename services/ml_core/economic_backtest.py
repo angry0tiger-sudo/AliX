@@ -172,6 +172,18 @@ def extract_qualifying_candidates(report: dict[str, Any]) -> list[dict[str, Any]
     return candidates
 
 
+def _same_utc_instant(left: Any, right: Any) -> bool:
+    """Compare timezone-aware timestamps independent of ISO-8601 suffix style."""
+    try:
+        left_timestamp = pd.Timestamp(left)
+        right_timestamp = pd.Timestamp(right)
+    except (TypeError, ValueError):
+        return False
+    if left_timestamp.tzinfo is None or right_timestamp.tzinfo is None:
+        return False
+    return left_timestamp.tz_convert("UTC") == right_timestamp.tz_convert("UTC")
+
+
 def validate_market_manifest(
     source_metadata: dict[str, Any],
     current_manifest: dict[str, Any],
@@ -184,8 +196,12 @@ def validate_market_manifest(
         current_manifest.get("interval") == "1m",
         current_manifest.get("requested_days") == source_metadata.get("requested_days"),
         current_manifest.get("row_count") == source_metadata.get("row_count"),
-        current_manifest.get("start_utc") == source_metadata.get("start_utc"),
-        current_manifest.get("end_utc") == source_metadata.get("end_utc"),
+        _same_utc_instant(
+            current_manifest.get("start_utc"), source_metadata.get("start_utc")
+        ),
+        _same_utc_instant(
+            current_manifest.get("end_utc"), source_metadata.get("end_utc")
+        ),
         current_manifest.get("csv_sha256") == source_metadata.get("csv_sha256"),
         current_manifest.get("commit_sha") == current_commit_sha,
         current_manifest.get("public_api_only") is True,
