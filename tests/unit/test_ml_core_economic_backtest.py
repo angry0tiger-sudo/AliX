@@ -343,12 +343,8 @@ def test_zero_cost_and_fee_only_execution_accounting() -> None:
             "signal": "HOLD",
         },
     ]
-    zero_cost = _simulate(
-        bars, signals, ExecutionConfig(fee_bps=0.0, slippage_bps=0.0)
-    )
-    fee_only = _simulate(
-        bars, signals, ExecutionConfig(fee_bps=25.0, slippage_bps=0.0)
-    )
+    zero_cost = _simulate(bars, signals, ExecutionConfig(fee_bps=0.0, slippage_bps=0.0))
+    fee_only = _simulate(bars, signals, ExecutionConfig(fee_bps=25.0, slippage_bps=0.0))
     assert zero_cost["total_fees_usd"] == 0.0
     assert zero_cost["total_slippage_cost_usd"] == 0.0
     assert fee_only["total_fees_usd"] > 0.0

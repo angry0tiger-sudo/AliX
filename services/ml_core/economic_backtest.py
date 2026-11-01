@@ -1203,7 +1203,6 @@ def simulate_signals(
     }
 
 
-
 def evaluate_candidate(
     candidate: dict[str, Any],
     bars: DataFrame,
