@@ -1392,6 +1392,30 @@ V4M_TP_SL_GEOMETRIES = (
 )
 
 
+def _validate_tp_sl_multiplier(value: Any) -> float:
+    """Convert one ATR multiplier and reject non-finite or non-positive values."""
+    if isinstance(value, bool):
+        raise ValueError("economic_tp_sl_geometry_invalid")
+    try:
+        multiplier = float(value)
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError("economic_tp_sl_geometry_invalid") from None
+    if not np.isfinite(multiplier):
+        raise ValueError("economic_tp_sl_geometry_invalid")
+    if multiplier <= 0:
+        raise ValueError("economic_tp_sl_multipliers_must_be_positive")
+    return multiplier
+
+
+def _normalize_tp_sl_geometry(geometry: Any) -> tuple[float, float]:
+    """Normalize one (SL, TP) pair without accepting malformed shapes."""
+    if not isinstance(geometry, (list, tuple)) or len(geometry) != 2:
+        raise ValueError("economic_tp_sl_geometry_invalid")
+    stop_loss = _validate_tp_sl_multiplier(geometry[0])
+    take_profit = _validate_tp_sl_multiplier(geometry[1])
+    return stop_loss, take_profit
+
+
 def validate_tp_sl_geometries(
     tp_sl_geometries: list[tuple[float, float]] | tuple[tuple[float, float], ...],
 ) -> tuple[tuple[float, float], ...]:
@@ -1401,27 +1425,12 @@ def validate_tp_sl_geometries(
     validated: list[tuple[float, float]] = []
     seen: set[tuple[float, float]] = set()
     for geometry in tp_sl_geometries:
-        if not isinstance(geometry, (list, tuple)) or len(geometry) != 2:
-            raise ValueError("economic_tp_sl_geometry_invalid")
-        stop_loss_value, take_profit_value = geometry
-        if isinstance(stop_loss_value, bool) or isinstance(take_profit_value, bool):
-            raise ValueError("economic_tp_sl_geometry_invalid")
-        try:
-            stop_loss = float(stop_loss_value)
-            take_profit = float(take_profit_value)
-        except (TypeError, ValueError, OverflowError):
-            raise ValueError("economic_tp_sl_geometry_invalid") from None
-        if not np.isfinite(stop_loss) or not np.isfinite(take_profit):
-            raise ValueError("economic_tp_sl_geometry_invalid")
-        if stop_loss <= 0 or take_profit <= 0:
-            raise ValueError("economic_tp_sl_multipliers_must_be_positive")
-        pair = (stop_loss, take_profit)
+        pair = _normalize_tp_sl_geometry(geometry)
         if pair in seen:
             raise ValueError("economic_tp_sl_geometry_duplicate")
         seen.add(pair)
         validated.append(pair)
     return tuple(validated)
-
 
 def evaluate_candidate_tp_sl_sweep(
     candidate: dict[str, Any],
