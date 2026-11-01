@@ -855,9 +855,10 @@ def _signal_market_indices(
         signal_timestamp = pd.Timestamp(signal_time)
         if signal_timestamp.tzinfo is None:
             raise ValueError("economic_signal_timestamp_timezone_required")
-        signal_index = index_by_time.get(signal_timestamp.tz_convert("UTC"))
-        if signal_index is None:
+        signal_index_value = index_by_time.get(signal_timestamp.tz_convert("UTC"))
+        if signal_index_value is None:
             raise ValueError("economic_signal_price_timestamp_mismatch")
+        signal_index = signal_index_value
     if signal_index < 0 or signal_index + 1 != execution_index:
         raise ValueError("economic_signal_next_bar_alignment_invalid")
     return signal_index, execution_index
