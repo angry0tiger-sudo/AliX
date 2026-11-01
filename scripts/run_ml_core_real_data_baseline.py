@@ -2515,112 +2515,139 @@ def _summarize_feature_profile(
     }
 
 
+def _fold_profile_forward_metrics(
+    rows: list[dict[str, Any]],
+) -> tuple[dict[str, Any], dict[tuple[str, str], tuple[float, float]]]:
+    trained = _trained_profile_experiments(rows)
+    forward = [
+        (item, values)
+        for item in trained
+        if (values := _forward_hold_metrics(item)) is not None
+    ]
+    values = [metric_values for _, metric_values in forward]
+    profile_stats = {
+        "experiment_count": len(rows),
+        "trained_experiment_count": len(trained),
+        "forward_metric_experiment_count": len(forward),
+        "mean_forward_hold_precision": _mean_metric(
+            [item[0] for item in values]
+        ),
+        "mean_forward_hold_recall": _mean_metric(
+            [item[1] for item in values]
+        ),
+        "precision_at_least_0_40_count": sum(
+            item[0] >= DEFAULT_MINIMUM_HOLD_PRECISION for item in values
+        ),
+        "strict_acceptance_count": sum(
+            _forward_hold_acceptance_pass(item) for item in values
+        ),
+    }
+    indexed = {
+        (str(item["pair"]), str(item["timeframe"])): metric_values
+        for item, metric_values in forward
+    }
+    return profile_stats, indexed
+
+
+def _paired_forward_precision_summary(
+    indexed: dict[str, dict[tuple[str, str], tuple[float, float]]],
+) -> dict[str, Any]:
+    baseline = indexed.get("Baseline", {})
+    trend = indexed.get("Baseline+Trend", {})
+    shared_keys = set(baseline).intersection(trend)
+    baseline_values = [baseline[key][0] for key in sorted(shared_keys)]
+    trend_values = [trend[key][0] for key in sorted(shared_keys)]
+    baseline_mean = _mean_metric(baseline_values)
+    trend_mean = _mean_metric(trend_values)
+    delta = (
+        round(trend_mean - baseline_mean, 6)
+        if baseline_mean is not None and trend_mean is not None
+        else None
+    )
+    return {
+        "matched_pair_timeframe_count": len(shared_keys),
+        "baseline_mean_forward_hold_precision": baseline_mean,
+        "trend_mean_forward_hold_precision": trend_mean,
+        "trend_minus_baseline_precision": delta,
+        "trend_wins": sum(
+            trend[key][0] > baseline[key][0] for key in sorted(shared_keys)
+        ),
+    }
+
+
+def _build_fold_walk_forward_summary(
+    fold_rows: list[dict[str, Any]],
+    profile_names: tuple[str, ...],
+    fold_index: int,
+) -> dict[str, Any]:
+    profile_stats: dict[str, dict[str, Any]] = {}
+    indexed: dict[str, dict[tuple[str, str], tuple[float, float]]] = {}
+    for profile in profile_names:
+        rows = [
+            item for item in fold_rows if item.get("feature_profile") == profile
+        ]
+        profile_stats[profile], indexed[profile] = _fold_profile_forward_metrics(rows)
+    return {
+        "fold_index": fold_index,
+        "profiles": profile_stats,
+        "paired_comparison": _paired_forward_precision_summary(indexed),
+    }
+
+
+def _count_improved_walk_forward_folds(folds: list[dict[str, Any]]) -> int:
+    return sum(
+        item["paired_comparison"]["trend_minus_baseline_precision"] is not None
+        and item["paired_comparison"]["trend_minus_baseline_precision"] > 0.0
+        for item in folds
+    )
+
+
+def _fold_profile_threshold_count(
+    folds: list[dict[str, Any]],
+    profile: str,
+    metric_name: str,
+) -> int:
+    return sum(
+        item["profiles"][profile][metric_name]
+        for item in folds
+    )
+
+
 def _build_walk_forward_summary(
     experiments: list[dict[str, Any]],
     profile_names: tuple[str, ...],
     fold_count: int,
 ) -> dict[str, Any]:
     """Aggregate each fold and paired Baseline/Trend Test precision results."""
-    folds: list[dict[str, Any]] = []
-    for fold_index in range(1, fold_count + 1):
-        fold_rows = [
-            item for item in experiments if item.get("fold_index") == fold_index
-        ]
-        profile_stats: dict[str, dict[str, Any]] = {}
-        indexed: dict[str, dict[tuple[str, str], tuple[float, float]]] = {}
-        for profile in profile_names:
-            rows = [
-                item for item in fold_rows if item.get("feature_profile") == profile
-            ]
-            trained = _trained_profile_experiments(rows)
-            forward = [
-                (item, values)
-                for item in trained
-                if (values := _forward_hold_metrics(item)) is not None
-            ]
-            profile_stats[profile] = {
-                "experiment_count": len(rows),
-                "trained_experiment_count": len(trained),
-                "forward_metric_experiment_count": len(forward),
-                "mean_forward_hold_precision": _mean_metric(
-                    [values[0] for _, values in forward]
-                ),
-                "mean_forward_hold_recall": _mean_metric(
-                    [values[1] for _, values in forward]
-                ),
-                "precision_at_least_0_40_count": sum(
-                    values[0] >= DEFAULT_MINIMUM_HOLD_PRECISION for _, values in forward
-                ),
-                "strict_acceptance_count": sum(
-                    _forward_hold_acceptance_pass(values) for _, values in forward
-                ),
-            }
-            indexed[profile] = {
-                (str(item["pair"]), str(item["timeframe"])): values
-                for item, values in forward
-            }
-
-        paired_count = 0
-        baseline_precision: list[float] = []
-        trend_precision: list[float] = []
-        trend_wins = 0
-        if "Baseline" in indexed and "Baseline+Trend" in indexed:
-            shared_keys = set(indexed["Baseline"]).intersection(
-                indexed["Baseline+Trend"]
-            )
-            for key in sorted(shared_keys):
-                base_values = indexed["Baseline"][key]
-                trend_values = indexed["Baseline+Trend"][key]
-                paired_count += 1
-                baseline_precision.append(base_values[0])
-                trend_precision.append(trend_values[0])
-                trend_wins += trend_values[0] > base_values[0]
-
-        baseline_mean = _mean_metric(baseline_precision)
-        trend_mean = _mean_metric(trend_precision)
-        paired_delta = (
-            round(trend_mean - baseline_mean, 6)
-            if baseline_mean is not None and trend_mean is not None
-            else None
+    folds = [
+        _build_fold_walk_forward_summary(
+            [
+                item
+                for item in experiments
+                if item.get("fold_index") == fold_index
+            ],
+            profile_names,
+            fold_index,
         )
-        folds.append(
-            {
-                "fold_index": fold_index,
-                "profiles": profile_stats,
-                "paired_comparison": {
-                    "matched_pair_timeframe_count": paired_count,
-                    "baseline_mean_forward_hold_precision": baseline_mean,
-                    "trend_mean_forward_hold_precision": trend_mean,
-                    "trend_minus_baseline_precision": paired_delta,
-                    "trend_wins": trend_wins,
-                },
-            }
-        )
-
-    improved_folds = sum(
-        item["paired_comparison"]["trend_minus_baseline_precision"] is not None
-        and item["paired_comparison"]["trend_minus_baseline_precision"] > 0.0
-        for item in folds
-    )
+        for fold_index in range(1, fold_count + 1)
+    ]
     return {
         "fold_count": fold_count,
         "folds": folds,
-        "trend_improved_fold_count": improved_folds,
+        "trend_improved_fold_count": _count_improved_walk_forward_folds(folds),
         "forward_hold_precision_at_least_0_40_count_by_profile": {
-            profile: sum(
-                item["profiles"][profile]["precision_at_least_0_40_count"]
-                for item in folds
+            profile: _fold_profile_threshold_count(
+                folds, profile, "precision_at_least_0_40_count"
             )
             for profile in profile_names
         },
         "strict_acceptance_count_by_profile": {
-            profile: sum(
-                item["profiles"][profile]["strict_acceptance_count"] for item in folds
+            profile: _fold_profile_threshold_count(
+                folds, profile, "strict_acceptance_count"
             )
             for profile in profile_names
         },
     }
-
 
 def _add_feature_profile_baseline_deltas(
     profile_summary: dict[str, dict[str, Any]],
