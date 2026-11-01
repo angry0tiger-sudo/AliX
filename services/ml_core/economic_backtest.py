@@ -23,6 +23,7 @@ V4H_MIN_HOLD_RECALL = 0.20
 LABELS = ("BUY", "SELL", "HOLD")
 TIMEFRAME_MINUTES = {"15m": 15, "30m": 30, "1h": 60, "4h": 240}
 OHLCV_COLUMNS = ("date", "open", "high", "low", "close", "volume")
+MAX_DRAWDOWN_ACCOUNTING_TOLERANCE = 1e-10
 
 
 @dataclass(frozen=True)
@@ -652,6 +653,18 @@ def _metrics(
     }
 
 
+def _validate_drawdown_accounting(
+    state_drawdown: float, equity_values: list[float]
+) -> None:
+    """Compare full-precision state drawdown with the rounded equity-curve series."""
+    curve_drawdown = max_drawdown_from_equity(equity_values)
+    if state_drawdown > curve_drawdown + MAX_DRAWDOWN_ACCOUNTING_TOLERANCE:
+        raise RuntimeError(
+            "economic_drawdown_accounting_inconsistent:"
+            f"state={state_drawdown:.12g};curve={curve_drawdown:.12g}"
+        )
+
+
 def _normalize_execution_bars(bars: DataFrame) -> DataFrame:
     """Validate execution timestamps and next-bar prices once per candidate."""
     if bars.empty or not {"date", "open", "close"}.issubset(bars.columns):
@@ -871,8 +884,7 @@ def simulate_signals(
         state, final_bar, pd.Timestamp(final_bar["date"]), config
     )
     equity_values = [float(item["equity_usd"]) for item in state.equity_curve]
-    if state.maximum_drawdown > max_drawdown_from_equity(equity_values):
-        raise RuntimeError("economic_drawdown_accounting_inconsistent")
+    _validate_drawdown_accounting(state.maximum_drawdown, equity_values)
     metrics = _metrics(state.trades, equity_values, config)
     return {
         "metrics": metrics,

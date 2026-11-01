@@ -17,6 +17,7 @@ from services.ml_core.economic_backtest import (
     validate_execution_config,
     validate_market_manifest,
     validate_source_report,
+    _validate_drawdown_accounting,
 )
 
 
@@ -322,6 +323,13 @@ def test_profit_factor_and_drawdown_are_net_of_costs_and_peak_to_trough() -> Non
     assert result["metrics"]["max_drawdown_fraction"] >= 0
     assert result["total_fees_usd"] > 0
     assert result["total_slippage_cost_usd"] > 0
+
+
+def test_drawdown_accounting_allows_only_equity_rounding_tolerance() -> None:
+    _validate_drawdown_accounting(0.2, [100.0, 80.0])
+    _validate_drawdown_accounting(0.20000000005, [100.0, 80.0])
+    with pytest.raises(RuntimeError, match="economic_drawdown_accounting_inconsistent"):
+        _validate_drawdown_accounting(0.200001, [100.0, 80.0])
 
 
 def test_execution_rejects_misaligned_or_invalid_signals() -> None:
