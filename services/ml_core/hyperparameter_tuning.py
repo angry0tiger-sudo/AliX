@@ -83,6 +83,97 @@ def _training_rows(
     return np.asarray(rows, dtype=int), np.asarray(ends, dtype=int)
 
 
+def _validate_inner_cv_inputs(
+    training_indices: Sequence[int],
+    labels: Series,
+    label_end_indices: Sequence[object],
+    horizon_candles: int,
+    n_splits: int,
+    minimum_class_samples: int,
+) -> tuple[int, int, int, np.ndarray, np.ndarray]:
+    horizon = _positive_integer(horizon_candles, "tuning_horizon_invalid")
+    split_count = _positive_integer(n_splits, "tuning_inner_cv_split_count_invalid")
+    minimum = _positive_integer(
+        minimum_class_samples, "tuning_minimum_class_samples_invalid"
+    )
+    train_rows, train_ends = _training_rows(training_indices, label_end_indices)
+    if len(labels) != len(train_rows):
+        raise ValueError("tuning_train_labels_length_mismatch")
+    if len(train_rows) <= split_count:
+        raise ValueError("tuning_inner_cv_rows_insufficient")
+    return horizon, split_count, minimum, train_rows, train_ends
+
+
+def _purged_fit_positions(
+    candidate_positions: np.ndarray,
+    train_rows: np.ndarray,
+    train_ends: np.ndarray,
+    validation_start: int,
+    horizon: int,
+) -> np.ndarray:
+    return np.asarray(
+        [
+            int(position)
+            for position in candidate_positions
+            if int(train_rows[int(position)]) < validation_start - horizon
+            and int(train_ends[int(position)]) < validation_start
+        ],
+        dtype=int,
+    )
+
+
+def _validate_inner_fit_support(
+    fit_positions: np.ndarray,
+    label_values: np.ndarray,
+    minimum_class_samples: int,
+) -> dict[str, int]:
+    if len(fit_positions) == 0:
+        raise ValueError("tuning_inner_cv_fit_empty_after_purge")
+    counts = {
+        label: int(np.count_nonzero(label_values[fit_positions] == label))
+        for label in LABELS
+    }
+    if any(count < minimum_class_samples for count in counts.values()):
+        raise ValueError("tuning_inner_cv_class_support_insufficient")
+    return counts
+
+
+def _build_inner_cv_fold(
+    candidate_positions: np.ndarray,
+    validation_positions: np.ndarray,
+    train_rows: np.ndarray,
+    train_ends: np.ndarray,
+    label_values: np.ndarray,
+    *,
+    horizon: int,
+    minimum_class_samples: int,
+) -> tuple[tuple[np.ndarray, np.ndarray], dict[str, int]]:
+    if len(validation_positions) == 0:
+        raise ValueError("tuning_inner_cv_validation_empty")
+    validation_start = int(train_rows[int(validation_positions[0])])
+    fit_positions = _purged_fit_positions(
+        candidate_positions, train_rows, train_ends, validation_start, horizon
+    )
+    _validate_inner_fit_support(fit_positions, label_values, minimum_class_samples)
+    if int(train_rows[int(fit_positions[-1])]) >= validation_start:
+        raise ValueError("tuning_inner_cv_chronology_invalid")
+    maximum_label_end = int(np.max(train_ends[fit_positions]))
+    if maximum_label_end >= validation_start:
+        raise ValueError("tuning_inner_cv_label_overlap")
+    validation = np.asarray(validation_positions, dtype=int)
+    diagnostics = {
+        "train_rows": int(len(fit_positions)),
+        "validation_rows": int(len(validation)),
+        "train_start_index": int(train_rows[int(fit_positions[0])]),
+        "train_end_index": int(train_rows[int(fit_positions[-1])]),
+        "validation_start_index": validation_start,
+        "validation_end_index": int(train_rows[int(validation[-1])]),
+        "maximum_training_label_end_index": maximum_label_end,
+        "pre_validation_embargo_candles": horizon,
+    }
+    return (fit_positions, validation), diagnostics
+
+
 def build_purged_time_series_splits(
     training_indices: Sequence[int],
     labels: Series,
@@ -99,68 +190,33 @@ def build_purged_time_series_splits(
     whose label horizon reaches the inner validation window, or falls inside the
     fixed pre-validation embargo, are excluded.
     """
-    horizon = _positive_integer(horizon_candles, "tuning_horizon_invalid")
-    split_count = _positive_integer(n_splits, "tuning_inner_cv_split_count_invalid")
-    minimum = _positive_integer(
-        minimum_class_samples, "tuning_minimum_class_samples_invalid"
+    horizon, split_count, minimum, train_rows, train_ends = _validate_inner_cv_inputs(
+        training_indices,
+        labels,
+        label_end_indices,
+        horizon_candles,
+        n_splits,
+        minimum_class_samples,
     )
-    train_rows, train_ends = _training_rows(training_indices, label_end_indices)
-    if len(labels) != len(train_rows):
-        raise ValueError("tuning_train_labels_length_mismatch")
-    if len(train_rows) <= split_count:
-        raise ValueError("tuning_inner_cv_rows_insufficient")
-
     splitter = TimeSeriesSplit(n_splits=split_count)
+    label_values = labels.to_numpy(dtype=object)
     cv_splits: list[tuple[np.ndarray, np.ndarray]] = []
     diagnostics: list[dict[str, int]] = []
-    label_values = labels.to_numpy(dtype=object)
-
-    for candidate_fit_positions, validation_positions in splitter.split(train_rows):
-        if len(validation_positions) == 0:
-            raise ValueError("tuning_inner_cv_validation_empty")
-        validation_start = int(train_rows[int(validation_positions[0])])
-        purged_fit_positions = np.asarray(
-            [
-                int(position)
-                for position in candidate_fit_positions
-                if int(train_rows[int(position)]) < validation_start - horizon
-                and int(train_ends[int(position)]) < validation_start
-            ],
-            dtype=int,
+    for candidate_positions, validation_positions in splitter.split(train_rows):
+        fold, fold_diagnostics = _build_inner_cv_fold(
+            candidate_positions,
+            validation_positions,
+            train_rows,
+            train_ends,
+            label_values,
+            horizon=horizon,
+            minimum_class_samples=minimum,
         )
-        if len(purged_fit_positions) == 0:
-            raise ValueError("tuning_inner_cv_fit_empty_after_purge")
-        counts = {
-            label: int(np.count_nonzero(label_values[purged_fit_positions] == label))
-            for label in LABELS
-        }
-        if any(counts[label] < minimum for label in LABELS):
-            raise ValueError("tuning_inner_cv_class_support_insufficient")
-        validation_positions = np.asarray(validation_positions, dtype=int)
-        if int(train_rows[int(purged_fit_positions[-1])]) >= validation_start:
-            raise ValueError("tuning_inner_cv_chronology_invalid")
-        if int(np.max(train_ends[purged_fit_positions])) >= validation_start:
-            raise ValueError("tuning_inner_cv_label_overlap")
-        cv_splits.append((purged_fit_positions, validation_positions))
-        diagnostics.append(
-            {
-                "train_rows": int(len(purged_fit_positions)),
-                "validation_rows": int(len(validation_positions)),
-                "train_start_index": int(train_rows[int(purged_fit_positions[0])]),
-                "train_end_index": int(train_rows[int(purged_fit_positions[-1])]),
-                "validation_start_index": validation_start,
-                "validation_end_index": int(train_rows[int(validation_positions[-1])]),
-                "maximum_training_label_end_index": int(
-                    np.max(train_ends[purged_fit_positions])
-                ),
-                "pre_validation_embargo_candles": horizon,
-            }
-        )
-
+        cv_splits.append(fold)
+        diagnostics.append(fold_diagnostics)
     if len(cv_splits) != split_count:
         raise ValueError("tuning_inner_cv_fold_count_mismatch")
     return cv_splits, diagnostics
-
 
 def _hold_precision_score(estimator: Any, features: DataFrame, actual: Series) -> float:
     predicted = estimator.predict(features)
@@ -201,53 +257,74 @@ def _macro_f1_score(estimator: Any, features: DataFrame, actual: Series) -> floa
     )
 
 
-def _select_candidate(
-    cv_results: dict[str, Any], minimum_hold_recall: float
-) -> tuple[int, str, int]:
+def _validated_cv_score_arrays(
+    cv_results: dict[str, Any],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[dict[str, Any]]]:
     precisions = np.asarray(cv_results["mean_test_hold_precision"], dtype=float)
     recalls = np.asarray(cv_results["mean_test_hold_recall"], dtype=float)
     macro_f1 = np.asarray(cv_results["mean_test_macro_f1"], dtype=float)
     parameters = cv_results["params"]
-    if (
-        len(precisions) == 0
-        or len(precisions) != len(recalls)
-        or len(precisions) != len(macro_f1)
-        or len(precisions) != len(parameters)
-        or not np.isfinite(precisions).all()
-        or not np.isfinite(recalls).all()
-        or not np.isfinite(macro_f1).all()
-    ):
+    lengths_match = (
+        len(precisions) == len(recalls) == len(macro_f1) == len(parameters)
+    )
+    values_are_finite = (
+        np.isfinite(precisions).all()
+        and np.isfinite(recalls).all()
+        and np.isfinite(macro_f1).all()
+    )
+    if len(precisions) == 0 or not lengths_match or not values_are_finite:
         raise ValueError("tuning_cv_results_invalid")
+    return precisions, recalls, macro_f1, parameters
 
+
+def _candidate_complexity_key(parameters: dict[str, Any]) -> tuple[int, int, int]:
+    return (
+        -int(parameters["num_leaves"]),
+        int(parameters["min_child_samples"]),
+        -int(round(float(parameters["learning_rate"]) * 1000)),
+    )
+
+
+def _candidate_ranking_key(
+    index: int,
+    precisions: np.ndarray,
+    recalls: np.ndarray,
+    macro_f1: np.ndarray,
+    parameters: list[dict[str, Any]],
+    precision_constrained: bool,
+) -> tuple[float, float, float, int, int, int]:
+    complexity = _candidate_complexity_key(parameters[index])
+    precision = float(precisions[index])
+    recall = float(recalls[index])
+    macro = float(macro_f1[index])
+    if precision_constrained:
+        return (precision, macro, recall, *complexity)
+    return (macro, precision, recall, *complexity)
+
+
+def _select_candidate(
+    cv_results: dict[str, Any], minimum_hold_recall: float
+) -> tuple[int, str, int]:
+    precisions, recalls, macro_f1, parameters = _validated_cv_score_arrays(
+        cv_results
+    )
     feasible = [
         index
         for index, recall in enumerate(recalls)
         if float(recall) >= minimum_hold_recall
     ]
     candidate_indices = feasible or list(range(len(parameters)))
-
-    def ranking_key(index: int) -> tuple[float, float, float, int, int, int]:
-        params = parameters[index]
-        complexity_key = (
-            -int(params["num_leaves"]),
-            int(params["min_child_samples"]),
-            -int(round(float(params["learning_rate"]) * 1000)),
-        )
-        if feasible:
-            return (
-                float(precisions[index]),
-                float(macro_f1[index]),
-                float(recalls[index]),
-                *complexity_key,
-            )
-        return (
-            float(macro_f1[index]),
-            float(precisions[index]),
-            float(recalls[index]),
-            *complexity_key,
-        )
-
-    selected = max(candidate_indices, key=ranking_key)
+    selected = max(
+        candidate_indices,
+        key=lambda index: _candidate_ranking_key(
+            index,
+            precisions,
+            recalls,
+            macro_f1,
+            parameters,
+            bool(feasible),
+        ),
+    )
     status = (
         "RECALL_CONSTRAINED_HOLD_PRECISION"
         if feasible
@@ -255,6 +332,190 @@ def _select_candidate(
     )
     return selected, status, len(feasible)
 
+def _validate_tuning_configuration(
+    minimum_hold_recall: float,
+    n_iter: int,
+    n_splits: int,
+    random_state: int,
+    class_weight_policy: str,
+) -> tuple[int, int, int]:
+    iterations = _positive_integer(n_iter, "tuning_random_search_iterations_invalid")
+    split_count = _positive_integer(n_splits, "tuning_inner_cv_split_count_invalid")
+    seed = _nonnegative_integer(random_state, "tuning_random_state_invalid")
+    if iterations > 27:
+        raise ValueError("tuning_random_search_iterations_out_of_policy")
+    recall_is_valid = (
+        isinstance(minimum_hold_recall, (int, float))
+        and not isinstance(minimum_hold_recall, bool)
+        and isfinite(float(minimum_hold_recall))
+        and 0.0 <= float(minimum_hold_recall) <= 1.0
+    )
+    if not recall_is_valid:
+        raise ValueError("tuning_minimum_hold_recall_invalid")
+    if not class_weight_policy.strip():
+        raise ValueError("tuning_class_weight_policy_missing")
+    return iterations, split_count, seed
+
+
+def _build_randomized_search(
+    estimator: Any,
+    cv_splits: list[tuple[np.ndarray, np.ndarray]],
+    iterations: int,
+    seed: int,
+) -> Any:
+    return RandomizedSearchCV(
+        estimator=estimator,
+        param_distributions=HYPERPARAMETER_DISTRIBUTIONS,
+        n_iter=iterations,
+        scoring={
+            "hold_precision": _hold_precision_score,
+            "hold_recall": _hold_recall_score,
+            "macro_f1": _macro_f1_score,
+        },
+        cv=cv_splits,
+        refit=False,
+        random_state=seed,
+        n_jobs=1,
+        pre_dispatch=1,
+        error_score="raise",
+        return_train_score=False,
+    )
+
+
+def _fit_selected_estimator(
+    estimator: Any,
+    features: DataFrame,
+    labels: Series,
+    parameters: dict[str, Any],
+) -> Any:
+    fitted_estimator = clone(estimator)
+    fitted_estimator.set_params(**parameters)
+    fitted_estimator.fit(features, labels)
+    return fitted_estimator
+
+
+def _candidate_result_records(cv_results: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        {
+            "candidate_index": index,
+            "parameters": dict(parameters),
+            "mean_cv_hold_precision": round(
+                float(cv_results["mean_test_hold_precision"][index]), 6
+            ),
+            "mean_cv_hold_recall": round(
+                float(cv_results["mean_test_hold_recall"][index]), 6
+            ),
+            "mean_cv_macro_f1": round(
+                float(cv_results["mean_test_macro_f1"][index]), 6
+            ),
+        }
+        for index, parameters in enumerate(cv_results["params"])
+    ]
+
+
+def _build_tuning_diagnostics(
+    cv_results: dict[str, Any],
+    fold_diagnostics: list[dict[str, int]],
+    parameters: dict[str, Any],
+    *,
+    class_weight_policy: str,
+    minimum_hold_recall: float,
+    selection_status: str,
+    recall_feasible_count: int,
+    seed: int,
+) -> dict[str, Any]:
+    best_index = next(
+        index
+        for index, candidate in enumerate(cv_results["params"])
+        if candidate == parameters
+    )
+    candidate_count = len(cv_results["params"])
+    return {
+        "search_method": "RANDOM_SEARCH",
+        "search_space": {
+            name: list(values) for name, values in HYPERPARAMETER_DISTRIBUTIONS.items()
+        },
+        "search_space_size": 27,
+        "candidate_count": candidate_count,
+        "inner_cv_method": "PURGED_EXPANDING_TIME_SERIES",
+        "inner_cv_fold_count": len(fold_diagnostics),
+        "inner_cv_folds": fold_diagnostics,
+        "inner_cv_scope": "OUTER_TRAIN_ONLY",
+        "validation_accessed_during_search": False,
+        "final_refit_scope": "FULL_OUTER_TRAIN_ONLY",
+        "class_weight_policy": class_weight_policy,
+        "minimum_hold_recall_for_candidate_selection": float(minimum_hold_recall),
+        "recall_feasible_candidate_count": recall_feasible_count,
+        "selection_status": selection_status,
+        "selected_parameters": parameters,
+        "selected_mean_cv_hold_precision": round(
+            float(cv_results["mean_test_hold_precision"][best_index]), 6
+        ),
+        "selected_mean_cv_hold_recall": round(
+            float(cv_results["mean_test_hold_recall"][best_index]), 6
+        ),
+        "selected_mean_cv_macro_f1": round(
+            float(cv_results["mean_test_macro_f1"][best_index]), 6
+        ),
+        "candidate_results": _candidate_result_records(cv_results),
+        "candidate_fit_count": candidate_count * len(fold_diagnostics),
+        "random_state": seed,
+    }
+
+
+def tune_lightgbm_classifier(
+    estimator: Any,
+    features: DataFrame,
+    labels: Series,
+    training_indices: Sequence[int],
+    label_end_indices: Sequence[object],
+    *,
+    horizon_candles: int,
+    class_weight_policy: str,
+    minimum_hold_recall: float,
+    n_iter: int = DEFAULT_RANDOM_SEARCH_ITERATIONS,
+    n_splits: int = DEFAULT_INNER_CV_SPLITS,
+    random_state: int = DEFAULT_RANDOM_STATE,
+) -> tuple[Any, dict[str, Any]]:
+    """Tune on outer Train only, then refit the chosen estimator on all outer Train."""
+    iterations, split_count, seed = _validate_tuning_configuration(
+        minimum_hold_recall,
+        n_iter,
+        n_splits,
+        random_state,
+        class_weight_policy,
+    )
+    train_rows, _ = _training_rows(training_indices, label_end_indices)
+    if len(features) != len(labels) or len(labels) != len(train_rows):
+        raise ValueError("tuning_train_matrix_alignment_invalid")
+    cv_splits, fold_diagnostics = build_purged_time_series_splits(
+        training_indices,
+        labels,
+        label_end_indices,
+        horizon_candles=horizon_candles,
+        n_splits=split_count,
+    )
+    search = _build_randomized_search(estimator, cv_splits, iterations, seed)
+    search.fit(features, labels)
+    cv_results: dict[str, Any] = search.cv_results_
+    best_index, selection_status, recall_feasible_count = _select_candidate(
+        cv_results, float(minimum_hold_recall)
+    )
+    best_parameters = dict(cv_results["params"][best_index])
+    fitted_estimator = _fit_selected_estimator(
+        estimator, features, labels, best_parameters
+    )
+    diagnostics = _build_tuning_diagnostics(
+        cv_results,
+        fold_diagnostics,
+        best_parameters,
+        class_weight_policy=class_weight_policy,
+        minimum_hold_recall=minimum_hold_recall,
+        selection_status=selection_status,
+        recall_feasible_count=recall_feasible_count,
+        seed=seed,
+    )
+    return fitted_estimator, diagnostics
 
 def tune_lightgbm_classifier(
     estimator: Any,
