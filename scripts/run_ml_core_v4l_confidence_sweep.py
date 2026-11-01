@@ -295,9 +295,7 @@ def _aggregate_candidate_metrics(
             round(sum(defined_pf) / len(defined_pf), 8) if defined_pf else None
         ),
         "defined_candidate_profit_factor_count": len(defined_pf),
-        "mean_max_drawdown_percent_all_candidates": round(
-            sum(all_dd) / len(all_dd), 8
-        ),
+        "mean_max_drawdown_percent_all_candidates": round(sum(all_dd) / len(all_dd), 8),
         "mean_max_drawdown_percent_active_candidates": (
             round(sum(active_dd) / len(active_dd), 8) if active_dd else None
         ),
