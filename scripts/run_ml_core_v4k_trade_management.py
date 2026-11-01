@@ -395,57 +395,54 @@ def _candidate_result(
     }
 
 
-def _aggregate(candidates: list[dict[str, Any]]) -> dict[str, Any]:
-    """Summarize PF, drawdown, and trade-count changes across candidates."""
+def _aggregate_trade_counts(
+    candidates: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Aggregate per-candidate trade counts and reduction."""
     before = [int(item["v4j_baseline"]["trade_count"]) for item in candidates]
     after = [int(item["v4k_result"]["metrics"]["trade_count"]) for item in candidates]
-    before_pfs = [
+    before_total, after_total = sum(before), sum(after)
+    reduction = before_total - after_total
+    reduction_percent = (
+        round(100.0 * reduction / before_total, 8) if before_total else None
+    )
+    return {
+        "v4j_total_trade_count": before_total,
+        "v4k_total_trade_count": after_total,
+        "total_trade_count_reduction": reduction,
+        "total_trade_count_reduction_percent": reduction_percent,
+        "v4j_mean_trade_count": round(sum(before) / len(before), 8),
+        "v4k_mean_trade_count": round(sum(after) / len(after), 8),
+        "trade_count_reduced_candidate_count": sum(
+            item["comparison"]["trade_count_reduction"] > 0 for item in candidates
+        ),
+    }
+
+
+def _aggregate_profit_factors(
+    candidates: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Aggregate only defined PF values and candidate-level improvements."""
+    before = [
         float(item["v4j_baseline"]["profit_factor"])
         for item in candidates
         if item["v4j_baseline"]["profit_factor"] is not None
     ]
-    after_pfs = [
+    after = [
         float(item["v4k_result"]["metrics"]["profit_factor_net_of_costs"])
         for item in candidates
         if item["v4k_result"]["metrics"]["profit_factor_net_of_costs"] is not None
     ]
-    before_dd = [
-        float(item["v4j_baseline"]["max_drawdown_percent"]) for item in candidates
-    ]
-    after_dd = [
-        float(item["v4k_result"]["metrics"]["max_drawdown_percent"])
-        for item in candidates
-    ]
-    before_total, after_total = sum(before), sum(after)
     return {
-        "candidate_count": len(candidates),
-        "v4j_total_trade_count": before_total,
-        "v4k_total_trade_count": after_total,
-        "total_trade_count_reduction": before_total - after_total,
-        "total_trade_count_reduction_percent": (
-            round(100.0 * (before_total - after_total) / before_total, 8)
-            if before_total
-            else None
-        ),
-        "v4j_mean_trade_count": round(sum(before) / len(before), 8),
-        "v4k_mean_trade_count": round(sum(after) / len(after), 8),
-        "v4j_mean_profit_factor": round(sum(before_pfs) / len(before_pfs), 8)
-        if before_pfs
+        "v4j_mean_profit_factor": round(sum(before) / len(before), 8)
+        if before
         else None,
-        "v4k_mean_profit_factor": round(sum(after_pfs) / len(after_pfs), 8)
-        if after_pfs
+        "v4k_mean_profit_factor": round(sum(after) / len(after), 8)
+        if after
         else None,
         "profit_factor_improved_candidate_count": sum(
             item["comparison"]["profit_factor_improved"] for item in candidates
         ),
-        "max_drawdown_reduced_candidate_count": sum(
-            item["comparison"]["max_drawdown_reduced"] for item in candidates
-        ),
-        "trade_count_reduced_candidate_count": sum(
-            item["comparison"]["trade_count_reduction"] > 0 for item in candidates
-        ),
-        "v4j_mean_max_drawdown_percent": round(sum(before_dd) / len(before_dd), 8),
-        "v4k_mean_max_drawdown_percent": round(sum(after_dd) / len(after_dd), 8),
         "v4k_pf_above_1_5_candidate_count": sum(
             item["v4k_result"]["metrics"]["profit_factor_net_of_costs"] is not None
             and item["v4k_result"]["metrics"]["profit_factor_net_of_costs"] > 1.5
@@ -455,6 +452,38 @@ def _aggregate(candidates: list[dict[str, Any]]) -> dict[str, Any]:
             bool(item["v4k_result"]["metrics"]["economic_candidate_gate_passed"])
             for item in candidates
         ),
+    }
+
+
+def _aggregate_drawdowns(
+    candidates: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Aggregate mean drawdown and candidate-level reductions."""
+    before = [
+        float(item["v4j_baseline"]["max_drawdown_percent"]) for item in candidates
+    ]
+    after = [
+        float(item["v4k_result"]["metrics"]["max_drawdown_percent"])
+        for item in candidates
+    ]
+    return {
+        "v4j_mean_max_drawdown_percent": round(sum(before) / len(before), 8),
+        "v4k_mean_max_drawdown_percent": round(sum(after) / len(after), 8),
+        "max_drawdown_reduced_candidate_count": sum(
+            item["comparison"]["max_drawdown_reduced"] for item in candidates
+        ),
+    }
+
+
+def _aggregate(candidates: list[dict[str, Any]]) -> dict[str, Any]:
+    """Summarize PF, drawdown, and trade-count changes across candidates."""
+    if not candidates:
+        raise ValueError("v4k_candidate_results_empty")
+    return {
+        "candidate_count": len(candidates),
+        **_aggregate_trade_counts(candidates),
+        **_aggregate_profit_factors(candidates),
+        **_aggregate_drawdowns(candidates),
     }
 
 
