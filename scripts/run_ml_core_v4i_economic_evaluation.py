@@ -112,9 +112,7 @@ def _build_report(
         bars = bars_cache[(symbol, str(candidate["timeframe"]))]
         results.append(evaluate_candidate(candidate, bars, config))
     passed = [
-        item
-        for item in results
-        if item["metrics"]["economic_candidate_gate_passed"]
+        item for item in results if item["metrics"]["economic_candidate_gate_passed"]
     ]
     return {
         "schema_version": "alix.ml-core.v4i-economic-evaluation.v1",
