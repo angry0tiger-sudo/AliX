@@ -2605,8 +2605,7 @@ def _fold_profile_forward_metrics(
             for metric_pair in forward_values
         ),
         "strict_acceptance_count": sum(
-            _forward_hold_acceptance_pass(metric_pair)
-            for metric_pair in forward_values
+            _forward_hold_acceptance_pass(metric_pair) for metric_pair in forward_values
         ),
     }
     indexed = {
