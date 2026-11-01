@@ -245,52 +245,20 @@ def _best_defined_pf(
     )
 
 
-def _aggregate_threshold(
-    candidates: list[dict[str, Any]],
-) -> dict[str, Any]:
-    """Aggregate independent model ledgers for one confidence threshold."""
-    if len(candidates) != 13:
-        raise ValueError("v4l_threshold_candidate_results_invalid")
-    trades = _flatten_trades(candidates)
-    wins = [float(item["net_pnl_usd"]) for item in trades if item["net_pnl_usd"] > 0]
-    losses = [float(item["net_pnl_usd"]) for item in trades if item["net_pnl_usd"] < 0]
+def _aggregate_trade_outcomes(trades: list[dict[str, Any]]) -> dict[str, Any]:
+    """Summarize net trade outcomes across independent candidate ledgers."""
+    wins: list[float] = []
+    losses: list[float] = []
+    for trade in trades:
+        pnl = float(trade["net_pnl_usd"])
+        if pnl > 0:
+            wins.append(pnl)
+        elif pnl < 0:
+            losses.append(pnl)
     gross_profit = sum(wins)
     gross_loss = abs(sum(losses))
-    metrics = [item["metrics"] for item in candidates]
-    defined_pf = [
-        float(item["profit_factor_net_of_costs"])
-        for item in metrics
-        if item["profit_factor_net_of_costs"] is not None
-    ]
-    active_dd = [
-        float(item["max_drawdown_percent"])
-        for item in metrics
-        if int(item["trade_count"]) > 0
-    ]
-    all_dd = [float(item["max_drawdown_percent"]) for item in metrics]
-    exits = _aggregate_exit_counts(candidates)
-    raw_buys = sum(
-        int(item["confidence_filter"]["raw_buy_signal_count"]) for item in candidates
-    )
-    rejected_buys = sum(
-        int(item["confidence_filter"]["rejected_buy_signal_count"])
-        for item in candidates
-    )
-    gate_passes = sum(
-        bool(item["metrics"]["economic_candidate_gate_passed"]) for item in candidates
-    )
-    pf_passes = sum(
-        item["metrics"]["profit_factor_net_of_costs"] is not None
-        and float(item["metrics"]["profit_factor_net_of_costs"]) > 1.5
-        for item in candidates
-    )
-    best = _best_defined_pf(candidates)
     trade_count = len(trades)
     return {
-        "candidate_count": len(candidates),
-        "active_candidate_count": sum(
-            int(item["metrics"]["trade_count"]) > 0 for item in candidates
-        ),
         "total_trade_count": trade_count,
         "winning_trade_count": len(wins),
         "losing_trade_count": len(losses),
@@ -300,28 +268,106 @@ def _aggregate_threshold(
         ),
         "combined_ledger_gross_profit_usd": round(gross_profit, 8),
         "combined_ledger_gross_loss_usd": round(gross_loss, 8),
+    }
+
+
+def _aggregate_candidate_metrics(
+    candidates: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Summarize defined PF and active/all-candidate drawdown values."""
+    defined_pf: list[float] = []
+    active_dd: list[float] = []
+    all_dd: list[float] = []
+    active_count = 0
+    for candidate in candidates:
+        metrics = candidate["metrics"]
+        profit_factor = metrics["profit_factor_net_of_costs"]
+        if profit_factor is not None:
+            defined_pf.append(float(profit_factor))
+        drawdown = float(metrics["max_drawdown_percent"])
+        all_dd.append(drawdown)
+        if int(metrics["trade_count"]) > 0:
+            active_count += 1
+            active_dd.append(drawdown)
+    return {
+        "active_candidate_count": active_count,
         "mean_defined_candidate_profit_factor": (
             round(sum(defined_pf) / len(defined_pf), 8) if defined_pf else None
         ),
         "defined_candidate_profit_factor_count": len(defined_pf),
-        "mean_max_drawdown_percent_all_candidates": round(sum(all_dd) / len(all_dd), 8),
+        "mean_max_drawdown_percent_all_candidates": round(
+            sum(all_dd) / len(all_dd), 8
+        ),
         "mean_max_drawdown_percent_active_candidates": (
             round(sum(active_dd) / len(active_dd), 8) if active_dd else None
         ),
+    }
+
+
+def _aggregate_confidence_filter(
+    candidates: list[dict[str, Any]],
+) -> dict[str, int]:
+    """Sum raw, rejected, and accepted BUY entries for one threshold."""
+    raw_buys = 0
+    rejected_buys = 0
+    for candidate in candidates:
+        confidence_filter = candidate["confidence_filter"]
+        raw_buys += int(confidence_filter["raw_buy_signal_count"])
+        rejected_buys += int(confidence_filter["rejected_buy_signal_count"])
+    return {
+        "raw_buy_signal_count": raw_buys,
+        "rejected_buy_signal_count": rejected_buys,
+        "accepted_buy_signal_count": raw_buys - rejected_buys,
+    }
+
+
+def _aggregate_acceptance_counts(
+    candidates: list[dict[str, Any]],
+) -> dict[str, int]:
+    """Count candidate-level economic-gate and strict PF passes."""
+    gate_passes = 0
+    pf_passes = 0
+    for candidate in candidates:
+        metrics = candidate["metrics"]
+        if bool(metrics["economic_candidate_gate_passed"]):
+            gate_passes += 1
+        profit_factor = metrics["profit_factor_net_of_costs"]
+        if profit_factor is not None and float(profit_factor) > 1.5:
+            pf_passes += 1
+    return {
+        "economic_gate_passed_candidate_count": gate_passes,
+        "pf_above_1_5_candidate_count": pf_passes,
+    }
+
+
+def _aggregate_threshold(
+    candidates: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Aggregate independent model ledgers for one confidence threshold."""
+    if len(candidates) != 13:
+        raise ValueError("v4l_threshold_candidate_results_invalid")
+    trades = _flatten_trades(candidates)
+    outcomes = _aggregate_trade_outcomes(trades)
+    metrics = _aggregate_candidate_metrics(candidates)
+    filters = _aggregate_confidence_filter(candidates)
+    acceptance = _aggregate_acceptance_counts(candidates)
+    exits = _aggregate_exit_counts(candidates)
+    best = _best_defined_pf(candidates)
+    return {
+        "candidate_count": len(candidates),
+        **outcomes,
+        **metrics,
+        **filters,
+        **acceptance,
+        "exit_reason_counts": exits,
+        "sl_exit_count": exits.get("SL_HIT", 0),
+        "tp_exit_count": exits.get("TP_HIT", 0),
         "total_fees_usd": round(
             sum(float(item["total_fees_usd"]) for item in candidates), 8
         ),
         "total_slippage_cost_usd": round(
             sum(float(item["total_slippage_cost_usd"]) for item in candidates), 8
         ),
-        "raw_buy_signal_count": raw_buys,
-        "rejected_buy_signal_count": rejected_buys,
-        "accepted_buy_signal_count": raw_buys - rejected_buys,
-        "exit_reason_counts": exits,
-        "sl_exit_count": exits.get("SL_HIT", 0),
-        "tp_exit_count": exits.get("TP_HIT", 0),
-        "economic_gate_passed_candidate_count": gate_passes,
-        "pf_above_1_5_candidate_count": pf_passes,
         "best_defined_profit_factor_candidate": (
             {
                 "candidate_id": best["candidate_id"],
@@ -333,7 +379,6 @@ def _aggregate_threshold(
             else None
         ),
     }
-
 
 def _build_report(
     commit_sha: str,
