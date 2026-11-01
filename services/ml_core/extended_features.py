@@ -319,40 +319,62 @@ def build_extended_feature_groups(
     return groups
 
 
+def _validate_feature_profile_selection(
+    profile_names: tuple[str, ...] | None,
+) -> tuple[str, ...]:
+    selected = FEATURE_PROFILE_ORDER if profile_names is None else profile_names
+    if not selected or len(set(selected)) != len(selected):
+        raise ValueError("feature_profile_selection_invalid")
+    for profile in selected:
+        feature_profile_columns(profile)
+    return selected
+
+
+def _required_feature_groups(profile_names: tuple[str, ...]) -> tuple[str, ...]:
+    return tuple(
+        group
+        for group in FEATURE_GROUP_COLUMNS
+        if any(group in feature_profile_groups(profile) for profile in profile_names)
+    )
+
+
+def _build_feature_profile_matrix(
+    profile: str,
+    baseline: DataFrame,
+    extended_groups: dict[str, DataFrame],
+) -> DataFrame:
+    frames = [
+        baseline if group == "Baseline" else extended_groups[group]
+        for group in feature_profile_groups(profile)
+    ]
+    matrix = pd.concat(frames, axis=1)
+    if not matrix.columns.is_unique:
+        raise ValueError("feature_profile_duplicate_columns")
+    if tuple(matrix.columns) != feature_profile_columns(profile):
+        raise ValueError("feature_profile_schema_mismatch")
+    if any(name.startswith("&-") for name in matrix.columns):
+        raise ValueError("target_column_in_feature_matrix")
+    matrix.replace([np.inf, -np.inf], np.nan, inplace=True)
+    if bool(np.isinf(matrix.to_numpy(dtype=np.float64)).any()):
+        raise ValueError("feature_profile_non_finite")
+    return matrix
+
+
 def build_feature_profiles(
     candles: DataFrame,
     *,
     profile_names: tuple[str, ...] | None = None,
 ) -> dict[str, DataFrame]:
     """Build all or selected approved profiles with a common causal row origin."""
-    selected = FEATURE_PROFILE_ORDER if profile_names is None else profile_names
-    if not selected or len(set(selected)) != len(selected):
-        raise ValueError("feature_profile_selection_invalid")
-    required_groups = tuple(
-        group
-        for group in FEATURE_GROUP_COLUMNS
-        if any(group in feature_profile_groups(profile) for profile in selected)
-    )
+    selected = _validate_feature_profile_selection(profile_names)
+    required_groups = _required_feature_groups(selected)
     baseline = build_causal_feature_matrix(candles)
     extended_groups = (
         build_extended_feature_groups(candles, group_names=required_groups)
         if required_groups
         else {}
     )
-    profiles: dict[str, DataFrame] = {}
-    for profile in selected:
-        frames: list[DataFrame] = []
-        for group in feature_profile_groups(profile):
-            frames.append(baseline if group == "Baseline" else extended_groups[group])
-        matrix = pd.concat(frames, axis=1)
-        if not matrix.columns.is_unique:
-            raise ValueError("feature_profile_duplicate_columns")
-        if tuple(matrix.columns) != feature_profile_columns(profile):
-            raise ValueError("feature_profile_schema_mismatch")
-        if any(name.startswith("&-") for name in matrix.columns):
-            raise ValueError("target_column_in_feature_matrix")
-        matrix.replace([np.inf, -np.inf], np.nan, inplace=True)
-        if bool(np.isinf(matrix.to_numpy(dtype=np.float64)).any()):
-            raise ValueError("feature_profile_non_finite")
-        profiles[profile] = matrix
-    return profiles
+    return {
+        profile: _build_feature_profile_matrix(profile, baseline, extended_groups)
+        for profile in selected
+    }
