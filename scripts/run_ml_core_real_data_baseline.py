@@ -3155,6 +3155,26 @@ def _print_diagnostic_completion(
     )
 
 
+def _resolve_diagnostic_profile_selection(
+    scenarios: list[dict[str, Any]],
+    feature_ablation: bool,
+    walk_forward_folds: int | None,
+) -> tuple[str, ...]:
+    if feature_ablation and (
+        len(scenarios) != 1 or scenarios[0]["horizon_candles"] != 12
+    ):
+        raise ValueError("feature_ablation_requires_one_12_candle_scenario")
+    if walk_forward_folds is not None:
+        if isinstance(walk_forward_folds, bool):
+            raise ValueError("walk_forward_configuration_invalid")
+        if not isinstance(walk_forward_folds, int) or walk_forward_folds < 3:
+            raise ValueError("walk_forward_configuration_invalid")
+        if not feature_ablation:
+            raise ValueError("walk_forward_configuration_invalid")
+        return V4G_FEATURE_PROFILE_ORDER
+    return FEATURE_PROFILE_ORDER if feature_ablation else ("Baseline",)
+
+
 def run_diagnostic(
     input_dir: Path,
     output_path: Path,
@@ -3172,28 +3192,13 @@ def run_diagnostic(
     policy_specs = _validate_diagnostic_parameters(
         days, calibration_fraction, minimum_hold_precision, minimum_hold_recall
     )
-    scenarios = _validate_barrier_scenarios(
+    scenarios = (
         barrier_scenarios
         if barrier_scenarios is not None
         else _default_barrier_scenarios()
     )
-    if feature_ablation and (
-        len(scenarios) != 1 or scenarios[0]["horizon_candles"] != 12
-    ):
-        raise ValueError("feature_ablation_requires_one_12_candle_scenario")
-    if walk_forward_folds is not None and (
-        isinstance(walk_forward_folds, bool)
-        or not isinstance(walk_forward_folds, int)
-        or walk_forward_folds < 3
-        or not feature_ablation
-    ):
-        raise ValueError("walk_forward_configuration_invalid")
-    selected_profiles = (
-        V4G_FEATURE_PROFILE_ORDER
-        if walk_forward_folds is not None
-        else FEATURE_PROFILE_ORDER
-        if feature_ablation
-        else ("Baseline",)
+    selected_profiles = _resolve_diagnostic_profile_selection(
+        scenarios, feature_ablation, walk_forward_folds
     )
     datasets, provenance = _load_diagnostic_datasets(input_dir, days, commit_sha)
     experiments = _run_diagnostic_experiments(
@@ -3222,7 +3227,6 @@ def run_diagnostic(
     _write_diagnostic_report(report, output_path)
     _print_diagnostic_completion(report, output_path, commit_sha)
     return report
-
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
