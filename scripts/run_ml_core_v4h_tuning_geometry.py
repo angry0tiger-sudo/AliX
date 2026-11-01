@@ -291,6 +291,123 @@ def run_v4h_experiment(
     return result
 
 
+def _validate_v4h_random_search_iterations(random_search_iterations: int) -> None:
+    valid = (
+        not isinstance(random_search_iterations, bool)
+        and isinstance(random_search_iterations, int)
+        and 1 <= random_search_iterations <= 27
+    )
+    if not valid:
+        raise ValueError("v4h_random_search_iterations_invalid")
+
+
+def _insufficient_context_experiments(
+    pair: str,
+    timeframe: str,
+    bars: DataFrame,
+    scenarios: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    experiments: list[dict[str, Any]] = []
+    for scenario in scenarios:
+        labels = apply_adaptive_triple_barrier(
+            bars,
+            horizon_candles=int(scenario["horizon_candles"]),
+            take_profit_multiplier=float(scenario["take_profit_multiplier"]),
+            stop_loss_multiplier=float(scenario["stop_loss_multiplier"]),
+        )
+        for profile in V4H_FEATURE_PROFILES:
+            result = _insufficient_bar_result(
+                pair, timeframe, bars, labels
+            )
+            result.update(
+                {
+                    "scenario": scenario["name"],
+                    "triple_barrier": {
+                        "horizon_candles": scenario["horizon_candles"],
+                        "take_profit_multiplier": scenario["take_profit_multiplier"],
+                        "stop_loss_multiplier": scenario["stop_loss_multiplier"],
+                    },
+                    **_feature_profile_diagnostics(profile),
+                }
+            )
+            experiments.append(result)
+    return experiments
+
+
+def _run_v4h_scenario_experiments(
+    pair: str,
+    timeframe: str,
+    bars: DataFrame,
+    feature_matrices: dict[str, DataFrame],
+    scenario: dict[str, Any],
+    *,
+    calibration_fraction: float,
+    minimum_hold_precision: float,
+    minimum_hold_recall: float,
+    random_search_iterations: int,
+) -> list[dict[str, Any]]:
+    labels = apply_adaptive_triple_barrier(
+        bars,
+        horizon_candles=int(scenario["horizon_candles"]),
+        take_profit_multiplier=float(scenario["take_profit_multiplier"]),
+        stop_loss_multiplier=float(scenario["stop_loss_multiplier"]),
+    )
+    return [
+        run_v4h_experiment(
+            pair,
+            timeframe,
+            bars,
+            labels,
+            feature_matrices,
+            scenario=scenario,
+            feature_profile=profile,
+            calibration_fraction=calibration_fraction,
+            minimum_hold_precision=minimum_hold_precision,
+            minimum_hold_recall=minimum_hold_recall,
+            random_search_iterations=random_search_iterations,
+        )
+        for profile in V4H_FEATURE_PROFILES
+    ]
+
+
+def _run_v4h_pair_timeframe(
+    symbol: str,
+    timeframe: str,
+    datasets: dict[str, DataFrame],
+    scenarios: list[dict[str, Any]],
+    *,
+    calibration_fraction: float,
+    minimum_hold_precision: float,
+    minimum_hold_recall: float,
+    random_search_iterations: int,
+) -> list[dict[str, Any]]:
+    pair = f"{symbol[:-4]}/USDT"
+    bars = resample_ohlcv(datasets[symbol], timeframe)
+    if len(bars) < 100:
+        return _insufficient_context_experiments(
+            pair, timeframe, bars, scenarios
+        )
+    feature_matrices = build_feature_profiles(
+        bars, profile_names=V4H_FEATURE_PROFILES
+    )
+    experiments: list[dict[str, Any]] = []
+    for scenario in scenarios:
+        experiments.extend(
+            _run_v4h_scenario_experiments(
+                pair,
+                timeframe,
+                bars,
+                feature_matrices,
+                scenario,
+                calibration_fraction=calibration_fraction,
+                minimum_hold_precision=minimum_hold_precision,
+                minimum_hold_recall=minimum_hold_recall,
+                random_search_iterations=random_search_iterations,
+            )
+        )
+    return experiments
+
+
 def run_v4h_experiments(
     datasets: dict[str, DataFrame],
     *,
@@ -300,84 +417,26 @@ def run_v4h_experiments(
     random_search_iterations: int = DEFAULT_RANDOM_SEARCH_ITERATIONS,
 ) -> list[dict[str, Any]]:
     """Run 2 profiles x 3 geometries x 8 pair/timeframe contexts."""
-    if (
-        isinstance(random_search_iterations, bool)
-        or not isinstance(random_search_iterations, int)
-        or not 1 <= random_search_iterations <= 27
-    ):
-        raise ValueError("v4h_random_search_iterations_invalid")
+    _validate_v4h_random_search_iterations(random_search_iterations)
     scenarios = _v4h_scenarios()
     experiments: list[dict[str, Any]] = []
     for symbol in SYMBOLS:
-        pair = f"{symbol[:-4]}/USDT"
         for timeframe in TIMEFRAME_MINUTES:
-            bars = resample_ohlcv(datasets[symbol], timeframe)
-            if len(bars) < 100:
-                for scenario in scenarios:
-                    for profile in V4H_FEATURE_PROFILES:
-                        result = _insufficient_bar_result(
-                            pair,
-                            timeframe,
-                            bars,
-                            apply_adaptive_triple_barrier(
-                                bars,
-                                horizon_candles=int(scenario["horizon_candles"]),
-                                take_profit_multiplier=float(
-                                    scenario["take_profit_multiplier"]
-                                ),
-                                stop_loss_multiplier=float(
-                                    scenario["stop_loss_multiplier"]
-                                ),
-                            ),
-                        )
-                        result.update(
-                            {
-                                "scenario": scenario["name"],
-                                "triple_barrier": {
-                                    "horizon_candles": scenario["horizon_candles"],
-                                    "take_profit_multiplier": scenario[
-                                        "take_profit_multiplier"
-                                    ],
-                                    "stop_loss_multiplier": scenario[
-                                        "stop_loss_multiplier"
-                                    ],
-                                },
-                                **_feature_profile_diagnostics(profile),
-                            }
-                        )
-                        experiments.append(result)
-                continue
-
-            feature_matrices = build_feature_profiles(
-                bars, profile_names=V4H_FEATURE_PROFILES
-            )
-            for scenario in scenarios:
-                labels = apply_adaptive_triple_barrier(
-                    bars,
-                    horizon_candles=int(scenario["horizon_candles"]),
-                    take_profit_multiplier=float(scenario["take_profit_multiplier"]),
-                    stop_loss_multiplier=float(scenario["stop_loss_multiplier"]),
+            experiments.extend(
+                _run_v4h_pair_timeframe(
+                    symbol,
+                    timeframe,
+                    datasets,
+                    scenarios,
+                    calibration_fraction=calibration_fraction,
+                    minimum_hold_precision=minimum_hold_precision,
+                    minimum_hold_recall=minimum_hold_recall,
+                    random_search_iterations=random_search_iterations,
                 )
-                for profile in V4H_FEATURE_PROFILES:
-                    experiments.append(
-                        run_v4h_experiment(
-                            pair,
-                            timeframe,
-                            bars,
-                            labels,
-                            feature_matrices,
-                            scenario=scenario,
-                            feature_profile=profile,
-                            calibration_fraction=calibration_fraction,
-                            minimum_hold_precision=minimum_hold_precision,
-                            minimum_hold_recall=minimum_hold_recall,
-                            random_search_iterations=random_search_iterations,
-                        )
-                    )
+            )
     if len(experiments) != V4H_EXPECTED_EXPERIMENTS:
         raise RuntimeError("v4h_experiment_count_mismatch")
     return experiments
-
 
 def _mean(values: list[float]) -> float | None:
     return round(float(np.mean(values)), 6) if values else None
@@ -457,55 +516,74 @@ def _aggregate_label_distribution(
     }
 
 
+def _append_experiment_candidates(
+    grouped: dict[str, list[dict[str, Any]]],
+    experiment: dict[str, Any],
+) -> None:
+    variants = experiment.get("model_variants") or {}
+    for policy in weighting_policy_specs():
+        variant = variants.get(policy)
+        if not isinstance(variant, dict):
+            continue
+        tuning = variant.get("hyperparameter_tuning") or {}
+        _append_candidate_results(grouped, tuning.get("candidate_results", []))
+
+
+def _append_candidate_results(
+    grouped: dict[str, list[dict[str, Any]]],
+    candidates: list[dict[str, Any]],
+) -> None:
+    for candidate in candidates:
+        key = json.dumps(
+            candidate["parameters"], sort_keys=True, separators=(",", ":")
+        )
+        grouped[key].append(candidate)
+
+
+def _candidate_summary_row(
+    key: str, candidates: list[dict[str, Any]]
+) -> dict[str, Any]:
+    return {
+        "parameters": json.loads(key),
+        "model_context_count": len(candidates),
+        "mean_inner_cv_hold_precision": _mean(
+            [float(item["mean_cv_hold_precision"]) for item in candidates]
+        ),
+        "mean_inner_cv_hold_recall": _mean(
+            [float(item["mean_cv_hold_recall"]) for item in candidates]
+        ),
+        "mean_inner_cv_macro_f1": _mean(
+            [float(item["mean_cv_macro_f1"]) for item in candidates]
+        ),
+    }
+
+
+def _candidate_precision_rank(item: dict[str, Any]) -> tuple[float, float]:
+    return (
+        item["mean_inner_cv_hold_precision"] or -1.0,
+        item["mean_inner_cv_macro_f1"] or -1.0,
+    )
+
+
+def _candidate_macro_rank(item: dict[str, Any]) -> tuple[float, float]:
+    return (
+        item["mean_inner_cv_macro_f1"] or -1.0,
+        item["mean_inner_cv_hold_precision"] or -1.0,
+    )
+
+
 def _aggregate_parameter_candidates(
     experiments: list[dict[str, Any]],
 ) -> dict[str, Any]:
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for experiment in experiments:
-        for policy in weighting_policy_specs():
-            variant = (experiment.get("model_variants") or {}).get(policy)
-            if not isinstance(variant, dict):
-                continue
-            tuning = variant.get("hyperparameter_tuning") or {}
-            for candidate in tuning.get("candidate_results", []):
-                parameters = candidate["parameters"]
-                key = json.dumps(parameters, sort_keys=True, separators=(",", ":"))
-                grouped[key].append(candidate)
-
-    rows: list[dict[str, Any]] = []
-    for key, candidates in grouped.items():
-        parameters = json.loads(key)
-        rows.append(
-            {
-                "parameters": parameters,
-                "model_context_count": len(candidates),
-                "mean_inner_cv_hold_precision": _mean(
-                    [float(item["mean_cv_hold_precision"]) for item in candidates]
-                ),
-                "mean_inner_cv_hold_recall": _mean(
-                    [float(item["mean_cv_hold_recall"]) for item in candidates]
-                ),
-                "mean_inner_cv_macro_f1": _mean(
-                    [float(item["mean_cv_macro_f1"]) for item in candidates]
-                ),
-            }
-        )
-    by_precision = sorted(
-        rows,
-        key=lambda item: (
-            item["mean_inner_cv_hold_precision"] or -1.0,
-            item["mean_inner_cv_macro_f1"] or -1.0,
-        ),
-        reverse=True,
-    )
-    by_macro = sorted(
-        rows,
-        key=lambda item: (
-            item["mean_inner_cv_macro_f1"] or -1.0,
-            item["mean_inner_cv_hold_precision"] or -1.0,
-        ),
-        reverse=True,
-    )
+        _append_experiment_candidates(grouped, experiment)
+    rows = [
+        _candidate_summary_row(key, candidates)
+        for key, candidates in grouped.items()
+    ]
+    by_precision = sorted(rows, key=_candidate_precision_rank, reverse=True)
+    by_macro = sorted(rows, key=_candidate_macro_rank, reverse=True)
     return {
         "candidate_combinations_evaluated": len(rows),
         "aggregation_scope": "MEAN_INNER_CV_SCORE_ACROSS_ALL_TRAINED_MODEL_CONTEXTS",
@@ -520,126 +598,272 @@ def _aggregate_parameter_candidates(
     }
 
 
+def _append_selected_parameter_record(
+    grouped: dict[str, list[dict[str, Any]]],
+    record: dict[str, Any],
+) -> None:
+    parameters = record.get("selected_parameters")
+    if isinstance(parameters, dict):
+        key = json.dumps(parameters, sort_keys=True, separators=(",", ":"))
+        grouped[key].append(record)
+
+
+def _selected_parameter_summary_row(
+    key: str, records: list[dict[str, Any]]
+) -> dict[str, Any]:
+    return {
+        "parameters": json.loads(key),
+        "selected_model_count": len(records),
+        "mean_forward_hold_precision": _mean(
+            [
+                float(item["hold_precision"])
+                for item in records
+                if item["hold_precision"] is not None
+            ]
+        ),
+        "mean_forward_hold_recall": _mean(
+            [
+                float(item["hold_recall"])
+                for item in records
+                if item["hold_recall"] is not None
+            ]
+        ),
+        "mean_outer_validation_macro_f1": _mean(
+            [
+                float(item["macro_f1"])
+                for item in records
+                if item["macro_f1"] is not None
+            ]
+        ),
+    }
+
+
+def _selected_parameter_rank(item: dict[str, Any]) -> tuple[float, float]:
+    return (
+        item["mean_forward_hold_precision"] or -1.0,
+        item["mean_outer_validation_macro_f1"] or -1.0,
+    )
+
+
 def _aggregate_selected_parameters(
     metric_records: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for record in metric_records:
-        parameters = record.get("selected_parameters")
-        if not isinstance(parameters, dict):
-            continue
-        key = json.dumps(parameters, sort_keys=True, separators=(",", ":"))
-        grouped[key].append(record)
-    rows: list[dict[str, Any]] = []
-    for key, records in grouped.items():
-        rows.append(
-            {
-                "parameters": json.loads(key),
-                "selected_model_count": len(records),
-                "mean_forward_hold_precision": _mean(
-                    [
-                        float(item["hold_precision"])
-                        for item in records
-                        if item["hold_precision"] is not None
-                    ]
-                ),
-                "mean_forward_hold_recall": _mean(
-                    [
-                        float(item["hold_recall"])
-                        for item in records
-                        if item["hold_recall"] is not None
-                    ]
-                ),
-                "mean_outer_validation_macro_f1": _mean(
-                    [
-                        float(item["macro_f1"])
-                        for item in records
-                        if item["macro_f1"] is not None
-                    ]
-                ),
-            }
-        )
-    return sorted(
-        rows,
-        key=lambda item: (
-            item["mean_forward_hold_precision"] or -1.0,
-            item["mean_outer_validation_macro_f1"] or -1.0,
-        ),
-        reverse=True,
+        _append_selected_parameter_record(grouped, record)
+    rows = [
+        _selected_parameter_summary_row(key, records)
+        for key, records in grouped.items()
+    ]
+    return sorted(rows, key=_selected_parameter_rank, reverse=True)
+
+
+def _geometry_records(
+    metric_records: list[dict[str, Any]], scenario_name: str
+) -> list[dict[str, Any]]:
+    return [
+        item for item in metric_records if item["scenario"] == scenario_name
+    ]
+
+
+def _geometry_metric_values(
+    records: list[dict[str, Any]], metric_name: str
+) -> list[float]:
+    return [
+        float(item[metric_name])
+        for item in records
+        if item[metric_name] is not None
+    ]
+
+
+def _geometry_acceptance_count(records: list[dict[str, Any]]) -> int:
+    return sum(
+        item["hold_precision"] is not None
+        and item["hold_recall"] is not None
+        and float(item["hold_precision"]) >= DEFAULT_MINIMUM_HOLD_PRECISION
+        and float(item["hold_recall"]) >= DEFAULT_MINIMUM_HOLD_RECALL
+        for item in records
     )
+
+
+def _best_geometry_record(
+    records: list[dict[str, Any]], metric_name: str
+) -> dict[str, Any] | None:
+    available = [
+        item for item in records if item[metric_name] is not None
+    ]
+    if not available:
+        return None
+    return max(available, key=lambda item: float(item[metric_name]))
+
+
+def _geometry_experiment_count(
+    experiments: list[dict[str, Any]], scenario_name: str
+) -> int:
+    return sum(item.get("scenario") == scenario_name for item in experiments)
+
+
+def _geometry_summary_row(
+    experiments: list[dict[str, Any]],
+    metric_records: list[dict[str, Any]],
+    scenario: tuple[str, int, float, float],
+) -> dict[str, Any]:
+    scenario_name, horizon, take_profit, stop_loss = scenario
+    records = _geometry_records(metric_records, scenario_name)
+    precisions = _geometry_metric_values(records, "hold_precision")
+    recalls = _geometry_metric_values(records, "hold_recall")
+    macro_scores = _geometry_metric_values(records, "macro_f1")
+    return {
+        "scenario": scenario_name,
+        "horizon_candles": horizon,
+        "take_profit_multiplier": take_profit,
+        "stop_loss_multiplier": stop_loss,
+        "experiment_count": _geometry_experiment_count(
+            experiments, scenario_name
+        ),
+        "trained_model_count": len(records),
+        "label_distribution": _aggregate_label_distribution(
+            experiments, scenario_name
+        ),
+        "mean_forward_hold_precision": _mean(precisions),
+        "mean_forward_hold_recall": _mean(recalls),
+        "mean_outer_validation_macro_f1": _mean(macro_scores),
+        "strict_acceptance_count": _geometry_acceptance_count(records),
+        "best_individual_forward_hold_precision_result": _best_geometry_record(
+            records, "hold_precision"
+        ),
+        "best_individual_outer_validation_macro_f1_result": _best_geometry_record(
+            records, "macro_f1"
+        ),
+    }
 
 
 def _build_geometry_summary(
     experiments: list[dict[str, Any]],
     metric_records: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    summary: list[dict[str, Any]] = []
-    for scenario_name, _, _, _ in V4H_SCENARIO_CONTRACT:
-        records = [item for item in metric_records if item["scenario"] == scenario_name]
-        precisions = [
-            float(item["hold_precision"])
-            for item in records
-            if item["hold_precision"] is not None
-        ]
-        recalls = [
-            float(item["hold_recall"])
-            for item in records
-            if item["hold_recall"] is not None
-        ]
-        macro_scores = [
-            float(item["macro_f1"]) for item in records if item["macro_f1"] is not None
-        ]
-        acceptance_count = sum(
-            item["hold_precision"] is not None
-            and item["hold_recall"] is not None
-            and float(item["hold_precision"]) >= DEFAULT_MINIMUM_HOLD_PRECISION
-            and float(item["hold_recall"]) >= DEFAULT_MINIMUM_HOLD_RECALL
-            for item in records
-        )
-        precision_records = [
-            item for item in records if item["hold_precision"] is not None
-        ]
-        macro_records = [item for item in records if item["macro_f1"] is not None]
-        best_precision = (
-            max(precision_records, key=lambda item: float(item["hold_precision"]))
-            if precision_records
-            else None
-        )
-        best_macro = (
-            max(macro_records, key=lambda item: float(item["macro_f1"]))
-            if macro_records
-            else None
-        )
-        summary.append(
-            {
-                "scenario": scenario_name,
-                "horizon_candles": 12,
-                "take_profit_multiplier": next(
-                    item[2]
-                    for item in V4H_SCENARIO_CONTRACT
-                    if item[0] == scenario_name
-                ),
-                "stop_loss_multiplier": next(
-                    item[3]
-                    for item in V4H_SCENARIO_CONTRACT
-                    if item[0] == scenario_name
-                ),
-                "experiment_count": sum(
-                    item.get("scenario") == scenario_name for item in experiments
-                ),
-                "trained_model_count": len(records),
-                "label_distribution": _aggregate_label_distribution(
-                    experiments, scenario_name
-                ),
-                "mean_forward_hold_precision": _mean(precisions),
-                "mean_forward_hold_recall": _mean(recalls),
-                "mean_outer_validation_macro_f1": _mean(macro_scores),
-                "strict_acceptance_count": int(acceptance_count),
-                "best_individual_forward_hold_precision_result": best_precision,
-                "best_individual_outer_validation_macro_f1_result": best_macro,
-            }
-        )
-    return summary
+    return [
+        _geometry_summary_row(experiments, metric_records, scenario)
+        for scenario in V4H_SCENARIO_CONTRACT
+    ]
+
+def _append_experiment_metric_records(
+    records: list[dict[str, Any]], experiment: dict[str, Any]
+) -> None:
+    for policy in weighting_policy_specs():
+        record = _variant_metric_record(experiment, policy)
+        if record is not None:
+            records.append(record)
+
+
+def _collect_metric_records(
+    experiments: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for experiment in experiments:
+        _append_experiment_metric_records(records, experiment)
+    return records
+
+
+def _training_counts(experiments: list[dict[str, Any]]) -> tuple[int, int]:
+    trained_experiments = 0
+    trained_models = 0
+    for experiment in experiments:
+        trained_experiments += int(experiment.get("status") == "TRAINED")
+        trained_models += len(experiment.get("model_variants") or {})
+    return trained_experiments, trained_models
+
+
+def _candidate_fit_total(experiments: list[dict[str, Any]]) -> int:
+    fit_count = 0
+    for experiment in experiments:
+        variants = experiment.get("model_variants") or {}
+        for variant in variants.values():
+            tuning = variant.get("hyperparameter_tuning", {})
+            fit_count += int(tuning.get("candidate_fit_count", 0))
+    return fit_count
+
+
+def _build_report_feature_engineering() -> dict[str, Any]:
+    return {
+        "enabled": True,
+        "schema_version": EXTENDED_FEATURE_SCHEMA_VERSION,
+        "selected_profiles": list(V4H_FEATURE_PROFILES),
+        "profile_manifest": feature_profile_manifest(V4H_FEATURE_PROFILES),
+        "common_sample_policy": "FINITE_ROW_INTERSECTION_OF_BASELINE_PLUS_TREND",
+        "point_in_time": True,
+    }
+
+
+def _build_report_model() -> dict[str, Any]:
+    return {
+        "family": "LightGBM LGBMClassifier",
+        "objective": "multiclass",
+        "n_estimators": 80,
+        "max_depth": 6,
+        "random_state": 42,
+        "deterministic": True,
+        "class_weight_policies": list(weighting_policy_specs()),
+        "binary_only_parameters_excluded": ["scale_pos_weight", "is_unbalance"],
+    }
+
+
+def _build_report_hyperparameter_tuning(
+    experiments: list[dict[str, Any]],
+    metric_records: list[dict[str, Any]],
+    random_search_iterations: int,
+    trained_models: int,
+) -> dict[str, Any]:
+    return {
+        "method": "RANDOM_SEARCH",
+        "parameter_distributions": {
+            name: list(values)
+            for name, values in HYPERPARAMETER_DISTRIBUTIONS.items()
+        },
+        "search_space_size": 27,
+        "candidate_count_per_model": random_search_iterations,
+        "inner_cv_method": "PURGED_EXPANDING_TIME_SERIES",
+        "inner_cv_fold_count": DEFAULT_INNER_CV_SPLITS,
+        "inner_cv_scope": "OUTER_TRAIN_ONLY",
+        "validation_accessed_during_search": False,
+        "final_refit_scope": "FULL_OUTER_TRAIN_ONLY",
+        "selected_candidate_scores_are_inner_cv_only": True,
+        "model_count": trained_models,
+        "candidate_fit_count": _candidate_fit_total(experiments),
+        "final_refit_count": trained_models,
+        "candidate_summary": _aggregate_parameter_candidates(experiments),
+        "selected_parameter_summary": _aggregate_selected_parameters(
+            metric_records
+        ),
+    }
+
+
+def _build_report_validation_design(calibration_fraction: float) -> dict[str, Any]:
+    return {
+        "method": "SINGLE_PURGED_CHRONOLOGICAL_OUTER_HOLDOUT",
+        "validation_start_fraction": V4H_OUTER_VALIDATION_START_FRACTION,
+        "validation_end_fraction": V4H_OUTER_VALIDATION_END_FRACTION,
+        "calibration_fraction_of_outer_validation": calibration_fraction,
+        "calibration_is_excluded_from_model_fit": True,
+        "inner_search_uses_train_only": True,
+        "pre_validation_embargo": "EXACT_LABEL_HORIZON_CANDLES",
+        "label_window_purge": "ACTUAL_LABEL_END_INDEX_OVERLAP",
+        "forward_hold_metric_scope": "POST_CALIBRATION_VALIDATION",
+        "macro_f1_scope": "FULL_OUTER_VALIDATION_DESCRIPTIVE",
+    }
+
+
+def _build_report_safety() -> dict[str, Any]:
+    return {
+        "public_api_only": True,
+        "credentials_used": False,
+        "private_api_calls": 0,
+        "real_order_attempts": 0,
+        "orders_or_execution_api_used": False,
+        "Champion": None,
+        "order_permission": False,
+        "trading_authorization": "NO-GO",
+    }
 
 
 def build_v4h_report(
@@ -651,22 +875,22 @@ def build_v4h_report(
     random_search_iterations: int,
     calibration_fraction: float,
 ) -> dict[str, Any]:
-    metric_records = [
-        record
-        for experiment in experiments
-        for policy in weighting_policy_specs()
-        if (record := _variant_metric_record(experiment, policy)) is not None
-    ]
+    metric_records = _collect_metric_records(experiments)
     candidate_summary = _aggregate_parameter_candidates(experiments)
     geometry_summary = _build_geometry_summary(experiments, metric_records)
-    trained_experiments = sum(item.get("status") == "TRAINED" for item in experiments)
-    trained_models = sum(len(item.get("model_variants") or {}) for item in experiments)
-    all_candidate_fit_count = sum(
-        int(variant.get("hyperparameter_tuning", {}).get("candidate_fit_count", 0))
-        for experiment in experiments
-        for variant in (experiment.get("model_variants") or {}).values()
+    trained_experiments, trained_models = _training_counts(experiments)
+    candidate_fit_count = _candidate_fit_total(experiments)
+    acceptance_count = sum(
+        item["strict_acceptance_count"] for item in geometry_summary
     )
-    acceptance_count = sum(item["strict_acceptance_count"] for item in geometry_summary)
+    tuning_report = _build_report_hyperparameter_tuning(
+        experiments,
+        metric_records,
+        random_search_iterations,
+        trained_models,
+    )
+    tuning_report["candidate_fit_count"] = candidate_fit_count
+    tuning_report["candidate_summary"] = candidate_summary
     return {
         "schema_version": V4H_REPORT_SCHEMA,
         "commit_sha": commit_sha,
@@ -681,58 +905,12 @@ def build_v4h_report(
         "symbols": list(SYMBOLS),
         "labels": list(LABELS),
         "triple_barrier_scenarios": _v4h_scenarios(),
-        "feature_engineering": {
-            "enabled": True,
-            "schema_version": EXTENDED_FEATURE_SCHEMA_VERSION,
-            "selected_profiles": list(V4H_FEATURE_PROFILES),
-            "profile_manifest": feature_profile_manifest(V4H_FEATURE_PROFILES),
-            "common_sample_policy": "FINITE_ROW_INTERSECTION_OF_BASELINE_PLUS_TREND",
-            "point_in_time": True,
-        },
-        "model": {
-            "family": "LightGBM LGBMClassifier",
-            "objective": "multiclass",
-            "n_estimators": 80,
-            "max_depth": 6,
-            "random_state": 42,
-            "deterministic": True,
-            "class_weight_policies": list(weighting_policy_specs()),
-            "binary_only_parameters_excluded": ["scale_pos_weight", "is_unbalance"],
-        },
-        "hyperparameter_tuning": {
-            "method": "RANDOM_SEARCH",
-            "parameter_distributions": {
-                name: list(values)
-                for name, values in HYPERPARAMETER_DISTRIBUTIONS.items()
-            },
-            "search_space_size": 27,
-            "candidate_count_per_model": random_search_iterations,
-            "inner_cv_method": "PURGED_EXPANDING_TIME_SERIES",
-            "inner_cv_fold_count": DEFAULT_INNER_CV_SPLITS,
-            "inner_cv_scope": "OUTER_TRAIN_ONLY",
-            "validation_accessed_during_search": False,
-            "final_refit_scope": "FULL_OUTER_TRAIN_ONLY",
-            "selected_candidate_scores_are_inner_cv_only": True,
-            "model_count": trained_models,
-            "candidate_fit_count": all_candidate_fit_count,
-            "final_refit_count": trained_models,
-            "candidate_summary": candidate_summary,
-            "selected_parameter_summary": _aggregate_selected_parameters(
-                metric_records
-            ),
-        },
-        "validation_design": {
-            "method": "SINGLE_PURGED_CHRONOLOGICAL_OUTER_HOLDOUT",
-            "validation_start_fraction": V4H_OUTER_VALIDATION_START_FRACTION,
-            "validation_end_fraction": V4H_OUTER_VALIDATION_END_FRACTION,
-            "calibration_fraction_of_outer_validation": calibration_fraction,
-            "calibration_is_excluded_from_model_fit": True,
-            "inner_search_uses_train_only": True,
-            "pre_validation_embargo": "EXACT_LABEL_HORIZON_CANDLES",
-            "label_window_purge": "ACTUAL_LABEL_END_INDEX_OVERLAP",
-            "forward_hold_metric_scope": "POST_CALIBRATION_VALIDATION",
-            "macro_f1_scope": "FULL_OUTER_VALIDATION_DESCRIPTIVE",
-        },
+        "feature_engineering": _build_report_feature_engineering(),
+        "model": _build_report_model(),
+        "hyperparameter_tuning": tuning_report,
+        "validation_design": _build_report_validation_design(
+            calibration_fraction
+        ),
         "acceptance_policy": {
             "minimum_hold_precision": DEFAULT_MINIMUM_HOLD_PRECISION,
             "minimum_hold_recall": DEFAULT_MINIMUM_HOLD_RECALL,
@@ -746,18 +924,8 @@ def build_v4h_report(
         "expected_models": V4H_EXPECTED_MODELS,
         "experiments": experiments,
         "geometry_summary": geometry_summary,
-        "safety": {
-            "public_api_only": True,
-            "credentials_used": False,
-            "private_api_calls": 0,
-            "real_order_attempts": 0,
-            "orders_or_execution_api_used": False,
-            "Champion": None,
-            "order_permission": False,
-            "trading_authorization": "NO-GO",
-        },
+        "safety": _build_report_safety(),
     }
-
 
 def render_v4h_markdown(report: dict[str, Any]) -> str:
     lines = [
