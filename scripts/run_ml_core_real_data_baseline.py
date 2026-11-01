@@ -2480,6 +2480,7 @@ def _run_diagnostic_experiments(
                 )
     return experiments
 
+
 def _mean_metric(values: list[float]) -> float | None:
     """Return a rounded unweighted mean, preserving empty support as null."""
     if not values:
@@ -2593,12 +2594,8 @@ def _fold_profile_forward_metrics(
         "experiment_count": len(rows),
         "trained_experiment_count": len(trained),
         "forward_metric_experiment_count": len(forward),
-        "mean_forward_hold_precision": _mean_metric(
-            [item[0] for item in values]
-        ),
-        "mean_forward_hold_recall": _mean_metric(
-            [item[1] for item in values]
-        ),
+        "mean_forward_hold_precision": _mean_metric([item[0] for item in values]),
+        "mean_forward_hold_recall": _mean_metric([item[1] for item in values]),
         "precision_at_least_0_40_count": sum(
             item[0] >= DEFAULT_MINIMUM_HOLD_PRECISION for item in values
         ),
@@ -2647,9 +2644,7 @@ def _build_fold_walk_forward_summary(
     profile_stats: dict[str, dict[str, Any]] = {}
     indexed: dict[str, dict[tuple[str, str], tuple[float, float]]] = {}
     for profile in profile_names:
-        rows = [
-            item for item in fold_rows if item.get("feature_profile") == profile
-        ]
+        rows = [item for item in fold_rows if item.get("feature_profile") == profile]
         profile_stats[profile], indexed[profile] = _fold_profile_forward_metrics(rows)
     return {
         "fold_index": fold_index,
@@ -2671,10 +2666,7 @@ def _fold_profile_threshold_count(
     profile: str,
     metric_name: str,
 ) -> int:
-    return sum(
-        item["profiles"][profile][metric_name]
-        for item in folds
-    )
+    return sum(item["profiles"][profile][metric_name] for item in folds)
 
 
 def _build_walk_forward_summary(
@@ -2685,11 +2677,7 @@ def _build_walk_forward_summary(
     """Aggregate each fold and paired Baseline/Trend Test precision results."""
     folds = [
         _build_fold_walk_forward_summary(
-            [
-                item
-                for item in experiments
-                if item.get("fold_index") == fold_index
-            ],
+            [item for item in experiments if item.get("fold_index") == fold_index],
             profile_names,
             fold_index,
         )
@@ -2712,6 +2700,7 @@ def _build_walk_forward_summary(
             for profile in profile_names
         },
     }
+
 
 def _add_feature_profile_baseline_deltas(
     profile_summary: dict[str, dict[str, Any]],
@@ -2790,9 +2779,7 @@ def _summarize_selected_feature_profiles(
 
 
 def _primary_extended_profile(profile_names: tuple[str, ...]) -> str | None:
-    return next(
-        (profile for profile in profile_names if profile != "Baseline"), None
-    )
+    return next((profile for profile in profile_names if profile != "Baseline"), None)
 
 
 def _feature_summary_acceptance_fields(
@@ -2854,6 +2841,7 @@ def _build_feature_ablation_summary(
         **_feature_summary_acceptance_fields(profile_summary, primary_extended),
     }
 
+
 def _resolved_report_profiles(
     profile_names: tuple[str, ...] | None,
     feature_ablation: bool,
@@ -2883,9 +2871,7 @@ def _build_data_window_report(
             os.environ.get("ALIX_DIAGNOSTIC_CONFIGURED_DAYS", str(days))
         ),
         "selected_days": days,
-        "fallback_reason": os.environ.get(
-            "ALIX_DIAGNOSTIC_FALLBACK_REASON", "NONE"
-        ),
+        "fallback_reason": os.environ.get("ALIX_DIAGNOSTIC_FALLBACK_REASON", "NONE"),
         "policy": (
             "Fetch the configured window in validated pages of at most 1,000 "
             "one-minute candles with a 0.25-second delay; reject gaps and never "
@@ -3083,9 +3069,7 @@ def _build_diagnostic_summary_reports(
         else None
     )
     walk_forward_summary = (
-        _build_walk_forward_summary(
-            experiments, selected_profiles, walk_forward_folds
-        )
+        _build_walk_forward_summary(experiments, selected_profiles, walk_forward_folds)
         if walk_forward_folds is not None
         else None
     )
@@ -3162,9 +3146,7 @@ def _build_diagnostic_report(
             minimum_hold_recall,
             walk_forward_folds,
         ),
-        "trained_experiments": sum(
-            item["status"] == "TRAINED" for item in experiments
-        ),
+        "trained_experiments": sum(item["status"] == "TRAINED" for item in experiments),
         "trained_models": sum(
             len(item["model_variants"] or {}) for item in experiments
         ),
@@ -3183,6 +3165,7 @@ def _build_diagnostic_report(
             "trading_authorization": "NO-GO",
         },
     }
+
 
 def _write_diagnostic_report(report: dict[str, Any], output_path: Path) -> None:
     """Persist JSON and its matching GitHub Step Summary."""
@@ -3291,6 +3274,7 @@ def run_diagnostic(
     _write_diagnostic_report(report, output_path)
     _print_diagnostic_completion(report, output_path, commit_sha)
     return report
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)

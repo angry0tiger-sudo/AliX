@@ -89,7 +89,9 @@ def _calibration_status(hold_count: int, non_hold_count: int) -> str:
         hold_count >= MINIMUM_CALIBRATION_HOLD_SAMPLES
         and non_hold_count >= MINIMUM_CALIBRATION_NON_HOLD_SAMPLES
     )
-    return "PASS" if support_is_sufficient else "SKIPPED_INSUFFICIENT_CALIBRATION_SAMPLES"
+    return (
+        "PASS" if support_is_sufficient else "SKIPPED_INSUFFICIENT_CALIBRATION_SAMPLES"
+    )
 
 
 def _indices_are_disjoint(
@@ -175,9 +177,7 @@ def _build_fold_diagnostics(
         "test_rows": len(test),
         "calibration_hold_samples": hold_count,
         "calibration_non_hold_samples": non_hold_count,
-        "calibration_support_status": _calibration_status(
-            hold_count, non_hold_count
-        ),
+        "calibration_support_status": _calibration_status(hold_count, non_hold_count),
         "minimum_calibration_hold_samples": MINIMUM_CALIBRATION_HOLD_SAMPLES,
         "minimum_calibration_non_hold_samples": MINIMUM_CALIBRATION_NON_HOLD_SAMPLES,
         "pre_calibration_embargo_bars": split.embargo_size,
@@ -223,9 +223,7 @@ def _build_one_fold(
     horizon: int,
     calibration_fraction: float,
 ) -> WalkForwardFold:
-    test_start, test_end = _fold_test_bounds(
-        len(labels), fold_index, fold_count
-    )
+    test_start, test_end = _fold_test_bounds(len(labels), fold_index, fold_count)
     calibration_start = floor(test_start * (1.0 - calibration_fraction))
     if not 0 < calibration_start < test_start:
         raise ValueError("walk_forward_calibration_window_invalid")
@@ -291,9 +289,7 @@ def _validate_walk_forward_frames(
         raise ValueError("walk_forward_labels_missing")
 
 
-def _eligible_sample_indices(
-    common_features: DataFrame, labels: DataFrame
-) -> set[int]:
+def _eligible_sample_indices(common_features: DataFrame, labels: DataFrame) -> set[int]:
     eligible_mask = (
         common_features.notna().all(axis=1)
         & labels["label"].isin(LABELS)
