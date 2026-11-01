@@ -223,7 +223,7 @@ jobs:
           assert report["calibration_policy"]["full_validation_scope"] == "NOT_COMPUTED_FOR_WALK_FORWARD"
           assert report["split_policy"]["validation_start_fraction"] == 0.60
           assert report["split_policy"]["validation_end_fraction"] == 0.90
-          assert report["split_policy"]["fold_test_window_policy"] == "FIVE_NON_OVERLAPPING_CHRONOLOGICAL_WINDOWS"
+          assert report["split_policy"]["fold_test_window_policy"] == "5_NON_OVERLAPPING_CHRONOLOGICAL_WINDOWS"
           assert report["split_policy"]["calibration_is_disjoint_from_test"] is True
           assert len(report["input_datasets"]) == 2
           for dataset in report["input_datasets"]:
