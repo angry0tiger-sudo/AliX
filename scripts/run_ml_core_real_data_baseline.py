@@ -2790,6 +2790,244 @@ def _build_feature_ablation_summary(
         **_feature_summary_acceptance_fields(profile_summary, primary_extended),
     }
 
+def _resolved_report_profiles(
+    profile_names: tuple[str, ...] | None,
+    feature_ablation: bool,
+) -> tuple[str, ...]:
+    if profile_names:
+        return profile_names
+    return FEATURE_PROFILE_ORDER if feature_ablation else ("Baseline",)
+
+
+def _diagnostic_report_schema(
+    feature_ablation: bool,
+    walk_forward_folds: int | None,
+) -> str:
+    if walk_forward_folds is not None:
+        return WALK_FORWARD_TREND_REPORT_SCHEMA
+    if feature_ablation:
+        return FEATURE_ABLATION_REPORT_SCHEMA
+    return REPORT_SCHEMA
+
+
+def _build_data_window_report(
+    days: int,
+    provenance: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "configured_days": int(
+            os.environ.get("ALIX_DIAGNOSTIC_CONFIGURED_DAYS", str(days))
+        ),
+        "selected_days": days,
+        "fallback_reason": os.environ.get(
+            "ALIX_DIAGNOSTIC_FALLBACK_REASON", "NONE"
+        ),
+        "policy": (
+            "Fetch the configured window in validated pages of at most 1,000 "
+            "one-minute candles with a 0.25-second delay; reject gaps and never "
+            "shorten the requested window or synthesize missing candles."
+        ),
+        "fetch_page_size_candles": provenance[0]["fetch_page_size_candles"],
+        "inter_page_delay_seconds": provenance[0]["inter_page_delay_seconds"],
+    }
+
+
+def _build_feature_engineering_report(
+    selected_profiles: tuple[str, ...],
+    feature_ablation: bool,
+) -> dict[str, Any]:
+    return {
+        "enabled": feature_ablation,
+        "schema_version": EXTENDED_FEATURE_SCHEMA_VERSION,
+        "profile_manifest": feature_profile_manifest(
+            selected_profiles if feature_ablation else None
+        ),
+        "selected_profiles": list(selected_profiles),
+        "point_in_time": True,
+        "warmup_policy": (
+            "Leading rolling-window warm-up rows remain null and are excluded; "
+            "no backfill, interpolation, centered windows, or future values are used."
+        ),
+        "common_sample_policy": (
+            "V4-G Baseline and Baseline+Trend use the finite-row intersection of "
+            "the Baseline+Trend matrix. V4-F uses the finite-row intersection of "
+            "the Combined matrix."
+        ),
+        "volume_semantics": (
+            "Relative volume, volume z-score, normalized OBV, and Chaikin money "
+            "flow are OHLCV-derived proxies; they are not aggressor-side order-flow data."
+        ),
+    }
+
+
+def _build_model_report() -> dict[str, Any]:
+    return {
+        "family": "LightGBM LGBMClassifier",
+        "n_estimators": 80,
+        "learning_rate": 0.05,
+        "max_depth": 4,
+        "num_leaves": 15,
+        "random_state": 42,
+        "class_weight": "balanced",
+        "primary_variant": "weight_balanced",
+    }
+
+
+def _build_weighting_policy_report(
+    policy_specs: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "policies": {
+            name: {"class_weight": spec["class_weight"]}
+            for name, spec in policy_specs.items()
+        },
+        "excluded_policy": "weight_intermediate",
+        "excluded_policy_reason": (
+            "Removed from the model-fitting grid after lower Macro-F1 and "
+            "near-zero HOLD recall in the V4 diagnostic."
+        ),
+    }
+
+
+def _build_calibration_policy_report(
+    calibration_fraction: float,
+    minimum_hold_precision: float,
+    minimum_hold_recall: float,
+    walk_forward_folds: int | None,
+) -> dict[str, Any]:
+    is_walk_forward = walk_forward_folds is not None
+    return {
+        "fraction_of_validation": (
+            None if is_walk_forward else float(calibration_fraction)
+        ),
+        "fraction_of_pre_test_history": (
+            float(calibration_fraction) if is_walk_forward else None
+        ),
+        "temporal_position": (
+            "TAIL_OF_PRE_TEST_TRAIN_EXCLUDED_FROM_MODEL_FIT"
+            if is_walk_forward
+            else "FIRST_CHRONOLOGICAL_SEGMENT_OF_VALIDATION"
+        ),
+        "minimum_hold_support": MIN_CALIBRATION_HOLD_SAMPLES,
+        "minimum_non_hold_support": MIN_CALIBRATION_NON_HOLD_SAMPLES,
+        "minimum_hold_precision": float(minimum_hold_precision),
+        "minimum_hold_recall": float(minimum_hold_recall),
+        "threshold_grid_steps": HOLD_THRESHOLD_GRID_STEPS,
+        "probability_diagnostics": [
+            "multiclass_brier_score",
+            "hold_binary_brier_score",
+            "multiclass_macro_ece",
+            "hold_binary_ece",
+            "hold_auc",
+            "hold_pr_auc",
+        ],
+        "ece_bin_count": 10,
+        "primary_evaluation_scope": (
+            "WALK_FORWARD_TEST_ONLY"
+            if is_walk_forward
+            else "POST_CALIBRATION_REMAINING_VALIDATION"
+        ),
+        "full_validation_scope": (
+            "NOT_COMPUTED_FOR_WALK_FORWARD"
+            if is_walk_forward
+            else "DESCRIPTIVE_ONLY_INCLUDES_CALIBRATION_ROWS"
+        ),
+    }
+
+
+def _build_baseline_comparisons_report() -> dict[str, Any]:
+    return {
+        "always_sell": {
+            "type": "constant_prediction",
+            "predicted_label": "SELL",
+            "metrics_scope": "VALIDATION_ONLY",
+        },
+        "lightgbm_unweighted": {
+            "family": "LightGBM LGBMClassifier",
+            "n_estimators": 80,
+            "learning_rate": 0.05,
+            "max_depth": 4,
+            "num_leaves": 15,
+            "random_state": 42,
+            "class_weight": None,
+            "metrics_scope": "VALIDATION_ONLY",
+        },
+    }
+
+
+def _build_split_policy_report(
+    walk_forward_folds: int | None,
+) -> dict[str, Any]:
+    is_walk_forward = walk_forward_folds is not None
+    return {
+        "validation_start_fraction": (
+            0.60 if is_walk_forward else VALIDATION_START_FRACTION
+        ),
+        "validation_end_fraction": (
+            0.90 if is_walk_forward else VALIDATION_END_FRACTION
+        ),
+        "chronological_training_only": True,
+        "label_window_purge": "actual_label_end_idx_overlap",
+        "pre_validation_embargo": "exact_label_horizon_candles",
+        "post_validation_embargo": "exact_label_horizon_candles",
+        "fold_test_window_policy": (
+            "THREE_NON_OVERLAPPING_CHRONOLOGICAL_WINDOWS"
+            if is_walk_forward
+            else "SINGLE_CHRONOLOGICAL_VALIDATION_WINDOW"
+        ),
+        "calibration_is_disjoint_from_test": is_walk_forward,
+        "feature_lookback_is_causal": True,
+    }
+
+
+def _build_validation_design_report(
+    calibration_fraction: float,
+    minimum_hold_precision: float,
+    minimum_hold_recall: float,
+    walk_forward_folds: int | None,
+) -> dict[str, Any]:
+    is_walk_forward = walk_forward_folds is not None
+    return {
+        "method": (
+            "EXPANDING_WINDOW_WALK_FORWARD"
+            if is_walk_forward
+            else "SINGLE_PURGED_CHRONOLOGICAL_SPLIT"
+        ),
+        "fold_count": walk_forward_folds or 1,
+        "test_window_start_fraction": 0.60 if is_walk_forward else None,
+        "test_window_end_fraction": 0.90 if is_walk_forward else None,
+        "calibration_fraction_of_pre_test_history": (
+            float(calibration_fraction) if is_walk_forward else None
+        ),
+        "calibration_is_excluded_from_model_fit": is_walk_forward,
+        "minimum_calibration_hold_samples": MIN_CALIBRATION_HOLD_SAMPLES,
+        "minimum_calibration_non_hold_samples": MIN_CALIBRATION_NON_HOLD_SAMPLES,
+        "minimum_hold_precision": float(minimum_hold_precision),
+        "minimum_hold_recall": float(minimum_hold_recall),
+    }
+
+
+def _build_diagnostic_summary_reports(
+    experiments: list[dict[str, Any]],
+    selected_profiles: tuple[str, ...],
+    feature_ablation: bool,
+    walk_forward_folds: int | None,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    feature_summary = (
+        _build_feature_ablation_summary(experiments, selected_profiles)
+        if feature_ablation
+        else None
+    )
+    walk_forward_summary = (
+        _build_walk_forward_summary(
+            experiments, selected_profiles, walk_forward_folds
+        )
+        if walk_forward_folds is not None
+        else None
+    )
+    return feature_summary, walk_forward_summary
+
+
 def _build_diagnostic_report(
     *,
     days: int,
@@ -2806,18 +3044,15 @@ def _build_diagnostic_report(
     walk_forward_folds: int | None = None,
 ) -> dict[str, Any]:
     """Construct a classification-only report with selected profiles and split design."""
-    selected_profiles = feature_profile_names or (
-        FEATURE_PROFILE_ORDER if feature_ablation else ("Baseline",)
+    selected_profiles = _resolved_report_profiles(
+        feature_profile_names, feature_ablation
     )
-    trained_experiments = sum(item["status"] == "TRAINED" for item in experiments)
-    trained_models = sum(len(item["model_variants"] or {}) for item in experiments)
+    feature_summary, walk_forward_summary = _build_diagnostic_summary_reports(
+        experiments, selected_profiles, feature_ablation, walk_forward_folds
+    )
     return {
-        "schema_version": (
-            WALK_FORWARD_TREND_REPORT_SCHEMA
-            if walk_forward_folds is not None
-            else FEATURE_ABLATION_REPORT_SCHEMA
-            if feature_ablation
-            else REPORT_SCHEMA
+        "schema_version": _diagnostic_report_schema(
+            feature_ablation, walk_forward_folds
         ),
         "commit_sha": commit_sha,
         "diagnostic_scope": "CLASSIFICATION_ONLY",
@@ -2825,22 +3060,7 @@ def _build_diagnostic_report(
         "economic_evaluation_performed": False,
         "economic_metrics_reported": False,
         "requested_days": days,
-        "data_window_selection": {
-            "configured_days": int(
-                os.environ.get("ALIX_DIAGNOSTIC_CONFIGURED_DAYS", str(days))
-            ),
-            "selected_days": days,
-            "fallback_reason": os.environ.get(
-                "ALIX_DIAGNOSTIC_FALLBACK_REASON", "NONE"
-            ),
-            "policy": (
-                "Fetch the configured window in validated pages of at most 1,000 "
-                "one-minute candles with a 0.25-second delay; reject gaps and never "
-                "shorten the requested window or synthesize missing candles."
-            ),
-            "fetch_page_size_candles": provenance[0]["fetch_page_size_candles"],
-            "inter_page_delay_seconds": provenance[0]["inter_page_delay_seconds"],
-        },
+        "data_window_selection": _build_data_window_report(days, provenance),
         "sample_gate_policy": {
             "minimum_train_samples_per_class": MIN_TRAIN_SAMPLES_PER_CLASS,
             "minimum_validation_samples_per_class": MIN_VALIDATION_SAMPLES_PER_CLASS,
@@ -2859,156 +3079,35 @@ def _build_diagnostic_report(
         "allowed_timeframes": list(TIMEFRAME_MINUTES),
         "labels": list(LABELS),
         "triple_barrier_scenarios": barrier_scenarios,
-        "feature_engineering": {
-            "enabled": feature_ablation,
-            "schema_version": EXTENDED_FEATURE_SCHEMA_VERSION,
-            "profile_manifest": feature_profile_manifest(
-                selected_profiles if feature_ablation else None
-            ),
-            "selected_profiles": list(selected_profiles),
-            "point_in_time": True,
-            "warmup_policy": (
-                "Leading rolling-window warm-up rows remain null and are excluded; "
-                "no backfill, interpolation, centered windows, or future values are used."
-            ),
-            "common_sample_policy": (
-                "V4-G Baseline and Baseline+Trend use the finite-row intersection of "
-                "the Baseline+Trend matrix. V4-F uses the finite-row intersection of "
-                "the Combined matrix."
-            ),
-            "volume_semantics": (
-                "Relative volume, volume z-score, normalized OBV, and Chaikin money "
-                "flow are OHLCV-derived proxies; they are not aggressor-side order-flow data."
-            ),
-        },
-        "model": {
-            "family": "LightGBM LGBMClassifier",
-            "n_estimators": 80,
-            "learning_rate": 0.05,
-            "max_depth": 4,
-            "num_leaves": 15,
-            "random_state": 42,
-            "class_weight": "balanced",
-            "primary_variant": "weight_balanced",
-        },
-        "weighting_policy": {
-            "policies": {
-                name: {"class_weight": spec["class_weight"]}
-                for name, spec in policy_specs.items()
-            },
-            "excluded_policy": "weight_intermediate",
-            "excluded_policy_reason": (
-                "Removed from the model-fitting grid after lower Macro-F1 and "
-                "near-zero HOLD recall in the V4 diagnostic."
-            ),
-        },
-        "calibration_policy": {
-            "fraction_of_validation": (
-                float(calibration_fraction) if walk_forward_folds is None else None
-            ),
-            "fraction_of_pre_test_history": (
-                float(calibration_fraction) if walk_forward_folds is not None else None
-            ),
-            "temporal_position": (
-                "TAIL_OF_PRE_TEST_TRAIN_EXCLUDED_FROM_MODEL_FIT"
-                if walk_forward_folds is not None
-                else "FIRST_CHRONOLOGICAL_SEGMENT_OF_VALIDATION"
-            ),
-            "minimum_hold_support": MIN_CALIBRATION_HOLD_SAMPLES,
-            "minimum_non_hold_support": MIN_CALIBRATION_NON_HOLD_SAMPLES,
-            "minimum_hold_precision": float(minimum_hold_precision),
-            "minimum_hold_recall": float(minimum_hold_recall),
-            "threshold_grid_steps": HOLD_THRESHOLD_GRID_STEPS,
-            "probability_diagnostics": [
-                "multiclass_brier_score",
-                "hold_binary_brier_score",
-                "multiclass_macro_ece",
-                "hold_binary_ece",
-                "hold_auc",
-                "hold_pr_auc",
-            ],
-            "ece_bin_count": 10,
-            "primary_evaluation_scope": (
-                "WALK_FORWARD_TEST_ONLY"
-                if walk_forward_folds is not None
-                else "POST_CALIBRATION_REMAINING_VALIDATION"
-            ),
-            "full_validation_scope": (
-                "NOT_COMPUTED_FOR_WALK_FORWARD"
-                if walk_forward_folds is not None
-                else "DESCRIPTIVE_ONLY_INCLUDES_CALIBRATION_ROWS"
-            ),
-        },
-        "baseline_comparisons": {
-            "always_sell": {
-                "type": "constant_prediction",
-                "predicted_label": "SELL",
-                "metrics_scope": "VALIDATION_ONLY",
-            },
-            "lightgbm_unweighted": {
-                "family": "LightGBM LGBMClassifier",
-                "n_estimators": 80,
-                "learning_rate": 0.05,
-                "max_depth": 4,
-                "num_leaves": 15,
-                "random_state": 42,
-                "class_weight": None,
-                "metrics_scope": "VALIDATION_ONLY",
-            },
-        },
-        "split_policy": {
-            "validation_start_fraction": (
-                0.60 if walk_forward_folds is not None else VALIDATION_START_FRACTION
-            ),
-            "validation_end_fraction": (
-                0.90 if walk_forward_folds is not None else VALIDATION_END_FRACTION
-            ),
-            "chronological_training_only": True,
-            "label_window_purge": "actual_label_end_idx_overlap",
-            "pre_validation_embargo": "exact_label_horizon_candles",
-            "post_validation_embargo": "exact_label_horizon_candles",
-            "fold_test_window_policy": (
-                "THREE_NON_OVERLAPPING_CHRONOLOGICAL_WINDOWS"
-                if walk_forward_folds is not None
-                else "SINGLE_CHRONOLOGICAL_VALIDATION_WINDOW"
-            ),
-            "calibration_is_disjoint_from_test": walk_forward_folds is not None,
-            "feature_lookback_is_causal": True,
-        },
-        "validation_design": {
-            "method": (
-                "EXPANDING_WINDOW_WALK_FORWARD"
-                if walk_forward_folds is not None
-                else "SINGLE_PURGED_CHRONOLOGICAL_SPLIT"
-            ),
-            "fold_count": walk_forward_folds or 1,
-            "test_window_start_fraction": 0.60 if walk_forward_folds else None,
-            "test_window_end_fraction": 0.90 if walk_forward_folds else None,
-            "calibration_fraction_of_pre_test_history": (
-                float(calibration_fraction) if walk_forward_folds else None
-            ),
-            "calibration_is_excluded_from_model_fit": walk_forward_folds is not None,
-            "minimum_calibration_hold_samples": MIN_CALIBRATION_HOLD_SAMPLES,
-            "minimum_calibration_non_hold_samples": MIN_CALIBRATION_NON_HOLD_SAMPLES,
-            "minimum_hold_precision": float(minimum_hold_precision),
-            "minimum_hold_recall": float(minimum_hold_recall),
-        },
-        "trained_experiments": trained_experiments,
-        "trained_models": trained_models,
+        "feature_engineering": _build_feature_engineering_report(
+            selected_profiles, feature_ablation
+        ),
+        "model": _build_model_report(),
+        "weighting_policy": _build_weighting_policy_report(policy_specs),
+        "calibration_policy": _build_calibration_policy_report(
+            calibration_fraction,
+            minimum_hold_precision,
+            minimum_hold_recall,
+            walk_forward_folds,
+        ),
+        "baseline_comparisons": _build_baseline_comparisons_report(),
+        "split_policy": _build_split_policy_report(walk_forward_folds),
+        "validation_design": _build_validation_design_report(
+            calibration_fraction,
+            minimum_hold_precision,
+            minimum_hold_recall,
+            walk_forward_folds,
+        ),
+        "trained_experiments": sum(
+            item["status"] == "TRAINED" for item in experiments
+        ),
+        "trained_models": sum(
+            len(item["model_variants"] or {}) for item in experiments
+        ),
         "experiment_count": len(experiments),
         "experiments": experiments,
-        "feature_ablation_summary": (
-            _build_feature_ablation_summary(experiments, selected_profiles)
-            if feature_ablation
-            else None
-        ),
-        "walk_forward_summary": (
-            _build_walk_forward_summary(
-                experiments, selected_profiles, walk_forward_folds
-            )
-            if walk_forward_folds is not None
-            else None
-        ),
+        "feature_ablation_summary": feature_summary,
+        "walk_forward_summary": walk_forward_summary,
         "safety": {
             "public_api_only": True,
             "credentials_used": False,
@@ -3020,7 +3119,6 @@ def _build_diagnostic_report(
             "trading_authorization": "NO-GO",
         },
     }
-
 
 def _write_diagnostic_report(report: dict[str, Any], output_path: Path) -> None:
     """Persist JSON and its matching GitHub Step Summary."""
