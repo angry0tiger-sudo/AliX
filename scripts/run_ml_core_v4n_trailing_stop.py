@@ -148,6 +148,48 @@ def _management() -> TradeManagementConfig:
     )
 
 
+def _validate_trade_direction_confidence_and_horizon(
+    trade: dict[str, Any],
+) -> None:
+    """Enforce Spot-long, confidence, and vertical-barrier constraints."""
+    if trade["direction"] != "LONG":
+        raise RuntimeError("economic_spot_only_position_invariant_violation")
+    if float(trade["entry_confidence"]) < V4N_CONFIDENCE_THRESHOLD:
+        raise RuntimeError("v4n_trade_confidence_invariant_violation")
+    if not 1 <= int(trade["bars_held"]) <= HORIZON:
+        raise RuntimeError("v4n_trade_horizon_invariant_violation")
+
+
+def _validate_trade_barrier_geometry(trade: dict[str, Any]) -> None:
+    """Enforce the immutable initial two-ATR stop and three-ATR target."""
+    reference = float(trade["barrier_reference_price"])
+    atr = float(trade["atr_value"])
+    initial_stop = reference - V4N_STOP_LOSS_ATR_MULTIPLIER * atr
+    take_profit = reference + V4N_TAKE_PROFIT_ATR_MULTIPLIER * atr
+    if abs(float(trade["initial_stop_loss_price"]) - initial_stop) > 1e-7:
+        raise RuntimeError("v4n_initial_stop_geometry_invariant_violation")
+    if abs(float(trade["take_profit_price"]) - take_profit) > 1e-7:
+        raise RuntimeError("v4n_take_profit_geometry_invariant_violation")
+
+
+def _validate_trade_trailing_stop(trade: dict[str, Any]) -> None:
+    """Enforce a non-loosening stop and a non-negative step counter."""
+    if float(trade["stop_loss_price"]) + 1e-9 < float(
+        trade["initial_stop_loss_price"]
+    ):
+        raise RuntimeError("v4n_trailing_stop_monotonicity_invariant_violation")
+    if int(trade["trailing_stop_steps"]) < 0:
+        raise RuntimeError("v4n_trailing_stop_steps_invalid")
+
+
+def _validate_candidate_trades(trades: list[dict[str, Any]]) -> None:
+    """Apply every per-trade execution invariant before aggregating a candidate."""
+    for trade in trades:
+        _validate_trade_direction_confidence_and_horizon(trade)
+        _validate_trade_barrier_geometry(trade)
+        _validate_trade_trailing_stop(trade)
+
+
 def _evaluate(
     candidate: dict[str, Any],
     market_bars: DataFrame,
@@ -156,28 +198,8 @@ def _evaluate(
 ) -> dict[str, Any]:
     """Replay persisted probabilities and validate every emitted trade."""
     replay = evaluate_candidate(candidate, market_bars, execution, management)
-    for trade in replay["trades"]:
-        if trade["direction"] != "LONG":
-            raise RuntimeError("economic_spot_only_position_invariant_violation")
-        if float(trade["entry_confidence"]) < V4N_CONFIDENCE_THRESHOLD:
-            raise RuntimeError("v4n_trade_confidence_invariant_violation")
-        if not 1 <= int(trade["bars_held"]) <= HORIZON:
-            raise RuntimeError("v4n_trade_horizon_invariant_violation")
-        reference = float(trade["barrier_reference_price"])
-        atr = float(trade["atr_value"])
-        if (
-            abs(float(trade["initial_stop_loss_price"]) - (reference - 2.0 * atr))
-            > 1e-7
-        ):
-            raise RuntimeError("v4n_initial_stop_geometry_invariant_violation")
-        if abs(float(trade["take_profit_price"]) - (reference + 3.0 * atr)) > 1e-7:
-            raise RuntimeError("v4n_take_profit_geometry_invariant_violation")
-        if float(trade["stop_loss_price"]) + 1e-9 < float(
-            trade["initial_stop_loss_price"]
-        ):
-            raise RuntimeError("v4n_trailing_stop_monotonicity_invariant_violation")
-        if int(trade["trailing_stop_steps"]) < 0:
-            raise RuntimeError("v4n_trailing_stop_steps_invalid")
+    trades = replay["trades"]
+    _validate_candidate_trades(trades)
     return {
         "candidate_id": candidate["candidate_id"],
         "pair": candidate["pair"],
@@ -190,7 +212,7 @@ def _evaluate(
         "stop_loss_atr_multiplier": V4N_STOP_LOSS_ATR_MULTIPLIER,
         "take_profit_atr_multiplier": V4N_TAKE_PROFIT_ATR_MULTIPLIER,
         "metrics": replay["metrics"],
-        "trades": replay["trades"],
+        "trades": trades,
         "exit_reason_counts": replay["exit_reason_counts"],
         "stop_exit_type_counts": replay["stop_exit_type_counts"],
         "initial_stop_exit_count": replay["initial_stop_exit_count"],
@@ -199,72 +221,143 @@ def _evaluate(
         "total_fees_usd": replay["total_fees_usd"],
         "total_slippage_cost_usd": replay["total_slippage_cost_usd"],
         "trade_direction_counts": {
-            "LONG": sum(t["direction"] == "LONG" for t in replay["trades"]),
-            "SHORT": sum(t["direction"] == "SHORT" for t in replay["trades"]),
+            "LONG": sum(trade["direction"] == "LONG" for trade in trades),
+            "SHORT": sum(trade["direction"] == "SHORT" for trade in trades),
         },
         "trade_management": replay["trade_management"],
     }
+
+
+def _trade_outcomes(
+    trades: list[dict[str, Any]],
+) -> tuple[list[float], list[float]]:
+    """Separate winning and losing net trade outcomes across independent ledgers."""
+    wins = [float(trade["net_pnl_usd"]) for trade in trades if trade["net_pnl_usd"] > 0]
+    losses = [
+        float(trade["net_pnl_usd"]) for trade in trades if trade["net_pnl_usd"] < 0
+    ]
+    return wins, losses
+
+
+def _defined_candidate_profit_factors(
+    results: list[dict[str, Any]],
+) -> list[float]:
+    """Collect defined per-candidate net profit factors."""
+    return [
+        float(result["metrics"]["profit_factor_net_of_costs"])
+        for result in results
+        if result["metrics"]["profit_factor_net_of_costs"] is not None
+    ]
+
+
+def _candidate_drawdowns(
+    results: list[dict[str, Any]],
+) -> tuple[list[float], list[float]]:
+    """Return active-candidate and all-candidate maximum drawdown samples."""
+    active = [
+        float(result["metrics"]["max_drawdown_percent"])
+        for result in results
+        if int(result["metrics"]["trade_count"]) > 0
+    ]
+    all_candidates = [
+        float(result["metrics"]["max_drawdown_percent"]) for result in results
+    ]
+    return active, all_candidates
+
+
+def _sum_count_maps(
+    results: list[dict[str, Any]], field: str
+) -> dict[str, int]:
+    """Sum one named exit-count mapping across independent candidate replays."""
+    total: dict[str, int] = {}
+    for result in results:
+        for key, value in result[field].items():
+            total[key] = total.get(key, 0) + int(value)
+    return total
+
+
+def _best_defined_candidate(
+    results: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Return the candidate with the highest defined net profit factor."""
+    return max(
+        (
+            result
+            for result in results
+            if result["metrics"]["profit_factor_net_of_costs"] is not None
+        ),
+        key=lambda result: float(result["metrics"]["profit_factor_net_of_costs"]),
+        default=None,
+    )
+
+
+def _gate_pass_counts(
+    results: list[dict[str, Any]], drawdowns: list[float]
+) -> tuple[int, int, int]:
+    """Count candidates meeting PF, drawdown, and combined economic gates."""
+    passed = sum(
+        bool(result["metrics"]["economic_candidate_gate_passed"])
+        for result in results
+    )
+    pf_passed = sum(
+        result["metrics"]["profit_factor_net_of_costs"] is not None
+        and float(result["metrics"]["profit_factor_net_of_costs"]) > 1.5
+        for result in results
+    )
+    drawdown_passed = sum(value < 15.0 for value in drawdowns)
+    return passed, pf_passed, drawdown_passed
+
+
+def _optional_mean(values: list[float]) -> float | None:
+    """Return an eight-decimal mean for a non-empty sample."""
+    if not values:
+        return None
+    return round(sum(values) / len(values), 8)
+
+
+def _ledger_profit_factor(wins: list[float], losses: list[float]) -> float | None:
+    """Return descriptive pooled PF for independent replay ledgers."""
+    if not losses:
+        return None
+    return round(sum(wins) / abs(sum(losses)), 8)
+
+
+def _win_rate(wins: list[float], losses: list[float]) -> float:
+    """Return the pooled win rate, treating empty trade ledgers as zero."""
+    total = len(wins) + len(losses)
+    if total == 0:
+        return 0.0
+    return round(len(wins) / total, 8)
 
 
 def _aggregate(results: list[dict[str, Any]]) -> dict[str, Any]:
     """Aggregate independent ledgers descriptively without merging equity curves."""
     if len(results) != 13:
         raise ValueError("v4n_candidate_count_invalid")
-    trades = [t for item in results for t in item["trades"]]
-    wins = [float(t["net_pnl_usd"]) for t in trades if t["net_pnl_usd"] > 0]
-    losses = [float(t["net_pnl_usd"]) for t in trades if t["net_pnl_usd"] < 0]
-    pfs = [
-        float(r["metrics"]["profit_factor_net_of_costs"])
-        for r in results
-        if r["metrics"]["profit_factor_net_of_costs"] is not None
-    ]
-    active_dd = [
-        float(r["metrics"]["max_drawdown_percent"])
-        for r in results
-        if int(r["metrics"]["trade_count"]) > 0
-    ]
-    drawdowns = [float(r["metrics"]["max_drawdown_percent"]) for r in results]
-    reasons: dict[str, int] = {}
-    stop_types: dict[str, int] = {}
-    for item in results:
-        for key, value in item["exit_reason_counts"].items():
-            reasons[key] = reasons.get(key, 0) + int(value)
-        for key, value in item["stop_exit_type_counts"].items():
-            stop_types[key] = stop_types.get(key, 0) + int(value)
-    passed = sum(bool(r["metrics"]["economic_candidate_gate_passed"]) for r in results)
-    best = max(
-        (r for r in results if r["metrics"]["profit_factor_net_of_costs"] is not None),
-        key=lambda r: float(r["metrics"]["profit_factor_net_of_costs"]),
-        default=None,
-    )
+    trades = [trade for result in results for trade in result["trades"]]
+    wins, losses = _trade_outcomes(trades)
+    profit_factors = _defined_candidate_profit_factors(results)
+    active_drawdowns, drawdowns = _candidate_drawdowns(results)
+    reasons = _sum_count_maps(results, "exit_reason_counts")
+    stop_types = _sum_count_maps(results, "stop_exit_type_counts")
+    passed, pf_passed, drawdown_passed = _gate_pass_counts(results, drawdowns)
+    best = _best_defined_candidate(results)
     return {
-        "candidate_count": 13,
-        "active_candidate_count": len(active_dd),
+        "candidate_count": len(results),
+        "active_candidate_count": len(active_drawdowns),
         "total_trade_count": len(trades),
         "winning_trade_count": len(wins),
         "losing_trade_count": len(losses),
-        "win_rate": round(len(wins) / len(trades), 8) if trades else 0.0,
-        "combined_ledger_profit_factor": round(sum(wins) / abs(sum(losses)), 8)
-        if losses
-        else None,
-        "mean_defined_candidate_profit_factor": round(sum(pfs) / len(pfs), 8)
-        if pfs
-        else None,
-        "defined_candidate_profit_factor_count": len(pfs),
-        "mean_max_drawdown_percent_active_candidates": round(
-            sum(active_dd) / len(active_dd), 8
-        )
-        if active_dd
-        else None,
-        "mean_max_drawdown_percent_all_candidates": round(sum(drawdowns) / 13, 8),
+        "win_rate": _win_rate(wins, losses),
+        "combined_ledger_profit_factor": _ledger_profit_factor(wins, losses),
+        "mean_defined_candidate_profit_factor": _optional_mean(profit_factors),
+        "defined_candidate_profit_factor_count": len(profit_factors),
+        "mean_max_drawdown_percent_active_candidates": _optional_mean(active_drawdowns),
+        "mean_max_drawdown_percent_all_candidates": _optional_mean(drawdowns),
         "worst_candidate_max_drawdown_percent": round(max(drawdowns), 8),
         "economic_gate_passed_candidate_count": passed,
-        "pf_above_1_5_candidate_count": sum(
-            r["metrics"]["profit_factor_net_of_costs"] is not None
-            and float(r["metrics"]["profit_factor_net_of_costs"]) > 1.5
-            for r in results
-        ),
-        "drawdown_below_15_candidate_count": sum(d < 15.0 for d in drawdowns),
+        "pf_above_1_5_candidate_count": pf_passed,
+        "drawdown_below_15_candidate_count": drawdown_passed,
         "exit_reason_counts": reasons,
         "stop_exit_type_counts": stop_types,
         "initial_stop_exit_count": stop_types.get("INITIAL_STOP", 0),
@@ -274,9 +367,11 @@ def _aggregate(results: list[dict[str, Any]]) -> dict[str, Any]:
         "horizon_exit_count": reasons.get("HORIZON_EXPIRY", 0),
         "collision_exit_count": reasons.get("COLLISION", 0),
         "sell_exit_count": reasons.get("SELL", 0),
-        "total_fees_usd": round(sum(float(r["total_fees_usd"]) for r in results), 8),
+        "total_fees_usd": round(
+            sum(float(result["total_fees_usd"]) for result in results), 8
+        ),
         "total_slippage_cost_usd": round(
-            sum(float(r["total_slippage_cost_usd"]) for r in results), 8
+            sum(float(result["total_slippage_cost_usd"]) for result in results), 8
         ),
         "best_defined_profit_factor_candidate": (
             {
