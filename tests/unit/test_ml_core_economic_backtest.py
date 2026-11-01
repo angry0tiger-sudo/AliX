@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 import pandas as pd
 import pytest
@@ -152,7 +152,9 @@ def test_candidate_extraction_requires_exact_thirteen_forward_passes() -> None:
         ],
     }
     assert len(extract_qualifying_candidates(report)) == 13
-    report["experiments"][0]["model_variants"].pop("12")
+    experiment = cast(dict[str, Any], cast(list[Any], report["experiments"])[0])
+    variants = cast(dict[str, Any], experiment["model_variants"])
+    variants.pop("12")
     with pytest.raises(ValueError, match="candidate_count"):
         extract_qualifying_candidates(report)
 
@@ -188,7 +190,8 @@ def test_forward_signals_use_only_ordered_persisted_forward_rows() -> None:
     signals = build_forward_signals(candidate)
     assert [item["signal"] for item in signals] == ["BUY", "HOLD"]
     assert signals[0]["execution_timestamp"] == pd.Timestamp("2026-01-01T00:15:00Z")
-    candidate["probability_records"][1]["row_index"] = 10
+    probability_records = cast(list[dict[str, Any]], candidate["probability_records"])
+    probability_records[1]["row_index"] = 10
     with pytest.raises(ValueError, match="order"):
         build_forward_signals(candidate)
 
