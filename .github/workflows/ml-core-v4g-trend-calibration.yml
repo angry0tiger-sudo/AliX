@@ -1,0 +1,316 @@
+name: AliX V4-G Trend Walk-Forward Calibration
+
+on:
+  push:
+    branches:
+      - research/ml-core-v4g-trend-calibration
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: alix-v4g-trend-walk-forward-calibration
+  cancel-in-progress: false
+
+jobs:
+  trend-walk-forward:
+    if: github.ref == 'refs/heads/research/ml-core-v4g-trend-calibration'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      ALIx_ENV: paper
+      ALIx_DRY_RUN: "true"
+      ALIx_ALLOW_LIVE_TRADING: "false"
+      ALIx_REPORTING_ENABLED: "false"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Require standard CI success for this exact V4-G research commit
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          TARGET_SHA: ${{ github.sha }}
+          TARGET_BRANCH: ${{ github.ref_name }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import time
+          from urllib.error import HTTPError, URLError
+          from urllib.request import Request, urlopen
+
+          repository = os.environ["GITHUB_REPOSITORY"]
+          target_sha = os.environ["TARGET_SHA"]
+          target_branch = os.environ["TARGET_BRANCH"]
+          token = os.environ["GH_TOKEN"]
+          if target_branch != "research/ml-core-v4g-trend-calibration":
+              raise SystemExit("unsupported_v4g_training_branch:" + target_branch)
+          deadline = time.monotonic() + 90 * 60
+          url = (
+              f"https://api.github.com/repos/{repository}/actions/workflows/ci.yml/runs"
+              f"?head_sha={target_sha}&per_page=100"
+          )
+          while time.monotonic() < deadline:
+              request = Request(
+                  url,
+                  headers={
+                      "Accept": "application/vnd.github+json",
+                      "Authorization": f"Bearer {token}",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  },
+              )
+              try:
+                  with urlopen(request, timeout=20) as response:
+                      payload = json.load(response)
+              except (HTTPError, URLError, TimeoutError) as error:
+                  raise SystemExit(
+                      f"ci_status_lookup_failed:{type(error).__name__}"
+                  ) from None
+
+              matching = [
+                  run for run in payload.get("workflow_runs", [])
+                  if run.get("head_sha") == target_sha
+                  and run.get("head_branch") == target_branch
+                  and run.get("event") == "push"
+              ]
+              if matching:
+                  latest = max(
+                      matching,
+                      key=lambda item: (
+                          item.get("run_number", 0),
+                          item.get("run_attempt", 0),
+                      ),
+                  )
+                  if latest.get("status") == "completed":
+                      if latest.get("conclusion") != "success":
+                          raise SystemExit(
+                              "ci_green_gate_blocked:"
+                              + str(latest.get("conclusion"))
+                              + ":"
+                              + target_sha
+                          )
+                      print(json.dumps({
+                          "gate": "PASS",
+                          "target_sha": target_sha,
+                          "ci_run_id": latest.get("id"),
+                          "ci_run_url": latest.get("html_url"),
+                          "ci_conclusion": latest.get("conclusion"),
+                      }, sort_keys=True))
+                      break
+              time.sleep(30)
+          else:
+              raise SystemExit("ci_green_gate_timeout:" + target_sha)
+          PY
+
+      - name: Checkout the exact V4-G research commit without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Confirm V4-G branch, fold contract, and safety scope
+        env:
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/research/ml-core-v4g-trend-calibration"
+          test "$GITHUB_SHA" = "$TARGET_SHA"
+          test -n "$GITHUB_SHA"
+          printf 'commit_sha=%s\n' "$GITHUB_SHA"
+          printf 'scope=CLASSIFICATION_ONLY\n'
+          printf 'feature_profiles=Baseline,Baseline+Trend\n'
+          printf 'feature_counts=9,17\n'
+          printf 'walk_forward_folds=3\n'
+          printf 'target_horizon_candles=12\n'
+          printf 'calibration_minimum_hold_samples=30\n'
+          printf 'minimum_hold_precision=0.40\nminimum_hold_recall=0.20\n'
+          printf 'economic_evaluation_performed=false\n'
+          printf 'private_api_calls=0\nreal_order_attempts=0\n'
+          printf 'Champion=null\norder_permission=false\ntrading_authorization=NO-GO\n'
+
+      - name: Set up pinned Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install pinned diagnostic tree-model dependencies
+        run: |
+          python -m pip install pip==25.2
+          python -m pip install numpy==2.5.4 pandas==2.3.3 scikit-learn==1.9.0 lightgbm==4.7.0
+
+      - name: Fetch complete Binance public 1-minute candles
+        run: |
+          set -euo pipefail
+          data_dir="$RUNNER_TEMP/alix-v4g-market-data"
+          rm -rf "$data_dir"
+          mkdir -p "$data_dir"
+          for symbol in BTCUSDT ETHUSDT; do
+            log_path="$RUNNER_TEMP/v4g-fetch-730-${symbol}.log"
+            if python scripts/fetch_binance_public_ohlcv.py \
+              --days 730 \
+              --symbol "$symbol" \
+              --interval 1m \
+              --output-dir "$data_dir" \
+              --commit-sha "$GITHUB_SHA" >"$log_path" 2>&1; then
+              cat "$log_path"
+            else
+              cat "$log_path"
+              echo "Binance fetch failed for ${symbol}; refusing partial data." >&2
+              exit 1
+            fi
+          done
+          echo "ALIX_DIAGNOSTIC_DAYS=730" >> "$GITHUB_ENV"
+          echo "ALIX_DIAGNOSTIC_CONFIGURED_DAYS=730" >> "$GITHUB_ENV"
+          echo "ALIX_DIAGNOSTIC_FALLBACK_REASON=NONE" >> "$GITHUB_ENV"
+
+      - name: Train Baseline and Baseline+Trend across three purged walk-forward folds
+        run: |
+          python -m scripts.run_ml_core_real_data_baseline \
+            --input-dir "$RUNNER_TEMP/alix-v4g-market-data" \
+            --output "$GITHUB_WORKSPACE/alix-v4g-trend-walk-forward-report.json" \
+            --days "$ALIX_DIAGNOSTIC_DAYS" \
+            --commit-sha "$GITHUB_SHA" \
+            --scenario "V4G_Flat_12_Candle:12:2.0:1.0" \
+            --feature-ablation \
+            --walk-forward-folds 3 \
+            --calibration-fraction 0.20 \
+            --minimum-hold-precision 0.40 \
+            --minimum-hold-recall 0.20
+          echo "ALIX_TRAIN_STEP_SUMMARY=$GITHUB_STEP_SUMMARY" >> "$GITHUB_ENV"
+
+      - name: Validate V4-G folds, profile pairing, calibration isolation, and safety
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          report = json.loads(
+              Path("alix-v4g-trend-walk-forward-report.json").read_text(encoding="utf-8")
+          )
+          assert report["schema_version"] == "alix.ml-core.walk-forward-trend-calibration.v1"
+          assert report["commit_sha"] == os.environ["GITHUB_SHA"]
+          assert report["diagnostic_scope"] == "CLASSIFICATION_ONLY"
+          assert report["economic_evaluation_performed"] is False
+          assert report["economic_metrics_reported"] is False
+          assert report["requested_days"] == 730
+          assert report["experiment_count"] == 48
+          assert report["triple_barrier_scenarios"] == [{
+              "name": "V4G_Flat_12_Candle",
+              "horizon_candles": 12,
+              "take_profit_multiplier": 2.0,
+              "stop_loss_multiplier": 1.0,
+          }]
+          expected_profiles = ["Baseline", "Baseline+Trend"]
+          assert report["feature_engineering"]["selected_profiles"] == expected_profiles
+          manifest = report["feature_engineering"]["profile_manifest"]
+          assert [item["name"] for item in manifest] == expected_profiles
+          assert [item["feature_count"] for item in manifest] == [9, 17]
+          assert report["validation_design"]["method"] == "EXPANDING_WINDOW_WALK_FORWARD"
+          assert report["validation_design"]["fold_count"] == 3
+          assert report["validation_design"]["calibration_is_excluded_from_model_fit"] is True
+          assert report["validation_design"]["minimum_calibration_hold_samples"] == 30
+          assert report["validation_design"]["minimum_calibration_non_hold_samples"] == 30
+          assert report["validation_design"]["minimum_hold_precision"] == 0.40
+          assert report["validation_design"]["minimum_hold_recall"] == 0.20
+          assert report["calibration_policy"]["minimum_hold_support"] == 30
+          assert report["calibration_policy"]["minimum_hold_precision"] == 0.40
+          assert report["calibration_policy"]["minimum_hold_recall"] == 0.20
+          assert len(report["input_datasets"]) == 2
+          for dataset in report["input_datasets"]:
+              assert dataset["requested_days"] == 730
+              assert dataset["row_count"] == 730 * 24 * 60
+              assert dataset["missing_minute_intervals"] == 0
+              assert dataset["provider"] == "Binance Spot public klines API"
+              assert dataset["public_api_only"] is True
+              assert dataset["credentials_used"] is False
+          allowed_statuses = {
+              "TRAINED",
+              "SKIPPED_INSUFFICIENT_SAMPLES",
+              "SKIPPED_INSUFFICIENT_CLASS_DIVERSITY",
+              "SKIPPED_INSUFFICIENT_CALIBRATION_SAMPLES",
+          }
+          grouped = {}
+          for item in report["experiments"]:
+              assert item["scenario"] == "V4G_Flat_12_Candle"
+              assert item["triple_barrier"]["horizon_candles"] == 12
+              assert item["feature_profile"] in expected_profiles
+              assert item["feature_count"] == (9 if item["feature_profile"] == "Baseline" else 17)
+              assert item["status"] in allowed_statuses
+              assert item["fold_index"] in {1, 2, 3}
+              assert item["sample_signature_sha256"]
+              fold = item["fold"]
+              assert fold["training_label_end_before_calibration"] is True
+              assert fold["calibration_labels_end_before_test"] is True
+              assert fold["train_calibration_test_indices_disjoint"] is True
+              assert fold["pre_calibration_embargo_bars"] == 12
+              assert fold["calibration_hold_samples"] >= 30 or (
+                  item["status"] == "SKIPPED_INSUFFICIENT_CALIBRATION_SAMPLES"
+              )
+              assert fold["calibration_non_hold_samples"] >= 30 or (
+                  item["status"] == "SKIPPED_INSUFFICIENT_CALIBRATION_SAMPLES"
+              )
+              key = (item["pair"], item["timeframe"], item["fold_index"])
+              grouped.setdefault(key, []).append(item)
+              if item["status"] == "TRAINED":
+                  assert set(item["model_variants"]) == {"weight_none", "weight_balanced"}
+                  for variant in item["model_variants"].values():
+                      threshold = variant["threshold_optimization"]
+                      assert threshold["constraints"]["minimum_hold_precision"] == 0.40
+                      assert threshold["constraints"]["minimum_hold_recall"] == 0.20
+                      assert threshold["calibration"]["minimum_hold_support"] == 30
+                      assert threshold["calibration"]["minimum_non_hold_support"] == 30
+                      assert threshold["status"] in {"SELECTED", "NO_FEASIBLE_THRESHOLD"}
+                      if threshold["status"] == "SELECTED":
+                          forward = threshold["post_calibration_validation"]
+                          assert forward["evaluation_scope"] == "WALK_FORWARD_TEST_ONLY"
+                          assert forward["calibration_overlap"] is False
+          assert len(grouped) == 24
+          for items in grouped.values():
+              assert len(items) == 2
+              assert {item["feature_profile"] for item in items} == set(expected_profiles)
+              assert len({item["sample_signature_sha256"] for item in items}) == 1
+          assert report["walk_forward_summary"]["fold_count"] == 3
+          assert len(report["walk_forward_summary"]["folds"]) == 3
+          safety = report["safety"]
+          assert safety["Champion"] is None
+          assert safety["order_permission"] is False
+          assert safety["private_api_calls"] == 0
+          assert safety["real_order_attempts"] == 0
+          assert safety["orders_or_execution_api_used"] is False
+          assert safety["trading_authorization"] == "NO-GO"
+          print(json.dumps({
+              "schema_version": report["schema_version"],
+              "experiments": report["experiment_count"],
+              "trained_experiments": report["trained_experiments"],
+              "trained_models": report["trained_models"],
+              "profiles": expected_profiles,
+              "folds": 3,
+              "Champion": None,
+              "trading_authorization": "NO-GO",
+              "economic_evaluation_performed": False,
+              "private_api_calls": 0,
+              "real_order_attempts": 0,
+          }, sort_keys=True))
+          PY
+
+      - name: Verify GitHub Step Summary contains V4-G fold metrics
+        run: |
+          set -euo pipefail
+          test -n "$ALIX_TRAIN_STEP_SUMMARY"
+          test -s "$ALIX_TRAIN_STEP_SUMMARY"
+          grep -q "V4-G walk-forward fold results" "$ALIX_TRAIN_STEP_SUMMARY"
+          grep -q "Fold-level paired Baseline vs Trend comparison" "$ALIX_TRAIN_STEP_SUMMARY"
+          grep -q "Baseline+Trend" "$ALIX_TRAIN_STEP_SUMMARY"
+          grep -q "Baseline" "$ALIX_TRAIN_STEP_SUMMARY"
+          grep -q "NO-GO" "$ALIX_TRAIN_STEP_SUMMARY"
+
+      - name: Upload V4-G trend walk-forward diagnostic report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alix-v4g-trend-walk-forward-diagnostic
+          path: alix-v4g-trend-walk-forward-report.json
+          if-no-files-found: warn
+          retention-days: 14
