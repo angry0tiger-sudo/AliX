@@ -155,9 +155,7 @@ def _select_forward_probability_records(
     expected_count: int,
 ) -> list[dict[str, Any]]:
     """Select only post-calibration Forward rows and verify their exact count."""
-    records = [
-        item for item in raw_records if int(item["row_index"]) >= start_index
-    ]
+    records = [item for item in raw_records if int(item["row_index"]) >= start_index]
     if len(records) != expected_count:
         raise ValueError("forward_probability_row_count_mismatch")
     if not records:
