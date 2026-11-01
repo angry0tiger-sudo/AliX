@@ -129,30 +129,51 @@ def _candidate_passes_hold_acceptance(precision: float, recall: float) -> bool:
     return precision >= V4H_MIN_HOLD_PRECISION and recall >= V4H_MIN_HOLD_RECALL
 
 
-def _candidate_forward_records(
+def _candidate_replay_inputs(
     variant: dict[str, Any], forward: dict[str, Any]
 ) -> tuple[float, int, list[dict[str, Any]]]:
-    """Validate the threshold and extract post-calibration Forward rows."""
+    """Validate required threshold and persisted validation probability payload."""
     threshold_report = variant.get("threshold_optimization") or {}
     threshold = threshold_report.get("selected_threshold")
     start_index = forward.get("start_row_index")
     parameters = (variant.get("hyperparameter_tuning") or {}).get("selected_parameters")
     raw_records = variant.get("validation_probabilities")
-    if (
+    invalid = (
         threshold is None
         or start_index is None
         or not isinstance(parameters, dict)
         or not isinstance(raw_records, list)
-    ):
+    )
+    if invalid:
         raise ValueError("accepted_v4h_candidate_replay_data_missing")
-    forward_records = [
-        item for item in raw_records if int(item["row_index"]) >= int(start_index)
+    return float(threshold), int(start_index), raw_records
+
+
+def _select_forward_probability_records(
+    raw_records: list[dict[str, Any]],
+    start_index: int,
+    expected_count: int,
+) -> list[dict[str, Any]]:
+    """Select only post-calibration Forward rows and verify their exact count."""
+    records = [
+        item for item in raw_records if int(item["row_index"]) >= start_index
     ]
-    if len(forward_records) != int(forward.get("row_count", -1)):
+    if len(records) != expected_count:
         raise ValueError("forward_probability_row_count_mismatch")
-    if not forward_records:
+    if not records:
         raise ValueError("forward_probability_rows_empty")
-    return float(threshold), int(start_index), forward_records
+    return records
+
+
+def _candidate_forward_records(
+    variant: dict[str, Any], forward: dict[str, Any]
+) -> tuple[float, int, list[dict[str, Any]]]:
+    """Return the threshold, first Forward row index, and persisted probabilities."""
+    threshold, start_index, raw_records = _candidate_replay_inputs(variant, forward)
+    records = _select_forward_probability_records(
+        raw_records, start_index, int(forward.get("row_count", -1))
+    )
+    return threshold, start_index, records
 
 
 def _candidate_identifier(experiment: dict[str, Any], policy: str) -> str:
@@ -199,24 +220,46 @@ def _extract_candidate_variant(
     }
 
 
-def extract_qualifying_candidates(report: dict[str, Any]) -> list[dict[str, Any]]:
-    """Extract the 13 strict Forward-Validation passes and their persisted scores."""
-    validate_source_report(report)
+def _extract_experiment_candidates(
+    experiment: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Extract every accepted class-weight variant from one experiment."""
+    if experiment.get("scenario") != V4H_ACCEPTED_GEOMETRY:
+        return []
     candidates: list[dict[str, Any]] = []
-    for experiment in report["experiments"]:
-        if experiment.get("scenario") != V4H_ACCEPTED_GEOMETRY:
-            continue
-        variants = experiment.get("model_variants") or {}
-        for policy, variant in variants.items():
-            candidate = _extract_candidate_variant(experiment, policy, variant)
-            if candidate is not None:
-                candidates.append(candidate)
-    expected = int(report["acceptance_policy"]["strict_acceptance_count"])
+    variants = experiment.get("model_variants") or {}
+    for policy, variant in variants.items():
+        candidate = _extract_candidate_variant(experiment, policy, variant)
+        if candidate is not None:
+            candidates.append(candidate)
+    return candidates
+
+
+def _collect_qualifying_candidates(
+    experiments: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Collect qualifying candidates across the approved geometry experiments."""
+    candidates: list[dict[str, Any]] = []
+    for experiment in experiments:
+        candidates.extend(_extract_experiment_candidates(experiment))
+    return candidates
+
+
+def _validate_candidate_collection(
+    candidates: list[dict[str, Any]], expected_count: int
+) -> None:
+    """Require the expected number of unique candidates from the accepted geometry."""
     candidate_ids = {item["candidate_id"] for item in candidates}
-    if len(candidates) != expected or len(candidate_ids) != expected:
+    if len(candidates) != expected_count or len(candidate_ids) != expected_count:
         raise ValueError("v4h_qualifying_candidate_count_mismatch")
-    if any(item["scenario"] != V4H_ACCEPTED_GEOMETRY for item in candidates):
-        raise ValueError("v4h_qualifying_candidate_geometry_mismatch")
+
+
+def extract_qualifying_candidates(report: dict[str, Any]) -> list[dict[str, Any]]:
+    """Extract the strict Forward-Validation passes and their persisted scores."""
+    validate_source_report(report)
+    candidates = _collect_qualifying_candidates(report["experiments"])
+    expected = int(report["acceptance_policy"]["strict_acceptance_count"])
+    _validate_candidate_collection(candidates, expected)
     return candidates
 
 
