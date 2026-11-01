@@ -88,7 +88,7 @@ def test_trade_management_config_rejects_invalid_parameters() -> None:
         trade_management_config(confidence_threshold=0.0)
     with pytest.raises(ValueError, match="atr_period"):
         trade_management_config(atr_period=0)
-    with pytest.raises(ValueError, match="take_profit_multiplier"):
+    with pytest.raises(ValueError, match="multipliers"):
         trade_management_config(take_profit_atr_multiplier=-1.0)
     with pytest.raises(ValueError, match="horizon_candles"):
         trade_management_config(horizon_candles=0)

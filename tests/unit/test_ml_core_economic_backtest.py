@@ -625,6 +625,11 @@ def test_rejected_buy_does_not_close_active_long_or_create_short() -> None:
                 "signal": NO_ENTRY_SIGNAL,
                 "buy_probability": 0.4,
             },
+            {
+                "execution_timestamp": pd.Timestamp("2026-01-01T00:45:00Z"),
+                "signal": "HOLD",
+                "buy_probability": 0.2,
+            },
         ],
         atr_values=[10.0] * 4,
     )
