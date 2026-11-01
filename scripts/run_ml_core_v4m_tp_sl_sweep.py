@@ -304,9 +304,7 @@ def _candidate_risk_metrics(candidates: list[dict[str, Any]]) -> dict[str, Any]:
             round(sum(defined_pf) / len(defined_pf), 8) if defined_pf else None
         ),
         "defined_candidate_profit_factor_count": len(defined_pf),
-        "mean_max_drawdown_percent_all_candidates": round(
-            sum(all_dd) / len(all_dd), 8
-        ),
+        "mean_max_drawdown_percent_all_candidates": round(sum(all_dd) / len(all_dd), 8),
         "mean_max_drawdown_percent_active_candidates": (
             round(sum(active_dd) / len(active_dd), 8) if active_dd else None
         ),
@@ -610,9 +608,7 @@ def render_v4m_markdown(report: dict[str, Any]) -> str:
         "| SL ATR | TP ATR | Trades | Ledger PF | Mean model PF | Active mean DD | Win rate | TP exits | SL exits | Horizon exits | Gate passes |",
         "|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
-    lines.extend(
-        _aggregate_summary_row(item) for item in report["geometry_results"]
-    )
+    lines.extend(_aggregate_summary_row(item) for item in report["geometry_results"])
     lines.extend(
         [
             "",
@@ -694,7 +690,9 @@ def run_v4m_tp_sl_sweep(
                 "aggregate_results": [
                     {
                         "stop_loss_atr_multiplier": item["stop_loss_atr_multiplier"],
-                        "take_profit_atr_multiplier": item["take_profit_atr_multiplier"],
+                        "take_profit_atr_multiplier": item[
+                            "take_profit_atr_multiplier"
+                        ],
                         "aggregate": item["aggregate"],
                     }
                     for item in report["geometry_results"]

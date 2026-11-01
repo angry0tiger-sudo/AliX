@@ -1393,8 +1393,7 @@ V4M_TP_SL_GEOMETRIES = (
 
 
 def validate_tp_sl_geometries(
-    tp_sl_geometries: list[tuple[float, float]]
-    | tuple[tuple[float, float], ...],
+    tp_sl_geometries: list[tuple[float, float]] | tuple[tuple[float, float], ...],
 ) -> tuple[tuple[float, float], ...]:
     """Validate unique positive finite (SL, TP) ATR multiplier pairs."""
     if not isinstance(tp_sl_geometries, (list, tuple)) or not tp_sl_geometries:

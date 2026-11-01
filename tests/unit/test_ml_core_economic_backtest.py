@@ -758,7 +758,6 @@ def test_confidence_sweep_validation_rejects_invalid_threshold_sets() -> None:
         validate_confidence_thresholds([0.40, True])
 
 
-
 def test_tp_sl_sweep_applies_each_geometry_at_fixed_confidence() -> None:
     bars = _bars(4)
     bars["high"] = 101.0
@@ -794,9 +793,7 @@ def test_tp_sl_sweep_applies_each_geometry_at_fixed_confidence() -> None:
         ],
     }
     base = TradeManagementConfig(atr_period=1, confidence_threshold=0.60)
-    results = evaluate_candidate_tp_sl_sweep(
-        candidate, bars, ExecutionConfig(), base
-    )
+    results = evaluate_candidate_tp_sl_sweep(candidate, bars, ExecutionConfig(), base)
 
     assert V4M_CONFIDENCE_THRESHOLD == 0.60
     assert [
