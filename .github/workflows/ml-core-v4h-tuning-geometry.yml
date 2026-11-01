@@ -163,7 +163,7 @@ jobs:
           echo "ALIX_DIAGNOSTIC_CONFIGURED_DAYS=730" >> "$GITHUB_ENV"
           echo "ALIX_DIAGNOSTIC_FALLBACK_REASON=NONE" >> "$GITHUB_ENV"
 
-      - name: Run V4-H LightGBM tuning and Triple-Barrier geometry experiments
+      - name: Run V4-H experiments and verify Step Summary
         run: |
           python -m scripts.run_ml_core_v4h_tuning_geometry \
             --input-dir "$RUNNER_TEMP/alix-v4h-market-data" \
@@ -172,6 +172,15 @@ jobs:
             --commit-sha "$GITHUB_SHA" \
             --random-search-iterations 9 \
             --calibration-fraction 0.20
+
+          summary_path="${GITHUB_STEP_SUMMARY:?missing_GITHUB_STEP_SUMMARY}"
+          test -s "$summary_path"
+          grep -Fq "AliX V4-H Tuning & Target Geometry" "$summary_path"
+          grep -Fq "Best inner-CV hyperparameter combinations" "$summary_path"
+          grep -Fq "V4H_Current" "$summary_path"
+          grep -Fq "V4H_Symmetric" "$summary_path"
+          grep -Fq "V4H_Tighter_SL" "$summary_path"
+          grep -Fq "NO-GO" "$summary_path"
 
       - name: Validate V4-H experiment counts, train-only search, and safety
         run: |
@@ -315,17 +324,6 @@ jobs:
               "economic_evaluation_performed": False,
           }, sort_keys=True))
           PY
-
-      - name: Verify V4-H Step Summary
-        run: |
-          set -euo pipefail
-          test -s "$GITHUB_STEP_SUMMARY"
-          grep -q "AliX V4-H Tuning & Target Geometry" "$GITHUB_STEP_SUMMARY"
-          grep -q "Best inner-CV hyperparameter combinations" "$GITHUB_STEP_SUMMARY"
-          grep -q "V4H_Current" "$GITHUB_STEP_SUMMARY"
-          grep -q "V4H_Symmetric" "$GITHUB_STEP_SUMMARY"
-          grep -q "V4H_Tighter_SL" "$GITHUB_STEP_SUMMARY"
-          grep -q "NO-GO" "$GITHUB_STEP_SUMMARY"
 
       - name: Upload V4-H tuning and target geometry report
         if: always()
