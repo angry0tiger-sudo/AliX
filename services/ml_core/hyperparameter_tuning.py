@@ -4,13 +4,20 @@ from __future__ import annotations
 
 from math import isfinite
 from numbers import Integral
-from typing import Any, Sequence
+from typing import Any, Sequence, cast
 
 import numpy as np
 from pandas import DataFrame, Series
-from sklearn.base import clone
-from sklearn.metrics import f1_score, precision_score, recall_score
-from sklearn.model_selection import RandomizedSearchCV, TimeSeriesSplit
+from sklearn.base import clone  # type: ignore[import-untyped]
+from sklearn.metrics import (  # type: ignore[import-untyped]
+    f1_score,
+    precision_score,
+    recall_score,
+)
+from sklearn.model_selection import (  # type: ignore[import-untyped]
+    RandomizedSearchCV,
+    TimeSeriesSplit,
+)
 
 LABELS = ("BUY", "SELL", "HOLD")
 HYPERPARAMETER_DISTRIBUTIONS: dict[str, list[int | float]] = {
@@ -40,7 +47,7 @@ def _label_end_index(value: object, row_index: int, row_count: int) -> int:
     if isinstance(value, bool):
         raise ValueError("tuning_label_end_index_invalid")
     try:
-        numeric = float(value)
+        numeric = float(cast(float | int | str, value))
     except (TypeError, ValueError):
         raise ValueError("tuning_label_end_index_invalid") from None
     if not isfinite(numeric) or not numeric.is_integer():
@@ -52,7 +59,7 @@ def _label_end_index(value: object, row_index: int, row_count: int) -> int:
 
 
 def _training_rows(
-    training_indices: Sequence[int],
+    training_indices: Sequence[object],
     label_end_indices: Sequence[object],
 ) -> tuple[np.ndarray, np.ndarray]:
     if len(training_indices) == 0:
@@ -60,14 +67,11 @@ def _training_rows(
     rows: list[int] = []
     ends: list[int] = []
     for raw_index in training_indices:
-        if (
-            isinstance(raw_index, bool)
-            or not isinstance(raw_index, Integral)
-            or int(raw_index) < 0
-            or int(raw_index) >= len(label_end_indices)
-        ):
+        if isinstance(raw_index, bool) or not isinstance(raw_index, Integral):
             raise ValueError("tuning_training_index_invalid")
         row_index = int(raw_index)
+        if row_index < 0 or row_index >= len(label_end_indices):
+            raise ValueError("tuning_training_index_invalid")
         rows.append(row_index)
         ends.append(
             _label_end_index(
