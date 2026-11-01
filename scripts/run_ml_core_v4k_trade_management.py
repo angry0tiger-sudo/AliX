@@ -445,9 +445,7 @@ def _count_profit_factor_improvements(
     candidates: list[dict[str, Any]],
 ) -> int:
     """Count candidates whose defined numeric PF improved versus V4-J."""
-    return sum(
-        item["comparison"]["profit_factor_improved"] for item in candidates
-    )
+    return sum(item["comparison"]["profit_factor_improved"] for item in candidates)
 
 
 def _count_v4k_pf_above_threshold(
@@ -483,15 +481,11 @@ def _aggregate_profit_factors(
         "v4j_mean_profit_factor": round(sum(before) / len(before), 8)
         if before
         else None,
-        "v4k_mean_profit_factor": round(sum(after) / len(after), 8)
-        if after
-        else None,
+        "v4k_mean_profit_factor": round(sum(after) / len(after), 8) if after else None,
         "profit_factor_improved_candidate_count": _count_profit_factor_improvements(
             candidates
         ),
-        "v4k_pf_above_1_5_candidate_count": _count_v4k_pf_above_threshold(
-            candidates
-        ),
+        "v4k_pf_above_1_5_candidate_count": _count_v4k_pf_above_threshold(candidates),
         "v4k_economic_gate_passed_candidate_count": _count_v4k_economic_gate_passes(
             candidates
         ),
