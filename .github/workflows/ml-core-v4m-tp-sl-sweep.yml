@@ -181,8 +181,8 @@ jobs:
           with Path(os.environ["GITHUB_ENV"]).open("a", encoding="utf-8") as env:
               for symbol in ("BTCUSDT", "ETHUSDT"):
                   item = datasets[symbol]
-                  env.write(f"{symbol}_START_UTC={item['start_utc']}\\n")
-                  env.write(f"{symbol}_END_UTC={item['end_utc']}\\n")
+                  env.write(f"{symbol}_START_UTC={item['start_utc']}\n")
+                  env.write(f"{symbol}_END_UTC={item['end_utc']}\n")
           print(json.dumps({
               "source_v4h_sha": source["commit_sha"],
               "source_report_sha256": expected_sha,
