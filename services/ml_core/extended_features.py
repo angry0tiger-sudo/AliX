@@ -286,18 +286,28 @@ def _volume_features(data: DataFrame) -> DataFrame:
     )
 
 
-def build_extended_feature_groups(candles: DataFrame) -> dict[str, DataFrame]:
-    """Build causal Trend, Volatility, and OHLCV-proxy Volume feature groups.
+def build_extended_feature_groups(
+    candles: DataFrame,
+    *,
+    group_names: tuple[str, ...] | None = None,
+) -> dict[str, DataFrame]:
+    """Build selected causal feature groups; default preserves the V4-F contract.
 
     All calculations are right-aligned and use only the current and prior closed
     candles. Rolling warm-up rows intentionally remain null and are never backfilled.
     """
-    data = _validated_ohlcv(candles)
-    groups = {
-        "Trend": _trend_features(data),
-        "Volatility": _volatility_features(data),
-        "Volume": _volume_features(data),
+    selected = tuple(FEATURE_GROUP_COLUMNS) if group_names is None else group_names
+    if not selected or len(set(selected)) != len(selected):
+        raise ValueError("extended_feature_group_selection_invalid")
+    builders = {
+        "Trend": _trend_features,
+        "Volatility": _volatility_features,
+        "Volume": _volume_features,
     }
+    if any(group not in builders for group in selected):
+        raise ValueError("extended_feature_group_unknown")
+    data = _validated_ohlcv(candles)
+    groups = {group: builders[group](data) for group in selected}
     for group_name, frame in groups.items():
         expected_columns = FEATURE_GROUP_COLUMNS[group_name]
         if tuple(frame.columns) != expected_columns:
@@ -318,16 +328,17 @@ def build_feature_profiles(
     selected = FEATURE_PROFILE_ORDER if profile_names is None else profile_names
     if not selected or len(set(selected)) != len(selected):
         raise ValueError("feature_profile_selection_invalid")
-    required_groups = {
-        group for profile in selected for group in feature_profile_groups(profile)
-    }
+    required_groups = tuple(
+        group
+        for group in FEATURE_GROUP_COLUMNS
+        if any(group in feature_profile_groups(profile) for profile in selected)
+    )
     baseline = build_causal_feature_matrix(candles)
-    all_extended_groups = build_extended_feature_groups(candles)
-    extended_groups = {
-        group: frame
-        for group, frame in all_extended_groups.items()
-        if group in required_groups
-    }
+    extended_groups = (
+        build_extended_feature_groups(candles, group_names=required_groups)
+        if required_groups
+        else {}
+    )
     profiles: dict[str, DataFrame] = {}
     for profile in selected:
         frames: list[DataFrame] = []
