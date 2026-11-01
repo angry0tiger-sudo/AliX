@@ -2282,6 +2282,145 @@ def _load_diagnostic_datasets(
     return datasets, provenance
 
 
+def _validate_experiment_profile_configuration(
+    profile_names: tuple[str, ...],
+    barrier_scenarios: list[dict[str, Any]],
+    walk_forward_folds: int | None,
+) -> None:
+    if not profile_names or len(set(profile_names)) != len(profile_names):
+        raise ValueError("feature_profile_selection_invalid")
+    for profile in profile_names:
+        feature_profile_columns(profile)
+    if walk_forward_folds is not None:
+        if profile_names != V4G_FEATURE_PROFILE_ORDER:
+            raise ValueError("walk_forward_feature_profile_contract_invalid")
+        if len(barrier_scenarios) != 1:
+            raise ValueError("walk_forward_feature_profile_contract_invalid")
+        if barrier_scenarios[0]["horizon_candles"] != 12:
+            raise ValueError("walk_forward_feature_profile_contract_invalid")
+
+
+def _run_walk_forward_pair_timeframe(
+    symbol: str,
+    pair: str,
+    timeframe: str,
+    candles: DataFrame,
+    *,
+    scenario: dict[str, Any],
+    profile_names: tuple[str, ...],
+    fold_count: int,
+    calibration_fraction: float,
+    minimum_hold_precision: float,
+    minimum_hold_recall: float,
+) -> list[dict[str, Any]]:
+    bars = resample_ohlcv(candles, timeframe)
+    labels = apply_adaptive_triple_barrier(
+        bars,
+        horizon_candles=scenario["horizon_candles"],
+        take_profit_multiplier=scenario["take_profit_multiplier"],
+        stop_loss_multiplier=scenario["stop_loss_multiplier"],
+    )
+    profile_matrices = build_feature_profiles(bars, profile_names=profile_names)
+    folds = create_walk_forward_folds(
+        profile_matrices["Baseline+Trend"],
+        labels,
+        fold_count=fold_count,
+        label_horizon_candles=scenario["horizon_candles"],
+        calibration_fraction=calibration_fraction,
+    )
+    return [
+        run_walk_forward_experiment(
+            pair,
+            timeframe,
+            candles,
+            feature_profile=profile,
+            fold=fold,
+            calibration_fraction=calibration_fraction,
+            minimum_hold_precision=minimum_hold_precision,
+            minimum_hold_recall=minimum_hold_recall,
+            scenario_name=scenario["name"],
+            horizon_candles=scenario["horizon_candles"],
+            take_profit_multiplier=scenario["take_profit_multiplier"],
+            stop_loss_multiplier=scenario["stop_loss_multiplier"],
+            prepared_bars=bars,
+            prepared_labels=labels,
+            prepared_feature_profiles=profile_matrices,
+        )
+        for fold in folds
+        for profile in profile_names
+    ]
+
+
+def _run_baseline_pair_timeframe(
+    pair: str,
+    timeframe: str,
+    candles: DataFrame,
+    scenarios: list[dict[str, Any]],
+    *,
+    calibration_fraction: float,
+    minimum_hold_precision: float,
+    minimum_hold_recall: float,
+) -> list[dict[str, Any]]:
+    return [
+        run_experiment(
+            pair,
+            timeframe,
+            candles,
+            scenario_name=scenario["name"],
+            horizon_candles=scenario["horizon_candles"],
+            take_profit_multiplier=scenario["take_profit_multiplier"],
+            stop_loss_multiplier=scenario["stop_loss_multiplier"],
+            calibration_fraction=calibration_fraction,
+            minimum_hold_precision=minimum_hold_precision,
+            minimum_hold_recall=minimum_hold_recall,
+        )
+        for scenario in scenarios
+    ]
+
+
+def _run_ablation_pair_timeframe(
+    pair: str,
+    timeframe: str,
+    candles: DataFrame,
+    scenarios: list[dict[str, Any]],
+    profile_names: tuple[str, ...],
+    *,
+    calibration_fraction: float,
+    minimum_hold_precision: float,
+    minimum_hold_recall: float,
+) -> list[dict[str, Any]]:
+    bars = resample_ohlcv(candles, timeframe)
+    profile_matrices = build_feature_profiles(bars)
+    experiments: list[dict[str, Any]] = []
+    for scenario in scenarios:
+        labels = apply_adaptive_triple_barrier(
+            bars,
+            horizon_candles=scenario["horizon_candles"],
+            take_profit_multiplier=scenario["take_profit_multiplier"],
+            stop_loss_multiplier=scenario["stop_loss_multiplier"],
+        )
+        for profile in profile_names:
+            experiments.append(
+                run_experiment(
+                    pair,
+                    timeframe,
+                    candles,
+                    scenario_name=scenario["name"],
+                    horizon_candles=scenario["horizon_candles"],
+                    take_profit_multiplier=scenario["take_profit_multiplier"],
+                    stop_loss_multiplier=scenario["stop_loss_multiplier"],
+                    calibration_fraction=calibration_fraction,
+                    minimum_hold_precision=minimum_hold_precision,
+                    minimum_hold_recall=minimum_hold_recall,
+                    feature_profile=profile,
+                    prepared_bars=bars,
+                    prepared_labels=labels,
+                    prepared_feature_profiles=profile_matrices,
+                )
+            )
+    return experiments
+
+
 def _run_diagnostic_experiments(
     datasets: dict[str, DataFrame],
     *,
@@ -2292,182 +2431,56 @@ def _run_diagnostic_experiments(
     feature_profile_names: tuple[str, ...] = ("Baseline",),
     walk_forward_folds: int | None = None,
 ) -> list[dict[str, Any]]:
-    """Train the selected profiles on shared rows and optional expanding folds."""
-    if not feature_profile_names or len(set(feature_profile_names)) != len(
-        feature_profile_names
-    ):
-        raise ValueError("feature_profile_selection_invalid")
-    for profile in feature_profile_names:
-        feature_profile_columns(profile)
-    if walk_forward_folds is not None and (
-        feature_profile_names != V4G_FEATURE_PROFILE_ORDER
-        or len(barrier_scenarios) != 1
-        or barrier_scenarios[0]["horizon_candles"] != 12
-    ):
-        raise ValueError("walk_forward_feature_profile_contract_invalid")
-
+    """Run one of the approved baseline, ablation, or V4-G experiment designs."""
+    _validate_experiment_profile_configuration(
+        feature_profile_names, barrier_scenarios, walk_forward_folds
+    )
     experiments: list[dict[str, Any]] = []
     for symbol in SYMBOLS:
         pair = f"{symbol[:-4]}/USDT"
         for timeframe in TIMEFRAME_MINUTES:
+            candles = datasets[symbol]
             if walk_forward_folds is not None:
-                bars = resample_ohlcv(datasets[symbol], timeframe)
-                scenario = barrier_scenarios[0]
-                labels = apply_adaptive_triple_barrier(
-                    bars,
-                    horizon_candles=scenario["horizon_candles"],
-                    take_profit_multiplier=scenario["take_profit_multiplier"],
-                    stop_loss_multiplier=scenario["stop_loss_multiplier"],
-                )
-                profile_matrices = build_feature_profiles(
-                    bars, profile_names=feature_profile_names
-                )
-                folds = create_walk_forward_folds(
-                    profile_matrices["Baseline+Trend"],
-                    labels,
-                    fold_count=walk_forward_folds,
-                    label_horizon_candles=scenario["horizon_candles"],
-                    calibration_fraction=calibration_fraction,
-                )
-                for fold in folds:
-                    for profile in feature_profile_names:
-                        experiments.append(
-                            run_walk_forward_experiment(
-                                pair,
-                                timeframe,
-                                datasets[symbol],
-                                feature_profile=profile,
-                                fold=fold,
-                                calibration_fraction=calibration_fraction,
-                                minimum_hold_precision=minimum_hold_precision,
-                                minimum_hold_recall=minimum_hold_recall,
-                                scenario_name=scenario["name"],
-                                horizon_candles=scenario["horizon_candles"],
-                                take_profit_multiplier=scenario[
-                                    "take_profit_multiplier"
-                                ],
-                                stop_loss_multiplier=scenario["stop_loss_multiplier"],
-                                prepared_bars=bars,
-                                prepared_labels=labels,
-                                prepared_feature_profiles=profile_matrices,
-                            )
-                        )
-                continue
-
-            if feature_profile_names == ("Baseline",):
-                for scenario in barrier_scenarios:
-                    experiments.append(
-                        run_experiment(
-                            pair,
-                            timeframe,
-                            datasets[symbol],
-                            scenario_name=scenario["name"],
-                            horizon_candles=scenario["horizon_candles"],
-                            take_profit_multiplier=scenario["take_profit_multiplier"],
-                            stop_loss_multiplier=scenario["stop_loss_multiplier"],
-                            calibration_fraction=calibration_fraction,
-                            minimum_hold_precision=minimum_hold_precision,
-                            minimum_hold_recall=minimum_hold_recall,
-                        )
+                experiments.extend(
+                    _run_walk_forward_pair_timeframe(
+                        symbol,
+                        pair,
+                        timeframe,
+                        candles,
+                        scenario=barrier_scenarios[0],
+                        profile_names=feature_profile_names,
+                        fold_count=walk_forward_folds,
+                        calibration_fraction=calibration_fraction,
+                        minimum_hold_precision=minimum_hold_precision,
+                        minimum_hold_recall=minimum_hold_recall,
                     )
-                continue
-
-            bars = resample_ohlcv(datasets[symbol], timeframe)
-            profile_matrices = build_feature_profiles(bars)
-            for scenario in barrier_scenarios:
-                labels = apply_adaptive_triple_barrier(
-                    bars,
-                    horizon_candles=scenario["horizon_candles"],
-                    take_profit_multiplier=scenario["take_profit_multiplier"],
-                    stop_loss_multiplier=scenario["stop_loss_multiplier"],
                 )
-                for profile in feature_profile_names:
-                    experiments.append(
-                        run_experiment(
-                            pair,
-                            timeframe,
-                            datasets[symbol],
-                            scenario_name=scenario["name"],
-                            horizon_candles=scenario["horizon_candles"],
-                            take_profit_multiplier=scenario["take_profit_multiplier"],
-                            stop_loss_multiplier=scenario["stop_loss_multiplier"],
-                            calibration_fraction=calibration_fraction,
-                            minimum_hold_precision=minimum_hold_precision,
-                            minimum_hold_recall=minimum_hold_recall,
-                            feature_profile=profile,
-                            prepared_bars=bars,
-                            prepared_labels=labels,
-                            prepared_feature_profiles=profile_matrices,
-                        )
+            elif feature_profile_names == ("Baseline",):
+                experiments.extend(
+                    _run_baseline_pair_timeframe(
+                        pair,
+                        timeframe,
+                        candles,
+                        barrier_scenarios,
+                        calibration_fraction=calibration_fraction,
+                        minimum_hold_precision=minimum_hold_precision,
+                        minimum_hold_recall=minimum_hold_recall,
                     )
+                )
+            else:
+                experiments.extend(
+                    _run_ablation_pair_timeframe(
+                        pair,
+                        timeframe,
+                        candles,
+                        barrier_scenarios,
+                        feature_profile_names,
+                        calibration_fraction=calibration_fraction,
+                        minimum_hold_precision=minimum_hold_precision,
+                        minimum_hold_recall=minimum_hold_recall,
+                    )
+                )
     return experiments
-
-
-def _mean_metric(values: list[float]) -> float | None:
-    """Return a rounded unweighted mean, preserving empty support as null."""
-    if not values:
-        return None
-    return round(float(np.mean(np.asarray(values, dtype=float))), 6)
-
-
-def _trained_profile_experiments(
-    rows: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """Select successful experiments for one feature profile."""
-    return [item for item in rows if item.get("status") == "TRAINED"]
-
-
-def _forward_hold_metrics(
-    experiment: dict[str, Any],
-) -> tuple[float, float] | None:
-    """Extract post-calibration forward HOLD Precision and Recall."""
-    threshold = experiment.get("threshold_optimization") or {}
-    forward = threshold.get("post_calibration_validation")
-    if forward is None:
-        return None
-    hold_metrics = forward.get("hold_metrics")
-    if hold_metrics is None:
-        return None
-    return float(hold_metrics["precision"]), float(hold_metrics["recall"])
-
-
-def _collect_forward_hold_metrics(
-    trained: list[dict[str, Any]],
-) -> list[tuple[float, float]]:
-    """Collect only complete post-calibration forward HOLD metrics."""
-    return [
-        values
-        for item in trained
-        if (values := _forward_hold_metrics(item)) is not None
-    ]
-
-
-def _forward_hold_acceptance_pass(metrics: tuple[float, float]) -> bool:
-    """Require both configured forward HOLD thresholds."""
-    precision, recall = metrics
-    return (
-        precision >= DEFAULT_MINIMUM_HOLD_PRECISION
-        and recall >= DEFAULT_MINIMUM_HOLD_RECALL
-    )
-
-
-def _forward_acceptance_status(
-    experiment_count: int,
-    trained_count: int,
-    forward_count: int,
-    accepted_count: int,
-) -> str:
-    """Fail closed when any experiment or forward metric is missing."""
-    if experiment_count == 0:
-        return "NOT_MET_OR_INCOMPLETE"
-    if trained_count != experiment_count:
-        return "NOT_MET_OR_INCOMPLETE"
-    if forward_count != experiment_count:
-        return "NOT_MET_OR_INCOMPLETE"
-    if accepted_count != experiment_count:
-        return "NOT_MET_OR_INCOMPLETE"
-    return "PASS"
-
 
 def _summarize_feature_profile(
     rows: list[dict[str, Any]],
