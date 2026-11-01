@@ -114,7 +114,10 @@ def extract_qualifying_candidates(report: dict[str, Any]) -> list[dict[str, Any]
             recall = hold.get("recall")
             if precision is None or recall is None:
                 continue
-            if float(precision) < V4H_MIN_HOLD_PRECISION or float(recall) < V4H_MIN_HOLD_RECALL:
+            if (
+                float(precision) < V4H_MIN_HOLD_PRECISION
+                or float(recall) < V4H_MIN_HOLD_RECALL
+            ):
                 continue
             threshold = threshold_report.get("selected_threshold")
             start_index = forward.get("start_row_index")
@@ -165,7 +168,10 @@ def extract_qualifying_candidates(report: dict[str, Any]) -> list[dict[str, Any]
                 }
             )
     expected = int(report["acceptance_policy"]["strict_acceptance_count"])
-    if len(candidates) != expected or len({item["candidate_id"] for item in candidates}) != expected:
+    if (
+        len(candidates) != expected
+        or len({item["candidate_id"] for item in candidates}) != expected
+    ):
         raise ValueError("v4h_qualifying_candidate_count_mismatch")
     if any(item["scenario"] != V4H_ACCEPTED_GEOMETRY for item in candidates):
         raise ValueError("v4h_qualifying_candidate_geometry_mismatch")
@@ -242,7 +248,10 @@ def load_validated_minute_data(
     candles["date"] = pd.to_datetime(candles["date"], utc=True, errors="coerce")
     if candles["date"].isna().any():
         raise ValueError(f"economic_market_timestamp_invalid:{symbol}")
-    if candles["date"].duplicated().any() or not candles["date"].is_monotonic_increasing:
+    if (
+        candles["date"].duplicated().any()
+        or not candles["date"].is_monotonic_increasing
+    ):
         raise ValueError(f"economic_market_timestamp_order_invalid:{symbol}")
     if len(candles) > 1 and not bool(
         (candles["date"].diff().iloc[1:] == pd.Timedelta(minutes=1)).all()
@@ -263,7 +272,10 @@ def resample_ohlcv(candles: DataFrame, timeframe: str) -> DataFrame:
     numeric = source.loc[:, ["open", "high", "low", "close", "volume"]].apply(
         pd.to_numeric, errors="coerce"
     )
-    if source["date"].isna().any() or not np.isfinite(numeric.to_numpy(dtype=float)).all():
+    if (
+        source["date"].isna().any()
+        or not np.isfinite(numeric.to_numpy(dtype=float)).all()
+    ):
         raise ValueError("economic_ohlcv_values_invalid")
     if source["date"].duplicated().any() or not source["date"].is_monotonic_increasing:
         raise ValueError("economic_ohlcv_timestamps_invalid")
@@ -390,7 +402,12 @@ def _mark_position(position: OpenPosition, mark_price: float) -> float:
         * position.direction
         * (mark_price - position.entry_reference_price)
     )
-    return position.equity_at_entry + market_pnl - position.entry_fee - position.entry_slippage_cost
+    return (
+        position.equity_at_entry
+        + market_pnl
+        - position.entry_fee
+        - position.entry_slippage_cost
+    )
 
 
 def _close_position(
@@ -438,7 +455,9 @@ def _close_position(
 
 def max_drawdown_from_equity(equity_values: list[float]) -> float:
     """Return peak-to-trough drawdown as a positive fraction."""
-    if not equity_values or not all(np.isfinite(float(value)) for value in equity_values):
+    if not equity_values or not all(
+        np.isfinite(float(value)) for value in equity_values
+    ):
         raise ValueError("economic_equity_curve_invalid")
     peak = float(equity_values[0])
     maximum = 0.0
@@ -473,7 +492,9 @@ def _metrics(
         "initial_equity_usd": round(config.initial_equity, 8),
         "final_equity_usd": round(final_equity, 8),
         "net_return_fraction": round(final_equity / config.initial_equity - 1.0, 10),
-        "net_return_percent": round((final_equity / config.initial_equity - 1.0) * 100.0, 8),
+        "net_return_percent": round(
+            (final_equity / config.initial_equity - 1.0) * 100.0, 8
+        ),
         "trade_count": trade_count,
         "win_rate": round(len(wins) / trade_count, 8) if trade_count else 0.0,
         "profit_factor_net_of_costs": round(pf, 8) if pf is not None else None,
@@ -482,7 +503,9 @@ def _metrics(
         "gross_loss_usd": round(gross_loss, 8),
         "average_win_usd": round(float(np.mean(wins)), 8) if wins else None,
         "average_loss_usd": round(float(np.mean(losses)), 8) if losses else None,
-        "average_net_pnl_per_trade_usd": round(float(np.mean(pnls)), 8) if pnls else None,
+        "average_net_pnl_per_trade_usd": round(float(np.mean(pnls)), 8)
+        if pnls
+        else None,
         "max_drawdown_fraction": round(max_drawdown, 10),
         "max_drawdown_percent": round(max_drawdown * 100.0, 8),
         "profit_factor_gate_passed": pf_pass,
@@ -592,9 +615,7 @@ def simulate_signals(
         if marked_equity <= 0:
             raise ValueError("economic_equity_non_positive")
         peak = max(peak, marked_equity)
-        maximum_drawdown = max(
-            maximum_drawdown, (peak - marked_equity) / peak
-        )
+        maximum_drawdown = max(maximum_drawdown, (peak - marked_equity) / peak)
         equity_curve.append(
             {
                 "timestamp": timestamp.isoformat(),
