@@ -110,11 +110,11 @@ def _validate_trade_barrier_multipliers(config: TradeManagementConfig) -> None:
 def validate_trade_management_config(config: TradeManagementConfig) -> None:
     """Reject invalid ATR, barrier, horizon, or confidence assumptions."""
     _require_positive_integer(config.atr_period, "economic_atr_period_invalid")
-    _require_positive_integer(config.horizon_candles, "economic_horizon_candles_invalid")
+    _require_positive_integer(
+        config.horizon_candles, "economic_horizon_candles_invalid"
+    )
     _validate_trade_barrier_multipliers(config)
     _validate_confidence_threshold(config.confidence_threshold)
-
-
 
 
 def _source_report_metadata_is_approved(report: dict[str, Any]) -> bool:
@@ -793,7 +793,11 @@ def _validate_drawdown_accounting(
 def _validate_execution_timestamps(bars: DataFrame) -> None:
     """Require unique, monotonic UTC candle timestamps."""
     dates = bars["date"]
-    if dates.isna().any() or dates.duplicated().any() or not dates.is_monotonic_increasing:
+    if (
+        dates.isna().any()
+        or dates.duplicated().any()
+        or not dates.is_monotonic_increasing
+    ):
         raise ValueError("economic_execution_timestamps_invalid")
 
 
@@ -833,8 +837,6 @@ def _normalize_execution_bars(bars: DataFrame) -> DataFrame:
         _validate_execution_column(normalized, column)
     _validate_execution_geometry(normalized)
     return normalized
-
-
 
 
 def _signal_market_indices(
@@ -882,8 +884,6 @@ def _index_execution_signals(
     if not action_by_index:
         raise ValueError("economic_bars_or_signals_empty")
     return action_by_index
-
-
 
 
 @dataclass
@@ -1168,9 +1168,7 @@ def _process_execution_bar(
     """Process one candle in gap, signal, intrabar, horizon, and mark order."""
     bar = normalized.iloc[index]
     timestamp = pd.Timestamp(bar["date"])
-    gap_closed = _close_on_barrier(
-        state, bar, timestamp, index, config, gap_first=True
-    )
+    gap_closed = _close_on_barrier(state, bar, timestamp, index, config, gap_first=True)
     signal_item = action_by_index.get(index)
     if signal_item is not None and not gap_closed:
         signal = str(signal_item["signal"])

@@ -437,9 +437,7 @@ def _aggregate_profit_factors(
         "v4j_mean_profit_factor": round(sum(before) / len(before), 8)
         if before
         else None,
-        "v4k_mean_profit_factor": round(sum(after) / len(after), 8)
-        if after
-        else None,
+        "v4k_mean_profit_factor": round(sum(after) / len(after), 8) if after else None,
         "profit_factor_improved_candidate_count": sum(
             item["comparison"]["profit_factor_improved"] for item in candidates
         ),
