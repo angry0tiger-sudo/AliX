@@ -270,16 +270,14 @@ def _aggregate_threshold(
     all_dd = [float(item["max_drawdown_percent"]) for item in metrics]
     exits = _aggregate_exit_counts(candidates)
     raw_buys = sum(
-        int(item["confidence_filter"]["raw_buy_signal_count"])
-        for item in candidates
+        int(item["confidence_filter"]["raw_buy_signal_count"]) for item in candidates
     )
     rejected_buys = sum(
         int(item["confidence_filter"]["rejected_buy_signal_count"])
         for item in candidates
     )
     gate_passes = sum(
-        bool(item["metrics"]["economic_candidate_gate_passed"])
-        for item in candidates
+        bool(item["metrics"]["economic_candidate_gate_passed"]) for item in candidates
     )
     pf_passes = sum(
         item["metrics"]["profit_factor_net_of_costs"] is not None
@@ -306,9 +304,7 @@ def _aggregate_threshold(
             round(sum(defined_pf) / len(defined_pf), 8) if defined_pf else None
         ),
         "defined_candidate_profit_factor_count": len(defined_pf),
-        "mean_max_drawdown_percent_all_candidates": round(
-            sum(all_dd) / len(all_dd), 8
-        ),
+        "mean_max_drawdown_percent_all_candidates": round(sum(all_dd) / len(all_dd), 8),
         "mean_max_drawdown_percent_active_candidates": (
             round(sum(active_dd) / len(active_dd), 8) if active_dd else None
         ),
@@ -486,9 +482,9 @@ def _csv_rows(report: dict[str, Any]) -> list[dict[str, Any]]:
                     "collision_exit_count": exits.get("COLLISION", 0),
                     "horizon_exit_count": exits.get("HORIZON_EXPIRY", 0),
                     "sell_exit_count": exits.get("SELL", 0),
-                    "confidence_rejected_buy_signal_count": item[
-                        "confidence_filter"
-                    ]["rejected_buy_signal_count"],
+                    "confidence_rejected_buy_signal_count": item["confidence_filter"][
+                        "rejected_buy_signal_count"
+                    ],
                     "economic_candidate_gate_passed": metrics[
                         "economic_candidate_gate_passed"
                     ],

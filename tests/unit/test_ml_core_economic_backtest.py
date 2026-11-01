@@ -737,9 +737,7 @@ def test_confidence_sweep_replays_each_threshold_independently() -> None:
         0,
         0,
     ]
-    assert candidate_results[0]["trades"][0]["entry_confidence"] == pytest.approx(
-        0.44
-    )
+    assert candidate_results[0]["trades"][0]["entry_confidence"] == pytest.approx(0.44)
     assert candidate_results[0]["total_fees_usd"] > 0
     assert candidate_results[0]["total_slippage_cost_usd"] > 0
     assert all(
