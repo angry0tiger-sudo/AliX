@@ -316,9 +316,7 @@ def _insufficient_context_experiments(
             stop_loss_multiplier=float(scenario["stop_loss_multiplier"]),
         )
         for profile in V4H_FEATURE_PROFILES:
-            result = _insufficient_bar_result(
-                pair, timeframe, bars, labels
-            )
+            result = _insufficient_bar_result(pair, timeframe, bars, labels)
             result.update(
                 {
                     "scenario": scenario["name"],
@@ -384,12 +382,8 @@ def _run_v4h_pair_timeframe(
     pair = f"{symbol[:-4]}/USDT"
     bars = resample_ohlcv(datasets[symbol], timeframe)
     if len(bars) < 100:
-        return _insufficient_context_experiments(
-            pair, timeframe, bars, scenarios
-        )
-    feature_matrices = build_feature_profiles(
-        bars, profile_names=V4H_FEATURE_PROFILES
-    )
+        return _insufficient_context_experiments(pair, timeframe, bars, scenarios)
+    feature_matrices = build_feature_profiles(bars, profile_names=V4H_FEATURE_PROFILES)
     experiments: list[dict[str, Any]] = []
     for scenario in scenarios:
         experiments.extend(
@@ -534,9 +528,7 @@ def _append_candidate_results(
     candidates: list[dict[str, Any]],
 ) -> None:
     for candidate in candidates:
-        key = json.dumps(
-            candidate["parameters"], sort_keys=True, separators=(",", ":")
-        )
+        key = json.dumps(candidate["parameters"], sort_keys=True, separators=(",", ":"))
         grouped[key].append(candidate)
 
 
@@ -579,8 +571,7 @@ def _aggregate_parameter_candidates(
     for experiment in experiments:
         _append_experiment_candidates(grouped, experiment)
     rows = [
-        _candidate_summary_row(key, candidates)
-        for key, candidates in grouped.items()
+        _candidate_summary_row(key, candidates) for key, candidates in grouped.items()
     ]
     by_precision = sorted(rows, key=_candidate_precision_rank, reverse=True)
     by_macro = sorted(rows, key=_candidate_macro_rank, reverse=True)
@@ -661,18 +652,14 @@ def _aggregate_selected_parameters(
 def _geometry_records(
     metric_records: list[dict[str, Any]], scenario_name: str
 ) -> list[dict[str, Any]]:
-    return [
-        item for item in metric_records if item["scenario"] == scenario_name
-    ]
+    return [item for item in metric_records if item["scenario"] == scenario_name]
 
 
 def _geometry_metric_values(
     records: list[dict[str, Any]], metric_name: str
 ) -> list[float]:
     return [
-        float(item[metric_name])
-        for item in records
-        if item[metric_name] is not None
+        float(item[metric_name]) for item in records if item[metric_name] is not None
     ]
 
 
@@ -689,9 +676,7 @@ def _geometry_acceptance_count(records: list[dict[str, Any]]) -> int:
 def _best_geometry_record(
     records: list[dict[str, Any]], metric_name: str
 ) -> dict[str, Any] | None:
-    available = [
-        item for item in records if item[metric_name] is not None
-    ]
+    available = [item for item in records if item[metric_name] is not None]
     if not available:
         return None
     return max(available, key=lambda item: float(item[metric_name]))
@@ -718,13 +703,9 @@ def _geometry_summary_row(
         "horizon_candles": horizon,
         "take_profit_multiplier": take_profit,
         "stop_loss_multiplier": stop_loss,
-        "experiment_count": _geometry_experiment_count(
-            experiments, scenario_name
-        ),
+        "experiment_count": _geometry_experiment_count(experiments, scenario_name),
         "trained_model_count": len(records),
-        "label_distribution": _aggregate_label_distribution(
-            experiments, scenario_name
-        ),
+        "label_distribution": _aggregate_label_distribution(experiments, scenario_name),
         "mean_forward_hold_precision": _mean(precisions),
         "mean_forward_hold_recall": _mean(recalls),
         "mean_outer_validation_macro_f1": _mean(macro_scores),
@@ -817,8 +798,7 @@ def _build_report_hyperparameter_tuning(
     return {
         "method": "RANDOM_SEARCH",
         "parameter_distributions": {
-            name: list(values)
-            for name, values in HYPERPARAMETER_DISTRIBUTIONS.items()
+            name: list(values) for name, values in HYPERPARAMETER_DISTRIBUTIONS.items()
         },
         "search_space_size": 27,
         "candidate_count_per_model": random_search_iterations,
@@ -832,9 +812,7 @@ def _build_report_hyperparameter_tuning(
         "candidate_fit_count": _candidate_fit_total(experiments),
         "final_refit_count": trained_models,
         "candidate_summary": _aggregate_parameter_candidates(experiments),
-        "selected_parameter_summary": _aggregate_selected_parameters(
-            metric_records
-        ),
+        "selected_parameter_summary": _aggregate_selected_parameters(metric_records),
     }
 
 
@@ -880,9 +858,7 @@ def build_v4h_report(
     geometry_summary = _build_geometry_summary(experiments, metric_records)
     trained_experiments, trained_models = _training_counts(experiments)
     candidate_fit_count = _candidate_fit_total(experiments)
-    acceptance_count = sum(
-        item["strict_acceptance_count"] for item in geometry_summary
-    )
+    acceptance_count = sum(item["strict_acceptance_count"] for item in geometry_summary)
     tuning_report = _build_report_hyperparameter_tuning(
         experiments,
         metric_records,
@@ -908,9 +884,7 @@ def build_v4h_report(
         "feature_engineering": _build_report_feature_engineering(),
         "model": _build_report_model(),
         "hyperparameter_tuning": tuning_report,
-        "validation_design": _build_report_validation_design(
-            calibration_fraction
-        ),
+        "validation_design": _build_report_validation_design(calibration_fraction),
         "acceptance_policy": {
             "minimum_hold_precision": DEFAULT_MINIMUM_HOLD_PRECISION,
             "minimum_hold_recall": DEFAULT_MINIMUM_HOLD_RECALL,
