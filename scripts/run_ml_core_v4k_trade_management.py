@@ -419,36 +419,81 @@ def _aggregate_trade_counts(
     }
 
 
-def _aggregate_profit_factors(
+def _v4j_profit_factor_values(
     candidates: list[dict[str, Any]],
-) -> dict[str, Any]:
-    """Aggregate only defined PF values and candidate-level improvements."""
-    before = [
+) -> list[float]:
+    """Return defined V4-J baseline PF values only."""
+    return [
         float(item["v4j_baseline"]["profit_factor"])
         for item in candidates
         if item["v4j_baseline"]["profit_factor"] is not None
     ]
-    after = [
+
+
+def _v4k_profit_factor_values(
+    candidates: list[dict[str, Any]],
+) -> list[float]:
+    """Return defined V4-K net-of-cost PF values only."""
+    return [
         float(item["v4k_result"]["metrics"]["profit_factor_net_of_costs"])
         for item in candidates
         if item["v4k_result"]["metrics"]["profit_factor_net_of_costs"] is not None
     ]
+
+
+def _count_profit_factor_improvements(
+    candidates: list[dict[str, Any]],
+) -> int:
+    """Count candidates whose defined numeric PF improved versus V4-J."""
+    return sum(
+        item["comparison"]["profit_factor_improved"] for item in candidates
+    )
+
+
+def _count_v4k_pf_above_threshold(
+    candidates: list[dict[str, Any]],
+    minimum_profit_factor: float = 1.5,
+) -> int:
+    """Count V4-K candidates with a defined PF strictly above the gate."""
+    return sum(
+        item["v4k_result"]["metrics"]["profit_factor_net_of_costs"] is not None
+        and item["v4k_result"]["metrics"]["profit_factor_net_of_costs"]
+        > minimum_profit_factor
+        for item in candidates
+    )
+
+
+def _count_v4k_economic_gate_passes(
+    candidates: list[dict[str, Any]],
+) -> int:
+    """Count candidate ledgers passing both PF and drawdown gates."""
+    return sum(
+        bool(item["v4k_result"]["metrics"]["economic_candidate_gate_passed"])
+        for item in candidates
+    )
+
+
+def _aggregate_profit_factors(
+    candidates: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Aggregate only defined PF values and candidate-level improvements."""
+    before = _v4j_profit_factor_values(candidates)
+    after = _v4k_profit_factor_values(candidates)
     return {
         "v4j_mean_profit_factor": round(sum(before) / len(before), 8)
         if before
         else None,
-        "v4k_mean_profit_factor": round(sum(after) / len(after), 8) if after else None,
-        "profit_factor_improved_candidate_count": sum(
-            item["comparison"]["profit_factor_improved"] for item in candidates
+        "v4k_mean_profit_factor": round(sum(after) / len(after), 8)
+        if after
+        else None,
+        "profit_factor_improved_candidate_count": _count_profit_factor_improvements(
+            candidates
         ),
-        "v4k_pf_above_1_5_candidate_count": sum(
-            item["v4k_result"]["metrics"]["profit_factor_net_of_costs"] is not None
-            and item["v4k_result"]["metrics"]["profit_factor_net_of_costs"] > 1.5
-            for item in candidates
+        "v4k_pf_above_1_5_candidate_count": _count_v4k_pf_above_threshold(
+            candidates
         ),
-        "v4k_economic_gate_passed_candidate_count": sum(
-            bool(item["v4k_result"]["metrics"]["economic_candidate_gate_passed"])
-            for item in candidates
+        "v4k_economic_gate_passed_candidate_count": _count_v4k_economic_gate_passes(
+            candidates
         ),
     }
 
