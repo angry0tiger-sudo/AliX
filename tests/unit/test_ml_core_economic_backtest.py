@@ -9,6 +9,9 @@ from pandas import DataFrame
 from services.ml_core.economic_backtest import (
     NO_ENTRY_SIGNAL,
     ExecutionConfig,
+    V4L_CONFIDENCE_SWEEP_THRESHOLDS,
+    evaluate_candidate_confidence_sweep,
+    validate_confidence_thresholds,
     TradeManagementConfig,
     build_forward_signals,
     extract_qualifying_candidates,
@@ -678,3 +681,78 @@ def test_execution_rejects_misaligned_or_invalid_signals() -> None:
         )
     with pytest.raises(ValueError, match="bars_or_signals"):
         _simulate(bars, [], ExecutionConfig())
+
+
+
+def test_confidence_sweep_replays_each_threshold_independently() -> None:
+    bars = _bars(4)
+    bars["high"] = 101.0
+    bars["low"] = 99.0
+    candidate = {
+        "candidate_id": "v4l-synthetic-candidate",
+        "scenario": "V4H_Tighter_SL",
+        "pair": "BTC/USDT",
+        "timeframe": "15m",
+        "feature_profile": "Baseline",
+        "weighting_policy": "weight_balanced",
+        "selected_parameters": {},
+        "hold_precision": 0.5,
+        "hold_recall": 0.3,
+        "selected_hold_threshold": 0.5,
+        "forward_row_count": 3,
+        "probability_records": [
+            {
+                "row_index": 0,
+                "timestamp": "2026-01-01T00:00:00Z",
+                "probabilities": {"BUY": 0.44, "SELL": 0.30, "HOLD": 0.26},
+            },
+            {
+                "row_index": 1,
+                "timestamp": "2026-01-01T00:15:00Z",
+                "probabilities": {"BUY": 0.20, "SELL": 0.20, "HOLD": 0.60},
+            },
+            {
+                "row_index": 2,
+                "timestamp": "2026-01-01T00:30:00Z",
+                "probabilities": {"BUY": 0.20, "SELL": 0.20, "HOLD": 0.60},
+            },
+        ],
+    }
+    thresholds = [0.40, 0.45, 0.50, 0.55, 0.60]
+    results = evaluate_candidate_confidence_sweep(
+        candidate,
+        bars,
+        ExecutionConfig(),
+        TradeManagementConfig(atr_period=1),
+        confidence_thresholds=thresholds,
+    )
+
+    assert V4L_CONFIDENCE_SWEEP_THRESHOLDS == tuple(thresholds)
+    assert [item["confidence_threshold"] for item in results] == thresholds
+    candidate_results = [item["candidate_result"] for item in results]
+    assert [item["metrics"]["trade_count"] for item in candidate_results] == [
+        1,
+        0,
+        0,
+        0,
+        0,
+    ]
+    assert candidate_results[0]["trades"][0]["entry_confidence"] == pytest.approx(
+        0.44
+    )
+    assert candidate_results[0]["total_fees_usd"] > 0
+    assert candidate_results[0]["total_slippage_cost_usd"] > 0
+    assert all(
+        item["total_fees_usd"] == 0
+        and item["total_slippage_cost_usd"] == 0
+        for item in candidate_results[1:]
+    )
+
+
+def test_confidence_sweep_validation_rejects_invalid_threshold_sets() -> None:
+    with pytest.raises(ValueError, match="sweep_thresholds_invalid"):
+        validate_confidence_thresholds([])
+    with pytest.raises(ValueError, match="threshold_duplicate"):
+        validate_confidence_thresholds([0.40, 0.40])
+    with pytest.raises(ValueError, match="threshold_invalid"):
+        validate_confidence_thresholds([0.40, True])

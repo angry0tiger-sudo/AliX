@@ -1316,6 +1316,72 @@ def evaluate_candidate(
     }
 
 
+V4L_CONFIDENCE_SWEEP_THRESHOLDS = (0.40, 0.45, 0.50, 0.55, 0.60)
+
+
+def validate_confidence_thresholds(
+    confidence_thresholds: list[float] | tuple[float, ...],
+) -> tuple[float, ...]:
+    """Validate a non-empty, unique confidence sweep without reordering it."""
+    if (
+        not isinstance(confidence_thresholds, (list, tuple))
+        or not confidence_thresholds
+    ):
+        raise ValueError("economic_confidence_sweep_thresholds_invalid")
+    validated: list[float] = []
+    seen: set[float] = set()
+    for value in confidence_thresholds:
+        if isinstance(value, bool):
+            raise ValueError("economic_confidence_sweep_threshold_invalid")
+        try:
+            threshold = _validate_confidence_threshold(value)
+        except (TypeError, ValueError, OverflowError):
+            raise ValueError("economic_confidence_sweep_threshold_invalid") from None
+        if threshold in seen:
+            raise ValueError("economic_confidence_sweep_threshold_duplicate")
+        seen.add(threshold)
+        validated.append(threshold)
+    return tuple(validated)
+
+
+def evaluate_candidate_confidence_sweep(
+    candidate: dict[str, Any],
+    bars: DataFrame,
+    config: ExecutionConfig,
+    base_management: TradeManagementConfig | None = None,
+    *,
+    confidence_thresholds: list[float] | tuple[float, ...] = (
+        V4L_CONFIDENCE_SWEEP_THRESHOLDS
+    ),
+) -> list[dict[str, Any]]:
+    """Replay one persisted candidate independently at each BUY confidence floor.
+
+    Stored probabilities, bars, execution assumptions, and exit geometry remain
+    identical across runs. Only the BUY-entry confidence floor changes.
+    """
+    thresholds = validate_confidence_thresholds(confidence_thresholds)
+    base = base_management or TradeManagementConfig()
+    validate_trade_management_config(base)
+    results: list[dict[str, Any]] = []
+    for threshold in thresholds:
+        management = TradeManagementConfig(
+            atr_period=base.atr_period,
+            take_profit_atr_multiplier=base.take_profit_atr_multiplier,
+            stop_loss_atr_multiplier=base.stop_loss_atr_multiplier,
+            horizon_candles=base.horizon_candles,
+            confidence_threshold=threshold,
+        )
+        results.append(
+            {
+                "confidence_threshold": threshold,
+                "candidate_result": evaluate_candidate(
+                    candidate, bars, config, management
+                ),
+            }
+        )
+    return results
+
+
 def render_economic_markdown(report: dict[str, Any]) -> str:
     """Render the auditable per-model economic results into GitHub Step Summary."""
     lines = [
