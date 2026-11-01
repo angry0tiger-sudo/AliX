@@ -156,8 +156,6 @@ def test_walk_forward_summary_compares_matched_profile_support() -> None:
         assert fold["paired_comparison"]["matched_pair_timeframe_count"] == 2
         assert fold["paired_comparison"]["trend_minus_baseline_precision"] == 0.05
 
-
-
 def test_walk_forward_threshold_skips_when_calibration_hold_support_is_below_thirty() -> (
     None
 ):

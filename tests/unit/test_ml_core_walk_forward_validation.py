@@ -122,8 +122,6 @@ def test_walk_forward_rejects_short_dataset_and_missing_labels() -> None:
     with pytest.raises(ValueError, match="walk_forward_labels_missing"):
         create_walk_forward_folds(features, labels.drop(columns=["label"]))
 
-
-
 def test_walk_forward_support_skips_when_feature_mask_removes_calibration_rows() -> (
     None
 ):

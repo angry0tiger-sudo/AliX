@@ -2829,14 +2829,10 @@ def _build_diagnostic_report(
         },
         "calibration_policy": {
             "fraction_of_validation": (
-                float(calibration_fraction)
-                if walk_forward_folds is None
-                else None
+                float(calibration_fraction) if walk_forward_folds is None else None
             ),
             "fraction_of_pre_test_history": (
-                float(calibration_fraction)
-                if walk_forward_folds is not None
-                else None
+                float(calibration_fraction) if walk_forward_folds is not None else None
             ),
             "temporal_position": (
                 "TAIL_OF_PRE_TEST_TRAIN_EXCLUDED_FROM_MODEL_FIT"
