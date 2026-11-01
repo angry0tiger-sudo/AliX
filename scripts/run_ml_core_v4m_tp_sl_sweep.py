@@ -401,7 +401,7 @@ def _build_report(
                     sweep["candidate_result"],
                 )
             )
-    geometry_results = [
+    geometry_results: list[dict[str, Any]] = [
         {
             "stop_loss_atr_multiplier": stop_loss,
             "take_profit_atr_multiplier": take_profit,
