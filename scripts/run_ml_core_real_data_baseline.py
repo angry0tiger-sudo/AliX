@@ -2585,22 +2585,28 @@ def _fold_profile_forward_metrics(
 ) -> tuple[dict[str, Any], dict[tuple[str, str], tuple[float, float]]]:
     trained = _trained_profile_experiments(rows)
     forward = [
-        (item, values)
+        (item, metric_pair)
         for item in trained
-        if (values := _forward_hold_metrics(item)) is not None
+        if (metric_pair := _forward_hold_metrics(item)) is not None
     ]
-    values = [metric_values for _, metric_values in forward]
+    forward_values = [metric_pair for _, metric_pair in forward]
     profile_stats = {
         "experiment_count": len(rows),
         "trained_experiment_count": len(trained),
         "forward_metric_experiment_count": len(forward),
-        "mean_forward_hold_precision": _mean_metric([item[0] for item in values]),
-        "mean_forward_hold_recall": _mean_metric([item[1] for item in values]),
+        "mean_forward_hold_precision": _mean_metric(
+            [metric_pair[0] for metric_pair in forward_values]
+        ),
+        "mean_forward_hold_recall": _mean_metric(
+            [metric_pair[1] for metric_pair in forward_values]
+        ),
         "precision_at_least_0_40_count": sum(
-            item[0] >= DEFAULT_MINIMUM_HOLD_PRECISION for item in values
+            metric_pair[0] >= DEFAULT_MINIMUM_HOLD_PRECISION
+            for metric_pair in forward_values
         ),
         "strict_acceptance_count": sum(
-            _forward_hold_acceptance_pass(item) for item in values
+            _forward_hold_acceptance_pass(metric_pair)
+            for metric_pair in forward_values
         ),
     }
     indexed = {
