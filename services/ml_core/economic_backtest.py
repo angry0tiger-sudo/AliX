@@ -124,14 +124,9 @@ def _candidate_forward_metrics(
     return forward, float(precision), float(recall)
 
 
-def _candidate_passes_hold_acceptance(
-    precision: float, recall: float
-) -> bool:
+def _candidate_passes_hold_acceptance(precision: float, recall: float) -> bool:
     """Apply the approved strict V4-H precision and recall floors."""
-    return (
-        precision >= V4H_MIN_HOLD_PRECISION
-        and recall >= V4H_MIN_HOLD_RECALL
-    )
+    return precision >= V4H_MIN_HOLD_PRECISION and recall >= V4H_MIN_HOLD_RECALL
 
 
 def _candidate_forward_records(
@@ -141,9 +136,7 @@ def _candidate_forward_records(
     threshold_report = variant.get("threshold_optimization") or {}
     threshold = threshold_report.get("selected_threshold")
     start_index = forward.get("start_row_index")
-    parameters = (variant.get("hyperparameter_tuning") or {}).get(
-        "selected_parameters"
-    )
+    parameters = (variant.get("hyperparameter_tuning") or {}).get("selected_parameters")
     raw_records = variant.get("validation_probabilities")
     if (
         threshold is None
@@ -345,7 +338,11 @@ def _ohlcv_geometry_is_valid(numeric: DataFrame) -> bool:
     low = numeric["low"]
     upper_bound = numeric[["open", "close"]].max(axis=1)
     lower_bound = numeric[["open", "close"]].min(axis=1)
-    return bool((high >= upper_bound).all() and (low <= lower_bound).all() and (high >= low).all())
+    return bool(
+        (high >= upper_bound).all()
+        and (low <= lower_bound).all()
+        and (high >= low).all()
+    )
 
 
 def _aggregate_complete_bars(source: DataFrame, minutes: int) -> DataFrame:
@@ -790,9 +787,7 @@ def _force_close_forward_window(
     state.maximum_drawdown = max(
         state.maximum_drawdown, (state.peak - state.cash_equity) / state.peak
     )
-    _append_equity_event(
-        state, timestamp, state.cash_equity, "FORCED_FINAL_CLOSE"
-    )
+    _append_equity_event(state, timestamp, state.cash_equity, "FORCED_FINAL_CLOSE")
 
 
 def simulate_signals(
@@ -838,9 +833,7 @@ def simulate_signals(
     _force_close_forward_window(
         state, final_bar, pd.Timestamp(final_bar["date"]), config
     )
-    equity_values = [
-        float(item["equity_usd"]) for item in state.equity_curve
-    ]
+    equity_values = [float(item["equity_usd"]) for item in state.equity_curve]
     if state.maximum_drawdown > max_drawdown_from_equity(equity_values):
         raise RuntimeError("economic_drawdown_accounting_inconsistent")
     metrics = _metrics(state.trades, equity_values, config)
@@ -848,9 +841,7 @@ def simulate_signals(
         "metrics": metrics,
         "trades": state.trades,
         "equity_curve": state.equity_curve,
-        "total_fees_usd": round(
-            sum(item["fees_usd"] for item in state.trades), 8
-        ),
+        "total_fees_usd": round(sum(item["fees_usd"] for item in state.trades), 8),
         "total_slippage_cost_usd": round(
             sum(item["slippage_cost_usd"] for item in state.trades), 8
         ),
