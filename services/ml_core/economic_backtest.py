@@ -577,8 +577,6 @@ def build_forward_signals(
     return signals
 
 
-
-
 def _open_position(
     equity: float,
     direction: int,
