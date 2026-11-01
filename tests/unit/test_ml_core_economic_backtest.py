@@ -10,6 +10,10 @@ from services.ml_core.economic_backtest import (
     NO_ENTRY_SIGNAL,
     ExecutionConfig,
     V4L_CONFIDENCE_SWEEP_THRESHOLDS,
+    V4M_CONFIDENCE_THRESHOLD,
+    V4M_TP_SL_GEOMETRIES,
+    evaluate_candidate_tp_sl_sweep,
+    validate_tp_sl_geometries,
     evaluate_candidate_confidence_sweep,
     validate_confidence_thresholds,
     TradeManagementConfig,
@@ -752,3 +756,103 @@ def test_confidence_sweep_validation_rejects_invalid_threshold_sets() -> None:
         validate_confidence_thresholds([0.40, 0.40])
     with pytest.raises(ValueError, match="threshold_invalid"):
         validate_confidence_thresholds([0.40, True])
+
+
+
+def test_tp_sl_sweep_applies_each_geometry_at_fixed_confidence() -> None:
+    bars = _bars(4)
+    bars["high"] = 101.0
+    bars["low"] = 99.0
+    candidate = {
+        "candidate_id": "v4m-synthetic-candidate",
+        "scenario": "V4H_Tighter_SL",
+        "pair": "BTC/USDT",
+        "timeframe": "15m",
+        "feature_profile": "Baseline",
+        "weighting_policy": "weight_balanced",
+        "selected_parameters": {},
+        "hold_precision": 0.5,
+        "hold_recall": 0.3,
+        "selected_hold_threshold": 0.5,
+        "forward_row_count": 3,
+        "probability_records": [
+            {
+                "row_index": 0,
+                "timestamp": "2026-01-01T00:00:00Z",
+                "probabilities": {"BUY": 0.62, "SELL": 0.18, "HOLD": 0.20},
+            },
+            {
+                "row_index": 1,
+                "timestamp": "2026-01-01T00:15:00Z",
+                "probabilities": {"BUY": 0.20, "SELL": 0.20, "HOLD": 0.60},
+            },
+            {
+                "row_index": 2,
+                "timestamp": "2026-01-01T00:30:00Z",
+                "probabilities": {"BUY": 0.20, "SELL": 0.20, "HOLD": 0.60},
+            },
+        ],
+    }
+    base = TradeManagementConfig(atr_period=1, confidence_threshold=0.60)
+    results = evaluate_candidate_tp_sl_sweep(
+        candidate, bars, ExecutionConfig(), base
+    )
+
+    assert V4M_CONFIDENCE_THRESHOLD == 0.60
+    assert [
+        (item["stop_loss_atr_multiplier"], item["take_profit_atr_multiplier"])
+        for item in results
+    ] == list(V4M_TP_SL_GEOMETRIES)
+    for result in results:
+        trade = result["candidate_result"]["trades"][0]
+        stop_loss = result["stop_loss_atr_multiplier"]
+        take_profit = result["take_profit_atr_multiplier"]
+        reference = float(trade["barrier_reference_price"])
+        atr_value = float(trade["atr_value"])
+        assert trade["entry_confidence"] >= V4M_CONFIDENCE_THRESHOLD
+        assert trade["stop_loss_price"] == pytest.approx(
+            reference - stop_loss * atr_value
+        )
+        assert trade["take_profit_price"] == pytest.approx(
+            reference + take_profit * atr_value
+        )
+
+
+def test_tp_sl_sweep_validation_is_fail_closed() -> None:
+    with pytest.raises(ValueError, match="geometries_invalid"):
+        validate_tp_sl_geometries([])
+    with pytest.raises(ValueError, match="geometry_duplicate"):
+        validate_tp_sl_geometries([(2.0, 2.0), (2.0, 2.0)])
+    with pytest.raises(ValueError, match="multipliers_must_be_positive"):
+        validate_tp_sl_geometries([(0.0, 2.0)])
+    with pytest.raises(ValueError, match="geometry_invalid"):
+        validate_tp_sl_geometries([(True, 2.0)])
+
+    bars = _bars(4)
+    candidate = {
+        "candidate_id": "v4m-invalid-base",
+        "scenario": "V4H_Tighter_SL",
+        "pair": "BTC/USDT",
+        "timeframe": "15m",
+        "feature_profile": "Baseline",
+        "weighting_policy": "weight_balanced",
+        "selected_parameters": {},
+        "hold_precision": 0.5,
+        "hold_recall": 0.3,
+        "selected_hold_threshold": 0.5,
+        "forward_row_count": 1,
+        "probability_records": [
+            {
+                "row_index": 0,
+                "timestamp": "2026-01-01T00:00:00Z",
+                "probabilities": {"BUY": 0.70, "SELL": 0.10, "HOLD": 0.20},
+            }
+        ],
+    }
+    with pytest.raises(ValueError, match="must_be_0_60"):
+        evaluate_candidate_tp_sl_sweep(
+            candidate,
+            bars,
+            ExecutionConfig(),
+            TradeManagementConfig(atr_period=1, confidence_threshold=0.55),
+        )

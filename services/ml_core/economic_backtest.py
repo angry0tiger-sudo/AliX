@@ -1382,6 +1382,90 @@ def evaluate_candidate_confidence_sweep(
     return results
 
 
+V4M_CONFIDENCE_THRESHOLD = 0.60
+# Each tuple is ordered (stop_loss_atr_multiplier, take_profit_atr_multiplier).
+V4M_TP_SL_GEOMETRIES = (
+    (2.0, 2.0),
+    (2.5, 2.5),
+    (2.0, 3.0),
+    (1.5, 2.0),
+)
+
+
+def validate_tp_sl_geometries(
+    tp_sl_geometries: list[tuple[float, float]]
+    | tuple[tuple[float, float], ...],
+) -> tuple[tuple[float, float], ...]:
+    """Validate unique positive finite (SL, TP) ATR multiplier pairs."""
+    if not isinstance(tp_sl_geometries, (list, tuple)) or not tp_sl_geometries:
+        raise ValueError("economic_tp_sl_geometries_invalid")
+    validated: list[tuple[float, float]] = []
+    seen: set[tuple[float, float]] = set()
+    for geometry in tp_sl_geometries:
+        if not isinstance(geometry, (list, tuple)) or len(geometry) != 2:
+            raise ValueError("economic_tp_sl_geometry_invalid")
+        stop_loss_value, take_profit_value = geometry
+        if isinstance(stop_loss_value, bool) or isinstance(take_profit_value, bool):
+            raise ValueError("economic_tp_sl_geometry_invalid")
+        try:
+            stop_loss = float(stop_loss_value)
+            take_profit = float(take_profit_value)
+        except (TypeError, ValueError, OverflowError):
+            raise ValueError("economic_tp_sl_geometry_invalid") from None
+        if not np.isfinite(stop_loss) or not np.isfinite(take_profit):
+            raise ValueError("economic_tp_sl_geometry_invalid")
+        if stop_loss <= 0 or take_profit <= 0:
+            raise ValueError("economic_tp_sl_multipliers_must_be_positive")
+        pair = (stop_loss, take_profit)
+        if pair in seen:
+            raise ValueError("economic_tp_sl_geometry_duplicate")
+        seen.add(pair)
+        validated.append(pair)
+    return tuple(validated)
+
+
+def evaluate_candidate_tp_sl_sweep(
+    candidate: dict[str, Any],
+    bars: DataFrame,
+    config: ExecutionConfig,
+    base_management: TradeManagementConfig | None = None,
+    *,
+    tp_sl_geometries: list[tuple[float, float]]
+    | tuple[tuple[float, float], ...] = V4M_TP_SL_GEOMETRIES,
+) -> list[dict[str, Any]]:
+    """Replay one persisted candidate over TP/SL geometries at fixed 0.60 confidence.
+
+    Probability rows, market bars, execution costs, ATR period, and vertical
+    horizon remain fixed. Each geometry runs an independent Spot simulation.
+    """
+    geometries = validate_tp_sl_geometries(tp_sl_geometries)
+    base = base_management or TradeManagementConfig(
+        confidence_threshold=V4M_CONFIDENCE_THRESHOLD
+    )
+    validate_trade_management_config(base)
+    if base.confidence_threshold != V4M_CONFIDENCE_THRESHOLD:
+        raise ValueError("v4m_confidence_threshold_must_be_0_60")
+    results: list[dict[str, Any]] = []
+    for stop_loss, take_profit in geometries:
+        management = TradeManagementConfig(
+            atr_period=base.atr_period,
+            take_profit_atr_multiplier=take_profit,
+            stop_loss_atr_multiplier=stop_loss,
+            horizon_candles=base.horizon_candles,
+            confidence_threshold=V4M_CONFIDENCE_THRESHOLD,
+        )
+        results.append(
+            {
+                "stop_loss_atr_multiplier": stop_loss,
+                "take_profit_atr_multiplier": take_profit,
+                "candidate_result": evaluate_candidate(
+                    candidate, bars, config, management
+                ),
+            }
+        )
+    return results
+
+
 def render_economic_markdown(report: dict[str, Any]) -> str:
     """Render the auditable per-model economic results into GitHub Step Summary."""
     lines = [
