@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 from pandas import DataFrame, Series
-from sklearn.base import BaseEstimator  # type: ignore[import-untyped]
+from typing import Any, cast
 
 from services.ml_core.hyperparameter_tuning import (
     HYPERPARAMETER_DISTRIBUTIONS,
@@ -12,7 +12,7 @@ from services.ml_core.hyperparameter_tuning import (
 )
 
 
-class DeterministicClassifier(BaseEstimator):
+class DeterministicClassifier:
     def __init__(
         self,
         num_leaves: int = 15,
@@ -27,6 +27,23 @@ class DeterministicClassifier(BaseEstimator):
         self.class_weight = class_weight
         self.max_depth = max_depth
 
+    def get_params(self, deep: bool = True) -> dict[str, Any]:
+        return {
+            "num_leaves": self.num_leaves,
+            "learning_rate": self.learning_rate,
+            "min_child_samples": self.min_child_samples,
+            "class_weight": self.class_weight,
+            "max_depth": self.max_depth,
+        }
+
+    def set_params(self, **parameters: Any) -> DeterministicClassifier:
+        valid_parameters = self.get_params()
+        for name, value in parameters.items():
+            if name not in valid_parameters:
+                raise ValueError(f"unknown_estimator_parameter:{name}")
+            setattr(self, name, value)
+        return self
+
     def fit(self, features: DataFrame, labels: Series) -> DeterministicClassifier:
         assert len(features) == len(labels)
         self.is_fitted_ = True
@@ -34,7 +51,8 @@ class DeterministicClassifier(BaseEstimator):
 
     def predict(self, features: DataFrame) -> np.ndarray:
         codes = features["signal"].to_numpy(dtype=int) % 3
-        return np.asarray(["BUY", "SELL", "HOLD"], dtype=object)[codes]
+        predictions = np.asarray(["BUY", "SELL", "HOLD"], dtype=object)[codes]
+        return cast(np.ndarray, predictions)
 
 
 def _training_fixture(
