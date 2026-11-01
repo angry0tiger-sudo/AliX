@@ -13,6 +13,8 @@ import numpy as np
 import pandas as pd
 from pandas import DataFrame
 
+from services.ml_core.adaptive_targets import ATR_PERIOD, calculate_atr
+
 V4H_SOURCE_SCHEMA = "alix.ml-core.v4h-tuning-geometry.v1"
 V4H_SOURCE_SHA = "e34861c4873b7cc2170aaaf6c79ed9b464df0a9a"
 V4H_SOURCE_RUN_ID = 41293168191
@@ -21,6 +23,7 @@ V4H_ACCEPTED_GEOMETRY = "V4H_Tighter_SL"
 V4H_MIN_HOLD_PRECISION = 0.40
 V4H_MIN_HOLD_RECALL = 0.20
 LABELS = ("BUY", "SELL", "HOLD")
+NO_ENTRY_SIGNAL = "NO_ENTRY"
 TIMEFRAME_MINUTES = {"15m": 15, "30m": 30, "1h": 60, "4h": 240}
 OHLCV_COLUMNS = ("date", "open", "high", "low", "close", "volume")
 MAX_DRAWDOWN_ACCOUNTING_TOLERANCE = 1e-10
@@ -38,8 +41,19 @@ class ExecutionConfig:
 
 
 @dataclass(frozen=True)
+class TradeManagementConfig:
+    """V4-H Triple-Barrier geometry and directional entry-confidence policy."""
+
+    atr_period: int = ATR_PERIOD
+    take_profit_atr_multiplier: float = 2.0
+    stop_loss_atr_multiplier: float = 1.5
+    horizon_candles: int = 12
+    confidence_threshold: float = 0.55
+
+
+@dataclass(frozen=True)
 class OpenPosition:
-    """One non-pyramided spot long position."""
+    """One non-pyramided spot long with fixed ATR-derived exit barriers."""
 
     direction: int
     entry_timestamp: str
@@ -49,6 +63,12 @@ class OpenPosition:
     equity_at_entry: float
     entry_fee: float
     entry_slippage_cost: float
+    atr_value: float
+    take_profit_price: float
+    stop_loss_price: float
+    entry_bar_index: int
+    entry_confidence: float
+    atr_reference_timestamp: str
 
 
 def validate_execution_config(config: ExecutionConfig) -> None:
@@ -70,6 +90,33 @@ def validate_execution_config(config: ExecutionConfig) -> None:
         raise ValueError("position_fraction_must_be_in_(0,1]")
     if not 0 < config.maximum_drawdown < 1:
         raise ValueError("maximum_drawdown_must_be_in_(0,1)")
+
+
+def validate_trade_management_config(config: TradeManagementConfig) -> None:
+    """Reject invalid ATR, barrier, horizon, or confidence assumptions."""
+    if (
+        isinstance(config.atr_period, bool)
+        or not isinstance(config.atr_period, int)
+        or config.atr_period < 1
+    ):
+        raise ValueError("economic_atr_period_invalid")
+    if (
+        isinstance(config.horizon_candles, bool)
+        or not isinstance(config.horizon_candles, int)
+        or config.horizon_candles < 1
+    ):
+        raise ValueError("economic_horizon_candles_invalid")
+    values = (
+        config.take_profit_atr_multiplier,
+        config.stop_loss_atr_multiplier,
+        config.confidence_threshold,
+    )
+    if not all(np.isfinite(float(value)) for value in values):
+        raise ValueError("economic_trade_management_values_must_be_finite")
+    if config.take_profit_atr_multiplier <= 0 or config.stop_loss_atr_multiplier <= 0:
+        raise ValueError("economic_atr_multipliers_must_be_positive")
+    if not 0 < config.confidence_threshold <= 1:
+        raise ValueError("economic_confidence_threshold_invalid")
 
 
 def _source_report_metadata_is_approved(report: dict[str, Any]) -> bool:
@@ -451,10 +498,30 @@ def probability_to_signal(probabilities: dict[str, Any], hold_threshold: float) 
     return "BUY" if buy >= sell else "SELL"
 
 
-def build_forward_signals(candidate: dict[str, Any]) -> list[dict[str, Any]]:
-    """Transform persisted Forward-Validation probabilities without using labels."""
+def _validate_confidence_threshold(confidence_threshold: float) -> float:
+    """Validate an optional directional entry-confidence floor."""
+    threshold = float(confidence_threshold)
+    if not np.isfinite(threshold) or not 0 < threshold <= 1:
+        raise ValueError("economic_confidence_threshold_invalid")
+    return threshold
+
+
+def build_forward_signals(
+    candidate: dict[str, Any],
+    confidence_threshold: float | None = None,
+) -> list[dict[str, Any]]:
+    """Transform persisted probabilities and optionally filter BUY entries.
+
+    The default None preserves the historical V4-J signal transformation.
+    V4-K passes an explicit confidence floor. SELL exits are never filtered.
+    """
     rows = candidate["probability_records"]
     threshold = float(candidate["selected_hold_threshold"])
+    confidence_floor = (
+        None
+        if confidence_threshold is None
+        else _validate_confidence_threshold(confidence_threshold)
+    )
     signals: list[dict[str, Any]] = []
     previous_index = -1
     previous_timestamp: pd.Timestamp | None = None
@@ -467,13 +534,30 @@ def build_forward_signals(candidate: dict[str, Any]) -> list[dict[str, Any]]:
         timestamp = timestamp.tz_convert("UTC")
         if previous_timestamp is not None and timestamp <= previous_timestamp:
             raise ValueError("economic_forward_signal_timestamp_invalid")
-        signal = probability_to_signal(row["probabilities"], threshold)
+        probabilities = row["probabilities"]
+        buy, sell, hold = _validated_probability_values(probabilities)
+        raw_signal = probability_to_signal(probabilities, threshold)
+        confidence_passed = (
+            raw_signal != "BUY"
+            or confidence_floor is None
+            or buy >= confidence_floor
+        )
+        signal = raw_signal if confidence_passed else NO_ENTRY_SIGNAL
         signals.append(
             {
                 "row_index": row_index,
                 "signal_timestamp": timestamp,
                 "execution_timestamp": timestamp + delta,
                 "signal": signal,
+                "raw_signal": raw_signal,
+                "buy_probability": buy,
+                "sell_probability": sell,
+                "hold_probability": hold,
+                "directional_confidence": (
+                    buy if raw_signal == "BUY" else sell if raw_signal == "SELL" else None
+                ),
+                "confidence_threshold": confidence_floor,
+                "confidence_passed": confidence_passed,
             }
         )
         previous_index = row_index
@@ -488,15 +572,28 @@ def _open_position(
     direction: int,
     reference_price: float,
     timestamp: pd.Timestamp,
+    atr_value: float,
+    entry_bar_index: int,
+    entry_confidence: float,
+    atr_reference_timestamp: pd.Timestamp,
     config: ExecutionConfig,
+    management: TradeManagementConfig,
 ) -> tuple[OpenPosition, float]:
-    """Open one 1x-equity spot long and immediately mark entry costs."""
+    """Open a 1x-equity Spot long and attach causal ATR barriers."""
     fee_rate = config.fee_bps / 10_000.0
     slippage_rate = config.slippage_bps / 10_000.0
     quantity = equity * config.position_fraction / reference_price
     entry_fill = reference_price * (1.0 + direction * slippage_rate)
     entry_fee = quantity * entry_fill * fee_rate
     entry_slippage = quantity * abs(entry_fill - reference_price)
+    take_profit = entry_fill + management.take_profit_atr_multiplier * atr_value
+    stop_loss = entry_fill - management.stop_loss_atr_multiplier * atr_value
+    if (
+        not np.isfinite(take_profit)
+        or not np.isfinite(stop_loss)
+        or stop_loss <= 0
+    ):
+        raise ValueError("economic_atr_barrier_price_invalid")
     position = OpenPosition(
         direction=direction,
         entry_timestamp=timestamp.isoformat(),
@@ -506,6 +603,12 @@ def _open_position(
         equity_at_entry=equity,
         entry_fee=entry_fee,
         entry_slippage_cost=entry_slippage,
+        atr_value=atr_value,
+        take_profit_price=take_profit,
+        stop_loss_price=stop_loss,
+        entry_bar_index=entry_bar_index,
+        entry_confidence=entry_confidence,
+        atr_reference_timestamp=atr_reference_timestamp.isoformat(),
     )
     marked_equity = equity - entry_fee - entry_slippage
     if marked_equity <= 0:
@@ -534,8 +637,11 @@ def _close_position(
     timestamp: pd.Timestamp,
     reason: str,
     config: ExecutionConfig,
+    *,
+    exit_bar_index: int,
+    exit_trigger_type: str,
 ) -> tuple[dict[str, Any], float]:
-    """Close a spot long with exit slippage and a second-side fee."""
+    """Close one Spot long with exit-side fee and adverse slippage."""
     fee_rate = config.fee_bps / 10_000.0
     slippage_rate = config.slippage_bps / 10_000.0
     exit_fill = reference_price * (1.0 - position.direction * slippage_rate)
@@ -552,14 +658,25 @@ def _close_position(
     equity = position.equity_at_entry + net_pnl
     if equity <= 0:
         raise ValueError("economic_equity_non_positive_after_exit")
+    bars_held = exit_bar_index - position.entry_bar_index + 1
+    if bars_held < 1:
+        raise RuntimeError("economic_position_holding_index_invalid")
     trade = {
         "direction": "LONG" if position.direction == 1 else "SHORT",
         "entry_timestamp": position.entry_timestamp,
         "exit_timestamp": timestamp.isoformat(),
         "entry_reference_price": round(position.entry_reference_price, 10),
         "entry_fill_price": round(position.entry_fill_price, 10),
+        "entry_atr_reference_timestamp": position.atr_reference_timestamp,
+        "atr_value": round(position.atr_value, 10),
+        "barrier_reference_price": round(position.entry_fill_price, 10),
+        "stop_loss_price": round(position.stop_loss_price, 10),
+        "take_profit_price": round(position.take_profit_price, 10),
+        "entry_confidence": round(position.entry_confidence, 10),
+        "bars_held": bars_held,
         "exit_reference_price": round(reference_price, 10),
         "exit_fill_price": round(exit_fill, 10),
+        "exit_trigger_type": exit_trigger_type,
         "quantity": round(position.quantity, 10),
         "gross_market_pnl_usd": round(gross_pnl, 8),
         "fees_usd": round(fees, 8),
@@ -666,10 +783,10 @@ def _validate_drawdown_accounting(
 
 
 def _normalize_execution_bars(bars: DataFrame) -> DataFrame:
-    """Validate execution timestamps and next-bar prices once per candidate."""
-    if bars.empty or not {"date", "open", "close"}.issubset(bars.columns):
+    """Validate timestamped OHLCV data required for causal ATR and execution."""
+    if bars.empty or not set(OHLCV_COLUMNS).issubset(bars.columns):
         raise ValueError("economic_execution_bars_invalid")
-    normalized = bars.copy().reset_index(drop=True)
+    normalized = bars.loc[:, list(OHLCV_COLUMNS)].copy().reset_index(drop=True)
     normalized["date"] = pd.to_datetime(normalized["date"], utc=True, errors="coerce")
     invalid_dates = (
         normalized["date"].isna().any()
@@ -678,31 +795,57 @@ def _normalize_execution_bars(bars: DataFrame) -> DataFrame:
     )
     if invalid_dates:
         raise ValueError("economic_execution_timestamps_invalid")
-    for column in ("open", "close"):
+    for column in ("open", "high", "low", "close", "volume"):
         normalized[column] = pd.to_numeric(normalized[column], errors="coerce")
         values = normalized[column].to_numpy(dtype=float)
-        if not bool(np.isfinite(values).all()) or bool(np.any(values <= 0)):
+        if not bool(np.isfinite(values).all()):
+            raise ValueError("economic_execution_ohlcv_non_finite")
+        if column != "volume" and bool(np.any(values <= 0)):
             raise ValueError("economic_execution_prices_invalid")
+        if column == "volume" and bool(np.any(values < 0)):
+            raise ValueError("economic_execution_volume_invalid")
+    invalid_geometry = (
+        bool((normalized["high"] < normalized["low"]).any())
+        or bool((normalized["high"] < normalized[["open", "close"]].max(axis=1)).any())
+        or bool((normalized["low"] > normalized[["open", "close"]].min(axis=1)).any())
+    )
+    if invalid_geometry:
+        raise ValueError("economic_execution_ohlcv_geometry_invalid")
     return normalized
 
 
 def _index_execution_signals(
     signals: list[dict[str, Any]],
     index_by_time: dict[pd.Timestamp, int],
-) -> dict[int, str]:
-    """Map timezone-aware execution actions to exact market bar indices."""
-    action_by_index: dict[int, str] = {}
-    for item in signals:
-        timestamp = pd.Timestamp(item["execution_timestamp"])
-        if timestamp.tzinfo is None:
+) -> dict[int, dict[str, Any]]:
+    """Map persisted signal and execution times to adjacent exact market bars."""
+    action_by_index: dict[int, dict[str, Any]] = {}
+    for raw_item in signals:
+        item = dict(raw_item)
+        execution_time = pd.Timestamp(item["execution_timestamp"])
+        if execution_time.tzinfo is None:
             raise ValueError("economic_execution_signal_timezone_required")
-        index = index_by_time.get(timestamp.tz_convert("UTC"))
-        if index is None:
+        execution_index = index_by_time.get(execution_time.tz_convert("UTC"))
+        if execution_index is None:
             raise ValueError("economic_signal_price_timestamp_mismatch")
-        signal = item["signal"]
-        if signal not in LABELS or index in action_by_index:
+        signal_time = item.get("signal_timestamp")
+        if signal_time is None:
+            signal_index = execution_index - 1
+        else:
+            signal_timestamp = pd.Timestamp(signal_time)
+            if signal_timestamp.tzinfo is None:
+                raise ValueError("economic_signal_timestamp_timezone_required")
+            signal_index_value = index_by_time.get(signal_timestamp.tz_convert("UTC"))
+            if signal_index_value is None:
+                raise ValueError("economic_signal_price_timestamp_mismatch")
+            signal_index = signal_index_value
+        if signal_index < 0 or signal_index + 1 != execution_index:
+            raise ValueError("economic_signal_next_bar_alignment_invalid")
+        signal = item.get("signal")
+        if signal not in (*LABELS, NO_ENTRY_SIGNAL) or execution_index in action_by_index:
             raise ValueError("economic_signal_contract_invalid")
-        action_by_index[index] = signal
+        item["signal_index"] = signal_index
+        action_by_index[execution_index] = item
     if not action_by_index:
         raise ValueError("economic_bars_or_signals_empty")
     return action_by_index
@@ -736,9 +879,44 @@ def _append_equity_event(
     )
 
 
-def _signal_direction(signal: str) -> int:
-    """Map Spot BUY to long intent; SELL and HOLD remain flat intent."""
-    return 1 if signal == "BUY" else 0
+def _update_equity_extrema(state: _SimulationState, equity: float) -> None:
+    """Update peak and drawdown at every realized or marked equity event."""
+    if not np.isfinite(equity) or equity <= 0:
+        raise ValueError("economic_equity_non_positive")
+    state.peak = max(state.peak, equity)
+    state.maximum_drawdown = max(
+        state.maximum_drawdown, (state.peak - equity) / state.peak
+    )
+
+
+def _close_state_position(
+    state: _SimulationState,
+    reference_price: float,
+    timestamp: pd.Timestamp,
+    bar_index: int,
+    reason: str,
+    trigger_type: str,
+    config: ExecutionConfig,
+) -> bool:
+    """Close the active Spot long once and record realized equity immediately."""
+    position = state.position
+    if position is None:
+        return False
+    trade, equity = _close_position(
+        position,
+        reference_price,
+        timestamp,
+        reason,
+        config,
+        exit_bar_index=bar_index,
+        exit_trigger_type=trigger_type,
+    )
+    state.trades.append(trade)
+    state.position = None
+    state.cash_equity = equity
+    _update_equity_extrema(state, equity)
+    _append_equity_event(state, timestamp, equity, f"POSITION_CLOSED_{trigger_type}")
+    return True
 
 
 def _close_for_signal(
@@ -746,51 +924,129 @@ def _close_for_signal(
     signal: str,
     bar: Any,
     timestamp: pd.Timestamp,
+    bar_index: int,
     config: ExecutionConfig,
-) -> None:
-    """Close an existing Spot long on SELL or HOLD; never create a short."""
-    position = state.position
-    if position is None or signal == "BUY":
-        return
-    trade, state.cash_equity = _close_position(
-        position, float(bar["open"]), timestamp, signal, config
+) -> bool:
+    """Treat SELL as a risk-reducing close; HOLD and NO_ENTRY keep the long."""
+    if signal != "SELL":
+        return False
+    return _close_state_position(
+        state, float(bar["open"]), timestamp, bar_index, "SELL", "MODEL_SELL", config
     )
-    state.trades.append(trade)
-    state.position = None
-    _append_equity_event(state, timestamp, state.cash_equity, "POSITION_CLOSED")
 
 
 def _open_for_signal(
     state: _SimulationState,
-    direction: int,
+    signal_item: dict[str, Any],
     bar: Any,
     timestamp: pd.Timestamp,
+    bar_index: int,
+    atr_values: pd.Series,
     config: ExecutionConfig,
+    management: TradeManagementConfig,
+    normalized: DataFrame,
 ) -> None:
-    """Open only a directional signal when no position is currently active."""
-    if direction == 0 or state.position is not None:
+    """Open one confident BUY only when flat, using signal-time ATR."""
+    if signal_item["signal"] != "BUY" or state.position is not None:
         return
+    signal_index = int(signal_item["signal_index"])
+    atr_value = float(atr_values.iloc[signal_index])
+    if not np.isfinite(atr_value) or atr_value <= 0:
+        raise ValueError("economic_atr_unavailable_for_entry")
+    confidence = float(signal_item.get("buy_probability", 1.0))
+    if not np.isfinite(confidence) or not 0 <= confidence <= 1:
+        raise ValueError("economic_entry_confidence_invalid")
+    atr_timestamp = pd.Timestamp(normalized["date"].iloc[signal_index])
     state.position, marked_equity = _open_position(
-        state.cash_equity, direction, float(bar["open"]), timestamp, config
+        state.cash_equity,
+        1,
+        float(bar["open"]),
+        timestamp,
+        atr_value,
+        bar_index,
+        confidence,
+        atr_timestamp,
+        config,
+        management,
     )
-    state.peak = max(state.peak, marked_equity)
-    state.maximum_drawdown = max(
-        state.maximum_drawdown, (state.peak - marked_equity) / state.peak
-    )
+    _update_equity_extrema(state, marked_equity)
     _append_equity_event(state, timestamp, marked_equity, "POSITION_OPENED")
 
 
-def _apply_execution_signal(
+def _gap_barrier_touch(position: OpenPosition, bar: Any) -> tuple[str, float, str] | None:
+    """Detect a barrier already crossed at the next candle open."""
+    opened = float(bar["open"])
+    if opened <= position.stop_loss_price:
+        return "SL_HIT", opened, "OPEN_GAP"
+    if opened >= position.take_profit_price:
+        return "TP_HIT", opened, "OPEN_GAP"
+    return None
+
+
+def _intrabar_barrier_touch(
+    position: OpenPosition,
+    bar: Any,
+) -> tuple[str, float, str] | None:
+    """Resolve OHLC touches; a same-candle SL/TP collision conservatively stops."""
+    stop_hit = float(bar["low"]) <= position.stop_loss_price
+    take_hit = float(bar["high"]) >= position.take_profit_price
+    if stop_hit:
+        reason = "COLLISION" if take_hit else "SL_HIT"
+        trigger = "INTRABAR_COLLISION" if take_hit else "INTRABAR_STOP"
+        return reason, position.stop_loss_price, trigger
+    if take_hit:
+        return "TP_HIT", position.take_profit_price, "INTRABAR_TAKE"
+    return None
+
+
+def _close_on_barrier(
     state: _SimulationState,
-    signal: str,
     bar: Any,
     timestamp: pd.Timestamp,
+    bar_index: int,
     config: ExecutionConfig,
-) -> None:
-    """Apply close-before-open reversal semantics at the next-bar open."""
-    direction = _signal_direction(signal)
-    _close_for_signal(state, signal, bar, timestamp, config)
-    _open_for_signal(state, direction, bar, timestamp, config)
+    *,
+    gap_first: bool,
+) -> bool:
+    """Check an opening gap or intrabar barrier with stop-first collision logic."""
+    if state.position is None:
+        return False
+    touch = (
+        _gap_barrier_touch(state.position, bar)
+        if gap_first
+        else _intrabar_barrier_touch(state.position, bar)
+    )
+    if touch is None:
+        return False
+    reason, reference_price, trigger = touch
+    return _close_state_position(
+        state, reference_price, timestamp, bar_index, reason, trigger, config
+    )
+
+
+def _close_on_vertical_barrier(
+    state: _SimulationState,
+    bar: Any,
+    timestamp: pd.Timestamp,
+    bar_index: int,
+    management: TradeManagementConfig,
+    config: ExecutionConfig,
+) -> bool:
+    """Close at candle close after the configured Triple-Barrier horizon."""
+    if state.position is None:
+        return False
+    bars_held = bar_index - state.position.entry_bar_index + 1
+    if bars_held < management.horizon_candles:
+        return False
+    return _close_state_position(
+        state,
+        float(bar["close"]),
+        timestamp,
+        bar_index,
+        "HORIZON_EXPIRY",
+        "VERTICAL_BARRIER",
+        config,
+    )
 
 
 def _mark_execution_bar_close(
@@ -801,12 +1057,7 @@ def _mark_execution_bar_close(
         marked_equity = state.cash_equity
     else:
         marked_equity = _mark_position(state.position, float(bar["close"]))
-    if marked_equity <= 0:
-        raise ValueError("economic_equity_non_positive")
-    state.peak = max(state.peak, marked_equity)
-    state.maximum_drawdown = max(
-        state.maximum_drawdown, (state.peak - marked_equity) / state.peak
-    )
+    _update_equity_extrema(state, marked_equity)
     _append_equity_event(state, timestamp, marked_equity, "BAR_CLOSE_MARK")
 
 
@@ -814,55 +1065,59 @@ def _force_close_forward_window(
     state: _SimulationState,
     final_bar: Any,
     timestamp: pd.Timestamp,
+    bar_index: int,
     config: ExecutionConfig,
 ) -> None:
-    """Close any remaining position at the final observed Forward bar close."""
-    if state.position is None:
-        return
-    trade, state.cash_equity = _close_position(
-        state.position,
+    """Close a remaining position at the Forward-window boundary."""
+    _close_state_position(
+        state,
         float(final_bar["close"]),
         timestamp,
+        bar_index,
         "END_OF_FORWARD_WINDOW",
+        "FORWARD_WINDOW",
         config,
     )
-    state.trades.append(trade)
-    state.position = None
-    state.peak = max(state.peak, state.cash_equity)
-    state.maximum_drawdown = max(
-        state.maximum_drawdown, (state.peak - state.cash_equity) / state.peak
-    )
-    _append_equity_event(state, timestamp, state.cash_equity, "FORCED_FINAL_CLOSE")
 
 
 def simulate_signals(
     bars: DataFrame,
     signals: list[dict[str, Any]],
     config: ExecutionConfig,
+    *,
+    trade_management_config: TradeManagementConfig | None = None,
+    atr_values: pd.Series | None = None,
 ) -> dict[str, Any]:
-    """Replay next-bar-open signals; HOLD closes and never opens a position."""
+    """Replay Spot entries with ATR barriers, SELL exits, and vertical expiry."""
     validate_execution_config(config)
+    management = trade_management_config or TradeManagementConfig()
+    validate_trade_management_config(management)
     if not signals:
         raise ValueError("economic_bars_or_signals_empty")
     normalized = _normalize_execution_bars(bars)
+    if atr_values is None:
+        selected_atr = calculate_atr(normalized, period=management.atr_period)
+    else:
+        if len(atr_values) != len(normalized):
+            raise ValueError("economic_atr_length_mismatch")
+        selected_atr = pd.to_numeric(atr_values, errors="coerce").reset_index(drop=True)
     index_by_time = {
         timestamp: index for index, timestamp in enumerate(normalized["date"].tolist())
     }
     action_by_index = _index_execution_signals(signals, index_by_time)
     first_index = min(action_by_index)
     last_index = max(action_by_index)
-    initial_equity = float(config.initial_equity)
     first_timestamp = pd.Timestamp(normalized["date"].iloc[first_index])
     state = _SimulationState(
         position=None,
-        cash_equity=initial_equity,
-        peak=initial_equity,
+        cash_equity=float(config.initial_equity),
+        peak=float(config.initial_equity),
         maximum_drawdown=0.0,
         trades=[],
         equity_curve=[
             {
                 "timestamp": first_timestamp.isoformat(),
-                "equity_usd": round(initial_equity, 8),
+                "equity_usd": round(float(config.initial_equity), 8),
                 "event": "START",
             }
         ],
@@ -870,19 +1125,39 @@ def simulate_signals(
     for index in range(first_index, last_index + 1):
         bar = normalized.iloc[index]
         timestamp = pd.Timestamp(bar["date"])
-        desired = action_by_index.get(index)
-        if desired is not None:
-            _apply_execution_signal(state, desired, bar, timestamp, config)
+        gap_closed = _close_on_barrier(
+            state, bar, timestamp, index, config, gap_first=True
+        )
+        signal_item = action_by_index.get(index)
+        if signal_item is not None and not gap_closed:
+            signal = str(signal_item["signal"])
+            _close_for_signal(state, signal, bar, timestamp, index, config)
+            _open_for_signal(
+                state,
+                signal_item,
+                bar,
+                timestamp,
+                index,
+                selected_atr,
+                config,
+                management,
+                normalized,
+            )
+        _close_on_barrier(state, bar, timestamp, index, config, gap_first=False)
+        _close_on_vertical_barrier(
+            state, bar, timestamp, index, management, config
+        )
         _mark_execution_bar_close(state, bar, timestamp)
     final_bar = normalized.iloc[last_index]
     _force_close_forward_window(
-        state, final_bar, pd.Timestamp(final_bar["date"]), config
+        state, final_bar, pd.Timestamp(final_bar["date"]), last_index, config
     )
     if any(item["direction"] != "LONG" for item in state.trades):
         raise RuntimeError("economic_spot_only_position_invariant_violation")
     equity_values = [float(item["equity_usd"]) for item in state.equity_curve]
     _validate_drawdown_accounting(state.maximum_drawdown, equity_values)
     metrics = _metrics(state.trades, equity_values, config)
+    exit_reasons = sorted({str(item["exit_reason"]) for item in state.trades})
     return {
         "metrics": metrics,
         "trades": state.trades,
@@ -891,17 +1166,50 @@ def simulate_signals(
         "total_slippage_cost_usd": round(
             sum(item["slippage_cost_usd"] for item in state.trades), 8
         ),
+        "exit_reason_counts": {
+            reason: sum(item["exit_reason"] == reason for item in state.trades)
+            for reason in exit_reasons
+        },
+        "confidence_filter": {
+            "threshold": management.confidence_threshold,
+            "raw_buy_signal_count": sum(item["raw_signal"] == "BUY" for item in signals),
+            "accepted_buy_signal_count": sum(item["signal"] == "BUY" for item in signals),
+            "rejected_buy_signal_count": sum(
+                item["signal"] == NO_ENTRY_SIGNAL for item in signals
+            ),
+            "sell_exit_signals_unfiltered": True,
+        },
+        "trade_management": {
+            "atr_period": management.atr_period,
+            "take_profit_atr_multiplier": management.take_profit_atr_multiplier,
+            "stop_loss_atr_multiplier": management.stop_loss_atr_multiplier,
+            "horizon_candles": management.horizon_candles,
+            "barrier_reference": "ACTUAL_NEXT_BAR_ENTRY_FILL",
+            "atr_reference": "SIGNAL_BAR_CLOSE_ONLY",
+            "same_candle_collision_policy": "STOP_LOSS_WINS",
+            "hold_semantics": "KEEP_POSITION_UNTIL_BARRIER_OR_HORIZON",
+            "sell_semantics": "CLOSE_LONG_AT_NEXT_BAR_OPEN",
+            "short_positions_supported": False,
+        },
     }
+
 
 
 def evaluate_candidate(
     candidate: dict[str, Any],
     bars: DataFrame,
     config: ExecutionConfig,
+    trade_management_config: TradeManagementConfig | None = None,
 ) -> dict[str, Any]:
-    """Evaluate one persisted candidate independently against its aligned bars."""
-    signals = build_forward_signals(candidate)
-    replay = simulate_signals(bars, signals, config)
+    """Replay persisted probabilities with fixed Spot trade management."""
+    management = trade_management_config or TradeManagementConfig()
+    validate_trade_management_config(management)
+    signals = build_forward_signals(
+        candidate, confidence_threshold=management.confidence_threshold
+    )
+    replay = simulate_signals(
+        bars, signals, config, trade_management_config=management
+    )
     return {
         "candidate_id": candidate["candidate_id"],
         "scenario": candidate["scenario"],
@@ -914,6 +1222,10 @@ def evaluate_candidate(
         "source_forward_hold_recall": candidate["hold_recall"],
         "selected_hold_threshold": candidate["selected_hold_threshold"],
         "forward_signal_count": len(signals),
+        "raw_signal_counts": {
+            signal: sum(item["raw_signal"] == signal for item in signals)
+            for signal in LABELS
+        },
         **replay,
     }
 
