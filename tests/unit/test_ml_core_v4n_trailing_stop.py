@@ -120,9 +120,9 @@ def test_breakeven_stop_accounts_for_both_sides_costs() -> None:
     entry_fee = quantity * entry_fill * fee_rate
     entry_slippage = quantity * (entry_fill - 100.0)
     exit_cost_rate = fee_rate * (1.0 - slippage_rate) + slippage_rate
-    breakeven = (
-        100.0 + (entry_fee + entry_slippage) / quantity
-    ) / (1.0 - exit_cost_rate)
+    breakeven = (100.0 + (entry_fee + entry_slippage) / quantity) / (
+        1.0 - exit_cost_rate
+    )
     result = _run(
         [
             (100.0, 100.0, 100.0, 100.0),

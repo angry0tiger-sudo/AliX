@@ -1166,9 +1166,7 @@ def _update_trailing_stop_after_completed_bar(
         state.position = replace(position, high_water_mark=high_water_mark)
         return
     step_size = management.trailing_step_atr * position.atr_value
-    steps = int(
-        np.floor((high_water_mark - activation_price) / step_size + 1e-12)
-    )
+    steps = int(np.floor((high_water_mark - activation_price) / step_size + 1e-12))
     steps = max(position.trailing_stop_steps, steps)
     breakeven = _net_breakeven_reference_price(position, config)
     proposed_stop = breakeven + steps * step_size
@@ -1407,9 +1405,7 @@ def simulate_signals(
             "trailing_stop_enabled": management.trailing_stop_enabled,
             "trailing_activation_atr": management.trailing_activation_atr,
             "trailing_step_atr": management.trailing_step_atr,
-            "trailing_stop_update_policy": (
-                "COMPLETED_BAR_HIGH_NEXT_BAR_EFFECTIVE"
-            ),
+            "trailing_stop_update_policy": ("COMPLETED_BAR_HIGH_NEXT_BAR_EFFECTIVE"),
             "trailing_breakeven_policy": "NET_OF_BOTH_SIDE_FEES_AND_SLIPPAGE",
             "barrier_reference": "ACTUAL_NEXT_BAR_ENTRY_FILL",
             "atr_reference": "SIGNAL_BAR_CLOSE_ONLY",
