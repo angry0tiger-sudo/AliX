@@ -334,6 +334,22 @@ def tune_lightgbm_classifier(
         "selected_mean_cv_hold_precision": round(mean_precision, 6),
         "selected_mean_cv_hold_recall": round(mean_recall, 6),
         "selected_mean_cv_macro_f1": round(mean_macro_f1, 6),
+        "candidate_results": [
+            {
+                "candidate_index": index,
+                "parameters": dict(params),
+                "mean_cv_hold_precision": round(
+                    float(cv_results["mean_test_hold_precision"][index]), 6
+                ),
+                "mean_cv_hold_recall": round(
+                    float(cv_results["mean_test_hold_recall"][index]), 6
+                ),
+                "mean_cv_macro_f1": round(
+                    float(cv_results["mean_test_macro_f1"][index]), 6
+                ),
+            }
+            for index, params in enumerate(cv_results["params"])
+        ],
         "candidate_fit_count": candidate_count * len(cv_splits),
         "random_state": seed,
     }
