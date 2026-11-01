@@ -432,6 +432,7 @@ def run_v4h_experiments(
         raise RuntimeError("v4h_experiment_count_mismatch")
     return experiments
 
+
 def _mean(values: list[float]) -> float | None:
     return round(float(np.mean(values)), 6) if values else None
 
@@ -570,9 +571,7 @@ def _aggregate_parameter_candidates(
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for experiment in experiments:
         _append_experiment_candidates(grouped, experiment)
-    rows = [
-        _candidate_summary_row(key, candidates) for key, candidates in grouped.items()
-    ]
+    rows = [_candidate_summary_row(key, candidates) for key, candidates in grouped.items()]
     by_precision = sorted(rows, key=_candidate_precision_rank, reverse=True)
     by_macro = sorted(rows, key=_candidate_macro_rank, reverse=True)
     return {
@@ -658,9 +657,7 @@ def _geometry_records(
 def _geometry_metric_values(
     records: list[dict[str, Any]], metric_name: str
 ) -> list[float]:
-    return [
-        float(item[metric_name]) for item in records if item[metric_name] is not None
-    ]
+    return [float(item[metric_name]) for item in records if item[metric_name] is not None]
 
 
 def _geometry_acceptance_count(records: list[dict[str, Any]]) -> int:
@@ -727,6 +724,7 @@ def _build_geometry_summary(
         _geometry_summary_row(experiments, metric_records, scenario)
         for scenario in V4H_SCENARIO_CONTRACT
     ]
+
 
 def _append_experiment_metric_records(
     records: list[dict[str, Any]], experiment: dict[str, Any]
@@ -900,6 +898,7 @@ def build_v4h_report(
         "geometry_summary": geometry_summary,
         "safety": _build_report_safety(),
     }
+
 
 def render_v4h_markdown(report: dict[str, Any]) -> str:
     lines = [

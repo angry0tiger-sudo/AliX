@@ -218,6 +218,7 @@ def build_purged_time_series_splits(
         raise ValueError("tuning_inner_cv_fold_count_mismatch")
     return cv_splits, diagnostics
 
+
 def _hold_precision_score(estimator: Any, features: DataFrame, actual: Series) -> float:
     predicted = estimator.predict(features)
     return float(
@@ -264,9 +265,7 @@ def _validated_cv_score_arrays(
     recalls = np.asarray(cv_results["mean_test_hold_recall"], dtype=float)
     macro_f1 = np.asarray(cv_results["mean_test_macro_f1"], dtype=float)
     parameters = cv_results["params"]
-    lengths_match = (
-        len(precisions) == len(recalls) == len(macro_f1) == len(parameters)
-    )
+    lengths_match = len(precisions) == len(recalls) == len(macro_f1) == len(parameters)
     values_are_finite = (
         np.isfinite(precisions).all()
         and np.isfinite(recalls).all()
@@ -305,9 +304,7 @@ def _candidate_ranking_key(
 def _select_candidate(
     cv_results: dict[str, Any], minimum_hold_recall: float
 ) -> tuple[int, str, int]:
-    precisions, recalls, macro_f1, parameters = _validated_cv_score_arrays(
-        cv_results
-    )
+    precisions, recalls, macro_f1, parameters = _validated_cv_score_arrays(cv_results)
     feasible = [
         index
         for index, recall in enumerate(recalls)
@@ -331,6 +328,7 @@ def _select_candidate(
         else "MACRO_F1_FALLBACK_NO_RECALL_FEASIBLE"
     )
     return selected, status, len(feasible)
+
 
 def _validate_tuning_configuration(
     minimum_hold_recall: float,
