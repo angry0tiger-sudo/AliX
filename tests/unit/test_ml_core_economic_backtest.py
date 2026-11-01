@@ -683,7 +683,6 @@ def test_execution_rejects_misaligned_or_invalid_signals() -> None:
         _simulate(bars, [], ExecutionConfig())
 
 
-
 def test_confidence_sweep_replays_each_threshold_independently() -> None:
     bars = _bars(4)
     bars["high"] = 101.0
@@ -741,8 +740,7 @@ def test_confidence_sweep_replays_each_threshold_independently() -> None:
     assert candidate_results[0]["total_fees_usd"] > 0
     assert candidate_results[0]["total_slippage_cost_usd"] > 0
     assert all(
-        item["total_fees_usd"] == 0
-        and item["total_slippage_cost_usd"] == 0
+        item["total_fees_usd"] == 0 and item["total_slippage_cost_usd"] == 0
         for item in candidate_results[1:]
     )
 
