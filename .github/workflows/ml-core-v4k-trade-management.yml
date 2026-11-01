@@ -1,0 +1,369 @@
+name: AliX V4-K Trade Management and Exit Logic
+
+on:
+  push:
+    branches:
+      - research/ml-core-v4k-trade-management
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: alix-v4k-trade-management
+  cancel-in-progress: false
+
+jobs:
+  trade-management:
+    if: github.ref == 'refs/heads/research/ml-core-v4k-trade-management'
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      ALIx_ENV: paper
+      ALIx_DRY_RUN: "true"
+      ALIx_ALLOW_LIVE_TRADING: "false"
+      ALIx_REPORTING_ENABLED: "false"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Require Standard CI success for this exact V4-K commit
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          TARGET_SHA: ${{ github.sha }}
+          TARGET_BRANCH: ${{ github.ref_name }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import time
+          from urllib.error import HTTPError, URLError
+          from urllib.request import Request, urlopen
+
+          repository = os.environ["GITHUB_REPOSITORY"]
+          target_sha = os.environ["TARGET_SHA"]
+          target_branch = os.environ["TARGET_BRANCH"]
+          token = os.environ["GH_TOKEN"]
+          if target_branch != "research/ml-core-v4k-trade-management":
+              raise SystemExit("unsupported_v4k_research_branch:" + target_branch)
+          deadline = time.monotonic() + 90 * 60
+          url = (
+              f"https://api.github.com/repos/{repository}/actions/workflows/ci.yml/runs"
+              f"?head_sha={target_sha}&per_page=100"
+          )
+          while time.monotonic() < deadline:
+              request = Request(
+                  url,
+                  headers={
+                      "Accept": "application/vnd.github+json",
+                      "Authorization": f"Bearer {token}",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  },
+              )
+              try:
+                  with urlopen(request, timeout=20) as response:
+                      payload = json.load(response)
+              except (HTTPError, URLError, TimeoutError) as error:
+                  raise SystemExit(
+                      f"ci_status_lookup_failed:{type(error).__name__}"
+                  ) from None
+              matching = [
+                  run for run in payload.get("workflow_runs", [])
+                  if run.get("head_sha") == target_sha
+                  and run.get("head_branch") == target_branch
+                  and run.get("event") == "push"
+              ]
+              if matching:
+                  latest = max(
+                      matching,
+                      key=lambda item: (
+                          item.get("run_number", 0),
+                          item.get("run_attempt", 0),
+                      ),
+                  )
+                  if latest.get("status") == "completed":
+                      if latest.get("conclusion") != "success":
+                          raise SystemExit(
+                              "ci_green_gate_blocked:"
+                              + str(latest.get("conclusion"))
+                              + ":"
+                              + target_sha
+                          )
+                      print(json.dumps({
+                          "gate": "PASS",
+                          "target_sha": target_sha,
+                          "ci_run_id": latest.get("id"),
+                          "ci_run_url": latest.get("html_url"),
+                          "ci_conclusion": latest.get("conclusion"),
+                      }, sort_keys=True))
+                      break
+              time.sleep(30)
+          else:
+              raise SystemExit("ci_green_gate_timeout:" + target_sha)
+          PY
+
+      - name: Checkout exact V4-K commit without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Download immutable V4-H Run 15 candidate artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: alix-v4h-tuning-geometry-diagnostic
+          path: ${{ runner.temp }}/v4h-source
+          repository: ${{ github.repository }}
+          run-id: 41293168191
+          github-token: ${{ github.token }}
+
+      - name: Download immutable V4-J Run 4 Spot-only baseline
+        uses: actions/download-artifact@v4
+        with:
+          name: alix-v4j-cost-isolation
+          path: ${{ runner.temp }}/v4j-baseline
+          repository: ${{ github.repository }}
+          run-id: 41320586694
+          github-token: ${{ github.token }}
+
+      - name: Validate immutable V4-H and V4-J source artifacts
+        env:
+          SOURCE_REPORT: ${{ runner.temp }}/v4h-source/alix-v4h-tuning-geometry-report.json
+          BASELINE_REPORT: ${{ runner.temp }}/v4j-baseline/alix-v4j-cost-isolation-report.json
+          BASELINE_CSV: ${{ runner.temp }}/v4j-baseline/alix-v4j-cost-isolation-comparison.csv
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          source_path = Path(os.environ["SOURCE_REPORT"])
+          baseline_path = Path(os.environ["BASELINE_REPORT"])
+          baseline_csv = Path(os.environ["BASELINE_CSV"])
+          source_bytes = source_path.read_bytes()
+          baseline_bytes = baseline_path.read_bytes()
+          source = json.loads(source_bytes.decode("utf-8"))
+          baseline = json.loads(baseline_bytes.decode("utf-8"))
+          expected_source_sha = (
+              "3f3c08c583fabb6c91fcdee81c036db6c92a988cdf2537306813af97e89de6a0"
+          )
+          expected_v4j_sha = (
+              "74d76163d3c9acf1c36a99180d447d510e8bbb91fb12a70933b743d1e178d44b"
+          )
+          expected_csv_sha = (
+              "ac9de8c14df17a6eb4cf7581135004737b15b94e662a87593d2e6ce5e3c92b0d"
+          )
+          assert hashlib.sha256(source_bytes).hexdigest() == expected_source_sha
+          assert hashlib.sha256(baseline_bytes).hexdigest() == expected_v4j_sha
+          assert hashlib.sha256(baseline_csv.read_bytes()).hexdigest() == expected_csv_sha
+          assert source["schema_version"] == "alix.ml-core.v4h-tuning-geometry.v1"
+          assert source["commit_sha"] == "e34861c4873b7cc2170aaaf6c79ed9b464df0a9a"
+          assert source["trained_models"] == 96
+          assert source["economic_evaluation_performed"] is False
+          assert source["safety"]["Champion"] is None
+          assert source["safety"]["order_permission"] is False
+          assert source["safety"]["trading_authorization"] == "NO-GO"
+          assert source["safety"]["private_api_calls"] == 0
+          assert source["safety"]["real_order_attempts"] == 0
+
+          assert baseline["schema_version"] == "alix.ml-core.v4j-cost-isolation.v1"
+          assert baseline["commit_sha"] == "fe5cf50b0084ea412345e82863569d084548faee"
+          assert baseline["source_v4h_commit_sha"] == source["commit_sha"]
+          assert baseline["source_v4h_run_id"] == 41293168191
+          assert baseline["source_v4h_report_sha256"] == expected_source_sha
+          assert baseline["candidate_count"] == 13
+          assert baseline["source_v4h_candidate_count"] == 13
+          assert len(baseline["candidates"]) == 13
+          assumptions = baseline["spot_execution_assumptions"]
+          assert assumptions["sell_semantics"] == "CLOSE_LONG_OR_IGNORE_WHEN_FLAT"
+          assert assumptions["short_positions_supported"] is False
+          realistic = baseline["cost_profiles"]["realistic"]
+          assert realistic["fee_bps_per_side"] == 25.0
+          assert realistic["slippage_bps_per_side"] == 20.0
+          assert baseline["model_training_performed"] is False
+          assert baseline["model_inference_performed"] is False
+          assert baseline["safety"]["Champion"] is None
+          assert baseline["safety"]["order_permission"] is False
+          assert baseline["safety"]["trading_authorization"] == "NO-GO"
+          assert baseline["safety"]["private_api_calls"] == 0
+          assert baseline["safety"]["real_order_attempts"] == 0
+
+          source_datasets = {item["symbol"]: item for item in source["input_datasets"]}
+          baseline_datasets = {item["symbol"]: item for item in baseline["input_datasets"]}
+          assert set(source_datasets) == {"BTCUSDT", "ETHUSDT"}
+          assert set(baseline_datasets) == set(source_datasets)
+          source_ids = []
+          for experiment in source["experiments"]:
+              if experiment.get("scenario") != "V4H_Tighter_SL":
+                  continue
+              for policy, variant in (experiment.get("model_variants") or {}).items():
+                  forward = (
+                      (variant.get("threshold_optimization") or {})
+                      .get("post_calibration_validation")
+                  )
+                  if not isinstance(forward, dict):
+                      continue
+                  hold = forward.get("hold_metrics") or {}
+                  if (
+                      hold.get("precision") is not None
+                      and hold.get("recall") is not None
+                      and hold["precision"] >= 0.40
+                      and hold["recall"] >= 0.20
+                  ):
+                      source_ids.append("|".join((
+                          experiment["scenario"],
+                          experiment["pair"],
+                          experiment["timeframe"],
+                          experiment["feature_profile"],
+                          policy,
+                      )))
+          baseline_ids = [item["candidate_id"] for item in baseline["candidates"]]
+          assert len(source_ids) == 13 and source_ids == baseline_ids
+          with Path(os.environ["GITHUB_ENV"]).open("a", encoding="utf-8") as env:
+              for symbol in ("BTCUSDT", "ETHUSDT"):
+                  source_item = source_datasets[symbol]
+                  baseline_item = baseline_datasets[symbol]
+                  assert baseline_item["byte_identical_to_v4h"] is True
+                  assert baseline_item["csv_sha256"] == source_item["csv_sha256"]
+                  env.write(f"{symbol}_START_UTC={source_item['start_utc']}\n")
+                  env.write(f"{symbol}_END_UTC={source_item['end_utc']}\n")
+          print(json.dumps({
+              "source_v4h_sha": source["commit_sha"],
+              "v4j_baseline_sha": baseline["commit_sha"],
+              "candidate_count": len(source_ids),
+              "source_report_sha256": expected_source_sha,
+              "v4j_report_sha256": expected_v4j_sha,
+              "v4j_csv_sha256": expected_csv_sha,
+              "model_training_allowed": False,
+          }, sort_keys=True))
+          PY
+
+      - name: Set up pinned Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install pinned trade-management dependencies
+        run: |
+          python -m pip install pip==25.2
+          python -m pip install numpy==2.5.4 pandas==2.3.3
+
+      - name: Fetch byte-identical V4-H public market candles
+        env:
+          DATA_DIR: ${{ runner.temp }}/alix-v4k-market-data
+        run: |
+          set -euo pipefail
+          rm -rf "$DATA_DIR"
+          mkdir -p "$DATA_DIR"
+          for symbol in BTCUSDT ETHUSDT; do
+            start_var="${symbol}_START_UTC"
+            end_var="${symbol}_END_UTC"
+            start_utc="${!start_var}"
+            end_utc="${!end_var}"
+            python scripts/fetch_binance_public_ohlcv.py \
+              --days 730 \
+              --symbol "$symbol" \
+              --interval 1m \
+              --start-utc "$start_utc" \
+              --end-utc "$end_utc" \
+              --output-dir "$DATA_DIR" \
+              --commit-sha "$GITHUB_SHA"
+          done
+
+      - name: Replay V4-K management rules across 13 persisted candidates
+        env:
+          SOURCE_REPORT: ${{ runner.temp }}/v4h-source/alix-v4h-tuning-geometry-report.json
+          BASELINE_REPORT: ${{ runner.temp }}/v4j-baseline/alix-v4j-cost-isolation-report.json
+          BASELINE_CSV: ${{ runner.temp }}/v4j-baseline/alix-v4j-cost-isolation-comparison.csv
+          DATA_DIR: ${{ runner.temp }}/alix-v4k-market-data
+          OUTPUT_REPORT: ${{ github.workspace }}/alix-v4k-trade-management-report.json
+          OUTPUT_CSV: ${{ github.workspace }}/alix-v4k-trade-management-comparison.csv
+        run: |
+          set -euo pipefail
+          python -m scripts.run_ml_core_v4k_trade_management \
+            --source-report "$SOURCE_REPORT" \
+            --baseline-report "$BASELINE_REPORT" \
+            --baseline-csv "$BASELINE_CSV" \
+            --input-dir "$DATA_DIR" \
+            --output "$OUTPUT_REPORT" \
+            --output-csv "$OUTPUT_CSV" \
+            --commit-sha "$GITHUB_SHA" \
+            --confidence-threshold 0.55 \
+            --atr-period 14 \
+            --take-profit-atr-multiplier 2.0 \
+            --stop-loss-atr-multiplier 1.5 \
+            --horizon-candles 12
+          test -s "$GITHUB_STEP_SUMMARY"
+          grep -Fq "AliX V4-K Trade Management and Exit Logic" "$GITHUB_STEP_SUMMARY"
+          grep -Fq "NO-GO" "$GITHUB_STEP_SUMMARY"
+
+      - name: Validate V4-K trade ledgers and safety invariants
+        env:
+          OUTPUT_REPORT: ${{ github.workspace }}/alix-v4k-trade-management-report.json
+          OUTPUT_CSV: ${{ github.workspace }}/alix-v4k-trade-management-comparison.csv
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          python - <<'PY'
+          import csv
+          import json
+          import os
+          from pathlib import Path
+
+          report = json.loads(Path(os.environ["OUTPUT_REPORT"]).read_text(encoding="utf-8"))
+          assert report["schema_version"] == "alix.ml-core.v4k-trade-management.v1"
+          assert report["commit_sha"] == os.environ["TARGET_SHA"]
+          assert report["source_v4h_commit_sha"] == "e34861c4873b7cc2170aaaf6c79ed9b464df0a9a"
+          assert report["source_v4j_baseline"]["commit_sha"] == "fe5cf50b0084ea412345e82863569d084548faee"
+          assert report["candidate_count"] == 13
+          assert report["model_training_performed"] is False
+          assert report["model_inference_performed"] is False
+          assert report["persisted_probability_replay_only"] is True
+          config = report["trade_management_config"]
+          assert config["atr_period"] == 14
+          assert config["take_profit_atr_multiplier"] == 2.0
+          assert config["stop_loss_atr_multiplier"] == 1.5
+          assert config["horizon_candles"] == 12
+          assert config["confidence_threshold"] == 0.55
+          assert config["same_candle_collision_policy"] == "STOP_LOSS_WINS"
+          for candidate in report["candidates"]:
+              assert candidate["v4k_result"]["trade_direction_counts"]["SHORT"] == 0
+              for trade in candidate["v4k_result"]["trades"]:
+                  assert trade["direction"] == "LONG"
+                  assert trade["entry_confidence"] >= 0.55
+                  assert 1 <= trade["bars_held"] <= 12
+                  assert trade["take_profit_price"] > trade["barrier_reference_price"]
+                  assert 0 < trade["stop_loss_price"] < trade["barrier_reference_price"]
+          for dataset in report["input_datasets"]:
+              assert dataset["byte_identical_to_v4h"] is True
+              assert dataset["csv_sha256"] == dataset["source_v4h_csv_sha256"]
+          safety = report["safety"]
+          assert safety["Champion"] is None
+          assert safety["order_permission"] is False
+          assert safety["trading_authorization"] == "NO-GO"
+          assert safety["private_api_calls"] == 0
+          assert safety["real_order_attempts"] == 0
+          assert report["promotion_status"] == "BLOCKED_PENDING_INDEPENDENT_OOS_AND_OWNER_REVIEW"
+          with Path(os.environ["OUTPUT_CSV"]).open(encoding="utf-8", newline="") as handle:
+              rows = list(csv.DictReader(handle))
+          assert len(rows) == 13
+          print(json.dumps({
+              "candidate_count": report["candidate_count"],
+              "aggregate": report["aggregate"],
+              "confidence_threshold": config["confidence_threshold"],
+              "Champion": None,
+              "trading_authorization": "NO-GO",
+              "model_training_performed": False,
+          }, sort_keys=True))
+          PY
+
+      - name: Upload V4-K trade-management report and comparison
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alix-v4k-trade-management
+          path: |
+            alix-v4k-trade-management-report.json
+            alix-v4k-trade-management-comparison.csv
+          if-no-files-found: error
+          retention-days: 14
