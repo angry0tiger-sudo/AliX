@@ -77,8 +77,13 @@ def feature_profile_columns(profile: str) -> tuple[str, ...]:
     return tuple(columns)
 
 
-def feature_profile_manifest() -> list[dict[str, object]]:
-    """Return the stable, ordered definitions used in reports and artifacts."""
+def feature_profile_manifest(
+    profile_names: tuple[str, ...] | None = None,
+) -> list[dict[str, object]]:
+    """Return the stable definitions for all or selected approved profiles."""
+    selected = FEATURE_PROFILE_ORDER if profile_names is None else profile_names
+    if not selected or len(set(selected)) != len(selected):
+        raise ValueError("feature_profile_selection_invalid")
     return [
         {
             "name": profile,
@@ -86,7 +91,7 @@ def feature_profile_manifest() -> list[dict[str, object]]:
             "columns": list(feature_profile_columns(profile)),
             "feature_count": len(feature_profile_columns(profile)),
         }
-        for profile in FEATURE_PROFILE_ORDER
+        for profile in selected
     ]
 
 
@@ -304,18 +309,32 @@ def build_extended_feature_groups(candles: DataFrame) -> dict[str, DataFrame]:
     return groups
 
 
-def build_feature_profiles(candles: DataFrame) -> dict[str, DataFrame]:
-    """Build all five approved profiles with identical row indices and a shared origin."""
+def build_feature_profiles(
+    candles: DataFrame,
+    *,
+    profile_names: tuple[str, ...] | None = None,
+) -> dict[str, DataFrame]:
+    """Build all or selected approved profiles with a common causal row origin."""
+    selected = FEATURE_PROFILE_ORDER if profile_names is None else profile_names
+    if not selected or len(set(selected)) != len(selected):
+        raise ValueError("feature_profile_selection_invalid")
+    required_groups = {
+        group for profile in selected for group in feature_profile_groups(profile)
+    }
     baseline = build_causal_feature_matrix(candles)
-    extended_groups = build_extended_feature_groups(candles)
+    all_extended_groups = build_extended_feature_groups(candles)
+    extended_groups = {
+        group: frame
+        for group, frame in all_extended_groups.items()
+        if group in required_groups
+    }
     profiles: dict[str, DataFrame] = {}
-    for profile in FEATURE_PROFILE_ORDER:
+    for profile in selected:
         frames: list[DataFrame] = []
         for group in feature_profile_groups(profile):
-            if group == "Baseline":
-                frames.append(baseline)
-            else:
-                frames.append(extended_groups[group])
+            frames.append(
+                baseline if group == "Baseline" else extended_groups[group]
+            )
         matrix = pd.concat(frames, axis=1)
         if not matrix.columns.is_unique:
             raise ValueError("feature_profile_duplicate_columns")
