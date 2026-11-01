@@ -8,7 +8,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from services.ml_core.economic_backtest import (
     V4H_SOURCE_RUN_ID,
@@ -291,10 +291,11 @@ def _baseline_metrics(candidate: dict[str, Any]) -> dict[str, Any]:
         realistic.get("metrics"), dict
     ):
         raise ValueError("v4j_baseline_realistic_metrics_missing")
+    metrics = cast(dict[str, Any], realistic["metrics"])
     directions = realistic.get("trade_direction_counts")
     if not isinstance(directions, dict) or directions.get("SHORT") != 0:
         raise ValueError("v4j_baseline_not_spot_only")
-    return realistic["metrics"]
+    return metrics
 
 
 def _validate_trade_ledger(
