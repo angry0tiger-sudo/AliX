@@ -378,6 +378,7 @@ def _aggregate_threshold(
         ),
     }
 
+
 def _build_report(
     commit_sha: str,
     source_digest: str,
