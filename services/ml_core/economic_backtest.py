@@ -39,7 +39,7 @@ class ExecutionConfig:
 
 @dataclass(frozen=True)
 class OpenPosition:
-    """One non-pyramided long or short position."""
+    """One non-pyramided spot long position."""
 
     direction: int
     entry_timestamp: str
@@ -490,7 +490,7 @@ def _open_position(
     timestamp: pd.Timestamp,
     config: ExecutionConfig,
 ) -> tuple[OpenPosition, float]:
-    """Open one 1x-equity position and immediately mark entry costs."""
+    """Open one 1x-equity spot long and immediately mark entry costs."""
     fee_rate = config.fee_bps / 10_000.0
     slippage_rate = config.slippage_bps / 10_000.0
     quantity = equity * config.position_fraction / reference_price
@@ -535,7 +535,7 @@ def _close_position(
     reason: str,
     config: ExecutionConfig,
 ) -> tuple[dict[str, Any], float]:
-    """Close a position with exit slippage and a second-side fee."""
+    """Close a spot long with exit slippage and a second-side fee."""
     fee_rate = config.fee_bps / 10_000.0
     slippage_rate = config.slippage_bps / 10_000.0
     exit_fill = reference_price * (1.0 - position.direction * slippage_rate)
@@ -626,7 +626,7 @@ def _metrics(
     final_equity = float(equity_values[-1])
     max_drawdown = max_drawdown_from_equity(equity_values)
     trade_count = len(trades)
-    pf_pass = pf_infinite or (pf is not None and pf > 1.5)
+    pf_pass = pf is not None and pf > 1.5
     drawdown_pass = max_drawdown < config.maximum_drawdown
     return {
         "initial_equity_usd": round(config.initial_equity, 8),
@@ -737,28 +737,23 @@ def _append_equity_event(
 
 
 def _signal_direction(signal: str) -> int:
-    """Map V4-H actions to long, short, or flat intent."""
-    if signal == "BUY":
-        return 1
-    if signal == "SELL":
-        return -1
-    return 0
+    """Map Spot BUY to long intent; SELL and HOLD remain flat intent."""
+    return 1 if signal == "BUY" else 0
 
 
 def _close_for_signal(
     state: _SimulationState,
-    direction: int,
+    signal: str,
     bar: Any,
     timestamp: pd.Timestamp,
     config: ExecutionConfig,
 ) -> None:
-    """Close an existing position on HOLD or an opposite directional signal."""
+    """Close an existing Spot long on SELL or HOLD; never create a short."""
     position = state.position
-    if position is None or direction == position.direction:
+    if position is None or signal == "BUY":
         return
-    reason = "HOLD" if direction == 0 else "SIGNAL_REVERSAL"
     trade, state.cash_equity = _close_position(
-        position, float(bar["open"]), timestamp, reason, config
+        position, float(bar["open"]), timestamp, signal, config
     )
     state.trades.append(trade)
     state.position = None
@@ -794,7 +789,7 @@ def _apply_execution_signal(
 ) -> None:
     """Apply close-before-open reversal semantics at the next-bar open."""
     direction = _signal_direction(signal)
-    _close_for_signal(state, direction, bar, timestamp, config)
+    _close_for_signal(state, signal, bar, timestamp, config)
     _open_for_signal(state, direction, bar, timestamp, config)
 
 
@@ -883,6 +878,8 @@ def simulate_signals(
     _force_close_forward_window(
         state, final_bar, pd.Timestamp(final_bar["date"]), config
     )
+    if any(item["direction"] != "LONG" for item in state.trades):
+        raise RuntimeError("economic_spot_only_position_invariant_violation")
     equity_values = [float(item["equity_usd"]) for item in state.equity_curve]
     _validate_drawdown_accounting(state.maximum_drawdown, equity_values)
     metrics = _metrics(state.trades, equity_values, config)

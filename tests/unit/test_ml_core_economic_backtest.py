@@ -271,7 +271,7 @@ def test_hold_never_opens_and_closes_an_existing_position() -> None:
     assert close_existing["trades"][0]["exit_reason"] == "HOLD"
 
 
-def test_signal_reversal_closes_and_opens_a_new_direction() -> None:
+def test_spot_sell_closes_long_and_is_ignored_when_flat() -> None:
     bars = _bars(4, [100.0, 100.0, 105.0, 95.0])
     result = simulate_signals(
         bars,
@@ -284,14 +284,78 @@ def test_signal_reversal_closes_and_opens_a_new_direction() -> None:
                 "execution_timestamp": pd.Timestamp("2026-01-01T00:30:00Z"),
                 "signal": "SELL",
             },
+            {
+                "execution_timestamp": pd.Timestamp("2026-01-01T00:45:00Z"),
+                "signal": "SELL",
+            },
         ],
         ExecutionConfig(),
     )
-    assert len(result["trades"]) == 2
+    assert len(result["trades"]) == 1
     assert result["trades"][0]["direction"] == "LONG"
-    assert result["trades"][0]["exit_reason"] == "SIGNAL_REVERSAL"
-    assert result["trades"][1]["direction"] == "SHORT"
-    assert result["trades"][1]["exit_reason"] == "END_OF_FORWARD_WINDOW"
+    assert result["trades"][0]["exit_reason"] == "SELL"
+    assert all(item["direction"] != "SHORT" for item in result["trades"])
+
+    flat_sell = simulate_signals(
+        bars,
+        [
+            {
+                "execution_timestamp": pd.Timestamp("2026-01-01T00:15:00Z"),
+                "signal": "SELL",
+            }
+        ],
+        ExecutionConfig(),
+    )
+    assert flat_sell["trades"] == []
+    assert flat_sell["metrics"]["trade_count"] == 0
+
+
+def test_zero_cost_and_fee_only_execution_accounting() -> None:
+    bars = _bars(3, [100.0, 100.0, 110.0])
+    signals = [
+        {
+            "execution_timestamp": pd.Timestamp("2026-01-01T00:15:00Z"),
+            "signal": "BUY",
+        },
+        {
+            "execution_timestamp": pd.Timestamp("2026-01-01T00:30:00Z"),
+            "signal": "HOLD",
+        },
+    ]
+    zero_cost = simulate_signals(
+        bars, signals, ExecutionConfig(fee_bps=0.0, slippage_bps=0.0)
+    )
+    fee_only = simulate_signals(
+        bars, signals, ExecutionConfig(fee_bps=25.0, slippage_bps=0.0)
+    )
+    assert zero_cost["total_fees_usd"] == 0.0
+    assert zero_cost["total_slippage_cost_usd"] == 0.0
+    assert fee_only["total_fees_usd"] > 0.0
+    assert fee_only["total_slippage_cost_usd"] == 0.0
+    assert fee_only["trades"][0]["entry_fill_price"] == pytest.approx(100.0)
+    assert fee_only["trades"][0]["net_pnl_usd"] < zero_cost["trades"][0]["net_pnl_usd"]
+
+
+def test_undefined_profit_factor_does_not_pass_strict_profit_factor_gate() -> None:
+    bars = _bars(3, [100.0, 100.0, 110.0])
+    result = simulate_signals(
+        bars,
+        [
+            {
+                "execution_timestamp": pd.Timestamp("2026-01-01T00:15:00Z"),
+                "signal": "BUY",
+            },
+            {
+                "execution_timestamp": pd.Timestamp("2026-01-01T00:30:00Z"),
+                "signal": "HOLD",
+            },
+        ],
+        ExecutionConfig(fee_bps=0.0, slippage_bps=0.0),
+    )
+    assert result["metrics"]["profit_factor_infinite_no_losses"] is True
+    assert result["metrics"]["profit_factor_net_of_costs"] is None
+    assert result["metrics"]["profit_factor_gate_passed"] is False
+    assert result["metrics"]["economic_candidate_gate_passed"] is False
 
 
 def test_profit_factor_and_drawdown_are_net_of_costs_and_peak_to_trough() -> None:
