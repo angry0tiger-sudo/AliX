@@ -40,6 +40,13 @@ def test_three_walk_forward_folds_are_expanding_and_temporally_disjoint() -> Non
         diagnostics = fold.diagnostics
         assert diagnostics["training_label_end_before_calibration"] is True
         assert diagnostics["calibration_labels_end_before_test"] is True
+        assert diagnostics["train_end_index"] == max(fold.train_indices)
+        assert diagnostics["calibration_last_sample_index"] == max(
+            fold.calibration_indices
+        )
+        assert diagnostics["training_label_end_max_index"] == max(
+            labels.iloc[list(fold.train_indices)]["label_end_idx"]
+        )
         assert diagnostics["train_calibration_test_indices_disjoint"] is True
         assert diagnostics["calibration_hold_samples"] >= 30
         assert diagnostics["calibration_non_hold_samples"] >= 30

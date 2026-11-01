@@ -68,6 +68,10 @@ def _maximum_or_none(values: tuple[int, ...], ends: list[int]) -> int | None:
     return max(ends[index] for index in values)
 
 
+def _maximum_index_or_none(values: tuple[int, ...]) -> int | None:
+    return max(values) if values else None
+
+
 def _minimum_or_none(values: tuple[int, ...]) -> int | None:
     return min(values) if values else None
 
@@ -158,11 +162,11 @@ def _build_fold_diagnostics(
         "fold_index": fold_index,
         "fold_count": fold_count,
         "train_start_index": _minimum_or_none(train),
-        "train_end_index": _maximum_or_none(train, ends),
+        "train_end_index": _maximum_index_or_none(train),
         "training_label_end_max_index": train_label_end,
         "calibration_start_index": calibration_start,
         "calibration_end_index": test_start - 1,
-        "calibration_last_sample_index": _maximum_or_none(calibration, ends),
+        "calibration_last_sample_index": _maximum_index_or_none(calibration),
         "calibration_label_end_max_index": calibration_label_end,
         "test_start_index": test_start,
         "test_end_index": test_end,

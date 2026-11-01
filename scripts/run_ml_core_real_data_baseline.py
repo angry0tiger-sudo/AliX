@@ -2301,7 +2301,6 @@ def _validate_experiment_profile_configuration(
 
 
 def _run_walk_forward_pair_timeframe(
-    symbol: str,
     pair: str,
     timeframe: str,
     candles: DataFrame,
@@ -2443,7 +2442,6 @@ def _run_diagnostic_experiments(
             if walk_forward_folds is not None:
                 experiments.extend(
                     _run_walk_forward_pair_timeframe(
-                        symbol,
                         pair,
                         timeframe,
                         candles,
