@@ -371,7 +371,7 @@ def _build_report(
                     base.horizon_candles,
                 )
             )
-    threshold_results = [
+    threshold_results: list[dict[str, Any]] = [
         {
             "confidence_threshold": threshold,
             "aggregate": _aggregate_threshold(by_threshold[threshold]),
