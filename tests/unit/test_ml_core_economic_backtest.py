@@ -69,8 +69,8 @@ def test_source_report_and_market_manifest_fail_closed() -> None:
     }
     current = {
         "symbol": "BTCUSDT", "interval": "1m", "requested_days": 1,
-        "row_count": 1440, "start_utc": source["start_utc"],
-        "end_utc": source["end_utc"], "csv_sha256": "abc",
+        "row_count": 1440, "start_utc": "2026-01-01T00:00:00Z",
+        "end_utc": "2026-01-01T23:59:00Z", "csv_sha256": "abc",
         "commit_sha": "new-sha", "public_api_only": True,
         "credentials_used": False, "missing_minute_intervals": 0,
         "private_api_calls": 0, "real_order_attempts": 0,
