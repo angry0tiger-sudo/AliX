@@ -48,10 +48,7 @@ def _baseline_report() -> dict[str, Any]:
                 "byte_identical_to_v4h": True,
             },
         ],
-        "candidates": [
-            {"candidate_id": f"candidate-{index}"}
-            for index in range(13)
-        ],
+        "candidates": [{"candidate_id": f"candidate-{index}"} for index in range(13)],
         "safety": {
             "Champion": None,
             "order_permission": False,

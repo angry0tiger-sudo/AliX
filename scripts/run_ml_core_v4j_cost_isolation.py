@@ -117,7 +117,8 @@ def validate_v4i_baseline(
         raise ValueError("v4i_baseline_report_contract_invalid")
     actual_ids = [str(item.get("candidate_id")) for item in candidates]
     source_datasets = {
-        str(item.get("symbol")): item for item in source_report.get("input_datasets", [])
+        str(item.get("symbol")): item
+        for item in source_report.get("input_datasets", [])
     }
     baseline_datasets = {
         str(item.get("symbol")): item for item in report.get("input_datasets", [])
@@ -313,8 +314,7 @@ def _build_candidate_result(
                 realistic_metrics["trade_count"] - baseline_metrics["trade_count"]
             ),
             "total_fees_delta_usd": round(
-                profiles["realistic"]["total_fees_usd"]
-                - baseline["total_fees_usd"],
+                profiles["realistic"]["total_fees_usd"] - baseline["total_fees_usd"],
                 8,
             ),
             "total_slippage_delta_usd": round(
@@ -418,7 +418,9 @@ def _build_report(
         },
         "spot_execution_assumptions": {
             "initial_equity_usd": next(iter(configs.values())).initial_equity,
-            "position_fraction_of_equity": next(iter(configs.values())).position_fraction,
+            "position_fraction_of_equity": next(
+                iter(configs.values())
+            ).position_fraction,
             "leverage": 1.0,
             "pyramiding": False,
             "concurrent_positions_per_candidate": 1,
