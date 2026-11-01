@@ -281,7 +281,9 @@ def run_v4h_experiment(
         minimum_hold_recall=minimum_hold_recall,
         random_search_iterations=random_search_iterations,
     )
-    result = _build_trained_experiment_result(base_result, train_y, validation_y, variants)
+    result = _build_trained_experiment_result(
+        base_result, train_y, validation_y, variants
+    )
     result["overfitting_assessment"]["caveat"] = (
         "In-sample versus outer chronological Validation macro-F1; "
         "diagnostic heuristic, not proof."
@@ -381,7 +383,9 @@ def _mean(values: list[float]) -> float | None:
     return round(float(np.mean(values)), 6) if values else None
 
 
-def _forward_hold_metrics(experiment: dict[str, Any], policy: str) -> tuple[float, float] | None:
+def _forward_hold_metrics(
+    experiment: dict[str, Any], policy: str
+) -> tuple[float, float] | None:
     variant = (experiment.get("model_variants") or {}).get(policy)
     if not isinstance(variant, dict):
         return None
