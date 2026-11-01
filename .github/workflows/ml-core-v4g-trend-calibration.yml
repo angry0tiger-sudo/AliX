@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: alix-v4g-trend-walk-forward-calibration
+  group: alix-v4g-trend-walk-forward-calibration-5fold
   cancel-in-progress: true
 
 jobs:
