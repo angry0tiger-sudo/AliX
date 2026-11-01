@@ -1,0 +1,275 @@
+name: AliX V4-I Economic Evaluation
+
+on:
+  push:
+    branches:
+      - research/ml-core-v4i-economic-evaluation
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: alix-v4i-economic-evaluation
+  cancel-in-progress: false
+
+jobs:
+  economic-evaluation:
+    if: github.ref == 'refs/heads/research/ml-core-v4i-economic-evaluation'
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      ALIx_ENV: paper
+      ALIx_DRY_RUN: "true"
+      ALIx_ALLOW_LIVE_TRADING: "false"
+      ALIx_REPORTING_ENABLED: "false"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      GH_TOKEN: \${{ github.token }}
+    steps:
+      - name: Require standard CI success for this exact V4-I commit
+        env:
+          GITHUB_REPOSITORY: \${{ github.repository }}
+          TARGET_SHA: \${{ github.sha }}
+          TARGET_BRANCH: \${{ github.ref_name }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import time
+          from urllib.error import HTTPError, URLError
+          from urllib.request import Request, urlopen
+
+          repository = os.environ["GITHUB_REPOSITORY"]
+          target_sha = os.environ["TARGET_SHA"]
+          target_branch = os.environ["TARGET_BRANCH"]
+          token = os.environ["GH_TOKEN"]
+          if target_branch != "research/ml-core-v4i-economic-evaluation":
+              raise SystemExit("unsupported_v4i_training_branch:" + target_branch)
+          deadline = time.monotonic() + 90 * 60
+          url = (
+              f"https://api.github.com/repos/{repository}/actions/workflows/ci.yml/runs"
+              f"?head_sha={target_sha}&per_page=100"
+          )
+          while time.monotonic() < deadline:
+              request = Request(
+                  url,
+                  headers={
+                      "Accept": "application/vnd.github+json",
+                      "Authorization": f"Bearer {token}",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  },
+              )
+              try:
+                  with urlopen(request, timeout=20) as response:
+                      payload = json.load(response)
+              except (HTTPError, URLError, TimeoutError) as error:
+                  raise SystemExit(
+                      f"ci_status_lookup_failed:{type(error).__name__}"
+                  ) from None
+              matching = [
+                  run for run in payload.get("workflow_runs", [])
+                  if run.get("head_sha") == target_sha
+                  and run.get("head_branch") == target_branch
+                  and run.get("event") == "push"
+              ]
+              if matching:
+                  latest = max(
+                      matching,
+                      key=lambda item: (
+                          item.get("run_number", 0),
+                          item.get("run_attempt", 0),
+                      ),
+                  )
+                  if latest.get("status") == "completed":
+                      if latest.get("conclusion") != "success":
+                          raise SystemExit(
+                              "ci_green_gate_blocked:"
+                              + str(latest.get("conclusion"))
+                              + ":"
+                              + target_sha
+                          )
+                      print(json.dumps({
+                          "gate": "PASS",
+                          "target_sha": target_sha,
+                          "ci_run_id": latest.get("id"),
+                          "ci_run_url": latest.get("html_url"),
+                          "ci_conclusion": latest.get("conclusion"),
+                      }, sort_keys=True))
+                      break
+              time.sleep(30)
+          else:
+              raise SystemExit("ci_green_gate_timeout:" + target_sha)
+          PY
+
+      - name: Checkout exact V4-I commit without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Download immutable V4-H Run 15 candidate artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: alix-v4h-tuning-geometry-diagnostic
+          path: \${{ runner.temp }}/v4h-source
+          repository: \${{ github.repository }}
+          run-id: 41293168191
+          github-token: \${{ github.token }}
+
+      - name: Validate source artifact and export exact data windows
+        env:
+          SOURCE_REPORT: \${{ runner.temp }}/v4h-source/alix-v4h-tuning-geometry-report.json
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          report = json.loads(Path(os.environ["SOURCE_REPORT"]).read_text(encoding="utf-8"))
+          assert report["schema_version"] == "alix.ml-core.v4h-tuning-geometry.v1"
+          assert report["commit_sha"] == "e34861c4873b7cc2170aaaf6c79ed9b464df0a9"
+          assert report["acceptance_policy"]["status"] == "MET"
+          assert report["acceptance_policy"]["strict_acceptance_count"] == 13
+          assert report["trained_models"] == 96
+          assert report["economic_evaluation_performed"] is False
+          safety = report["safety"]
+          assert safety["Champion"] is None
+          assert safety["order_permission"] is False
+          assert safety["trading_authorization"] == "NO-GO"
+          assert safety["private_api_calls"] == 0
+          assert safety["real_order_attempts"] == 0
+
+          datasets = {item["symbol"]: item for item in report["input_datasets"]}
+          assert set(datasets) == {"BTCUSDT", "ETHUSDT"}
+          with Path(os.environ["GITHUB_ENV"]).open("a", encoding="utf-8") as env:
+              for symbol in ("BTCUSDT", "ETHUSDT"):
+                  item = datasets[symbol]
+                  env.write(f"{symbol}_START_UTC={item['start_utc']}\n")
+                  env.write(f"{symbol}_END_UTC={item['end_utc']}\n")
+          print(json.dumps({
+              "source_run_id": 41293168191,
+              "source_commit_sha": report["commit_sha"],
+              "strict_acceptance_count": report["acceptance_policy"]["strict_acceptance_count"],
+              "model_training_allowed": False,
+              "source_datasets": {
+                  key: {"start_utc": value["start_utc"], "end_utc": value["end_utc"],
+                        "csv_sha256": value["csv_sha256"]}
+                  for key, value in datasets.items()
+              },
+          }, sort_keys=True))
+          PY
+
+      - name: Set up pinned Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install pinned economic replay dependencies only
+        run: |
+          python -m pip install pip==25.2
+          python -m pip install numpy==2.5.4 pandas==2.3.3
+
+      - name: Fetch byte-identical V4-H public market candles
+        env:
+          DATA_DIR: \${{ runner.temp }}/alix-v4i-market-data
+        run: |
+          set -euo pipefail
+          rm -rf "$DATA_DIR"
+          mkdir -p "$DATA_DIR"
+          for symbol in BTCUSDT ETHUSDT; do
+            start_var="\${symbol}_START_UTC"
+            end_var="\${symbol}_END_UTC"
+            start_utc="\${!start_var}"
+            end_utc="\${!end_var}"
+            python scripts/fetch_binance_public_ohlcv.py \
+              --days 730 \
+              --symbol "$symbol" \
+              --interval 1m \
+              --start-utc "$start_utc" \
+              --end-utc "$end_utc" \
+              --output-dir "$DATA_DIR" \
+              --commit-sha "$GITHUB_SHA"
+          done
+
+      - name: Replay 13 persisted V4-H candidates and verify Step Summary
+        env:
+          SOURCE_REPORT: \${{ runner.temp }}/v4h-source/alix-v4h-tuning-geometry-report.json
+          DATA_DIR: \${{ runner.temp }}/alix-v4i-market-data
+          OUTPUT_REPORT: \${{ github.workspace }}/alix-v4i-economic-evaluation-report.json
+        run: |
+          set -euo pipefail
+          python -m scripts.run_ml_core_v4i_economic_evaluation \
+            --source-report "$SOURCE_REPORT" \
+            --input-dir "$DATA_DIR" \
+            --output "$OUTPUT_REPORT" \
+            --commit-sha "$GITHUB_SHA" \
+            --initial-equity 10000 \
+            --fee-bps 25 \
+            --slippage-bps 20 \
+            --position-fraction 1.0 \
+            --maximum-drawdown 0.15
+          summary_path="\${GITHUB_STEP_SUMMARY:?missing_GITHUB_STEP_SUMMARY}"
+          test -s "$summary_path"
+          grep -Fq "AliX V4-I Economic Evaluation" "$summary_path"
+          grep -Fq "Profit Factor" "$summary_path"
+          grep -Fq "Max DD" "$summary_path"
+          grep -Fq "NO-GO" "$summary_path"
+
+      - name: Validate V4-I economic report and safety invariants
+        env:
+          OUTPUT_REPORT: \${{ github.workspace }}/alix-v4i-economic-evaluation-report.json
+          TARGET_SHA: \${{ github.sha }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          report = json.loads(Path(os.environ["OUTPUT_REPORT"]).read_text(encoding="utf-8"))
+          assert report["schema_version"] == "alix.ml-core.v4i-economic-evaluation.v1"
+          assert report["commit_sha"] == os.environ["TARGET_SHA"]
+          assert report["source_v4h_commit_sha"] == "e34861c4873b7cc2170aaaf6c79ed9b464df0a9"
+          assert report["source_v4h_run_id"] == 41293168191
+          assert report["candidate_count"] == 13
+          assert report["source_v4h_candidate_count"] == 13
+          assert report["economic_evaluation_performed"] is True
+          assert report["model_training_performed"] is False
+          assert report["model_inference_performed"] is False
+          assert report["persisted_probability_replay_only"] is True
+          assumptions = report["execution_assumptions"]
+          assert assumptions["fee_bps_per_side"] == 25
+          assert assumptions["slippage_bps_per_side"] == 20
+          assert assumptions["position_fraction_of_equity"] == 1.0
+          assert assumptions["hold_semantics"] == "CLOSE_POSITION_AND_REMAIN_FLAT"
+          assert assumptions["entry_timing"] == "NEXT_BAR_OPEN_AFTER_SIGNAL_BAR_CLOSE"
+          assert assumptions["round_trip_nominal_cost_bps"] == 90
+          assert report["economic_acceptance"]["candidate_count"] == 13
+          assert len(report["candidates"]) == 13
+          safety = report["safety"]
+          assert safety["Champion"] is None
+          assert safety["order_permission"] is False
+          assert safety["trading_authorization"] == "NO-GO"
+          assert safety["private_api_calls"] == 0
+          assert safety["real_order_attempts"] == 0
+          assert report["promotion_status"] == "BLOCKED_PENDING_INDEPENDENT_OOS_AND_OWNER_REVIEW"
+          for dataset in report["input_datasets"]:
+              assert dataset["byte_identical_to_v4h"] is True
+              assert dataset["csv_sha256"] == dataset["source_v4h_csv_sha256"]
+          print(json.dumps({
+              "candidate_count": report["candidate_count"],
+              "economic_acceptance": report["economic_acceptance"],
+              "Champion": None,
+              "trading_authorization": "NO-GO",
+              "model_training_performed": False,
+          }, sort_keys=True))
+          PY
+
+      - name: Upload V4-I economic replay report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alix-v4i-economic-evaluation
+          path: alix-v4i-economic-evaluation-report.json
+          if-no-files-found: warn
+          retention-days: 14
