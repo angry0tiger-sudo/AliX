@@ -127,7 +127,7 @@ jobs:
 
           report = json.loads(Path(os.environ["SOURCE_REPORT"]).read_text(encoding="utf-8"))
           assert report["schema_version"] == "alix.ml-core.v4h-tuning-geometry.v1"
-          assert report["commit_sha"] == "e34861c4873b7cc2170aaaf6c79ed9b464df0a9"
+          assert report["commit_sha"] == "e34861c4873b7cc2170aaaf6c79ed9b464df0a9a"
           assert report["acceptance_policy"]["status"] == "MET"
           assert report["acceptance_policy"]["strict_acceptance_count"] == 13
           assert report["trained_models"] == 96
@@ -229,7 +229,7 @@ jobs:
           report = json.loads(Path(os.environ["OUTPUT_REPORT"]).read_text(encoding="utf-8"))
           assert report["schema_version"] == "alix.ml-core.v4i-economic-evaluation.v1"
           assert report["commit_sha"] == os.environ["TARGET_SHA"]
-          assert report["source_v4h_commit_sha"] == "e34861c4873b7cc2170aaaf6c79ed9b464df0a9"
+          assert report["source_v4h_commit_sha"] == "e34861c4873b7cc2170aaaf6c79ed9b464df0a9a"
           assert report["source_v4h_run_id"] == 41293168191
           assert report["candidate_count"] == 13
           assert report["source_v4h_candidate_count"] == 13

@@ -14,7 +14,7 @@ import pandas as pd
 from pandas import DataFrame
 
 V4H_SOURCE_SCHEMA = "alix.ml-core.v4h-tuning-geometry.v1"
-V4H_SOURCE_SHA = "e34861c4873b7cc2170aaaf6c79ed9b464df0a9"
+V4H_SOURCE_SHA = "e34861c4873b7cc2170aaaf6c79ed9b464df0a9a"
 V4H_SOURCE_RUN_ID = 41293168191
 V4H_SOURCE_ARTIFACT_ID = 13080269872
 V4H_ACCEPTED_GEOMETRY = "V4H_Tighter_SL"

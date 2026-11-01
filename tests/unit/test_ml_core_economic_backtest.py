@@ -52,7 +52,7 @@ def test_execution_config_rejects_invalid_and_leveraged_assumptions() -> None:
 def test_source_report_and_market_manifest_fail_closed() -> None:
     report = {
         "schema_version": "alix.ml-core.v4h-tuning-geometry.v1",
-        "commit_sha": "e34861c4873b7cc2170aaaf6c79ed9b464df0a9",
+        "commit_sha": "e34861c4873b7cc2170aaaf6c79ed9b464df0a9a",
         "diagnostic_scope": "CLASSIFICATION_ONLY",
         "economic_evaluation_performed": False,
         "trained_models": 96,
@@ -128,7 +128,7 @@ def test_candidate_extraction_requires_exact_thirteen_forward_passes() -> None:
         }
     report = {
         "schema_version": "alix.ml-core.v4h-tuning-geometry.v1",
-        "commit_sha": "e34861c4873b7cc2170aaaf6c79ed9b464df0a9",
+        "commit_sha": "e34861c4873b7cc2170aaaf6c79ed9b464df0a9a",
         "diagnostic_scope": "CLASSIFICATION_ONLY",
         "economic_evaluation_performed": False,
         "trained_models": 96,
