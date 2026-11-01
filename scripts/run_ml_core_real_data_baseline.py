@@ -33,6 +33,10 @@ from services.ml_core.extended_features import (
     feature_profile_manifest,
 )
 from services.ml_core.purged_embargo import create_purged_embargo_split
+from services.ml_core.walk_forward_validation import (
+    WalkForwardFold,
+    create_walk_forward_folds,
+)
 
 SYMBOLS = ("BTCUSDT", "ETHUSDT")
 TIMEFRAME_MINUTES = {"15m": 15, "30m": 30, "1h": 60, "4h": 240}
@@ -61,6 +65,10 @@ DEFAULT_BARRIER_SCENARIOS = (
 )
 REPORT_SCHEMA = "alix.ml-core.real-data-classification-diagnostic.v5"
 FEATURE_ABLATION_REPORT_SCHEMA = "alix.ml-core.real-data-feature-ablation.v1"
+WALK_FORWARD_TREND_REPORT_SCHEMA = (
+    "alix.ml-core.walk-forward-trend-calibration.v1"
+)
+V4G_FEATURE_PROFILE_ORDER = ("Baseline", "Baseline+Trend")
 
 
 def _feature_profile_diagnostics(profile: str) -> dict[str, Any]:
@@ -884,6 +892,80 @@ def threshold_optimization_diagnostics(
     )
 
 
+def _walk_forward_threshold_optimization_diagnostics(
+    calibration_y: Series,
+    test_y: Series,
+    calibration_probabilities: np.ndarray,
+    test_probabilities: np.ndarray,
+    *,
+    minimum_precision: float,
+    minimum_recall: float,
+) -> dict[str, Any]:
+    """Choose a threshold on held-out historical Calibration, then score the next Test."""
+    _validate_threshold_constraints(minimum_precision, minimum_recall)
+    calibration_counts = _class_counts(calibration_y)
+    hold_count = calibration_counts["HOLD"]
+    non_hold_count = len(calibration_y) - hold_count
+    metadata: dict[str, Any] = {
+        "row_count": int(len(calibration_y)),
+        "start_row_index": int(calibration_y.index[0]) if len(calibration_y) else None,
+        "end_row_index": int(calibration_y.index[-1]) if len(calibration_y) else None,
+        "temporal_position": "TAIL_OF_PRE_TEST_TRAIN_EXCLUDED_FROM_MODEL_FIT",
+        "label_distribution": label_distribution(calibration_y),
+        "minimum_hold_support": MIN_CALIBRATION_HOLD_SAMPLES,
+        "minimum_non_hold_support": MIN_CALIBRATION_NON_HOLD_SAMPLES,
+        "hold_support": hold_count,
+        "non_hold_support": non_hold_count,
+    }
+    constraints = {
+        "minimum_hold_precision": float(minimum_precision),
+        "minimum_hold_recall": float(minimum_recall),
+    }
+    result: dict[str, Any] = {
+        "status": "NOT_EVALUATED",
+        "selected_threshold": None,
+        "constraints": constraints,
+        "calibration": metadata,
+        "post_calibration_validation": None,
+        "full_validation_including_calibration": None,
+    }
+    if not _calibration_support_is_sufficient(calibration_y):
+        result["status"] = "SKIPPED_INSUFFICIENT_CALIBRATION_SAMPLES"
+        return result
+
+    selection = optimize_hold_threshold(
+        calibration_y,
+        calibration_probabilities,
+        minimum_precision=minimum_precision,
+        minimum_recall=minimum_recall,
+    )
+    result["status"] = str(selection["status"])
+    result["selected_threshold"] = selection["selected_threshold"]
+    result["calibration"]["threshold_selection"] = selection
+    if selection["status"] != "SELECTED":
+        return result
+
+    threshold = float(selection["selected_threshold"])
+    calibration_evaluation = _threshold_validation_evaluation(
+        calibration_y, calibration_probabilities, threshold
+    )
+    test_evaluation = _threshold_validation_evaluation(
+        test_y, test_probabilities, threshold
+    )
+    result["calibration"]["selected_calibration_metrics"] = {
+        "classification_metrics": calibration_evaluation["classification_metrics"],
+        "hold_metrics": calibration_evaluation["hold_metrics"],
+    }
+    result["post_calibration_validation"] = {
+        **test_evaluation,
+        "start_row_index": int(test_y.index[0]),
+        "end_row_index": int(test_y.index[-1]),
+        "calibration_overlap": False,
+        "evaluation_scope": "WALK_FORWARD_TEST_ONLY",
+    }
+    return result
+
+
 def _serialize_validation_probabilities(
     bars: DataFrame,
     validation_indices: list[int],
@@ -1156,19 +1238,28 @@ def _prepare_experiment_feature_matrices(
     bars: DataFrame,
     feature_profile: str,
     prepared_feature_profiles: dict[str, DataFrame] | None,
+    *,
+    common_sample_profile: str | None = None,
 ) -> tuple[DataFrame, DataFrame]:
-    """Resolve model features and the common feature mask used for splitting."""
+    """Resolve model features and the explicitly shared sample-mask profile."""
     if prepared_feature_profiles is not None:
-        if tuple(prepared_feature_profiles) != FEATURE_PROFILE_ORDER:
+        if feature_profile not in prepared_feature_profiles:
             raise ValueError("prepared_feature_profile_contract_mismatch")
+        common_name = common_sample_profile or (
+            "Combined" if "Combined" in prepared_feature_profiles else feature_profile
+        )
+        if common_name not in prepared_feature_profiles:
+            raise ValueError("prepared_common_sample_profile_missing")
         if any(
             len(matrix) != len(bars) for matrix in prepared_feature_profiles.values()
         ):
             raise ValueError("prepared_feature_profile_length_mismatch")
         return (
             prepared_feature_profiles[feature_profile],
-            prepared_feature_profiles["Combined"],
+            prepared_feature_profiles[common_name],
         )
+    if common_sample_profile is not None:
+        raise ValueError("common_sample_profile_requires_prepared_profiles")
     if feature_profile == "Baseline":
         baseline = build_causal_feature_matrix(bars)
         return baseline, baseline
@@ -1408,6 +1499,232 @@ def run_experiment(
     return _build_trained_experiment_result(
         base_result, train_y, validation_y, variants
     )
+
+
+def _fit_walk_forward_variants(
+    features: DataFrame,
+    bars: DataFrame,
+    train_indices: list[int],
+    calibration_indices: list[int],
+    test_indices: list[int],
+    train_y: Series,
+    calibration_y: Series,
+    test_y: Series,
+    *,
+    feature_profile: str,
+    feature_count: int,
+    minimum_hold_precision: float,
+    minimum_hold_recall: float,
+) -> dict[str, Any]:
+    """Fit each weighting policy once, calibrate on held-out history, and score Test."""
+    variants: dict[str, Any] = {}
+    x_train = features.iloc[train_indices]
+    x_calibration = features.iloc[calibration_indices]
+    x_test = features.iloc[test_indices]
+    for name, policy in weighting_policy_specs().items():
+        model = _new_classifier(class_weight=policy["class_weight"])
+        model.fit(x_train, train_y)
+        train_probabilities = ordered_probability_matrix(model, x_train)
+        calibration_probabilities = ordered_probability_matrix(model, x_calibration)
+        test_probabilities = ordered_probability_matrix(model, x_test)
+        train_prediction = predictions_from_probabilities(
+            train_probabilities, train_y.index
+        )
+        test_prediction = predictions_from_probabilities(test_probabilities, test_y.index)
+        threshold_diagnostics = _walk_forward_threshold_optimization_diagnostics(
+            calibration_y,
+            test_y,
+            calibration_probabilities,
+            test_probabilities,
+            minimum_precision=minimum_hold_precision,
+            minimum_recall=minimum_hold_recall,
+        )
+        variants[name] = {
+            "model_parameters": {
+                "class_weight": policy["class_weight"],
+                "feature_profile": feature_profile,
+                "feature_count": feature_count,
+            },
+            "classification_metrics": {
+                "train_in_sample": classification_metrics(train_y, train_prediction),
+                "validation": classification_metrics(test_y, test_prediction),
+            },
+            **validation_classification_diagnostics(test_y, test_prediction),
+            "hold_metrics": hold_class_metrics(test_y, test_prediction),
+            "probability_diagnostics": {
+                "calibration": probability_quality_metrics(
+                    calibration_y, calibration_probabilities
+                ),
+                "forward_validation": probability_quality_metrics(
+                    test_y, test_probabilities
+                ),
+                "calibration_overlap": False,
+            },
+            "threshold_optimization": threshold_diagnostics,
+            "validation_probabilities": _serialize_validation_probabilities(
+                bars, test_indices, test_y, test_probabilities
+            ),
+        }
+    return variants
+
+
+def run_walk_forward_experiment(
+    pair: str,
+    timeframe: str,
+    minute_candles: DataFrame,
+    *,
+    feature_profile: str,
+    fold: WalkForwardFold,
+    calibration_fraction: float,
+    minimum_hold_precision: float,
+    minimum_hold_recall: float,
+    scenario_name: str,
+    horizon_candles: int,
+    take_profit_multiplier: float,
+    stop_loss_multiplier: float,
+    prepared_bars: DataFrame,
+    prepared_labels: DataFrame,
+    prepared_feature_profiles: dict[str, DataFrame],
+) -> dict[str, Any]:
+    """Run one profile on one fold using disjoint Train, Calibration, and Test rows."""
+    profile_metadata = _feature_profile_diagnostics(feature_profile)
+    bars, labels = _prepare_experiment_bars_and_labels(
+        minute_candles,
+        timeframe,
+        horizon_candles=horizon_candles,
+        take_profit_multiplier=take_profit_multiplier,
+        stop_loss_multiplier=stop_loss_multiplier,
+        prepared_bars=prepared_bars,
+        prepared_labels=prepared_labels,
+    )
+    features, _ = _prepare_experiment_feature_matrices(
+        bars,
+        feature_profile,
+        prepared_feature_profiles,
+        common_sample_profile="Baseline+Trend",
+    )
+    train_indices = list(fold.train_indices)
+    calibration_indices = list(fold.calibration_indices)
+    test_indices = list(fold.test_indices)
+    all_indices = train_indices + calibration_indices + test_indices
+    if (
+        len(set(all_indices)) != len(all_indices)
+        or any(index < 0 or index >= len(bars) for index in all_indices)
+    ):
+        raise ValueError("walk_forward_sample_indices_invalid")
+
+    train_y = labels.iloc[train_indices]["label"]
+    calibration_y = labels.iloc[calibration_indices]["label"]
+    test_y = labels.iloc[test_indices]["label"]
+    sample_gate = sample_gate_diagnostics(train_y, test_y)
+    calibration_counts = _class_counts(calibration_y)
+    calibration_hold = calibration_counts["HOLD"]
+    calibration_non_hold = len(calibration_y) - calibration_hold
+    calibration_gate_status = (
+        "PASS"
+        if calibration_hold >= MIN_CALIBRATION_HOLD_SAMPLES
+        and calibration_non_hold >= MIN_CALIBRATION_NON_HOLD_SAMPLES
+        else "SKIPPED_INSUFFICIENT_CALIBRATION_SAMPLES"
+    )
+    sample_signature = hashlib.sha256(
+        json.dumps(
+            {
+                "train_indices": train_indices,
+                "calibration_indices": calibration_indices,
+                "test_indices": test_indices,
+            },
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    split_diagnostics = dict(fold.diagnostics)
+    base_result: dict[str, Any] = {
+        "pair": pair,
+        "timeframe": timeframe,
+        "scenario": scenario_name,
+        "triple_barrier": {
+            "horizon_candles": horizon_candles,
+            "take_profit_multiplier": float(take_profit_multiplier),
+            "stop_loss_multiplier": float(stop_loss_multiplier),
+        },
+        "fold_index": fold.fold_index,
+        "fold": split_diagnostics,
+        "bar_count": int(len(bars)),
+        "train_rows": len(train_indices),
+        "calibration_rows": len(calibration_indices),
+        "validation_rows": len(test_indices),
+        "sample_signature_sha256": sample_signature,
+        **profile_metadata,
+        "label_distribution": {
+            "train": label_distribution(train_y),
+            "calibration": label_distribution(calibration_y),
+            "validation": label_distribution(test_y),
+        },
+        "label_audit": label_audit_diagnostics(labels),
+        "sample_gate": sample_gate,
+        "calibration_gate": {
+            "status": calibration_gate_status,
+            "minimum_hold_samples": MIN_CALIBRATION_HOLD_SAMPLES,
+            "minimum_non_hold_samples": MIN_CALIBRATION_NON_HOLD_SAMPLES,
+            "hold_samples": calibration_hold,
+            "non_hold_samples": calibration_non_hold,
+        },
+        "split": split_diagnostics,
+    }
+    skip_reason = (
+        str(sample_gate["status"])
+        if sample_gate["status"] != "PASS"
+        else calibration_gate_status
+        if calibration_gate_status != "PASS"
+        else None
+    )
+    if skip_reason is not None:
+        return {
+            **base_result,
+            "status": skip_reason,
+            "classification_metrics": None,
+            "confusion_matrix": None,
+            "prediction_distribution": None,
+            "hold_metrics": None,
+            "model_variants": None,
+            "threshold_optimization": {
+                "status": skip_reason,
+                "selected_threshold": None,
+                "calibration": {
+                    "row_count": len(calibration_indices),
+                    "temporal_position": "TAIL_OF_PRE_TEST_TRAIN_EXCLUDED_FROM_MODEL_FIT",
+                    "label_distribution": label_distribution(calibration_y),
+                },
+                "post_calibration_validation": None,
+                "full_validation_including_calibration": None,
+            },
+            "baseline_comparisons": None,
+            "overfitting_assessment": {
+                "status": "NOT_ASSESSED",
+                "macro_f1_gap_train_minus_validation": None,
+            },
+        }
+
+    variants = _fit_walk_forward_variants(
+        features,
+        bars,
+        train_indices,
+        calibration_indices,
+        test_indices,
+        train_y,
+        calibration_y,
+        test_y,
+        feature_profile=feature_profile,
+        feature_count=int(profile_metadata["feature_count"]),
+        minimum_hold_precision=minimum_hold_precision,
+        minimum_hold_recall=minimum_hold_recall,
+    )
+    result = _build_trained_experiment_result(
+        base_result, train_y, test_y, variants
+    )
+    result["overfitting_assessment"]["caveat"] = (
+        "In-sample versus this fold's forward Test score; diagnostic heuristic, not proof."
+    )
+    return result
 
 
 def _load_manifested_data(
@@ -1722,6 +2039,72 @@ def _render_probability_diagnostics_section(
     return lines
 
 
+def _render_walk_forward_section(
+    experiments: list[dict[str, Any]],
+    summary: dict[str, Any],
+) -> list[str]:
+    """Render per-fold Train/Calibration/Test support and HOLD metrics."""
+    lines = [
+        "### V4-G walk-forward fold results (balanced LightGBM primary)",
+        "",
+        "| Pair | TF | Fold | Profile | Train n | Calibration n (HOLD) | Test n | Raw Test HOLD P | Threshold status | Threshold | Test HOLD P | Test HOLD R |",
+        "|---|---:|---:|---|---:|---:|---:|---:|---|---:|---:|---:|",
+    ]
+    for item in experiments:
+        fold = item.get("fold") or {}
+        threshold = item.get("threshold_optimization") or {}
+        forward = threshold.get("post_calibration_validation")
+        hold = item.get("hold_metrics")
+        raw_precision = _format_probability_metric(
+            float(hold["precision"]) if hold is not None else None
+        )
+        forward_hold = forward.get("hold_metrics") if forward else None
+        forward_precision = _format_probability_metric(
+            float(forward_hold["precision"]) if forward_hold else None
+        )
+        forward_recall = _format_probability_metric(
+            float(forward_hold["recall"]) if forward_hold else None
+        )
+        threshold_value = threshold.get("selected_threshold")
+        threshold_text = (
+            f"{float(threshold_value):.4f}" if threshold_value is not None else "N/A"
+        )
+        lines.append(
+            f"| {item['pair']} | {item['timeframe']} | "
+            f"{item.get('fold_index', 'N/A')} | {item.get('feature_profile', 'N/A')} "
+            f"| {fold.get('train_rows', item.get('train_rows', 0))} "
+            f"| {fold.get('calibration_rows', item.get('calibration_rows', 0))} "
+            f"({fold.get('calibration_hold_samples', 0)}) "
+            f"| {fold.get('test_rows', item.get('validation_rows', 0))} "
+            f"| {raw_precision} | {threshold.get('status', item['status'])} "
+            f"| {threshold_text} | {forward_precision} | {forward_recall} |"
+        )
+
+    lines.extend(
+        [
+            "",
+            "#### Fold-level paired Baseline vs Trend comparison",
+            "",
+            "| Fold | Baseline mean Test HOLD P | Trend mean Test HOLD P | Trend delta | Matched pair/timeframes | Trend wins |",
+            "|---:|---:|---:|---:|---:|---:|",
+        ]
+    )
+    for fold in summary["folds"]:
+        paired = fold["paired_comparison"]
+        lines.append(
+            f"| {fold['fold_index']} "
+            f"| {_format_probability_metric(paired['baseline_mean_forward_hold_precision'])} "
+            f"| {_format_probability_metric(paired['trend_mean_forward_hold_precision'])} "
+            f"| {_format_probability_metric(paired['trend_minus_baseline_precision'])} "
+            f"| {paired['matched_pair_timeframe_count']} | {paired['trend_wins']} |"
+        )
+    lines.append(
+        f"Trend improved paired mean HOLD Precision in "
+        f"{summary['trend_improved_fold_count']}/{summary['fold_count']} folds."
+    )
+    return lines
+
+
 def render_markdown(report: dict[str, Any]) -> str:
     """Render classification diagnostics for the GitHub Actions summary."""
     experiments = report["experiments"]
@@ -1738,6 +2121,15 @@ def render_markdown(report: dict[str, Any]) -> str:
     lines.extend(["", *_render_classwise_metrics_section(experiments)])
     lines.extend(["", *_render_weighting_metrics_section(experiments)])
     lines.extend(["", *_render_threshold_optimization_section(experiments)])
+    if report.get("walk_forward_summary") is not None:
+        lines.extend(
+            [
+                "",
+                *_render_walk_forward_section(
+                    experiments, report["walk_forward_summary"]
+                ),
+            ]
+        )
     lines.extend(["", *_render_probability_diagnostics_section(experiments)])
     lines.extend(["", *_render_prediction_distribution_section(experiments)])
     lines.extend(["", *_render_confusion_matrix_section(experiments)])
@@ -1753,8 +2145,7 @@ def render_markdown(report: dict[str, Any]) -> str:
                 "|---|---:|---:|---:|---:|---:|---|",
             ]
         )
-        for profile in FEATURE_PROFILE_ORDER:
-            values = profile_rows[profile]
+        for profile, values in profile_rows.items():
             lines.append(
                 f"| {profile} | {values['trained_experiment_count']}/"
                 f"{values['experiment_count']} | "
@@ -1764,13 +2155,17 @@ def render_markdown(report: dict[str, Any]) -> str:
                 f"{_format_probability_metric(values['mean_forward_hold_recall'])} | "
                 f"{values['forward_acceptance_status']} |"
             )
+        primary_status = ablation_summary.get(
+            "primary_extended_forward_acceptance",
+            ablation_summary.get("combined_forward_acceptance"),
+        )
         lines.extend(
             [
                 "",
                 "Highest mean forward HOLD Precision profile: "
                 f"{ablation_summary['highest_mean_forward_hold_precision_profile'] or 'N/A'}.",
-                "Combined forward HOLD acceptance: "
-                f"{ablation_summary['combined_forward_acceptance']}.",
+                "Primary extended profile forward HOLD acceptance: "
+                f"{primary_status or 'N/A'}.",
                 "",
             ]
         )
@@ -1898,19 +2293,72 @@ def _run_diagnostic_experiments(
     minimum_hold_precision: float,
     minimum_hold_recall: float,
     feature_profile_names: tuple[str, ...] = ("Baseline",),
+    walk_forward_folds: int | None = None,
 ) -> list[dict[str, Any]]:
-    """Train selected feature profiles over identical target and eligible samples."""
+    """Train the selected profiles on shared rows and optional expanding folds."""
     if not feature_profile_names or len(set(feature_profile_names)) != len(
         feature_profile_names
     ):
         raise ValueError("feature_profile_selection_invalid")
     for profile in feature_profile_names:
         feature_profile_columns(profile)
+    if walk_forward_folds is not None and (
+        feature_profile_names != V4G_FEATURE_PROFILE_ORDER
+        or len(barrier_scenarios) != 1
+        or barrier_scenarios[0]["horizon_candles"] != 12
+    ):
+        raise ValueError("walk_forward_feature_profile_contract_invalid")
 
     experiments: list[dict[str, Any]] = []
     for symbol in SYMBOLS:
         pair = f"{symbol[:-4]}/USDT"
         for timeframe in TIMEFRAME_MINUTES:
+            if walk_forward_folds is not None:
+                bars = resample_ohlcv(datasets[symbol], timeframe)
+                scenario = barrier_scenarios[0]
+                labels = apply_adaptive_triple_barrier(
+                    bars,
+                    horizon_candles=scenario["horizon_candles"],
+                    take_profit_multiplier=scenario["take_profit_multiplier"],
+                    stop_loss_multiplier=scenario["stop_loss_multiplier"],
+                )
+                profile_matrices = build_feature_profiles(
+                    bars, profile_names=feature_profile_names
+                )
+                folds = create_walk_forward_folds(
+                    profile_matrices["Baseline+Trend"],
+                    labels,
+                    fold_count=walk_forward_folds,
+                    label_horizon_candles=scenario["horizon_candles"],
+                    calibration_fraction=calibration_fraction,
+                )
+                for fold in folds:
+                    for profile in feature_profile_names:
+                        experiments.append(
+                            run_walk_forward_experiment(
+                                pair,
+                                timeframe,
+                                datasets[symbol],
+                                feature_profile=profile,
+                                fold=fold,
+                                calibration_fraction=calibration_fraction,
+                                minimum_hold_precision=minimum_hold_precision,
+                                minimum_hold_recall=minimum_hold_recall,
+                                scenario_name=scenario["name"],
+                                horizon_candles=scenario["horizon_candles"],
+                                take_profit_multiplier=scenario[
+                                    "take_profit_multiplier"
+                                ],
+                                stop_loss_multiplier=scenario[
+                                    "stop_loss_multiplier"
+                                ],
+                                prepared_bars=bars,
+                                prepared_labels=labels,
+                                prepared_feature_profiles=profile_matrices,
+                            )
+                        )
+                continue
+
             if feature_profile_names == ("Baseline",):
                 for scenario in barrier_scenarios:
                     experiments.append(
@@ -2059,6 +2507,113 @@ def _summarize_feature_profile(
     }
 
 
+def _build_walk_forward_summary(
+    experiments: list[dict[str, Any]],
+    profile_names: tuple[str, ...],
+    fold_count: int,
+) -> dict[str, Any]:
+    """Aggregate each fold and paired Baseline/Trend Test precision results."""
+    folds: list[dict[str, Any]] = []
+    for fold_index in range(1, fold_count + 1):
+        fold_rows = [
+            item for item in experiments if item.get("fold_index") == fold_index
+        ]
+        profile_stats: dict[str, dict[str, Any]] = {}
+        indexed: dict[str, dict[tuple[str, str], tuple[float, float]]] = {}
+        for profile in profile_names:
+            rows = [
+                item for item in fold_rows if item.get("feature_profile") == profile
+            ]
+            trained = _trained_profile_experiments(rows)
+            forward = [
+                (item, values)
+                for item in trained
+                if (values := _forward_hold_metrics(item)) is not None
+            ]
+            profile_stats[profile] = {
+                "experiment_count": len(rows),
+                "trained_experiment_count": len(trained),
+                "forward_metric_experiment_count": len(forward),
+                "mean_forward_hold_precision": _mean_metric(
+                    [values[0] for _, values in forward]
+                ),
+                "mean_forward_hold_recall": _mean_metric(
+                    [values[1] for _, values in forward]
+                ),
+                "precision_at_least_0_40_count": sum(
+                    values[0] >= DEFAULT_MINIMUM_HOLD_PRECISION
+                    for _, values in forward
+                ),
+                "strict_acceptance_count": sum(
+                    _forward_hold_acceptance_pass(values) for _, values in forward
+                ),
+            }
+            indexed[profile] = {
+                (str(item["pair"]), str(item["timeframe"])): values
+                for item, values in forward
+            }
+
+        paired_count = 0
+        baseline_precision: list[float] = []
+        trend_precision: list[float] = []
+        trend_wins = 0
+        if "Baseline" in indexed and "Baseline+Trend" in indexed:
+            shared_keys = set(indexed["Baseline"]).intersection(indexed["Baseline+Trend"])
+            for key in sorted(shared_keys):
+                base_values = indexed["Baseline"][key]
+                trend_values = indexed["Baseline+Trend"][key]
+                paired_count += 1
+                baseline_precision.append(base_values[0])
+                trend_precision.append(trend_values[0])
+                trend_wins += trend_values[0] > base_values[0]
+
+        baseline_mean = _mean_metric(baseline_precision)
+        trend_mean = _mean_metric(trend_precision)
+        paired_delta = (
+            round(trend_mean - baseline_mean, 6)
+            if baseline_mean is not None and trend_mean is not None
+            else None
+        )
+        folds.append(
+            {
+                "fold_index": fold_index,
+                "profiles": profile_stats,
+                "paired_comparison": {
+                    "matched_pair_timeframe_count": paired_count,
+                    "baseline_mean_forward_hold_precision": baseline_mean,
+                    "trend_mean_forward_hold_precision": trend_mean,
+                    "trend_minus_baseline_precision": paired_delta,
+                    "trend_wins": trend_wins,
+                },
+            }
+        )
+
+    improved_folds = sum(
+        item["paired_comparison"]["trend_minus_baseline_precision"] is not None
+        and item["paired_comparison"]["trend_minus_baseline_precision"] > 0.0
+        for item in folds
+    )
+    return {
+        "fold_count": fold_count,
+        "folds": folds,
+        "trend_improved_fold_count": improved_folds,
+        "forward_hold_precision_at_least_0_40_count_by_profile": {
+            profile: sum(
+                item["profiles"][profile]["precision_at_least_0_40_count"]
+                for item in folds
+            )
+            for profile in profile_names
+        },
+        "strict_acceptance_count_by_profile": {
+            profile: sum(
+                item["profiles"][profile]["strict_acceptance_count"]
+                for item in folds
+            )
+            for profile in profile_names
+        },
+    }
+
+
 def _add_feature_profile_baseline_deltas(
     profile_summary: dict[str, dict[str, Any]],
 ) -> None:
@@ -2105,8 +2660,9 @@ def _rank_feature_profiles_by_forward_precision(
     ]
     ranking.sort(
         key=lambda item: (
-            item["forward_metric_experiment_count"],
             item["mean_forward_hold_precision"],
+            item["forward_metric_experiment_count"],
+            item["feature_profile"],
         ),
         reverse=True,
     )
@@ -2115,34 +2671,52 @@ def _rank_feature_profiles_by_forward_precision(
 
 def _build_feature_ablation_summary(
     experiments: list[dict[str, Any]],
+    profile_names: tuple[str, ...] = FEATURE_PROFILE_ORDER,
 ) -> dict[str, Any]:
-    """Summarize profile effects against the nine-feature Baseline control."""
+    """Summarize selected profiles against the unchanged nine-feature Baseline."""
+    if not profile_names or "Baseline" not in profile_names:
+        raise ValueError("feature_profile_summary_contract_invalid")
     profile_summary = {
         profile: _summarize_feature_profile(
             [item for item in experiments if item.get("feature_profile") == profile]
         )
-        for profile in FEATURE_PROFILE_ORDER
+        for profile in profile_names
     }
     _add_feature_profile_baseline_deltas(profile_summary)
     ranking = _rank_feature_profiles_by_forward_precision(profile_summary)
+    primary_extended = next(
+        (profile for profile in profile_names if profile != "Baseline"), None
+    )
     return {
         "aggregation_policy": (
-            "Unweighted means across pair/timeframe/scenario experiments; "
-            "forward HOLD metrics use only the post-calibration validation segment."
+            "Unweighted means across pair/timeframe/fold experiments; forward HOLD "
+            "metrics use only the untouched post-calibration Test segment."
+        ),
+        "ranking_policy": (
+            "Descending mean forward HOLD Precision, then forward metric count, "
+            "then profile name. Precision is the primary ranking criterion."
         ),
         "baseline_reference": (
             "The Baseline profile is the unchanged nine-column V4-D feature set, "
-            "trained with the same 12-candle labels, target bars, split, sample mask, "
-            "classifier settings, and weighting policies as the extended profiles."
+            "trained with the same 12-candle labels, target bars, fold boundaries, "
+            "common sample mask, classifier settings, and weighting policies."
         ),
         "profiles": profile_summary,
         "ranking_by_forward_hold_precision": ranking,
         "highest_mean_forward_hold_precision_profile": (
             ranking[0]["feature_profile"] if ranking else None
         ),
-        "combined_forward_acceptance": profile_summary["Combined"][
-            "forward_acceptance_status"
-        ],
+        "primary_extended_profile": primary_extended,
+        "primary_extended_forward_acceptance": (
+            profile_summary[primary_extended]["forward_acceptance_status"]
+            if primary_extended is not None
+            else None
+        ),
+        "combined_forward_acceptance": (
+            profile_summary["Combined"]["forward_acceptance_status"]
+            if "Combined" in profile_summary
+            else None
+        ),
     }
 
 
@@ -2158,13 +2732,22 @@ def _build_diagnostic_report(
     minimum_hold_recall: float,
     policy_specs: dict[str, dict[str, Any]],
     feature_ablation: bool = False,
+    feature_profile_names: tuple[str, ...] | None = None,
+    walk_forward_folds: int | None = None,
 ) -> dict[str, Any]:
-    """Construct a classification-only report, including optional feature ablation."""
+    """Construct a classification-only report with selected profiles and split design."""
+    selected_profiles = feature_profile_names or (
+        FEATURE_PROFILE_ORDER if feature_ablation else ("Baseline",)
+    )
     trained_experiments = sum(item["status"] == "TRAINED" for item in experiments)
     trained_models = sum(len(item["model_variants"] or {}) for item in experiments)
     return {
         "schema_version": (
-            FEATURE_ABLATION_REPORT_SCHEMA if feature_ablation else REPORT_SCHEMA
+            WALK_FORWARD_TREND_REPORT_SCHEMA
+            if walk_forward_folds is not None
+            else FEATURE_ABLATION_REPORT_SCHEMA
+            if feature_ablation
+            else REPORT_SCHEMA
         ),
         "commit_sha": commit_sha,
         "diagnostic_scope": "CLASSIFICATION_ONLY",
@@ -2209,15 +2792,19 @@ def _build_diagnostic_report(
         "feature_engineering": {
             "enabled": feature_ablation,
             "schema_version": EXTENDED_FEATURE_SCHEMA_VERSION,
-            "profile_manifest": feature_profile_manifest(),
+            "profile_manifest": feature_profile_manifest(
+                selected_profiles if feature_ablation else None
+            ),
+            "selected_profiles": list(selected_profiles),
             "point_in_time": True,
             "warmup_policy": (
                 "Leading rolling-window warm-up rows remain null and are excluded; "
                 "no backfill, interpolation, centered windows, or future values are used."
             ),
             "common_sample_policy": (
-                "For feature ablation, all profiles use the finite-row intersection "
-                "of the Combined feature matrix before the same purged chronological split."
+                "V4-G Baseline and Baseline+Trend use the finite-row intersection of "
+                "the Baseline+Trend matrix. V4-F uses the finite-row intersection of "
+                "the Combined matrix."
             ),
             "volume_semantics": (
                 "Relative volume, volume z-score, normalized OBV, and Chaikin money "
@@ -2247,7 +2834,11 @@ def _build_diagnostic_report(
         },
         "calibration_policy": {
             "fraction_of_validation": float(calibration_fraction),
-            "temporal_position": "FIRST_CHRONOLOGICAL_SEGMENT_OF_VALIDATION",
+            "temporal_position": (
+                "TAIL_OF_PRE_TEST_TRAIN_EXCLUDED_FROM_MODEL_FIT"
+                if walk_forward_folds is not None
+                else "FIRST_CHRONOLOGICAL_SEGMENT_OF_VALIDATION"
+            ),
             "minimum_hold_support": MIN_CALIBRATION_HOLD_SAMPLES,
             "minimum_non_hold_support": MIN_CALIBRATION_NON_HOLD_SAMPLES,
             "minimum_hold_precision": float(minimum_hold_precision),
@@ -2291,12 +2882,39 @@ def _build_diagnostic_report(
             "post_validation_embargo": "exact_label_horizon_candles",
             "feature_lookback_is_causal": True,
         },
+        "validation_design": {
+            "method": (
+                "EXPANDING_WINDOW_WALK_FORWARD"
+                if walk_forward_folds is not None
+                else "SINGLE_PURGED_CHRONOLOGICAL_SPLIT"
+            ),
+            "fold_count": walk_forward_folds or 1,
+            "test_window_start_fraction": 0.60 if walk_forward_folds else None,
+            "test_window_end_fraction": 0.90 if walk_forward_folds else None,
+            "calibration_fraction_of_pre_test_history": (
+                float(calibration_fraction) if walk_forward_folds else None
+            ),
+            "calibration_is_excluded_from_model_fit": walk_forward_folds is not None,
+            "minimum_calibration_hold_samples": MIN_CALIBRATION_HOLD_SAMPLES,
+            "minimum_calibration_non_hold_samples": MIN_CALIBRATION_NON_HOLD_SAMPLES,
+            "minimum_hold_precision": float(minimum_hold_precision),
+            "minimum_hold_recall": float(minimum_hold_recall),
+        },
         "trained_experiments": trained_experiments,
         "trained_models": trained_models,
         "experiment_count": len(experiments),
         "experiments": experiments,
         "feature_ablation_summary": (
-            _build_feature_ablation_summary(experiments) if feature_ablation else None
+            _build_feature_ablation_summary(experiments, selected_profiles)
+            if feature_ablation
+            else None
+        ),
+        "walk_forward_summary": (
+            _build_walk_forward_summary(
+                experiments, selected_profiles, walk_forward_folds
+            )
+            if walk_forward_folds is not None
+            else None
         ),
         "safety": {
             "public_api_only": True,
@@ -2357,8 +2975,9 @@ def run_diagnostic(
     minimum_hold_recall: float = DEFAULT_MINIMUM_HOLD_RECALL,
     barrier_scenarios: list[dict[str, Any]] | None = None,
     feature_ablation: bool = False,
+    walk_forward_folds: int | None = None,
 ) -> dict[str, Any]:
-    """Run classification diagnostics, optionally across all approved feature profiles."""
+    """Run classification diagnostics with optional V4-F ablation or V4-G folds."""
     policy_specs = _validate_diagnostic_parameters(
         days, calibration_fraction, minimum_hold_precision, minimum_hold_recall
     )
@@ -2371,6 +2990,20 @@ def run_diagnostic(
         len(scenarios) != 1 or scenarios[0]["horizon_candles"] != 12
     ):
         raise ValueError("feature_ablation_requires_one_12_candle_scenario")
+    if walk_forward_folds is not None and (
+        isinstance(walk_forward_folds, bool)
+        or not isinstance(walk_forward_folds, int)
+        or walk_forward_folds < 3
+        or not feature_ablation
+    ):
+        raise ValueError("walk_forward_configuration_invalid")
+    selected_profiles = (
+        V4G_FEATURE_PROFILE_ORDER
+        if walk_forward_folds is not None
+        else FEATURE_PROFILE_ORDER
+        if feature_ablation
+        else ("Baseline",)
+    )
     datasets, provenance = _load_diagnostic_datasets(input_dir, days, commit_sha)
     experiments = _run_diagnostic_experiments(
         datasets,
@@ -2378,9 +3011,8 @@ def run_diagnostic(
         calibration_fraction=calibration_fraction,
         minimum_hold_precision=minimum_hold_precision,
         minimum_hold_recall=minimum_hold_recall,
-        feature_profile_names=(
-            FEATURE_PROFILE_ORDER if feature_ablation else ("Baseline",)
-        ),
+        feature_profile_names=selected_profiles,
+        walk_forward_folds=walk_forward_folds,
     )
     report = _build_diagnostic_report(
         days=days,
@@ -2393,6 +3025,8 @@ def run_diagnostic(
         minimum_hold_recall=minimum_hold_recall,
         policy_specs=policy_specs,
         feature_ablation=feature_ablation,
+        feature_profile_names=selected_profiles,
+        walk_forward_folds=walk_forward_folds,
     )
     _write_diagnostic_report(report, output_path)
     _print_diagnostic_completion(report, output_path, commit_sha)
@@ -2421,7 +3055,13 @@ def main() -> int:
     parser.add_argument(
         "--feature-ablation",
         action="store_true",
-        help="Train the five fixed V4-F feature profiles using one 12-candle target.",
+        help="Enable the fixed 12-candle feature-profile diagnostic.",
+    )
+    parser.add_argument(
+        "--walk-forward-folds",
+        type=int,
+        default=0,
+        help="Run V4-G with at least three expanding temporal folds and only Baseline/Trend.",
     )
     parser.add_argument(
         "--scenario",
@@ -2446,12 +3086,21 @@ def main() -> int:
         minimum_hold_recall=args.minimum_hold_recall,
         barrier_scenarios=scenarios,
         feature_ablation=args.feature_ablation,
+        walk_forward_folds=args.walk_forward_folds or None,
+    )
+    profile_count = (
+        len(V4G_FEATURE_PROFILE_ORDER)
+        if args.walk_forward_folds
+        else len(FEATURE_PROFILE_ORDER)
+        if args.feature_ablation
+        else 1
     )
     expected_experiments = (
         len(SYMBOLS)
         * len(TIMEFRAME_MINUTES)
         * len(scenarios)
-        * (len(FEATURE_PROFILE_ORDER) if args.feature_ablation else 1)
+        * profile_count
+        * (args.walk_forward_folds or 1)
     )
     if report["experiment_count"] != expected_experiments:
         raise RuntimeError("diagnostic_experiment_count_mismatch")
