@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from scripts.run_ml_core_real_data_baseline import (
     _build_walk_forward_summary,
     _rank_feature_profiles_by_forward_precision,
@@ -112,7 +114,7 @@ def test_walk_forward_threshold_distinguishes_no_feasible_from_low_support() -> 
 
 
 def test_walk_forward_summary_compares_matched_profile_support() -> None:
-    experiments = []
+    experiments: list[dict[str, Any]] = []
     for fold in (1, 2, 3):
         for pair, timeframe, baseline_precision, trend_precision in (
             ("BTC/USDT", "15m", 0.30, 0.35),
@@ -152,3 +154,29 @@ def test_walk_forward_summary_compares_matched_profile_support() -> None:
     for fold in summary["folds"]:
         assert fold["paired_comparison"]["matched_pair_timeframe_count"] == 2
         assert fold["paired_comparison"]["trend_minus_baseline_precision"] == 0.05
+
+
+
+def test_walk_forward_threshold_skips_when_calibration_hold_support_is_below_thirty() -> None:
+    calibration_y = Series(
+        ["HOLD"] * 29 + ["BUY"] * 46 + ["SELL"] * 45,
+        index=range(120),
+        dtype=object,
+    )
+    probabilities = np.tile(
+        np.asarray([[0.10, 0.10, 0.80]], dtype=float), (120, 1)
+    )
+    test_y = Series(["HOLD", "BUY", "SELL"] * 20, index=range(300, 360))
+
+    result = _walk_forward_threshold_optimization_diagnostics(
+        calibration_y,
+        test_y,
+        probabilities,
+        np.tile(np.asarray([[0.10, 0.10, 0.80]], dtype=float), (60, 1)),
+        minimum_precision=0.40,
+        minimum_recall=0.20,
+    )
+
+    assert result["status"] == "SKIPPED_INSUFFICIENT_CALIBRATION_SAMPLES"
+    assert result["calibration"]["hold_support"] == 29
+    assert result["post_calibration_validation"] is None

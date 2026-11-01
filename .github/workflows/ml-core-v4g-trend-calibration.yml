@@ -241,16 +241,15 @@ jobs:
               assert item["fold_index"] in {1, 2, 3}
               assert item["sample_signature_sha256"]
               fold = item["fold"]
-              assert fold["training_label_end_before_calibration"] is True
-              assert fold["calibration_labels_end_before_test"] is True
               assert fold["train_calibration_test_indices_disjoint"] is True
               assert fold["pre_calibration_embargo_bars"] == 12
-              assert fold["calibration_hold_samples"] >= 30 or (
-                  item["status"] == "SKIPPED_INSUFFICIENT_CALIBRATION_SAMPLES"
-              )
-              assert fold["calibration_non_hold_samples"] >= 30 or (
-                  item["status"] == "SKIPPED_INSUFFICIENT_CALIBRATION_SAMPLES"
-              )
+              if fold["train_rows"] > 0:
+                  assert fold["training_label_end_before_calibration"] is True
+              if fold["calibration_rows"] > 0:
+                  assert fold["calibration_labels_end_before_test"] is True
+              if item["status"] == "TRAINED":
+                  assert fold["calibration_hold_samples"] >= 30
+                  assert fold["calibration_non_hold_samples"] >= 30
               key = (item["pair"], item["timeframe"], item["fold_index"])
               grouped.setdefault(key, []).append(item)
               if item["status"] == "TRAINED":
@@ -274,6 +273,9 @@ jobs:
           assert report["walk_forward_summary"]["fold_count"] == 3
           assert len(report["walk_forward_summary"]["folds"]) == 3
           safety = report["safety"]
+          assert report["trained_models"] == sum(
+              len(item["model_variants"] or {}) for item in report["experiments"]
+          )
           assert safety["Champion"] is None
           assert safety["order_permission"] is False
           assert safety["private_api_calls"] == 0

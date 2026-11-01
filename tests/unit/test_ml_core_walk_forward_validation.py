@@ -120,3 +120,41 @@ def test_walk_forward_rejects_short_dataset_and_missing_labels() -> None:
     features, labels = _frames()
     with pytest.raises(ValueError, match="walk_forward_labels_missing"):
         create_walk_forward_folds(features, labels.drop(columns=["label"]))
+
+
+
+def test_walk_forward_support_skips_when_feature_mask_removes_calibration_rows() -> None:
+    features, labels = _frames()
+    features.loc[576:719, "feature"] = np.nan
+
+    folds = create_walk_forward_folds(features, labels, fold_count=3)
+
+    assert folds[0].calibration_indices == ()
+    assert folds[0].diagnostics["calibration_rows"] == 0
+    assert folds[0].diagnostics["calibration_label_end_max_index"] is None
+    assert (
+        folds[0].diagnostics["calibration_support_status"]
+        == "SKIPPED_INSUFFICIENT_CALIBRATION_SAMPLES"
+    )
+    assert folds[0].diagnostics["calibration_labels_end_before_test"] is False
+
+
+@pytest.mark.parametrize("horizon", [True, 0, -1, 1.5])
+def test_walk_forward_rejects_invalid_label_horizon(horizon: object) -> None:
+    features, labels = _frames()
+
+    with pytest.raises(ValueError, match="walk_forward_label_horizon_invalid"):
+        create_walk_forward_folds(
+            features, labels, label_horizon_candles=horizon  # type: ignore[arg-type]
+        )
+
+
+def test_walk_forward_handles_unlabeled_rows_without_using_them() -> None:
+    features, labels = _frames()
+    labels.loc[600, "label"] = None
+    labels.loc[601, "label_end_idx"] = np.nan
+
+    folds = create_walk_forward_folds(features, labels, fold_count=3)
+
+    assert 600 not in folds[0].calibration_indices
+    assert 601 not in folds[0].calibration_indices
