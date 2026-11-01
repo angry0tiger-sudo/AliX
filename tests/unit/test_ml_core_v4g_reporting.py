@@ -79,7 +79,10 @@ def test_walk_forward_threshold_uses_calibration_and_scores_only_test() -> None:
     assert result["calibration"]["end_row_index"] == 219
     assert result["post_calibration_validation"]["start_row_index"] == 500
     assert result["post_calibration_validation"]["end_row_index"] == 559
-    assert result["post_calibration_validation"]["evaluation_scope"] == "WALK_FORWARD_TEST_ONLY"
+    assert (
+        result["post_calibration_validation"]["evaluation_scope"]
+        == "WALK_FORWARD_TEST_ONLY"
+    )
     assert result["post_calibration_validation"]["hold_metrics"]["precision"] == 1.0
     assert result["post_calibration_validation"]["hold_metrics"]["recall"] == 1.0
     assert result["post_calibration_validation"]["calibration_overlap"] is False
@@ -95,9 +98,7 @@ def test_walk_forward_threshold_distinguishes_no_feasible_from_low_support() -> 
         np.asarray([[0.45, 0.45, 0.10]], dtype=float), (120, 1)
     )
     test_y = Series(["HOLD", "BUY", "SELL"] * 20, index=range(300, 360))
-    test_probabilities = np.tile(
-        np.asarray([[0.45, 0.45, 0.10]], dtype=float), (60, 1)
-    )
+    test_probabilities = np.tile(np.asarray([[0.45, 0.45, 0.10]], dtype=float), (60, 1))
 
     result = _walk_forward_threshold_optimization_diagnostics(
         calibration_y,
@@ -157,15 +158,15 @@ def test_walk_forward_summary_compares_matched_profile_support() -> None:
 
 
 
-def test_walk_forward_threshold_skips_when_calibration_hold_support_is_below_thirty() -> None:
+def test_walk_forward_threshold_skips_when_calibration_hold_support_is_below_thirty() -> (
+    None
+):
     calibration_y = Series(
         ["HOLD"] * 29 + ["BUY"] * 46 + ["SELL"] * 45,
         index=range(120),
         dtype=object,
     )
-    probabilities = np.tile(
-        np.asarray([[0.10, 0.10, 0.80]], dtype=float), (120, 1)
-    )
+    probabilities = np.tile(np.asarray([[0.10, 0.10, 0.80]], dtype=float), (120, 1))
     test_y = Series(["HOLD", "BUY", "SELL"] * 20, index=range(300, 360))
 
     result = _walk_forward_threshold_optimization_diagnostics(

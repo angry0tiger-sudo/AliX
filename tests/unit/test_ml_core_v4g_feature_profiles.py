@@ -40,9 +40,7 @@ def test_v4g_builds_only_trend_group_for_baseline_and_trend_profiles() -> None:
 
 
 def test_selected_feature_group_builder_rejects_invalid_selection() -> None:
-    with pytest.raises(
-        ValueError, match="extended_feature_group_selection_invalid"
-    ):
+    with pytest.raises(ValueError, match="extended_feature_group_selection_invalid"):
         build_extended_feature_groups(_candles(), group_names=())
 
     with pytest.raises(ValueError, match="extended_feature_group_unknown"):

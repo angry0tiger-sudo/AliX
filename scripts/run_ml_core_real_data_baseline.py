@@ -65,9 +65,7 @@ DEFAULT_BARRIER_SCENARIOS = (
 )
 REPORT_SCHEMA = "alix.ml-core.real-data-classification-diagnostic.v5"
 FEATURE_ABLATION_REPORT_SCHEMA = "alix.ml-core.real-data-feature-ablation.v1"
-WALK_FORWARD_TREND_REPORT_SCHEMA = (
-    "alix.ml-core.walk-forward-trend-calibration.v1"
-)
+WALK_FORWARD_TREND_REPORT_SCHEMA = "alix.ml-core.walk-forward-trend-calibration.v1"
 V4G_FEATURE_PROFILE_ORDER = ("Baseline", "Baseline+Trend")
 
 
@@ -1530,7 +1528,9 @@ def _fit_walk_forward_variants(
         train_prediction = predictions_from_probabilities(
             train_probabilities, train_y.index
         )
-        test_prediction = predictions_from_probabilities(test_probabilities, test_y.index)
+        test_prediction = predictions_from_probabilities(
+            test_probabilities, test_y.index
+        )
         threshold_diagnostics = _walk_forward_threshold_optimization_diagnostics(
             calibration_y,
             test_y,
@@ -1607,9 +1607,8 @@ def run_walk_forward_experiment(
     calibration_indices = list(fold.calibration_indices)
     test_indices = list(fold.test_indices)
     all_indices = train_indices + calibration_indices + test_indices
-    if (
-        len(set(all_indices)) != len(all_indices)
-        or any(index < 0 or index >= len(bars) for index in all_indices)
+    if len(set(all_indices)) != len(all_indices) or any(
+        index < 0 or index >= len(bars) for index in all_indices
     ):
         raise ValueError("walk_forward_sample_indices_invalid")
 
@@ -1718,9 +1717,7 @@ def run_walk_forward_experiment(
         minimum_hold_precision=minimum_hold_precision,
         minimum_hold_recall=minimum_hold_recall,
     )
-    result = _build_trained_experiment_result(
-        base_result, train_y, test_y, variants
-    )
+    result = _build_trained_experiment_result(base_result, train_y, test_y, variants)
     result["overfitting_assessment"]["caveat"] = (
         "In-sample versus this fold's forward Test score; diagnostic heuristic, not proof."
     )
@@ -2349,9 +2346,7 @@ def _run_diagnostic_experiments(
                                 take_profit_multiplier=scenario[
                                     "take_profit_multiplier"
                                 ],
-                                stop_loss_multiplier=scenario[
-                                    "stop_loss_multiplier"
-                                ],
+                                stop_loss_multiplier=scenario["stop_loss_multiplier"],
                                 prepared_bars=bars,
                                 prepared_labels=labels,
                                 prepared_feature_profiles=profile_matrices,
@@ -2541,8 +2536,7 @@ def _build_walk_forward_summary(
                     [values[1] for _, values in forward]
                 ),
                 "precision_at_least_0_40_count": sum(
-                    values[0] >= DEFAULT_MINIMUM_HOLD_PRECISION
-                    for _, values in forward
+                    values[0] >= DEFAULT_MINIMUM_HOLD_PRECISION for _, values in forward
                 ),
                 "strict_acceptance_count": sum(
                     _forward_hold_acceptance_pass(values) for _, values in forward
@@ -2558,7 +2552,9 @@ def _build_walk_forward_summary(
         trend_precision: list[float] = []
         trend_wins = 0
         if "Baseline" in indexed and "Baseline+Trend" in indexed:
-            shared_keys = set(indexed["Baseline"]).intersection(indexed["Baseline+Trend"])
+            shared_keys = set(indexed["Baseline"]).intersection(
+                indexed["Baseline+Trend"]
+            )
             for key in sorted(shared_keys):
                 base_values = indexed["Baseline"][key]
                 trend_values = indexed["Baseline+Trend"][key]
@@ -2606,8 +2602,7 @@ def _build_walk_forward_summary(
         },
         "strict_acceptance_count_by_profile": {
             profile: sum(
-                item["profiles"][profile]["strict_acceptance_count"]
-                for item in folds
+                item["profiles"][profile]["strict_acceptance_count"] for item in folds
             )
             for profile in profile_names
         },

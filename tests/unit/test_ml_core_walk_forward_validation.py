@@ -74,7 +74,9 @@ def test_walk_forward_rejects_invalid_calibration_fraction(fraction: object) -> 
 
     with pytest.raises(ValueError, match="walk_forward_calibration_fraction_invalid"):
         create_walk_forward_folds(
-            features, labels, calibration_fraction=fraction  # type: ignore[arg-type]
+            features,
+            labels,
+            calibration_fraction=fraction,  # type: ignore[arg-type]
         )
 
 
@@ -122,7 +124,9 @@ def test_walk_forward_rejects_short_dataset_and_missing_labels() -> None:
 
 
 
-def test_walk_forward_support_skips_when_feature_mask_removes_calibration_rows() -> None:
+def test_walk_forward_support_skips_when_feature_mask_removes_calibration_rows() -> (
+    None
+):
     features, labels = _frames()
     features.loc[576:719, "feature"] = np.nan
 
@@ -144,7 +148,9 @@ def test_walk_forward_rejects_invalid_label_horizon(horizon: object) -> None:
 
     with pytest.raises(ValueError, match="walk_forward_label_horizon_invalid"):
         create_walk_forward_folds(
-            features, labels, label_horizon_candles=horizon  # type: ignore[arg-type]
+            features,
+            labels,
+            label_horizon_candles=horizon,  # type: ignore[arg-type]
         )
 
 

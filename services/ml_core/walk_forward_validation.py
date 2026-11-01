@@ -68,13 +68,17 @@ def _maximum_or_none(values: tuple[int, ...], ends: list[int]) -> int | None:
     return max(ends[index] for index in values)
 
 
-def _calibration_support(labels: DataFrame, indices: tuple[int, ...]) -> tuple[int, int]:
+def _calibration_support(
+    labels: DataFrame, indices: tuple[int, ...]
+) -> tuple[int, int]:
     values = labels.iloc[list(indices)]["label"]
     hold_count = int((values == "HOLD").sum())
     return hold_count, len(indices) - hold_count
 
 
-def _fold_test_bounds(row_count: int, fold_index: int, fold_count: int) -> tuple[int, int]:
+def _fold_test_bounds(
+    row_count: int, fold_index: int, fold_count: int
+) -> tuple[int, int]:
     width = (FINAL_TEST_END_FRACTION - FIRST_TEST_START_FRACTION) / fold_count
     start_fraction = FIRST_TEST_START_FRACTION + (fold_index - 1) * width
     end_fraction = FIRST_TEST_START_FRACTION + fold_index * width
@@ -122,9 +126,7 @@ def _build_one_fold(
         if index in eligible_indices and ends[index] < test_start
     )
     test = tuple(
-        index
-        for index in range(test_start, test_end + 1)
-        if index in eligible_indices
+        index for index in range(test_start, test_end + 1) if index in eligible_indices
     )
 
     hold_count, non_hold_count = _calibration_support(labels, calibration)

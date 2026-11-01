@@ -343,9 +343,7 @@ def build_feature_profiles(
     for profile in selected:
         frames: list[DataFrame] = []
         for group in feature_profile_groups(profile):
-            frames.append(
-                baseline if group == "Baseline" else extended_groups[group]
-            )
+            frames.append(baseline if group == "Baseline" else extended_groups[group])
         matrix = pd.concat(frames, axis=1)
         if not matrix.columns.is_unique:
             raise ValueError("feature_profile_duplicate_columns")

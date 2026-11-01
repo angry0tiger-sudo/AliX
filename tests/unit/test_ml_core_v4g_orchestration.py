@@ -23,9 +23,7 @@ def test_v4g_orchestration_runs_only_two_profiles_over_three_folds(
     )
     matrices = {
         "Baseline": DataFrame({"baseline": range(1200)}),
-        "Baseline+Trend": DataFrame(
-            {"baseline": range(1200), "trend": range(1200)}
-        ),
+        "Baseline+Trend": DataFrame({"baseline": range(1200), "trend": range(1200)}),
     }
     dummy_folds = tuple(
         WalkForwardFold(
@@ -137,26 +135,19 @@ def test_v4g_orchestration_runs_only_two_profiles_over_three_folds(
     assert len(profile_builder_calls) == 8
     assert all(names == V4G_FEATURE_PROFILE_ORDER for names in profile_builder_calls)
     assert all(
-        parameters == {
+        parameters
+        == {
             "fold_count": 3,
             "label_horizon_candles": 12,
             "calibration_fraction": 0.20,
         }
         for parameters in fold_builder_calls
     )
-    assert {
-        (item["pair"], item["timeframe"])
-        for item in result
-    } == {
+    assert {(item["pair"], item["timeframe"]) for item in result} == {
         (pair, timeframe)
         for pair in ("BTC/USDT", "ETH/USDT")
         for timeframe in ("15m", "30m", "1h", "4h")
     }
-    assert {
-        (item["fold_index"], item["feature_profile"])
-        for item in result
-    } == {
-        (fold, profile)
-        for fold in (1, 2, 3)
-        for profile in V4G_FEATURE_PROFILE_ORDER
+    assert {(item["fold_index"], item["feature_profile"]) for item in result} == {
+        (fold, profile) for fold in (1, 2, 3) for profile in V4G_FEATURE_PROFILE_ORDER
     }
