@@ -68,12 +68,131 @@ def _maximum_or_none(values: tuple[int, ...], ends: list[int]) -> int | None:
     return max(ends[index] for index in values)
 
 
+def _minimum_or_none(values: tuple[int, ...]) -> int | None:
+    return min(values) if values else None
+
+
 def _calibration_support(
     labels: DataFrame, indices: tuple[int, ...]
 ) -> tuple[int, int]:
     values = labels.iloc[list(indices)]["label"]
     hold_count = int((values == "HOLD").sum())
     return hold_count, len(indices) - hold_count
+
+
+def _calibration_status(hold_count: int, non_hold_count: int) -> str:
+    support_is_sufficient = (
+        hold_count >= MINIMUM_CALIBRATION_HOLD_SAMPLES
+        and non_hold_count >= MINIMUM_CALIBRATION_NON_HOLD_SAMPLES
+    )
+    return "PASS" if support_is_sufficient else "SKIPPED_INSUFFICIENT_CALIBRATION_SAMPLES"
+
+
+def _indices_are_disjoint(
+    train: tuple[int, ...],
+    calibration: tuple[int, ...],
+    test: tuple[int, ...],
+) -> bool:
+    return (
+        not set(train).intersection(calibration)
+        and not set(train).intersection(test)
+        and not set(calibration).intersection(test)
+    )
+
+
+def _build_fold_indices(
+    ends: list[int],
+    eligible_indices: set[int],
+    *,
+    calibration_start: int,
+    test_start: int,
+    test_end: int,
+    horizon: int,
+) -> tuple[tuple[int, ...], tuple[int, ...], tuple[int, ...], Any, int]:
+    split = create_purged_embargo_split(
+        ends,
+        validation_start=calibration_start,
+        validation_end=test_end,
+        label_horizon_candles=horizon,
+    )
+    train_limit = calibration_start - split.embargo_size
+    train = tuple(
+        index
+        for index in split.train_indices
+        if index in eligible_indices
+        and index < train_limit
+        and ends[index] < calibration_start
+    )
+    calibration = tuple(
+        index
+        for index in range(calibration_start, test_start)
+        if index in eligible_indices and ends[index] < test_start
+    )
+    test = tuple(
+        index for index in range(test_start, test_end + 1) if index in eligible_indices
+    )
+    return train, calibration, test, split, train_limit
+
+
+def _build_fold_diagnostics(
+    features: DataFrame,
+    labels: DataFrame,
+    ends: list[int],
+    eligible_indices: set[int],
+    *,
+    fold_index: int,
+    fold_count: int,
+    train: tuple[int, ...],
+    calibration: tuple[int, ...],
+    test: tuple[int, ...],
+    split: Any,
+    train_limit: int,
+    calibration_start: int,
+    test_start: int,
+    test_end: int,
+) -> dict[str, Any]:
+    hold_count, non_hold_count = _calibration_support(labels, calibration)
+    train_label_end = _maximum_or_none(train, ends)
+    calibration_label_end = _maximum_or_none(calibration, ends)
+    return {
+        "fold_index": fold_index,
+        "fold_count": fold_count,
+        "train_start_index": _minimum_or_none(train),
+        "train_end_index": _maximum_or_none(train, ends),
+        "training_label_end_max_index": train_label_end,
+        "calibration_start_index": calibration_start,
+        "calibration_end_index": test_start - 1,
+        "calibration_last_sample_index": _maximum_or_none(calibration, ends),
+        "calibration_label_end_max_index": calibration_label_end,
+        "test_start_index": test_start,
+        "test_end_index": test_end,
+        "train_rows": len(train),
+        "calibration_rows": len(calibration),
+        "test_rows": len(test),
+        "calibration_hold_samples": hold_count,
+        "calibration_non_hold_samples": non_hold_count,
+        "calibration_support_status": _calibration_status(
+            hold_count, non_hold_count
+        ),
+        "minimum_calibration_hold_samples": MINIMUM_CALIBRATION_HOLD_SAMPLES,
+        "minimum_calibration_non_hold_samples": MINIMUM_CALIBRATION_NON_HOLD_SAMPLES,
+        "pre_calibration_embargo_bars": split.embargo_size,
+        "post_test_embargo_bars": len(split.embargo_indices),
+        "purged_train_candidate_rows": sum(
+            index in eligible_indices and index < train_limit
+            for index in split.purged_indices
+        ),
+        "training_label_end_before_calibration": (
+            train_label_end is not None and train_label_end < calibration_start
+        ),
+        "calibration_labels_end_before_test": (
+            calibration_label_end is not None and calibration_label_end < test_start
+        ),
+        "train_calibration_test_indices_disjoint": _indices_are_disjoint(
+            train, calibration, test
+        ),
+        "common_feature_rows": int(features.notna().all(axis=1).sum()),
+    }
 
 
 def _fold_test_bounds(
@@ -100,83 +219,36 @@ def _build_one_fold(
     horizon: int,
     calibration_fraction: float,
 ) -> WalkForwardFold:
-    row_count = len(labels)
-    test_start, test_end = _fold_test_bounds(row_count, fold_index, fold_count)
+    test_start, test_end = _fold_test_bounds(
+        len(labels), fold_index, fold_count
+    )
     calibration_start = floor(test_start * (1.0 - calibration_fraction))
-    if calibration_start <= 0 or calibration_start >= test_start:
+    if not 0 < calibration_start < test_start:
         raise ValueError("walk_forward_calibration_window_invalid")
-
-    split = create_purged_embargo_split(
+    train, calibration, test, split, train_limit = _build_fold_indices(
         ends,
-        validation_start=calibration_start,
-        validation_end=test_end,
-        label_horizon_candles=horizon,
+        eligible_indices,
+        calibration_start=calibration_start,
+        test_start=test_start,
+        test_end=test_end,
+        horizon=horizon,
     )
-    train_limit = calibration_start - split.embargo_size
-    train = tuple(
-        index
-        for index in split.train_indices
-        if index in eligible_indices
-        and index < train_limit
-        and ends[index] < calibration_start
+    diagnostics = _build_fold_diagnostics(
+        features,
+        labels,
+        ends,
+        eligible_indices,
+        fold_index=fold_index,
+        fold_count=fold_count,
+        train=train,
+        calibration=calibration,
+        test=test,
+        split=split,
+        train_limit=train_limit,
+        calibration_start=calibration_start,
+        test_start=test_start,
+        test_end=test_end,
     )
-    calibration = tuple(
-        index
-        for index in range(calibration_start, test_start)
-        if index in eligible_indices and ends[index] < test_start
-    )
-    test = tuple(
-        index for index in range(test_start, test_end + 1) if index in eligible_indices
-    )
-
-    hold_count, non_hold_count = _calibration_support(labels, calibration)
-    train_label_end = _maximum_or_none(train, ends)
-    calibration_label_end = _maximum_or_none(calibration, ends)
-    index_sets_disjoint = (
-        not set(train).intersection(calibration)
-        and not set(train).intersection(test)
-        and not set(calibration).intersection(test)
-    )
-    diagnostics: dict[str, Any] = {
-        "fold_index": fold_index,
-        "fold_count": fold_count,
-        "train_start_index": min(train) if train else None,
-        "train_end_index": max(train) if train else None,
-        "training_label_end_max_index": train_label_end,
-        "calibration_start_index": calibration_start,
-        "calibration_end_index": test_start - 1,
-        "calibration_last_sample_index": max(calibration) if calibration else None,
-        "calibration_label_end_max_index": calibration_label_end,
-        "test_start_index": test_start,
-        "test_end_index": test_end,
-        "train_rows": len(train),
-        "calibration_rows": len(calibration),
-        "test_rows": len(test),
-        "calibration_hold_samples": hold_count,
-        "calibration_non_hold_samples": non_hold_count,
-        "calibration_support_status": (
-            "PASS"
-            if hold_count >= MINIMUM_CALIBRATION_HOLD_SAMPLES
-            and non_hold_count >= MINIMUM_CALIBRATION_NON_HOLD_SAMPLES
-            else "SKIPPED_INSUFFICIENT_CALIBRATION_SAMPLES"
-        ),
-        "minimum_calibration_hold_samples": MINIMUM_CALIBRATION_HOLD_SAMPLES,
-        "minimum_calibration_non_hold_samples": MINIMUM_CALIBRATION_NON_HOLD_SAMPLES,
-        "pre_calibration_embargo_bars": split.embargo_size,
-        "post_test_embargo_bars": len(split.embargo_indices),
-        "purged_train_candidate_rows": sum(
-            index in eligible_indices and index < train_limit
-            for index in split.purged_indices
-        ),
-        "training_label_end_before_calibration": (
-            train_label_end is not None and train_label_end < calibration_start
-        ),
-        "calibration_labels_end_before_test": (
-            calibration_label_end is not None and calibration_label_end < test_start
-        ),
-        "train_calibration_test_indices_disjoint": index_sets_disjoint,
-        "common_feature_rows": int(features.notna().all(axis=1).sum()),
-    }
     return WalkForwardFold(
         fold_index=fold_index,
         train_indices=train,
@@ -184,6 +256,50 @@ def _build_one_fold(
         test_indices=test,
         diagnostics=diagnostics,
     )
+
+
+def _validated_fold_count(value: object) -> int:
+    folds = _positive_integer(value, "walk_forward_fold_count_invalid")
+    if not MINIMUM_WALK_FORWARD_FOLDS <= folds <= MAXIMUM_WALK_FORWARD_FOLDS:
+        raise ValueError("walk_forward_fold_count_out_of_policy")
+    return folds
+
+
+def _validated_calibration_fraction(value: object) -> float:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not isfinite(float(value))
+        or not 0.0 < float(value) < 0.5
+    ):
+        raise ValueError("walk_forward_calibration_fraction_invalid")
+    return float(value)
+
+
+def _validate_walk_forward_frames(
+    common_features: DataFrame, labels: DataFrame
+) -> None:
+    if len(common_features) != len(labels):
+        raise ValueError("walk_forward_features_labels_length_mismatch")
+    if len(labels) < 100:
+        raise ValueError("walk_forward_rows_insufficient")
+    if "label" not in labels.columns:
+        raise ValueError("walk_forward_labels_missing")
+
+
+def _eligible_sample_indices(
+    common_features: DataFrame, labels: DataFrame
+) -> set[int]:
+    eligible_mask = (
+        common_features.notna().all(axis=1)
+        & labels["label"].isin(LABELS)
+        & labels["label_end_idx"].notna()
+    )
+    return {
+        int(index)
+        for index, eligible in enumerate(eligible_mask.to_numpy(dtype=bool))
+        if eligible
+    }
 
 
 def create_walk_forward_folds(
@@ -202,38 +318,14 @@ def create_walk_forward_folds(
     purged against the combined calibration/test span and embargoed by the
     complete target-label horizon before calibration.
     """
-    folds = _positive_integer(fold_count, "walk_forward_fold_count_invalid")
-    if folds < MINIMUM_WALK_FORWARD_FOLDS or folds > MAXIMUM_WALK_FORWARD_FOLDS:
-        raise ValueError("walk_forward_fold_count_out_of_policy")
+    folds = _validated_fold_count(fold_count)
     horizon = _positive_integer(
         label_horizon_candles, "walk_forward_label_horizon_invalid"
     )
-    if (
-        isinstance(calibration_fraction, bool)
-        or not isinstance(calibration_fraction, (int, float))
-        or not isfinite(float(calibration_fraction))
-        or not 0.0 < float(calibration_fraction) < 0.5
-    ):
-        raise ValueError("walk_forward_calibration_fraction_invalid")
-    if len(common_features) != len(labels):
-        raise ValueError("walk_forward_features_labels_length_mismatch")
-    if len(labels) < 100:
-        raise ValueError("walk_forward_rows_insufficient")
-    if "label" not in labels.columns:
-        raise ValueError("walk_forward_labels_missing")
-
-    row_count = len(labels)
-    ends = _validated_label_ends(labels, row_count)
-    eligible_mask = (
-        common_features.notna().all(axis=1)
-        & labels["label"].isin(LABELS)
-        & labels["label_end_idx"].notna()
-    )
-    eligible_indices = {
-        int(index)
-        for index, eligible in enumerate(eligible_mask.to_numpy(dtype=bool))
-        if eligible
-    }
+    fraction = _validated_calibration_fraction(calibration_fraction)
+    _validate_walk_forward_frames(common_features, labels)
+    ends = _validated_label_ends(labels, len(labels))
+    eligible_indices = _eligible_sample_indices(common_features, labels)
     return tuple(
         _build_one_fold(
             features=common_features,
@@ -243,7 +335,7 @@ def create_walk_forward_folds(
             fold_index=fold_index,
             fold_count=folds,
             horizon=horizon,
-            calibration_fraction=float(calibration_fraction),
+            calibration_fraction=fraction,
         )
         for fold_index in range(1, folds + 1)
     )
