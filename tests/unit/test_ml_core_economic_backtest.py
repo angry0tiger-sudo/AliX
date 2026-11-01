@@ -216,9 +216,7 @@ def test_resampling_requires_complete_bars_and_preserves_ohlcv() -> None:
         resample_ohlcv(minute, "1m")
     incomplete_first_bar = resample_ohlcv(minute.drop(index=5), "15m")
     assert len(incomplete_first_bar) == 1
-    assert incomplete_first_bar.iloc[0]["date"] == pd.Timestamp(
-        "2026-01-01T00:15:00Z"
-    )
+    assert incomplete_first_bar.iloc[0]["date"] == pd.Timestamp("2026-01-01T00:15:00Z")
     with pytest.raises(ValueError, match="resampled_bars_empty"):
         resample_ohlcv(minute.drop(index=[5, 20]), "15m")
 
