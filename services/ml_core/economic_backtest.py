@@ -71,10 +71,26 @@ def validate_execution_config(config: ExecutionConfig) -> None:
         raise ValueError("maximum_drawdown_must_be_in_(0,1)")
 
 
-def validate_source_report(report: dict[str, Any]) -> None:
-    """Require the exact approved V4-H report and closed safety state."""
+def _source_report_metadata_is_approved(report: dict[str, Any]) -> bool:
+    """Check immutable V4-H identity and training contract fields."""
+    acceptance = report.get("acceptance_policy")
+    return (
+        report.get("schema_version") == V4H_SOURCE_SCHEMA
+        and report.get("commit_sha") == V4H_SOURCE_SHA
+        and report.get("diagnostic_scope") == "CLASSIFICATION_ONLY"
+        and report.get("economic_evaluation_performed") is False
+        and report.get("trained_models") == 96
+        and report.get("experiment_count") == 48
+        and isinstance(acceptance, dict)
+        and acceptance.get("status") == "MET"
+        and acceptance.get("strict_acceptance_count") == 13
+    )
+
+
+def _source_report_safety_is_closed(report: dict[str, Any]) -> bool:
+    """Verify source report safety state before any economic replay."""
     safety = report.get("safety")
-    valid_safety = (
+    return (
         isinstance(safety, dict)
         and safety.get("Champion") is None
         and safety.get("order_permission") is False
@@ -82,18 +98,133 @@ def validate_source_report(report: dict[str, Any]) -> None:
         and safety.get("private_api_calls") == 0
         and safety.get("real_order_attempts") == 0
     )
-    if (
-        report.get("schema_version") != V4H_SOURCE_SCHEMA
-        or report.get("commit_sha") != V4H_SOURCE_SHA
-        or report.get("diagnostic_scope") != "CLASSIFICATION_ONLY"
-        or report.get("economic_evaluation_performed") is not False
-        or report.get("trained_models") != 96
-        or report.get("experiment_count") != 48
-        or report.get("acceptance_policy", {}).get("status") != "MET"
-        or report.get("acceptance_policy", {}).get("strict_acceptance_count") != 13
-        or not valid_safety
-    ):
+
+
+def validate_source_report(report: dict[str, Any]) -> None:
+    """Require the exact approved V4-H report and closed safety state."""
+    if not _source_report_metadata_is_approved(report):
         raise ValueError("v4h_source_report_contract_invalid")
+    if not _source_report_safety_is_closed(report):
+        raise ValueError("v4h_source_report_contract_invalid")
+
+
+def _candidate_forward_metrics(
+    variant: dict[str, Any],
+) -> tuple[dict[str, Any] | None, float | None, float | None]:
+    """Return persisted Forward HOLD metrics, if the candidate has them."""
+    threshold_report = variant.get("threshold_optimization") or {}
+    forward = threshold_report.get("post_calibration_validation")
+    if not isinstance(forward, dict):
+        return None, None, None
+    hold = forward.get("hold_metrics") or {}
+    precision = hold.get("precision")
+    recall = hold.get("recall")
+    if precision is None or recall is None:
+        return forward, None, None
+    return forward, float(precision), float(recall)
+
+
+def _candidate_passes_hold_acceptance(
+    precision: float, recall: float
+) -> bool:
+    """Apply the approved strict V4-H precision and recall floors."""
+    return (
+        precision >= V4H_MIN_HOLD_PRECISION
+        and recall >= V4H_MIN_HOLD_RECALL
+    )
+
+
+def _candidate_forward_records(
+    variant: dict[str, Any], forward: dict[str, Any]
+) -> tuple[float, int, list[dict[str, Any]]]:
+    """Validate the threshold and extract post-calibration Forward rows."""
+    threshold_report = variant.get("threshold_optimization") or {}
+    threshold = threshold_report.get("selected_threshold")
+    start_index = forward.get("start_row_index")
+    parameters = (variant.get("hyperparameter_tuning") or {}).get(
+        "selected_parameters"
+    )
+    raw_records = variant.get("validation_probabilities")
+    if (
+        threshold is None
+        or start_index is None
+        or not isinstance(parameters, dict)
+        or not isinstance(raw_records, list)
+    ):
+        raise ValueError("accepted_v4h_candidate_replay_data_missing")
+    forward_records = [
+        item for item in raw_records if int(item["row_index"]) >= int(start_index)
+    ]
+    if len(forward_records) != int(forward.get("row_count", -1)):
+        raise ValueError("forward_probability_row_count_mismatch")
+    if not forward_records:
+        raise ValueError("forward_probability_rows_empty")
+    return float(threshold), int(start_index), forward_records
+
+
+def _candidate_identifier(experiment: dict[str, Any], policy: str) -> str:
+    """Create a stable ID for a single V4-H model variant."""
+    return "|".join(
+        (
+            str(experiment["scenario"]),
+            str(experiment["pair"]),
+            str(experiment["timeframe"]),
+            str(experiment["feature_profile"]),
+            policy,
+        )
+    )
+
+
+def _extract_candidate_variant(
+    experiment: dict[str, Any], policy: str, variant: dict[str, Any]
+) -> dict[str, Any] | None:
+    """Build a candidate record only when both Forward HOLD floors are met."""
+    forward, precision, recall = _candidate_forward_metrics(variant)
+    if forward is None or precision is None or recall is None:
+        return None
+    if not _candidate_passes_hold_acceptance(precision, recall):
+        return None
+    threshold, start_index, forward_records = _candidate_forward_records(
+        variant, forward
+    )
+    return {
+        "candidate_id": _candidate_identifier(experiment, policy),
+        "scenario": experiment["scenario"],
+        "pair": experiment["pair"],
+        "timeframe": experiment["timeframe"],
+        "feature_profile": experiment["feature_profile"],
+        "weighting_policy": policy,
+        "selected_parameters": (variant.get("hyperparameter_tuning") or {})[
+            "selected_parameters"
+        ],
+        "hold_precision": precision,
+        "hold_recall": recall,
+        "selected_hold_threshold": threshold,
+        "forward_start_row_index": start_index,
+        "forward_row_count": len(forward_records),
+        "probability_records": forward_records,
+    }
+
+
+def extract_qualifying_candidates(report: dict[str, Any]) -> list[dict[str, Any]]:
+    """Extract the 13 strict Forward-Validation passes and their persisted scores."""
+    validate_source_report(report)
+    candidates: list[dict[str, Any]] = []
+    for experiment in report["experiments"]:
+        if experiment.get("scenario") != V4H_ACCEPTED_GEOMETRY:
+            continue
+        variants = experiment.get("model_variants") or {}
+        for policy, variant in variants.items():
+            candidate = _extract_candidate_variant(experiment, policy, variant)
+            if candidate is not None:
+                candidates.append(candidate)
+    expected = int(report["acceptance_policy"]["strict_acceptance_count"])
+    candidate_ids = {item["candidate_id"] for item in candidates}
+    if len(candidates) != expected or len(candidate_ids) != expected:
+        raise ValueError("v4h_qualifying_candidate_count_mismatch")
+    if any(item["scenario"] != V4H_ACCEPTED_GEOMETRY for item in candidates):
+        raise ValueError("v4h_qualifying_candidate_geometry_mismatch")
+    return candidates
 
 
 def extract_qualifying_candidates(report: dict[str, Any]) -> list[dict[str, Any]]:
@@ -260,60 +391,88 @@ def load_validated_minute_data(
     return candles.loc[:, list(OHLCV_COLUMNS)]
 
 
-def resample_ohlcv(candles: DataFrame, timeframe: str) -> DataFrame:
-    """Rebuild complete epoch-aligned OHLCV bars using the V4-H aggregation rule."""
+def _validate_resample_input(candles: DataFrame, timeframe: str) -> int:
+    """Validate resampling scope and required minute candle columns."""
     if timeframe not in TIMEFRAME_MINUTES:
         raise ValueError("economic_timeframe_out_of_policy")
-    missing = sorted(set(OHLCV_COLUMNS) - set(candles.columns))
-    if missing or candles.empty:
+    if candles.empty or not set(OHLCV_COLUMNS).issubset(candles.columns):
         raise ValueError("economic_ohlcv_input_invalid")
+    return TIMEFRAME_MINUTES[timeframe]
+
+
+def _prepare_resample_source(candles: DataFrame) -> tuple[DataFrame, DataFrame]:
+    """Normalize and validate timestamp and numeric OHLCV columns."""
     source = candles.loc[:, list(OHLCV_COLUMNS)].copy().reset_index(drop=True)
     source["date"] = pd.to_datetime(source["date"], utc=True, errors="coerce")
     numeric = source.loc[:, ["open", "high", "low", "close", "volume"]].apply(
         pd.to_numeric, errors="coerce"
     )
-    if (
-        source["date"].isna().any()
-        or not np.isfinite(numeric.to_numpy(dtype=float)).all()
-    ):
+    if source["date"].isna().any():
+        raise ValueError("economic_ohlcv_values_invalid")
+    if not np.isfinite(numeric.to_numpy(dtype=float)).all():
         raise ValueError("economic_ohlcv_values_invalid")
     if source["date"].duplicated().any() or not source["date"].is_monotonic_increasing:
         raise ValueError("economic_ohlcv_timestamps_invalid")
-    opened = numeric["open"].to_numpy(dtype=float)
-    high = numeric["high"].to_numpy(dtype=float)
-    low = numeric["low"].to_numpy(dtype=float)
-    close = numeric["close"].to_numpy(dtype=float)
-    volume = numeric["volume"].to_numpy(dtype=float)
-    if (
-        np.any(opened <= 0)
-        or np.any(high <= 0)
-        or np.any(low <= 0)
-        or np.any(close <= 0)
-        or np.any(volume < 0)
-        or np.any(high < np.maximum(opened, close))
-        or np.any(low > np.minimum(opened, close))
-        or np.any(high < low)
-    ):
-        raise ValueError("economic_ohlcv_geometry_invalid")
-    source.loc[:, ["open", "high", "low", "close", "volume"]] = numeric
-    minutes = TIMEFRAME_MINUTES[timeframe]
+    return source, numeric
+
+
+def _ohlcv_geometry_is_valid(numeric: DataFrame) -> bool:
+    """Check price positivity, volume, and candle high/low consistency."""
+    prices = ("open", "high", "low", "close")
+    if any((numeric[column] <= 0).any() for column in prices):
+        return False
+    if (numeric["volume"] < 0).any():
+        return False
+    high = numeric["high"]
+    low = numeric["low"]
+    upper_bound = numeric[["open", "close"]].max(axis=1)
+    lower_bound = numeric[["open", "close"]].min(axis=1)
+    return bool((high >= upper_bound).all() and (low <= lower_bound).all() and (high >= low).all())
+
+
+def _aggregate_complete_bars(source: DataFrame, minutes: int) -> DataFrame:
+    """Apply the V4-H epoch-aligned OHLCV aggregation rule."""
     grouped = source.set_index("date").resample(
         f"{minutes}min", origin="epoch", closed="left", label="left"
     )
     bars = grouped.agg(
-        {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}
+        {
+            "open": "first",
+            "high": "max",
+            "low": "min",
+            "close": "last",
+            "volume": "sum",
+        }
     )
     complete = grouped["close"].count() == minutes
-    result = bars.loc[complete].dropna().reset_index()
+    return bars.loc[complete].dropna().reset_index()
+
+
+def resample_ohlcv(candles: DataFrame, timeframe: str) -> DataFrame:
+    """Rebuild complete epoch-aligned OHLCV bars using the V4-H aggregation rule."""
+    minutes = _validate_resample_input(candles, timeframe)
+    source, numeric = _prepare_resample_source(candles)
+    if not _ohlcv_geometry_is_valid(numeric):
+        raise ValueError("economic_ohlcv_geometry_invalid")
+    source.loc[:, ["open", "high", "low", "close", "volume"]] = numeric
+    result = _aggregate_complete_bars(source, minutes)
     if result.empty:
         raise ValueError("economic_resampled_bars_empty")
     return result.loc[:, list(OHLCV_COLUMNS)]
 
 
-def probability_to_signal(probabilities: dict[str, Any], hold_threshold: float) -> str:
-    """Apply the same HOLD-threshold and BUY/SELL tie-break rule as V4-H."""
-    if not np.isfinite(float(hold_threshold)) or not 0 <= float(hold_threshold) <= 1:
+def _validate_hold_threshold(hold_threshold: float) -> float:
+    """Validate the persisted V4-H threshold before signal conversion."""
+    threshold = float(hold_threshold)
+    if not np.isfinite(threshold) or not 0 <= threshold <= 1:
         raise ValueError("economic_hold_threshold_invalid")
+    return threshold
+
+
+def _validated_probability_values(
+    probabilities: dict[str, Any],
+) -> tuple[float, float, float]:
+    """Validate and return BUY, SELL, and HOLD probabilities."""
     try:
         buy = float(probabilities["BUY"])
         sell = float(probabilities["SELL"])
@@ -321,14 +480,20 @@ def probability_to_signal(probabilities: dict[str, Any], hold_threshold: float) 
     except (KeyError, TypeError, ValueError):
         raise ValueError("economic_probabilities_invalid") from None
     values = np.asarray([buy, sell, hold], dtype=float)
-    if (
-        not bool(np.isfinite(values).all())
-        or bool(np.any(values < 0))
-        or bool(np.any(values > 1))
-        or abs(float(values.sum()) - 1.0) > 1e-6
-    ):
+    if not bool(np.isfinite(values).all()):
         raise ValueError("economic_probabilities_invalid")
-    if hold >= float(hold_threshold) and hold > max(buy, sell):
+    if bool(np.any(values < 0)) or bool(np.any(values > 1)):
+        raise ValueError("economic_probabilities_invalid")
+    if abs(float(values.sum()) - 1.0) > 1e-6:
+        raise ValueError("economic_probabilities_invalid")
+    return buy, sell, hold
+
+
+def probability_to_signal(probabilities: dict[str, Any], hold_threshold: float) -> str:
+    """Apply the same HOLD-threshold and BUY/SELL tie-break rule as V4-H."""
+    threshold = _validate_hold_threshold(hold_threshold)
+    buy, sell, hold = _validated_probability_values(probabilities)
+    if hold >= threshold and hold > max(buy, sell):
         return "HOLD"
     return "BUY" if buy >= sell else "SELL"
 
@@ -470,23 +635,45 @@ def max_drawdown_from_equity(equity_values: list[float]) -> float:
     return maximum
 
 
+def _trade_pnl_groups(
+    trades: list[dict[str, Any]],
+) -> tuple[list[float], list[float]]:
+    """Separate positive and negative net trade outcomes."""
+    pnls = [float(item["net_pnl_usd"]) for item in trades]
+    wins = [value for value in pnls if value > 0]
+    losses = [value for value in pnls if value < 0]
+    return wins, losses
+
+
+def _profit_factor_details(
+    wins: list[float], losses: list[float]
+) -> tuple[float | None, bool, float, float]:
+    """Return net profit factor, no-loss status, and gross outcome totals."""
+    gross_profit = sum(wins)
+    gross_loss = abs(sum(losses))
+    profit_factor = gross_profit / gross_loss if gross_loss > 0 else None
+    infinite = bool(wins and not losses)
+    return profit_factor, infinite, gross_profit, gross_loss
+
+
+def _optional_mean(values: list[float]) -> float | None:
+    """Return a rounded mean for a non-empty trade outcome group."""
+    return round(float(np.mean(values)), 8) if values else None
+
+
 def _metrics(
     trades: list[dict[str, Any]],
     equity_values: list[float],
     config: ExecutionConfig,
 ) -> dict[str, Any]:
     """Calculate net-of-cost portfolio and trade statistics."""
+    wins, losses = _trade_pnl_groups(trades)
     pnls = [float(item["net_pnl_usd"]) for item in trades]
-    wins = [value for value in pnls if value > 0]
-    losses = [value for value in pnls if value < 0]
-    gross_profit = sum(wins)
-    gross_loss = abs(sum(losses))
-    pf = gross_profit / gross_loss if gross_loss > 0 else None
-    pf_infinite = bool(trades and gross_profit > 0 and gross_loss == 0)
+    pf, pf_infinite, gross_profit, gross_loss = _profit_factor_details(wins, losses)
     final_equity = float(equity_values[-1])
     max_drawdown = max_drawdown_from_equity(equity_values)
     trade_count = len(trades)
-    pf_pass = (pf is not None and pf > 1.5) or pf_infinite
+    pf_pass = pf_infinite or (pf is not None and pf > 1.5)
     drawdown_pass = max_drawdown < config.maximum_drawdown
     return {
         "initial_equity_usd": round(config.initial_equity, 8),
@@ -501,17 +688,254 @@ def _metrics(
         "profit_factor_infinite_no_losses": pf_infinite,
         "gross_profit_usd": round(gross_profit, 8),
         "gross_loss_usd": round(gross_loss, 8),
-        "average_win_usd": round(float(np.mean(wins)), 8) if wins else None,
-        "average_loss_usd": round(float(np.mean(losses)), 8) if losses else None,
-        "average_net_pnl_per_trade_usd": round(float(np.mean(pnls)), 8)
-        if pnls
-        else None,
+        "average_win_usd": _optional_mean(wins),
+        "average_loss_usd": _optional_mean(losses),
+        "average_net_pnl_per_trade_usd": _optional_mean(pnls),
         "max_drawdown_fraction": round(max_drawdown, 10),
         "max_drawdown_percent": round(max_drawdown * 100.0, 8),
         "profit_factor_gate_passed": pf_pass,
         "drawdown_gate_passed": drawdown_pass,
         "economic_candidate_gate_passed": bool(pf_pass and drawdown_pass),
         "maximum_drawdown_limit_fraction": config.maximum_drawdown,
+    }
+
+
+def _normalize_execution_bars(bars: DataFrame) -> DataFrame:
+    """Validate execution timestamps and next-bar prices once per candidate."""
+    if bars.empty or not {"date", "open", "close"}.issubset(bars.columns):
+        raise ValueError("economic_execution_bars_invalid")
+    normalized = bars.copy().reset_index(drop=True)
+    normalized["date"] = pd.to_datetime(normalized["date"], utc=True, errors="coerce")
+    invalid_dates = (
+        normalized["date"].isna().any()
+        or normalized["date"].duplicated().any()
+        or not normalized["date"].is_monotonic_increasing
+    )
+    if invalid_dates:
+        raise ValueError("economic_execution_timestamps_invalid")
+    for column in ("open", "close"):
+        normalized[column] = pd.to_numeric(normalized[column], errors="coerce")
+        values = normalized[column].to_numpy(dtype=float)
+        if not bool(np.isfinite(values).all()) or bool(np.any(values <= 0)):
+            raise ValueError("economic_execution_prices_invalid")
+    return normalized
+
+
+def _index_execution_signals(
+    signals: list[dict[str, Any]],
+    index_by_time: dict[pd.Timestamp, int],
+) -> dict[int, str]:
+    """Map timezone-aware execution actions to exact market bar indices."""
+    action_by_index: dict[int, str] = {}
+    for item in signals:
+        timestamp = pd.Timestamp(item["execution_timestamp"])
+        if timestamp.tzinfo is None:
+            raise ValueError("economic_execution_signal_timezone_required")
+        index = index_by_time.get(timestamp.tz_convert("UTC"))
+        if index is None:
+            raise ValueError("economic_signal_price_timestamp_mismatch")
+        signal = item["signal"]
+        if signal not in LABELS or index in action_by_index:
+            raise ValueError("economic_signal_contract_invalid")
+        action_by_index[index] = signal
+    if not action_by_index:
+        raise ValueError("economic_bars_or_signals_empty")
+    return action_by_index
+
+
+@dataclass
+class _SimulationState:
+    """Mutable accounting state for one isolated candidate replay."""
+
+    position: OpenPosition | None
+    cash_equity: float
+    peak: float
+    maximum_drawdown: float
+    trades: list[dict[str, Any]]
+    equity_curve: list[dict[str, Any]]
+
+
+def _append_equity_event(
+    state: _SimulationState,
+    timestamp: pd.Timestamp,
+    equity: float,
+    event: str,
+) -> None:
+    """Append one timestamped account-equity event."""
+    state.equity_curve.append(
+        {
+            "timestamp": timestamp.isoformat(),
+            "equity_usd": round(equity, 8),
+            "event": event,
+        }
+    )
+
+
+def _signal_direction(signal: str) -> int:
+    """Map V4-H actions to long, short, or flat intent."""
+    if signal == "BUY":
+        return 1
+    if signal == "SELL":
+        return -1
+    return 0
+
+
+def _close_for_signal(
+    state: _SimulationState,
+    direction: int,
+    bar: Any,
+    timestamp: pd.Timestamp,
+    config: ExecutionConfig,
+) -> None:
+    """Close an existing position on HOLD or an opposite directional signal."""
+    position = state.position
+    if position is None or direction == position.direction:
+        return
+    reason = "HOLD" if direction == 0 else "SIGNAL_REVERSAL"
+    trade, state.cash_equity = _close_position(
+        position, float(bar["open"]), timestamp, reason, config
+    )
+    state.trades.append(trade)
+    state.position = None
+    _append_equity_event(state, timestamp, state.cash_equity, "POSITION_CLOSED")
+
+
+def _open_for_signal(
+    state: _SimulationState,
+    direction: int,
+    bar: Any,
+    timestamp: pd.Timestamp,
+    config: ExecutionConfig,
+) -> None:
+    """Open only a directional signal when no position is currently active."""
+    if direction == 0 or state.position is not None:
+        return
+    state.position, marked_equity = _open_position(
+        state.cash_equity, direction, float(bar["open"]), timestamp, config
+    )
+    state.peak = max(state.peak, marked_equity)
+    state.maximum_drawdown = max(
+        state.maximum_drawdown, (state.peak - marked_equity) / state.peak
+    )
+    _append_equity_event(state, timestamp, marked_equity, "POSITION_OPENED")
+
+
+def _apply_execution_signal(
+    state: _SimulationState,
+    signal: str,
+    bar: Any,
+    timestamp: pd.Timestamp,
+    config: ExecutionConfig,
+) -> None:
+    """Apply close-before-open reversal semantics at the next-bar open."""
+    direction = _signal_direction(signal)
+    _close_for_signal(state, direction, bar, timestamp, config)
+    _open_for_signal(state, direction, bar, timestamp, config)
+
+
+def _mark_execution_bar_close(
+    state: _SimulationState, bar: Any, timestamp: pd.Timestamp
+) -> None:
+    """Mark active exposure to the bar close and update peak-to-trough drawdown."""
+    if state.position is None:
+        marked_equity = state.cash_equity
+    else:
+        marked_equity = _mark_position(state.position, float(bar["close"]))
+    if marked_equity <= 0:
+        raise ValueError("economic_equity_non_positive")
+    state.peak = max(state.peak, marked_equity)
+    state.maximum_drawdown = max(
+        state.maximum_drawdown, (state.peak - marked_equity) / state.peak
+    )
+    _append_equity_event(state, timestamp, marked_equity, "BAR_CLOSE_MARK")
+
+
+def _force_close_forward_window(
+    state: _SimulationState,
+    final_bar: Any,
+    timestamp: pd.Timestamp,
+    config: ExecutionConfig,
+) -> None:
+    """Close any remaining position at the final observed Forward bar close."""
+    if state.position is None:
+        return
+    trade, state.cash_equity = _close_position(
+        state.position,
+        float(final_bar["close"]),
+        timestamp,
+        "END_OF_FORWARD_WINDOW",
+        config,
+    )
+    state.trades.append(trade)
+    state.position = None
+    state.peak = max(state.peak, state.cash_equity)
+    state.maximum_drawdown = max(
+        state.maximum_drawdown, (state.peak - state.cash_equity) / state.peak
+    )
+    _append_equity_event(
+        state, timestamp, state.cash_equity, "FORCED_FINAL_CLOSE"
+    )
+
+
+def simulate_signals(
+    bars: DataFrame,
+    signals: list[dict[str, Any]],
+    config: ExecutionConfig,
+) -> dict[str, Any]:
+    """Replay next-bar-open signals; HOLD closes and never opens a position."""
+    validate_execution_config(config)
+    if not signals:
+        raise ValueError("economic_bars_or_signals_empty")
+    normalized = _normalize_execution_bars(bars)
+    index_by_time = {
+        timestamp: index for index, timestamp in enumerate(normalized["date"].tolist())
+    }
+    action_by_index = _index_execution_signals(signals, index_by_time)
+    first_index = min(action_by_index)
+    last_index = max(action_by_index)
+    initial_equity = float(config.initial_equity)
+    first_timestamp = pd.Timestamp(normalized["date"].iloc[first_index])
+    state = _SimulationState(
+        position=None,
+        cash_equity=initial_equity,
+        peak=initial_equity,
+        maximum_drawdown=0.0,
+        trades=[],
+        equity_curve=[
+            {
+                "timestamp": first_timestamp.isoformat(),
+                "equity_usd": round(initial_equity, 8),
+                "event": "START",
+            }
+        ],
+    )
+    for index in range(first_index, last_index + 1):
+        bar = normalized.iloc[index]
+        timestamp = pd.Timestamp(bar["date"])
+        desired = action_by_index.get(index)
+        if desired is not None:
+            _apply_execution_signal(state, desired, bar, timestamp, config)
+        _mark_execution_bar_close(state, bar, timestamp)
+    final_bar = normalized.iloc[last_index]
+    _force_close_forward_window(
+        state, final_bar, pd.Timestamp(final_bar["date"]), config
+    )
+    equity_values = [
+        float(item["equity_usd"]) for item in state.equity_curve
+    ]
+    if state.maximum_drawdown > max_drawdown_from_equity(equity_values):
+        raise RuntimeError("economic_drawdown_accounting_inconsistent")
+    metrics = _metrics(state.trades, equity_values, config)
+    return {
+        "metrics": metrics,
+        "trades": state.trades,
+        "equity_curve": state.equity_curve,
+        "total_fees_usd": round(
+            sum(item["fees_usd"] for item in state.trades), 8
+        ),
+        "total_slippage_cost_usd": round(
+            sum(item["slippage_cost_usd"] for item in state.trades), 8
+        ),
     }
 
 
