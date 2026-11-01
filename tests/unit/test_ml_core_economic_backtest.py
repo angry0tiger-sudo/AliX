@@ -378,11 +378,13 @@ def test_profit_factor_and_drawdown_are_net_of_costs_and_peak_to_trough() -> Non
             },
             {
                 "execution_timestamp": pd.Timestamp("2026-01-01T00:45:00Z"),
-                "signal": "SELL",
+                "signal": "BUY",
             },
         ],
         ExecutionConfig(),
     )
+    assert result["metrics"]["trade_count"] == 2
+    assert all(trade["direction"] == "LONG" for trade in result["trades"])
     assert result["metrics"]["profit_factor_net_of_costs"] is not None
     assert result["metrics"]["max_drawdown_fraction"] >= 0
     assert result["total_fees_usd"] > 0
