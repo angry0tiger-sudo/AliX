@@ -138,13 +138,9 @@ def _candidate_replay_inputs(
     start_index = forward.get("start_row_index")
     parameters = (variant.get("hyperparameter_tuning") or {}).get("selected_parameters")
     raw_records = variant.get("validation_probabilities")
-    invalid = (
-        threshold is None
-        or start_index is None
-        or not isinstance(parameters, dict)
-        or not isinstance(raw_records, list)
-    )
-    if invalid:
+    if threshold is None or start_index is None:
+        raise ValueError("accepted_v4h_candidate_replay_data_missing")
+    if not isinstance(parameters, dict) or not isinstance(raw_records, list):
         raise ValueError("accepted_v4h_candidate_replay_data_missing")
     return float(threshold), int(start_index), raw_records
 
