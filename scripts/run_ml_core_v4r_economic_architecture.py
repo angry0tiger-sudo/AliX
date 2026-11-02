@@ -830,7 +830,6 @@ def _v4r_paired_effect_values(
     )
 
 
-
 def _v4r_paired_effect_summary(
     effect_values: list[tuple[float, float, float, float, float]],
 ) -> dict[str, float | None]:
