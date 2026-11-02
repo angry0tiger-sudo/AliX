@@ -66,7 +66,9 @@ def _run(
     )
 
 
-def _rows(*, third_bar_high: float = 104.0, next_open: float = 98.0):
+def _rows(
+    *, third_bar_high: float = 104.0, next_open: float = 98.0
+) -> list[tuple[float, float, float, float]]:
     return [
         (100.0, 100.0, 100.0, 100.0),
         (100.0, 102.0, 99.0, 101.0),
