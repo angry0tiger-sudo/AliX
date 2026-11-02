@@ -189,6 +189,7 @@ def _economic_outcomes_by_index(bars: DataFrame, labels: DataFrame) -> Series:
     outcomes = Series(values, index=bars.index, dtype=float)
     return outcomes
 
+
 def _candidate_identifier(
     arm_name: str,
     pair: str,
