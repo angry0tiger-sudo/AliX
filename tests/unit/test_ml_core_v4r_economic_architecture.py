@@ -13,6 +13,7 @@ from services.ml_core.economic_backtest import (
     ExecutionConfig,
     _metrics,
 )
+from pathlib import Path
 from services.ml_core.hyperparameter_tuning import (
     TUNING_OBJECTIVES,
     _select_candidate,
@@ -128,3 +129,20 @@ def test_v4r_paired_comparison_rejects_sample_signature_mismatch() -> None:
     ]
     with pytest.raises(ValueError, match="v4r_paired_sample_signature_mismatch"):
         v4r._paired_comparison(records)
+
+
+def test_v4r_execution_management_uses_primary_asymmetric_geometry() -> None:
+    management = v4r._management_config(v4r.V4R_ARMS[3])
+    assert management.take_profit_atr_multiplier == 2.0
+    assert management.stop_loss_atr_multiplier == 1.0
+    assert management.horizon_candles == 24
+    assert management.trailing_stop_enabled is False
+
+
+def test_v4r_empty_trade_csv_is_still_written_with_header(tmp_path: Path) -> None:
+    output = tmp_path / "trades.csv"
+    columns = ["candidate_id", "trade_index", "net_pnl_usd"]
+    v4r._write_csv(output, [], fieldnames=columns)
+    assert output.read_text(encoding="utf-8").strip() == (
+        "candidate_id,trade_index,net_pnl_usd"
+    )
