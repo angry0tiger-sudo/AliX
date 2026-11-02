@@ -130,13 +130,9 @@ def _mask_to_common_horizon(labels: DataFrame, row_count: int) -> DataFrame:
     return result
 
 
-def _economic_outcomes_by_index(bars: DataFrame, labels: DataFrame) -> Series:
-    """Estimate event gross returns using next-open reference and label barriers.
-
-    Entry slippage is not embedded in gross returns; the scorer deducts the full
-    90 bps round-trip fee/slippage estimate. Intrabar outcomes follow the target
-    label's stop-first collision rule. Final portfolio acceptance uses replay.
-    """
+def _economic_label_arrays(
+    labels: DataFrame,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     event_indices = pd.to_numeric(labels["event_index"], errors="raise").to_numpy(
         dtype=np.int64
     )
@@ -151,43 +147,119 @@ def _economic_outcomes_by_index(bars: DataFrame, labels: DataFrame) -> Series:
     ).to_numpy(dtype=np.float64)
     target_labels = labels["label"].to_numpy(dtype=object)
     exit_reasons = labels["exit_reason"].to_numpy(dtype=object)
+    return (
+        event_indices,
+        label_end_indices,
+        take_profit_prices,
+        stop_loss_prices,
+        target_labels,
+        exit_reasons,
+    )
 
+
+def _validated_proxy_label_end_index(
+    event_index: int, raw_label_end_value: float, row_count: int
+) -> int | None:
+    if not np.isfinite(raw_label_end_value):
+        return None
+    if not raw_label_end_value.is_integer():
+        raise ValueError("v4r_economic_proxy_label_end_index_invalid")
+    label_end_index = int(raw_label_end_value)
+    if event_index < 0 or event_index >= row_count:
+        raise ValueError("v4r_economic_proxy_event_index_invalid")
+    if label_end_index <= event_index or label_end_index >= row_count:
+        raise ValueError("v4r_economic_proxy_label_end_index_invalid")
+    return label_end_index
+
+
+def _proxy_entry_reference(bars: DataFrame, event_index: int) -> float:
+    entry_reference = float(bars.iloc[event_index + 1]["open"])
+    if entry_reference <= 0 or not np.isfinite(entry_reference):
+        raise ValueError("v4r_economic_proxy_entry_price_invalid")
+    return entry_reference
+
+
+def _proxy_exit_reference(
+    bars: DataFrame,
+    position: int,
+    label_end_index: int,
+    exit_reason: object,
+    take_profit_prices: np.ndarray,
+    stop_loss_prices: np.ndarray,
+) -> float:
+    if exit_reason == "TP_HIT":
+        exit_reference = float(take_profit_prices[position])
+    elif exit_reason in ("SL_HIT", "COLLISION"):
+        exit_reference = float(stop_loss_prices[position])
+    elif exit_reason == "HORIZON_EXPIRY":
+        exit_reference = float(bars.iloc[label_end_index]["close"])
+    else:
+        raise ValueError("v4r_economic_proxy_exit_reason_invalid")
+    if exit_reference <= 0 or not np.isfinite(exit_reference):
+        raise ValueError("v4r_economic_proxy_exit_price_invalid")
+    return exit_reference
+
+
+def _proxy_event_gross_return(
+    bars: DataFrame,
+    event_index: int,
+    position: int,
+    label_end_index: int,
+    exit_reason: object,
+    take_profit_prices: np.ndarray,
+    stop_loss_prices: np.ndarray,
+) -> float | None:
+    if event_index + 1 >= len(bars):
+        return None
+    entry_reference = _proxy_entry_reference(bars, event_index)
+    exit_reference = _proxy_exit_reference(
+        bars,
+        position,
+        label_end_index,
+        exit_reason,
+        take_profit_prices,
+        stop_loss_prices,
+    )
+    return exit_reference / entry_reference - 1.0
+
+
+def _economic_outcomes_by_index(bars: DataFrame, labels: DataFrame) -> Series:
+    """Estimate event gross returns using next-open reference and label barriers.
+
+    Entry slippage is not embedded in gross returns; the scorer deducts the full
+    90 bps round-trip fee/slippage estimate. Intrabar outcomes follow the target
+    label's stop-first collision rule. Final portfolio acceptance uses replay.
+    """
+    (
+        event_indices,
+        label_end_indices,
+        take_profit_prices,
+        stop_loss_prices,
+        target_labels,
+        exit_reasons,
+    ) = _economic_label_arrays(labels)
     values = np.full(len(bars), np.nan, dtype=float)
     for position, raw_event_index in enumerate(event_indices):
         event_index = int(raw_event_index)
         if target_labels[position] not in LABELS:
             continue
-
-        label_end_value = float(label_end_indices[position])
-        if not np.isfinite(label_end_value):
+        label_end_index = _validated_proxy_label_end_index(
+            event_index, float(label_end_indices[position]), len(bars)
+        )
+        if label_end_index is None:
             continue
-        if not label_end_value.is_integer():
-            raise ValueError("v4r_economic_proxy_label_end_index_invalid")
-        label_end_index = int(label_end_value)
-        if event_index < 0 or event_index >= len(bars):
-            raise ValueError("v4r_economic_proxy_event_index_invalid")
-        if label_end_index <= event_index or label_end_index >= len(bars):
-            raise ValueError("v4r_economic_proxy_label_end_index_invalid")
-        if event_index + 1 >= len(bars):
-            continue
-
-        entry_reference = float(bars.iloc[event_index + 1]["open"])
-        if entry_reference <= 0 or not np.isfinite(entry_reference):
-            raise ValueError("v4r_economic_proxy_entry_price_invalid")
-        exit_reason = exit_reasons[position]
-        if exit_reason == "TP_HIT":
-            exit_reference = float(take_profit_prices[position])
-        elif exit_reason in {"SL_HIT", "COLLISION"}:
-            exit_reference = float(stop_loss_prices[position])
-        elif exit_reason == "HORIZON_EXPIRY":
-            exit_reference = float(bars.iloc[label_end_index]["close"])
-        else:
-            raise ValueError("v4r_economic_proxy_exit_reason_invalid")
-        if exit_reference <= 0 or not np.isfinite(exit_reference):
-            raise ValueError("v4r_economic_proxy_exit_price_invalid")
-        values[event_index] = exit_reference / entry_reference - 1.0
-    outcomes = Series(values, index=bars.index, dtype=float)
-    return outcomes
+        gross_return = _proxy_event_gross_return(
+            bars,
+            event_index,
+            position,
+            label_end_index,
+            exit_reasons[position],
+            take_profit_prices,
+            stop_loss_prices,
+        )
+        if gross_return is not None:
+            values[event_index] = gross_return
+    return Series(values, index=bars.index, dtype=float)
 
 
 def _candidate_identifier(
@@ -379,55 +451,77 @@ def _profit_factor(pnls: list[float]) -> float | None:
     return round(wins / losses, 8) if losses > 0 else None
 
 
-def _arm_aggregate(records: list[dict[str, Any]]) -> dict[str, Any]:
-    trades = [trade for record in records for trade in record["trades"]]
-    pnls = [float(trade["net_pnl_usd"]) for trade in trades]
-    gross = [float(trade["gross_market_pnl_usd"]) for trade in trades]
-    total_fees = sum(float(record["total_fees_usd"]) for record in records)
-    total_slippage = sum(float(record["total_slippage_cost_usd"]) for record in records)
-    eligible = [
-        record
-        for record in records
-        if record["metrics"]["economic_data_status"] == "ELIGIBLE"
-    ]
-    insufficient = len(records) - len(eligible)
+def _arm_candidate_count_summary(
+    records: list[dict[str, Any]],
+) -> dict[str, Any]:
+    candidate_metrics = [record["metrics"] for record in records]
+    eligible_count = sum(
+        metric["economic_data_status"] == "ELIGIBLE"
+        for metric in candidate_metrics
+    )
     return {
         "candidate_count": len(records),
         "active_candidate_count": sum(
-            int(record["metrics"]["trade_count"]) > 0 for record in records
+            int(metric["trade_count"]) > 0 for metric in candidate_metrics
         ),
-        "insufficient_data_candidate_count": insufficient,
+        "insufficient_data_candidate_count": len(records) - eligible_count,
         "minimum_trade_count_for_acceptance": V4R_MINIMUM_TRADES,
+    }
+
+
+def _arm_trade_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
+    trades = [trade for record in records for trade in record["trades"]]
+    net_pnls = [float(trade["net_pnl_usd"]) for trade in trades]
+    gross_pnls = [float(trade["gross_market_pnl_usd"]) for trade in trades]
+    total_fees = sum(float(record["total_fees_usd"]) for record in records)
+    total_slippage = sum(
+        float(record["total_slippage_cost_usd"]) for record in records
+    )
+    return {
         "trade_count": len(trades),
-        "winning_trade_count": sum(value > 0 for value in pnls),
-        "losing_trade_count": sum(value < 0 for value in pnls),
+        "winning_trade_count": sum(value > 0 for value in net_pnls),
+        "losing_trade_count": sum(value < 0 for value in net_pnls),
         "win_rate": round(
-            sum(value > 0 for value in pnls) / max(1, len(pnls)),
+            sum(value > 0 for value in net_pnls) / max(1, len(net_pnls)),
             8,
         ),
-        "combined_net_profit_factor": _profit_factor(pnls),
-        "combined_gross_profit_factor": _profit_factor(gross),
-        "total_gross_market_pnl_usd": round(sum(gross), 8),
+        "combined_net_profit_factor": _profit_factor(net_pnls),
+        "combined_gross_profit_factor": _profit_factor(gross_pnls),
+        "total_gross_market_pnl_usd": round(sum(gross_pnls), 8),
         "total_fees_usd": round(total_fees, 8),
         "total_slippage_cost_usd": round(total_slippage, 8),
-        "total_net_pnl_usd": round(sum(pnls), 8),
-        "mean_candidate_profit_factor": _mean(
-            [
-                float(record["metrics"]["profit_factor_net_of_costs"])
-                for record in records
-                if record["metrics"]["profit_factor_net_of_costs"] is not None
-            ]
-        ),
-        "mean_candidate_max_drawdown_percent": _mean(
-            [float(record["metrics"]["max_drawdown_percent"]) for record in records]
-        ),
+        "total_net_pnl_usd": round(sum(net_pnls), 8),
+    }
+
+
+def _arm_candidate_risk_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
+    candidate_metrics = [record["metrics"] for record in records]
+    defined_profit_factors = [
+        float(metric["profit_factor_net_of_costs"])
+        for metric in candidate_metrics
+        if metric["profit_factor_net_of_costs"] is not None
+    ]
+    drawdowns = [
+        float(metric["max_drawdown_percent"]) for metric in candidate_metrics
+    ]
+    return {
+        "mean_candidate_profit_factor": _mean(defined_profit_factors),
+        "mean_candidate_max_drawdown_percent": _mean(drawdowns),
         "pf_above_1_5_candidate_count": sum(
-            bool(record["metrics"]["profit_factor_gate_passed"]) for record in records
+            bool(metric["profit_factor_gate_passed"]) for metric in candidate_metrics
         ),
         "strict_economic_pass_candidate_count": sum(
-            bool(record["metrics"]["economic_candidate_gate_passed"])
-            for record in records
+            bool(metric["economic_candidate_gate_passed"])
+            for metric in candidate_metrics
         ),
+    }
+
+
+def _arm_aggregate(records: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        **_arm_candidate_count_summary(records),
+        **_arm_trade_summary(records),
+        **_arm_candidate_risk_summary(records),
     }
 
 

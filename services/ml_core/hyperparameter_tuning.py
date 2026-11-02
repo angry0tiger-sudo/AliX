@@ -590,6 +590,109 @@ def _build_tuning_diagnostics(
     }
 
 
+def _validate_tuning_training_alignment(
+    features: DataFrame,
+    labels: Series,
+    training_indices: Sequence[int],
+    label_end_indices: Sequence[object],
+) -> None:
+    train_rows, _ = _training_rows(training_indices, label_end_indices)
+    if len(features) != len(labels) or len(labels) != len(train_rows):
+        raise ValueError("tuning_train_matrix_alignment_invalid")
+
+
+def _validate_tuning_economic_inputs(
+    features: DataFrame,
+    tuning_objective: str,
+    economic_outcomes: Series | None,
+) -> None:
+    if tuning_objective == "NET_EXPECTANCY_PROXY" and economic_outcomes is None:
+        raise ValueError("tuning_economic_objective_requires_outcomes")
+    if economic_outcomes is not None:
+        if (
+            not isinstance(economic_outcomes, Series)
+            or economic_outcomes.index.has_duplicates
+        ):
+            raise ValueError("tuning_economic_outcomes_invalid")
+        aligned = economic_outcomes.reindex(features.index)
+        if aligned.isna().any() or not bool(
+            np.isfinite(aligned.to_numpy(dtype=float)).all()
+        ):
+            raise ValueError("tuning_economic_outcomes_missing_or_non_finite")
+
+
+def _validate_estimated_cost_bps(estimated_cost_bps: float) -> None:
+    if (
+        isinstance(estimated_cost_bps, bool)
+        or not isfinite(float(estimated_cost_bps))
+        or estimated_cost_bps < 0
+    ):
+        raise ValueError("tuning_estimated_cost_bps_invalid")
+
+
+def tune_lightgbm_classifier(
+    estimator: Any,
+    features: DataFrame,
+    labels: Series,
+    training_indices: Sequence[int],
+    label_end_indices: Sequence[object],
+    *,
+    horizon_candles: int,
+    class_weight_policy: str,
+    minimum_hold_recall: float,
+    n_iter: int = DEFAULT_RANDOM_SEARCH_ITERATIONS,
+    n_splits: int = DEFAULT_INNER_CV_SPLITS,
+    random_state: int = DEFAULT_RANDOM_STATE,
+    tuning_objective: str = "HOLD_PRECISION",
+    economic_outcomes: Series | None = None,
+    estimated_cost_bps: float = DEFAULT_ESTIMATED_ROUND_TRIP_COST_BPS,
+) -> tuple[Any, dict[str, Any]]:
+    """Tune on outer Train only, then refit the selected model on all outer Train."""
+    tuning_objective = _validate_tuning_objective(tuning_objective)
+    iterations, split_count, seed = _validate_tuning_configuration(
+        minimum_hold_recall, n_iter, n_splits, random_state, class_weight_policy
+    )
+    _validate_tuning_training_alignment(
+        features, labels, training_indices, label_end_indices
+    )
+    _validate_tuning_economic_inputs(features, tuning_objective, economic_outcomes)
+    _validate_estimated_cost_bps(estimated_cost_bps)
+    cv_splits, fold_diagnostics = build_purged_time_series_splits(
+        training_indices,
+        labels,
+        label_end_indices,
+        horizon_candles=horizon_candles,
+        n_splits=split_count,
+    )
+    search = _build_randomized_search(
+        estimator,
+        cv_splits,
+        iterations,
+        seed,
+        economic_outcomes=economic_outcomes,
+        estimated_cost_bps=estimated_cost_bps,
+    )
+    search.fit(features, labels)
+    results: dict[str, Any] = search.cv_results_
+    best_index, selection_status, recall_feasible_count = _select_candidate(
+        results, float(minimum_hold_recall), tuning_objective
+    )
+    best_parameters = dict(results["params"][best_index])
+    fitted_estimator = _fit_selected_estimator(
+        estimator, features, labels, best_parameters
+    )
+    diagnostics = _build_tuning_diagnostics(
+        results,
+        fold_diagnostics,
+        best_parameters,
+        class_weight_policy=class_weight_policy,
+        minimum_hold_recall=minimum_hold_recall,
+        selection_status=selection_status,
+        recall_feasible_count=recall_feasible_count,
+        seed=seed,
+        tuning_objective=tuning_objective,
+    )
+    return fitted_estimator, diagnostics
 def tune_lightgbm_classifier(
     estimator: Any,
     features: DataFrame,

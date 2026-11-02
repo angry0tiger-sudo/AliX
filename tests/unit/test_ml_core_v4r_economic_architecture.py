@@ -67,6 +67,84 @@ def test_v4r_event_objective_subtracts_90_bps_from_predicted_buy_rows() -> None:
     assert score == pytest.approx(0.042)
 
 
+def test_v4r_event_economic_outcomes_use_target_exit_references() -> None:
+    bars = DataFrame(
+        {
+            "open": [100.0, 100.0, 100.0, 100.0],
+            "close": [100.0, 100.0, 100.0, 105.0],
+        }
+    )
+    labels = DataFrame(
+        {
+            "event_index": [0, 1, 2],
+            "label_end_idx": [1, 2, 3],
+            "label": ["BUY", "SELL", "HOLD"],
+            "take_profit_price": [102.0, 102.0, 102.0],
+            "stop_loss_price": [98.0, 99.0, 98.0],
+            "exit_reason": ["TP_HIT", "SL_HIT", "HORIZON_EXPIRY"],
+        }
+    )
+
+    outcomes = v4r._economic_outcomes_by_index(bars, labels)
+
+    assert outcomes.iloc[:3].tolist() == pytest.approx([0.02, -0.01, 0.05])
+    assert np.isnan(outcomes.iloc[3])
+
+
+def test_v4r_arm_aggregate_preserves_trade_and_candidate_summaries() -> None:
+    records = [
+        {
+            "metrics": {
+                "economic_data_status": "ELIGIBLE",
+                "trade_count": 2,
+                "profit_factor_net_of_costs": 1.5,
+                "max_drawdown_percent": 4.0,
+                "profit_factor_gate_passed": True,
+                "economic_candidate_gate_passed": False,
+            },
+            "trades": [
+                {"net_pnl_usd": 10.0, "gross_market_pnl_usd": 12.0},
+                {"net_pnl_usd": -4.0, "gross_market_pnl_usd": -3.0},
+            ],
+            "total_fees_usd": 1.2,
+            "total_slippage_cost_usd": 0.8,
+        },
+        {
+            "metrics": {
+                "economic_data_status": "INSUFFICIENT_DATA",
+                "trade_count": 0,
+                "profit_factor_net_of_costs": None,
+                "max_drawdown_percent": 0.0,
+                "profit_factor_gate_passed": False,
+                "economic_candidate_gate_passed": False,
+            },
+            "trades": [],
+            "total_fees_usd": 0.0,
+            "total_slippage_cost_usd": 0.0,
+        },
+    ]
+
+    aggregate = v4r._arm_aggregate(records)
+
+    assert aggregate["candidate_count"] == 2
+    assert aggregate["active_candidate_count"] == 1
+    assert aggregate["insufficient_data_candidate_count"] == 1
+    assert aggregate["trade_count"] == 2
+    assert aggregate["winning_trade_count"] == 1
+    assert aggregate["losing_trade_count"] == 1
+    assert aggregate["combined_net_profit_factor"] == pytest.approx(2.5)
+    assert aggregate["combined_gross_profit_factor"] == pytest.approx(4.0)
+    assert aggregate["total_gross_market_pnl_usd"] == pytest.approx(9.0)
+    assert aggregate["total_fees_usd"] == pytest.approx(1.2)
+    assert aggregate["total_slippage_cost_usd"] == pytest.approx(0.8)
+    assert aggregate["total_net_pnl_usd"] == pytest.approx(6.0)
+    assert aggregate["mean_candidate_profit_factor"] == pytest.approx(1.5)
+    assert aggregate["mean_candidate_max_drawdown_percent"] == pytest.approx(2.0)
+    assert aggregate["pf_above_1_5_candidate_count"] == 1
+    assert aggregate["strict_economic_pass_candidate_count"] == 0
+
+
+
 def test_v4r_objective_selects_best_net_expectancy_not_best_buy_f1() -> None:
     results = {
         "mean_test_hold_precision": np.asarray([0.8, 0.5]),
