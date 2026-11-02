@@ -1416,10 +1416,13 @@ def _process_execution_bar(
     bar = normalized.iloc[index]
     timestamp = pd.Timestamp(bar["date"])
     gap_closed = _close_on_barrier(state, bar, timestamp, index, config, gap_first=True)
+    time_exit_closed = False
     if not gap_closed:
-        _close_on_pending_time_exit(state, bar, timestamp, index, config)
+        time_exit_closed = _close_on_pending_time_exit(
+            state, bar, timestamp, index, config
+        )
     signal_item = action_by_index.get(index)
-    if signal_item is not None and not gap_closed:
+    if signal_item is not None and not gap_closed and not time_exit_closed:
         signal = str(signal_item["signal"])
         _close_for_signal(state, signal, bar, timestamp, index, config)
         _open_for_signal(

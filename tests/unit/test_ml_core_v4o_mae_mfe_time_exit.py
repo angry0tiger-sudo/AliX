@@ -35,15 +35,16 @@ def _run(
     rows: list[tuple[float, float, float, float]],
     *,
     time_exit_candles: int | None = None,
+    buy_at_index: int | None = None,
 ) -> dict[str, Any]:
     bars = _bars(rows)
     signals = [
         {
             "signal_timestamp": bars["date"].iloc[index - 1],
             "execution_timestamp": bars["date"].iloc[index],
-            "signal": "BUY" if index == 1 else "HOLD",
-            "raw_signal": "BUY" if index == 1 else "HOLD",
-            "buy_probability": 0.80 if index == 1 else 0.20,
+            "signal": "BUY" if index == 1 or index == buy_at_index else "HOLD",
+            "raw_signal": "BUY" if index == 1 or index == buy_at_index else "HOLD",
+            "buy_probability": 0.80 if index == 1 or index == buy_at_index else 0.20,
         }
         for index in range(1, len(bars))
     ]
@@ -102,6 +103,15 @@ def test_time_exit_uses_excursions_and_executes_at_next_open() -> None:
     assert result["metrics"]["mean_losing_trade_mfe_atr"] == pytest.approx(0.4)
     assert result["metrics"]["mean_losing_trade_mae_atr"] == pytest.approx(0.2)
     assert result["metrics"]["losing_trades_with_positive_mfe_count"] == 1
+
+
+def test_time_exit_does_not_reopen_on_same_open_signal() -> None:
+    result = _run(_rows(), time_exit_candles=3, buy_at_index=4)
+
+    assert len(result["trades"]) == 1
+    assert result["trades"][0]["exit_reason"] == "TIME_EXIT"
+    assert result["trades"][0]["exit_trigger_type"] == "TIME_EXIT_OPEN"
+    assert result["time_exit_count"] == 1
 
 
 def test_baseline_records_excursions_without_time_exit() -> None:
