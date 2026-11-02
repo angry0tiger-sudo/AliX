@@ -1,6 +1,9 @@
 name: AliX V4-P Economic Evaluation
 
 on:
+  push:
+    branches:
+      - research/ml-core-v4p-feature-target-rebuild
   workflow_dispatch:
 
 permissions:

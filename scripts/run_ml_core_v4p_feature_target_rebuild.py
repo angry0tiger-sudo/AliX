@@ -312,7 +312,10 @@ def _aggregate_economics(records: list[dict[str, Any]]) -> dict[str, Any]:
         preliminary += int(above_one and drawdown < 15.0)
         strict += int(above_one_five and drawdown < 15.0)
         exits.update(
-            {str(reason): int(count) for reason, count in item["exit_reason_counts"].items()}
+            {
+                str(reason): int(count)
+                for reason, count in item["exit_reason_counts"].items()
+            }
         )
     return {
         "candidate_model_count": len(records),
@@ -397,9 +400,7 @@ def _build_report(
 ) -> dict[str, Any]:
     """Build target, feature, training, economic, and safety evidence."""
     trained_experiments = sum(item.get("status") == "TRAINED" for item in experiments)
-    trained_models = sum(
-        len(item.get("model_variants") or {}) for item in experiments
-    )
+    trained_models = sum(len(item.get("model_variants") or {}) for item in experiments)
     fit_count = sum(
         int(variant["hyperparameter_tuning"]["candidate_fit_count"])
         for experiment in experiments
@@ -590,9 +591,7 @@ def _comparison_csv_rows(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return rows
 
 
-def _write_csv(
-    path: Path, rows: list[dict[str, Any]], fieldnames: list[str]
-) -> None:
+def _write_csv(path: Path, rows: list[dict[str, Any]], fieldnames: list[str]) -> None:
     """Write a deterministic UTF-8 CSV, including a header for empty ledgers."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8", newline="") as handle:
@@ -615,21 +614,53 @@ def _write_outputs(
         encoding="utf-8",
     )
     comparison_fields = [
-        "candidate_id", "pair", "timeframe", "feature_profile", "weighting_policy",
-        "feature_count", "train_rows", "validation_rows", "confidence_threshold",
-        "hold_probability_threshold", "take_profit_atr_multiplier",
-        "stop_loss_atr_multiplier", "horizon_candles", "trade_count",
-        "profit_factor", "profit_factor_infinite_no_losses", "max_drawdown_percent",
-        "win_rate", "net_return_percent", "tp_exit_count", "sl_exit_count",
-        "collision_exit_count", "sell_exit_count", "horizon_exit_count",
-        "total_fees_usd", "total_slippage_cost_usd",
+        "candidate_id",
+        "pair",
+        "timeframe",
+        "feature_profile",
+        "weighting_policy",
+        "feature_count",
+        "train_rows",
+        "validation_rows",
+        "confidence_threshold",
+        "hold_probability_threshold",
+        "take_profit_atr_multiplier",
+        "stop_loss_atr_multiplier",
+        "horizon_candles",
+        "trade_count",
+        "profit_factor",
+        "profit_factor_infinite_no_losses",
+        "max_drawdown_percent",
+        "win_rate",
+        "net_return_percent",
+        "tp_exit_count",
+        "sl_exit_count",
+        "collision_exit_count",
+        "sell_exit_count",
+        "horizon_exit_count",
+        "total_fees_usd",
+        "total_slippage_cost_usd",
     ]
     trade_fields = [
-        "candidate_id", "pair", "timeframe", "feature_profile", "weighting_policy",
-        "trade_index", "entry_timestamp", "exit_timestamp", "entry_fill_price",
-        "atr_value", "bars_held", "net_pnl_usd", "mfe_atr", "mae_atr", "exit_reason",
+        "candidate_id",
+        "pair",
+        "timeframe",
+        "feature_profile",
+        "weighting_policy",
+        "trade_index",
+        "entry_timestamp",
+        "exit_timestamp",
+        "entry_fill_price",
+        "atr_value",
+        "bars_held",
+        "net_pnl_usd",
+        "mfe_atr",
+        "mae_atr",
+        "exit_reason",
     ]
-    _write_csv(comparison_path, _comparison_csv_rows(economic_records), comparison_fields)
+    _write_csv(
+        comparison_path, _comparison_csv_rows(economic_records), comparison_fields
+    )
     _write_csv(trades_path, _trade_csv_rows(economic_records), trade_fields)
 
 
@@ -705,9 +736,7 @@ def run_v4p_diagnostic(
     experiments, economic_records = run_v4p_experiments(
         datasets, random_search_iterations=random_search_iterations
     )
-    trained_models = sum(
-        len(item.get("model_variants") or {}) for item in experiments
-    )
+    trained_models = sum(len(item.get("model_variants") or {}) for item in experiments)
     if trained_models != V4P_EXPECTED_MODELS:
         raise RuntimeError("v4p_expected_all_lightgbm_models_to_train")
     if len(economic_records) != V4P_EXPECTED_MODELS:
@@ -720,7 +749,11 @@ def run_v4p_diagnostic(
         random_search_iterations=random_search_iterations,
     )
     _write_outputs(
-        report, output_report, output_comparison_csv, output_trades_csv, economic_records
+        report,
+        output_report,
+        output_comparison_csv,
+        output_trades_csv,
+        economic_records,
     )
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary_path:
@@ -735,7 +768,9 @@ def run_v4p_diagnostic(
                 "trade_ledger_csv": str(output_trades_csv),
                 "experiments": report["experiment_count"],
                 "trained_models": report["trained_models"],
-                "candidate_fit_count": report["hyperparameter_tuning"]["candidate_fit_count"],
+                "candidate_fit_count": report["hyperparameter_tuning"][
+                    "candidate_fit_count"
+                ],
                 "economic_aggregate": report["economic_evaluation"]["aggregate"],
                 "Champion": None,
                 "order_permission": False,

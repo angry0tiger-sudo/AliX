@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 
-def test_v4p_economic_workflow_is_manual_ci_gated_and_fail_closed() -> None:
+def test_v4p_economic_workflow_is_push_triggered_ci_gated_and_fail_closed() -> None:
     workflow_path = (
         Path(__file__).resolve().parents[2]
         / ".github"
@@ -12,6 +12,8 @@ def test_v4p_economic_workflow_is_manual_ci_gated_and_fail_closed() -> None:
     )
     workflow = workflow_path.read_text(encoding="utf-8")
 
+    assert "  push:" in workflow
+    assert "      - research/ml-core-v4p-feature-target-rebuild" in workflow
     assert "  workflow_dispatch:" in workflow
     assert "research/ml-core-v4p-feature-target-rebuild" in workflow
     assert "Require standard CI success for this exact V4-P commit" in workflow

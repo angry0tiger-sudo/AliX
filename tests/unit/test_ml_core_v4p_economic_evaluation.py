@@ -314,7 +314,8 @@ def test_v4p_feature_and_target_orchestration_trains_all_32_model_variants(
     assert len(train_calls) == 16
     assert len(replay_calls) == 32
     assert all(
-        call == {
+        call
+        == {
             "horizon_candles": 12,
             "take_profit_multiplier": 1.0,
             "stop_loss_multiplier": 1.0,
@@ -357,19 +358,28 @@ def test_v4p_diagnostic_writes_json_comparison_csv_and_trade_csv(
     experiments = _report_experiments()
     records = _report_records()
     provenance = [
-        {"symbol": symbol, "requested_days": 730, "row_count": 730 * 24 * 60,
-         "missing_minute_intervals": 0, "public_api_only": True, "credentials_used": False}
+        {
+            "symbol": symbol,
+            "requested_days": 730,
+            "row_count": 730 * 24 * 60,
+            "missing_minute_intervals": 0,
+            "public_api_only": True,
+            "credentials_used": False,
+        }
         for symbol in ("BTCUSDT", "ETHUSDT")
     ]
     monkeypatch.setattr(
         v4p,
         "_load_diagnostic_datasets",
-        lambda input_dir, days, commit_sha: ({"BTCUSDT": _market_frame(), "ETHUSDT": _market_frame()}, provenance),
+        lambda input_dir, days, commit_sha: (
+            {"BTCUSDT": _market_frame(), "ETHUSDT": _market_frame()},
+            provenance,
+        ),
     )
     monkeypatch.setattr(
-        v4p, "run_v4p_experiments", lambda datasets, random_search_iterations: (
-            experiments, records
-        )
+        v4p,
+        "run_v4p_experiments",
+        lambda datasets, random_search_iterations: (experiments, records),
     )
     summary_path = tmp_path / "step-summary.md"
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary_path))
