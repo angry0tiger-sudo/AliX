@@ -383,9 +383,7 @@ def _trade_performance_statistics(
 ) -> dict[str, Any]:
     """Calculate pooled trade statistics and losing-trade excursion behavior."""
     wins, losses = _trade_outcomes(trades)
-    losing = [
-        trade for trade in trades if float(trade["net_pnl_usd"]) < 0
-    ]
+    losing = [trade for trade in trades if float(trade["net_pnl_usd"]) < 0]
     return {
         "total_trade_count": len(trades),
         "winning_trade_count": len(wins),
@@ -418,12 +416,8 @@ def _candidate_performance_statistics(
         "mean_max_drawdown_percent_active_candidates": _optional_mean(active_dd),
         "mean_max_drawdown_percent_all_candidates": _optional_mean(all_dd),
         "worst_candidate_max_drawdown_percent": round(max(all_dd), 8),
-        "pf_above_1_5_candidate_count": sum(
-            value > 1.5 for value in defined_pf
-        ),
-        "drawdown_below_15_candidate_count": sum(
-            value < 15.0 for value in all_dd
-        ),
+        "pf_above_1_5_candidate_count": sum(value > 1.5 for value in defined_pf),
+        "drawdown_below_15_candidate_count": sum(value < 15.0 for value in all_dd),
         "drawdown_below_15_active_candidate_count": sum(
             value < 15.0 for value in active_dd
         ),
@@ -436,20 +430,14 @@ def _variant_aggregate(candidates: list[dict[str, Any]]) -> dict[str, Any]:
     """Aggregate one variant without combining independent candidate equity curves."""
     if len(candidates) != 13:
         raise ValueError("v4o_candidate_count_invalid")
-    trades = [
-        trade
-        for candidate in candidates
-        for trade in candidate["trades"]
-    ]
+    trades = [trade for candidate in candidates for trade in candidate["trades"]]
     return {
         "candidate_count": len(candidates),
         **_trade_performance_statistics(trades),
         **_candidate_performance_statistics(candidates),
         "exit_reason_counts": _sum_exit_reasons(candidates),
         "stop_exit_type_counts": _sum_stop_exit_types(candidates),
-        "time_exit_count": sum(
-            item["time_exit_count"] for item in candidates
-        ),
+        "time_exit_count": sum(item["time_exit_count"] for item in candidates),
         "total_fees_usd": round(
             sum(float(item["total_fees_usd"]) for item in candidates), 8
         ),
