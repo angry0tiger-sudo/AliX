@@ -63,7 +63,7 @@ def test_v4r_event_objective_subtracts_90_bps_from_predicted_buy_rows() -> None:
         gross_returns_by_index=gross,
         estimated_cost_bps=90.0,
     )
-    assert score == pytest.approx(0.021)
+    assert score == pytest.approx(0.042)
 
 
 def test_v4r_objective_selects_best_net_expectancy_not_best_buy_f1() -> None:

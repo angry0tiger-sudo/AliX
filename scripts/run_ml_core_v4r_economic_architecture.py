@@ -633,7 +633,7 @@ def _render_step_summary(report: dict[str, Any]) -> str:
     lines.extend(
         [
             "",
-            "Economics proxy: mean per-entry BUY gross outcome minus estimated 90 bps round-trip cost. It does not model portfolio overlap.",
+            "Economics proxy: aggregate BUY gross profit minus gross loss and 90 bps round-trip costs per BUY. It does not model portfolio overlap.",
             "Economic acceptance is based on the separate execution replay, net PF > 1.5, Max DD < 15%, and at least 30 closed trades per candidate.",
             "",
             "Safety: Champion=null, order_permission=false, trading_authorization=NO-GO, private_api_calls=0, real_order_attempts=0.",

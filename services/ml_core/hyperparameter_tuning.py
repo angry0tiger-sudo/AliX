@@ -42,7 +42,7 @@ def custom_eval_metric(
     gross_returns_by_index: Series,
     estimated_cost_bps: float = DEFAULT_ESTIMATED_ROUND_TRIP_COST_BPS,
 ) -> float:
-    """Mean predicted-BUY gross outcome less estimated round-trip cost.
+    """Aggregate predicted-BUY gross profit less gross loss and estimated costs.
 
     Event-level proxy used only on inner CV folds inside outer Train. The final
     economic execution replay remains the acceptance authority.
@@ -59,7 +59,11 @@ def custom_eval_metric(
     gross = gross_returns_by_index.reindex(features.index).to_numpy(dtype=float)
     if len(gross) != len(features) or not bool(np.isfinite(gross).all()):
         raise ValueError("tuning_economic_outcomes_missing_or_non_finite")
-    return float(np.mean(gross[buy_mask] - float(estimated_cost_bps) / 10_000.0))
+    selected_returns = gross[buy_mask]
+    gross_profit = float(selected_returns[selected_returns > 0.0].sum())
+    gross_loss = abs(float(selected_returns[selected_returns < 0.0].sum()))
+    estimated_costs = len(selected_returns) * float(estimated_cost_bps) / 10_000.0
+    return gross_profit - (gross_loss + estimated_costs)
 
 
 def _positive_integer(value: object, reason: str) -> int:
