@@ -137,28 +137,57 @@ def _economic_outcomes_by_index(bars: DataFrame, labels: DataFrame) -> Series:
     90 bps round-trip fee/slippage estimate. Intrabar outcomes follow the target
     label's stop-first collision rule. Final portfolio acceptance uses replay.
     """
+    event_indices = pd.to_numeric(labels["event_index"], errors="raise").to_numpy(
+        dtype=np.int64
+    )
+    label_end_indices = pd.to_numeric(
+        labels["label_end_idx"], errors="coerce"
+    ).to_numpy(dtype=np.float64)
+    take_profit_prices = pd.to_numeric(
+        labels["take_profit_price"], errors="coerce"
+    ).to_numpy(dtype=np.float64)
+    stop_loss_prices = pd.to_numeric(
+        labels["stop_loss_price"], errors="coerce"
+    ).to_numpy(dtype=np.float64)
+    target_labels = labels["label"].to_numpy(dtype=object)
+    exit_reasons = labels["exit_reason"].to_numpy(dtype=object)
+
     values = np.full(len(bars), np.nan, dtype=float)
-    for row in labels.itertuples(index=False):
-        event_index = int(row.event_index)
-        if row.label not in LABELS or pd.isna(row.label_end_idx):
+    for position, raw_event_index in enumerate(event_indices):
+        event_index = int(raw_event_index)
+        if target_labels[position] not in LABELS:
             continue
+
+        label_end_value = float(label_end_indices[position])
+        if not np.isfinite(label_end_value):
+            continue
+        if not label_end_value.is_integer():
+            raise ValueError("v4r_economic_proxy_label_end_index_invalid")
+        label_end_index = int(label_end_value)
+        if event_index < 0 or event_index >= len(bars):
+            raise ValueError("v4r_economic_proxy_event_index_invalid")
+        if label_end_index <= event_index or label_end_index >= len(bars):
+            raise ValueError("v4r_economic_proxy_label_end_index_invalid")
         if event_index + 1 >= len(bars):
             continue
+
         entry_reference = float(bars.iloc[event_index + 1]["open"])
         if entry_reference <= 0 or not np.isfinite(entry_reference):
             raise ValueError("v4r_economic_proxy_entry_price_invalid")
-        if row.exit_reason == "TP_HIT":
-            exit_reference = float(row.take_profit_price)
-        elif row.exit_reason in {"SL_HIT", "COLLISION"}:
-            exit_reference = float(row.stop_loss_price)
-        elif row.exit_reason == "HORIZON_EXPIRY":
-            exit_reference = float(bars.iloc[int(row.label_end_idx)]["close"])
+        exit_reason = exit_reasons[position]
+        if exit_reason == "TP_HIT":
+            exit_reference = float(take_profit_prices[position])
+        elif exit_reason in {"SL_HIT", "COLLISION"}:
+            exit_reference = float(stop_loss_prices[position])
+        elif exit_reason == "HORIZON_EXPIRY":
+            exit_reference = float(bars.iloc[label_end_index]["close"])
         else:
             raise ValueError("v4r_economic_proxy_exit_reason_invalid")
+        if exit_reference <= 0 or not np.isfinite(exit_reference):
+            raise ValueError("v4r_economic_proxy_exit_price_invalid")
         values[event_index] = exit_reference / entry_reference - 1.0
     outcomes = Series(values, index=bars.index, dtype=float)
     return outcomes
-
 
 def _candidate_identifier(
     arm_name: str,
