@@ -201,8 +201,7 @@ def test_infinite_pf_with_30_trades_is_sample_eligible() -> None:
     assert metrics["profit_factor_gate_passed"] is True
 
 
-
-def test_v4r_sample_gate_skip_preserves_empty_slot_without_fake_metrics() -> None:
+def test_v4r_sample_gate_skip_preserves_empty_slot_without_fake_metrics -> None:
     status = "SKIPPED_INSUFFICIENT_SAMPLES"
     candidate = v4r._sample_gate_skipped_candidate_record(
         arm=v4r.V4R_ARMS[1],
@@ -285,8 +284,7 @@ def test_v4r_pair_runner_persists_sample_gate_skips(
         **_kwargs: Any,
     ) -> dict[str, Any]:
         skipped = (
-            scenario["name"] == "GEOMETRY_2R_BUY_F1"
-            and feature_profile == "Baseline"
+            scenario["name"] == "GEOMETRY_2R_BUY_F1" and feature_profile == "Baseline"
         )
         status = "SKIPPED_INSUFFICIENT_SAMPLES" if skipped else "TRAINED"
         return {
@@ -310,8 +308,15 @@ def test_v4r_pair_runner_persists_sample_gate_skips(
         }
 
     def fake_evaluate(
-        *, arm: dict[str, Any], pair: str, timeframe: str, profile: str, policy: str,
-        experiment: dict[str, Any], variant: dict[str, Any], bars: DataFrame,
+        *,
+        arm: dict[str, Any],
+        pair: str,
+        timeframe: str,
+        profile: str,
+        policy: str,
+        experiment: dict[str, Any],
+        variant: dict[str, Any],
+        bars: DataFrame,
     ) -> dict[str, Any]:
         evaluated.append(policy)
         return {
@@ -346,7 +351,10 @@ def test_v4r_pair_runner_persists_sample_gate_skips(
     monkeypatch.setattr(v4r, "run_v4h_experiment", fake_v4h)
     monkeypatch.setattr(v4r, "_evaluate_candidate", fake_evaluate)
     experiments, records, _ = v4r._run_pair_timeframe(
-        "BTCUSDT", "4h", DataFrame(), calibration_fraction=0.2,
+        "BTCUSDT",
+        "4h",
+        DataFrame(),
+        calibration_fraction=0.2,
         random_search_iterations=1,
     )
     assert len(experiments) == 8
@@ -379,7 +387,8 @@ def test_v4r_paired_comparison_excludes_incomplete_training_groups() -> None:
                                 "arm": arm["name"],
                                 "status": (
                                     "SKIPPED_INSUFFICIENT_SAMPLES"
-                                    if skipped else "TRAINED"
+                                    if skipped
+                                    else "TRAINED"
                                 ),
                                 "sample_signature_sha256": "shared-signature",
                                 "metrics": {

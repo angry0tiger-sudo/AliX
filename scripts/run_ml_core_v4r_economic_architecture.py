@@ -350,7 +350,6 @@ def _evaluate_candidate(
     }
 
 
-
 def _sample_gate_skipped_metrics() -> dict[str, Any]:
     """Return non-performance metrics for a candidate that never trained."""
     return {
@@ -525,9 +524,7 @@ def _run_pair_timeframe(
                 "sample_gate": dict(sample_gate),
                 "train_rows": int(experiment["train_rows"]),
                 "validation_rows": int(experiment["validation_rows"]),
-                "sample_signature_sha256": str(
-                    experiment["sample_signature_sha256"]
-                ),
+                "sample_signature_sha256": str(experiment["sample_signature_sha256"]),
                 "split": dict(experiment["split"]),
                 "label_distribution": dict(experiment["label_distribution"]),
                 "label_audit": dict(experiment["label_audit"]),
@@ -601,8 +598,7 @@ def _arm_candidate_count_summary(
             record.get("status", "TRAINED") == "TRAINED" for record in records
         ),
         "sample_gate_skipped_candidate_count": sum(
-            record.get("status") in V4R_SAMPLE_GATE_SKIP_STATUSES
-            for record in records
+            record.get("status") in V4R_SAMPLE_GATE_SKIP_STATUSES for record in records
         ),
         "active_candidate_count": sum(
             int(metric["trade_count"]) > 0 for metric in candidate_metrics
@@ -668,7 +664,6 @@ def _arm_aggregate(records: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-
 def _paired_comparison(records: list[dict[str, Any]]) -> dict[str, Any]:
     groups: dict[tuple[str, str, str, str], dict[str, dict[str, Any]]] = defaultdict(
         dict
@@ -701,7 +696,9 @@ def _paired_comparison(records: list[dict[str, Any]]) -> dict[str, Any]:
         if len(signatures) != 1:
             raise ValueError(f"v4r_paired_sample_signature_mismatch:{key}")
         signatures_checked += 1
-        statuses = {str(record.get("status", "TRAINED")) for record in arm_records.values()}
+        statuses = {
+            str(record.get("status", "TRAINED")) for record in arm_records.values()
+        }
         if not statuses.issubset({"TRAINED", *V4R_SAMPLE_GATE_SKIP_STATUSES}):
             raise ValueError(f"v4r_paired_candidate_status_invalid:{key}")
         if statuses != {"TRAINED"}:
@@ -755,6 +752,8 @@ def _paired_comparison(records: list[dict[str, Any]]) -> dict[str, Any]:
         ),
     }
 
+
+
 def _comparison_csv_rows(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for record in records:
@@ -788,10 +787,7 @@ def _comparison_csv_rows(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "total_slippage_cost_usd": record["total_slippage_cost_usd"],
                 "net_pnl_usd": (
                     round(
-                        sum(
-                            float(trade["net_pnl_usd"])
-                            for trade in record["trades"]
-                        ),
+                        sum(float(trade["net_pnl_usd"]) for trade in record["trades"]),
                         8,
                     )
                     if record.get("evaluation_performed", True)
@@ -1253,8 +1249,9 @@ def main() -> int:
         raise RuntimeError("v4r_experiment_count_mismatch")
     if report["candidate_count"] != V4R_EXPECTED_CANDIDATES:
         raise RuntimeError("v4r_candidate_count_mismatch")
-    if report["model_count"] + report["sample_gate_skipped_candidate_count"] != (
-        report["candidate_count"]
+    if (
+        report["model_count"] + report["sample_gate_skipped_candidate_count"]
+        != (report["candidate_count"])
     ):
         raise RuntimeError("v4r_model_and_sample_gate_count_mismatch")
     return 0
