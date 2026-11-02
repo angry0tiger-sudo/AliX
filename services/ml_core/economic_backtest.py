@@ -919,16 +919,16 @@ def _metrics(
     max_drawdown = max_drawdown_from_equity(equity_values)
     trade_count = len(trades)
     trade_count_pass = trade_count >= MINIMUM_TRADES_FOR_ECONOMIC_ACCEPTANCE
-    pf_pass = trade_count_pass and (
-        pf_infinite or (pf is not None and pf > 1.5)
-    )
+    pf_pass = trade_count_pass and (pf_infinite or (pf is not None and pf > 1.5))
     drawdown_pass = max_drawdown < config.maximum_drawdown
     excursion_statistics = _excursion_statistics(trades)
     return {
         "initial_equity_usd": round(config.initial_equity, 8),
         "final_equity_usd": round(final_equity, 8),
         "net_return_fraction": round(final_equity / config.initial_equity - 1.0, 10),
-        "net_return_percent": round((final_equity / config.initial_equity - 1.0) * 100.0, 8),
+        "net_return_percent": round(
+            (final_equity / config.initial_equity - 1.0) * 100.0, 8
+        ),
         "trade_count": trade_count,
         "minimum_trade_count_for_acceptance": MINIMUM_TRADES_FOR_ECONOMIC_ACCEPTANCE,
         "trade_count_gate_passed": trade_count_pass,
@@ -949,8 +949,6 @@ def _metrics(
         "maximum_drawdown_limit_fraction": config.maximum_drawdown,
         **excursion_statistics,
     }
-
-
 
 
 def _validate_drawdown_accounting(

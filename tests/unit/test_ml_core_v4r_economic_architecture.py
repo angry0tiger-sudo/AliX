@@ -92,7 +92,9 @@ def test_infinite_pf_below_30_trades_is_insufficient_data(trade_count: int) -> N
         {"net_pnl_usd": 10.0, "mfe_atr": 0.8, "mae_atr": 0.1}
         for _ in range(trade_count)
     ]
-    metrics = _metrics(trades, [10_000.0, 10_000.0 + 10.0 * trade_count], ExecutionConfig())
+    metrics = _metrics(
+        trades, [10_000.0, 10_000.0 + 10.0 * trade_count], ExecutionConfig()
+    )
     if trade_count > 0:
         assert metrics["profit_factor_infinite_no_losses"] is True
     assert metrics["economic_data_status"] == "INSUFFICIENT_DATA"
@@ -103,10 +105,7 @@ def test_infinite_pf_below_30_trades_is_insufficient_data(trade_count: int) -> N
 
 
 def test_infinite_pf_with_30_trades_is_sample_eligible() -> None:
-    trades = [
-        {"net_pnl_usd": 10.0, "mfe_atr": 0.8, "mae_atr": 0.1}
-        for _ in range(30)
-    ]
+    trades = [{"net_pnl_usd": 10.0, "mfe_atr": 0.8, "mae_atr": 0.1} for _ in range(30)]
     metrics = _metrics(trades, [10_000.0, 10_300.0], ExecutionConfig())
     assert metrics["profit_factor_infinite_no_losses"] is True
     assert metrics["economic_data_status"] == "ELIGIBLE"
@@ -122,7 +121,9 @@ def test_v4r_paired_comparison_rejects_sample_signature_mismatch() -> None:
             "feature_profile": "Baseline",
             "weighting_policy": "weight_none",
             "arm": arm["name"],
-            "sample_signature_sha256": "different" if arm["name"].startswith("V4R_") else "same",
+            "sample_signature_sha256": "different"
+            if arm["name"].startswith("V4R_")
+            else "same",
             "metrics": {"net_return_percent": 1.0},
         }
         for arm in v4r.V4R_ARMS
@@ -151,9 +152,7 @@ def test_v4r_empty_trade_csv_is_still_written_with_header(tmp_path: Path) -> Non
 def test_net_expectancy_objective_fails_closed_without_economic_outcomes() -> None:
     features = DataFrame({"x": [0.0, 1.0, 2.0]})
     labels = Series(["BUY", "SELL", "HOLD"])
-    with pytest.raises(
-        ValueError, match="tuning_economic_objective_requires_outcomes"
-    ):
+    with pytest.raises(ValueError, match="tuning_economic_objective_requires_outcomes"):
         tune_lightgbm_classifier(
             object(),
             features,

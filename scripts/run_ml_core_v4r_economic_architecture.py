@@ -252,9 +252,7 @@ def _run_pair_timeframe(
     bars = resample_ohlcv(minute_candles, timeframe)
     if len(bars) < 100:
         raise ValueError(f"v4r_insufficient_resampled_bars:{symbol}:{timeframe}")
-    feature_matrices = build_feature_profiles(
-        bars, profile_names=V4R_FEATURE_PROFILES
-    )
+    feature_matrices = build_feature_profiles(bars, profile_names=V4R_FEATURE_PROFILES)
     experiments: list[dict[str, Any]] = []
     records: list[dict[str, Any]] = []
     for arm in V4R_ARMS:
@@ -356,11 +354,10 @@ def _arm_aggregate(records: list[dict[str, Any]]) -> dict[str, Any]:
     pnls = [float(trade["net_pnl_usd"]) for trade in trades]
     gross = [float(trade["gross_market_pnl_usd"]) for trade in trades]
     total_fees = sum(float(record["total_fees_usd"]) for record in records)
-    total_slippage = sum(
-        float(record["total_slippage_cost_usd"]) for record in records
-    )
+    total_slippage = sum(float(record["total_slippage_cost_usd"]) for record in records)
     eligible = [
-        record for record in records
+        record
+        for record in records
         if record["metrics"]["economic_data_status"] == "ELIGIBLE"
     ]
     insufficient = len(records) - len(eligible)
@@ -384,18 +381,18 @@ def _arm_aggregate(records: list[dict[str, Any]]) -> dict[str, Any]:
         "total_fees_usd": round(total_fees, 8),
         "total_slippage_cost_usd": round(total_slippage, 8),
         "total_net_pnl_usd": round(sum(pnls), 8),
-        "mean_candidate_profit_factor": _mean([
-            float(record["metrics"]["profit_factor_net_of_costs"])
-            for record in records
-            if record["metrics"]["profit_factor_net_of_costs"] is not None
-        ]),
-        "mean_candidate_max_drawdown_percent": _mean([
-            float(record["metrics"]["max_drawdown_percent"])
-            for record in records
-        ]),
+        "mean_candidate_profit_factor": _mean(
+            [
+                float(record["metrics"]["profit_factor_net_of_costs"])
+                for record in records
+                if record["metrics"]["profit_factor_net_of_costs"] is not None
+            ]
+        ),
+        "mean_candidate_max_drawdown_percent": _mean(
+            [float(record["metrics"]["max_drawdown_percent"]) for record in records]
+        ),
         "pf_above_1_5_candidate_count": sum(
-            bool(record["metrics"]["profit_factor_gate_passed"])
-            for record in records
+            bool(record["metrics"]["profit_factor_gate_passed"]) for record in records
         ),
         "strict_economic_pass_candidate_count": sum(
             bool(record["metrics"]["economic_candidate_gate_passed"])
@@ -405,7 +402,9 @@ def _arm_aggregate(records: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _paired_comparison(records: list[dict[str, Any]]) -> dict[str, Any]:
-    groups: dict[tuple[str, str, str, str], dict[str, dict[str, Any]]] = defaultdict(dict)
+    groups: dict[tuple[str, str, str, str], dict[str, dict[str, Any]]] = defaultdict(
+        dict
+    )
     for record in records:
         key = (
             str(record["pair"]),
@@ -428,8 +427,7 @@ def _paired_comparison(records: list[dict[str, Any]]) -> dict[str, Any]:
         if set(arm_records) != expected_arms:
             raise ValueError(f"v4r_paired_arm_missing:{key}")
         signatures = {
-            str(record["sample_signature_sha256"])
-            for record in arm_records.values()
+            str(record["sample_signature_sha256"]) for record in arm_records.values()
         }
         if len(signatures) != 1:
             raise ValueError(f"v4r_paired_sample_signature_mismatch:{key}")
@@ -442,12 +440,10 @@ def _paired_comparison(records: list[dict[str, Any]]) -> dict[str, Any]:
             metric["GEOMETRY_2R_BUY_F1"] - metric["CONTROL_SYMMETRIC_BUY_F1"]
         )
         geometry_at_net.append(
-            metric["V4R_2R_NET_EXPECTANCY"]
-            - metric["SYMMETRIC_NET_EXPECTANCY"]
+            metric["V4R_2R_NET_EXPECTANCY"] - metric["SYMMETRIC_NET_EXPECTANCY"]
         )
         objective_at_symmetric.append(
-            metric["SYMMETRIC_NET_EXPECTANCY"]
-            - metric["CONTROL_SYMMETRIC_BUY_F1"]
+            metric["SYMMETRIC_NET_EXPECTANCY"] - metric["CONTROL_SYMMETRIC_BUY_F1"]
         )
         objective_at_asymmetric.append(
             metric["V4R_2R_NET_EXPECTANCY"] - metric["GEOMETRY_2R_BUY_F1"]
@@ -464,9 +460,15 @@ def _paired_comparison(records: list[dict[str, Any]]) -> dict[str, Any]:
         "sample_signature_mismatch_count": 0,
         "common_outer_purge_horizon_candles": V4R_COMMON_PURGE_HORIZON,
         "geometry_effect_at_buy_f1_mean_net_return_delta_pp": _mean(geometry_at_buy),
-        "geometry_effect_at_net_expectancy_mean_net_return_delta_pp": _mean(geometry_at_net),
-        "objective_effect_at_symmetric_geometry_mean_net_return_delta_pp": _mean(objective_at_symmetric),
-        "objective_effect_at_asymmetric_geometry_mean_net_return_delta_pp": _mean(objective_at_asymmetric),
+        "geometry_effect_at_net_expectancy_mean_net_return_delta_pp": _mean(
+            geometry_at_net
+        ),
+        "objective_effect_at_symmetric_geometry_mean_net_return_delta_pp": _mean(
+            objective_at_symmetric
+        ),
+        "objective_effect_at_asymmetric_geometry_mean_net_return_delta_pp": _mean(
+            objective_at_asymmetric
+        ),
         "geometry_objective_interaction_mean_net_return_delta_pp": _mean(interaction),
         "sample_signature_groups_checked": signatures_checked,
         "interpretation": (
@@ -495,7 +497,9 @@ def _comparison_csv_rows(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "economic_data_status": metrics["economic_data_status"],
                 "trade_count_gate_passed": metrics["trade_count_gate_passed"],
                 "profit_factor_net_of_costs": metrics["profit_factor_net_of_costs"],
-                "profit_factor_infinite_no_losses": metrics["profit_factor_infinite_no_losses"],
+                "profit_factor_infinite_no_losses": metrics[
+                    "profit_factor_infinite_no_losses"
+                ],
                 "profit_factor_gate_passed": metrics["profit_factor_gate_passed"],
                 "max_drawdown_percent": metrics["max_drawdown_percent"],
                 "net_return_percent": metrics["net_return_percent"],
@@ -507,7 +511,9 @@ def _comparison_csv_rows(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     sum(float(trade["net_pnl_usd"]) for trade in record["trades"]),
                     8,
                 ),
-                "economic_candidate_gate_passed": metrics["economic_candidate_gate_passed"],
+                "economic_candidate_gate_passed": metrics[
+                    "economic_candidate_gate_passed"
+                ],
             }
         )
     return rows
@@ -684,9 +690,7 @@ def _build_report(
 ) -> dict[str, Any]:
     arms: list[dict[str, Any]] = []
     for arm in V4R_ARMS:
-        arm_records = [
-            record for record in records if record["arm"] == arm["name"]
-        ]
+        arm_records = [record for record in records if record["arm"] == arm["name"]]
         if len(arm_records) != V4R_EXPECTED_CANDIDATES // V4R_EXPECTED_ARMS:
             raise RuntimeError(f"v4r_arm_candidate_count_mismatch:{arm['name']}")
         arms.append(
@@ -764,7 +768,8 @@ def _build_report(
             {
                 key: value
                 for key, value in record.items()
-                if key not in {"trades", "feature_importance_gain", "tuning_diagnostics"}
+                if key
+                not in {"trades", "feature_importance_gain", "tuning_diagnostics"}
             }
             for record in records
         ],
@@ -818,11 +823,24 @@ def _write_outputs(
         trades_path,
         report["trade_rows"],
         fieldnames=[
-            "candidate_id", "arm", "pair", "timeframe", "feature_profile",
-            "weighting_policy", "trade_index", "entry_timestamp",
-            "exit_timestamp", "entry_reference_price", "entry_fill_price",
-            "exit_reference_price", "exit_fill_price", "gross_market_pnl_usd",
-            "fees_usd", "slippage_cost_usd", "net_pnl_usd", "exit_reason",
+            "candidate_id",
+            "arm",
+            "pair",
+            "timeframe",
+            "feature_profile",
+            "weighting_policy",
+            "trade_index",
+            "entry_timestamp",
+            "exit_timestamp",
+            "entry_reference_price",
+            "entry_fill_price",
+            "exit_reference_price",
+            "exit_fill_price",
+            "gross_market_pnl_usd",
+            "fees_usd",
+            "slippage_cost_usd",
+            "net_pnl_usd",
+            "exit_reason",
         ],
     )
     _write_csv(feature_importance_path, report["feature_importance_rows"])
@@ -846,9 +864,7 @@ def run_v4r(
 ) -> dict[str, Any]:
     if days != 730:
         raise ValueError("v4r_dataset_window_must_be_730_days")
-    datasets, provenance = _load_diagnostic_datasets(
-        input_dir, days, commit_sha
-    )
+    datasets, provenance = _load_diagnostic_datasets(input_dir, days, commit_sha)
     experiments, records = run_v4r_experiments(
         datasets,
         calibration_fraction=calibration_fraction,
