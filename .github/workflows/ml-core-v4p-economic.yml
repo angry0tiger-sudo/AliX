@@ -1,0 +1,294 @@
+name: AliX V4-P Economic Evaluation
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: alix-v4p-economic-evaluation
+  cancel-in-progress: false
+
+jobs:
+  economic-evaluation:
+    if: github.ref == 'refs/heads/research/ml-core-v4p-feature-target-rebuild'
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      ALIx_ENV: paper
+      ALIx_DRY_RUN: "true"
+      ALIx_ALLOW_LIVE_TRADING: "false"
+      ALIx_REPORTING_ENABLED: "false"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Require standard CI success for this exact V4-P commit
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          TARGET_SHA: ${{ github.sha }}
+          TARGET_BRANCH: ${{ github.ref_name }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import time
+          from urllib.error import HTTPError, URLError
+          from urllib.request import Request, urlopen
+
+          repository = os.environ["GITHUB_REPOSITORY"]
+          target_sha = os.environ["TARGET_SHA"]
+          target_branch = os.environ["TARGET_BRANCH"]
+          token = os.environ["GH_TOKEN"]
+          if target_branch != "research/ml-core-v4p-feature-target-rebuild":
+              raise SystemExit("unsupported_v4p_training_branch:" + target_branch)
+          deadline = time.monotonic() + 90 * 60
+          url = (
+              f"https://api.github.com/repos/{repository}/actions/workflows/ci.yml/runs"
+              f"?head_sha={target_sha}&per_page=100"
+          )
+          while time.monotonic() < deadline:
+              request = Request(
+                  url,
+                  headers={
+                      "Accept": "application/vnd.github+json",
+                      "Authorization": f"Bearer {token}",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  },
+              )
+              try:
+                  with urlopen(request, timeout=20) as response:
+                      payload = json.load(response)
+              except (HTTPError, URLError, TimeoutError) as error:
+                  raise SystemExit(
+                      f"ci_status_lookup_failed:{type(error).__name__}"
+                  ) from None
+              matching = [
+                  run for run in payload.get("workflow_runs", [])
+                  if run.get("head_sha") == target_sha
+                  and run.get("head_branch") == target_branch
+                  and run.get("event") == "push"
+              ]
+              if matching:
+                  latest = max(
+                      matching,
+                      key=lambda item: (
+                          item.get("run_number", 0),
+                          item.get("run_attempt", 0),
+                      ),
+                  )
+                  if latest.get("status") == "completed":
+                      if latest.get("conclusion") != "success":
+                          raise SystemExit(
+                              "ci_green_gate_blocked:"
+                              + str(latest.get("conclusion"))
+                              + ":"
+                              + target_sha
+                          )
+                      print(json.dumps({
+                          "gate": "PASS",
+                          "target_sha": target_sha,
+                          "ci_run_id": latest.get("id"),
+                          "ci_run_url": latest.get("html_url"),
+                          "ci_conclusion": latest.get("conclusion"),
+                      }, sort_keys=True))
+                      break
+              time.sleep(30)
+          else:
+              raise SystemExit("ci_green_gate_timeout:" + target_sha)
+          PY
+
+      - name: Checkout exact V4-P commit without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Confirm V4-P target, features, and fail-closed safety scope
+        env:
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/research/ml-core-v4p-feature-target-rebuild"
+          test "$GITHUB_SHA" = "$TARGET_SHA"
+          printf 'commit_sha=%s\n' "$GITHUB_SHA"
+          printf 'training_scope=NEW_LIGHTGBM_MODELS\n'
+          printf 'target=TP_1_ATR_SL_1_ATR_HORIZON_12\n'
+          printf 'features=RSI14_MACD_HISTOGRAM_VOLUME_ZSCORE_ATR_PERCENTILE\n'
+          printf 'confidence_threshold=0.60\n'
+          printf 'sequence_models=FORBIDDEN\n'
+          printf 'private_api_calls=0\nreal_order_attempts=0\n'
+          printf 'Champion=null\norder_permission=false\ntrading_authorization=NO-GO\n'
+
+      - name: Set up pinned Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install pinned V4-P training and evaluation dependencies
+        run: |
+          python -m pip install pip==25.2
+          python -m pip install numpy==2.5.4 pandas==2.3.3 scikit-learn==1.9.0 lightgbm==4.7.0
+
+      - name: Fetch complete 730-day Binance Spot public 1-minute candles
+        run: |
+          set -euo pipefail
+          data_dir="$RUNNER_TEMP/alix-v4p-market-data"
+          rm -rf "$data_dir"
+          mkdir -p "$data_dir"
+          for symbol in BTCUSDT ETHUSDT; do
+            log_path="$RUNNER_TEMP/v4p-fetch-730-${symbol}.log"
+            if python scripts/fetch_binance_public_ohlcv.py \
+              --days 730 \
+              --symbol "$symbol" \
+              --interval 1m \
+              --output-dir "$data_dir" \
+              --commit-sha "$GITHUB_SHA" >"$log_path" 2>&1; then
+              cat "$log_path"
+            else
+              cat "$log_path"
+              echo "Binance public fetch failed for ${symbol}; refusing partial data." >&2
+              exit 1
+            fi
+          done
+          printf 'requested_days=730\nprovider=Binance Spot public klines API\n'
+          printf 'private_api_calls=0\ncredentials_used=false\n'
+
+      - name: Retrain V4-P LightGBM models and run costed economic evaluation
+        run: |
+          set -euo pipefail
+          python -m scripts.run_ml_core_v4p_feature_target_rebuild \
+            --input-dir "$RUNNER_TEMP/alix-v4p-market-data" \
+            --output-report "$GITHUB_WORKSPACE/alix-v4p-economic-evaluation-report.json" \
+            --output-comparison-csv "$GITHUB_WORKSPACE/alix-v4p-economic-comparison.csv" \
+            --output-trades-csv "$GITHUB_WORKSPACE/alix-v4p-trades.csv" \
+            --days 730 \
+            --commit-sha "$GITHUB_SHA" \
+            --random-search-iterations 9
+          summary_path="${GITHUB_STEP_SUMMARY:?missing_GITHUB_STEP_SUMMARY}"
+          test -s "$summary_path"
+          grep -Fq "AliX V4-P Economic Evaluation" "$summary_path"
+          grep -Fq "Combined-ledger PF" "$summary_path"
+          grep -Fq "NO-GO" "$summary_path"
+
+      - name: Validate V4-P trained models, economics, data provenance, and safety
+        env:
+          REPORT_PATH: ${{ github.workspace }}/alix-v4p-economic-evaluation-report.json
+          COMPARISON_CSV: ${{ github.workspace }}/alix-v4p-economic-comparison.csv
+          TRADES_CSV: ${{ github.workspace }}/alix-v4p-trades.csv
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          python - <<'PY'
+          import csv
+          import json
+          import os
+          from pathlib import Path
+
+          report = json.loads(Path(os.environ["REPORT_PATH"]).read_text(encoding="utf-8"))
+          assert report["schema_version"] == "alix.ml-core.v4p-economic-evaluation.v1"
+          assert report["commit_sha"] == os.environ["TARGET_SHA"]
+          assert report["requested_days"] == 730
+          assert report["model_training_performed"] is True
+          assert report["economic_evaluation_performed"] is True
+          assert report["economic_metrics_reported"] is True
+          assert report["target_contract"] == {
+              "atr_period": 14,
+              "horizon_candles": 12,
+              "take_profit_multiplier": 1.0,
+              "stop_loss_multiplier": 1.0,
+              "label_entry_reference": "SIGNAL_CANDLE_CLOSE",
+              "economic_barrier_reference": "ACTUAL_NEXT_BAR_ENTRY_FILL",
+              "same_candle_collision_policy": "STOP_LOSS_WINS",
+              "incomplete_horizon_policy": "UNLABELED",
+          }
+          assert set(report["feature_engineering"]["new_features"]) == {
+              "%-rsi_14",
+              "%-macd_histogram",
+              "%-volume_zscore_20",
+              "%-atr_percentile_252",
+          }
+          assert report["feature_engineering"]["point_in_time"] is True
+          assert report["feature_engineering"]["future_rows_used"] is False
+          assert report["model"]["family"] == "LightGBM LGBMClassifier"
+          assert report["model"]["sequence_model_used"] is False
+          assert report["model"]["new_models_trained"] == 32
+          assert report["experiment_count"] == 16
+          assert report["trained_experiments"] == 16
+          assert report["trained_models"] == 32
+          assert report["expected_models"] == 32
+          tuning = report["hyperparameter_tuning"]
+          assert tuning["candidate_count_per_model"] == 9
+          assert tuning["inner_cv_fold_count"] == 3
+          assert tuning["inner_cv_scope"] == "OUTER_TRAIN_ONLY"
+          assert tuning["validation_accessed_during_search"] is False
+          assert tuning["final_refit_scope"] == "FULL_OUTER_TRAIN_ONLY"
+          economic = report["economic_evaluation"]
+          assert economic["candidate_count"] == 32
+          assert economic["expected_candidate_count"] == 32
+          assert economic["all_candidates_evaluated"] is True
+          assert economic["confidence_threshold"] == 0.60
+          assert economic["hold_probability_threshold"] == 0.60
+          assumptions = economic["execution_assumptions"]
+          assert assumptions["fee_bps_per_side"] == 25.0
+          assert assumptions["slippage_bps_per_side"] == 20.0
+          assert assumptions["round_trip_nominal_cost_bps"] == 90.0
+          assert assumptions["position_fraction"] == 1.0
+          assert assumptions["leverage"] == 1.0
+          assert assumptions["pyramiding"] is False
+          assert assumptions["short_positions_supported"] is False
+          assert len(report["input_datasets"]) == 2
+          for dataset in report["input_datasets"]:
+              assert dataset["requested_days"] == 730
+              assert dataset["row_count"] == 730 * 24 * 60
+              assert dataset["missing_minute_intervals"] == 0
+              assert dataset["public_api_only"] is True
+              assert dataset["credentials_used"] is False
+          safety = report["safety"]
+          assert safety["Champion"] is None
+          assert safety["order_permission"] is False
+          assert safety["trading_authorization"] == "NO-GO"
+          assert safety["private_api_calls"] == 0
+          assert safety["real_order_attempts"] == 0
+          assert safety["orders_or_execution_api_used"] is False
+          assert report["promotion_status"] == (
+              "BLOCKED_PENDING_INDEPENDENT_OOS_AND_OWNER_REVIEW"
+          )
+          with Path(os.environ["COMPARISON_CSV"]).open(
+              newline="", encoding="utf-8"
+          ) as handle:
+              comparison = list(csv.DictReader(handle))
+          with Path(os.environ["TRADES_CSV"]).open(
+              newline="", encoding="utf-8"
+          ) as handle:
+              trades = list(csv.DictReader(handle))
+          assert len(comparison) == 32
+          aggregate = economic["aggregate"]
+          assert aggregate["candidate_model_count"] == 32
+          assert aggregate["total_trade_count"] == len(trades)
+          assert aggregate["take_profit_exit_count"] == aggregate[
+              "exit_reason_counts"
+          ].get("TP_HIT", 0)
+          print(json.dumps({
+              "commit_sha": report["commit_sha"],
+              "experiments": report["experiment_count"],
+              "trained_models": report["trained_models"],
+              "economic_candidates": economic["candidate_count"],
+              "economic_aggregate": aggregate,
+              "Champion": None,
+              "order_permission": False,
+              "trading_authorization": "NO-GO",
+          }, sort_keys=True))
+          PY
+
+      - name: Upload V4-P economic evaluation artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alix-v4p-economic-evaluation
+          path: |
+            alix-v4p-economic-evaluation-report.json
+            alix-v4p-economic-comparison.csv
+            alix-v4p-trades.csv
+          if-no-files-found: warn
+          retention-days: 14
