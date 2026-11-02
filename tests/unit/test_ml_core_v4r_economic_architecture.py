@@ -144,7 +144,6 @@ def test_v4r_arm_aggregate_preserves_trade_and_candidate_summaries() -> None:
     assert aggregate["strict_economic_pass_candidate_count"] == 0
 
 
-
 def test_v4r_objective_selects_best_net_expectancy_not_best_buy_f1() -> None:
     results = {
         "mean_test_hold_precision": np.asarray([0.8, 0.5]),

@@ -456,8 +456,7 @@ def _arm_candidate_count_summary(
 ) -> dict[str, Any]:
     candidate_metrics = [record["metrics"] for record in records]
     eligible_count = sum(
-        metric["economic_data_status"] == "ELIGIBLE"
-        for metric in candidate_metrics
+        metric["economic_data_status"] == "ELIGIBLE" for metric in candidate_metrics
     )
     return {
         "candidate_count": len(records),
@@ -474,9 +473,7 @@ def _arm_trade_summary(records: list[dict[str, Any]]) -> dict[str, Any]:
     net_pnls = [float(trade["net_pnl_usd"]) for trade in trades]
     gross_pnls = [float(trade["gross_market_pnl_usd"]) for trade in trades]
     total_fees = sum(float(record["total_fees_usd"]) for record in records)
-    total_slippage = sum(
-        float(record["total_slippage_cost_usd"]) for record in records
-    )
+    total_slippage = sum(float(record["total_slippage_cost_usd"]) for record in records)
     return {
         "trade_count": len(trades),
         "winning_trade_count": sum(value > 0 for value in net_pnls),
@@ -501,9 +498,7 @@ def _arm_candidate_risk_summary(records: list[dict[str, Any]]) -> dict[str, Any]
         for metric in candidate_metrics
         if metric["profit_factor_net_of_costs"] is not None
     ]
-    drawdowns = [
-        float(metric["max_drawdown_percent"]) for metric in candidate_metrics
-    ]
+    drawdowns = [float(metric["max_drawdown_percent"]) for metric in candidate_metrics]
     return {
         "mean_candidate_profit_factor": _mean(defined_profit_factors),
         "mean_candidate_max_drawdown_percent": _mean(drawdowns),
