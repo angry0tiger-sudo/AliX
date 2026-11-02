@@ -142,9 +142,7 @@ def test_target_and_extra_columns_are_never_feature_inputs() -> None:
 def test_constant_volume_uses_finite_zero_baseline_zscore() -> None:
     candles = market_frame()
     candles["volume"] = 100.0
-    baseline = build_feature_profiles(
-        candles, profile_names=("Baseline",)
-    )["Baseline"]
+    baseline = build_feature_profiles(candles, profile_names=("Baseline",))["Baseline"]
     volume = build_extended_feature_groups(candles)["Volume"]
 
     assert volume.loc[19, "%-volume_relative_20"] == pytest.approx(1.0)
@@ -222,6 +220,7 @@ def test_unknown_feature_profiles_are_rejected() -> None:
     with pytest.raises(ValueError, match="feature_profile_unknown"):
         feature_profile_columns("Baseline+Unknown")
 
+
 def test_v4p_feature_definitions_are_finite_and_point_in_time() -> None:
     candles = market_frame(400)
     baseline = build_feature_profiles(candles, profile_names=("Baseline",))["Baseline"]
@@ -251,23 +250,23 @@ def test_v4p_rsi_handles_monotonic_and_flat_price_series() -> None:
 
     flat = market_frame(100)
     flat[["open", "high", "low", "close"]] = 100.0
-    flat_rsi = build_feature_profiles(flat, profile_names=("Baseline",))[
-        "Baseline"
-    ]["%-rsi_14"]
+    flat_rsi = build_feature_profiles(flat, profile_names=("Baseline",))["Baseline"][
+        "%-rsi_14"
+    ]
     assert flat_rsi.iloc[-1] == pytest.approx(50.0)
 
 
 def test_v4p_atr_percentile_is_trailing_and_uses_only_current_past_rows() -> None:
     candles = market_frame(400)
     decision_index = 300
-    original = build_feature_profiles(candles, profile_names=("Baseline",))[
-        "Baseline"
-    ]["%-atr_percentile_252"]
+    original = build_feature_profiles(candles, profile_names=("Baseline",))["Baseline"][
+        "%-atr_percentile_252"
+    ]
     changed = candles.copy()
     changed.loc[decision_index + 1 :, ["open", "high", "low", "close"]] *= 2.0
-    mutated = build_feature_profiles(changed, profile_names=("Baseline",))[
-        "Baseline"
-    ]["%-atr_percentile_252"]
+    mutated = build_feature_profiles(changed, profile_names=("Baseline",))["Baseline"][
+        "%-atr_percentile_252"
+    ]
     pd.testing.assert_series_equal(
         original.iloc[: decision_index + 1],
         mutated.iloc[: decision_index + 1],

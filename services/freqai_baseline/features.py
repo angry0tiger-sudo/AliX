@@ -68,12 +68,14 @@ def add_market_features(dataframe: DataFrame) -> DataFrame:
     atr_proxy = true_range.rolling(14, min_periods=14).mean() / close
 
     delta = close.diff()
-    average_gain = delta.clip(lower=0.0).ewm(
-        alpha=1.0 / 14, adjust=False, min_periods=14
-    ).mean()
-    average_loss = (-delta.clip(upper=0.0)).ewm(
-        alpha=1.0 / 14, adjust=False, min_periods=14
-    ).mean()
+    average_gain = (
+        delta.clip(lower=0.0).ewm(alpha=1.0 / 14, adjust=False, min_periods=14).mean()
+    )
+    average_loss = (
+        (-delta.clip(upper=0.0))
+        .ewm(alpha=1.0 / 14, adjust=False, min_periods=14)
+        .mean()
+    )
     relative_strength = average_gain / average_loss.where(average_loss > 0.0)
     rsi = 100.0 - 100.0 / (1.0 + relative_strength)
     rsi = rsi.mask(average_loss.eq(0.0) & average_gain.gt(0.0), 100.0)
@@ -88,9 +90,7 @@ def add_market_features(dataframe: DataFrame) -> DataFrame:
     volume_mean = volume.rolling(20, min_periods=20).mean()
     volume_std = volume.rolling(20, min_periods=20).std(ddof=0)
     volume_zscore = (volume - volume_mean) / volume_std.where(volume_std > 0.0)
-    volume_zscore = volume_zscore.mask(
-        volume_std.eq(0.0) & volume_mean.notna(), 0.0
-    )
+    volume_zscore = volume_zscore.mask(volume_std.eq(0.0) & volume_mean.notna(), 0.0)
 
     atr_percentile = atr_proxy.rolling(252, min_periods=63).rank(pct=True)
 
