@@ -243,6 +243,8 @@ def test_next_bar_open_entry_and_signal_time_atr_are_explicit_contracts() -> Non
         atr_values=atr,
         horizon_candles=3,
         atr_period=1,
+        take_profit_multiplier=1.0,
+        stop_loss_multiplier=1.0,
         entry_reference="NEXT_BAR_OPEN",
     )
 
@@ -262,6 +264,8 @@ def test_next_bar_open_entry_uses_same_adverse_slippage_as_simulator() -> None:
         atr_values=constant_atr(candles, 1.0),
         horizon_candles=3,
         atr_period=1,
+        take_profit_multiplier=1.0,
+        stop_loss_multiplier=1.0,
         entry_reference="NEXT_BAR_OPEN",
         entry_slippage_bps=20.0,
     )
