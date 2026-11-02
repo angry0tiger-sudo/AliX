@@ -137,9 +137,9 @@ def _economic_outcomes_by_index(bars: DataFrame, labels: DataFrame) -> Series:
     90 bps round-trip fee/slippage estimate. Intrabar outcomes follow the target
     label's stop-first collision rule. Final portfolio acceptance uses replay.
     """
-    event_indices = pd.to_numeric(
-        labels["event_index"], errors="raise"
-    ).to_numpy(dtype=np.int64)
+    event_indices = pd.to_numeric(labels["event_index"], errors="raise").to_numpy(
+        dtype=np.int64
+    )
     label_end_indices = pd.to_numeric(
         labels["label_end_idx"], errors="coerce"
     ).to_numpy(dtype=np.float64)
