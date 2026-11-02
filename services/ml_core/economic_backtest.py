@@ -52,6 +52,8 @@ class TradeManagementConfig:
     trailing_stop_enabled: bool = False
     trailing_activation_atr: float = 1.0
     trailing_step_atr: float = 1.0
+    time_exit_candles: int | None = None
+    time_exit_mfe_threshold_atr: float = 0.5
 
 
 @dataclass(frozen=True)
@@ -76,6 +78,12 @@ class OpenPosition:
     high_water_mark: float
     trailing_stop_active: bool
     trailing_stop_steps: int
+    time_exit_candles: int | None
+    time_exit_mfe_threshold_atr: float
+    time_exit_evaluated: bool
+    time_exit_pending: bool
+    max_favorable_excursion_atr: float
+    max_adverse_excursion_atr: float
 
 
 def validate_execution_config(config: ExecutionConfig) -> None:
@@ -129,8 +137,27 @@ def _validate_trailing_stop_settings(config: TradeManagementConfig) -> None:
         raise ValueError("economic_trailing_stop_settings_invalid")
 
 
+def _validate_time_exit_settings(config: TradeManagementConfig) -> None:
+    """Reject malformed dynamic time-exit settings."""
+    if config.time_exit_candles is not None:
+        _require_positive_integer(
+            config.time_exit_candles, "economic_time_exit_candles_invalid"
+        )
+        if config.time_exit_candles >= config.horizon_candles:
+            raise ValueError("economic_time_exit_must_precede_vertical_horizon")
+    threshold = config.time_exit_mfe_threshold_atr
+    if isinstance(threshold, bool):
+        raise ValueError("economic_time_exit_mfe_threshold_invalid")
+    try:
+        valid = np.isfinite(float(threshold)) and float(threshold) > 0
+    except (TypeError, ValueError, OverflowError):
+        valid = False
+    if not valid:
+        raise ValueError("economic_time_exit_mfe_threshold_invalid")
+
+
 def validate_trade_management_config(config: TradeManagementConfig) -> None:
-    """Reject invalid ATR, barrier, horizon, confidence, or trailing assumptions."""
+    """Reject invalid ATR, barrier, horizon, confidence, and exit settings."""
     _require_positive_integer(config.atr_period, "economic_atr_period_invalid")
     _require_positive_integer(
         config.horizon_candles, "economic_horizon_candles_invalid"
@@ -138,6 +165,7 @@ def validate_trade_management_config(config: TradeManagementConfig) -> None:
     _validate_trade_barrier_multipliers(config)
     _validate_confidence_threshold(config.confidence_threshold)
     _validate_trailing_stop_settings(config)
+    _validate_time_exit_settings(config)
 
 
 def _source_report_metadata_is_approved(report: dict[str, Any]) -> bool:
@@ -642,6 +670,12 @@ def _open_position(
         high_water_mark=entry_fill,
         trailing_stop_active=False,
         trailing_stop_steps=0,
+        time_exit_candles=management.time_exit_candles,
+        time_exit_mfe_threshold_atr=management.time_exit_mfe_threshold_atr,
+        time_exit_evaluated=False,
+        time_exit_pending=False,
+        max_favorable_excursion_atr=0.0,
+        max_adverse_excursion_atr=0.0,
     )
     marked_equity = equity - entry_fee - entry_slippage
     if marked_equity <= 0:
@@ -661,6 +695,37 @@ def _mark_position(position: OpenPosition, mark_price: float) -> float:
         + market_pnl
         - position.entry_fee
         - position.entry_slippage_cost
+    )
+
+
+def _update_position_excursions(state: _SimulationState, bar: Any) -> None:
+    """Update cumulative OHLC-based MFE and MAE in units of entry ATR."""
+    position = state.position
+    if position is None:
+        return
+    high, low = float(bar["high"]), float(bar["low"])
+    if position.direction == 1:
+        favorable = max(
+            0.0, (high - position.entry_fill_price) / position.atr_value
+        )
+        adverse = max(
+            0.0, (position.entry_fill_price - low) / position.atr_value
+        )
+    else:
+        favorable = max(
+            0.0, (position.entry_fill_price - low) / position.atr_value
+        )
+        adverse = max(
+            0.0, (high - position.entry_fill_price) / position.atr_value
+        )
+    state.position = replace(
+        position,
+        max_favorable_excursion_atr=max(
+            position.max_favorable_excursion_atr, favorable
+        ),
+        max_adverse_excursion_atr=max(
+            position.max_adverse_excursion_atr, adverse
+        ),
     )
 
 
@@ -767,6 +832,15 @@ def _close_position(
         "stop_exit_type": stop_exit_type,
         "entry_confidence": round(position.entry_confidence, 10),
         "bars_held": bars_held,
+        "mfe_atr": round(position.max_favorable_excursion_atr, 8),
+        "mae_atr": round(position.max_adverse_excursion_atr, 8),
+        "time_exit_candles": position.time_exit_candles,
+        "time_exit_mfe_threshold_atr": round(
+            position.time_exit_mfe_threshold_atr, 8
+        ),
+        "time_exit_evaluated": position.time_exit_evaluated,
+        "time_exit_pending": position.time_exit_pending,
+        "time_exit_triggered": reason == "TIME_EXIT",
         "exit_reference_price": round(reference_price, 10),
         "exit_fill_price": round(exit_fill, 10),
         "exit_trigger_type": exit_trigger_type,
@@ -824,6 +898,25 @@ def _optional_mean(values: list[float]) -> float | None:
     return round(float(np.mean(values)), 8) if values else None
 
 
+def _excursion_statistics(trades: list[dict[str, Any]]) -> dict[str, Any]:
+    """Summarize MFE and MAE for all trades and negative-PnL trades."""
+    mfe_values = [float(item["mfe_atr"]) for item in trades]
+    mae_values = [float(item["mae_atr"]) for item in trades]
+    losing = [item for item in trades if float(item["net_pnl_usd"]) < 0]
+    losing_mfe = [float(item["mfe_atr"]) for item in losing]
+    losing_mae = [float(item["mae_atr"]) for item in losing]
+    return {
+        "mean_mfe_atr": _optional_mean(mfe_values),
+        "mean_mae_atr": _optional_mean(mae_values),
+        "mean_losing_trade_mfe_atr": _optional_mean(losing_mfe),
+        "mean_losing_trade_mae_atr": _optional_mean(losing_mae),
+        "losing_trades_with_positive_mfe_count": sum(value > 0 for value in losing_mfe),
+        "losing_trades_with_mfe_at_least_0_5_atr_count": sum(
+            value >= 0.5 for value in losing_mfe
+        ),
+    }
+
+
 def _metrics(
     trades: list[dict[str, Any]],
     equity_values: list[float],
@@ -838,6 +931,7 @@ def _metrics(
     trade_count = len(trades)
     pf_pass = pf is not None and pf > 1.5
     drawdown_pass = max_drawdown < config.maximum_drawdown
+    excursion_statistics = _excursion_statistics(trades)
     return {
         "initial_equity_usd": round(config.initial_equity, 8),
         "final_equity_usd": round(final_equity, 8),
@@ -860,6 +954,7 @@ def _metrics(
         "drawdown_gate_passed": drawdown_pass,
         "economic_candidate_gate_passed": bool(pf_pass and drawdown_pass),
         "maximum_drawdown_limit_fraction": config.maximum_drawdown,
+        **excursion_statistics,
     }
 
 
@@ -1179,6 +1274,53 @@ def _update_trailing_stop_after_completed_bar(
     )
 
 
+def _close_on_pending_time_exit(
+    state: _SimulationState,
+    bar: Any,
+    timestamp: pd.Timestamp,
+    bar_index: int,
+    config: ExecutionConfig,
+) -> bool:
+    """Execute a previously scheduled exit at the next candle open."""
+    position = state.position
+    if position is None or not position.time_exit_pending:
+        return False
+    return _close_state_position(
+        state,
+        float(bar["open"]),
+        timestamp,
+        bar_index,
+        "TIME_EXIT",
+        "TIME_EXIT_OPEN",
+        config,
+    )
+
+
+def _schedule_time_exit_after_completed_bar(
+    state: _SimulationState,
+    bar_index: int,
+) -> None:
+    """Evaluate the MFE threshold once X complete candles have elapsed."""
+    position = state.position
+    if (
+        position is None
+        or position.time_exit_candles is None
+        or position.time_exit_evaluated
+    ):
+        return
+    bars_held = bar_index - position.entry_bar_index + 1
+    if bars_held < position.time_exit_candles:
+        return
+    state.position = replace(
+        position,
+        time_exit_evaluated=True,
+        time_exit_pending=(
+            position.max_favorable_excursion_atr
+            < position.time_exit_mfe_threshold_atr
+        ),
+    )
+
+
 def _close_on_vertical_barrier(
     state: _SimulationState,
     bar: Any,
@@ -1283,10 +1425,12 @@ def _process_execution_bar(
     config: ExecutionConfig,
     management: TradeManagementConfig,
 ) -> None:
-    """Process one candle in gap, signal, intrabar, horizon, and mark order."""
+    """Process one candle in causal opening, signal, barrier, and mark order."""
     bar = normalized.iloc[index]
     timestamp = pd.Timestamp(bar["date"])
     gap_closed = _close_on_barrier(state, bar, timestamp, index, config, gap_first=True)
+    if not gap_closed:
+        _close_on_pending_time_exit(state, bar, timestamp, index, config)
     signal_item = action_by_index.get(index)
     if signal_item is not None and not gap_closed:
         signal = str(signal_item["signal"])
@@ -1302,8 +1446,10 @@ def _process_execution_bar(
             management,
             normalized,
         )
+    _update_position_excursions(state, bar)
     _close_on_barrier(state, bar, timestamp, index, config, gap_first=False)
     _update_trailing_stop_after_completed_bar(state, bar, config, management)
+    _schedule_time_exit_after_completed_bar(state, index)
     _close_on_vertical_barrier(state, bar, timestamp, index, management, config)
     _mark_execution_bar_close(state, bar, timestamp)
 
@@ -1337,6 +1483,7 @@ def _simulation_exit_summary(
         "initial_stop_exit_count": stop_exit_type_counts["INITIAL_STOP"],
         "breakeven_stop_exit_count": stop_exit_type_counts["BREAKEVEN_STOP"],
         "trailing_stop_exit_count": stop_exit_type_counts["TRAILING_STOP"],
+        "time_exit_count": sum(item["exit_reason"] == "TIME_EXIT" for item in trades),
         "confidence_filter": {
             "threshold": None,
             "raw_buy_signal_count": sum(
@@ -1406,6 +1553,10 @@ def simulate_signals(
             "trailing_activation_atr": management.trailing_activation_atr,
             "trailing_step_atr": management.trailing_step_atr,
             "trailing_stop_update_policy": ("COMPLETED_BAR_HIGH_NEXT_BAR_EFFECTIVE"),
+            "time_exit_candles": management.time_exit_candles,
+            "time_exit_mfe_threshold_atr": management.time_exit_mfe_threshold_atr,
+            "time_exit_evaluation_policy": "ONCE_AFTER_X_COMPLETED_CANDLES",
+            "time_exit_execution_policy": "NEXT_CANDLE_OPEN",
             "trailing_breakeven_policy": "NET_OF_BOTH_SIDE_FEES_AND_SLIPPAGE",
             "barrier_reference": "ACTUAL_NEXT_BAR_ENTRY_FILL",
             "atr_reference": "SIGNAL_BAR_CLOSE_ONLY",
@@ -1507,6 +1658,8 @@ def evaluate_candidate_confidence_sweep(
             trailing_stop_enabled=base.trailing_stop_enabled,
             trailing_activation_atr=base.trailing_activation_atr,
             trailing_step_atr=base.trailing_step_atr,
+            time_exit_candles=base.time_exit_candles,
+            time_exit_mfe_threshold_atr=base.time_exit_mfe_threshold_atr,
         )
         results.append(
             {
@@ -1525,6 +1678,8 @@ V4N_STOP_LOSS_ATR_MULTIPLIER = 2.0
 V4N_TAKE_PROFIT_ATR_MULTIPLIER = 3.0
 V4N_TRAILING_ACTIVATION_ATR = 1.0
 V4N_TRAILING_STEP_ATR = 1.0
+V4O_TIME_EXIT_MFE_THRESHOLD_ATR = 0.5
+V4O_TIME_EXIT_CANDLES = (None, 3, 6, 9)
 # Each tuple is ordered (stop_loss_atr_multiplier, take_profit_atr_multiplier).
 V4M_TP_SL_GEOMETRIES = (
     (2.0, 2.0),
@@ -1607,11 +1762,78 @@ def evaluate_candidate_tp_sl_sweep(
             trailing_stop_enabled=base.trailing_stop_enabled,
             trailing_activation_atr=base.trailing_activation_atr,
             trailing_step_atr=base.trailing_step_atr,
+            time_exit_candles=base.time_exit_candles,
+            time_exit_mfe_threshold_atr=base.time_exit_mfe_threshold_atr,
         )
         results.append(
             {
                 "stop_loss_atr_multiplier": stop_loss,
                 "take_profit_atr_multiplier": take_profit,
+                "candidate_result": evaluate_candidate(
+                    candidate, bars, config, management
+                ),
+            }
+        )
+    return results
+
+
+def validate_time_exit_candles(
+    time_exit_candles: list[int | None] | tuple[int | None, ...],
+) -> tuple[int | None, ...]:
+    """Validate a non-empty ordered collection of unique exit horizons."""
+    if not isinstance(time_exit_candles, (list, tuple)) or not time_exit_candles:
+        raise ValueError("economic_time_exit_sweep_values_invalid")
+    validated: list[int | None] = []
+    seen: set[int | None] = set()
+    for value in time_exit_candles:
+        if value is not None:
+            _require_positive_integer(value, "economic_time_exit_candles_invalid")
+        if value in seen:
+            raise ValueError("economic_time_exit_sweep_duplicate")
+        seen.add(value)
+        validated.append(value)
+    return tuple(validated)
+
+
+def evaluate_candidate_time_exit_sweep(
+    candidate: dict[str, Any],
+    bars: DataFrame,
+    config: ExecutionConfig,
+    base_management: TradeManagementConfig | None = None,
+    *,
+    time_exit_candles: list[int | None] | tuple[int | None, ...] = (
+        V4O_TIME_EXIT_CANDLES
+    ),
+) -> list[dict[str, Any]]:
+    """Replay stored probabilities at baseline and fixed dynamic time exits."""
+    options = validate_time_exit_candles(time_exit_candles)
+    base = base_management or TradeManagementConfig(
+        confidence_threshold=V4N_CONFIDENCE_THRESHOLD,
+        trailing_stop_enabled=False,
+        time_exit_mfe_threshold_atr=V4O_TIME_EXIT_MFE_THRESHOLD_ATR,
+    )
+    validate_trade_management_config(base)
+    if base.trailing_stop_enabled:
+        raise ValueError("v4o_trailing_stop_must_be_disabled")
+    if base.confidence_threshold != V4N_CONFIDENCE_THRESHOLD:
+        raise ValueError("v4o_confidence_threshold_must_be_0_60")
+    results: list[dict[str, Any]] = []
+    for candles in options:
+        management = TradeManagementConfig(
+            atr_period=base.atr_period,
+            take_profit_atr_multiplier=base.take_profit_atr_multiplier,
+            stop_loss_atr_multiplier=base.stop_loss_atr_multiplier,
+            horizon_candles=base.horizon_candles,
+            confidence_threshold=base.confidence_threshold,
+            trailing_stop_enabled=False,
+            trailing_activation_atr=base.trailing_activation_atr,
+            trailing_step_atr=base.trailing_step_atr,
+            time_exit_candles=candles,
+            time_exit_mfe_threshold_atr=base.time_exit_mfe_threshold_atr,
+        )
+        results.append(
+            {
+                "time_exit_candles": candles,
                 "candidate_result": evaluate_candidate(
                     candidate, bars, config, management
                 ),
