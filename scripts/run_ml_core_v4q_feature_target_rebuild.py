@@ -706,7 +706,10 @@ def _comparison_csv_rows(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "sell_exit_count": exits.get("SELL", 0),
                 "horizon_exit_count": exits.get("HORIZON_EXPIRY", 0),
                 "total_gross_market_pnl_usd": round(
-                    sum(float(trade["gross_market_pnl_usd"]) for trade in item["trades"]), 8
+                    sum(
+                        float(trade["gross_market_pnl_usd"]) for trade in item["trades"]
+                    ),
+                    8,
                 ),
                 "total_net_pnl_usd": round(
                     sum(float(trade["net_pnl_usd"]) for trade in item["trades"]), 8

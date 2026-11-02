@@ -368,7 +368,6 @@ def _select_candidate(
     return selected, status, len(feasible)
 
 
-
 def _validate_tuning_configuration(
     minimum_hold_recall: float,
     n_iter: int,
@@ -446,9 +445,7 @@ def _candidate_result_records(cv_results: dict[str, Any]) -> list[dict[str, Any]
             "mean_cv_macro_f1": round(
                 float(cv_results["mean_test_macro_f1"][index]), 6
             ),
-            "mean_cv_buy_f1": round(
-                float(cv_results["mean_test_buy_f1"][index]), 6
-            ),
+            "mean_cv_buy_f1": round(float(cv_results["mean_test_buy_f1"][index]), 6),
         }
         for index, parameters in enumerate(cv_results["params"])
     ]
@@ -488,7 +485,8 @@ def _build_tuning_diagnostics(
         "class_weight_policy": class_weight_policy,
         "selection_objective": tuning_objective,
         "minimum_hold_recall_for_candidate_selection": float(minimum_hold_recall),
-        "minimum_hold_recall_applied_to_selection": tuning_objective == "HOLD_PRECISION",
+        "minimum_hold_recall_applied_to_selection": tuning_objective
+        == "HOLD_PRECISION",
         "recall_feasible_candidate_count": recall_feasible_count,
         "selection_status": selection_status,
         "selected_parameters": parameters,

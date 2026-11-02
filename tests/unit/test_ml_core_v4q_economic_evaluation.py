@@ -77,16 +77,12 @@ def test_v4q_feature_importance_rows_are_named_and_fail_closed() -> None:
 
     assert rows == [
         {
-            "candidate_id": (
-                "V4Q_1ATR_SYMMETRIC|BTC/USDT|15m|Baseline|weight_none"
-            ),
+            "candidate_id": ("V4Q_1ATR_SYMMETRIC|BTC/USDT|15m|Baseline|weight_none"),
             "feature": "rsi_14",
             "gain": 3.0,
         },
         {
-            "candidate_id": (
-                "V4Q_1ATR_SYMMETRIC|BTC/USDT|15m|Baseline|weight_none"
-            ),
+            "candidate_id": ("V4Q_1ATR_SYMMETRIC|BTC/USDT|15m|Baseline|weight_none"),
             "feature": "macd_histogram",
             "gain": 1.5,
         },
@@ -127,7 +123,5 @@ def test_v4q_comparison_csv_summary_rejects_partial_data(tmp_path: Path) -> None
         writer.writeheader()
         writer.writerow({"candidate_id": "candidate-00", "profit_factor": "0.75"})
 
-    with pytest.raises(
-        ValueError, match="v4q_comparison_csv_candidate_count_mismatch"
-    ):
+    with pytest.raises(ValueError, match="v4q_comparison_csv_candidate_count_mismatch"):
         v4q._render_comparison_csv_markdown(comparison)

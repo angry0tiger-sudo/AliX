@@ -121,9 +121,7 @@ def _feature_importance_gain(model: Any, features: DataFrame) -> list[dict[str, 
     expected_names = [str(name) for name in features.columns]
     if feature_names != expected_names:
         raise ValueError("v4h_feature_importance_feature_names_mismatch")
-    gains = np.asarray(
-        booster.feature_importance(importance_type="gain"), dtype=float
-    )
+    gains = np.asarray(booster.feature_importance(importance_type="gain"), dtype=float)
     if (
         gains.ndim != 1
         or len(gains) != len(feature_names)

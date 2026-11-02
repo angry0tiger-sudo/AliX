@@ -20,7 +20,9 @@ def test_v4q_economic_workflow_is_push_triggered_ci_gated_and_fail_closed() -> N
     assert "alix-v4q-economic-evaluation" in workflow
     assert "Feature Importance Gain" in workflow
     assert "Comparison CSV (exact persisted rows)" in workflow
-    assert 'report["model"]["hyperparameter_selection_objective"] == "BUY_F1"' in workflow
+    assert (
+        'report["model"]["hyperparameter_selection_objective"] == "BUY_F1"' in workflow
+    )
     assert "NEXT_BAR_OPEN_WITH_LONG_ENTRY_SLIPPAGE" in workflow
     assert '"Champion": None' in workflow
     assert "order_permission" in workflow

@@ -273,7 +273,9 @@ def test_next_bar_open_entry_uses_same_adverse_slippage_as_simulator() -> None:
     assert event["stop_loss_price"] == pytest.approx(expected_fill - 1.0)
 
 
-def test_entry_slippage_requires_next_open_reference_and_valid_nonnegative_value() -> None:
+def test_entry_slippage_requires_next_open_reference_and_valid_nonnegative_value() -> (
+    None
+):
     candles = market_frame(40)
     atr = constant_atr(candles, 1.0)
     with pytest.raises(
