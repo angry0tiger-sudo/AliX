@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from functools import partial
 from math import isfinite
 from numbers import Integral
 from typing import Any, Sequence, cast
@@ -29,7 +30,36 @@ DEFAULT_RANDOM_SEARCH_ITERATIONS = 9
 DEFAULT_INNER_CV_SPLITS = 3
 DEFAULT_RANDOM_STATE = 42
 DEFAULT_MINIMUM_CLASS_SAMPLES = 20
-TUNING_OBJECTIVES = ("HOLD_PRECISION", "BUY_F1")
+TUNING_OBJECTIVES = ("HOLD_PRECISION", "BUY_F1", "NET_EXPECTANCY_PROXY")
+DEFAULT_ESTIMATED_ROUND_TRIP_COST_BPS = 90.0
+
+
+def custom_eval_metric(
+    estimator: Any,
+    features: DataFrame,
+    actual: Series,
+    *,
+    gross_returns_by_index: Series,
+    estimated_cost_bps: float = DEFAULT_ESTIMATED_ROUND_TRIP_COST_BPS,
+) -> float:
+    """Mean predicted-BUY gross outcome less estimated round-trip cost.
+
+    Event-level proxy used only on inner CV folds inside outer Train. The final
+    economic execution replay remains the acceptance authority.
+    """
+    if isinstance(estimated_cost_bps, bool) or not isfinite(float(estimated_cost_bps)) or estimated_cost_bps < 0:
+        raise ValueError("tuning_estimated_cost_bps_invalid")
+    if not isinstance(gross_returns_by_index, Series) or gross_returns_by_index.index.has_duplicates:
+        raise ValueError("tuning_economic_outcomes_invalid")
+    if len(features) != len(actual):
+        raise ValueError("tuning_economic_score_alignment_invalid")
+    buy_mask = np.asarray(estimator.predict(features) == "BUY", dtype=bool)
+    if not bool(buy_mask.any()):
+        return 0.0
+    gross = gross_returns_by_index.reindex(features.index).to_numpy(dtype=float)
+    if len(gross) != len(features) or not bool(np.isfinite(gross).all()):
+        raise ValueError("tuning_economic_outcomes_missing_or_non_finite")
+    return float(np.mean(gross[buy_mask] - float(estimated_cost_bps) / 10_000.0))
 
 
 def _positive_integer(value: object, reason: str) -> int:
@@ -281,28 +311,21 @@ def _validate_tuning_objective(objective: str) -> str:
 
 def _validated_cv_score_arrays(
     cv_results: dict[str, Any],
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, list[dict[str, Any]]]:
-    precisions = np.asarray(cv_results["mean_test_hold_precision"], dtype=float)
-    recalls = np.asarray(cv_results["mean_test_hold_recall"], dtype=float)
-    macro_f1 = np.asarray(cv_results["mean_test_macro_f1"], dtype=float)
-    buy_f1 = np.asarray(cv_results["mean_test_buy_f1"], dtype=float)
-    parameters = cv_results["params"]
-    lengths_match = (
-        len(precisions)
-        == len(recalls)
-        == len(macro_f1)
-        == len(buy_f1)
-        == len(parameters)
-    )
-    values_are_finite = (
-        np.isfinite(precisions).all()
-        and np.isfinite(recalls).all()
-        and np.isfinite(macro_f1).all()
-        and np.isfinite(buy_f1).all()
-    )
-    if len(precisions) == 0 or not lengths_match or not values_are_finite:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, list[dict[str, Any]]]:
+    precision = np.asarray(cv_results["mean_test_hold_precision"], dtype=float)
+    recall = np.asarray(cv_results["mean_test_hold_recall"], dtype=float)
+    macro = np.asarray(cv_results["mean_test_macro_f1"], dtype=float)
+    buy = np.asarray(cv_results["mean_test_buy_f1"], dtype=float)
+    expectancy = np.asarray(cv_results.get("mean_test_net_expectancy_proxy", np.zeros_like(buy)), dtype=float)
+    params = cv_results["params"]
+    arrays = (precision, recall, macro, buy, expectancy)
+    if not precision.size or len({len(item) for item in arrays} | {len(params)}) != 1:
         raise ValueError("tuning_cv_results_invalid")
-    return precisions, recalls, macro_f1, buy_f1, parameters
+    if not all(bool(np.isfinite(item).all()) for item in arrays):
+        raise ValueError("tuning_cv_results_invalid")
+    return precision, recall, macro, buy, expectancy, params
+
+
 
 
 def _candidate_complexity_key(parameters: dict[str, Any]) -> tuple[int, int, int]:
@@ -319,17 +342,20 @@ def _candidate_ranking_key(
     recalls: np.ndarray,
     macro_f1: np.ndarray,
     buy_f1: np.ndarray,
+    net_expectancy: np.ndarray,
     parameters: list[dict[str, Any]],
     objective: str,
-) -> tuple[float, float, float, float, int, int, int]:
+) -> tuple[float, float, float, float, float, int, int, int]:
     complexity = _candidate_complexity_key(parameters[index])
-    precision = float(precisions[index])
-    recall = float(recalls[index])
-    macro = float(macro_f1[index])
+    precision, recall, macro = float(precisions[index]), float(recalls[index]), float(macro_f1[index])
     selected_buy_f1 = float(buy_f1[index])
     if objective == "BUY_F1":
-        return (selected_buy_f1, macro, precision, recall, *complexity)
-    return (precision, macro, recall, selected_buy_f1, *complexity)
+        return selected_buy_f1, macro, precision, recall, 0.0, *complexity
+    if objective == "NET_EXPECTANCY_PROXY":
+        return float(net_expectancy[index]), selected_buy_f1, macro, precision, recall, *complexity
+    return precision, macro, recall, selected_buy_f1, 0.0, *complexity
+
+
 
 
 def _select_candidate(
@@ -338,34 +364,19 @@ def _select_candidate(
     objective: str = "HOLD_PRECISION",
 ) -> tuple[int, str, int]:
     objective = _validate_tuning_objective(objective)
-    precisions, recalls, macro_f1, buy_f1, parameters = _validated_cv_score_arrays(
-        cv_results
-    )
-    feasible = [
-        index
-        for index, recall in enumerate(recalls)
-        if float(recall) >= minimum_hold_recall
-    ]
-    candidate_indices = (
-        list(range(len(parameters)))
-        if objective == "BUY_F1"
-        else feasible or list(range(len(parameters)))
-    )
-    selected = max(
-        candidate_indices,
-        key=lambda index: _candidate_ranking_key(
-            index, precisions, recalls, macro_f1, buy_f1, parameters, objective
-        ),
-    )
+    precisions, recalls, macro_f1, buy_f1, net, parameters = _validated_cv_score_arrays(cv_results)
+    feasible = [i for i, recall in enumerate(recalls) if float(recall) >= minimum_hold_recall]
+    candidates = list(range(len(parameters))) if objective in {"BUY_F1", "NET_EXPECTANCY_PROXY"} else feasible or list(range(len(parameters)))
+    selected = max(candidates, key=lambda i: _candidate_ranking_key(i, precisions, recalls, macro_f1, buy_f1, net, parameters, objective))
     if objective == "BUY_F1":
         status = "BUY_F1_MAXIMIZED"
+    elif objective == "NET_EXPECTANCY_PROXY":
+        status = "NET_EXPECTANCY_PROXY_MAXIMIZED"
     else:
-        status = (
-            "RECALL_CONSTRAINED_HOLD_PRECISION"
-            if feasible
-            else "MACRO_F1_FALLBACK_NO_RECALL_FEASIBLE"
-        )
+        status = "RECALL_CONSTRAINED_HOLD_PRECISION" if feasible else "MACRO_F1_FALLBACK_NO_RECALL_FEASIBLE"
     return selected, status, len(feasible)
+
+
 
 
 def _validate_tuning_configuration(
@@ -398,17 +409,27 @@ def _build_randomized_search(
     cv_splits: list[tuple[np.ndarray, np.ndarray]],
     iterations: int,
     seed: int,
+    *,
+    economic_outcomes: Series | None = None,
+    estimated_cost_bps: float = DEFAULT_ESTIMATED_ROUND_TRIP_COST_BPS,
 ) -> Any:
+    scoring = {
+        "hold_precision": _hold_precision_score,
+        "hold_recall": _hold_recall_score,
+        "macro_f1": _macro_f1_score,
+        "buy_f1": _buy_f1_score,
+    }
+    if economic_outcomes is not None:
+        scoring["net_expectancy_proxy"] = partial(
+            custom_eval_metric,
+            gross_returns_by_index=economic_outcomes,
+            estimated_cost_bps=estimated_cost_bps,
+        )
     return RandomizedSearchCV(
         estimator=estimator,
         param_distributions=HYPERPARAMETER_DISTRIBUTIONS,
         n_iter=iterations,
-        scoring={
-            "hold_precision": _hold_precision_score,
-            "hold_recall": _hold_recall_score,
-            "macro_f1": _macro_f1_score,
-            "buy_f1": _buy_f1_score,
-        },
+        scoring=scoring,
         cv=cv_splits,
         refit=False,
         random_state=seed,
@@ -417,6 +438,8 @@ def _build_randomized_search(
         error_score="raise",
         return_train_score=False,
     )
+
+
 
 
 def _fit_selected_estimator(
@@ -432,23 +455,21 @@ def _fit_selected_estimator(
 
 
 def _candidate_result_records(cv_results: dict[str, Any]) -> list[dict[str, Any]]:
+    net = np.asarray(cv_results.get("mean_test_net_expectancy_proxy", np.zeros(len(cv_results["params"]))), dtype=float)
     return [
         {
-            "candidate_index": index,
+            "candidate_index": i,
             "parameters": dict(parameters),
-            "mean_cv_hold_precision": round(
-                float(cv_results["mean_test_hold_precision"][index]), 6
-            ),
-            "mean_cv_hold_recall": round(
-                float(cv_results["mean_test_hold_recall"][index]), 6
-            ),
-            "mean_cv_macro_f1": round(
-                float(cv_results["mean_test_macro_f1"][index]), 6
-            ),
-            "mean_cv_buy_f1": round(float(cv_results["mean_test_buy_f1"][index]), 6),
+            "mean_cv_hold_precision": round(float(cv_results["mean_test_hold_precision"][i]), 6),
+            "mean_cv_hold_recall": round(float(cv_results["mean_test_hold_recall"][i]), 6),
+            "mean_cv_macro_f1": round(float(cv_results["mean_test_macro_f1"][i]), 6),
+            "mean_cv_buy_f1": round(float(cv_results["mean_test_buy_f1"][i]), 6),
+            "mean_cv_net_expectancy_proxy": round(float(net[i]), 8),
         }
-        for index, parameters in enumerate(cv_results["params"])
+        for i, parameters in enumerate(cv_results["params"])
     ]
+
+
 
 
 def _build_tuning_diagnostics(
@@ -502,6 +523,13 @@ def _build_tuning_diagnostics(
         "selected_mean_cv_buy_f1": round(
             float(cv_results["mean_test_buy_f1"][best_index]), 6
         ),
+        "selected_mean_cv_net_expectancy_proxy": round(
+            float(cv_results.get("mean_test_net_expectancy_proxy", np.zeros(candidate_count))[best_index]), 8
+        ),
+        "economic_scorer": "custom_eval_metric" if tuning_objective == "NET_EXPECTANCY_PROXY" else None,
+        "estimated_round_trip_cost_bps": 90.0 if tuning_objective == "NET_EXPECTANCY_PROXY" else None,
+        "economic_scorer_scope": "INNER_CV_FOLDS_WITHIN_OUTER_TRAIN" if tuning_objective == "NET_EXPECTANCY_PROXY" else None,
+        "portfolio_overlap_modeled": False,
         "candidate_results": _candidate_result_records(cv_results),
         "candidate_fit_count": candidate_count * len(fold_diagnostics),
         "random_state": seed,
@@ -522,40 +550,45 @@ def tune_lightgbm_classifier(
     n_splits: int = DEFAULT_INNER_CV_SPLITS,
     random_state: int = DEFAULT_RANDOM_STATE,
     tuning_objective: str = "HOLD_PRECISION",
+    economic_outcomes: Series | None = None,
+    estimated_cost_bps: float = DEFAULT_ESTIMATED_ROUND_TRIP_COST_BPS,
 ) -> tuple[Any, dict[str, Any]]:
-    """Tune on outer Train only, then refit the chosen estimator on all outer Train."""
+    """Tune on outer Train only, then refit the selected model on all outer Train."""
     tuning_objective = _validate_tuning_objective(tuning_objective)
     iterations, split_count, seed = _validate_tuning_configuration(
-        minimum_hold_recall,
-        n_iter,
-        n_splits,
-        random_state,
-        class_weight_policy,
+        minimum_hold_recall, n_iter, n_splits, random_state, class_weight_policy
     )
     train_rows, _ = _training_rows(training_indices, label_end_indices)
     if len(features) != len(labels) or len(labels) != len(train_rows):
         raise ValueError("tuning_train_matrix_alignment_invalid")
+    if tuning_objective == "NET_EXPECTANCY_PROXY" and economic_outcomes is None:
+        raise ValueError("tuning_economic_objective_requires_outcomes")
+    if economic_outcomes is not None:
+        if not isinstance(economic_outcomes, Series) or economic_outcomes.index.has_duplicates:
+            raise ValueError("tuning_economic_outcomes_invalid")
+        aligned = economic_outcomes.reindex(features.index)
+        if aligned.isna().any() or not bool(np.isfinite(aligned.to_numpy(dtype=float)).all()):
+            raise ValueError("tuning_economic_outcomes_missing_or_non_finite")
+    if isinstance(estimated_cost_bps, bool) or not isfinite(float(estimated_cost_bps)) or estimated_cost_bps < 0:
+        raise ValueError("tuning_estimated_cost_bps_invalid")
     cv_splits, fold_diagnostics = build_purged_time_series_splits(
-        training_indices,
-        labels,
-        label_end_indices,
-        horizon_candles=horizon_candles,
-        n_splits=split_count,
+        training_indices, labels, label_end_indices,
+        horizon_candles=horizon_candles, n_splits=split_count,
     )
-    search = _build_randomized_search(estimator, cv_splits, iterations, seed)
+    search = _build_randomized_search(
+        estimator, cv_splits, iterations, seed,
+        economic_outcomes=economic_outcomes,
+        estimated_cost_bps=estimated_cost_bps,
+    )
     search.fit(features, labels)
-    cv_results: dict[str, Any] = search.cv_results_
+    results: dict[str, Any] = search.cv_results_
     best_index, selection_status, recall_feasible_count = _select_candidate(
-        cv_results, float(minimum_hold_recall), tuning_objective
+        results, float(minimum_hold_recall), tuning_objective
     )
-    best_parameters = dict(cv_results["params"][best_index])
-    fitted_estimator = _fit_selected_estimator(
-        estimator, features, labels, best_parameters
-    )
+    best_parameters = dict(results["params"][best_index])
+    fitted_estimator = _fit_selected_estimator(estimator, features, labels, best_parameters)
     diagnostics = _build_tuning_diagnostics(
-        cv_results,
-        fold_diagnostics,
-        best_parameters,
+        results, fold_diagnostics, best_parameters,
         class_weight_policy=class_weight_policy,
         minimum_hold_recall=minimum_hold_recall,
         selection_status=selection_status,
