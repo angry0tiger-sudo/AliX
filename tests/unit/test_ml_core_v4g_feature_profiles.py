@@ -35,8 +35,8 @@ def test_v4g_builds_only_trend_group_for_baseline_and_trend_profiles() -> None:
 
     assert tuple(groups) == ("Trend",)
     assert tuple(profiles) == ("Baseline", "Baseline+Trend")
-    assert profiles["Baseline"].shape[1] == 9
-    assert profiles["Baseline+Trend"].shape[1] == 17
+    assert profiles["Baseline"].shape[1] == 13
+    assert profiles["Baseline+Trend"].shape[1] == 21
 
 
 def test_selected_feature_group_builder_rejects_invalid_selection() -> None:
