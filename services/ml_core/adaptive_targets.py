@@ -160,6 +160,34 @@ def calculate_atr(candles: DataFrame, period: int = ATR_PERIOD) -> pd.Series:
     )
 
 
+def _validate_positive_barrier_multiplier(value: float, reason: str) -> None:
+    if not isfinite(float(value)):
+        raise ValueError(reason)
+    if value <= 0:
+        raise ValueError(reason)
+
+
+def _validate_entry_reference(entry_reference: str) -> None:
+    if entry_reference not in {"SIGNAL_CANDLE_CLOSE", "NEXT_BAR_OPEN"}:
+        raise ValueError("entry_reference_unsupported")
+
+
+def _validate_entry_slippage(entry_slippage_bps: float) -> None:
+    if isinstance(entry_slippage_bps, bool):
+        raise ValueError("entry_slippage_bps_must_be_finite_and_nonnegative")
+    if not isfinite(float(entry_slippage_bps)):
+        raise ValueError("entry_slippage_bps_must_be_finite_and_nonnegative")
+    if entry_slippage_bps < 0:
+        raise ValueError("entry_slippage_bps_must_be_finite_and_nonnegative")
+
+
+def _validate_entry_reference_slippage_compatibility(
+    entry_reference: str, entry_slippage_bps: float
+) -> None:
+    if entry_reference == "SIGNAL_CANDLE_CLOSE" and entry_slippage_bps != 0:
+        raise ValueError("entry_slippage_requires_next_bar_open_reference")
+
+
 def _validate_barrier_configuration(
     atr_period: int,
     horizon_candles: int,
@@ -170,20 +198,19 @@ def _validate_barrier_configuration(
 ) -> None:
     _positive_integer(atr_period, "atr_period")
     _positive_integer(horizon_candles, "horizon_candles")
-    if not isfinite(float(take_profit_multiplier)) or take_profit_multiplier <= 0:
-        raise ValueError("take_profit_multiplier_must_be_finite_and_positive")
-    if not isfinite(float(stop_loss_multiplier)) or stop_loss_multiplier <= 0:
-        raise ValueError("stop_loss_multiplier_must_be_finite_and_positive")
-    if entry_reference not in {"SIGNAL_CANDLE_CLOSE", "NEXT_BAR_OPEN"}:
-        raise ValueError("entry_reference_unsupported")
-    if (
-        isinstance(entry_slippage_bps, bool)
-        or not isfinite(float(entry_slippage_bps))
-        or entry_slippage_bps < 0
-    ):
-        raise ValueError("entry_slippage_bps_must_be_finite_and_nonnegative")
-    if entry_reference == "SIGNAL_CANDLE_CLOSE" and entry_slippage_bps != 0:
-        raise ValueError("entry_slippage_requires_next_bar_open_reference")
+    _validate_positive_barrier_multiplier(
+        take_profit_multiplier,
+        "take_profit_multiplier_must_be_finite_and_positive",
+    )
+    _validate_positive_barrier_multiplier(
+        stop_loss_multiplier,
+        "stop_loss_multiplier_must_be_finite_and_positive",
+    )
+    _validate_entry_reference(entry_reference)
+    _validate_entry_slippage(entry_slippage_bps)
+    _validate_entry_reference_slippage_compatibility(
+        entry_reference, entry_slippage_bps
+    )
 
 
 def _record(
