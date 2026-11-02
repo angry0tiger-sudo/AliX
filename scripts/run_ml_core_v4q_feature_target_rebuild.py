@@ -478,7 +478,7 @@ def _feature_importance_rows(
                 raise ValueError("v4q_feature_importance_missing")
             candidate_id = "|".join(
                 (
-                    V4Q_SCENARIO["name"],
+                    str(V4Q_SCENARIO["name"]),
                     str(experiment["pair"]),
                     str(experiment["timeframe"]),
                     str(experiment["feature_profile"]),
