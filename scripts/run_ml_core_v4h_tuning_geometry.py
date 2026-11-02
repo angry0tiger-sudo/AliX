@@ -112,6 +112,32 @@ def _v4h_sample_signature(
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def _feature_importance_gain(model: Any, features: DataFrame) -> list[dict[str, Any]]:
+    """Extract named LightGBM gain importance from the fitted outer-Train model."""
+    booster = getattr(model, "booster_", None)
+    if booster is None:
+        raise ValueError("v4h_feature_importance_booster_missing")
+    feature_names = [str(name) for name in booster.feature_name()]
+    expected_names = [str(name) for name in features.columns]
+    if feature_names != expected_names:
+        raise ValueError("v4h_feature_importance_feature_names_mismatch")
+    gains = np.asarray(
+        booster.feature_importance(importance_type="gain"), dtype=float
+    )
+    if (
+        gains.ndim != 1
+        or len(gains) != len(feature_names)
+        or not bool(np.isfinite(gains).all())
+        or bool(np.any(gains < 0))
+    ):
+        raise ValueError("v4h_feature_importance_gain_invalid")
+    rows = [
+        {"feature": name, "gain": round(float(gain), 8)}
+        for name, gain in zip(feature_names, gains, strict=True)
+    ]
+    return sorted(rows, key=lambda item: (-float(item["gain"]), str(item["feature"])))
+
+
 def _fit_v4h_variants(
     features: DataFrame,
     bars: DataFrame,
@@ -128,6 +154,7 @@ def _fit_v4h_variants(
     minimum_hold_precision: float,
     minimum_hold_recall: float,
     random_search_iterations: int,
+    tuning_objective: str,
 ) -> dict[str, Any]:
     """Tune on outer Train, refit on all Train, and evaluate on untouched Validation."""
     variants: dict[str, Any] = {}
@@ -148,6 +175,7 @@ def _fit_v4h_variants(
             minimum_hold_recall=minimum_hold_recall,
             n_iter=random_search_iterations,
             n_splits=DEFAULT_INNER_CV_SPLITS,
+            tuning_objective=tuning_objective,
         )
         train_probabilities = ordered_probability_matrix(model, x_train)
         validation_probabilities = ordered_probability_matrix(model, x_validation)
@@ -183,6 +211,7 @@ def _fit_v4h_variants(
                 validation_y, validation_prediction
             ),
             "hold_metrics": hold_class_metrics(validation_y, validation_prediction),
+            "feature_importance_gain": _feature_importance_gain(model, x_train),
             "probability_diagnostics": probability_diagnostics_by_temporal_segment(
                 validation_y,
                 validation_probabilities,
@@ -210,6 +239,7 @@ def run_v4h_experiment(
     minimum_hold_precision: float,
     minimum_hold_recall: float,
     random_search_iterations: int,
+    tuning_objective: str = "HOLD_PRECISION",
 ) -> dict[str, Any]:
     """Run one profile/geometry experiment using a purged outer split."""
     profile_metadata = _feature_profile_diagnostics(feature_profile)
@@ -227,6 +257,7 @@ def run_v4h_experiment(
         "pair": pair,
         "timeframe": timeframe,
         "scenario": scenario["name"],
+        "tuning_objective": tuning_objective,
         "triple_barrier": {
             "horizon_candles": int(scenario["horizon_candles"]),
             "take_profit_multiplier": float(scenario["take_profit_multiplier"]),
@@ -280,6 +311,7 @@ def run_v4h_experiment(
         minimum_hold_precision=minimum_hold_precision,
         minimum_hold_recall=minimum_hold_recall,
         random_search_iterations=random_search_iterations,
+        tuning_objective=tuning_objective,
     )
     result = _build_trained_experiment_result(
         base_result, train_y, validation_y, variants

@@ -256,3 +256,25 @@ def test_v4h_report_aggregates_candidate_metrics_and_target_balance() -> None:
         "order_permission": False,
         "trading_authorization": "NO-GO",
     }
+
+
+def test_v4h_feature_importance_extracts_named_lightgbm_gain_values() -> None:
+    class DummyBooster:
+        def feature_name(self) -> list[str]:
+            return ["rsi", "macd"]
+
+        def feature_importance(self, importance_type: str) -> np.ndarray:
+            assert importance_type == "gain"
+            return np.asarray([2.0, 5.0])
+
+    class DummyModel:
+        booster_ = DummyBooster()
+
+    result = v4h._feature_importance_gain(
+        DummyModel(), DataFrame({"rsi": [1.0], "macd": [2.0]})
+    )
+
+    assert result == [
+        {"feature": "macd", "gain": 5.0},
+        {"feature": "rsi", "gain": 2.0},
+    ]
