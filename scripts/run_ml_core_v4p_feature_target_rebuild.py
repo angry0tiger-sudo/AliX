@@ -278,11 +278,7 @@ def _mean(values: list[float]) -> float | None:
 
 def _trade_pnl_values(records: list[dict[str, Any]]) -> list[float]:
     """Flatten net PnL values from every independently replayed candidate."""
-    return [
-        float(trade["net_pnl_usd"])
-        for item in records
-        for trade in item["trades"]
-    ]
+    return [float(trade["net_pnl_usd"]) for item in records for trade in item["trades"]]
 
 
 def _winning_pnls(pnls: list[float]) -> list[float]:
