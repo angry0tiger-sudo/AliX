@@ -8,6 +8,7 @@ from typing import cast
 
 from services.ml_core.hyperparameter_tuning import (
     HYPERPARAMETER_DISTRIBUTIONS,
+    _select_candidate,
     build_purged_time_series_splits,
     tune_lightgbm_classifier,
 )
@@ -207,3 +208,43 @@ def test_random_search_rejects_candidate_count_outside_search_space() -> None:
             minimum_hold_recall=0.20,
             n_iter=28,
         )
+
+
+def test_buy_f1_objective_selects_highest_buy_f1_without_hold_recall_gate() -> None:
+    cv_results = {
+        "mean_test_hold_precision": np.asarray([0.95, 0.40, 0.30]),
+        "mean_test_hold_recall": np.asarray([0.99, 0.10, 0.20]),
+        "mean_test_macro_f1": np.asarray([0.80, 0.70, 0.60]),
+        "mean_test_buy_f1": np.asarray([0.20, 0.90, 0.40]),
+        "params": [
+            {"num_leaves": 15, "learning_rate": 0.01, "min_child_samples": 20},
+            {"num_leaves": 31, "learning_rate": 0.05, "min_child_samples": 50},
+            {"num_leaves": 63, "learning_rate": 0.1, "min_child_samples": 100},
+        ],
+    }
+    selected, status, _ = _select_candidate(
+        cv_results, minimum_hold_recall=0.95, objective="BUY_F1"
+    )
+    assert selected == 1
+    assert status == "BUY_F1_MAXIMIZED"
+
+
+def test_buy_f1_objective_is_reported_by_train_only_hyperparameter_search() -> None:
+    features, labels, training_indices, label_end_indices = _training_fixture()
+    _, diagnostics = tune_lightgbm_classifier(
+        DeterministicClassifier(),
+        features,
+        labels,
+        training_indices,
+        label_end_indices,
+        horizon_candles=12,
+        class_weight_policy="weight_none",
+        minimum_hold_recall=0.20,
+        n_iter=9,
+        n_splits=3,
+        random_state=42,
+        tuning_objective="BUY_F1",
+    )
+    assert diagnostics["selection_objective"] == "BUY_F1"
+    assert diagnostics["minimum_hold_recall_applied_to_selection"] is False
+    assert diagnostics["selected_mean_cv_buy_f1"] == pytest.approx(1.0)

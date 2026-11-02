@@ -165,6 +165,8 @@ def _validate_barrier_configuration(
     horizon_candles: int,
     take_profit_multiplier: float,
     stop_loss_multiplier: float,
+    entry_reference: str,
+    entry_slippage_bps: float,
 ) -> None:
     _positive_integer(atr_period, "atr_period")
     _positive_integer(horizon_candles, "horizon_candles")
@@ -172,12 +174,22 @@ def _validate_barrier_configuration(
         raise ValueError("take_profit_multiplier_must_be_finite_and_positive")
     if not isfinite(float(stop_loss_multiplier)) or stop_loss_multiplier <= 0:
         raise ValueError("stop_loss_multiplier_must_be_finite_and_positive")
+    if entry_reference not in {"SIGNAL_CANDLE_CLOSE", "NEXT_BAR_OPEN"}:
+        raise ValueError("entry_reference_unsupported")
+    if (
+        isinstance(entry_slippage_bps, bool)
+        or not isfinite(float(entry_slippage_bps))
+        or entry_slippage_bps < 0
+    ):
+        raise ValueError("entry_slippage_bps_must_be_finite_and_nonnegative")
+    if entry_reference == "SIGNAL_CANDLE_CLOSE" and entry_slippage_bps != 0:
+        raise ValueError("entry_slippage_requires_next_bar_open_reference")
 
 
 def _record(
     event_index: int,
     event_time: pd.Timestamp,
-    entry_price: float,
+    entry_price: float | None,
     atr: float | None,
     take_profit_price: float | None,
     stop_loss_price: float | None,
@@ -201,7 +213,10 @@ def _record(
 
 
 def _unlabeled_record(
-    event_index: int, event_time: pd.Timestamp, entry_price: float, reason: str
+    event_index: int,
+    event_time: pd.Timestamp,
+    entry_price: float | None,
+    reason: str,
 ) -> TargetRecord:
     return _record(
         event_index,
@@ -310,15 +325,30 @@ def _label_one_event(
     horizon_candles: int,
     take_profit_multiplier: float,
     stop_loss_multiplier: float,
+    entry_reference: str,
+    entry_slippage_bps: float,
 ) -> TargetRecord:
-    entry_row = normalized.iloc[event_index]
-    entry_price = float(entry_row["close"])
-    event_time = pd.Timestamp(entry_row["date"])
+    signal_row = normalized.iloc[event_index]
+    event_time = pd.Timestamp(signal_row["date"])
+    entry_price: float | None
+    if entry_reference == "NEXT_BAR_OPEN":
+        if event_index + 1 >= len(normalized):
+            return _unlabeled_record(
+                event_index, event_time, None, "incomplete_horizon"
+            )
+        next_bar_open = float(normalized.iloc[event_index + 1]["open"])
+        entry_price = next_bar_open * (1.0 + entry_slippage_bps / 10_000.0)
+    else:
+        entry_price = float(signal_row["close"])
+    if not isfinite(entry_price) or entry_price <= 0:
+        raise ValueError("label_entry_price_invalid")
+
     if computed_atr and event_index < atr_period - 1:
         return _unlabeled_record(
             event_index, event_time, entry_price, "insufficient_atr_history"
         )
 
+    # ATR is read at signal index t; no t+1 OHLC enters the ATR calculation.
     atr = _validated_atr_value(float(atr_values[event_index]))
     take_profit_price, stop_loss_price = _barrier_prices(
         entry_price, atr, take_profit_multiplier, stop_loss_multiplier
@@ -343,16 +373,23 @@ def apply_adaptive_triple_barrier(
     horizon_candles: int = LABEL_HORIZON_CANDLES,
     take_profit_multiplier: float = TAKE_PROFIT_MULTIPLIER_DEFAULT,
     stop_loss_multiplier: float = STOP_LOSS_MULTIPLIER_DEFAULT,
+    entry_reference: str = "SIGNAL_CANDLE_CLOSE",
+    entry_slippage_bps: float = 0.0,
 ) -> DataFrame:
-    """Create BUY/SELL/HOLD labels while keeping future outcomes out of features.
+    """Create BUY/SELL/HOLD labels with an explicit causal entry reference.
 
-    At index t, entry is close[t] and ATR[t] uses only OHLCV through t.
-    Future OHLCV at t+1 ... t+horizon_candles is inspected only to determine the label.
-    Stop-loss wins when both barriers are hit on the same candle. Tail rows
-    without a complete future horizon are intentionally left unlabeled.
+    ATR[t] uses OHLCV only through signal candle t. The default preserves the
+    historical Close[t] contract. V4-Q selects NEXT_BAR_OPEN and applies the
+    same adverse long-entry slippage as the economic simulator. Future bars are
+    inspected only to determine the label; incomplete horizons are unlabeled.
     """
     _validate_barrier_configuration(
-        atr_period, horizon_candles, take_profit_multiplier, stop_loss_multiplier
+        atr_period,
+        horizon_candles,
+        take_profit_multiplier,
+        stop_loss_multiplier,
+        entry_reference,
+        entry_slippage_bps,
     )
     normalized = _validated_ohlcv(candles)
     computed_atr = atr_values is None
@@ -371,6 +408,8 @@ def apply_adaptive_triple_barrier(
             horizon_candles=horizon_candles,
             take_profit_multiplier=take_profit_multiplier,
             stop_loss_multiplier=stop_loss_multiplier,
+            entry_reference=entry_reference,
+            entry_slippage_bps=entry_slippage_bps,
         )
         for event_index in range(len(normalized))
     ]

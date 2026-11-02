@@ -230,3 +230,67 @@ def test_new_barrier_parameters_reject_invalid_values() -> None:
         apply_adaptive_triple_barrier(
             candles, atr_values=atr, stop_loss_multiplier=float("inf")
         )
+
+
+def test_next_bar_open_entry_and_signal_time_atr_are_explicit_contracts() -> None:
+    candles = market_frame(40)
+    candles.loc[11, ["open", "high", "low", "close"]] = [105.0, 105.5, 104.5, 105.0]
+    atr = constant_atr(candles, 1.0)
+    atr.iloc[11] = 9.0
+
+    labels = apply_adaptive_triple_barrier(
+        candles,
+        atr_values=atr,
+        horizon_candles=3,
+        atr_period=1,
+        entry_reference="NEXT_BAR_OPEN",
+    )
+
+    event = labels.iloc[10]
+    assert event["entry_price"] == pytest.approx(105.0)
+    assert event["atr"] == pytest.approx(1.0)
+    assert event["take_profit_price"] == pytest.approx(106.0)
+    assert event["stop_loss_price"] == pytest.approx(104.0)
+
+
+def test_next_bar_open_entry_uses_same_adverse_slippage_as_simulator() -> None:
+    candles = market_frame(40)
+    candles.loc[11, ["open", "high", "low", "close"]] = [105.0, 105.5, 104.5, 105.0]
+
+    labels = apply_adaptive_triple_barrier(
+        candles,
+        atr_values=constant_atr(candles, 1.0),
+        horizon_candles=3,
+        atr_period=1,
+        entry_reference="NEXT_BAR_OPEN",
+        entry_slippage_bps=20.0,
+    )
+
+    event = labels.iloc[10]
+    expected_fill = 105.0 * 1.002
+    assert event["entry_price"] == pytest.approx(expected_fill)
+    assert event["take_profit_price"] == pytest.approx(expected_fill + 1.0)
+    assert event["stop_loss_price"] == pytest.approx(expected_fill - 1.0)
+
+
+def test_entry_slippage_requires_next_open_reference_and_valid_nonnegative_value() -> None:
+    candles = market_frame(40)
+    atr = constant_atr(candles, 1.0)
+    with pytest.raises(
+        ValueError, match="entry_slippage_requires_next_bar_open_reference"
+    ):
+        apply_adaptive_triple_barrier(
+            candles,
+            atr_values=atr,
+            entry_slippage_bps=20.0,
+        )
+    for invalid in (-1.0, float("nan"), float("inf"), True):
+        with pytest.raises(
+            ValueError, match="entry_slippage_bps_must_be_finite_and_nonnegative"
+        ):
+            apply_adaptive_triple_barrier(
+                candles,
+                atr_values=atr,
+                entry_reference="NEXT_BAR_OPEN",
+                entry_slippage_bps=invalid,
+            )

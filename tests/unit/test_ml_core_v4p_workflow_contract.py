@@ -12,8 +12,7 @@ def test_v4p_economic_workflow_is_push_triggered_ci_gated_and_fail_closed() -> N
     )
     workflow = workflow_path.read_text(encoding="utf-8")
 
-    assert "  push:" in workflow
-    assert "      - research/ml-core-v4p-feature-target-rebuild" in workflow
+    assert "  push:" not in workflow
     assert "  workflow_dispatch:" in workflow
     assert "research/ml-core-v4p-feature-target-rebuild" in workflow
     assert "Require standard CI success for this exact V4-P commit" in workflow

@@ -29,6 +29,7 @@ DEFAULT_RANDOM_SEARCH_ITERATIONS = 9
 DEFAULT_INNER_CV_SPLITS = 3
 DEFAULT_RANDOM_STATE = 42
 DEFAULT_MINIMUM_CLASS_SAMPLES = 20
+TUNING_OBJECTIVES = ("HOLD_PRECISION", "BUY_F1")
 
 
 def _positive_integer(value: object, reason: str) -> int:
@@ -258,22 +259,50 @@ def _macro_f1_score(estimator: Any, features: DataFrame, actual: Series) -> floa
     )
 
 
+def _buy_f1_score(estimator: Any, features: DataFrame, actual: Series) -> float:
+    """Score the BUY class only."""
+    predicted = estimator.predict(features)
+    return float(
+        f1_score(
+            actual,
+            predicted,
+            labels=["BUY"],
+            average="macro",
+            zero_division=0,
+        )
+    )
+
+
+def _validate_tuning_objective(objective: str) -> str:
+    if objective not in TUNING_OBJECTIVES:
+        raise ValueError("tuning_objective_unsupported")
+    return objective
+
+
 def _validated_cv_score_arrays(
     cv_results: dict[str, Any],
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[dict[str, Any]]]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, list[dict[str, Any]]]:
     precisions = np.asarray(cv_results["mean_test_hold_precision"], dtype=float)
     recalls = np.asarray(cv_results["mean_test_hold_recall"], dtype=float)
     macro_f1 = np.asarray(cv_results["mean_test_macro_f1"], dtype=float)
+    buy_f1 = np.asarray(cv_results["mean_test_buy_f1"], dtype=float)
     parameters = cv_results["params"]
-    lengths_match = len(precisions) == len(recalls) == len(macro_f1) == len(parameters)
+    lengths_match = (
+        len(precisions)
+        == len(recalls)
+        == len(macro_f1)
+        == len(buy_f1)
+        == len(parameters)
+    )
     values_are_finite = (
         np.isfinite(precisions).all()
         and np.isfinite(recalls).all()
         and np.isfinite(macro_f1).all()
+        and np.isfinite(buy_f1).all()
     )
     if len(precisions) == 0 or not lengths_match or not values_are_finite:
         raise ValueError("tuning_cv_results_invalid")
-    return precisions, recalls, macro_f1, parameters
+    return precisions, recalls, macro_f1, buy_f1, parameters
 
 
 def _candidate_complexity_key(parameters: dict[str, Any]) -> tuple[int, int, int]:
@@ -289,45 +318,55 @@ def _candidate_ranking_key(
     precisions: np.ndarray,
     recalls: np.ndarray,
     macro_f1: np.ndarray,
+    buy_f1: np.ndarray,
     parameters: list[dict[str, Any]],
-    precision_constrained: bool,
-) -> tuple[float, float, float, int, int, int]:
+    objective: str,
+) -> tuple[float, float, float, float, int, int, int]:
     complexity = _candidate_complexity_key(parameters[index])
     precision = float(precisions[index])
     recall = float(recalls[index])
     macro = float(macro_f1[index])
-    if precision_constrained:
-        return (precision, macro, recall, *complexity)
-    return (macro, precision, recall, *complexity)
+    selected_buy_f1 = float(buy_f1[index])
+    if objective == "BUY_F1":
+        return (selected_buy_f1, macro, precision, recall, *complexity)
+    return (precision, macro, recall, selected_buy_f1, *complexity)
 
 
 def _select_candidate(
-    cv_results: dict[str, Any], minimum_hold_recall: float
+    cv_results: dict[str, Any],
+    minimum_hold_recall: float,
+    objective: str = "HOLD_PRECISION",
 ) -> tuple[int, str, int]:
-    precisions, recalls, macro_f1, parameters = _validated_cv_score_arrays(cv_results)
+    objective = _validate_tuning_objective(objective)
+    precisions, recalls, macro_f1, buy_f1, parameters = _validated_cv_score_arrays(
+        cv_results
+    )
     feasible = [
         index
         for index, recall in enumerate(recalls)
         if float(recall) >= minimum_hold_recall
     ]
-    candidate_indices = feasible or list(range(len(parameters)))
+    candidate_indices = (
+        list(range(len(parameters)))
+        if objective == "BUY_F1"
+        else feasible or list(range(len(parameters)))
+    )
     selected = max(
         candidate_indices,
         key=lambda index: _candidate_ranking_key(
-            index,
-            precisions,
-            recalls,
-            macro_f1,
-            parameters,
-            bool(feasible),
+            index, precisions, recalls, macro_f1, buy_f1, parameters, objective
         ),
     )
-    status = (
-        "RECALL_CONSTRAINED_HOLD_PRECISION"
-        if feasible
-        else "MACRO_F1_FALLBACK_NO_RECALL_FEASIBLE"
-    )
+    if objective == "BUY_F1":
+        status = "BUY_F1_MAXIMIZED"
+    else:
+        status = (
+            "RECALL_CONSTRAINED_HOLD_PRECISION"
+            if feasible
+            else "MACRO_F1_FALLBACK_NO_RECALL_FEASIBLE"
+        )
     return selected, status, len(feasible)
+
 
 
 def _validate_tuning_configuration(
@@ -369,6 +408,7 @@ def _build_randomized_search(
             "hold_precision": _hold_precision_score,
             "hold_recall": _hold_recall_score,
             "macro_f1": _macro_f1_score,
+            "buy_f1": _buy_f1_score,
         },
         cv=cv_splits,
         refit=False,
@@ -406,9 +446,12 @@ def _candidate_result_records(cv_results: dict[str, Any]) -> list[dict[str, Any]
             "mean_cv_macro_f1": round(
                 float(cv_results["mean_test_macro_f1"][index]), 6
             ),
+            "mean_cv_buy_f1": round(
+                float(cv_results["mean_test_buy_f1"][index]), 6
+            ),
         }
         for index, parameters in enumerate(cv_results["params"])
-    ]
+    }
 
 
 def _build_tuning_diagnostics(
@@ -421,6 +464,7 @@ def _build_tuning_diagnostics(
     selection_status: str,
     recall_feasible_count: int,
     seed: int,
+    tuning_objective: str,
 ) -> dict[str, Any]:
     best_index = next(
         index
@@ -442,7 +486,9 @@ def _build_tuning_diagnostics(
         "validation_accessed_during_search": False,
         "final_refit_scope": "FULL_OUTER_TRAIN_ONLY",
         "class_weight_policy": class_weight_policy,
+        "selection_objective": tuning_objective,
         "minimum_hold_recall_for_candidate_selection": float(minimum_hold_recall),
+        "minimum_hold_recall_applied_to_selection": tuning_objective == "HOLD_PRECISION",
         "recall_feasible_candidate_count": recall_feasible_count,
         "selection_status": selection_status,
         "selected_parameters": parameters,
@@ -454,6 +500,9 @@ def _build_tuning_diagnostics(
         ),
         "selected_mean_cv_macro_f1": round(
             float(cv_results["mean_test_macro_f1"][best_index]), 6
+        ),
+        "selected_mean_cv_buy_f1": round(
+            float(cv_results["mean_test_buy_f1"][best_index]), 6
         ),
         "candidate_results": _candidate_result_records(cv_results),
         "candidate_fit_count": candidate_count * len(fold_diagnostics),
@@ -474,8 +523,10 @@ def tune_lightgbm_classifier(
     n_iter: int = DEFAULT_RANDOM_SEARCH_ITERATIONS,
     n_splits: int = DEFAULT_INNER_CV_SPLITS,
     random_state: int = DEFAULT_RANDOM_STATE,
+    tuning_objective: str = "HOLD_PRECISION",
 ) -> tuple[Any, dict[str, Any]]:
     """Tune on outer Train only, then refit the chosen estimator on all outer Train."""
+    tuning_objective = _validate_tuning_objective(tuning_objective)
     iterations, split_count, seed = _validate_tuning_configuration(
         minimum_hold_recall,
         n_iter,
@@ -497,7 +548,7 @@ def tune_lightgbm_classifier(
     search.fit(features, labels)
     cv_results: dict[str, Any] = search.cv_results_
     best_index, selection_status, recall_feasible_count = _select_candidate(
-        cv_results, float(minimum_hold_recall)
+        cv_results, float(minimum_hold_recall), tuning_objective
     )
     best_parameters = dict(cv_results["params"][best_index])
     fitted_estimator = _fit_selected_estimator(
@@ -512,5 +563,6 @@ def tune_lightgbm_classifier(
         selection_status=selection_status,
         recall_feasible_count=recall_feasible_count,
         seed=seed,
+        tuning_objective=tuning_objective,
     )
     return fitted_estimator, diagnostics
