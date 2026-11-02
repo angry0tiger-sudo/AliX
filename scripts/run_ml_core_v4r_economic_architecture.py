@@ -375,8 +375,7 @@ def _arm_aggregate(records: list[dict[str, Any]]) -> dict[str, Any]:
         "winning_trade_count": sum(value > 0 for value in pnls),
         "losing_trade_count": sum(value < 0 for value in pnls),
         "win_rate": round(
-            sum(value > 0 for value in pnls)
-            / max(1, sum(value != 0 for value in pnls)),
+            sum(value > 0 for value in pnls) / max(1, len(pnls)),
             8,
         ),
         "combined_net_profit_factor": _profit_factor(pnls),
@@ -681,6 +680,7 @@ def _build_report(
     provenance: list[dict[str, Any]],
     experiments: list[dict[str, Any]],
     records: list[dict[str, Any]],
+    random_search_iterations: int = V4R_RANDOM_SEARCH_ITERATIONS,
 ) -> dict[str, Any]:
     arms: list[dict[str, Any]] = []
     for arm in V4R_ARMS:
@@ -715,9 +715,9 @@ def _build_report(
         "market_timeframes": list(V4R_TIMEFRAMES),
         "symbols": list(SYMBOLS),
         "feature_profiles": list(V4R_FEATURE_PROFILES),
-        "random_search_iterations": V4R_RANDOM_SEARCH_ITERATIONS,
+        "random_search_iterations": int(random_search_iterations),
         "candidate_fit_count": (
-            V4R_EXPECTED_CANDIDATES * V4R_RANDOM_SEARCH_ITERATIONS * 3
+            V4R_EXPECTED_CANDIDATES * int(random_search_iterations) * 3
         ),
         "model_count": len(records),
         "experiment_count": len(experiments),
@@ -785,12 +785,18 @@ def _build_report(
     }
 
 
-def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
-    if not rows:
-        raise ValueError("v4r_csv_rows_empty")
+def _write_csv(
+    path: Path,
+    rows: list[dict[str, Any]],
+    *,
+    fieldnames: list[str] | None = None,
+) -> None:
+    columns = fieldnames or (list(rows[0]) if rows else None)
+    if not columns:
+        raise ValueError("v4r_csv_fieldnames_missing")
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
+        writer = csv.DictWriter(handle, fieldnames=columns, extrasaction="raise")
         writer.writeheader()
         writer.writerows(rows)
 
@@ -808,7 +814,17 @@ def _write_outputs(
         encoding="utf-8",
     )
     _write_csv(comparison_path, report["comparison_rows"])
-    _write_csv(trades_path, report["trade_rows"]) if report["trade_rows"] else None
+    _write_csv(
+        trades_path,
+        report["trade_rows"],
+        fieldnames=[
+            "candidate_id", "arm", "pair", "timeframe", "feature_profile",
+            "weighting_policy", "trade_index", "entry_timestamp",
+            "exit_timestamp", "entry_reference_price", "entry_fill_price",
+            "exit_reference_price", "exit_fill_price", "gross_market_pnl_usd",
+            "fees_usd", "slippage_cost_usd", "net_pnl_usd", "exit_reason",
+        ],
+    )
     _write_csv(feature_importance_path, report["feature_importance_rows"])
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary_path:
@@ -843,6 +859,7 @@ def run_v4r(
         provenance=provenance,
         experiments=experiments,
         records=records,
+        random_search_iterations=random_search_iterations,
     )
     _write_outputs(
         report,
