@@ -27,6 +27,7 @@ NO_ENTRY_SIGNAL = "NO_ENTRY"
 TIMEFRAME_MINUTES = {"15m": 15, "30m": 30, "1h": 60, "4h": 240}
 OHLCV_COLUMNS = ("date", "open", "high", "low", "close", "volume")
 MAX_DRAWDOWN_ACCOUNTING_TOLERANCE = 1e-10
+MINIMUM_TRADES_FOR_ECONOMIC_ACCEPTANCE = 30
 
 
 @dataclass(frozen=True)
@@ -910,24 +911,28 @@ def _metrics(
     equity_values: list[float],
     config: ExecutionConfig,
 ) -> dict[str, Any]:
-    """Calculate net-of-cost portfolio and trade statistics."""
+    """Calculate net-of-cost portfolio and trade statistics with sample gating."""
     wins, losses = _trade_pnl_groups(trades)
     pnls = [float(item["net_pnl_usd"]) for item in trades]
     pf, pf_infinite, gross_profit, gross_loss = _profit_factor_details(wins, losses)
     final_equity = float(equity_values[-1])
     max_drawdown = max_drawdown_from_equity(equity_values)
     trade_count = len(trades)
-    pf_pass = pf is not None and pf > 1.5
+    trade_count_pass = trade_count >= MINIMUM_TRADES_FOR_ECONOMIC_ACCEPTANCE
+    pf_pass = trade_count_pass and (
+        pf_infinite or (pf is not None and pf > 1.5)
+    )
     drawdown_pass = max_drawdown < config.maximum_drawdown
     excursion_statistics = _excursion_statistics(trades)
     return {
         "initial_equity_usd": round(config.initial_equity, 8),
         "final_equity_usd": round(final_equity, 8),
         "net_return_fraction": round(final_equity / config.initial_equity - 1.0, 10),
-        "net_return_percent": round(
-            (final_equity / config.initial_equity - 1.0) * 100.0, 8
-        ),
+        "net_return_percent": round((final_equity / config.initial_equity - 1.0) * 100.0, 8),
         "trade_count": trade_count,
+        "minimum_trade_count_for_acceptance": MINIMUM_TRADES_FOR_ECONOMIC_ACCEPTANCE,
+        "trade_count_gate_passed": trade_count_pass,
+        "economic_data_status": "ELIGIBLE" if trade_count_pass else "INSUFFICIENT_DATA",
         "win_rate": round(len(wins) / trade_count, 8) if trade_count else 0.0,
         "profit_factor_net_of_costs": round(pf, 8) if pf is not None else None,
         "profit_factor_infinite_no_losses": pf_infinite,
@@ -944,6 +949,8 @@ def _metrics(
         "maximum_drawdown_limit_fraction": config.maximum_drawdown,
         **excursion_statistics,
     }
+
+
 
 
 def _validate_drawdown_accounting(

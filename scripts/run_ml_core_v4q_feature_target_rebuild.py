@@ -333,14 +333,15 @@ def _trade_outcome_summary(
 def _candidate_profit_factor_gates(
     metrics: dict[str, Any],
 ) -> tuple[float | None, bool, bool]:
-    """Resolve whether one candidate PF exceeds the preliminary and strict gates."""
+    """Apply the hard 30-trade minimum before interpreting finite or infinite PF."""
     profit_factor = metrics["profit_factor_net_of_costs"]
+    trade_count = int(metrics["trade_count"])
+    selected_pf = float(profit_factor) if profit_factor is not None else None
+    if trade_count < 30:
+        return selected_pf, False, False
     infinite = bool(metrics["profit_factor_infinite_no_losses"])
     above_one = infinite or (profit_factor is not None and float(profit_factor) > 1.0)
-    above_one_five = infinite or (
-        profit_factor is not None and float(profit_factor) > 1.5
-    )
-    selected_pf = float(profit_factor) if profit_factor is not None else None
+    above_one_five = infinite or (profit_factor is not None and float(profit_factor) > 1.5)
     return selected_pf, above_one, above_one_five
 
 
@@ -355,6 +356,7 @@ def _candidate_risk_summary(
     pf_one_five = 0
     preliminary = 0
     strict = 0
+    insufficient = 0
     for item in records:
         metrics = item["metrics"]
         trade_count = int(metrics["trade_count"])
@@ -362,9 +364,9 @@ def _candidate_risk_summary(
         all_dd.append(drawdown)
         if trade_count > 0:
             active_dd.append(drawdown)
-        profit_factor, above_one, above_one_five = _candidate_profit_factor_gates(
-            metrics
-        )
+        if trade_count < 30:
+            insufficient += 1
+        profit_factor, above_one, above_one_five = _candidate_profit_factor_gates(metrics)
         if profit_factor is not None:
             defined_pf.append(profit_factor)
         pf_one += int(above_one)
@@ -375,16 +377,18 @@ def _candidate_risk_summary(
         "active_candidate_model_count": len(active_dd),
         "mean_defined_candidate_profit_factor": _mean(defined_pf),
         "defined_candidate_profit_factor_count": len(defined_pf),
+        "minimum_trade_count_for_pf_acceptance": 30,
+        "insufficient_data_candidate_count": insufficient,
         "pf_above_1_0_candidate_count": pf_one,
         "pf_above_1_5_candidate_count": pf_one_five,
         "mean_max_drawdown_percent_active_candidates": _mean(active_dd),
         "mean_max_drawdown_percent_all_candidates": _mean(all_dd),
-        "worst_candidate_max_drawdown_percent": round(max(all_dd), 8)
-        if all_dd
-        else None,
+        "worst_candidate_max_drawdown_percent": round(max(all_dd), 8) if all_dd else None,
         "preliminary_pf_above_1_and_dd_below_15_candidate_count": preliminary,
         "strict_pf_above_1_5_and_dd_below_15_candidate_count": strict,
     }
+
+
 
 
 def _exit_reason_summary(records: list[dict[str, Any]]) -> dict[str, int]:
