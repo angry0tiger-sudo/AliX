@@ -451,7 +451,7 @@ def _candidate_result_records(cv_results: dict[str, Any]) -> list[dict[str, Any]
             ),
         }
         for index, parameters in enumerate(cv_results["params"])
-    }
+    ]
 
 
 def _build_tuning_diagnostics(
