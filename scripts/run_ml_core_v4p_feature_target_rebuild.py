@@ -276,23 +276,51 @@ def _mean(values: list[float]) -> float | None:
     return round(sum(values) / len(values), 8) if values else None
 
 
+def _trade_pnl_values(records: list[dict[str, Any]]) -> list[float]:
+    """Flatten net PnL values from every independently replayed candidate."""
+    return [
+        float(trade["net_pnl_usd"])
+        for item in records
+        for trade in item["trades"]
+    ]
+
+
+def _winning_pnls(pnls: list[float]) -> list[float]:
+    """Select positive net trade outcomes."""
+    return [value for value in pnls if value > 0.0]
+
+
+def _losing_pnls(pnls: list[float]) -> list[float]:
+    """Select negative net trade outcomes."""
+    return [value for value in pnls if value < 0.0]
+
+
+def _pooled_profit_factor(wins: list[float], losses: list[float]) -> float | None:
+    """Calculate pooled-ledger PF, leaving no-loss cases undefined."""
+    gross_loss = abs(sum(losses))
+    return sum(wins) / gross_loss if gross_loss > 0.0 else None
+
+
+def _pooled_win_rate(wins: list[float], losses: list[float]) -> float:
+    """Calculate win rate over non-flat trade outcomes."""
+    non_flat_count = len(wins) + len(losses)
+    return len(wins) / non_flat_count if non_flat_count else 0.0
+
+
 def _trade_outcome_summary(
     records: list[dict[str, Any]],
 ) -> dict[str, Any]:
     """Summarize pooled net trade outcomes across independent model replays."""
-    trades = [trade for item in records for trade in item["trades"]]
-    pnls = [float(item["net_pnl_usd"]) for item in trades]
-    wins = [value for value in pnls if value > 0.0]
-    losses = [value for value in pnls if value < 0.0]
-    gross_loss = abs(sum(losses))
-    pooled_pf = sum(wins) / gross_loss if gross_loss > 0.0 else None
-    win_rate = len(wins) / (len(wins) + len(losses)) if wins or losses else 0.0
+    pnls = _trade_pnl_values(records)
+    wins = _winning_pnls(pnls)
+    losses = _losing_pnls(pnls)
+    pooled_pf = _pooled_profit_factor(wins, losses)
     return {
-        "total_trade_count": len(trades),
+        "total_trade_count": len(pnls),
         "winning_trade_count": len(wins),
         "losing_trade_count": len(losses),
-        "flat_trade_count": len(trades) - len(wins) - len(losses),
-        "win_rate": round(win_rate, 8),
+        "flat_trade_count": len(pnls) - len(wins) - len(losses),
+        "win_rate": round(_pooled_win_rate(wins, losses), 8),
         "combined_ledger_profit_factor": round(pooled_pf, 8)
         if pooled_pf is not None
         else None,
