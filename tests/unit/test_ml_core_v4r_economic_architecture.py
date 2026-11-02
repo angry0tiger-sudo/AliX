@@ -5,6 +5,7 @@ import pytest
 from pandas import DataFrame, Series
 
 from scripts import run_ml_core_v4r_economic_architecture as v4r
+from scripts.run_ml_core_real_data_baseline import label_audit_diagnostics
 from scripts.run_ml_core_v4q_feature_target_rebuild import (
     _candidate_profit_factor_gates,
 )
@@ -47,6 +48,14 @@ def test_v4r_masks_common_24_candle_tail_for_both_geometry_arms() -> None:
     assert masked["label"].iloc[:6].notna().all()
     assert masked["label"].iloc[6:].isna().all()
     assert masked["unlabeled_reason"].iloc[6:].eq("common_24_candle_tail").all()
+    audit = label_audit_diagnostics(masked)
+    assert audit["unlabeled_events"] == 24
+    assert (
+        audit["unlabeled_reason_distribution"]["reasons"]["common_24_candle_tail"][
+            "count"
+        ]
+        == 24
+    )
 
 
 def test_v4r_event_objective_subtracts_90_bps_from_predicted_buy_rows() -> None:

@@ -32,6 +32,7 @@ EXIT_REASONS: Final[tuple[str, ...]] = (
 UNLABELED_REASONS: Final[tuple[str, ...]] = (
     "insufficient_atr_history",
     "incomplete_horizon",
+    "common_24_candle_tail",
 )
 
 _OHLCV_COLUMNS: Final[tuple[str, ...]] = (
