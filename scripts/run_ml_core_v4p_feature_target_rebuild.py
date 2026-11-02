@@ -305,9 +305,7 @@ def _candidate_profit_factor_gates(
     """Resolve whether one candidate PF exceeds the preliminary and strict gates."""
     profit_factor = metrics["profit_factor_net_of_costs"]
     infinite = bool(metrics["profit_factor_infinite_no_losses"])
-    above_one = infinite or (
-        profit_factor is not None and float(profit_factor) > 1.0
-    )
+    above_one = infinite or (profit_factor is not None and float(profit_factor) > 1.0)
     above_one_five = infinite or (
         profit_factor is not None and float(profit_factor) > 1.5
     )
