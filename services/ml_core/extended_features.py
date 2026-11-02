@@ -13,7 +13,7 @@ from services.freqai_baseline.features import (
 )
 from services.ml_core.causal_features import build_causal_feature_matrix
 
-EXTENDED_FEATURE_SCHEMA_VERSION: Final[str] = "alix.ml-core.extended-features.v1"
+EXTENDED_FEATURE_SCHEMA_VERSION: Final[str] = "alix.ml-core.extended-features.v2"
 OHLCV_COLUMNS: Final[tuple[str, ...]] = (
     "date",
     "open",
@@ -41,7 +41,6 @@ FEATURE_GROUP_COLUMNS: Final[dict[str, tuple[str, ...]]] = {
     ),
     "Volume": (
         "%-volume_relative_20",
-        "%-volume_zscore_20",
         "%-volume_obv_imbalance_20",
         "%-volume_chaikin_money_flow_20",
     ),
@@ -255,10 +254,7 @@ def _volume_features(data: DataFrame) -> DataFrame:
     close = data["close"].astype(float)
     volume = data["volume"].astype(float)
     rolling_mean = volume.rolling(20, min_periods=20).mean()
-    rolling_std = volume.rolling(20, min_periods=20).std(ddof=0)
     relative_volume = volume / rolling_mean.where(rolling_mean > 0.0)
-    volume_zscore = (volume - rolling_mean) / rolling_std.where(rolling_std > 0.0)
-    volume_zscore = volume_zscore.mask(rolling_std.eq(0.0), 0.0)
 
     price_change = close.diff().fillna(0.0)
     direction = price_change.gt(0.0).astype(float) - price_change.lt(0.0).astype(float)
@@ -278,7 +274,6 @@ def _volume_features(data: DataFrame) -> DataFrame:
     return DataFrame(
         {
             "%-volume_relative_20": relative_volume,
-            "%-volume_zscore_20": volume_zscore,
             "%-volume_obv_imbalance_20": obv_imbalance,
             "%-volume_chaikin_money_flow_20": chaikin_money_flow,
         },

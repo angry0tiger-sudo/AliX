@@ -38,18 +38,20 @@ def market_frame(rows: int = 120) -> DataFrame:
     )
 
 
-def test_profile_contract_preserves_nine_column_baseline() -> None:
+def test_profile_contract_includes_v4p_baseline_features_without_duplicates() -> None:
     profiles = build_feature_profiles(market_frame())
     manifest = feature_profile_manifest()
 
-    assert EXTENDED_FEATURE_SCHEMA_VERSION == "alix.ml-core.extended-features.v1"
+    assert EXTENDED_FEATURE_SCHEMA_VERSION == "alix.ml-core.extended-features.v2"
     assert tuple(profiles) == FEATURE_PROFILE_ORDER
     assert tuple(profiles["Baseline"].columns) == FEATURE_COLUMNS
-    assert len(profiles["Baseline"].columns) == 9
-    assert len(profiles["Baseline+Trend"].columns) == 17
-    assert len(profiles["Baseline+Volatility"].columns) == 12
-    assert len(profiles["Baseline+Volume"].columns) == 13
-    assert len(profiles["Combined"].columns) == 24
+    assert len(profiles["Baseline"].columns) == 13
+    assert len(profiles["Baseline+Trend"].columns) == 21
+    assert len(profiles["Baseline+Volatility"].columns) == 16
+    assert len(profiles["Baseline+Volume"].columns) == 16
+    assert len(profiles["Combined"].columns) == 27
+    for profile in profiles.values():
+        assert profile.columns.is_unique
     assert [item["name"] for item in manifest] == list(FEATURE_PROFILE_ORDER)
     for item in manifest:
         assert isinstance(item["columns"], list)
@@ -64,7 +66,7 @@ def test_extended_groups_are_finite_after_their_rolling_warmup() -> None:
         frame = groups[name]
         assert tuple(frame.columns) == columns
         assert not np.isinf(frame.to_numpy(dtype=np.float64)).any()
-        assert np.isfinite(frame.iloc[60:].to_numpy(dtype=np.float64)).all()
+        assert np.isfinite(frame.iloc[90:].to_numpy(dtype=np.float64)).all()
 
 
 def test_all_profiles_have_no_infinity_or_post_warmup_nan() -> None:
@@ -73,7 +75,7 @@ def test_all_profiles_have_no_infinity_or_post_warmup_nan() -> None:
     for name, frame in profiles.items():
         assert tuple(frame.columns) == feature_profile_columns(name)
         assert not np.isinf(frame.to_numpy(dtype=np.float64)).any()
-        assert np.isfinite(frame.iloc[60:].to_numpy(dtype=np.float64)).all()
+        assert np.isfinite(frame.iloc[90:].to_numpy(dtype=np.float64)).all()
 
 
 def test_future_rows_cannot_change_any_feature_at_the_decision_time() -> None:
@@ -137,14 +139,17 @@ def test_target_and_extra_columns_are_never_feature_inputs() -> None:
         pd.testing.assert_frame_equal(plain[profile], contaminated[profile])
 
 
-def test_constant_volume_uses_finite_zero_zscore_and_unit_relative_volume() -> None:
+def test_constant_volume_uses_finite_zero_baseline_zscore() -> None:
     candles = market_frame()
     candles["volume"] = 100.0
+    baseline = build_feature_profiles(
+        candles, profile_names=("Baseline",)
+    )["Baseline"]
     volume = build_extended_feature_groups(candles)["Volume"]
 
     assert volume.loc[19, "%-volume_relative_20"] == pytest.approx(1.0)
-    assert volume.loc[19, "%-volume_zscore_20"] == pytest.approx(0.0)
-    assert np.isfinite(volume.iloc[60:].to_numpy(dtype=np.float64)).all()
+    assert baseline.loc[19, "%-volume_zscore_20"] == pytest.approx(0.0)
+    assert np.isfinite(baseline.iloc[90:].to_numpy(dtype=np.float64)).all()
 
 
 def test_zero_volume_has_no_infinite_proxy_values() -> None:
@@ -216,3 +221,58 @@ def test_unknown_feature_profiles_are_rejected() -> None:
         feature_profile_groups("TrendOnly")
     with pytest.raises(ValueError, match="feature_profile_unknown"):
         feature_profile_columns("Baseline+Unknown")
+
+def test_v4p_feature_definitions_are_finite_and_point_in_time() -> None:
+    candles = market_frame(400)
+    baseline = build_feature_profiles(candles, profile_names=("Baseline",))["Baseline"]
+    expected = {
+        "%-rsi_14",
+        "%-macd_histogram",
+        "%-volume_zscore_20",
+        "%-atr_percentile_252",
+    }
+    assert expected.issubset(set(baseline.columns))
+    assert baseline.loc[90:, list(expected)].notna().all().all()
+    assert np.isfinite(baseline.loc[90:, list(expected)].to_numpy(dtype=float)).all()
+    assert baseline["%-rsi_14"].dropna().between(0.0, 100.0).all()
+    assert baseline["%-atr_percentile_252"].dropna().between(0.0, 1.0).all()
+
+
+def test_v4p_rsi_handles_monotonic_and_flat_price_series() -> None:
+    rising = market_frame(100)
+    rising["close"] = np.linspace(100.0, 150.0, len(rising))
+    rising["open"] = rising["close"].shift(1).fillna(rising["close"].iloc[0])
+    rising["high"] = rising[["open", "close"]].max(axis=1) + 0.1
+    rising["low"] = rising[["open", "close"]].min(axis=1) - 0.1
+    rising_rsi = build_feature_profiles(rising, profile_names=("Baseline",))[
+        "Baseline"
+    ]["%-rsi_14"]
+    assert rising_rsi.iloc[-1] == pytest.approx(100.0)
+
+    flat = market_frame(100)
+    flat[["open", "high", "low", "close"]] = 100.0
+    flat_rsi = build_feature_profiles(flat, profile_names=("Baseline",))[
+        "Baseline"
+    ]["%-rsi_14"]
+    assert flat_rsi.iloc[-1] == pytest.approx(50.0)
+
+
+def test_v4p_atr_percentile_is_trailing_and_uses_only_current_past_rows() -> None:
+    candles = market_frame(400)
+    decision_index = 300
+    original = build_feature_profiles(candles, profile_names=("Baseline",))[
+        "Baseline"
+    ]["%-atr_percentile_252"]
+    changed = candles.copy()
+    changed.loc[decision_index + 1 :, ["open", "high", "low", "close"]] *= 2.0
+    mutated = build_feature_profiles(changed, profile_names=("Baseline",))[
+        "Baseline"
+    ]["%-atr_percentile_252"]
+    pd.testing.assert_series_equal(
+        original.iloc[: decision_index + 1],
+        mutated.iloc[: decision_index + 1],
+    )
+    prefix = build_feature_profiles(
+        candles.iloc[: decision_index + 1], profile_names=("Baseline",)
+    )["Baseline"]["%-atr_percentile_252"]
+    assert original.iloc[decision_index] == pytest.approx(prefix.iloc[-1])
