@@ -276,14 +276,49 @@ def _mean(values: list[float]) -> float | None:
     return round(sum(values) / len(values), 8) if values else None
 
 
-def _aggregate_economics(records: list[dict[str, Any]]) -> dict[str, Any]:
-    """Aggregate independent candidate replays without merging their equity curves."""
+def _trade_outcome_summary(
+    records: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Summarize pooled net trade outcomes across independent model replays."""
     trades = [trade for item in records for trade in item["trades"]]
     pnls = [float(item["net_pnl_usd"]) for item in trades]
     wins = [value for value in pnls if value > 0.0]
     losses = [value for value in pnls if value < 0.0]
     gross_loss = abs(sum(losses))
     pooled_pf = sum(wins) / gross_loss if gross_loss > 0.0 else None
+    win_rate = len(wins) / (len(wins) + len(losses)) if wins or losses else 0.0
+    return {
+        "total_trade_count": len(trades),
+        "winning_trade_count": len(wins),
+        "losing_trade_count": len(losses),
+        "flat_trade_count": len(trades) - len(wins) - len(losses),
+        "win_rate": round(win_rate, 8),
+        "combined_ledger_profit_factor": round(pooled_pf, 8)
+        if pooled_pf is not None
+        else None,
+    }
+
+
+def _candidate_profit_factor_gates(
+    metrics: dict[str, Any],
+) -> tuple[float | None, bool, bool]:
+    """Resolve whether one candidate PF exceeds the preliminary and strict gates."""
+    profit_factor = metrics["profit_factor_net_of_costs"]
+    infinite = bool(metrics["profit_factor_infinite_no_losses"])
+    above_one = infinite or (
+        profit_factor is not None and float(profit_factor) > 1.0
+    )
+    above_one_five = infinite or (
+        profit_factor is not None and float(profit_factor) > 1.5
+    )
+    selected_pf = float(profit_factor) if profit_factor is not None else None
+    return selected_pf, above_one, above_one_five
+
+
+def _candidate_risk_summary(
+    records: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Aggregate per-model PF and drawdown gates without merging equity curves."""
     defined_pf: list[float] = []
     active_dd: list[float] = []
     all_dd: list[float] = []
@@ -291,43 +326,24 @@ def _aggregate_economics(records: list[dict[str, Any]]) -> dict[str, Any]:
     pf_one_five = 0
     preliminary = 0
     strict = 0
-    exits: Counter[str] = Counter()
     for item in records:
         metrics = item["metrics"]
         trade_count = int(metrics["trade_count"])
         drawdown = float(metrics["max_drawdown_percent"])
         all_dd.append(drawdown)
-        if trade_count:
+        if trade_count > 0:
             active_dd.append(drawdown)
-        pf = metrics["profit_factor_net_of_costs"]
-        infinite = bool(metrics["profit_factor_infinite_no_losses"])
-        if pf is not None:
-            defined_pf.append(float(pf))
-        above_one = infinite or (pf is not None and float(pf) > 1.0)
-        above_one_five = infinite or (pf is not None and float(pf) > 1.5)
+        profit_factor, above_one, above_one_five = _candidate_profit_factor_gates(
+            metrics
+        )
+        if profit_factor is not None:
+            defined_pf.append(profit_factor)
         pf_one += int(above_one)
         pf_one_five += int(above_one_five)
         preliminary += int(above_one and drawdown < 15.0)
         strict += int(above_one_five and drawdown < 15.0)
-        exits.update(
-            {
-                str(reason): int(count)
-                for reason, count in item["exit_reason_counts"].items()
-            }
-        )
     return {
-        "candidate_model_count": len(records),
         "active_candidate_model_count": len(active_dd),
-        "total_trade_count": len(trades),
-        "winning_trade_count": len(wins),
-        "losing_trade_count": len(losses),
-        "flat_trade_count": len(trades) - len(wins) - len(losses),
-        "win_rate": round(len(wins) / (len(wins) + len(losses)), 8)
-        if wins or losses
-        else 0.0,
-        "combined_ledger_profit_factor": round(pooled_pf, 8)
-        if pooled_pf is not None
-        else None,
         "mean_defined_candidate_profit_factor": _mean(defined_pf),
         "defined_candidate_profit_factor_count": len(defined_pf),
         "pf_above_1_0_candidate_count": pf_one,
@@ -339,16 +355,49 @@ def _aggregate_economics(records: list[dict[str, Any]]) -> dict[str, Any]:
         else None,
         "preliminary_pf_above_1_and_dd_below_15_candidate_count": preliminary,
         "strict_pf_above_1_5_and_dd_below_15_candidate_count": strict,
-        "exit_reason_counts": dict(sorted(exits.items())),
-        "take_profit_exit_count": int(exits.get("TP_HIT", 0)),
-        "stop_loss_exit_count": int(exits.get("SL_HIT", 0)),
-        "collision_exit_count": int(exits.get("COLLISION", 0)),
+    }
+
+
+def _exit_reason_summary(records: list[dict[str, Any]]) -> dict[str, int]:
+    """Aggregate exit reasons from each candidate model replay."""
+    exit_counts: Counter[str] = Counter()
+    for item in records:
+        exit_counts.update(
+            {
+                str(reason): int(count)
+                for reason, count in item["exit_reason_counts"].items()
+            }
+        )
+    return dict(sorted(exit_counts.items()))
+
+
+def _economic_cost_summary(records: list[dict[str, Any]]) -> dict[str, float]:
+    """Return cumulative fees and slippage across all candidate replays."""
+    return {
         "total_fees_usd": round(
             sum(float(item["total_fees_usd"]) for item in records), 8
         ),
         "total_slippage_cost_usd": round(
             sum(float(item["total_slippage_cost_usd"]) for item in records), 8
         ),
+    }
+
+
+def _aggregate_economics(records: list[dict[str, Any]]) -> dict[str, Any]:
+    """Aggregate independent candidate replays without merging their equity curves."""
+    trade_summary = _trade_outcome_summary(records)
+    risk_summary = _candidate_risk_summary(records)
+    exit_counts = _exit_reason_summary(records)
+    cost_summary = _economic_cost_summary(records)
+    return {
+        "candidate_model_count": len(records),
+        **trade_summary,
+        **risk_summary,
+        "exit_reason_counts": exit_counts,
+        "take_profit_exit_count": int(exit_counts.get("TP_HIT", 0)),
+        "stop_loss_exit_count": int(exit_counts.get("SL_HIT", 0)),
+        "collision_exit_count": int(exit_counts.get("COLLISION", 0)),
+        **cost_summary,
         "aggregation_caveat": (
             "Combined-ledger PF pools net trade outcomes from separate model replays; "
             "drawdowns are per-candidate metrics, not one investable portfolio."
