@@ -892,7 +892,7 @@ def _render_comparison_csv_markdown(path: Path) -> str:
         lines.append(
             "| " + " | ".join(cell(row.get(field, "")) for field in fields) + " |"
         )
-    return "\\n".join(lines) + "\\n"
+    return "\n".join(lines) + "\n
 
 
 def run_v4q_diagnostic(
