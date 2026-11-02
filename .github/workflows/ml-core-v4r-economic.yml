@@ -1,0 +1,272 @@
+name: AliX V4-R Economic Architecture Evaluation
+
+on:
+  push:
+    branches:
+      - research/ml-core-v4r-economic-architecture
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: alix-v4r-economic-architecture
+  cancel-in-progress: false
+
+jobs:
+  economic-evaluation:
+    if: github.ref == 'refs/heads/research/ml-core-v4r-economic-architecture'
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      ALIx_ENV: paper
+      ALIx_DRY_RUN: "true"
+      ALIx_ALLOW_LIVE_TRADING: "false"
+      ALIx_REPORTING_ENABLED: "false"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Require standard CI success for this exact V4-R commit
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          TARGET_SHA: ${{ github.sha }}
+          TARGET_BRANCH: ${{ github.ref_name }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import time
+          from urllib.error import HTTPError, URLError
+          from urllib.request import Request, urlopen
+
+          repository = os.environ["GITHUB_REPOSITORY"]
+          target_sha = os.environ["TARGET_SHA"]
+          target_branch = os.environ["TARGET_BRANCH"]
+          token = os.environ["GH_TOKEN"]
+          if target_branch != "research/ml-core-v4r-economic-architecture":
+              raise SystemExit("unsupported_v4r_training_branch:" + target_branch)
+          deadline = time.monotonic() + 90 * 60
+          url = (
+              f"https://api.github.com/repos/{repository}/actions/workflows/ci.yml/runs"
+              f"?head_sha={target_sha}&per_page=100"
+          )
+          while time.monotonic() < deadline:
+              request = Request(
+                  url,
+                  headers={
+                      "Accept": "application/vnd.github+json",
+                      "Authorization": f"Bearer {token}",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  },
+              )
+              try:
+                  with urlopen(request, timeout=20) as response:
+                      payload = json.load(response)
+              except (HTTPError, URLError, TimeoutError) as error:
+                  raise SystemExit(
+                      f"ci_status_lookup_failed:{type(error).__name__}"
+                  ) from None
+              matching = [
+                  run for run in payload.get("workflow_runs", [])
+                  if run.get("head_sha") == target_sha
+                  and run.get("head_branch") == target_branch
+                  and run.get("event") == "push"
+              ]
+              if matching:
+                  latest = max(
+                      matching,
+                      key=lambda item: (
+                          item.get("run_number", 0),
+                          item.get("run_attempt", 0),
+                      ),
+                  )
+                  if latest.get("status") == "completed":
+                      if latest.get("conclusion") != "success":
+                          raise SystemExit(
+                              "ci_green_gate_blocked:"
+                              + str(latest.get("conclusion"))
+                              + ":"
+                              + target_sha
+                          )
+                      print(json.dumps({
+                          "gate": "PASS",
+                          "target_sha": target_sha,
+                          "ci_run_id": latest.get("id"),
+                          "ci_run_url": latest.get("html_url"),
+                          "ci_conclusion": latest.get("conclusion"),
+                      }, sort_keys=True))
+                      break
+              time.sleep(30)
+          else:
+              raise SystemExit("ci_green_gate_timeout:" + target_sha)
+          PY
+
+      - name: Checkout exact V4-R commit without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Confirm V4-R target, market scope, and fail-closed safety
+        env:
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/research/ml-core-v4r-economic-architecture"
+          test "$GITHUB_SHA" = "$TARGET_SHA"
+          printf 'commit_sha=%s\n' "$GITHUB_SHA"
+          printf 'primary_geometry=TP=2.0 ATR; SL=1.0 ATR; Horizon=24\n'
+          printf 'control_geometry=TP=1.0 ATR; SL=1.0 ATR; Horizon=12\n'
+          printf 'primary_objective=NET_EXPECTANCY_PROXY\n'
+          printf 'economic_scorer=custom_eval_metric\n'
+          printf 'estimated_round_trip_cost_bps=90\n'
+          printf 'market_timeframes=1h,4h\n'
+          printf 'sequence_models=FORBIDDEN\n'
+          printf 'private_api_calls=0\nreal_order_attempts=0\n'
+          printf 'Champion=null\norder_permission=false\ntrading_authorization=NO-GO\n'
+
+      - name: Set up pinned Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install pinned V4-R training and economic evaluation dependencies
+        run: |
+          python -m pip install pip==25.2
+          python -m pip install numpy==2.5.4 pandas==2.3.3 scikit-learn==1.9.0 lightgbm==4.7.0
+
+      - name: Fetch unchanged public Binance Spot 730-day 1-minute datasets once per symbol
+        run: |
+          set -euo pipefail
+          data_dir="$RUNNER_TEMP/alix-v4r-market-data"
+          rm -rf "$data_dir"
+          mkdir -p "$data_dir"
+          for symbol in BTCUSDT ETHUSDT; do
+            log_path="$RUNNER_TEMP/v4r-fetch-730-${symbol}.log"
+            if python scripts/fetch_binance_public_ohlcv.py               --days 730               --symbol "$symbol"               --interval 1m               --output-dir "$data_dir"               --commit-sha "$GITHUB_SHA" >"$log_path" 2>&1; then
+              cat "$log_path"
+            else
+              cat "$log_path"
+              echo "Binance public fetch failed for ${symbol}; refusing partial data." >&2
+              exit 1
+            fi
+          done
+          printf 'requested_days=730\nprovider=Binance Spot public klines API\n'
+          printf 'private_api_calls=0\ncredentials_used=false\n'
+          printf 'V4R arms reuse the same in-run raw data snapshot.\n'
+
+      - name: Train paired V4-R models and run costed economic replays
+        run: |
+          set -euo pipefail
+          python -m scripts.run_ml_core_v4r_economic_architecture             --input-dir "$RUNNER_TEMP/alix-v4r-market-data"             --output-report "$GITHUB_WORKSPACE/alix-v4r-economic-report.json"             --output-comparison-csv "$GITHUB_WORKSPACE/alix-v4r-economic-comparison.csv"             --output-trades-csv "$GITHUB_WORKSPACE/alix-v4r-trades.csv"             --output-feature-importance-csv "$GITHUB_WORKSPACE/alix-v4r-feature-importance.csv"             --days 730             --commit-sha "$GITHUB_SHA"             --random-search-iterations 9
+          summary_path="${GITHUB_STEP_SUMMARY:?missing_GITHUB_STEP_SUMMARY}"
+          test -s "$summary_path"
+          grep -Fq "AliX V4-R Economic Architecture Evaluation" "$summary_path"
+          grep -Fq "Paired effect estimates" "$summary_path"
+          grep -Fq "Comparison CSV (exact persisted rows)" "$summary_path"
+          grep -Fq "Feature Importance Gain" "$summary_path"
+          grep -Fq "NO-GO" "$summary_path"
+
+      - name: Validate paired design, target geometry, economic sample gates, and safety
+        env:
+          REPORT_PATH: ${{ github.workspace }}/alix-v4r-economic-report.json
+          COMPARISON_CSV: ${{ github.workspace }}/alix-v4r-economic-comparison.csv
+          TRADES_CSV: ${{ github.workspace }}/alix-v4r-trades.csv
+          FEATURE_IMPORTANCE_CSV: ${{ github.workspace }}/alix-v4r-feature-importance.csv
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          python - <<'PY'
+          import csv
+          import json
+          import math
+          import os
+          from pathlib import Path
+
+          report = json.loads(Path(os.environ["REPORT_PATH"]).read_text(encoding="utf-8"))
+          assert report["schema_version"] == "alix.ml-core.v4r-economic-architecture.v1"
+          assert report["commit_sha"] == os.environ["TARGET_SHA"]
+          assert report["requested_days"] == 730
+          assert report["model_training_performed"] is True
+          assert report["economic_evaluation_performed"] is True
+          assert report["economic_metrics_reported"] is True
+          assert set(report["market_timeframes"]) == {"1h", "4h"}
+          assert report["experiment_count"] == 32
+          assert report["model_count"] == 64
+          assert report["candidate_fit_count"] == 1728
+          assert report["experimental_design"] == "2x2_PAIRED_FACTORIAL"
+          assert report["paired_comparison"]["paired_group_count"] == 16
+          assert report["paired_comparison"]["sample_signature_mismatch_count"] == 0
+          target = report["target_contract"]
+          assert target["atr_period"] == 14
+          assert target["primary_geometry"] == "TP=2.0 ATR; SL=1.0 ATR"
+          assert target["primary_horizon_candles"] == 24
+          assert target["label_entry_reference"] == "NEXT_BAR_OPEN"
+          assert target["entry_slippage_bps"] == 20.0
+          assert target["same_candle_collision_policy"] == "STOP_LOSS_WINS"
+          assert target["common_outer_and_inner_purge_horizon_candles"] == 24
+          objective = report["objective_contract"]
+          assert objective["primary_objective"] == "NET_EXPECTANCY_PROXY"
+          assert objective["scorer"] == "custom_eval_metric"
+          assert objective["cost_estimate_round_trip_bps"] == 90.0
+          assert objective["portfolio_overlap_modeled"] is False
+          assert report["minimum_trade_count_for_economic_acceptance"] == 30
+          assert len(report["candidates"]) == 64
+          for candidate in report["candidates"]:
+              metrics = candidate["metrics"]
+              count = int(metrics["trade_count"])
+              assert metrics["trade_count_gate_passed"] is (count >= 30)
+              expected_status = "ELIGIBLE" if count >= 30 else "INSUFFICIENT_DATA"
+              assert metrics["economic_data_status"] == expected_status
+              if count < 30:
+                  assert metrics["profit_factor_gate_passed"] is False
+                  assert metrics["economic_candidate_gate_passed"] is False
+          for trade in report["trade_rows"]:
+              expected_net = (
+                  float(trade["gross_market_pnl_usd"])
+                  - float(trade["fees_usd"])
+                  - float(trade["slippage_cost_usd"])
+              )
+              assert math.isclose(
+                  expected_net, float(trade["net_pnl_usd"]), rel_tol=0.0, abs_tol=0.02
+              )
+          safety = report["safety"]
+          assert safety["Champion"] is None
+          assert safety["order_permission"] is False
+          assert safety["trading_authorization"] == "NO-GO"
+          assert safety["private_api_calls"] == 0
+          assert safety["real_order_attempts"] == 0
+          assert safety["orders_or_execution_api_used"] is False
+          assert safety["credentials_used"] is False
+          assert report["promotion_status"] == "BLOCKED_PENDING_INDEPENDENT_OOS_AND_OWNER_REVIEW"
+          assert Path(os.environ["COMPARISON_CSV"]).is_file()
+          assert Path(os.environ["TRADES_CSV"]).is_file()
+          assert Path(os.environ["FEATURE_IMPORTANCE_CSV"]).is_file()
+          with Path(os.environ["COMPARISON_CSV"]).open(newline="", encoding="utf-8") as handle:
+              rows = list(csv.DictReader(handle))
+          assert len(rows) == 64
+          assert {row["timeframe"] for row in rows} == {"1h", "4h"}
+          print(json.dumps({
+              "validation": "PASS",
+              "experiment_count": report["experiment_count"],
+              "model_count": report["model_count"],
+              "paired_group_count": report["paired_comparison"]["paired_group_count"],
+              "strict_pass_count": sum(
+                  int(arm["aggregate"]["strict_economic_pass_candidate_count"])
+                  for arm in report["arms"]
+              ),
+              "safety": safety,
+          }, sort_keys=True))
+          PY
+
+      - name: Upload V4-R economic report and paired trade artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: alix-v4r-economic-architecture
+          if-no-files-found: error
+          retention-days: 30
+          path: |
+            alix-v4r-economic-report.json
+            alix-v4r-economic-comparison.csv
+            alix-v4r-trades.csv
+            alix-v4r-feature-importance.csv
