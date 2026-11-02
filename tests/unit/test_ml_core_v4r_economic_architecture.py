@@ -201,7 +201,7 @@ def test_infinite_pf_with_30_trades_is_sample_eligible() -> None:
     assert metrics["profit_factor_gate_passed"] is True
 
 
-def test_v4r_sample_gate_skip_preserves_empty_slot_without_fake_metrics -> None:
+def test_v4r_sample_gate_skip_preserves_empty_slot_without_fake_metrics() -> None:
     status = "SKIPPED_INSUFFICIENT_SAMPLES"
     candidate = v4r._sample_gate_skipped_candidate_record(
         arm=v4r.V4R_ARMS[1],
