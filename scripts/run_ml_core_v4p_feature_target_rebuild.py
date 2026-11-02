@@ -22,10 +22,7 @@ from scripts.run_ml_core_real_data_baseline import (
     _load_diagnostic_datasets,
     resample_ohlcv,
 )
-from scripts.run_ml_core_v4h_tuning_geometry import (
-    V4H_FEATURE_PROFILES,
-    run_v4h_experiment,
-)
+from scripts.run_ml_core_v4h_tuning_geometry import run_v4h_experiment
 from services.freqai_baseline.features import FEATURE_SCHEMA_VERSION
 from services.ml_core.adaptive_targets import apply_adaptive_triple_barrier
 from services.ml_core.economic_backtest import (
@@ -40,6 +37,7 @@ from services.ml_core.extended_features import (
 )
 
 V4P_REPORT_SCHEMA = "alix.ml-core.v4p-economic-evaluation.v1"
+V4P_FEATURE_PROFILES: tuple[str, str] = ("Baseline", "Baseline+Trend")
 V4P_SCENARIO = {
     "name": "V4P_1ATR_SYMMETRIC",
     "horizon_candles": 12,
@@ -198,7 +196,7 @@ def _run_pair_timeframe(
     bars = resample_ohlcv(minute_candles, timeframe)
     if len(bars) < 100:
         raise ValueError(f"v4p_insufficient_resampled_bars:{symbol}:{timeframe}")
-    matrices = build_feature_profiles(bars, profile_names=V4H_FEATURE_PROFILES)
+    matrices = build_feature_profiles(bars, profile_names=V4P_FEATURE_PROFILES)
     labels = apply_adaptive_triple_barrier(
         bars,
         horizon_candles=12,
@@ -207,7 +205,7 @@ def _run_pair_timeframe(
     )
     experiments: list[dict[str, Any]] = []
     records: list[dict[str, Any]] = []
-    for profile in V4H_FEATURE_PROFILES:
+    for profile in V4P_FEATURE_PROFILES:
         experiment = run_v4h_experiment(
             pair,
             timeframe,
@@ -434,7 +432,7 @@ def _build_report(
         "feature_engineering": {
             "feature_schema_version": FEATURE_SCHEMA_VERSION,
             "extended_feature_schema_version": EXTENDED_FEATURE_SCHEMA_VERSION,
-            "profiles": feature_profile_manifest(V4H_FEATURE_PROFILES),
+            "profiles": feature_profile_manifest(V4P_FEATURE_PROFILES),
             "new_features": list(V4P_FEATURES),
             "point_in_time": True,
             "centered_windows": False,

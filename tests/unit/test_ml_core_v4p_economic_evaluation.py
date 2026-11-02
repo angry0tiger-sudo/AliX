@@ -165,7 +165,7 @@ def _economics_record(
 def _report_experiments() -> list[dict[str, Any]]:
     experiments: list[dict[str, Any]] = []
     for context in range(8):
-        for profile in v4p.V4H_FEATURE_PROFILES:
+        for profile in v4p.V4P_FEATURE_PROFILES:
             experiments.append(_experiment("BTC/USDT", "15m", profile))
     return experiments
 
@@ -259,7 +259,7 @@ def test_v4p_feature_and_target_orchestration_trains_all_32_model_variants(
         prepared: DataFrame, *, profile_names: tuple[str, ...] | None = None
     ) -> dict[str, DataFrame]:
         assert prepared is bars
-        assert profile_names == v4p.V4H_FEATURE_PROFILES
+        assert profile_names == v4p.V4P_FEATURE_PROFILES
         feature_calls.append(profile_names)
         return {
             "Baseline": DataFrame({"base": range(len(bars))}),
