@@ -6,6 +6,7 @@ import argparse
 import csv
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 from typing import Any
@@ -183,35 +184,44 @@ def _management() -> TradeManagementConfig:
     )
 
 
-def _validate_trade(trade: dict[str, Any], time_exit_candles: int | None) -> None:
-    """Fail closed on invalid trade geometry, excursion, or exit causality."""
+def _validate_trade_identity(
+    trade: dict[str, Any], time_exit_candles: int | None
+) -> None:
+    """Validate the trade identity, confidence, and held-bar bounds."""
     if trade["direction"] != "LONG" or trade["entry_confidence"] < CONFIDENCE:
         raise ValueError("v4o_trade_direction_or_confidence_invalid")
     if not 1 <= int(trade["bars_held"]) <= HORIZON:
         raise ValueError("v4o_trade_horizon_invalid")
     if trade["time_exit_candles"] != time_exit_candles:
         raise ValueError("v4o_trade_time_exit_horizon_mismatch")
+
+
+def _validate_trade_geometry(trade: dict[str, Any]) -> None:
+    """Validate the unchanged initial stop, target, and disabled trailing stop."""
     reference = float(trade["barrier_reference_price"])
     atr = float(trade["atr_value"])
-    if (
-        abs(float(trade["initial_stop_loss_price"]) - (reference - STOP_LOSS_ATR * atr))
-        > 1e-7
-    ):
+    expected_stop = reference - STOP_LOSS_ATR * atr
+    expected_target = reference + TAKE_PROFIT_ATR * atr
+    if abs(float(trade["initial_stop_loss_price"]) - expected_stop) > 1e-7:
         raise ValueError("v4o_trade_stop_geometry_invalid")
-    if (
-        abs(float(trade["take_profit_price"]) - (reference + TAKE_PROFIT_ATR * atr))
-        > 1e-7
-    ):
+    if abs(float(trade["take_profit_price"]) - expected_target) > 1e-7:
         raise ValueError("v4o_trade_target_geometry_invalid")
-    if (
-        abs(float(trade["stop_loss_price"]) - float(trade["initial_stop_loss_price"]))
-        > 1e-7
-    ):
+    if abs(float(trade["stop_loss_price"]) - expected_stop) > 1e-7:
         raise ValueError("v4o_trailing_stop_must_be_disabled")
+
+
+def _validate_trade_excursions(trade: dict[str, Any]) -> None:
+    """Reject negative, non-finite, or missing excursion measurements."""
     for field in ("mfe_atr", "mae_atr"):
         value = float(trade[field])
-        if value < 0:
-            raise ValueError("v4o_trade_excursion_negative")
+        if not math.isfinite(value) or value < 0:
+            raise ValueError("v4o_trade_excursion_invalid")
+
+
+def _validate_time_exit_causality(
+    trade: dict[str, Any], time_exit_candles: int | None
+) -> None:
+    """Validate the deferred next-open time-exit state machine."""
     if trade["exit_reason"] == "TIME_EXIT":
         if (
             time_exit_candles is None
@@ -222,8 +232,17 @@ def _validate_trade(trade: dict[str, Any], time_exit_candles: int | None) -> Non
             or trade["exit_trigger_type"] != "TIME_EXIT_OPEN"
         ):
             raise ValueError("v4o_time_exit_causality_invalid")
-    elif trade["time_exit_triggered"] is not False:
+        return
+    if trade["time_exit_triggered"] is not False:
         raise ValueError("v4o_time_exit_reason_mismatch")
+
+
+def _validate_trade(trade: dict[str, Any], time_exit_candles: int | None) -> None:
+    """Apply all fail-closed trade-ledger invariants."""
+    _validate_trade_identity(trade, time_exit_candles)
+    _validate_trade_geometry(trade)
+    _validate_trade_excursions(trade)
+    _validate_time_exit_causality(trade, time_exit_candles)
 
 
 def _candidate_result(
@@ -337,27 +356,37 @@ def _best_candidate(candidates: list[dict[str, Any]]) -> dict[str, Any] | None:
     }
 
 
-def _variant_aggregate(candidates: list[dict[str, Any]]) -> dict[str, Any]:
-    """Aggregate one experiment without combining candidate equity curves."""
-    if len(candidates) != 13:
-        raise ValueError("v4o_candidate_count_invalid")
-    trades = [trade for candidate in candidates for trade in candidate["trades"]]
+def _candidate_performance_samples(
+    candidates: list[dict[str, Any]],
+) -> tuple[list[float], list[float], list[float], int]:
+    """Collect defined candidate PFs, active/all drawdowns, and passed gates."""
+    defined_pf: list[float] = []
+    active_dd: list[float] = []
+    all_dd: list[float] = []
+    gate_passed = 0
+    for candidate in candidates:
+        metrics = candidate["metrics"]
+        drawdown = float(metrics["max_drawdown_percent"])
+        all_dd.append(drawdown)
+        if int(metrics["trade_count"]) > 0:
+            active_dd.append(drawdown)
+        profit_factor = metrics["profit_factor_net_of_costs"]
+        if profit_factor is not None:
+            defined_pf.append(float(profit_factor))
+        if metrics["economic_candidate_gate_passed"]:
+            gate_passed += 1
+    return defined_pf, active_dd, all_dd, gate_passed
+
+
+def _trade_performance_statistics(
+    trades: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Calculate pooled trade statistics and losing-trade excursion behavior."""
     wins, losses = _trade_outcomes(trades)
-    defined_pf = [
-        float(item["metrics"]["profit_factor_net_of_costs"])
-        for item in candidates
-        if item["metrics"]["profit_factor_net_of_costs"] is not None
+    losing = [
+        trade for trade in trades if float(trade["net_pnl_usd"]) < 0
     ]
-    active_dd = [
-        float(item["metrics"]["max_drawdown_percent"])
-        for item in candidates
-        if int(item["metrics"]["trade_count"]) > 0
-    ]
-    all_dd = [float(item["metrics"]["max_drawdown_percent"]) for item in candidates]
-    losing = [trade for trade in trades if float(trade["net_pnl_usd"]) < 0]
     return {
-        "candidate_count": len(candidates),
-        "active_candidate_count": len(active_dd),
         "total_trade_count": len(trades),
         "winning_trade_count": len(wins),
         "losing_trade_count": len(losses),
@@ -365,37 +394,68 @@ def _variant_aggregate(candidates: list[dict[str, Any]]) -> dict[str, Any]:
         if wins or losses
         else 0.0,
         "combined_ledger_profit_factor": _ledger_profit_factor(wins, losses),
+        "mean_mfe_atr_all_trades": _optional_mean(
+            [float(trade["mfe_atr"]) for trade in trades]
+        ),
+        "mean_mae_atr_all_trades": _optional_mean(
+            [float(trade["mae_atr"]) for trade in trades]
+        ),
+        **_excursion_summary(losing),
+    }
+
+
+def _candidate_performance_statistics(
+    candidates: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Calculate candidate PF, drawdown, acceptance, and best-model statistics."""
+    defined_pf, active_dd, all_dd, gate_passed = _candidate_performance_samples(
+        candidates
+    )
+    return {
+        "active_candidate_count": len(active_dd),
         "mean_defined_candidate_profit_factor": _optional_mean(defined_pf),
         "defined_candidate_profit_factor_count": len(defined_pf),
         "mean_max_drawdown_percent_active_candidates": _optional_mean(active_dd),
         "mean_max_drawdown_percent_all_candidates": _optional_mean(all_dd),
         "worst_candidate_max_drawdown_percent": round(max(all_dd), 8),
-        "pf_above_1_5_candidate_count": sum(value > 1.5 for value in defined_pf),
-        "drawdown_below_15_candidate_count": sum(value < 15.0 for value in all_dd),
+        "pf_above_1_5_candidate_count": sum(
+            value > 1.5 for value in defined_pf
+        ),
+        "drawdown_below_15_candidate_count": sum(
+            value < 15.0 for value in all_dd
+        ),
         "drawdown_below_15_active_candidate_count": sum(
             value < 15.0 for value in active_dd
         ),
-        "economic_gate_passed_candidate_count": sum(
-            bool(item["metrics"]["economic_candidate_gate_passed"])
-            for item in candidates
-        ),
+        "economic_gate_passed_candidate_count": gate_passed,
+        "best_defined_profit_factor_candidate": _best_candidate(candidates),
+    }
+
+
+def _variant_aggregate(candidates: list[dict[str, Any]]) -> dict[str, Any]:
+    """Aggregate one variant without combining independent candidate equity curves."""
+    if len(candidates) != 13:
+        raise ValueError("v4o_candidate_count_invalid")
+    trades = [
+        trade
+        for candidate in candidates
+        for trade in candidate["trades"]
+    ]
+    return {
+        "candidate_count": len(candidates),
+        **_trade_performance_statistics(trades),
+        **_candidate_performance_statistics(candidates),
         "exit_reason_counts": _sum_exit_reasons(candidates),
         "stop_exit_type_counts": _sum_stop_exit_types(candidates),
-        "time_exit_count": sum(item["time_exit_count"] for item in candidates),
-        "mean_mfe_atr_all_trades": _optional_mean(
-            [float(item["mfe_atr"]) for item in trades]
+        "time_exit_count": sum(
+            item["time_exit_count"] for item in candidates
         ),
-        "mean_mae_atr_all_trades": _optional_mean(
-            [float(item["mae_atr"]) for item in trades]
-        ),
-        **_excursion_summary(losing),
         "total_fees_usd": round(
             sum(float(item["total_fees_usd"]) for item in candidates), 8
         ),
         "total_slippage_cost_usd": round(
             sum(float(item["total_slippage_cost_usd"]) for item in candidates), 8
         ),
-        "best_defined_profit_factor_candidate": _best_candidate(candidates),
     }
 
 
