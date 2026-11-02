@@ -18,6 +18,7 @@ from services.ml_core.hyperparameter_tuning import (
     TUNING_OBJECTIVES,
     _select_candidate,
     custom_eval_metric,
+    tune_lightgbm_classifier,
 )
 
 
@@ -146,3 +147,24 @@ def test_v4r_empty_trade_csv_is_still_written_with_header(tmp_path: Path) -> Non
     assert output.read_text(encoding="utf-8").strip() == (
         "candidate_id,trade_index,net_pnl_usd"
     )
+
+
+def test_net_expectancy_objective_fails_closed_without_economic_outcomes() -> None:
+    features = DataFrame({"x": [0.0, 1.0, 2.0]})
+    labels = Series(["BUY", "SELL", "HOLD"])
+    with pytest.raises(
+        ValueError, match="tuning_economic_objective_requires_outcomes"
+    ):
+        tune_lightgbm_classifier(
+            object(),
+            features,
+            labels,
+            [0, 1, 2],
+            [0, 1, 2],
+            horizon_candles=1,
+            class_weight_policy="weight_none",
+            minimum_hold_recall=0.2,
+            n_iter=1,
+            n_splits=1,
+            tuning_objective="NET_EXPECTANCY_PROXY",
+        )
