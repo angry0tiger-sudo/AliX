@@ -459,7 +459,6 @@ def _validated_experiment_sample_gate(
     return status, sample_gate
 
 
-
 def _v4r_experiment_record(
     arm: dict[str, Any],
     pair: str,
@@ -549,8 +548,8 @@ def _v4r_trained_profile_records(
             variant=variant,
         )
         records.append(candidate)
-        experiment_record["model_variants"][policy] = (
-            _v4r_experiment_variant_record(variant, candidate)
+        experiment_record["model_variants"][policy] = _v4r_experiment_variant_record(
+            variant, candidate
         )
     return records
 
@@ -582,7 +581,9 @@ def _run_v4r_profile_experiment(
         minimum_hold_recall=DEFAULT_MINIMUM_HOLD_RECALL,
         random_search_iterations=random_search_iterations,
         tuning_objective=objective,
-        economic_outcomes=economic_outcomes if objective == "NET_EXPECTANCY_PROXY" else None,
+        economic_outcomes=economic_outcomes
+        if objective == "NET_EXPECTANCY_PROXY"
+        else None,
         estimated_cost_bps=V4R_ESTIMATED_ROUND_TRIP_COST_BPS,
         split_horizon_candles=V4R_COMMON_PURGE_HORIZON,
     )
@@ -676,6 +677,7 @@ def _run_pair_timeframe(
         records.extend(arm_records)
     return experiments, records, []
 
+
 def _mean(values: list[float]) -> float | None:
     return round(sum(values) / len(values), 8) if values else None
 
@@ -765,11 +767,12 @@ def _arm_aggregate(records: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-
 def _group_v4r_paired_records(
     records: list[dict[str, Any]],
 ) -> dict[tuple[str, str, str, str], dict[str, dict[str, Any]]]:
-    groups: dict[tuple[str, str, str, str], dict[str, dict[str, Any]]] = defaultdict(dict)
+    groups: dict[tuple[str, str, str, str], dict[str, dict[str, Any]]] = defaultdict(
+        dict
+    )
     for record in records:
         key = (
             str(record["pair"]),
@@ -796,9 +799,7 @@ def _validate_v4r_paired_group(
     }
     if len(signatures) != 1:
         raise ValueError(f"v4r_paired_sample_signature_mismatch:{key}")
-    statuses = {
-        str(record.get("status", "TRAINED")) for record in arm_records.values()
-    }
+    statuses = {str(record.get("status", "TRAINED")) for record in arm_records.values()}
     if not statuses.issubset({"TRAINED", *V4R_SAMPLE_GATE_SKIP_STATUSES}):
         raise ValueError(f"v4r_paired_candidate_status_invalid:{key}")
     return statuses == {"TRAINED"}
@@ -811,12 +812,8 @@ def _v4r_paired_effect_values(
         name: float(record["metrics"]["net_return_percent"])
         for name, record in arm_records.items()
     }
-    geometry_buy = (
-        metric["GEOMETRY_2R_BUY_F1"] - metric["CONTROL_SYMMETRIC_BUY_F1"]
-    )
-    geometry_net = (
-        metric["V4R_2R_NET_EXPECTANCY"] - metric["SYMMETRIC_NET_EXPECTANCY"]
-    )
+    geometry_buy = metric["GEOMETRY_2R_BUY_F1"] - metric["CONTROL_SYMMETRIC_BUY_F1"]
+    geometry_net = metric["V4R_2R_NET_EXPECTANCY"] - metric["SYMMETRIC_NET_EXPECTANCY"]
     objective_symmetric = (
         metric["SYMMETRIC_NET_EXPECTANCY"] - metric["CONTROL_SYMMETRIC_BUY_F1"]
     )
@@ -836,7 +833,11 @@ def _v4r_paired_effect_values(
 def _v4r_paired_effect_summary(
     effect_values: list[tuple[float, float, float, float, float]],
 ) -> dict[str, float | None]:
-    columns = list(zip(*effect_values, strict=True)) if effect_values else [[], [], [], [], []]
+    columns = (
+        list(zip(*effect_values, strict=True))
+        if effect_values
+        else [[], [], [], [], []]
+    )
     return {
         "geometry_effect_at_buy_f1_mean_net_return_delta_pp": _mean(list(columns[0])),
         "geometry_effect_at_net_expectancy_mean_net_return_delta_pp": _mean(
@@ -884,6 +885,7 @@ def _paired_comparison(records: list[dict[str, Any]]) -> dict[str, Any]:
             "training sample gate; skipped groups are excluded, not imputed."
         ),
     }
+
 
 def _comparison_csv_rows(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
@@ -1103,7 +1105,6 @@ def run_v4r_experiments(
     return experiments, records
 
 
-
 def _v4r_report_status_counts(
     experiments: list[dict[str, Any]],
     records: list[dict[str, Any]],
@@ -1253,6 +1254,7 @@ def _build_report(
             "trading_authorization": "NO-GO",
         },
     }
+
 
 def _write_csv(
     path: Path,
