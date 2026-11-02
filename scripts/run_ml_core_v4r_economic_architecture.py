@@ -852,6 +852,39 @@ def _v4r_paired_effect_summary(
         ),
     }
 
+
+def _paired_comparison(records: list[dict[str, Any]]) -> dict[str, Any]:
+    groups = _group_v4r_paired_records(records)
+    expected_arms = {str(arm["name"]) for arm in V4R_ARMS}
+    effect_values: list[tuple[float, float, float, float, float]] = []
+    skipped_groups = 0
+    signatures_checked = 0
+    for key, arm_records in groups.items():
+        complete = _validate_v4r_paired_group(key, arm_records, expected_arms)
+        signatures_checked += 1
+        if not complete:
+            skipped_groups += 1
+            continue
+        effect_values.append(_v4r_paired_effect_values(arm_records))
+    expected_groups = V4R_EXPECTED_CANDIDATES // len(V4R_ARMS)
+    if len(groups) != expected_groups:
+        raise RuntimeError("v4r_paired_group_count_mismatch")
+    return {
+        "design": "2x2_PAIRED_FACTORIAL",
+        "candidate_group_count": len(groups),
+        "paired_group_count": len(effect_values),
+        "sample_gate_skipped_group_count": skipped_groups,
+        "sample_signature_mismatch_count": 0,
+        "common_outer_purge_horizon_candles": V4R_COMMON_PURGE_HORIZON,
+        **_v4r_paired_effect_summary(effect_values),
+        "sample_signature_groups_checked": signatures_checked,
+        "interpretation": (
+            "Paired effects use only groups where all four models passed their "
+            "training sample gate; skipped groups are excluded, not imputed."
+        ),
+    }
+
+
 def _comparison_csv_rows(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for record in records:
