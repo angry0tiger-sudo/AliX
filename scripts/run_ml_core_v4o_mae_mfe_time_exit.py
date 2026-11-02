@@ -39,27 +39,64 @@ V4M_RUN_ID = 41345541356
 V4M_BEST_LEDGER_PF = 0.04894419
 V4M_SAME_GEOMETRY_LEDGER_PF = 0.03802472
 EXIT_REASONS = (
-    "SL_HIT", "TP_HIT", "HORIZON_EXPIRY", "SELL", "TIME_EXIT",
-    "COLLISION", "END_OF_FORWARD_WINDOW",
+    "SL_HIT",
+    "TP_HIT",
+    "HORIZON_EXPIRY",
+    "SELL",
+    "TIME_EXIT",
+    "COLLISION",
+    "END_OF_FORWARD_WINDOW",
 )
 STOP_EXIT_TYPES = ("INITIAL_STOP", "BREAKEVEN_STOP", "TRAILING_STOP")
 COMPARISON_CSV_FIELDS = (
-    "variant", "time_exit_candles", "candidate_id", "pair", "timeframe",
-    "feature_profile", "weighting_policy", "confidence_threshold",
-    "stop_loss_atr_multiplier", "take_profit_atr_multiplier", "trade_count",
-    "profit_factor", "max_drawdown_percent", "win_rate", "mean_mfe_atr",
-    "mean_mae_atr", "mean_losing_trade_mfe_atr", "mean_losing_trade_mae_atr",
-    "losing_trades_with_positive_mfe_count", "time_exit_count",
-    "initial_stop_exit_count", "tp_exit_count", "horizon_exit_count",
-    "sell_exit_count", "collision_exit_count", "total_fees_usd",
-    "total_slippage_cost_usd", "economic_candidate_gate_passed",
+    "variant",
+    "time_exit_candles",
+    "candidate_id",
+    "pair",
+    "timeframe",
+    "feature_profile",
+    "weighting_policy",
+    "confidence_threshold",
+    "stop_loss_atr_multiplier",
+    "take_profit_atr_multiplier",
+    "trade_count",
+    "profit_factor",
+    "max_drawdown_percent",
+    "win_rate",
+    "mean_mfe_atr",
+    "mean_mae_atr",
+    "mean_losing_trade_mfe_atr",
+    "mean_losing_trade_mae_atr",
+    "losing_trades_with_positive_mfe_count",
+    "time_exit_count",
+    "initial_stop_exit_count",
+    "tp_exit_count",
+    "horizon_exit_count",
+    "sell_exit_count",
+    "collision_exit_count",
+    "total_fees_usd",
+    "total_slippage_cost_usd",
+    "economic_candidate_gate_passed",
 )
 TRADE_CSV_FIELDS = (
-    "variant", "time_exit_candles", "candidate_id", "trade_index",
-    "entry_timestamp", "exit_timestamp", "direction", "bars_held",
-    "entry_fill_price", "atr_value", "mfe_atr", "mae_atr", "net_pnl_usd",
-    "exit_reason", "exit_trigger_type", "time_exit_evaluated",
-    "time_exit_pending", "time_exit_triggered",
+    "variant",
+    "time_exit_candles",
+    "candidate_id",
+    "trade_index",
+    "entry_timestamp",
+    "exit_timestamp",
+    "direction",
+    "bars_held",
+    "entry_fill_price",
+    "atr_value",
+    "mfe_atr",
+    "mae_atr",
+    "net_pnl_usd",
+    "exit_reason",
+    "exit_trigger_type",
+    "time_exit_evaluated",
+    "time_exit_pending",
+    "time_exit_triggered",
 )
 
 
@@ -156,11 +193,20 @@ def _validate_trade(trade: dict[str, Any], time_exit_candles: int | None) -> Non
         raise ValueError("v4o_trade_time_exit_horizon_mismatch")
     reference = float(trade["barrier_reference_price"])
     atr = float(trade["atr_value"])
-    if abs(float(trade["initial_stop_loss_price"]) - (reference - STOP_LOSS_ATR * atr)) > 1e-7:
+    if (
+        abs(float(trade["initial_stop_loss_price"]) - (reference - STOP_LOSS_ATR * atr))
+        > 1e-7
+    ):
         raise ValueError("v4o_trade_stop_geometry_invalid")
-    if abs(float(trade["take_profit_price"]) - (reference + TAKE_PROFIT_ATR * atr)) > 1e-7:
+    if (
+        abs(float(trade["take_profit_price"]) - (reference + TAKE_PROFIT_ATR * atr))
+        > 1e-7
+    ):
         raise ValueError("v4o_trade_target_geometry_invalid")
-    if abs(float(trade["stop_loss_price"]) - float(trade["initial_stop_loss_price"])) > 1e-7:
+    if (
+        abs(float(trade["stop_loss_price"]) - float(trade["initial_stop_loss_price"]))
+        > 1e-7
+    ):
         raise ValueError("v4o_trailing_stop_must_be_disabled")
     for field in ("mfe_atr", "mae_atr"):
         value = float(trade[field])
@@ -226,9 +272,7 @@ def _optional_mean(values: list[float]) -> float | None:
     return round(sum(values) / len(values), 8) if values else None
 
 
-def _ledger_profit_factor(
-    wins: list[float], losses: list[float]
-) -> float | None:
+def _ledger_profit_factor(wins: list[float], losses: list[float]) -> float | None:
     """Compute descriptive pooled PF across independent candidate replays."""
     gross_loss = abs(sum(losses))
     return round(sum(wins) / gross_loss, 8) if gross_loss > 0 else None
@@ -265,7 +309,9 @@ def _excursion_summary(losing: list[dict[str, Any]]) -> dict[str, Any]:
         "mean_mfe_atr_losing_trades": _optional_mean(mfe),
         "mean_mae_atr_losing_trades": _optional_mean(mae),
         "losing_trades_with_positive_mfe_count": sum(value > 0 for value in mfe),
-        "losing_trades_with_mfe_at_least_0_5_atr_count": sum(value >= 0.5 for value in mfe),
+        "losing_trades_with_mfe_at_least_0_5_atr_count": sum(
+            value >= 0.5 for value in mfe
+        ),
         "losing_trades_with_zero_mfe_count": sum(value == 0 for value in mfe),
     }
 
@@ -274,7 +320,8 @@ def _best_candidate(candidates: list[dict[str, Any]]) -> dict[str, Any] | None:
     """Return the active candidate with the highest defined net PF."""
     best = max(
         (
-            item for item in candidates
+            item
+            for item in candidates
             if item["metrics"]["profit_factor_net_of_costs"] is not None
         ),
         key=lambda item: float(item["metrics"]["profit_factor_net_of_costs"]),
@@ -314,7 +361,9 @@ def _variant_aggregate(candidates: list[dict[str, Any]]) -> dict[str, Any]:
         "total_trade_count": len(trades),
         "winning_trade_count": len(wins),
         "losing_trade_count": len(losses),
-        "win_rate": round(len(wins) / (len(wins) + len(losses)), 8) if wins or losses else 0.0,
+        "win_rate": round(len(wins) / (len(wins) + len(losses)), 8)
+        if wins or losses
+        else 0.0,
         "combined_ledger_profit_factor": _ledger_profit_factor(wins, losses),
         "mean_defined_candidate_profit_factor": _optional_mean(defined_pf),
         "defined_candidate_profit_factor_count": len(defined_pf),
@@ -323,7 +372,9 @@ def _variant_aggregate(candidates: list[dict[str, Any]]) -> dict[str, Any]:
         "worst_candidate_max_drawdown_percent": round(max(all_dd), 8),
         "pf_above_1_5_candidate_count": sum(value > 1.5 for value in defined_pf),
         "drawdown_below_15_candidate_count": sum(value < 15.0 for value in all_dd),
-        "drawdown_below_15_active_candidate_count": sum(value < 15.0 for value in active_dd),
+        "drawdown_below_15_active_candidate_count": sum(
+            value < 15.0 for value in active_dd
+        ),
         "economic_gate_passed_candidate_count": sum(
             bool(item["metrics"]["economic_candidate_gate_passed"])
             for item in candidates
@@ -338,8 +389,12 @@ def _variant_aggregate(candidates: list[dict[str, Any]]) -> dict[str, Any]:
             [float(item["mae_atr"]) for item in trades]
         ),
         **_excursion_summary(losing),
-        "total_fees_usd": round(sum(float(item["total_fees_usd"]) for item in candidates), 8),
-        "total_slippage_cost_usd": round(sum(float(item["total_slippage_cost_usd"]) for item in candidates), 8),
+        "total_fees_usd": round(
+            sum(float(item["total_fees_usd"]) for item in candidates), 8
+        ),
+        "total_slippage_cost_usd": round(
+            sum(float(item["total_slippage_cost_usd"]) for item in candidates), 8
+        ),
         "best_defined_profit_factor_candidate": _best_candidate(candidates),
     }
 
@@ -368,7 +423,9 @@ def _variant_report(
             "maximum_drawdown_limit_percent": 15.0,
             "candidate_count": 13,
             "passed_candidate_count": aggregate["economic_gate_passed_candidate_count"],
-            "status": "MET" if aggregate["economic_gate_passed_candidate_count"] else "NOT_MET",
+            "status": "MET"
+            if aggregate["economic_gate_passed_candidate_count"]
+            else "NOT_MET",
         },
     }
 
@@ -444,10 +501,12 @@ def _report(
                 item["variant"]: item["economic_acceptance"]["passed_candidate_count"]
                 for item in variants
             },
-            "status": "MET" if any(
+            "status": "MET"
+            if any(
                 item["economic_acceptance"]["passed_candidate_count"] > 0
                 for item in variants
-            ) else "NOT_MET",
+            )
+            else "NOT_MET",
         },
         "validation_bias_caveat": (
             "V4-O reuses the V4-H Forward-Validation interval for exploratory exit "
@@ -611,7 +670,10 @@ def run_v4o_mae_mfe_time_exit(
     for candidate in candidates:
         key = (symbols[candidate["pair"]], candidate["timeframe"])
         sweeps = evaluate_candidate_time_exit_sweep(
-            candidate, bars[key], execution, management,
+            candidate,
+            bars[key],
+            execution,
+            management,
             time_exit_candles=V4O_TIME_EXIT_CANDLES,
         )
         for sweep in sweeps:

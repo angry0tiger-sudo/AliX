@@ -705,27 +705,17 @@ def _update_position_excursions(state: _SimulationState, bar: Any) -> None:
         return
     high, low = float(bar["high"]), float(bar["low"])
     if position.direction == 1:
-        favorable = max(
-            0.0, (high - position.entry_fill_price) / position.atr_value
-        )
-        adverse = max(
-            0.0, (position.entry_fill_price - low) / position.atr_value
-        )
+        favorable = max(0.0, (high - position.entry_fill_price) / position.atr_value)
+        adverse = max(0.0, (position.entry_fill_price - low) / position.atr_value)
     else:
-        favorable = max(
-            0.0, (position.entry_fill_price - low) / position.atr_value
-        )
-        adverse = max(
-            0.0, (high - position.entry_fill_price) / position.atr_value
-        )
+        favorable = max(0.0, (position.entry_fill_price - low) / position.atr_value)
+        adverse = max(0.0, (high - position.entry_fill_price) / position.atr_value)
     state.position = replace(
         position,
         max_favorable_excursion_atr=max(
             position.max_favorable_excursion_atr, favorable
         ),
-        max_adverse_excursion_atr=max(
-            position.max_adverse_excursion_atr, adverse
-        ),
+        max_adverse_excursion_atr=max(position.max_adverse_excursion_atr, adverse),
     )
 
 
@@ -835,9 +825,7 @@ def _close_position(
         "mfe_atr": round(position.max_favorable_excursion_atr, 8),
         "mae_atr": round(position.max_adverse_excursion_atr, 8),
         "time_exit_candles": position.time_exit_candles,
-        "time_exit_mfe_threshold_atr": round(
-            position.time_exit_mfe_threshold_atr, 8
-        ),
+        "time_exit_mfe_threshold_atr": round(position.time_exit_mfe_threshold_atr, 8),
         "time_exit_evaluated": position.time_exit_evaluated,
         "time_exit_pending": position.time_exit_pending,
         "time_exit_triggered": reason == "TIME_EXIT",
@@ -1315,8 +1303,7 @@ def _schedule_time_exit_after_completed_bar(
         position,
         time_exit_evaluated=True,
         time_exit_pending=(
-            position.max_favorable_excursion_atr
-            < position.time_exit_mfe_threshold_atr
+            position.max_favorable_excursion_atr < position.time_exit_mfe_threshold_atr
         ),
     )
 

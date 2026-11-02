@@ -213,7 +213,10 @@ def test_time_exit_sweep_validation_fails_closed() -> None:
         ({"time_exit_candles": 0}, "time_exit_candles_invalid"),
         ({"time_exit_candles": 12}, "time_exit_must_precede"),
         ({"time_exit_mfe_threshold_atr": 0.0}, "time_exit_mfe_threshold_invalid"),
-        ({"time_exit_mfe_threshold_atr": float("nan")}, "time_exit_mfe_threshold_invalid"),
+        (
+            {"time_exit_mfe_threshold_atr": float("nan")},
+            "time_exit_mfe_threshold_invalid",
+        ),
         ({"time_exit_mfe_threshold_atr": True}, "time_exit_mfe_threshold_invalid"),
     ],
 )
