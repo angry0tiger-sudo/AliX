@@ -69,12 +69,17 @@ def _run(
 def _rows(
     *, third_bar_high: float = 104.0, next_open: float = 98.0
 ) -> list[tuple[float, float, float, float]]:
+    exit_bar = (
+        (next_open, next_open + 1.0, next_open - 1.0, next_open)
+        if next_open < 80.0
+        else (next_open, 100.0, 97.0, 99.0)
+    )
     return [
         (100.0, 100.0, 100.0, 100.0),
         (100.0, 102.0, 99.0, 101.0),
         (101.0, 103.0, 98.0, 102.0),
         (102.0, third_bar_high, 99.0, 103.0),
-        (next_open, 100.0, 97.0, 99.0),
+        exit_bar,
         (99.0, 100.0, 98.0, 99.0),
     ]
 
