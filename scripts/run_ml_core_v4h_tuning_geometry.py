@@ -153,6 +153,8 @@ def _fit_v4h_variants(
     minimum_hold_recall: float,
     random_search_iterations: int,
     tuning_objective: str,
+    economic_outcomes: Series | None = None,
+    estimated_cost_bps: float = 90.0,
 ) -> dict[str, Any]:
     """Tune on outer Train, refit on all Train, and evaluate on untouched Validation."""
     variants: dict[str, Any] = {}
@@ -174,6 +176,8 @@ def _fit_v4h_variants(
             n_iter=random_search_iterations,
             n_splits=DEFAULT_INNER_CV_SPLITS,
             tuning_objective=tuning_objective,
+            economic_outcomes=economic_outcomes,
+            estimated_cost_bps=estimated_cost_bps,
         )
         train_probabilities = ordered_probability_matrix(model, x_train)
         validation_probabilities = ordered_probability_matrix(model, x_validation)
@@ -238,15 +242,23 @@ def run_v4h_experiment(
     minimum_hold_recall: float,
     random_search_iterations: int,
     tuning_objective: str = "HOLD_PRECISION",
+    economic_outcomes: Series | None = None,
+    estimated_cost_bps: float = 90.0,
+    split_horizon_candles: int | None = None,
 ) -> dict[str, Any]:
     """Run one profile/geometry experiment using a purged outer split."""
     profile_metadata = _feature_profile_diagnostics(feature_profile)
     common_features = feature_matrices["Baseline+Trend"]
     features = feature_matrices[feature_profile]
+    split_horizon = (
+        int(split_horizon_candles)
+        if split_horizon_candles is not None
+        else int(scenario["horizon_candles"])
+    )
     train_indices, validation_indices, split_info = purged_temporal_indices(
         common_features,
         labels,
-        horizon_candles=int(scenario["horizon_candles"]),
+        horizon_candles=split_horizon,
     )
     train_y = labels.iloc[train_indices]["label"]
     validation_y = labels.iloc[validation_indices]["label"]
@@ -304,12 +316,14 @@ def run_v4h_experiment(
         validation_y,
         feature_profile=feature_profile,
         feature_count=int(profile_metadata["feature_count"]),
-        horizon_candles=int(scenario["horizon_candles"]),
+        horizon_candles=split_horizon,
         calibration_fraction=calibration_fraction,
         minimum_hold_precision=minimum_hold_precision,
         minimum_hold_recall=minimum_hold_recall,
         random_search_iterations=random_search_iterations,
         tuning_objective=tuning_objective,
+        economic_outcomes=economic_outcomes,
+        estimated_cost_bps=estimated_cost_bps,
     )
     result = _build_trained_experiment_result(
         base_result, train_y, validation_y, variants
