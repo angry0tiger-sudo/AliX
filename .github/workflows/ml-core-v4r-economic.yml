@@ -192,11 +192,19 @@ jobs:
           assert report["economic_metrics_reported"] is True
           assert set(report["market_timeframes"]) == {"1h", "4h"}
           assert report["experiment_count"] == 32
-          assert report["model_count"] == 64
-          assert report["candidate_fit_count"] == 1728
+          assert report["trained_experiment_count"] > 0
+          assert report["trained_experiment_count"] + report["sample_gate_skipped_experiment_count"] == 32
+          assert report["candidate_count"] == 64
+          assert report["model_count"] > 0
+          assert report["model_count"] + report["sample_gate_skipped_candidate_count"] == 64
+          assert report["candidate_fit_count"] == report["model_count"] * 9 * 3
           assert report["experimental_design"] == "2x2_PAIRED_FACTORIAL"
-          assert report["paired_comparison"]["paired_group_count"] == 16
-          assert report["paired_comparison"]["sample_signature_mismatch_count"] == 0
+          paired = report["paired_comparison"]
+          assert paired["candidate_group_count"] == 16
+          assert paired["paired_group_count"] > 0
+          assert paired["paired_group_count"] + paired["sample_gate_skipped_group_count"] == 16
+          assert paired["sample_signature_groups_checked"] == 16
+          assert paired["sample_signature_mismatch_count"] == 0
           target = report["target_contract"]
           assert target["atr_period"] == 14
           assert target["primary_geometry"] == "TP=2.0 ATR; SL=1.0 ATR"
@@ -214,6 +222,23 @@ jobs:
           assert len(report["candidates"]) == 64
           for candidate in report["candidates"]:
               metrics = candidate["metrics"]
+              status = candidate["status"]
+              if status in {
+                  "SKIPPED_INSUFFICIENT_CLASS_DIVERSITY",
+                  "SKIPPED_INSUFFICIENT_SAMPLES",
+              }:
+                  assert candidate["evaluation_performed"] is False
+                  assert candidate["sample_gate"]["status"] == status
+                  assert metrics["trade_count"] == 0
+                  assert metrics["economic_data_status"] == "INSUFFICIENT_DATA"
+                  assert metrics["profit_factor_net_of_costs"] is None
+                  assert metrics["max_drawdown_percent"] is None
+                  assert metrics["trade_count_gate_passed"] is False
+                  assert metrics["profit_factor_gate_passed"] is False
+                  assert metrics["economic_candidate_gate_passed"] is False
+                  continue
+              assert status == "TRAINED"
+              assert candidate["evaluation_performed"] is True
               count = int(metrics["trade_count"])
               assert metrics["trade_count_gate_passed"] is (count >= 30)
               expected_status = "ELIGIBLE" if count >= 30 else "INSUFFICIENT_DATA"

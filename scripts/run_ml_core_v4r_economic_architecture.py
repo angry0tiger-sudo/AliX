@@ -26,6 +26,7 @@ from scripts.run_ml_core_real_data_baseline import (
     SYMBOLS,
     _load_diagnostic_datasets,
     resample_ohlcv,
+    weighting_policy_specs,
 )
 from scripts.run_ml_core_v4h_tuning_geometry import run_v4h_experiment
 from services.ml_core.adaptive_targets import apply_adaptive_triple_barrier
@@ -56,6 +57,10 @@ V4R_EXPECTED_CONTEXTS = 4
 V4R_EXPECTED_ARMS = 4
 V4R_EXPECTED_EXPERIMENTS = 32
 V4R_EXPECTED_CANDIDATES = 64
+V4R_SAMPLE_GATE_SKIP_STATUSES = (
+    "SKIPPED_INSUFFICIENT_CLASS_DIVERSITY",
+    "SKIPPED_INSUFFICIENT_SAMPLES",
+)
 
 V4R_ARMS: tuple[dict[str, Any], ...] = (
     {
@@ -316,6 +321,9 @@ def _evaluate_candidate(
     metrics = dict(replay["metrics"])
     return {
         "candidate_id": candidate_id,
+        "status": "TRAINED",
+        "evaluation_performed": True,
+        "sample_gate": dict(experiment["sample_gate"]),
         "arm": str(arm["name"]),
         "geometry": str(arm["geometry"]),
         "objective": str(arm["objective"]),
@@ -340,6 +348,116 @@ def _evaluate_candidate(
         "total_slippage_cost_usd": float(replay["total_slippage_cost_usd"]),
         "trades": list(replay["trades"]),
     }
+
+
+
+def _sample_gate_skipped_metrics() -> dict[str, Any]:
+    """Return non-performance metrics for a candidate that never trained."""
+    return {
+        "initial_equity_usd": 10_000.0,
+        "final_equity_usd": None,
+        "net_return_fraction": None,
+        "net_return_percent": None,
+        "trade_count": 0,
+        "win_rate": None,
+        "profit_factor_net_of_costs": None,
+        "profit_factor_infinite_no_losses": False,
+        "gross_profit_usd": None,
+        "gross_loss_usd": None,
+        "average_win_usd": None,
+        "average_loss_usd": None,
+        "average_net_pnl_per_trade_usd": None,
+        "max_drawdown_fraction": None,
+        "max_drawdown_percent": None,
+        "trade_count_gate_passed": False,
+        "profit_factor_gate_passed": False,
+        "drawdown_gate_passed": False,
+        "economic_candidate_gate_passed": False,
+        "economic_data_status": "INSUFFICIENT_DATA",
+        "maximum_drawdown_limit_fraction": V4R_MAXIMUM_DRAWDOWN,
+    }
+
+
+def _sample_gate_skipped_candidate_record(
+    *,
+    arm: dict[str, Any],
+    pair: str,
+    timeframe: str,
+    profile: str,
+    policy: str,
+    experiment: dict[str, Any],
+) -> dict[str, Any]:
+    """Persist a skipped model slot without fabricating economic performance."""
+    status = str(experiment.get("status"))
+    sample_gate = experiment.get("sample_gate")
+    if status not in V4R_SAMPLE_GATE_SKIP_STATUSES:
+        raise ValueError(f"v4r_sample_gate_skip_status_invalid:{status}")
+    if not isinstance(sample_gate, dict) or sample_gate.get("status") != status:
+        raise ValueError("v4r_sample_gate_skip_diagnostics_mismatch")
+    signature = experiment.get("sample_signature_sha256")
+    if not isinstance(signature, str) or not signature:
+        raise ValueError("v4r_sample_gate_skip_signature_missing")
+    return {
+        "candidate_id": _candidate_identifier(
+            str(arm["name"]), pair, timeframe, profile, policy
+        ),
+        "status": status,
+        "evaluation_performed": False,
+        "sample_gate": dict(sample_gate),
+        "arm": str(arm["name"]),
+        "geometry": str(arm["geometry"]),
+        "objective": str(arm["objective"]),
+        "pair": pair,
+        "timeframe": timeframe,
+        "feature_profile": profile,
+        "weighting_policy": policy,
+        "sample_signature_sha256": signature,
+        "train_rows": int(experiment["train_rows"]),
+        "validation_rows": int(experiment["validation_rows"]),
+        "tuning_objective": str(arm["tuning_objective"]),
+        "selected_parameters": None,
+        "tuning_diagnostics": {
+            "status": status,
+            "sample_gate": dict(sample_gate),
+        },
+        "feature_importance_gain": [],
+        "metrics": _sample_gate_skipped_metrics(),
+        "exit_reason_counts": {},
+        "raw_signal_counts": {},
+        "confidence_filter": {},
+        "total_fees_usd": 0.0,
+        "total_slippage_cost_usd": 0.0,
+        "trades": [],
+    }
+
+
+def _validated_experiment_sample_gate(
+    experiment: dict[str, Any],
+    *,
+    pair: str,
+    timeframe: str,
+    profile: str,
+    arm_name: str,
+) -> tuple[str, dict[str, Any]]:
+    """Accept only trained experiments or explicitly permitted sample skips."""
+    status = str(experiment.get("status"))
+    sample_gate = experiment.get("sample_gate")
+    if not isinstance(sample_gate, dict):
+        raise ValueError("v4r_sample_gate_diagnostics_missing")
+    if status == "TRAINED":
+        if sample_gate.get("status") != "PASS":
+            raise ValueError("v4r_trained_experiment_sample_gate_mismatch")
+    elif status in V4R_SAMPLE_GATE_SKIP_STATUSES:
+        if sample_gate.get("status") != status:
+            raise ValueError("v4r_skipped_experiment_sample_gate_mismatch")
+        if experiment.get("model_variants") not in (None, {}):
+            raise ValueError("v4r_skipped_experiment_has_model_variants")
+    else:
+        raise ValueError(
+            "v4r_experiment_status_out_of_policy:"
+            f"{pair}:{timeframe}:{profile}:{arm_name}:{status}"
+        )
+    return status, sample_gate
 
 
 def _run_pair_timeframe(
@@ -391,30 +509,49 @@ def _run_pair_timeframe(
                 estimated_cost_bps=V4R_ESTIMATED_ROUND_TRIP_COST_BPS,
                 split_horizon_candles=V4R_COMMON_PURGE_HORIZON,
             )
-            if experiment.get("status") != "TRAINED":
-                raise ValueError(
-                    "v4r_experiment_not_trained:"
-                    f"{pair}:{timeframe}:{profile}:{arm['name']}:"
-                    f"{experiment.get('status')}"
-                )
-            experiments.append(
-                {
-                    "arm": str(arm["name"]),
-                    "pair": pair,
-                    "timeframe": timeframe,
-                    "feature_profile": profile,
-                    "status": str(experiment["status"]),
-                    "train_rows": int(experiment["train_rows"]),
-                    "validation_rows": int(experiment["validation_rows"]),
-                    "sample_signature_sha256": str(
-                        experiment["sample_signature_sha256"]
-                    ),
-                    "split": dict(experiment["split"]),
-                    "label_distribution": dict(experiment["label_distribution"]),
-                    "label_audit": dict(experiment["label_audit"]),
-                    "model_variants": {},
-                }
+            status, sample_gate = _validated_experiment_sample_gate(
+                experiment,
+                pair=pair,
+                timeframe=timeframe,
+                profile=profile,
+                arm_name=str(arm["name"]),
             )
+            experiment_record = {
+                "arm": str(arm["name"]),
+                "pair": pair,
+                "timeframe": timeframe,
+                "feature_profile": profile,
+                "status": status,
+                "sample_gate": dict(sample_gate),
+                "train_rows": int(experiment["train_rows"]),
+                "validation_rows": int(experiment["validation_rows"]),
+                "sample_signature_sha256": str(
+                    experiment["sample_signature_sha256"]
+                ),
+                "split": dict(experiment["split"]),
+                "label_distribution": dict(experiment["label_distribution"]),
+                "label_audit": dict(experiment["label_audit"]),
+                "model_variants": {},
+            }
+            experiments.append(experiment_record)
+            if status in V4R_SAMPLE_GATE_SKIP_STATUSES:
+                for policy in weighting_policy_specs():
+                    records.append(
+                        _sample_gate_skipped_candidate_record(
+                            arm=arm,
+                            pair=pair,
+                            timeframe=timeframe,
+                            profile=profile,
+                            policy=policy,
+                            experiment=experiment,
+                        )
+                    )
+                continue
+            model_variants = experiment.get("model_variants")
+            if not isinstance(model_variants, dict) or set(model_variants) != set(
+                weighting_policy_specs()
+            ):
+                raise ValueError("v4r_trained_model_variant_contract_mismatch")
             for policy, variant in (experiment.get("model_variants") or {}).items():
                 record = _evaluate_candidate(
                     arm=arm,
@@ -460,6 +597,13 @@ def _arm_candidate_count_summary(
     )
     return {
         "candidate_count": len(records),
+        "trained_candidate_count": sum(
+            record.get("status", "TRAINED") == "TRAINED" for record in records
+        ),
+        "sample_gate_skipped_candidate_count": sum(
+            record.get("status") in V4R_SAMPLE_GATE_SKIP_STATUSES
+            for record in records
+        ),
         "active_candidate_count": sum(
             int(metric["trade_count"]) > 0 for metric in candidate_metrics
         ),
@@ -498,7 +642,11 @@ def _arm_candidate_risk_summary(records: list[dict[str, Any]]) -> dict[str, Any]
         for metric in candidate_metrics
         if metric["profit_factor_net_of_costs"] is not None
     ]
-    drawdowns = [float(metric["max_drawdown_percent"]) for metric in candidate_metrics]
+    drawdowns = [
+        float(metric["max_drawdown_percent"])
+        for metric in candidate_metrics
+        if metric["max_drawdown_percent"] is not None
+    ]
     return {
         "mean_candidate_profit_factor": _mean(defined_profit_factors),
         "mean_candidate_max_drawdown_percent": _mean(drawdowns),
@@ -518,6 +666,7 @@ def _arm_aggregate(records: list[dict[str, Any]]) -> dict[str, Any]:
         **_arm_trade_summary(records),
         **_arm_candidate_risk_summary(records),
     }
+
 
 
 def _paired_comparison(records: list[dict[str, Any]]) -> dict[str, Any]:
@@ -542,6 +691,7 @@ def _paired_comparison(records: list[dict[str, Any]]) -> dict[str, Any]:
     objective_at_asymmetric: list[float] = []
     interaction: list[float] = []
     signatures_checked = 0
+    skipped_groups = 0
     for key, arm_records in groups.items():
         if set(arm_records) != expected_arms:
             raise ValueError(f"v4r_paired_arm_missing:{key}")
@@ -551,6 +701,12 @@ def _paired_comparison(records: list[dict[str, Any]]) -> dict[str, Any]:
         if len(signatures) != 1:
             raise ValueError(f"v4r_paired_sample_signature_mismatch:{key}")
         signatures_checked += 1
+        statuses = {str(record.get("status", "TRAINED")) for record in arm_records.values()}
+        if not statuses.issubset({"TRAINED", *V4R_SAMPLE_GATE_SKIP_STATUSES}):
+            raise ValueError(f"v4r_paired_candidate_status_invalid:{key}")
+        if statuses != {"TRAINED"}:
+            skipped_groups += 1
+            continue
         metric = {
             name: float(value["metrics"]["net_return_percent"])
             for name, value in arm_records.items()
@@ -571,11 +727,14 @@ def _paired_comparison(records: list[dict[str, Any]]) -> dict[str, Any]:
             (metric["V4R_2R_NET_EXPECTANCY"] - metric["GEOMETRY_2R_BUY_F1"])
             - (metric["SYMMETRIC_NET_EXPECTANCY"] - metric["CONTROL_SYMMETRIC_BUY_F1"])
         )
-    if len(groups) != V4R_EXPECTED_CANDIDATES // len(V4R_ARMS):
+    expected_groups = V4R_EXPECTED_CANDIDATES // len(V4R_ARMS)
+    if len(groups) != expected_groups:
         raise RuntimeError("v4r_paired_group_count_mismatch")
     return {
         "design": "2x2_PAIRED_FACTORIAL",
-        "paired_group_count": len(groups),
+        "candidate_group_count": len(groups),
+        "paired_group_count": len(geometry_at_buy),
+        "sample_gate_skipped_group_count": skipped_groups,
         "sample_signature_mismatch_count": 0,
         "common_outer_purge_horizon_candles": V4R_COMMON_PURGE_HORIZON,
         "geometry_effect_at_buy_f1_mean_net_return_delta_pp": _mean(geometry_at_buy),
@@ -591,11 +750,10 @@ def _paired_comparison(records: list[dict[str, Any]]) -> dict[str, Any]:
         "geometry_objective_interaction_mean_net_return_delta_pp": _mean(interaction),
         "sample_signature_groups_checked": signatures_checked,
         "interpretation": (
-            "Paired mean differences across independent model replays; not a "
-            "single deployable portfolio and not causal proof beyond this fixed design."
+            "Paired effects use only groups where all four models passed their "
+            "training sample gate; skipped groups are excluded, not imputed."
         ),
     }
-
 
 def _comparison_csv_rows(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
@@ -604,6 +762,8 @@ def _comparison_csv_rows(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
         rows.append(
             {
                 "candidate_id": record["candidate_id"],
+                "candidate_status": record.get("status", "TRAINED"),
+                "evaluation_performed": record.get("evaluation_performed", True),
                 "arm": record["arm"],
                 "geometry": record["geometry"],
                 "objective": record["objective"],
@@ -626,9 +786,16 @@ def _comparison_csv_rows(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "gross_loss_usd": metrics["gross_loss_usd"],
                 "total_fees_usd": record["total_fees_usd"],
                 "total_slippage_cost_usd": record["total_slippage_cost_usd"],
-                "net_pnl_usd": round(
-                    sum(float(trade["net_pnl_usd"]) for trade in record["trades"]),
-                    8,
+                "net_pnl_usd": (
+                    round(
+                        sum(
+                            float(trade["net_pnl_usd"])
+                            for trade in record["trades"]
+                        ),
+                        8,
+                    )
+                    if record.get("evaluation_performed", True)
+                    else None
                 ),
                 "economic_candidate_gate_passed": metrics[
                     "economic_candidate_gate_passed"
@@ -695,8 +862,8 @@ def _render_step_summary(report: dict[str, Any]) -> str:
         "Paired factorial experiment: TP/SL geometry x tuning objective.",
         "Raw 1m datasets are loaded once; 1h and 4h resamples and feature matrices are shared across all four arms.",
         "",
-        "| Arm | Geometry | Objective | Candidates | Trades | Net PF | Gross PF | Net PnL USD | Strict passes | Insufficient data |",
-        "|---|---|---|---:|---:|---:|---:|---:|---:|---:|",
+        "| Arm | Geometry | Objective | Slots | Trained | Sample skips | Trades | Net PF | Gross PF | Net PnL USD | Strict passes | Insufficient data |",
+        "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for arm in report["arms"]:
         aggregate = arm["aggregate"]
@@ -704,7 +871,10 @@ def _render_step_summary(report: dict[str, Any]) -> str:
         gross_pf = aggregate["combined_gross_profit_factor"]
         lines.append(
             f"| {arm['name']} | {arm['geometry']} | {arm['objective']} "
-            f"| {aggregate['candidate_count']} | {aggregate['trade_count']} "
+            f"| {aggregate['candidate_count']} "
+            f"| {aggregate['trained_candidate_count']} "
+            f"| {aggregate['sample_gate_skipped_candidate_count']} "
+            f"| {aggregate['trade_count']} "
             f"| {net_pf if net_pf is not None else 'N/A'} "
             f"| {gross_pf if gross_pf is not None else 'N/A'} "
             f"| {aggregate['total_net_pnl_usd']:.2f} "
@@ -717,7 +887,10 @@ def _render_step_summary(report: dict[str, Any]) -> str:
             "",
             "### Paired effect estimates",
             "",
-            f"Paired groups with matching sample signatures: {paired['paired_group_count']}.",
+            f"Candidate groups with matching sample signatures: "
+            f"{paired['candidate_group_count']}.",
+            f"Complete paired groups included in effects: {paired['paired_group_count']}.",
+            f"Groups excluded by sample gates: {paired['sample_gate_skipped_group_count']}.",
             f"Geometry effect under BUY_F1: {paired['geometry_effect_at_buy_f1_mean_net_return_delta_pp']}.",
             f"Geometry effect under Net Expectancy: {paired['geometry_effect_at_net_expectancy_mean_net_return_delta_pp']}.",
             f"Objective effect under symmetric geometry: {paired['objective_effect_at_symmetric_geometry_mean_net_return_delta_pp']}.",
@@ -730,13 +903,17 @@ def _render_step_summary(report: dict[str, Any]) -> str:
         ]
     )
     for item in report["comparison_rows"]:
+        drawdown = item["max_drawdown_percent"]
+        net_return = item["net_return_percent"]
+        drawdown_text = f"{drawdown:.2f}%" if drawdown is not None else "N/A"
+        return_text = f"{net_return:.2f}%" if net_return is not None else "N/A"
         lines.append(
             f"| {item['arm']} | {item['pair']} | {item['timeframe']} "
             f"| {item['feature_profile']} | {item['weighting_policy']} "
             f"| {item['trade_count']} | {item['economic_data_status']} "
             f"| {item['profit_factor_net_of_costs']} "
-            f"| {item['max_drawdown_percent']:.2f}% "
-            f"| {item['net_return_percent']:.2f}% "
+            f"| {drawdown_text} "
+            f"| {return_text} "
             f"| {'PASS' if item['economic_candidate_gate_passed'] else 'NO-GO'} |"
         )
     lines.extend(
@@ -807,6 +984,25 @@ def _build_report(
     records: list[dict[str, Any]],
     random_search_iterations: int = V4R_RANDOM_SEARCH_ITERATIONS,
 ) -> dict[str, Any]:
+    trained_candidate_count = sum(
+        record.get("status", "TRAINED") == "TRAINED" for record in records
+    )
+    skipped_candidate_count = sum(
+        record.get("status") in V4R_SAMPLE_GATE_SKIP_STATUSES for record in records
+    )
+    trained_experiment_count = sum(
+        experiment.get("status") == "TRAINED" for experiment in experiments
+    )
+    skipped_experiment_count = sum(
+        experiment.get("status") in V4R_SAMPLE_GATE_SKIP_STATUSES
+        for experiment in experiments
+    )
+    if trained_candidate_count + skipped_candidate_count != len(records):
+        raise RuntimeError("v4r_candidate_status_count_mismatch")
+    if trained_experiment_count + skipped_experiment_count != len(experiments):
+        raise RuntimeError("v4r_experiment_status_count_mismatch")
+    if len(records) != V4R_EXPECTED_CANDIDATES or trained_candidate_count == 0:
+        raise RuntimeError("v4r_candidate_slot_or_training_count_mismatch")
     arms: list[dict[str, Any]] = []
     for arm in V4R_ARMS:
         arm_records = [record for record in records if record["arm"] == arm["name"]]
@@ -832,18 +1028,22 @@ def _build_report(
         "requested_days": 730,
         "provider": "Binance Spot public klines API",
         "input_datasets": provenance,
-        "model_training_performed": True,
-        "economic_evaluation_performed": True,
-        "economic_metrics_reported": True,
+        "model_training_performed": trained_candidate_count > 0,
+        "economic_evaluation_performed": trained_candidate_count > 0,
+        "economic_metrics_reported": trained_candidate_count > 0,
         "market_timeframes": list(V4R_TIMEFRAMES),
         "symbols": list(SYMBOLS),
         "feature_profiles": list(V4R_FEATURE_PROFILES),
         "random_search_iterations": int(random_search_iterations),
         "candidate_fit_count": (
-            V4R_EXPECTED_CANDIDATES * int(random_search_iterations) * 3
+            trained_candidate_count * int(random_search_iterations) * 3
         ),
-        "model_count": len(records),
+        "model_count": trained_candidate_count,
+        "candidate_count": len(records),
+        "sample_gate_skipped_candidate_count": skipped_candidate_count,
         "experiment_count": len(experiments),
+        "trained_experiment_count": trained_experiment_count,
+        "sample_gate_skipped_experiment_count": skipped_experiment_count,
         "experimental_design": "2x2_PAIRED_FACTORIAL",
         "arms": arms,
         "target_contract": {
@@ -1051,8 +1251,12 @@ def main() -> int:
     )
     if report["experiment_count"] != V4R_EXPECTED_EXPERIMENTS:
         raise RuntimeError("v4r_experiment_count_mismatch")
-    if report["model_count"] != V4R_EXPECTED_CANDIDATES:
-        raise RuntimeError("v4r_model_count_mismatch")
+    if report["candidate_count"] != V4R_EXPECTED_CANDIDATES:
+        raise RuntimeError("v4r_candidate_count_mismatch")
+    if report["model_count"] + report["sample_gate_skipped_candidate_count"] != (
+        report["candidate_count"]
+    ):
+        raise RuntimeError("v4r_model_and_sample_gate_count_mismatch")
     return 0
 
 

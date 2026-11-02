@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 import pytest
 from pandas import DataFrame, Series
 
@@ -197,6 +198,199 @@ def test_infinite_pf_with_30_trades_is_sample_eligible() -> None:
     assert metrics["economic_data_status"] == "ELIGIBLE"
     assert metrics["trade_count_gate_passed"] is True
     assert metrics["profit_factor_gate_passed"] is True
+
+
+
+def test_v4r_sample_gate_skip_preserves_empty_slot_without_fake_metrics() -> None:
+    status = "SKIPPED_INSUFFICIENT_SAMPLES"
+    candidate = v4r._sample_gate_skipped_candidate_record(
+        arm=v4r.V4R_ARMS[1],
+        pair="BTC/USDT",
+        timeframe="4h",
+        profile="Baseline",
+        policy="weight_none",
+        experiment={
+            "status": status,
+            "sample_gate": {
+                "status": status,
+                "insufficient_validation_classes": ["BUY"],
+            },
+            "sample_signature_sha256": "shared-sample-signature",
+            "train_rows": 120,
+            "validation_rows": 30,
+        },
+    )
+    assert candidate["status"] == status
+    assert candidate["evaluation_performed"] is False
+    assert candidate["metrics"]["trade_count"] == 0
+    assert candidate["metrics"]["profit_factor_net_of_costs"] is None
+    assert candidate["metrics"]["max_drawdown_percent"] is None
+    aggregate = v4r._arm_aggregate([candidate])
+    assert aggregate["candidate_count"] == 1
+    assert aggregate["trained_candidate_count"] == 0
+    assert aggregate["sample_gate_skipped_candidate_count"] == 1
+    assert aggregate["trade_count"] == 0
+    assert aggregate["mean_candidate_max_drawdown_percent"] is None
+
+
+def test_v4r_pair_runner_persists_sample_gate_skips(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bars = DataFrame(
+        {
+            "open": [100.0] * 120,
+            "high": [101.0] * 120,
+            "low": [99.0] * 120,
+            "close": [100.0] * 120,
+            "volume": [1.0] * 120,
+        }
+    )
+    labels = DataFrame(
+        {
+            "event_index": list(range(120)),
+            "label": ["BUY"] * 120,
+            "exit_reason": ["TP_HIT"] * 120,
+            "label_end_idx": list(range(1, 121)),
+            "unlabeled_reason": [None] * 120,
+        }
+    )
+    evaluated: list[str] = []
+    monkeypatch.setattr(v4r, "resample_ohlcv", lambda _data, _tf: bars)
+    monkeypatch.setattr(
+        v4r,
+        "build_feature_profiles",
+        lambda _bars, profile_names: {
+            name: DataFrame({"x": [0.0] * len(bars)}) for name in profile_names
+        },
+    )
+    monkeypatch.setattr(
+        v4r, "apply_adaptive_triple_barrier", lambda _bars, **_kwargs: labels.copy()
+    )
+    monkeypatch.setattr(
+        v4r,
+        "_economic_outcomes_by_index",
+        lambda _bars, _labels: Series(np.zeros(len(bars))),
+    )
+
+    def fake_v4h(
+        _pair: str,
+        _timeframe: str,
+        _bars: DataFrame,
+        _labels: DataFrame,
+        _features: dict[str, DataFrame],
+        *,
+        scenario: dict[str, Any],
+        feature_profile: str,
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        skipped = (
+            scenario["name"] == "GEOMETRY_2R_BUY_F1"
+            and feature_profile == "Baseline"
+        )
+        status = "SKIPPED_INSUFFICIENT_SAMPLES" if skipped else "TRAINED"
+        return {
+            "status": status,
+            "sample_gate": {
+                "status": status if skipped else "PASS",
+                "insufficient_validation_classes": ["BUY"] if skipped else [],
+            },
+            "sample_signature_sha256": "same-shared-signature",
+            "train_rows": 80,
+            "validation_rows": 20,
+            "split": {},
+            "label_distribution": {},
+            "label_audit": {},
+            "model_variants": None
+            if skipped
+            else {
+                "weight_none": {"validation_probabilities": []},
+                "weight_balanced": {"validation_probabilities": []},
+            },
+        }
+
+    def fake_evaluate(
+        *, arm: dict[str, Any], pair: str, timeframe: str, profile: str, policy: str,
+        experiment: dict[str, Any], variant: dict[str, Any], bars: DataFrame,
+    ) -> dict[str, Any]:
+        evaluated.append(policy)
+        return {
+            "candidate_id": v4r._candidate_identifier(
+                arm["name"], pair, timeframe, profile, policy
+            ),
+            "status": "TRAINED",
+            "evaluation_performed": True,
+            "arm": arm["name"],
+            "geometry": arm["geometry"],
+            "objective": arm["objective"],
+            "pair": pair,
+            "timeframe": timeframe,
+            "feature_profile": profile,
+            "weighting_policy": policy,
+            "sample_signature_sha256": experiment["sample_signature_sha256"],
+            "train_rows": experiment["train_rows"],
+            "validation_rows": experiment["validation_rows"],
+            "tuning_objective": arm["tuning_objective"],
+            "selected_parameters": {},
+            "tuning_diagnostics": {},
+            "feature_importance_gain": [],
+            "metrics": {"trade_count": 0, "net_return_percent": 0.0},
+            "exit_reason_counts": {},
+            "raw_signal_counts": {},
+            "confidence_filter": {},
+            "total_fees_usd": 0.0,
+            "total_slippage_cost_usd": 0.0,
+            "trades": [],
+        }
+
+    monkeypatch.setattr(v4r, "run_v4h_experiment", fake_v4h)
+    monkeypatch.setattr(v4r, "_evaluate_candidate", fake_evaluate)
+    experiments, records, _ = v4r._run_pair_timeframe(
+        "BTCUSDT", "4h", DataFrame(), calibration_fraction=0.2,
+        random_search_iterations=1,
+    )
+    assert len(experiments) == 8
+    assert len(records) == 16
+    assert sum(row["status"] == "SKIPPED_INSUFFICIENT_SAMPLES" for row in records) == 2
+    assert sum(row["status"] == "TRAINED" for row in records) == 14
+    assert len(evaluated) == 14
+
+
+def test_v4r_paired_comparison_excludes_incomplete_training_groups() -> None:
+    records = []
+    for pair in ("BTC/USDT", "ETH/USDT"):
+        for timeframe in ("1h", "4h"):
+            for profile in ("Baseline", "Baseline+Trend"):
+                for policy in ("weight_none", "weight_balanced"):
+                    skip_group = (
+                        pair == "BTC/USDT"
+                        and timeframe == "4h"
+                        and profile == "Baseline"
+                        and policy == "weight_none"
+                    )
+                    for arm in v4r.V4R_ARMS:
+                        skipped = skip_group and arm["name"] == "GEOMETRY_2R_BUY_F1"
+                        records.append(
+                            {
+                                "pair": pair,
+                                "timeframe": timeframe,
+                                "feature_profile": profile,
+                                "weighting_policy": policy,
+                                "arm": arm["name"],
+                                "status": (
+                                    "SKIPPED_INSUFFICIENT_SAMPLES"
+                                    if skipped else "TRAINED"
+                                ),
+                                "sample_signature_sha256": "shared-signature",
+                                "metrics": {
+                                    "net_return_percent": None if skipped else 1.0
+                                },
+                            }
+                        )
+    result = v4r._paired_comparison(records)
+    assert result["candidate_group_count"] == 16
+    assert result["paired_group_count"] == 15
+    assert result["sample_gate_skipped_group_count"] == 1
+    assert result["sample_signature_groups_checked"] == 16
 
 
 def test_v4r_paired_comparison_rejects_sample_signature_mismatch() -> None:
