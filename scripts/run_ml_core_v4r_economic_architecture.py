@@ -753,7 +753,6 @@ def _paired_comparison(records: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-
 def _comparison_csv_rows(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for record in records:
