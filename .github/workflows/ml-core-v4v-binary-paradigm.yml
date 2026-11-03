@@ -1,0 +1,363 @@
+name: AliX V4-V Binary BUY vs NO_BUY Economic Evaluation
+
+on:
+  push:
+    branches:
+      - research/ml-core-v4v-binary-paradigm
+    paths:
+      - .github/workflows/ml-core-v4v-binary-paradigm.yml
+      - scripts/run_ml_core_v4v_binary_paradigm.py
+      - services/ml_core/binary_targets.py
+      - services/ml_core/hyperparameter_tuning.py
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: alix-v4v-binary-paradigm
+  cancel-in-progress: false
+
+jobs:
+  v4v-binary-economic-evaluation:
+    if: github.ref == 'refs/heads/research/ml-core-v4v-binary-paradigm'
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      ALIx_ENV: paper
+      ALIx_DRY_RUN: "true"
+      ALIx_ALLOW_LIVE_TRADING: "false"
+      ALIx_REPORTING_ENABLED: "false"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      GH_TOKEN: \${{ github.token }}
+    steps:
+      - name: Require standard CI success for this exact V4-V commit
+        env:
+          GITHUB_REPOSITORY: \${{ github.repository }}
+          TARGET_SHA: \${{ github.sha }}
+          TARGET_BRANCH: \${{ github.ref_name }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import time
+          from urllib.error import HTTPError, URLError
+          from urllib.request import Request, urlopen
+
+          repository = os.environ["GITHUB_REPOSITORY"]
+          target_sha = os.environ["TARGET_SHA"]
+          target_branch = os.environ["TARGET_BRANCH"]
+          token = os.environ["GH_TOKEN"]
+          expected_branch = "research/ml-core-v4v-binary-paradigm"
+          if target_branch != expected_branch:
+              raise SystemExit("unsupported_v4v_training_branch:" + target_branch)
+
+          deadline = time.monotonic() + 90 * 60
+          url = (
+              f"https://api.github.com/repos/{repository}/actions/workflows/ci.yml/runs"
+              f"?head_sha={target_sha}&per_page=100"
+          )
+          while time.monotonic() < deadline:
+              request = Request(
+                  url,
+                  headers={
+                      "Accept": "application/vnd.github+json",
+                      "Authorization": f"Bearer {token}",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  },
+              )
+              try:
+                  with urlopen(request, timeout=20) as response:
+                      payload = json.load(response)
+              except (HTTPError, URLError, TimeoutError) as error:
+                  raise SystemExit(
+                      f"ci_status_lookup_failed:{type(error).__name__}"
+                  ) from None
+
+              matching = [
+                  run for run in payload.get("workflow_runs", [])
+                  if run.get("head_sha") == target_sha
+                  and run.get("head_branch") == expected_branch
+                  and run.get("event") == "push"
+              ]
+              if matching:
+                  latest = max(
+                      matching,
+                      key=lambda item: (
+                          item.get("run_number", 0),
+                          item.get("run_attempt", 0),
+                      ),
+                  )
+                  if latest.get("status") == "completed":
+                      if latest.get("conclusion") != "success":
+                          raise SystemExit(
+                              "ci_green_gate_blocked:"
+                              + str(latest.get("conclusion"))
+                              + ":"
+                              + target_sha
+                          )
+                      print(json.dumps({
+                          "gate": "PASS",
+                          "target_sha": target_sha,
+                          "ci_run_id": latest.get("id"),
+                          "ci_run_url": latest.get("html_url"),
+                          "ci_conclusion": latest.get("conclusion"),
+                      }, sort_keys=True))
+                      break
+              time.sleep(30)
+          else:
+              raise SystemExit("ci_green_gate_timeout:" + target_sha)
+          PY
+
+      - name: Checkout exact V4-V commit without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Confirm V4-V branch, binary target, and fail-closed safety
+        env:
+          TARGET_SHA: \${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/research/ml-core-v4v-binary-paradigm"
+          test "$GITHUB_SHA" = "$TARGET_SHA"
+          printf 'commit_sha=%s\n' "$GITHUB_SHA"
+          printf 'target=BUY_VS_NO_BUY\n'
+          printf 'source_label_mapping=BUY->BUY;SELL->NO_BUY;HOLD->NO_BUY\n'
+          printf 'buy_probability_threshold=0.65\n'
+          printf 'features=BASELINE+TREND+VOLATILITY+VOLUME\n'
+          printf 'geometry_control=TP=1.0 ATR; SL=1.0 ATR; Horizon=24\n'
+          printf 'geometry_primary=TP=1.5 ATR; SL=1.0 ATR; Horizon=24\n'
+          printf 'objective=Binary_BUY_Economic_Score\n'
+          printf 'missed_opportunity_penalty=0\n'
+          printf 'no_buy_execution=NO_ENTRY\n'
+          printf 'sequence_models=FORBIDDEN\n'
+          printf 'market_data=PUBLIC_BINANCE_SPOT_ONLY\n'
+          printf 'short_positions_supported=false\n'
+          printf 'private_api_calls=0\nreal_order_attempts=0\n'
+          printf 'Champion=null\norder_permission=false\ntrading_authorization=NO-GO\n'
+
+      - name: Set up pinned Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install pinned V4-V training and economic evaluation dependencies
+        run: |
+          python -m pip install pip==25.2
+          python -m pip install numpy==2.5.4 pandas==2.3.3 scikit-learn==1.9.0 lightgbm==4.7.0
+
+      - name: Fetch complete public Binance Spot 730-day 1-minute datasets
+        run: |
+          set -euo pipefail
+          data_dir="$RUNNER_TEMP/alix-v4v-market-data"
+          rm -rf "$data_dir"
+          mkdir -p "$data_dir"
+          for symbol in BTCUSDT ETHUSDT; do
+            log_path="$RUNNER_TEMP/v4v-fetch-730-\${symbol}.log"
+            if python scripts/fetch_binance_public_ohlcv.py \
+              --days 730 \
+              --symbol "$symbol" \
+              --interval 1m \
+              --output-dir "$data_dir" \
+              --commit-sha "$GITHUB_SHA" >"$log_path" 2>&1; then
+              cat "$log_path"
+            else
+              cat "$log_path"
+              echo "Public Spot data fetch failed for \${symbol}; refusing partial data." >&2
+              exit 1
+            fi
+          done
+          printf 'requested_days=730\nprovider=Binance Spot public klines API\n'
+          printf 'private_api_calls=0\ncredentials_used=false\n'
+
+      - name: Train V4-V binary LightGBM models and run costed Spot economic replay
+        run: |
+          set -euo pipefail
+          python -m scripts.run_ml_core_v4v_binary_paradigm \
+            --input-dir "$RUNNER_TEMP/alix-v4v-market-data" \
+            --output-report "$GITHUB_WORKSPACE/alix-v4v-binary-report.json" \
+            --output-comparison-csv "$GITHUB_WORKSPACE/alix-v4v-binary-comparison.csv" \
+            --output-trades-csv "$GITHUB_WORKSPACE/alix-v4v-binary-trades.csv" \
+            --output-probabilities-csv "$GITHUB_WORKSPACE/alix-v4v-row-level-probabilities.csv" \
+            --output-feature-importance-csv "$GITHUB_WORKSPACE/alix-v4v-feature-importance.csv" \
+            --days 730 \
+            --commit-sha "$GITHUB_SHA"
+          test -s "$GITHUB_STEP_SUMMARY"
+          grep -Fq "AliX V4-V Binary BUY / NO_BUY Evaluation" "$GITHUB_STEP_SUMMARY"
+          grep -Fq "Binary_BUY_Economic_Score" "$GITHUB_STEP_SUMMARY"
+          grep -Fq "NO-GO" "$GITHUB_STEP_SUMMARY"
+
+      - name: Validate V4-V binary report, probabilities, economics, and safety
+        env:
+          REPORT_PATH: \${{ github.workspace }}/alix-v4v-binary-report.json
+          COMPARISON_CSV: \${{ github.workspace }}/alix-v4v-binary-comparison.csv
+          TRADES_CSV: \${{ github.workspace }}/alix-v4v-binary-trades.csv
+          PROBABILITIES_CSV: \${{ github.workspace }}/alix-v4v-row-level-probabilities.csv
+          TARGET_SHA: \${{ github.sha }}
+        run: |
+          python - <<'PY'
+          import csv
+          import json
+          import math
+          import os
+          from pathlib import Path
+
+          report = json.loads(Path(os.environ["REPORT_PATH"]).read_text(encoding="utf-8"))
+          assert report["schema_version"] == "alix.ml-core.v4v-binary-paradigm.v1"
+          assert report["commit_sha"] == os.environ["TARGET_SHA"]
+          assert report["requested_days"] == 730
+          assert report["model_training_performed"] is True
+          assert report["economic_evaluation_performed"] is True
+          assert report["model"]["family"] == "LightGBM LGBMClassifier objective=binary"
+          assert report["model"]["class_labels"] == ["BUY", "NO_BUY"]
+          assert report["model"]["positive_class"] == "BUY"
+          assert report["model"]["negative_class"] == "NO_BUY"
+          assert report["model"]["sequence_model_used"] is False
+          assert report["experiment_count"] == 8
+          assert report["candidate_count"] == 16
+          assert report["trained_candidate_count"] > 0
+          assert report["experimental_design"] == "PAIRED_1R_VS_1_5R_BINARY_BUY_NO_BUY"
+
+          target = report["target_contract"]
+          assert target["class_mapping"] == {
+              "BUY": "BUY", "SELL": "NO_BUY", "HOLD": "NO_BUY"
+          }
+          assert target["unlabeled_rows_remain_unlabeled"] is True
+          assert target["horizon_candles"] == 24
+
+          feature = report["feature_contract"]
+          assert feature["selected_profile"] == "Combined"
+          assert feature["volatility_features_included"] is True
+          assert feature["volume_features_included"] is True
+          assert feature["microstructure_data_used"] is False
+          assert set(feature["groups"]) == {"Baseline", "Trend", "Volatility", "Volume"}
+
+          objective = report["objective_contract"]
+          assert objective["primary_objective"] == "BINARY_BUY_ECONOMIC_SCORE"
+          assert objective["scorer"] == "Binary_BUY_Economic_Score"
+          assert objective["scored_rows"] == "PREDICTED_BUY_ONLY"
+          assert objective["buy_probability_threshold"] == 0.65
+          assert objective["missed_opportunity_penalty_bps"] == 0.0
+          assert objective["no_buy_predictions_are_penalized"] is False
+          assert objective["minimum_trade_count_penalty"] is False
+
+          confidence = report["confidence_threshold_contract"]
+          assert confidence["buy_probability_threshold"] == 0.65
+          assert confidence["selected_using_validation_labels"] is False
+          assert confidence["no_buy_execution_mapping"] == "NO_ENTRY"
+
+          artifact = report["row_level_probability_artifact"]
+          assert artifact["file"] == "alix-v4v-row-level-probabilities.csv"
+          required = {
+              "candidate_id", "arm", "pair", "timeframe", "feature_profile",
+              "weighting_policy", "row_index", "timestamp", "split_role",
+              "actual_label", "source_label", "predicted_label",
+              "executable_signal", "prob_buy", "prob_no_buy",
+          }
+          assert set(artifact["columns"]) == required
+          with Path(os.environ["PROBABILITIES_CSV"]).open(
+              newline="", encoding="utf-8"
+          ) as handle:
+              reader = csv.DictReader(handle)
+              assert set(reader.fieldnames or []) == required
+              probability_rows = list(reader)
+          assert len(probability_rows) == artifact["row_count"]
+          assert probability_rows
+          assert {row["split_role"] for row in probability_rows} == {"FORWARD_VALIDATION"}
+          for row in probability_rows:
+              buy = float(row["prob_buy"])
+              no_buy = float(row["prob_no_buy"])
+              assert math.isfinite(buy) and math.isfinite(no_buy)
+              assert 0.0 <= buy <= 1.0 and 0.0 <= no_buy <= 1.0
+              assert math.isclose(buy + no_buy, 1.0, rel_tol=0.0, abs_tol=1e-5)
+              assert row["actual_label"] in {"BUY", "NO_BUY"}
+              assert row["source_label"] in {"BUY", "SELL", "HOLD"}
+              expected_actual = "BUY" if row["source_label"] == "BUY" else "NO_BUY"
+              assert row["actual_label"] == expected_actual
+              expected_prediction = "BUY" if buy >= 0.65 else "NO_BUY"
+              assert row["predicted_label"] == expected_prediction
+              expected_signal = "BUY" if buy >= 0.65 else "NO_ENTRY"
+              assert row["executable_signal"] == expected_signal
+
+          assert len(report["candidates"]) == 16
+          for candidate in report["candidates"]:
+              assert candidate["class_labels"] == ["BUY", "NO_BUY"]
+              assert candidate["model_family"] == "LightGBM LGBMClassifier objective=binary"
+              assert candidate["sequence_model_used"] is False
+              if candidate["status"] != "TRAINED":
+                  continue
+              assert candidate["evaluation_performed"] is True
+              assert candidate["tuning_objective"] == "BINARY_BUY_ECONOMIC_SCORE"
+              assert candidate["buy_probability_threshold"] == 0.65
+              tuning = candidate["tuning_diagnostics"]
+              assert tuning["validation_accessed_during_search"] is False
+              assert tuning["selection_objective"] == "BINARY_BUY_ECONOMIC_SCORE"
+              assert tuning["economic_scorer"] == "Binary_BUY_Economic_Score"
+              assert tuning["custom_economic_score_contract"]["missed_opportunity_penalty_bps"] == 0.0
+              metrics = candidate["validation_classification_metrics"]
+              for name in ("buy_precision", "buy_recall", "buy_f1", "roc_auc"):
+                  assert math.isfinite(float(metrics[name]))
+                  assert 0.0 <= float(metrics[name]) <= 1.0
+              assert candidate["trade_management"]["short_positions_supported"] is False
+
+          with Path(os.environ["COMPARISON_CSV"]).open(
+              newline="", encoding="utf-8"
+          ) as handle:
+              comparison = list(csv.DictReader(handle))
+          assert len(comparison) == 16
+          with Path(os.environ["TRADES_CSV"]).open(
+              newline="", encoding="utf-8"
+          ) as handle:
+              trades = list(csv.DictReader(handle))
+          for trade in trades:
+              assert trade["direction"] == "LONG"
+              reconciled = (
+                  float(trade["gross_market_pnl_usd"])
+                  - float(trade["fees_usd"])
+                  - float(trade["slippage_cost_usd"])
+              )
+              assert math.isclose(
+                  reconciled, float(trade["net_pnl_usd"]),
+                  rel_tol=0.0, abs_tol=0.02
+              )
+
+          safety = report["safety"]
+          assert safety["Champion"] is None
+          assert safety["order_permission"] is False
+          assert safety["trading_authorization"] == "NO-GO"
+          assert safety["private_api_calls"] == 0
+          assert safety["real_order_attempts"] == 0
+          assert safety["orders_or_execution_api_used"] is False
+          assert safety["credentials_used"] is False
+          assert safety["short_positions_supported"] is False
+          assert safety["sequence_model_used"] is False
+          assert report["promotion_status"] == "BLOCKED_PENDING_INDEPENDENT_OOS_AND_OWNER_REVIEW"
+          print(json.dumps({
+              "validation": "PASS",
+              "commit_sha": report["commit_sha"],
+              "experiment_count": report["experiment_count"],
+              "candidate_count": report["candidate_count"],
+              "trained_candidate_count": report["trained_candidate_count"],
+              "probability_rows": len(probability_rows),
+              "trade_rows": len(trades),
+              "Champion": None,
+              "order_permission": False,
+              "trading_authorization": "NO-GO",
+          }, sort_keys=True))
+          PY
+
+      - name: Upload V4-V binary economic report and row-level artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alix-v4v-binary-economic-evaluation
+          path: |
+            alix-v4v-binary-report.json
+            alix-v4v-binary-comparison.csv
+            alix-v4v-binary-trades.csv
+            alix-v4v-row-level-probabilities.csv
+            alix-v4v-feature-importance.csv
+          if-no-files-found: error
