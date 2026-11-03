@@ -987,17 +987,67 @@ def _feature_importance_rows(candidates: list[dict[str, Any]]) -> list[dict[str,
     return rows
 
 
-def _report_candidate_rows(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    excluded = {
-        "trades",
-        "probability_records",
-        "feature_importance_gain",
-        "tuning_diagnostics",
+V4T_REPORT_TUNING_DIAGNOSTIC_FIELDS = (
+    "search_method",
+    "candidate_count",
+    "inner_cv_method",
+    "inner_cv_fold_count",
+    "inner_cv_scope",
+    "validation_accessed_during_search",
+    "final_refit_scope",
+    "class_weight_policy",
+    "selection_objective",
+    "minimum_hold_recall_for_candidate_selection",
+    "minimum_hold_recall_applied_to_selection",
+    "recall_feasible_candidate_count",
+    "selection_status",
+    "selected_mean_cv_hold_precision",
+    "selected_mean_cv_hold_recall",
+    "selected_mean_cv_macro_f1",
+    "selected_mean_cv_buy_f1",
+    "selected_mean_cv_net_expectancy_proxy",
+    "selected_mean_cv_custom_economic_score",
+    "economic_scorer",
+    "custom_economic_score_contract",
+    "estimated_round_trip_cost_bps",
+    "economic_scorer_scope",
+    "portfolio_overlap_modeled",
+    "candidate_fit_count",
+    "random_state",
+)
+
+
+def _report_tuning_diagnostics(candidate: dict[str, Any]) -> dict[str, Any]:
+    """Keep compact, verifiable tuning evidence in the public report candidate."""
+    if candidate.get("status") != "TRAINED":
+        return {}
+    diagnostics = candidate.get("tuning_diagnostics")
+    if not isinstance(diagnostics, dict):
+        raise ValueError("v4t_trained_candidate_tuning_diagnostics_missing")
+    contract = diagnostics.get("custom_economic_score_contract")
+    if (
+        diagnostics.get("selection_objective") != "CUSTOM_ECONOMIC_SCORE"
+        or diagnostics.get("validation_accessed_during_search") is not False
+        or diagnostics.get("economic_scorer") != "Custom_Economic_Score"
+        or not isinstance(contract, dict)
+        or contract.get("minimum_trade_count_soft_target") != V4T_SOFT_TRADE_TARGET
+    ):
+        raise ValueError("v4t_trained_candidate_tuning_diagnostics_invalid")
+    return {
+        key: diagnostics[key]
+        for key in V4T_REPORT_TUNING_DIAGNOSTIC_FIELDS
+        if key in diagnostics
     }
-    return [
-        {key: value for key, value in item.items() if key not in excluded}
-        for item in candidates
-    ]
+
+
+def _report_candidate_rows(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    excluded = {"trades", "probability_records", "feature_importance_gain"}
+    rows: list[dict[str, Any]] = []
+    for candidate in candidates:
+        row = {key: value for key, value in candidate.items() if key not in excluded}
+        row["tuning_diagnostics"] = _report_tuning_diagnostics(candidate)
+        rows.append(row)
+    return rows
 
 
 def _render_step_summary(report: dict[str, Any]) -> str:

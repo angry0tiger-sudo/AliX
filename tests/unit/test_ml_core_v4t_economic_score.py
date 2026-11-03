@@ -561,3 +561,90 @@ def test_v4t_inner_cv_preflight_passes_only_after_all_default_folds_validate(
         "n_splits": DEFAULT_INNER_CV_SPLITS,
         "minimum_class_samples": DEFAULT_MINIMUM_CLASS_SAMPLES,
     }
+
+
+def test_v4t_report_candidates_preserve_compact_tuning_evidence() -> None:
+    diagnostics = {
+        "search_method": "RANDOM_SEARCH",
+        "candidate_count": 9,
+        "inner_cv_method": "PURGED_EXPANDING_TIME_SERIES",
+        "inner_cv_fold_count": 3,
+        "inner_cv_scope": "OUTER_TRAIN_ONLY",
+        "validation_accessed_during_search": False,
+        "final_refit_scope": "FULL_OUTER_TRAIN_ONLY",
+        "class_weight_policy": "weight_none",
+        "selection_objective": "CUSTOM_ECONOMIC_SCORE",
+        "selected_mean_cv_custom_economic_score": 0.125,
+        "economic_scorer": "Custom_Economic_Score",
+        "custom_economic_score_contract": {
+            "minimum_trade_count_soft_target": 30,
+            "candidate_results_are_internal": True,
+        },
+        "candidate_fit_count": 27,
+        "search_space": {"num_leaves": [15, 31]},
+        "inner_cv_folds": [{"fold": 1}],
+        "candidate_results": [{"score": 0.125}],
+    }
+    candidates = [
+        {
+            "candidate_id": "trained-candidate",
+            "status": "TRAINED",
+            "tuning_diagnostics": diagnostics,
+            "trades": [{"net_pnl_usd": 1.0}],
+            "probability_records": [{"probabilities": [0.7, 0.2, 0.1]}],
+            "feature_importance_gain": [{"feature": "rsi", "gain": 2.0}],
+        },
+        {
+            "candidate_id": "skipped-candidate",
+            "status": "SKIPPED_INSUFFICIENT_INNER_CV_CLASS_SUPPORT",
+            "tuning_diagnostics": {},
+        },
+    ]
+
+    rows = v4t._report_candidate_rows(candidates)
+
+    assert rows[0]["tuning_diagnostics"] == {
+        key: diagnostics[key]
+        for key in v4t.V4T_REPORT_TUNING_DIAGNOSTIC_FIELDS
+        if key in diagnostics
+    }
+    assert "candidate_results" not in rows[0]["tuning_diagnostics"]
+    assert "inner_cv_folds" not in rows[0]["tuning_diagnostics"]
+    assert "search_space" not in rows[0]["tuning_diagnostics"]
+    assert "trades" not in rows[0]
+    assert "probability_records" not in rows[0]
+    assert "feature_importance_gain" not in rows[0]
+    assert rows[1]["tuning_diagnostics"] == {}
+
+
+def test_v4t_report_rejects_missing_trained_candidate_tuning_evidence() -> None:
+    with pytest.raises(
+        ValueError, match="v4t_trained_candidate_tuning_diagnostics_missing"
+    ):
+        v4t._report_candidate_rows(
+            [{"candidate_id": "missing-evidence", "status": "TRAINED"}]
+        )
+
+
+def test_v4t_report_rejects_mismatched_trained_candidate_tuning_evidence() -> None:
+    invalid = {
+        "selection_objective": "CUSTOM_ECONOMIC_SCORE",
+        "validation_accessed_during_search": True,
+        "economic_scorer": "Custom_Economic_Score",
+        "custom_economic_score_contract": {
+            "minimum_trade_count_soft_target": 30
+        },
+    }
+    with pytest.raises(
+        ValueError, match="v4t_trained_candidate_tuning_diagnostics_invalid"
+    ):
+        v4t._report_candidate_rows(
+            [
+                {
+                    "candidate_id": "invalid-evidence",
+                    "status": "TRAINED",
+                    "tuning_diagnostics": invalid,
+                }
+            ]
+        )
+
