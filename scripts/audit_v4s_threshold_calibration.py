@@ -372,7 +372,7 @@ def _render_intro(summary: dict[str, Any]) -> str:
         f"- آموزش توسط ابزار V4-S: {summary['training_performed_by_v4s']}.",
         "- روش: فقط خواندن گزارش و CSVهای ثابت Run #25؛ بدون دریافت داده، آموزش مدل یا تغییر داده.",
     ]
-    return "\\n".join(lines)
+    return "\n".join(lines)
 
 
 def _render_activity_section(summary: dict[str, Any]) -> str:
@@ -404,7 +404,7 @@ def _render_activity_section(summary: dict[str, Any]) -> str:
             "",
         ]
     )
-    return "\\n".join(lines)
+    return "\n".join(lines)
 
 
 def _render_threshold_optimization_section(summary: dict[str, Any]) -> str:
@@ -437,7 +437,7 @@ def _render_threshold_optimization_section(summary: dict[str, Any]) -> str:
         "و selected_threshold=null دارند. کف حمایت مثبت HOLD برابر ۳۰ است و نمونه "
         "کالیبراسیون این کف را تأمین نکرده است."
     )
-    return "\\n".join(lines)
+    return "\n".join(lines)
 
 
 def _render_label_section(summary: dict[str, Any]) -> str:
@@ -480,7 +480,7 @@ def _render_label_section(summary: dict[str, Any]) -> str:
         "۲۱٫۷۱٪ کاهش یافته است. فرض «افزایش HOLD به علت افق کوتاه» پشتیبانی نمی‌شود؛ "
         "این داده مزیت افق ۴۸/۷۲ کندلی را نیز اثبات نمی‌کند."
     )
-    return "\\n".join(lines)
+    return "\n".join(lines)
 
 
 def _render_probability_section(summary: dict[str, Any]) -> str:
@@ -522,11 +522,11 @@ def _render_probability_section(summary: dict[str, Any]) -> str:
             "اعداد Counterfactual حدس زده نشده‌اند. بازسازی Probability یا PF از روی AUC/Brier و شمارش aggregate از نظر ریاضی معتبر نیست.",
         ]
     )
-    return "\\n".join(lines)
+    return "\n".join(lines)
 
 
 def _render_v4t_section() -> str:
-    return "\\n".join(
+    return "\n".join(
         [
             "## 4. پیشنهاد V4-T",
             "",
@@ -538,7 +538,7 @@ def _render_v4t_section() -> str:
 
 
 def _render_safety_section() -> str:
-    return "\\n".join(
+    return "\n".join(
         [
             "## 5. ایمنی",
             "",
@@ -567,7 +567,7 @@ def _render_report(summary: dict[str, Any]) -> str:
         _render_v4t_section(),
         _render_safety_section(),
     ]
-    return "\\n\\n".join(sections) + "\\n"
+    return "\n\n".join(sections) + "\n"
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
