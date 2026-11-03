@@ -42,25 +42,15 @@ CUSTOM_SCORE_TRADE_COUNT_PENALTY_BPS = 50.0
 CUSTOM_SCORE_DRAWDOWN_PENALTY_WEIGHT = 0.5
 
 
-def Custom_Economic_Score(
-    estimator: Any,
+def _validate_custom_economic_score_configuration(
     features: DataFrame,
     actual: Series,
-    *,
     gross_returns_by_index: Series,
-    estimated_cost_bps: float = DEFAULT_ESTIMATED_ROUND_TRIP_COST_BPS,
-    minimum_trade_count: int = CUSTOM_SCORE_MINIMUM_TRADES,
-    trade_count_penalty_bps: float = CUSTOM_SCORE_TRADE_COUNT_PENALTY_BPS,
-    drawdown_penalty_weight: float = CUSTOM_SCORE_DRAWDOWN_PENALTY_WEIGHT,
-) -> float:
-    """Score predicted Spot BUY events using net expectancy, drawdown and sample size.
-
-    The score is an inner-CV selection proxy only. Positive net expectancy is
-    rewarded twice, negative expectancy remains a penalty, drawdown is penalized,
-    and trade counts below the soft 30-trade target receive a linear penalty.
-    It does not model portfolio overlap; costed execution replay remains the
-    economic acceptance authority.
-    """
+    estimated_cost_bps: float,
+    minimum_trade_count: int,
+    trade_count_penalty_bps: float,
+    drawdown_penalty_weight: float,
+) -> tuple[int, float, float, float]:
     if (
         isinstance(estimated_cost_bps, bool)
         or not isfinite(float(estimated_cost_bps))
@@ -89,35 +79,108 @@ def Custom_Economic_Score(
     )
     if not penalty_valid or not drawdown_valid:
         raise ValueError("tuning_custom_score_penalty_invalid")
+    return (
+        minimum,
+        float(estimated_cost_bps),
+        float(trade_count_penalty_bps),
+        float(drawdown_penalty_weight),
+    )
+
+
+def _predicted_buy_gross_returns(
+    estimator: Any,
+    features: DataFrame,
+    gross_returns_by_index: Series,
+) -> np.ndarray:
     predicted = np.asarray(estimator.predict(features), dtype=object)
     if predicted.ndim != 1 or len(predicted) != len(features):
         raise ValueError("tuning_custom_score_predictions_invalid")
     gross = gross_returns_by_index.reindex(features.index).to_numpy(dtype=float)
     if len(gross) != len(features) or not bool(np.isfinite(gross).all()):
         raise ValueError("tuning_economic_outcomes_missing_or_non_finite")
-    selected = gross[predicted == "BUY"]
-    trade_count = len(selected)
-    shortfall_ratio = max(0.0, float(minimum - trade_count) / float(minimum))
-    count_penalty = float(trade_count_penalty_bps) * shortfall_ratio
-    if trade_count == 0:
-        return -count_penalty
-    net_returns = selected - float(estimated_cost_bps) / 10_000.0
-    if not bool(np.isfinite(net_returns).all()) or bool(np.any(net_returns <= -1.0)):
-        raise ValueError("tuning_custom_score_net_returns_invalid")
+    return gross[predicted == "BUY"]
+
+
+def _custom_score_drawdown_and_expectancy(
+    net_returns: np.ndarray,
+) -> tuple[float, float]:
     equity = np.concatenate(([1.0], np.cumprod(1.0 + net_returns)))
     peaks = np.maximum.accumulate(equity)
     drawdown = float(np.max((peaks - equity) / peaks))
     expectancy_bps = float(np.mean(net_returns)) * 10_000.0
+    return drawdown, expectancy_bps
+
+
+def _custom_score_from_net_returns(
+    net_returns: np.ndarray,
+    *,
+    trade_count: int,
+    minimum_trade_count: int,
+    trade_count_penalty_bps: float,
+    drawdown_penalty_weight: float,
+) -> float:
+    shortfall_ratio = max(
+        0.0, float(minimum_trade_count - trade_count) / float(minimum_trade_count)
+    )
+    count_penalty = trade_count_penalty_bps * shortfall_ratio
+    if trade_count == 0:
+        return -count_penalty
+    if not bool(np.isfinite(net_returns).all()) or bool(np.any(net_returns <= -1.0)):
+        raise ValueError("tuning_custom_score_net_returns_invalid")
+    drawdown, expectancy_bps = _custom_score_drawdown_and_expectancy(net_returns)
     positive_expectancy_reward_bps = max(0.0, expectancy_bps)
     drawdown_bps = drawdown * 10_000.0
     return (
         expectancy_bps
         + positive_expectancy_reward_bps
-        - float(drawdown_penalty_weight) * drawdown_bps
+        - drawdown_penalty_weight * drawdown_bps
         - count_penalty
     )
 
 
+def Custom_Economic_Score(
+    estimator: Any,
+    features: DataFrame,
+    actual: Series,
+    *,
+    gross_returns_by_index: Series,
+    estimated_cost_bps: float = DEFAULT_ESTIMATED_ROUND_TRIP_COST_BPS,
+    minimum_trade_count: int = CUSTOM_SCORE_MINIMUM_TRADES,
+    trade_count_penalty_bps: float = CUSTOM_SCORE_TRADE_COUNT_PENALTY_BPS,
+    drawdown_penalty_weight: float = CUSTOM_SCORE_DRAWDOWN_PENALTY_WEIGHT,
+) -> float:
+    """Score predicted Spot BUY events using expectancy, drawdown and sample size.
+
+    This inner-CV proxy rewards positive net expectancy, penalizes losses and
+    drawdown, and applies a linear soft penalty below 30 trades. Costed execution
+    replay remains the economic acceptance authority.
+    """
+    (
+        minimum,
+        estimated_cost,
+        count_penalty_bps,
+        drawdown_weight,
+    ) = _validate_custom_economic_score_configuration(
+        features,
+        actual,
+        gross_returns_by_index,
+        estimated_cost_bps,
+        minimum_trade_count,
+        trade_count_penalty_bps,
+        drawdown_penalty_weight,
+    )
+    selected = _predicted_buy_gross_returns(
+        estimator, features, gross_returns_by_index
+    )
+    trade_count = len(selected)
+    net_returns = selected - estimated_cost / 10_000.0
+    return _custom_score_from_net_returns(
+        net_returns,
+        trade_count=trade_count,
+        minimum_trade_count=minimum,
+        trade_count_penalty_bps=count_penalty_bps,
+        drawdown_penalty_weight=drawdown_weight,
+    )
 def custom_eval_metric(
     estimator: Any,
     features: DataFrame,

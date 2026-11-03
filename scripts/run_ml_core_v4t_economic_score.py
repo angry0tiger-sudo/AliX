@@ -101,9 +101,59 @@ def _execution_config() -> ExecutionConfig:
     )
 
 
+def _validated_v4t_label_end(
+    raw_end: object, event_index: int, row_count: int
+) -> int | None:
+    if pd.isna(raw_end):
+        return None
+    numeric = float(raw_end)
+    if not np.isfinite(numeric):
+        return None
+    if not numeric.is_integer():
+        raise ValueError("v4t_economic_label_end_index_invalid")
+    label_end = int(numeric)
+    if label_end <= event_index or label_end >= row_count:
+        raise ValueError("v4t_economic_label_end_index_invalid")
+    return label_end
+
+
+def _v4t_exit_reference(bars: DataFrame, row: Any, label_end: int) -> float:
+    reason = getattr(row, "exit_reason")
+    if reason == "TP_HIT":
+        exit_reference = float(getattr(row, "take_profit_price"))
+    elif reason in ("SL_HIT", "COLLISION"):
+        exit_reference = float(getattr(row, "stop_loss_price"))
+    elif reason == "HORIZON_EXPIRY":
+        exit_reference = float(bars.iloc[label_end]["close"])
+    else:
+        raise ValueError("v4t_economic_exit_reason_invalid")
+    if not np.isfinite(exit_reference) or exit_reference <= 0.0:
+        raise ValueError("v4t_economic_exit_reference_invalid")
+    return exit_reference
+
+
+def _v4t_event_gross_return(
+    bars: DataFrame, row: Any
+) -> tuple[int, float] | None:
+    event_index = int(getattr(row, "event_index"))
+    if event_index < 0 or event_index >= len(bars):
+        raise ValueError("v4t_economic_event_index_invalid")
+    if getattr(row, "label") not in LABELS:
+        return None
+    label_end = _validated_v4t_label_end(
+        getattr(row, "label_end_idx"), event_index, len(bars)
+    )
+    if label_end is None or event_index + 1 >= len(bars):
+        return None
+    entry_reference = float(bars.iloc[event_index + 1]["open"])
+    if not np.isfinite(entry_reference) or entry_reference <= 0.0:
+        raise ValueError("v4t_economic_entry_reference_invalid")
+    exit_reference = _v4t_exit_reference(bars, row, label_end)
+    return event_index, exit_reference / entry_reference - 1.0
+
+
 def _economic_outcomes_by_index(bars: DataFrame, labels: DataFrame) -> Series:
-    """Build causal gross event returns for BUY label rows using target exits."""
-    values = np.full(len(bars), np.nan, dtype=float)
+    """Build causal gross event returns using next-open entry and target exits."""
     required = {
         "event_index",
         "label_end_idx",
@@ -114,39 +164,13 @@ def _economic_outcomes_by_index(bars: DataFrame, labels: DataFrame) -> Series:
     }
     if not required.issubset(labels.columns):
         raise ValueError("v4t_economic_label_columns_missing")
+    values = np.full(len(bars), np.nan, dtype=float)
     for row in labels.itertuples(index=False):
-        event_index = int(getattr(row, "event_index"))
-        actual_label = getattr(row, "label")
-        if actual_label not in LABELS:
-            continue
-        raw_end = getattr(row, "label_end_idx")
-        if pd.isna(raw_end):
-            continue
-        if not np.isfinite(float(raw_end)):
-            continue
-        label_end = int(raw_end)
-        if label_end <= event_index or label_end >= len(bars):
-            raise ValueError("v4t_economic_label_end_index_invalid")
-        if event_index + 1 >= len(bars):
-            continue
-        entry_reference = float(bars.iloc[event_index + 1]["open"])
-        if not np.isfinite(entry_reference) or entry_reference <= 0.0:
-            raise ValueError("v4t_economic_entry_reference_invalid")
-        reason = getattr(row, "exit_reason")
-        if reason == "TP_HIT":
-            exit_reference = float(getattr(row, "take_profit_price"))
-        elif reason in ("SL_HIT", "COLLISION"):
-            exit_reference = float(getattr(row, "stop_loss_price"))
-        elif reason == "HORIZON_EXPIRY":
-            exit_reference = float(bars.iloc[label_end]["close"])
-        else:
-            raise ValueError("v4t_economic_exit_reason_invalid")
-        if not np.isfinite(exit_reference) or exit_reference <= 0.0:
-            raise ValueError("v4t_economic_exit_reference_invalid")
-        values[event_index] = exit_reference / entry_reference - 1.0
+        event_return = _v4t_event_gross_return(bars, row)
+        if event_return is not None:
+            event_index, gross_return = event_return
+            values[event_index] = gross_return
     return Series(values, index=bars.index, dtype=float)
-
-
 def _probability_values(record: dict[str, Any]) -> dict[str, float]:
     raw = record.get("probabilities")
     if not isinstance(raw, dict) or set(raw) != set(LABELS):
@@ -163,20 +187,12 @@ def _probability_values(record: dict[str, Any]) -> dict[str, float]:
     return probabilities
 
 
-def select_dynamic_buy_confidence_threshold(
+def _validate_dynamic_threshold_inputs(
     validation_probability_records: list[dict[str, Any]],
-    *,
-    calibration_fraction: float = V4T_CALIBRATION_FRACTION,
-    hold_threshold: float = V4T_HOLD_THRESHOLD,
-    top_buy_share: float = V4T_TOP_BUY_SHARE,
-) -> dict[str, Any]:
-    """Select the BUY-probability floor on early Calibration rows only.
-
-    The first chronological Calibration slice determines the BUY confidence
-    threshold. Only later Forward Validation rows enter economic replay.
-    Equal threshold values are included and reported as ties rather than being
-    silently dropped, so achieved coverage may be slightly above the target.
-    """
+    calibration_fraction: float,
+    hold_threshold: float,
+    top_buy_share: float,
+) -> int:
     if (
         isinstance(calibration_fraction, bool)
         or not np.isfinite(float(calibration_fraction))
@@ -194,33 +210,57 @@ def select_dynamic_buy_confidence_threshold(
     if len(validation_probability_records) < 2:
         raise ValueError("v4t_validation_probability_rows_insufficient")
     calibration_count = max(
-        1, int(math.floor(len(validation_probability_records) * calibration_fraction))
+        1,
+        int(
+            math.floor(
+                len(validation_probability_records) * float(calibration_fraction)
+            )
+        ),
     )
     if calibration_count >= len(validation_probability_records):
         raise ValueError("v4t_calibration_leaves_no_forward_rows")
-    raw_buy_confidences: list[float] = []
-    for record in validation_probability_records[:calibration_count]:
+    return calibration_count
+
+
+def _calibration_raw_buy_confidences(
+    records: list[dict[str, Any]],
+    calibration_count: int,
+    hold_threshold: float,
+) -> list[float]:
+    confidences: list[float] = []
+    for record in records[:calibration_count]:
         probabilities = _probability_values(record)
         if probability_to_signal(probabilities, float(hold_threshold)) == "BUY":
-            raw_buy_confidences.append(probabilities["BUY"])
-    if not raw_buy_confidences:
-        return {
-            "status": "NO_BUY_SIGNALS_IN_CALIBRATION",
-            "selected_threshold": 1.0,
-            "calibration_row_count": calibration_count,
-            "calibration_raw_buy_count": 0,
-            "target_buy_share": float(top_buy_share),
-            "target_selected_buy_count": 0,
-            "selected_buy_count_in_calibration": 0,
-            "achieved_buy_share": 0.0,
-            "threshold_tie_count": 0,
-            "calibration_start_row_index": int(
-                validation_probability_records[0]["row_index"]
-            ),
-            "forward_start_row_index": int(
-                validation_probability_records[calibration_count]["row_index"]
-            ),
-        }
+            confidences.append(probabilities["BUY"])
+    return confidences
+
+
+def _no_buy_threshold_result(
+    records: list[dict[str, Any]],
+    calibration_count: int,
+    top_buy_share: float,
+) -> dict[str, Any]:
+    return {
+        "status": "NO_BUY_SIGNALS_IN_CALIBRATION",
+        "selected_threshold": 1.0,
+        "calibration_row_count": calibration_count,
+        "calibration_raw_buy_count": 0,
+        "target_buy_share": float(top_buy_share),
+        "target_selected_buy_count": 0,
+        "selected_buy_count_in_calibration": 0,
+        "achieved_buy_share": 0.0,
+        "threshold_tie_count": 0,
+        "calibration_start_row_index": int(records[0]["row_index"]),
+        "forward_start_row_index": int(records[calibration_count]["row_index"]),
+    }
+
+
+def _selected_buy_threshold_result(
+    records: list[dict[str, Any]],
+    calibration_count: int,
+    raw_buy_confidences: list[float],
+    top_buy_share: float,
+) -> dict[str, Any]:
     target_count = max(1, int(math.ceil(len(raw_buy_confidences) * top_buy_share)))
     ordered = sorted(raw_buy_confidences, reverse=True)
     threshold = max(float(ordered[target_count - 1]), float(np.finfo(float).eps))
@@ -236,15 +276,38 @@ def select_dynamic_buy_confidence_threshold(
         "selected_buy_count_in_calibration": int(selected_count),
         "achieved_buy_share": round(selected_count / len(raw_buy_confidences), 8),
         "threshold_tie_count": int(tie_count),
-        "calibration_start_row_index": int(
-            validation_probability_records[0]["row_index"]
-        ),
-        "forward_start_row_index": int(
-            validation_probability_records[calibration_count]["row_index"]
-        ),
+        "calibration_start_row_index": int(records[0]["row_index"]),
+        "forward_start_row_index": int(records[calibration_count]["row_index"]),
     }
 
 
+def select_dynamic_buy_confidence_threshold(
+    validation_probability_records: list[dict[str, Any]],
+    *,
+    calibration_fraction: float = V4T_CALIBRATION_FRACTION,
+    hold_threshold: float = V4T_HOLD_THRESHOLD,
+    top_buy_share: float = V4T_TOP_BUY_SHARE,
+) -> dict[str, Any]:
+    """Select BUY confidence on early Calibration rows; replay later rows only."""
+    calibration_count = _validate_dynamic_threshold_inputs(
+        validation_probability_records,
+        calibration_fraction,
+        hold_threshold,
+        top_buy_share,
+    )
+    raw_buy_confidences = _calibration_raw_buy_confidences(
+        validation_probability_records, calibration_count, hold_threshold
+    )
+    if not raw_buy_confidences:
+        return _no_buy_threshold_result(
+            validation_probability_records, calibration_count, top_buy_share
+        )
+    return _selected_buy_threshold_result(
+        validation_probability_records,
+        calibration_count,
+        raw_buy_confidences,
+        top_buy_share,
+    )
 def _candidate_identifier(
     arm_name: str, pair: str, timeframe: str, profile: str, policy: str
 ) -> str:
@@ -494,6 +557,177 @@ def _evaluate_trained_variant(
     return candidate, rows
 
 
+def _run_context_profile(
+    arm: dict[str, Any],
+    pair: str,
+    timeframe: str,
+    bars: DataFrame,
+    labels: DataFrame,
+    economic_outcomes: Series,
+    feature_matrices: dict[str, DataFrame],
+    profile: str,
+    random_search_iterations: int,
+) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
+    experiment = run_v4h_experiment(
+        pair,
+        timeframe,
+        bars,
+        labels,
+        feature_matrices,
+        scenario=arm,
+        feature_profile=profile,
+        calibration_fraction=V4T_CALIBRATION_FRACTION,
+        minimum_hold_precision=DEFAULT_MINIMUM_HOLD_PRECISION,
+        minimum_hold_recall=DEFAULT_MINIMUM_HOLD_RECALL,
+        random_search_iterations=random_search_iterations,
+        tuning_objective="CUSTOM_ECONOMIC_SCORE",
+        economic_outcomes=economic_outcomes,
+        estimated_cost_bps=V4T_ESTIMATED_ROUND_TRIP_COST_BPS,
+        split_horizon_candles=24,
+    )
+    status, sample_gate = _validate_v4t_experiment_status(experiment)
+    experiment_record = _v4t_experiment_report_record(
+        arm, pair, timeframe, profile, experiment, status, sample_gate
+    )
+    if status in V4T_SAMPLE_GATE_SKIP_STATUSES:
+        skipped = _v4t_skipped_profile_candidates(
+            arm, pair, timeframe, profile, experiment
+        )
+        return experiment_record, skipped, []
+    candidates, probabilities = _v4t_trained_profile_candidates(
+        arm, pair, timeframe, bars, profile, experiment, experiment_record
+    )
+    return experiment_record, candidates, probabilities
+
+
+def _validate_v4t_experiment_status(
+    experiment: dict[str, Any],
+) -> tuple[str, dict[str, Any]]:
+    status = str(experiment.get("status"))
+    sample_gate = experiment.get("sample_gate")
+    if not isinstance(sample_gate, dict):
+        raise ValueError("v4t_sample_gate_diagnostics_missing")
+    if status in V4T_SAMPLE_GATE_SKIP_STATUSES:
+        if sample_gate.get("status") != status:
+            raise ValueError("v4t_sample_gate_skip_status_mismatch")
+        return status, sample_gate
+    if status != "TRAINED" or sample_gate.get("status") != "PASS":
+        raise ValueError(f"v4t_experiment_status_invalid:{status}")
+    return status, sample_gate
+
+
+def _v4t_experiment_report_record(
+    arm: dict[str, Any],
+    pair: str,
+    timeframe: str,
+    profile: str,
+    experiment: dict[str, Any],
+    status: str,
+    sample_gate: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "arm": str(arm["name"]),
+        "geometry": str(arm["geometry"]),
+        "pair": pair,
+        "timeframe": timeframe,
+        "feature_profile": profile,
+        "status": status,
+        "sample_gate": dict(sample_gate),
+        "train_rows": int(experiment["train_rows"]),
+        "validation_rows": int(experiment["validation_rows"]),
+        "sample_signature_sha256": str(experiment["sample_signature_sha256"]),
+        "split": dict(experiment["split"]),
+        "label_distribution": dict(experiment["label_distribution"]),
+        "label_audit": dict(experiment["label_audit"]),
+        "model_variants": {},
+    }
+
+
+def _v4t_skipped_profile_candidates(
+    arm: dict[str, Any],
+    pair: str,
+    timeframe: str,
+    profile: str,
+    experiment: dict[str, Any],
+) -> list[dict[str, Any]]:
+    return [
+        _skipped_candidate_record(arm, pair, timeframe, profile, policy, experiment)
+        for policy in weighting_policy_specs()
+    ]
+
+
+def _v4t_trained_profile_candidates(
+    arm: dict[str, Any],
+    pair: str,
+    timeframe: str,
+    bars: DataFrame,
+    profile: str,
+    experiment: dict[str, Any],
+    experiment_record: dict[str, Any],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    variants = experiment.get("model_variants")
+    expected_policies = set(weighting_policy_specs())
+    if not isinstance(variants, dict) or set(variants) != expected_policies:
+        raise ValueError("v4t_model_variant_contract_mismatch")
+    candidates: list[dict[str, Any]] = []
+    probability_rows: list[dict[str, Any]] = []
+    for policy, variant in variants.items():
+        candidate, rows = _evaluate_trained_variant(
+            arm, pair, timeframe, bars, profile, policy, experiment, variant
+        )
+        candidates.append(candidate)
+        probability_rows.extend(rows)
+        experiment_record["model_variants"][policy] = {
+            "candidate_id": candidate["candidate_id"],
+            "selected_parameters": dict(candidate["selected_parameters"]),
+            "tuning_objective": candidate["tuning_objective"],
+            "confidence_threshold_selection": dict(
+                candidate["confidence_threshold_selection"]
+            ),
+            "metrics": dict(candidate["metrics"]),
+        }
+    return candidates, probability_rows
+
+
+def _run_context_arm(
+    arm: dict[str, Any],
+    pair: str,
+    timeframe: str,
+    bars: DataFrame,
+    feature_matrices: dict[str, DataFrame],
+    random_search_iterations: int,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    labels = apply_adaptive_triple_barrier(
+        bars,
+        atr_period=V4T_ATR_PERIOD,
+        horizon_candles=int(arm["horizon_candles"]),
+        take_profit_multiplier=float(arm["take_profit_multiplier"]),
+        stop_loss_multiplier=float(arm["stop_loss_multiplier"]),
+        entry_reference="NEXT_BAR_OPEN",
+        entry_slippage_bps=V4T_ENTRY_SLIPPAGE_BPS,
+    )
+    economic_outcomes = _economic_outcomes_by_index(bars, labels)
+    experiments: list[dict[str, Any]] = []
+    candidates: list[dict[str, Any]] = []
+    probability_rows: list[dict[str, Any]] = []
+    for profile in V4H_FEATURE_PROFILES:
+        experiment, profile_candidates, profile_probabilities = _run_context_profile(
+            arm,
+            pair,
+            timeframe,
+            bars,
+            labels,
+            economic_outcomes,
+            feature_matrices,
+            profile,
+            random_search_iterations,
+        )
+        experiments.append(experiment)
+        candidates.extend(profile_candidates)
+        probability_rows.extend(profile_probabilities)
+    return experiments, candidates, probability_rows
+
+
 def _run_context(
     symbol: str,
     timeframe: str,
@@ -510,92 +744,21 @@ def _run_context(
     candidates: list[dict[str, Any]] = []
     probability_rows: list[dict[str, Any]] = []
     for arm in V4T_ARMS:
-        labels = apply_adaptive_triple_barrier(
+        arm_experiments, arm_candidates, arm_probabilities = _run_context_arm(
+            arm,
+            pair,
+            timeframe,
             bars,
-            atr_period=V4T_ATR_PERIOD,
-            horizon_candles=int(arm["horizon_candles"]),
-            take_profit_multiplier=float(arm["take_profit_multiplier"]),
-            stop_loss_multiplier=float(arm["stop_loss_multiplier"]),
-            entry_reference="NEXT_BAR_OPEN",
-            entry_slippage_bps=V4T_ENTRY_SLIPPAGE_BPS,
+            feature_matrices,
+            random_search_iterations,
         )
-        economic_outcomes = _economic_outcomes_by_index(bars, labels)
-        for profile in V4H_FEATURE_PROFILES:
-            experiment = run_v4h_experiment(
-                pair,
-                timeframe,
-                bars,
-                labels,
-                feature_matrices,
-                scenario=arm,
-                feature_profile=profile,
-                calibration_fraction=V4T_CALIBRATION_FRACTION,
-                minimum_hold_precision=DEFAULT_MINIMUM_HOLD_PRECISION,
-                minimum_hold_recall=DEFAULT_MINIMUM_HOLD_RECALL,
-                random_search_iterations=random_search_iterations,
-                tuning_objective="CUSTOM_ECONOMIC_SCORE",
-                economic_outcomes=economic_outcomes,
-                estimated_cost_bps=V4T_ESTIMATED_ROUND_TRIP_COST_BPS,
-                split_horizon_candles=24,
-            )
-            status = str(experiment.get("status"))
-            sample_gate = experiment.get("sample_gate")
-            if not isinstance(sample_gate, dict):
-                raise ValueError("v4t_sample_gate_diagnostics_missing")
-            experiment_record: dict[str, Any] = {
-                "arm": str(arm["name"]),
-                "geometry": str(arm["geometry"]),
-                "pair": pair,
-                "timeframe": timeframe,
-                "feature_profile": profile,
-                "status": status,
-                "sample_gate": dict(sample_gate),
-                "train_rows": int(experiment["train_rows"]),
-                "validation_rows": int(experiment["validation_rows"]),
-                "sample_signature_sha256": str(experiment["sample_signature_sha256"]),
-                "split": dict(experiment["split"]),
-                "label_distribution": dict(experiment["label_distribution"]),
-                "label_audit": dict(experiment["label_audit"]),
-                "model_variants": {},
-            }
-            experiments.append(experiment_record)
-            if status in V4T_SAMPLE_GATE_SKIP_STATUSES:
-                for policy in weighting_policy_specs():
-                    candidates.append(
-                        _skipped_candidate_record(
-                            arm, pair, timeframe, profile, policy, experiment
-                        )
-                    )
-                continue
-            if status != "TRAINED" or sample_gate.get("status") != "PASS":
-                raise ValueError(f"v4t_experiment_status_invalid:{status}")
-            variants = experiment.get("model_variants")
-            expected_policies = set(weighting_policy_specs())
-            if not isinstance(variants, dict) or set(variants) != expected_policies:
-                raise ValueError("v4t_model_variant_contract_mismatch")
-            for policy, variant in variants.items():
-                candidate, rows = _evaluate_trained_variant(
-                    arm, pair, timeframe, bars, profile, policy, experiment, variant
-                )
-                candidates.append(candidate)
-                probability_rows.extend(rows)
-                experiment_record["model_variants"][policy] = {
-                    "candidate_id": candidate["candidate_id"],
-                    "selected_parameters": dict(candidate["selected_parameters"]),
-                    "tuning_objective": candidate["tuning_objective"],
-                    "confidence_threshold_selection": dict(
-                        candidate["confidence_threshold_selection"]
-                    ),
-                    "metrics": dict(candidate["metrics"]),
-                }
+        experiments.extend(arm_experiments)
+        candidates.extend(arm_candidates)
+        probability_rows.extend(arm_probabilities)
     return experiments, candidates, probability_rows
-
-
-def run_v4t_experiments(
-    datasets: dict[str, DataFrame],
-    *,
-    random_search_iterations: int = V4T_RANDOM_SEARCH_ITERATIONS,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+def _validate_v4t_run_inputs(
+    datasets: dict[str, DataFrame], random_search_iterations: int
+) -> None:
     if (
         isinstance(random_search_iterations, bool)
         or not isinstance(random_search_iterations, int)
@@ -604,6 +767,12 @@ def run_v4t_experiments(
         raise ValueError("v4t_random_search_iterations_invalid")
     if set(datasets) != set(SYMBOLS):
         raise ValueError("v4t_dataset_symbol_contract_mismatch")
+
+
+def _collect_v4t_contexts(
+    datasets: dict[str, DataFrame],
+    random_search_iterations: int,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     experiments: list[dict[str, Any]] = []
     candidates: list[dict[str, Any]] = []
     probability_rows: list[dict[str, Any]] = []
@@ -620,6 +789,14 @@ def run_v4t_experiments(
             experiments.extend(context_experiments)
             candidates.extend(context_candidates)
             probability_rows.extend(context_probabilities)
+    return experiments, candidates, probability_rows
+
+
+def _validate_v4t_run_outputs(
+    experiments: list[dict[str, Any]],
+    candidates: list[dict[str, Any]],
+    probability_rows: list[dict[str, Any]],
+) -> None:
     if len(experiments) != V4T_EXPECTED_EXPERIMENTS:
         raise RuntimeError("v4t_experiment_count_mismatch")
     if len(candidates) != V4T_EXPECTED_CANDIDATES:
@@ -633,9 +810,19 @@ def run_v4t_experiments(
     )
     if len(probability_rows) != expected_probability_rows:
         raise RuntimeError("v4t_row_level_probability_count_mismatch")
+
+
+def run_v4t_experiments(
+    datasets: dict[str, DataFrame],
+    *,
+    random_search_iterations: int = V4T_RANDOM_SEARCH_ITERATIONS,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    _validate_v4t_run_inputs(datasets, random_search_iterations)
+    experiments, candidates, probability_rows = _collect_v4t_contexts(
+        datasets, random_search_iterations
+    )
+    _validate_v4t_run_outputs(experiments, candidates, probability_rows)
     return experiments, candidates, probability_rows
-
-
 def _profit_factor(pnls: list[float]) -> float | None:
     gross_profit = sum(value for value in pnls if value > 0.0)
     gross_loss = abs(sum(value for value in pnls if value < 0.0))
@@ -686,10 +873,11 @@ def _candidate_comparison_rows(
     return rows
 
 
-def _arm_aggregate(candidates: list[dict[str, Any]], arm_name: str) -> dict[str, Any]:
-    selected = [item for item in candidates if item["arm"] == arm_name]
-    trained = [item for item in selected if item["status"] == "TRAINED"]
-    trades = [trade for item in trained for trade in item["trades"]]
+def _arm_trade_metrics(
+    selected: list[dict[str, Any]],
+    trained: list[dict[str, Any]],
+    trades: list[dict[str, Any]],
+) -> dict[str, Any]:
     net_pnls = [float(item["net_pnl_usd"]) for item in trades]
     gross_pnls = [float(item["gross_market_pnl_usd"]) for item in trades]
     drawdowns = [
@@ -716,8 +904,14 @@ def _arm_aggregate(candidates: list[dict[str, Any]], arm_name: str) -> dict[str,
         "mean_candidate_max_drawdown_percent": (
             round(float(np.mean(drawdowns)), 8) if drawdowns else None
         ),
+    }
+
+
+def _arm_risk_metrics(trained: list[dict[str, Any]]) -> dict[str, int]:
+    return {
         "strict_economic_pass_candidate_count": sum(
-            bool(item["metrics"]["economic_candidate_gate_passed"]) for item in trained
+            bool(item["metrics"]["economic_candidate_gate_passed"])
+            for item in trained
         ),
         "below_soft_sample_target_candidate_count": sum(
             not bool(item["metrics"]["minimum_trade_count_soft_target_met"])
@@ -726,6 +920,16 @@ def _arm_aggregate(candidates: list[dict[str, Any]], arm_name: str) -> dict[str,
     }
 
 
+def _arm_aggregate(
+    candidates: list[dict[str, Any]], arm_name: str
+) -> dict[str, Any]:
+    selected = [item for item in candidates if item["arm"] == arm_name]
+    trained = [item for item in selected if item["status"] == "TRAINED"]
+    trades = [trade for item in trained for trade in item["trades"]]
+    return {
+        **_arm_trade_metrics(selected, trained, trades),
+        **_arm_risk_metrics(trained),
+    }
 def _trade_rows(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for candidate in candidates:
