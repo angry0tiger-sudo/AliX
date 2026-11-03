@@ -83,7 +83,9 @@ def test_custom_economic_score_penalizes_drawdown_and_low_trade_count() -> None:
 
 def test_custom_economic_score_rejects_missing_outcomes() -> None:
     features = DataFrame({"x": [0, 1]})
-    with pytest.raises(ValueError, match="tuning_economic_outcomes_missing_or_non_finite"):
+    with pytest.raises(
+        ValueError, match="tuning_economic_outcomes_missing_or_non_finite"
+    ):
         Custom_Economic_Score(
             FixedPredictions(["BUY", "HOLD"]),
             features,
@@ -172,7 +174,9 @@ def test_v4t_threshold_fails_closed_when_calibration_has_no_raw_buy() -> None:
     assert result["selected_threshold"] == 1.0
 
 
-def test_v4t_probability_rows_preserve_split_timestamp_label_and_probabilities() -> None:
+def test_v4t_probability_rows_preserve_split_timestamp_label_and_probabilities() -> (
+    None
+):
     records = [
         _probability_record(10, 0.7, 0.2, 0.1),
         _probability_record(11, 0.6, 0.3, 0.1),
@@ -202,7 +206,11 @@ def test_v4t_probability_rows_preserve_split_timestamp_label_and_probabilities()
 def test_v4t_target_geometry_removes_two_to_one_ratio() -> None:
     assert len(v4t.V4T_ARMS) == 2
     assert {
-        (arm["take_profit_multiplier"], arm["stop_loss_multiplier"], arm["horizon_candles"])
+        (
+            arm["take_profit_multiplier"],
+            arm["stop_loss_multiplier"],
+            arm["horizon_candles"],
+        )
         for arm in v4t.V4T_ARMS
     } == {(1.0, 1.0, 24), (1.5, 1.0, 24)}
     assert all(arm["take_profit_multiplier"] != 2.0 for arm in v4t.V4T_ARMS)

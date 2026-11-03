@@ -597,7 +597,8 @@ def _candidate_result_records(cv_results: dict[str, Any]) -> list[dict[str, Any]
     )
     custom = np.asarray(
         cv_results.get(
-            "mean_test_custom_economic_score", np.full(len(cv_results["params"]), np.nan)
+            "mean_test_custom_economic_score",
+            np.full(len(cv_results["params"]), np.nan),
         ),
         dtype=float,
     )

@@ -66,8 +66,8 @@ V4T_CALIBRATION_FRACTION = DEFAULT_CALIBRATION_FRACTION
 V4T_SOFT_TRADE_TARGET = 30
 V4T_MAXIMUM_DRAWDOWN = 0.15
 V4T_RANDOM_SEARCH_ITERATIONS = 9
-V4T_EXPECTED_EXPERIMENTS = len(SYMBOLS) * len(V4T_TIMEFRAMES) * len(V4T_ARMS) * len(
-    V4H_FEATURE_PROFILES
+V4T_EXPECTED_EXPERIMENTS = (
+    len(SYMBOLS) * len(V4T_TIMEFRAMES) * len(V4T_ARMS) * len(V4H_FEATURE_PROFILES)
 )
 V4T_EXPECTED_CANDIDATES = V4T_EXPECTED_EXPERIMENTS * len(weighting_policy_specs())
 V4T_SAMPLE_GATE_SKIP_STATUSES = (
@@ -284,9 +284,7 @@ def _apply_soft_sample_diagnostics(metrics: dict[str, Any]) -> dict[str, Any]:
         0.0,
         float(V4T_SOFT_TRADE_TARGET - trade_count) / float(V4T_SOFT_TRADE_TARGET),
     )
-    pf_pass = infinite_pf or (
-        profit_factor is not None and float(profit_factor) > 1.5
-    )
+    pf_pass = infinite_pf or (profit_factor is not None and float(profit_factor) > 1.5)
     drawdown_pass = drawdown < V4T_MAXIMUM_DRAWDOWN
     result.pop("trade_count_gate_passed", None)
     result.pop("minimum_trade_count_for_acceptance", None)
@@ -296,12 +294,8 @@ def _apply_soft_sample_diagnostics(metrics: dict[str, Any]) -> dict[str, Any]:
         else "SAMPLE_TARGET_MET"
     )
     result["minimum_trade_count_soft_target"] = V4T_SOFT_TRADE_TARGET
-    result["minimum_trade_count_soft_target_met"] = (
-        trade_count >= V4T_SOFT_TRADE_TARGET
-    )
-    result["trade_count_soft_shortfall"] = max(
-        0, V4T_SOFT_TRADE_TARGET - trade_count
-    )
+    result["minimum_trade_count_soft_target_met"] = trade_count >= V4T_SOFT_TRADE_TARGET
+    result["trade_count_soft_shortfall"] = max(0, V4T_SOFT_TRADE_TARGET - trade_count)
     result["trade_count_soft_penalty_factor"] = round(trade_count_penalty, 8)
     result["profit_factor_gate_passed"] = bool(pf_pass)
     result["drawdown_gate_passed"] = bool(drawdown_pass)
@@ -404,10 +398,9 @@ def _evaluate_trained_variant(
         str(arm["name"]), pair, timeframe, profile, policy
     )
     all_probability_records = variant.get("validation_probabilities")
-    if (
-        not isinstance(all_probability_records, list)
-        or len(all_probability_records) != int(experiment["validation_rows"])
-    ):
+    if not isinstance(all_probability_records, list) or len(
+        all_probability_records
+    ) != int(experiment["validation_rows"]):
         raise ValueError("v4t_validation_probability_count_mismatch")
     threshold_selection = select_dynamic_buy_confidence_threshold(
         all_probability_records
@@ -471,9 +464,7 @@ def _evaluate_trained_variant(
             variant["hyperparameter_tuning"]["selected_parameters"]
         ),
         "tuning_diagnostics": dict(variant["hyperparameter_tuning"]),
-        "validation_classification_metrics": dict(
-            variant["classification_metrics"]
-        ),
+        "validation_classification_metrics": dict(variant["classification_metrics"]),
         "hold_metrics_argmax_full_validation": hold_metrics,
         "confidence_threshold_selection": threshold_selection,
         "selected_hold_threshold": V4T_HOLD_THRESHOLD,
@@ -514,9 +505,7 @@ def _run_context(
     bars = resample_ohlcv(minute_candles, timeframe)
     if len(bars) < 100:
         raise ValueError(f"v4t_insufficient_resampled_bars:{symbol}:{timeframe}")
-    feature_matrices = build_feature_profiles(
-        bars, profile_names=V4H_FEATURE_PROFILES
-    )
+    feature_matrices = build_feature_profiles(bars, profile_names=V4H_FEATURE_PROFILES)
     experiments: list[dict[str, Any]] = []
     candidates: list[dict[str, Any]] = []
     probability_rows: list[dict[str, Any]] = []
@@ -563,9 +552,7 @@ def _run_context(
                 "sample_gate": dict(sample_gate),
                 "train_rows": int(experiment["train_rows"]),
                 "validation_rows": int(experiment["validation_rows"]),
-                "sample_signature_sha256": str(
-                    experiment["sample_signature_sha256"]
-                ),
+                "sample_signature_sha256": str(experiment["sample_signature_sha256"]),
                 "split": dict(experiment["split"]),
                 "label_distribution": dict(experiment["label_distribution"]),
                 "label_audit": dict(experiment["label_audit"]),
@@ -655,7 +642,9 @@ def _profit_factor(pnls: list[float]) -> float | None:
     return round(gross_profit / gross_loss, 8) if gross_loss > 0.0 else None
 
 
-def _candidate_comparison_rows(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _candidate_comparison_rows(
+    candidates: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for candidate in candidates:
         metrics = candidate["metrics"]
@@ -728,8 +717,7 @@ def _arm_aggregate(candidates: list[dict[str, Any]], arm_name: str) -> dict[str,
             round(float(np.mean(drawdowns)), 8) if drawdowns else None
         ),
         "strict_economic_pass_candidate_count": sum(
-            bool(item["metrics"]["economic_candidate_gate_passed"])
-            for item in trained
+            bool(item["metrics"]["economic_candidate_gate_passed"]) for item in trained
         ),
         "below_soft_sample_target_candidate_count": sum(
             not bool(item["metrics"]["minimum_trade_count_soft_target_met"])
@@ -844,7 +832,9 @@ def _write_csv(
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=list(fieldnames), extrasaction="raise")
+        writer = csv.DictWriter(
+            handle, fieldnames=list(fieldnames), extrasaction="raise"
+        )
         writer.writeheader()
         writer.writerows(rows)
 
@@ -1086,9 +1076,9 @@ def run_v4t(
                 "experiment_count": report["experiment_count"],
                 "candidate_count": report["candidate_count"],
                 "trained_candidate_count": report["trained_candidate_count"],
-                "row_level_probability_count": report[
-                    "row_level_probability_artifact"
-                ]["row_count"],
+                "row_level_probability_count": report["row_level_probability_artifact"][
+                    "row_count"
+                ],
                 "promotion_status": report["promotion_status"],
                 "Champion": None,
                 "order_permission": False,
