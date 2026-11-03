@@ -43,7 +43,7 @@ jobs:
         run: |
           set -euo pipefail
           python -m scripts.audit_v4s_threshold_calibration \
-            --artifact "$RUNNER_TEMP/v4r-run25" \
+            --artifact "$RUNNER_TEMP/v4r-run25/alix-v4r-economic-architecture" \
             --output "$RUNNER_TEMP/threshold_calibration_audit.md"
           test -s "$RUNNER_TEMP/threshold_calibration_audit.md"
 
