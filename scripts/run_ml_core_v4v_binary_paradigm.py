@@ -197,9 +197,7 @@ def _binary_eligible_indices(features: DataFrame, labels: DataFrame) -> set[int]
         & labels["label"].isin(BINARY_BUY_LABELS)
         & labels["label_end_idx"].notna()
     )
-    return {
-        int(index) for index in np.flatnonzero(eligible_mask.to_numpy(dtype=bool))
-    }
+    return {int(index) for index in np.flatnonzero(eligible_mask.to_numpy(dtype=bool))}
 
 
 def _retained_outer_split_indices(
@@ -306,17 +304,11 @@ def _binary_outer_split(
 
 
 def _binary_class_counts(labels: Series) -> dict[str, int]:
-    return {
-        label: int((labels == label).sum()) for label in BINARY_BUY_LABELS
-    }
+    return {label: int((labels == label).sum()) for label in BINARY_BUY_LABELS}
 
 
-def _classes_below_minimum(
-    counts: dict[str, int], minimum_samples: int
-) -> list[str]:
-    return [
-        label for label, count in counts.items() if count < minimum_samples
-    ]
+def _classes_below_minimum(counts: dict[str, int], minimum_samples: int) -> list[str]:
+    return [label for label, count in counts.items() if count < minimum_samples]
 
 
 def _binary_sample_gate_status(
@@ -336,9 +328,7 @@ def _binary_sample_gate(
 ) -> dict[str, Any]:
     train_counts = _binary_class_counts(train_labels)
     validation_counts = _binary_class_counts(validation_labels)
-    missing = [
-        label for label, count in train_counts.items() if count == 0
-    ]
+    missing = [label for label, count in train_counts.items() if count == 0]
     insufficient_train = _classes_below_minimum(
         train_counts, MIN_TRAIN_SAMPLES_PER_CLASS
     )
@@ -417,9 +407,7 @@ def _validate_economic_label_columns(labels: DataFrame) -> None:
         raise ValueError("v4v_economic_label_columns_missing")
 
 
-def _economic_exit_reference(
-    bars: DataFrame, row: Any, label_end: int
-) -> float:
+def _economic_exit_reference(bars: DataFrame, row: Any, label_end: int) -> float:
     reason = str(getattr(row, "exit_reason"))
     if reason == "TP_HIT":
         return float(getattr(row, "take_profit_price"))
@@ -430,9 +418,7 @@ def _economic_exit_reference(
     raise ValueError("v4v_economic_exit_reason_invalid")
 
 
-def _economic_outcome_for_label(
-    bars: DataFrame, row: Any
-) -> tuple[int, float] | None:
+def _economic_outcome_for_label(bars: DataFrame, row: Any) -> tuple[int, float] | None:
     source_label = getattr(row, "source_label")
     if pd.isna(source_label) or str(source_label) not in {"BUY", "SELL", "HOLD"}:
         return None
@@ -718,9 +704,7 @@ def _profit_factor(values: list[float]) -> float | None:
     return round(gross_profit / gross_loss, 8)
 
 
-def _trade_values(
-    trades: list[dict[str, Any]], field_name: str
-) -> list[float]:
+def _trade_values(trades: list[dict[str, Any]], field_name: str) -> list[float]:
     return [float(item[field_name]) for item in trades]
 
 
@@ -768,10 +752,7 @@ def _trade_cost_metrics(trades: list[dict[str, Any]]) -> dict[str, float]:
 def _trade_metrics(trades: list[dict[str, Any]]) -> dict[str, Any]:
     net_values = _trade_values(trades, "net_pnl_usd")
     net_metrics = _trade_side_metrics(trades, "net_pnl_usd", "net")
-    gross_metrics = _trade_side_metrics(
-        trades, "gross_market_pnl_usd", "gross"
-    )
-    net_metrics["net_pnl_usd"] = net_metrics.pop("net_pnl_usd")
+    gross_metrics = _trade_side_metrics(trades, "gross_market_pnl_usd", "gross")
     gross_metrics["gross_market_pnl_usd"] = gross_metrics.pop("gross_pnl_usd")
     return {
         **_trade_count_metrics(trades, net_values),
@@ -1168,9 +1149,7 @@ def _run_timeframe_experiments(
     bars = resample_ohlcv(source_bars, timeframe)
     if len(bars) < 100:
         raise ValueError(f"v4v_insufficient_resampled_bars:{symbol}:{timeframe}")
-    feature_matrices = build_feature_profiles(
-        bars, profile_names=V4V_FEATURE_PROFILES
-    )
+    feature_matrices = build_feature_profiles(bars, profile_names=V4V_FEATURE_PROFILES)
     experiments: list[dict[str, Any]] = []
     candidates: list[dict[str, Any]] = []
     probability_rows: list[dict[str, Any]] = []
@@ -1217,15 +1196,11 @@ def run_v4v_experiments(
     probability_rows: list[dict[str, Any]] = []
     for symbol in SYMBOLS:
         for timeframe in V4V_TIMEFRAMES:
-            batch = _run_timeframe_experiments(
-                symbol, timeframe, datasets[symbol]
-            )
+            batch = _run_timeframe_experiments(symbol, timeframe, datasets[symbol])
             experiments.extend(batch[0])
             candidates.extend(batch[1])
             probability_rows.extend(batch[2])
-    _validate_v4v_experiment_batch(
-        experiments, candidates, probability_rows
-    )
+    _validate_v4v_experiment_batch(experiments, candidates, probability_rows)
     return experiments, candidates, probability_rows
 
 
@@ -1270,14 +1245,10 @@ def _arm_candidate_sets(
 
 
 def _arm_trade_list(trained: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [
-        trade for candidate in trained for trade in candidate["trades"]
-    ]
+    return [trade for candidate in trained for trade in candidate["trades"]]
 
 
-def _arm_candidate_drawdowns(
-    trained: list[dict[str, Any]]
-) -> list[float]:
+def _arm_candidate_drawdowns(trained: list[dict[str, Any]]) -> list[float]:
     return [
         float(candidate["metrics"]["max_drawdown_percent"])
         for candidate in trained
@@ -1292,9 +1263,7 @@ def _arm_economic_pass_count(trained: list[dict[str, Any]]) -> int:
     )
 
 
-def _arm_aggregate(
-    candidates: list[dict[str, Any]], arm_name: str
-) -> dict[str, Any]:
+def _arm_aggregate(candidates: list[dict[str, Any]], arm_name: str) -> dict[str, Any]:
     selected, trained = _arm_candidate_sets(candidates, arm_name)
     trades = _arm_trade_list(trained)
     drawdowns = _arm_candidate_drawdowns(trained)
