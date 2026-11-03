@@ -831,7 +831,7 @@ def _evaluate_trained_candidate(
     metrics = dict(replay["metrics"])
     metrics.update(_trade_metrics(trades))
     profit_factor_infinite = bool(
-        metrics.get("profit_factor_infinite_no_losses", False)
+        metrics.get("net_profit_factor_infinite_no_losses", False)
     )
     profit_factor = metrics.get("profit_factor_net_of_costs")
     profit_factor_passed = profit_factor_infinite or (
