@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 import numpy as np
 import pandas as pd
 import pytest
@@ -418,7 +419,7 @@ def test_v4v_arm_aggregate_keeps_skips_out_of_economic_totals() -> None:
         "fees_usd": 0.25,
         "slippage_cost_usd": 0.25,
     }
-    candidates = [
+    candidates: list[dict[str, Any]] = [
         {
             "arm": "PRIMARY_ASYMMETRIC_1_5R",
             "status": "TRAINED",
