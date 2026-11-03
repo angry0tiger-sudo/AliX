@@ -213,7 +213,7 @@ The prediction action below uses the repository's persisted V4-T rule: HOLD only
 
 **Baseline / weight-balanced**
 
-| Actual \ Predicted | BUY | SELL | HOLD |
+| Predicted \ Actual | BUY | SELL | HOLD |
 |---|---:|---:|---:|
 | BUY | 198 | 244 | 0 |
 | SELL | 648 | 970 | 7 |
@@ -226,7 +226,7 @@ The prediction action below uses the repository's persisted V4-T rule: HOLD only
 
 **Baseline+Trend / weight-balanced**
 
-| Actual \ Predicted | BUY | SELL | HOLD |
+| Predicted \ Actual | BUY | SELL | HOLD |
 |---|---:|---:|---:|
 | BUY | 213 | 229 | 0 |
 | SELL | 658 | 965 | 6 |
