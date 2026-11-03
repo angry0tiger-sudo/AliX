@@ -15,7 +15,9 @@ REPORT_SCHEMA = "alix.ml-core.v4r-economic-architecture.v1"
 EXPECTED_COMMIT_SHA = "1837089f29d5abdb87b45a55e2a49a51f804d926"
 EXPECTED_RUN_ID = 41518486550
 EXPECTED_ARTIFACT_ID = 13180755166
-EXPECTED_ARTIFACT_SHA256 = "74e9fe906ba288c7a87f67a27fb252273ff4181e8ec411919434f1219047aa36"
+EXPECTED_ARTIFACT_SHA256 = (
+    "74e9fe906ba288c7a87f67a27fb252273ff4181e8ec411919434f1219047aa36"
+)
 ARM_NAMES = (
     "CONTROL_SYMMETRIC_BUY_F1",
     "GEOMETRY_2R_BUY_F1",
@@ -127,16 +129,17 @@ def _pooled_label_summary(
         for context in contexts.values():
             distribution = context["label_distribution"][split]
             total += int(distribution["total"])
-            counts.update({
-                label: int(details["count"])
-                for label, details in distribution["classes"].items()
-            })
+            counts.update(
+                {
+                    label: int(details["count"])
+                    for label, details in distribution["classes"].items()
+                }
+            )
         splits[split] = {
             "total": total,
             "counts": dict(counts),
             "percent": {
-                label: round(count / total * 100, 4)
-                for label, count in counts.items()
+                label: round(count / total * 100, 4) for label, count in counts.items()
             },
         }
 
@@ -145,10 +148,12 @@ def _pooled_label_summary(
     for context in contexts.values():
         distribution = context["exit_reason_distribution"]
         exit_total += int(distribution["total"])
-        exit_counts.update({
-            reason: int(details["count"])
-            for reason, details in distribution["reasons"].items()
-        })
+        exit_counts.update(
+            {
+                reason: int(details["count"])
+                for reason, details in distribution["reasons"].items()
+            }
+        )
     return {
         "unique_pair_timeframe_contexts": len(contexts),
         "splits": splits,
@@ -203,8 +208,12 @@ def _probability_summary(
         "model_variant_count": variant_count,
         "threshold_optimization_statuses": dict(optimization_statuses),
         "calibration_hold_positive_support": {
-            "minimum": min(calibration_hold_support) if calibration_hold_support else None,
-            "maximum": max(calibration_hold_support) if calibration_hold_support else None,
+            "minimum": min(calibration_hold_support)
+            if calibration_hold_support
+            else None,
+            "maximum": max(calibration_hold_support)
+            if calibration_hold_support
+            else None,
             "mean": _mean_metric([float(item) for item in calibration_hold_support]),
         },
         "mean_metrics": {
@@ -216,7 +225,8 @@ def _probability_summary(
 def _arm_activity_summary(report: dict[str, Any], arm_name: str) -> dict[str, Any]:
     arm = next(item for item in report["arms"] if item["name"] == arm_name)
     candidates = [
-        candidate for candidate in report["candidates"]
+        candidate
+        for candidate in report["candidates"]
         if candidate.get("arm") == arm_name
     ]
     thresholds: Counter[str] = Counter()
@@ -257,20 +267,18 @@ def _arm_activity_summary(report: dict[str, Any], arm_name: str) -> dict[str, An
 def analyze_report(report: dict[str, Any]) -> dict[str, Any]:
     _validate_source_report(report)
     experiments = report["experiments"]
-    activity = {
-        name: _arm_activity_summary(report, name) for name in ARM_NAMES
-    }
-    labels = {
-        name: _pooled_label_summary(experiments, name) for name in ARM_NAMES
-    }
+    activity = {name: _arm_activity_summary(report, name) for name in ARM_NAMES}
+    labels = {name: _pooled_label_summary(experiments, name) for name in ARM_NAMES}
     probabilities = {
         name: _probability_summary(experiments, name) for name in ARM_NAMES
     }
-    probability_fields = _row_level_probability_fields({
-        "candidates": report.get("candidates", []),
-        "experiments": experiments,
-        "trade_rows": report.get("trade_rows", []),
-    })
+    probability_fields = _row_level_probability_fields(
+        {
+            "candidates": report.get("candidates", []),
+            "experiments": experiments,
+            "trade_rows": report.get("trade_rows", []),
+        }
+    )
     return {
         "commit_sha": report["commit_sha"],
         "model_training_performed_in_source_run": bool(
@@ -283,7 +291,8 @@ def analyze_report(report: dict[str, Any]) -> dict[str, Any]:
         "row_level_probability_fields": probability_fields,
         "row_level_probabilities_available": bool(probability_fields),
         "counterfactual_sweep_status": (
-            "COMPUTABLE" if probability_fields
+            "COMPUTABLE"
+            if probability_fields
             else "NOT_COMPUTABLE_MISSING_ROW_LEVEL_PROBABILITIES"
         ),
         "safety": report["safety"],
@@ -314,10 +323,13 @@ def _render_report(summary: dict[str, Any]) -> str:
     ]
     for name in ARM_NAMES:
         item = activity[name]
-        thresholds = ", ".join(
-            f"{value} ({count})"
-            for value, count in sorted(item["confidence_threshold_counts"].items())
-        ) or "موجود نیست"
+        thresholds = (
+            ", ".join(
+                f"{value} ({count})"
+                for value, count in sorted(item["confidence_threshold_counts"].items())
+            )
+            or "موجود نیست"
+        )
         ratio = item["accepted_buy_percent_of_raw"]
         ratio_text = "موجود نیست" if ratio is None else f"{ratio:.4f}%"
         lines.append(
@@ -326,40 +338,50 @@ def _render_report(summary: dict[str, Any]) -> str:
             f"| {ratio_text} | {item['trade_count']} "
             f"| {item['combined_net_profit_factor']:.6f} |"
         )
-    lines.extend([
-        "",
-        "برای بازوهای ۱ و ۳ آستانه ثبت‌شده 0.60 است؛ آستانه 0.90 برای بازوی ۳ در Artifact وجود ندارد. اختلاف پذیرش سیگنال با آستانه یکسان مشاهده می‌شود، اما این داده aggregate علت را بین تابع هدف، توزیع احتمال خروجی و انتخاب Candidate تفکیک نمی‌کند.",
-        "",
-        "### وضعیت Threshold Optimization",
-        "",
-        "| بازو | Variant | وضعیت بهینه‌سازی | حمایت مثبت HOLD در بخش کالیبراسیون |",
-        "|---|---:|---|---:|",
-    ])
+    lines.extend(
+        [
+            "",
+            "برای بازوهای ۱ و ۳ آستانه ثبت‌شده 0.60 است؛ آستانه 0.90 برای بازوی ۳ در Artifact وجود ندارد. اختلاف پذیرش سیگنال با آستانه یکسان مشاهده می‌شود، اما این داده aggregate علت را بین تابع هدف، توزیع احتمال خروجی و انتخاب Candidate تفکیک نمی‌کند.",
+            "",
+            "### وضعیت Threshold Optimization",
+            "",
+            "| بازو | Variant | وضعیت بهینه‌سازی | حمایت مثبت HOLD در بخش کالیبراسیون |",
+            "|---|---:|---|---:|",
+        ]
+    )
     for name in ARM_NAMES:
         item = probability[name]
-        statuses = ", ".join(
-            f"{status}: {count}"
-            for status, count in sorted(item["threshold_optimization_statuses"].items())
-        ) or "موجود نیست"
+        statuses = (
+            ", ".join(
+                f"{status}: {count}"
+                for status, count in sorted(
+                    item["threshold_optimization_statuses"].items()
+                )
+            )
+            or "موجود نیست"
+        )
         support = item["calibration_hold_positive_support"]
         support_text = (
-            "موجود نیست" if support["minimum"] is None
+            "موجود نیست"
+            if support["minimum"] is None
             else f"{support['minimum']} تا {support['maximum']} (میانگین {support['mean']:.2f})"
         )
         lines.append(
             f"| {name} | {item['model_variant_count']} | {statuses} | {support_text} |"
         )
-    lines.extend([
-        "",
-        "تمام Variantهای دارای خروجی، وضعیت SKIPPED_INSUFFICIENT_CALIBRATION_SAMPLES و selected_threshold=null دارند. کف حمایت مثبت HOLD برابر ۳۰ است و نمونه کالیبراسیون این کف را تأمین نکرده است.",
-        "",
-        "## 2. توزیع برچسب در هندسه ۱:۱ و ۲:۱ ATR",
-        "",
-        "برای جلوگیری از دوباره‌شماری، از هر زوج pair/timeframe فقط یک توزیع استفاده شده است؛ دو Feature Profile توزیع یکسانی داشتند.",
-        "",
-        "| هندسه | Split | BUY | HOLD | SELL |",
-        "|---|---|---:|---:|---:|",
-    ])
+    lines.extend(
+        [
+            "",
+            "تمام Variantهای دارای خروجی، وضعیت SKIPPED_INSUFFICIENT_CALIBRATION_SAMPLES و selected_threshold=null دارند. کف حمایت مثبت HOLD برابر ۳۰ است و نمونه کالیبراسیون این کف را تأمین نکرده است.",
+            "",
+            "## 2. توزیع برچسب در هندسه ۱:۱ و ۲:۱ ATR",
+            "",
+            "برای جلوگیری از دوباره‌شماری، از هر زوج pair/timeframe فقط یک توزیع استفاده شده است؛ دو Feature Profile توزیع یکسانی داشتند.",
+            "",
+            "| هندسه | Split | BUY | HOLD | SELL |",
+            "|---|---|---:|---:|---:|",
+        ]
+    )
     for geometry, name in (("۱:۱ ATR", ARM_NAMES[0]), ("۲:۱ ATR", ARM_NAMES[1])):
         for split in ("train", "validation"):
             values = labels[name]["splits"][split]["percent"]
@@ -367,13 +389,15 @@ def _render_report(summary: dict[str, Any]) -> str:
                 f"| {geometry} | {split} | {values.get('BUY', 0):.2f}% "
                 f"| {values.get('HOLD', 0):.2f}% | {values.get('SELL', 0):.2f}% |"
             )
-    lines.extend([
-        "",
-        "### توزیع خروج Triple-Barrier",
-        "",
-        "| هندسه | TP_HIT | SL_HIT | HORIZON_EXPIRY | COLLISION |",
-        "|---|---:|---:|---:|---:|",
-    ])
+    lines.extend(
+        [
+            "",
+            "### توزیع خروج Triple-Barrier",
+            "",
+            "| هندسه | TP_HIT | SL_HIT | HORIZON_EXPIRY | COLLISION |",
+            "|---|---:|---:|---:|---:|",
+        ]
+    )
     for geometry, name in (("۱:۱ ATR", ARM_NAMES[0]), ("۲:۱ ATR", ARM_NAMES[1])):
         values = labels[name]["exit_reasons"]["percent"]
         lines.append(
@@ -382,15 +406,17 @@ def _render_report(summary: dict[str, Any]) -> str:
             f"| {values.get('HORIZON_EXPIRY', 0):.2f}% "
             f"| {values.get('COLLISION', 0):.2f}% |"
         )
-    lines.extend([
-        "",
-        "سهم HOLD در هندسه ۲:۱ افزایش نیافته است. در Validation از ۴٫۳۸٪ به ۳٫۲۴٪ کاهش دارد. در عوض SL_HIT از ۶۱٫۱۱٪ به ۷۳٫۹۰٪ افزایش و TP_HIT از ۳۲٫۵۵٪ به ۲۱٫۷۱٪ کاهش یافته است. فرض «افزایش HOLD به علت افق کوتاه» پشتیبانی نمی‌شود؛ این داده مزیت افق ۴۸/۷۲ کندلی را نیز اثبات نمی‌کند.",
-        "",
-        "## 3. Probability Diagnostics و محدودیت بازپخش آستانه",
-        "",
-        "| بازو | Variant | میانگین Hold AUC در Forward Validation | میانگین Hold PR-AUC در Forward Validation |",
-        "|---|---:|---:|---:|",
-    ])
+    lines.extend(
+        [
+            "",
+            "سهم HOLD در هندسه ۲:۱ افزایش نیافته است. در Validation از ۴٫۳۸٪ به ۳٫۲۴٪ کاهش دارد. در عوض SL_HIT از ۶۱٫۱۱٪ به ۷۳٫۹۰٪ افزایش و TP_HIT از ۳۲٫۵۵٪ به ۲۱٫۷۱٪ کاهش یافته است. فرض «افزایش HOLD به علت افق کوتاه» پشتیبانی نمی‌شود؛ این داده مزیت افق ۴۸/۷۲ کندلی را نیز اثبات نمی‌کند.",
+            "",
+            "## 3. Probability Diagnostics و محدودیت بازپخش آستانه",
+            "",
+            "| بازو | Variant | میانگین Hold AUC در Forward Validation | میانگین Hold PR-AUC در Forward Validation |",
+            "|---|---:|---:|---:|",
+        ]
+    )
     for name in ARM_NAMES:
         item = probability[name]
         metrics = item["mean_metrics"]
@@ -401,45 +427,47 @@ def _render_report(summary: dict[str, Any]) -> str:
         lines.append(
             f"| {name} | {item['model_variant_count']} | {auc_text} | {pr_text} |"
         )
-    lines.extend([
-        "",
-        f"- Probability ردیفی در Artifact موجود است: {summary['row_level_probabilities_available']}.",
-        f"- وضعیت Counterfactual Sweep: {summary['counterfactual_sweep_status']}.",
-        "- Artifact فقط خلاصه‌های aggregate مانند Brier، ECE، AUC و PR-AUC دارد؛ trade_rows شامل timestamp، قیمت‌ها، خروج، هزینه و PnL است، نه Probability مربوط به هر ردیف.",
-        "",
-        "### سناریوهای آستانه درخواستی",
-        "",
-        "| بازو | آستانه | تعداد معامله | PF خالص | وضعیت |",
-        "|---|---:|---:|---:|---|",
-        f"| بازوی ۳: Economic Proxy | 0.60 (واقعی) | {activity[ARM_NAMES[2]]['trade_count']} | {activity[ARM_NAMES[2]]['combined_net_profit_factor']:.6f} | مقدار واقعی Artifact |",
-        "| بازوی ۳: Economic Proxy | 0.70 | موجود نیست | موجود نیست | قابل محاسبه نیست؛ Probability ردیفی ذخیره نشده |",
-        "| بازوی ۳: Economic Proxy | 0.90 | موجود نیست | موجود نیست | قابل محاسبه نیست؛ Probability ردیفی ذخیره نشده |",
-        f"| بازوی ۱: F1 | 0.60 (واقعی) | {activity[ARM_NAMES[0]]['trade_count']} | {activity[ARM_NAMES[0]]['combined_net_profit_factor']:.6f} | مقدار واقعی Artifact |",
-        "| بازوی ۱: F1 | 0.80 | موجود نیست | موجود نیست | قابل محاسبه نیست؛ Probability ردیفی ذخیره نشده |",
-        "",
-        "اعداد Counterfactual حدس زده نشده‌اند. بازسازی Probability یا PF از روی AUC/Brier و شمارش aggregate از نظر ریاضی معتبر نیست.",
-        "",
-        "## 4. پیشنهاد V4-T",
-        "",
-        "1. **Horizon هندسه ۲:۱:** افزایش مستقیم به ۷۲ کندل توصیه نمی‌شود. ابتدا آزمایش تک‌متغیره ۲۴ در برابر ۴۸ کندل با همان TP=2 ATR و SL=1 ATR انجام شود. فقط اگر رویدادهایی مشاهده شوند که بین کندل‌های ۲۵ تا ۴۸ به TP می‌رسند، ۷۲ کندل بررسی شود. Purge horizon مشترک باید دست‌کم برابر بیشترین افق باشد.",
-        "2. **تابع هدف ترکیبی:** جایگزینی فوری NET_EXPECTANCY_PROXY با جمع وزنی PF و F1 توصیه نمی‌شود. ابتدا احتمال BUY/HOLD و پیش‌بینی ردیفی ذخیره شود. سپس F1، Proxy خالص و Proxy با قید حداقل کیفیت/پوشش سیگنال با طراحی از پیش ثبت‌شده مقایسه شوند. حداقل نمونه و Gate اقتصادی تغییر نکنند.",
-        "3. **کالیبراسیون آستانه:** Probabilityهای BUY/HOLD، کلاس پیش‌بینی‌شده، timestamp و label واقعی باید برای بخش Calibration و Forward Validation ذخیره شوند. آستانه فقط روی Calibration انتخاب و بدون تنظیم مجدد روی بازه زمانی بعدی ارزیابی شود.",
-        "",
-        "## 5. ایمنی",
-        "",
-        "| ثابت | مقدار Artifact |",
-        "|---|---|",
-        "| Champion | null |",
-        "| order_permission | false |",
-        "| trading_authorization | NO-GO |",
-        "| private_api_calls | 0 |",
-        "| real_order_attempts | 0 |",
-        "| orders_or_execution_api_used | false |",
-        "| credentials_used | false |",
-        "",
-        "**تصمیم:** این گزارش فقط Audit خواندنی Run #25 است. V4-S هیچ مدلی آموزش نداده، داده‌ای را تغییر نداده، آستانه یا Gate را دست‌کاری نکرده و مجوز معامله صادر نمی‌کند. Champion=null و NO-GO پابرجاست.",
-        "",
-    ])
+    lines.extend(
+        [
+            "",
+            f"- Probability ردیفی در Artifact موجود است: {summary['row_level_probabilities_available']}.",
+            f"- وضعیت Counterfactual Sweep: {summary['counterfactual_sweep_status']}.",
+            "- Artifact فقط خلاصه‌های aggregate مانند Brier، ECE، AUC و PR-AUC دارد؛ trade_rows شامل timestamp، قیمت‌ها، خروج، هزینه و PnL است، نه Probability مربوط به هر ردیف.",
+            "",
+            "### سناریوهای آستانه درخواستی",
+            "",
+            "| بازو | آستانه | تعداد معامله | PF خالص | وضعیت |",
+            "|---|---:|---:|---:|---|",
+            f"| بازوی ۳: Economic Proxy | 0.60 (واقعی) | {activity[ARM_NAMES[2]]['trade_count']} | {activity[ARM_NAMES[2]]['combined_net_profit_factor']:.6f} | مقدار واقعی Artifact |",
+            "| بازوی ۳: Economic Proxy | 0.70 | موجود نیست | موجود نیست | قابل محاسبه نیست؛ Probability ردیفی ذخیره نشده |",
+            "| بازوی ۳: Economic Proxy | 0.90 | موجود نیست | موجود نیست | قابل محاسبه نیست؛ Probability ردیفی ذخیره نشده |",
+            f"| بازوی ۱: F1 | 0.60 (واقعی) | {activity[ARM_NAMES[0]]['trade_count']} | {activity[ARM_NAMES[0]]['combined_net_profit_factor']:.6f} | مقدار واقعی Artifact |",
+            "| بازوی ۱: F1 | 0.80 | موجود نیست | موجود نیست | قابل محاسبه نیست؛ Probability ردیفی ذخیره نشده |",
+            "",
+            "اعداد Counterfactual حدس زده نشده‌اند. بازسازی Probability یا PF از روی AUC/Brier و شمارش aggregate از نظر ریاضی معتبر نیست.",
+            "",
+            "## 4. پیشنهاد V4-T",
+            "",
+            "1. **Horizon هندسه ۲:۱:** افزایش مستقیم به ۷۲ کندل توصیه نمی‌شود. ابتدا آزمایش تک‌متغیره ۲۴ در برابر ۴۸ کندل با همان TP=2 ATR و SL=1 ATR انجام شود. فقط اگر رویدادهایی مشاهده شوند که بین کندل‌های ۲۵ تا ۴۸ به TP می‌رسند، ۷۲ کندل بررسی شود. Purge horizon مشترک باید دست‌کم برابر بیشترین افق باشد.",
+            "2. **تابع هدف ترکیبی:** جایگزینی فوری NET_EXPECTANCY_PROXY با جمع وزنی PF و F1 توصیه نمی‌شود. ابتدا احتمال BUY/HOLD و پیش‌بینی ردیفی ذخیره شود. سپس F1، Proxy خالص و Proxy با قید حداقل کیفیت/پوشش سیگنال با طراحی از پیش ثبت‌شده مقایسه شوند. حداقل نمونه و Gate اقتصادی تغییر نکنند.",
+            "3. **کالیبراسیون آستانه:** Probabilityهای BUY/HOLD، کلاس پیش‌بینی‌شده، timestamp و label واقعی باید برای بخش Calibration و Forward Validation ذخیره شوند. آستانه فقط روی Calibration انتخاب و بدون تنظیم مجدد روی بازه زمانی بعدی ارزیابی شود.",
+            "",
+            "## 5. ایمنی",
+            "",
+            "| ثابت | مقدار Artifact |",
+            "|---|---|",
+            "| Champion | null |",
+            "| order_permission | false |",
+            "| trading_authorization | NO-GO |",
+            "| private_api_calls | 0 |",
+            "| real_order_attempts | 0 |",
+            "| orders_or_execution_api_used | false |",
+            "| credentials_used | false |",
+            "",
+            "**تصمیم:** این گزارش فقط Audit خواندنی Run #25 است. V4-S هیچ مدلی آموزش نداده، داده‌ای را تغییر نداده، آستانه یا Gate را دست‌کاری نکرده و مجوز معامله صادر نمی‌کند. Champion=null و NO-GO پابرجاست.",
+            "",
+        ]
+    )
     return "\n".join(lines)
 
 
@@ -452,17 +480,22 @@ def main() -> int:
     summary = analyze_report(report)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(_render_report(summary), encoding="utf-8")
-    print(json.dumps({
-        "source_run_id": EXPECTED_RUN_ID,
-        "source_artifact_id": EXPECTED_ARTIFACT_ID,
-        "source_commit_sha": summary["commit_sha"],
-        "counterfactual_sweep_status": summary["counterfactual_sweep_status"],
-        "training_performed": False,
-        "Champion": None,
-        "order_permission": False,
-        "trading_authorization": "NO-GO",
-        "output": str(args.output),
-    }, sort_keys=True))
+    print(
+        json.dumps(
+            {
+                "source_run_id": EXPECTED_RUN_ID,
+                "source_artifact_id": EXPECTED_ARTIFACT_ID,
+                "source_commit_sha": summary["commit_sha"],
+                "counterfactual_sweep_status": summary["counterfactual_sweep_status"],
+                "training_performed": False,
+                "Champion": None,
+                "order_permission": False,
+                "trading_authorization": "NO-GO",
+                "output": str(args.output),
+            },
+            sort_keys=True,
+        )
+    )
     return 0
 
 
