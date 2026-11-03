@@ -12,79 +12,85 @@ def _report() -> dict[str, Any]:
     candidates = []
     experiments = []
     for name in audit.ARM_NAMES:
-        arms.append({
-            "name": name,
-            "aggregate": {
-                "trained_candidate_count": 1,
-                "sample_gate_skipped_candidate_count": 0,
-                "trade_count": 3,
-                "combined_net_profit_factor": 0.8,
-                "total_net_pnl_usd": -10.0,
-                "strict_economic_pass_candidate_count": 0,
-            },
-        })
-        candidates.append({
-            "arm": name,
-            "confidence_filter": {
-                "threshold": 0.6,
-                "raw_buy_signal_count": 10,
-                "accepted_buy_signal_count": 4,
-                "rejected_buy_signal_count": 6,
-            },
-        })
-        experiments.append({
-            "arm": name,
-            "pair": "BTC/USDT",
-            "timeframe": "1h",
-            "feature_profile": "Baseline",
-            "label_distribution": {
-                "train": {
-                    "total": 10,
-                    "classes": {
-                        "BUY": {"count": 3},
-                        "HOLD": {"count": 2},
-                        "SELL": {"count": 5},
-                    },
+        arms.append(
+            {
+                "name": name,
+                "aggregate": {
+                    "trained_candidate_count": 1,
+                    "sample_gate_skipped_candidate_count": 0,
+                    "trade_count": 3,
+                    "combined_net_profit_factor": 0.8,
+                    "total_net_pnl_usd": -10.0,
+                    "strict_economic_pass_candidate_count": 0,
                 },
-                "validation": {
-                    "total": 5,
-                    "classes": {
-                        "BUY": {"count": 1},
-                        "HOLD": {"count": 1},
-                        "SELL": {"count": 3},
-                    },
+            }
+        )
+        candidates.append(
+            {
+                "arm": name,
+                "confidence_filter": {
+                    "threshold": 0.6,
+                    "raw_buy_signal_count": 10,
+                    "accepted_buy_signal_count": 4,
+                    "rejected_buy_signal_count": 6,
                 },
-            },
-            "label_audit": {
-                "exit_reason_distribution": {
-                    "total": 10,
-                    "reasons": {
-                        "TP_HIT": {"count": 3},
-                        "SL_HIT": {"count": 5},
-                        "HORIZON_EXPIRY": {"count": 1},
-                        "COLLISION": {"count": 1},
-                    },
-                },
-            },
-            "model_variants": {
-                "weight_none": {
-                    "threshold_optimization": {
-                        "status": "SKIPPED_INSUFFICIENT_CALIBRATION_SAMPLES",
-                        "calibration": {
-                            "label_distribution": {
-                                "classes": {"HOLD": {"count": 15}}
-                            }
+            }
+        )
+        experiments.append(
+            {
+                "arm": name,
+                "pair": "BTC/USDT",
+                "timeframe": "1h",
+                "feature_profile": "Baseline",
+                "label_distribution": {
+                    "train": {
+                        "total": 10,
+                        "classes": {
+                            "BUY": {"count": 3},
+                            "HOLD": {"count": 2},
+                            "SELL": {"count": 5},
                         },
                     },
-                    "probability_diagnostics": {
-                        "forward_validation": {
-                            "hold_auc": 0.7,
-                            "hold_pr_auc": 0.1,
-                        }
+                    "validation": {
+                        "total": 5,
+                        "classes": {
+                            "BUY": {"count": 1},
+                            "HOLD": {"count": 1},
+                            "SELL": {"count": 3},
+                        },
                     },
-                }
-            },
-        })
+                },
+                "label_audit": {
+                    "exit_reason_distribution": {
+                        "total": 10,
+                        "reasons": {
+                            "TP_HIT": {"count": 3},
+                            "SL_HIT": {"count": 5},
+                            "HORIZON_EXPIRY": {"count": 1},
+                            "COLLISION": {"count": 1},
+                        },
+                    },
+                },
+                "model_variants": {
+                    "weight_none": {
+                        "threshold_optimization": {
+                            "status": "SKIPPED_INSUFFICIENT_CALIBRATION_SAMPLES",
+                            "calibration": {
+                                "label_distribution": {
+                                    "classes": {"HOLD": {"count": 15}}
+                                }
+                            },
+                        },
+                        "probability_diagnostics": {
+                            "forward_validation": {
+                                "hold_auc": 0.7,
+                                "hold_pr_auc": 0.1,
+                            }
+                        },
+                    }
+                },
+            }
+        )
     return {
         "schema_version": audit.REPORT_SCHEMA,
         "commit_sha": audit.EXPECTED_COMMIT_SHA,
@@ -142,9 +148,7 @@ def test_label_pool_deduplicates_feature_profiles() -> None:
     duplicate["feature_profile"] = "Baseline+Trend"
     experiments.append(duplicate)
 
-    summary = audit._pooled_label_summary(
-        experiments, audit.ARM_NAMES[0]
-    )
+    summary = audit._pooled_label_summary(experiments, audit.ARM_NAMES[0])
 
     assert summary["unique_pair_timeframe_contexts"] == 1
     assert summary["splits"]["validation"]["total"] == 5
