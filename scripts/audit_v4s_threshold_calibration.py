@@ -101,126 +101,185 @@ def _row_level_probability_fields(value: Any, path: str = "") -> list[str]:
     return found
 
 
-def _pooled_label_summary(
+def _store_label_context(
+    contexts: dict[tuple[str, str], dict[str, Any]],
+    experiment: dict[str, Any],
+    arm_name: str,
+) -> None:
+    if experiment.get("arm") != arm_name:
+        return
+    context_key = (str(experiment["pair"]), str(experiment["timeframe"]))
+    current = {
+        "label_distribution": experiment["label_distribution"],
+        "exit_reason_distribution": experiment["label_audit"][
+            "exit_reason_distribution"
+        ],
+    }
+    previous = contexts.get(context_key)
+    if previous is not None and previous != current:
+        raise ValueError(f"v4s_duplicate_context_label_mismatch:{context_key}")
+    contexts[context_key] = current
+
+
+def _collect_label_contexts(
     experiments: list[dict[str, Any]], arm_name: str
-) -> dict[str, Any]:
+) -> dict[tuple[str, str], dict[str, Any]]:
     contexts: dict[tuple[str, str], dict[str, Any]] = {}
     for experiment in experiments:
-        if experiment.get("arm") != arm_name:
-            continue
-        context_key = (str(experiment["pair"]), str(experiment["timeframe"]))
-        current = {
-            "label_distribution": experiment["label_distribution"],
-            "exit_reason_distribution": experiment["label_audit"][
-                "exit_reason_distribution"
-            ],
-        }
-        previous = contexts.get(context_key)
-        if previous is not None and previous != current:
-            raise ValueError(f"v4s_duplicate_context_label_mismatch:{context_key}")
-        contexts[context_key] = current
+        _store_label_context(contexts, experiment, arm_name)
     if not contexts:
         raise ValueError(f"v4s_label_contexts_missing:{arm_name}")
+    return contexts
 
-    splits: dict[str, dict[str, Any]] = {}
-    for split in ("train", "validation"):
-        counts: Counter[str] = Counter()
-        total = 0
-        for context_data in contexts.values():
-            distribution = context_data["label_distribution"][split]
-            total += int(distribution["total"])
-            counts.update(
-                {
-                    label: int(details["count"])
-                    for label, details in distribution["classes"].items()
-                }
-            )
-        splits[split] = {
-            "total": total,
-            "counts": dict(counts),
-            "percent": {
-                label: round(count / total * 100, 4) for label, count in counts.items()
-            },
-        }
 
-    exit_counts: Counter[str] = Counter()
-    exit_total = 0
+def _pooled_distribution(
+    contexts: dict[tuple[str, str], dict[str, Any]],
+    distribution_key: str,
+    split: str,
+    count_key: str,
+) -> dict[str, Any]:
+    counts: Counter[str] = Counter()
+    total = 0
+    for context_data in contexts.values():
+        distribution = context_data[distribution_key]
+        if split:
+            distribution = distribution[split]
+        total += int(distribution["total"])
+        counts.update(
+            {
+                label: int(details[count_key])
+                for label, details in distribution[
+                    "classes" if distribution_key == "label_distribution" else "reasons"
+                ].items()
+            }
+        )
+    return {
+        "total": total,
+        "counts": dict(counts),
+        "percent": {
+            label: round(count / total * 100, 4) for label, count in counts.items()
+        },
+    }
+
+
+def _pooled_exit_reason_distribution(
+    contexts: dict[tuple[str, str], dict[str, Any]]
+) -> dict[str, Any]:
+    counts: Counter[str] = Counter()
+    total = 0
     for context_data in contexts.values():
         distribution = context_data["exit_reason_distribution"]
-        exit_total += int(distribution["total"])
-        exit_counts.update(
+        total += int(distribution["total"])
+        counts.update(
             {
                 reason: int(details["count"])
                 for reason, details in distribution["reasons"].items()
             }
         )
     return {
-        "unique_pair_timeframe_contexts": len(contexts),
-        "splits": splits,
-        "exit_reasons": {
-            "total": exit_total,
-            "counts": dict(exit_counts),
-            "percent": {
-                reason: round(count / exit_total * 100, 4)
-                for reason, count in exit_counts.items()
-            },
+        "total": total,
+        "counts": dict(counts),
+        "percent": {
+            reason: round(count / total * 100, 4)
+            for reason, count in counts.items()
         },
     }
 
+
+def _pooled_label_summary(
+    experiments: list[dict[str, Any]], arm_name: str
+) -> dict[str, Any]:
+    contexts = _collect_label_contexts(experiments, arm_name)
+    splits = {
+        split: _pooled_distribution(
+            contexts, "label_distribution", split, "count"
+        )
+        for split in ("train", "validation")
+    }
+    return {
+        "unique_pair_timeframe_contexts": len(contexts),
+        "splits": splits,
+        "exit_reasons": _pooled_exit_reason_distribution(contexts),
+    }
 
 def _mean_metric(values: list[float]) -> float | None:
     return round(statistics.mean(values), 6) if values else None
 
 
+def _arm_variants(
+    experiments: list[dict[str, Any]], arm_name: str
+) -> list[dict[str, Any]]:
+    variants: list[dict[str, Any]] = []
+    for experiment in experiments:
+        if experiment.get("arm") == arm_name:
+            variants.extend(experiment.get("model_variants", {}).values())
+    return variants
+
+
+def _hold_support_count(variant: dict[str, Any]) -> int | None:
+    optimization = variant.get("threshold_optimization", {})
+    calibration = optimization.get("calibration", {})
+    classes = calibration.get("label_distribution", {}).get("classes", {})
+    hold_count = classes.get("HOLD", {}).get("count")
+    return hold_count if isinstance(hold_count, int) else None
+
+
+def _record_numeric_metric(
+    metrics: dict[str, list[float]], metric_name: str, value: Any
+) -> None:
+    if isinstance(value, (int, float)):
+        metrics[metric_name].append(float(value))
+
+
+def _record_probability_split_metrics(
+    metrics: dict[str, list[float]], split: str, data: dict[str, Any]
+) -> None:
+    for metric in ("hold_auc", "hold_pr_auc"):
+        _record_numeric_metric(metrics, f"{split}_{metric}", data.get(metric))
+    brier = data.get("brier_score", {}).get("hold_binary")
+    ece = data.get("ece", {}).get("hold_binary")
+    _record_numeric_metric(metrics, f"{split}_hold_brier", brier)
+    _record_numeric_metric(metrics, f"{split}_hold_ece", ece)
+
+
+def _probability_metrics(
+    variants: list[dict[str, Any]]
+) -> dict[str, list[float]]:
+    metrics: dict[str, list[float]] = defaultdict(list)
+    for variant in variants:
+        diagnostics = variant.get("probability_diagnostics", {})
+        for split in ("calibration", "forward_validation"):
+            _record_probability_split_metrics(
+                metrics, split, diagnostics.get(split, {})
+            )
+    return metrics
+
+
 def _probability_summary(
     experiments: list[dict[str, Any]], arm_name: str
 ) -> dict[str, Any]:
-    metrics: dict[str, list[float]] = defaultdict(list)
-    optimization_statuses: Counter[str] = Counter()
-    calibration_hold_support: list[int] = []
-    variant_count = 0
-    for experiment in experiments:
-        if experiment.get("arm") != arm_name:
-            continue
-        for variant in experiment.get("model_variants", {}).values():
-            variant_count += 1
-            optimization = variant.get("threshold_optimization", {})
-            optimization_statuses[str(optimization.get("status", "MISSING"))] += 1
-            calibration = optimization.get("calibration", {})
-            classes = calibration.get("label_distribution", {}).get("classes", {})
-            hold_count = classes.get("HOLD", {}).get("count")
-            if isinstance(hold_count, int):
-                calibration_hold_support.append(hold_count)
-            diagnostics = variant.get("probability_diagnostics", {})
-            for split in ("calibration", "forward_validation"):
-                data = diagnostics.get(split, {})
-                for metric in ("hold_auc", "hold_pr_auc"):
-                    value = data.get(metric)
-                    if isinstance(value, (int, float)):
-                        metrics[f"{split}_{metric}"].append(float(value))
-                brier = data.get("brier_score", {}).get("hold_binary")
-                ece = data.get("ece", {}).get("hold_binary")
-                if isinstance(brier, (int, float)):
-                    metrics[f"{split}_hold_brier"].append(float(brier))
-                if isinstance(ece, (int, float)):
-                    metrics[f"{split}_hold_ece"].append(float(ece))
+    variants = _arm_variants(experiments, arm_name)
+    statuses = Counter(
+        str(variant.get("threshold_optimization", {}).get("status", "MISSING"))
+        for variant in variants
+    )
+    support_values = [
+        value for value in (_hold_support_count(variant) for variant in variants)
+        if value is not None
+    ]
+    metrics = _probability_metrics(variants)
     return {
-        "model_variant_count": variant_count,
-        "threshold_optimization_statuses": dict(optimization_statuses),
+        "model_variant_count": len(variants),
+        "threshold_optimization_statuses": dict(statuses),
         "calibration_hold_positive_support": {
-            "minimum": min(calibration_hold_support)
-            if calibration_hold_support
-            else None,
-            "maximum": max(calibration_hold_support)
-            if calibration_hold_support
-            else None,
-            "mean": _mean_metric([float(item) for item in calibration_hold_support]),
+            "minimum": min(support_values) if support_values else None,
+            "maximum": max(support_values) if support_values else None,
+            "mean": _mean_metric([float(item) for item in support_values]),
         },
         "mean_metrics": {
             name: _mean_metric(values) for name, values in sorted(metrics.items())
         },
     }
-
 
 def _arm_activity_summary(report: dict[str, Any], arm_name: str) -> dict[str, Any]:
     arm = next(item for item in report["arms"] if item["name"] == arm_name)
@@ -299,10 +358,7 @@ def analyze_report(report: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _render_report(summary: dict[str, Any]) -> str:
-    activity = summary["activity"]
-    labels = summary["labels"]
-    probability = summary["probability_diagnostics"]
+def _render_intro(summary: dict[str, Any]) -> str:
     lines = [
         "# ممیزی V4-S: تشخیص آستانه و توزیع برچسب‌ها",
         "",
@@ -315,7 +371,13 @@ def _render_report(summary: dict[str, Any]) -> str:
         f"- آموزش در Run منبع: {summary['model_training_performed_in_source_run']} (تاریخی و متعلق به V4-R).",
         f"- آموزش توسط ابزار V4-S: {summary['training_performed_by_v4s']}.",
         "- روش: فقط خواندن گزارش و CSVهای ثابت Run #25؛ بدون دریافت داده، آموزش مدل یا تغییر داده.",
-        "",
+    ]
+    return "\\n".join(lines)
+
+
+def _render_activity_section(summary: dict[str, Any]) -> str:
+    activity = summary["activity"]
+    lines = [
         "## 1. آستانه و نرخ پذیرش سیگنال BUY",
         "",
         "| بازو | Candidate آموزش‌دیده | آستانه ثبت‌شده | BUY خام | BUY پذیرفته | نسبت پذیرش | معامله Replay | PF خالص تجمیعی |",
@@ -323,13 +385,10 @@ def _render_report(summary: dict[str, Any]) -> str:
     ]
     for name in ARM_NAMES:
         item = activity[name]
-        thresholds = (
-            ", ".join(
-                f"{value} ({count})"
-                for value, count in sorted(item["confidence_threshold_counts"].items())
-            )
-            or "موجود نیست"
-        )
+        thresholds = ", ".join(
+            f"{value} ({count})"
+            for value, count in sorted(item["confidence_threshold_counts"].items())
+        ) or "موجود نیست"
         ratio = item["accepted_buy_percent_of_raw"]
         ratio_text = "موجود نیست" if ratio is None else f"{ratio:.4f}%"
         lines.append(
@@ -343,45 +402,54 @@ def _render_report(summary: dict[str, Any]) -> str:
             "",
             "برای بازوهای ۱ و ۳ آستانه ثبت‌شده 0.60 است؛ آستانه 0.90 برای بازوی ۳ در Artifact وجود ندارد. اختلاف پذیرش سیگنال با آستانه یکسان مشاهده می‌شود، اما این داده aggregate علت را بین تابع هدف، توزیع احتمال خروجی و انتخاب Candidate تفکیک نمی‌کند.",
             "",
-            "### وضعیت Threshold Optimization",
-            "",
-            "| بازو | Variant | وضعیت بهینه‌سازی | حمایت مثبت HOLD در بخش کالیبراسیون |",
-            "|---|---:|---|---:|",
         ]
     )
+    return "\\n".join(lines)
+
+
+def _render_threshold_optimization_section(summary: dict[str, Any]) -> str:
+    probability = summary["probability_diagnostics"]
+    lines = [
+        "### وضعیت Threshold Optimization",
+        "",
+        "| بازو | Variant | وضعیت بهینه‌سازی | حمایت مثبت HOLD در بخش کالیبراسیون |",
+        "|---|---:|---|---:|",
+    ]
     for name in ARM_NAMES:
         item = probability[name]
-        statuses = (
-            ", ".join(
-                f"{status}: {count}"
-                for status, count in sorted(
-                    item["threshold_optimization_statuses"].items()
-                )
-            )
-            or "موجود نیست"
-        )
+        statuses = ", ".join(
+            f"{status}: {count}"
+            for status, count in sorted(item["threshold_optimization_statuses"].items())
+        ) or "موجود نیست"
         support = item["calibration_hold_positive_support"]
-        support_text = (
-            "موجود نیست"
-            if support["minimum"] is None
-            else f"{support['minimum']} تا {support['maximum']} (میانگین {support['mean']:.2f})"
-        )
+        if support["minimum"] is None:
+            support_text = "موجود نیست"
+        else:
+            support_text = (
+                f"{support['minimum']} تا {support['maximum']} "
+                f"(میانگین {support['mean']:.2f})"
+            )
         lines.append(
             f"| {name} | {item['model_variant_count']} | {statuses} | {support_text} |"
         )
-    lines.extend(
-        [
-            "",
-            "تمام Variantهای دارای خروجی، وضعیت SKIPPED_INSUFFICIENT_CALIBRATION_SAMPLES و selected_threshold=null دارند. کف حمایت مثبت HOLD برابر ۳۰ است و نمونه کالیبراسیون این کف را تأمین نکرده است.",
-            "",
-            "## 2. توزیع برچسب در هندسه ۱:۱ و ۲:۱ ATR",
-            "",
-            "برای جلوگیری از دوباره‌شماری، از هر زوج pair/timeframe فقط یک توزیع استفاده شده است؛ دو Feature Profile توزیع یکسانی داشتند.",
-            "",
-            "| هندسه | Split | BUY | HOLD | SELL |",
-            "|---|---|---:|---:|---:|",
-        ]
+    lines.append(
+        "تمام Variantهای دارای خروجی، وضعیت SKIPPED_INSUFFICIENT_CALIBRATION_SAMPLES "
+        "و selected_threshold=null دارند. کف حمایت مثبت HOLD برابر ۳۰ است و نمونه "
+        "کالیبراسیون این کف را تأمین نکرده است."
     )
+    return "\\n".join(lines)
+
+
+def _render_label_section(summary: dict[str, Any]) -> str:
+    labels = summary["labels"]
+    lines = [
+        "## 2. توزیع برچسب در هندسه ۱:۱ و ۲:۱ ATR",
+        "",
+        "برای جلوگیری از دوباره‌شماری، از هر زوج pair/timeframe فقط یک توزیع استفاده شده است؛ دو Feature Profile توزیع یکسانی داشتند.",
+        "",
+        "| هندسه | Split | BUY | HOLD | SELL |",
+        "|---|---|---:|---:|---:|",
+    ]
     for geometry, name in (("۱:۱ ATR", ARM_NAMES[0]), ("۲:۱ ATR", ARM_NAMES[1])):
         for split in ("train", "validation"):
             values = labels[name]["splits"][split]["percent"]
@@ -406,17 +474,24 @@ def _render_report(summary: dict[str, Any]) -> str:
             f"| {values.get('HORIZON_EXPIRY', 0):.2f}% "
             f"| {values.get('COLLISION', 0):.2f}% |"
         )
-    lines.extend(
-        [
-            "",
-            "سهم HOLD در هندسه ۲:۱ افزایش نیافته است. در Validation از ۴٫۳۸٪ به ۳٫۲۴٪ کاهش دارد. در عوض SL_HIT از ۶۱٫۱۱٪ به ۷۳٫۹۰٪ افزایش و TP_HIT از ۳۲٫۵۵٪ به ۲۱٫۷۱٪ کاهش یافته است. فرض «افزایش HOLD به علت افق کوتاه» پشتیبانی نمی‌شود؛ این داده مزیت افق ۴۸/۷۲ کندلی را نیز اثبات نمی‌کند.",
-            "",
-            "## 3. Probability Diagnostics و محدودیت بازپخش آستانه",
-            "",
-            "| بازو | Variant | میانگین Hold AUC در Forward Validation | میانگین Hold PR-AUC در Forward Validation |",
-            "|---|---:|---:|---:|",
-        ]
+    lines.append(
+        "سهم HOLD در هندسه ۲:۱ افزایش نیافته است. در Validation از ۴٫۳۸٪ به ۳٫۲۴٪ "
+        "کاهش دارد. در عوض SL_HIT از ۶۱٫۱۱٪ به ۷۳٫۹۰٪ افزایش و TP_HIT از ۳۲٫۵۵٪ به "
+        "۲۱٫۷۱٪ کاهش یافته است. فرض «افزایش HOLD به علت افق کوتاه» پشتیبانی نمی‌شود؛ "
+        "این داده مزیت افق ۴۸/۷۲ کندلی را نیز اثبات نمی‌کند."
     )
+    return "\\n".join(lines)
+
+
+def _render_probability_section(summary: dict[str, Any]) -> str:
+    activity = summary["activity"]
+    probability = summary["probability_diagnostics"]
+    lines = [
+        "## 3. Probability Diagnostics و محدودیت بازپخش آستانه",
+        "",
+        "| بازو | Variant | میانگین Hold AUC در Forward Validation | میانگین Hold PR-AUC در Forward Validation |",
+        "|---|---:|---:|---:|",
+    ]
     for name in ARM_NAMES:
         item = probability[name]
         metrics = item["mean_metrics"]
@@ -445,13 +520,26 @@ def _render_report(summary: dict[str, Any]) -> str:
             "| بازوی ۱: F1 | 0.80 | موجود نیست | موجود نیست | قابل محاسبه نیست؛ Probability ردیفی ذخیره نشده |",
             "",
             "اعداد Counterfactual حدس زده نشده‌اند. بازسازی Probability یا PF از روی AUC/Brier و شمارش aggregate از نظر ریاضی معتبر نیست.",
-            "",
+        ]
+    )
+    return "\\n".join(lines)
+
+
+def _render_v4t_section() -> str:
+    return "\\n".join(
+        [
             "## 4. پیشنهاد V4-T",
             "",
             "1. **Horizon هندسه ۲:۱:** افزایش مستقیم به ۷۲ کندل توصیه نمی‌شود. ابتدا آزمایش تک‌متغیره ۲۴ در برابر ۴۸ کندل با همان TP=2 ATR و SL=1 ATR انجام شود. فقط اگر رویدادهایی مشاهده شوند که بین کندل‌های ۲۵ تا ۴۸ به TP می‌رسند، ۷۲ کندل بررسی شود. Purge horizon مشترک باید دست‌کم برابر بیشترین افق باشد.",
             "2. **تابع هدف ترکیبی:** جایگزینی فوری NET_EXPECTANCY_PROXY با جمع وزنی PF و F1 توصیه نمی‌شود. ابتدا احتمال BUY/HOLD و پیش‌بینی ردیفی ذخیره شود. سپس F1، Proxy خالص و Proxy با قید حداقل کیفیت/پوشش سیگنال با طراحی از پیش ثبت‌شده مقایسه شوند. حداقل نمونه و Gate اقتصادی تغییر نکنند.",
             "3. **کالیبراسیون آستانه:** Probabilityهای BUY/HOLD، کلاس پیش‌بینی‌شده، timestamp و label واقعی باید برای بخش Calibration و Forward Validation ذخیره شوند. آستانه فقط روی Calibration انتخاب و بدون تنظیم مجدد روی بازه زمانی بعدی ارزیابی شود.",
-            "",
+        ]
+    )
+
+
+def _render_safety_section() -> str:
+    return "\\n".join(
+        [
             "## 5. ایمنی",
             "",
             "| ثابت | مقدار Artifact |",
@@ -465,11 +553,21 @@ def _render_report(summary: dict[str, Any]) -> str:
             "| credentials_used | false |",
             "",
             "**تصمیم:** این گزارش فقط Audit خواندنی Run #25 است. V4-S هیچ مدلی آموزش نداده، داده‌ای را تغییر نداده، آستانه یا Gate را دست‌کاری نکرده و مجوز معامله صادر نمی‌کند. Champion=null و NO-GO پابرجاست.",
-            "",
         ]
     )
-    return "\n".join(lines)
 
+
+def _render_report(summary: dict[str, Any]) -> str:
+    sections = [
+        _render_intro(summary),
+        _render_activity_section(summary),
+        _render_threshold_optimization_section(summary),
+        _render_label_section(summary),
+        _render_probability_section(summary),
+        _render_v4t_section(),
+        _render_safety_section(),
+    ]
+    return "\\n\\n".join(sections) + "\\n"
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
