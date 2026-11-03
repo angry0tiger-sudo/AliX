@@ -271,7 +271,9 @@ class TuningClassifier(BaseEstimator):  # type: ignore[misc]
 
     def predict(self, features: DataFrame) -> np.ndarray:
         codes = features["signal"].to_numpy(dtype=int) % 3
-        return cast(np.ndarray, np.asarray(["BUY", "SELL", "HOLD"], dtype=object)[codes])
+        return cast(
+            np.ndarray, np.asarray(["BUY", "SELL", "HOLD"], dtype=object)[codes]
+        )
 
 
 def test_custom_objective_executes_inner_cv_and_reports_its_selection_score() -> None:
