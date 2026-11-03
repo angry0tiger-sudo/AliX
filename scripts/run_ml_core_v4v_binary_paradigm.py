@@ -145,9 +145,7 @@ def _binary_label_distribution(values: Series) -> dict[str, Any]:
         "classes": {
             label: {
                 "count": int(counts.get(label, 0)),
-                "percent": round(
-                    100.0 * int(counts.get(label, 0)) / total, 6
-                )
+                "percent": round(100.0 * int(counts.get(label, 0)) / total, 6)
                 if total
                 else 0.0,
             }
@@ -208,8 +206,7 @@ def _binary_outer_split(
         & labels["label_end_idx"].notna()
     )
     eligible_indices = {
-        int(index)
-        for index in np.flatnonzero(eligible_mask.to_numpy(dtype=bool))
+        int(index) for index in np.flatnonzero(eligible_mask.to_numpy(dtype=bool))
     }
     train_limit = validation_start - split.embargo_size
     train_indices = [
@@ -218,9 +215,7 @@ def _binary_outer_split(
         if index in eligible_indices and index < train_limit
     ]
     validation_indices = [
-        int(index)
-        for index in split.validation_indices
-        if index in eligible_indices
+        int(index) for index in split.validation_indices if index in eligible_indices
     ]
     if (
         not train_indices
@@ -614,12 +609,14 @@ def _trade_metrics(trades: list[dict[str, Any]]) -> dict[str, Any]:
         "win_rate": round(wins / len(trades), 8) if trades else None,
         "net_profit_factor": _profit_factor(net),
         "net_profit_factor_infinite_no_losses": bool(
-            net and sum(value for value in net if value > 0.0) > 0.0
+            net
+            and sum(value for value in net if value > 0.0) > 0.0
             and not any(value < 0.0 for value in net)
         ),
         "gross_profit_factor": _profit_factor(gross),
         "gross_profit_factor_infinite_no_losses": bool(
-            gross and sum(value for value in gross if value > 0.0) > 0.0
+            gross
+            and sum(value for value in gross if value > 0.0) > 0.0
             and not any(value < 0.0 for value in gross)
         ),
         "net_pnl_usd": round(sum(net), 8),
@@ -859,9 +856,9 @@ def _run_binary_experiment(
         entry_reference="NEXT_BAR_OPEN",
         entry_slippage_bps=V4V_ENTRY_SLIPPAGE_BPS,
     )
-    economic_outcomes = _economic_outcomes_by_index(bars, raw_labels.assign(
-        source_label=raw_labels["label"]
-    ))
+    economic_outcomes = _economic_outcomes_by_index(
+        bars, raw_labels.assign(source_label=raw_labels["label"])
+    )
     labels = apply_binary_buy_targets(raw_labels)
     features = feature_matrices[feature_profile]
     train_indices, validation_indices, split_diagnostics = _binary_outer_split(
@@ -1012,7 +1009,9 @@ def run_v4v_experiments(
             pair = f"{symbol[:-4]}/USDT"
             bars = resample_ohlcv(datasets[symbol], timeframe)
             if len(bars) < 100:
-                raise ValueError(f"v4v_insufficient_resampled_bars:{symbol}:{timeframe}")
+                raise ValueError(
+                    f"v4v_insufficient_resampled_bars:{symbol}:{timeframe}"
+                )
             feature_matrices = build_feature_profiles(
                 bars, profile_names=V4V_FEATURE_PROFILES
             )
