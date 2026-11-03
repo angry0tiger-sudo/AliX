@@ -306,7 +306,10 @@ def test_custom_objective_executes_inner_cv_and_reports_its_selection_score() ->
     assert diagnostics["selection_objective"] == "CUSTOM_ECONOMIC_SCORE"
     assert diagnostics["economic_scorer"] == "Custom_Economic_Score"
     assert diagnostics["selected_mean_cv_custom_economic_score"] is not None
-    assert diagnostics["custom_economic_score_contract"]["minimum_trade_count_soft_target"] == 30
+    assert (
+        diagnostics["custom_economic_score_contract"]["minimum_trade_count_soft_target"]
+        == 30
+    )
     assert diagnostics["validation_accessed_during_search"] is False
 
 
@@ -346,9 +349,9 @@ def test_custom_score_rejects_invalid_soft_penalty_configuration() -> None:
 
 
 def test_v4t_workflow_is_branch_scoped_and_waits_for_exact_sha_ci() -> None:
-    workflow_text = Path(
-        ".github/workflows/ml-core-v4t-economic-score.yml"
-    ).read_text(encoding="utf-8")
+    workflow_text = Path(".github/workflows/ml-core-v4t-economic-score.yml").read_text(
+        encoding="utf-8"
+    )
     assert "research/ml-core-v4t-economic-score" in workflow_text
     assert "Require standard CI success for this exact V4-T commit" in workflow_text
     assert "TARGET_SHA" in workflow_text
