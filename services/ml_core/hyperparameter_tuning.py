@@ -14,6 +14,7 @@ from sklearn.metrics import (  # type: ignore[import-untyped]
     f1_score,
     precision_score,
     recall_score,
+    roc_auc_score,
 )
 from sklearn.model_selection import (  # type: ignore[import-untyped]
     RandomizedSearchCV,
@@ -935,4 +936,375 @@ def tune_lightgbm_classifier(
         seed=seed,
         tuning_objective=tuning_objective,
     )
+    return fitted_estimator, diagnostics
+
+
+BINARY_BUY_LABELS = ("BUY", "NO_BUY")
+BINARY_BUY_OBJECTIVE = "BINARY_BUY_ECONOMIC_SCORE"
+DEFAULT_BINARY_BUY_THRESHOLD = 0.65
+
+
+def _binary_buy_probabilities(estimator: Any, features: DataFrame) -> np.ndarray:
+    """Return validated BUY probabilities independent of estimator class order."""
+    raw_classes = getattr(estimator, "classes_", None)
+    if raw_classes is None:
+        raise ValueError("tuning_binary_probability_classes_missing")
+    classes = [str(value) for value in raw_classes]
+    if len(classes) != 2 or set(classes) != set(BINARY_BUY_LABELS):
+        raise ValueError("tuning_binary_probability_classes_invalid")
+    predict_proba = getattr(estimator, "predict_proba", None)
+    if not callable(predict_proba):
+        raise ValueError("tuning_binary_predict_proba_missing")
+    matrix = np.asarray(predict_proba(features), dtype=float)
+    if matrix.shape != (len(features), 2):
+        raise ValueError("tuning_binary_probability_shape_invalid")
+    buy_probabilities = matrix[:, classes.index("BUY")]
+    if (
+        not bool(np.isfinite(matrix).all())
+        or bool(np.any(matrix < 0.0))
+        or bool(np.any(matrix > 1.0))
+        or not bool(np.allclose(matrix.sum(axis=1), 1.0, atol=1e-6))
+    ):
+        raise ValueError("tuning_binary_probabilities_invalid")
+    return buy_probabilities
+
+
+def _binary_buy_threshold(value: float) -> float:
+    if (
+        isinstance(value, bool)
+        or not isfinite(float(value))
+        or not 0.0 < float(value) <= 1.0
+    ):
+        raise ValueError("tuning_binary_buy_threshold_invalid")
+    return float(value)
+
+
+def _binary_buy_targets(actual: Series, row_count: int) -> np.ndarray:
+    if len(actual) != row_count or not bool(actual.isin(BINARY_BUY_LABELS).all()):
+        raise ValueError("tuning_binary_actual_labels_invalid")
+    targets = (actual.to_numpy(dtype=object) == "BUY").astype(int)
+    if len(np.unique(targets)) != 2:
+        raise ValueError("tuning_binary_actual_requires_both_classes")
+    return targets
+
+
+def _binary_buy_predictions(
+    estimator: Any,
+    features: DataFrame,
+    actual: Series,
+    threshold: float = DEFAULT_BINARY_BUY_THRESHOLD,
+) -> np.ndarray:
+    _binary_buy_targets(actual, len(features))
+    cutoff = _binary_buy_threshold(threshold)
+    return _binary_buy_probabilities(estimator, features) >= cutoff
+
+
+def _binary_buy_precision_score(
+    estimator: Any, features: DataFrame, actual: Series
+) -> float:
+    predicted = _binary_buy_predictions(estimator, features, actual)
+    targets = _binary_buy_targets(actual, len(features))
+    return float(precision_score(targets, predicted, zero_division=0))
+
+
+def _binary_buy_recall_score(
+    estimator: Any, features: DataFrame, actual: Series
+) -> float:
+    predicted = _binary_buy_predictions(estimator, features, actual)
+    targets = _binary_buy_targets(actual, len(features))
+    return float(recall_score(targets, predicted, zero_division=0))
+
+
+def _binary_buy_f1_score(
+    estimator: Any, features: DataFrame, actual: Series
+) -> float:
+    predicted = _binary_buy_predictions(estimator, features, actual)
+    targets = _binary_buy_targets(actual, len(features))
+    return float(f1_score(targets, predicted, zero_division=0))
+
+
+def _binary_buy_roc_auc_score(
+    estimator: Any, features: DataFrame, actual: Series
+) -> float:
+    targets = _binary_buy_targets(actual, len(features))
+    probabilities = _binary_buy_probabilities(estimator, features)
+    return float(roc_auc_score(targets, probabilities))
+
+
+def _binary_buy_drawdown(net_returns: np.ndarray) -> float:
+    if net_returns.size == 0:
+        return 0.0
+    equity = np.concatenate(([1.0], np.cumprod(1.0 + net_returns)))
+    if not bool(np.isfinite(equity).all()) or bool(np.any(equity <= 0.0)):
+        raise ValueError("tuning_binary_economic_equity_invalid")
+    peaks = np.maximum.accumulate(equity)
+    return float(np.max((peaks - equity) / peaks))
+
+
+def Binary_BUY_Economic_Score(
+    estimator: Any,
+    features: DataFrame,
+    actual: Series,
+    *,
+    gross_returns_by_index: Series,
+    estimated_cost_bps: float = DEFAULT_ESTIMATED_ROUND_TRIP_COST_BPS,
+    buy_probability_threshold: float = DEFAULT_BINARY_BUY_THRESHOLD,
+    drawdown_penalty_weight: float = CUSTOM_SCORE_DRAWDOWN_PENALTY_WEIGHT,
+) -> float:
+    """Score only threshold-qualified BUY proposals; NO_BUY has no missed-profit cost.
+
+    The score uses only rows on which the model proposes a BUY. Realized gross
+    event returns are reduced by the configured round-trip cost, and sequential
+    drawdown among selected proposals is penalized. A model that predicts NO_BUY
+    receives zero for those rows: missed opportunities are not penalized and
+    there is no minimum-trade-count penalty.
+    """
+    _binary_buy_targets(actual, len(features))
+    if (
+        not isinstance(gross_returns_by_index, Series)
+        or gross_returns_by_index.index.has_duplicates
+        or len(features) != len(actual)
+    ):
+        raise ValueError("tuning_binary_economic_alignment_invalid")
+    if (
+        isinstance(estimated_cost_bps, bool)
+        or not isfinite(float(estimated_cost_bps))
+        or estimated_cost_bps < 0.0
+    ):
+        raise ValueError("tuning_binary_estimated_cost_invalid")
+    if (
+        isinstance(drawdown_penalty_weight, bool)
+        or not isfinite(float(drawdown_penalty_weight))
+        or drawdown_penalty_weight < 0.0
+    ):
+        raise ValueError("tuning_binary_drawdown_penalty_invalid")
+    cutoff = _binary_buy_threshold(buy_probability_threshold)
+    probabilities = _binary_buy_probabilities(estimator, features)
+    selected = probabilities >= cutoff
+    gross = gross_returns_by_index.reindex(features.index).to_numpy(dtype=float)
+    if len(gross) != len(features) or not bool(np.isfinite(gross).all()):
+        raise ValueError("tuning_binary_economic_outcomes_missing_or_non_finite")
+    selected_gross = gross[selected]
+    if selected_gross.size == 0:
+        return 0.0
+    net_returns = selected_gross - float(estimated_cost_bps) / 10_000.0
+    if (
+        not bool(np.isfinite(net_returns).all())
+        or bool(np.any(net_returns <= -1.0))
+    ):
+        raise ValueError("tuning_binary_net_returns_invalid")
+    expectancy_bps = float(np.mean(net_returns)) * 10_000.0
+    positive_expectancy_reward_bps = max(0.0, expectancy_bps)
+    drawdown_bps = _binary_buy_drawdown(net_returns) * 10_000.0
+    return (
+        expectancy_bps
+        + positive_expectancy_reward_bps
+        - float(drawdown_penalty_weight) * drawdown_bps
+    )
+
+
+def _validate_binary_tuning_inputs(
+    estimator: Any,
+    features: DataFrame,
+    labels: Series,
+    training_indices: Sequence[int],
+    label_end_indices: Sequence[object],
+    *,
+    class_weight_policy: str,
+    horizon_candles: int,
+    n_iter: int,
+    n_splits: int,
+    random_state: int,
+    estimated_cost_bps: float,
+    buy_probability_threshold: float,
+) -> tuple[int, int, int, float, float]:
+    del estimator
+    iterations = _positive_integer(
+        n_iter, "tuning_binary_random_search_iterations_invalid"
+    )
+    split_count = _positive_integer(
+        n_splits, "tuning_binary_inner_cv_split_count_invalid"
+    )
+    seed = _nonnegative_integer(random_state, "tuning_binary_random_state_invalid")
+    horizon = _positive_integer(horizon_candles, "tuning_binary_horizon_invalid")
+    if iterations > 27:
+        raise ValueError("tuning_random_search_iterations_out_of_policy")
+    if not class_weight_policy.strip():
+        raise ValueError("tuning_class_weight_policy_missing")
+    _validate_tuning_training_alignment(
+        features, labels, training_indices, label_end_indices
+    )
+    _binary_buy_targets(labels, len(features))
+    if (
+        isinstance(estimated_cost_bps, bool)
+        or not isfinite(float(estimated_cost_bps))
+        or estimated_cost_bps < 0.0
+    ):
+        raise ValueError("tuning_binary_estimated_cost_invalid")
+    threshold = _binary_buy_threshold(buy_probability_threshold)
+    return iterations, split_count, seed, float(estimated_cost_bps), threshold
+
+
+def tune_lightgbm_binary_classifier(
+    estimator: Any,
+    features: DataFrame,
+    labels: Series,
+    training_indices: Sequence[int],
+    label_end_indices: Sequence[object],
+    *,
+    horizon_candles: int,
+    class_weight_policy: str,
+    n_iter: int = DEFAULT_RANDOM_SEARCH_ITERATIONS,
+    n_splits: int = DEFAULT_INNER_CV_SPLITS,
+    random_state: int = DEFAULT_RANDOM_STATE,
+    minimum_class_samples: int = DEFAULT_MINIMUM_CLASS_SAMPLES,
+    minimum_validation_class_samples: int = DEFAULT_MINIMUM_CLASS_SAMPLES,
+    economic_outcomes: Series,
+    estimated_cost_bps: float = DEFAULT_ESTIMATED_ROUND_TRIP_COST_BPS,
+    buy_probability_threshold: float = DEFAULT_BINARY_BUY_THRESHOLD,
+) -> tuple[Any, dict[str, Any]]:
+    """Tune a binary BUY/NO_BUY LightGBM using purged CV and BUY-only economics."""
+    (
+        iterations,
+        split_count,
+        seed,
+        estimated_cost,
+        threshold,
+    ) = _validate_binary_tuning_inputs(
+        estimator,
+        features,
+        labels,
+        training_indices,
+        label_end_indices,
+        class_weight_policy=class_weight_policy,
+        horizon_candles=horizon_candles,
+        n_iter=n_iter,
+        n_splits=n_splits,
+        random_state=random_state,
+        estimated_cost_bps=estimated_cost_bps,
+        buy_probability_threshold=buy_probability_threshold,
+    )
+    minimum_fit = _positive_integer(
+        minimum_class_samples, "tuning_binary_minimum_class_samples_invalid"
+    )
+    minimum_validation = _positive_integer(
+        minimum_validation_class_samples,
+        "tuning_binary_minimum_validation_class_samples_invalid",
+    )
+    if (
+        not isinstance(economic_outcomes, Series)
+        or economic_outcomes.index.has_duplicates
+    ):
+        raise ValueError("tuning_binary_economic_outcomes_invalid")
+    aligned_outcomes = economic_outcomes.reindex(features.index)
+    if aligned_outcomes.isna().any() or not bool(
+        np.isfinite(aligned_outcomes.to_numpy(dtype=float)).all()
+    ):
+        raise ValueError("tuning_binary_economic_outcomes_missing_or_non_finite")
+    cv_splits, fold_diagnostics = build_purged_time_series_splits(
+        training_indices,
+        labels,
+        label_end_indices,
+        horizon_candles=horizon_candles,
+        n_splits=split_count,
+        minimum_class_samples=minimum_fit,
+        class_labels=BINARY_BUY_LABELS,
+        minimum_validation_class_samples=minimum_validation,
+    )
+    search = RandomizedSearchCV(
+        estimator=estimator,
+        param_distributions=HYPERPARAMETER_DISTRIBUTIONS,
+        n_iter=iterations,
+        scoring={
+            "binary_buy_precision": _binary_buy_precision_score,
+            "binary_buy_recall": _binary_buy_recall_score,
+            "binary_buy_f1": _binary_buy_f1_score,
+            "binary_roc_auc": _binary_buy_roc_auc_score,
+            "binary_buy_economic_score": partial(
+                Binary_BUY_Economic_Score,
+                gross_returns_by_index=economic_outcomes,
+                estimated_cost_bps=estimated_cost,
+                buy_probability_threshold=threshold,
+            ),
+        },
+        cv=cv_splits,
+        refit=False,
+        random_state=seed,
+        n_jobs=1,
+        pre_dispatch=1,
+        error_score="raise",
+        return_train_score=False,
+    )
+    search.fit(features, labels)
+    results = search.cv_results_
+    score_values = np.asarray(
+        results["mean_test_binary_buy_economic_score"], dtype=float
+    )
+    precision_values = np.asarray(results["mean_test_binary_buy_precision"], dtype=float)
+    recall_values = np.asarray(results["mean_test_binary_buy_recall"], dtype=float)
+    f1_values = np.asarray(results["mean_test_binary_buy_f1"], dtype=float)
+    auc_values = np.asarray(results["mean_test_binary_roc_auc"], dtype=float)
+    parameters = results["params"]
+    arrays = (score_values, precision_values, recall_values, f1_values, auc_values)
+    if (
+        not score_values.size
+        or len({len(item) for item in arrays} | {len(parameters)}) != 1
+        or not all(bool(np.isfinite(item).all()) for item in arrays)
+    ):
+        raise ValueError("tuning_binary_cv_results_invalid")
+    best_index = max(
+        range(len(parameters)),
+        key=lambda index: (
+            float(score_values[index]),
+            float(precision_values[index]),
+            float(auc_values[index]),
+            float(recall_values[index]),
+            *_candidate_complexity_key(dict(parameters[index])),
+        ),
+    )
+    best_parameters = dict(parameters[best_index])
+    fitted_estimator = _fit_selected_estimator(
+        estimator, features, labels, best_parameters
+    )
+    diagnostics = {
+        "search_method": "RANDOM_SEARCH",
+        "candidate_count": len(parameters),
+        "candidate_fit_count": len(parameters) * len(fold_diagnostics),
+        "inner_cv_method": "PURGED_EXPANDING_TIME_SERIES",
+        "inner_cv_fold_count": len(fold_diagnostics),
+        "inner_cv_scope": "OUTER_TRAIN_ONLY",
+        "inner_cv_folds": fold_diagnostics,
+        "class_labels": list(BINARY_BUY_LABELS),
+        "minimum_fit_class_samples": minimum_fit,
+        "minimum_validation_class_samples": minimum_validation,
+        "validation_accessed_during_search": False,
+        "final_refit_scope": "FULL_OUTER_TRAIN_ONLY",
+        "class_weight_policy": class_weight_policy,
+        "selection_objective": BINARY_BUY_OBJECTIVE,
+        "economic_scorer": "Binary_BUY_Economic_Score",
+        "buy_probability_threshold": threshold,
+        "selected_parameters": best_parameters,
+        "selected_mean_cv_binary_buy_economic_score": round(
+            float(score_values[best_index]), 8
+        ),
+        "selected_mean_cv_buy_precision": round(
+            float(precision_values[best_index]), 8
+        ),
+        "selected_mean_cv_buy_recall": round(
+            float(recall_values[best_index]), 8
+        ),
+        "selected_mean_cv_buy_f1": round(float(f1_values[best_index]), 8),
+        "selected_mean_cv_roc_auc": round(float(auc_values[best_index]), 8),
+        "custom_economic_score_contract": {
+            "score_scope": "PREDICTED_BUY_ROWS_ONLY",
+            "estimated_round_trip_cost_bps": estimated_cost,
+            "buy_probability_threshold": threshold,
+            "missed_opportunity_penalty_bps": 0.0,
+            "no_buy_predictions_are_penalized": False,
+            "minimum_trade_count_penalty": False,
+            "drawdown_penalty_weight": CUSTOM_SCORE_DRAWDOWN_PENALTY_WEIGHT,
+            "positive_net_expectancy_reward_multiplier": 2.0,
+        },
+        "random_state": seed,
+    }
     return fitted_estimator, diagnostics
