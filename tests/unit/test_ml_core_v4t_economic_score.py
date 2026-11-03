@@ -631,9 +631,7 @@ def test_v4t_report_rejects_mismatched_trained_candidate_tuning_evidence() -> No
         "selection_objective": "CUSTOM_ECONOMIC_SCORE",
         "validation_accessed_during_search": True,
         "economic_scorer": "Custom_Economic_Score",
-        "custom_economic_score_contract": {
-            "minimum_trade_count_soft_target": 30
-        },
+        "custom_economic_score_contract": {"minimum_trade_count_soft_target": 30},
     }
     with pytest.raises(
         ValueError, match="v4t_trained_candidate_tuning_diagnostics_invalid"
@@ -647,4 +645,3 @@ def test_v4t_report_rejects_mismatched_trained_candidate_tuning_evidence() -> No
                 }
             ]
         )
-
