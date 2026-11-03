@@ -191,9 +191,7 @@ def _pooled_label_summary(
 ) -> dict[str, Any]:
     contexts = _collect_label_contexts(experiments, arm_name)
     splits = {
-        split: _pooled_distribution(
-            contexts, "label_distribution", split, "count"
-        )
+        split: _pooled_distribution(contexts, "label_distribution", split, "count")
         for split in ("train", "validation")
     }
     return {
@@ -201,6 +199,7 @@ def _pooled_label_summary(
         "splits": splits,
         "exit_reasons": _pooled_exit_reason_distribution(contexts),
     }
+
 
 def _mean_metric(values: list[float]) -> float | None:
     return round(statistics.mean(values), 6) if values else None
@@ -242,9 +241,7 @@ def _record_probability_split_metrics(
     _record_numeric_metric(metrics, f"{split}_hold_ece", ece)
 
 
-def _probability_metrics(
-    variants: list[dict[str, Any]]
-) -> dict[str, list[float]]:
+def _probability_metrics(variants: list[dict[str, Any]]) -> dict[str, list[float]]:
     metrics: dict[str, list[float]] = defaultdict(list)
     for variant in variants:
         diagnostics = variant.get("probability_diagnostics", {})
@@ -264,7 +261,8 @@ def _probability_summary(
         for variant in variants
     )
     support_values = [
-        value for value in (_hold_support_count(variant) for variant in variants)
+        value
+        for value in (_hold_support_count(variant) for variant in variants)
         if value is not None
     ]
     metrics = _probability_metrics(variants)
@@ -280,6 +278,7 @@ def _probability_summary(
             name: _mean_metric(values) for name, values in sorted(metrics.items())
         },
     }
+
 
 def _arm_activity_summary(report: dict[str, Any], arm_name: str) -> dict[str, Any]:
     arm = next(item for item in report["arms"] if item["name"] == arm_name)
@@ -385,10 +384,13 @@ def _render_activity_section(summary: dict[str, Any]) -> str:
     ]
     for name in ARM_NAMES:
         item = activity[name]
-        thresholds = ", ".join(
-            f"{value} ({count})"
-            for value, count in sorted(item["confidence_threshold_counts"].items())
-        ) or "موجود نیست"
+        thresholds = (
+            ", ".join(
+                f"{value} ({count})"
+                for value, count in sorted(item["confidence_threshold_counts"].items())
+            )
+            or "موجود نیست"
+        )
         ratio = item["accepted_buy_percent_of_raw"]
         ratio_text = "موجود نیست" if ratio is None else f"{ratio:.4f}%"
         lines.append(
@@ -417,10 +419,13 @@ def _render_threshold_optimization_section(summary: dict[str, Any]) -> str:
     ]
     for name in ARM_NAMES:
         item = probability[name]
-        statuses = ", ".join(
-            f"{status}: {count}"
-            for status, count in sorted(item["threshold_optimization_statuses"].items())
-        ) or "موجود نیست"
+        statuses = (
+            ", ".join(
+                f"{status}: {count}"
+                for status, count in sorted(item["threshold_optimization_statuses"].items())
+            )
+            or "موجود نیست"
+        )
         support = item["calibration_hold_positive_support"]
         if support["minimum"] is None:
             support_text = "موجود نیست"
