@@ -542,7 +542,7 @@ def _run_context(
             sample_gate = experiment.get("sample_gate")
             if not isinstance(sample_gate, dict):
                 raise ValueError("v4t_sample_gate_diagnostics_missing")
-            experiment_record = {
+            experiment_record: dict[str, Any] = {
                 "arm": str(arm["name"]),
                 "geometry": str(arm["geometry"]),
                 "pair": pair,
