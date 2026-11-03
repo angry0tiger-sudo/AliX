@@ -310,7 +310,6 @@ def _binary_outer_split(
     return train_indices, validation_indices, diagnostics
 
 
-
 def _validate_binary_calibration_split_inputs(
     outer_train_indices: list[int],
     label_end_indices: list[int],
@@ -376,7 +375,6 @@ def _binary_calibration_split_diagnostics(
     }
 
 
-
 def _binary_calibration_split(
     outer_train_indices: list[int],
     label_end_indices: list[int],
@@ -400,6 +398,7 @@ def _binary_calibration_split(
         len(outer_train_indices),
     )
     return fit_indices, calibration_indices, diagnostics
+
 
 def _binary_class_counts(labels: Series) -> dict[str, int]:
     return {label: int((labels == label).sum()) for label in BINARY_BUY_LABELS}
@@ -615,7 +614,6 @@ def _buy_probabilities(model: Any, features: DataFrame) -> np.ndarray:
     return buy
 
 
-
 def _validate_binary_classification_metric_inputs(
     actual: Series,
     buy_probabilities: np.ndarray,
@@ -692,7 +690,6 @@ def _binary_classification_confusion_matrix(
     }
 
 
-
 def _binary_classification_metrics(
     actual: Series,
     buy_probabilities: np.ndarray,
@@ -717,6 +714,7 @@ def _binary_classification_metrics(
             actual_values, predicted_values
         ),
     }
+
 
 def _feature_importance_gain(model: Any, features: DataFrame) -> list[dict[str, Any]]:
     booster = getattr(model, "booster_", None)

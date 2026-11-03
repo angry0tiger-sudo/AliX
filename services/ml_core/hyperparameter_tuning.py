@@ -1262,7 +1262,6 @@ def _validate_binary_tuning_inputs(
     )
 
 
-
 def _validate_binary_tuning_economic_outcomes(
     features: DataFrame, economic_outcomes: Series
 ) -> None:
@@ -1428,9 +1427,7 @@ def _binary_tuning_diagnostics(
         "selected_mean_cv_binary_buy_economic_score": round(
             selected_scores["economic_score"], 8
         ),
-        "selected_mean_cv_buy_precision": round(
-            selected_scores["buy_precision"], 8
-        ),
+        "selected_mean_cv_buy_precision": round(selected_scores["buy_precision"], 8),
         "selected_mean_cv_buy_recall": round(selected_scores["buy_recall"], 8),
         "selected_mean_cv_buy_f1": round(selected_scores["buy_f1"], 8),
         "selected_mean_cv_roc_auc": round(selected_scores["roc_auc"], 8),
@@ -1453,7 +1450,6 @@ def _binary_tuning_diagnostics(
         },
         "random_state": seed,
     }
-
 
 
 def tune_lightgbm_binary_classifier(
@@ -1533,8 +1529,8 @@ def tune_lightgbm_binary_classifier(
         missed_penalty_weight=missed_penalty_weight,
     )
     search.fit(features, labels)
-    best_parameters, candidate_count, selected_scores = (
-        _select_binary_tuning_candidate(search.cv_results_)
+    best_parameters, candidate_count, selected_scores = _select_binary_tuning_candidate(
+        search.cv_results_
     )
     fitted_estimator = _fit_selected_estimator(
         estimator, features, labels, best_parameters
@@ -1554,4 +1550,3 @@ def tune_lightgbm_binary_classifier(
         seed=seed,
     )
     return fitted_estimator, diagnostics
-
