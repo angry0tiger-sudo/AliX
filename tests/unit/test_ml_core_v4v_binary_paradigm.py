@@ -358,6 +358,93 @@ def test_v4v_step_summary_contains_economic_metrics_and_closed_safety() -> None:
     assert "portfolio overlap is not modeled" in summary
 
 
+def test_v4v_economic_outcomes_reconstruct_barrier_exit_returns() -> None:
+    bars = DataFrame(
+        {
+            "open": [100.0, 100.0, 100.0, 100.0],
+            "close": [101.0, 102.0, 103.0, 104.0],
+        }
+    )
+    labels = DataFrame(
+        {
+            "event_index": [0, 1, 2],
+            "label_end_idx": [1, 2, 3],
+            "source_label": ["BUY", "SELL", "HOLD"],
+            "take_profit_price": [102.0, 101.0, 105.0],
+            "stop_loss_price": [98.0, 99.0, 95.0],
+            "exit_reason": ["TP_HIT", "SL_HIT", "HORIZON_EXPIRY"],
+        }
+    )
+    outcomes = v4v._economic_outcomes_by_index(bars, labels)
+    assert outcomes.iloc[0] == pytest.approx(0.02)
+    assert outcomes.iloc[1] == pytest.approx(-0.01)
+    assert outcomes.iloc[2] == pytest.approx(0.04)
+    assert pd.isna(outcomes.iloc[3])
+
+
+def test_v4v_trade_metrics_reconcile_net_gross_costs_and_profit_factor() -> None:
+    trades = [
+        {
+            "net_pnl_usd": 4.0,
+            "gross_market_pnl_usd": 4.5,
+            "fees_usd": 0.25,
+            "slippage_cost_usd": 0.25,
+        },
+        {
+            "net_pnl_usd": -1.0,
+            "gross_market_pnl_usd": -0.5,
+            "fees_usd": 0.25,
+            "slippage_cost_usd": 0.25,
+        },
+    ]
+    metrics = v4v._trade_metrics(trades)
+    assert metrics["trade_count"] == 2
+    assert metrics["winning_trade_count"] == 1
+    assert metrics["losing_trade_count"] == 1
+    assert metrics["win_rate"] == pytest.approx(0.5)
+    assert metrics["net_profit_factor"] == pytest.approx(4.0)
+    assert metrics["gross_profit_factor"] == pytest.approx(9.0)
+    assert metrics["net_pnl_usd"] == pytest.approx(3.0)
+    assert metrics["gross_market_pnl_usd"] == pytest.approx(4.0)
+    assert metrics["fees_usd"] == pytest.approx(0.5)
+    assert metrics["slippage_cost_usd"] == pytest.approx(0.5)
+    assert metrics["net_profit_factor_infinite_no_losses"] is False
+
+
+def test_v4v_arm_aggregate_keeps_skips_out_of_economic_totals() -> None:
+    trade = {
+        "net_pnl_usd": 4.0,
+        "gross_market_pnl_usd": 4.5,
+        "fees_usd": 0.25,
+        "slippage_cost_usd": 0.25,
+    }
+    candidates = [
+        {
+            "arm": "PRIMARY_ASYMMETRIC_1_5R",
+            "status": "TRAINED",
+            "trades": [trade],
+            "metrics": {
+                "max_drawdown_percent": 7.5,
+                "economic_candidate_gate_passed": True,
+            },
+        },
+        {
+            "arm": "PRIMARY_ASYMMETRIC_1_5R",
+            "status": "SKIPPED_INSUFFICIENT_SAMPLES",
+            "trades": [],
+            "metrics": {},
+        },
+    ]
+    aggregate = v4v._arm_aggregate(candidates, "PRIMARY_ASYMMETRIC_1_5R")
+    assert aggregate["candidate_count"] == 2
+    assert aggregate["trained_candidate_count"] == 1
+    assert aggregate["skipped_candidate_count"] == 1
+    assert aggregate["trade_count"] == 1
+    assert aggregate["net_pnl_usd"] == pytest.approx(4.0)
+    assert aggregate["mean_candidate_max_drawdown_percent"] == pytest.approx(7.5)
+    assert aggregate["economic_pass_candidate_count"] == 1
+
+
 def test_v4v_geometry_contract_is_paired_control_and_primary() -> None:
     assert {
         (
