@@ -706,7 +706,7 @@ def _build_tuning_diagnostics(
         if tuning_objective == "CUSTOM_ECONOMIC_SCORE"
         else None,
         "estimated_round_trip_cost_bps": 90.0
-        if tuning_objective == "NET_EXPECTANCY_PROXY"
+        if tuning_objective in {"NET_EXPECTANCY_PROXY", "CUSTOM_ECONOMIC_SCORE"}
         else None,
         "economic_scorer_scope": "INNER_CV_FOLDS_WITHIN_OUTER_TRAIN"
         if tuning_objective in {"NET_EXPECTANCY_PROXY", "CUSTOM_ECONOMIC_SCORE"}

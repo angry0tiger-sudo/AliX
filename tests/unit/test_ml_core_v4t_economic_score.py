@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import math
-from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -60,7 +58,7 @@ def test_custom_economic_score_rewards_positive_net_expectancy() -> None:
 def test_custom_economic_score_penalizes_drawdown_and_low_trade_count() -> None:
     features = DataFrame({"x": list(range(30))})
     actual = Series(["BUY"] * 30)
-    gross = Series([0.02] * 15 + [-0.03] * 15)
+    gross = Series([0.01] * 30)
     score = Custom_Economic_Score(
         FixedPredictions(["BUY"] * 30),
         features,

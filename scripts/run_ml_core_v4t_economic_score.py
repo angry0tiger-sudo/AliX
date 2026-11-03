@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pandas as pd
 from pandas import DataFrame, Series
 
 from scripts.run_ml_core_real_data_baseline import (
@@ -119,7 +120,7 @@ def _economic_outcomes_by_index(bars: DataFrame, labels: DataFrame) -> Series:
         if actual_label not in LABELS:
             continue
         raw_end = getattr(row, "label_end_idx")
-        if raw_end is None or bool(np.asarray([raw_end is np.nan])[0]):
+        if pd.isna(raw_end):
             continue
         if not np.isfinite(float(raw_end)):
             continue
@@ -982,13 +983,22 @@ def _write_outputs(
     trades_path: Path,
     probabilities_path: Path,
     feature_importance_path: Path,
+    probability_rows: list[dict[str, Any]],
 ) -> None:
+    if len(probability_rows) != int(
+        report["row_level_probability_artifact"]["row_count"]
+    ):
+        raise ValueError("v4t_probability_artifact_row_count_mismatch")
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(
         json.dumps(report, indent=2, sort_keys=True, allow_nan=False) + "\n",
         encoding="utf-8",
     )
-    _write_csv(comparison_path, report["comparison_rows"], list(report["comparison_rows"][0]))
+    _write_csv(
+        comparison_path,
+        report["comparison_rows"],
+        list(report["comparison_rows"][0]),
+    )
     _write_csv(
         trades_path,
         report["trade_rows"],
@@ -1013,7 +1023,7 @@ def _write_outputs(
             "exit_reason",
         ),
     )
-    _write_csv(probabilities_path, report["_row_level_probability_rows"], V4T_PROBABILITY_COLUMNS)
+    _write_csv(probabilities_path, probability_rows, V4T_PROBABILITY_COLUMNS)
     _write_csv(
         feature_importance_path,
         report["feature_importance_rows"],
@@ -1060,7 +1070,6 @@ def run_v4t(
         probability_rows=probability_rows,
         random_search_iterations=random_search_iterations,
     )
-    report["_row_level_probability_rows"] = probability_rows
     _write_outputs(
         report,
         report_path,
@@ -1068,8 +1077,8 @@ def run_v4t(
         trades_path,
         probabilities_path,
         feature_importance_path,
+        probability_rows,
     )
-    report.pop("_row_level_probability_rows", None)
     print(
         json.dumps(
             {
