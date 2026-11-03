@@ -174,40 +174,38 @@ def _source_label_distribution(values: Series) -> dict[str, Any]:
     }
 
 
-def _binary_outer_split(
-    features: DataFrame,
-    labels: DataFrame,
-    *,
-    horizon_candles: int,
-) -> tuple[list[int], list[int], dict[str, Any]]:
-    """Apply the established chronological purged split to binary labels."""
-    row_count = len(labels)
-    if len(features) != row_count or row_count < 100:
+def _outer_validation_bounds(row_count: int) -> tuple[int, int]:
+    if row_count < 100:
         raise ValueError("v4v_outer_split_rows_invalid")
     validation_start = int(row_count * V4V_OUTER_VALIDATION_START_FRACTION)
     validation_end = int(row_count * V4V_OUTER_VALIDATION_END_FRACTION) - 1
     if validation_end <= validation_start:
         raise ValueError("v4v_outer_validation_window_invalid")
+    return validation_start, validation_end
 
-    label_ends = [
+
+def _outer_label_end_indices(labels: DataFrame) -> list[int]:
+    return [
         index if pd.isna(value) else int(value)
         for index, value in enumerate(labels["label_end_idx"].tolist())
     ]
-    split = create_purged_embargo_split(
-        label_ends,
-        validation_start=validation_start,
-        validation_end=validation_end,
-        label_horizon_candles=horizon_candles,
-    )
+
+
+def _binary_eligible_indices(features: DataFrame, labels: DataFrame) -> set[int]:
     eligible_mask = (
         features.notna().all(axis=1)
         & labels["label"].isin(BINARY_BUY_LABELS)
         & labels["label_end_idx"].notna()
     )
-    eligible_indices = {
+    return {
         int(index) for index in np.flatnonzero(eligible_mask.to_numpy(dtype=bool))
     }
-    train_limit = validation_start - split.embargo_size
+
+
+def _retained_outer_split_indices(
+    split: Any, eligible_indices: set[int], validation_start: int
+) -> tuple[list[int], list[int], int]:
+    train_limit = validation_start - int(split.embargo_size)
     train_indices = [
         int(index)
         for index in split.train_indices
@@ -216,19 +214,41 @@ def _binary_outer_split(
     validation_indices = [
         int(index) for index in split.validation_indices if index in eligible_indices
     ]
-    if (
-        not train_indices
-        or not validation_indices
-        or train_indices != sorted(set(train_indices))
-        or validation_indices != sorted(set(validation_indices))
-        or train_indices[-1] >= validation_indices[0]
-    ):
+    return train_indices, validation_indices, train_limit
+
+
+def _validate_outer_split_chronology(
+    train_indices: list[int],
+    validation_indices: list[int],
+    label_ends: list[int],
+) -> int:
+    indices_are_valid = (
+        bool(train_indices)
+        and bool(validation_indices)
+        and train_indices == sorted(set(train_indices))
+        and validation_indices == sorted(set(validation_indices))
+        and train_indices[-1] < validation_indices[0]
+    )
+    if not indices_are_valid:
         raise ValueError("v4v_outer_split_chronology_invalid")
     maximum_train_label_end = max(label_ends[index] for index in train_indices)
     if maximum_train_label_end >= validation_indices[0]:
         raise ValueError("v4v_outer_split_label_overlap")
+    return maximum_train_label_end
 
-    diagnostics = {
+
+def _outer_split_diagnostics(
+    *,
+    validation_start: int,
+    validation_end: int,
+    train_limit: int,
+    train_indices: list[int],
+    validation_indices: list[int],
+    maximum_train_label_end: int,
+    split: Any,
+    eligible_count: int,
+) -> dict[str, Any]:
+    return {
         "method": "PURGED_CHRONOLOGICAL_OUTER_HOLDOUT",
         "validation_start_index": validation_start,
         "validation_end_index": validation_end,
@@ -242,40 +262,93 @@ def _binary_outer_split(
         "pre_validation_embargo_candles": split.embargo_size,
         "post_validation_embargo_start_index": split.embargo_start,
         "post_validation_embargo_end_index": split.embargo_end,
-        "eligible_sample_count": len(eligible_indices),
+        "eligible_sample_count": eligible_count,
         "inner_tuning_uses_outer_train_only": True,
     }
+
+
+def _binary_outer_split(
+    features: DataFrame,
+    labels: DataFrame,
+    *,
+    horizon_candles: int,
+) -> tuple[list[int], list[int], dict[str, Any]]:
+    """Apply the established chronological purged split to binary labels."""
+    row_count = len(labels)
+    if len(features) != row_count:
+        raise ValueError("v4v_outer_split_rows_invalid")
+    validation_start, validation_end = _outer_validation_bounds(row_count)
+    label_ends = _outer_label_end_indices(labels)
+    split = create_purged_embargo_split(
+        label_ends,
+        validation_start=validation_start,
+        validation_end=validation_end,
+        label_horizon_candles=horizon_candles,
+    )
+    eligible_indices = _binary_eligible_indices(features, labels)
+    train_indices, validation_indices, train_limit = _retained_outer_split_indices(
+        split, eligible_indices, validation_start
+    )
+    maximum_train_label_end = _validate_outer_split_chronology(
+        train_indices, validation_indices, label_ends
+    )
+    diagnostics = _outer_split_diagnostics(
+        validation_start=validation_start,
+        validation_end=validation_end,
+        train_limit=train_limit,
+        train_indices=train_indices,
+        validation_indices=validation_indices,
+        maximum_train_label_end=maximum_train_label_end,
+        split=split,
+        eligible_count=len(eligible_indices),
+    )
     return train_indices, validation_indices, diagnostics
+
+
+def _binary_class_counts(labels: Series) -> dict[str, int]:
+    return {
+        label: int((labels == label).sum()) for label in BINARY_BUY_LABELS
+    }
+
+
+def _classes_below_minimum(
+    counts: dict[str, int], minimum_samples: int
+) -> list[str]:
+    return [
+        label for label, count in counts.items() if count < minimum_samples
+    ]
+
+
+def _binary_sample_gate_status(
+    missing_classes: list[str],
+    insufficient_train: list[str],
+    insufficient_validation: list[str],
+) -> str:
+    if missing_classes:
+        return "SKIPPED_INSUFFICIENT_CLASS_DIVERSITY"
+    if insufficient_train or insufficient_validation:
+        return "SKIPPED_INSUFFICIENT_SAMPLES"
+    return "PASS"
 
 
 def _binary_sample_gate(
     train_labels: Series, validation_labels: Series
 ) -> dict[str, Any]:
-    train_counts = {
-        label: int((train_labels == label).sum()) for label in BINARY_BUY_LABELS
-    }
-    validation_counts = {
-        label: int((validation_labels == label).sum()) for label in BINARY_BUY_LABELS
-    }
-    missing = [label for label, count in train_counts.items() if count == 0]
-    insufficient_train = [
-        label
-        for label, count in train_counts.items()
-        if count < MIN_TRAIN_SAMPLES_PER_CLASS
+    train_counts = _binary_class_counts(train_labels)
+    validation_counts = _binary_class_counts(validation_labels)
+    missing = [
+        label for label, count in train_counts.items() if count == 0
     ]
-    insufficient_validation = [
-        label
-        for label, count in validation_counts.items()
-        if count < MIN_VALIDATION_SAMPLES_PER_CLASS
-    ]
-    if missing:
-        status = "SKIPPED_INSUFFICIENT_CLASS_DIVERSITY"
-    elif insufficient_train or insufficient_validation:
-        status = "SKIPPED_INSUFFICIENT_SAMPLES"
-    else:
-        status = "PASS"
+    insufficient_train = _classes_below_minimum(
+        train_counts, MIN_TRAIN_SAMPLES_PER_CLASS
+    )
+    insufficient_validation = _classes_below_minimum(
+        validation_counts, MIN_VALIDATION_SAMPLES_PER_CLASS
+    )
     return {
-        "status": status,
+        "status": _binary_sample_gate_status(
+            missing, insufficient_train, insufficient_validation
+        ),
         "class_labels": list(BINARY_BUY_LABELS),
         "minimum_train_samples_per_class": MIN_TRAIN_SAMPLES_PER_CLASS,
         "minimum_validation_samples_per_class": MIN_VALIDATION_SAMPLES_PER_CLASS,
@@ -331,8 +404,7 @@ def _binary_inner_cv_preflight(
     }
 
 
-def _economic_outcomes_by_index(bars: DataFrame, labels: DataFrame) -> Series:
-    """Build next-open gross long returns from the original barrier outcomes."""
+def _validate_economic_label_columns(labels: DataFrame) -> None:
     required = {
         "event_index",
         "label_end_idx",
@@ -343,38 +415,57 @@ def _economic_outcomes_by_index(bars: DataFrame, labels: DataFrame) -> Series:
     }
     if not required.issubset(labels.columns):
         raise ValueError("v4v_economic_label_columns_missing")
+
+
+def _economic_exit_reference(
+    bars: DataFrame, row: Any, label_end: int
+) -> float:
+    reason = str(getattr(row, "exit_reason"))
+    if reason == "TP_HIT":
+        return float(getattr(row, "take_profit_price"))
+    if reason in {"SL_HIT", "COLLISION"}:
+        return float(getattr(row, "stop_loss_price"))
+    if reason == "HORIZON_EXPIRY":
+        return float(bars.iloc[label_end]["close"])
+    raise ValueError("v4v_economic_exit_reason_invalid")
+
+
+def _economic_outcome_for_label(
+    bars: DataFrame, row: Any
+) -> tuple[int, float] | None:
+    source_label = getattr(row, "source_label")
+    if pd.isna(source_label) or str(source_label) not in {"BUY", "SELL", "HOLD"}:
+        return None
+    event_index = int(getattr(row, "event_index"))
+    if event_index < 0 or event_index + 1 >= len(bars):
+        return None
+    raw_end = getattr(row, "label_end_idx")
+    if pd.isna(raw_end):
+        return None
+    label_end = int(raw_end)
+    if label_end <= event_index or label_end >= len(bars):
+        raise ValueError("v4v_economic_label_end_index_invalid")
+    entry_reference = float(bars.iloc[event_index + 1]["open"])
+    exit_reference = _economic_exit_reference(bars, row, label_end)
+    if (
+        not np.isfinite(entry_reference)
+        or not np.isfinite(exit_reference)
+        or entry_reference <= 0.0
+        or exit_reference <= 0.0
+    ):
+        raise ValueError("v4v_economic_price_reference_invalid")
+    return event_index, exit_reference / entry_reference - 1.0
+
+
+def _economic_outcomes_by_index(bars: DataFrame, labels: DataFrame) -> Series:
+    """Build next-open gross long returns from the original barrier outcomes."""
+    _validate_economic_label_columns(labels)
     values = np.full(len(bars), np.nan, dtype=float)
     for row in labels.itertuples(index=False):
-        source_label = getattr(row, "source_label")
-        if pd.isna(source_label) or str(source_label) not in {"BUY", "SELL", "HOLD"}:
-            continue
-        event_index = int(getattr(row, "event_index"))
-        if event_index < 0 or event_index + 1 >= len(bars):
-            continue
-        raw_end = getattr(row, "label_end_idx")
-        if pd.isna(raw_end):
-            continue
-        label_end = int(raw_end)
-        if label_end <= event_index or label_end >= len(bars):
-            raise ValueError("v4v_economic_label_end_index_invalid")
-        entry_reference = float(bars.iloc[event_index + 1]["open"])
-        reason = str(getattr(row, "exit_reason"))
-        if reason == "TP_HIT":
-            exit_reference = float(getattr(row, "take_profit_price"))
-        elif reason in {"SL_HIT", "COLLISION"}:
-            exit_reference = float(getattr(row, "stop_loss_price"))
-        elif reason == "HORIZON_EXPIRY":
-            exit_reference = float(bars.iloc[label_end]["close"])
-        else:
-            raise ValueError("v4v_economic_exit_reason_invalid")
-        if (
-            not np.isfinite(entry_reference)
-            or not np.isfinite(exit_reference)
-            or entry_reference <= 0.0
-            or exit_reference <= 0.0
-        ):
-            raise ValueError("v4v_economic_price_reference_invalid")
-        values[event_index] = exit_reference / entry_reference - 1.0
+        outcome = _economic_outcome_for_label(bars, row)
+        if outcome is not None:
+            event_index, gross_return = outcome
+            values[event_index] = gross_return
     return Series(values, index=bars.index, dtype=float)
 
 
@@ -545,6 +636,54 @@ def _candidate_probability_records(
     return records
 
 
+def _execution_timestamp(record: dict[str, Any]) -> pd.Timestamp:
+    timestamp = pd.Timestamp(record["timestamp"])
+    if timestamp.tzinfo is None:
+        raise ValueError("v4v_probability_timestamp_timezone_required")
+    return timestamp.tz_convert("UTC")
+
+
+def _validate_execution_probability(value: Any) -> float:
+    probability = float(value)
+    if not np.isfinite(probability) or not 0.0 <= probability <= 1.0:
+        raise ValueError("v4v_buy_probability_invalid")
+    return probability
+
+
+def _validate_execution_order(
+    row_index: int,
+    timestamp: pd.Timestamp,
+    previous_index: int,
+    previous_timestamp: pd.Timestamp | None,
+) -> None:
+    index_out_of_order = row_index <= previous_index
+    timestamp_out_of_order = (
+        previous_timestamp is not None and timestamp <= previous_timestamp
+    )
+    if index_out_of_order or timestamp_out_of_order:
+        raise ValueError("v4v_probability_order_invalid")
+
+
+def _execution_signal_record(
+    record: dict[str, Any],
+    delta: timedelta,
+) -> dict[str, Any]:
+    row_index = int(record["row_index"])
+    timestamp = _execution_timestamp(record)
+    buy_probability = _validate_execution_probability(record["prob_buy"])
+    is_buy = buy_probability >= V4V_BUY_PROBABILITY_THRESHOLD
+    return {
+        "row_index": row_index,
+        "signal_timestamp": timestamp,
+        "execution_timestamp": timestamp + delta,
+        "signal": "BUY" if is_buy else "NO_ENTRY",
+        "raw_signal": "BUY" if buy_probability >= 0.50 else "NO_BUY",
+        "buy_probability": buy_probability,
+        "confidence_threshold": V4V_BUY_PROBABILITY_THRESHOLD,
+        "confidence_passed": is_buy,
+    }
+
+
 def _execution_signals(
     probability_records: list[dict[str, Any]],
     timeframe: str,
@@ -556,33 +695,16 @@ def _execution_signals(
     previous_index = -1
     previous_timestamp: pd.Timestamp | None = None
     for record in probability_records:
-        row_index = int(record["row_index"])
-        timestamp = pd.Timestamp(record["timestamp"])
-        if timestamp.tzinfo is None:
-            raise ValueError("v4v_probability_timestamp_timezone_required")
-        timestamp = timestamp.tz_convert("UTC")
-        if row_index <= previous_index or (
-            previous_timestamp is not None and timestamp <= previous_timestamp
-        ):
-            raise ValueError("v4v_probability_order_invalid")
-        buy_probability = float(record["prob_buy"])
-        if not np.isfinite(buy_probability) or not 0.0 <= buy_probability <= 1.0:
-            raise ValueError("v4v_buy_probability_invalid")
-        is_buy = buy_probability >= V4V_BUY_PROBABILITY_THRESHOLD
-        signals.append(
-            {
-                "row_index": row_index,
-                "signal_timestamp": timestamp,
-                "execution_timestamp": timestamp + delta,
-                "signal": "BUY" if is_buy else "NO_ENTRY",
-                "raw_signal": "BUY" if buy_probability >= 0.50 else "NO_BUY",
-                "buy_probability": buy_probability,
-                "confidence_threshold": V4V_BUY_PROBABILITY_THRESHOLD,
-                "confidence_passed": is_buy,
-            }
+        signal = _execution_signal_record(record, delta)
+        _validate_execution_order(
+            int(signal["row_index"]),
+            signal["signal_timestamp"],
+            previous_index,
+            previous_timestamp,
         )
-        previous_index = row_index
-        previous_timestamp = timestamp
+        signals.append(signal)
+        previous_index = int(signal["row_index"])
+        previous_timestamp = signal["signal_timestamp"]
     if not signals:
         raise ValueError("v4v_forward_signals_empty")
     return signals
@@ -596,34 +718,66 @@ def _profit_factor(values: list[float]) -> float | None:
     return round(gross_profit / gross_loss, 8)
 
 
-def _trade_metrics(trades: list[dict[str, Any]]) -> dict[str, Any]:
-    net = [float(item["net_pnl_usd"]) for item in trades]
-    gross = [float(item["gross_market_pnl_usd"]) for item in trades]
-    wins = sum(value > 0.0 for value in net)
-    losses = sum(value < 0.0 for value in net)
+def _trade_values(
+    trades: list[dict[str, Any]], field_name: str
+) -> list[float]:
+    return [float(item[field_name]) for item in trades]
+
+
+def _profit_factor_has_no_losses(values: list[float]) -> bool:
+    has_profit = sum(value for value in values if value > 0.0) > 0.0
+    has_losses = any(value < 0.0 for value in values)
+    return bool(values) and has_profit and not has_losses
+
+
+def _trade_side_metrics(
+    trades: list[dict[str, Any]], pnl_field: str, prefix: str
+) -> dict[str, Any]:
+    values = _trade_values(trades, pnl_field)
+    return {
+        f"{prefix}_profit_factor": _profit_factor(values),
+        f"{prefix}_profit_factor_infinite_no_losses": (
+            _profit_factor_has_no_losses(values)
+        ),
+        f"{prefix}_pnl_usd": round(sum(values), 8),
+    }
+
+
+def _trade_count_metrics(
+    trades: list[dict[str, Any]], net_values: list[float]
+) -> dict[str, Any]:
+    wins = sum(value > 0.0 for value in net_values)
+    losses = sum(value < 0.0 for value in net_values)
     return {
         "trade_count": len(trades),
         "winning_trade_count": wins,
         "losing_trade_count": losses,
         "win_rate": round(wins / len(trades), 8) if trades else None,
-        "net_profit_factor": _profit_factor(net),
-        "net_profit_factor_infinite_no_losses": bool(
-            net
-            and sum(value for value in net if value > 0.0) > 0.0
-            and not any(value < 0.0 for value in net)
-        ),
-        "gross_profit_factor": _profit_factor(gross),
-        "gross_profit_factor_infinite_no_losses": bool(
-            gross
-            and sum(value for value in gross if value > 0.0) > 0.0
-            and not any(value < 0.0 for value in gross)
-        ),
-        "net_pnl_usd": round(sum(net), 8),
-        "gross_market_pnl_usd": round(sum(gross), 8),
-        "fees_usd": round(sum(float(item["fees_usd"]) for item in trades), 8),
-        "slippage_cost_usd": round(
-            sum(float(item["slippage_cost_usd"]) for item in trades), 8
-        ),
+    }
+
+
+def _trade_cost_metrics(trades: list[dict[str, Any]]) -> dict[str, float]:
+    fees = sum(float(item["fees_usd"]) for item in trades)
+    slippage = sum(float(item["slippage_cost_usd"]) for item in trades)
+    return {
+        "fees_usd": round(fees, 8),
+        "slippage_cost_usd": round(slippage, 8),
+    }
+
+
+def _trade_metrics(trades: list[dict[str, Any]]) -> dict[str, Any]:
+    net_values = _trade_values(trades, "net_pnl_usd")
+    net_metrics = _trade_side_metrics(trades, "net_pnl_usd", "net")
+    gross_metrics = _trade_side_metrics(
+        trades, "gross_market_pnl_usd", "gross"
+    )
+    net_metrics["net_pnl_usd"] = net_metrics.pop("net_pnl_usd")
+    gross_metrics["gross_market_pnl_usd"] = gross_metrics.pop("gross_pnl_usd")
+    return {
+        **_trade_count_metrics(trades, net_values),
+        **net_metrics,
+        **gross_metrics,
+        **_trade_cost_metrics(trades),
     }
 
 
@@ -1005,38 +1159,42 @@ def _run_binary_experiment(
     return experiment, candidates, probability_rows
 
 
-def run_v4v_experiments(
-    datasets: dict[str, DataFrame],
+def _run_timeframe_experiments(
+    symbol: str,
+    timeframe: str,
+    source_bars: DataFrame,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
-    if set(datasets) != set(SYMBOLS):
-        raise ValueError("v4v_dataset_symbol_contract_mismatch")
+    pair = f"{symbol[:-4]}/USDT"
+    bars = resample_ohlcv(source_bars, timeframe)
+    if len(bars) < 100:
+        raise ValueError(f"v4v_insufficient_resampled_bars:{symbol}:{timeframe}")
+    feature_matrices = build_feature_profiles(
+        bars, profile_names=V4V_FEATURE_PROFILES
+    )
     experiments: list[dict[str, Any]] = []
     candidates: list[dict[str, Any]] = []
     probability_rows: list[dict[str, Any]] = []
-    for symbol in SYMBOLS:
-        for timeframe in V4V_TIMEFRAMES:
-            pair = f"{symbol[:-4]}/USDT"
-            bars = resample_ohlcv(datasets[symbol], timeframe)
-            if len(bars) < 100:
-                raise ValueError(
-                    f"v4v_insufficient_resampled_bars:{symbol}:{timeframe}"
-                )
-            feature_matrices = build_feature_profiles(
-                bars, profile_names=V4V_FEATURE_PROFILES
+    for arm in V4V_ARMS:
+        for feature_profile in V4V_FEATURE_PROFILES:
+            experiment, variant_candidates, rows = _run_binary_experiment(
+                arm=arm,
+                pair=pair,
+                timeframe=timeframe,
+                bars=bars,
+                feature_matrices=feature_matrices,
+                feature_profile=feature_profile,
             )
-            for arm in V4V_ARMS:
-                for feature_profile in V4V_FEATURE_PROFILES:
-                    experiment, variant_candidates, rows = _run_binary_experiment(
-                        arm=arm,
-                        pair=pair,
-                        timeframe=timeframe,
-                        bars=bars,
-                        feature_matrices=feature_matrices,
-                        feature_profile=feature_profile,
-                    )
-                    experiments.append(experiment)
-                    candidates.extend(variant_candidates)
-                    probability_rows.extend(rows)
+            experiments.append(experiment)
+            candidates.extend(variant_candidates)
+            probability_rows.extend(rows)
+    return experiments, candidates, probability_rows
+
+
+def _validate_v4v_experiment_batch(
+    experiments: list[dict[str, Any]],
+    candidates: list[dict[str, Any]],
+    probability_rows: list[dict[str, Any]],
+) -> None:
     if len(experiments) != V4V_EXPECTED_EXPERIMENTS:
         raise RuntimeError("v4v_experiment_count_mismatch")
     if len(candidates) != V4V_EXPECTED_CANDIDATES:
@@ -1047,6 +1205,27 @@ def run_v4v_experiments(
     expected_probability_rows = sum(int(item["validation_rows"]) for item in trained)
     if len(probability_rows) != expected_probability_rows:
         raise RuntimeError("v4v_probability_row_count_mismatch")
+
+
+def run_v4v_experiments(
+    datasets: dict[str, DataFrame],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    if set(datasets) != set(SYMBOLS):
+        raise ValueError("v4v_dataset_symbol_contract_mismatch")
+    experiments: list[dict[str, Any]] = []
+    candidates: list[dict[str, Any]] = []
+    probability_rows: list[dict[str, Any]] = []
+    for symbol in SYMBOLS:
+        for timeframe in V4V_TIMEFRAMES:
+            batch = _run_timeframe_experiments(
+                symbol, timeframe, datasets[symbol]
+            )
+            experiments.extend(batch[0])
+            candidates.extend(batch[1])
+            probability_rows.extend(batch[2])
+    _validate_v4v_experiment_batch(
+        experiments, candidates, probability_rows
+    )
     return experiments, candidates, probability_rows
 
 
@@ -1082,28 +1261,52 @@ def _candidate_comparison_rows(
     return rows
 
 
-def _arm_aggregate(candidates: list[dict[str, Any]], arm_name: str) -> dict[str, Any]:
+def _arm_candidate_sets(
+    candidates: list[dict[str, Any]], arm_name: str
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     selected = [item for item in candidates if item["arm"] == arm_name]
     trained = [item for item in selected if item["status"] == "TRAINED"]
-    trades = [trade for candidate in trained for trade in candidate["trades"]]
-    metrics = _trade_metrics(trades)
-    drawdowns = [
+    return selected, trained
+
+
+def _arm_trade_list(trained: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        trade for candidate in trained for trade in candidate["trades"]
+    ]
+
+
+def _arm_candidate_drawdowns(
+    trained: list[dict[str, Any]]
+) -> list[float]:
+    return [
         float(candidate["metrics"]["max_drawdown_percent"])
         for candidate in trained
         if candidate["metrics"].get("max_drawdown_percent") is not None
     ]
+
+
+def _arm_economic_pass_count(trained: list[dict[str, Any]]) -> int:
+    return sum(
+        bool(candidate["metrics"].get("economic_candidate_gate_passed"))
+        for candidate in trained
+    )
+
+
+def _arm_aggregate(
+    candidates: list[dict[str, Any]], arm_name: str
+) -> dict[str, Any]:
+    selected, trained = _arm_candidate_sets(candidates, arm_name)
+    trades = _arm_trade_list(trained)
+    drawdowns = _arm_candidate_drawdowns(trained)
     return {
         "candidate_count": len(selected),
         "trained_candidate_count": len(trained),
         "skipped_candidate_count": len(selected) - len(trained),
-        **metrics,
+        **_trade_metrics(trades),
         "mean_candidate_max_drawdown_percent": (
             round(float(np.mean(drawdowns)), 8) if drawdowns else None
         ),
-        "economic_pass_candidate_count": sum(
-            bool(candidate["metrics"].get("economic_candidate_gate_passed"))
-            for candidate in trained
-        ),
+        "economic_pass_candidate_count": _arm_economic_pass_count(trained),
     }
 
 
