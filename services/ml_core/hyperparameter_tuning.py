@@ -943,29 +943,43 @@ BINARY_BUY_OBJECTIVE = "BINARY_BUY_ECONOMIC_SCORE"
 DEFAULT_BINARY_BUY_THRESHOLD = 0.65
 
 
-def _binary_buy_probabilities(estimator: Any, features: DataFrame) -> np.ndarray:
-    """Return validated BUY probabilities independent of estimator class order."""
+def _binary_buy_class_index(estimator: Any) -> int:
     raw_classes = getattr(estimator, "classes_", None)
     if raw_classes is None:
         raise ValueError("tuning_binary_probability_classes_missing")
     classes = [str(value) for value in raw_classes]
     if len(classes) != 2 or set(classes) != set(BINARY_BUY_LABELS):
         raise ValueError("tuning_binary_probability_classes_invalid")
+    return classes.index("BUY")
+
+
+def _validated_binary_probability_matrix(
+    raw_probabilities: Any, row_count: int
+) -> np.ndarray:
+    matrix = np.asarray(raw_probabilities, dtype=float)
+    if matrix.shape != (row_count, 2):
+        raise ValueError("tuning_binary_probability_shape_invalid")
+    valid_values = (
+        bool(np.isfinite(matrix).all())
+        and not bool(np.any(matrix < 0.0))
+        and not bool(np.any(matrix > 1.0))
+        and bool(np.allclose(matrix.sum(axis=1), 1.0, atol=1e-6))
+    )
+    if not valid_values:
+        raise ValueError("tuning_binary_probabilities_invalid")
+    return matrix
+
+
+def _binary_buy_probabilities(estimator: Any, features: DataFrame) -> np.ndarray:
+    """Return validated BUY probabilities independent of estimator class order."""
+    class_index = _binary_buy_class_index(estimator)
     predict_proba = getattr(estimator, "predict_proba", None)
     if not callable(predict_proba):
         raise ValueError("tuning_binary_predict_proba_missing")
-    matrix = np.asarray(predict_proba(features), dtype=float)
-    if matrix.shape != (len(features), 2):
-        raise ValueError("tuning_binary_probability_shape_invalid")
-    buy_probabilities = matrix[:, classes.index("BUY")]
-    if (
-        not bool(np.isfinite(matrix).all())
-        or bool(np.any(matrix < 0.0))
-        or bool(np.any(matrix > 1.0))
-        or not bool(np.allclose(matrix.sum(axis=1), 1.0, atol=1e-6))
-    ):
-        raise ValueError("tuning_binary_probabilities_invalid")
-    return buy_probabilities
+    matrix = _validated_binary_probability_matrix(
+        predict_proba(features), len(features)
+    )
+    return matrix[:, class_index]
 
 
 def _binary_buy_threshold(value: float) -> float:
@@ -1038,31 +1052,20 @@ def _binary_buy_drawdown(net_returns: np.ndarray) -> float:
     return float(np.max((peaks - equity) / peaks))
 
 
-def Binary_BUY_Economic_Score(
-    estimator: Any,
-    features: DataFrame,
-    actual: Series,
-    *,
-    gross_returns_by_index: Series,
-    estimated_cost_bps: float = DEFAULT_ESTIMATED_ROUND_TRIP_COST_BPS,
-    buy_probability_threshold: float = DEFAULT_BINARY_BUY_THRESHOLD,
-    drawdown_penalty_weight: float = CUSTOM_SCORE_DRAWDOWN_PENALTY_WEIGHT,
-) -> float:
-    """Score only threshold-qualified BUY proposals; NO_BUY has no missed-profit cost.
-
-    The score uses only rows on which the model proposes a BUY. Realized gross
-    event returns are reduced by the configured round-trip cost, and sequential
-    drawdown among selected proposals is penalized. A model that predicts NO_BUY
-    receives zero for those rows: missed opportunities are not penalized and
-    there is no minimum-trade-count penalty.
-    """
-    _binary_buy_targets(actual, len(features))
+def _validate_binary_score_alignment(
+    features: DataFrame, actual: Series, gross_returns_by_index: Series
+) -> None:
     if (
         not isinstance(gross_returns_by_index, Series)
         or gross_returns_by_index.index.has_duplicates
         or len(features) != len(actual)
     ):
         raise ValueError("tuning_binary_economic_alignment_invalid")
+
+
+def _validate_binary_score_costs(
+    estimated_cost_bps: float, drawdown_penalty_weight: float
+) -> None:
     if (
         isinstance(estimated_cost_bps, bool)
         or not isfinite(float(estimated_cost_bps))
@@ -1075,21 +1078,34 @@ def Binary_BUY_Economic_Score(
         or drawdown_penalty_weight < 0.0
     ):
         raise ValueError("tuning_binary_drawdown_penalty_invalid")
-    cutoff = _binary_buy_threshold(buy_probability_threshold)
-    probabilities = _binary_buy_probabilities(estimator, features)
-    selected = probabilities >= cutoff
+
+
+def _selected_binary_net_returns(
+    features: DataFrame,
+    actual: Series,
+    gross_returns_by_index: Series,
+    buy_probabilities: np.ndarray,
+    cutoff: float,
+    estimated_cost_bps: float,
+) -> np.ndarray:
+    selected = buy_probabilities >= cutoff
     gross = gross_returns_by_index.reindex(features.index).to_numpy(dtype=float)
     if len(gross) != len(features) or not bool(np.isfinite(gross).all()):
         raise ValueError("tuning_binary_economic_outcomes_missing_or_non_finite")
-    selected_gross = gross[selected]
-    if selected_gross.size == 0:
-        return 0.0
-    net_returns = selected_gross - float(estimated_cost_bps) / 10_000.0
+    net_returns = gross[selected] - float(estimated_cost_bps) / 10_000.0
     selected_actual = actual.to_numpy(dtype=object)[selected]
     false_positive_mask = selected_actual == "NO_BUY"
     net_returns[false_positive_mask] = -np.abs(net_returns[false_positive_mask])
     if not bool(np.isfinite(net_returns).all()) or bool(np.any(net_returns <= -1.0)):
         raise ValueError("tuning_binary_net_returns_invalid")
+    return net_returns
+
+
+def _binary_economic_score_value(
+    net_returns: np.ndarray, drawdown_penalty_weight: float
+) -> float:
+    if net_returns.size == 0:
+        return 0.0
     expectancy_bps = float(np.mean(net_returns)) * 10_000.0
     positive_expectancy_reward_bps = max(0.0, expectancy_bps)
     drawdown_bps = _binary_buy_drawdown(net_returns) * 10_000.0
@@ -1098,6 +1114,33 @@ def Binary_BUY_Economic_Score(
         + positive_expectancy_reward_bps
         - float(drawdown_penalty_weight) * drawdown_bps
     )
+
+
+def Binary_BUY_Economic_Score(
+    estimator: Any,
+    features: DataFrame,
+    actual: Series,
+    *,
+    gross_returns_by_index: Series,
+    estimated_cost_bps: float = DEFAULT_ESTIMATED_ROUND_TRIP_COST_BPS,
+    buy_probability_threshold: float = DEFAULT_BINARY_BUY_THRESHOLD,
+    drawdown_penalty_weight: float = CUSTOM_SCORE_DRAWDOWN_PENALTY_WEIGHT,
+) -> float:
+    """Score predicted BUY rows; missed BUY opportunities and low trade counts are not penalized."""
+    _binary_buy_targets(actual, len(features))
+    _validate_binary_score_alignment(features, actual, gross_returns_by_index)
+    _validate_binary_score_costs(estimated_cost_bps, drawdown_penalty_weight)
+    cutoff = _binary_buy_threshold(buy_probability_threshold)
+    probabilities = _binary_buy_probabilities(estimator, features)
+    net_returns = _selected_binary_net_returns(
+        features,
+        actual,
+        gross_returns_by_index,
+        probabilities,
+        cutoff,
+        estimated_cost_bps,
+    )
+    return _binary_economic_score_value(net_returns, drawdown_penalty_weight)
 
 
 def _validate_binary_tuning_inputs(
