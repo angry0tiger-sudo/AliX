@@ -171,6 +171,8 @@ def _economic_outcomes_by_index(bars: DataFrame, labels: DataFrame) -> Series:
             event_index, gross_return = event_return
             values[event_index] = gross_return
     return Series(values, index=bars.index, dtype=float)
+
+
 def _probability_values(record: dict[str, Any]) -> dict[str, float]:
     raw = record.get("probabilities")
     if not isinstance(raw, dict) or set(raw) != set(LABELS):
@@ -308,6 +310,8 @@ def select_dynamic_buy_confidence_threshold(
         raw_buy_confidences,
         top_buy_share,
     )
+
+
 def _candidate_identifier(
     arm_name: str, pair: str, timeframe: str, profile: str, policy: str
 ) -> str:
@@ -756,6 +760,8 @@ def _run_context(
         candidates.extend(arm_candidates)
         probability_rows.extend(arm_probabilities)
     return experiments, candidates, probability_rows
+
+
 def _validate_v4t_run_inputs(
     datasets: dict[str, DataFrame], random_search_iterations: int
 ) -> None:
@@ -823,6 +829,8 @@ def run_v4t_experiments(
     )
     _validate_v4t_run_outputs(experiments, candidates, probability_rows)
     return experiments, candidates, probability_rows
+
+
 def _profit_factor(pnls: list[float]) -> float | None:
     gross_profit = sum(value for value in pnls if value > 0.0)
     gross_loss = abs(sum(value for value in pnls if value < 0.0))
@@ -930,6 +938,8 @@ def _arm_aggregate(
         **_arm_trade_metrics(selected, trained, trades),
         **_arm_risk_metrics(trained),
     }
+
+
 def _trade_rows(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for candidate in candidates:
