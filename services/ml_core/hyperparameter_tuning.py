@@ -1088,6 +1088,9 @@ def Binary_BUY_Economic_Score(
     if selected_gross.size == 0:
         return 0.0
     net_returns = selected_gross - float(estimated_cost_bps) / 10_000.0
+    selected_actual = actual.to_numpy(dtype=object)[selected]
+    false_positive_mask = selected_actual == "NO_BUY"
+    net_returns[false_positive_mask] = -np.abs(net_returns[false_positive_mask])
     if (
         not bool(np.isfinite(net_returns).all())
         or bool(np.any(net_returns <= -1.0))
