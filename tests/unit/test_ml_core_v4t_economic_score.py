@@ -363,7 +363,9 @@ def test_v4t_workflow_is_branch_scoped_and_waits_for_exact_sha_ci() -> None:
     assert "trading_authorization=NO-GO" in workflow_text
 
 
-def _v4t_inner_cv_preflight_fixture() -> tuple[DataFrame, DataFrame, dict[str, DataFrame]]:
+def _v4t_inner_cv_preflight_fixture() -> tuple[
+    DataFrame, DataFrame, dict[str, DataFrame]
+]:
     row_count = 48
     bars = DataFrame({"close": np.full(row_count, 100.0)})
     labels = DataFrame(
@@ -434,6 +436,7 @@ def test_v4t_inner_cv_class_support_failure_is_recorded_as_skip(
     monkeypatch.setattr(v4h, "label_audit_diagnostics", lambda _: {"status": "TEST"})
     monkeypatch.setattr(v4h, "_skipped_result", fake_skipped_result)
     monkeypatch.setattr(v4h, "build_purged_time_series_splits", fake_build_splits)
+
     def fail_if_fit_started(*args: Any, **kwargs: Any) -> dict[str, Any]:
         pytest.fail("model fitting must not start after failed preflight")
 
@@ -459,7 +462,10 @@ def test_v4t_inner_cv_class_support_failure_is_recorded_as_skip(
 
     assert experiment["status"] == v4h.V4H_INNER_CV_CLASS_SUPPORT_SKIP_STATUS
     assert experiment["sample_gate"]["outer_sample_gate_status"] == "PASS"
-    assert experiment["sample_gate"]["status"] == v4h.V4H_INNER_CV_CLASS_SUPPORT_SKIP_STATUS
+    assert (
+        experiment["sample_gate"]["status"]
+        == v4h.V4H_INNER_CV_CLASS_SUPPORT_SKIP_STATUS
+    )
     assert (
         experiment["sample_gate"]["inner_cv_preflight"]["reason_code"]
         == "tuning_inner_cv_class_support_insufficient"
@@ -482,7 +488,6 @@ def test_v4t_inner_cv_class_support_failure_is_recorded_as_skip(
     assert candidate["status"] == v4h.V4H_INNER_CV_CLASS_SUPPORT_SKIP_STATUS
     assert candidate["evaluation_performed"] is False
     assert candidate["metrics"]["economic_candidate_gate_passed"] is False
-
 
 
 def test_v4t_inner_cv_preflight_propagates_other_purge_errors(
@@ -554,4 +559,3 @@ def test_v4t_inner_cv_preflight_passes_only_after_all_default_folds_validate(
         "n_splits": v4h.DEFAULT_INNER_CV_SPLITS,
         "minimum_class_samples": v4h.DEFAULT_MINIMUM_CLASS_SAMPLES,
     }
-
