@@ -601,7 +601,7 @@ def _profit_factor(values: list[float]) -> float | None:
     gross_profit = sum(value for value in values if value > 0.0)
     gross_loss = abs(sum(value for value in values if value < 0.0))
     if gross_loss == 0.0:
-        return None if gross_profit == 0.0 else None
+        return None
     return round(gross_profit / gross_loss, 8)
 
 
@@ -616,7 +616,15 @@ def _trade_metrics(trades: list[dict[str, Any]]) -> dict[str, Any]:
         "losing_trade_count": losses,
         "win_rate": round(wins / len(trades), 8) if trades else None,
         "net_profit_factor": _profit_factor(net),
+        "net_profit_factor_infinite_no_losses": bool(
+            net and sum(value for value in net if value > 0.0) > 0.0
+            and not any(value < 0.0 for value in net)
+        ),
         "gross_profit_factor": _profit_factor(gross),
+        "gross_profit_factor_infinite_no_losses": bool(
+            gross and sum(value for value in gross if value > 0.0) > 0.0
+            and not any(value < 0.0 for value in gross)
+        ),
         "net_pnl_usd": round(sum(net), 8),
         "gross_market_pnl_usd": round(sum(gross), 8),
         "fees_usd": round(sum(float(item["fees_usd"]) for item in trades), 8),
@@ -1228,7 +1236,7 @@ def _build_report(
             "schema_version": EXTENDED_FEATURE_SCHEMA_VERSION,
             "selected_profile": "Combined",
             "groups": ["Baseline", "Trend", "Volatility", "Volume"],
-            "feature_count": len(V4V_FEATURE_PROFILES) and len(
+            "feature_count": len(
                 feature_profile_manifest(V4V_FEATURE_PROFILES)[0]["columns"]
             ),
             "point_in_time": True,
@@ -1368,6 +1376,7 @@ def _write_outputs(
     trades_path: Path,
     probabilities_path: Path,
     feature_importance_path: Path,
+    probability_rows: list[dict[str, Any]],
 ) -> None:
     if len(report["row_level_probability_artifact"]["columns"]) != len(
         V4V_PROBABILITY_COLUMNS
@@ -1431,7 +1440,7 @@ def _write_outputs(
             "direction",
         ),
     )
-    _write_csv(probabilities_path, report["row_level_probability_rows"], V4V_PROBABILITY_COLUMNS)
+    _write_csv(probabilities_path, probability_rows, V4V_PROBABILITY_COLUMNS)
     _write_csv(
         feature_importance_path,
         report["feature_importance_rows"],
@@ -1470,7 +1479,6 @@ def run_v4v(
         candidates=candidates,
         probability_rows=probability_rows,
     )
-    report["row_level_probability_rows"] = probability_rows
     _write_outputs(
         report,
         report_path,
@@ -1478,6 +1486,7 @@ def run_v4v(
         trades_path,
         probabilities_path,
         feature_importance_path,
+        probability_rows,
     )
     print(
         json.dumps(
