@@ -30,13 +30,13 @@ jobs:
       ALIx_ALLOW_LIVE_TRADING: "false"
       ALIx_REPORTING_ENABLED: "false"
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
-      GH_TOKEN: \${{ github.token }}
+      GH_TOKEN: ${{ github.token }}
     steps:
       - name: Require standard CI success for this exact V4-V commit
         env:
-          GITHUB_REPOSITORY: \${{ github.repository }}
-          TARGET_SHA: \${{ github.sha }}
-          TARGET_BRANCH: \${{ github.ref_name }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          TARGET_SHA: ${{ github.sha }}
+          TARGET_BRANCH: ${{ github.ref_name }}
         run: |
           python - <<'PY'
           import json
@@ -117,7 +117,7 @@ jobs:
 
       - name: Confirm V4-V branch, binary target, and fail-closed safety
         env:
-          TARGET_SHA: \${{ github.sha }}
+          TARGET_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           test "$GITHUB_REF" = "refs/heads/research/ml-core-v4v-binary-paradigm"
@@ -192,11 +192,11 @@ jobs:
 
       - name: Validate V4-V binary report, probabilities, economics, and safety
         env:
-          REPORT_PATH: \${{ github.workspace }}/alix-v4v-binary-report.json
-          COMPARISON_CSV: \${{ github.workspace }}/alix-v4v-binary-comparison.csv
-          TRADES_CSV: \${{ github.workspace }}/alix-v4v-binary-trades.csv
-          PROBABILITIES_CSV: \${{ github.workspace }}/alix-v4v-row-level-probabilities.csv
-          TARGET_SHA: \${{ github.sha }}
+          REPORT_PATH: ${{ github.workspace }}/alix-v4v-binary-report.json
+          COMPARISON_CSV: ${{ github.workspace }}/alix-v4v-binary-comparison.csv
+          TRADES_CSV: ${{ github.workspace }}/alix-v4v-binary-trades.csv
+          PROBABILITIES_CSV: ${{ github.workspace }}/alix-v4v-row-level-probabilities.csv
+          TARGET_SHA: ${{ github.sha }}
         run: |
           python - <<'PY'
           import csv
