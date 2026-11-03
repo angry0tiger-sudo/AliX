@@ -534,6 +534,7 @@ def _build_randomized_search(
     *,
     economic_outcomes: Series | None = None,
     estimated_cost_bps: float = DEFAULT_ESTIMATED_ROUND_TRIP_COST_BPS,
+    tuning_objective: str = "HOLD_PRECISION",
 ) -> Any:
     scoring = {
         "hold_precision": _hold_precision_score,
@@ -547,11 +548,12 @@ def _build_randomized_search(
             gross_returns_by_index=economic_outcomes,
             estimated_cost_bps=estimated_cost_bps,
         )
-        scoring["custom_economic_score"] = partial(
-            Custom_Economic_Score,
-            gross_returns_by_index=economic_outcomes,
-            estimated_cost_bps=estimated_cost_bps,
-        )
+        if tuning_objective == "CUSTOM_ECONOMIC_SCORE":
+            scoring["custom_economic_score"] = partial(
+                Custom_Economic_Score,
+                gross_returns_by_index=economic_outcomes,
+                estimated_cost_bps=estimated_cost_bps,
+            )
     return RandomizedSearchCV(
         estimator=estimator,
         param_distributions=HYPERPARAMETER_DISTRIBUTIONS,
@@ -700,7 +702,7 @@ def _build_tuning_diagnostics(
         if tuning_objective == "NET_EXPECTANCY_PROXY"
         else None,
         "economic_scorer_scope": "INNER_CV_FOLDS_WITHIN_OUTER_TRAIN"
-        if tuning_objective == "NET_EXPECTANCY_PROXY"
+        if tuning_objective in {"NET_EXPECTANCY_PROXY", "CUSTOM_ECONOMIC_SCORE"}
         else None,
         "portfolio_overlap_modeled": False,
         "candidate_results": _candidate_result_records(cv_results),
@@ -790,6 +792,7 @@ def tune_lightgbm_classifier(
         seed,
         economic_outcomes=economic_outcomes,
         estimated_cost_bps=estimated_cost_bps,
+        tuning_objective=tuning_objective,
     )
     search.fit(features, labels)
     results: dict[str, Any] = search.cv_results_
