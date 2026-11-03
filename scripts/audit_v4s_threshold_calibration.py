@@ -25,6 +25,7 @@ ARM_NAMES = (
     "V4R_2R_NET_EXPECTANCY",
 )
 ROW_LEVEL_PROBABILITY_FIELDS = {
+    "probability_records",
     "class_probabilities",
     "event_probabilities",
     "per_row_probabilities",

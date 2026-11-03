@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
+
+from sklearn.base import BaseEstimator  # type: ignore[import-untyped]
+
+from services.ml_core.hyperparameter_tuning import tune_lightgbm_classifier
 
 import numpy as np
 import pytest
@@ -238,3 +243,107 @@ def test_v4t_safety_contract_stays_closed() -> None:
     assert safety["private_api_calls"] == 0
     assert safety["real_order_attempts"] == 0
     assert safety["short_positions_supported"] is False
+
+
+class TuningClassifier(BaseEstimator):  # type: ignore[misc]
+    def __init__(
+        self,
+        num_leaves: int = 15,
+        learning_rate: float = 0.05,
+        min_child_samples: int = 20,
+    ) -> None:
+        self.num_leaves = num_leaves
+        self.learning_rate = learning_rate
+        self.min_child_samples = min_child_samples
+
+    def fit(self, features: DataFrame, labels: Series) -> TuningClassifier:
+        assert len(features) == len(labels)
+        self.is_fitted_ = True
+        return self
+
+    def predict(self, features: DataFrame) -> np.ndarray:
+        codes = features["signal"].to_numpy(dtype=int) % 3
+        return np.asarray(["BUY", "SELL", "HOLD"], dtype=object)[codes]
+
+
+def test_custom_objective_executes_inner_cv_and_reports_its_selection_score() -> None:
+    training_indices = list(range(10, 610))
+    features = DataFrame(
+        {"signal": [index % 3 for index in training_indices]},
+        index=training_indices,
+    )
+    labels = Series(
+        [["BUY", "SELL", "HOLD"][index % 3] for index in training_indices],
+        index=training_indices,
+        dtype=object,
+    )
+    label_end_indices = [min(index + 12, 699) for index in range(700)]
+    outcomes = Series(0.01, index=features.index, dtype=float)
+    model, diagnostics = tune_lightgbm_classifier(
+        TuningClassifier(),
+        features,
+        labels,
+        training_indices,
+        label_end_indices,
+        horizon_candles=12,
+        class_weight_policy="weight_none",
+        minimum_hold_recall=0.2,
+        n_iter=1,
+        n_splits=3,
+        tuning_objective="CUSTOM_ECONOMIC_SCORE",
+        economic_outcomes=outcomes,
+        estimated_cost_bps=90.0,
+    )
+    assert model.is_fitted_ is True
+    assert diagnostics["selection_objective"] == "CUSTOM_ECONOMIC_SCORE"
+    assert diagnostics["economic_scorer"] == "Custom_Economic_Score"
+    assert diagnostics["selected_mean_cv_custom_economic_score"] is not None
+    assert diagnostics["custom_economic_score_contract"]["minimum_trade_count_soft_target"] == 30
+    assert diagnostics["validation_accessed_during_search"] is False
+
+
+def test_custom_score_returns_soft_penalty_when_no_buy_is_predicted() -> None:
+    features = DataFrame({"x": [0, 1]})
+    score = Custom_Economic_Score(
+        FixedPredictions(["SELL", "HOLD"]),
+        features,
+        Series(["BUY", "HOLD"]),
+        gross_returns_by_index=Series([0.01, -0.01]),
+    )
+    assert score == pytest.approx(-50.0)
+
+
+def test_custom_score_rejects_invalid_net_event_return() -> None:
+    features = DataFrame({"x": [0]})
+    with pytest.raises(ValueError, match="tuning_custom_score_net_returns_invalid"):
+        Custom_Economic_Score(
+            FixedPredictions(["BUY"]),
+            features,
+            Series(["BUY"]),
+            gross_returns_by_index=Series([-1.0]),
+            estimated_cost_bps=0.0,
+        )
+
+
+def test_custom_score_rejects_invalid_soft_penalty_configuration() -> None:
+    features = DataFrame({"x": [0]})
+    with pytest.raises(ValueError, match="tuning_custom_score_penalty_invalid"):
+        Custom_Economic_Score(
+            FixedPredictions(["BUY"]),
+            features,
+            Series(["BUY"]),
+            gross_returns_by_index=Series([0.01]),
+            trade_count_penalty_bps=-1.0,
+        )
+
+
+def test_v4t_workflow_is_branch_scoped_and_waits_for_exact_sha_ci() -> None:
+    workflow_text = Path(
+        ".github/workflows/ml-core-v4t-economic-score.yml"
+    ).read_text(encoding="utf-8")
+    assert "research/ml-core-v4t-economic-score" in workflow_text
+    assert "Require standard CI success for this exact V4-T commit" in workflow_text
+    assert "TARGET_SHA" in workflow_text
+    assert "Custom_Economic_Score" in workflow_text
+    assert "alix-v4t-row-level-probabilities.csv" in workflow_text
+    assert "trading_authorization=NO-GO" in workflow_text

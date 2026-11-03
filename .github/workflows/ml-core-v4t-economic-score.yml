@@ -1,0 +1,332 @@
+name: AliX V4-T Custom Economic Score Evaluation
+
+on:
+  push:
+    branches:
+      - research/ml-core-v4t-economic-score
+    paths:
+      - .github/workflows/ml-core-v4t-economic-score.yml
+      - scripts/run_ml_core_v4t_economic_score.py
+      - services/ml_core/hyperparameter_tuning.py
+      - tests/unit/test_ml_core_v4t_economic_score.py
+      - tests/unit/test_v4s_threshold_calibration_audit.py
+      - scripts/audit_v4s_threshold_calibration.py
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: alix-v4t-economic-score
+  cancel-in-progress: false
+
+jobs:
+  v4t-economic-evaluation:
+    if: github.ref == 'refs/heads/research/ml-core-v4t-economic-score'
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      ALIx_ENV: paper
+      ALIx_DRY_RUN: "true"
+      ALIx_ALLOW_LIVE_TRADING: "false"
+      ALIx_REPORTING_ENABLED: "false"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Require standard CI success for this exact V4-T commit
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          TARGET_SHA: ${{ github.sha }}
+          TARGET_BRANCH: ${{ github.ref_name }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import time
+          from urllib.error import HTTPError, URLError
+          from urllib.request import Request, urlopen
+
+          repository = os.environ["GITHUB_REPOSITORY"]
+          target_sha = os.environ["TARGET_SHA"]
+          target_branch = os.environ["TARGET_BRANCH"]
+          token = os.environ["GH_TOKEN"]
+          expected_branch = "research/ml-core-v4t-economic-score"
+          if target_branch != expected_branch:
+              raise SystemExit("unsupported_v4t_training_branch:" + target_branch)
+          deadline = time.monotonic() + 90 * 60
+          url = (
+              f"https://api.github.com/repos/{repository}/actions/workflows/ci.yml/runs"
+              f"?head_sha={target_sha}&per_page=100"
+          )
+          while time.monotonic() < deadline:
+              request = Request(
+                  url,
+                  headers={
+                      "Accept": "application/vnd.github+json",
+                      "Authorization": f"Bearer {token}",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  },
+              )
+              try:
+                  with urlopen(request, timeout=20) as response:
+                      payload = json.load(response)
+              except (HTTPError, URLError, TimeoutError) as error:
+                  raise SystemExit(
+                      f"ci_status_lookup_failed:{type(error).__name__}"
+                  ) from None
+              matching = [
+                  run for run in payload.get("workflow_runs", [])
+                  if run.get("head_sha") == target_sha
+                  and run.get("head_branch") == expected_branch
+                  and run.get("event") == "push"
+              ]
+              if matching:
+                  latest = max(
+                      matching,
+                      key=lambda item: (
+                          item.get("run_number", 0),
+                          item.get("run_attempt", 0),
+                      ),
+                  )
+                  if latest.get("status") == "completed":
+                      if latest.get("conclusion") != "success":
+                          raise SystemExit(
+                              "ci_green_gate_blocked:"
+                              + str(latest.get("conclusion"))
+                              + ":"
+                              + target_sha
+                          )
+                      print(json.dumps({
+                          "gate": "PASS",
+                          "target_sha": target_sha,
+                          "ci_run_id": latest.get("id"),
+                          "ci_run_url": latest.get("html_url"),
+                          "ci_conclusion": latest.get("conclusion"),
+                      }, sort_keys=True))
+                      break
+              time.sleep(30)
+          else:
+              raise SystemExit("ci_green_gate_timeout:" + target_sha)
+          PY
+
+      - name: Checkout exact V4-T commit without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Confirm V4-T branch, target contract, and fail-closed safety
+        env:
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/research/ml-core-v4t-economic-score"
+          test "$GITHUB_SHA" = "$TARGET_SHA"
+          printf 'commit_sha=%s\n' "$GITHUB_SHA"
+          printf 'primary_geometry=TP=1.5 ATR; SL=1.0 ATR; Horizon=24\n'
+          printf 'control_geometry=TP=1.0 ATR; SL=1.0 ATR; Horizon=24\n'
+          printf 'objective=Custom_Economic_Score\n'
+          printf 'dynamic_buy_confidence=TOP_30_PERCENT_CALIBRATION_ONLY\n'
+          printf 'sequence_models=FORBIDDEN\n'
+          printf 'market_data=PUBLIC_BINANCE_SPOT_ONLY\n'
+          printf 'short_positions_supported=false\n'
+          printf 'private_api_calls=0\nreal_order_attempts=0\n'
+          printf 'Champion=null\norder_permission=false\ntrading_authorization=NO-GO\n'
+
+      - name: Set up pinned Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install pinned V4-T training and economic evaluation dependencies
+        run: |
+          python -m pip install pip==25.2
+          python -m pip install numpy==2.5.4 pandas==2.3.3 scikit-learn==1.9.0 lightgbm==4.7.0
+
+      - name: Fetch complete public Binance Spot 730-day 1-minute datasets
+        run: |
+          set -euo pipefail
+          data_dir="$RUNNER_TEMP/alix-v4t-market-data"
+          rm -rf "$data_dir"
+          mkdir -p "$data_dir"
+          for symbol in BTCUSDT ETHUSDT; do
+            log_path="$RUNNER_TEMP/v4t-fetch-730-${symbol}.log"
+            if python scripts/fetch_binance_public_ohlcv.py \
+              --days 730 \
+              --symbol "$symbol" \
+              --interval 1m \
+              --output-dir "$data_dir" \
+              --commit-sha "$GITHUB_SHA" >"$log_path" 2>&1; then
+              cat "$log_path"
+            else
+              cat "$log_path"
+              echo "Public Spot data fetch failed for ${symbol}; refusing partial data." >&2
+              exit 1
+            fi
+          done
+          printf 'requested_days=730\nprovider=Binance Spot public klines API\n'
+          printf 'private_api_calls=0\ncredentials_used=false\n'
+
+      - name: Train V4-T LightGBM models and run costed Spot economic replay
+        run: |
+          set -euo pipefail
+          python -m scripts.run_ml_core_v4t_economic_score \
+            --input-dir "$RUNNER_TEMP/alix-v4t-market-data" \
+            --output-report "$GITHUB_WORKSPACE/alix-v4t-economic-report.json" \
+            --output-comparison-csv "$GITHUB_WORKSPACE/alix-v4t-economic-comparison.csv" \
+            --output-trades-csv "$GITHUB_WORKSPACE/alix-v4t-trades.csv" \
+            --output-probabilities-csv "$GITHUB_WORKSPACE/alix-v4t-row-level-probabilities.csv" \
+            --output-feature-importance-csv "$GITHUB_WORKSPACE/alix-v4t-feature-importance.csv" \
+            --days 730 \
+            --commit-sha "$GITHUB_SHA" \
+            --random-search-iterations 9
+          test -s "$GITHUB_STEP_SUMMARY"
+          grep -Fq "AliX V4-T Economic Evaluation" "$GITHUB_STEP_SUMMARY"
+          grep -Fq "Custom_Economic_Score" "$GITHUB_STEP_SUMMARY"
+          grep -Fq "NO-GO" "$GITHUB_STEP_SUMMARY"
+
+      - name: Validate V4-T report, row probabilities, economics, and safety
+        env:
+          REPORT_PATH: ${{ github.workspace }}/alix-v4t-economic-report.json
+          COMPARISON_CSV: ${{ github.workspace }}/alix-v4t-economic-comparison.csv
+          TRADES_CSV: ${{ github.workspace }}/alix-v4t-trades.csv
+          PROBABILITIES_CSV: ${{ github.workspace }}/alix-v4t-row-level-probabilities.csv
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          python - <<'PY'
+          import csv
+          import json
+          import math
+          import os
+          from pathlib import Path
+
+          report = json.loads(Path(os.environ["REPORT_PATH"]).read_text(encoding="utf-8"))
+          assert report["schema_version"] == "alix.ml-core.v4t-economic-score.v1"
+          assert report["commit_sha"] == os.environ["TARGET_SHA"]
+          assert report["requested_days"] == 730
+          assert report["model_training_performed"] is True
+          assert report["economic_evaluation_performed"] is True
+          assert report["model"]["family"] == "LightGBM LGBMClassifier"
+          assert report["model"]["sequence_model_used"] is False
+          assert report["experiment_count"] == 16
+          assert report["candidate_count"] == 32
+          assert report["trained_candidate_count"] > 0
+          assert report["experimental_design"] == "PAIRED_1R_VS_1_5R_GEOMETRY"
+          target = report["target_contract"]
+          assert target["primary_geometry"] == "TP=1.5 ATR; SL=1.0 ATR"
+          assert target["primary_horizon_candles"] == 24
+          assert target["control_geometry"] == "TP=1.0 ATR; SL=1.0 ATR"
+          assert target["control_horizon_candles"] == 24
+          assert target["common_outer_and_inner_purge_horizon_candles"] == 24
+          assert all(arm["take_profit_multiplier"] != 2.0 for arm in report["arms"])
+          assert {arm["take_profit_multiplier"] for arm in report["arms"]} == {1.0, 1.5}
+          objective = report["objective_contract"]
+          assert objective["primary_objective"] == "CUSTOM_ECONOMIC_SCORE"
+          assert objective["scorer"] == "Custom_Economic_Score"
+          assert objective["scorer_scope"] == "PURGED_INNER_CV_FOLDS_WITHIN_OUTER_TRAIN"
+          assert objective["minimum_trade_count_is_hard_gate"] is False
+          assert objective["soft_minimum_trade_count_target"] == 30
+          confidence = report["confidence_threshold_contract"]
+          assert confidence["method"] == "TOP_30_PERCENT_RAW_BUY_CONFIDENCE"
+          assert confidence["application_scope"] == "LATER_FORWARD_VALIDATION_ONLY"
+          assert confidence["target_buy_share"] == 0.30
+          assert confidence["actual_label_used_for_threshold_selection"] is False
+          assert report["execution_cost_contract"]["short_positions_supported"] is False
+          artifact = report["row_level_probability_artifact"]
+          assert artifact["file"] == "alix-v4t-row-level-probabilities.csv"
+          required = {
+              "candidate_id", "arm", "pair", "timeframe", "feature_profile",
+              "weighting_policy", "row_index", "timestamp", "split_role",
+              "actual_label", "prob_buy", "prob_sell", "prob_hold",
+          }
+          assert set(artifact["columns"]) == required
+          with Path(os.environ["PROBABILITIES_CSV"]).open(
+              newline="", encoding="utf-8"
+          ) as handle:
+              reader = csv.DictReader(handle)
+              assert set(reader.fieldnames or []) == required
+              probability_rows = list(reader)
+          assert len(probability_rows) == artifact["row_count"]
+          assert len(probability_rows) > 0
+          assert {row["split_role"] for row in probability_rows} == {
+              "CALIBRATION", "FORWARD_VALIDATION"
+          }
+          for row in probability_rows:
+              values = [float(row[key]) for key in ("prob_buy", "prob_sell", "prob_hold")]
+              assert all(math.isfinite(value) and 0.0 <= value <= 1.0 for value in values)
+              assert math.isclose(sum(values), 1.0, rel_tol=0.0, abs_tol=1e-5)
+              assert row["actual_label"] in {"BUY", "SELL", "HOLD"}
+              assert row["timestamp"]
+          for candidate in report["candidates"]:
+              assert candidate["objective"] == "CUSTOM_ECONOMIC_SCORE"
+              if candidate["status"] != "TRAINED":
+                  continue
+              assert candidate["evaluation_performed"] is True
+              assert candidate["tuning_objective"] == "CUSTOM_ECONOMIC_SCORE"
+              assert "trade_count_gate_passed" not in candidate["metrics"]
+              selection = candidate["confidence_threshold_selection"]
+              assert selection["status"] in {"SELECTED", "NO_BUY_SIGNALS_IN_CALIBRATION"}
+              assert selection["target_buy_share"] == 0.30
+              assert candidate["forward_validation_rows"] > 0
+              tuning = candidate["tuning_diagnostics"]
+              assert tuning["selection_objective"] == "CUSTOM_ECONOMIC_SCORE"
+              assert tuning["validation_accessed_during_search"] is False
+              assert tuning["economic_scorer"] == "Custom_Economic_Score"
+              assert tuning["custom_economic_score_contract"]["minimum_trade_count_soft_target"] == 30
+          safety = report["safety"]
+          assert safety["Champion"] is None
+          assert safety["order_permission"] is False
+          assert safety["trading_authorization"] == "NO-GO"
+          assert safety["private_api_calls"] == 0
+          assert safety["real_order_attempts"] == 0
+          assert safety["orders_or_execution_api_used"] is False
+          assert safety["credentials_used"] is False
+          assert safety["short_positions_supported"] is False
+          assert safety["sequence_model_used"] is False
+          assert report["promotion_status"] == "BLOCKED_PENDING_INDEPENDENT_OOS_AND_OWNER_REVIEW"
+          with Path(os.environ["COMPARISON_CSV"]).open(
+              newline="", encoding="utf-8"
+          ) as handle:
+              comparison = list(csv.DictReader(handle))
+          assert len(comparison) == 32
+          with Path(os.environ["TRADES_CSV"]).open(
+              newline="", encoding="utf-8"
+          ) as handle:
+              trades = list(csv.DictReader(handle))
+          for trade in trades:
+              reconciled = (
+                  float(trade["gross_market_pnl_usd"])
+                  - float(trade["fees_usd"])
+                  - float(trade["slippage_cost_usd"])
+              )
+              assert math.isclose(
+                  reconciled, float(trade["net_pnl_usd"]),
+                  rel_tol=1e-7, abs_tol=1e-6
+              )
+          print(json.dumps({
+              "validation": "PASS",
+              "commit_sha": report["commit_sha"],
+              "experiment_count": report["experiment_count"],
+              "candidate_count": report["candidate_count"],
+              "trained_candidate_count": report["trained_candidate_count"],
+              "row_level_probability_rows": len(probability_rows),
+              "Champion": None,
+              "order_permission": False,
+              "trading_authorization": "NO-GO",
+          }, sort_keys=True))
+          PY
+
+      - name: Upload V4-T economic report and row-level probability artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alix-v4t-economic-score
+          path: |
+            alix-v4t-economic-report.json
+            alix-v4t-economic-comparison.csv
+            alix-v4t-trades.csv
+            alix-v4t-row-level-probabilities.csv
+            alix-v4t-feature-importance.csv
+          if-no-files-found: warn
+          retention-days: 30

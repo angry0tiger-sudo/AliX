@@ -182,3 +182,18 @@ def test_safety_invariant_mismatch_is_rejected() -> None:
 
     with pytest.raises(ValueError, match="v4s_safety_invariant_mismatch"):
         audit.analyze_report(report)
+
+
+def test_row_level_probability_records_are_recognized_in_candidate_artifact() -> None:
+    report = _report()
+    report["candidates"][0]["probability_records"] = [
+        {
+            "row_index": 100,
+            "timestamp": "2026-01-01T00:00:00+00:00",
+            "actual_label": "BUY",
+            "probabilities": {"BUY": 0.7, "SELL": 0.2, "HOLD": 0.1},
+        }
+    ]
+    summary = audit.analyze_report(report)
+    assert summary["row_level_probabilities_available"] is True
+    assert summary["counterfactual_sweep_status"] == "COMPUTABLE"
