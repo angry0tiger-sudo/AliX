@@ -906,10 +906,10 @@ def _run_binary_experiment(
     probability_rows: list[dict[str, Any]] = []
     if sample_gate["status"] != "PASS":
         experiment["skip_reason"] = str(sample_gate["status"])
-        for policy in weighting_policy_specs():
+        for weighting_policy_name in weighting_policy_specs():
             candidates.append(
                 _skipped_candidate(
-                    arm, pair, timeframe, feature_profile, policy, experiment
+                    arm, pair, timeframe, feature_profile, weighting_policy_name, experiment
                 )
             )
         return experiment, candidates, probability_rows
@@ -929,10 +929,10 @@ def _run_binary_experiment(
         experiment["status"] = str(inner_preflight["status"])
         experiment["skip_reason"] = str(inner_preflight["reason_code"])
         experiment["sample_gate"]["status"] = str(inner_preflight["status"])
-        for policy in weighting_policy_specs():
+        for weighting_policy_name in weighting_policy_specs():
             candidates.append(
                 _skipped_candidate(
-                    arm, pair, timeframe, feature_profile, policy, experiment
+                    arm, pair, timeframe, feature_profile, weighting_policy_name, experiment
                 )
             )
         return experiment, candidates, probability_rows
@@ -940,9 +940,9 @@ def _run_binary_experiment(
     x_train = features.iloc[train_indices]
     x_validation = features.iloc[validation_indices]
     validation_source_labels = labels.iloc[validation_indices]["source_label"]
-    for policy_name, policy in weighting_policy_specs().items():
+    for policy_name, policy_config in weighting_policy_specs().items():
         model, tuning_diagnostics = tune_lightgbm_binary_classifier(
-            _new_binary_classifier(policy["class_weight"]),
+            _new_binary_classifier(policy_config["class_weight"]),
             x_train,
             train_labels,
             train_indices,
@@ -1167,6 +1167,8 @@ def _build_report(
     candidates: list[dict[str, Any]],
     probability_rows: list[dict[str, Any]],
 ) -> dict[str, Any]:
+    feature_manifest = feature_profile_manifest(V4V_FEATURE_PROFILES)
+    feature_columns = cast(list[str], feature_manifest[0]["columns"])
     comparison_rows = _candidate_comparison_rows(candidates)
     trade_rows = _trade_rows(candidates)
     feature_rows = _feature_importance_rows(candidates)
@@ -1183,7 +1185,7 @@ def _build_report(
         "symbols": list(SYMBOLS),
         "market_timeframes": list(V4V_TIMEFRAMES),
         "feature_profiles": list(V4V_FEATURE_PROFILES),
-        "feature_manifest": feature_profile_manifest(V4V_FEATURE_PROFILES),
+        "feature_manifest": feature_manifest,
         "model": {
             "family": "LightGBM LGBMClassifier objective=binary",
             "class_labels": list(BINARY_BUY_LABELS),
@@ -1232,9 +1234,7 @@ def _build_report(
             "schema_version": EXTENDED_FEATURE_SCHEMA_VERSION,
             "selected_profile": "Combined",
             "groups": ["Baseline", "Trend", "Volatility", "Volume"],
-            "feature_count": len(
-                feature_profile_manifest(V4V_FEATURE_PROFILES)[0]["columns"]
-            ),
+            "feature_count": len(feature_columns),
             "point_in_time": True,
             "volatility_features_included": True,
             "volume_features_included": True,

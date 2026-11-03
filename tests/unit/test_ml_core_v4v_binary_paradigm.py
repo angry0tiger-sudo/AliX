@@ -8,6 +8,10 @@ from pandas import DataFrame, Series
 from sklearn.base import BaseEstimator  # type: ignore[import-untyped]
 
 from scripts import run_ml_core_v4v_binary_paradigm as v4v
+from services.ml_core.extended_features import (
+    feature_profile_columns,
+    feature_profile_groups,
+)
 from services.ml_core.binary_targets import (
     BINARY_BUY_LABELS,
     apply_binary_buy_targets,
@@ -317,10 +321,15 @@ def test_binary_execution_signals_map_no_buy_to_no_entry_and_never_sell() -> Non
 
 
 def test_combined_feature_profile_contains_volatility_and_volume_groups() -> None:
-    manifest = v4v.feature_profile_manifest(("Combined",))[0]
-    assert manifest["groups"] == ["Baseline", "Trend", "Volatility", "Volume"]
-    assert "%-volatility_bollinger_bandwidth_20" in manifest["columns"]
-    assert "%-volume_relative_20" in manifest["columns"]
+    assert feature_profile_groups("Combined") == (
+        "Baseline",
+        "Trend",
+        "Volatility",
+        "Volume",
+    )
+    columns = feature_profile_columns("Combined")
+    assert "%-volatility_bollinger_bandwidth_20" in columns
+    assert "%-volume_relative_20" in columns
 
 
 def test_v4v_geometry_contract_is_paired_control_and_primary() -> None:
