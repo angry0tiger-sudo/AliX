@@ -339,12 +339,13 @@ def _validate_inner_fit_support(
     fit_positions: np.ndarray,
     label_values: np.ndarray,
     minimum_class_samples: int,
+    class_labels: Sequence[str] = LABELS,
 ) -> dict[str, int]:
     if len(fit_positions) == 0:
         raise ValueError("tuning_inner_cv_fit_empty_after_purge")
     counts = {
         label: int(np.count_nonzero(label_values[fit_positions] == label))
-        for label in LABELS
+        for label in class_labels
     }
     if any(count < minimum_class_samples for count in counts.values()):
         raise ValueError("tuning_inner_cv_class_support_insufficient")
@@ -360,6 +361,8 @@ def _build_inner_cv_fold(
     *,
     horizon: int,
     minimum_class_samples: int,
+    class_labels: Sequence[str] = LABELS,
+    minimum_validation_class_samples: int | None = None,
 ) -> tuple[tuple[np.ndarray, np.ndarray], dict[str, int]]:
     if len(validation_positions) == 0:
         raise ValueError("tuning_inner_cv_validation_empty")
@@ -367,13 +370,24 @@ def _build_inner_cv_fold(
     fit_positions = _purged_fit_positions(
         candidate_positions, train_rows, train_ends, validation_start, horizon
     )
-    _validate_inner_fit_support(fit_positions, label_values, minimum_class_samples)
+    fit_counts = _validate_inner_fit_support(
+        fit_positions, label_values, minimum_class_samples, class_labels
+    )
+    validation = np.asarray(validation_positions, dtype=int)
+    validation_counts = {
+        label: int(np.count_nonzero(label_values[validation] == label))
+        for label in class_labels
+    }
+    if minimum_validation_class_samples is not None and any(
+        count < minimum_validation_class_samples
+        for count in validation_counts.values()
+    ):
+        raise ValueError("tuning_inner_cv_validation_class_support_insufficient")
     if int(train_rows[int(fit_positions[-1])]) >= validation_start:
         raise ValueError("tuning_inner_cv_chronology_invalid")
     maximum_label_end = int(np.max(train_ends[fit_positions]))
     if maximum_label_end >= validation_start:
         raise ValueError("tuning_inner_cv_label_overlap")
-    validation = np.asarray(validation_positions, dtype=int)
     diagnostics = {
         "train_rows": int(len(fit_positions)),
         "validation_rows": int(len(validation)),
@@ -383,6 +397,11 @@ def _build_inner_cv_fold(
         "validation_end_index": int(train_rows[int(validation[-1])]),
         "maximum_training_label_end_index": maximum_label_end,
         "pre_validation_embargo_candles": horizon,
+        **{f"fit_{label.lower()}_count": count for label, count in fit_counts.items()},
+        **{
+            f"validation_{label.lower()}_count": count
+            for label, count in validation_counts.items()
+        },
     }
     return (fit_positions, validation), diagnostics
 
@@ -395,6 +414,8 @@ def build_purged_time_series_splits(
     horizon_candles: int,
     n_splits: int = DEFAULT_INNER_CV_SPLITS,
     minimum_class_samples: int = DEFAULT_MINIMUM_CLASS_SAMPLES,
+    class_labels: Sequence[str] = LABELS,
+    minimum_validation_class_samples: int | None = None,
 ) -> tuple[list[tuple[np.ndarray, np.ndarray]], list[dict[str, int]]]:
     """Create expanding CV folds using only outer-Train rows and purged label windows.
 
@@ -424,6 +445,8 @@ def build_purged_time_series_splits(
             label_values,
             horizon=horizon,
             minimum_class_samples=minimum,
+            class_labels=class_labels,
+            minimum_validation_class_samples=minimum_validation_class_samples,
         )
         cv_splits.append(fold)
         diagnostics.append(fold_diagnostics)
