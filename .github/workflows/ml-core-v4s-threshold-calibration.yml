@@ -1,0 +1,55 @@
+name: AliX V4-S Run 25 Threshold Calibration Audit
+
+on:
+  push:
+    branches:
+      - research/ml-core-v4s-threshold-calibration
+    paths:
+      - .github/workflows/ml-core-v4s-threshold-calibration.yml
+      - scripts/audit_v4s_threshold_calibration.py
+      - tests/unit/test_v4s_threshold_calibration_audit.py
+      - docs/v4s/threshold_calibration_audit.md
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  audit-run-25:
+    if: github.ref == 'refs/heads/research/ml-core-v4s-threshold-calibration'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout V4-S diagnostic-only branch
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download exact V4-R Run 25 artifact
+        uses: actions/download-artifact@v4
+        with:
+          artifact-ids: 13180755166
+          run-id: 41518486550
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/v4r-run25
+
+      - name: Audit immutable Run 25 outputs (no training, no data fetch)
+        run: |
+          set -euo pipefail
+          python -m scripts.audit_v4s_threshold_calibration \
+            --artifact "$RUNNER_TEMP/v4r-run25" \
+            --output "$RUNNER_TEMP/threshold_calibration_audit.md"
+          test -s "$RUNNER_TEMP/threshold_calibration_audit.md"
+
+      - name: Upload V4-S audit report
+        uses: actions/upload-artifact@v4
+        with:
+          name: alix-v4s-threshold-calibration-audit
+          path: ${{ runner.temp }}/threshold_calibration_audit.md
+          if-no-files-found: error
