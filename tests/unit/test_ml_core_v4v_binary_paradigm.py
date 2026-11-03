@@ -498,7 +498,6 @@ def test_v4v_workflow_is_branch_scoped_and_waits_for_exact_sha_ci() -> None:
     assert "trading_authorization=NO-GO" in workflow_text
 
 
-
 def test_dynamic_probability_calibration_selects_top_fraction_and_reports_ties() -> (
     None
 ):
