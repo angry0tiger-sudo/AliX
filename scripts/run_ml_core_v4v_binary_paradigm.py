@@ -418,28 +418,55 @@ def _economic_exit_reference(bars: DataFrame, row: Any, label_end: int) -> float
     raise ValueError("v4v_economic_exit_reason_invalid")
 
 
-def _economic_outcome_for_label(bars: DataFrame, row: Any) -> tuple[int, float] | None:
-    source_label = getattr(row, "source_label")
-    if pd.isna(source_label) or str(source_label) not in {"BUY", "SELL", "HOLD"}:
-        return None
+def _supported_source_label(value: Any) -> bool:
+    return not pd.isna(value) and str(value) in {"BUY", "SELL", "HOLD"}
+
+
+def _economic_event_index(row: Any, bar_count: int) -> int | None:
     event_index = int(getattr(row, "event_index"))
-    if event_index < 0 or event_index + 1 >= len(bars):
+    if event_index < 0 or event_index + 1 >= bar_count:
         return None
+    return event_index
+
+
+def _economic_label_end_index(
+    row: Any, event_index: int, bar_count: int
+) -> int | None:
     raw_end = getattr(row, "label_end_idx")
     if pd.isna(raw_end):
         return None
     label_end = int(raw_end)
-    if label_end <= event_index or label_end >= len(bars):
+    if label_end <= event_index or label_end >= bar_count:
         raise ValueError("v4v_economic_label_end_index_invalid")
-    entry_reference = float(bars.iloc[event_index + 1]["open"])
-    exit_reference = _economic_exit_reference(bars, row, label_end)
-    if (
+    return label_end
+
+
+def _validate_economic_price_references(
+    entry_reference: float, exit_reference: float
+) -> None:
+    prices_are_invalid = (
         not np.isfinite(entry_reference)
         or not np.isfinite(exit_reference)
         or entry_reference <= 0.0
         or exit_reference <= 0.0
-    ):
+    )
+    if prices_are_invalid:
         raise ValueError("v4v_economic_price_reference_invalid")
+
+
+def _economic_outcome_for_label(bars: DataFrame, row: Any) -> tuple[int, float] | None:
+    source_label = getattr(row, "source_label")
+    if not _supported_source_label(source_label):
+        return None
+    event_index = _economic_event_index(row, len(bars))
+    if event_index is None:
+        return None
+    label_end = _economic_label_end_index(row, event_index, len(bars))
+    if label_end is None:
+        return None
+    entry_reference = float(bars.iloc[event_index + 1]["open"])
+    exit_reference = _economic_exit_reference(bars, row, label_end)
+    _validate_economic_price_references(entry_reference, exit_reference)
     return event_index, exit_reference / entry_reference - 1.0
 
 
