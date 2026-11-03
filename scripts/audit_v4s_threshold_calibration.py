@@ -163,7 +163,7 @@ def _pooled_distribution(
 
 
 def _pooled_exit_reason_distribution(
-    contexts: dict[tuple[str, str], dict[str, Any]]
+    contexts: dict[tuple[str, str], dict[str, Any]],
 ) -> dict[str, Any]:
     counts: Counter[str] = Counter()
     total = 0
@@ -180,8 +180,7 @@ def _pooled_exit_reason_distribution(
         "total": total,
         "counts": dict(counts),
         "percent": {
-            reason: round(count / total * 100, 4)
-            for reason, count in counts.items()
+            reason: round(count / total * 100, 4) for reason, count in counts.items()
         },
     }
 
@@ -422,7 +421,9 @@ def _render_threshold_optimization_section(summary: dict[str, Any]) -> str:
         statuses = (
             ", ".join(
                 f"{status}: {count}"
-                for status, count in sorted(item["threshold_optimization_statuses"].items())
+                for status, count in sorted(
+                    item["threshold_optimization_statuses"].items()
+                )
             )
             or "موجود نیست"
         )
@@ -573,6 +574,7 @@ def _render_report(summary: dict[str, Any]) -> str:
         _render_safety_section(),
     ]
     return "\n\n".join(sections) + "\n"
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
