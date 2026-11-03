@@ -68,7 +68,7 @@ def Custom_Economic_Score(
     ):
         raise ValueError("tuning_estimated_cost_bps_invalid")
     if (
-        isinstance(gross_returns_by_index, Series) is False
+        not isinstance(gross_returns_by_index, Series)
         or gross_returns_by_index.index.has_duplicates
     ):
         raise ValueError("tuning_economic_outcomes_invalid")
@@ -459,7 +459,14 @@ def _candidate_ranking_key(
     if objective == "BUY_F1":
         return selected_buy_f1, macro, precision, recall, 0.0, *complexity
     if objective in {"NET_EXPECTANCY_PROXY", "CUSTOM_ECONOMIC_SCORE"}:
-        return (float(net_expectancy[index]), selected_buy_f1, macro, precision, recall, *complexity)
+        return (
+            float(net_expectancy[index]),
+            selected_buy_f1,
+            macro,
+            precision,
+            recall,
+            *complexity,
+        )
     return precision, macro, recall, selected_buy_f1, 0.0, *complexity
 
 
@@ -727,7 +734,10 @@ def _validate_tuning_economic_inputs(
     tuning_objective: str,
     economic_outcomes: Series | None,
 ) -> None:
-    if tuning_objective == "NET_EXPECTANCY_PROXY" and economic_outcomes is None:
+    if (
+        tuning_objective in {"NET_EXPECTANCY_PROXY", "CUSTOM_ECONOMIC_SCORE"}
+        and economic_outcomes is None
+    ):
         raise ValueError("tuning_economic_objective_requires_outcomes")
     if economic_outcomes is not None:
         if (
