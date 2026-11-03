@@ -343,20 +343,24 @@ def _binary_calibration_split(
     maximum_fit_label_end = max(label_end_indices[index] for index in fit_indices)
     if maximum_fit_label_end >= calibration_start:
         raise ValueError("v4w_calibration_split_label_overlap")
-    return fit_indices, calibration_indices, {
-        "method": "PURGED_CHRONOLOGICAL_OUTER_TRAIN_TAIL",
-        "target_calibration_fraction": V4W_CALIBRATION_FRACTION,
-        "outer_train_rows": len(outer_train_indices),
-        "fit_rows": len(fit_indices),
-        "calibration_rows": len(calibration_indices),
-        "fit_start_index": fit_indices[0],
-        "fit_end_index": fit_indices[-1],
-        "calibration_start_index": calibration_indices[0],
-        "calibration_end_index": calibration_indices[-1],
-        "maximum_fit_label_end_index": maximum_fit_label_end,
-        "pre_calibration_embargo_candles": horizon_candles,
-        "fit_label_windows_end_before_calibration": True,
-    }
+    return (
+        fit_indices,
+        calibration_indices,
+        {
+            "method": "PURGED_CHRONOLOGICAL_OUTER_TRAIN_TAIL",
+            "target_calibration_fraction": V4W_CALIBRATION_FRACTION,
+            "outer_train_rows": len(outer_train_indices),
+            "fit_rows": len(fit_indices),
+            "calibration_rows": len(calibration_indices),
+            "fit_start_index": fit_indices[0],
+            "fit_end_index": fit_indices[-1],
+            "calibration_start_index": calibration_indices[0],
+            "calibration_end_index": calibration_indices[-1],
+            "maximum_fit_label_end_index": maximum_fit_label_end,
+            "pre_calibration_embargo_candles": horizon_candles,
+            "fit_label_windows_end_before_calibration": True,
+        },
+    )
 
 
 def _binary_class_counts(labels: Series) -> dict[str, int]:
@@ -616,7 +620,9 @@ def _binary_classification_metrics(
         "buy_precision": round(
             float(precision_score(targets, predicted, zero_division=0)), 8
         ),
-        "buy_recall": round(float(recall_score(targets, predicted, zero_division=0)), 8),
+        "buy_recall": round(
+            float(recall_score(targets, predicted, zero_division=0)), 8
+        ),
         "buy_f1": round(float(f1_score(targets, predicted, zero_division=0)), 8),
         "roc_auc": round(float(roc_auc_score(targets, probabilities)), 8),
         "average_precision": round(
@@ -875,8 +881,12 @@ def _evaluate_trained_candidate(
         validation_labels, buy_probabilities, threshold
     )
     probability_records = _candidate_probability_records(
-        bars, validation_indices, validation_labels,
-        validation_source_labels, buy_probabilities, threshold,
+        bars,
+        validation_indices,
+        validation_labels,
+        validation_source_labels,
+        buy_probabilities,
+        threshold,
     )
     signals = _execution_signals(probability_records, timeframe)
     management = TradeManagementConfig(
@@ -888,7 +898,9 @@ def _evaluate_trained_candidate(
         trailing_stop_enabled=False,
     )
     replay = simulate_signals(
-        bars, signals, _execution_config(),
+        bars,
+        signals,
+        _execution_config(),
         trade_management_config=management,
     )
     neutral_probability_count = sum(
@@ -973,8 +985,13 @@ def _evaluate_trained_candidate(
         "sequence_model_used": False,
     }
     probability_rows = _probability_artifact_rows(
-        candidate_id, arm, pair, timeframe, feature_profile,
-        weighting_policy, probability_records,
+        candidate_id,
+        arm,
+        pair,
+        timeframe,
+        feature_profile,
+        weighting_policy,
+        probability_records,
     )
     return candidate, probability_rows
 
@@ -1086,7 +1103,8 @@ def _run_binary_experiment(
     )
     label_end_indices = _outer_label_end_indices(labels)
     fit_indices, calibration_indices, calibration_split = _binary_calibration_split(
-        outer_train_indices, label_end_indices,
+        outer_train_indices,
+        label_end_indices,
         horizon_candles=int(arm["horizon_candles"]),
     )
     train_labels = labels.iloc[fit_indices]["label"]
@@ -1114,15 +1132,19 @@ def _run_binary_experiment(
             "validation": _binary_label_distribution(validation_labels),
         },
         "source_label_distribution": {
-            "train": _source_label_distribution(labels.iloc[fit_indices]["source_label"]),
-            "calibration": _source_label_distribution(labels.iloc[calibration_indices]["source_label"]),
-            "validation": _source_label_distribution(labels.iloc[validation_indices]["source_label"]),
+            "train": _source_label_distribution(
+                labels.iloc[fit_indices]["source_label"]
+            ),
+            "calibration": _source_label_distribution(
+                labels.iloc[calibration_indices]["source_label"]
+            ),
+            "validation": _source_label_distribution(
+                labels.iloc[validation_indices]["source_label"]
+            ),
         },
         "label_contract": {
             "schema_version": BINARY_TARGET_SCHEMA_VERSION,
-            "class_mapping": {
-                "BUY": "BUY", "SELL": "NO_BUY", "HOLD": "NO_BUY"
-            },
+            "class_mapping": {"BUY": "BUY", "SELL": "NO_BUY", "HOLD": "NO_BUY"},
             "unlabeled_rows_remain_unlabeled": True,
         },
         "model_variants": {},
@@ -1134,8 +1156,12 @@ def _run_binary_experiment(
         for weighting_policy_name in weighting_policy_specs():
             candidates.append(
                 _skipped_candidate(
-                    arm, pair, timeframe, feature_profile,
-                    weighting_policy_name, experiment,
+                    arm,
+                    pair,
+                    timeframe,
+                    feature_profile,
+                    weighting_policy_name,
+                    experiment,
                 )
             )
         return experiment, candidates, probability_rows
@@ -1153,8 +1179,12 @@ def _run_binary_experiment(
         for weighting_policy_name in weighting_policy_specs():
             candidates.append(
                 _skipped_candidate(
-                    arm, pair, timeframe, feature_profile,
-                    weighting_policy_name, experiment,
+                    arm,
+                    pair,
+                    timeframe,
+                    feature_profile,
+                    weighting_policy_name,
+                    experiment,
                 )
             )
         return experiment, candidates, probability_rows
@@ -1172,7 +1202,10 @@ def _run_binary_experiment(
     for policy_name, policy_config in weighting_policy_specs().items():
         model, tuning_diagnostics = tune_lightgbm_binary_classifier(
             _new_binary_classifier(policy_config["class_weight"]),
-            x_train, train_labels, fit_indices, label_end_indices,
+            x_train,
+            train_labels,
+            fit_indices,
+            label_end_indices,
             horizon_candles=int(arm["horizon_candles"]),
             class_weight_policy=policy_name,
             n_iter=V4V_RANDOM_SEARCH_ITERATIONS,
@@ -1203,11 +1236,18 @@ def _run_binary_experiment(
         )
         feature_importance = _feature_importance_gain(model, x_train)
         candidate, rows = _evaluate_trained_candidate(
-            arm=arm, pair=pair, timeframe=timeframe, bars=bars,
-            feature_profile=feature_profile, weighting_policy=policy_name,
-            experiment=experiment, model=model,
-            tuning_diagnostics=tuning_diagnostics, train_features=x_train,
-            validation_features=x_validation, validation_labels=validation_labels,
+            arm=arm,
+            pair=pair,
+            timeframe=timeframe,
+            bars=bars,
+            feature_profile=feature_profile,
+            weighting_policy=policy_name,
+            experiment=experiment,
+            model=model,
+            tuning_diagnostics=tuning_diagnostics,
+            train_features=x_train,
+            validation_features=x_validation,
+            validation_labels=validation_labels,
             validation_source_labels=validation_source_labels,
             validation_indices=validation_indices,
             feature_importance=feature_importance,
@@ -1223,8 +1263,12 @@ def _run_binary_experiment(
             "selected_mean_cv_binary_buy_economic_score": tuning_diagnostics[
                 "selected_mean_cv_binary_buy_economic_score"
             ],
-            "calibrated_buy_probability_threshold": candidate["buy_probability_threshold"],
-            "validation_classification_metrics": dict(candidate["validation_classification_metrics"]),
+            "calibrated_buy_probability_threshold": candidate[
+                "buy_probability_threshold"
+            ],
+            "validation_classification_metrics": dict(
+                candidate["validation_classification_metrics"]
+            ),
             "trade_metrics": _trade_metrics(list(candidate["trades"])),
         }
     experiment["status"] = "TRAINED"
@@ -1539,7 +1583,9 @@ def _build_report(
             "calibration_split_role": "OUTER_TRAIN_CALIBRATION",
             "threshold_is_candidate_specific": True,
             "candidate_thresholds": {
-                str(candidate["candidate_id"]): float(candidate["buy_probability_threshold"])
+                str(candidate["candidate_id"]): float(
+                    candidate["buy_probability_threshold"]
+                )
                 for candidate in trained
             },
             "comparison": "GREATER_THAN_OR_EQUAL",

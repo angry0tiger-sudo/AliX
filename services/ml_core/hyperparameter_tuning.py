@@ -1097,11 +1097,7 @@ def _validate_binary_score_costs(
             "tuning_binary_missed_opportunity_penalty_invalid",
         ),
     ):
-        if (
-            isinstance(value, bool)
-            or not isfinite(float(value))
-            or float(value) < 0.0
-        ):
+        if isinstance(value, bool) or not isfinite(float(value)) or float(value) < 0.0:
             raise ValueError(reason)
 
 
@@ -1196,9 +1192,7 @@ def Binary_BUY_Economic_Score(
         gross[missed_buy_mask] - float(estimated_cost_bps) / 10_000.0, 0.0
     )
     missed_penalty_bps = (
-        float(np.sum(missed_net))
-        * 10_000.0
-        * float(missed_opportunity_penalty_weight)
+        float(np.sum(missed_net)) * 10_000.0 * float(missed_opportunity_penalty_weight)
     )
     return _binary_economic_score_value(
         net_returns, drawdown_penalty_weight, missed_penalty_bps

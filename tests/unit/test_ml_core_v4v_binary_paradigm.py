@@ -277,15 +277,16 @@ def test_binary_tuner_runs_purged_search_and_keeps_outer_validation_unused() -> 
     assert set(model.classes_) == set(BINARY_BUY_LABELS)
     assert diagnostics["selection_objective"] == "BINARY_BUY_ECONOMIC_SCORE"
     assert diagnostics["economic_scorer"] == "Binary_BUY_Economic_Score"
-    assert diagnostics["threshold_selection"] == "DYNAMIC_TOP_PERCENTILE_PER_INNER_CV_FOLD"
+    assert (
+        diagnostics["threshold_selection"] == "DYNAMIC_TOP_PERCENTILE_PER_INNER_CV_FOLD"
+    )
     assert diagnostics["target_buy_fraction"] == pytest.approx(0.10)
     assert diagnostics["validation_accessed_during_search"] is False
     assert diagnostics["minimum_fit_class_samples"] == 20
     assert diagnostics["minimum_validation_class_samples"] == 20
-    assert (
-        diagnostics["custom_economic_score_contract"]["missed_opportunity_penalty_weight"]
-        == pytest.approx(0.50)
-    )
+    assert diagnostics["custom_economic_score_contract"][
+        "missed_opportunity_penalty_weight"
+    ] == pytest.approx(0.50)
     assert (
         diagnostics["custom_economic_score_contract"]["minimum_trade_count_penalty"]
         is False
@@ -498,7 +499,9 @@ def test_v4v_workflow_is_branch_scoped_and_waits_for_exact_sha_ci() -> None:
 
 
 
-def test_dynamic_probability_calibration_selects_top_fraction_and_reports_ties() -> None:
+def test_dynamic_probability_calibration_selects_top_fraction_and_reports_ties() -> (
+    None
+):
     result = select_dynamic_buy_threshold(
         np.asarray([0.10, 0.20, 0.30, 0.80, 0.80, 0.90], dtype=float),
         target_buy_fraction=0.34,
