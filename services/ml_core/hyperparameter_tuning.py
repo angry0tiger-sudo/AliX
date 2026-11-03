@@ -992,9 +992,13 @@ def _binary_buy_threshold(value: float) -> float:
     return float(value)
 
 
-def _binary_buy_targets(actual: Series, row_count: int) -> np.ndarray:
+def _validate_binary_actual_labels(actual: Series, row_count: int) -> None:
     if len(actual) != row_count or not bool(actual.isin(BINARY_BUY_LABELS).all()):
         raise ValueError("tuning_binary_actual_labels_invalid")
+
+
+def _binary_buy_targets(actual: Series, row_count: int) -> np.ndarray:
+    _validate_binary_actual_labels(actual, row_count)
     targets = np.asarray(actual.to_numpy(dtype=object) == "BUY", dtype=np.int64)
     if len(np.unique(targets)) != 2:
         raise ValueError("tuning_binary_actual_requires_both_classes")
@@ -1127,7 +1131,7 @@ def Binary_BUY_Economic_Score(
     drawdown_penalty_weight: float = CUSTOM_SCORE_DRAWDOWN_PENALTY_WEIGHT,
 ) -> float:
     """Score predicted BUY rows; missed BUY opportunities and low trade counts are not penalized."""
-    _binary_buy_targets(actual, len(features))
+    _validate_binary_actual_labels(actual, len(features))
     _validate_binary_score_alignment(features, actual, gross_returns_by_index)
     _validate_binary_score_costs(estimated_cost_bps, drawdown_penalty_weight)
     cutoff = _binary_buy_threshold(buy_probability_threshold)
