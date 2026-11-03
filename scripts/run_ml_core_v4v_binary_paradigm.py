@@ -1,4 +1,4 @@
-"""V4-V binary BUY/NO_BUY LightGBM training and Spot economic evaluation."""
+"""V4-W dynamic-calibration BUY/NO_BUY LightGBM economic evaluation."""
 
 from __future__ import annotations
 
@@ -38,6 +38,10 @@ from services.ml_core.binary_targets import (
     BINARY_TARGET_SCHEMA_VERSION,
     apply_binary_buy_targets,
 )
+from services.ml_core.binary_calibration import (
+    DEFAULT_TARGET_BUY_FRACTION,
+    select_dynamic_buy_threshold,
+)
 from services.ml_core.economic_backtest import (
     ExecutionConfig,
     TradeManagementConfig,
@@ -58,7 +62,7 @@ from services.ml_core.hyperparameter_tuning import (
 )
 from services.ml_core.purged_embargo import create_purged_embargo_split
 
-V4V_REPORT_SCHEMA = "alix.ml-core.v4v-binary-paradigm.v1"
+V4W_REPORT_SCHEMA = "alix.ml-core.v4w-dynamic-calibration.v1"
 V4V_TIMEFRAMES = ("1h", "4h")
 V4V_FEATURE_PROFILES = ("Combined",)
 V4V_ARMS: tuple[dict[str, Any], ...] = (
@@ -82,7 +86,9 @@ V4V_ENTRY_SLIPPAGE_BPS = 20.0
 V4V_ESTIMATED_ROUND_TRIP_COST_BPS = 90.0
 V4V_FEE_BPS_PER_SIDE = 25.0
 V4V_SLIPPAGE_BPS_PER_SIDE = 20.0
-V4V_BUY_PROBABILITY_THRESHOLD = 0.65
+V4W_CALIBRATION_FRACTION = 0.15
+V4W_TARGET_BUY_FRACTION = DEFAULT_TARGET_BUY_FRACTION
+V4W_MISSED_OPPORTUNITY_PENALTY_WEIGHT = 0.50
 V4V_MINIMUM_INNER_FIT_CLASS_SAMPLES = DEFAULT_MINIMUM_CLASS_SAMPLES
 V4V_MINIMUM_INNER_VALIDATION_CLASS_SAMPLES = DEFAULT_MINIMUM_CLASS_SAMPLES
 V4V_MAXIMUM_DRAWDOWN = 0.15
@@ -98,7 +104,7 @@ V4V_SKIP_STATUSES = (
     "SKIPPED_INSUFFICIENT_SAMPLES",
     "SKIPPED_INSUFFICIENT_INNER_CV_CLASS_SUPPORT",
 )
-V4V_PROBABILITY_COLUMNS = (
+V4W_PROBABILITY_COLUMNS = (
     "candidate_id",
     "arm",
     "pair",
@@ -112,6 +118,7 @@ V4V_PROBABILITY_COLUMNS = (
     "source_label",
     "predicted_label",
     "executable_signal",
+    "buy_probability_threshold",
     "prob_buy",
     "prob_no_buy",
 )
@@ -301,6 +308,55 @@ def _binary_outer_split(
         eligible_count=len(eligible_indices),
     )
     return train_indices, validation_indices, diagnostics
+
+
+def _binary_calibration_split(
+    outer_train_indices: list[int],
+    label_end_indices: list[int],
+    *,
+    horizon_candles: int,
+) -> tuple[list[int], list[int], dict[str, Any]]:
+    """Reserve the chronological tail of Outer Train for probability calibration."""
+    if (
+        not outer_train_indices
+        or outer_train_indices != sorted(set(outer_train_indices))
+        or len(label_end_indices) == 0
+        or horizon_candles < 1
+    ):
+        raise ValueError("v4w_calibration_split_inputs_invalid")
+    calibration_count = max(
+        1, int(np.ceil(len(outer_train_indices) * V4W_CALIBRATION_FRACTION))
+    )
+    if len(outer_train_indices) - calibration_count < 1:
+        raise ValueError("v4w_calibration_split_fit_window_empty")
+    calibration_indices = outer_train_indices[-calibration_count:]
+    calibration_start = calibration_indices[0]
+    fit_candidates = outer_train_indices[:-calibration_count]
+    fit_indices = [
+        index
+        for index in fit_candidates
+        if index < calibration_start - horizon_candles
+        and label_end_indices[index] < calibration_start
+    ]
+    if not fit_indices or fit_indices[-1] >= calibration_start:
+        raise ValueError("v4w_calibration_split_fit_window_invalid")
+    maximum_fit_label_end = max(label_end_indices[index] for index in fit_indices)
+    if maximum_fit_label_end >= calibration_start:
+        raise ValueError("v4w_calibration_split_label_overlap")
+    return fit_indices, calibration_indices, {
+        "method": "PURGED_CHRONOLOGICAL_OUTER_TRAIN_TAIL",
+        "target_calibration_fraction": V4W_CALIBRATION_FRACTION,
+        "outer_train_rows": len(outer_train_indices),
+        "fit_rows": len(fit_indices),
+        "calibration_rows": len(calibration_indices),
+        "fit_start_index": fit_indices[0],
+        "fit_end_index": fit_indices[-1],
+        "calibration_start_index": calibration_indices[0],
+        "calibration_end_index": calibration_indices[-1],
+        "maximum_fit_label_end_index": maximum_fit_label_end,
+        "pre_calibration_embargo_candles": horizon_candles,
+        "fit_label_windows_end_before_calibration": True,
+    }
 
 
 def _binary_class_counts(labels: Series) -> dict[str, int]:
@@ -520,6 +576,7 @@ def _buy_probabilities(model: Any, features: DataFrame) -> np.ndarray:
 def _binary_classification_metrics(
     actual: Series,
     buy_probabilities: np.ndarray,
+    buy_probability_threshold: float,
 ) -> dict[str, Any]:
     if (
         len(actual) != len(buy_probabilities)
@@ -528,16 +585,17 @@ def _binary_classification_metrics(
     ):
         raise ValueError("v4v_binary_metric_support_invalid")
     probabilities = np.asarray(buy_probabilities, dtype=float)
+    threshold = float(buy_probability_threshold)
     if (
         probabilities.ndim != 1
         or not bool(np.isfinite(probabilities).all())
         or bool(np.any(probabilities < 0.0))
         or bool(np.any(probabilities > 1.0))
+        or not np.isfinite(threshold)
+        or not 0.0 <= threshold <= 1.0
     ):
         raise ValueError("v4v_binary_metric_probabilities_invalid")
-    predicted_values = np.where(
-        probabilities >= V4V_BUY_PROBABILITY_THRESHOLD, "BUY", "NO_BUY"
-    )
+    predicted_values = np.where(probabilities >= threshold, "BUY", "NO_BUY")
     actual_values = actual.to_numpy(dtype=object)
     targets = (actual_values == "BUY").astype(int)
     predicted = (predicted_values == "BUY").astype(int)
@@ -548,7 +606,8 @@ def _binary_classification_metrics(
     )
     return {
         "sample_count": int(len(actual)),
-        "threshold": V4V_BUY_PROBABILITY_THRESHOLD,
+        "threshold": threshold,
+        "threshold_selection": "CALIBRATION_TOP_PERCENTILE",
         "class_labels": list(BINARY_BUY_LABELS),
         "buy_support": int(np.count_nonzero(targets)),
         "no_buy_support": int(len(targets) - np.count_nonzero(targets)),
@@ -557,9 +616,7 @@ def _binary_classification_metrics(
         "buy_precision": round(
             float(precision_score(targets, predicted, zero_division=0)), 8
         ),
-        "buy_recall": round(
-            float(recall_score(targets, predicted, zero_division=0)), 8
-        ),
+        "buy_recall": round(float(recall_score(targets, predicted, zero_division=0)), 8),
         "buy_f1": round(float(f1_score(targets, predicted, zero_division=0)), 8),
         "roc_auc": round(float(roc_auc_score(targets, probabilities)), 8),
         "average_precision": round(
@@ -608,6 +665,7 @@ def _candidate_probability_records(
     actual_binary: Series,
     source_labels: Series,
     buy_probabilities: np.ndarray,
+    buy_probability_threshold: float,
 ) -> list[dict[str, Any]]:
     if not (
         len(validation_indices)
@@ -616,6 +674,9 @@ def _candidate_probability_records(
         == len(buy_probabilities)
     ):
         raise ValueError("v4v_probability_record_alignment_invalid")
+    threshold = float(buy_probability_threshold)
+    if not np.isfinite(threshold) or not 0.0 <= threshold <= 1.0:
+        raise ValueError("v4w_probability_threshold_invalid")
     records: list[dict[str, Any]] = []
     for row_index, actual_label, source_label, buy_probability in zip(
         validation_indices,
@@ -632,14 +693,9 @@ def _candidate_probability_records(
                 "split_role": "FORWARD_VALIDATION",
                 "actual_label": str(actual_label),
                 "source_label": str(source_label),
-                "predicted_label": (
-                    "BUY" if probability >= V4V_BUY_PROBABILITY_THRESHOLD else "NO_BUY"
-                ),
-                "executable_signal": (
-                    "BUY"
-                    if probability >= V4V_BUY_PROBABILITY_THRESHOLD
-                    else "NO_ENTRY"
-                ),
+                "predicted_label": "BUY" if probability >= threshold else "NO_BUY",
+                "executable_signal": "BUY" if probability >= threshold else "NO_ENTRY",
+                "buy_probability_threshold": threshold,
                 "prob_buy": round(probability, 8),
                 "prob_no_buy": round(1.0 - probability, 8),
             }
@@ -682,7 +738,10 @@ def _execution_signal_record(
     row_index = int(record["row_index"])
     timestamp = _execution_timestamp(record)
     buy_probability = _validate_execution_probability(record["prob_buy"])
-    is_buy = buy_probability >= V4V_BUY_PROBABILITY_THRESHOLD
+    confidence_threshold = _validate_execution_probability(
+        record["buy_probability_threshold"]
+    )
+    is_buy = buy_probability >= confidence_threshold
     return {
         "row_index": row_index,
         "signal_timestamp": timestamp,
@@ -690,7 +749,7 @@ def _execution_signal_record(
         "signal": "BUY" if is_buy else "NO_ENTRY",
         "raw_signal": "BUY" if buy_probability >= 0.50 else "NO_BUY",
         "buy_probability": buy_probability,
-        "confidence_threshold": V4V_BUY_PROBABILITY_THRESHOLD,
+        "confidence_threshold": confidence_threshold,
         "confidence_passed": is_buy,
     }
 
@@ -804,20 +863,20 @@ def _evaluate_trained_candidate(
     validation_source_labels: Series,
     validation_indices: list[int],
     feature_importance: list[dict[str, Any]],
+    calibration_diagnostics: dict[str, Any],
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    del train_features
     candidate_id = _candidate_identifier(
         str(arm["name"]), pair, timeframe, feature_profile, weighting_policy
     )
+    threshold = float(calibration_diagnostics["threshold"])
     buy_probabilities = _buy_probabilities(model, validation_features)
     classification = _binary_classification_metrics(
-        validation_labels, buy_probabilities
+        validation_labels, buy_probabilities, threshold
     )
     probability_records = _candidate_probability_records(
-        bars,
-        validation_indices,
-        validation_labels,
-        validation_source_labels,
-        buy_probabilities,
+        bars, validation_indices, validation_labels,
+        validation_source_labels, buy_probabilities, threshold,
     )
     signals = _execution_signals(probability_records, timeframe)
     management = TradeManagementConfig(
@@ -825,31 +884,34 @@ def _evaluate_trained_candidate(
         take_profit_atr_multiplier=float(arm["take_profit_multiplier"]),
         stop_loss_atr_multiplier=float(arm["stop_loss_multiplier"]),
         horizon_candles=int(arm["horizon_candles"]),
-        confidence_threshold=V4V_BUY_PROBABILITY_THRESHOLD,
+        confidence_threshold=threshold,
         trailing_stop_enabled=False,
     )
     replay = simulate_signals(
-        bars,
-        signals,
-        _execution_config(),
+        bars, signals, _execution_config(),
         trade_management_config=management,
     )
-    raw_buy_count = sum(
+    neutral_probability_count = sum(
         float(record["prob_buy"]) >= 0.50 for record in probability_records
     )
     accepted_buy_count = sum(
-        float(record["prob_buy"]) >= V4V_BUY_PROBABILITY_THRESHOLD
-        for record in probability_records
+        float(record["prob_buy"]) >= threshold for record in probability_records
     )
+    validation_rows = len(probability_records)
     replay["confidence_filter"] = {
-        "threshold": V4V_BUY_PROBABILITY_THRESHOLD,
-        "threshold_selection": "FIXED_OWNER_DIRECTIVE",
-        "validation_rows": len(probability_records),
-        "raw_buy_count_at_0_50": raw_buy_count,
-        "accepted_buy_count_at_0_65": accepted_buy_count,
-        "confidence_rejected_buy_count": raw_buy_count - accepted_buy_count,
-        "predicted_no_buy_count": len(probability_records) - raw_buy_count,
-        "missed_opportunity_penalty": False,
+        "threshold": threshold,
+        "threshold_selection": "CALIBRATION_TOP_PERCENTILE",
+        "target_buy_fraction": float(calibration_diagnostics["target_buy_fraction"]),
+        "validation_rows": validation_rows,
+        "selected_buy_count": accepted_buy_count,
+        "selected_buy_fraction": (
+            accepted_buy_count / float(validation_rows) if validation_rows else 0.0
+        ),
+        "probability_at_or_above_0_50_count": neutral_probability_count,
+        "no_entry_count": validation_rows - accepted_buy_count,
+        "calibration_rows": int(calibration_diagnostics["calibration_rows"]),
+        "calibration_labels_used_for_threshold": False,
+        "forward_validation_used_for_threshold": False,
         "no_buy_closes_existing_position": False,
     }
     trades = list(replay["trades"])
@@ -877,23 +939,26 @@ def _evaluate_trained_candidate(
         "feature_profile": feature_profile,
         "weighting_policy": weighting_policy,
         "class_labels": list(BINARY_BUY_LABELS),
+        "outer_train_rows": int(experiment["outer_train_rows"]),
         "train_rows": int(experiment["train_rows"]),
+        "calibration_rows": int(experiment["calibration_rows"]),
         "validation_rows": int(experiment["validation_rows"]),
         "tuning_objective": BINARY_BUY_OBJECTIVE,
         "tuning_diagnostics": dict(tuning_diagnostics),
         "selected_parameters": dict(tuning_diagnostics["selected_parameters"]),
         "model_class_order": [str(value) for value in model.classes_],
-        "buy_probability_threshold": V4V_BUY_PROBABILITY_THRESHOLD,
+        "buy_probability_threshold": threshold,
+        "calibration_diagnostics": dict(calibration_diagnostics),
         "validation_classification_metrics": classification,
         "metrics": metrics,
         "confidence_filter": dict(replay["confidence_filter"]),
         "raw_binary_prediction_counts": {
-            "BUY_AT_0_50": raw_buy_count,
-            "NO_BUY_BELOW_0_50": len(probability_records) - raw_buy_count,
+            "PROBABILITY_AT_OR_ABOVE_0_50": neutral_probability_count,
+            "PROBABILITY_BELOW_0_50": validation_rows - neutral_probability_count,
         },
         "executable_signal_counts": {
-            "BUY_AT_0_65": accepted_buy_count,
-            "NO_ENTRY_BELOW_0_65": len(probability_records) - accepted_buy_count,
+            "BUY_AT_CALIBRATED_THRESHOLD": accepted_buy_count,
+            "NO_ENTRY_BELOW_CALIBRATED_THRESHOLD": validation_rows - accepted_buy_count,
         },
         "exit_reason_counts": dict(replay["exit_reason_counts"]),
         "total_fees_usd": float(replay["total_fees_usd"]),
@@ -908,13 +973,8 @@ def _evaluate_trained_candidate(
         "sequence_model_used": False,
     }
     probability_rows = _probability_artifact_rows(
-        candidate_id,
-        arm,
-        pair,
-        timeframe,
-        feature_profile,
-        weighting_policy,
-        probability_records,
+        candidate_id, arm, pair, timeframe, feature_profile,
+        weighting_policy, probability_records,
     )
     return candidate, probability_rows
 
@@ -945,6 +1005,7 @@ def _probability_artifact_rows(
                 "source_label": str(record["source_label"]),
                 "predicted_label": str(record["predicted_label"]),
                 "executable_signal": str(record["executable_signal"]),
+                "buy_probability_threshold": float(record["buy_probability_threshold"]),
                 "prob_buy": float(record["prob_buy"]),
                 "prob_no_buy": float(record["prob_no_buy"]),
             }
@@ -1020,12 +1081,16 @@ def _run_binary_experiment(
     )
     labels = apply_binary_buy_targets(raw_labels)
     features = feature_matrices[feature_profile]
-    train_indices, validation_indices, split_diagnostics = _binary_outer_split(
-        features,
-        labels,
+    outer_train_indices, validation_indices, split_diagnostics = _binary_outer_split(
+        features, labels, horizon_candles=int(arm["horizon_candles"])
+    )
+    label_end_indices = _outer_label_end_indices(labels)
+    fit_indices, calibration_indices, calibration_split = _binary_calibration_split(
+        outer_train_indices, label_end_indices,
         horizon_candles=int(arm["horizon_candles"]),
     )
-    train_labels = labels.iloc[train_indices]["label"]
+    train_labels = labels.iloc[fit_indices]["label"]
+    calibration_labels = labels.iloc[calibration_indices]["label"]
     validation_labels = labels.iloc[validation_indices]["label"]
     sample_gate = _binary_sample_gate(train_labels, validation_labels)
     experiment: dict[str, Any] = {
@@ -1036,28 +1101,27 @@ def _run_binary_experiment(
         "feature_profile": feature_profile,
         "status": str(sample_gate["status"]),
         "bar_count": int(len(bars)),
-        "train_rows": len(train_indices),
+        "outer_train_rows": len(outer_train_indices),
+        "train_rows": len(fit_indices),
+        "calibration_rows": len(calibration_indices),
         "validation_rows": len(validation_indices),
         "sample_gate": sample_gate,
         "split": split_diagnostics,
+        "calibration_split": calibration_split,
         "binary_label_distribution": {
             "train": _binary_label_distribution(train_labels),
+            "calibration": _binary_label_distribution(calibration_labels),
             "validation": _binary_label_distribution(validation_labels),
         },
         "source_label_distribution": {
-            "train": _source_label_distribution(
-                labels.iloc[train_indices]["source_label"]
-            ),
-            "validation": _source_label_distribution(
-                labels.iloc[validation_indices]["source_label"]
-            ),
+            "train": _source_label_distribution(labels.iloc[fit_indices]["source_label"]),
+            "calibration": _source_label_distribution(labels.iloc[calibration_indices]["source_label"]),
+            "validation": _source_label_distribution(labels.iloc[validation_indices]["source_label"]),
         },
         "label_contract": {
             "schema_version": BINARY_TARGET_SCHEMA_VERSION,
             "class_mapping": {
-                "BUY": "BUY",
-                "SELL": "NO_BUY",
-                "HOLD": "NO_BUY",
+                "BUY": "BUY", "SELL": "NO_BUY", "HOLD": "NO_BUY"
             },
             "unlabeled_rows_remain_unlabeled": True,
         },
@@ -1070,25 +1134,16 @@ def _run_binary_experiment(
         for weighting_policy_name in weighting_policy_specs():
             candidates.append(
                 _skipped_candidate(
-                    arm,
-                    pair,
-                    timeframe,
-                    feature_profile,
-                    weighting_policy_name,
-                    experiment,
+                    arm, pair, timeframe, feature_profile,
+                    weighting_policy_name, experiment,
                 )
             )
         return experiment, candidates, probability_rows
 
-    label_end_indices = [
-        index if pd.isna(value) else int(value)
-        for index, value in enumerate(labels["label_end_idx"].tolist())
-    ]
+    if len(calibration_indices) < 20:
+        raise ValueError("v4w_calibration_window_insufficient")
     inner_preflight = _binary_inner_cv_preflight(
-        train_indices,
-        train_labels,
-        label_end_indices,
-        int(arm["horizon_candles"]),
+        fit_indices, train_labels, label_end_indices, int(arm["horizon_candles"])
     )
     experiment["split"]["inner_cv_preflight"] = inner_preflight
     if inner_preflight["status"] != "PASS":
@@ -1098,26 +1153,26 @@ def _run_binary_experiment(
         for weighting_policy_name in weighting_policy_specs():
             candidates.append(
                 _skipped_candidate(
-                    arm,
-                    pair,
-                    timeframe,
-                    feature_profile,
-                    weighting_policy_name,
-                    experiment,
+                    arm, pair, timeframe, feature_profile,
+                    weighting_policy_name, experiment,
                 )
             )
         return experiment, candidates, probability_rows
 
-    x_train = features.iloc[train_indices]
+    x_train = features.iloc[fit_indices]
+    x_calibration = features.iloc[calibration_indices]
     x_validation = features.iloc[validation_indices]
     validation_source_labels = labels.iloc[validation_indices]["source_label"]
+    calibration_start_timestamp = pd.Timestamp(
+        bars["date"].iloc[calibration_indices[0]]
+    ).isoformat()
+    calibration_end_timestamp = pd.Timestamp(
+        bars["date"].iloc[calibration_indices[-1]]
+    ).isoformat()
     for policy_name, policy_config in weighting_policy_specs().items():
         model, tuning_diagnostics = tune_lightgbm_binary_classifier(
             _new_binary_classifier(policy_config["class_weight"]),
-            x_train,
-            train_labels,
-            train_indices,
-            label_end_indices,
+            x_train, train_labels, fit_indices, label_end_indices,
             horizon_candles=int(arm["horizon_candles"]),
             class_weight_policy=policy_name,
             n_iter=V4V_RANDOM_SEARCH_ITERATIONS,
@@ -1126,25 +1181,37 @@ def _run_binary_experiment(
             minimum_validation_class_samples=V4V_MINIMUM_INNER_VALIDATION_CLASS_SAMPLES,
             economic_outcomes=economic_outcomes,
             estimated_cost_bps=V4V_ESTIMATED_ROUND_TRIP_COST_BPS,
-            buy_probability_threshold=V4V_BUY_PROBABILITY_THRESHOLD,
+            target_buy_fraction=V4W_TARGET_BUY_FRACTION,
+            missed_opportunity_penalty_weight=V4W_MISSED_OPPORTUNITY_PENALTY_WEIGHT,
+        )
+        calibration_probabilities = _buy_probabilities(model, x_calibration)
+        calibration_diagnostics = select_dynamic_buy_threshold(
+            calibration_probabilities,
+            target_buy_fraction=V4W_TARGET_BUY_FRACTION,
+        )
+        calibration_diagnostics.update(
+            {
+                "split_role": "OUTER_TRAIN_CALIBRATION",
+                "calibration_start_index": calibration_indices[0],
+                "calibration_end_index": calibration_indices[-1],
+                "calibration_start_timestamp": calibration_start_timestamp,
+                "calibration_end_timestamp": calibration_end_timestamp,
+                "calibration_labels_used_for_threshold": False,
+                "forward_validation_used_for_threshold": False,
+                "final_holdout_used_for_threshold": False,
+            }
         )
         feature_importance = _feature_importance_gain(model, x_train)
         candidate, rows = _evaluate_trained_candidate(
-            arm=arm,
-            pair=pair,
-            timeframe=timeframe,
-            bars=bars,
-            feature_profile=feature_profile,
-            weighting_policy=policy_name,
-            experiment=experiment,
-            model=model,
-            tuning_diagnostics=tuning_diagnostics,
-            train_features=x_train,
-            validation_features=x_validation,
-            validation_labels=validation_labels,
+            arm=arm, pair=pair, timeframe=timeframe, bars=bars,
+            feature_profile=feature_profile, weighting_policy=policy_name,
+            experiment=experiment, model=model,
+            tuning_diagnostics=tuning_diagnostics, train_features=x_train,
+            validation_features=x_validation, validation_labels=validation_labels,
             validation_source_labels=validation_source_labels,
             validation_indices=validation_indices,
             feature_importance=feature_importance,
+            calibration_diagnostics=calibration_diagnostics,
         )
         candidates.append(candidate)
         probability_rows.extend(rows)
@@ -1156,9 +1223,8 @@ def _run_binary_experiment(
             "selected_mean_cv_binary_buy_economic_score": tuning_diagnostics[
                 "selected_mean_cv_binary_buy_economic_score"
             ],
-            "validation_classification_metrics": dict(
-                candidate["validation_classification_metrics"]
-            ),
+            "calibrated_buy_probability_threshold": candidate["buy_probability_threshold"],
+            "validation_classification_metrics": dict(candidate["validation_classification_metrics"]),
             "trade_metrics": _trade_metrics(list(candidate["trades"])),
         }
     experiment["status"] = "TRAINED"
@@ -1382,7 +1448,7 @@ def _build_report(
     feature_rows = _feature_importance_rows(candidates)
     trained = [item for item in candidates if item["status"] == "TRAINED"]
     return {
-        "schema_version": V4V_REPORT_SCHEMA,
+        "schema_version": V4W_REPORT_SCHEMA,
         "commit_sha": commit_sha,
         "requested_days": 730,
         "provider": "Binance Spot public klines API",
@@ -1452,11 +1518,13 @@ def _build_report(
             "primary_objective": BINARY_BUY_OBJECTIVE,
             "scorer": "Binary_BUY_Economic_Score",
             "scorer_scope": "PURGED_INNER_CV_FOLDS_WITHIN_OUTER_TRAIN",
-            "scored_rows": "PREDICTED_BUY_ONLY",
-            "buy_probability_threshold": V4V_BUY_PROBABILITY_THRESHOLD,
+            "scored_rows": "ALL_PURGED_INNER_CV_VALIDATION_ROWS",
+            "threshold_selection": "DYNAMIC_TOP_PERCENTILE_PER_INNER_CV_FOLD",
+            "target_buy_fraction": V4W_TARGET_BUY_FRACTION,
             "estimated_round_trip_cost_bps": V4V_ESTIMATED_ROUND_TRIP_COST_BPS,
-            "missed_opportunity_penalty_bps": 0.0,
-            "no_buy_predictions_are_penalized": False,
+            "missed_opportunity_penalty_weight": V4W_MISSED_OPPORTUNITY_PENALTY_WEIGHT,
+            "missed_opportunity_definition": "ACTUAL_BUY_WITH_POSITIVE_NET_OUTCOME_NOT_SELECTED",
+            "no_buy_predictions_are_penalized": True,
             "minimum_trade_count_penalty": False,
             "drawdown_penalty_weight": 0.5,
             "positive_net_expectancy_reward_multiplier": 2.0,
@@ -1464,12 +1532,34 @@ def _build_report(
             "economic_acceptance_authority": "FORWARD_VALIDATION_COSTED_SPOT_EXECUTION_REPLAY",
         },
         "confidence_threshold_contract": {
-            "method": "FIXED_OWNER_DIRECTIVE_THRESHOLD",
-            "buy_probability_threshold": V4V_BUY_PROBABILITY_THRESHOLD,
+            "method": "DYNAMIC_TOP_PERCENTILE_CALIBRATION",
+            "target_buy_fraction": V4W_TARGET_BUY_FRACTION,
+            "target_percentile": 100.0 * (1.0 - V4W_TARGET_BUY_FRACTION),
+            "calibration_fraction_of_outer_train": V4W_CALIBRATION_FRACTION,
+            "calibration_split_role": "OUTER_TRAIN_CALIBRATION",
+            "threshold_is_candidate_specific": True,
+            "candidate_thresholds": {
+                str(candidate["candidate_id"]): float(candidate["buy_probability_threshold"])
+                for candidate in trained
+            },
             "comparison": "GREATER_THAN_OR_EQUAL",
+            "selected_using_calibration_probabilities": True,
+            "calibration_labels_used_for_threshold": False,
             "selected_using_validation_labels": False,
-            "calibration_window_used": False,
+            "selected_using_validation_probabilities": False,
+            "forward_validation_used_for_threshold": False,
+            "final_holdout_used_for_threshold": False,
             "no_buy_execution_mapping": "NO_ENTRY",
+        },
+        "calibration_contract": {
+            "method": "PURGED_CHRONOLOGICAL_OUTER_TRAIN_TAIL",
+            "calibration_fraction_of_outer_train": V4W_CALIBRATION_FRACTION,
+            "threshold_method": "TOP_PERCENTILE_ORDER_STATISTIC",
+            "target_buy_fraction": V4W_TARGET_BUY_FRACTION,
+            "calibration_data_scope": "OUTER_TRAIN_ONLY",
+            "calibration_labels_used_for_threshold": False,
+            "forward_validation_reserved_for_economic_replay": True,
+            "final_holdout_untouched": True,
         },
         "inner_cv_contract": {
             "method": "PURGED_EXPANDING_TIME_SERIES",
@@ -1496,9 +1586,9 @@ def _build_report(
             "minimum_trade_count_is_hard_gate": False,
         },
         "row_level_probability_artifact": {
-            "file": "alix-v4v-row-level-probabilities.csv",
+            "file": "alix-v4w-row-level-probabilities.csv",
             "row_count": len(probability_rows),
-            "columns": list(V4V_PROBABILITY_COLUMNS),
+            "columns": list(V4W_PROBABILITY_COLUMNS),
             "contains_calibration_rows": False,
             "contains_forward_validation_rows": True,
         },
@@ -1539,14 +1629,14 @@ def _write_csv(
 
 def _render_step_summary(report: dict[str, Any]) -> str:
     lines = [
-        "## AliX V4-V Binary BUY / NO_BUY Evaluation",
+        "## AliX V4-W Dynamic Calibration BUY / NO_BUY Evaluation",
         "",
         f"Commit SHA: {report['commit_sha']}",
         "",
         "Target: BUY vs NO_BUY; source SELL and HOLD map to NO_BUY.",
         "Features: Combined Baseline + Trend + Volatility + Volume.",
-        "BUY threshold: fixed 0.65; NO_BUY maps to NO_ENTRY and never opens shorts.",
-        "Objective: Binary_BUY_Economic_Score on predicted BUY rows only; missed opportunities are not penalized.",
+        "BUY threshold: candidate-specific top-percentile calibration on an isolated Outer-Train tail; Forward Validation is reserved for economic replay.",
+        "Objective: Binary_BUY_Economic_Score includes costed positive BUY opportunities missed below the dynamic cutoff.",
         "",
         "| Arm | Candidates | Trained | Trades | Net PF | Win Rate | Mean Candidate Max DD |",
         "|---|---:|---:|---:|---:|---:|---:|",
@@ -1589,7 +1679,7 @@ def _write_outputs(
     probability_rows: list[dict[str, Any]],
 ) -> None:
     if len(report["row_level_probability_artifact"]["columns"]) != len(
-        V4V_PROBABILITY_COLUMNS
+        V4W_PROBABILITY_COLUMNS
     ):
         raise ValueError("v4v_probability_artifact_schema_invalid")
     if len(report["row_level_probability_artifact"]["columns"]) != len(
@@ -1650,7 +1740,7 @@ def _write_outputs(
             "direction",
         ),
     )
-    _write_csv(probabilities_path, probability_rows, V4V_PROBABILITY_COLUMNS)
+    _write_csv(probabilities_path, probability_rows, V4W_PROBABILITY_COLUMNS)
     _write_csv(
         feature_importance_path,
         report["feature_importance_rows"],

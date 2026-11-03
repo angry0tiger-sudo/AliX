@@ -1,4 +1,4 @@
-name: AliX V4-V Binary BUY vs NO_BUY Economic Evaluation
+name: AliX V4-W Binary BUY vs NO_BUY Economic Evaluation
 
 on:
   push:
@@ -17,7 +17,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: alix-v4v-binary-paradigm
+  group: alix-v4w-dynamic-calibration
   cancel-in-progress: true
 
 jobs:
@@ -126,12 +126,13 @@ jobs:
           printf 'commit_sha=%s\n' "$GITHUB_SHA"
           printf 'target=BUY_VS_NO_BUY\n'
           printf 'source_label_mapping=BUY->BUY;SELL->NO_BUY;HOLD->NO_BUY\n'
-          printf 'buy_probability_threshold=0.65\n'
+          printf 'buy_threshold_method=TOP_10_PERCENTILE_FROM_OUTER_TRAIN_CALIBRATION\n'
           printf 'features=BASELINE+TREND+VOLATILITY+VOLUME\n'
           printf 'geometry_control=TP=1.0 ATR; SL=1.0 ATR; Horizon=24\n'
           printf 'geometry_primary=TP=1.5 ATR; SL=1.0 ATR; Horizon=24\n'
           printf 'objective=Binary_BUY_Economic_Score\n'
-          printf 'missed_opportunity_penalty=0\n'
+printf 'calibration=TOP_10_PERCENTILE_OUTER_TRAIN_TAIL\n'
+          printf 'missed_opportunity_penalty_weight=0.50\n'
           printf 'no_buy_execution=NO_ENTRY\n'
           printf 'sequence_models=FORBIDDEN\n'
           printf 'market_data=PUBLIC_BINANCE_SPOT_ONLY\n'
@@ -149,6 +150,120 @@ jobs:
         run: |
           python -m pip install pip==25.2
           python -m pip install numpy==2.5.4 pandas==2.3.3 scikit-learn==1.9.0 lightgbm==4.7.0
+
+      - name: Audit V4-V Run #18 BUY probability distribution from its GitHub Artifact
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import csv
+          import hashlib
+          import io
+          import json
+          import os
+          import zipfile
+          from collections import defaultdict
+          from pathlib import Path
+          from urllib.request import Request, urlopen
+
+          artifact_id = 13257040043
+          expected_digest = "7484b3403ea7e236363eb2f79007f01286b9953e6919b893d4c51928607cb9b5"
+          repository = os.environ["GITHUB_REPOSITORY"]
+          request = Request(
+              f"https://api.github.com/repos/{repository}/actions/artifacts/{artifact_id}/zip",
+              headers={
+                  "Accept": "application/vnd.github+json",
+                  "Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+                  "X-GitHub-Api-Version": "2022-11-28",
+              },
+          )
+          with urlopen(request, timeout=90) as response:
+              archive_bytes = response.read()
+          actual_digest = hashlib.sha256(archive_bytes).hexdigest()
+          if actual_digest != expected_digest:
+              raise SystemExit("v4v_run18_artifact_digest_mismatch")
+          with zipfile.ZipFile(io.BytesIO(archive_bytes)) as archive:
+              members = [
+                  name for name in archive.namelist()
+                  if name.endswith("alix-v4v-row-level-probabilities.csv")
+              ]
+              if len(members) != 1:
+                  raise SystemExit("v4v_run18_probability_csv_missing_or_ambiguous")
+              payload = archive.read(members[0]).decode("utf-8")
+          grouped = defaultdict(list)
+          with io.StringIO(payload, newline="") as handle:
+              reader = csv.DictReader(handle)
+              required = {"candidate_id", "arm", "prob_buy", "split_role"}
+              if not required.issubset(set(reader.fieldnames or [])):
+                  raise SystemExit("v4v_run18_probability_schema_invalid")
+              for row in reader:
+                  if row["split_role"] != "FORWARD_VALIDATION":
+                      raise SystemExit("v4v_run18_probability_split_invalid")
+                  probability = float(row["prob_buy"])
+                  if not 0.0 <= probability <= 1.0:
+                      raise SystemExit("v4v_run18_probability_value_invalid")
+                  grouped[(row["candidate_id"], row["arm"])].append(probability)
+
+          def quantile(values, fraction):
+              ordered = sorted(values)
+              return ordered[int((len(ordered) - 1) * fraction)]
+
+          summaries = []
+          all_values = []
+          for (candidate_id, arm), values in sorted(grouped.items()):
+              all_values.extend(values)
+              summaries.append({
+                  "candidate_id": candidate_id,
+                  "arm": arm,
+                  "rows": len(values),
+                  "min": min(values),
+                  "q10": quantile(values, 0.10),
+                  "median": quantile(values, 0.50),
+                  "q90": quantile(values, 0.90),
+                  "q95": quantile(values, 0.95),
+                  "q99": quantile(values, 0.99),
+                  "max": max(values),
+                  "at_or_above_0_50": sum(value >= 0.50 for value in values),
+                  "at_or_above_0_65": sum(value >= 0.65 for value in values),
+                  "at_or_above_0_65_fraction": sum(value >= 0.65 for value in values) / len(values),
+              })
+          if not all_values or len(summaries) != 16:
+              raise SystemExit("v4v_run18_probability_population_invalid")
+          audit = {
+              "schema_version": "alix.v4w.v4v-run18-probability-audit.v1",
+              "source_workflow_run_id": 41680389265,
+              "source_artifact_id": artifact_id,
+              "source_commit_sha": "0bb02b9a482b663f3815ba7c283fb27ccb83dc07",
+              "artifact_sha256": actual_digest,
+              "row_count": len(all_values),
+              "candidate_count": len(summaries),
+              "overall": {
+                  "min": min(all_values),
+                  "q10": quantile(all_values, 0.10),
+                  "median": quantile(all_values, 0.50),
+                  "q90": quantile(all_values, 0.90),
+                  "q95": quantile(all_values, 0.95),
+                  "q99": quantile(all_values, 0.99),
+                  "max": max(all_values),
+                  "at_or_above_0_50": sum(value >= 0.50 for value in all_values),
+                  "at_or_above_0_65": sum(value >= 0.65 for value in all_values),
+                  "at_or_above_0_65_fraction": sum(value >= 0.65 for value in all_values) / len(all_values),
+              },
+              "candidates": summaries,
+          }
+          Path("alix-v4w-v4v-run18-probability-audit.json").write_text(
+              json.dumps(audit, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps({
+              "audit": "PASS",
+              "source_run_id": audit["source_workflow_run_id"],
+              "rows": audit["row_count"],
+              "candidates": audit["candidate_count"],
+              "overall": audit["overall"],
+          }, sort_keys=True))
+          PY
 
       - name: Fetch complete public Binance Spot 730-day 1-minute datasets
         run: |
@@ -179,25 +294,25 @@ jobs:
           set -euo pipefail
           python -m scripts.run_ml_core_v4v_binary_paradigm \
             --input-dir "$RUNNER_TEMP/alix-v4v-market-data" \
-            --output-report "$GITHUB_WORKSPACE/alix-v4v-binary-report.json" \
-            --output-comparison-csv "$GITHUB_WORKSPACE/alix-v4v-binary-comparison.csv" \
-            --output-trades-csv "$GITHUB_WORKSPACE/alix-v4v-binary-trades.csv" \
-            --output-probabilities-csv "$GITHUB_WORKSPACE/alix-v4v-row-level-probabilities.csv" \
-            --output-feature-importance-csv "$GITHUB_WORKSPACE/alix-v4v-feature-importance.csv" \
+            --output-report "$GITHUB_WORKSPACE/alix-v4w-binary-report.json" \
+            --output-comparison-csv "$GITHUB_WORKSPACE/alix-v4w-binary-comparison.csv" \
+            --output-trades-csv "$GITHUB_WORKSPACE/alix-v4w-binary-trades.csv" \
+            --output-probabilities-csv "$GITHUB_WORKSPACE/alix-v4w-row-level-probabilities.csv" \
+            --output-feature-importance-csv "$GITHUB_WORKSPACE/alix-v4w-feature-importance.csv" \
             --days 730 \
             --commit-sha "$GITHUB_SHA"
           test -s "$GITHUB_STEP_SUMMARY"
-          grep -Fq "AliX V4-V Binary BUY / NO_BUY Evaluation" "$GITHUB_STEP_SUMMARY"
+          grep -Fq "AliX V4-W Dynamic Calibration BUY / NO_BUY Evaluation" "$GITHUB_STEP_SUMMARY"
           grep -Fq "Binary_BUY_Economic_Score" "$GITHUB_STEP_SUMMARY"
           grep -Fq "NO-GO" "$GITHUB_STEP_SUMMARY"
           cat "$GITHUB_STEP_SUMMARY"
 
       - name: Validate V4-V binary report, probabilities, economics, and safety
         env:
-          REPORT_PATH: ${{ github.workspace }}/alix-v4v-binary-report.json
-          COMPARISON_CSV: ${{ github.workspace }}/alix-v4v-binary-comparison.csv
-          TRADES_CSV: ${{ github.workspace }}/alix-v4v-binary-trades.csv
-          PROBABILITIES_CSV: ${{ github.workspace }}/alix-v4v-row-level-probabilities.csv
+          REPORT_PATH: ${{ github.workspace }}/alix-v4w-binary-report.json
+          COMPARISON_CSV: ${{ github.workspace }}/alix-v4w-binary-comparison.csv
+          TRADES_CSV: ${{ github.workspace }}/alix-v4w-binary-trades.csv
+          PROBABILITIES_CSV: ${{ github.workspace }}/alix-v4w-row-level-probabilities.csv
           TARGET_SHA: ${{ github.sha }}
         run: |
           python - <<'PY'
@@ -208,7 +323,7 @@ jobs:
           from pathlib import Path
 
           report = json.loads(Path(os.environ["REPORT_PATH"]).read_text(encoding="utf-8"))
-          assert report["schema_version"] == "alix.ml-core.v4v-binary-paradigm.v1"
+          assert report["schema_version"] == "alix.ml-core.v4w-dynamic-calibration.v1"
           assert report["commit_sha"] == os.environ["TARGET_SHA"]
           assert report["requested_days"] == 730
           assert report["model_training_performed"] is True
@@ -240,24 +355,35 @@ jobs:
           objective = report["objective_contract"]
           assert objective["primary_objective"] == "BINARY_BUY_ECONOMIC_SCORE"
           assert objective["scorer"] == "Binary_BUY_Economic_Score"
-          assert objective["scored_rows"] == "PREDICTED_BUY_ONLY"
-          assert objective["buy_probability_threshold"] == 0.65
-          assert objective["missed_opportunity_penalty_bps"] == 0.0
-          assert objective["no_buy_predictions_are_penalized"] is False
+          assert objective["scored_rows"] == "ALL_PURGED_INNER_CV_VALIDATION_ROWS"
+          assert objective["threshold_selection"] == "DYNAMIC_TOP_PERCENTILE_PER_INNER_CV_FOLD"
+          assert objective["target_buy_fraction"] == 0.10
+          assert objective["missed_opportunity_penalty_weight"] == 0.50
+          assert objective["no_buy_predictions_are_penalized"] is True
           assert objective["minimum_trade_count_penalty"] is False
 
           confidence = report["confidence_threshold_contract"]
-          assert confidence["buy_probability_threshold"] == 0.65
+          assert confidence["method"] == "DYNAMIC_TOP_PERCENTILE_CALIBRATION"
+          assert confidence["target_buy_fraction"] == 0.10
+          assert confidence["selected_using_calibration_probabilities"] is True
+          assert confidence["calibration_labels_used_for_threshold"] is False
           assert confidence["selected_using_validation_labels"] is False
-          assert confidence["no_buy_execution_mapping"] == "NO_ENTRY"
+          assert confidence["selected_using_validation_probabilities"] is False
+          assert confidence["forward_validation_used_for_threshold"] is False
+          assert confidence["final_holdout_used_for_threshold"] is False
+          calibration = report["calibration_contract"]
+          assert calibration["calibration_data_scope"] == "OUTER_TRAIN_ONLY"
+          assert calibration["forward_validation_reserved_for_economic_replay"] is True
+          assert calibration["final_holdout_untouched"] is True
+          assert Path("alix-v4w-v4v-run18-probability-audit.json").is_file()
 
           artifact = report["row_level_probability_artifact"]
-          assert artifact["file"] == "alix-v4v-row-level-probabilities.csv"
+          assert artifact["file"] == "alix-v4w-row-level-probabilities.csv"
           required = {
               "candidate_id", "arm", "pair", "timeframe", "feature_profile",
               "weighting_policy", "row_index", "timestamp", "split_role",
               "actual_label", "source_label", "predicted_label",
-              "executable_signal", "prob_buy", "prob_no_buy",
+              "executable_signal", "buy_probability_threshold", "prob_buy", "prob_no_buy",
           }
           assert set(artifact["columns"]) == required
           with Path(os.environ["PROBABILITIES_CSV"]).open(
@@ -279,9 +405,11 @@ jobs:
               assert row["source_label"] in {"BUY", "SELL", "HOLD"}
               expected_actual = "BUY" if row["source_label"] == "BUY" else "NO_BUY"
               assert row["actual_label"] == expected_actual
-              expected_prediction = "BUY" if buy >= 0.65 else "NO_BUY"
+              threshold = float(row["buy_probability_threshold"])
+              assert math.isfinite(threshold) and 0.0 <= threshold <= 1.0
+              expected_prediction = "BUY" if buy >= threshold else "NO_BUY"
               assert row["predicted_label"] == expected_prediction
-              expected_signal = "BUY" if buy >= 0.65 else "NO_ENTRY"
+              expected_signal = "BUY" if buy >= threshold else "NO_ENTRY"
               assert row["executable_signal"] == expected_signal
 
           assert len(report["candidates"]) == 16
@@ -293,12 +421,19 @@ jobs:
                   continue
               assert candidate["evaluation_performed"] is True
               assert candidate["tuning_objective"] == "BINARY_BUY_ECONOMIC_SCORE"
-              assert candidate["buy_probability_threshold"] == 0.65
+              threshold = float(candidate["buy_probability_threshold"])
+              assert math.isfinite(threshold) and 0.0 <= threshold <= 1.0
+              calibration_diagnostics = candidate["calibration_diagnostics"]
+              assert calibration_diagnostics["split_role"] == "OUTER_TRAIN_CALIBRATION"
+              assert calibration_diagnostics["calibration_labels_used_for_threshold"] is False
+              assert calibration_diagnostics["forward_validation_used_for_threshold"] is False
+              assert calibration_diagnostics["final_holdout_used_for_threshold"] is False
               tuning = candidate["tuning_diagnostics"]
               assert tuning["validation_accessed_during_search"] is False
               assert tuning["selection_objective"] == "BINARY_BUY_ECONOMIC_SCORE"
               assert tuning["economic_scorer"] == "Binary_BUY_Economic_Score"
-              assert tuning["custom_economic_score_contract"]["missed_opportunity_penalty_bps"] == 0.0
+              assert tuning["custom_economic_score_contract"]["missed_opportunity_penalty_weight"] == 0.50
+              assert tuning["custom_economic_score_contract"]["minimum_trade_count_penalty"] is False
               metrics = candidate["validation_classification_metrics"]
               for name in ("buy_precision", "buy_recall", "buy_f1", "roc_auc"):
                   assert math.isfinite(float(metrics[name]))
@@ -355,11 +490,12 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: alix-v4v-binary-economic-evaluation
+          name: alix-v4w-dynamic-calibration-economic-evaluation
           path: |
-            alix-v4v-binary-report.json
-            alix-v4v-binary-comparison.csv
-            alix-v4v-binary-trades.csv
-            alix-v4v-row-level-probabilities.csv
-            alix-v4v-feature-importance.csv
+            alix-v4w-binary-report.json
+            alix-v4w-binary-comparison.csv
+            alix-v4w-binary-trades.csv
+            alix-v4w-row-level-probabilities.csv
+            alix-v4w-feature-importance.csv
+            alix-v4w-v4v-run18-probability-audit.json
           if-no-files-found: error

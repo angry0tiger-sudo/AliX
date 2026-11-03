@@ -8,6 +8,12 @@ from numbers import Integral
 from typing import Any, Sequence, cast
 
 import numpy as np
+
+from services.ml_core.binary_calibration import (
+    DEFAULT_TARGET_BUY_FRACTION,
+    select_dynamic_buy_threshold,
+    validate_target_buy_fraction,
+)
 from pandas import DataFrame, Series
 from sklearn.base import clone  # type: ignore[import-untyped]
 from sklearn.metrics import (  # type: ignore[import-untyped]
@@ -940,7 +946,8 @@ def tune_lightgbm_classifier(
 
 BINARY_BUY_LABELS = ("BUY", "NO_BUY")
 BINARY_BUY_OBJECTIVE = "BINARY_BUY_ECONOMIC_SCORE"
-DEFAULT_BINARY_BUY_THRESHOLD = 0.65
+DEFAULT_BINARY_BUY_TARGET_FRACTION = DEFAULT_TARGET_BUY_FRACTION
+DEFAULT_BINARY_MISSED_OPPORTUNITY_PENALTY_WEIGHT = 0.50
 
 
 def _binary_buy_class_index(estimator: Any) -> int:
@@ -1009,11 +1016,21 @@ def _binary_buy_predictions(
     estimator: Any,
     features: DataFrame,
     actual: Series,
-    threshold: float = DEFAULT_BINARY_BUY_THRESHOLD,
+    threshold: float | None = None,
+    target_buy_fraction: float = DEFAULT_BINARY_BUY_TARGET_FRACTION,
 ) -> np.ndarray:
     _binary_buy_targets(actual, len(features))
-    cutoff = _binary_buy_threshold(threshold)
-    return _binary_buy_probabilities(estimator, features) >= cutoff
+    probabilities = _binary_buy_probabilities(estimator, features)
+    cutoff = (
+        _binary_buy_threshold(threshold)
+        if threshold is not None
+        else float(
+            select_dynamic_buy_threshold(
+                probabilities, target_buy_fraction=target_buy_fraction
+            )["threshold"]
+        )
+    )
+    return probabilities >= cutoff
 
 
 def _binary_buy_precision_score(
@@ -1068,20 +1085,24 @@ def _validate_binary_score_alignment(
 
 
 def _validate_binary_score_costs(
-    estimated_cost_bps: float, drawdown_penalty_weight: float
+    estimated_cost_bps: float,
+    drawdown_penalty_weight: float,
+    missed_opportunity_penalty_weight: float,
 ) -> None:
-    if (
-        isinstance(estimated_cost_bps, bool)
-        or not isfinite(float(estimated_cost_bps))
-        or estimated_cost_bps < 0.0
+    for value, reason in (
+        (estimated_cost_bps, "tuning_binary_estimated_cost_invalid"),
+        (drawdown_penalty_weight, "tuning_binary_drawdown_penalty_invalid"),
+        (
+            missed_opportunity_penalty_weight,
+            "tuning_binary_missed_opportunity_penalty_invalid",
+        ),
     ):
-        raise ValueError("tuning_binary_estimated_cost_invalid")
-    if (
-        isinstance(drawdown_penalty_weight, bool)
-        or not isfinite(float(drawdown_penalty_weight))
-        or drawdown_penalty_weight < 0.0
-    ):
-        raise ValueError("tuning_binary_drawdown_penalty_invalid")
+        if (
+            isinstance(value, bool)
+            or not isfinite(float(value))
+            or float(value) < 0.0
+        ):
+            raise ValueError(reason)
 
 
 def _selected_binary_net_returns(
@@ -1106,17 +1127,18 @@ def _selected_binary_net_returns(
 
 
 def _binary_economic_score_value(
-    net_returns: np.ndarray, drawdown_penalty_weight: float
+    net_returns: np.ndarray,
+    drawdown_penalty_weight: float,
+    missed_opportunity_penalty_bps: float,
 ) -> float:
-    if net_returns.size == 0:
-        return 0.0
-    expectancy_bps = float(np.mean(net_returns)) * 10_000.0
-    positive_expectancy_reward_bps = max(0.0, expectancy_bps)
+    total_net_pnl_bps = float(np.sum(net_returns)) * 10_000.0
+    positive_pnl_reward_bps = max(0.0, total_net_pnl_bps)
     drawdown_bps = _binary_buy_drawdown(net_returns) * 10_000.0
     return (
-        expectancy_bps
-        + positive_expectancy_reward_bps
+        total_net_pnl_bps
+        + positive_pnl_reward_bps
         - float(drawdown_penalty_weight) * drawdown_bps
+        - float(missed_opportunity_penalty_bps)
     )
 
 
@@ -1127,15 +1149,38 @@ def Binary_BUY_Economic_Score(
     *,
     gross_returns_by_index: Series,
     estimated_cost_bps: float = DEFAULT_ESTIMATED_ROUND_TRIP_COST_BPS,
-    buy_probability_threshold: float = DEFAULT_BINARY_BUY_THRESHOLD,
+    buy_probability_threshold: float | None = None,
+    target_buy_fraction: float = DEFAULT_BINARY_BUY_TARGET_FRACTION,
     drawdown_penalty_weight: float = CUSTOM_SCORE_DRAWDOWN_PENALTY_WEIGHT,
+    missed_opportunity_penalty_weight: float = (
+        DEFAULT_BINARY_MISSED_OPPORTUNITY_PENALTY_WEIGHT
+    ),
 ) -> float:
-    """Score predicted BUY rows; missed BUY opportunities and low trade counts are not penalized."""
+    """Score executed BUY outcomes and positive BUY opportunities missed.
+
+    The threshold is derived from the fold's probability ranking when no
+    explicit cutoff is supplied. Actual labels never participate in threshold
+    selection. A missed opportunity is an actual BUY row with positive net
+    outcome which did not pass the probability cutoff.
+    """
     _validate_binary_actual_labels(actual, len(features))
     _validate_binary_score_alignment(features, actual, gross_returns_by_index)
-    _validate_binary_score_costs(estimated_cost_bps, drawdown_penalty_weight)
-    cutoff = _binary_buy_threshold(buy_probability_threshold)
+    _validate_binary_score_costs(
+        estimated_cost_bps,
+        drawdown_penalty_weight,
+        missed_opportunity_penalty_weight,
+    )
+    target_fraction = validate_target_buy_fraction(target_buy_fraction)
     probabilities = _binary_buy_probabilities(estimator, features)
+    cutoff = (
+        _binary_buy_threshold(buy_probability_threshold)
+        if buy_probability_threshold is not None
+        else float(
+            select_dynamic_buy_threshold(
+                probabilities, target_buy_fraction=target_fraction
+            )["threshold"]
+        )
+    )
     net_returns = _selected_binary_net_returns(
         features,
         actual,
@@ -1144,7 +1189,20 @@ def Binary_BUY_Economic_Score(
         cutoff,
         estimated_cost_bps,
     )
-    return _binary_economic_score_value(net_returns, drawdown_penalty_weight)
+    gross = gross_returns_by_index.reindex(features.index).to_numpy(dtype=float)
+    selected = probabilities >= cutoff
+    missed_buy_mask = (actual.to_numpy(dtype=object) == "BUY") & ~selected
+    missed_net = np.maximum(
+        gross[missed_buy_mask] - float(estimated_cost_bps) / 10_000.0, 0.0
+    )
+    missed_penalty_bps = (
+        float(np.sum(missed_net))
+        * 10_000.0
+        * float(missed_opportunity_penalty_weight)
+    )
+    return _binary_economic_score_value(
+        net_returns, drawdown_penalty_weight, missed_penalty_bps
+    )
 
 
 def _validate_binary_tuning_inputs(
@@ -1160,8 +1218,10 @@ def _validate_binary_tuning_inputs(
     n_splits: int,
     random_state: int,
     estimated_cost_bps: float,
-    buy_probability_threshold: float,
-) -> tuple[int, int, int, float, float]:
+    buy_probability_threshold: float | None,
+    target_buy_fraction: float,
+    missed_opportunity_penalty_weight: float,
+) -> tuple[int, int, int, float, float | None, float, float]:
     del estimator
     iterations = _positive_integer(
         n_iter, "tuning_binary_random_search_iterations_invalid"
@@ -1185,8 +1245,27 @@ def _validate_binary_tuning_inputs(
         or estimated_cost_bps < 0.0
     ):
         raise ValueError("tuning_binary_estimated_cost_invalid")
-    threshold = _binary_buy_threshold(buy_probability_threshold)
-    return iterations, split_count, seed, float(estimated_cost_bps), threshold
+    validate_target_buy_fraction(target_buy_fraction)
+    threshold = (
+        _binary_buy_threshold(buy_probability_threshold)
+        if buy_probability_threshold is not None
+        else None
+    )
+    if (
+        isinstance(missed_opportunity_penalty_weight, bool)
+        or not isfinite(float(missed_opportunity_penalty_weight))
+        or missed_opportunity_penalty_weight < 0.0
+    ):
+        raise ValueError("tuning_binary_missed_opportunity_penalty_invalid")
+    return (
+        iterations,
+        split_count,
+        seed,
+        float(estimated_cost_bps),
+        threshold,
+        float(target_buy_fraction),
+        float(missed_opportunity_penalty_weight),
+    )
 
 
 def tune_lightgbm_binary_classifier(
@@ -1205,15 +1284,21 @@ def tune_lightgbm_binary_classifier(
     minimum_validation_class_samples: int = DEFAULT_MINIMUM_CLASS_SAMPLES,
     economic_outcomes: Series,
     estimated_cost_bps: float = DEFAULT_ESTIMATED_ROUND_TRIP_COST_BPS,
-    buy_probability_threshold: float = DEFAULT_BINARY_BUY_THRESHOLD,
+    buy_probability_threshold: float | None = None,
+    target_buy_fraction: float = DEFAULT_BINARY_BUY_TARGET_FRACTION,
+    missed_opportunity_penalty_weight: float = (
+        DEFAULT_BINARY_MISSED_OPPORTUNITY_PENALTY_WEIGHT
+    ),
 ) -> tuple[Any, dict[str, Any]]:
-    """Tune a binary BUY/NO_BUY LightGBM using purged CV and BUY-only economics."""
+    """Tune LightGBM using dynamic-percentile, cost-aware binary BUY economics."""
     (
         iterations,
         split_count,
         seed,
         estimated_cost,
         threshold,
+        target_fraction,
+        missed_penalty_weight,
     ) = _validate_binary_tuning_inputs(
         estimator,
         features,
@@ -1227,6 +1312,8 @@ def tune_lightgbm_binary_classifier(
         random_state=random_state,
         estimated_cost_bps=estimated_cost_bps,
         buy_probability_threshold=buy_probability_threshold,
+        target_buy_fraction=target_buy_fraction,
+        missed_opportunity_penalty_weight=missed_opportunity_penalty_weight,
     )
     minimum_fit = _positive_integer(
         minimum_class_samples, "tuning_binary_minimum_class_samples_invalid"
@@ -1269,6 +1356,8 @@ def tune_lightgbm_binary_classifier(
                 gross_returns_by_index=economic_outcomes,
                 estimated_cost_bps=estimated_cost,
                 buy_probability_threshold=threshold,
+                target_buy_fraction=target_fraction,
+                missed_opportunity_penalty_weight=missed_penalty_weight,
             ),
         },
         cv=cv_splits,
@@ -1318,17 +1407,23 @@ def tune_lightgbm_binary_classifier(
         "candidate_fit_count": len(parameters) * len(fold_diagnostics),
         "inner_cv_method": "PURGED_EXPANDING_TIME_SERIES",
         "inner_cv_fold_count": len(fold_diagnostics),
-        "inner_cv_scope": "OUTER_TRAIN_ONLY",
+        "inner_cv_scope": "OUTER_TRAIN_FIT_WINDOW_ONLY",
         "inner_cv_folds": fold_diagnostics,
         "class_labels": list(BINARY_BUY_LABELS),
         "minimum_fit_class_samples": minimum_fit,
         "minimum_validation_class_samples": minimum_validation,
         "validation_accessed_during_search": False,
-        "final_refit_scope": "FULL_OUTER_TRAIN_ONLY",
+        "final_refit_scope": "PRE_CALIBRATION_TRAIN_ONLY",
         "class_weight_policy": class_weight_policy,
         "selection_objective": BINARY_BUY_OBJECTIVE,
         "economic_scorer": "Binary_BUY_Economic_Score",
         "buy_probability_threshold": threshold,
+        "threshold_selection": (
+            "DYNAMIC_TOP_PERCENTILE_PER_INNER_CV_FOLD"
+            if threshold is None
+            else "EXPLICIT_FIXED_CUTOFF"
+        ),
+        "target_buy_fraction": target_fraction,
         "selected_parameters": best_parameters,
         "selected_mean_cv_binary_buy_economic_score": round(
             float(score_values[best_index]), 8
@@ -1338,11 +1433,18 @@ def tune_lightgbm_binary_classifier(
         "selected_mean_cv_buy_f1": round(float(f1_values[best_index]), 8),
         "selected_mean_cv_roc_auc": round(float(auc_values[best_index]), 8),
         "custom_economic_score_contract": {
-            "score_scope": "PREDICTED_BUY_ROWS_ONLY",
+            "score_scope": "EXECUTED_BUY_PNL_MINUS_MISSED_POSITIVE_BUY_OPPORTUNITIES",
             "estimated_round_trip_cost_bps": estimated_cost,
-            "buy_probability_threshold": threshold,
-            "missed_opportunity_penalty_bps": 0.0,
-            "no_buy_predictions_are_penalized": False,
+            "threshold_selection": "DYNAMIC_TOP_PERCENTILE_PER_INNER_CV_FOLD",
+            "target_buy_fraction": target_fraction,
+            "missed_opportunity_penalty_weight": missed_penalty_weight,
+            "missed_opportunity_definition": (
+                "ACTUAL_BUY_WITH_POSITIVE_NET_OUTCOME_NOT_SELECTED"
+            ),
+            "missed_opportunity_penalty_bps": (
+                "OBSERVED_FROM_COSTED_INNER_CV_OUTCOMES"
+            ),
+            "no_buy_predictions_are_penalized": True,
             "minimum_trade_count_penalty": False,
             "drawdown_penalty_weight": CUSTOM_SCORE_DRAWDOWN_PENALTY_WEIGHT,
             "positive_net_expectancy_reward_multiplier": 2.0,

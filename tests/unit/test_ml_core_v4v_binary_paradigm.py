@@ -13,6 +13,7 @@ from services.ml_core.extended_features import (
     feature_profile_columns,
     feature_profile_groups,
 )
+from services.ml_core.binary_calibration import select_dynamic_buy_threshold
 from services.ml_core.binary_targets import (
     BINARY_BUY_LABELS,
     apply_binary_buy_targets,
@@ -186,7 +187,7 @@ def test_binary_inner_cv_requires_support_in_each_fit_and_validation_fold() -> N
         assert fit_positions[-1] < validation_positions[0]
 
 
-def test_binary_economic_score_has_no_penalty_for_missed_buy_opportunities() -> None:
+def test_binary_economic_score_penalizes_missed_positive_buy_opportunities() -> None:
     features = DataFrame({"x": [0, 1, 2]})
     estimator = FixedBinaryProbabilities([0.10, 0.40, 0.64])
     score = Binary_BUY_Economic_Score(
@@ -195,9 +196,10 @@ def test_binary_economic_score_has_no_penalty_for_missed_buy_opportunities() -> 
         Series(["BUY", "NO_BUY", "BUY"]),
         gross_returns_by_index=Series([0.10, -0.02, 0.05]),
         estimated_cost_bps=0.0,
-        buy_probability_threshold=0.65,
+        buy_probability_threshold=0.95,
+        missed_opportunity_penalty_weight=0.5,
     )
-    assert score == pytest.approx(0.0)
+    assert score == pytest.approx(-750.0)
 
 
 def test_binary_economic_score_penalizes_false_buy_even_when_no_buy_event_return_is_positive() -> (
@@ -268,18 +270,21 @@ def test_binary_tuner_runs_purged_search_and_keeps_outer_validation_unused() -> 
         n_splits=3,
         economic_outcomes=outcomes,
         estimated_cost_bps=90.0,
-        buy_probability_threshold=0.65,
+        target_buy_fraction=0.10,
+        missed_opportunity_penalty_weight=0.50,
     )
     assert model.is_fitted_ is True
     assert set(model.classes_) == set(BINARY_BUY_LABELS)
     assert diagnostics["selection_objective"] == "BINARY_BUY_ECONOMIC_SCORE"
     assert diagnostics["economic_scorer"] == "Binary_BUY_Economic_Score"
+    assert diagnostics["threshold_selection"] == "DYNAMIC_TOP_PERCENTILE_PER_INNER_CV_FOLD"
+    assert diagnostics["target_buy_fraction"] == pytest.approx(0.10)
     assert diagnostics["validation_accessed_during_search"] is False
     assert diagnostics["minimum_fit_class_samples"] == 20
     assert diagnostics["minimum_validation_class_samples"] == 20
     assert (
-        diagnostics["custom_economic_score_contract"]["missed_opportunity_penalty_bps"]
-        == 0.0
+        diagnostics["custom_economic_score_contract"]["missed_opportunity_penalty_weight"]
+        == pytest.approx(0.50)
     )
     assert (
         diagnostics["custom_economic_score_contract"]["minimum_trade_count_penalty"]
@@ -287,10 +292,10 @@ def test_binary_tuner_runs_purged_search_and_keeps_outer_validation_unused() -> 
     )
 
 
-def test_binary_metrics_use_fixed_065_decision_and_continuous_roc_auc() -> None:
+def test_binary_metrics_use_selected_dynamic_threshold_and_continuous_roc_auc() -> None:
     actual = Series(["BUY", "BUY", "NO_BUY", "NO_BUY"])
     result = v4v._binary_classification_metrics(
-        actual, np.asarray([0.65, 0.64, 0.66, 0.20], dtype=float)
+        actual, np.asarray([0.75, 0.64, 0.66, 0.20], dtype=float), 0.65
     )
     assert result["threshold"] == pytest.approx(0.65)
     assert result["buy_prediction_count"] == 2
@@ -304,17 +309,20 @@ def test_binary_execution_signals_map_no_buy_to_no_entry_and_never_sell() -> Non
         {
             "row_index": 100,
             "timestamp": "2026-01-01T00:00:00+00:00",
-            "prob_buy": 0.65,
+            "buy_probability_threshold": 0.70,
+            "prob_buy": 0.70,
         },
         {
             "row_index": 101,
             "timestamp": "2026-01-01T01:00:00+00:00",
-            "prob_buy": 0.649,
+            "buy_probability_threshold": 0.70,
+            "prob_buy": 0.699,
         },
     ]
     signals = v4v._execution_signals(records, "1h")
     assert signals[0]["signal"] == "BUY"
     assert signals[1]["signal"] == "NO_ENTRY"
+    assert signals[0]["confidence_threshold"] == pytest.approx(0.70)
     assert all(item["signal"] != "SELL" for item in signals)
     assert signals[0]["execution_timestamp"] == pd.Timestamp(
         "2026-01-01T01:00:00+00:00"
@@ -487,3 +495,48 @@ def test_v4v_workflow_is_branch_scoped_and_waits_for_exact_sha_ci() -> None:
     assert "Binary_BUY_Economic_Score" in workflow_text
     assert "alix-v4v-row-level-probabilities.csv" in workflow_text
     assert "trading_authorization=NO-GO" in workflow_text
+
+
+
+def test_dynamic_probability_calibration_selects_top_fraction_and_reports_ties() -> None:
+    result = select_dynamic_buy_threshold(
+        np.asarray([0.10, 0.20, 0.30, 0.80, 0.80, 0.90], dtype=float),
+        target_buy_fraction=0.34,
+    )
+    assert result["threshold"] == pytest.approx(0.80)
+    assert result["target_selected_rows"] == 3
+    assert result["selected_calibration_rows"] == 3
+    assert result["selected_calibration_fraction"] == pytest.approx(0.50)
+    assert result["tie_expansion_rows"] == 0
+
+
+def test_dynamic_probability_calibration_rejects_invalid_inputs() -> None:
+    with pytest.raises(ValueError, match="binary_calibration_probabilities_invalid"):
+        select_dynamic_buy_threshold(np.asarray([], dtype=float))
+    with pytest.raises(ValueError, match="binary_calibration_probabilities_invalid"):
+        select_dynamic_buy_threshold(np.asarray([0.2, np.nan], dtype=float))
+    with pytest.raises(ValueError, match="binary_calibration_target_fraction_invalid"):
+        select_dynamic_buy_threshold(np.asarray([0.2, 0.3]), target_buy_fraction=0.0)
+
+
+def test_dynamic_probability_calibration_reports_tie_expansion() -> None:
+    result = select_dynamic_buy_threshold(
+        np.asarray([0.20, 0.80, 0.80, 0.80], dtype=float),
+        target_buy_fraction=0.25,
+    )
+    assert result["target_selected_rows"] == 1
+    assert result["selected_calibration_rows"] == 3
+    assert result["tie_expansion_rows"] == 2
+
+
+def test_binary_calibration_split_is_purged_and_chronological() -> None:
+    outer_train = list(range(100, 1100))
+    label_ends = [min(index + 12, 1199) for index in range(1200)]
+    fit, calibration, diagnostics = v4v._binary_calibration_split(
+        outer_train, label_ends, horizon_candles=24
+    )
+    assert fit
+    assert calibration
+    assert fit[-1] < calibration[0]
+    assert diagnostics["maximum_fit_label_end_index"] < calibration[0]
+    assert diagnostics["fit_label_windows_end_before_calibration"] is True
