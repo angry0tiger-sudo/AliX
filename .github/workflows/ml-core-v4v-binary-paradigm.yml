@@ -17,7 +17,7 @@ permissions:
 
 concurrency:
   group: alix-v4v-binary-paradigm
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   v4v-binary-economic-evaluation:

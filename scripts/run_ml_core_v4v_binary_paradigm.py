@@ -6,6 +6,7 @@ import argparse
 import csv
 import importlib
 import json
+import os
 from datetime import timedelta
 from pathlib import Path
 from typing import Any, cast
@@ -1355,10 +1356,15 @@ def _render_step_summary(report: dict[str, Any]) -> str:
     ]
     for arm in report["arms"]:
         aggregate = arm["aggregate"]
+        net_pf = (
+            "INF"
+            if aggregate.get("net_profit_factor_infinite_no_losses", False)
+            else aggregate["net_profit_factor"]
+        )
         lines.append(
             f"| {arm['name']} | {aggregate['candidate_count']} "
             f"| {aggregate['trained_candidate_count']} | {aggregate['trade_count']} "
-            f"| {aggregate['net_profit_factor']} | {aggregate['win_rate']} "
+            f"| {net_pf} | {aggregate['win_rate']} "
             f"| {aggregate['mean_candidate_max_drawdown_percent']} |"
         )
     lines.extend(
@@ -1369,6 +1375,7 @@ def _render_step_summary(report: dict[str, Any]) -> str:
             "",
             "Safety: Champion=null, order_permission=false, trading_authorization=NO-GO, private_api_calls=0, real_order_attempts=0.",
             "Spot-only: short positions unsupported. Sequence models: none.",
+            "Candidate rows are aggregated descriptively; portfolio overlap is not modeled.",
             "Promotion: BLOCKED_PENDING_INDEPENDENT_OOS_AND_OWNER_REVIEW.",
         ]
     )
@@ -1494,6 +1501,10 @@ def run_v4v(
         feature_importance_path,
         probability_rows,
     )
+    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary_path:
+        with Path(summary_path).open("a", encoding="utf-8") as handle:
+            handle.write(_render_step_summary(report))
     print(
         json.dumps(
             {

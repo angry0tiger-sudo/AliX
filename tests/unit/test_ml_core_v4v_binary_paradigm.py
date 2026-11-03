@@ -332,6 +332,32 @@ def test_combined_feature_profile_contains_volatility_and_volume_groups() -> Non
     assert "%-volume_relative_20" in columns
 
 
+def test_v4v_step_summary_contains_economic_metrics_and_closed_safety() -> None:
+    summary = v4v._render_step_summary(
+        {
+            "commit_sha": "test-sha",
+            "arms": [
+                {
+                    "name": "PRIMARY_ASYMMETRIC_1_5R",
+                    "aggregate": {
+                        "candidate_count": 8,
+                        "trained_candidate_count": 4,
+                        "trade_count": 123,
+                        "net_profit_factor": 1.23,
+                        "net_profit_factor_infinite_no_losses": False,
+                        "win_rate": 0.45,
+                        "mean_candidate_max_drawdown_percent": 12.0,
+                    },
+                }
+            ],
+        }
+    )
+    assert "PRIMARY_ASYMMETRIC_1_5R" in summary
+    assert "| 123 | 1.23 | 0.45 | 12.0 |" in summary
+    assert "trading_authorization=NO-GO" in summary
+    assert "portfolio overlap is not modeled" in summary
+
+
 def test_v4v_geometry_contract_is_paired_control_and_primary() -> None:
     assert {
         (
