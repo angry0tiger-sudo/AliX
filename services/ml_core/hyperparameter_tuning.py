@@ -981,9 +981,7 @@ def _binary_buy_threshold(value: float) -> float:
 def _binary_buy_targets(actual: Series, row_count: int) -> np.ndarray:
     if len(actual) != row_count or not bool(actual.isin(BINARY_BUY_LABELS).all()):
         raise ValueError("tuning_binary_actual_labels_invalid")
-    targets = np.asarray(
-        actual.to_numpy(dtype=object) == "BUY", dtype=np.int64
-    )
+    targets = np.asarray(actual.to_numpy(dtype=object) == "BUY", dtype=np.int64)
     if len(np.unique(targets)) != 2:
         raise ValueError("tuning_binary_actual_requires_both_classes")
     return targets

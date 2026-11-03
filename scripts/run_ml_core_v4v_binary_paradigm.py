@@ -909,7 +909,12 @@ def _run_binary_experiment(
         for weighting_policy_name in weighting_policy_specs():
             candidates.append(
                 _skipped_candidate(
-                    arm, pair, timeframe, feature_profile, weighting_policy_name, experiment
+                    arm,
+                    pair,
+                    timeframe,
+                    feature_profile,
+                    weighting_policy_name,
+                    experiment,
                 )
             )
         return experiment, candidates, probability_rows
@@ -932,7 +937,12 @@ def _run_binary_experiment(
         for weighting_policy_name in weighting_policy_specs():
             candidates.append(
                 _skipped_candidate(
-                    arm, pair, timeframe, feature_profile, weighting_policy_name, experiment
+                    arm,
+                    pair,
+                    timeframe,
+                    feature_profile,
+                    weighting_policy_name,
+                    experiment,
                 )
             )
         return experiment, candidates, probability_rows
