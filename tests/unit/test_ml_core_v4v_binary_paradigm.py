@@ -195,7 +195,9 @@ def test_binary_economic_score_has_no_penalty_for_missed_buy_opportunities() -> 
     assert score == pytest.approx(0.0)
 
 
-def test_binary_economic_score_penalizes_false_buy_even_when_no_buy_event_return_is_positive() -> None:
+def test_binary_economic_score_penalizes_false_buy_even_when_no_buy_event_return_is_positive() -> (
+    None
+):
     features = DataFrame({"x": [0, 1]})
     estimator = FixedBinaryProbabilities([0.90, 0.80])
     score = Binary_BUY_Economic_Score(
@@ -270,8 +272,14 @@ def test_binary_tuner_runs_purged_search_and_keeps_outer_validation_unused() -> 
     assert diagnostics["validation_accessed_during_search"] is False
     assert diagnostics["minimum_fit_class_samples"] == 20
     assert diagnostics["minimum_validation_class_samples"] == 20
-    assert diagnostics["custom_economic_score_contract"]["missed_opportunity_penalty_bps"] == 0.0
-    assert diagnostics["custom_economic_score_contract"]["minimum_trade_count_penalty"] is False
+    assert (
+        diagnostics["custom_economic_score_contract"]["missed_opportunity_penalty_bps"]
+        == 0.0
+    )
+    assert (
+        diagnostics["custom_economic_score_contract"]["minimum_trade_count_penalty"]
+        is False
+    )
 
 
 def test_binary_metrics_use_fixed_065_decision_and_continuous_roc_auc() -> None:
@@ -347,9 +355,9 @@ def test_v4v_safety_contract_stays_closed() -> None:
 
 
 def test_v4v_workflow_is_branch_scoped_and_waits_for_exact_sha_ci() -> None:
-    workflow_text = Path(
-        ".github/workflows/ml-core-v4v-binary-paradigm.yml"
-    ).read_text(encoding="utf-8")
+    workflow_text = Path(".github/workflows/ml-core-v4v-binary-paradigm.yml").read_text(
+        encoding="utf-8"
+    )
     assert "research/ml-core-v4v-binary-paradigm" in workflow_text
     assert "Require standard CI success for this exact V4-V commit" in workflow_text
     assert "TARGET_SHA" in workflow_text

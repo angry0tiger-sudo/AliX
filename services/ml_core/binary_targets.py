@@ -32,11 +32,7 @@ def apply_binary_buy_targets(labels: DataFrame) -> DataFrame:
         raise ValueError("v4v_label_input_empty")
 
     source = labels["label"]
-    observed = {
-        str(value)
-        for value in source.tolist()
-        if not pd.isna(value)
-    }
+    observed = {str(value) for value in source.tolist() if not pd.isna(value)}
     unexpected = sorted(observed - set(SOURCE_LABELS))
     if unexpected:
         raise ValueError("v4v_source_label_values_invalid")
@@ -52,9 +48,7 @@ def apply_binary_buy_targets(labels: DataFrame) -> DataFrame:
     ).astype(object)
 
     mapped_values = {
-        str(value)
-        for value in result["label"].tolist()
-        if not pd.isna(value)
+        str(value) for value in result["label"].tolist() if not pd.isna(value)
     }
     if not mapped_values.issubset(set(BINARY_BUY_LABELS)):
         raise ValueError("v4v_binary_label_values_invalid")

@@ -380,8 +380,7 @@ def _build_inner_cv_fold(
         for label in class_labels
     }
     if minimum_validation_class_samples is not None and any(
-        count < minimum_validation_class_samples
-        for count in validation_counts.values()
+        count < minimum_validation_class_samples for count in validation_counts.values()
     ):
         raise ValueError("tuning_inner_cv_validation_class_support_insufficient")
     if int(train_rows[int(fit_positions[-1])]) >= validation_start:
@@ -1015,9 +1014,7 @@ def _binary_buy_recall_score(
     return float(recall_score(targets, predicted, zero_division=0))
 
 
-def _binary_buy_f1_score(
-    estimator: Any, features: DataFrame, actual: Series
-) -> float:
+def _binary_buy_f1_score(estimator: Any, features: DataFrame, actual: Series) -> float:
     predicted = _binary_buy_predictions(estimator, features, actual)
     targets = _binary_buy_targets(actual, len(features))
     return float(f1_score(targets, predicted, zero_division=0))
@@ -1091,10 +1088,7 @@ def Binary_BUY_Economic_Score(
     selected_actual = actual.to_numpy(dtype=object)[selected]
     false_positive_mask = selected_actual == "NO_BUY"
     net_returns[false_positive_mask] = -np.abs(net_returns[false_positive_mask])
-    if (
-        not bool(np.isfinite(net_returns).all())
-        or bool(np.any(net_returns <= -1.0))
-    ):
+    if not bool(np.isfinite(net_returns).all()) or bool(np.any(net_returns <= -1.0)):
         raise ValueError("tuning_binary_net_returns_invalid")
     expectancy_bps = float(np.mean(net_returns)) * 10_000.0
     positive_expectancy_reward_bps = max(0.0, expectancy_bps)
@@ -1243,7 +1237,9 @@ def tune_lightgbm_binary_classifier(
     score_values = np.asarray(
         results["mean_test_binary_buy_economic_score"], dtype=float
     )
-    precision_values = np.asarray(results["mean_test_binary_buy_precision"], dtype=float)
+    precision_values = np.asarray(
+        results["mean_test_binary_buy_precision"], dtype=float
+    )
     recall_values = np.asarray(results["mean_test_binary_buy_recall"], dtype=float)
     f1_values = np.asarray(results["mean_test_binary_buy_f1"], dtype=float)
     auc_values = np.asarray(results["mean_test_binary_roc_auc"], dtype=float)
@@ -1290,12 +1286,8 @@ def tune_lightgbm_binary_classifier(
         "selected_mean_cv_binary_buy_economic_score": round(
             float(score_values[best_index]), 8
         ),
-        "selected_mean_cv_buy_precision": round(
-            float(precision_values[best_index]), 8
-        ),
-        "selected_mean_cv_buy_recall": round(
-            float(recall_values[best_index]), 8
-        ),
+        "selected_mean_cv_buy_precision": round(float(precision_values[best_index]), 8),
+        "selected_mean_cv_buy_recall": round(float(recall_values[best_index]), 8),
         "selected_mean_cv_buy_f1": round(float(f1_values[best_index]), 8),
         "selected_mean_cv_roc_auc": round(float(auc_values[best_index]), 8),
         "custom_economic_score_contract": {

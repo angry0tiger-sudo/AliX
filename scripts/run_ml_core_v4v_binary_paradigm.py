@@ -164,9 +164,7 @@ def _source_label_distribution(values: Series) -> dict[str, Any]:
         "classes": {
             label: {
                 "count": int(counts.get(label, 0)),
-                "percent": round(
-                    100.0 * int(counts.get(label, 0)) / total, 6
-                )
+                "percent": round(100.0 * int(counts.get(label, 0)) / total, 6)
                 if total
                 else 0.0,
             }
@@ -1035,9 +1033,7 @@ def run_v4v_experiments(
     trained = [item for item in candidates if item["status"] == "TRAINED"]
     if not trained:
         raise RuntimeError("v4v_no_trained_candidates")
-    expected_probability_rows = sum(
-        int(item["validation_rows"]) for item in trained
-    )
+    expected_probability_rows = sum(int(item["validation_rows"]) for item in trained)
     if len(probability_rows) != expected_probability_rows:
         raise RuntimeError("v4v_probability_row_count_mismatch")
     return experiments, candidates, probability_rows
@@ -1069,9 +1065,7 @@ def _candidate_comparison_rows(
                 "buy_precision": classification.get("buy_precision"),
                 "buy_recall": classification.get("buy_recall"),
                 "roc_auc": classification.get("roc_auc"),
-                "buy_probability_threshold": candidate.get(
-                    "buy_probability_threshold"
-                ),
+                "buy_probability_threshold": candidate.get("buy_probability_threshold"),
             }
         )
     return rows
