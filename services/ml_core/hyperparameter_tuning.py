@@ -1129,7 +1129,7 @@ def _validate_binary_tuning_inputs(
         n_splits, "tuning_binary_inner_cv_split_count_invalid"
     )
     seed = _nonnegative_integer(random_state, "tuning_binary_random_state_invalid")
-    horizon = _positive_integer(horizon_candles, "tuning_binary_horizon_invalid")
+    _positive_integer(horizon_candles, "tuning_binary_horizon_invalid")
     if iterations > 27:
         raise ValueError("tuning_random_search_iterations_out_of_policy")
     if not class_weight_policy.strip():
