@@ -458,7 +458,7 @@ def test_v4t_inner_cv_class_support_failure_is_recorded_as_skip(
         split_horizon_candles=24,
     )
 
-    assert experiment["status"] == V4H_INNER_CV_CLASS_SUPPORT_SKIP_STATUS
+    assert experiment["status"] == v4h.V4H_INNER_CV_CLASS_SUPPORT_SKIP_STATUS
     assert experiment["sample_gate"]["outer_sample_gate_status"] == "PASS"
     assert experiment["sample_gate"]["status"] == V4T_INNER_CV_SKIP_STATUS
     assert (
@@ -484,10 +484,6 @@ def test_v4t_inner_cv_class_support_failure_is_recorded_as_skip(
     assert candidate["evaluation_performed"] is False
     assert candidate["metrics"]["economic_candidate_gate_passed"] is False
 
-
-V4T_INNER_CV_SKIP_STATUS = (
-    "SKIPPED_INSUFFICIENT_INNER_CV_CLASS_SUPPORT"
-)
 
 
 def test_v4t_inner_cv_preflight_propagates_other_purge_errors(
