@@ -108,17 +108,17 @@ def _pooled_label_summary(
     for experiment in experiments:
         if experiment.get("arm") != arm_name:
             continue
-        context = (str(experiment["pair"]), str(experiment["timeframe"]))
+        context_key = (str(experiment["pair"]), str(experiment["timeframe"]))
         current = {
             "label_distribution": experiment["label_distribution"],
             "exit_reason_distribution": experiment["label_audit"][
                 "exit_reason_distribution"
             ],
         }
-        previous = contexts.get(context)
+        previous = contexts.get(context_key)
         if previous is not None and previous != current:
-            raise ValueError(f"v4s_duplicate_context_label_mismatch:{context}")
-        contexts[context] = current
+            raise ValueError(f"v4s_duplicate_context_label_mismatch:{context_key}")
+        contexts[context_key] = current
     if not contexts:
         raise ValueError(f"v4s_label_contexts_missing:{arm_name}")
 
@@ -126,8 +126,8 @@ def _pooled_label_summary(
     for split in ("train", "validation"):
         counts: Counter[str] = Counter()
         total = 0
-        for context in contexts.values():
-            distribution = context["label_distribution"][split]
+        for context_data in contexts.values():
+            distribution = context_data["label_distribution"][split]
             total += int(distribution["total"])
             counts.update(
                 {
@@ -145,8 +145,8 @@ def _pooled_label_summary(
 
     exit_counts: Counter[str] = Counter()
     exit_total = 0
-    for context in contexts.values():
-        distribution = context["exit_reason_distribution"]
+    for context_data in contexts.values():
+        distribution = context_data["exit_reason_distribution"]
         exit_total += int(distribution["total"])
         exit_counts.update(
             {
