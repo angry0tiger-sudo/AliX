@@ -110,6 +110,7 @@ def _validate_custom_economic_score_configuration(
     )
     return minimum, estimated_cost, count_penalty, drawdown_weight
 
+
 def _predicted_buy_gross_returns(
     estimator: Any,
     features: DataFrame,
