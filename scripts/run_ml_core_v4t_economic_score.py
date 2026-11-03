@@ -25,6 +25,7 @@ from scripts.run_ml_core_real_data_baseline import (
 )
 from scripts.run_ml_core_v4h_tuning_geometry import (
     V4H_FEATURE_PROFILES,
+    V4H_INNER_CV_CLASS_SUPPORT_SKIP_STATUS,
     run_v4h_experiment,
 )
 from services.ml_core.adaptive_targets import apply_adaptive_triple_barrier
@@ -72,6 +73,7 @@ V4T_EXPECTED_CANDIDATES = V4T_EXPECTED_EXPERIMENTS * len(weighting_policy_specs(
 V4T_SAMPLE_GATE_SKIP_STATUSES = (
     "SKIPPED_INSUFFICIENT_CLASS_DIVERSITY",
     "SKIPPED_INSUFFICIENT_SAMPLES",
+    V4H_INNER_CV_CLASS_SUPPORT_SKIP_STATUS,
 )
 V4T_PROBABILITY_COLUMNS = (
     "candidate_id",

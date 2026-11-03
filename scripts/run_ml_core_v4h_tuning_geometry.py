@@ -49,8 +49,10 @@ from services.ml_core.extended_features import (
 )
 from services.ml_core.hyperparameter_tuning import (
     DEFAULT_INNER_CV_SPLITS,
+    DEFAULT_MINIMUM_CLASS_SAMPLES,
     DEFAULT_RANDOM_SEARCH_ITERATIONS,
     HYPERPARAMETER_DISTRIBUTIONS,
+    build_purged_time_series_splits,
     tune_lightgbm_classifier,
 )
 
@@ -65,6 +67,9 @@ V4H_OUTER_VALIDATION_START_FRACTION = 0.70
 V4H_OUTER_VALIDATION_END_FRACTION = 0.85
 V4H_EXPECTED_EXPERIMENTS = 48
 V4H_EXPECTED_MODELS = 96
+V4H_INNER_CV_CLASS_SUPPORT_SKIP_STATUS = (
+    "SKIPPED_INSUFFICIENT_INNER_CV_CLASS_SUPPORT"
+)
 
 
 def _v4h_scenarios() -> list[dict[str, Any]]:
@@ -228,6 +233,80 @@ def _fit_v4h_variants(
     return variants
 
 
+def _inner_cv_preflight_diagnostics(
+    train_indices: list[int],
+    train_labels: Series,
+    labels: DataFrame,
+    horizon_candles: int,
+) -> dict[str, Any]:
+    """Preflight the exact purged CV contract before fitting economic candidates."""
+    try:
+        _, fold_diagnostics = build_purged_time_series_splits(
+            train_indices,
+            train_labels,
+            labels["label_end_idx"].tolist(),
+            horizon_candles=horizon_candles,
+            n_splits=DEFAULT_INNER_CV_SPLITS,
+            minimum_class_samples=DEFAULT_MINIMUM_CLASS_SAMPLES,
+        )
+    except ValueError as error:
+        if str(error) != "tuning_inner_cv_class_support_insufficient":
+            raise
+        return {
+            "status": V4H_INNER_CV_CLASS_SUPPORT_SKIP_STATUS,
+            "reason_code": str(error),
+            "minimum_class_samples_per_class": DEFAULT_MINIMUM_CLASS_SAMPLES,
+            "expected_fold_count": DEFAULT_INNER_CV_SPLITS,
+            "complete_fold_validation": False,
+        }
+    return {
+        "status": "PASS",
+        "reason_code": None,
+        "minimum_class_samples_per_class": DEFAULT_MINIMUM_CLASS_SAMPLES,
+        "expected_fold_count": DEFAULT_INNER_CV_SPLITS,
+        "validated_fold_count": len(fold_diagnostics),
+        "complete_fold_validation": True,
+    }
+
+
+def _skipped_inner_cv_class_support_experiment(
+    base_result: dict[str, Any],
+    pair: str,
+    timeframe: str,
+    bars: DataFrame,
+    labels: DataFrame,
+    train_indices: list[int],
+    validation_indices: list[int],
+    preflight: dict[str, Any],
+) -> dict[str, Any]:
+    """Persist an explicit non-trained experiment when purged CV support is inadequate."""
+    status = V4H_INNER_CV_CLASS_SUPPORT_SKIP_STATUS
+    sample_gate = {
+        **base_result["sample_gate"],
+        "outer_sample_gate_status": "PASS",
+        "status": status,
+        "inner_cv_preflight": preflight,
+    }
+    split = {
+        **base_result["split"],
+        "inner_cv_preflight": preflight,
+    }
+    base_result["sample_gate"] = sample_gate
+    base_result["split"] = split
+    skipped = _skipped_result(
+        pair,
+        timeframe,
+        bars,
+        labels,
+        train_indices,
+        validation_indices,
+        split,
+        status,
+        sample_gate,
+    )
+    return {**skipped, **base_result, "status": status}
+
+
 def run_v4h_experiment(
     pair: str,
     timeframe: str,
@@ -305,6 +384,23 @@ def run_v4h_experiment(
             sample_gate,
         )
         return {**skipped, **base_result}
+
+    if tuning_objective == "CUSTOM_ECONOMIC_SCORE":
+        inner_cv_preflight = _inner_cv_preflight_diagnostics(
+            train_indices, train_y, labels, split_horizon
+        )
+        base_result["split"]["inner_cv_preflight"] = inner_cv_preflight
+        if inner_cv_preflight["status"] == V4H_INNER_CV_CLASS_SUPPORT_SKIP_STATUS:
+            return _skipped_inner_cv_class_support_experiment(
+                base_result,
+                pair,
+                timeframe,
+                bars,
+                labels,
+                train_indices,
+                validation_indices,
+                inner_cv_preflight,
+            )
 
     variants = _fit_v4h_variants(
         features,

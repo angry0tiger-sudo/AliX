@@ -11,6 +11,7 @@ import numpy as np
 import pytest
 from pandas import DataFrame, Series
 
+from scripts import run_ml_core_v4h_tuning_geometry as v4h
 from scripts import run_ml_core_v4t_economic_score as v4t
 from services.ml_core.hyperparameter_tuning import (
     Custom_Economic_Score,
@@ -360,3 +361,153 @@ def test_v4t_workflow_is_branch_scoped_and_waits_for_exact_sha_ci() -> None:
     assert "Custom_Economic_Score" in workflow_text
     assert "alix-v4t-row-level-probabilities.csv" in workflow_text
     assert "trading_authorization=NO-GO" in workflow_text
+
+
+def _v4t_inner_cv_preflight_fixture() -> tuple[DataFrame, DataFrame, dict[str, DataFrame]]:
+    row_count = 48
+    bars = DataFrame({"close": np.full(row_count, 100.0)})
+    labels = DataFrame(
+        {
+            "label": ["BUY", "SELL", "HOLD"] * 16,
+            "label_end_idx": [
+                min(index + 24, row_count - 1) for index in range(row_count)
+            ],
+        }
+    )
+    features = {
+        "Baseline": DataFrame({"base": range(row_count)}),
+        "Baseline+Trend": DataFrame(
+            {"base": range(row_count), "trend": range(row_count)}
+        ),
+    }
+    return bars, labels, features
+
+
+def test_v4t_inner_cv_class_support_failure_is_recorded_as_skip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bars, labels, features = _v4t_inner_cv_preflight_fixture()
+    train_indices = list(range(32))
+    validation_indices = list(range(32, 48))
+    observed: dict[str, Any] = {}
+
+    def fake_build_splits(*args: Any, **kwargs: Any) -> tuple[list[Any], list[Any]]:
+        observed["horizon_candles"] = kwargs["horizon_candles"]
+        observed["n_splits"] = kwargs["n_splits"]
+        observed["minimum_class_samples"] = kwargs["minimum_class_samples"]
+        raise ValueError("tuning_inner_cv_class_support_insufficient")
+
+    def fake_skipped_result(
+        pair: str,
+        timeframe: str,
+        prepared_bars: DataFrame,
+        prepared_labels: DataFrame,
+        fit_indices: list[int],
+        forward_indices: list[int],
+        split_diagnostics: dict[str, Any],
+        reason: str,
+        sample_gate: dict[str, Any],
+    ) -> dict[str, Any]:
+        return {
+            "status": reason,
+            "sample_gate": sample_gate,
+            "model_variants": None,
+        }
+
+    monkeypatch.setattr(
+        v4h,
+        "purged_temporal_indices",
+        lambda *args, **kwargs: (
+            train_indices,
+            validation_indices,
+            {"method": "TEST_PURGED_CHRONOLOGICAL_SPLIT"},
+        ),
+    )
+    monkeypatch.setattr(
+        v4h,
+        "sample_gate_diagnostics",
+        lambda *args: {
+            "status": "PASS",
+            "train_class_counts": {"BUY": 100, "SELL": 100, "HOLD": 100},
+        },
+    )
+    monkeypatch.setattr(v4h, "label_audit_diagnostics", lambda _: {"status": "TEST"})
+    monkeypatch.setattr(v4h, "_skipped_result", fake_skipped_result)
+    monkeypatch.setattr(v4h, "build_purged_time_series_splits", fake_build_splits)
+    monkeypatch.setattr(
+        v4h,
+        "_fit_v4h_variants",
+        lambda *args, **kwargs: pytest.fail("model fitting must not start after failed preflight"),
+    )
+
+    experiment = v4h.run_v4h_experiment(
+        "BTC/USDT",
+        "1h",
+        bars,
+        labels,
+        features,
+        scenario=v4t.V4T_ARMS[1],
+        feature_profile="Baseline",
+        calibration_fraction=0.20,
+        minimum_hold_precision=0.40,
+        minimum_hold_recall=0.20,
+        random_search_iterations=1,
+        tuning_objective="CUSTOM_ECONOMIC_SCORE",
+        economic_outcomes=Series(np.zeros(len(bars))),
+        estimated_cost_bps=90.0,
+        split_horizon_candles=24,
+    )
+
+    assert experiment["status"] == V4H_INNER_CV_CLASS_SUPPORT_SKIP_STATUS
+    assert experiment["sample_gate"]["outer_sample_gate_status"] == "PASS"
+    assert experiment["sample_gate"]["status"] == V4T_INNER_CV_SKIP_STATUS
+    assert (
+        experiment["sample_gate"]["inner_cv_preflight"]["reason_code"]
+        == "tuning_inner_cv_class_support_insufficient"
+    )
+    assert observed == {
+        "horizon_candles": 24,
+        "n_splits": v4h.DEFAULT_INNER_CV_SPLITS,
+        "minimum_class_samples": v4h.DEFAULT_MINIMUM_CLASS_SAMPLES,
+    }
+    status, _ = v4t._validate_v4t_experiment_status(experiment)
+    candidate = v4t._skipped_candidate_record(
+        v4t.V4T_ARMS[1],
+        "BTC/USDT",
+        "1h",
+        "Baseline",
+        "weight_none",
+        experiment,
+    )
+    assert status == V4T_INNER_CV_SKIP_STATUS
+    assert candidate["status"] == V4T_INNER_CV_SKIP_STATUS
+    assert candidate["evaluation_performed"] is False
+    assert candidate["metrics"]["economic_candidate_gate_passed"] is False
+
+
+V4T_INNER_CV_SKIP_STATUS = (
+    "SKIPPED_INSUFFICIENT_INNER_CV_CLASS_SUPPORT"
+)
+
+
+def test_v4t_inner_cv_preflight_propagates_other_purge_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bars, labels, _ = _v4t_inner_cv_preflight_fixture()
+
+    def fail_for_unrelated_reason(*args: Any, **kwargs: Any) -> tuple[list[Any], list[Any]]:
+        raise ValueError("tuning_inner_cv_label_overlap")
+
+    monkeypatch.setattr(
+        v4h,
+        "build_purged_time_series_splits",
+        fail_for_unrelated_reason,
+    )
+    with pytest.raises(ValueError, match="tuning_inner_cv_label_overlap"):
+        v4h._inner_cv_preflight_diagnostics(
+            list(range(32)),
+            labels.iloc[:32]["label"],
+            labels,
+            24,
+        )
+
