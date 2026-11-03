@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Any, cast
 
 import numpy as np
-import pandas as pd
 from pandas import DataFrame, Series
 
 from scripts.run_ml_core_real_data_baseline import (
