@@ -4,10 +4,8 @@ from __future__ import annotations
 
 import argparse
 import csv
-import hashlib
 import importlib
 import json
-import math
 from datetime import timedelta
 from pathlib import Path
 from typing import Any, cast
@@ -54,7 +52,6 @@ from services.ml_core.hyperparameter_tuning import (
     DEFAULT_INNER_CV_SPLITS,
     DEFAULT_MINIMUM_CLASS_SAMPLES,
     DEFAULT_RANDOM_SEARCH_ITERATIONS,
-    Binary_BUY_Economic_Score,
     build_purged_time_series_splits,
     tune_lightgbm_binary_classifier,
 )
@@ -702,9 +699,15 @@ def _evaluate_trained_candidate(
     trades = list(replay["trades"])
     metrics = dict(replay["metrics"])
     metrics.update(_trade_metrics(trades))
+    profit_factor_infinite = bool(
+        metrics.get("profit_factor_infinite_no_losses", False)
+    )
+    profit_factor = metrics.get("profit_factor_net_of_costs")
+    profit_factor_passed = profit_factor_infinite or (
+        profit_factor is not None and float(cast(float, profit_factor)) > 1.5
+    )
     metrics["economic_candidate_gate_passed"] = bool(
-        metrics.get("profit_factor_net_of_costs") is not None
-        and float(cast(float, metrics["profit_factor_net_of_costs"])) > 1.5
+        profit_factor_passed
         and float(metrics["max_drawdown_fraction"]) < V4V_MAXIMUM_DRAWDOWN
     )
     candidate = {
