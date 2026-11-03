@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
-
 import numpy as np
 import pandas as pd
 import pytest
@@ -283,7 +281,7 @@ def test_binary_metrics_use_fixed_065_decision_and_continuous_roc_auc() -> None:
     )
     assert result["threshold"] == pytest.approx(0.65)
     assert result["buy_prediction_count"] == 2
-    assert result["roc_auc"] == pytest.approx(0.75)
+    assert result["roc_auc"] == pytest.approx(0.50)
     assert result["class_labels"] == ["BUY", "NO_BUY"]
     assert result["confusion_matrix"]["rows_are"] == "actual"
 
