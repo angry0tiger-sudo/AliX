@@ -132,9 +132,7 @@ def _v4t_exit_reference(bars: DataFrame, row: Any, label_end: int) -> float:
     return exit_reference
 
 
-def _v4t_event_gross_return(
-    bars: DataFrame, row: Any
-) -> tuple[int, float] | None:
+def _v4t_event_gross_return(bars: DataFrame, row: Any) -> tuple[int, float] | None:
     event_index = int(getattr(row, "event_index"))
     if event_index < 0 or event_index >= len(bars):
         raise ValueError("v4t_economic_event_index_invalid")
@@ -918,8 +916,7 @@ def _arm_trade_metrics(
 def _arm_risk_metrics(trained: list[dict[str, Any]]) -> dict[str, int]:
     return {
         "strict_economic_pass_candidate_count": sum(
-            bool(item["metrics"]["economic_candidate_gate_passed"])
-            for item in trained
+            bool(item["metrics"]["economic_candidate_gate_passed"]) for item in trained
         ),
         "below_soft_sample_target_candidate_count": sum(
             not bool(item["metrics"]["minimum_trade_count_soft_target_met"])
@@ -928,9 +925,7 @@ def _arm_risk_metrics(trained: list[dict[str, Any]]) -> dict[str, int]:
     }
 
 
-def _arm_aggregate(
-    candidates: list[dict[str, Any]], arm_name: str
-) -> dict[str, Any]:
+def _arm_aggregate(candidates: list[dict[str, Any]], arm_name: str) -> dict[str, Any]:
     selected = [item for item in candidates if item["arm"] == arm_name]
     trained = [item for item in selected if item["status"] == "TRAINED"]
     trades = [trade for item in trained for trade in item["trades"]]

@@ -169,9 +169,7 @@ def Custom_Economic_Score(
         trade_count_penalty_bps,
         drawdown_penalty_weight,
     )
-    selected = _predicted_buy_gross_returns(
-        estimator, features, gross_returns_by_index
-    )
+    selected = _predicted_buy_gross_returns(estimator, features, gross_returns_by_index)
     trade_count = len(selected)
     net_returns = selected - estimated_cost / 10_000.0
     return _custom_score_from_net_returns(
