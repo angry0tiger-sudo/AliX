@@ -429,9 +429,7 @@ def _economic_event_index(row: Any, bar_count: int) -> int | None:
     return event_index
 
 
-def _economic_label_end_index(
-    row: Any, event_index: int, bar_count: int
-) -> int | None:
+def _economic_label_end_index(row: Any, event_index: int, bar_count: int) -> int | None:
     raw_end = getattr(row, "label_end_idx")
     if pd.isna(raw_end):
         return None
