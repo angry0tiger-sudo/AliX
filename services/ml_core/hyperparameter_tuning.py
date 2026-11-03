@@ -30,8 +30,92 @@ DEFAULT_RANDOM_SEARCH_ITERATIONS = 9
 DEFAULT_INNER_CV_SPLITS = 3
 DEFAULT_RANDOM_STATE = 42
 DEFAULT_MINIMUM_CLASS_SAMPLES = 20
-TUNING_OBJECTIVES = ("HOLD_PRECISION", "BUY_F1", "NET_EXPECTANCY_PROXY")
+TUNING_OBJECTIVES = (
+    "HOLD_PRECISION",
+    "BUY_F1",
+    "NET_EXPECTANCY_PROXY",
+    "CUSTOM_ECONOMIC_SCORE",
+)
 DEFAULT_ESTIMATED_ROUND_TRIP_COST_BPS = 90.0
+CUSTOM_SCORE_MINIMUM_TRADES = 30
+CUSTOM_SCORE_TRADE_COUNT_PENALTY_BPS = 50.0
+CUSTOM_SCORE_DRAWDOWN_PENALTY_WEIGHT = 0.5
+
+
+def Custom_Economic_Score(
+    estimator: Any,
+    features: DataFrame,
+    actual: Series,
+    *,
+    gross_returns_by_index: Series,
+    estimated_cost_bps: float = DEFAULT_ESTIMATED_ROUND_TRIP_COST_BPS,
+    minimum_trade_count: int = CUSTOM_SCORE_MINIMUM_TRADES,
+    trade_count_penalty_bps: float = CUSTOM_SCORE_TRADE_COUNT_PENALTY_BPS,
+    drawdown_penalty_weight: float = CUSTOM_SCORE_DRAWDOWN_PENALTY_WEIGHT,
+) -> float:
+    """Score predicted Spot BUY events using net expectancy, drawdown and sample size.
+
+    The score is an inner-CV selection proxy only. Positive net expectancy is
+    rewarded twice, negative expectancy remains a penalty, drawdown is penalized,
+    and trade counts below the soft 30-trade target receive a linear penalty.
+    It does not model portfolio overlap; costed execution replay remains the
+    economic acceptance authority.
+    """
+    if (
+        isinstance(estimated_cost_bps, bool)
+        or not isfinite(float(estimated_cost_bps))
+        or estimated_cost_bps < 0
+    ):
+        raise ValueError("tuning_estimated_cost_bps_invalid")
+    if (
+        isinstance(gross_returns_by_index, Series) is False
+        or gross_returns_by_index.index.has_duplicates
+    ):
+        raise ValueError("tuning_economic_outcomes_invalid")
+    if len(features) != len(actual):
+        raise ValueError("tuning_economic_score_alignment_invalid")
+    minimum = _positive_integer(
+        minimum_trade_count, "tuning_custom_score_minimum_trade_count_invalid"
+    )
+    penalty_valid = (
+        not isinstance(trade_count_penalty_bps, bool)
+        and isfinite(float(trade_count_penalty_bps))
+        and trade_count_penalty_bps >= 0
+    )
+    drawdown_valid = (
+        not isinstance(drawdown_penalty_weight, bool)
+        and isfinite(float(drawdown_penalty_weight))
+        and drawdown_penalty_weight >= 0
+    )
+    if not penalty_valid or not drawdown_valid:
+        raise ValueError("tuning_custom_score_penalty_invalid")
+    predicted = np.asarray(estimator.predict(features), dtype=object)
+    if predicted.ndim != 1 or len(predicted) != len(features):
+        raise ValueError("tuning_custom_score_predictions_invalid")
+    gross = gross_returns_by_index.reindex(features.index).to_numpy(dtype=float)
+    if len(gross) != len(features) or not bool(np.isfinite(gross).all()):
+        raise ValueError("tuning_economic_outcomes_missing_or_non_finite")
+    selected = gross[predicted == "BUY"]
+    trade_count = len(selected)
+    shortfall_ratio = max(0.0, float(minimum - trade_count) / float(minimum))
+    count_penalty = float(trade_count_penalty_bps) * shortfall_ratio
+    if trade_count == 0:
+        return -count_penalty
+    net_returns = selected - float(estimated_cost_bps) / 10_000.0
+    if not bool(np.isfinite(net_returns).all()) or bool(np.any(net_returns <= -1.0)):
+        raise ValueError("tuning_custom_score_net_returns_invalid")
+    equity = np.concatenate(([1.0], np.cumprod(1.0 + net_returns)))
+    peaks = np.maximum.accumulate(equity)
+    drawdown = float(np.max((peaks - equity) / peaks))
+    expectancy_bps = float(np.mean(net_returns)) * 10_000.0
+    positive_expectancy_reward_bps = max(0.0, expectancy_bps)
+    drawdown_bps = drawdown * 10_000.0
+    return (
+        expectancy_bps
+        + positive_expectancy_reward_bps
+        - float(drawdown_penalty_weight) * drawdown_bps
+        - count_penalty
+    )
 
 
 def custom_eval_metric(
@@ -329,8 +413,13 @@ def _validated_cv_score_arrays(
     recall = np.asarray(cv_results["mean_test_hold_recall"], dtype=float)
     macro = np.asarray(cv_results["mean_test_macro_f1"], dtype=float)
     buy = np.asarray(cv_results["mean_test_buy_f1"], dtype=float)
+    expectancy_key = (
+        "mean_test_custom_economic_score"
+        if "mean_test_custom_economic_score" in cv_results
+        else "mean_test_net_expectancy_proxy"
+    )
     expectancy = np.asarray(
-        cv_results.get("mean_test_net_expectancy_proxy", np.zeros_like(buy)),
+        cv_results.get(expectancy_key, np.zeros_like(buy)),
         dtype=float,
     )
     params = cv_results["params"]
@@ -369,15 +458,8 @@ def _candidate_ranking_key(
     selected_buy_f1 = float(buy_f1[index])
     if objective == "BUY_F1":
         return selected_buy_f1, macro, precision, recall, 0.0, *complexity
-    if objective == "NET_EXPECTANCY_PROXY":
-        return (
-            float(net_expectancy[index]),
-            selected_buy_f1,
-            macro,
-            precision,
-            recall,
-            *complexity,
-        )
+    if objective in {"NET_EXPECTANCY_PROXY", "CUSTOM_ECONOMIC_SCORE"}:
+        return (float(net_expectancy[index]), selected_buy_f1, macro, precision, recall, *complexity)
     return precision, macro, recall, selected_buy_f1, 0.0, *complexity
 
 
@@ -395,7 +477,7 @@ def _select_candidate(
     ]
     candidates = (
         list(range(len(parameters)))
-        if objective in {"BUY_F1", "NET_EXPECTANCY_PROXY"}
+        if objective in {"BUY_F1", "NET_EXPECTANCY_PROXY", "CUSTOM_ECONOMIC_SCORE"}
         else feasible or list(range(len(parameters)))
     )
     selected = max(
@@ -408,6 +490,8 @@ def _select_candidate(
         status = "BUY_F1_MAXIMIZED"
     elif objective == "NET_EXPECTANCY_PROXY":
         status = "NET_EXPECTANCY_PROXY_MAXIMIZED"
+    elif objective == "CUSTOM_ECONOMIC_SCORE":
+        status = "CUSTOM_ECONOMIC_SCORE_MAXIMIZED"
     else:
         status = (
             "RECALL_CONSTRAINED_HOLD_PRECISION"
@@ -463,6 +547,11 @@ def _build_randomized_search(
             gross_returns_by_index=economic_outcomes,
             estimated_cost_bps=estimated_cost_bps,
         )
+        scoring["custom_economic_score"] = partial(
+            Custom_Economic_Score,
+            gross_returns_by_index=economic_outcomes,
+            estimated_cost_bps=estimated_cost_bps,
+        )
     return RandomizedSearchCV(
         estimator=estimator,
         param_distributions=HYPERPARAMETER_DISTRIBUTIONS,
@@ -497,6 +586,12 @@ def _candidate_result_records(cv_results: dict[str, Any]) -> list[dict[str, Any]
         ),
         dtype=float,
     )
+    custom = np.asarray(
+        cv_results.get(
+            "mean_test_custom_economic_score", np.full(len(cv_results["params"]), np.nan)
+        ),
+        dtype=float,
+    )
     return [
         {
             "candidate_index": i,
@@ -510,6 +605,9 @@ def _candidate_result_records(cv_results: dict[str, Any]) -> list[dict[str, Any]
             "mean_cv_macro_f1": round(float(cv_results["mean_test_macro_f1"][i]), 6),
             "mean_cv_buy_f1": round(float(cv_results["mean_test_buy_f1"][i]), 6),
             "mean_cv_net_expectancy_proxy": round(float(net[i]), 8),
+            "mean_cv_custom_economic_score": (
+                round(float(custom[i]), 8) if np.isfinite(custom[i]) else None
+            ),
         }
         for i, parameters in enumerate(cv_results["params"])
     ]
@@ -574,8 +672,29 @@ def _build_tuning_diagnostics(
             ),
             8,
         ),
-        "economic_scorer": "custom_eval_metric"
-        if tuning_objective == "NET_EXPECTANCY_PROXY"
+        "selected_mean_cv_custom_economic_score": (
+            round(
+                float(cv_results["mean_test_custom_economic_score"][best_index]),
+                8,
+            )
+            if "mean_test_custom_economic_score" in cv_results
+            else None
+        ),
+        "economic_scorer": (
+            "Custom_Economic_Score"
+            if tuning_objective == "CUSTOM_ECONOMIC_SCORE"
+            else "custom_eval_metric"
+            if tuning_objective == "NET_EXPECTANCY_PROXY"
+            else None
+        ),
+        "custom_economic_score_contract": {
+            "minimum_trade_count_soft_target": CUSTOM_SCORE_MINIMUM_TRADES,
+            "trade_count_penalty_max_bps": CUSTOM_SCORE_TRADE_COUNT_PENALTY_BPS,
+            "drawdown_penalty_weight": CUSTOM_SCORE_DRAWDOWN_PENALTY_WEIGHT,
+            "positive_net_expectancy_reward_multiplier": 2.0,
+            "portfolio_overlap_modeled": False,
+        }
+        if tuning_objective == "CUSTOM_ECONOMIC_SCORE"
         else None,
         "estimated_round_trip_cost_bps": 90.0
         if tuning_objective == "NET_EXPECTANCY_PROXY"
