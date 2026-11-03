@@ -434,11 +434,10 @@ def test_v4t_inner_cv_class_support_failure_is_recorded_as_skip(
     monkeypatch.setattr(v4h, "label_audit_diagnostics", lambda _: {"status": "TEST"})
     monkeypatch.setattr(v4h, "_skipped_result", fake_skipped_result)
     monkeypatch.setattr(v4h, "build_purged_time_series_splits", fake_build_splits)
-    monkeypatch.setattr(
-        v4h,
-        "_fit_v4h_variants",
-        lambda *args, **kwargs: pytest.fail("model fitting must not start after failed preflight"),
-    )
+    def fail_if_fit_started(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        pytest.fail("model fitting must not start after failed preflight")
+
+    monkeypatch.setattr(v4h, "_fit_v4h_variants", fail_if_fit_started)
 
     experiment = v4h.run_v4h_experiment(
         "BTC/USDT",
@@ -460,7 +459,7 @@ def test_v4t_inner_cv_class_support_failure_is_recorded_as_skip(
 
     assert experiment["status"] == v4h.V4H_INNER_CV_CLASS_SUPPORT_SKIP_STATUS
     assert experiment["sample_gate"]["outer_sample_gate_status"] == "PASS"
-    assert experiment["sample_gate"]["status"] == V4T_INNER_CV_SKIP_STATUS
+    assert experiment["sample_gate"]["status"] == v4h.V4H_INNER_CV_CLASS_SUPPORT_SKIP_STATUS
     assert (
         experiment["sample_gate"]["inner_cv_preflight"]["reason_code"]
         == "tuning_inner_cv_class_support_insufficient"
@@ -479,8 +478,8 @@ def test_v4t_inner_cv_class_support_failure_is_recorded_as_skip(
         "weight_none",
         experiment,
     )
-    assert status == V4T_INNER_CV_SKIP_STATUS
-    assert candidate["status"] == V4T_INNER_CV_SKIP_STATUS
+    assert status == v4h.V4H_INNER_CV_CLASS_SUPPORT_SKIP_STATUS
+    assert candidate["status"] == v4h.V4H_INNER_CV_CLASS_SUPPORT_SKIP_STATUS
     assert candidate["evaluation_performed"] is False
     assert candidate["metrics"]["economic_candidate_gate_passed"] is False
 
@@ -491,7 +490,9 @@ def test_v4t_inner_cv_preflight_propagates_other_purge_errors(
 ) -> None:
     bars, labels, _ = _v4t_inner_cv_preflight_fixture()
 
-    def fail_for_unrelated_reason(*args: Any, **kwargs: Any) -> tuple[list[Any], list[Any]]:
+    def fail_for_unrelated_reason(
+        *args: Any, **kwargs: Any
+    ) -> tuple[list[Any], list[Any]]:
         raise ValueError("tuning_inner_cv_label_overlap")
 
     monkeypatch.setattr(
@@ -506,4 +507,51 @@ def test_v4t_inner_cv_preflight_propagates_other_purge_errors(
             labels,
             24,
         )
+
+
+def test_v4t_inner_cv_preflight_passes_only_after_all_default_folds_validate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, labels, _ = _v4t_inner_cv_preflight_fixture()
+    observed: dict[str, Any] = {}
+    fold_diagnostics = [{"fold": index} for index in range(v4h.DEFAULT_INNER_CV_SPLITS)]
+
+    def successful_build(
+        training_indices: list[int],
+        train_labels: Series,
+        label_end_indices: list[int],
+        **kwargs: Any,
+    ) -> tuple[list[Any], list[dict[str, int]]]:
+        observed["training_rows"] = len(training_indices)
+        observed["label_rows"] = len(train_labels)
+        observed["label_end_rows"] = len(label_end_indices)
+        observed["horizon_candles"] = kwargs["horizon_candles"]
+        observed["n_splits"] = kwargs["n_splits"]
+        observed["minimum_class_samples"] = kwargs["minimum_class_samples"]
+        return [([], []) for _ in fold_diagnostics], fold_diagnostics
+
+    monkeypatch.setattr(v4h, "build_purged_time_series_splits", successful_build)
+    result = v4h._inner_cv_preflight_diagnostics(
+        list(range(32)),
+        labels.iloc[:32]["label"],
+        labels,
+        24,
+    )
+
+    assert result == {
+        "status": "PASS",
+        "reason_code": None,
+        "minimum_class_samples_per_class": v4h.DEFAULT_MINIMUM_CLASS_SAMPLES,
+        "expected_fold_count": v4h.DEFAULT_INNER_CV_SPLITS,
+        "validated_fold_count": v4h.DEFAULT_INNER_CV_SPLITS,
+        "complete_fold_validation": True,
+    }
+    assert observed == {
+        "training_rows": 32,
+        "label_rows": 32,
+        "label_end_rows": 48,
+        "horizon_candles": 24,
+        "n_splits": v4h.DEFAULT_INNER_CV_SPLITS,
+        "minimum_class_samples": v4h.DEFAULT_MINIMUM_CLASS_SAMPLES,
+    }
 
