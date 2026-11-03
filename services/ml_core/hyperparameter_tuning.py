@@ -42,15 +42,12 @@ CUSTOM_SCORE_TRADE_COUNT_PENALTY_BPS = 50.0
 CUSTOM_SCORE_DRAWDOWN_PENALTY_WEIGHT = 0.5
 
 
-def _validate_custom_economic_score_configuration(
+def _validate_custom_score_economic_alignment(
     features: DataFrame,
     actual: Series,
     gross_returns_by_index: Series,
     estimated_cost_bps: float,
-    minimum_trade_count: int,
-    trade_count_penalty_bps: float,
-    drawdown_penalty_weight: float,
-) -> tuple[int, float, float, float]:
+) -> float:
     if (
         isinstance(estimated_cost_bps, bool)
         or not isfinite(float(estimated_cost_bps))
@@ -64,6 +61,14 @@ def _validate_custom_economic_score_configuration(
         raise ValueError("tuning_economic_outcomes_invalid")
     if len(features) != len(actual):
         raise ValueError("tuning_economic_score_alignment_invalid")
+    return float(estimated_cost_bps)
+
+
+def _validate_custom_score_penalties(
+    minimum_trade_count: int,
+    trade_count_penalty_bps: float,
+    drawdown_penalty_weight: float,
+) -> tuple[int, float, float]:
     minimum = _positive_integer(
         minimum_trade_count, "tuning_custom_score_minimum_trade_count_invalid"
     )
@@ -81,11 +86,29 @@ def _validate_custom_economic_score_configuration(
         raise ValueError("tuning_custom_score_penalty_invalid")
     return (
         minimum,
-        float(estimated_cost_bps),
         float(trade_count_penalty_bps),
         float(drawdown_penalty_weight),
     )
 
+
+def _validate_custom_economic_score_configuration(
+    features: DataFrame,
+    actual: Series,
+    gross_returns_by_index: Series,
+    estimated_cost_bps: float,
+    minimum_trade_count: int,
+    trade_count_penalty_bps: float,
+    drawdown_penalty_weight: float,
+) -> tuple[int, float, float, float]:
+    estimated_cost = _validate_custom_score_economic_alignment(
+        features, actual, gross_returns_by_index, estimated_cost_bps
+    )
+    minimum, count_penalty, drawdown_weight = _validate_custom_score_penalties(
+        minimum_trade_count,
+        trade_count_penalty_bps,
+        drawdown_penalty_weight,
+    )
+    return minimum, estimated_cost, count_penalty, drawdown_weight
 
 def _predicted_buy_gross_returns(
     estimator: Any,
