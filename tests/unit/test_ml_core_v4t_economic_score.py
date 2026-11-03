@@ -14,6 +14,8 @@ from pandas import DataFrame, Series
 from scripts import run_ml_core_v4h_tuning_geometry as v4h
 from scripts import run_ml_core_v4t_economic_score as v4t
 from services.ml_core.hyperparameter_tuning import (
+    DEFAULT_INNER_CV_SPLITS,
+    DEFAULT_MINIMUM_CLASS_SAMPLES,
     Custom_Economic_Score,
     TUNING_OBJECTIVES,
 )
@@ -472,8 +474,8 @@ def test_v4t_inner_cv_class_support_failure_is_recorded_as_skip(
     )
     assert observed == {
         "horizon_candles": 24,
-        "n_splits": v4h.DEFAULT_INNER_CV_SPLITS,
-        "minimum_class_samples": v4h.DEFAULT_MINIMUM_CLASS_SAMPLES,
+        "n_splits": DEFAULT_INNER_CV_SPLITS,
+        "minimum_class_samples": DEFAULT_MINIMUM_CLASS_SAMPLES,
     }
     status, _ = v4t._validate_v4t_experiment_status(experiment)
     candidate = v4t._skipped_candidate_record(
@@ -519,7 +521,7 @@ def test_v4t_inner_cv_preflight_passes_only_after_all_default_folds_validate(
 ) -> None:
     _, labels, _ = _v4t_inner_cv_preflight_fixture()
     observed: dict[str, Any] = {}
-    fold_diagnostics = [{"fold": index} for index in range(v4h.DEFAULT_INNER_CV_SPLITS)]
+    fold_diagnostics = [{"fold": index} for index in range(DEFAULT_INNER_CV_SPLITS)]
 
     def successful_build(
         training_indices: list[int],
@@ -546,9 +548,9 @@ def test_v4t_inner_cv_preflight_passes_only_after_all_default_folds_validate(
     assert result == {
         "status": "PASS",
         "reason_code": None,
-        "minimum_class_samples_per_class": v4h.DEFAULT_MINIMUM_CLASS_SAMPLES,
-        "expected_fold_count": v4h.DEFAULT_INNER_CV_SPLITS,
-        "validated_fold_count": v4h.DEFAULT_INNER_CV_SPLITS,
+        "minimum_class_samples_per_class": DEFAULT_MINIMUM_CLASS_SAMPLES,
+        "expected_fold_count": DEFAULT_INNER_CV_SPLITS,
+        "validated_fold_count": DEFAULT_INNER_CV_SPLITS,
         "complete_fold_validation": True,
     }
     assert observed == {
@@ -556,6 +558,6 @@ def test_v4t_inner_cv_preflight_passes_only_after_all_default_folds_validate(
         "label_rows": 32,
         "label_end_rows": 48,
         "horizon_candles": 24,
-        "n_splits": v4h.DEFAULT_INNER_CV_SPLITS,
-        "minimum_class_samples": v4h.DEFAULT_MINIMUM_CLASS_SAMPLES,
+        "n_splits": DEFAULT_INNER_CV_SPLITS,
+        "minimum_class_samples": DEFAULT_MINIMUM_CLASS_SAMPLES,
     }
