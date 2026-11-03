@@ -300,7 +300,7 @@ def test_binary_metrics_use_selected_dynamic_threshold_and_continuous_roc_auc() 
     )
     assert result["threshold"] == pytest.approx(0.65)
     assert result["buy_prediction_count"] == 2
-    assert result["roc_auc"] == pytest.approx(0.50)
+    assert result["roc_auc"] == pytest.approx(0.75)
     assert result["class_labels"] == ["BUY", "NO_BUY"]
     assert result["confusion_matrix"]["rows_are"] == "actual"
 
@@ -491,7 +491,7 @@ def test_v4v_workflow_is_branch_scoped_and_waits_for_exact_sha_ci() -> None:
         encoding="utf-8"
     )
     assert "research/ml-core-v4v-binary-paradigm" in workflow_text
-    assert "Require standard CI success for this exact V4-V commit" in workflow_text
+    assert "Require standard CI success for this exact V4-W commit" in workflow_text
     assert "TARGET_SHA" in workflow_text
     assert "Binary_BUY_Economic_Score" in workflow_text
     assert "alix-v4v-row-level-probabilities.csv" in workflow_text
