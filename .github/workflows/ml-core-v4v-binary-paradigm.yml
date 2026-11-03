@@ -9,6 +9,7 @@ on:
       - scripts/run_ml_core_v4v_binary_paradigm.py
       - services/ml_core/binary_targets.py
       - services/ml_core/hyperparameter_tuning.py
+      - tests/unit/test_ml_core_v4v_binary_paradigm.py
   workflow_dispatch:
 
 permissions:
