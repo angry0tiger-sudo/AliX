@@ -189,6 +189,7 @@ jobs:
           grep -Fq "AliX V4-V Binary BUY / NO_BUY Evaluation" "$GITHUB_STEP_SUMMARY"
           grep -Fq "Binary_BUY_Economic_Score" "$GITHUB_STEP_SUMMARY"
           grep -Fq "NO-GO" "$GITHUB_STEP_SUMMARY"
+          cat "$GITHUB_STEP_SUMMARY"
 
       - name: Validate V4-V binary report, probabilities, economics, and safety
         env:
