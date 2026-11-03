@@ -98,7 +98,7 @@ def _predicted_buy_gross_returns(
     gross = gross_returns_by_index.reindex(features.index).to_numpy(dtype=float)
     if len(gross) != len(features) or not bool(np.isfinite(gross).all()):
         raise ValueError("tuning_economic_outcomes_missing_or_non_finite")
-    return gross[predicted == "BUY"]
+    return cast(np.ndarray, gross[predicted == "BUY"])
 
 
 def _custom_score_drawdown_and_expectancy(

@@ -8,7 +8,7 @@ import json
 import math
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -104,9 +104,12 @@ def _execution_config() -> ExecutionConfig:
 def _validated_v4t_label_end(
     raw_end: object, event_index: int, row_count: int
 ) -> int | None:
-    if pd.isna(raw_end):
+    if raw_end is None:
         return None
-    numeric = float(raw_end)
+    try:
+        numeric = float(cast(float | int | str, raw_end))
+    except (TypeError, ValueError):
+        raise ValueError("v4t_economic_label_end_index_invalid") from None
     if not np.isfinite(numeric):
         return None
     if not numeric.is_integer():
