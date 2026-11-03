@@ -585,7 +585,7 @@ def test_v4t_report_candidates_preserve_compact_tuning_evidence() -> None:
         "inner_cv_folds": [{"fold": 1}],
         "candidate_results": [{"score": 0.125}],
     }
-    candidates = [
+    candidates: list[dict[str, Any]] = [
         {
             "candidate_id": "trained-candidate",
             "status": "TRAINED",
