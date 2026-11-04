@@ -515,9 +515,7 @@ def _resolve_matrix_decision(
 def _decision_rule(cells: list[dict[str, Any]]) -> dict[str, Any]:
     completed, skipped = _partition_cell_status(cells)
     gross_edge, net_oos, cost_drag = _classify_completed_cells(completed)
-    branch, action = _resolve_matrix_decision(
-        gross_edge, net_oos, cost_drag, skipped
-    )
+    branch, action = _resolve_matrix_decision(gross_edge, net_oos, cost_drag, skipped)
     return {
         "decision_branch": branch,
         "action": action,
