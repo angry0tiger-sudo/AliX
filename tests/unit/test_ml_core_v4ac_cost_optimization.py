@@ -12,6 +12,7 @@ import pytest
 from pandas import DataFrame, Series
 
 from scripts import run_ml_core_v4ac_cost_optimization as v4ac
+from scripts.run_ml_core_real_data_baseline import SYMBOLS, TIMEFRAME_MINUTES
 
 
 def _bars(count: int = 1_000) -> DataFrame:
@@ -90,7 +91,7 @@ def _matrix() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     cells = [
         _cell(symbol, timeframe, policy, mode)
         for symbol, timeframe, policy, mode in itertools.product(
-            v4ac.SYMBOLS, v4ac.TIMEFRAMES, v4ac.EXIT_POLICIES, v4ac.MODES
+            SYMBOLS, v4ac.TIMEFRAMES, v4ac.EXIT_POLICIES, v4ac.MODES
         )
     ]
     scenarios = [
@@ -116,7 +117,7 @@ def test_allowed_timeframes_are_exact_and_closed_above_four_hours() -> None:
         with pytest.raises(ValueError, match="v4ac_timeframe_out_of_policy"):
             v4ac._validate_timeframe(timeframe)
     assert v4ac.TIMEFRAMES == ("15m", "30m", "1h", "4h")
-    assert [v4ac.TIMEFRAME_MINUTES[item] for item in v4ac.TIMEFRAMES] == [
+    assert [TIMEFRAME_MINUTES[item] for item in v4ac.TIMEFRAMES] == [
         15,
         30,
         60,
