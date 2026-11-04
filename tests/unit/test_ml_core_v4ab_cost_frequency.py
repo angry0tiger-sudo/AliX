@@ -215,7 +215,13 @@ def test_summarize_replay_rejects_invalid_trade_shapes() -> None:
     with pytest.raises(ValueError, match="v4ab_trade_pnl_non_finite"):
         v4ab._summarize_replay(
             {
-                "trades": [{**trade, "gross_market_pnl_usd": float("nan")}],
+                "trades": [
+                    {
+                        **trade,
+                        "gross_market_pnl_usd": float("nan"),
+                        "bars_held": 24,
+                    }
+                ],
                 "metrics": metrics,
             },
             "TB_1.5_1.0",
