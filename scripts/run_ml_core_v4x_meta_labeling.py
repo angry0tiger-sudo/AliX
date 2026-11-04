@@ -130,8 +130,7 @@ def _training_oof_events(
         validate="one_to_one",
     ).sort_values("event_index")
     training = training.loc[
-        (training["event_index"] < train_end)
-        & (training["label_end_idx"] < train_end)
+        (training["event_index"] < train_end) & (training["label_end_idx"] < train_end)
     ].reset_index(drop=True)
     diagnostics = {
         "primary_oof_event_count": int(len(oof_events)),
@@ -141,9 +140,7 @@ def _training_oof_events(
         "oof_fold_ids": sorted(
             int(value) for value in training["fold_id"].unique().tolist()
         ),
-        "all_primary_signals_are_buy": bool(
-            training["primary_signal"].eq("BUY").all()
-        ),
+        "all_primary_signals_are_buy": bool(training["primary_signal"].eq("BUY").all()),
         "all_primary_signals_are_oof": bool(training["primary_oof"].eq(True).all()),
         "maximum_training_label_end_index": (
             int(training["label_end_idx"].max()) if not training.empty else None
@@ -202,7 +199,9 @@ def _validation_decision_signals(
                 "raw_signal": "BUY"
                 if bool(primary_buy_signal.iloc[row_index])
                 else "NO_BUY",
-                "buy_probability": float(probability) if probability is not None else 0.0,
+                "buy_probability": float(probability)
+                if probability is not None
+                else 0.0,
                 "confidence_threshold": threshold,
             }
         )
@@ -310,9 +309,7 @@ def _run_candidate(
     candle_features = build_feature_profiles(
         bars, profile_names=(V4X_FEATURE_PROFILE,)
     )[V4X_FEATURE_PROFILE]
-    features, primary_buy_signal = build_sma_primary_features(
-        bars, candle_features
-    )
+    features, primary_buy_signal = build_sma_primary_features(bars, candle_features)
     try:
         training, training_diagnostics = _training_oof_events(
             bars, features, primary_buy_signal, train_end
@@ -371,10 +368,7 @@ def _run_candidate(
         trade_management_config=management,
     )
     candidate_id = f"{pair}|{timeframe}|{V4X_FEATURE_PROFILE}"
-    trades = [
-        {"candidate_id": candidate_id, **trade}
-        for trade in replay["trades"]
-    ]
+    trades = [{"candidate_id": candidate_id, **trade} for trade in replay["trades"]]
     for row in decisions:
         row["candidate_id"] = candidate_id
         row["pair"] = pair
@@ -385,9 +379,7 @@ def _run_candidate(
             "fit_start_event_index": int(fit_rows["event_index"].min()),
             "fit_end_event_index": int(fit_rows["event_index"].max()),
             "calibration_rows": int(len(calibration_rows)),
-            "calibration_start_event_index": int(
-                calibration_rows["event_index"].min()
-            ),
+            "calibration_start_event_index": int(calibration_rows["event_index"].min()),
             "fit_max_label_end_index": int(fit_rows["label_end_idx"].max()),
             "fit_labels_end_before_calibration": bool(
                 int(fit_rows["label_end_idx"].max())
@@ -525,7 +517,9 @@ def run_v4x(
 ) -> dict[str, Any]:
     if days != 730:
         raise ValueError("v4x_dataset_window_must_be_730_days")
-    if len(commit_sha) != 40 or any(char not in "0123456789abcdef" for char in commit_sha):
+    if len(commit_sha) != 40 or any(
+        char not in "0123456789abcdef" for char in commit_sha
+    ):
         raise ValueError("v4x_commit_sha_invalid")
     datasets, provenance = _load_diagnostic_datasets(input_dir, days, commit_sha)
     candidates = [

@@ -68,12 +68,10 @@ def build_sma_primary_features(
 
     result = candle_features.reset_index(drop=True).copy()
     result["%-primary_sma_spread_pct"] = fast / slow - 1.0
-    result["%-primary_sma_fast_slope_5"] = fast.pct_change(
-        periods=5, fill_method=None
-    )
+    result["%-primary_sma_fast_slope_5"] = fast.pct_change(periods=5, fill_method=None)
     result["%-primary_close_vs_sma_slow_pct"] = close / slow - 1.0
     finite = _finite_feature_rows(result)
-    signals = (crossover.fillna(False).to_numpy(dtype=bool) & finite)
+    signals = crossover.fillna(False).to_numpy(dtype=bool) & finite
     return result, Series(signals, name="primary_buy_signal", dtype=bool)
 
 
@@ -131,8 +129,10 @@ def generate_oof_primary_events(
             )
     if not records:
         raise ValueError("v4x_oof_primary_signals_empty")
-    result = DataFrame.from_records(records).sort_values("event_index").reset_index(
-        drop=True
+    result = (
+        DataFrame.from_records(records)
+        .sort_values("event_index")
+        .reset_index(drop=True)
     )
     if result["event_index"].duplicated().any():
         raise ValueError("v4x_oof_primary_events_duplicate")
@@ -176,7 +176,9 @@ def build_costed_meta_labels(
     if not required_labels.issubset(barrier_labels.columns):
         raise ValueError("v4x_barrier_label_schema_invalid")
     cost_values = (fee_bps_per_side, slippage_bps_per_side, entry_slippage_bps)
-    if any(not math.isfinite(float(value)) or float(value) < 0 for value in cost_values):
+    if any(
+        not math.isfinite(float(value)) or float(value) < 0 for value in cost_values
+    ):
         raise ValueError("v4x_cost_configuration_invalid")
     if not primary_events["primary_signal"].eq("BUY").all():
         raise ValueError("v4x_meta_training_requires_primary_buy_only")
@@ -224,11 +226,7 @@ def build_costed_meta_labels(
         entry_slippage = (entry_fill - entry_reference) / entry_reference
         exit_slippage = (exit_reference - exit_fill) / entry_reference
         net_return = (
-            gross_return
-            - entry_fee
-            - exit_fee
-            - entry_slippage
-            - exit_slippage
+            gross_return - entry_fee - exit_fee - entry_slippage - exit_slippage
         )
         if not math.isfinite(net_return):
             raise ValueError("v4x_meta_net_return_invalid")
@@ -246,8 +244,8 @@ def build_costed_meta_labels(
         )
     if not rows:
         raise ValueError("v4x_costed_meta_labels_empty")
-    result = DataFrame.from_records(rows).sort_values("event_index").reset_index(
-        drop=True
+    result = (
+        DataFrame.from_records(rows).sort_values("event_index").reset_index(drop=True)
     )
     if result["event_index"].duplicated().any():
         raise ValueError("v4x_costed_meta_labels_duplicate")
@@ -376,9 +374,7 @@ def fit_lightgbm_meta_filter(
         force_col_wise=True,
     )
     model.fit(fit_features.to_numpy(dtype=float), labels.astype(int))
-    calibration_probabilities = _positive_class_probability(
-        model, calibration_features
-    )
+    calibration_probabilities = _positive_class_probability(model, calibration_features)
     threshold = select_dynamic_buy_threshold(
         calibration_probabilities,
         target_buy_fraction=target_accept_fraction,

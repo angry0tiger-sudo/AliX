@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 import sys
 from types import ModuleType
 from typing import Any
@@ -93,7 +94,9 @@ def test_sma_primary_emits_only_bullish_crossovers_using_causal_features() -> No
 def test_sma_primary_rejects_invalid_periods_and_feature_schema() -> None:
     bars = _bars(np.linspace(100.0, 120.0, 80))
     with pytest.raises(ValueError, match="sma_period_configuration_invalid"):
-        build_sma_primary_features(bars, DataFrame({"x": range(80)}), fast_period=50, slow_period=20)
+        build_sma_primary_features(
+            bars, DataFrame({"x": range(80)}), fast_period=50, slow_period=20
+        )
     with pytest.raises(ValueError, match="target_column_in_primary_features"):
         build_sma_primary_features(
             bars,
@@ -128,9 +131,7 @@ def test_oof_generation_rejects_invalid_or_empty_windows() -> None:
     with pytest.raises(ValueError, match="oof_window_invalid"):
         generate_oof_primary_events(signal, start_index=10, stop_index=10)
     with pytest.raises(ValueError, match="oof_fold_configuration_invalid"):
-        generate_oof_primary_events(
-            signal, start_index=0, stop_index=3, fold_count=4
-        )
+        generate_oof_primary_events(signal, start_index=0, stop_index=3, fold_count=4)
     with pytest.raises(ValueError, match="oof_primary_signals_empty"):
         generate_oof_primary_events(signal, start_index=0, stop_index=20)
 
@@ -214,11 +215,9 @@ def test_costed_meta_labels_reject_non_buy_or_non_oof_training_signals() -> None
         )
 
 
-def test_training_calibration_split_purges_unmatured_labels_and_is_outer_train_only() -> None:
+def test_meta_fit_calibration_split_purges_labels() -> None:
     events = _labelled_oof_events()
-    fit, calibration = split_meta_fit_calibration(
-        events, outer_train_end_index=300
-    )
+    fit, calibration = split_meta_fit_calibration(events, outer_train_end_index=300)
 
     calibration_start = int(calibration["event_index"].min())
     assert len(fit) >= 40
@@ -230,7 +229,7 @@ def test_training_calibration_split_purges_unmatured_labels_and_is_outer_train_o
     assert fit["primary_oof"].all()
 
 
-def test_training_split_rejects_validation_contamination_and_invalid_provenance() -> None:
+def test_meta_split_rejects_leaks_and_bad_oof_provenance() -> None:
     events = _labelled_oof_events()
     events.loc[len(events) - 1, "label_end_idx"] = 300
     with pytest.raises(ValueError, match="outer_validation_contamination"):
@@ -349,16 +348,19 @@ def test_v4x_step_summary_reports_candidate_thresholds_and_economics() -> None:
 
 
 def test_v4x_workflow_is_branch_scoped_and_keeps_ci_and_safety_gates() -> None:
-    workflow = __import__("pathlib").Path(
-        ".github/workflows/ml-core-v4x-meta-labeling.yml"
-    ).read_text(encoding="utf-8")
+    workflow = Path(".github/workflows/ml-core-v4x-meta-labeling.yml").read_text(
+        encoding="utf-8"
+    )
 
     assert "research/ml-core-v4x-meta-labeling" in workflow
     assert "Require standard CI success for this exact V4-X commit" in workflow
     assert "TARGET_SHA" in workflow
     assert "actions: read" in workflow
     assert "Fetch complete public Binance Spot 730-day 1-minute datasets" in workflow
-    assert "Render V4-X candidate metrics and thresholds to GitHub Step Summary" in workflow
+    assert (
+        "Render V4-X candidate metrics and thresholds to GitHub Step Summary"
+        in workflow
+    )
     assert "_render_summary" in workflow
     assert "alix-v4x-meta-labeling-report.json" in workflow
     assert "Champion=null" in workflow
