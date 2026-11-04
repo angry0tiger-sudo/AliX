@@ -196,9 +196,7 @@ def _validate_replay_trades(
         not _time_exit_trade_is_valid(item, horizon) for item in trades
     ):
         raise ValueError("v4ab_unconditional_time_exit_contract_failed")
-    if policy != "TIME_N" and any(
-        int(item["bars_held"]) > horizon for item in trades
-    ):
+    if policy != "TIME_N" and any(int(item["bars_held"]) > horizon for item in trades):
         raise ValueError("v4ab_trade_exceeded_registered_horizon")
 
 
@@ -212,9 +210,7 @@ def _validated_pnl_values(
     return gross, net
 
 
-def _holding_periods(
-    trades: list[dict[str, Any]], policy: str
-) -> list[int]:
+def _holding_periods(trades: list[dict[str, Any]], policy: str) -> list[int]:
     return [
         int(item["bars_held"]) - 1
         if policy == "TIME_N" and item["exit_reason"] == "TIME_EXIT"
@@ -259,6 +255,7 @@ def _summarize_replay(
             sum(float(item["slippage_cost_usd"]) for item in trades), 8
         ),
     }
+
 
 def _run_cell(
     symbol: str,
@@ -321,11 +318,7 @@ def _cell_meets_net_oos_rule(item: dict[str, Any]) -> bool:
 
 def _cell_has_cost_drag(item: dict[str, Any]) -> bool:
     net_pf = item["net_profit_factor"]
-    return (
-        _cell_has_gross_edge(item)
-        and net_pf is not None
-        and float(net_pf) < 1.0
-    )
+    return _cell_has_gross_edge(item) and net_pf is not None and float(net_pf) < 1.0
 
 
 def _decision_branch(
@@ -369,6 +362,7 @@ def _decision_rule(cells: list[dict[str, Any]]) -> dict[str, Any]:
         "net_oos_confirmation_cell_ids": [item["candidate_id"] for item in net_oos],
         "cost_drag_cell_ids": [item["candidate_id"] for item in cost_drag],
     }
+
 
 def _build_report(
     commit_sha: str,
