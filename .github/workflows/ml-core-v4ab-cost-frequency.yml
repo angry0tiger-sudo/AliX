@@ -178,8 +178,8 @@ jobs:
 
       - name: Render V4-AB candidate metrics to GitHub Step Summary
         env:
-          REPORT_PATH: ${{ github.workspace }}}/alix-v4ab-cost-frequency-report.json
-          SUMMARY_PATH: ${{ github.workspace }}}/alix-v4ab-cost-frequency-step-summary.md
+          REPORT_PATH: ${{ github.workspace }}/alix-v4ab-cost-frequency-report.json
+          SUMMARY_PATH: ${{ github.workspace }}/alix-v4ab-cost-frequency-step-summary.md
         run: |
           python - <<'PY'
           import json
@@ -210,8 +210,8 @@ jobs:
 
       - name: Validate matrix, costs, ledger arithmetic, and safety
         env:
-          REPORT_PATH: ${{ github.workspace }}}/alix-v4ab-cost-frequency-report.json
-          TRADES_CSV: ${{ github.workspace }}}/alix-v4ab-cost-frequency-trades.csv
+          REPORT_PATH: ${{ github.workspace }}/alix-v4ab-cost-frequency-report.json
+          TRADES_CSV: ${{ github.workspace }}/alix-v4ab-cost-frequency-trades.csv
           TARGET_SHA: ${{ github.sha }}
         run: |
           python - <<'PY'
