@@ -236,7 +236,10 @@ def _summarize_replay(replay: dict[str, Any]) -> dict[str, Any]:
         "net_pnl_total_usd": round(sum(net), 8),
         "fees_total_usd": round(fees_total, 8),
         "slippage_total_usd": round(slippage_total, 8),
-    }def _empty_metric_values() -> dict[str, Any]:
+    }
+
+
+def _empty_metric_values() -> dict[str, Any]:
     return {
         "trade_count": None,
         "gross_profit_factor": None,
@@ -865,7 +868,10 @@ def _build_report(
         "decision_rule": "OWNER_REVIEW_REQUIRED_NO_AUTOMATIC_PROMOTION",
         "promotion_status": "BLOCKED_PENDING_INDEPENDENT_OOS_AND_OWNER_REVIEW",
         "safety": _safety_report(),
-    }def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
+    }
+
+
+def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if not rows:
         path.write_text("", encoding="utf-8")
