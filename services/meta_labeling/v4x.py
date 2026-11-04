@@ -339,7 +339,7 @@ def build_costed_meta_labels(
         for row in merged.to_dict(orient="records")
         if (
             record := _costed_meta_label_record(
-                bars, row, fee_rate, slippage_rate, entry_rate
+                bars, cast(dict[str, Any], row), fee_rate, slippage_rate, entry_rate
             )
         )
         is not None
