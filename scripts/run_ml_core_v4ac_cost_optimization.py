@@ -712,7 +712,7 @@ def render_step_summary(report: dict[str, Any]) -> str:
         [
             "",
             f"Candidate rows: {len(report['cells'])}/32; completed: {completed}; skipped Meta rows: {skipped_meta}.",
-            f"Meta training scenarios: {trained}/{len(report['meta_scenarios'])} trained.",
+            f"Meta training scenarios: {trained}/{len(meta_scenarios)} trained.",
             "This is a research comparison, not independent OOS promotion or profitability approval.",
             "",
             "Safety: Champion=null, order_permission=false, trading_authorization=NO-GO, private_api_calls=0, real_order_attempts=0, sequence_model_used=false.",

@@ -664,6 +664,7 @@ def test_step_summary_contains_32_rows_modes_costs_and_safety() -> None:
     assert "30 bps round trip" in rendered
     assert "PRIMARY_ONLY" in rendered and "META_FILTERED" in rendered
     assert "Gross PF" in rendered and "Net PF" in rendered
+    assert "Meta training scenarios: 16/16 trained." in rendered
     assert "N/A metrics" in rendered
     assert "trading_authorization=NO-GO" in rendered
     with pytest.raises(ValueError, match="v4ac_step_summary_report_schema_invalid"):
