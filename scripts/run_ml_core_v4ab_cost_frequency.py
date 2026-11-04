@@ -179,38 +179,66 @@ def _pf_above(value: float | None, infinite: bool, threshold: float) -> bool:
     return infinite or (value is not None and value > threshold)
 
 
-def _summarize_replay(
-    replay: dict[str, Any], policy: str, horizon: int
-) -> dict[str, Any]:
-    trades = replay["trades"]
+def _time_exit_trade_is_valid(trade: dict[str, Any], horizon: int) -> bool:
+    return (
+        trade["exit_reason"] == "TIME_EXIT"
+        and trade["time_exit_triggered"] is True
+        and int(trade["bars_held"]) - 1 == horizon
+    )
+
+
+def _validate_replay_trades(
+    trades: list[dict[str, Any]], policy: str, horizon: int
+) -> None:
     if any(item["direction"] != "LONG" for item in trades):
         raise ValueError("v4ab_non_spot_trade_detected")
-    if policy == "TIME_N":
-        for trade in trades:
-            if (
-                trade["exit_reason"] != "TIME_EXIT"
-                or trade["time_exit_triggered"] is not True
-                or int(trade["bars_held"]) - 1 != horizon
-            ):
-                raise ValueError("v4ab_unconditional_time_exit_contract_failed")
-    elif any(int(item["bars_held"]) > horizon for item in trades):
+    if policy == "TIME_N" and any(
+        not _time_exit_trade_is_valid(item, horizon) for item in trades
+    ):
+        raise ValueError("v4ab_unconditional_time_exit_contract_failed")
+    if policy != "TIME_N" and any(
+        int(item["bars_held"]) > horizon for item in trades
+    ):
         raise ValueError("v4ab_trade_exceeded_registered_horizon")
 
+
+def _validated_pnl_values(
+    trades: list[dict[str, Any]],
+) -> tuple[list[float], list[float]]:
     gross = [float(item["gross_market_pnl_usd"]) for item in trades]
     net = [float(item["net_pnl_usd"]) for item in trades]
     if not all(math.isfinite(value) for value in (*gross, *net)):
         raise ValueError("v4ab_trade_pnl_non_finite")
-    gross_pf, gross_inf = _profit_factor(gross)
-    net_pf, net_inf = _profit_factor(net)
-    holding = [
+    return gross, net
+
+
+def _holding_periods(
+    trades: list[dict[str, Any]], policy: str
+) -> list[int]:
+    return [
         int(item["bars_held"]) - 1
         if policy == "TIME_N" and item["exit_reason"] == "TIME_EXIT"
         else int(item["bars_held"])
         for item in trades
     ]
+
+
+def _validated_drawdown(replay: dict[str, Any]) -> float:
     drawdown = float(replay["metrics"]["max_drawdown_percent"])
     if not math.isfinite(drawdown) or drawdown < 0:
         raise ValueError("v4ab_candidate_drawdown_invalid")
+    return round(drawdown, 8)
+
+
+def _summarize_replay(
+    replay: dict[str, Any], policy: str, horizon: int
+) -> dict[str, Any]:
+    trades = replay["trades"]
+    _validate_replay_trades(trades, policy, horizon)
+    gross, net = _validated_pnl_values(trades)
+    gross_pf, gross_inf = _profit_factor(gross)
+    net_pf, net_inf = _profit_factor(net)
+    holding = _holding_periods(trades, policy)
     count = len(trades)
     return {
         "trade_count": count,
@@ -223,7 +251,7 @@ def _summarize_replay(
         if count
         else 0.0,
         "median_bars_held": round(float(median(holding)), 4) if holding else None,
-        "max_drawdown_percent": round(drawdown, 8),
+        "max_drawdown_percent": _validated_drawdown(replay),
         "gross_pnl_total_usd": round(sum(gross), 8),
         "net_pnl_total_usd": round(sum(net), 8),
         "fees_total_usd": round(sum(float(item["fees_usd"]) for item in trades), 8),
@@ -231,7 +259,6 @@ def _summarize_replay(
             sum(float(item["slippage_cost_usd"]) for item in trades), 8
         ),
     }
-
 
 def _run_cell(
     symbol: str,
@@ -276,53 +303,65 @@ def _run_cell(
     return cell, trades
 
 
-def _decision_rule(cells: list[dict[str, Any]]) -> dict[str, Any]:
-    gross_edge = [
-        item
-        for item in cells
-        if _pf_above(
-            item["gross_profit_factor"],
-            bool(item["gross_profit_factor_infinite_no_losses"]),
-            1.0,
-        )
-    ]
-    net_oos = [
-        item
-        for item in cells
-        if int(item["trade_count"]) >= 30
-        and _pf_above(
-            item["net_profit_factor"],
-            bool(item["net_profit_factor_infinite_no_losses"]),
-            1.3,
-        )
-    ]
-    cost_drag = [
-        item
-        for item in gross_edge
-        if item["net_profit_factor"] is not None
-        and float(item["net_profit_factor"]) < 1.0
-    ]
+def _cell_has_gross_edge(item: dict[str, Any]) -> bool:
+    return _pf_above(
+        item["gross_profit_factor"],
+        bool(item["gross_profit_factor_infinite_no_losses"]),
+        1.0,
+    )
+
+
+def _cell_meets_net_oos_rule(item: dict[str, Any]) -> bool:
+    return int(item["trade_count"]) >= 30 and _pf_above(
+        item["net_profit_factor"],
+        bool(item["net_profit_factor_infinite_no_losses"]),
+        1.3,
+    )
+
+
+def _cell_has_cost_drag(item: dict[str, Any]) -> bool:
+    net_pf = item["net_profit_factor"]
+    return (
+        _cell_has_gross_edge(item)
+        and net_pf is not None
+        and float(net_pf) < 1.0
+    )
+
+
+def _decision_branch(
+    gross_edge: list[dict[str, Any]],
+    net_oos: list[dict[str, Any]],
+    cost_drag: list[dict[str, Any]],
+) -> tuple[str, str]:
     if net_oos:
-        branch = "NET_PF_GT_1_3_WITH_AT_LEAST_30_TRADES_FLAG_FOR_INDEPENDENT_OOS"
-        action = (
+        return (
+            "NET_PF_GT_1_3_WITH_AT_LEAST_30_TRADES_FLAG_FOR_INDEPENDENT_OOS",
             "Flag qualifying cells for independent OOS confirmation; "
-            "prioritize Meta-labeling only after confirmation."
+            "prioritize Meta-labeling only after confirmation.",
         )
-    elif not gross_edge:
-        branch = "NO_GROSS_PF_ABOVE_1_HALT_META_AND_PIVOT_PRIMARY_GENERATOR"
-        action = (
+    if not gross_edge:
+        return (
+            "NO_GROSS_PF_ABOVE_1_HALT_META_AND_PIVOT_PRIMARY_GENERATOR",
             "Halt Meta-model work; investigate a different Primary generator "
-            "in a separate research phase."
+            "in a separate research phase.",
         )
-    elif cost_drag:
-        branch = "GROSS_EDGE_BUT_NET_PF_BELOW_1_COST_FREQUENCY_OPTIMIZATION"
-        action = "Prioritize cost/frequency optimization; do not retrain Meta."
-    else:
-        branch = "INTERMEDIATE_RESULT_NOT_EXPLICITLY_COVERED_BY_REGISTERED_RULE"
-        action = (
-            "Preserve results and request an Owner decision; do not change "
-            "thresholds or resume Meta-model training."
+    if cost_drag:
+        return (
+            "GROSS_EDGE_BUT_NET_PF_BELOW_1_COST_FREQUENCY_OPTIMIZATION",
+            "Prioritize cost/frequency optimization; do not retrain Meta.",
         )
+    return (
+        "INTERMEDIATE_RESULT_NOT_EXPLICITLY_COVERED_BY_REGISTERED_RULE",
+        "Preserve results and request an Owner decision; do not change "
+        "thresholds or resume Meta-model training.",
+    )
+
+
+def _decision_rule(cells: list[dict[str, Any]]) -> dict[str, Any]:
+    gross_edge = [item for item in cells if _cell_has_gross_edge(item)]
+    net_oos = [item for item in cells if _cell_meets_net_oos_rule(item)]
+    cost_drag = [item for item in gross_edge if _cell_has_cost_drag(item)]
+    branch, action = _decision_branch(gross_edge, net_oos, cost_drag)
     return {
         "decision_branch": branch,
         "action": action,
@@ -330,7 +369,6 @@ def _decision_rule(cells: list[dict[str, Any]]) -> dict[str, Any]:
         "net_oos_confirmation_cell_ids": [item["candidate_id"] for item in net_oos],
         "cost_drag_cell_ids": [item["candidate_id"] for item in cost_drag],
     }
-
 
 def _build_report(
     commit_sha: str,
