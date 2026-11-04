@@ -1,0 +1,374 @@
+name: AliX V4-AD Meta Threshold and Trailing Optimization
+
+on:
+  push:
+    branches:
+      - research/ml-core-v4ad-threshold-optimization
+    paths:
+      - .github/workflows/ml-core-v4ad-threshold-optimization.yml
+      - scripts/run_ml_core_v4ad_threshold_optimization.py
+      - scripts/run_ml_core_v4ac_cost_optimization.py
+      - tests/unit/test_ml_core_v4ad_threshold_optimization.py
+      - tests/unit/test_ml_core_v4ac_cost_optimization.py
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: alix-v4ad-threshold-optimization
+  cancel-in-progress: false
+
+jobs:
+  v4ad-threshold-optimization:
+    if: github.ref == 'refs/heads/research/ml-core-v4ad-threshold-optimization'
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      ALIx_ENV: paper
+      ALIx_DRY_RUN: "true"
+      ALIx_ALLOW_LIVE_TRADING: "false"
+      ALIx_REPORTING_ENABLED: "false"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      GH_TOKEN: \${{ github.token }}
+    steps:
+      - name: Require Standard CI success for this exact V4-AD commit
+        env:
+          GITHUB_REPOSITORY: \${{ github.repository }}
+          TARGET_SHA: \${{ github.sha }}
+          TARGET_BRANCH: \${{ github.ref_name }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import time
+          from urllib.error import HTTPError, URLError
+          from urllib.request import Request, urlopen
+
+          repository = os.environ["GITHUB_REPOSITORY"]
+          target_sha = os.environ["TARGET_SHA"]
+          target_branch = os.environ["TARGET_BRANCH"]
+          token = os.environ["GH_TOKEN"]
+          expected_branch = "research/ml-core-v4ad-threshold-optimization"
+          if target_branch != expected_branch:
+              raise SystemExit("unsupported_v4ad_branch:" + target_branch)
+
+          deadline = time.monotonic() + 90 * 60
+          url = (
+              f"https://api.github.com/repos/{repository}/actions/workflows/ci.yml/runs"
+              f"?head_sha={target_sha}&per_page=100"
+          )
+          while time.monotonic() < deadline:
+              request = Request(
+                  url,
+                  headers={
+                      "Accept": "application/vnd.github+json",
+                      "Authorization": f"Bearer {token}",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  },
+              )
+              try:
+                  with urlopen(request, timeout=20) as response:
+                      payload = json.load(response)
+              except (HTTPError, URLError, TimeoutError) as error:
+                  raise SystemExit(
+                      f"ci_status_lookup_failed:{type(error).__name__}"
+                  ) from None
+
+              matching = [
+                  run for run in payload.get("workflow_runs", [])
+                  if run.get("head_sha") == target_sha
+                  and run.get("head_branch") == expected_branch
+                  and run.get("event") == "push"
+              ]
+              if matching:
+                  latest = max(
+                      matching,
+                      key=lambda item: (
+                          item.get("run_number", 0), item.get("run_attempt", 0)
+                      ),
+                  )
+                  if latest.get("status") == "completed":
+                      if latest.get("conclusion") != "success":
+                          raise SystemExit(
+                              "ci_green_gate_blocked:"
+                              + str(latest.get("conclusion")) + ":" + target_sha
+                          )
+                      print(json.dumps({
+                          "gate": "PASS", "target_sha": target_sha,
+                          "ci_run_id": latest.get("id"),
+                          "ci_run_url": latest.get("html_url"),
+                      }, sort_keys=True))
+                      break
+              time.sleep(30)
+          else:
+              raise SystemExit("ci_green_gate_timeout:" + target_sha)
+          PY
+
+      - name: Checkout exact V4-AD commit without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Confirm V4-AD scope and fail-closed safety
+        env:
+          TARGET_SHA: \${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/research/ml-core-v4ad-threshold-optimization"
+          test "$GITHUB_SHA" = "$TARGET_SHA"
+          printf 'commit_sha=%s\n' "$GITHUB_SHA"
+          printf 'timeframes=1h,4h\nhorizon_bars=24\n'
+          printf 'exit_policies_1h=TB_1.5_1.0,TRAIL_2.0,TRAIL_2.0_ACT1.5\n'
+          printf 'exit_policies_4h=TB_1.5_1.0,TRAIL_2.0\n'
+          printf 'meta_target_accept_fractions=0.30,0.50,0.70\n'
+          printf 'fee_bps_per_side=10\nslippage_bps_per_side=5\nround_trip_cost_bps=30\n'
+          printf 'Champion=null\norder_permission=false\ntrading_authorization=NO-GO\n'
+          printf 'private_api_calls=0\nreal_order_attempts=0\nsequence_model_used=false\n'
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+
+          source = Path(
+              "scripts/run_ml_core_v4ad_threshold_optimization.py"
+          ).read_text(encoding="utf-8")
+          tree = ast.parse(source)
+          expected = {
+              "TIMEFRAMES": ("1h", "4h"),
+              "BASE_EXIT_POLICIES": ("TB_1.5_1.0", "TRAIL_2.0"),
+              "TARGET_ACCEPT_FRACTIONS": (0.30, 0.50, 0.70),
+              "MINIMUM_TRADES_EXCLUSIVE": 30,
+              "MINIMUM_NET_PROFIT_FACTOR_EXCLUSIVE": 1.5,
+              "MAXIMUM_DRAWDOWN_INCLUSIVE": 15.0,
+          }
+          observed = {}
+          for node in tree.body:
+              if isinstance(node, ast.Assign):
+                  for target in node.targets:
+                      if isinstance(target, ast.Name) and target.id in expected:
+                          observed[target.id] = ast.literal_eval(node.value)
+          if observed != expected:
+              raise SystemExit(
+                  "v4ad_static_contract_mismatch:"
+                  + repr({"observed": observed, "expected": expected})
+              )
+          print("V4-AD static scope and acceptance contract: PASS")
+          PY
+
+      - name: Set up pinned Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install pinned V4-AD diagnostic and Meta dependencies
+        run: |
+          python -m pip install pip==25.2
+          python -m pip install numpy==2.5.4 pandas==2.3.3 scikit-learn==1.9.0 lightgbm==4.7.0
+
+      - name: Fetch complete public Binance Spot 730-day 1-minute datasets
+        run: |
+          set -euo pipefail
+          data_dir="$RUNNER_TEMP/alix-v4ad-market-data"
+          rm -rf "$data_dir"
+          mkdir -p "$data_dir"
+          for symbol in BTCUSDT ETHUSDT; do
+            log_path="$RUNNER_TEMP/v4ad-fetch-730-$symbol.log"
+            if python scripts/fetch_binance_public_ohlcv.py \
+              --days 730 \
+              --symbol "$symbol" \
+              --interval 1m \
+              --output-dir "$data_dir" \
+              --commit-sha "$GITHUB_SHA" >"$log_path" 2>&1; then
+              cat "$log_path"
+            else
+              cat "$log_path"
+              echo "Public Spot fetch failed; refusing partial data." >&2
+              exit 1
+            fi
+          done
+          printf 'requested_days=730\nprovider=Binance Spot public klines API\n'
+          printf 'private_api_calls=0\ncredentials_used=false\n'
+
+      - name: Run V4-AD 40-row threshold and exit economic matrix
+        run: |
+          set -euo pipefail
+          python -m scripts.run_ml_core_v4ad_threshold_optimization \
+            --input-dir "$RUNNER_TEMP/alix-v4ad-market-data" \
+            --output-report "$GITHUB_WORKSPACE/alix-v4ad-threshold-optimization-report.json" \
+            --output-trades-csv "$GITHUB_WORKSPACE/alix-v4ad-threshold-optimization-trades.csv" \
+            --output-decisions-csv "$GITHUB_WORKSPACE/alix-v4ad-threshold-optimization-decisions.csv" \
+            --days 730 \
+            --commit-sha "$GITHUB_SHA"
+
+      - name: Render and validate V4-AD report in GitHub Step Summary
+        env:
+          REPORT_PATH: \${{ github.workspace }}/alix-v4ad-threshold-optimization-report.json
+          TRADES_CSV: \${{ github.workspace }}/alix-v4ad-threshold-optimization-trades.csv
+          DECISIONS_CSV: \${{ github.workspace }}/alix-v4ad-threshold-optimization-decisions.csv
+          TARGET_SHA: \${{ github.sha }}
+        run: |
+          python - <<'PY'
+          import csv
+          import json
+          import math
+          import os
+          from pathlib import Path
+
+          report = json.loads(
+              Path(os.environ["REPORT_PATH"]).read_text(encoding="utf-8")
+          )
+          assert report["schema_version"] == "alix.ml-core.v4ad-threshold-optimization.v1"
+          assert report["commit_sha"] == os.environ["TARGET_SHA"]
+          assert report["requested_days"] == 730
+          assert report["symbols"] == ["BTCUSDT", "ETHUSDT"]
+          assert report["timeframes"] == ["1h", "4h"]
+          assert report["horizon_bars"] == 24
+          assert report["horizon_hours_by_timeframe"] == {"1h": 24.0, "4h": 96.0}
+          assert report["exit_policies_by_timeframe"] == {
+              "1h": ["TB_1.5_1.0", "TRAIL_2.0", "TRAIL_2.0_ACT1.5"],
+              "4h": ["TB_1.5_1.0", "TRAIL_2.0"],
+          }
+          assert report["modes"] == [
+              "PRIMARY_ONLY", "META_TOP_30", "META_TOP_50", "META_TOP_70"
+          ]
+          assert report["meta_model"]["target_accept_fractions"] == [0.3, 0.5, 0.7]
+          assert report["meta_model"]["same_model_reused_across_threshold_variants"] is True
+          assert report["meta_model"]["calibration_labels_used"] is False
+          assert report["meta_model"]["validation_labels_used_for_fit_or_threshold"] is False
+          assert report["evaluation_window"]["last_15_percent_final_holdout_used"] is False
+          costs = report["execution_cost_contract"]
+          assert costs["fee_bps_per_side"] == 10.0
+          assert costs["fee_type_assumption"] == "MAKER"
+          assert costs["slippage_bps_per_side"] == 5.0
+          assert costs["round_trip_cost_bps"] == 30.0
+          assert costs["assumption_only_not_limit_fill_simulation"] is True
+
+          expected = {
+              f"{symbol}|{timeframe}|24|{policy}|{mode}"
+              for symbol in ("BTCUSDT", "ETHUSDT")
+              for timeframe, policies in {
+                  "1h": ("TB_1.5_1.0", "TRAIL_2.0", "TRAIL_2.0_ACT1.5"),
+                  "4h": ("TB_1.5_1.0", "TRAIL_2.0"),
+              }.items()
+              for policy in policies
+              for mode in (
+                  "PRIMARY_ONLY", "META_TOP_30", "META_TOP_50", "META_TOP_70"
+              )
+          }
+          assert len(report["cells"]) == 40
+          assert {cell["candidate_id"] for cell in report["cells"]} == expected
+          assert len(report["meta_model"]["scenarios"]) == 30
+          for cell in report["cells"]:
+              assert cell["timeframe"] in {"1h", "4h"}
+              assert cell["horizon_bars"] == 24
+              assert cell["round_trip_cost_bps"] == 30.0
+              if cell["status"] != "COMPLETED":
+                  assert cell["mode"].startswith("META_TOP_")
+                  assert cell["trade_count"] is None
+                  assert cell["net_profit_factor"] is None
+                  assert cell["net_pnl_total_usd"] is None
+                  assert cell["acceptance_target_met"] is False
+                  continue
+              assert cell["trade_count"] >= 0
+              assert math.isfinite(float(cell["max_drawdown_percent"]))
+              assert math.isfinite(float(cell["gross_pnl_total_usd"]))
+              assert math.isfinite(float(cell["net_pnl_total_usd"]))
+              if cell["mode"].startswith("META_TOP_"):
+                  pf = cell["net_profit_factor"]
+                  pf_passed = cell["net_profit_factor_infinite_no_losses"] or (
+                      pf is not None and float(pf) > 1.5
+                  )
+                  expected_acceptance = (
+                      cell["trade_count"] > 30
+                      and pf_passed
+                      and cell["max_drawdown_percent"] <= 15.0
+                  )
+                  assert cell["acceptance_target_met"] is expected_acceptance
+
+          for scenario in report["meta_model"]["scenarios"]:
+              if scenario["status"] == "TRAINED":
+                  diagnostics = scenario["diagnostics"]
+                  assert diagnostics["labels_matured_before_outer_train_end"] is True
+                  assert diagnostics["all_primary_events_are_buy"] is True
+                  assert diagnostics["all_primary_events_are_oof"] is True
+                  assert diagnostics["fit_labels_purged_before_calibration"] is True
+                  assert diagnostics["validation_labels_used_for_fit"] is False
+                  assert diagnostics["validation_labels_used_for_threshold"] is False
+                  assert diagnostics["meta_model"]["calibration_labels_used"] is False
+                  assert diagnostics["meta_model"]["single_model_reused_across_thresholds"] is True
+
+          with Path(os.environ["TRADES_CSV"]).open(
+              newline="", encoding="utf-8"
+          ) as handle:
+              trades = list(csv.DictReader(handle))
+          for trade in trades:
+              assert trade["direction"] == "LONG"
+              assert trade["timeframe"] in {"1h", "4h"}
+              assert int(trade["horizon_bars"]) == 24
+              gross = float(trade["gross_market_pnl_usd"])
+              fees = float(trade["fees_usd"])
+              slippage = float(trade["slippage_cost_usd"])
+              net = float(trade["net_pnl_usd"])
+              assert math.isclose(
+                  gross - fees - slippage, net, rel_tol=0.0, abs_tol=0.02
+              )
+
+          with Path(os.environ["DECISIONS_CSV"]).open(
+              newline="", encoding="utf-8"
+          ) as handle:
+              decisions = list(csv.DictReader(handle))
+          for decision in decisions:
+              assert decision["split_role"] == "FORWARD_VALIDATION"
+              assert decision["timeframe"] in {"1h", "4h"}
+              assert decision["mode"] in {"META_TOP_30", "META_TOP_50", "META_TOP_70"}
+              assert decision["primary_signal"] == "BUY"
+              assert decision["executable_signal"] in {"BUY", "NO_ENTRY"}
+              assert decision["meta_filter_decision"] in {"ACCEPT", "REJECT"}
+
+          safety = report["safety"]
+          assert safety["Champion"] is None
+          assert safety["order_permission"] is False
+          assert safety["trading_authorization"] == "NO-GO"
+          assert safety["private_api_calls"] == 0
+          assert safety["real_order_attempts"] == 0
+          assert safety["orders_or_execution_api_used"] is False
+          assert safety["credentials_used"] is False
+          assert safety["short_positions_supported"] is False
+          assert safety["sequence_model_used"] is False
+          assert report["promotion_status"] == "BLOCKED_PENDING_INDEPENDENT_OOS_AND_OWNER_REVIEW"
+
+          from scripts.run_ml_core_v4ad_threshold_optimization import render_step_summary
+
+          summary = render_step_summary(report)
+          required = (
+              "| Symbol | TF | Exit | Mode |",
+              "Selected Threshold", "Trades", "Gross PF", "Net PF",
+              "Max DD %", "Top 30%", "Top 50%", "Top 70%",
+              "Champion=null", "trading_authorization=NO-GO",
+          )
+          if any(value not in summary for value in required):
+              raise SystemExit("v4ad_step_summary_required_metrics_missing")
+          with Path(os.environ["GITHUB_STEP_SUMMARY"]).open(
+              "a", encoding="utf-8"
+          ) as handle:
+              handle.write(summary)
+          Path(
+              os.environ["GITHUB_WORKSPACE"],
+              "alix-v4ad-threshold-optimization-step-summary.md",
+          ).write_text(summary, encoding="utf-8")
+          print(summary, end="")
+          PY
+
+      - name: Upload V4-AD report, trades, decisions, and exact Step Summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alix-v4ad-threshold-optimization
+          path: |
+            alix-v4ad-threshold-optimization-report.json
+            alix-v4ad-threshold-optimization-trades.csv
+            alix-v4ad-threshold-optimization-decisions.csv
+            alix-v4ad-threshold-optimization-step-summary.md
+          if-no-files-found: warn

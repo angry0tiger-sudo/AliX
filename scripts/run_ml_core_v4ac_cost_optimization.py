@@ -172,14 +172,14 @@ def _trade_management_config(policy: str) -> TradeManagementConfig:
             horizon_candles=HORIZON_BARS,
             trailing_stop_enabled=False,
         )
-    if policy == "TRAIL_2.0":
+    if policy in {"TRAIL_2.0", "TRAIL_2.0_ACT1.5"}:
         return TradeManagementConfig(
             atr_period=ATR_PERIOD,
             take_profit_atr_multiplier=4.0,
             stop_loss_atr_multiplier=2.0,
             horizon_candles=HORIZON_BARS,
             trailing_stop_enabled=True,
-            trailing_activation_atr=2.0,
+            trailing_activation_atr=1.5 if policy == "TRAIL_2.0_ACT1.5" else 2.0,
             trailing_step_atr=1.0,
         )
     raise ValueError("v4ac_exit_policy_out_of_policy")
