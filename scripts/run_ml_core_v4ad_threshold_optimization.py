@@ -83,9 +83,7 @@ def _fit_meta_model_calibration(
     primary_signals: pd.Series,
     train_end: int,
     policy: str,
-) -> tuple[
-    Any, dict[str, Any], DataFrame, DataFrame, dict[str, Any], np.ndarray
-]:
+) -> tuple[Any, dict[str, Any], DataFrame, DataFrame, dict[str, Any], np.ndarray]:
     training, diagnostics = v4ac._meta_training_rows(
         bars, features, primary_signals, train_end, policy
     )
