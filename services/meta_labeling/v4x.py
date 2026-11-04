@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import importlib
 import math
-from typing import Any, Final
+from typing import Any, Final, cast
 
 import numpy as np
 import pandas as pd
@@ -28,7 +28,7 @@ V4X_META_FEATURE_COLUMNS: Final[tuple[str, ...]] = (
 
 def _finite_feature_rows(features: DataFrame) -> np.ndarray:
     numeric = features.apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
-    return np.isfinite(numeric).all(axis=1)
+    return cast(np.ndarray, np.isfinite(numeric).all(axis=1))
 
 
 def build_sma_primary_features(
@@ -197,22 +197,24 @@ def build_costed_meta_labels(
     fee_rate = float(fee_bps_per_side) / 10_000.0
     slippage_rate = float(slippage_bps_per_side) / 10_000.0
     entry_rate = float(entry_slippage_bps) / 10_000.0
-    for row in merged.itertuples(index=False):
-        if pd.isna(row.label_end_idx) or pd.isna(row.entry_price):
+    for row in merged.to_dict(orient="records"):
+        raw_label_end = row["label_end_idx"]
+        raw_entry_price = row["entry_price"]
+        if pd.isna(raw_label_end) or pd.isna(raw_entry_price):
             continue
-        event_index = int(row.event_index)
-        label_end = int(row.label_end_idx)
+        event_index = int(row["event_index"])
+        label_end = int(raw_label_end)
         if event_index < 0 or label_end <= event_index or label_end >= len(bars):
             raise ValueError("v4x_meta_label_horizon_invalid")
-        entry_fill = float(row.entry_price)
+        entry_fill = float(raw_entry_price)
         if not math.isfinite(entry_fill) or entry_fill <= 0 or entry_rate >= 1:
             raise ValueError("v4x_meta_entry_price_invalid")
         entry_reference = entry_fill / (1.0 + entry_rate)
-        reason = str(row.exit_reason)
+        reason = str(row["exit_reason"])
         if reason == "TP_HIT":
-            exit_reference = float(row.take_profit_price)
+            exit_reference = float(row["take_profit_price"])
         elif reason in {"SL_HIT", "COLLISION"}:
-            exit_reference = float(row.stop_loss_price)
+            exit_reference = float(row["stop_loss_price"])
         elif reason == "HORIZON_EXPIRY":
             exit_reference = float(bars.iloc[label_end]["close"])
         else:
@@ -233,13 +235,13 @@ def build_costed_meta_labels(
         rows.append(
             {
                 "event_index": event_index,
-                "fold_id": int(row.fold_id),
+                "fold_id": int(row["fold_id"]),
                 "label_end_idx": label_end,
                 "meta_label": int(net_return > 0.0),
                 "net_return": float(net_return),
                 "exit_reason": reason,
-                "primary_signal": str(row.primary_signal),
-                "primary_oof": bool(row.primary_oof),
+                "primary_signal": str(row["primary_signal"]),
+                "primary_oof": bool(row["primary_oof"]),
             }
         )
     if not rows:
@@ -313,7 +315,7 @@ def _validate_meta_matrix(features: DataFrame) -> np.ndarray:
     values = features.apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
     if not np.isfinite(values).all():
         raise ValueError("v4x_meta_features_non_finite")
-    return values
+    return cast(np.ndarray, values)
 
 
 def _positive_class_probability(model: Any, features: DataFrame) -> np.ndarray:

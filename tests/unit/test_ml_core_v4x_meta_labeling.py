@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 import sys
 from types import ModuleType
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -85,9 +85,11 @@ def test_sma_primary_emits_only_bullish_crossovers_using_causal_features() -> No
     assert len(event_indices) == 1
     event_index = int(event_indices[0])
     assert event_index >= 50
-    assert features.loc[event_index, "%-primary_sma_spread_pct"] > 0
+    assert cast(float, features.loc[event_index, "%-primary_sma_spread_pct"]) > 0
     assert set(V4X_META_FEATURE_COLUMNS).issubset(features.columns)
-    assert features.loc[event_index, "%-primary_close_vs_sma_slow_pct"] > 0
+    assert cast(
+        float, features.loc[event_index, "%-primary_close_vs_sma_slow_pct"]
+    ) > 0
     assert signal.dtype == bool
 
 
@@ -122,8 +124,12 @@ def test_oof_primary_events_are_disjoint_chronological_test_folds() -> None:
         result["primary_history_end_index"].to_numpy(dtype=int)
         <= result["event_index"].to_numpy(dtype=int)
     ).all()
-    for row in result.itertuples(index=False):
-        assert row.fold_start_index <= row.event_index < row.fold_stop_index
+    for row in result.to_dict(orient="records"):
+        assert (
+            int(row["fold_start_index"])
+            <= int(row["event_index"])
+            < int(row["fold_stop_index"])
+        )
 
 
 def test_oof_generation_rejects_invalid_or_empty_windows() -> None:
@@ -167,8 +173,8 @@ def test_costed_meta_labels_use_net_result_and_only_primary_buy_oof_rows() -> No
     )
 
     assert result["meta_label"].tolist() == [1, 0]
-    assert result.loc[0, "net_return"] > 0
-    assert result.loc[1, "net_return"] < 0
+    assert cast(float, result.loc[0, "net_return"]) > 0
+    assert cast(float, result.loc[1, "net_return"]) < 0
     assert result["primary_signal"].eq("BUY").all()
     assert result["primary_oof"].all()
 
