@@ -84,6 +84,7 @@ def build_sma_primary_features(
     signals = crossover.fillna(False).to_numpy(dtype=bool) & finite
     return result, Series(signals, name="primary_buy_signal", dtype=bool)
 
+
 def _validate_oof_configuration(
     row_count: int,
     start_index: int,
@@ -180,6 +181,7 @@ def generate_oof_primary_events(
     _validate_oof_primary_event_frame(result)
     return result
 
+
 def _validate_primary_events(primary_events: DataFrame) -> None:
     required = {"event_index", "primary_signal", "primary_oof", "fold_id"}
     if not required.issubset(primary_events.columns):
@@ -267,9 +269,7 @@ def _costed_meta_label_record(
     exit_fee = exit_fill * fee_rate / entry_reference
     entry_slippage = (entry_fill - entry_reference) / entry_reference
     exit_slippage = (exit_reference - exit_fill) / entry_reference
-    net_return = (
-        gross_return - entry_fee - exit_fee - entry_slippage - exit_slippage
-    )
+    net_return = gross_return - entry_fee - exit_fee - entry_slippage - exit_slippage
     if not math.isfinite(net_return):
         raise ValueError("v4x_meta_net_return_invalid")
     return {
@@ -346,6 +346,7 @@ def build_costed_meta_labels(
     ]
     return _costed_meta_label_frame(records)
 
+
 def _validate_meta_training_events(
     events: DataFrame,
     outer_train_end_index: int,
@@ -364,9 +365,10 @@ def _validate_meta_training_events(
     fraction = float(calibration_fraction)
     if not math.isfinite(fraction) or not 0 < fraction < 0.5:
         raise ValueError("v4x_meta_calibration_fraction_invalid")
-    if events["event_index"].duplicated().any() or not events[
-        "event_index"
-    ].is_monotonic_increasing:
+    if (
+        events["event_index"].duplicated().any()
+        or not events["event_index"].is_monotonic_increasing
+    ):
         raise ValueError("v4x_meta_training_event_order_invalid")
     if not events["primary_signal"].eq("BUY").all():
         raise ValueError("v4x_meta_training_requires_primary_buy_only")
@@ -391,9 +393,7 @@ def _build_meta_fit_calibration_frames(
     calibration = events.iloc[-calibration_count:].copy()
     calibration_start = int(calibration["event_index"].iloc[0])
     fit_candidates = events.iloc[:-calibration_count].copy()
-    fit = fit_candidates.loc[
-        fit_candidates["label_end_idx"] < calibration_start
-    ].copy()
+    fit = fit_candidates.loc[fit_candidates["label_end_idx"] < calibration_start].copy()
     return fit, calibration, calibration_start
 
 
@@ -435,6 +435,7 @@ def split_meta_fit_calibration(
         fit, calibration, calibration_start, minimum_fit_rows, minimum_class_rows
     )
     return fit.reset_index(drop=True), calibration.reset_index(drop=True)
+
 
 def _validate_meta_matrix(features: DataFrame) -> np.ndarray:
     if features.empty or not features.columns.is_unique:
