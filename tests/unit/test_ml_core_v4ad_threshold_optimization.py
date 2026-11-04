@@ -177,7 +177,7 @@ def test_meta_threshold_sweep_fits_one_model_and_uses_calibration_only(
     monkeypatch.setattr(
         v4ad,
         "predict_meta_probabilities",
-        lambda model, data: np.asarray([0.1, 0.4, 0.6, 0.9], dtype=float),
+        lambda model, data: np.asarray([0.9], dtype=float),
     )
     observed_targets: list[float] = []
 
