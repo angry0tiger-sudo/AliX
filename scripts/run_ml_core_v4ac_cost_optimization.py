@@ -6,6 +6,7 @@ import argparse
 import csv
 import json
 import math
+from itertools import product
 from pathlib import Path
 from statistics import median
 from typing import Any
@@ -720,24 +721,37 @@ def render_step_summary(report: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _validate_report_matrix(
-    cells: list[dict[str, Any]],
-    meta_scenarios: list[dict[str, Any]],
-) -> None:
+def _validate_candidate_ids(cells: list[dict[str, Any]]) -> None:
     expected = {
         f"{symbol}|{timeframe}|{HORIZON_BARS}|{policy}|{mode}"
-        for symbol in SYMBOLS
-        for timeframe in TIMEFRAMES
-        for policy in EXIT_POLICIES
-        for mode in MODES
+        for symbol, timeframe, policy, mode in product(
+            SYMBOLS, TIMEFRAMES, EXIT_POLICIES, MODES
+        )
     }
     observed = {str(item["candidate_id"]) for item in cells}
     if len(cells) != 32 or observed != expected:
         raise ValueError("v4ac_candidate_matrix_incomplete")
+
+
+def _validate_cell_timeframes(cells: list[dict[str, Any]]) -> None:
     if any(item["timeframe"] not in TIMEFRAMES for item in cells):
         raise ValueError("v4ac_report_timeframe_out_of_policy")
+
+
+def _validate_meta_scenario_count(
+    meta_scenarios: list[dict[str, Any]],
+) -> None:
     if len(meta_scenarios) != 16:
         raise ValueError("v4ac_meta_scenario_matrix_incomplete")
+
+
+def _validate_report_matrix(
+    cells: list[dict[str, Any]],
+    meta_scenarios: list[dict[str, Any]],
+) -> None:
+    _validate_candidate_ids(cells)
+    _validate_cell_timeframes(cells)
+    _validate_meta_scenario_count(meta_scenarios)
 
 
 def _primary_model_report() -> dict[str, Any]:
