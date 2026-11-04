@@ -104,17 +104,13 @@ def build_v4y_primary_features(
     _validate_feature_inputs(bars, candle_features)
     close = _validated_close(bars)
 
-    middle = close.rolling(
-        window=bollinger_period, min_periods=bollinger_period
-    ).mean()
+    middle = close.rolling(window=bollinger_period, min_periods=bollinger_period).mean()
     deviation = close.rolling(
         window=bollinger_period, min_periods=bollinger_period
     ).std(ddof=0)
     upper = middle + float(standard_deviations) * deviation
     lower = middle - float(standard_deviations) * deviation
-    ema = close.ewm(
-        span=ema_period, adjust=False, min_periods=ema_period
-    ).mean()
+    ema = close.ewm(span=ema_period, adjust=False, min_periods=ema_period).mean()
 
     breakout = (close > upper) & (close.shift(1) <= upper.shift(1))
     trend_aligned = close > ema
@@ -165,9 +161,7 @@ def evaluate_primary_train_sample_gate(
     ):
         raise ValueError("v4y_primary_sample_gate_minimum_invalid")
 
-    observed = int(
-        primary_buy_signal.iloc[train_start_index:train_end_index].sum()
-    )
+    observed = int(primary_buy_signal.iloc[train_start_index:train_end_index].sum())
     passed = observed >= minimum_signal_count
     return {
         "status": "PASS" if passed else "SKIPPED_INSUFFICIENT_PRIMARY_SIGNALS",

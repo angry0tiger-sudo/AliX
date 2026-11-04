@@ -148,8 +148,7 @@ def _training_oof_events(
         validate="one_to_one",
     ).sort_values("event_index")
     training = training.loc[
-        (training["event_index"] < train_end)
-        & (training["label_end_idx"] < train_end)
+        (training["event_index"] < train_end) & (training["label_end_idx"] < train_end)
     ].reset_index(drop=True)
     diagnostics = {
         "primary_signal_generation": V4Y_PRIMARY_SIGNAL_GENERATION,
@@ -396,9 +395,7 @@ def _run_candidate(
     candle_features = build_feature_profiles(
         bars, profile_names=(V4Y_FEATURE_PROFILE,)
     )[V4Y_FEATURE_PROFILE]
-    features, primary_buy_signal = build_v4y_primary_features(
-        bars, candle_features
-    )
+    features, primary_buy_signal = build_v4y_primary_features(bars, candle_features)
     if not set(V4Y_META_FEATURE_COLUMNS).issubset(features.columns):
         raise ValueError("v4y_primary_meta_feature_schema_invalid")
     full_signal_count = int(primary_buy_signal.sum())
@@ -409,9 +406,7 @@ def _run_candidate(
     )
     primary_signal_counts = {
         "total_primary_buy_event_count": full_signal_count,
-        "train_primary_buy_event_count": int(
-            train_gate["observed_primary_buy_count"]
-        ),
+        "train_primary_buy_event_count": int(train_gate["observed_primary_buy_count"]),
         "forward_validation_primary_buy_event_count": int(
             primary_buy_signal.iloc[train_end:validation_end].sum()
         ),
@@ -517,9 +512,7 @@ def _run_candidate(
             "fit_start_event_index": int(fit_rows["event_index"].min()),
             "fit_end_event_index": int(fit_rows["event_index"].max()),
             "calibration_rows": int(len(calibration_rows)),
-            "calibration_start_event_index": int(
-                calibration_rows["event_index"].min()
-            ),
+            "calibration_start_event_index": int(calibration_rows["event_index"].min()),
             "fit_max_label_end_index": int(fit_rows["label_end_idx"].max()),
             "fit_labels_end_before_calibration": bool(
                 int(fit_rows["label_end_idx"].max())

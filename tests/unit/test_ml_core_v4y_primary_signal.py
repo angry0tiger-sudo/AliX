@@ -74,9 +74,7 @@ def test_primary_signal_prefix_is_invariant_to_future_price_changes() -> None:
 
 
 def test_bollinger_breakout_is_filtered_when_price_is_below_ema200() -> None:
-    close = np.concatenate(
-        (np.full(200, 100.0), np.full(20, 80.0), np.full(100, 90.0))
-    )
+    close = np.concatenate((np.full(200, 100.0), np.full(20, 80.0), np.full(100, 90.0)))
     bars = _bars(close)
     features, signal = build_v4y_primary_features(
         bars, DataFrame({"base_feature": np.arange(len(close), dtype=float)})
@@ -85,9 +83,7 @@ def test_bollinger_breakout_is_filtered_when_price_is_below_ema200() -> None:
     upper_distance = cast(
         float, features.loc[220, "%-primary_close_vs_bollinger_upper_pct"]
     )
-    trend_distance = cast(
-        float, features.loc[220, "%-primary_close_vs_ema200_pct"]
-    )
+    trend_distance = cast(float, features.loc[220, "%-primary_close_vs_ema200_pct"])
     assert upper_distance > 0
     assert trend_distance < 0
     assert not bool(signal.iloc[220])
@@ -102,9 +98,7 @@ def test_bollinger_primary_rejects_invalid_periods_and_feature_schema() -> None:
     with pytest.raises(ValueError, match="deviation_configuration_invalid"):
         build_v4y_primary_features(bars, base, standard_deviations=0.0)
     with pytest.raises(ValueError, match="target_column_in_primary_features"):
-        build_v4y_primary_features(
-            bars, DataFrame({"&-future_return": np.zeros(260)})
-        )
+        build_v4y_primary_features(bars, DataFrame({"&-future_return": np.zeros(260)}))
     with pytest.raises(ValueError, match="input_alignment_invalid"):
         build_v4y_primary_features(bars, DataFrame({"x": [1.0]}))
     with pytest.raises(ValueError, match="feature_columns_must_be_unique"):
@@ -116,9 +110,7 @@ def test_bollinger_primary_rejects_invalid_periods_and_feature_schema() -> None:
             bars, DataFrame({V4Y_META_FEATURE_COLUMNS[0]: np.ones(260)})
         )
     with pytest.raises(ValueError, match="close_column_missing"):
-        build_v4y_primary_features(
-            bars.drop(columns=["close"]), base
-        )
+        build_v4y_primary_features(bars.drop(columns=["close"]), base)
 
 
 def test_bollinger_primary_rejects_boolean_parameters_and_empty_bars() -> None:
@@ -185,15 +177,11 @@ def test_candidate_sample_gate_skips_before_meta_training(
     signals.iloc[200:249] = True
 
     monkeypatch.setattr(v4y, "resample_ohlcv", lambda source, timeframe: bars)
-    monkeypatch.setattr(
-        v4y, "_outer_boundaries", lambda rows, horizon: (250, 280)
-    )
+    monkeypatch.setattr(v4y, "_outer_boundaries", lambda rows, horizon: (250, 280))
     monkeypatch.setattr(
         v4y,
         "build_feature_profiles",
-        lambda frame, profile_names: {
-            "Combined": DataFrame({"base": np.ones(300)})
-        },
+        lambda frame, profile_names: {"Combined": DataFrame({"base": np.ones(300)})},
     )
     monkeypatch.setattr(
         v4y,
@@ -205,9 +193,7 @@ def test_candidate_sample_gate_skips_before_meta_training(
         raise AssertionError("meta_training_must_not_run_before_sample_gate")
 
     monkeypatch.setattr(v4y, "_training_oof_events", unexpected_training)
-    candidate = v4y._run_candidate(
-        symbol="BTCUSDT", timeframe="15m", source_bars=bars
-    )
+    candidate = v4y._run_candidate(symbol="BTCUSDT", timeframe="15m", source_bars=bars)
 
     assert candidate["status"] == "SKIPPED_INSUFFICIENT_PRIMARY_SIGNALS"
     observed_train_signals = candidate["primary_signal_counts"][
@@ -254,9 +240,7 @@ def test_v4y_oof_events_reuse_chronological_folds_with_correct_provenance() -> N
     assert result["fold_id"].tolist() == [0, 0, 1, 2, 3]
     assert result["primary_signal"].eq("BUY").all()
     assert result["primary_oof"].all()
-    assert result["primary_signal_generation"].eq(
-        V4Y_PRIMARY_SIGNAL_GENERATION
-    ).all()
+    assert result["primary_signal_generation"].eq(V4Y_PRIMARY_SIGNAL_GENERATION).all()
     assert (
         result["primary_history_end_index"].to_numpy(dtype=int)
         <= result["event_index"].to_numpy(dtype=int)
@@ -266,17 +250,13 @@ def test_v4y_oof_events_reuse_chronological_folds_with_correct_provenance() -> N
 def test_v4y_oof_events_reject_empty_and_invalid_windows() -> None:
     signal = Series(False, index=range(20), dtype=bool)
     with pytest.raises(ValueError, match="oof_window_invalid"):
-        generate_v4y_oof_primary_events(
-            signal, start_index=10, stop_index=10
-        )
+        generate_v4y_oof_primary_events(signal, start_index=10, stop_index=10)
     with pytest.raises(ValueError, match="oof_fold_configuration_invalid"):
         generate_v4y_oof_primary_events(
             signal, start_index=0, stop_index=3, fold_count=4
         )
     with pytest.raises(ValueError, match="oof_primary_signals_empty"):
-        generate_v4y_oof_primary_events(
-            signal, start_index=0, stop_index=20
-        )
+        generate_v4y_oof_primary_events(signal, start_index=0, stop_index=20)
 
 
 def test_timeframe_horizons_preserve_24_hour_label_window() -> None:
@@ -353,9 +333,9 @@ def test_v4y_step_summary_reports_signal_counts_thresholds_and_economics() -> No
 
 
 def test_v4y_workflow_is_branch_scoped_and_keeps_ci_and_safety_gates() -> None:
-    workflow = Path(
-        ".github/workflows/ml-core-v4y-primary-signal.yml"
-    ).read_text(encoding="utf-8")
+    workflow = Path(".github/workflows/ml-core-v4y-primary-signal.yml").read_text(
+        encoding="utf-8"
+    )
 
     assert "research/ml-core-v4y-primary-signal" in workflow
     assert "Require standard CI success for this exact V4-Y commit" in workflow
