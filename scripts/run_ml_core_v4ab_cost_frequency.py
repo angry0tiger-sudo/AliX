@@ -458,11 +458,13 @@ def _decision_branch(
 
 
 def _cell_is_completed(item: dict[str, Any]) -> bool:
-    return item.get("status", "COMPLETED") == "COMPLETED"
+    status = item.get("status", "COMPLETED")
+    return isinstance(status, str) and status == "COMPLETED"
 
 
 def _cell_is_skipped(item: dict[str, Any]) -> bool:
-    return item.get("status") == "SKIPPED_WARNING"
+    status = item.get("status")
+    return isinstance(status, str) and status == "SKIPPED_WARNING"
 
 
 def _decision_rule(cells: list[dict[str, Any]]) -> dict[str, Any]:

@@ -457,6 +457,16 @@ def test_summary_marks_skipped_cell_n_a_and_does_not_call_it_zero_trades() -> No
     assert "N/A is not zero trades" in summary
 
 
+
+def test_cell_status_predicates_reject_non_string_values() -> None:
+    assert v4ab._cell_is_completed({})
+    assert v4ab._cell_is_completed({"status": "COMPLETED"})
+    assert not v4ab._cell_is_completed({"status": None})
+    assert not v4ab._cell_is_completed({"status": 1})
+    assert v4ab._cell_is_skipped({"status": "SKIPPED_WARNING"})
+    assert not v4ab._cell_is_skipped({"status": []})
+    assert not v4ab._cell_is_skipped({})
+
 def test_csv_writer_handles_rows_and_empty_result(tmp_path: object) -> None:
     from pathlib import Path
 
