@@ -706,7 +706,8 @@ def render_step_summary(report: dict[str, Any]) -> str:
         item["mode"] == "META_FILTERED" and item["status"] != "COMPLETED"
         for item in report["cells"]
     )
-    trained = sum(item["status"] == "TRAINED" for item in report["meta_scenarios"])
+    meta_scenarios = report["meta_model"]["scenarios"]
+    trained = sum(item["status"] == "TRAINED" for item in meta_scenarios)
     lines.extend(
         [
             "",

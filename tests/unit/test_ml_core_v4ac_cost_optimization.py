@@ -630,6 +630,7 @@ def test_build_report_requires_exact_32_cells_and_sets_non_go_safety() -> None:
     }
     assert report["execution_cost_contract"]["round_trip_cost_bps"] == 30.0
     assert report["meta_model"]["enabled"] is True
+    assert report["meta_model"]["scenarios"] == scenarios
     assert report["primary_model"]["signal_changed_from_v4ab"] is False
     assert report["safety"]["Champion"] is None
     assert report["safety"]["order_permission"] is False
@@ -655,7 +656,7 @@ def test_step_summary_contains_32_rows_modes_costs_and_safety() -> None:
         "schema_version": v4ac.SCHEMA,
         "commit_sha": "a" * 40,
         "cells": cells,
-        "meta_scenarios": scenarios,
+        "meta_model": {"scenarios": scenarios},
     }
     rendered = v4ac.render_step_summary(report)
     assert rendered.count("| BTCUSDT |") + rendered.count("| ETHUSDT |") == 32
