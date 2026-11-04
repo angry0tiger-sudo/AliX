@@ -153,34 +153,44 @@ def _training_oof_events(
     return training, diagnostics
 
 
-def _validation_decision_signals(
-    bars: DataFrame,
-    features: DataFrame,
+def _validation_primary_event_indices(
     primary_buy_signal: pd.Series,
     train_end: int,
     validation_end: int,
-    model: Any,
-    threshold: float,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, int]]:
-    """Score validation BUY events; all other bars remain explicit NO_ENTRY."""
+) -> list[int]:
     final_entry_index = validation_end - V4X_HORIZON_CANDLES - 1
-    validation_event_indices = [
+    return [
         index
         for index in range(train_end, final_entry_index + 1)
         if bool(primary_buy_signal.iloc[index])
     ]
-    probabilities = np.asarray([], dtype=float)
-    if validation_event_indices:
-        event_features = features.iloc[validation_event_indices].reset_index(drop=True)
-        probabilities = predict_meta_probabilities(model, event_features)
-    probability_by_index = {
+
+
+def _validation_probability_by_index(
+    features: DataFrame,
+    event_indices: list[int],
+    model: Any,
+) -> dict[int, float]:
+    if not event_indices:
+        return {}
+    event_features = features.iloc[event_indices].reset_index(drop=True)
+    probabilities = predict_meta_probabilities(model, event_features)
+    return {
         index: float(probability)
-        for index, probability in zip(
-            validation_event_indices, probabilities, strict=True
-        )
+        for index, probability in zip(event_indices, probabilities, strict=True)
     }
-    decisions: list[dict[str, Any]] = []
+
+
+def _validation_row_outputs(
+    bars: DataFrame,
+    primary_buy_signal: pd.Series,
+    train_end: int,
+    validation_end: int,
+    probability_by_index: dict[int, float],
+    threshold: float,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], int]:
     signals: list[dict[str, Any]] = []
+    decisions: list[dict[str, Any]] = []
     accepted_count = 0
     for row_index in range(train_end, validation_end):
         timestamp = pd.Timestamp(bars["date"].iloc[row_index])
@@ -218,16 +228,42 @@ def _validation_decision_signals(
                     "split_role": "FORWARD_VALIDATION",
                 }
             )
+    return signals, decisions, accepted_count
+
+
+def _validation_decision_signals(
+    bars: DataFrame,
+    features: DataFrame,
+    primary_buy_signal: pd.Series,
+    train_end: int,
+    validation_end: int,
+    model: Any,
+    threshold: float,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, int]]:
+    """Score validation BUY events; all other bars remain explicit NO_ENTRY."""
+    event_indices = _validation_primary_event_indices(
+        primary_buy_signal, train_end, validation_end
+    )
+    probability_by_index = _validation_probability_by_index(
+        features, event_indices, model
+    )
+    signals, decisions, accepted_count = _validation_row_outputs(
+        bars,
+        primary_buy_signal,
+        train_end,
+        validation_end,
+        probability_by_index,
+        threshold,
+    )
     if not signals:
         raise ValueError("v4x_validation_signal_window_empty")
     counts = {
-        "primary_buy_event_count": len(validation_event_indices),
+        "primary_buy_event_count": len(event_indices),
         "meta_accepted_buy_count": accepted_count,
-        "meta_rejected_buy_count": len(validation_event_indices) - accepted_count,
+        "meta_rejected_buy_count": len(event_indices) - accepted_count,
         "explicit_no_entry_bar_count": len(signals) - accepted_count,
     }
     return signals, decisions, counts
-
 
 def _candidate_metrics(replay: dict[str, Any]) -> dict[str, Any]:
     metrics = replay["metrics"]
@@ -506,23 +542,17 @@ def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         writer.writerows(rows)
 
 
-def run_v4x(
-    input_dir: Path,
-    report_path: Path,
-    trades_path: Path,
-    decisions_path: Path,
-    *,
-    days: int,
-    commit_sha: str,
-) -> dict[str, Any]:
+def _validate_v4x_run_request(days: int, commit_sha: str) -> None:
     if days != 730:
         raise ValueError("v4x_dataset_window_must_be_730_days")
     if len(commit_sha) != 40 or any(
         char not in "0123456789abcdef" for char in commit_sha
     ):
         raise ValueError("v4x_commit_sha_invalid")
-    datasets, provenance = _load_diagnostic_datasets(input_dir, days, commit_sha)
-    candidates = [
+
+
+def _run_v4x_candidates(datasets: dict[str, DataFrame]) -> list[dict[str, Any]]:
+    return [
         _run_candidate(
             symbol=symbol,
             timeframe=timeframe,
@@ -531,8 +561,16 @@ def run_v4x(
         for symbol in SYMBOLS
         for timeframe in V4X_TIMEFRAMES
     ]
+
+
+def _build_v4x_report(
+    commit_sha: str,
+    days: int,
+    provenance: list[dict[str, Any]],
+    candidates: list[dict[str, Any]],
+) -> dict[str, Any]:
     trained = [item for item in candidates if item["status"] == "TRAINED"]
-    report = {
+    return {
         "schema_version": V4X_REPORT_SCHEMA,
         "commit_sha": commit_sha,
         "requested_days": days,
@@ -610,20 +648,32 @@ def run_v4x(
             "sequence_model_used": False,
         },
     }
+
+
+def _write_v4x_outputs(
+    report: dict[str, Any],
+    report_path: Path,
+    trades_path: Path,
+    decisions_path: Path,
+) -> None:
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(
         json.dumps(report, indent=2, sort_keys=True, allow_nan=False) + "\n",
         encoding="utf-8",
     )
-    _write_csv(trades_path, [trade for item in candidates for trade in item["trades"]])
-    _write_csv(
-        decisions_path,
-        [row for item in candidates for row in item["decisions"]],
-    )
+    trade_rows = [trade for item in report["candidates"] for trade in item["trades"]]
+    decision_rows = [
+        row for item in report["candidates"] for row in item["decisions"]
+    ]
+    _write_csv(trades_path, trade_rows)
+    _write_csv(decisions_path, decision_rows)
+
+
+def _print_v4x_run_summary(report: dict[str, Any]) -> None:
     print(
         json.dumps(
             {
-                "commit_sha": commit_sha,
+                "commit_sha": report["commit_sha"],
                 "candidate_count": report["candidate_count"],
                 "trained_candidate_count": report["trained_candidate_count"],
                 "promotion_status": report["promotion_status"],
@@ -636,8 +686,24 @@ def run_v4x(
             sort_keys=True,
         )
     )
-    return report
 
+
+def run_v4x(
+    input_dir: Path,
+    report_path: Path,
+    trades_path: Path,
+    decisions_path: Path,
+    *,
+    days: int,
+    commit_sha: str,
+) -> dict[str, Any]:
+    _validate_v4x_run_request(days, commit_sha)
+    datasets, provenance = _load_diagnostic_datasets(input_dir, days, commit_sha)
+    candidates = _run_v4x_candidates(datasets)
+    report = _build_v4x_report(commit_sha, days, provenance, candidates)
+    _write_v4x_outputs(report, report_path, trades_path, decisions_path)
+    _print_v4x_run_summary(report)
+    return report
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
