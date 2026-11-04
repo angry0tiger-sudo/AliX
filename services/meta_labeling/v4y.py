@@ -131,6 +131,37 @@ def build_v4y_primary_features(
     return result, Series(signals, name="primary_buy_signal", dtype=bool)
 
 
+def _validate_primary_sample_signal_series(primary_buy_signal: Series) -> None:
+    if not pd.api.types.is_bool_dtype(primary_buy_signal.dtype):
+        raise ValueError("v4y_primary_sample_gate_requires_boolean_signals")
+    if primary_buy_signal.isna().any():
+        raise ValueError("v4y_primary_sample_gate_signals_must_not_be_null")
+
+
+def _validate_primary_sample_window(
+    primary_buy_signal: Series,
+    train_start_index: int,
+    train_end_index: int,
+) -> None:
+    if isinstance(train_start_index, bool) or isinstance(train_end_index, bool):
+        raise ValueError("v4y_primary_sample_gate_window_invalid")
+    if not isinstance(train_start_index, int) or not isinstance(train_end_index, int):
+        raise ValueError("v4y_primary_sample_gate_window_invalid")
+    if train_start_index < 0 or train_end_index > len(primary_buy_signal):
+        raise ValueError("v4y_primary_sample_gate_window_invalid")
+    if train_end_index <= train_start_index:
+        raise ValueError("v4y_primary_sample_gate_window_invalid")
+
+
+def _validate_primary_sample_minimum(minimum_signal_count: int) -> None:
+    if isinstance(minimum_signal_count, bool):
+        raise ValueError("v4y_primary_sample_gate_minimum_invalid")
+    if not isinstance(minimum_signal_count, int):
+        raise ValueError("v4y_primary_sample_gate_minimum_invalid")
+    if minimum_signal_count < 1:
+        raise ValueError("v4y_primary_sample_gate_minimum_invalid")
+
+
 def evaluate_primary_train_sample_gate(
     primary_buy_signal: Series,
     *,
@@ -139,27 +170,11 @@ def evaluate_primary_train_sample_gate(
     minimum_signal_count: int = V4Y_MINIMUM_PRIMARY_TRAIN_SIGNALS,
 ) -> dict[str, int | bool | str]:
     """Fail closed before meta-label training when Train has fewer than 50 BUYs."""
-    if not pd.api.types.is_bool_dtype(primary_buy_signal.dtype):
-        raise ValueError("v4y_primary_sample_gate_requires_boolean_signals")
-    if primary_buy_signal.isna().any():
-        raise ValueError("v4y_primary_sample_gate_signals_must_not_be_null")
-    invalid_indices = (
-        isinstance(train_start_index, bool)
-        or isinstance(train_end_index, bool)
-        or not isinstance(train_start_index, int)
-        or not isinstance(train_end_index, int)
-        or train_start_index < 0
-        or train_end_index > len(primary_buy_signal)
-        or train_end_index <= train_start_index
+    _validate_primary_sample_signal_series(primary_buy_signal)
+    _validate_primary_sample_window(
+        primary_buy_signal, train_start_index, train_end_index
     )
-    if invalid_indices:
-        raise ValueError("v4y_primary_sample_gate_window_invalid")
-    if (
-        isinstance(minimum_signal_count, bool)
-        or not isinstance(minimum_signal_count, int)
-        or minimum_signal_count < 1
-    ):
-        raise ValueError("v4y_primary_sample_gate_minimum_invalid")
+    _validate_primary_sample_minimum(minimum_signal_count)
 
     observed = int(primary_buy_signal.iloc[train_start_index:train_end_index].sum())
     passed = observed >= minimum_signal_count
@@ -171,7 +186,6 @@ def evaluate_primary_train_sample_gate(
         "train_start_index": train_start_index,
         "train_end_index_exclusive": train_end_index,
     }
-
 
 def generate_v4y_oof_primary_events(
     primary_buy_signal: Series,

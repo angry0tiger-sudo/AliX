@@ -571,7 +571,100 @@ def _run_candidate(
     }
 
 
+def _format_summary_threshold(value: Any) -> str:
+    if value is None:
+        return "N/A"
+    return f"{float(value):.6f}"
+
+
+def _format_summary_fit_cal(item: dict[str, Any]) -> str:
+    if item["status"] != "TRAINED":
+        return "N/A"
+    training = item.get("training_diagnostics", {})
+    return f"{training.get('fit_rows', 0)} / {training.get('calibration_rows', 0)}"
+
+
+def _format_summary_win_rate(value: Any) -> str:
+    if value is None:
+        return "N/A"
+    return f"{float(value):.2%}"
+
+
+def _format_summary_profit_factor(metrics: dict[str, Any]) -> str:
+    if metrics.get("net_profit_factor_infinite_no_losses"):
+        return "INF"
+    value = metrics.get("net_profit_factor")
+    if value is None:
+        return "N/A"
+    return f"{float(value):.4f}"
+
+
+def _format_summary_drawdown(value: Any) -> str:
+    if value is None:
+        return "N/A"
+    return f"{float(value):.2f}%"
+
+
+def _render_candidate_summary_row(item: dict[str, Any]) -> str:
+    counts = item.get("primary_signal_counts", {})
+    validation = item.get("validation_signal_counts", {})
+    metrics = item.get("metrics", {})
+    threshold = _format_summary_threshold(
+        item.get("selected_meta_probability_threshold")
+    )
+    fit_cal = _format_summary_fit_cal(item)
+    win_rate = _format_summary_win_rate(metrics.get("win_rate"))
+    profit_factor = _format_summary_profit_factor(metrics)
+    drawdown = _format_summary_drawdown(metrics.get("max_drawdown_percent"))
+    return (
+        f"| {item['candidate_id']} | {item['status']} "
+        f"| {counts.get('total_primary_buy_event_count', 0)} "
+        f"| {counts.get('train_primary_buy_event_count', 0)} "
+        f"| {counts.get('matured_oof_train_buy_event_count', 0)} "
+        f"| {fit_cal} | {threshold} "
+        f"| {validation.get('primary_buy_event_count', 0)} "
+        f"| {validation.get('meta_accepted_buy_count', 0)} "
+        f"| {metrics.get('trade_count', 0)} | {win_rate} | {profit_factor} "
+        f"| {float(metrics.get('net_pnl_usd', 0.0)):.2f} | {drawdown} |"
+    )
+
+
+def _render_candidate_summary_section(item: dict[str, Any]) -> list[str]:
+    lines = [_render_candidate_summary_row(item)]
+    skip_reason = item.get("skip_reason")
+    if skip_reason:
+        lines.append(f"\nSkipped: `{skip_reason}`.")
+    return lines
+
+
+def _candidate_met_primary_signal_target(item: dict[str, Any]) -> bool:
+    counts = item.get("primary_signal_counts", {})
+    return int(counts.get("total_primary_buy_event_count", 0)) >= 100
+
+
+def _candidate_passed_primary_sample_gate(item: dict[str, Any]) -> bool:
+    gate = item.get("primary_sample_gate", {})
+    return bool(gate.get("passed"))
+
+
+def _candidate_passed_economic_gate(item: dict[str, Any]) -> bool:
+    metrics = item.get("metrics", {})
+    return bool(metrics.get("economic_candidate_gate_passed"))
+
+
+def _summary_aggregate_counts(
+    candidates: list[dict[str, Any]],
+) -> tuple[int, int, int]:
+    signal_targets = sum(_candidate_met_primary_signal_target(item) for item in candidates)
+    sample_gate_passed = sum(
+        _candidate_passed_primary_sample_gate(item) for item in candidates
+    )
+    economic_passed = sum(_candidate_passed_economic_gate(item) for item in candidates)
+    return signal_targets, sample_gate_passed, economic_passed
+
+
 def _render_summary(report: dict[str, Any]) -> str:
+    candidates = report["candidates"]
     lines = [
         "## AliX V4-Y Bollinger / EMA200 Primary + LightGBM Meta-Labeling Evaluation",
         "",
@@ -589,66 +682,18 @@ def _render_summary(report: dict[str, Any]) -> str:
         "| Candidate | Status | Primary BUY 730d | Train BUY | Matured OOF | Fit / Cal | Threshold | Validation BUY | Accepted | Trades | Win Rate | Net PF | Net PnL USD | Max DD |",
         "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
-    for item in report["candidates"]:
-        counts = item.get("primary_signal_counts", {})
-        training = item.get("training_diagnostics", {})
-        validation = item.get("validation_signal_counts", {})
-        metrics = item.get("metrics", {})
-        threshold = item.get("selected_meta_probability_threshold")
-        threshold_text = "N/A" if threshold is None else f"{float(threshold):.6f}"
-        fit_cal = (
-            f"{training.get('fit_rows', 0)} / {training.get('calibration_rows', 0)}"
-            if item["status"] == "TRAINED"
-            else "N/A"
-        )
-        win_rate = metrics.get("win_rate")
-        win_text = "N/A" if win_rate is None else f"{float(win_rate):.2%}"
-        pf_value = metrics.get("net_profit_factor")
-        pf = (
-            "INF"
-            if metrics.get("net_profit_factor_infinite_no_losses")
-            else "N/A"
-            if pf_value is None
-            else f"{float(pf_value):.4f}"
-        )
-        dd = metrics.get("max_drawdown_percent")
-        dd_text = "N/A" if dd is None else f"{float(dd):.2f}%"
-        lines.append(
-            f"| {item['candidate_id']} | {item['status']} "
-            f"| {counts.get('total_primary_buy_event_count', 0)} "
-            f"| {counts.get('train_primary_buy_event_count', 0)} "
-            f"| {counts.get('matured_oof_train_buy_event_count', 0)} "
-            f"| {fit_cal} | {threshold_text} "
-            f"| {validation.get('primary_buy_event_count', 0)} "
-            f"| {validation.get('meta_accepted_buy_count', 0)} "
-            f"| {metrics.get('trade_count', 0)} | {win_text} | {pf} "
-            f"| {float(metrics.get('net_pnl_usd', 0.0)):.2f} | {dd_text} |"
-        )
-        if item.get("skip_reason"):
-            lines.append(f"\nSkipped: `{item['skip_reason']}`.")
-    passed = sum(
-        bool(item["metrics"].get("economic_candidate_gate_passed"))
-        for item in report["candidates"]
+    for item in candidates:
+        lines.extend(_render_candidate_summary_section(item))
+    signal_targets, sample_gate_passed, economic_passed = _summary_aggregate_counts(
+        candidates
     )
-    signal_targets = sum(
-        int(
-            item.get("primary_signal_counts", {}).get(
-                "total_primary_buy_event_count", 0
-            )
-        )
-        >= 100
-        for item in report["candidates"]
-    )
-    sample_gate_passed = sum(
-        bool(item.get("primary_sample_gate", {}).get("passed"))
-        for item in report["candidates"]
-    )
+    candidate_count = len(candidates)
     lines.extend(
         [
             "",
-            f"Primary signal target (>=100 across 730 days): {signal_targets}/{len(report['candidates'])} candidates met.",
-            f"Train sample gate (>=50 Primary BUY): {sample_gate_passed}/{len(report['candidates'])} candidates passed.",
-            f"Economic gates passed: {passed}/{len(report['candidates'])} candidates.",
+            f"Primary signal target (>=100 across 730 days): {signal_targets}/{candidate_count} candidates met.",
+            f"Train sample gate (>=50 Primary BUY): {sample_gate_passed}/{candidate_count} candidates passed.",
+            f"Economic gates passed: {economic_passed}/{candidate_count} candidates.",
             "Acceptance policy is unchanged: at least 30 trades, net PF > 1.5, and Max DD < 15%.",
             "Candidate metrics are reported independently; cross-candidate portfolio overlap and allocation are not modeled.",
             "",
@@ -658,7 +703,6 @@ def _render_summary(report: dict[str, Any]) -> str:
         ]
     )
     return "\n".join(lines) + "\n"
-
 
 def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
