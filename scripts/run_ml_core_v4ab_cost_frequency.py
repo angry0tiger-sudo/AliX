@@ -190,9 +190,7 @@ def _time_exit_trade_is_valid(trade: dict[str, Any], horizon: int) -> bool:
 def _time_exit_contract_violations(
     trades: list[dict[str, Any]], horizon: int
 ) -> list[dict[str, Any]]:
-    return [
-        item for item in trades if not _time_exit_trade_is_valid(item, horizon)
-    ]
+    return [item for item in trades if not _time_exit_trade_is_valid(item, horizon)]
 
 
 def _time_exit_violation_details(

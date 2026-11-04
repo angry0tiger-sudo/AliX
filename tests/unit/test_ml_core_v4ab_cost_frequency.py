@@ -344,7 +344,9 @@ def test_time_exit_violations_capture_observed_early_exit_reasons() -> None:
     assert sample["expected_bars_held"] == 25
 
 
-def test_run_cell_skips_only_time_exit_contract_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_cell_skips_only_time_exit_contract_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     invalid_trade = {
         "direction": "LONG",
         "exit_reason": "TP_HIT",
@@ -356,9 +358,7 @@ def test_run_cell_skips_only_time_exit_contract_failure(monkeypatch: pytest.Monk
     }
     replay = {"trades": [invalid_trade], "metrics": {"max_drawdown_percent": 1.0}}
     monkeypatch.setattr(v4ab, "simulate_signals", lambda *args, **kwargs: replay)
-    cell, trade_rows = v4ab._run_cell(
-        "BTCUSDT", _bars(), [], 12, 10, 24, "TIME_N"
-    )
+    cell, trade_rows = v4ab._run_cell("BTCUSDT", _bars(), [], 12, 10, 24, "TIME_N")
     assert cell["status"] == "SKIPPED_WARNING"
     assert cell["trade_count"] is None
     assert cell["gross_profit_factor"] is None
@@ -367,7 +367,9 @@ def test_run_cell_skips_only_time_exit_contract_failure(monkeypatch: pytest.Monk
     assert trade_rows == []
 
 
-def test_run_cell_does_not_suppress_other_policy_failures(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_cell_does_not_suppress_other_policy_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     replay = {
         "trades": [
             {
@@ -406,7 +408,10 @@ def test_skipped_time_exit_cell_makes_matrix_decision_incomplete() -> None:
     )
     cells.append(skipped)
     result = v4ab._decision_rule(cells)
-    assert result["decision_branch"] == "INCOMPLETE_MATRIX_DUE_TO_SKIPPED_CELL_NO_FINAL_DECISION"
+    assert (
+        result["decision_branch"]
+        == "INCOMPLETE_MATRIX_DUE_TO_SKIPPED_CELL_NO_FINAL_DECISION"
+    )
     assert result["matrix_complete"] is False
     assert result["completed_cell_count"] == 1
     assert result["skipped_cell_ids"] == ["ETHUSDT|1h|24|TIME_N"]
@@ -415,11 +420,17 @@ def test_skipped_time_exit_cell_makes_matrix_decision_incomplete() -> None:
 def test_oos_qualifier_remains_identifiable_when_another_cell_is_skipped() -> None:
     qualified = _cell(1.5, 1.35, count=35)
     skipped = v4ab._skipped_time_exit_cell(
-        "ETHUSDT", 20, 15, 24,
+        "ETHUSDT",
+        20,
+        15,
+        24,
         [{"exit_reason": "INITIAL_STOP", "bars_held": 2}],
     )
     result = v4ab._decision_rule([qualified, skipped])
-    assert result["decision_branch"] == "NET_PF_GT_1_3_WITH_AT_LEAST_30_TRADES_FLAG_FOR_INDEPENDENT_OOS"
+    assert (
+        result["decision_branch"]
+        == "NET_PF_GT_1_3_WITH_AT_LEAST_30_TRADES_FLAG_FOR_INDEPENDENT_OOS"
+    )
     assert result["net_oos_confirmation_cell_ids"] == [qualified["candidate_id"]]
     assert result["matrix_complete"] is False
 
