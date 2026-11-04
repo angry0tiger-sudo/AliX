@@ -192,40 +192,51 @@ def _profit_factor(pnls: list[float]) -> tuple[float | None, bool]:
     return None, profit > 0
 
 
-def _summarize_replay(replay: dict[str, Any]) -> dict[str, Any]:
-    trades = replay["trades"]
+def _validated_trade_pnls(
+    trades: list[dict[str, Any]],
+) -> tuple[list[float], list[float]]:
     if any(item["direction"] != "LONG" for item in trades):
         raise ValueError("v4ac_non_spot_trade_detected")
     gross = [float(item["gross_market_pnl_usd"]) for item in trades]
     net = [float(item["net_pnl_usd"]) for item in trades]
     if not all(math.isfinite(value) for value in (*gross, *net)):
         raise ValueError("v4ac_trade_pnl_non_finite")
-    gross_pf, gross_inf = _profit_factor(gross)
-    net_pf, net_inf = _profit_factor(net)
-    count = len(trades)
+    return gross, net
+
+
+def _validated_max_drawdown(replay: dict[str, Any]) -> float:
     drawdown = float(replay["metrics"]["max_drawdown_percent"])
     if not math.isfinite(drawdown) or drawdown < 0:
         raise ValueError("v4ac_candidate_drawdown_invalid")
+    return drawdown
+
+
+def _summarize_replay(replay: dict[str, Any]) -> dict[str, Any]:
+    trades = replay["trades"]
+    gross, net = _validated_trade_pnls(trades)
+    gross_pf, gross_inf = _profit_factor(gross)
+    net_pf, net_inf = _profit_factor(net)
+    count = len(trades)
+    drawdown = _validated_max_drawdown(replay)
     holding = [int(item["bars_held"]) for item in trades]
+    win_rate = round(sum(value > 0 for value in net) / count, 8) if count else 0.0
+    median_holding = round(float(median(holding)), 4) if holding else None
+    fees_total = sum(float(item["fees_usd"]) for item in trades)
+    slippage_total = sum(float(item["slippage_cost_usd"]) for item in trades)
     return {
         "trade_count": count,
         "gross_profit_factor": gross_pf,
         "gross_profit_factor_infinite_no_losses": gross_inf,
         "net_profit_factor": net_pf,
         "net_profit_factor_infinite_no_losses": net_inf,
-        "win_rate": round(sum(value > 0 for value in net) / count, 8) if count else 0.0,
-        "median_bars_held": round(float(median(holding)), 4) if holding else None,
+        "win_rate": win_rate,
+        "median_bars_held": median_holding,
         "max_drawdown_percent": round(drawdown, 8),
         "gross_pnl_total_usd": round(sum(gross), 8),
         "net_pnl_total_usd": round(sum(net), 8),
-        "fees_total_usd": round(sum(float(item["fees_usd"]) for item in trades), 8),
-        "slippage_total_usd": round(
-            sum(float(item["slippage_cost_usd"]) for item in trades), 8
-        ),
-    }
-
-
-def _empty_metric_values() -> dict[str, Any]:
+        "fees_total_usd": round(fees_total, 8),
+        "slippage_total_usd": round(slippage_total, 8),
+    }def _empty_metric_values() -> dict[str, Any]:
     return {
         "trade_count": None,
         "gross_profit_factor": None,
@@ -706,14 +717,10 @@ def render_step_summary(report: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _build_report(
-    commit_sha: str,
-    days: int,
-    provenance: list[dict[str, Any]],
+def _validate_report_matrix(
     cells: list[dict[str, Any]],
-    windows: list[dict[str, Any]],
     meta_scenarios: list[dict[str, Any]],
-) -> dict[str, Any]:
+) -> None:
     expected = {
         f"{symbol}|{timeframe}|{HORIZON_BARS}|{policy}|{mode}"
         for symbol in SYMBOLS
@@ -728,6 +735,115 @@ def _build_report(
         raise ValueError("v4ac_report_timeframe_out_of_policy")
     if len(meta_scenarios) != 16:
         raise ValueError("v4ac_meta_scenario_matrix_incomplete")
+
+
+def _primary_model_report() -> dict[str, Any]:
+    return {
+        "definition": V4Y_PRIMARY_SIGNAL_GENERATION,
+        "bollinger_period": 20,
+        "bollinger_standard_deviations": 2.0,
+        "trend_filter": "CLOSE_ABOVE_EMA200",
+        "decision": "CLOSED_CANDLE",
+        "execution": "NEXT_BAR_OPEN",
+        "model_fit_performed": False,
+        "signal_changed_from_v4ab": False,
+        "sequence_model_used": False,
+    }
+
+
+def _meta_model_report(
+    meta_scenarios: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "enabled": True,
+        "family": "LightGBM LGBMClassifier objective=binary",
+        "training_signal_requirement": "OOF_PRIMARY_BUY_ONLY",
+        "training_label": "POLICY_MATCHED_NET_POSITIVE_AFTER_FEES_AND_SLIPPAGE",
+        "separate_model_per_symbol_timeframe_exit_policy": True,
+        "oof_fold_count": V4Y_OOF_FOLD_COUNT,
+        "calibration_fraction": V4Y_META_CALIBRATION_FRACTION,
+        "target_accept_fraction": V4Y_TARGET_ACCEPT_FRACTION,
+        "minimum_primary_train_signals": META_MINIMUM_TRAIN_SIGNALS,
+        "calibration_labels_used": False,
+        "validation_labels_used_for_fit_or_threshold": False,
+        "scenarios": meta_scenarios,
+        "sequence_model_used": False,
+    }
+
+
+def _evaluation_window_report(
+    windows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "method": "CHRONOLOGICAL_70_15_15",
+        "common_event_window_per_symbol_timeframe": True,
+        "candidate_windows": windows,
+        "last_15_percent_final_holdout_used": False,
+        "maximum_horizon_bars": HORIZON_BARS,
+    }
+
+
+def _execution_cost_report() -> dict[str, Any]:
+    return {
+        "fee_bps_per_side": FEE_BPS_PER_SIDE,
+        "fee_type_assumption": "MAKER",
+        "slippage_bps_per_side": SLIPPAGE_BPS_PER_SIDE,
+        "entry_slippage_bps": ENTRY_SLIPPAGE_BPS,
+        "round_trip_cost_bps": ROUND_TRIP_COST_BPS,
+        "assumption_only_not_limit_fill_simulation": True,
+        "initial_equity_usd": INITIAL_EQUITY,
+        "position_fraction": 1.0,
+        "leverage": 1.0,
+        "pyramiding": False,
+        "short_positions_supported": False,
+    }
+
+
+def _exit_contract_report() -> dict[str, Any]:
+    return {
+        "TB_1.5_1.0": {
+            "take_profit_atr": 1.5,
+            "stop_loss_atr": 1.0,
+            "vertical_horizon_bars": HORIZON_BARS,
+            "trailing_stop_enabled": False,
+        },
+        "TRAIL_2.0": {
+            "initial_stop_atr": 2.0,
+            "trailing_activation_atr": 2.0,
+            "trailing_step_atr": 1.0,
+            "terminal_take_profit_atr": 4.0,
+            "vertical_horizon_bars": HORIZON_BARS,
+        },
+    }
+
+
+def _safety_report() -> dict[str, Any]:
+    return {
+        "Champion": None,
+        "order_permission": False,
+        "trading_authorization": "NO-GO",
+        "private_api_calls": 0,
+        "real_order_attempts": 0,
+        "orders_or_execution_api_used": False,
+        "credentials_used": False,
+        "short_positions_supported": False,
+        "sequence_model_used": False,
+    }
+
+
+def _build_report(
+    commit_sha: str,
+    days: int,
+    provenance: list[dict[str, Any]],
+    cells: list[dict[str, Any]],
+    windows: list[dict[str, Any]],
+    meta_scenarios: list[dict[str, Any]],
+) -> dict[str, Any]:
+    _validate_report_matrix(cells, meta_scenarios)
+    horizon_hours = {
+        timeframe: HORIZON_BARS * TIMEFRAME_MINUTES[timeframe] / 60
+        for timeframe in TIMEFRAMES
+    }
     return {
         "schema_version": SCHEMA,
         "commit_sha": commit_sha,
@@ -737,91 +853,19 @@ def _build_report(
         "symbols": list(SYMBOLS),
         "timeframes": list(TIMEFRAMES),
         "horizon_bars": HORIZON_BARS,
-        "horizon_hours_by_timeframe": {
-            timeframe: HORIZON_BARS * TIMEFRAME_MINUTES[timeframe] / 60
-            for timeframe in TIMEFRAMES
-        },
+        "horizon_hours_by_timeframe": horizon_hours,
         "exit_policies": list(EXIT_POLICIES),
         "modes": list(MODES),
-        "primary_model": {
-            "definition": V4Y_PRIMARY_SIGNAL_GENERATION,
-            "bollinger_period": 20,
-            "bollinger_standard_deviations": 2.0,
-            "trend_filter": "CLOSE_ABOVE_EMA200",
-            "decision": "CLOSED_CANDLE",
-            "execution": "NEXT_BAR_OPEN",
-            "model_fit_performed": False,
-            "signal_changed_from_v4ab": False,
-            "sequence_model_used": False,
-        },
-        "meta_model": {
-            "enabled": True,
-            "family": "LightGBM LGBMClassifier objective=binary",
-            "training_signal_requirement": "OOF_PRIMARY_BUY_ONLY",
-            "training_label": "POLICY_MATCHED_NET_POSITIVE_AFTER_FEES_AND_SLIPPAGE",
-            "separate_model_per_symbol_timeframe_exit_policy": True,
-            "oof_fold_count": V4Y_OOF_FOLD_COUNT,
-            "calibration_fraction": V4Y_META_CALIBRATION_FRACTION,
-            "target_accept_fraction": V4Y_TARGET_ACCEPT_FRACTION,
-            "minimum_primary_train_signals": META_MINIMUM_TRAIN_SIGNALS,
-            "calibration_labels_used": False,
-            "validation_labels_used_for_fit_or_threshold": False,
-            "scenarios": meta_scenarios,
-            "sequence_model_used": False,
-        },
-        "evaluation_window": {
-            "method": "CHRONOLOGICAL_70_15_15",
-            "common_event_window_per_symbol_timeframe": True,
-            "candidate_windows": windows,
-            "last_15_percent_final_holdout_used": False,
-            "maximum_horizon_bars": HORIZON_BARS,
-        },
-        "execution_cost_contract": {
-            "fee_bps_per_side": FEE_BPS_PER_SIDE,
-            "fee_type_assumption": "MAKER",
-            "slippage_bps_per_side": SLIPPAGE_BPS_PER_SIDE,
-            "entry_slippage_bps": ENTRY_SLIPPAGE_BPS,
-            "round_trip_cost_bps": ROUND_TRIP_COST_BPS,
-            "assumption_only_not_limit_fill_simulation": True,
-            "initial_equity_usd": INITIAL_EQUITY,
-            "position_fraction": 1.0,
-            "leverage": 1.0,
-            "pyramiding": False,
-            "short_positions_supported": False,
-        },
-        "exit_contract": {
-            "TB_1.5_1.0": {
-                "take_profit_atr": 1.5,
-                "stop_loss_atr": 1.0,
-                "vertical_horizon_bars": HORIZON_BARS,
-                "trailing_stop_enabled": False,
-            },
-            "TRAIL_2.0": {
-                "initial_stop_atr": 2.0,
-                "trailing_activation_atr": 2.0,
-                "trailing_step_atr": 1.0,
-                "terminal_take_profit_atr": 4.0,
-                "vertical_horizon_bars": HORIZON_BARS,
-            },
-        },
+        "primary_model": _primary_model_report(),
+        "meta_model": _meta_model_report(meta_scenarios),
+        "evaluation_window": _evaluation_window_report(windows),
+        "execution_cost_contract": _execution_cost_report(),
+        "exit_contract": _exit_contract_report(),
         "cells": cells,
         "decision_rule": "OWNER_REVIEW_REQUIRED_NO_AUTOMATIC_PROMOTION",
         "promotion_status": "BLOCKED_PENDING_INDEPENDENT_OOS_AND_OWNER_REVIEW",
-        "safety": {
-            "Champion": None,
-            "order_permission": False,
-            "trading_authorization": "NO-GO",
-            "private_api_calls": 0,
-            "real_order_attempts": 0,
-            "orders_or_execution_api_used": False,
-            "credentials_used": False,
-            "short_positions_supported": False,
-            "sequence_model_used": False,
-        },
-    }
-
-
-def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
+        "safety": _safety_report(),
+    }def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if not rows:
         path.write_text("", encoding="utf-8")
