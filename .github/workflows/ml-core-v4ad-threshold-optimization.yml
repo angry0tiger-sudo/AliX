@@ -31,13 +31,13 @@ jobs:
       ALIx_ALLOW_LIVE_TRADING: "false"
       ALIx_REPORTING_ENABLED: "false"
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
-      GH_TOKEN: \${{ github.token }}
+      GH_TOKEN: ${{ github.token }}
     steps:
       - name: Require Standard CI success for this exact V4-AD commit
         env:
-          GITHUB_REPOSITORY: \${{ github.repository }}
-          TARGET_SHA: \${{ github.sha }}
-          TARGET_BRANCH: \${{ github.ref_name }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          TARGET_SHA: ${{ github.sha }}
+          TARGET_BRANCH: ${{ github.ref_name }}
         run: |
           python - <<'PY'
           import json
@@ -113,7 +113,7 @@ jobs:
 
       - name: Confirm V4-AD scope and fail-closed safety
         env:
-          TARGET_SHA: \${{ github.sha }}
+          TARGET_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           test "$GITHUB_REF" = "refs/heads/research/ml-core-v4ad-threshold-optimization"
@@ -204,10 +204,10 @@ jobs:
 
       - name: Render and validate V4-AD report in GitHub Step Summary
         env:
-          REPORT_PATH: \${{ github.workspace }}/alix-v4ad-threshold-optimization-report.json
-          TRADES_CSV: \${{ github.workspace }}/alix-v4ad-threshold-optimization-trades.csv
-          DECISIONS_CSV: \${{ github.workspace }}/alix-v4ad-threshold-optimization-decisions.csv
-          TARGET_SHA: \${{ github.sha }}
+          REPORT_PATH: ${{ github.workspace }}/alix-v4ad-threshold-optimization-report.json
+          TRADES_CSV: ${{ github.workspace }}/alix-v4ad-threshold-optimization-trades.csv
+          DECISIONS_CSV: ${{ github.workspace }}/alix-v4ad-threshold-optimization-decisions.csv
+          TARGET_SHA: ${{ github.sha }}
         run: |
           python - <<'PY'
           import csv
