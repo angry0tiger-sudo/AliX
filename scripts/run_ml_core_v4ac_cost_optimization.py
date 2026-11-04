@@ -1,4 +1,5 @@
 """V4-AC cost optimization with matched Primary-only and OOF Meta-filtered replays."""
+
 from __future__ import annotations
 
 import argparse
@@ -14,18 +15,28 @@ import pandas as pd
 from pandas import DataFrame, Series
 
 from scripts.run_ml_core_real_data_baseline import (
-    SYMBOLS, TIMEFRAME_MINUTES, _load_diagnostic_datasets, resample_ohlcv,
+    SYMBOLS,
+    TIMEFRAME_MINUTES,
+    _load_diagnostic_datasets,
+    resample_ohlcv,
 )
 from services.meta_labeling.v4y import (
-    V4Y_EMA_TREND_PERIOD, V4Y_META_CALIBRATION_FRACTION,
-    V4Y_OOF_FOLD_COUNT, V4Y_PRIMARY_SIGNAL_GENERATION,
-    V4Y_TARGET_ACCEPT_FRACTION, build_v4y_primary_features,
-    evaluate_primary_train_sample_gate, fit_lightgbm_meta_filter,
-    generate_v4y_oof_primary_events, predict_meta_probabilities,
+    V4Y_EMA_TREND_PERIOD,
+    V4Y_META_CALIBRATION_FRACTION,
+    V4Y_OOF_FOLD_COUNT,
+    V4Y_PRIMARY_SIGNAL_GENERATION,
+    V4Y_TARGET_ACCEPT_FRACTION,
+    build_v4y_primary_features,
+    evaluate_primary_train_sample_gate,
+    fit_lightgbm_meta_filter,
+    generate_v4y_oof_primary_events,
+    predict_meta_probabilities,
     split_meta_fit_calibration,
 )
 from services.ml_core.economic_backtest import (
-    ExecutionConfig, TradeManagementConfig, simulate_signals,
+    ExecutionConfig,
+    TradeManagementConfig,
+    simulate_signals,
 )
 from services.ml_core.extended_features import build_feature_profiles
 
@@ -135,7 +146,8 @@ def _forward_primary_signal_indices(
     if last_eligible < train_end:
         raise ValueError("v4ac_forward_window_has_no_matured_events")
     return [
-        index for index in range(train_end, last_eligible + 1)
+        index
+        for index in range(train_end, last_eligible + 1)
         if bool(signals.iloc[index])
     ]
 
@@ -215,12 +227,17 @@ def _summarize_replay(replay: dict[str, Any]) -> dict[str, Any]:
 
 def _empty_metric_values() -> dict[str, Any]:
     return {
-        "trade_count": None, "gross_profit_factor": None,
+        "trade_count": None,
+        "gross_profit_factor": None,
         "gross_profit_factor_infinite_no_losses": False,
-        "net_profit_factor": None, "net_profit_factor_infinite_no_losses": False,
-        "win_rate": None, "median_bars_held": None,
-        "max_drawdown_percent": None, "gross_pnl_total_usd": None,
-        "net_pnl_total_usd": None, "fees_total_usd": None,
+        "net_profit_factor": None,
+        "net_profit_factor_infinite_no_losses": False,
+        "win_rate": None,
+        "median_bars_held": None,
+        "max_drawdown_percent": None,
+        "gross_pnl_total_usd": None,
+        "net_pnl_total_usd": None,
+        "fees_total_usd": None,
         "slippage_total_usd": None,
     }
 
@@ -238,7 +255,9 @@ def _single_event_trade(
         local_bars, [local_event], local_event + HORIZON_BARS + 2
     )
     replay = simulate_signals(
-        local_bars, actions, _execution_config(),
+        local_bars,
+        actions,
+        _execution_config(),
         trade_management_config=_trade_management_config(policy),
     )
     trades = replay["trades"]
@@ -255,12 +274,17 @@ def _single_event_trade(
 
 
 def _meta_training_rows(
-    bars: DataFrame, features: DataFrame, primary_signals: Series,
-    train_end: int, policy: str,
+    bars: DataFrame,
+    features: DataFrame,
+    primary_signals: Series,
+    train_end: int,
+    policy: str,
 ) -> tuple[DataFrame, dict[str, Any]]:
     oof = generate_v4y_oof_primary_events(
-        primary_signals, start_index=V4Y_EMA_TREND_PERIOD,
-        stop_index=train_end, fold_count=V4Y_OOF_FOLD_COUNT,
+        primary_signals,
+        start_index=V4Y_EMA_TREND_PERIOD,
+        stop_index=train_end,
+        fold_count=V4Y_OOF_FOLD_COUNT,
     )
     latest_mature_event = train_end - HORIZON_BARS - 2
     eligible = oof.loc[oof["event_index"] <= latest_mature_event].copy()
@@ -270,16 +294,18 @@ def _meta_training_rows(
         trade, label_end_index = _single_event_trade(bars, event_index, policy)
         if label_end_index >= train_end:
             raise ValueError("v4ac_meta_training_label_crosses_outer_train")
-        records.append({
-            "event_index": event_index,
-            "fold_id": int(item["fold_id"]),
-            "label_end_idx": label_end_index,
-            "meta_label": int(float(trade["net_pnl_usd"]) > 0.0),
-            "primary_signal": "BUY",
-            "primary_oof": True,
-            "exit_reason": str(trade["exit_reason"]),
-            "net_return": float(trade["net_return_fraction"]),
-        })
+        records.append(
+            {
+                "event_index": event_index,
+                "fold_id": int(item["fold_id"]),
+                "label_end_idx": label_end_index,
+                "meta_label": int(float(trade["net_pnl_usd"]) > 0.0),
+                "primary_signal": "BUY",
+                "primary_oof": True,
+                "exit_reason": str(trade["exit_reason"]),
+                "net_return": float(trade["net_return_fraction"]),
+            }
+        )
     if not records:
         raise ValueError("v4ac_meta_training_events_empty")
     event_rows = DataFrame.from_records(records).sort_values("event_index")
@@ -307,19 +333,24 @@ def _meta_training_rows(
 
 def _is_expected_meta_support_error(error: ValueError) -> bool:
     code = str(error)
-    return (
-        code in {"v4x_oof_primary_signals_empty", "v4ac_meta_training_events_empty"}
-        or code.startswith("v4x_insufficient_meta_")
-    )
+    return code in {
+        "v4x_oof_primary_signals_empty",
+        "v4ac_meta_training_events_empty",
+    } or code.startswith("v4x_insufficient_meta_")
 
 
 def _train_meta_model(
-    bars: DataFrame, features: DataFrame, primary_signals: Series,
-    train_end: int, policy: str,
+    bars: DataFrame,
+    features: DataFrame,
+    primary_signals: Series,
+    train_end: int,
+    policy: str,
 ) -> tuple[Any | None, dict[str, Any], str]:
     gate = evaluate_primary_train_sample_gate(
-        primary_signals, train_start_index=V4Y_EMA_TREND_PERIOD,
-        train_end_index=train_end, minimum_signal_count=META_MINIMUM_TRAIN_SIGNALS,
+        primary_signals,
+        train_start_index=V4Y_EMA_TREND_PERIOD,
+        train_end_index=train_end,
+        minimum_signal_count=META_MINIMUM_TRAIN_SIGNALS,
     )
     if not bool(gate["passed"]):
         return None, {"sample_gate": gate}, "SKIPPED_INSUFFICIENT_PRIMARY_SIGNALS"
@@ -332,30 +363,35 @@ def _train_meta_model(
         )
         feature_columns = list(features.columns)
         model, fit_diagnostics = fit_lightgbm_meta_filter(
-            fit_rows.loc[:, feature_columns], fit_rows["meta_label"],
+            fit_rows.loc[:, feature_columns],
+            fit_rows["meta_label"],
             calibration_rows.loc[:, feature_columns],
             target_accept_fraction=V4Y_TARGET_ACCEPT_FRACTION,
         )
     except ValueError as error:
         if not _is_expected_meta_support_error(error):
             raise
-        return None, {"sample_gate": gate, "skip_reason": str(error)}, (
-            "SKIPPED_INSUFFICIENT_META_SUPPORT"
+        return (
+            None,
+            {"sample_gate": gate, "skip_reason": str(error)},
+            ("SKIPPED_INSUFFICIENT_META_SUPPORT"),
         )
-    diagnostics.update({
-        "sample_gate": gate,
-        "fit_rows": int(len(fit_rows)),
-        "calibration_rows": int(len(calibration_rows)),
-        "fit_max_label_end_index": int(fit_rows["label_end_idx"].max()),
-        "calibration_start_event_index": int(calibration_rows["event_index"].min()),
-        "fit_labels_purged_before_calibration": bool(
-            int(fit_rows["label_end_idx"].max())
-            < int(calibration_rows["event_index"].min())
-        ),
-        "validation_labels_used_for_fit": False,
-        "validation_labels_used_for_threshold": False,
-        "meta_model": fit_diagnostics,
-    })
+    diagnostics.update(
+        {
+            "sample_gate": gate,
+            "fit_rows": int(len(fit_rows)),
+            "calibration_rows": int(len(calibration_rows)),
+            "fit_max_label_end_index": int(fit_rows["label_end_idx"].max()),
+            "calibration_start_event_index": int(calibration_rows["event_index"].min()),
+            "fit_labels_purged_before_calibration": bool(
+                int(fit_rows["label_end_idx"].max())
+                < int(calibration_rows["event_index"].min())
+            ),
+            "validation_labels_used_for_fit": False,
+            "validation_labels_used_for_threshold": False,
+            "meta_model": fit_diagnostics,
+        }
+    )
     return model, diagnostics, "TRAINED"
 
 
@@ -368,8 +404,10 @@ def _forward_meta_probabilities(
     probabilities = predict_meta_probabilities(model, event_features)
     if len(probabilities) != len(event_indices):
         raise ValueError("v4ac_meta_probability_alignment_invalid")
-    if not np.isfinite(probabilities).all() or np.any(probabilities < 0) or np.any(
-        probabilities > 1
+    if (
+        not np.isfinite(probabilities).all()
+        or np.any(probabilities < 0)
+        or np.any(probabilities > 1)
     ):
         raise ValueError("v4ac_meta_probability_values_invalid")
     return {
@@ -379,9 +417,17 @@ def _forward_meta_probabilities(
 
 
 def _run_economic_cell(
-    *, symbol: str, timeframe: str, policy: str, mode: str, bars: DataFrame,
-    signal_indices: list[int], raw_signal_count: int, eligible_signal_count: int,
-    forward_end: int, meta_status: str | None = None,
+    *,
+    symbol: str,
+    timeframe: str,
+    policy: str,
+    mode: str,
+    bars: DataFrame,
+    signal_indices: list[int],
+    raw_signal_count: int,
+    eligible_signal_count: int,
+    forward_end: int,
+    meta_status: str | None = None,
     meta_diagnostics: dict[str, Any] | None = None,
     meta_threshold: float | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -390,17 +436,21 @@ def _run_economic_cell(
         raise ValueError("v4ac_mode_out_of_policy")
     candidate_id = f"{symbol}|{timeframe}|{HORIZON_BARS}|{policy}|{mode}"
     base = {
-        "candidate_id": candidate_id, "symbol": symbol,
+        "candidate_id": candidate_id,
+        "symbol": symbol,
         "pair": f"{symbol.removesuffix('USDT')}/USDT",
-        "timeframe": timeframe, "horizon_bars": HORIZON_BARS,
-        "exit_policy": policy, "mode": mode,
+        "timeframe": timeframe,
+        "horizon_bars": HORIZON_BARS,
+        "exit_policy": policy,
+        "mode": mode,
         "primary_signal_count": raw_signal_count,
         "eligible_primary_signal_count": eligible_signal_count,
         "accepted_signal_count": len(signal_indices),
         "fee_bps_per_side": FEE_BPS_PER_SIDE,
         "slippage_bps_per_side": SLIPPAGE_BPS_PER_SIDE,
         "round_trip_cost_bps": ROUND_TRIP_COST_BPS,
-        "meta_status": meta_status, "meta_threshold": meta_threshold,
+        "meta_status": meta_status,
+        "meta_threshold": meta_threshold,
         "meta_diagnostics": meta_diagnostics or {},
     }
     if mode == "META_FILTERED" and meta_status != "TRAINED":
@@ -412,15 +462,21 @@ def _run_economic_cell(
         }, []
     actions = _build_forward_actions(bars, signal_indices, forward_end)
     replay = simulate_signals(
-        bars, actions, _execution_config(),
+        bars,
+        actions,
+        _execution_config(),
         trade_management_config=_trade_management_config(policy),
     )
     metrics = _summarize_replay(replay)
     trade_rows = [
         {
-            "candidate_id": candidate_id, "symbol": symbol,
-            "timeframe": timeframe, "horizon_bars": HORIZON_BARS,
-            "exit_policy": policy, "mode": mode, "trade_index": index,
+            "candidate_id": candidate_id,
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "horizon_bars": HORIZON_BARS,
+            "exit_policy": policy,
+            "mode": mode,
+            "trade_index": index,
             "fee_bps_per_side": FEE_BPS_PER_SIDE,
             "slippage_bps_per_side": SLIPPAGE_BPS_PER_SIDE,
             **trade,
@@ -431,15 +487,24 @@ def _run_economic_cell(
 
 
 def _meta_skip_cell(
-    *, symbol: str, timeframe: str, policy: str, raw_signal_count: int,
-    eligible_signal_count: int, reason: str, diagnostics: dict[str, Any],
+    *,
+    symbol: str,
+    timeframe: str,
+    policy: str,
+    raw_signal_count: int,
+    eligible_signal_count: int,
+    reason: str,
+    diagnostics: dict[str, Any],
 ) -> dict[str, Any]:
     candidate_id = f"{symbol}|{timeframe}|{HORIZON_BARS}|{policy}|META_FILTERED"
     return {
-        "candidate_id": candidate_id, "symbol": symbol,
+        "candidate_id": candidate_id,
+        "symbol": symbol,
         "pair": f"{symbol.removesuffix('USDT')}/USDT",
-        "timeframe": timeframe, "horizon_bars": HORIZON_BARS,
-        "exit_policy": policy, "mode": "META_FILTERED",
+        "timeframe": timeframe,
+        "horizon_bars": HORIZON_BARS,
+        "exit_policy": policy,
+        "mode": "META_FILTERED",
         "status": reason,
         "skip_reason": diagnostics.get("skip_reason", reason),
         "primary_signal_count": raw_signal_count,
@@ -448,16 +513,21 @@ def _meta_skip_cell(
         "fee_bps_per_side": FEE_BPS_PER_SIDE,
         "slippage_bps_per_side": SLIPPAGE_BPS_PER_SIDE,
         "round_trip_cost_bps": ROUND_TRIP_COST_BPS,
-        "meta_status": reason, "meta_threshold": None,
-        "meta_diagnostics": diagnostics, **_empty_metric_values(),
+        "meta_status": reason,
+        "meta_threshold": None,
+        "meta_diagnostics": diagnostics,
+        **_empty_metric_values(),
     }
 
 
 def _run_symbol_timeframe(
-    symbol: str, source_bars: DataFrame,
+    symbol: str,
+    source_bars: DataFrame,
 ) -> tuple[
-    list[dict[str, Any]], list[dict[str, Any]],
-    list[dict[str, Any]], list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
 ]:
     cells: list[dict[str, Any]] = []
     trades: list[dict[str, Any]] = []
@@ -472,18 +542,27 @@ def _run_symbol_timeframe(
             primary_signals, train_end, forward_end
         )
         raw_count = int(primary_signals.iloc[train_end:forward_end].sum())
-        symbol_windows.append({
-            "symbol": symbol, "timeframe": timeframe, "row_count": len(bars),
-            "outer_train_end_index": train_end,
-            "forward_end_exclusive": forward_end,
-            "raw_forward_primary_signal_count": raw_count,
-            "eligible_forward_primary_signal_count": len(primary_indices),
-        })
+        symbol_windows.append(
+            {
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "row_count": len(bars),
+                "outer_train_end_index": train_end,
+                "forward_end_exclusive": forward_end,
+                "raw_forward_primary_signal_count": raw_count,
+                "eligible_forward_primary_signal_count": len(primary_indices),
+            }
+        )
         for policy in EXIT_POLICIES:
             primary_cell, primary_trades = _run_economic_cell(
-                symbol=symbol, timeframe=timeframe, policy=policy,
-                mode="PRIMARY_ONLY", bars=bars, signal_indices=primary_indices,
-                raw_signal_count=raw_count, eligible_signal_count=len(primary_indices),
+                symbol=symbol,
+                timeframe=timeframe,
+                policy=policy,
+                mode="PRIMARY_ONLY",
+                bars=bars,
+                signal_indices=primary_indices,
+                raw_signal_count=raw_count,
+                eligible_signal_count=len(primary_indices),
                 forward_end=forward_end,
             )
             cells.append(primary_cell)
@@ -492,41 +571,65 @@ def _run_symbol_timeframe(
                 bars, features, primary_signals, train_end, policy
             )
             if model is None:
-                cells.append(_meta_skip_cell(
-                    symbol=symbol, timeframe=timeframe, policy=policy,
-                    raw_signal_count=raw_count,
-                    eligible_signal_count=len(primary_indices),
-                    reason=meta_status, diagnostics=diagnostics,
-                ))
+                cells.append(
+                    _meta_skip_cell(
+                        symbol=symbol,
+                        timeframe=timeframe,
+                        policy=policy,
+                        raw_signal_count=raw_count,
+                        eligible_signal_count=len(primary_indices),
+                        reason=meta_status,
+                        diagnostics=diagnostics,
+                    )
+                )
                 continue
             threshold = float(diagnostics["meta_model"]["selected_threshold"])
-            probabilities = _forward_meta_probabilities(features, primary_indices, model)
+            probabilities = _forward_meta_probabilities(
+                features, primary_indices, model
+            )
             accepted = [
-                index for index in primary_indices
+                index
+                for index in primary_indices
                 if probabilities.get(index, -1.0) >= threshold
             ]
             accepted_set = set(accepted)
             for index in primary_indices:
                 probability = probabilities[index]
-                decisions.append({
-                    "candidate_id": (
-                        f"{symbol}|{timeframe}|{HORIZON_BARS}|{policy}|META_FILTERED"
-                    ),
-                    "symbol": symbol, "timeframe": timeframe,
-                    "exit_policy": policy, "split_role": "FORWARD_VALIDATION",
-                    "row_index": index,
-                    "timestamp": pd.Timestamp(bars["date"].iloc[index]).isoformat(),
-                    "primary_signal": "BUY", "meta_probability": probability,
-                    "selected_threshold": threshold,
-                    "meta_filter_decision": "ACCEPT" if index in accepted_set else "REJECT",
-                    "executable_signal": "BUY" if index in accepted_set else "NO_ENTRY",
-                })
+                decisions.append(
+                    {
+                        "candidate_id": (
+                            f"{symbol}|{timeframe}|{HORIZON_BARS}|{policy}|META_FILTERED"
+                        ),
+                        "symbol": symbol,
+                        "timeframe": timeframe,
+                        "exit_policy": policy,
+                        "split_role": "FORWARD_VALIDATION",
+                        "row_index": index,
+                        "timestamp": pd.Timestamp(bars["date"].iloc[index]).isoformat(),
+                        "primary_signal": "BUY",
+                        "meta_probability": probability,
+                        "selected_threshold": threshold,
+                        "meta_filter_decision": "ACCEPT"
+                        if index in accepted_set
+                        else "REJECT",
+                        "executable_signal": "BUY"
+                        if index in accepted_set
+                        else "NO_ENTRY",
+                    }
+                )
             meta_cell, meta_trades = _run_economic_cell(
-                symbol=symbol, timeframe=timeframe, policy=policy,
-                mode="META_FILTERED", bars=bars, signal_indices=accepted,
-                raw_signal_count=raw_count, eligible_signal_count=len(primary_indices),
-                forward_end=forward_end, meta_status=meta_status,
-                meta_diagnostics=diagnostics, meta_threshold=threshold,
+                symbol=symbol,
+                timeframe=timeframe,
+                policy=policy,
+                mode="META_FILTERED",
+                bars=bars,
+                signal_indices=accepted,
+                raw_signal_count=raw_count,
+                eligible_signal_count=len(primary_indices),
+                forward_end=forward_end,
+                meta_status=meta_status,
+                meta_diagnostics=diagnostics,
+                meta_threshold=threshold,
             )
             cells.append(meta_cell)
             trades.extend(meta_trades)
@@ -543,15 +646,18 @@ def render_step_summary(report: dict[str, Any]) -> str:
     if report.get("schema_version") != SCHEMA:
         raise ValueError("v4ac_step_summary_report_schema_invalid")
     lines = [
-        "## AliX V4-AC Cost Optimization & Meta Re-integration", "",
-        f"Commit SHA: {report['commit_sha']}", "",
+        "## AliX V4-AC Cost Optimization & Meta Re-integration",
+        "",
+        f"Commit SHA: {report['commit_sha']}",
+        "",
         "Primary: unchanged V4-Y causal Bollinger(20, 2.0) upper-band breakout with Close > EMA200.",
         "Decision: closed candle; execution: next-bar open. Spot long-only, 1x equity, no pyramiding.",
         "Timeframes: 15m / 30m / 1h / 4h only. Horizon: exactly 24 candles in every timeframe (6h / 12h / 24h / 96h respectively).",
         "Costs: 10 bps maker-fee assumption + 5 bps slippage assumption per side; 30 bps round trip.",
         "Important: fixed-bps next-open replay is a cost scenario, not a true limit-order queue, partial-fill, or non-fill simulator.",
         "Meta: separate OOF LightGBM model per symbol/timeframe/exit policy; policy-matched net-PnL labels; purged fit/calibration; validation labels never used.",
-        "SKIPPED Meta rows have N/A metrics, not zero trades. Primary-only rows still run when Meta sample support is insufficient.", "",
+        "SKIPPED Meta rows have N/A metrics, not zero trades. Primary-only rows still run when Meta sample support is insufficient.",
+        "",
         "| Symbol | TF | Horizon Bars | Exit | Mode | Fee bps/side | Slip bps/side | Primary BUYs | Eligible BUYs | Accepted BUYs | Trades | Gross PF | Net PF | Net PnL USD | Meta Threshold | Status |",
         "|---|---|---:|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|",
     ]
@@ -566,7 +672,8 @@ def render_step_summary(report: dict[str, Any]) -> str:
             )
             continue
         threshold = (
-            "N/A" if item["meta_threshold"] is None
+            "N/A"
+            if item["meta_threshold"] is None
             else f"{float(item['meta_threshold']):.6f}"
         )
         lines.append(
@@ -585,25 +692,34 @@ def render_step_summary(report: dict[str, Any]) -> str:
         for item in report["cells"]
     )
     trained = sum(item["status"] == "TRAINED" for item in report["meta_scenarios"])
-    lines.extend([
-        "", f"Candidate rows: {len(report['cells'])}/32; completed: {completed}; skipped Meta rows: {skipped_meta}.",
-        f"Meta training scenarios: {trained}/{len(report['meta_scenarios'])} trained.",
-        "This is a research comparison, not independent OOS promotion or profitability approval.", "",
-        "Safety: Champion=null, order_permission=false, trading_authorization=NO-GO, private_api_calls=0, real_order_attempts=0, sequence_model_used=false.",
-        "Research only; no private API, credentials, orders, or execution API are used.",
-    ])
+    lines.extend(
+        [
+            "",
+            f"Candidate rows: {len(report['cells'])}/32; completed: {completed}; skipped Meta rows: {skipped_meta}.",
+            f"Meta training scenarios: {trained}/{len(report['meta_scenarios'])} trained.",
+            "This is a research comparison, not independent OOS promotion or profitability approval.",
+            "",
+            "Safety: Champion=null, order_permission=false, trading_authorization=NO-GO, private_api_calls=0, real_order_attempts=0, sequence_model_used=false.",
+            "Research only; no private API, credentials, orders, or execution API are used.",
+        ]
+    )
     return "\n".join(lines) + "\n"
 
 
 def _build_report(
-    commit_sha: str, days: int, provenance: list[dict[str, Any]],
-    cells: list[dict[str, Any]], windows: list[dict[str, Any]],
+    commit_sha: str,
+    days: int,
+    provenance: list[dict[str, Any]],
+    cells: list[dict[str, Any]],
+    windows: list[dict[str, Any]],
     meta_scenarios: list[dict[str, Any]],
 ) -> dict[str, Any]:
     expected = {
         f"{symbol}|{timeframe}|{HORIZON_BARS}|{policy}|{mode}"
-        for symbol in SYMBOLS for timeframe in TIMEFRAMES
-        for policy in EXIT_POLICIES for mode in MODES
+        for symbol in SYMBOLS
+        for timeframe in TIMEFRAMES
+        for policy in EXIT_POLICIES
+        for mode in MODES
     }
     observed = {str(item["candidate_id"]) for item in cells}
     if len(cells) != 32 or observed != expected:
@@ -613,24 +729,34 @@ def _build_report(
     if len(meta_scenarios) != 16:
         raise ValueError("v4ac_meta_scenario_matrix_incomplete")
     return {
-        "schema_version": SCHEMA, "commit_sha": commit_sha,
-        "requested_days": days, "provider": "Binance Spot public klines API",
-        "input_datasets": provenance, "symbols": list(SYMBOLS),
-        "timeframes": list(TIMEFRAMES), "horizon_bars": HORIZON_BARS,
+        "schema_version": SCHEMA,
+        "commit_sha": commit_sha,
+        "requested_days": days,
+        "provider": "Binance Spot public klines API",
+        "input_datasets": provenance,
+        "symbols": list(SYMBOLS),
+        "timeframes": list(TIMEFRAMES),
+        "horizon_bars": HORIZON_BARS,
         "horizon_hours_by_timeframe": {
             timeframe: HORIZON_BARS * TIMEFRAME_MINUTES[timeframe] / 60
             for timeframe in TIMEFRAMES
         },
-        "exit_policies": list(EXIT_POLICIES), "modes": list(MODES),
+        "exit_policies": list(EXIT_POLICIES),
+        "modes": list(MODES),
         "primary_model": {
             "definition": V4Y_PRIMARY_SIGNAL_GENERATION,
-            "bollinger_period": 20, "bollinger_standard_deviations": 2.0,
-            "trend_filter": "CLOSE_ABOVE_EMA200", "decision": "CLOSED_CANDLE",
-            "execution": "NEXT_BAR_OPEN", "model_fit_performed": False,
-            "signal_changed_from_v4ab": False, "sequence_model_used": False,
+            "bollinger_period": 20,
+            "bollinger_standard_deviations": 2.0,
+            "trend_filter": "CLOSE_ABOVE_EMA200",
+            "decision": "CLOSED_CANDLE",
+            "execution": "NEXT_BAR_OPEN",
+            "model_fit_performed": False,
+            "signal_changed_from_v4ab": False,
+            "sequence_model_used": False,
         },
         "meta_model": {
-            "enabled": True, "family": "LightGBM LGBMClassifier objective=binary",
+            "enabled": True,
+            "family": "LightGBM LGBMClassifier objective=binary",
             "training_signal_requirement": "OOF_PRIMARY_BUY_ONLY",
             "training_label": "POLICY_MATCHED_NET_POSITIVE_AFTER_FEES_AND_SLIPPAGE",
             "separate_model_per_symbol_timeframe_exit_policy": True,
@@ -640,41 +766,56 @@ def _build_report(
             "minimum_primary_train_signals": META_MINIMUM_TRAIN_SIGNALS,
             "calibration_labels_used": False,
             "validation_labels_used_for_fit_or_threshold": False,
-            "scenarios": meta_scenarios, "sequence_model_used": False,
+            "scenarios": meta_scenarios,
+            "sequence_model_used": False,
         },
         "evaluation_window": {
             "method": "CHRONOLOGICAL_70_15_15",
             "common_event_window_per_symbol_timeframe": True,
-            "candidate_windows": windows, "last_15_percent_final_holdout_used": False,
+            "candidate_windows": windows,
+            "last_15_percent_final_holdout_used": False,
             "maximum_horizon_bars": HORIZON_BARS,
         },
         "execution_cost_contract": {
-            "fee_bps_per_side": FEE_BPS_PER_SIDE, "fee_type_assumption": "MAKER",
+            "fee_bps_per_side": FEE_BPS_PER_SIDE,
+            "fee_type_assumption": "MAKER",
             "slippage_bps_per_side": SLIPPAGE_BPS_PER_SIDE,
             "entry_slippage_bps": ENTRY_SLIPPAGE_BPS,
             "round_trip_cost_bps": ROUND_TRIP_COST_BPS,
             "assumption_only_not_limit_fill_simulation": True,
-            "initial_equity_usd": INITIAL_EQUITY, "position_fraction": 1.0,
-            "leverage": 1.0, "pyramiding": False, "short_positions_supported": False,
+            "initial_equity_usd": INITIAL_EQUITY,
+            "position_fraction": 1.0,
+            "leverage": 1.0,
+            "pyramiding": False,
+            "short_positions_supported": False,
         },
         "exit_contract": {
             "TB_1.5_1.0": {
-                "take_profit_atr": 1.5, "stop_loss_atr": 1.0,
-                "vertical_horizon_bars": HORIZON_BARS, "trailing_stop_enabled": False,
+                "take_profit_atr": 1.5,
+                "stop_loss_atr": 1.0,
+                "vertical_horizon_bars": HORIZON_BARS,
+                "trailing_stop_enabled": False,
             },
             "TRAIL_2.0": {
-                "initial_stop_atr": 2.0, "trailing_activation_atr": 2.0,
-                "trailing_step_atr": 1.0, "terminal_take_profit_atr": 4.0,
+                "initial_stop_atr": 2.0,
+                "trailing_activation_atr": 2.0,
+                "trailing_step_atr": 1.0,
+                "terminal_take_profit_atr": 4.0,
                 "vertical_horizon_bars": HORIZON_BARS,
             },
         },
-        "cells": cells, "decision_rule": "OWNER_REVIEW_REQUIRED_NO_AUTOMATIC_PROMOTION",
+        "cells": cells,
+        "decision_rule": "OWNER_REVIEW_REQUIRED_NO_AUTOMATIC_PROMOTION",
         "promotion_status": "BLOCKED_PENDING_INDEPENDENT_OOS_AND_OWNER_REVIEW",
         "safety": {
-            "Champion": None, "order_permission": False,
-            "trading_authorization": "NO-GO", "private_api_calls": 0,
-            "real_order_attempts": 0, "orders_or_execution_api_used": False,
-            "credentials_used": False, "short_positions_supported": False,
+            "Champion": None,
+            "order_permission": False,
+            "trading_authorization": "NO-GO",
+            "private_api_calls": 0,
+            "real_order_attempts": 0,
+            "orders_or_execution_api_used": False,
+            "credentials_used": False,
+            "short_positions_supported": False,
             "sequence_model_used": False,
         },
     }
@@ -693,8 +834,13 @@ def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
 
 
 def run_v4ac(
-    input_dir: Path, output_report: Path, output_trades_csv: Path,
-    output_decisions_csv: Path, *, days: int, commit_sha: str,
+    input_dir: Path,
+    output_report: Path,
+    output_trades_csv: Path,
+    output_decisions_csv: Path,
+    *,
+    days: int,
+    commit_sha: str,
 ) -> dict[str, Any]:
     _validate_run_request(days, commit_sha)
     datasets, provenance = _load_diagnostic_datasets(input_dir, days, commit_sha)
@@ -715,16 +861,18 @@ def run_v4ac(
         windows.extend(symbol_windows)
         for item in symbol_cells:
             if item["mode"] == "META_FILTERED":
-                meta_scenarios.append({
-                    "candidate_id": item["candidate_id"], "symbol": symbol,
-                    "timeframe": item["timeframe"], "exit_policy": item["exit_policy"],
-                    "status": item["meta_status"] or item["status"],
-                    "skip_reason": item.get("skip_reason"),
-                    "diagnostics": item["meta_diagnostics"],
-                })
-    report = _build_report(
-        commit_sha, days, provenance, cells, windows, meta_scenarios
-    )
+                meta_scenarios.append(
+                    {
+                        "candidate_id": item["candidate_id"],
+                        "symbol": symbol,
+                        "timeframe": item["timeframe"],
+                        "exit_policy": item["exit_policy"],
+                        "status": item["meta_status"] or item["status"],
+                        "skip_reason": item.get("skip_reason"),
+                        "diagnostics": item["meta_diagnostics"],
+                    }
+                )
+    report = _build_report(commit_sha, days, provenance, cells, windows, meta_scenarios)
     output_report.parent.mkdir(parents=True, exist_ok=True)
     output_report.write_text(
         json.dumps(report, indent=2, sort_keys=True, allow_nan=False) + "\n",
@@ -746,8 +894,12 @@ def main() -> int:
     parser.add_argument("--commit-sha", required=True)
     args = parser.parse_args()
     report = run_v4ac(
-        args.input_dir, args.output_report, args.output_trades_csv,
-        args.output_decisions_csv, days=args.days, commit_sha=args.commit_sha,
+        args.input_dir,
+        args.output_report,
+        args.output_trades_csv,
+        args.output_decisions_csv,
+        days=args.days,
+        commit_sha=args.commit_sha,
     )
     return 0 if len(report["cells"]) == 32 else 1
 

@@ -1,4 +1,5 @@
 """Unit contracts for V4-AC timeframe, costs, exits, and Meta comparison."""
+
 from __future__ import annotations
 
 import itertools
@@ -15,21 +16,34 @@ from scripts import run_ml_core_v4ac_cost_optimization as v4ac
 
 def _bars(count: int = 1_000) -> DataFrame:
     close = np.linspace(100.0, 150.0, count)
-    return DataFrame({
-        "date": pd.date_range("2024-01-01T00:00:00Z", periods=count, freq="h"),
-        "open": close, "high": close * 1.01, "low": close * 0.99,
-        "close": close, "volume": np.full(count, 1_000.0),
-    })
+    return DataFrame(
+        {
+            "date": pd.date_range("2024-01-01T00:00:00Z", periods=count, freq="h"),
+            "open": close,
+            "high": close * 1.01,
+            "low": close * 0.99,
+            "close": close,
+            "volume": np.full(count, 1_000.0),
+        }
+    )
 
 
 def _trade(
-    *, gross: float = 100.0, net: float = 70.0, bars_held: int = 24,
+    *,
+    gross: float = 100.0,
+    net: float = 70.0,
+    bars_held: int = 24,
     exit_timestamp: str = "2024-01-02T00:00:00+00:00",
 ) -> dict[str, Any]:
     return {
-        "direction": "LONG", "gross_market_pnl_usd": gross, "net_pnl_usd": net,
-        "fees_usd": 20.0, "slippage_cost_usd": 10.0, "bars_held": bars_held,
-        "exit_reason": "HORIZON_EXPIRY", "exit_timestamp": exit_timestamp,
+        "direction": "LONG",
+        "gross_market_pnl_usd": gross,
+        "net_pnl_usd": net,
+        "fees_usd": 20.0,
+        "slippage_cost_usd": 10.0,
+        "bars_held": bars_held,
+        "exit_reason": "HORIZON_EXPIRY",
+        "exit_timestamp": exit_timestamp,
         "net_return_fraction": net / 10_000.0,
     }
 
@@ -41,19 +55,33 @@ def _replay(trades: list[dict[str, Any]] | None = None) -> dict[str, Any]:
 def _cell(symbol: str, timeframe: str, policy: str, mode: str) -> dict[str, Any]:
     return {
         "candidate_id": f"{symbol}|{timeframe}|24|{policy}|{mode}",
-        "symbol": symbol, "pair": f"{symbol.removesuffix('USDT')}/USDT",
-        "timeframe": timeframe, "horizon_bars": 24, "exit_policy": policy,
-        "mode": mode, "status": "COMPLETED", "primary_signal_count": 12,
-        "eligible_primary_signal_count": 10, "accepted_signal_count": 8,
-        "fee_bps_per_side": 10.0, "slippage_bps_per_side": 5.0,
-        "round_trip_cost_bps": 30.0, "meta_status": "TRAINED" if mode == "META_FILTERED" else None,
+        "symbol": symbol,
+        "pair": f"{symbol.removesuffix('USDT')}/USDT",
+        "timeframe": timeframe,
+        "horizon_bars": 24,
+        "exit_policy": policy,
+        "mode": mode,
+        "status": "COMPLETED",
+        "primary_signal_count": 12,
+        "eligible_primary_signal_count": 10,
+        "accepted_signal_count": 8,
+        "fee_bps_per_side": 10.0,
+        "slippage_bps_per_side": 5.0,
+        "round_trip_cost_bps": 30.0,
+        "meta_status": "TRAINED" if mode == "META_FILTERED" else None,
         "meta_threshold": 0.6 if mode == "META_FILTERED" else None,
-        "trade_count": 8, "gross_profit_factor": 1.5,
-        "gross_profit_factor_infinite_no_losses": False, "net_profit_factor": 1.2,
-        "net_profit_factor_infinite_no_losses": False, "win_rate": 0.5,
-        "median_bars_held": 10.0, "max_drawdown_percent": 4.0,
-        "gross_pnl_total_usd": 100.0, "net_pnl_total_usd": 60.0,
-        "fees_total_usd": 20.0, "slippage_total_usd": 10.0,
+        "trade_count": 8,
+        "gross_profit_factor": 1.5,
+        "gross_profit_factor_infinite_no_losses": False,
+        "net_profit_factor": 1.2,
+        "net_profit_factor_infinite_no_losses": False,
+        "win_rate": 0.5,
+        "median_bars_held": 10.0,
+        "max_drawdown_percent": 4.0,
+        "gross_pnl_total_usd": 100.0,
+        "net_pnl_total_usd": 60.0,
+        "fees_total_usd": 20.0,
+        "slippage_total_usd": 10.0,
         "meta_diagnostics": {},
     }
 
@@ -67,11 +95,16 @@ def _matrix() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     ]
     scenarios = [
         {
-            "candidate_id": item["candidate_id"], "symbol": item["symbol"],
-            "timeframe": item["timeframe"], "exit_policy": item["exit_policy"],
-            "status": "TRAINED", "skip_reason": None, "diagnostics": {},
+            "candidate_id": item["candidate_id"],
+            "symbol": item["symbol"],
+            "timeframe": item["timeframe"],
+            "exit_policy": item["exit_policy"],
+            "status": "TRAINED",
+            "skip_reason": None,
+            "diagnostics": {},
         }
-        for item in cells if item["mode"] == "META_FILTERED"
+        for item in cells
+        if item["mode"] == "META_FILTERED"
     ]
     return cells, scenarios
 
@@ -83,7 +116,12 @@ def test_allowed_timeframes_are_exact_and_closed_above_four_hours() -> None:
         with pytest.raises(ValueError, match="v4ac_timeframe_out_of_policy"):
             v4ac._validate_timeframe(timeframe)
     assert v4ac.TIMEFRAMES == ("15m", "30m", "1h", "4h")
-    assert [v4ac.TIMEFRAME_MINUTES[item] for item in v4ac.TIMEFRAMES] == [15, 30, 60, 240]
+    assert [v4ac.TIMEFRAME_MINUTES[item] for item in v4ac.TIMEFRAMES] == [
+        15,
+        30,
+        60,
+        240,
+    ]
 
 
 def test_request_and_outer_split_contracts_fail_closed() -> None:
@@ -109,10 +147,16 @@ def test_fixed_horizon_costs_and_execution_contract() -> None:
 
 def test_trade_management_policies_and_unknown_exit_rejection() -> None:
     fixed = v4ac._trade_management_config("TB_1.5_1.0")
-    assert (fixed.take_profit_atr_multiplier, fixed.stop_loss_atr_multiplier) == (1.5, 1.0)
+    assert (fixed.take_profit_atr_multiplier, fixed.stop_loss_atr_multiplier) == (
+        1.5,
+        1.0,
+    )
     assert fixed.horizon_candles == 24 and not fixed.trailing_stop_enabled
     trailing = v4ac._trade_management_config("TRAIL_2.0")
-    assert (trailing.stop_loss_atr_multiplier, trailing.take_profit_atr_multiplier) == (2.0, 4.0)
+    assert (trailing.stop_loss_atr_multiplier, trailing.take_profit_atr_multiplier) == (
+        2.0,
+        4.0,
+    )
     assert trailing.trailing_stop_enabled
     assert (trailing.trailing_activation_atr, trailing.trailing_step_atr) == (2.0, 1.0)
     with pytest.raises(ValueError, match="v4ac_exit_policy_out_of_policy"):
@@ -127,16 +171,26 @@ def test_primary_feature_builder_rejects_missing_profile_and_alignment(
     with pytest.raises(ValueError, match="v4ac_primary_feature_profile_missing"):
         v4ac._primary_features_and_signals(bars)
     profile = DataFrame({"x": np.ones(len(bars))})
-    monkeypatch.setattr(v4ac, "build_feature_profiles", lambda *args, **kwargs: {"Combined": profile})
     monkeypatch.setattr(
-        v4ac, "build_v4y_primary_features",
-        lambda data, frame: (DataFrame({"x": np.ones(len(data))}), Series([False], dtype=bool)),
+        v4ac, "build_feature_profiles", lambda *args, **kwargs: {"Combined": profile}
+    )
+    monkeypatch.setattr(
+        v4ac,
+        "build_v4y_primary_features",
+        lambda data, frame: (
+            DataFrame({"x": np.ones(len(data))}),
+            Series([False], dtype=bool),
+        ),
     )
     with pytest.raises(ValueError, match="v4ac_primary_signal_alignment_invalid"):
         v4ac._primary_features_and_signals(bars)
     monkeypatch.setattr(
-        v4ac, "build_v4y_primary_features",
-        lambda data, frame: (DataFrame({"x": np.ones(len(data))}), Series(False, index=range(len(data)), dtype=bool)),
+        v4ac,
+        "build_v4y_primary_features",
+        lambda data, frame: (
+            DataFrame({"x": np.ones(len(data))}),
+            Series(False, index=range(len(data)), dtype=bool),
+        ),
     )
     features, signals = v4ac._primary_features_and_signals(bars)
     assert len(features) == len(signals) == len(bars)
@@ -150,7 +204,9 @@ def test_signal_records_and_forward_action_guards() -> None:
     actions = v4ac._build_forward_actions(bars, [10, 20], 100)
     assert [item["signal"] for item in actions] == ["BUY", "BUY", "NO_ENTRY"]
     assert actions[-1]["row_index"] == 98
-    with pytest.raises(ValueError, match="v4ac_primary_events_must_be_unique_and_ordered"):
+    with pytest.raises(
+        ValueError, match="v4ac_primary_events_must_be_unique_and_ordered"
+    ):
         v4ac._build_forward_actions(bars, [20, 10], 100)
     with pytest.raises(ValueError, match="v4ac_primary_event_outside_forward_window"):
         v4ac._build_forward_actions(bars, [99], 100)
@@ -180,10 +236,12 @@ def test_profit_factor_and_replay_summary_calculate_gross_and_net_metrics() -> N
     assert v4ac._profit_factor([10.0, -5.0]) == (2.0, False)
     assert v4ac._profit_factor([10.0, 2.0]) == (None, True)
     assert v4ac._profit_factor([]) == (None, False)
-    replay = _replay([
-        _trade(gross=120.0, net=30.0, bars_held=10),
-        _trade(gross=-60.0, net=-150.0, bars_held=20),
-    ])
+    replay = _replay(
+        [
+            _trade(gross=120.0, net=30.0, bars_held=10),
+            _trade(gross=-60.0, net=-150.0, bars_held=20),
+        ]
+    )
     metrics = v4ac._summarize_replay(replay)
     assert metrics["gross_profit_factor"] == 2.0
     assert metrics["net_profit_factor"] == 0.2
@@ -199,9 +257,13 @@ def test_replay_summary_rejects_non_spot_nan_and_invalid_drawdown() -> None:
     with pytest.raises(ValueError, match="v4ac_non_spot_trade_detected"):
         v4ac._summarize_replay(_replay([_trade() | {"direction": "SHORT"}]))
     with pytest.raises(ValueError, match="v4ac_trade_pnl_non_finite"):
-        v4ac._summarize_replay(_replay([_trade() | {"gross_market_pnl_usd": float("nan")}]))
+        v4ac._summarize_replay(
+            _replay([_trade() | {"gross_market_pnl_usd": float("nan")}])
+        )
     with pytest.raises(ValueError, match="v4ac_candidate_drawdown_invalid"):
-        v4ac._summarize_replay({"trades": [], "metrics": {"max_drawdown_percent": -1.0}})
+        v4ac._summarize_replay(
+            {"trades": [], "metrics": {"max_drawdown_percent": -1.0}}
+        )
 
 
 def test_empty_metrics_are_null_not_fake_zeroes() -> None:
@@ -219,7 +281,10 @@ def test_single_training_event_uses_policy_replay_and_maps_exit_index(
     captured: dict[str, Any] = {}
 
     def fake_simulate(
-        data: DataFrame, actions: list[dict[str, Any]], config: Any, *,
+        data: DataFrame,
+        actions: list[dict[str, Any]],
+        config: Any,
+        *,
         trade_management_config: Any,
     ) -> dict[str, Any]:
         captured["rows"] = len(data)
@@ -244,7 +309,9 @@ def test_single_training_event_rejects_unmatured_or_missing_trade(
     with pytest.raises(ValueError, match="v4ac_training_event_did_not_mature"):
         v4ac._single_event_trade(bars, 80, "TB_1.5_1.0")
     monkeypatch.setattr(v4ac, "simulate_signals", lambda *args, **kwargs: _replay())
-    with pytest.raises(ValueError, match="v4ac_meta_training_event_trade_count_invalid"):
+    with pytest.raises(
+        ValueError, match="v4ac_meta_training_event_trade_count_invalid"
+    ):
         v4ac._single_event_trade(bars, 50, "TB_1.5_1.0")
 
 
@@ -254,19 +321,29 @@ def test_meta_training_rows_build_policy_matched_oof_targets(
     bars = _bars()
     features = DataFrame({"feature": np.arange(len(bars), dtype=float)})
     signals = Series(False, index=range(len(bars)), dtype=bool)
-    events = DataFrame({
-        "event_index": [250, 275, 674, 675], "fold_id": [0, 1, 3, 3],
-        "primary_signal": ["BUY"] * 4, "primary_oof": [True] * 4,
-    })
-    monkeypatch.setattr(v4ac, "generate_v4y_oof_primary_events", lambda *args, **kwargs: events)
+    events = DataFrame(
+        {
+            "event_index": [250, 275, 674, 675],
+            "fold_id": [0, 1, 3, 3],
+            "primary_signal": ["BUY"] * 4,
+            "primary_oof": [True] * 4,
+        }
+    )
+    monkeypatch.setattr(
+        v4ac, "generate_v4y_oof_primary_events", lambda *args, **kwargs: events
+    )
     observed: list[int] = []
 
-    def fake_trade(data: DataFrame, event_index: int, policy: str) -> tuple[dict[str, Any], int]:
+    def fake_trade(
+        data: DataFrame, event_index: int, policy: str
+    ) -> tuple[dict[str, Any], int]:
         observed.append(event_index)
         return _trade(net=50.0 if policy == "TB_1.5_1.0" else -10.0), event_index + 5
 
     monkeypatch.setattr(v4ac, "_single_event_trade", fake_trade)
-    training, diagnostics = v4ac._meta_training_rows(bars, features, signals, 700, "TRAIL_2.0")
+    training, diagnostics = v4ac._meta_training_rows(
+        bars, features, signals, 700, "TRAIL_2.0"
+    )
     assert observed == [250, 275, 674]
     assert training["meta_label"].tolist() == [0, 0, 0]
     assert training["primary_oof"].all()
@@ -281,13 +358,23 @@ def test_meta_training_rows_and_error_classifier_handle_empty_support(
     bars = _bars()
     features = DataFrame({"feature": np.ones(len(bars))})
     signals = Series(False, index=range(len(bars)), dtype=bool)
-    empty = DataFrame(columns=["event_index", "fold_id", "primary_signal", "primary_oof"])
-    monkeypatch.setattr(v4ac, "generate_v4y_oof_primary_events", lambda *args, **kwargs: empty)
+    empty = DataFrame(
+        columns=["event_index", "fold_id", "primary_signal", "primary_oof"]
+    )
+    monkeypatch.setattr(
+        v4ac, "generate_v4y_oof_primary_events", lambda *args, **kwargs: empty
+    )
     with pytest.raises(ValueError, match="v4ac_meta_training_events_empty"):
         v4ac._meta_training_rows(bars, features, signals, 700, "TB_1.5_1.0")
-    assert v4ac._is_expected_meta_support_error(ValueError("v4x_insufficient_meta_class_support"))
-    assert v4ac._is_expected_meta_support_error(ValueError("v4ac_meta_training_events_empty"))
-    assert not v4ac._is_expected_meta_support_error(ValueError("v4x_meta_features_non_finite"))
+    assert v4ac._is_expected_meta_support_error(
+        ValueError("v4x_insufficient_meta_class_support")
+    )
+    assert v4ac._is_expected_meta_support_error(
+        ValueError("v4ac_meta_training_events_empty")
+    )
+    assert not v4ac._is_expected_meta_support_error(
+        ValueError("v4x_meta_features_non_finite")
+    )
 
 
 def test_meta_model_sample_gate_skips_without_training(
@@ -297,7 +384,8 @@ def test_meta_model_sample_gate_skips_without_training(
     features = DataFrame({"feature": np.ones(len(bars))})
     signals = Series(False, index=range(len(bars)), dtype=bool)
     monkeypatch.setattr(
-        v4ac, "evaluate_primary_train_sample_gate",
+        v4ac,
+        "evaluate_primary_train_sample_gate",
         lambda *args, **kwargs: {"passed": False, "observed_primary_buy_count": 49},
     )
 
@@ -305,7 +393,9 @@ def test_meta_model_sample_gate_skips_without_training(
         raise AssertionError("meta_training_must_not_run_before_sample_gate")
 
     monkeypatch.setattr(v4ac, "_meta_training_rows", unexpected)
-    model, diagnostics, status = v4ac._train_meta_model(bars, features, signals, 700, "TB_1.5_1.0")
+    model, diagnostics, status = v4ac._train_meta_model(
+        bars, features, signals, 700, "TB_1.5_1.0"
+    )
     assert model is None
     assert diagnostics["sample_gate"]["observed_primary_buy_count"] == 49
     assert status == "SKIPPED_INSUFFICIENT_PRIMARY_SIGNALS"
@@ -317,29 +407,43 @@ def test_meta_model_fit_records_purge_and_validation_isolation(
     bars = _bars()
     features = DataFrame({"feature": np.ones(len(bars))})
     signals = Series(False, index=range(len(bars)), dtype=bool)
-    training = DataFrame({
-        "event_index": [220, 240, 260], "fold_id": [0, 1, 2],
-        "label_end_idx": [225, 245, 250], "meta_label": [0, 1, 1],
-        "primary_signal": ["BUY"] * 3, "primary_oof": [True] * 3,
-        "feature": [1.0, 2.0, 3.0],
-    })
+    training = DataFrame(
+        {
+            "event_index": [220, 240, 260],
+            "fold_id": [0, 1, 2],
+            "label_end_idx": [225, 245, 250],
+            "meta_label": [0, 1, 1],
+            "primary_signal": ["BUY"] * 3,
+            "primary_oof": [True] * 3,
+            "feature": [1.0, 2.0, 3.0],
+        }
+    )
     monkeypatch.setattr(
-        v4ac, "evaluate_primary_train_sample_gate",
+        v4ac,
+        "evaluate_primary_train_sample_gate",
         lambda *args, **kwargs: {"passed": True, "observed_primary_buy_count": 60},
     )
     monkeypatch.setattr(
-        v4ac, "_meta_training_rows",
+        v4ac,
+        "_meta_training_rows",
         lambda *args, **kwargs: (training, {"label_exit_policy": "TB_1.5_1.0"}),
     )
     monkeypatch.setattr(
-        v4ac, "split_meta_fit_calibration",
+        v4ac,
+        "split_meta_fit_calibration",
         lambda data, **kwargs: (data.iloc[:2].copy(), data.iloc[2:].copy()),
     )
     monkeypatch.setattr(
-        v4ac, "fit_lightgbm_meta_filter",
-        lambda *args, **kwargs: (object(), {"selected_threshold": 0.62, "calibration_labels_used": False}),
+        v4ac,
+        "fit_lightgbm_meta_filter",
+        lambda *args, **kwargs: (
+            object(),
+            {"selected_threshold": 0.62, "calibration_labels_used": False},
+        ),
     )
-    model, diagnostics, status = v4ac._train_meta_model(bars, features, signals, 700, "TB_1.5_1.0")
+    model, diagnostics, status = v4ac._train_meta_model(
+        bars, features, signals, 700, "TB_1.5_1.0"
+    )
     assert model is not None and status == "TRAINED"
     assert diagnostics["fit_rows"] == 2 and diagnostics["calibration_rows"] == 1
     assert diagnostics["fit_labels_purged_before_calibration"] is True
@@ -354,20 +458,29 @@ def test_meta_model_skips_expected_support_but_propagates_other_errors(
     features = DataFrame({"feature": np.ones(len(bars))})
     signals = Series(False, index=range(len(bars)), dtype=bool)
     monkeypatch.setattr(
-        v4ac, "evaluate_primary_train_sample_gate",
+        v4ac,
+        "evaluate_primary_train_sample_gate",
         lambda *args, **kwargs: {"passed": True, "observed_primary_buy_count": 60},
     )
     monkeypatch.setattr(
-        v4ac, "_meta_training_rows",
-        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("v4x_insufficient_meta_class_support")),
+        v4ac,
+        "_meta_training_rows",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            ValueError("v4x_insufficient_meta_class_support")
+        ),
     )
-    model, diagnostics, status = v4ac._train_meta_model(bars, features, signals, 700, "TRAIL_2.0")
+    model, diagnostics, status = v4ac._train_meta_model(
+        bars, features, signals, 700, "TRAIL_2.0"
+    )
     assert model is None
     assert diagnostics["skip_reason"] == "v4x_insufficient_meta_class_support"
     assert status == "SKIPPED_INSUFFICIENT_META_SUPPORT"
     monkeypatch.setattr(
-        v4ac, "_meta_training_rows",
-        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("v4x_meta_features_non_finite")),
+        v4ac,
+        "_meta_training_rows",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            ValueError("v4x_meta_features_non_finite")
+        ),
     )
     with pytest.raises(ValueError, match="v4x_meta_features_non_finite"):
         v4ac._train_meta_model(bars, features, signals, 700, "TRAIL_2.0")
@@ -377,13 +490,22 @@ def test_forward_probabilities_align_and_reject_invalid_values(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     features = DataFrame({"x": [1.0, 2.0, 3.0]})
-    monkeypatch.setattr(v4ac, "predict_meta_probabilities", lambda model, data: np.array([0.25, 0.75]))
-    assert v4ac._forward_meta_probabilities(features, [0, 2], object()) == {0: 0.25, 2: 0.75}
+    monkeypatch.setattr(
+        v4ac, "predict_meta_probabilities", lambda model, data: np.array([0.25, 0.75])
+    )
+    assert v4ac._forward_meta_probabilities(features, [0, 2], object()) == {
+        0: 0.25,
+        2: 0.75,
+    }
     assert v4ac._forward_meta_probabilities(features, [], object()) == {}
-    monkeypatch.setattr(v4ac, "predict_meta_probabilities", lambda model, data: np.array([0.2]))
+    monkeypatch.setattr(
+        v4ac, "predict_meta_probabilities", lambda model, data: np.array([0.2])
+    )
     with pytest.raises(ValueError, match="v4ac_meta_probability_alignment_invalid"):
         v4ac._forward_meta_probabilities(features, [0, 2], object())
-    monkeypatch.setattr(v4ac, "predict_meta_probabilities", lambda model, data: np.array([float("nan")]))
+    monkeypatch.setattr(
+        v4ac, "predict_meta_probabilities", lambda model, data: np.array([float("nan")])
+    )
     with pytest.raises(ValueError, match="v4ac_meta_probability_values_invalid"):
         v4ac._forward_meta_probabilities(features, [0], object())
 
@@ -392,34 +514,57 @@ def test_economic_cell_runs_primary_and_preserves_null_meta_metrics(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     bars = _bars()
-    monkeypatch.setattr(v4ac, "simulate_signals", lambda *args, **kwargs: _replay([_trade()]))
+    monkeypatch.setattr(
+        v4ac, "simulate_signals", lambda *args, **kwargs: _replay([_trade()])
+    )
     primary, rows = v4ac._run_economic_cell(
-        symbol="BTCUSDT", timeframe="1h", policy="TB_1.5_1.0",
-        mode="PRIMARY_ONLY", bars=bars, signal_indices=[10],
-        raw_signal_count=10, eligible_signal_count=8, forward_end=850,
+        symbol="BTCUSDT",
+        timeframe="1h",
+        policy="TB_1.5_1.0",
+        mode="PRIMARY_ONLY",
+        bars=bars,
+        signal_indices=[10],
+        raw_signal_count=10,
+        eligible_signal_count=8,
+        forward_end=850,
     )
     assert primary["status"] == "COMPLETED" and primary["trade_count"] == 1
     assert primary["fee_bps_per_side"] == 10.0 and len(rows) == 1
     skipped, skipped_rows = v4ac._run_economic_cell(
-        symbol="BTCUSDT", timeframe="1h", policy="TRAIL_2.0",
-        mode="META_FILTERED", bars=bars, signal_indices=[],
-        raw_signal_count=10, eligible_signal_count=8, forward_end=850,
+        symbol="BTCUSDT",
+        timeframe="1h",
+        policy="TRAIL_2.0",
+        mode="META_FILTERED",
+        bars=bars,
+        signal_indices=[],
+        raw_signal_count=10,
+        eligible_signal_count=8,
+        forward_end=850,
         meta_status="SKIPPED_INSUFFICIENT_META_SUPPORT",
     )
     assert skipped["trade_count"] is None and skipped["net_profit_factor"] is None
     assert skipped_rows == []
     with pytest.raises(ValueError, match="v4ac_mode_out_of_policy"):
         v4ac._run_economic_cell(
-            symbol="BTCUSDT", timeframe="1h", policy="TRAIL_2.0",
-            mode="OTHER", bars=bars, signal_indices=[], raw_signal_count=0,
-            eligible_signal_count=0, forward_end=850,
+            symbol="BTCUSDT",
+            timeframe="1h",
+            policy="TRAIL_2.0",
+            mode="OTHER",
+            bars=bars,
+            signal_indices=[],
+            raw_signal_count=0,
+            eligible_signal_count=0,
+            forward_end=850,
         )
 
 
 def test_meta_skip_cell_has_null_unavailable_economics() -> None:
     cell = v4ac._meta_skip_cell(
-        symbol="ETHUSDT", timeframe="4h", policy="TRAIL_2.0",
-        raw_signal_count=4, eligible_signal_count=3,
+        symbol="ETHUSDT",
+        timeframe="4h",
+        policy="TRAIL_2.0",
+        raw_signal_count=4,
+        eligible_signal_count=3,
         reason="SKIPPED_INSUFFICIENT_PRIMARY_SIGNALS",
         diagnostics={"skip_reason": "minimum_primary_buy_count_not_met"},
     )
@@ -436,19 +581,33 @@ def test_symbol_runner_preserves_both_modes_across_all_timeframes(
     signals.iloc[[700, 720]] = True
     features = DataFrame({"x": np.ones(len(bars))})
     monkeypatch.setattr(v4ac, "resample_ohlcv", lambda source, timeframe: bars)
-    monkeypatch.setattr(v4ac, "_primary_features_and_signals", lambda data: (features, signals))
-    monkeypatch.setattr(v4ac, "_outer_boundaries", lambda count: (700, 850))
-    monkeypatch.setattr(v4ac, "_forward_primary_signal_indices", lambda *args: [700, 720])
     monkeypatch.setattr(
-        v4ac, "_run_economic_cell",
-        lambda **kwargs: ({
-            "candidate_id": f"{kwargs['symbol']}|{kwargs['timeframe']}|24|{kwargs['policy']}|{kwargs['mode']}",
-            "mode": kwargs["mode"], "status": "COMPLETED",
-        }, []),
+        v4ac, "_primary_features_and_signals", lambda data: (features, signals)
+    )
+    monkeypatch.setattr(v4ac, "_outer_boundaries", lambda count: (700, 850))
+    monkeypatch.setattr(
+        v4ac, "_forward_primary_signal_indices", lambda *args: [700, 720]
     )
     monkeypatch.setattr(
-        v4ac, "_train_meta_model",
-        lambda *args: (None, {"skip_reason": "insufficient"}, "SKIPPED_INSUFFICIENT_META_SUPPORT"),
+        v4ac,
+        "_run_economic_cell",
+        lambda **kwargs: (
+            {
+                "candidate_id": f"{kwargs['symbol']}|{kwargs['timeframe']}|24|{kwargs['policy']}|{kwargs['mode']}",
+                "mode": kwargs["mode"],
+                "status": "COMPLETED",
+            },
+            [],
+        ),
+    )
+    monkeypatch.setattr(
+        v4ac,
+        "_train_meta_model",
+        lambda *args: (
+            None,
+            {"skip_reason": "insufficient"},
+            "SKIPPED_INSUFFICIENT_META_SUPPORT",
+        ),
     )
     cells, trades, decisions, windows = v4ac._run_symbol_timeframe("BTCUSDT", bars)
     assert len(cells) == 16
@@ -463,7 +622,10 @@ def test_build_report_requires_exact_32_cells_and_sets_non_go_safety() -> None:
     assert len(report["cells"]) == 32
     assert report["horizon_bars"] == 24
     assert report["horizon_hours_by_timeframe"] == {
-        "15m": 6.0, "30m": 12.0, "1h": 24.0, "4h": 96.0,
+        "15m": 6.0,
+        "30m": 12.0,
+        "1h": 24.0,
+        "4h": 96.0,
     }
     assert report["execution_cost_contract"]["round_trip_cost_bps"] == 30.0
     assert report["meta_model"]["enabled"] is True
@@ -489,8 +651,10 @@ def test_step_summary_contains_32_rows_modes_costs_and_safety() -> None:
     cells[-1]["net_profit_factor"] = None
     cells[-1]["net_pnl_total_usd"] = None
     report = {
-        "schema_version": v4ac.SCHEMA, "commit_sha": "a" * 40,
-        "cells": cells, "meta_scenarios": scenarios,
+        "schema_version": v4ac.SCHEMA,
+        "commit_sha": "a" * 40,
+        "cells": cells,
+        "meta_scenarios": scenarios,
     }
     rendered = v4ac.render_step_summary(report)
     assert rendered.count("| BTCUSDT |") + rendered.count("| ETHUSDT |") == 32
@@ -510,23 +674,31 @@ def test_csv_writer_and_pf_formatter_cover_branches(tmp_path: Path) -> None:
     assert v4ac._format_pf(1.23456, False) == "1.2346"
     output = tmp_path / "nested" / "trades.csv"
     v4ac._write_csv(output, [{"trade_index": 1, "net_pnl_usd": 2.0}])
-    assert output.read_text(encoding="utf-8").splitlines()[0] == "trade_index,net_pnl_usd"
+    assert (
+        output.read_text(encoding="utf-8").splitlines()[0] == "trade_index,net_pnl_usd"
+    )
     empty = tmp_path / "empty.csv"
     v4ac._write_csv(empty, [])
     assert empty.read_text(encoding="utf-8") == ""
 
 
 def test_run_v4ac_writes_full_matrix_and_artifact_files(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     cells, scenarios = _matrix()
-    windows = [{"symbol": "BTCUSDT", "timeframe": timeframe} for timeframe in v4ac.TIMEFRAMES]
+    windows = [
+        {"symbol": "BTCUSDT", "timeframe": timeframe} for timeframe in v4ac.TIMEFRAMES
+    ]
 
     def fake_run_symbol(
-        symbol: str, source_bars: DataFrame,
+        symbol: str,
+        source_bars: DataFrame,
     ) -> tuple[
-        list[dict[str, Any]], list[dict[str, Any]],
-        list[dict[str, Any]], list[dict[str, Any]],
+        list[dict[str, Any]],
+        list[dict[str, Any]],
+        list[dict[str, Any]],
+        list[dict[str, Any]],
     ]:
         selected = [dict(item) for item in cells if item["symbol"] == symbol]
         for item in selected:
@@ -535,7 +707,8 @@ def test_run_v4ac_writes_full_matrix_and_artifact_files(
         return selected, [], [], [dict(item) for item in windows]
 
     monkeypatch.setattr(
-        v4ac, "_load_diagnostic_datasets",
+        v4ac,
+        "_load_diagnostic_datasets",
         lambda *args: (
             {"BTCUSDT": _bars(), "ETHUSDT": _bars()},
             [{"symbol": "BTCUSDT"}, {"symbol": "ETHUSDT"}],
@@ -546,8 +719,12 @@ def test_run_v4ac_writes_full_matrix_and_artifact_files(
     trades_path = tmp_path / "trades.csv"
     decisions_path = tmp_path / "decisions.csv"
     report = v4ac.run_v4ac(
-        tmp_path, report_path, trades_path, decisions_path,
-        days=730, commit_sha="a" * 40,
+        tmp_path,
+        report_path,
+        trades_path,
+        decisions_path,
+        days=730,
+        commit_sha="a" * 40,
     )
     assert len(report["cells"]) == 32
     assert report_path.is_file()
