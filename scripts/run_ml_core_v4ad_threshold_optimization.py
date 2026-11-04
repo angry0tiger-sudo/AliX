@@ -13,10 +13,23 @@ import pandas as pd
 from pandas import DataFrame
 
 from scripts import run_ml_core_v4ac_cost_optimization as v4ac
+from scripts.run_ml_core_real_data_baseline import (
+    SYMBOLS,
+    TIMEFRAME_MINUTES,
+    _load_diagnostic_datasets,
+    resample_ohlcv,
+)
+from services.meta_labeling.v4y import (
+    V4Y_EMA_TREND_PERIOD,
+    evaluate_primary_train_sample_gate,
+    fit_lightgbm_meta_filter,
+    predict_meta_probabilities,
+    split_meta_fit_calibration,
+)
 from services.ml_core.binary_calibration import select_dynamic_buy_threshold
 
 SCHEMA = "alix.ml-core.v4ad-threshold-optimization.v1"
-SYMBOLS = v4ac.SYMBOLS
+SYMBOLS = tuple(SYMBOLS)
 TIMEFRAMES = ("1h", "4h")
 BASE_EXIT_POLICIES = ("TB_1.5_1.0", "TRAIL_2.0")
 REFINED_TRAIL_POLICY = "TRAIL_2.0_ACT1.5"
@@ -59,9 +72,9 @@ def _train_meta_model_threshold_sweep(
     policy: str,
 ) -> tuple[Any | None, dict[str, Any], str]:
     """Fit one model and derive every cutoff from the same purged OOF calibration rows."""
-    gate = v4ac.evaluate_primary_train_sample_gate(
+    gate = evaluate_primary_train_sample_gate(
         primary_signals,
-        train_start_index=v4ac.V4Y_EMA_TREND_PERIOD,
+        train_start_index=V4Y_EMA_TREND_PERIOD,
         train_end_index=train_end,
         minimum_signal_count=v4ac.META_MINIMUM_TRAIN_SIGNALS,
     )
@@ -72,18 +85,18 @@ def _train_meta_model_threshold_sweep(
         training, diagnostics = v4ac._meta_training_rows(
             bars, features, primary_signals, train_end, policy
         )
-        fit_rows, calibration_rows = v4ac.split_meta_fit_calibration(
+        fit_rows, calibration_rows = split_meta_fit_calibration(
             training, outer_train_end_index=train_end
         )
         feature_columns = list(features.columns)
-        model, fit_diagnostics = v4ac.fit_lightgbm_meta_filter(
+        model, fit_diagnostics = fit_lightgbm_meta_filter(
             fit_rows.loc[:, feature_columns],
             fit_rows["meta_label"],
             calibration_rows.loc[:, feature_columns],
             target_accept_fraction=0.50,
         )
         calibration_features = calibration_rows.loc[:, feature_columns]
-        calibration_probabilities = v4ac.predict_meta_probabilities(
+        calibration_probabilities = predict_meta_probabilities(
             model, calibration_features
         )
         if (
@@ -308,7 +321,7 @@ def _run_symbol_timeframe(
 
     for timeframe in TIMEFRAMES:
         _validate_timeframe(timeframe)
-        bars = v4ac.resample_ohlcv(source_bars, timeframe)
+        bars = resample_ohlcv(source_bars, timeframe)
         features, primary_signals = v4ac._primary_features_and_signals(bars)
         train_end, forward_end = v4ac._outer_boundaries(len(bars))
         primary_indices = v4ac._forward_primary_signal_indices(
@@ -461,7 +474,7 @@ def _build_report(
         "timeframes": list(TIMEFRAMES),
         "horizon_bars": v4ac.HORIZON_BARS,
         "horizon_hours_by_timeframe": {
-            timeframe: v4ac.HORIZON_BARS * v4ac.TIMEFRAME_MINUTES[timeframe] / 60
+            timeframe: v4ac.HORIZON_BARS * TIMEFRAME_MINUTES[timeframe] / 60
             for timeframe in TIMEFRAMES
         },
         "exit_policies_by_timeframe": {
@@ -584,7 +597,7 @@ def run_v4ad(
     commit_sha: str,
 ) -> dict[str, Any]:
     v4ac._validate_run_request(days, commit_sha)
-    datasets, provenance = v4ac._load_diagnostic_datasets(input_dir, days, commit_sha)
+    datasets, provenance = _load_diagnostic_datasets(input_dir, days, commit_sha)
     cells: list[dict[str, Any]] = []
     trades: list[dict[str, Any]] = []
     decisions: list[dict[str, Any]] = []

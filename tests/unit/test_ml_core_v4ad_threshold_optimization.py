@@ -143,7 +143,7 @@ def test_meta_threshold_sweep_fits_one_model_and_uses_calibration_only(
         }
     )
     monkeypatch.setattr(
-        v4ac,
+        v4ad,
         "evaluate_primary_train_sample_gate",
         lambda *args, **kwargs: {"passed": True, "observed_primary_buy_count": 60},
     )
@@ -160,7 +160,7 @@ def test_meta_threshold_sweep_fits_one_model_and_uses_calibration_only(
         ),
     )
     monkeypatch.setattr(
-        v4ac,
+        v4ad,
         "split_meta_fit_calibration",
         lambda data, **kwargs: (data.iloc[:2].copy(), data.iloc[2:].copy()),
     )
@@ -173,9 +173,9 @@ def test_meta_threshold_sweep_fits_one_model_and_uses_calibration_only(
             "calibration_labels_used": False,
         }
 
-    monkeypatch.setattr(v4ac, "fit_lightgbm_meta_filter", fake_fit)
+    monkeypatch.setattr(v4ad, "fit_lightgbm_meta_filter", fake_fit)
     monkeypatch.setattr(
-        v4ac,
+        v4ad,
         "predict_meta_probabilities",
         lambda model, data: np.asarray([0.1, 0.4, 0.6, 0.9], dtype=float),
     )
@@ -241,7 +241,7 @@ def test_symbol_runner_builds_complete_1h_4h_threshold_and_exit_matrix(
     signals = Series(False, index=range(len(bars)), dtype=bool)
     signals.iloc[[700, 720]] = True
 
-    monkeypatch.setattr(v4ac, "resample_ohlcv", lambda source, timeframe: bars)
+    monkeypatch.setattr(v4ad, "resample_ohlcv", lambda source, timeframe: bars)
     monkeypatch.setattr(
         v4ac, "_primary_features_and_signals", lambda data: (features, signals)
     )
@@ -427,7 +427,7 @@ def test_run_v4ad_writes_report_and_csv_artifacts(
         )
 
     monkeypatch.setattr(
-        v4ac,
+        v4ad,
         "_load_diagnostic_datasets",
         lambda *args: (
             {"BTCUSDT": DataFrame(), "ETHUSDT": DataFrame()},
