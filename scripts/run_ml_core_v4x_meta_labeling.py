@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-import math
 from pathlib import Path
 from typing import Any
 
@@ -314,9 +313,20 @@ def _run_candidate(
     features, primary_buy_signal = build_sma_primary_features(
         bars, candle_features
     )
-    training, training_diagnostics = _training_oof_events(
-        bars, features, primary_buy_signal, train_end
-    )
+    try:
+        training, training_diagnostics = _training_oof_events(
+            bars, features, primary_buy_signal, train_end
+        )
+    except ValueError as error:
+        code = str(error)
+        if code in {
+            "v4x_oof_primary_signals_empty",
+            "v4x_costed_meta_labels_empty",
+        }:
+            return _skipped_candidate(
+                f"{pair}|{timeframe}", symbol, timeframe, code, {}
+            )
+        raise
     try:
         fit_rows, calibration_rows = split_meta_fit_calibration(
             training, outer_train_end_index=train_end
