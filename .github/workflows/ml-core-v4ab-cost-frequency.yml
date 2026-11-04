@@ -1,0 +1,308 @@
+name: AliX V4-AB Cost-Frequency Diagnostic Sweep
+
+on:
+  push:
+    branches:
+      - research/ml-core-v4ab-cost-frequency
+    paths:
+      - .github/workflows/ml-core-v4ab-cost-frequency.yml
+      - scripts/run_ml_core_v4ab_cost_frequency.py
+      - scripts/run_ml_core_real_data_baseline.py
+      - services/ml_core/economic_backtest.py
+      - services/meta_labeling/v4y.py
+      - tests/unit/test_ml_core_v4ab_cost_frequency.py
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: alix-v4ab-cost-frequency
+  cancel-in-progress: false
+
+jobs:
+  v4ab-cost-frequency-diagnostic:
+    if: github.ref == 'refs/heads/research/ml-core-v4ab-cost-frequency'
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      ALIx_ENV: paper
+      ALIx_DRY_RUN: "true"
+      ALIx_ALLOW_LIVE_TRADING: "false"
+      ALIx_REPORTING_ENABLED: "false"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      GH_TOKEN: ${ github.token }
+    steps:
+      - name: Require Standard CI success for this exact V4-AB commit
+        env:
+          GITHUB_REPOSITORY: ${ github.repository }
+          TARGET_SHA: ${ github.sha }
+          TARGET_BRANCH: ${ github.ref_name }
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import time
+          from urllib.error import HTTPError, URLError
+          from urllib.request import Request, urlopen
+
+          repository = os.environ["GITHUB_REPOSITORY"]
+          target_sha = os.environ["TARGET_SHA"]
+          target_branch = os.environ["TARGET_BRANCH"]
+          token = os.environ["GH_TOKEN"]
+          expected_branch = "research/ml-core-v4ab-cost-frequency"
+          if target_branch != expected_branch:
+              raise SystemExit("unsupported_v4ab_branch:" + target_branch)
+
+          deadline = time.monotonic() + 90 * 60
+          url = (
+              f"https://api.github.com/repos/{repository}/actions/workflows/ci.yml/runs"
+              f"?head_sha={target_sha}&per_page=100"
+          )
+          while time.monotonic() < deadline:
+              request = Request(
+                  url,
+                  headers={
+                      "Accept": "application/vnd.github+json",
+                      "Authorization": f"Bearer {token}",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  },
+              )
+              try:
+                  with urlopen(request, timeout=20) as response:
+                      payload = json.load(response)
+              except (HTTPError, URLError, TimeoutError) as error:
+                  raise SystemExit(
+                      f"ci_status_lookup_failed:{type(error).__name__}"
+                  ) from None
+
+              matching = [
+                  run for run in payload.get("workflow_runs", [])
+                  if run.get("head_sha") == target_sha
+                  and run.get("head_branch") == expected_branch
+                  and run.get("event") == "push"
+              ]
+              if matching:
+                  latest = max(
+                      matching,
+                      key=lambda item: (
+                          item.get("run_number", 0),
+                          item.get("run_attempt", 0),
+                      ),
+                  )
+                  if latest.get("status") == "completed":
+                      if latest.get("conclusion") != "success":
+                          raise SystemExit(
+                              "ci_green_gate_blocked:"
+                              + str(latest.get("conclusion"))
+                              + ":"
+                              + target_sha
+                          )
+                      print(json.dumps({
+                          "gate": "PASS",
+                          "target_sha": target_sha,
+                          "ci_run_id": latest.get("id"),
+                          "ci_run_url": latest.get("html_url"),
+                      }, sort_keys=True))
+                      break
+              time.sleep(30)
+          else:
+              raise SystemExit("ci_green_gate_timeout:" + target_sha)
+          PY
+
+      - name: Checkout exact V4-AB commit without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Confirm diagnostic scope and fail-closed safety
+        env:
+          TARGET_SHA: ${ github.sha }
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/research/ml-core-v4ab-cost-frequency"
+          test "$GITHUB_SHA" = "$TARGET_SHA"
+          printf 'commit_sha=%s\n' "$GITHUB_SHA"
+          printf 'primary_model=CAUSAL_BOLLINGER_UPPER_BREAKOUT_EMA200_TREND\n'
+          printf 'timeframe=1h\nhorizons=24,72,120\n'
+          printf 'exit_policies=TB_1.5_1.0,TIME_N,TRAIL_2.0\n'
+          printf 'fee_bps_per_side=25\nslippage_bps_per_side=20\nround_trip_cost_bps=90\n'
+          printf 'Champion=null\norder_permission=false\ntrading_authorization=NO-GO\n'
+          printf 'private_api_calls=0\nreal_order_attempts=0\nsequence_model_used=false\n'
+
+      - name: Set up pinned Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install pinned V4-AB diagnostic dependencies
+        run: |
+          python -m pip install pip==25.2
+          python -m pip install numpy==2.5.4 pandas==2.3.3 scikit-learn==1.9.0 lightgbm==4.7.0
+
+      - name: Fetch complete public Binance Spot 730-day 1-minute datasets
+        run: |
+          set -euo pipefail
+          data_dir="$RUNNER_TEMP/alix-v4ab-market-data"
+          rm -rf "$data_dir"
+          mkdir -p "$data_dir"
+          for symbol in BTCUSDT ETHUSDT; do
+            log_path="$RUNNER_TEMP/v4ab-fetch-730-$symbol.log"
+            if python scripts/fetch_binance_public_ohlcv.py \
+              --days 730 \
+              --symbol "$symbol" \
+              --interval 1m \
+              --output-dir "$data_dir" \
+              --commit-sha "$GITHUB_SHA" >"$log_path" 2>&1; then
+              cat "$log_path"
+            else
+              cat "$log_path"
+              echo "Public Spot fetch failed; refusing partial data." >&2
+              exit 1
+            fi
+          done
+          printf 'requested_days=730\nprovider=Binance Spot public klines API\n'
+          printf 'private_api_calls=0\ncredentials_used=false\n'
+
+      - name: Run the fixed V4-AB 18-cell economic sweep
+        run: |
+          set -euo pipefail
+          python -m scripts.run_ml_core_v4ab_cost_frequency \
+            --input-dir "$RUNNER_TEMP/alix-v4ab-market-data" \
+            --output-report "$GITHUB_WORKSPACE/alix-v4ab-cost-frequency-report.json" \
+            --output-trades-csv "$GITHUB_WORKSPACE/alix-v4ab-cost-frequency-trades.csv" \
+            --days 730 \
+            --commit-sha "$GITHUB_SHA"
+
+      - name: Render V4-AB candidate metrics to GitHub Step Summary
+        env:
+          REPORT_PATH: ${ github.workspace }}/alix-v4ab-cost-frequency-report.json
+          SUMMARY_PATH: ${ github.workspace }}/alix-v4ab-cost-frequency-step-summary.md
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          from scripts.run_ml_core_v4ab_cost_frequency import render_step_summary
+
+          report = json.loads(Path(os.environ["REPORT_PATH"]).read_text(encoding="utf-8"))
+          if report.get("schema_version") != "alix.ml-core.v4ab-cost-frequency.v1":
+              raise SystemExit("v4ab_step_summary_report_schema_invalid")
+          if len(report.get("cells", [])) != 18:
+              raise SystemExit("v4ab_step_summary_cell_count_invalid")
+          summary = render_step_summary(report)
+          required = (
+              "Primary BUYs (raw)", "Eligible BUYs", "Gross PF", "Net PF",
+              "Win Rate", "Median Bars Held", "Max DD", "Gross PnL USD",
+              "Net PnL USD", "Champion=null", "order_permission=false",
+              "trading_authorization=NO-GO",
+          )
+          if any(value not in summary for value in required):
+              raise SystemExit("v4ab_step_summary_required_metrics_missing")
+          Path(os.environ["SUMMARY_PATH"]).write_text(summary, encoding="utf-8")
+          with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a", encoding="utf-8") as handle:
+              handle.write(summary)
+          print(summary, end="")
+          PY
+
+      - name: Validate matrix, costs, ledger arithmetic, and safety
+        env:
+          REPORT_PATH: ${ github.workspace }}/alix-v4ab-cost-frequency-report.json
+          TRADES_CSV: ${ github.workspace }}/alix-v4ab-cost-frequency-trades.csv
+          TARGET_SHA: ${ github.sha }
+        run: |
+          python - <<'PY'
+          import csv
+          import json
+          import math
+          import os
+          from pathlib import Path
+
+          report = json.loads(Path(os.environ["REPORT_PATH"]).read_text(encoding="utf-8"))
+          assert report["schema_version"] == "alix.ml-core.v4ab-cost-frequency.v1"
+          assert report["commit_sha"] == os.environ["TARGET_SHA"]
+          assert report["requested_days"] == 730
+          assert report["symbols"] == ["BTCUSDT", "ETHUSDT"]
+          assert report["timeframes"] == ["1h"]
+          assert report["horizons_bars"] == [24, 72, 120]
+          assert report["exit_policies"] == ["TB_1.5_1.0", "TIME_N", "TRAIL_2.0"]
+          assert report["primary_model"]["model_fit_performed"] is False
+          assert report["primary_model"]["meta_model_used"] is False
+          assert report["primary_model"]["sequence_model_used"] is False
+          assert report["evaluation_window"]["common_event_window"] is True
+          assert report["evaluation_window"]["last_15_percent_final_holdout_used"] is False
+          costs = report["execution_cost_contract"]
+          assert costs["fee_bps_per_side"] == 25.0
+          assert costs["slippage_bps_per_side"] == 20.0
+          assert costs["round_trip_cost_bps"] == 90.0
+
+          expected = {
+              f"{symbol}|1h|{horizon}|{policy}"
+              for symbol in ("BTCUSDT", "ETHUSDT")
+              for horizon in (24, 72, 120)
+              for policy in ("TB_1.5_1.0", "TIME_N", "TRAIL_2.0")
+          }
+          assert len(report["cells"]) == 18
+          assert {cell["candidate_id"] for cell in report["cells"]} == expected
+          for cell in report["cells"]:
+              assert cell["primary_signal_count"] >= cell["eligible_primary_signal_count"] >= 0
+              assert cell["trade_count"] >= 0
+              assert 0.0 <= cell["win_rate"] <= 1.0
+              assert math.isfinite(cell["max_drawdown_percent"])
+              assert cell["max_drawdown_percent"] >= 0.0
+              for field in (
+                  "gross_pnl_total_usd", "net_pnl_total_usd",
+                  "fees_total_usd", "slippage_total_usd",
+              ):
+                  assert math.isfinite(cell[field])
+              assert (cell["median_bars_held"] is None) == (cell["trade_count"] == 0)
+
+          with Path(os.environ["TRADES_CSV"]).open(newline="", encoding="utf-8") as handle:
+              trades = list(csv.DictReader(handle))
+          for trade in trades:
+              assert trade["direction"] == "LONG"
+              gross = float(trade["gross_market_pnl_usd"])
+              fees = float(trade["fees_usd"])
+              slippage = float(trade["slippage_cost_usd"])
+              net = float(trade["net_pnl_usd"])
+              assert math.isclose(gross - fees - slippage, net, rel_tol=0.0, abs_tol=0.02)
+              if trade["exit_policy"] == "TIME_N":
+                  assert trade["exit_reason"] == "TIME_EXIT"
+                  assert int(trade["bars_held"]) - 1 == int(trade["horizon_bars"])
+
+          safety = report["safety"]
+          assert safety["Champion"] is None
+          assert safety["order_permission"] is False
+          assert safety["trading_authorization"] == "NO-GO"
+          assert safety["private_api_calls"] == 0
+          assert safety["real_order_attempts"] == 0
+          assert safety["orders_or_execution_api_used"] is False
+          assert safety["credentials_used"] is False
+          assert safety["short_positions_supported"] is False
+          assert safety["sequence_model_used"] is False
+          assert report["promotion_status"] == "BLOCKED_PENDING_INDEPENDENT_OOS_AND_OWNER_REVIEW"
+          print(json.dumps({
+              "validation": "PASS",
+              "commit_sha": report["commit_sha"],
+              "cells": len(report["cells"]),
+              "trade_rows": len(trades),
+              "decision_branch": report["decision_rule"]["decision_branch"],
+              "Champion": None,
+              "order_permission": False,
+              "trading_authorization": "NO-GO",
+          }, sort_keys=True))
+          PY
+
+      - name: Upload V4-AB report, trades, and exact Step Summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alix-v4ab-cost-frequency-diagnostic
+          path: |
+            alix-v4ab-cost-frequency-report.json
+            alix-v4ab-cost-frequency-trades.csv
+            alix-v4ab-cost-frequency-step-summary.md
+          if-no-files-found: warn
