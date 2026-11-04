@@ -85,29 +85,43 @@ def build_sma_primary_features(
     return result, Series(signals, name="primary_buy_signal", dtype=bool)
 
 
+def _validate_oof_window(
+    row_count: int,
+    start_index: int,
+    stop_index: int,
+) -> None:
+    invalid_type = (
+        isinstance(start_index, bool)
+        or isinstance(stop_index, bool)
+        or not isinstance(start_index, int)
+        or not isinstance(stop_index, int)
+    )
+    invalid_bounds = (
+        start_index < 0 or stop_index > row_count or stop_index <= start_index
+    )
+    if invalid_type or invalid_bounds:
+        raise ValueError("v4x_oof_window_invalid")
+
+
+def _validate_oof_fold_count(
+    start_index: int,
+    stop_index: int,
+    fold_count: int,
+) -> None:
+    invalid_type = isinstance(fold_count, bool) or not isinstance(fold_count, int)
+    invalid_count = fold_count < 2 or stop_index - start_index < fold_count
+    if invalid_type or invalid_count:
+        raise ValueError("v4x_oof_fold_configuration_invalid")
+
+
 def _validate_oof_configuration(
     row_count: int,
     start_index: int,
     stop_index: int,
     fold_count: int,
 ) -> None:
-    if (
-        isinstance(start_index, bool)
-        or isinstance(stop_index, bool)
-        or not isinstance(start_index, int)
-        or not isinstance(stop_index, int)
-        or start_index < 0
-        or stop_index > row_count
-        or stop_index <= start_index
-    ):
-        raise ValueError("v4x_oof_window_invalid")
-    if (
-        isinstance(fold_count, bool)
-        or not isinstance(fold_count, int)
-        or fold_count < 2
-        or stop_index - start_index < fold_count
-    ):
-        raise ValueError("v4x_oof_fold_configuration_invalid")
+    _validate_oof_window(row_count, start_index, stop_index)
+    _validate_oof_fold_count(start_index, stop_index, fold_count)
 
 
 def _oof_fold_records(
