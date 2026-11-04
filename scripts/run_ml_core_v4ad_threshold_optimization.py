@@ -14,7 +14,7 @@ from pandas import DataFrame
 
 from scripts import run_ml_core_v4ac_cost_optimization as v4ac
 from scripts.run_ml_core_real_data_baseline import (
-    SYMBOLS,
+    SYMBOLS as BASELINE_SYMBOLS,
     TIMEFRAME_MINUTES,
     _load_diagnostic_datasets,
     resample_ohlcv,
@@ -29,6 +29,7 @@ from services.meta_labeling.v4y import (
 from services.ml_core.binary_calibration import select_dynamic_buy_threshold
 
 SCHEMA = "alix.ml-core.v4ad-threshold-optimization.v1"
+SYMBOLS = BASELINE_SYMBOLS
 TIMEFRAMES = ("1h", "4h")
 BASE_EXIT_POLICIES = ("TB_1.5_1.0", "TRAIL_2.0")
 REFINED_TRAIL_POLICY = "TRAIL_2.0_ACT1.5"
