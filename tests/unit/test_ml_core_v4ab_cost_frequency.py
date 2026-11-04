@@ -14,9 +14,7 @@ def _bars(count: int = 1_000) -> DataFrame:
     close = np.linspace(100.0, 150.0, count)
     return DataFrame(
         {
-            "date": pd.date_range(
-                "2024-01-01T00:00:00Z", periods=count, freq="h"
-            ),
+            "date": pd.date_range("2024-01-01T00:00:00Z", periods=count, freq="h"),
             "open": close,
             "high": close * 1.01,
             "low": close * 0.99,
@@ -101,11 +99,15 @@ def test_maturity_cutoff_and_forward_action_timestamps() -> None:
 
 def test_forward_action_guards_and_signal_timezone() -> None:
     bars = _bars()
-    with pytest.raises(ValueError, match="v4ab_primary_events_must_be_unique_and_ordered"):
+    with pytest.raises(
+        ValueError, match="v4ab_primary_events_must_be_unique_and_ordered"
+    ):
         v4ab._build_forward_actions(bars, [701, 700], 850)
     with pytest.raises(ValueError, match="v4ab_primary_event_outside_forward_window"):
         v4ab._build_forward_actions(bars, [849], 850)
-    with pytest.raises(ValueError, match="v4ab_forward_sentinel_collides_with_primary_event"):
+    with pytest.raises(
+        ValueError, match="v4ab_forward_sentinel_collides_with_primary_event"
+    ):
         v4ab._build_forward_actions(bars, [848], 850)
     with pytest.raises(ValueError, match="v4ab_signal_execution_index_invalid"):
         v4ab._signal_record(bars, 999, "BUY")
@@ -190,7 +192,9 @@ def test_summarize_replay_rejects_invalid_trade_shapes() -> None:
         "time_exit_triggered": True,
     }
     metrics = {"max_drawdown_percent": 0.0}
-    with pytest.raises(ValueError, match="v4ab_unconditional_time_exit_contract_failed"):
+    with pytest.raises(
+        ValueError, match="v4ab_unconditional_time_exit_contract_failed"
+    ):
         v4ab._summarize_replay(
             {"trades": [{**trade, "bars_held": 24}], "metrics": metrics},
             "TIME_N",
@@ -210,7 +214,10 @@ def test_summarize_replay_rejects_invalid_trade_shapes() -> None:
         )
     with pytest.raises(ValueError, match="v4ab_trade_pnl_non_finite"):
         v4ab._summarize_replay(
-            {"trades": [{**trade, "gross_market_pnl_usd": float("nan")}], "metrics": metrics},
+            {
+                "trades": [{**trade, "gross_market_pnl_usd": float("nan")}],
+                "metrics": metrics,
+            },
             "TB_1.5_1.0",
             24,
         )

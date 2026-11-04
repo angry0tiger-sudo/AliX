@@ -65,9 +65,7 @@ def _outer_boundaries(row_count: int) -> tuple[int, int]:
 
 def _primary_signal_series(bars: DataFrame) -> Series:
     """Delegate to the exact causal V4-Y closed-candle signal implementation."""
-    _, signals = build_v4y_primary_features(
-        bars, DataFrame(index=range(len(bars)))
-    )
+    _, signals = build_v4y_primary_features(bars, DataFrame(index=range(len(bars))))
     if len(signals) != len(bars) or signals.dtype != bool:
         raise ValueError("v4ab_primary_signal_alignment_invalid")
     return signals
@@ -220,9 +218,7 @@ def _summarize_replay(
         "gross_profit_factor_infinite_no_losses": gross_inf,
         "net_profit_factor": net_pf,
         "net_profit_factor_infinite_no_losses": net_inf,
-        "win_rate": round(sum(value > 0 for value in net) / count, 8)
-        if count
-        else 0.0,
+        "win_rate": round(sum(value > 0 for value in net) / count, 8) if count else 0.0,
         "gross_win_rate": round(sum(value > 0 for value in gross) / count, 8)
         if count
         else 0.0,
@@ -230,9 +226,7 @@ def _summarize_replay(
         "max_drawdown_percent": round(drawdown, 8),
         "gross_pnl_total_usd": round(sum(gross), 8),
         "net_pnl_total_usd": round(sum(net), 8),
-        "fees_total_usd": round(
-            sum(float(item["fees_usd"]) for item in trades), 8
-        ),
+        "fees_total_usd": round(sum(float(item["fees_usd"]) for item in trades), 8),
         "slippage_total_usd": round(
             sum(float(item["slippage_cost_usd"]) for item in trades), 8
         ),
@@ -333,9 +327,7 @@ def _decision_rule(cells: list[dict[str, Any]]) -> dict[str, Any]:
         "decision_branch": branch,
         "action": action,
         "gross_edge_cell_ids": [item["candidate_id"] for item in gross_edge],
-        "net_oos_confirmation_cell_ids": [
-            item["candidate_id"] for item in net_oos
-        ],
+        "net_oos_confirmation_cell_ids": [item["candidate_id"] for item in net_oos],
         "cost_drag_cell_ids": [item["candidate_id"] for item in cost_drag],
     }
 
