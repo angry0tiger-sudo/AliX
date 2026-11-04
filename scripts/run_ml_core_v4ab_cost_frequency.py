@@ -467,31 +467,57 @@ def _cell_is_skipped(item: dict[str, Any]) -> bool:
     return isinstance(status, str) and status == "SKIPPED_WARNING"
 
 
-def _decision_rule(cells: list[dict[str, Any]]) -> dict[str, Any]:
+def _partition_cell_status(
+    cells: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     completed = [item for item in cells if _cell_is_completed(item)]
     skipped = [item for item in cells if _cell_is_skipped(item)]
+    return completed, skipped
+
+
+def _classify_completed_cells(
+    completed: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     gross_edge = [item for item in completed if _cell_has_gross_edge(item)]
     net_oos = [item for item in completed if _cell_meets_net_oos_rule(item)]
     cost_drag = [item for item in gross_edge if _cell_has_cost_drag(item)]
+    return gross_edge, net_oos, cost_drag
 
-    if net_oos:
-        branch, action = _decision_branch(gross_edge, net_oos, cost_drag)
-        if skipped:
-            action += (
-                " The qualifying OOS cell is observed, but skipped cells remain "
-                "explicitly unresolved."
-            )
-    elif skipped:
-        branch = "INCOMPLETE_MATRIX_DUE_TO_SKIPPED_CELL_NO_FINAL_DECISION"
-        action = (
-            "No final Halt-Meta or Cost-Optimization decision is permitted: "
-            "at least one TIME_N cell was skipped and may change the registered "
-            "matrix-wide conclusion. Resolve the skipped cell before selecting "
-            "a final decision branch."
+
+def _incomplete_matrix_decision() -> tuple[str, str]:
+    return (
+        "INCOMPLETE_MATRIX_DUE_TO_SKIPPED_CELL_NO_FINAL_DECISION",
+        "No final Halt-Meta or Cost-Optimization decision is permitted: "
+        "at least one TIME_N cell was skipped and may change the registered "
+        "matrix-wide conclusion. Resolve the skipped cell before selecting "
+        "a final decision branch.",
+    )
+
+
+def _resolve_matrix_decision(
+    gross_edge: list[dict[str, Any]],
+    net_oos: list[dict[str, Any]],
+    cost_drag: list[dict[str, Any]],
+    skipped: list[dict[str, Any]],
+) -> tuple[str, str]:
+    if not net_oos and skipped:
+        return _incomplete_matrix_decision()
+
+    branch, action = _decision_branch(gross_edge, net_oos, cost_drag)
+    if net_oos and skipped:
+        action += (
+            " The qualifying OOS cell is observed, but skipped cells remain "
+            "explicitly unresolved."
         )
-    else:
-        branch, action = _decision_branch(gross_edge, net_oos, cost_drag)
+    return branch, action
 
+
+def _decision_rule(cells: list[dict[str, Any]]) -> dict[str, Any]:
+    completed, skipped = _partition_cell_status(cells)
+    gross_edge, net_oos, cost_drag = _classify_completed_cells(completed)
+    branch, action = _resolve_matrix_decision(
+        gross_edge, net_oos, cost_drag, skipped
+    )
     return {
         "decision_branch": branch,
         "action": action,
