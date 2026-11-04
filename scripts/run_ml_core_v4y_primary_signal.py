@@ -655,7 +655,9 @@ def _candidate_passed_economic_gate(item: dict[str, Any]) -> bool:
 def _summary_aggregate_counts(
     candidates: list[dict[str, Any]],
 ) -> tuple[int, int, int]:
-    signal_targets = sum(_candidate_met_primary_signal_target(item) for item in candidates)
+    signal_targets = sum(
+        _candidate_met_primary_signal_target(item) for item in candidates
+    )
     sample_gate_passed = sum(
         _candidate_passed_primary_sample_gate(item) for item in candidates
     )
@@ -703,6 +705,7 @@ def _render_summary(report: dict[str, Any]) -> str:
         ]
     )
     return "\n".join(lines) + "\n"
+
 
 def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)

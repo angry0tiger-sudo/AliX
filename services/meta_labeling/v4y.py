@@ -187,6 +187,7 @@ def evaluate_primary_train_sample_gate(
         "train_end_index_exclusive": train_end_index,
     }
 
+
 def generate_v4y_oof_primary_events(
     primary_buy_signal: Series,
     *,
