@@ -196,7 +196,7 @@ jobs:
           summary = render_step_summary(report)
           required = (
               "Primary BUYs (raw)", "Eligible BUYs", "Gross PF", "Net PF",
-              "Win Rate", "Median Bars Held", "Max DD", "Gross PnL USD",
+              "Win Rate", "Median Bars Held", "Max DD", "Gross PnL USD", "Status",
               "Net PnL USD", "Champion=null", "order_permission=false",
               "trading_authorization=NO-GO",
           )
@@ -247,8 +247,26 @@ jobs:
           }
           assert len(report["cells"]) == 18
           assert {cell["candidate_id"] for cell in report["cells"]} == expected
+          skipped_candidate_ids = set()
           for cell in report["cells"]:
               assert cell["primary_signal_count"] >= cell["eligible_primary_signal_count"] >= 0
+              status = cell.get("status", "COMPLETED")
+              if status == "SKIPPED_WARNING":
+                  assert cell["exit_policy"] == "TIME_N"
+                  assert cell["warning_code"] == "v4ab_unconditional_time_exit_contract_failed"
+                  details = cell["warning_details"]
+                  assert details["invalid_trade_count"] > 0
+                  assert cell["trade_count"] is None
+                  for field in (
+                      "gross_profit_factor", "net_profit_factor", "win_rate",
+                      "max_drawdown_percent", "gross_pnl_total_usd",
+                      "net_pnl_total_usd", "fees_total_usd", "slippage_total_usd",
+                  ):
+                      assert cell[field] is None
+                  skipped_candidate_ids.add(cell["candidate_id"])
+                  continue
+
+              assert status == "COMPLETED"
               assert cell["trade_count"] >= 0
               assert 0.0 <= cell["win_rate"] <= 1.0
               assert math.isfinite(cell["max_drawdown_percent"])
@@ -260,9 +278,12 @@ jobs:
                   assert math.isfinite(cell[field])
               assert (cell["median_bars_held"] is None) == (cell["trade_count"] == 0)
 
+
           with Path(os.environ["TRADES_CSV"]).open(newline="", encoding="utf-8") as handle:
               trades = list(csv.DictReader(handle))
           for trade in trades:
+              candidate_id = trade["candidate_id"]
+              assert candidate_id not in skipped_candidate_ids
               assert trade["direction"] == "LONG"
               gross = float(trade["gross_market_pnl_usd"])
               fees = float(trade["fees_usd"])
@@ -289,6 +310,8 @@ jobs:
               "commit_sha": report["commit_sha"],
               "cells": len(report["cells"]),
               "trade_rows": len(trades),
+              "completed_cells": report["decision_rule"]["completed_cell_count"],
+              "skipped_cells": report["decision_rule"]["skipped_cell_count"],
               "decision_branch": report["decision_rule"]["decision_branch"],
               "Champion": None,
               "order_permission": False,

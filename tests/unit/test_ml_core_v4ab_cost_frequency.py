@@ -314,6 +314,138 @@ def test_summary_formats_pf_and_contains_every_cell_and_required_metrics() -> No
         v4ab.render_step_summary({"schema_version": "wrong"})
 
 
+def test_time_exit_violations_capture_observed_early_exit_reasons() -> None:
+    trades = [
+        {
+            "direction": "LONG",
+            "exit_reason": "INITIAL_STOP",
+            "exit_trigger_type": "INTRABAR_STOP",
+            "time_exit_triggered": False,
+            "bars_held": 7,
+            "entry_timestamp": "2025-01-01T00:00:00+00:00",
+            "exit_timestamp": "2025-01-01T07:00:00+00:00",
+        },
+        {
+            "direction": "LONG",
+            "exit_reason": "TIME_EXIT",
+            "exit_trigger_type": "TIME_EXIT_OPEN",
+            "time_exit_triggered": True,
+            "bars_held": 25,
+        },
+    ]
+    violations = v4ab._time_exit_contract_violations(trades, 24)
+    assert len(violations) == 1
+    details = v4ab._time_exit_violation_details(violations, 24)
+    assert details["invalid_trade_count"] == 1
+    assert details["exit_reason_counts"] == {"INITIAL_STOP": 1}
+    sample = details["sample_invalid_trades"][0]
+    assert sample["exit_trigger_type"] == "INTRABAR_STOP"
+    assert sample["bars_held"] == 7
+    assert sample["expected_bars_held"] == 25
+
+
+def test_run_cell_skips_only_time_exit_contract_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    invalid_trade = {
+        "direction": "LONG",
+        "exit_reason": "TP_HIT",
+        "exit_trigger_type": "INTRABAR_TAKE",
+        "time_exit_triggered": False,
+        "bars_held": 9,
+        "entry_timestamp": "2025-01-01T00:00:00+00:00",
+        "exit_timestamp": "2025-01-01T09:00:00+00:00",
+    }
+    replay = {"trades": [invalid_trade], "metrics": {"max_drawdown_percent": 1.0}}
+    monkeypatch.setattr(v4ab, "simulate_signals", lambda *args, **kwargs: replay)
+    cell, trade_rows = v4ab._run_cell(
+        "BTCUSDT", _bars(), [], 12, 10, 24, "TIME_N"
+    )
+    assert cell["status"] == "SKIPPED_WARNING"
+    assert cell["trade_count"] is None
+    assert cell["gross_profit_factor"] is None
+    assert cell["warning_code"] == "v4ab_unconditional_time_exit_contract_failed"
+    assert cell["warning_details"]["exit_reason_counts"] == {"TP_HIT": 1}
+    assert trade_rows == []
+
+
+def test_run_cell_does_not_suppress_other_policy_failures(monkeypatch: pytest.MonkeyPatch) -> None:
+    replay = {
+        "trades": [
+            {
+                "direction": "LONG",
+                "gross_market_pnl_usd": 1.0,
+                "net_pnl_usd": 0.0,
+                "fees_usd": 0.5,
+                "slippage_cost_usd": 0.5,
+                "bars_held": 25,
+                "exit_reason": "HORIZON_EXPIRY",
+            }
+        ],
+        "metrics": {"max_drawdown_percent": 0.0},
+    }
+    monkeypatch.setattr(v4ab, "simulate_signals", lambda *args, **kwargs: replay)
+    with pytest.raises(ValueError, match="v4ab_trade_exceeded_registered_horizon"):
+        v4ab._run_cell("BTCUSDT", _bars(), [], 12, 10, 24, "TB_1.5_1.0")
+
+
+def test_skipped_time_exit_cell_makes_matrix_decision_incomplete() -> None:
+    cells = [_cell(0.9, 0.8)]
+    skipped = v4ab._skipped_time_exit_cell(
+        "ETHUSDT",
+        20,
+        15,
+        24,
+        [
+            {
+                "exit_reason": "INITIAL_STOP",
+                "exit_trigger_type": "INTRABAR_STOP",
+                "bars_held": 3,
+                "entry_timestamp": "2025-01-01T00:00:00+00:00",
+                "exit_timestamp": "2025-01-01T03:00:00+00:00",
+            }
+        ],
+    )
+    cells.append(skipped)
+    result = v4ab._decision_rule(cells)
+    assert result["decision_branch"] == "INCOMPLETE_MATRIX_DUE_TO_SKIPPED_CELL_NO_FINAL_DECISION"
+    assert result["matrix_complete"] is False
+    assert result["completed_cell_count"] == 1
+    assert result["skipped_cell_ids"] == ["ETHUSDT|1h|24|TIME_N"]
+
+
+def test_oos_qualifier_remains_identifiable_when_another_cell_is_skipped() -> None:
+    qualified = _cell(1.5, 1.35, count=35)
+    skipped = v4ab._skipped_time_exit_cell(
+        "ETHUSDT", 20, 15, 24,
+        [{"exit_reason": "INITIAL_STOP", "bars_held": 2}],
+    )
+    result = v4ab._decision_rule([qualified, skipped])
+    assert result["decision_branch"] == "NET_PF_GT_1_3_WITH_AT_LEAST_30_TRADES_FLAG_FOR_INDEPENDENT_OOS"
+    assert result["net_oos_confirmation_cell_ids"] == [qualified["candidate_id"]]
+    assert result["matrix_complete"] is False
+
+
+def test_summary_marks_skipped_cell_n_a_and_does_not_call_it_zero_trades() -> None:
+    completed = _cell(1.2, 0.8)
+    skipped = v4ab._skipped_time_exit_cell(
+        "ETHUSDT",
+        20,
+        15,
+        24,
+        [{"exit_reason": "INITIAL_STOP", "bars_held": 2}],
+    )
+    cells = [completed, skipped]
+    report = {
+        "schema_version": v4ab.SCHEMA,
+        "commit_sha": "a" * 40,
+        "cells": cells,
+        "decision_rule": v4ab._decision_rule(cells),
+    }
+    summary = v4ab.render_step_summary(report)
+    assert "SKIPPED_WARNING" in summary
+    assert "| N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A |" in summary
+    assert "N/A is not zero trades" in summary
+
+
 def test_csv_writer_handles_rows_and_empty_result(tmp_path: object) -> None:
     from pathlib import Path
 

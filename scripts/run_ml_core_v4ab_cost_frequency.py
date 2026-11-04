@@ -187,14 +187,46 @@ def _time_exit_trade_is_valid(trade: dict[str, Any], horizon: int) -> bool:
     )
 
 
+def _time_exit_contract_violations(
+    trades: list[dict[str, Any]], horizon: int
+) -> list[dict[str, Any]]:
+    return [
+        item for item in trades if not _time_exit_trade_is_valid(item, horizon)
+    ]
+
+
+def _time_exit_violation_details(
+    violations: list[dict[str, Any]], horizon: int
+) -> dict[str, Any]:
+    reason_counts: dict[str, int] = {}
+    for trade in violations:
+        reason = str(trade.get("exit_reason", "UNKNOWN"))
+        reason_counts[reason] = reason_counts.get(reason, 0) + 1
+    samples = [
+        {
+            "entry_timestamp": item.get("entry_timestamp"),
+            "exit_timestamp": item.get("exit_timestamp"),
+            "exit_reason": item.get("exit_reason"),
+            "exit_trigger_type": item.get("exit_trigger_type"),
+            "time_exit_triggered": item.get("time_exit_triggered"),
+            "bars_held": int(item["bars_held"]),
+            "expected_bars_held": horizon + 1,
+        }
+        for item in violations[:5]
+    ]
+    return {
+        "invalid_trade_count": len(violations),
+        "exit_reason_counts": reason_counts,
+        "sample_invalid_trades": samples,
+    }
+
+
 def _validate_replay_trades(
     trades: list[dict[str, Any]], policy: str, horizon: int
 ) -> None:
     if any(item["direction"] != "LONG" for item in trades):
         raise ValueError("v4ab_non_spot_trade_detected")
-    if policy == "TIME_N" and any(
-        not _time_exit_trade_is_valid(item, horizon) for item in trades
-    ):
+    if policy == "TIME_N" and _time_exit_contract_violations(trades, horizon):
         raise ValueError("v4ab_unconditional_time_exit_contract_failed")
     if policy != "TIME_N" and any(int(item["bars_held"]) > horizon for item in trades):
         raise ValueError("v4ab_trade_exceeded_registered_horizon")
@@ -257,6 +289,48 @@ def _summarize_replay(
     }
 
 
+def _skipped_time_exit_cell(
+    symbol: str,
+    raw_signal_count: int,
+    eligible_signal_count: int,
+    horizon: int,
+    violations: list[dict[str, Any]],
+) -> dict[str, Any]:
+    pair = f"{symbol.removesuffix('USDT')}/USDT"
+    candidate_id = f"{symbol}|{TIMEFRAME}|{horizon}|TIME_N"
+    return {
+        "candidate_id": candidate_id,
+        "symbol": symbol,
+        "pair": pair,
+        "timeframe": TIMEFRAME,
+        "horizon_bars": horizon,
+        "exit_policy": "TIME_N",
+        "status": "SKIPPED_WARNING",
+        "primary_signal_count": raw_signal_count,
+        "eligible_primary_signal_count": eligible_signal_count,
+        "trade_count": None,
+        "gross_profit_factor": None,
+        "gross_profit_factor_infinite_no_losses": False,
+        "net_profit_factor": None,
+        "net_profit_factor_infinite_no_losses": False,
+        "win_rate": None,
+        "gross_win_rate": None,
+        "median_bars_held": None,
+        "max_drawdown_percent": None,
+        "gross_pnl_total_usd": None,
+        "net_pnl_total_usd": None,
+        "fees_total_usd": None,
+        "slippage_total_usd": None,
+        "warning_code": "v4ab_unconditional_time_exit_contract_failed",
+        "warning_message": (
+            "TIME_N produced at least one trade that closed before the "
+            "registered next-open time exit; the cell is excluded from PF "
+            "and PnL comparisons. Other cells continue."
+        ),
+        "warning_details": _time_exit_violation_details(violations, horizon),
+    }
+
+
 def _run_cell(
     symbol: str,
     bars: DataFrame,
@@ -272,21 +346,56 @@ def _run_cell(
         _execution_config(),
         trade_management_config=_trade_management_config(policy, horizon),
     )
-    metrics = _summarize_replay(replay, policy, horizon)
+    try:
+        metrics = _summarize_replay(replay, policy, horizon)
+    except ValueError as error:
+        if (
+            policy != "TIME_N"
+            or str(error) != "v4ab_unconditional_time_exit_contract_failed"
+        ):
+            raise
+        violations = _time_exit_contract_violations(replay["trades"], horizon)
+        if not violations:
+            raise
+        skipped = _skipped_time_exit_cell(
+            symbol,
+            raw_signal_count,
+            eligible_signal_count,
+            horizon,
+            violations,
+        )
+        print(
+            "WARNING: "
+            + json.dumps(
+                {
+                    "candidate_id": skipped["candidate_id"],
+                    "status": skipped["status"],
+                    "warning_code": skipped["warning_code"],
+                    "warning_details": skipped["warning_details"],
+                },
+                sort_keys=True,
+            ),
+            flush=True,
+        )
+        return skipped, []
+
     pair = f"{symbol.removesuffix('USDT')}/USDT"
+    candidate_id = f"{symbol}|{TIMEFRAME}|{horizon}|{policy}"
     cell = {
-        "candidate_id": f"{symbol}|{TIMEFRAME}|{horizon}|{policy}",
+        "candidate_id": candidate_id,
         "symbol": symbol,
         "pair": pair,
         "timeframe": TIMEFRAME,
         "horizon_bars": horizon,
         "exit_policy": policy,
+        "status": "COMPLETED",
         "primary_signal_count": raw_signal_count,
         "eligible_primary_signal_count": eligible_signal_count,
         **metrics,
     }
     trades = [
         {
+            "candidate_id": candidate_id,
             "symbol": symbol,
             "pair": pair,
             "timeframe": TIMEFRAME,
@@ -350,17 +459,49 @@ def _decision_branch(
     )
 
 
+def _cell_is_completed(item: dict[str, Any]) -> bool:
+    return item.get("status", "COMPLETED") == "COMPLETED"
+
+
+def _cell_is_skipped(item: dict[str, Any]) -> bool:
+    return item.get("status") == "SKIPPED_WARNING"
+
+
 def _decision_rule(cells: list[dict[str, Any]]) -> dict[str, Any]:
-    gross_edge = [item for item in cells if _cell_has_gross_edge(item)]
-    net_oos = [item for item in cells if _cell_meets_net_oos_rule(item)]
+    completed = [item for item in cells if _cell_is_completed(item)]
+    skipped = [item for item in cells if _cell_is_skipped(item)]
+    gross_edge = [item for item in completed if _cell_has_gross_edge(item)]
+    net_oos = [item for item in completed if _cell_meets_net_oos_rule(item)]
     cost_drag = [item for item in gross_edge if _cell_has_cost_drag(item)]
-    branch, action = _decision_branch(gross_edge, net_oos, cost_drag)
+
+    if net_oos:
+        branch, action = _decision_branch(gross_edge, net_oos, cost_drag)
+        if skipped:
+            action += (
+                " The qualifying OOS cell is observed, but skipped cells remain "
+                "explicitly unresolved."
+            )
+    elif skipped:
+        branch = "INCOMPLETE_MATRIX_DUE_TO_SKIPPED_CELL_NO_FINAL_DECISION"
+        action = (
+            "No final Halt-Meta or Cost-Optimization decision is permitted: "
+            "at least one TIME_N cell was skipped and may change the registered "
+            "matrix-wide conclusion. Resolve the skipped cell before selecting "
+            "a final decision branch."
+        )
+    else:
+        branch, action = _decision_branch(gross_edge, net_oos, cost_drag)
+
     return {
         "decision_branch": branch,
         "action": action,
         "gross_edge_cell_ids": [item["candidate_id"] for item in gross_edge],
         "net_oos_confirmation_cell_ids": [item["candidate_id"] for item in net_oos],
         "cost_drag_cell_ids": [item["candidate_id"] for item in cost_drag],
+        "skipped_cell_ids": [item["candidate_id"] for item in skipped],
+        "completed_cell_count": len(completed),
+        "skipped_cell_count": len(skipped),
+        "matrix_complete": not skipped and len(completed) == 18,
     }
 
 
@@ -476,11 +617,25 @@ def render_step_summary(report: dict[str, Any]) -> str:
         "Forward: common 70%-85% interval; final 122 bars excluded for maximum-horizon maturity; final 15% holdout untouched.",
         "Costs: 25 bps fee + 20 bps slippage per side; 90 bps round trip.",
         "Win Rate = executed trades with positive Net PnL after costs / executed trades.",
+        "SKIPPED_WARNING means the cell has no valid PF/PnL result; N/A is not zero trades.",
         "",
-        "| Symbol | Horizon | Exit | Primary BUYs (raw) | Eligible BUYs | Trades | Gross PF | Net PF | Win Rate | Median Bars Held | Max DD | Gross PnL USD | Net PnL USD |",
-        "|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "| Symbol | Horizon | Exit | Primary BUYs (raw) | Eligible BUYs | Trades | Gross PF | Net PF | Win Rate | Median Bars Held | Max DD | Gross PnL USD | Net PnL USD | Status |",
+        "|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|",
     ]
     for item in report["cells"]:
+        if _cell_is_skipped(item):
+            details = item["warning_details"]
+            reason_text = ", ".join(
+                f"{reason}={count}"
+                for reason, count in sorted(details["exit_reason_counts"].items())
+            )
+            lines.append(
+                f"| {item['symbol']} | {item['horizon_bars']} | TIME_N "
+                f"| {item['primary_signal_count']} | {item['eligible_primary_signal_count']} "
+                f"| N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A "
+                f"| SKIPPED_WARNING ({details['invalid_trade_count']} invalid; {reason_text}) |"
+            )
+            continue
         gross_pf = _format_pf(
             item["gross_profit_factor"],
             bool(item["gross_profit_factor_infinite_no_losses"]),
@@ -501,7 +656,7 @@ def render_step_summary(report: dict[str, Any]) -> str:
             f"| {float(item['win_rate']):.2%} | {median_bars} "
             f"| {float(item['max_drawdown_percent']):.2f}% "
             f"| {float(item['gross_pnl_total_usd']):.2f} "
-            f"| {float(item['net_pnl_total_usd']):.2f} |"
+            f"| {float(item['net_pnl_total_usd']):.2f} | COMPLETED |"
         )
     decision = report["decision_rule"]
     lines.extend(
@@ -510,6 +665,8 @@ def render_step_summary(report: dict[str, Any]) -> str:
             f"### Pre-registered decision: {decision['decision_branch']}",
             decision["action"],
             "",
+            f"Completed cells: {decision['completed_cell_count']}/18.",
+            f"Skipped warning cells: {decision['skipped_cell_count']}.",
             f"Gross-edge cells: {len(decision['gross_edge_cell_ids'])}.",
             f"Net OOS-priority cells (Net PF > 1.3 and trades >= 30): {len(decision['net_oos_confirmation_cell_ids'])}.",
             f"Cost-drag cells (Gross PF > 1.0 and Net PF < 1.0): {len(decision['cost_drag_cell_ids'])}.",
