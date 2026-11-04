@@ -64,6 +64,106 @@ def _candidate_id(symbol: str, timeframe: str, policy: str, mode: str) -> str:
     return f"{symbol}|{timeframe}|{v4ac.HORIZON_BARS}|{policy}|{mode}"
 
 
+def _validate_calibration_probabilities(
+    probabilities: np.ndarray, calibration_rows: DataFrame
+) -> None:
+    invalid_length = len(probabilities) != len(calibration_rows)
+    invalid_values = (
+        not np.isfinite(probabilities).all()
+        or np.any(probabilities < 0)
+        or np.any(probabilities > 1)
+    )
+    if invalid_length or invalid_values:
+        raise ValueError("v4ad_calibration_probability_values_invalid")
+
+
+def _fit_meta_model_calibration(
+    bars: DataFrame,
+    features: DataFrame,
+    primary_signals: pd.Series,
+    train_end: int,
+    policy: str,
+) -> tuple[
+    Any, dict[str, Any], DataFrame, DataFrame, dict[str, Any], np.ndarray
+]:
+    training, diagnostics = v4ac._meta_training_rows(
+        bars, features, primary_signals, train_end, policy
+    )
+    fit_rows, calibration_rows = split_meta_fit_calibration(
+        training, outer_train_end_index=train_end
+    )
+    feature_columns = list(features.columns)
+    model, fit_diagnostics = fit_lightgbm_meta_filter(
+        fit_rows.loc[:, feature_columns],
+        fit_rows["meta_label"],
+        calibration_rows.loc[:, feature_columns],
+        target_accept_fraction=0.50,
+    )
+    calibration_probabilities = predict_meta_probabilities(
+        model, calibration_rows.loc[:, feature_columns]
+    )
+    _validate_calibration_probabilities(calibration_probabilities, calibration_rows)
+    return (
+        model,
+        diagnostics,
+        fit_rows,
+        calibration_rows,
+        fit_diagnostics,
+        calibration_probabilities,
+    )
+
+
+def _select_calibration_thresholds(
+    calibration_probabilities: np.ndarray,
+) -> dict[str, dict[str, Any]]:
+    thresholds: dict[str, dict[str, Any]] = {}
+    for fraction in TARGET_ACCEPT_FRACTIONS:
+        selected = select_dynamic_buy_threshold(
+            calibration_probabilities,
+            target_buy_fraction=fraction,
+        )
+        threshold = float(selected["threshold"])
+        if not math.isfinite(threshold) or not 0.0 <= threshold <= 1.0:
+            raise ValueError("v4ad_selected_meta_threshold_invalid")
+        thresholds[_target_key(fraction)] = {
+            "target_accept_fraction": fraction,
+            "selected_threshold": threshold,
+            "threshold_diagnostics": selected,
+        }
+    return thresholds
+
+
+def _meta_training_diagnostics(
+    gate: dict[str, Any],
+    fit_rows: DataFrame,
+    calibration_rows: DataFrame,
+    fit_diagnostics: dict[str, Any],
+    thresholds: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    fit_label_end = int(fit_rows["label_end_idx"].max())
+    calibration_start = int(calibration_rows["event_index"].min())
+    return {
+        "sample_gate": gate,
+        "fit_rows": int(len(fit_rows)),
+        "calibration_rows": int(len(calibration_rows)),
+        "fit_max_label_end_index": fit_label_end,
+        "calibration_start_event_index": calibration_start,
+        "fit_labels_purged_before_calibration": fit_label_end < calibration_start,
+        "validation_labels_used_for_fit": False,
+        "validation_labels_used_for_threshold": False,
+        "meta_model": {
+            **fit_diagnostics,
+            "calibration_labels_used": False,
+            "threshold_selection_scope": (
+                "PURGED_OUTER_TRAIN_OOF_CALIBRATION_PROBABILITIES_ONLY"
+            ),
+            "target_accept_fractions": list(TARGET_ACCEPT_FRACTIONS),
+            "thresholds": thresholds,
+            "single_model_reused_across_thresholds": True,
+        },
+    }
+
+
 def _train_meta_model_threshold_sweep(
     bars: DataFrame,
     features: DataFrame,
@@ -82,45 +182,17 @@ def _train_meta_model_threshold_sweep(
         return None, {"sample_gate": gate}, "SKIPPED_INSUFFICIENT_PRIMARY_SIGNALS"
 
     try:
-        training, diagnostics = v4ac._meta_training_rows(
+        (
+            model,
+            diagnostics,
+            fit_rows,
+            calibration_rows,
+            fit_diagnostics,
+            calibration_probabilities,
+        ) = _fit_meta_model_calibration(
             bars, features, primary_signals, train_end, policy
         )
-        fit_rows, calibration_rows = split_meta_fit_calibration(
-            training, outer_train_end_index=train_end
-        )
-        feature_columns = list(features.columns)
-        model, fit_diagnostics = fit_lightgbm_meta_filter(
-            fit_rows.loc[:, feature_columns],
-            fit_rows["meta_label"],
-            calibration_rows.loc[:, feature_columns],
-            target_accept_fraction=0.50,
-        )
-        calibration_features = calibration_rows.loc[:, feature_columns]
-        calibration_probabilities = predict_meta_probabilities(
-            model, calibration_features
-        )
-        if (
-            len(calibration_probabilities) != len(calibration_rows)
-            or not np.isfinite(calibration_probabilities).all()
-            or np.any(calibration_probabilities < 0)
-            or np.any(calibration_probabilities > 1)
-        ):
-            raise ValueError("v4ad_calibration_probability_values_invalid")
-
-        thresholds: dict[str, dict[str, Any]] = {}
-        for fraction in TARGET_ACCEPT_FRACTIONS:
-            selected = select_dynamic_buy_threshold(
-                calibration_probabilities,
-                target_buy_fraction=fraction,
-            )
-            threshold = float(selected["threshold"])
-            if not math.isfinite(threshold) or not 0.0 <= threshold <= 1.0:
-                raise ValueError("v4ad_selected_meta_threshold_invalid")
-            thresholds[_target_key(fraction)] = {
-                "target_accept_fraction": fraction,
-                "selected_threshold": threshold,
-                "threshold_diagnostics": selected,
-            }
+        thresholds = _select_calibration_thresholds(calibration_probabilities)
     except ValueError as error:
         if not v4ac._is_expected_meta_support_error(error):
             raise
@@ -131,29 +203,9 @@ def _train_meta_model_threshold_sweep(
         )
 
     diagnostics.update(
-        {
-            "sample_gate": gate,
-            "fit_rows": int(len(fit_rows)),
-            "calibration_rows": int(len(calibration_rows)),
-            "fit_max_label_end_index": int(fit_rows["label_end_idx"].max()),
-            "calibration_start_event_index": int(calibration_rows["event_index"].min()),
-            "fit_labels_purged_before_calibration": bool(
-                int(fit_rows["label_end_idx"].max())
-                < int(calibration_rows["event_index"].min())
-            ),
-            "validation_labels_used_for_fit": False,
-            "validation_labels_used_for_threshold": False,
-            "meta_model": {
-                **fit_diagnostics,
-                "calibration_labels_used": False,
-                "threshold_selection_scope": (
-                    "PURGED_OUTER_TRAIN_OOF_CALIBRATION_PROBABILITIES_ONLY"
-                ),
-                "target_accept_fractions": list(TARGET_ACCEPT_FRACTIONS),
-                "thresholds": thresholds,
-                "single_model_reused_across_thresholds": True,
-            },
-        }
+        _meta_training_diagnostics(
+            gate, fit_rows, calibration_rows, fit_diagnostics, thresholds
+        )
     )
     return model, diagnostics, "TRAINED"
 
@@ -391,27 +443,18 @@ def _run_symbol_timeframe(
     return cells, trades, decisions, windows, scenarios
 
 
-def _validate_report_matrix(
-    cells: list[dict[str, Any]], scenarios: list[dict[str, Any]]
-) -> None:
-    expected = {
+def _expected_candidate_ids() -> set[str]:
+    return {
         _candidate_id(symbol, timeframe, policy, mode)
         for symbol in SYMBOLS
         for timeframe in TIMEFRAMES
         for policy in EXIT_POLICIES_BY_TIMEFRAME[timeframe]
         for mode in MODES
     }
-    observed = {str(item["candidate_id"]) for item in cells}
-    if len(cells) != 40 or observed != expected:
-        raise ValueError("v4ad_candidate_matrix_incomplete")
-    if any(item["timeframe"] not in TIMEFRAMES for item in cells):
-        raise ValueError("v4ad_report_timeframe_out_of_policy")
-    if any(
-        item["exit_policy"] == REFINED_TRAIL_POLICY and item["timeframe"] != "1h"
-        for item in cells
-    ):
-        raise ValueError("v4ad_refined_trailing_scope_invalid")
-    expected_scenarios = {
+
+
+def _expected_meta_scenario_ids() -> set[str]:
+    return {
         _candidate_id(symbol, timeframe, policy, mode)
         for symbol in SYMBOLS
         for timeframe in TIMEFRAMES
@@ -419,14 +462,45 @@ def _validate_report_matrix(
         for mode in MODES
         if mode != "PRIMARY_ONLY"
     }
-    observed_scenarios = {str(item["candidate_id"]) for item in scenarios}
-    if len(scenarios) != 30 or observed_scenarios != expected_scenarios:
+
+
+def _validate_candidate_matrix(cells: list[dict[str, Any]]) -> None:
+    expected = _expected_candidate_ids()
+    observed = {str(item["candidate_id"]) for item in cells}
+    if len(cells) != 40 or observed != expected:
+        raise ValueError("v4ad_candidate_matrix_incomplete")
+
+
+def _validate_candidate_scope(cells: list[dict[str, Any]]) -> None:
+    if any(item["timeframe"] not in TIMEFRAMES for item in cells):
+        raise ValueError("v4ad_report_timeframe_out_of_policy")
+    refined_exit_outside_1h = any(
+        item["exit_policy"] == REFINED_TRAIL_POLICY and item["timeframe"] != "1h"
+        for item in cells
+    )
+    if refined_exit_outside_1h:
+        raise ValueError("v4ad_refined_trailing_scope_invalid")
+
+
+def _validate_meta_scenario_matrix(scenarios: list[dict[str, Any]]) -> None:
+    expected = _expected_meta_scenario_ids()
+    observed = {str(item["candidate_id"]) for item in scenarios}
+    if len(scenarios) != 30 or observed != expected:
         raise ValueError("v4ad_meta_scenario_matrix_incomplete")
-    if any(
+    invalid_target_fraction = any(
         item["target_accept_fraction"] not in TARGET_ACCEPT_FRACTIONS
         for item in scenarios
-    ):
+    )
+    if invalid_target_fraction:
         raise ValueError("v4ad_meta_target_accept_fraction_invalid")
+
+
+def _validate_report_matrix(
+    cells: list[dict[str, Any]], scenarios: list[dict[str, Any]]
+) -> None:
+    _validate_candidate_matrix(cells)
+    _validate_candidate_scope(cells)
+    _validate_meta_scenario_matrix(scenarios)
 
 
 def _exit_contract_report() -> dict[str, Any]:
