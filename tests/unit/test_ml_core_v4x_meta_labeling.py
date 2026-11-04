@@ -87,9 +87,7 @@ def test_sma_primary_emits_only_bullish_crossovers_using_causal_features() -> No
     assert event_index >= 50
     assert cast(float, features.loc[event_index, "%-primary_sma_spread_pct"]) > 0
     assert set(V4X_META_FEATURE_COLUMNS).issubset(features.columns)
-    assert cast(
-        float, features.loc[event_index, "%-primary_close_vs_sma_slow_pct"]
-    ) > 0
+    assert cast(float, features.loc[event_index, "%-primary_close_vs_sma_slow_pct"]) > 0
     assert signal.dtype == bool
 
 
