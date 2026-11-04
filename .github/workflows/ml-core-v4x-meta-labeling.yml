@@ -1,0 +1,333 @@
+name: AliX V4-X SMA / LightGBM Meta-Labeling Economic Evaluation
+
+on:
+  push:
+    branches:
+      - research/ml-core-v4x-meta-labeling
+    paths:
+      - .github/workflows/ml-core-v4x-meta-labeling.yml
+      - scripts/run_ml_core_v4x_meta_labeling.py
+      - services/meta_labeling/v4x.py
+      - tests/unit/test_ml_core_v4x_meta_labeling.py
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: alix-v4x-meta-labeling
+  cancel-in-progress: true
+
+jobs:
+  v4x-meta-labeling-economic-evaluation:
+    if: github.ref == 'refs/heads/research/ml-core-v4x-meta-labeling'
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      ALIx_ENV: paper
+      ALIx_DRY_RUN: "true"
+      ALIx_ALLOW_LIVE_TRADING: "false"
+      ALIx_REPORTING_ENABLED: "false"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Require standard CI success for this exact V4-X commit
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          TARGET_SHA: ${{ github.sha }}
+          TARGET_BRANCH: ${{ github.ref_name }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import time
+          from urllib.error import HTTPError, URLError
+          from urllib.request import Request, urlopen
+
+          repository = os.environ["GITHUB_REPOSITORY"]
+          target_sha = os.environ["TARGET_SHA"]
+          target_branch = os.environ["TARGET_BRANCH"]
+          token = os.environ["GH_TOKEN"]
+          expected_branch = "research/ml-core-v4x-meta-labeling"
+          if target_branch != expected_branch:
+              raise SystemExit("unsupported_v4x_training_branch:" + target_branch)
+
+          deadline = time.monotonic() + 90 * 60
+          url = (
+              f"https://api.github.com/repos/{repository}/actions/workflows/ci.yml/runs"
+              f"?head_sha={target_sha}&per_page=100"
+          )
+          while time.monotonic() < deadline:
+              request = Request(
+                  url,
+                  headers={
+                      "Accept": "application/vnd.github+json",
+                      "Authorization": f"Bearer {token}",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  },
+              )
+              try:
+                  with urlopen(request, timeout=20) as response:
+                      payload = json.load(response)
+              except (HTTPError, URLError, TimeoutError) as error:
+                  raise SystemExit(
+                      f"ci_status_lookup_failed:{type(error).__name__}"
+                  ) from None
+
+              matching = [
+                  run for run in payload.get("workflow_runs", [])
+                  if run.get("head_sha") == target_sha
+                  and run.get("head_branch") == expected_branch
+                  and run.get("event") == "push"
+              ]
+              if matching:
+                  latest = max(
+                      matching,
+                      key=lambda item: (
+                          item.get("run_number", 0),
+                          item.get("run_attempt", 0),
+                      ),
+                  )
+                  if latest.get("status") == "completed":
+                      if latest.get("conclusion") != "success":
+                          raise SystemExit(
+                              "ci_green_gate_blocked:"
+                              + str(latest.get("conclusion"))
+                              + ":"
+                              + target_sha
+                          )
+                      print(json.dumps({
+                          "gate": "PASS",
+                          "target_sha": target_sha,
+                          "ci_run_id": latest.get("id"),
+                          "ci_run_url": latest.get("html_url"),
+                          "ci_conclusion": latest.get("conclusion"),
+                      }, sort_keys=True))
+                      break
+              time.sleep(30)
+          else:
+              raise SystemExit("ci_green_gate_timeout:" + target_sha)
+          PY
+
+      - name: Checkout exact V4-X commit without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Confirm V4-X branch, research-only scope, and fail-closed safety
+        env:
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/research/ml-core-v4x-meta-labeling"
+          test "$GITHUB_SHA" = "$TARGET_SHA"
+          printf 'commit_sha=%s\n' "$GITHUB_SHA"
+          printf 'primary_model=CAUSAL_SMA_20_50_BULLISH_CROSSOVER\n'
+          printf 'meta_model=LightGBM_BINARY_OOF_PRIMARY_BUY_ONLY\n'
+          printf 'meta_training=PURGED_MATURED_OUTER_TRAIN_OOF_EVENTS\n'
+          printf 'meta_calibration=OUTER_TRAIN_OOF_PROBABILITIES_LABEL_BLIND\n'
+          printf 'target=NET_POSITIVE_AFTER_FEES_AND_SLIPPAGE\n'
+          printf 'validation=FORWARD_VALIDATION_ONLY\n'
+          printf 'final_holdout=UNTOUCHED\n'
+          printf 'market_data=PUBLIC_BINANCE_SPOT_ONLY\n'
+          printf 'short_positions_supported=false\n'
+          printf 'private_api_calls=0\nreal_order_attempts=0\n'
+          printf 'Champion=null\norder_permission=false\ntrading_authorization=NO-GO\n'
+          printf 'sequence_model_used=false\n'
+
+      - name: Set up pinned Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install pinned V4-X training and economic evaluation dependencies
+        run: |
+          python -m pip install pip==25.2
+          python -m pip install numpy==2.5.4 pandas==2.3.3 scikit-learn==1.9.0 lightgbm==4.7.0
+
+      - name: Fetch complete public Binance Spot 730-day 1-minute datasets
+        run: |
+          set -euo pipefail
+          data_dir="$RUNNER_TEMP/alix-v4x-market-data"
+          rm -rf "$data_dir"
+          mkdir -p "$data_dir"
+          for symbol in BTCUSDT ETHUSDT; do
+            log_path="$RUNNER_TEMP/v4x-fetch-730-${symbol}.log"
+            if python scripts/fetch_binance_public_ohlcv.py \
+              --days 730 \
+              --symbol "$symbol" \
+              --interval 1m \
+              --output-dir "$data_dir" \
+              --commit-sha "$GITHUB_SHA" >"$log_path" 2>&1; then
+              cat "$log_path"
+            else
+              cat "$log_path"
+              echo "Public Spot data fetch failed for ${symbol}; refusing partial data." >&2
+              exit 1
+            fi
+          done
+          printf 'requested_days=730\nprovider=Binance Spot public klines API\n'
+          printf 'private_api_calls=0\ncredentials_used=false\n'
+
+      - name: Train V4-X OOF LightGBM Meta-Model and run costed Spot economic replay
+        run: |
+          set -euo pipefail
+          python -m scripts.run_ml_core_v4x_meta_labeling \
+            --input-dir "$RUNNER_TEMP/alix-v4x-market-data" \
+            --output-report "$GITHUB_WORKSPACE/alix-v4x-meta-labeling-report.json" \
+            --output-trades-csv "$GITHUB_WORKSPACE/alix-v4x-meta-labeling-trades.csv" \
+            --output-decisions-csv "$GITHUB_WORKSPACE/alix-v4x-meta-labeling-decisions.csv" \
+            --days 730 \
+            --commit-sha "$GITHUB_SHA"
+
+      - name: Render V4-X candidate metrics and thresholds to GitHub Step Summary
+        env:
+          REPORT_PATH: ${{ github.workspace }}/alix-v4x-meta-labeling-report.json
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          from scripts.run_ml_core_v4x_meta_labeling import _render_summary
+
+          report_path = Path(os.environ["REPORT_PATH"])
+          report = json.loads(report_path.read_text(encoding="utf-8"))
+          if report.get("schema_version") != "alix.ml-core.v4x-meta-labeling.v1":
+              raise SystemExit("v4x_step_summary_report_schema_invalid")
+          summary = _render_summary(report)
+          if not summary or "AliX V4-X SMA / LightGBM Meta-Labeling" not in summary:
+              raise SystemExit("v4x_step_summary_render_failed")
+          summary_path = Path(os.environ["GITHUB_STEP_SUMMARY"])
+          with summary_path.open("a", encoding="utf-8") as handle:
+              handle.write(summary)
+          required = (
+              "Threshold",
+              "Net PF",
+              "Net PnL USD",
+              "Max DD",
+              "trading_authorization=NO-GO",
+          )
+          rendered = summary_path.read_text(encoding="utf-8")
+          if any(value not in rendered for value in required):
+              raise SystemExit("v4x_step_summary_required_metrics_missing")
+          print(summary)
+          PY
+
+      - name: Validate V4-X OOF boundaries, per-candidate economics, and safety
+        env:
+          REPORT_PATH: ${{ github.workspace }}/alix-v4x-meta-labeling-report.json
+          TRADES_CSV: ${{ github.workspace }}/alix-v4x-meta-labeling-trades.csv
+          DECISIONS_CSV: ${{ github.workspace }}/alix-v4x-meta-labeling-decisions.csv
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          python - <<'PY'
+          import csv
+          import json
+          import math
+          import os
+          from pathlib import Path
+
+          report = json.loads(Path(os.environ["REPORT_PATH"]).read_text(encoding="utf-8"))
+          assert report["schema_version"] == "alix.ml-core.v4x-meta-labeling.v1"
+          assert report["commit_sha"] == os.environ["TARGET_SHA"]
+          assert report["requested_days"] == 730
+          assert report["candidate_count"] == 4
+          assert report["trained_candidate_count"] > 0
+          assert report["primary_model"]["definition"] == "SMA20_BULLISH_CROSSOVER_SMA50"
+          assert report["primary_model"]["fit_performed"] is False
+          assert report["meta_model"]["family"] == "LightGBM LGBMClassifier objective=binary"
+          assert report["meta_model"]["training_signal_requirement"] == "OOF_PRIMARY_BUY_ONLY"
+          assert report["meta_model"]["calibration_labels_used"] is False
+          assert report["meta_model"]["validation_labels_used_for_fit_or_threshold"] is False
+          assert report["outer_split_contract"]["validation_used_for_training"] is False
+          assert report["outer_split_contract"]["validation_used_for_threshold"] is False
+          assert report["outer_split_contract"]["final_holdout_used"] is False
+
+          trained = [row for row in report["candidates"] if row["status"] == "TRAINED"]
+          assert trained
+          for candidate in report["candidates"]:
+              assert candidate["sequence_model_used"] is False
+              if candidate["status"] != "TRAINED":
+                  assert candidate["skip_reason"]
+                  continue
+              threshold = float(candidate["selected_meta_probability_threshold"])
+              assert math.isfinite(threshold) and 0.0 <= threshold <= 1.0
+              training = candidate["training_diagnostics"]
+              assert training["all_primary_signals_are_buy"] is True
+              assert training["all_primary_signals_are_oof"] is True
+              assert training["training_labels_are_matured_before_outer_validation"] is True
+              assert training["maximum_training_label_end_index"] < training["outer_train_end_index"]
+              assert training["fit_labels_end_before_calibration"] is True
+              assert training["fit_max_label_end_index"] < training["calibration_start_event_index"]
+              assert training["fit_labels_are_oof_primary_buy_only"] is True
+              assert training["validation_labels_used_for_fit"] is False
+              assert training["validation_labels_used_for_threshold"] is False
+              meta = candidate["meta_training"]
+              assert meta["calibration_labels_used"] is False
+              assert meta["selected_using_validation_labels"] is False
+              assert meta["selected_using_validation_probabilities"] is False
+              metrics = candidate["metrics"]
+              assert metrics["trade_count"] >= 0
+              assert math.isfinite(float(metrics["win_rate"]))
+              assert math.isfinite(float(metrics["net_pnl_usd"]))
+              assert math.isfinite(float(metrics["max_drawdown_percent"]))
+              if metrics["net_profit_factor"] is not None:
+                  assert math.isfinite(float(metrics["net_profit_factor"]))
+              assert candidate["validation_window"]["all_trades_close_before_holdout"] is True
+
+          safety = report["safety"]
+          assert safety["Champion"] is None
+          assert safety["order_permission"] is False
+          assert safety["trading_authorization"] == "NO-GO"
+          assert safety["private_api_calls"] == 0
+          assert safety["real_order_attempts"] == 0
+          assert safety["orders_or_execution_api_used"] is False
+          assert safety["credentials_used"] is False
+          assert safety["short_positions_supported"] is False
+          assert safety["sequence_model_used"] is False
+          assert report["promotion_status"] == "BLOCKED_PENDING_INDEPENDENT_OOS_AND_OWNER_REVIEW"
+
+          with Path(os.environ["TRADES_CSV"]).open(newline="", encoding="utf-8") as handle:
+              trades = list(csv.DictReader(handle))
+          for trade in trades:
+              assert trade["direction"] == "LONG"
+              gross = float(trade["gross_market_pnl_usd"])
+              fees = float(trade["fees_usd"])
+              slippage = float(trade["slippage_cost_usd"])
+              net = float(trade["net_pnl_usd"])
+              assert math.isclose(gross - fees - slippage, net, rel_tol=0.0, abs_tol=0.02)
+
+          with Path(os.environ["DECISIONS_CSV"]).open(newline="", encoding="utf-8") as handle:
+              decisions = list(csv.DictReader(handle))
+          for decision in decisions:
+              assert decision["split_role"] == "FORWARD_VALIDATION"
+              assert decision["primary_signal"] == "BUY"
+              assert decision["executable_signal"] in {"BUY", "NO_ENTRY"}
+              assert decision["meta_filter_decision"] in {"ACCEPT", "REJECT"}
+
+          print(json.dumps({
+              "validation": "PASS",
+              "commit_sha": report["commit_sha"],
+              "candidates": report["candidate_count"],
+              "trained_candidates": report["trained_candidate_count"],
+              "trade_rows": len(trades),
+              "decision_rows": len(decisions),
+              "Champion": None,
+              "order_permission": False,
+              "trading_authorization": "NO-GO",
+          }, sort_keys=True))
+          PY
+
+      - name: Upload V4-X Meta-Labeling report and row-level economic artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alix-v4x-meta-labeling-economic-evaluation
+          path: |
+            alix-v4x-meta-labeling-report.json
+            alix-v4x-meta-labeling-trades.csv
+            alix-v4x-meta-labeling-decisions.csv
+          if-no-files-found: warn
