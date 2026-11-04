@@ -27,9 +27,7 @@ def _synthetic_matrix() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
                         if mode == "PRIMARY_ONLY"
                         else float(mode.removeprefix("META_TOP_")) / 100.0
                     )
-                    candidate_id = v4ad._candidate_id(
-                        symbol, timeframe, policy, mode
-                    )
+                    candidate_id = v4ad._candidate_id(symbol, timeframe, policy, mode)
                     cell = {
                         "candidate_id": candidate_id,
                         "symbol": symbol,
@@ -104,7 +102,9 @@ def test_target_modes_and_acceptance_gate_are_strict() -> None:
         "META_TOP_50",
         "META_TOP_70",
     ]
-    with pytest.raises(ValueError, match="v4ad_meta_target_accept_fraction_out_of_policy"):
+    with pytest.raises(
+        ValueError, match="v4ad_meta_target_accept_fraction_out_of_policy"
+    ):
         v4ad._mode_for_fraction(0.6)
 
     cell = {
@@ -118,7 +118,11 @@ def test_target_modes_and_acceptance_gate_are_strict() -> None:
     assert not v4ad._acceptance_target_met({**cell, "net_profit_factor": 1.5})
     assert not v4ad._acceptance_target_met({**cell, "max_drawdown_percent": 15.01})
     assert v4ad._acceptance_target_met(
-        {**cell, "net_profit_factor": None, "net_profit_factor_infinite_no_losses": True}
+        {
+            **cell,
+            "net_profit_factor": None,
+            "net_profit_factor_infinite_no_losses": True,
+        }
     )
 
 
@@ -164,7 +168,10 @@ def test_meta_threshold_sweep_fits_one_model_and_uses_calibration_only(
 
     def fake_fit(*args: Any, **kwargs: Any) -> tuple[object, dict[str, Any]]:
         fit_calls.append(kwargs)
-        return object(), {"model_family": "fake-lightgbm", "calibration_labels_used": False}
+        return object(), {
+            "model_family": "fake-lightgbm",
+            "calibration_labels_used": False,
+        }
 
     monkeypatch.setattr(v4ac, "fit_lightgbm_meta_filter", fake_fit)
     monkeypatch.setattr(
@@ -262,7 +269,9 @@ def test_symbol_runner_builds_complete_1h_4h_threshold_and_exit_matrix(
         lambda *args: {700: 0.4, 720: 0.8},
     )
 
-    def fake_economic_cell(**kwargs: Any) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    def fake_economic_cell(
+        **kwargs: Any,
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         candidate_id = (
             f"{kwargs['symbol']}|{kwargs['timeframe']}|24|"
             f"{kwargs['policy']}|{kwargs['mode']}"
@@ -300,7 +309,11 @@ def test_symbol_runner_builds_complete_1h_4h_threshold_and_exit_matrix(
         "TRAIL_2.0",
     }
     assert len(windows) == 2
-    assert all(item["acceptance_target_met"] for item in cells if item["mode"] != "PRIMARY_ONLY")
+    assert all(
+        item["acceptance_target_met"]
+        for item in cells
+        if item["mode"] != "PRIMARY_ONLY"
+    )
     assert len(trades) == 20
     assert decisions
 
@@ -406,7 +419,10 @@ def test_run_v4ad_writes_report_and_csv_artifacts(
             [item for item in cells if item["symbol"] == symbol],
             [],
             [],
-            [{"symbol": symbol, "timeframe": timeframe} for timeframe in v4ad.TIMEFRAMES],
+            [
+                {"symbol": symbol, "timeframe": timeframe}
+                for timeframe in v4ad.TIMEFRAMES
+            ],
             [item for item in scenarios if item["symbol"] == symbol],
         )
 
@@ -432,5 +448,8 @@ def test_run_v4ad_writes_report_and_csv_artifacts(
     )
     assert report_path.is_file()
     assert trades_path.is_file() and decisions_path.is_file()
-    assert json.loads(report_path.read_text(encoding="utf-8"))["schema_version"] == v4ad.SCHEMA
+    assert (
+        json.loads(report_path.read_text(encoding="utf-8"))["schema_version"]
+        == v4ad.SCHEMA
+    )
     assert len(report["cells"]) == 40

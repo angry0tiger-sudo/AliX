@@ -47,9 +47,7 @@ def _mode_for_fraction(target_accept_fraction: float) -> str:
     return f"META_TOP_{_target_key(target_accept_fraction)}"
 
 
-def _candidate_id(
-    symbol: str, timeframe: str, policy: str, mode: str
-) -> str:
+def _candidate_id(symbol: str, timeframe: str, policy: str, mode: str) -> str:
     return f"{symbol}|{timeframe}|{v4ac.HORIZON_BARS}|{policy}|{mode}"
 
 
@@ -125,9 +123,7 @@ def _train_meta_model_threshold_sweep(
             "fit_rows": int(len(fit_rows)),
             "calibration_rows": int(len(calibration_rows)),
             "fit_max_label_end_index": int(fit_rows["label_end_idx"].max()),
-            "calibration_start_event_index": int(
-                calibration_rows["event_index"].min()
-            ),
+            "calibration_start_event_index": int(calibration_rows["event_index"].min()),
             "fit_labels_purged_before_calibration": bool(
                 int(fit_rows["label_end_idx"].max())
                 < int(calibration_rows["event_index"].min())
@@ -398,8 +394,7 @@ def _validate_report_matrix(
     if any(item["timeframe"] not in TIMEFRAMES for item in cells):
         raise ValueError("v4ad_report_timeframe_out_of_policy")
     if any(
-        item["exit_policy"] == REFINED_TRAIL_POLICY
-        and item["timeframe"] != "1h"
+        item["exit_policy"] == REFINED_TRAIL_POLICY and item["timeframe"] != "1h"
         for item in cells
     ):
         raise ValueError("v4ad_refined_trailing_scope_invalid")
@@ -466,9 +461,7 @@ def _build_report(
         "timeframes": list(TIMEFRAMES),
         "horizon_bars": v4ac.HORIZON_BARS,
         "horizon_hours_by_timeframe": {
-            timeframe: v4ac.HORIZON_BARS
-            * v4ac.TIMEFRAME_MINUTES[timeframe]
-            / 60
+            timeframe: v4ac.HORIZON_BARS * v4ac.TIMEFRAME_MINUTES[timeframe] / 60
             for timeframe in TIMEFRAMES
         },
         "exit_policies_by_timeframe": {
@@ -591,9 +584,7 @@ def run_v4ad(
     commit_sha: str,
 ) -> dict[str, Any]:
     v4ac._validate_run_request(days, commit_sha)
-    datasets, provenance = v4ac._load_diagnostic_datasets(
-        input_dir, days, commit_sha
-    )
+    datasets, provenance = v4ac._load_diagnostic_datasets(input_dir, days, commit_sha)
     cells: list[dict[str, Any]] = []
     trades: list[dict[str, Any]] = []
     decisions: list[dict[str, Any]] = []
@@ -602,18 +593,20 @@ def run_v4ad(
     for symbol in SYMBOLS:
         if symbol not in datasets:
             raise ValueError("v4ad_required_symbol_dataset_missing")
-        symbol_cells, symbol_trades, symbol_decisions, symbol_windows, symbol_scenarios = (
-            _run_symbol_timeframe(symbol, datasets[symbol])
-        )
+        (
+            symbol_cells,
+            symbol_trades,
+            symbol_decisions,
+            symbol_windows,
+            symbol_scenarios,
+        ) = _run_symbol_timeframe(symbol, datasets[symbol])
         cells.extend(symbol_cells)
         trades.extend(symbol_trades)
         decisions.extend(symbol_decisions)
         windows.extend(symbol_windows)
         scenarios.extend(symbol_scenarios)
 
-    report = _build_report(
-        commit_sha, days, provenance, cells, windows, scenarios
-    )
+    report = _build_report(commit_sha, days, provenance, cells, windows, scenarios)
     output_report.parent.mkdir(parents=True, exist_ok=True)
     output_report.write_text(
         json.dumps(report, indent=2, sort_keys=True, allow_nan=False) + "\n",
