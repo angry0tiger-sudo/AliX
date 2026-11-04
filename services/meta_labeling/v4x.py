@@ -31,14 +31,7 @@ def _finite_feature_rows(features: DataFrame) -> np.ndarray:
     return cast(np.ndarray, np.isfinite(numeric).all(axis=1))
 
 
-def build_sma_primary_features(
-    bars: DataFrame,
-    candle_features: DataFrame,
-    *,
-    fast_period: int = V4X_SMA_FAST_PERIOD,
-    slow_period: int = V4X_SMA_SLOW_PERIOD,
-) -> tuple[DataFrame, Series]:
-    """Create causal SMA-crossover BUY events and point-in-time meta features."""
+def _validate_sma_periods(fast_period: int, slow_period: int) -> None:
     if (
         isinstance(fast_period, bool)
         or isinstance(slow_period, bool)
@@ -48,23 +41,40 @@ def build_sma_primary_features(
         or slow_period <= fast_period
     ):
         raise ValueError("v4x_sma_period_configuration_invalid")
+
+
+def _validate_sma_feature_inputs(bars: DataFrame, candle_features: DataFrame) -> None:
     if len(bars) != len(candle_features) or bars.empty:
         raise ValueError("v4x_sma_input_alignment_invalid")
     if not candle_features.columns.is_unique:
         raise ValueError("v4x_feature_columns_must_be_unique")
     if any(str(name).startswith("&-") for name in candle_features.columns):
         raise ValueError("v4x_target_column_in_primary_features")
-    if not {"close"}.issubset(bars.columns):
+    if "close" not in bars.columns:
         raise ValueError("v4x_sma_close_column_missing")
 
+
+def _validated_sma_close(bars: DataFrame) -> Series:
     close = pd.to_numeric(bars["close"], errors="coerce")
     if not np.isfinite(close.to_numpy(dtype=float)).all() or bool((close <= 0).any()):
         raise ValueError("v4x_sma_close_values_invalid")
+    return close
+
+
+def build_sma_primary_features(
+    bars: DataFrame,
+    candle_features: DataFrame,
+    *,
+    fast_period: int = V4X_SMA_FAST_PERIOD,
+    slow_period: int = V4X_SMA_SLOW_PERIOD,
+) -> tuple[DataFrame, Series]:
+    """Create causal SMA-crossover BUY events and point-in-time meta features."""
+    _validate_sma_periods(fast_period, slow_period)
+    _validate_sma_feature_inputs(bars, candle_features)
+    close = _validated_sma_close(bars)
     fast = close.rolling(fast_period, min_periods=fast_period).mean()
     slow = close.rolling(slow_period, min_periods=slow_period).mean()
-    previous_fast = fast.shift(1)
-    previous_slow = slow.shift(1)
-    crossover = (fast > slow) & (previous_fast <= previous_slow)
+    crossover = (fast > slow) & (fast.shift(1) <= slow.shift(1))
 
     result = candle_features.reset_index(drop=True).copy()
     result["%-primary_sma_spread_pct"] = fast / slow - 1.0
@@ -74,21 +84,12 @@ def build_sma_primary_features(
     signals = crossover.fillna(False).to_numpy(dtype=bool) & finite
     return result, Series(signals, name="primary_buy_signal", dtype=bool)
 
-
-def generate_oof_primary_events(
-    primary_buy_signal: Series,
-    *,
+def _validate_oof_configuration(
+    row_count: int,
     start_index: int,
     stop_index: int,
-    fold_count: int = V4X_OOF_FOLD_COUNT,
-) -> DataFrame:
-    """Record fixed-rule BUY signals in disjoint chronological OOF test folds.
-
-    The primary is a fixed, non-fitted SMA rule. Each fold emits signals only
-    for its own test interval; inputs are candle features available at that
-    event close and earlier. No target or future outcome is consulted.
-    """
-    row_count = len(primary_buy_signal)
+    fold_count: int,
+) -> None:
     if (
         isinstance(start_index, bool)
         or isinstance(stop_index, bool)
@@ -107,33 +108,32 @@ def generate_oof_primary_events(
     ):
         raise ValueError("v4x_oof_fold_configuration_invalid")
 
-    boundaries = np.linspace(start_index, stop_index, fold_count + 1, dtype=int)
-    signal_values = primary_buy_signal.to_numpy(dtype=bool)
-    records: list[dict[str, int | str | bool]] = []
-    for fold_id in range(fold_count):
-        fold_start = int(boundaries[fold_id])
-        fold_stop = int(boundaries[fold_id + 1])
-        indices = np.flatnonzero(signal_values[fold_start:fold_stop]) + fold_start
-        for event_index in indices.tolist():
-            records.append(
-                {
-                    "event_index": int(event_index),
-                    "fold_id": fold_id,
-                    "fold_start_index": fold_start,
-                    "fold_stop_index": fold_stop,
-                    "primary_signal": "BUY",
-                    "primary_signal_generation": "CAUSAL_FIXED_SMA_CROSSOVER",
-                    "primary_oof": True,
-                    "primary_history_end_index": int(event_index),
-                }
-            )
-    if not records:
+
+def _oof_fold_records(
+    signal_values: np.ndarray,
+    fold_id: int,
+    fold_start: int,
+    fold_stop: int,
+) -> list[dict[str, int | str | bool]]:
+    event_indices = np.flatnonzero(signal_values[fold_start:fold_stop]) + fold_start
+    return [
+        {
+            "event_index": int(event_index),
+            "fold_id": fold_id,
+            "fold_start_index": fold_start,
+            "fold_stop_index": fold_stop,
+            "primary_signal": "BUY",
+            "primary_signal_generation": "CAUSAL_FIXED_SMA_CROSSOVER",
+            "primary_oof": True,
+            "primary_history_end_index": int(event_index),
+        }
+        for event_index in event_indices.tolist()
+    ]
+
+
+def _validate_oof_primary_event_frame(result: DataFrame) -> None:
+    if result.empty:
         raise ValueError("v4x_oof_primary_signals_empty")
-    result = (
-        DataFrame.from_records(records)
-        .sort_values("event_index")
-        .reset_index(drop=True)
-    )
     if result["event_index"].duplicated().any():
         raise ValueError("v4x_oof_primary_events_duplicate")
     if not result["primary_oof"].eq(True).all():
@@ -143,6 +143,159 @@ def generate_oof_primary_events(
         > result["event_index"].to_numpy(dtype=int)
     ).any():
         raise ValueError("v4x_primary_signal_future_history")
+
+
+def generate_oof_primary_events(
+    primary_buy_signal: Series,
+    *,
+    start_index: int,
+    stop_index: int,
+    fold_count: int = V4X_OOF_FOLD_COUNT,
+) -> DataFrame:
+    """Record fixed-rule BUY signals in disjoint chronological OOF test folds.
+
+    The primary is a fixed, non-fitted SMA rule. Each fold emits signals only
+    for its own test interval; inputs are candle features available at that
+    event close and earlier. No target or future outcome is consulted.
+    """
+    row_count = len(primary_buy_signal)
+    _validate_oof_configuration(row_count, start_index, stop_index, fold_count)
+    boundaries = np.linspace(start_index, stop_index, fold_count + 1, dtype=int)
+    signal_values = primary_buy_signal.to_numpy(dtype=bool)
+    records = [
+        record
+        for fold_id in range(fold_count)
+        for record in _oof_fold_records(
+            signal_values,
+            fold_id,
+            int(boundaries[fold_id]),
+            int(boundaries[fold_id + 1]),
+        )
+    ]
+    result = (
+        DataFrame.from_records(records)
+        .sort_values("event_index")
+        .reset_index(drop=True)
+    )
+    _validate_oof_primary_event_frame(result)
+    return result
+
+def _validate_primary_events(primary_events: DataFrame) -> None:
+    required = {"event_index", "primary_signal", "primary_oof", "fold_id"}
+    if not required.issubset(primary_events.columns):
+        raise ValueError("v4x_primary_event_schema_invalid")
+    if not primary_events["primary_signal"].eq("BUY").all():
+        raise ValueError("v4x_meta_training_requires_primary_buy_only")
+    if not primary_events["primary_oof"].eq(True).all():
+        raise ValueError("v4x_meta_training_requires_oof_primary_signals")
+    if primary_events["event_index"].duplicated().any():
+        raise ValueError("v4x_primary_events_duplicate")
+
+
+def _validate_barrier_labels(barrier_labels: DataFrame) -> None:
+    required = {
+        "event_index",
+        "label_end_idx",
+        "entry_price",
+        "take_profit_price",
+        "stop_loss_price",
+        "exit_reason",
+    }
+    if not required.issubset(barrier_labels.columns):
+        raise ValueError("v4x_barrier_label_schema_invalid")
+    if barrier_labels["event_index"].duplicated().any():
+        raise ValueError("v4x_barrier_events_duplicate")
+
+
+def _validate_cost_configuration(
+    fee_bps_per_side: float,
+    slippage_bps_per_side: float,
+    entry_slippage_bps: float,
+) -> tuple[float, float, float]:
+    values = (fee_bps_per_side, slippage_bps_per_side, entry_slippage_bps)
+    if any(not math.isfinite(float(value)) or float(value) < 0 for value in values):
+        raise ValueError("v4x_cost_configuration_invalid")
+    return (
+        float(fee_bps_per_side) / 10_000.0,
+        float(slippage_bps_per_side) / 10_000.0,
+        float(entry_slippage_bps) / 10_000.0,
+    )
+
+
+def _meta_exit_reference(
+    bars: DataFrame,
+    row: dict[str, Any],
+    label_end: int,
+) -> float:
+    reason = str(row["exit_reason"])
+    if reason == "TP_HIT":
+        exit_reference = float(row["take_profit_price"])
+    elif reason in {"SL_HIT", "COLLISION"}:
+        exit_reference = float(row["stop_loss_price"])
+    elif reason == "HORIZON_EXPIRY":
+        exit_reference = float(bars.iloc[label_end]["close"])
+    else:
+        raise ValueError("v4x_meta_exit_reason_invalid")
+    if not math.isfinite(exit_reference) or exit_reference <= 0:
+        raise ValueError("v4x_meta_exit_price_invalid")
+    return exit_reference
+
+
+def _costed_meta_label_record(
+    bars: DataFrame,
+    row: dict[str, Any],
+    fee_rate: float,
+    slippage_rate: float,
+    entry_rate: float,
+) -> dict[str, int | float | str] | None:
+    raw_label_end = row["label_end_idx"]
+    raw_entry_price = row["entry_price"]
+    if pd.isna(raw_label_end) or pd.isna(raw_entry_price):
+        return None
+    event_index = int(row["event_index"])
+    label_end = int(raw_label_end)
+    if event_index < 0 or label_end <= event_index or label_end >= len(bars):
+        raise ValueError("v4x_meta_label_horizon_invalid")
+    entry_fill = float(raw_entry_price)
+    if not math.isfinite(entry_fill) or entry_fill <= 0 or entry_rate >= 1:
+        raise ValueError("v4x_meta_entry_price_invalid")
+    entry_reference = entry_fill / (1.0 + entry_rate)
+    exit_reference = _meta_exit_reference(bars, row, label_end)
+    exit_fill = exit_reference * (1.0 - slippage_rate)
+    gross_return = (exit_reference - entry_reference) / entry_reference
+    entry_fee = entry_fill * fee_rate / entry_reference
+    exit_fee = exit_fill * fee_rate / entry_reference
+    entry_slippage = (entry_fill - entry_reference) / entry_reference
+    exit_slippage = (exit_reference - exit_fill) / entry_reference
+    net_return = (
+        gross_return - entry_fee - exit_fee - entry_slippage - exit_slippage
+    )
+    if not math.isfinite(net_return):
+        raise ValueError("v4x_meta_net_return_invalid")
+    return {
+        "event_index": event_index,
+        "fold_id": int(row["fold_id"]),
+        "label_end_idx": label_end,
+        "meta_label": int(net_return > 0.0),
+        "net_return": float(net_return),
+        "exit_reason": str(row["exit_reason"]),
+        "primary_signal": str(row["primary_signal"]),
+        "primary_oof": bool(row["primary_oof"]),
+    }
+
+
+def _costed_meta_label_frame(
+    records: list[dict[str, int | float | str]],
+) -> DataFrame:
+    if not records:
+        raise ValueError("v4x_costed_meta_labels_empty")
+    result = (
+        DataFrame.from_records(records)
+        .sort_values("event_index")
+        .reset_index(drop=True)
+    )
+    if result["event_index"].duplicated().any():
+        raise ValueError("v4x_costed_meta_labels_duplicate")
     return result
 
 
@@ -162,96 +315,102 @@ def build_costed_meta_labels(
     sides' fee and slippage using the same accounting convention as the Spot
     replay. Future prices are used only for this target, never as features.
     """
-    required_events = {"event_index", "primary_signal", "primary_oof", "fold_id"}
-    required_labels = {
-        "event_index",
-        "label_end_idx",
-        "entry_price",
-        "take_profit_price",
-        "stop_loss_price",
-        "exit_reason",
-    }
-    if not required_events.issubset(primary_events.columns):
-        raise ValueError("v4x_primary_event_schema_invalid")
-    if not required_labels.issubset(barrier_labels.columns):
-        raise ValueError("v4x_barrier_label_schema_invalid")
-    cost_values = (fee_bps_per_side, slippage_bps_per_side, entry_slippage_bps)
-    if any(
-        not math.isfinite(float(value)) or float(value) < 0 for value in cost_values
-    ):
-        raise ValueError("v4x_cost_configuration_invalid")
-    if not primary_events["primary_signal"].eq("BUY").all():
-        raise ValueError("v4x_meta_training_requires_primary_buy_only")
-    if not primary_events["primary_oof"].eq(True).all():
-        raise ValueError("v4x_meta_training_requires_oof_primary_signals")
-    if primary_events["event_index"].duplicated().any():
-        raise ValueError("v4x_primary_events_duplicate")
-    if barrier_labels["event_index"].duplicated().any():
-        raise ValueError("v4x_barrier_events_duplicate")
-
-    selected = barrier_labels.loc[:, list(required_labels)].copy()
+    _validate_primary_events(primary_events)
+    _validate_barrier_labels(barrier_labels)
+    fee_rate, slippage_rate, entry_rate = _validate_cost_configuration(
+        fee_bps_per_side, slippage_bps_per_side, entry_slippage_bps
+    )
+    selected = barrier_labels.loc[
+        :,
+        [
+            "event_index",
+            "label_end_idx",
+            "entry_price",
+            "take_profit_price",
+            "stop_loss_price",
+            "exit_reason",
+        ],
+    ].copy()
     merged = primary_events.merge(
         selected, on="event_index", how="inner", validate="one_to_one"
     ).sort_values("event_index")
-    rows: list[dict[str, int | float | str]] = []
-    fee_rate = float(fee_bps_per_side) / 10_000.0
-    slippage_rate = float(slippage_bps_per_side) / 10_000.0
-    entry_rate = float(entry_slippage_bps) / 10_000.0
-    for row in merged.to_dict(orient="records"):
-        raw_label_end = row["label_end_idx"]
-        raw_entry_price = row["entry_price"]
-        if pd.isna(raw_label_end) or pd.isna(raw_entry_price):
-            continue
-        event_index = int(row["event_index"])
-        label_end = int(raw_label_end)
-        if event_index < 0 or label_end <= event_index or label_end >= len(bars):
-            raise ValueError("v4x_meta_label_horizon_invalid")
-        entry_fill = float(raw_entry_price)
-        if not math.isfinite(entry_fill) or entry_fill <= 0 or entry_rate >= 1:
-            raise ValueError("v4x_meta_entry_price_invalid")
-        entry_reference = entry_fill / (1.0 + entry_rate)
-        reason = str(row["exit_reason"])
-        if reason == "TP_HIT":
-            exit_reference = float(row["take_profit_price"])
-        elif reason in {"SL_HIT", "COLLISION"}:
-            exit_reference = float(row["stop_loss_price"])
-        elif reason == "HORIZON_EXPIRY":
-            exit_reference = float(bars.iloc[label_end]["close"])
-        else:
-            raise ValueError("v4x_meta_exit_reason_invalid")
-        if not math.isfinite(exit_reference) or exit_reference <= 0:
-            raise ValueError("v4x_meta_exit_price_invalid")
-        exit_fill = exit_reference * (1.0 - slippage_rate)
-        gross_return = (exit_reference - entry_reference) / entry_reference
-        entry_fee = entry_fill * fee_rate / entry_reference
-        exit_fee = exit_fill * fee_rate / entry_reference
-        entry_slippage = (entry_fill - entry_reference) / entry_reference
-        exit_slippage = (exit_reference - exit_fill) / entry_reference
-        net_return = (
-            gross_return - entry_fee - exit_fee - entry_slippage - exit_slippage
+    records = [
+        record
+        for row in merged.to_dict(orient="records")
+        if (
+            record := _costed_meta_label_record(
+                bars, row, fee_rate, slippage_rate, entry_rate
+            )
         )
-        if not math.isfinite(net_return):
-            raise ValueError("v4x_meta_net_return_invalid")
-        rows.append(
-            {
-                "event_index": event_index,
-                "fold_id": int(row["fold_id"]),
-                "label_end_idx": label_end,
-                "meta_label": int(net_return > 0.0),
-                "net_return": float(net_return),
-                "exit_reason": reason,
-                "primary_signal": str(row["primary_signal"]),
-                "primary_oof": bool(row["primary_oof"]),
-            }
-        )
-    if not rows:
-        raise ValueError("v4x_costed_meta_labels_empty")
-    result = (
-        DataFrame.from_records(rows).sort_values("event_index").reset_index(drop=True)
-    )
-    if result["event_index"].duplicated().any():
-        raise ValueError("v4x_costed_meta_labels_duplicate")
-    return result
+        is not None
+    ]
+    return _costed_meta_label_frame(records)
+
+def _validate_meta_training_events(
+    events: DataFrame,
+    outer_train_end_index: int,
+    calibration_fraction: float,
+) -> float:
+    required = {
+        "event_index",
+        "fold_id",
+        "label_end_idx",
+        "meta_label",
+        "primary_signal",
+        "primary_oof",
+    }
+    if not required.issubset(events.columns):
+        raise ValueError("v4x_meta_training_schema_invalid")
+    fraction = float(calibration_fraction)
+    if not math.isfinite(fraction) or not 0 < fraction < 0.5:
+        raise ValueError("v4x_meta_calibration_fraction_invalid")
+    if events["event_index"].duplicated().any() or not events[
+        "event_index"
+    ].is_monotonic_increasing:
+        raise ValueError("v4x_meta_training_event_order_invalid")
+    if not events["primary_signal"].eq("BUY").all():
+        raise ValueError("v4x_meta_training_requires_primary_buy_only")
+    if not events["primary_oof"].eq(True).all():
+        raise ValueError("v4x_meta_training_requires_oof_primary_signals")
+    indices = events["event_index"].to_numpy(dtype=int)
+    label_ends = events["label_end_idx"].to_numpy(dtype=int)
+    if (indices >= outer_train_end_index).any() or (
+        label_ends >= outer_train_end_index
+    ).any():
+        raise ValueError("v4x_meta_training_outer_validation_contamination")
+    return fraction
+
+
+def _build_meta_fit_calibration_frames(
+    events: DataFrame,
+    calibration_fraction: float,
+) -> tuple[DataFrame, DataFrame, int]:
+    calibration_count = max(2, int(math.ceil(len(events) * calibration_fraction)))
+    if len(events) - calibration_count < 1 or calibration_count >= len(events):
+        raise ValueError("v4x_insufficient_meta_calibration_rows")
+    calibration = events.iloc[-calibration_count:].copy()
+    calibration_start = int(calibration["event_index"].iloc[0])
+    fit_candidates = events.iloc[:-calibration_count].copy()
+    fit = fit_candidates.loc[
+        fit_candidates["label_end_idx"] < calibration_start
+    ].copy()
+    return fit, calibration, calibration_start
+
+
+def _validate_meta_fit_support(
+    fit: DataFrame,
+    calibration: DataFrame,
+    calibration_start: int,
+    minimum_fit_rows: int,
+    minimum_class_rows: int,
+) -> None:
+    if len(fit) < minimum_fit_rows or len(calibration) < 2:
+        raise ValueError("v4x_insufficient_meta_training_rows")
+    counts = fit["meta_label"].value_counts().to_dict()
+    if any(int(counts.get(label, 0)) < minimum_class_rows for label in (0, 1)):
+        raise ValueError("v4x_insufficient_meta_class_support")
+    if int(fit["label_end_idx"].max()) >= calibration_start:
+        raise ValueError("v4x_meta_calibration_purge_failed")
 
 
 def split_meta_fit_calibration(
@@ -263,51 +422,19 @@ def split_meta_fit_calibration(
     minimum_class_rows: int = V4X_MINIMUM_CLASS_ROWS,
 ) -> tuple[DataFrame, DataFrame]:
     """Split matured OOF BUY events into purged fit and label-blind calibration."""
-    required = {
-        "event_index",
-        "fold_id",
-        "label_end_idx",
-        "meta_label",
-        "primary_signal",
-        "primary_oof",
-    }
-    if not required.issubset(labelled_oof_events.columns):
-        raise ValueError("v4x_meta_training_schema_invalid")
-    fraction = float(calibration_fraction)
-    if not math.isfinite(fraction) or not 0 < fraction < 0.5:
-        raise ValueError("v4x_meta_calibration_fraction_invalid")
-    if (
-        labelled_oof_events["event_index"].duplicated().any()
-        or not labelled_oof_events["event_index"].is_monotonic_increasing
-    ):
-        raise ValueError("v4x_meta_training_event_order_invalid")
+    fraction = _validate_meta_training_events(
+        labelled_oof_events,
+        outer_train_end_index,
+        calibration_fraction,
+    )
     events = labelled_oof_events.copy().reset_index(drop=True)
-    if not events["primary_signal"].eq("BUY").all():
-        raise ValueError("v4x_meta_training_requires_primary_buy_only")
-    if not events["primary_oof"].eq(True).all():
-        raise ValueError("v4x_meta_training_requires_oof_primary_signals")
-    indices = events["event_index"].to_numpy(dtype=int)
-    label_ends = events["label_end_idx"].to_numpy(dtype=int)
-    if (indices >= outer_train_end_index).any() or (
-        label_ends >= outer_train_end_index
-    ).any():
-        raise ValueError("v4x_meta_training_outer_validation_contamination")
-    calibration_count = max(2, int(math.ceil(len(events) * fraction)))
-    if len(events) - calibration_count < 1 or calibration_count >= len(events):
-        raise ValueError("v4x_insufficient_meta_calibration_rows")
-    calibration = events.iloc[-calibration_count:].copy()
-    calibration_start = int(calibration["event_index"].iloc[0])
-    fit_candidates = events.iloc[:-calibration_count].copy()
-    fit = fit_candidates.loc[fit_candidates["label_end_idx"] < calibration_start].copy()
-    if len(fit) < minimum_fit_rows or len(calibration) < 2:
-        raise ValueError("v4x_insufficient_meta_training_rows")
-    counts = fit["meta_label"].value_counts().to_dict()
-    if any(int(counts.get(label, 0)) < minimum_class_rows for label in (0, 1)):
-        raise ValueError("v4x_insufficient_meta_class_support")
-    if int(fit["label_end_idx"].max()) >= calibration_start:
-        raise ValueError("v4x_meta_calibration_purge_failed")
+    fit, calibration, calibration_start = _build_meta_fit_calibration_frames(
+        events, fraction
+    )
+    _validate_meta_fit_support(
+        fit, calibration, calibration_start, minimum_fit_rows, minimum_class_rows
+    )
     return fit.reset_index(drop=True), calibration.reset_index(drop=True)
-
 
 def _validate_meta_matrix(features: DataFrame) -> np.ndarray:
     if features.empty or not features.columns.is_unique:
