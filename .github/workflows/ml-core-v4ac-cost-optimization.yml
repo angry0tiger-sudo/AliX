@@ -129,12 +129,44 @@ jobs:
           printf 'Champion=null\norder_permission=false\ntrading_authorization=NO-GO\n'
           printf 'private_api_calls=0\nreal_order_attempts=0\nsequence_model_used=false\n'
           python - <<'PY'
-          from scripts.run_ml_core_v4ac_cost_optimization import (
-              HORIZON_BARS, ROUND_TRIP_COST_BPS, TIMEFRAMES,
-          )
-          assert TIMEFRAMES == ("15m", "30m", "1h", "4h")
-          assert HORIZON_BARS == 24
-          assert ROUND_TRIP_COST_BPS == 30.0
+          import ast
+          from pathlib import Path
+
+          source = Path(
+              "scripts/run_ml_core_v4ac_cost_optimization.py"
+          ).read_text(encoding="utf-8")
+          tree = ast.parse(source)
+          contract_names = {
+              "TIMEFRAMES",
+              "HORIZON_BARS",
+              "EXIT_POLICIES",
+              "MODES",
+              "FEE_BPS_PER_SIDE",
+              "SLIPPAGE_BPS_PER_SIDE",
+              "ROUND_TRIP_COST_BPS",
+          }
+          observed = {}
+          for node in tree.body:
+              if isinstance(node, ast.Assign):
+                  for target in node.targets:
+                      if isinstance(target, ast.Name) and target.id in contract_names:
+                          observed[target.id] = ast.literal_eval(node.value)
+
+          expected = {
+              "TIMEFRAMES": ("15m", "30m", "1h", "4h"),
+              "HORIZON_BARS": 24,
+              "EXIT_POLICIES": ("TB_1.5_1.0", "TRAIL_2.0"),
+              "MODES": ("PRIMARY_ONLY", "META_FILTERED"),
+              "FEE_BPS_PER_SIDE": 10.0,
+              "SLIPPAGE_BPS_PER_SIDE": 5.0,
+              "ROUND_TRIP_COST_BPS": 30.0,
+          }
+          if observed != expected:
+              raise SystemExit(
+                  "v4ac_static_contract_mismatch:"
+                  + repr({"observed": observed, "expected": expected})
+              )
+          print("V4-AC static execution contract: PASS")
           PY
 
       - name: Set up pinned Python
