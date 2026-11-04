@@ -146,9 +146,19 @@ def _oof_fold_records(
     ]
 
 
-def _validate_oof_primary_event_frame(result: DataFrame) -> None:
-    if result.empty:
+def _oof_primary_event_frame(
+    records: list[dict[str, int | str | bool]],
+) -> DataFrame:
+    if not records:
         raise ValueError("v4x_oof_primary_signals_empty")
+    return (
+        DataFrame.from_records(records)
+        .sort_values("event_index")
+        .reset_index(drop=True)
+    )
+
+
+def _validate_oof_primary_event_frame(result: DataFrame) -> None:
     if result["event_index"].duplicated().any():
         raise ValueError("v4x_oof_primary_events_duplicate")
     if not result["primary_oof"].eq(True).all():
@@ -187,11 +197,7 @@ def generate_oof_primary_events(
             int(boundaries[fold_id + 1]),
         )
     ]
-    result = (
-        DataFrame.from_records(records)
-        .sort_values("event_index")
-        .reset_index(drop=True)
-    )
+    result = _oof_primary_event_frame(records)
     _validate_oof_primary_event_frame(result)
     return result
 
