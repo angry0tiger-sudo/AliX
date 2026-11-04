@@ -264,6 +264,7 @@ def _validation_decision_signals(
     }
     return signals, decisions, counts
 
+
 def _candidate_metrics(replay: dict[str, Any]) -> dict[str, Any]:
     metrics = replay["metrics"]
     trades = replay["trades"]
@@ -661,9 +662,7 @@ def _write_v4x_outputs(
         encoding="utf-8",
     )
     trade_rows = [trade for item in report["candidates"] for trade in item["trades"]]
-    decision_rows = [
-        row for item in report["candidates"] for row in item["decisions"]
-    ]
+    decision_rows = [row for item in report["candidates"] for row in item["decisions"]]
     _write_csv(trades_path, trade_rows)
     _write_csv(decisions_path, decision_rows)
 
@@ -703,6 +702,7 @@ def run_v4x(
     _write_v4x_outputs(report, report_path, trades_path, decisions_path)
     _print_v4x_run_summary(report)
     return report
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
