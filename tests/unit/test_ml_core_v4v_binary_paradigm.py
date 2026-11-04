@@ -496,6 +496,11 @@ def test_v4v_workflow_is_branch_scoped_and_waits_for_exact_sha_ci() -> None:
     assert "Binary_BUY_Economic_Score" in workflow_text
     assert "alix-v4v-row-level-probabilities.csv" in workflow_text
     assert "trading_authorization=NO-GO" in workflow_text
+    assert "uses: actions/download-artifact@v4" in workflow_text
+    assert "github-token: ${{ secrets.GITHUB_TOKEN }}" in workflow_text
+    assert "run-id: 41680389265" in workflow_text
+    assert "7484b3403ea7e236363eb2f79007f01286b9953e6919b893d4c51928607cb9b5" in workflow_text
+    assert "798315c1cd0e154dd2d0182b1576bd494ea1909860a1d6b2748a310d4262a89f" in workflow_text
 
 
 def test_dynamic_probability_calibration_selects_top_fraction_and_reports_ties() -> (
