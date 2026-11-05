@@ -22,6 +22,7 @@ V4AH_THRESHOLD_FRACTION: Final[float] = 0.15
 V4AH_MINIMUM_FIT_ROWS: Final[int] = 40
 # Diagnostic-phase floor only; keep both classes represented after purging.
 V4AH_MINIMUM_CLASS_ROWS: Final[int] = 3
+V4AH_MINIMUM_KELLY_OUTCOME_ROWS: Final[int] = 8
 V4AH_MINIMUM_CALIBRATION_ROWS: Final[int] = 30
 V4AH_MINIMUM_THRESHOLD_ROWS: Final[int] = 20
 V4AH_MINIMUM_TRAILING_POLICY_ROWS: Final[int] = 30
@@ -822,7 +823,10 @@ def estimate_training_payoff_ratio(net_returns: Any) -> tuple[float, dict[str, A
         raise ValueError("v4ah_kelly_training_returns_invalid")
     winners = values[values > 0.0]
     losers = values[values < 0.0]
-    if len(winners) < V4AH_MINIMUM_CLASS_ROWS or len(losers) < V4AH_MINIMUM_CLASS_ROWS:
+    if (
+        len(winners) < V4AH_MINIMUM_KELLY_OUTCOME_ROWS
+        or len(losers) < V4AH_MINIMUM_KELLY_OUTCOME_ROWS
+    ):
         raise ValueError("v4ah_kelly_payoff_support_insufficient")
     average_win = float(np.mean(winners))
     average_loss = abs(float(np.mean(losers)))
