@@ -69,7 +69,9 @@ def test_regime_feature_pipeline_and_fail_closed_guards() -> None:
     with pytest.raises(ValueError, match="v4ah_regime_cluster_count_invalid"):
         v4ah.build_regime_features(frame, fit_end=200, cluster_count=1)
     with pytest.raises(ValueError, match="v4ah_regime_input_schema_invalid"):
-        v4ah.build_regime_features(frame.drop(columns=[v4ah.REGIME_INPUT_COLUMNS[0]]), fit_end=200)
+        v4ah.build_regime_features(
+            frame.drop(columns=[v4ah.REGIME_INPUT_COLUMNS[0]]), fit_end=200
+        )
     insufficient = frame.copy()
     insufficient.loc[:119, list(v4ah.REGIME_INPUT_COLUMNS)] = np.nan
     with pytest.raises(ValueError, match="v4ah_regime_training_support_insufficient"):
@@ -82,8 +84,8 @@ def test_regime_feature_pipeline_and_fail_closed_guards() -> None:
 
 def test_three_way_chronological_purged_split_and_guards() -> None:
     events = _event_frame()
-    fit, temperature, threshold, diagnostics = (
-        v4ah.split_fit_temperature_threshold(events, outer_train_end=900)
+    fit, temperature, threshold, diagnostics = v4ah.split_fit_temperature_threshold(
+        events, outer_train_end=900
     )
     assert len(fit) == 175
     assert len(temperature) == 37
@@ -128,7 +130,9 @@ class _FakeShapExplainer:
         self.model = model
 
     def shap_values(self, features: DataFrame) -> list[np.ndarray]:
-        importance = np.tile(np.arange(1, len(features.columns) + 1), (len(features), 1))
+        importance = np.tile(
+            np.arange(1, len(features.columns) + 1), (len(features), 1)
+        )
         return [-importance, importance]
 
 
@@ -148,7 +152,9 @@ def test_shap_lightgbm_pipeline_with_stubbed_optional_libraries(
     setattr(shap, "TreeExplainer", _FakeShapExplainer)
     monkeypatch.setitem(sys.modules, "lightgbm", lightgbm)
     monkeypatch.setitem(sys.modules, "shap", shap)
-    features = DataFrame(np.arange(300, dtype=float).reshape(60, 5), columns=list("abcde"))
+    features = DataFrame(
+        np.arange(300, dtype=float).reshape(60, 5), columns=list("abcde")
+    )
     labels = pd.Series(np.array([0, 1] * 30))
     model, selected, rankings, diagnostics = v4ah.fit_shap_selected_lightgbm(
         features,
@@ -191,7 +197,9 @@ def test_probability_temperature_and_calibration_diagnostics() -> None:
     assert report["sample_count"] == 40
     assert report["brier_score"] >= 0.0
     with pytest.raises(ValueError, match="v4ah_model_class_order_invalid"):
-        v4ah._positive_probability(type("BadModel", (), {"classes_": [1, 0]})(), DataFrame({"x": [1.0]}))
+        v4ah._positive_probability(
+            type("BadModel", (), {"classes_": [1, 0]})(), DataFrame({"x": [1.0]})
+        )
     with pytest.raises(ValueError, match="v4ah_temperature_inputs_invalid"):
         v4ah.apply_temperature_scaling([0.2], 0.0)
     with pytest.raises(ValueError, match="v4ah_temperature_calibration_inputs_invalid"):
@@ -237,7 +245,9 @@ def test_adaptive_trailing_policy_training_and_prediction() -> None:
         v4ah.fit_adaptive_trailing_policy(
             features, np.ones((45, 2)), np.ones((45, 2)), calibration_start_index=100
         )
-    with pytest.raises(ValueError, match="v4ah_trailing_policy_training_support_insufficient"):
+    with pytest.raises(
+        ValueError, match="v4ah_trailing_policy_training_support_insufficient"
+    ):
         v4ah.fit_adaptive_trailing_policy(
             features.iloc[:20],
             returns[:20],
