@@ -205,7 +205,6 @@ def _validate_split_fractions(fit_fraction: float, temperature_fraction: float) 
         raise ValueError("v4ah_training_split_fractions_invalid")
 
 
-
 def _validate_labelled_event_schema(labelled_events: DataFrame) -> None:
     required = {"event_index", "label_end_idx", "meta_label", "net_return"}
     if not required.issubset(labelled_events.columns) or len(labelled_events) < 100:
@@ -856,7 +855,6 @@ def _apply_sized_trade(
     return enriched, next_equity, next_peak, drawdown, pnl, int(raw_return > 0.0)
 
 
-
 def _sized_profit_and_loss(pnl_values: list[float]) -> tuple[float, float]:
     profit = sum(value for value in pnl_values if value > 0.0)
     loss = abs(sum(value for value in pnl_values if value < 0.0))
@@ -903,9 +901,7 @@ def _sized_trade_metrics(
     metrics.update(
         {
             "net_profit_factor": round(profit / loss, 8) if loss else None,
-            "net_profit_factor_infinite_no_losses": bool(
-                profit > 0.0 and loss == 0.0
-            ),
+            "net_profit_factor_infinite_no_losses": bool(profit > 0.0 and loss == 0.0),
             "net_pnl_total_usd": round(sum(pnl_values), 8),
             "ending_equity_usd": round(equity, 8),
         }
@@ -914,6 +910,8 @@ def _sized_trade_metrics(
         _sized_position_metrics(stake_fractions, initial_equity, unscaled_returns)
     )
     return metrics
+
+
 
 def summarize_sized_trades(
     trades: list[dict[str, Any]],
