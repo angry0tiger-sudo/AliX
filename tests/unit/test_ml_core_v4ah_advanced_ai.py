@@ -142,8 +142,14 @@ def test_three_way_chronological_purged_split_and_guards() -> None:
         v4ah.split_fit_temperature_threshold(outside, outer_train_end=900)
     purged = events.copy()
     purged.loc[:174, "label_end_idx"] = int(events["event_index"].iloc[175])
-    with pytest.raises(ValueError, match="v4ah_fit_rows_insufficient_after_purge"):
+    with pytest.raises(
+        ValueError, match="v4ah_fit_rows_insufficient_after_purge"
+    ) as error:
         v4ah.split_fit_temperature_threshold(purged, outer_train_end=900)
+    purged_diagnostics = error.value.diagnostics
+    assert purged_diagnostics["fit_rows"] == 0
+    assert purged_diagnostics["fit_event_start"] is None
+    assert purged_diagnostics["fit_event_end"] is None
     imbalanced = events.copy()
     imbalanced.loc[:174, "meta_label"] = 1
     with pytest.raises(ValueError, match="v4ah_binary_class_support_insufficient"):
