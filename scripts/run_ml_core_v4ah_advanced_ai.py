@@ -1206,6 +1206,7 @@ def _render_step_summary(report: dict[str, Any]) -> str:
     threshold = meta.get("threshold_diagnostics", {})
     regime = report.get("regime_diagnostics", {})
     calibration = meta.get("calibration_diagnostics", {})
+    separation = meta.get("separation_diagnostics", {})
     lines.extend(
         [
             "",
