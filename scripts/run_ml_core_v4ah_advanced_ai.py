@@ -15,10 +15,7 @@ import pandas as pd
 from pandas import DataFrame
 
 import scripts.run_ml_core_v4af_meta_final as v4af
-from scripts.run_ml_core_v4ac_cost_optimization import (
-    _build_forward_actions as _v4ac_build_forward_actions,
-    _summarize_replay as _v4ac_summarize_replay,
-)
+import scripts.run_ml_core_v4ac_cost_optimization as v4ac_helpers
 from services.meta_labeling import v4ah as advanced
 from services.ml_core.economic_backtest import simulate_signals
 
@@ -301,7 +298,7 @@ def _run_exit_cost_diagnostic_matrix(
     """Replay one fixed primary-signal set across trailing geometries and costs."""
     if event_indices != sorted(set(event_indices)):
         raise ValueError("v4ah_exit_matrix_primary_events_invalid")
-    actions = _v4ac_build_forward_actions(bars, event_indices, forward_end)
+    actions = v4ac_helpers._build_forward_actions(bars, event_indices, forward_end)
     base_execution = v4af._execution_config()
     base_management = v4af._trade_management_config(None)
     cells: list[dict[str, Any]] = []
@@ -327,7 +324,7 @@ def _run_exit_cost_diagnostic_matrix(
                 trade_management_config=management,
             )
             trades = cast(list[dict[str, Any]], replay["trades"])
-            metrics = _v4ac_summarize_replay(replay)
+            metrics = v4ac_helpers._summarize_replay(replay)
             cells.append(
                 {
                     "candidate_id": (
