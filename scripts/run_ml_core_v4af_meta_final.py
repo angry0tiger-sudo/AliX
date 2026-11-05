@@ -648,13 +648,9 @@ def _step_summary_candidate_row(item: dict[str, Any]) -> str:
     threshold_text = "N/A" if raw_threshold is None else f"{float(raw_threshold):.6f}"
     calibration_fraction = calibration.get("selected_calibration_fraction")
     target_fraction = item.get("target_accept_fraction")
-    target_percent = (
-        None if target_fraction is None else float(target_fraction) * 100.0
-    )
+    target_percent = None if target_fraction is None else float(target_fraction) * 100.0
     accepted_percent = (
-        None
-        if calibration_fraction is None
-        else float(calibration_fraction) * 100.0
+        None if calibration_fraction is None else float(calibration_fraction) * 100.0
     )
     return (
         f"| {item['mode']} "
@@ -687,10 +683,7 @@ def _step_summary_footer(report: dict[str, Any]) -> list[str]:
             f"OOF labels: {training.get('matured_costed_oof_label_count', 0)}; "
             f"fit rows: {fit.get('fit_rows', 0)}; calibration rows: {fit.get('calibration_rows', 0)}."
         ),
-        (
-            f"Rows meeting Trades >30, Net PF >1.5, and Max DD <=15%: "
-            f"{accepted_count}."
-        ),
+        (f"Rows meeting Trades >30, Net PF >1.5, and Max DD <=15%: {accepted_count}."),
         "",
         (
             "V4-AE selected-geometry reference (Step=1.5): 42 trades, Net PF=1.1538, "
