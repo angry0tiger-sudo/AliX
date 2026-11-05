@@ -11,6 +11,7 @@ import pandas as pd
 import pytest
 from pandas import DataFrame
 
+from scripts import run_ml_core_v4ac_cost_optimization as v4ac
 from scripts import run_ml_core_v4ah_advanced_ai as v4ah_runner
 from services.meta_labeling import v4ah
 
@@ -374,7 +375,7 @@ def test_exit_cost_diagnostic_matrix_is_matched_and_fail_closed(
 ) -> None:
     calls: list[tuple[Any, Any]] = []
     monkeypatch.setattr(
-        v4ah_runner.v4af,
+        v4ac,
         "_build_forward_actions",
         lambda bars, indices, end: [{"signal": "BUY", "indices": indices, "end": end}],
     )
@@ -396,7 +397,7 @@ def test_exit_cost_diagnostic_matrix_is_matched_and_fail_closed(
 
     monkeypatch.setattr(v4ah_runner, "simulate_signals", fake_simulate)
     monkeypatch.setattr(
-        v4ah_runner.v4af,
+        v4ac,
         "_summarize_replay",
         lambda replay: {
             "trade_count": 2,
