@@ -509,7 +509,7 @@ def test_report_validates_four_rows_scope_holdout_and_safety() -> None:
     assert report["safety"]["trading_authorization"] == "NO-GO"
     summary = v4af._render_step_summary(report)
     assert "UNFILTERED_CONTROL" in summary
-    assert "50.0" in summary
+    assert all(value in summary for value in ("30.00", "50.00", "70.00"))
     assert "1.2477" in summary
     assert "final 15% untouched" in summary
     assert "Champion=null" in summary
