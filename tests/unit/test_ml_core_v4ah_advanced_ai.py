@@ -421,9 +421,7 @@ def test_exit_cost_diagnostic_matrix_is_matched_and_fail_closed(
         30.0,
         90.0,
     }
-    assert {
-        item["exit_policy"] for item in matrix["cells"]
-    } == {
+    assert {item["exit_policy"] for item in matrix["cells"]} == {
         "V4AH_REFERENCE",
         "V4AE_HISTORICAL_BEST",
         "V4AF_OWNER_GEOMETRY",

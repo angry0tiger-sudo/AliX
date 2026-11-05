@@ -336,18 +336,12 @@ def _run_exit_cost_diagnostic_matrix(
                     "exit_policy": str(policy["name"]),
                     "initial_stop_atr": float(policy["initial_stop_atr"]),
                     "take_profit_atr": float(policy["take_profit_atr"]),
-                    "trailing_activation_atr": float(
-                        policy["trailing_activation_atr"]
-                    ),
+                    "trailing_activation_atr": float(policy["trailing_activation_atr"]),
                     "trailing_step_atr": float(policy["trailing_step_atr"]),
                     "cost_scenario": str(scenario["name"]),
                     "fee_bps_per_side": float(scenario["fee_bps_per_side"]),
-                    "slippage_bps_per_side": float(
-                        scenario["slippage_bps_per_side"]
-                    ),
-                    "round_trip_cost_bps": float(
-                        scenario["round_trip_cost_bps"]
-                    ),
+                    "slippage_bps_per_side": float(scenario["slippage_bps_per_side"]),
+                    "round_trip_cost_bps": float(scenario["round_trip_cost_bps"]),
                     "primary_signal_count": len(event_indices),
                     "accepted_signal_count": len(event_indices),
                     "evaluation_split": "FORWARD_VALIDATION",
@@ -357,10 +351,7 @@ def _run_exit_cost_diagnostic_matrix(
                     "mean_unscaled_net_expectancy_usd_at_full_equity": (
                         float(
                             np.mean(
-                                [
-                                    float(item["net_return_fraction"])
-                                    for item in trades
-                                ]
+                                [float(item["net_return_fraction"]) for item in trades]
                             )
                             * INITIAL_EQUITY
                         )
@@ -375,9 +366,7 @@ def _run_exit_cost_diagnostic_matrix(
         "meta_model_used": False,
         "promotion_allowed": False,
         "policies": [dict(item) for item in EXIT_COST_DIAGNOSTIC_POLICIES],
-        "cost_scenarios": [
-            dict(item) for item in EXIT_COST_DIAGNOSTIC_SCENARIOS
-        ],
+        "cost_scenarios": [dict(item) for item in EXIT_COST_DIAGNOSTIC_SCENARIOS],
         "cells": cells,
     }
     _validate_exit_cost_diagnostic_matrix(matrix)
@@ -395,7 +384,11 @@ def _validate_exit_cost_diagnostic_matrix(matrix: dict[str, Any]) -> None:
     policies = matrix.get("policies")
     scenarios = matrix.get("cost_scenarios")
     cells = matrix.get("cells")
-    if not isinstance(policies, list) or not isinstance(scenarios, list) or not isinstance(cells, list):
+    if (
+        not isinstance(policies, list)
+        or not isinstance(scenarios, list)
+        or not isinstance(cells, list)
+    ):
         raise ValueError("v4ah_exit_matrix_schema_invalid")
     expected = {
         (str(policy.get("name")), str(scenario.get("name")))
@@ -403,15 +396,13 @@ def _validate_exit_cost_diagnostic_matrix(matrix: dict[str, Any]) -> None:
         for scenario in scenarios
     }
     observed = {
-        (str(cell.get("exit_policy")), str(cell.get("cost_scenario")))
-        for cell in cells
+        (str(cell.get("exit_policy")), str(cell.get("cost_scenario"))) for cell in cells
     }
     if len(cells) != 6 or observed != expected:
         raise ValueError("v4ah_exit_cost_matrix_incomplete")
     for cell in cells:
         expected_round_trip = 2.0 * (
-            float(cell["fee_bps_per_side"])
-            + float(cell["slippage_bps_per_side"])
+            float(cell["fee_bps_per_side"]) + float(cell["slippage_bps_per_side"])
         )
         if not (
             cell.get("symbol") == SYMBOL
@@ -1136,17 +1127,14 @@ def _validate_report(report: dict[str, Any], commit_sha: str) -> None:
     _validate_report_cost_geometry(report)
     _validate_report_candidate_matrix(report.get("candidates", []))
     _validate_report_holdout_safety(report)
-    _validate_exit_cost_diagnostic_matrix(
-        report.get("exit_cost_diagnostic_matrix", {})
-    )
+    _validate_exit_cost_diagnostic_matrix(report.get("exit_cost_diagnostic_matrix", {}))
     meta = report.get("meta_model", {})
     separation = meta.get("separation_diagnostics", {})
     if "roc_auc" in separation:
         if not (
             separation.get("metric_scope")
             == "PURGED_OOF_TEMPERATURE_SLICE_OUT_OF_FIT_PREDICTIONS"
-            and separation.get("probability_scope")
-            == "RAW_PRE_TEMPERATURE_CALIBRATION"
+            and separation.get("probability_scope") == "RAW_PRE_TEMPERATURE_CALIBRATION"
             and separation.get("sample_count")
             == meta.get("temperature_diagnostics", {}).get("calibration_rows")
             and 0.0 <= float(separation.get("roc_auc", -1.0)) <= 1.0
@@ -1246,11 +1234,11 @@ def _render_step_summary(report: dict[str, Any]) -> str:
                     f"| {float(cell['trailing_step_atr']):.1f} "
                     f"| {float(cell['round_trip_cost_bps']):.0f} "
                     f"| {cell['trade_count']} "
-                    f"| {'N/A' if cell.get('win_rate') is None else f'{float(cell['win_rate']) * 100.0:.2f}'} "
+                    f"| {'N/A' if cell.get('win_rate') is None else f'{float(cell["win_rate"]) * 100.0:.2f}'} "
                     f"| {_format_pf(cell)} "
-                    f"| {'N/A' if cell.get('max_drawdown_percent') is None else f'{float(cell['max_drawdown_percent']):.2f}'} "
+                    f"| {'N/A' if cell.get('max_drawdown_percent') is None else f'{float(cell["max_drawdown_percent"]):.2f}'} "
                     f"| {float(cell.get('net_pnl_total_usd') or 0.0):.2f} "
-                    f"| {'N/A' if cell.get('mean_unscaled_net_expectancy_usd_at_full_equity') is None else f'{float(cell['mean_unscaled_net_expectancy_usd_at_full_equity']):.4f}'} |"
+                    f"| {'N/A' if cell.get('mean_unscaled_net_expectancy_usd_at_full_equity') is None else f'{float(cell["mean_unscaled_net_expectancy_usd_at_full_equity"]):.4f}'} |"
                 )
                 for cell in report["exit_cost_diagnostic_matrix"]["cells"]
             ],
