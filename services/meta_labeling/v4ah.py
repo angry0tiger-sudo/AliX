@@ -781,9 +781,7 @@ def predict_trailing_steps(model: Any, features: DataFrame) -> np.ndarray:
         raise ValueError("v4ah_trailing_predictions_invalid")
     return cast(
         np.ndarray,
-        np.asarray(V4AH_TRAILING_STEP_OPTIONS, dtype=float)[
-            class_indices.astype(int)
-        ],
+        np.asarray(V4AH_TRAILING_STEP_OPTIONS, dtype=float)[class_indices.astype(int)],
     )
 
 
