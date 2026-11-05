@@ -221,6 +221,7 @@ def _metrics_from_sized_trades(
     )
     metrics["gross_profit_factor"] = gross_pf
     metrics["gross_profit_factor_infinite_no_losses"] = gross_inf
+    metrics["gross_profit_factor_scope"] = "UNSCALED_PER_TRADE_FIXED_NOTIONAL"
     return metrics, enriched
 
 
@@ -376,6 +377,7 @@ def _policy_candidate(
                             "event_index": index,
                             "trailing_step_atr": float(step_by_index[index]),
                             "meta_probability": float(probability),
+                            "unscaled_net_pnl_usd": float(trade["net_pnl_usd"]),
                             **trade,
                         }
                     )
