@@ -352,10 +352,10 @@ def test_adaptive_trailing_policy_training_and_prediction() -> None:
 
 
 def test_fractional_kelly_and_sized_equity_curve() -> None:
-    returns = np.array([0.02] * 16 + [-0.01] * 16)
+    returns = np.array([0.02] * 8 + [-0.01] * 8)
     ratio, diagnostics = v4ah.estimate_training_payoff_ratio(returns)
     assert ratio == pytest.approx(2.0)
-    assert diagnostics["training_rows"] == 32
+    assert diagnostics["training_rows"] == 16
     assert v4ah.fractional_kelly_fraction(0.6, ratio) == pytest.approx(0.1)
     assert v4ah.fractional_kelly_fraction(0.2, ratio) == 0.0
     trades = [
