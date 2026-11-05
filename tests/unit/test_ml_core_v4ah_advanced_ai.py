@@ -75,9 +75,7 @@ def test_numeric_matrix_and_binary_label_guards() -> None:
         v4ah._numeric_matrix(duplicate, "bad")
     with pytest.raises(ValueError, match="v4ah_binary_labels_invalid"):
         v4ah._validate_binary_labels(np.array([0, 2] * 8), 16)
-    diagnostic_floor = v4ah._validate_binary_labels(
-        np.array([0] * 13 + [1] * 3), 16
-    )
+    diagnostic_floor = v4ah._validate_binary_labels(np.array([0] * 13 + [1] * 3), 16)
     assert int(diagnostic_floor.sum()) == 3
     with pytest.raises(ValueError, match="v4ah_binary_class_support_insufficient"):
         v4ah._validate_binary_labels(np.array([0] * 14 + [1] * 2), 16)
@@ -210,7 +208,9 @@ def test_fit_advanced_meta_preserves_oof_diagnostics_on_class_support_failure(
         )
         raise error
 
-    monkeypatch.setattr(v4ah_runner.advanced, "split_fit_temperature_threshold", fail_split)
+    monkeypatch.setattr(
+        v4ah_runner.advanced, "split_fit_temperature_threshold", fail_split
+    )
     result = v4ah_runner._fit_advanced_meta(
         DataFrame({"close": np.arange(120, dtype=float)}),
         DataFrame({"feature": np.arange(120, dtype=float)}),
