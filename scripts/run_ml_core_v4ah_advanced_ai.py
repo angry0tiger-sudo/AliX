@@ -673,6 +673,22 @@ def _validate_report(report: dict[str, Any], commit_sha: str) -> None:
         raise ValueError("v4ah_report_identity_invalid")
     if report.get("symbols") != [SYMBOL] or report.get("timeframes") != [TIMEFRAME]:
         raise ValueError("v4ah_report_scope_invalid")
+    geometry = report.get("fixed_exit_geometry", {})
+    costs = report.get("cost_contract", {})
+    if geometry != {
+        "initial_stop_atr": 2.0,
+        "trailing_activation_atr": 1.0,
+        "trailing_step_atr": 1.5,
+        "take_profit_atr": 4.0,
+        "horizon_bars": 24,
+    }:
+        raise ValueError("v4ah_report_exit_geometry_invalid")
+    if costs != {
+        "fee_bps_per_side": 10.0,
+        "slippage_bps_per_side": 5.0,
+        "round_trip_cost_bps": 30.0,
+    }:
+        raise ValueError("v4ah_report_cost_contract_invalid")
     if [item.get("mode") for item in candidates] != list(CANDIDATE_NAMES):
         raise ValueError("v4ah_candidate_matrix_invalid")
     if (
@@ -797,6 +813,18 @@ def _build_report(
         "dataset_provenance": provenance,
         "dataset_days": DAYS,
         "bar_count": int(len(bars)),
+        "fixed_exit_geometry": {
+            "initial_stop_atr": v4af.INITIAL_STOP_ATR,
+            "trailing_activation_atr": v4af.TRAILING_ACTIVATION_ATR,
+            "trailing_step_atr": v4af.TRAILING_STEP_ATR,
+            "take_profit_atr": v4af.TAKE_PROFIT_ATR,
+            "horizon_bars": v4af.HORIZON_BARS_VALUE,
+        },
+        "cost_contract": {
+            "fee_bps_per_side": v4af.FEE_BPS_PER_SIDE,
+            "slippage_bps_per_side": v4af.SLIPPAGE_BPS_PER_SIDE,
+            "round_trip_cost_bps": v4af.ROUND_TRIP_COST_BPS,
+        },
         "signal_counts": signal_counts,
         "primary_train_sample_gate": train_gate,
         "chronological_evaluation": {
@@ -810,9 +838,12 @@ def _build_report(
         "training_diagnostics": training_diagnostics,
         "regime_diagnostics": regime_diagnostics,
         "meta_model": {
-            key: value
-            for key, value in meta.items()
-            if key not in {"model", "policy_model"}
+            "enabled": "model" in meta,
+            **{
+                key: value
+                for key, value in meta.items()
+                if key not in {"model", "policy_model"}
+            },
         },
         "candidates": candidates,
         "trade_count": len(trades),
