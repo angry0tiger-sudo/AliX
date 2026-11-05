@@ -249,6 +249,7 @@ def _validated_training_events(
     _validate_event_index_bounds(event_indices, label_ends, outer_train_end)
     return events
 
+
 def _purged_training_slices(
     events: DataFrame, fit_fraction: float, temperature_fraction: float
 ) -> tuple[DataFrame, DataFrame, DataFrame, int, int]:
@@ -910,7 +911,6 @@ def _sized_trade_metrics(
         _sized_position_metrics(stake_fractions, initial_equity, unscaled_returns)
     )
     return metrics
-
 
 
 def summarize_sized_trades(
