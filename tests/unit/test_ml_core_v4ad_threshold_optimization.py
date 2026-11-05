@@ -207,7 +207,7 @@ def test_meta_sweep_skips_closed_when_primary_sample_gate_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        v4ac,
+        v4ad,
         "evaluate_primary_train_sample_gate",
         lambda *args, **kwargs: {"passed": False, "observed_primary_buy_count": 49},
     )
@@ -217,10 +217,10 @@ def test_meta_sweep_skips_closed_when_primary_sample_gate_fails(
 
     monkeypatch.setattr(v4ac, "_meta_training_rows", unexpected)
     model, diagnostics, status = v4ad._train_meta_model_threshold_sweep(
-        DataFrame({"close": [1.0]}),
-        DataFrame({"feature": [1.0]}),
-        Series([False]),
-        1,
+        DataFrame({"close": np.ones(1_000)}),
+        DataFrame({"feature": np.ones(1_000)}),
+        Series(np.zeros(1_000, dtype=bool)),
+        700,
         "TB_1.5_1.0",
     )
     assert model is None
