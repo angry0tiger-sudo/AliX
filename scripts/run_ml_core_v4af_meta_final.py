@@ -136,6 +136,7 @@ def _validate_run_request(days: int, commit_sha: str) -> None:
     _validate_fixed_exit_and_cost_contract()
     _validate_meta_threshold_contract()
 
+
 def _trade_management_config(confidence_threshold: float) -> TradeManagementConfig:
     threshold = float(confidence_threshold)
     if not math.isfinite(threshold) or not 0.0 <= threshold <= 1.0:
@@ -312,6 +313,7 @@ def _training_oof_labels(
         train_end,
     )
     return labelled, diagnostics
+
 
 def _join_event_features(
     features: DataFrame,
@@ -711,6 +713,7 @@ def _render_step_summary(report: dict[str, Any]) -> str:
     lines.extend(_step_summary_footer(report))
     return "\n".join(lines) + "\n"
 
+
 def _validate_report_identity(
     report: dict[str, Any],
     commit_sha: str,
@@ -784,6 +787,7 @@ def _validate_report(report: dict[str, Any], commit_sha: str) -> None:
     _validate_report_thresholds(report)
     _validate_report_safety(report)
     _validate_report_candidates(report)
+
 
 def _write_csv(
     path: Path,
@@ -1334,6 +1338,7 @@ def run_v4af(
     _write_csv(output_decisions_csv, decisions, decision_columns)
     print(_render_step_summary(report), end="")
     return report
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
