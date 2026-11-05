@@ -671,6 +671,41 @@ def calibration_diagnostics(
     }
 
 
+def _validate_separation_inputs(
+    values: np.ndarray, outcomes: np.ndarray
+) -> np.ndarray:
+    valid = (
+        values.ndim == 1
+        and outcomes.shape == values.shape
+        and len(values) >= 2
+        and np.isfinite(values).all()
+        and not np.any(values < 0.0)
+        and not np.any(values > 1.0)
+    )
+    if not valid:
+        raise ValueError("v4ah_separation_inputs_invalid")
+    return _validate_binary_labels(outcomes, len(values))
+
+
+def _validate_separation_scores(roc_auc: float, average_precision: float) -> None:
+    if not math.isfinite(roc_auc) or not math.isfinite(average_precision):
+        raise ValueError("v4ah_separation_metrics_non_finite")
+
+
+def _separation_interpretation(roc_auc: float) -> str:
+    if abs(roc_auc - 0.5) <= 0.05:
+        return "NEAR_RANDOM_RANKING"
+    if roc_auc > 0.55:
+        return "RANK_SEPARATION_ABOVE_RANDOM"
+    return "RANKING_BELOW_RANDOM"
+
+
+def _separation_support_quality(positive_count: int) -> str:
+    if positive_count < 10:
+        return "LOW_POSITIVE_SUPPORT"
+    return "DESCRIPTIVE_SUPPORT"
+
+
 def separation_diagnostics(probabilities: Any, labels: Any) -> dict[str, Any]:
     """Measure rank separation on a disjoint, purged OOF slice.
 
@@ -679,44 +714,29 @@ def separation_diagnostics(probabilities: Any, labels: Any) -> dict[str, Any]:
     """
     values = np.asarray(probabilities, dtype=float)
     outcomes = np.asarray(labels, dtype=float)
-    if (
-        values.ndim != 1
-        or outcomes.shape != values.shape
-        or len(values) < 2
-        or not np.isfinite(values).all()
-        or np.any(values < 0.0)
-        or np.any(values > 1.0)
-    ):
-        raise ValueError("v4ah_separation_inputs_invalid")
-    binary = _validate_binary_labels(outcomes, len(values))
+    binary = _validate_separation_inputs(values, outcomes)
     counts = np.bincount(binary, minlength=2)
+    positive_count = int(counts[1])
+    negative_count = int(counts[0])
     from sklearn.metrics import average_precision_score, roc_auc_score  # type: ignore[import-untyped]
 
     roc_auc = float(roc_auc_score(binary, values))
     average_precision = float(average_precision_score(binary, values))
-    if not math.isfinite(roc_auc) or not math.isfinite(average_precision):
-        raise ValueError("v4ah_separation_metrics_non_finite")
+    _validate_separation_scores(roc_auc, average_precision)
+    prevalence = positive_count / len(values)
     return {
         "metric_scope": "PURGED_OOF_TEMPERATURE_SLICE_OUT_OF_FIT_PREDICTIONS",
         "probability_scope": "RAW_PRE_TEMPERATURE_CALIBRATION",
         "sample_count": int(len(values)),
-        "positive_count": int(counts[1]),
-        "negative_count": int(counts[0]),
-        "positive_prevalence": float(counts[1] / len(values)),
+        "positive_count": positive_count,
+        "negative_count": negative_count,
+        "positive_prevalence": float(prevalence),
         "roc_auc": roc_auc,
         "pr_auc_average_precision": average_precision,
         "random_rank_roc_auc_reference": 0.5,
-        "no_skill_pr_auc_reference": float(counts[1] / len(values)),
-        "positive_support_quality": (
-            "LOW_POSITIVE_SUPPORT" if int(counts[1]) < 10 else "DESCRIPTIVE_SUPPORT"
-        ),
-        "interpretation": (
-            "NEAR_RANDOM_RANKING"
-            if abs(roc_auc - 0.5) <= 0.05
-            else "RANK_SEPARATION_ABOVE_RANDOM"
-            if roc_auc > 0.55
-            else "RANKING_BELOW_RANDOM"
-        ),
+        "no_skill_pr_auc_reference": float(prevalence),
+        "positive_support_quality": _separation_support_quality(positive_count),
+        "interpretation": _separation_interpretation(roc_auc),
     }
 
 

@@ -377,14 +377,18 @@ def _run_exit_cost_diagnostic_matrix(
     return matrix
 
 
-def _validate_exit_cost_diagnostic_matrix(matrix: dict[str, Any]) -> None:
-    if not (
+def _exit_matrix_scope_is_valid(matrix: dict[str, Any]) -> bool:
+    return (
         matrix.get("evaluation_split") == "FORWARD_VALIDATION"
         and matrix.get("final_holdout_used") is False
         and matrix.get("meta_model_used") is False
         and matrix.get("promotion_allowed") is False
-    ):
-        raise ValueError("v4ah_exit_matrix_scope_or_safety_invalid")
+    )
+
+
+def _exit_matrix_collections(
+    matrix: dict[str, Any],
+) -> tuple[list[Any], list[Any], list[Any]]:
     policies = matrix.get("policies")
     scenarios = matrix.get("cost_scenarios")
     cells = matrix.get("cells")
@@ -394,6 +398,12 @@ def _validate_exit_cost_diagnostic_matrix(matrix: dict[str, Any]) -> None:
         or not isinstance(cells, list)
     ):
         raise ValueError("v4ah_exit_matrix_schema_invalid")
+    return policies, scenarios, cells
+
+
+def _validate_exit_matrix_combinations(
+    policies: list[Any], scenarios: list[Any], cells: list[Any]
+) -> None:
     expected = {
         (str(policy.get("name")), str(scenario.get("name")))
         for policy in policies
@@ -404,24 +414,39 @@ def _validate_exit_cost_diagnostic_matrix(matrix: dict[str, Any]) -> None:
     }
     if len(cells) != 6 or observed != expected:
         raise ValueError("v4ah_exit_cost_matrix_incomplete")
-    for cell in cells:
-        expected_round_trip = 2.0 * (
-            float(cell["fee_bps_per_side"]) + float(cell["slippage_bps_per_side"])
+
+
+def _exit_matrix_cell_is_valid(cell: Any) -> bool:
+    expected_round_trip = 2.0 * (
+        float(cell["fee_bps_per_side"]) + float(cell["slippage_bps_per_side"])
+    )
+    return (
+        cell.get("symbol") == SYMBOL
+        and cell.get("timeframe") == TIMEFRAME
+        and cell.get("evaluation_split") == "FORWARD_VALIDATION"
+        and cell.get("meta_model_used") is False
+        and cell.get("diagnostic_only") is True
+        and math.isclose(
+            float(cell["round_trip_cost_bps"]),
+            expected_round_trip,
+            rel_tol=0.0,
+            abs_tol=1e-12,
         )
-        if not (
-            cell.get("symbol") == SYMBOL
-            and cell.get("timeframe") == TIMEFRAME
-            and cell.get("evaluation_split") == "FORWARD_VALIDATION"
-            and cell.get("meta_model_used") is False
-            and cell.get("diagnostic_only") is True
-            and math.isclose(
-                float(cell["round_trip_cost_bps"]),
-                expected_round_trip,
-                rel_tol=0.0,
-                abs_tol=1e-12,
-            )
-        ):
-            raise ValueError("v4ah_exit_cost_matrix_cell_invalid")
+    )
+
+
+def _validate_exit_matrix_cell(cell: Any) -> None:
+    if not _exit_matrix_cell_is_valid(cell):
+        raise ValueError("v4ah_exit_cost_matrix_cell_invalid")
+
+
+def _validate_exit_cost_diagnostic_matrix(matrix: dict[str, Any]) -> None:
+    if not _exit_matrix_scope_is_valid(matrix):
+        raise ValueError("v4ah_exit_matrix_scope_or_safety_invalid")
+    policies, scenarios, cells = _exit_matrix_collections(matrix)
+    _validate_exit_matrix_combinations(policies, scenarios, cells)
+    for cell in cells:
+        _validate_exit_matrix_cell(cell)
 
 
 def _pf_value(metrics: dict[str, Any]) -> float:
@@ -1156,6 +1181,104 @@ def _format_pf(metrics: dict[str, Any]) -> str:
     return "N/A" if value is None else f"{float(value):.4f}"
 
 
+def _format_summary_number(
+    value: Any, decimal_places: int, multiplier: float = 1.0
+) -> str:
+    if value is None:
+        return "N/A"
+    return f"{float(value) * multiplier:.{decimal_places}f}"
+
+
+def _render_candidate_summary_line(item: dict[str, Any]) -> str:
+    metrics = item["metrics"]
+    expectancy = metrics.get("mean_unscaled_net_expectancy_usd_at_full_equity")
+    return (
+        f"| {item['mode']} | {metrics.get('trade_count', 0)} "
+        f"| {_format_summary_number(metrics.get('win_rate'), 2, 100.0)} "
+        f"| {_format_pf(metrics)} "
+        f"| {_format_summary_number(metrics.get('max_drawdown_percent'), 2)} "
+        f"| {float(metrics.get('net_pnl_total_usd', 0.0)):.2f} "
+        f"| {_format_summary_number(expectancy, 4)} "
+        f"| {'PASS' if item.get('acceptance_target_met') else 'NO'} "
+        f"| {item['status']} |"
+    )
+
+
+def _render_candidate_summary_lines(report: dict[str, Any]) -> list[str]:
+    return [
+        _render_candidate_summary_line(item) for item in report["candidates"]
+    ]
+
+
+def _render_model_diagnostics_summary_lines(report: dict[str, Any]) -> list[str]:
+    meta = report.get("meta_model", {})
+    fit = meta.get("fit_diagnostics", {})
+    threshold = meta.get("threshold_diagnostics", {})
+    regime = report.get("regime_diagnostics", {})
+    calibration = meta.get("calibration_diagnostics", {})
+    separation = meta.get("separation_diagnostics", {})
+    return [
+        "",
+        f"OOF labels: {report.get('training_diagnostics', {}).get('matured_costed_oof_label_count', 0)}.",
+        f"SHAP top-k: {fit.get('top_k_selected', 0)}; selected features: {', '.join(fit.get('selected_features', []))}.",
+        f"Regime: KMeans clusters={regime.get('cluster_count', 'N/A')}; fit rows={regime.get('fit_rows', 0)}; hard filter=false.",
+        f"Temperature: {meta.get('temperature_diagnostics', {}).get('temperature', 'N/A')}.",
+        (
+            "Separation: "
+            f"ROC-AUC={separation.get('roc_auc', 'N/A')}; "
+            f"PR-AUC/AP={separation.get('pr_auc_average_precision', 'N/A')}; "
+            f"positives={separation.get('positive_count', 'N/A')}/"
+            f"{separation.get('sample_count', 'N/A')}; "
+            f"random references ROC=0.50, PR={separation.get('no_skill_pr_auc_reference', 'N/A')}; "
+            f"support={separation.get('positive_support_quality', 'N/A')}."
+        ),
+        (
+            f"Threshold: {threshold.get('threshold', 'N/A')}; "
+            f"selected rows={threshold.get('selected_rows', 0)}; "
+            f"status={threshold.get('status', 'N/A')}; "
+            f"net expectancy={threshold.get('selected_net_expectancy', 'N/A')}."
+        ),
+        f"Calibration: Brier={calibration.get('brier_score', 'N/A')}; ECE={calibration.get('expected_calibration_error', 'N/A')}.",
+        f"Trailing policy: {meta.get('trailing_policy_diagnostics', {}).get('model_family', 'SKIPPED')}.",
+        f"Kelly: quarter-Kelly; max fraction={advanced.V4AH_MAXIMUM_KELLY_FRACTION:.2%}; fit={meta.get('payoff_diagnostics', {}).get('fit_scope', 'SKIPPED')}.",
+    ]
+
+
+def _render_exit_matrix_cell(cell: dict[str, Any]) -> str:
+    win_rate = _format_summary_number(cell.get("win_rate"), 2, 100.0)
+    drawdown = _format_summary_number(cell.get("max_drawdown_percent"), 2)
+    expectancy = _format_summary_number(
+        cell.get("mean_unscaled_net_expectancy_usd_at_full_equity"), 4
+    )
+    return (
+        f"| {cell['exit_policy']} | {float(cell['initial_stop_atr']):.1f} "
+        f"| {float(cell['take_profit_atr']):.1f} "
+        f"| {float(cell['trailing_activation_atr']):.1f} "
+        f"| {float(cell['trailing_step_atr']):.1f} "
+        f"| {float(cell['round_trip_cost_bps']):.0f} "
+        f"| {cell['trade_count']} "
+        f"| {win_rate} "
+        f"| {_format_pf(cell)} "
+        f"| {drawdown} "
+        f"| {float(cell.get('net_pnl_total_usd') or 0.0):.2f} "
+        f"| {expectancy} |"
+    )
+
+
+def _render_exit_cost_matrix_summary(matrix: dict[str, Any]) -> list[str]:
+    return [
+        "",
+        "### Exit-cost × trailing-geometry diagnostic matrix",
+        "Primary-only replay on identical forward-validation signals; no Meta filter; final 15% holdout untouched; diagnostic only.",
+        "Costs: 30 bps round trip (10 bps fee + 5 bps slippage per side) and 90 bps round trip (25+20 bps per side, MRD v0.7).",
+        "| Geometry | SL ATR | TP ATR | Activation ATR | Step ATR | RT cost bps | Trades | Win % | Net PF | Max DD % | Net PnL USD | Avg net USD/trade |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        *[_render_exit_matrix_cell(cell) for cell in matrix["cells"]],
+        "",
+        "The 30 bps case is a low-cost counterfactual, not the operating cost contract; this matrix cannot promote a candidate.",
+    ]
+
+
 def _render_step_summary(report: dict[str, Any]) -> str:
     if report.get("schema_version") != SCHEMA:
         raise ValueError("v4ah_step_summary_schema_invalid")
@@ -1171,83 +1294,19 @@ def _render_step_summary(report: dict[str, Any]) -> str:
         "Training: outer 70%; purged OOF Fit/Temperature/Threshold slices=70/15/15.",
         "Evaluation: next 15% forward validation; final 15% holdout untouched.",
         "Model: LightGBM + TreeSHAP top-30 Fit-only selection; KMeans regimes as features.",
-        "Calibration: Temperature Scaling (L-BFGS-B); threshold selected by positive net expectancy.",
+        "Calibration: Temperature Scaling (L-BFGS-B).",
+        "Threshold: positive expectancy preferred; non-positive fallback is diagnostic only.",
         "",
         "| Candidate | Trades | Win Rate % | Net PF | Max DD % | Net PnL USD | Unscaled expectancy USD/trade | Acceptance | Status |",
         "|---|---:|---:|---:|---:|---:|---:|---|---|",
     ]
-    for item in report["candidates"]:
-        metrics = item["metrics"]
-        expectancy = metrics.get("mean_unscaled_net_expectancy_usd_at_full_equity")
-        win_rate = metrics.get("win_rate")
-        win_text = "N/A" if win_rate is None else f"{float(win_rate) * 100.0:.2f}"
-        drawdown = metrics.get("max_drawdown_percent")
-        drawdown_text = "N/A" if drawdown is None else f"{float(drawdown):.2f}"
-        lines.append(
-            f"| {item['mode']} | {metrics.get('trade_count', 0)} "
-            f"| {win_text} "
-            f"| {_format_pf(metrics)} "
-            f"| {drawdown_text} "
-            f"| {float(metrics.get('net_pnl_total_usd', 0.0)):.2f} "
-            f"| {'N/A' if expectancy is None else f'{float(expectancy):.4f}'} "
-            f"| {'PASS' if item.get('acceptance_target_met') else 'NO'} "
-            f"| {item['status']} |"
-        )
-    meta = report.get("meta_model", {})
-    fit = meta.get("fit_diagnostics", {})
-    threshold = meta.get("threshold_diagnostics", {})
-    regime = report.get("regime_diagnostics", {})
-    calibration = meta.get("calibration_diagnostics", {})
-    separation = meta.get("separation_diagnostics", {})
+    lines.extend(_render_candidate_summary_lines(report))
+    lines.extend(_render_model_diagnostics_summary_lines(report))
+    lines.extend(
+        _render_exit_cost_matrix_summary(report["exit_cost_diagnostic_matrix"])
+    )
     lines.extend(
         [
-            "",
-            f"OOF labels: {report.get('training_diagnostics', {}).get('matured_costed_oof_label_count', 0)}.",
-            f"SHAP top-k: {fit.get('top_k_selected', 0)}; selected features: {', '.join(fit.get('selected_features', []))}.",
-            f"Regime: KMeans clusters={regime.get('cluster_count', 'N/A')}; fit rows={regime.get('fit_rows', 0)}; hard filter=false.",
-            f"Temperature: {meta.get('temperature_diagnostics', {}).get('temperature', 'N/A')}.",
-            (
-                "Separation: "
-                f"ROC-AUC={separation.get('roc_auc', 'N/A')}; "
-                f"PR-AUC/AP={separation.get('pr_auc_average_precision', 'N/A')}; "
-                f"positives={separation.get('positive_count', 'N/A')}/"
-                f"{separation.get('sample_count', 'N/A')}; "
-                f"random references ROC=0.50, PR={separation.get('no_skill_pr_auc_reference', 'N/A')}; "
-                f"support={separation.get('positive_support_quality', 'N/A')}."
-            ),
-            (
-                f"Threshold: {threshold.get('threshold', 'N/A')}; "
-                f"selected rows={threshold.get('selected_rows', 0)}; "
-                f"status={threshold.get('status', 'N/A')}; "
-                f"net expectancy={threshold.get('selected_net_expectancy', 'N/A')}."
-            ),
-            f"Calibration: Brier={calibration.get('brier_score', 'N/A')}; ECE={calibration.get('expected_calibration_error', 'N/A')}.",
-            f"Trailing policy: {meta.get('trailing_policy_diagnostics', {}).get('model_family', 'SKIPPED')}.",
-            f"Kelly: quarter-Kelly; max fraction={advanced.V4AH_MAXIMUM_KELLY_FRACTION:.2%}; fit={meta.get('payoff_diagnostics', {}).get('fit_scope', 'SKIPPED')}.",
-            "",
-            "### Exit-cost × trailing-geometry diagnostic matrix",
-            "Primary-only replay on identical forward-validation signals; no Meta filter; final 15% holdout untouched; diagnostic only.",
-            "Costs: 30 bps round trip (10 bps fee + 5 bps slippage per side) and 90 bps round trip (25+20 bps per side, MRD v0.7).",
-            "| Geometry | SL ATR | TP ATR | Activation ATR | Step ATR | RT cost bps | Trades | Win % | Net PF | Max DD % | Net PnL USD | Avg net USD/trade |",
-            "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
-            *[
-                (
-                    f"| {cell['exit_policy']} | {float(cell['initial_stop_atr']):.1f} "
-                    f"| {float(cell['take_profit_atr']):.1f} "
-                    f"| {float(cell['trailing_activation_atr']):.1f} "
-                    f"| {float(cell['trailing_step_atr']):.1f} "
-                    f"| {float(cell['round_trip_cost_bps']):.0f} "
-                    f"| {cell['trade_count']} "
-                    f"| {'N/A' if cell.get('win_rate') is None else f'{float(cell["win_rate"]) * 100.0:.2f}'} "
-                    f"| {_format_pf(cell)} "
-                    f"| {'N/A' if cell.get('max_drawdown_percent') is None else f'{float(cell["max_drawdown_percent"]):.2f}'} "
-                    f"| {float(cell.get('net_pnl_total_usd') or 0.0):.2f} "
-                    f"| {'N/A' if cell.get('mean_unscaled_net_expectancy_usd_at_full_equity') is None else f'{float(cell["mean_unscaled_net_expectancy_usd_at_full_equity"]):.4f}'} |"
-                )
-                for cell in report["exit_cost_diagnostic_matrix"]["cells"]
-            ],
-            "",
-            "The 30 bps case is a low-cost counterfactual, not the operating cost contract; this matrix cannot promote a candidate.",
             "",
             "Acceptance: Net PF >1.5, Max DD <15%, Win Rate >45%, Trades >=30, and outperformance vs Primary on Net PF and unscaled expectancy.",
             "Safety: Champion=null, order_permission=false, trading_authorization=NO-GO, private_api_calls=0, real_order_attempts=0, sequence_model_used=false.",
