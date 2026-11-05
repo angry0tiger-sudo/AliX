@@ -314,6 +314,18 @@ def _training_split_diagnostics(
         "fit_rows": int(len(fit)),
         "temperature_rows": int(len(temperature)),
         "threshold_rows": int(len(threshold)),
+        "fit_class_counts": {
+            "meta_failure": int(fit["meta_label"].eq(0).sum()),
+            "meta_success": int(fit["meta_label"].eq(1).sum()),
+        },
+        "temperature_class_counts": {
+            "meta_failure": int(temperature["meta_label"].eq(0).sum()),
+            "meta_success": int(temperature["meta_label"].eq(1).sum()),
+        },
+        "threshold_class_counts": {
+            "meta_failure": int(threshold["meta_label"].eq(0).sum()),
+            "meta_success": int(threshold["meta_label"].eq(1).sum()),
+        },
         "fit_event_start": int(fit["event_index"].min()),
         "fit_event_end": int(fit["event_index"].max()),
         "temperature_event_start": int(temperature["event_index"].min()),
@@ -347,12 +359,16 @@ def split_fit_temperature_threshold(
     fit, temperature, threshold, temperature_start, threshold_start = (
         _purged_training_slices(events, fit_fraction, temperature_fraction)
     )
-    _validate_purged_training_slices(
-        fit, temperature, threshold, temperature_start, threshold_start
-    )
     diagnostics = _training_split_diagnostics(
         fit, temperature, threshold, outer_train_end
     )
+    try:
+        _validate_purged_training_slices(
+            fit, temperature, threshold, temperature_start, threshold_start
+        )
+    except ValueError as error:
+        setattr(error, "diagnostics", diagnostics)
+        raise
     return (
         fit.reset_index(drop=True),
         temperature.reset_index(drop=True),
