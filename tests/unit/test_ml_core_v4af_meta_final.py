@@ -516,12 +516,8 @@ def test_csv_writer_persists_decisions_and_trade_provenance(tmp_path: Path) -> N
 
 
 def test_v4ae_reference_distinguishes_owner_baseline_from_historical_best() -> None:
-    selected = cast(
-        dict[str, object], v4af.V4AE_REFERENCE["owner_selected_geometry"]
-    )
-    historical = cast(
-        dict[str, object], v4af.V4AE_REFERENCE["historical_best_cell"]
-    )
+    selected = cast(dict[str, object], v4af.V4AE_REFERENCE["owner_selected_geometry"])
+    historical = cast(dict[str, object], v4af.V4AE_REFERENCE["historical_best_cell"])
     assert selected["trailing_step_atr"] == 1.5
     assert selected["net_profit_factor"] == 1.1538
     assert historical["trailing_step_atr"] == 2.0
