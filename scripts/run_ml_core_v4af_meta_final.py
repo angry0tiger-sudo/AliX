@@ -7,7 +7,7 @@ import csv
 import json
 import math
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -288,7 +288,7 @@ def _training_oof_labels(
     immature_event_count = 0
     for event in primary_events.to_dict(orient="records"):
         record = _label_one_oof_primary_event(
-            event,
+            cast(dict[str, Any], event),
             train_bars,
             index_by_timestamp,
             train_end,
