@@ -127,11 +127,12 @@ def _single_event_replay(
     context_start = max(0, event_index - REGIME_WARMUP_BARS)
     local = bars.iloc[context_start:required_end].reset_index(drop=True)
     local_event = event_index - context_start
-    actions = v4af._build_forward_actions(local, [local_event], len(local))
+    build_actions = getattr(v4af, "_build_forward_actions")
+    actions = build_actions(local, [local_event], len(local))
     replay = simulate_signals(
         local,
         actions,
-        v4af._execution_config(),
+        getattr(v4af, "_execution_config")(),
         trade_management_config=_trade_management(trailing_step),
     )
     trades = replay["trades"]
@@ -348,9 +349,10 @@ def _policy_candidate(
     last_exit_index = -1
     for index in event_indices:
         probability = probabilities.get(index)
-        is_accepted = probability is not None and probability >= threshold
+        probability_value = 0.0 if probability is None else float(probability)
+        is_accepted = probability is not None and probability_value >= threshold
         execution_status = "REJECTED_BY_META"
-        if is_accepted:
+        if probability is not None and probability_value >= threshold:
             if index + 1 <= last_exit_index:
                 execution_status = "SKIPPED_OVERLAPPING_POSITION"
             else:
@@ -364,7 +366,7 @@ def _policy_candidate(
                     1.0
                     if payoff_ratio is None
                     else advanced.fractional_kelly_fraction(
-                        float(probability), payoff_ratio
+                        probability_value, payoff_ratio
                     )
                 )
                 if fraction > 0.0:
@@ -376,7 +378,7 @@ def _policy_candidate(
                             "mode": name,
                             "event_index": index,
                             "trailing_step_atr": float(step_by_index[index]),
-                            "meta_probability": float(probability),
+                            "meta_probability": probability_value,
                             "unscaled_net_pnl_usd": float(trade["net_pnl_usd"]),
                             **trade,
                         }
