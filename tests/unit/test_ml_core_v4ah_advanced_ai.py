@@ -322,6 +322,23 @@ def test_probability_temperature_and_calibration_diagnostics() -> None:
         v4ah.calibration_diagnostics([0.2], [2])
 
 
+def test_separation_diagnostics_measure_raw_out_of_fit_ranking() -> None:
+    probabilities = np.asarray([0.1] * 6 + [0.8] * 6, dtype=float)
+    labels = np.asarray([0] * 6 + [1] * 6, dtype=int)
+    diagnostics = v4ah.separation_diagnostics(probabilities, labels)
+    assert diagnostics["metric_scope"] == (
+        "PURGED_OOF_TEMPERATURE_SLICE_OUT_OF_FIT_PREDICTIONS"
+    )
+    assert diagnostics["probability_scope"] == "RAW_PRE_TEMPERATURE_CALIBRATION"
+    assert diagnostics["roc_auc"] == pytest.approx(1.0)
+    assert diagnostics["pr_auc_average_precision"] == pytest.approx(1.0)
+    assert diagnostics["no_skill_pr_auc_reference"] == pytest.approx(0.5)
+    assert diagnostics["interpretation"] == "RANK_SEPARATION_ABOVE_RANDOM"
+    assert diagnostics["positive_support_quality"] == "LOW_POSITIVE_SUPPORT"
+    with pytest.raises(ValueError, match="v4ah_binary_class_support_insufficient"):
+        v4ah.separation_diagnostics(np.linspace(0.1, 0.9, 12), np.zeros(12))
+
+
 def test_net_expectancy_threshold_selection_and_tie_breaking() -> None:
     probabilities = np.linspace(0.01, 0.99, 40)
     returns = np.where(probabilities >= 0.5, 0.02, -0.01)
@@ -330,17 +347,106 @@ def test_net_expectancy_threshold_selection_and_tie_breaking() -> None:
     )
     assert threshold is not None and threshold >= 0.5
     assert diagnostics["status"] == "SELECTED_POSITIVE_EXPECTANCY_THRESHOLD"
-    none, no_positive = v4ah.select_net_expectancy_threshold(
+    fallback, no_positive = v4ah.select_net_expectancy_threshold(
         probabilities, np.full(40, -0.01)
     )
-    assert none is None
-    assert no_positive["status"] == "NO_POSITIVE_EXPECTANCY_THRESHOLD"
+    assert fallback == pytest.approx(probabilities[-12])
+    assert no_positive["status"] == (
+        "SELECTED_BEST_AVAILABLE_NON_POSITIVE_EXPECTANCY_DIAGNOSTIC"
+    )
+    assert no_positive["selected_rows"] == 12
+    assert no_positive["selected_net_expectancy"] == pytest.approx(-0.01)
+    assert no_positive["positive_expectancy_found"] is False
+    assert no_positive["fallback_used"] is True
+    assert no_positive["diagnostic_only"] is True
     assert v4ah._threshold_candidate_is_better((0.1, 15, 0.5), (0.1, 12, 0.6))
+    assert v4ah._threshold_candidate_is_better(
+        (0.1, 12, 0.6),
+        (0.1, 15, 0.5),
+        prefer_more_rows=False,
+    )
     with pytest.raises(ValueError, match="v4ah_threshold_inputs_invalid"):
         v4ah.select_net_expectancy_threshold([0.2], [-1.0])
 
 
-def test_adaptive_trailing_policy_training_and_prediction() -> None:
+def test_exit_cost_diagnostic_matrix_is_matched_and_fail_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[Any, Any]] = []
+    monkeypatch.setattr(
+        v4af if hasattr(v4ah_runner, "v4af") else v4ah_runner,
+        "_unused_test_hook",
+        lambda: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        v4ah_runner.v4af,
+        "_build_forward_actions",
+        lambda bars, indices, end: [{"signal": "BUY", "indices": indices, "end": end}],
+    )
+
+    def fake_simulate(
+        bars: DataFrame,
+        actions: list[dict[str, Any]],
+        execution: Any,
+        *,
+        trade_management_config: Any,
+    ) -> dict[str, Any]:
+        calls.append((execution, trade_management_config))
+        return {
+            "trades": [
+                {"net_return_fraction": 0.01},
+                {"net_return_fraction": -0.005},
+            ]
+        }
+
+    monkeypatch.setattr(v4ah_runner, "simulate_signals", fake_simulate)
+    monkeypatch.setattr(
+        v4ah_runner.v4af,
+        "_summarize_replay",
+        lambda replay: {
+            "trade_count": 2,
+            "net_profit_factor": 2.0,
+            "net_profit_factor_infinite_no_losses": False,
+            "win_rate": 0.5,
+            "max_drawdown_percent": 1.0,
+            "net_pnl_total_usd": 50.0,
+        },
+    )
+    matrix = v4ah_runner._run_exit_cost_diagnostic_matrix(
+        DataFrame({"close": [100.0, 101.0]}),
+        [10, 20],
+        100,
+    )
+    assert matrix["evaluation_split"] == "FORWARD_VALIDATION"
+    assert matrix["final_holdout_used"] is False
+    assert matrix["meta_model_used"] is False
+    assert matrix["promotion_allowed"] is False
+    assert len(matrix["cells"]) == 6
+    assert {item["round_trip_cost_bps"] for item in matrix["cells"]} == {
+        30.0,
+        90.0,
+    }
+    assert {
+        item["exit_policy"] for item in matrix["cells"]
+    } == {
+        "V4AH_REFERENCE",
+        "V4AE_HISTORICAL_BEST",
+        "V4AF_OWNER_GEOMETRY",
+    }
+    assert len(calls) == 6
+    assert {(item[0].fee_bps, item[0].slippage_bps) for item in calls} == {
+        (10.0, 5.0),
+        (25.0, 20.0),
+    }
+    v4ah_runner._validate_exit_cost_diagnostic_matrix(matrix)
+    invalid = dict(matrix)
+    invalid["final_holdout_used"] = True
+    with pytest.raises(ValueError, match="v4ah_exit_matrix_scope_or_safety_invalid"):
+        v4ah_runner._validate_exit_cost_diagnostic_matrix(invalid)
+
+
+def test_adaptive_trailing_policy_training_and_prediction() -> None
     rng = np.random.default_rng(7)
     features = DataFrame(rng.normal(size=(45, 4)), columns=list("abcd"))
     returns = np.tile(np.array([0.01, 0.02, 0.005]), (45, 1))

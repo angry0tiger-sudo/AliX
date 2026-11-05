@@ -671,6 +671,55 @@ def calibration_diagnostics(
     }
 
 
+def separation_diagnostics(probabilities: Any, labels: Any) -> dict[str, Any]:
+    """Measure rank separation on a disjoint, purged OOF slice.
+
+    Average Precision is reported as PR-AUC/AP. The positive-class prevalence is
+    included as its no-skill reference because PR-AUC depends on class balance.
+    """
+    values = np.asarray(probabilities, dtype=float)
+    outcomes = np.asarray(labels, dtype=float)
+    if (
+        values.ndim != 1
+        or outcomes.shape != values.shape
+        or len(values) < 2
+        or not np.isfinite(values).all()
+        or np.any(values < 0.0)
+        or np.any(values > 1.0)
+    ):
+        raise ValueError("v4ah_separation_inputs_invalid")
+    binary = _validate_binary_labels(outcomes, len(values))
+    counts = np.bincount(binary, minlength=2)
+    from sklearn.metrics import average_precision_score, roc_auc_score  # type: ignore[import-untyped]
+
+    roc_auc = float(roc_auc_score(binary, values))
+    average_precision = float(average_precision_score(binary, values))
+    if not math.isfinite(roc_auc) or not math.isfinite(average_precision):
+        raise ValueError("v4ah_separation_metrics_non_finite")
+    return {
+        "metric_scope": "PURGED_OOF_TEMPERATURE_SLICE_OUT_OF_FIT_PREDICTIONS",
+        "probability_scope": "RAW_PRE_TEMPERATURE_CALIBRATION",
+        "sample_count": int(len(values)),
+        "positive_count": int(counts[1]),
+        "negative_count": int(counts[0]),
+        "positive_prevalence": float(counts[1] / len(values)),
+        "roc_auc": roc_auc,
+        "pr_auc_average_precision": average_precision,
+        "random_rank_roc_auc_reference": 0.5,
+        "no_skill_pr_auc_reference": float(counts[1] / len(values)),
+        "positive_support_quality": (
+            "LOW_POSITIVE_SUPPORT" if int(counts[1]) < 10 else "DESCRIPTIVE_SUPPORT"
+        ),
+        "interpretation": (
+            "NEAR_RANDOM_RANKING"
+            if abs(roc_auc - 0.5) <= 0.05
+            else "RANK_SEPARATION_ABOVE_RANDOM"
+            if roc_auc > 0.55
+            else "RANKING_BELOW_RANDOM"
+        ),
+    }
+
+
 def _validate_threshold_inputs(values: np.ndarray, returns: np.ndarray) -> None:
     valid = (
         values.ndim == 1
@@ -689,16 +738,22 @@ def _validate_threshold_inputs(values: np.ndarray, returns: np.ndarray) -> None:
 def _threshold_candidate_is_better(
     candidate: tuple[float, int, float],
     best: tuple[float, int, float] | None,
+    *,
+    prefer_more_rows: bool = True,
 ) -> bool:
     if best is None or candidate[0] > best[0]:
         return True
-    return math.isclose(candidate[0], best[0], rel_tol=0.0, abs_tol=1e-12) and (
-        candidate[1] > best[1]
-    )
+    if not math.isclose(candidate[0], best[0], rel_tol=0.0, abs_tol=1e-12):
+        return False
+    return candidate[1] > best[1] if prefer_more_rows else candidate[1] < best[1]
 
 
 def _best_net_expectancy_threshold(
-    values: np.ndarray, returns: np.ndarray, minimum_selected: int
+    values: np.ndarray,
+    returns: np.ndarray,
+    minimum_selected: int,
+    *,
+    prefer_more_rows: bool = True,
 ) -> tuple[float, int, float] | None:
     best: tuple[float, int, float] | None = None
     thresholds = sorted(set(float(value) for value in values), reverse=True)
@@ -707,7 +762,9 @@ def _best_net_expectancy_threshold(
         selected_count = int(selected.sum())
         if selected_count >= minimum_selected:
             candidate = (float(np.mean(returns[selected])), selected_count, threshold)
-            if _threshold_candidate_is_better(candidate, best):
+            if _threshold_candidate_is_better(
+                candidate, best, prefer_more_rows=prefer_more_rows
+            ):
                 best = candidate
     return best
 
@@ -730,24 +787,46 @@ def select_net_expectancy_threshold(
     probabilities: Any,
     net_returns: Any,
 ) -> tuple[float | None, dict[str, Any]]:
-    """Select a positive-expectancy cutoff on an independent labelled slice."""
+    """Select a positive cutoff or the least-loss diagnostic cutoff.
+
+    A non-positive fallback is diagnostic only. It allows forward validation to
+    measure the Meta filter under realistic costs; it never changes acceptance
+    criteria or authorizes promotion.
+    """
     values = np.asarray(probabilities, dtype=float)
     returns = np.asarray(net_returns, dtype=float)
     _validate_threshold_inputs(values, returns)
     minimum_selected = max(12, int(math.ceil(len(values) * 0.30)))
     best = _best_net_expectancy_threshold(values, returns, minimum_selected)
-    if best is None or best[0] <= 0.0:
+    if best is None:
+        return None, _no_positive_threshold_diagnostics(len(values), minimum_selected)
+    if best[0] <= 0.0:
+        best = _best_net_expectancy_threshold(
+            values,
+            returns,
+            minimum_selected,
+            prefer_more_rows=False,
+        )
+    if best is None:
         return None, _no_positive_threshold_diagnostics(len(values), minimum_selected)
     expectancy, selected_count, threshold = best
+    positive_expectancy = expectancy > 0.0
     return threshold, {
         "method": "MAX_NET_EXPECTANCY_WITH_MINIMUM_SUPPORT",
-        "status": "SELECTED_POSITIVE_EXPECTANCY_THRESHOLD",
+        "status": (
+            "SELECTED_POSITIVE_EXPECTANCY_THRESHOLD"
+            if positive_expectancy
+            else "SELECTED_BEST_AVAILABLE_NON_POSITIVE_EXPECTANCY_DIAGNOSTIC"
+        ),
         "threshold": float(threshold),
         "threshold_rows": int(len(values)),
         "minimum_selected_rows": minimum_selected,
         "selected_rows": selected_count,
         "selected_fraction": selected_count / len(values),
         "selected_net_expectancy": expectancy,
+        "positive_expectancy_found": positive_expectancy,
+        "fallback_used": not positive_expectancy,
+        "diagnostic_only": not positive_expectancy,
         "labels_used": True,
         "selection_scope": "THIRD_PURGED_TRAINING_SLICE_ONLY",
     }

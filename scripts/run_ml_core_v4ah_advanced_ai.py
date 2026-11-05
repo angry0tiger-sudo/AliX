@@ -18,7 +18,7 @@ import scripts.run_ml_core_v4af_meta_final as v4af
 from services.meta_labeling import v4ah as advanced
 from services.ml_core.economic_backtest import simulate_signals
 
-SCHEMA = "alix.ml-core-v4ah-advanced-ai.v1"
+SCHEMA = "alix.ml-core-v4ah-advanced-ai.v2"
 SYMBOL = "ETHUSDT"
 TIMEFRAME = "1h"
 DAYS = 730
@@ -33,6 +33,43 @@ CANDIDATE_NAMES = (
     "META_NET_EXPECTANCY_FIXED",
     "META_SHAP_ADAPTIVE_TRAIL",
     "META_SHAP_ADAPTIVE_TRAIL_KELLY",
+)
+EXIT_COST_DIAGNOSTIC_POLICIES: tuple[dict[str, Any], ...] = (
+    {
+        "name": "V4AH_REFERENCE",
+        "initial_stop_atr": 2.0,
+        "take_profit_atr": 4.0,
+        "trailing_activation_atr": 1.0,
+        "trailing_step_atr": 1.5,
+    },
+    {
+        "name": "V4AE_HISTORICAL_BEST",
+        "initial_stop_atr": 2.0,
+        "take_profit_atr": 4.0,
+        "trailing_activation_atr": 1.5,
+        "trailing_step_atr": 2.0,
+    },
+    {
+        "name": "V4AF_OWNER_GEOMETRY",
+        "initial_stop_atr": 2.0,
+        "take_profit_atr": 4.0,
+        "trailing_activation_atr": 1.5,
+        "trailing_step_atr": 1.5,
+    },
+)
+EXIT_COST_DIAGNOSTIC_SCENARIOS: tuple[dict[str, Any], ...] = (
+    {
+        "name": "DIAGNOSTIC_30BPS",
+        "fee_bps_per_side": 10.0,
+        "slippage_bps_per_side": 5.0,
+        "round_trip_cost_bps": 30.0,
+    },
+    {
+        "name": "MRD_V0_7_90BPS",
+        "fee_bps_per_side": 25.0,
+        "slippage_bps_per_side": 20.0,
+        "round_trip_cost_bps": 90.0,
+    },
 )
 LABEL_COLUMNS = {
     "event_index",
@@ -250,6 +287,146 @@ def _metrics_from_sized_trades(
 def _unscaled_expectancy(trades: list[dict[str, Any]]) -> float:
     returns = [float(item["net_return_fraction"]) for item in trades]
     return float(np.mean(returns) * INITIAL_EQUITY) if returns else 0.0
+
+
+def _run_exit_cost_diagnostic_matrix(
+    bars: DataFrame,
+    event_indices: list[int],
+    forward_end: int,
+) -> dict[str, Any]:
+    """Replay one fixed primary-signal set across trailing geometries and costs."""
+    if event_indices != sorted(set(event_indices)):
+        raise ValueError("v4ah_exit_matrix_primary_events_invalid")
+    actions = v4af._build_forward_actions(bars, event_indices, forward_end)
+    base_execution = v4af._execution_config()
+    base_management = v4af._trade_management_config(None)
+    cells: list[dict[str, Any]] = []
+    for policy in EXIT_COST_DIAGNOSTIC_POLICIES:
+        management = replace(
+            base_management,
+            take_profit_atr_multiplier=float(policy["take_profit_atr"]),
+            stop_loss_atr_multiplier=float(policy["initial_stop_atr"]),
+            trailing_stop_enabled=True,
+            trailing_activation_atr=float(policy["trailing_activation_atr"]),
+            trailing_step_atr=float(policy["trailing_step_atr"]),
+        )
+        for scenario in EXIT_COST_DIAGNOSTIC_SCENARIOS:
+            execution = replace(
+                base_execution,
+                fee_bps=float(scenario["fee_bps_per_side"]),
+                slippage_bps=float(scenario["slippage_bps_per_side"]),
+            )
+            replay = simulate_signals(
+                bars,
+                actions,
+                execution,
+                trade_management_config=management,
+            )
+            trades = cast(list[dict[str, Any]], replay["trades"])
+            metrics = v4af._summarize_replay(replay)
+            cells.append(
+                {
+                    "candidate_id": (
+                        f"{SYMBOL}|{TIMEFRAME}|EXIT_COST_DIAGNOSTIC|"
+                        f"{policy['name']}|{scenario['name']}"
+                    ),
+                    "symbol": SYMBOL,
+                    "timeframe": TIMEFRAME,
+                    "mode": "PRIMARY_ONLY_EXIT_COST_DIAGNOSTIC",
+                    "exit_policy": str(policy["name"]),
+                    "initial_stop_atr": float(policy["initial_stop_atr"]),
+                    "take_profit_atr": float(policy["take_profit_atr"]),
+                    "trailing_activation_atr": float(
+                        policy["trailing_activation_atr"]
+                    ),
+                    "trailing_step_atr": float(policy["trailing_step_atr"]),
+                    "cost_scenario": str(scenario["name"]),
+                    "fee_bps_per_side": float(scenario["fee_bps_per_side"]),
+                    "slippage_bps_per_side": float(
+                        scenario["slippage_bps_per_side"]
+                    ),
+                    "round_trip_cost_bps": float(
+                        scenario["round_trip_cost_bps"]
+                    ),
+                    "primary_signal_count": len(event_indices),
+                    "accepted_signal_count": len(event_indices),
+                    "evaluation_split": "FORWARD_VALIDATION",
+                    "meta_model_used": False,
+                    "diagnostic_only": True,
+                    **metrics,
+                    "mean_unscaled_net_expectancy_usd_at_full_equity": (
+                        float(
+                            np.mean(
+                                [
+                                    float(item["net_return_fraction"])
+                                    for item in trades
+                                ]
+                            )
+                            * INITIAL_EQUITY
+                        )
+                        if trades
+                        else None
+                    ),
+                }
+            )
+    matrix = {
+        "evaluation_split": "FORWARD_VALIDATION",
+        "final_holdout_used": False,
+        "meta_model_used": False,
+        "promotion_allowed": False,
+        "policies": [dict(item) for item in EXIT_COST_DIAGNOSTIC_POLICIES],
+        "cost_scenarios": [
+            dict(item) for item in EXIT_COST_DIAGNOSTIC_SCENARIOS
+        ],
+        "cells": cells,
+    }
+    _validate_exit_cost_diagnostic_matrix(matrix)
+    return matrix
+
+
+def _validate_exit_cost_diagnostic_matrix(matrix: dict[str, Any]) -> None:
+    if not (
+        matrix.get("evaluation_split") == "FORWARD_VALIDATION"
+        and matrix.get("final_holdout_used") is False
+        and matrix.get("meta_model_used") is False
+        and matrix.get("promotion_allowed") is False
+    ):
+        raise ValueError("v4ah_exit_matrix_scope_or_safety_invalid")
+    policies = matrix.get("policies")
+    scenarios = matrix.get("cost_scenarios")
+    cells = matrix.get("cells")
+    if not isinstance(policies, list) or not isinstance(scenarios, list) or not isinstance(cells, list):
+        raise ValueError("v4ah_exit_matrix_schema_invalid")
+    expected = {
+        (str(policy.get("name")), str(scenario.get("name")))
+        for policy in policies
+        for scenario in scenarios
+    }
+    observed = {
+        (str(cell.get("exit_policy")), str(cell.get("cost_scenario")))
+        for cell in cells
+    }
+    if len(cells) != 6 or observed != expected:
+        raise ValueError("v4ah_exit_cost_matrix_incomplete")
+    for cell in cells:
+        expected_round_trip = 2.0 * (
+            float(cell["fee_bps_per_side"])
+            + float(cell["slippage_bps_per_side"])
+        )
+        if not (
+            cell.get("symbol") == SYMBOL
+            and cell.get("timeframe") == TIMEFRAME
+            and cell.get("evaluation_split") == "FORWARD_VALIDATION"
+            and cell.get("meta_model_used") is False
+            and cell.get("diagnostic_only") is True
+            and math.isclose(
+                float(cell["round_trip_cost_bps"]),
+                expected_round_trip,
+                rel_tol=0.0,
+                abs_tol=1e-12,
+            )
+        ):
+            raise ValueError("v4ah_exit_cost_matrix_cell_invalid")
 
 
 def _pf_value(metrics: dict[str, Any]) -> float:
@@ -657,6 +834,10 @@ def _fit_meta_predictor(prepared: dict[str, Any]) -> dict[str, Any]:
     raw_temperature = advanced._positive_probability(
         model, temperature_rows.loc[:, selected]
     )
+    separation = advanced.separation_diagnostics(
+        raw_temperature,
+        temperature_rows["meta_label"].to_numpy(dtype=int),
+    )
     temperature, temperature_diagnostics = advanced.fit_temperature_scaler(
         raw_temperature,
         temperature_rows["meta_label"].to_numpy(dtype=int),
@@ -681,6 +862,7 @@ def _fit_meta_predictor(prepared: dict[str, Any]) -> dict[str, Any]:
         "fit_diagnostics": shap_diagnostics,
         "shap_rankings": rankings,
         "temperature_diagnostics": temperature_diagnostics,
+        "separation_diagnostics": separation,
         "threshold_diagnostics": threshold_diagnostics,
         "calibration_diagnostics": calibration,
     }
@@ -954,6 +1136,25 @@ def _validate_report(report: dict[str, Any], commit_sha: str) -> None:
     _validate_report_cost_geometry(report)
     _validate_report_candidate_matrix(report.get("candidates", []))
     _validate_report_holdout_safety(report)
+    _validate_exit_cost_diagnostic_matrix(
+        report.get("exit_cost_diagnostic_matrix", {})
+    )
+    meta = report.get("meta_model", {})
+    separation = meta.get("separation_diagnostics", {})
+    if "roc_auc" in separation:
+        if not (
+            separation.get("metric_scope")
+            == "PURGED_OOF_TEMPERATURE_SLICE_OUT_OF_FIT_PREDICTIONS"
+            and separation.get("probability_scope")
+            == "RAW_PRE_TEMPERATURE_CALIBRATION"
+            and separation.get("sample_count")
+            == meta.get("temperature_diagnostics", {}).get("calibration_rows")
+            and 0.0 <= float(separation.get("roc_auc", -1.0)) <= 1.0
+            and 0.0 <= float(separation.get("pr_auc_average_precision", -1.0)) <= 1.0
+        ):
+            raise ValueError("v4ah_separation_report_invalid")
+    elif separation.get("status") != "NOT_AVAILABLE_MODEL_NOT_FIT":
+        raise ValueError("v4ah_separation_report_missing")
 
 
 def _format_pf(metrics: dict[str, Any]) -> str:
@@ -1012,10 +1213,48 @@ def _render_step_summary(report: dict[str, Any]) -> str:
             f"SHAP top-k: {fit.get('top_k_selected', 0)}; selected features: {', '.join(fit.get('selected_features', []))}.",
             f"Regime: KMeans clusters={regime.get('cluster_count', 'N/A')}; fit rows={regime.get('fit_rows', 0)}; hard filter=false.",
             f"Temperature: {meta.get('temperature_diagnostics', {}).get('temperature', 'N/A')}.",
-            f"Threshold: {threshold.get('threshold', 'N/A')}; selected rows={threshold.get('selected_rows', 0)}.",
+            (
+                "Separation: "
+                f"ROC-AUC={separation.get('roc_auc', 'N/A')}; "
+                f"PR-AUC/AP={separation.get('pr_auc_average_precision', 'N/A')}; "
+                f"positives={separation.get('positive_count', 'N/A')}/"
+                f"{separation.get('sample_count', 'N/A')}; "
+                f"random references ROC=0.50, PR={separation.get('no_skill_pr_auc_reference', 'N/A')}; "
+                f"support={separation.get('positive_support_quality', 'N/A')}."
+            ),
+            (
+                f"Threshold: {threshold.get('threshold', 'N/A')}; "
+                f"selected rows={threshold.get('selected_rows', 0)}; "
+                f"status={threshold.get('status', 'N/A')}; "
+                f"net expectancy={threshold.get('selected_net_expectancy', 'N/A')}."
+            ),
             f"Calibration: Brier={calibration.get('brier_score', 'N/A')}; ECE={calibration.get('expected_calibration_error', 'N/A')}.",
             f"Trailing policy: {meta.get('trailing_policy_diagnostics', {}).get('model_family', 'SKIPPED')}.",
             f"Kelly: quarter-Kelly; max fraction={advanced.V4AH_MAXIMUM_KELLY_FRACTION:.2%}; fit={meta.get('payoff_diagnostics', {}).get('fit_scope', 'SKIPPED')}.",
+            "",
+            "### Exit-cost × trailing-geometry diagnostic matrix",
+            "Primary-only replay on identical forward-validation signals; no Meta filter; final 15% holdout untouched; diagnostic only.",
+            "Costs: 30 bps round trip (10 bps fee + 5 bps slippage per side) and 90 bps round trip (25+20 bps per side, MRD v0.7).",
+            "| Geometry | SL ATR | TP ATR | Activation ATR | Step ATR | RT cost bps | Trades | Win % | Net PF | Max DD % | Net PnL USD | Avg net USD/trade |",
+            "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+            *[
+                (
+                    f"| {cell['exit_policy']} | {float(cell['initial_stop_atr']):.1f} "
+                    f"| {float(cell['take_profit_atr']):.1f} "
+                    f"| {float(cell['trailing_activation_atr']):.1f} "
+                    f"| {float(cell['trailing_step_atr']):.1f} "
+                    f"| {float(cell['round_trip_cost_bps']):.0f} "
+                    f"| {cell['trade_count']} "
+                    f"| {'N/A' if cell.get('win_rate') is None else f'{float(cell['win_rate']) * 100.0:.2f}'} "
+                    f"| {_format_pf(cell)} "
+                    f"| {'N/A' if cell.get('max_drawdown_percent') is None else f'{float(cell['max_drawdown_percent']):.2f}'} "
+                    f"| {float(cell.get('net_pnl_total_usd') or 0.0):.2f} "
+                    f"| {'N/A' if cell.get('mean_unscaled_net_expectancy_usd_at_full_equity') is None else f'{float(cell['mean_unscaled_net_expectancy_usd_at_full_equity']):.4f}'} |"
+                )
+                for cell in report["exit_cost_diagnostic_matrix"]["cells"]
+            ],
+            "",
+            "The 30 bps case is a low-cost counterfactual, not the operating cost contract; this matrix cannot promote a candidate.",
             "",
             "Acceptance: Net PF >1.5, Max DD <15%, Win Rate >45%, Trades >=30, and outperformance vs Primary on Net PF and unscaled expectancy.",
             "Safety: Champion=null, order_permission=false, trading_authorization=NO-GO, private_api_calls=0, real_order_attempts=0, sequence_model_used=false.",
@@ -1051,6 +1290,7 @@ def _build_report(
     candidates: list[dict[str, Any]],
     trades: list[dict[str, Any]],
     decisions: list[dict[str, Any]],
+    exit_cost_diagnostic_matrix: dict[str, Any],
 ) -> dict[str, Any]:
     report = {
         "schema_version": SCHEMA,
@@ -1093,6 +1333,7 @@ def _build_report(
             },
         },
         "candidates": candidates,
+        "exit_cost_diagnostic_matrix": exit_cost_diagnostic_matrix,
         "trade_count": len(trades),
         "decision_count": len(decisions),
         "safety": _safety_report(),
@@ -1113,6 +1354,7 @@ def _empty_meta(
         "temperature_diagnostics": {},
         "threshold_diagnostics": {},
         "calibration_diagnostics": {},
+        "separation_diagnostics": {"status": "NOT_AVAILABLE_MODEL_NOT_FIT"},
         "trailing_policy_diagnostics": {},
         "payoff_diagnostics": {},
     }
@@ -1161,6 +1403,11 @@ def run_v4ah(
             research_bars, features, event_indices, forward_end, prepared, meta
         )
     training_diagnostics = cast(dict[str, Any], meta.get("training_diagnostics", {}))
+    exit_cost_diagnostic_matrix = _run_exit_cost_diagnostic_matrix(
+        research_bars,
+        event_indices,
+        forward_end,
+    )
     report = _build_report(
         commit_sha,
         provenance,
@@ -1175,6 +1422,7 @@ def run_v4ah(
         candidates,
         trades,
         decisions,
+        exit_cost_diagnostic_matrix,
     )
     output_report.parent.mkdir(parents=True, exist_ok=True)
     output_report.write_text(

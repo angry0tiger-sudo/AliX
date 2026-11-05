@@ -250,6 +250,33 @@ jobs:
               "slippage_bps_per_side": 20.0,
               "round_trip_cost_bps": 90.0,
           }
+          separation = report["meta_model"].get("separation_diagnostics", {})
+          if "roc_auc" in separation:
+              assert separation["metric_scope"] == (
+                  "PURGED_OOF_TEMPERATURE_SLICE_OUT_OF_FIT_PREDICTIONS"
+              )
+              assert separation["sample_count"] == report["meta_model"][
+                  "temperature_diagnostics"
+              ]["calibration_rows"]
+              assert 0.0 <= float(separation["roc_auc"]) <= 1.0
+              assert 0.0 <= float(separation["pr_auc_average_precision"]) <= 1.0
+          else:
+              assert separation["status"] == "NOT_AVAILABLE_MODEL_NOT_FIT"
+          exit_matrix = report["exit_cost_diagnostic_matrix"]
+          assert exit_matrix["evaluation_split"] == "FORWARD_VALIDATION"
+          assert exit_matrix["final_holdout_used"] is False
+          assert exit_matrix["meta_model_used"] is False
+          assert exit_matrix["promotion_allowed"] is False
+          assert len(exit_matrix["cells"]) == 6
+          assert {
+              item["round_trip_cost_bps"] for item in exit_matrix["cells"]
+          } == {30.0, 90.0}
+          assert all(
+              item["diagnostic_only"] is True
+              and item["symbol"] == "ETHUSDT"
+              and item["timeframe"] == "1h"
+              for item in exit_matrix["cells"]
+          )
           safety = report["safety"]
           assert safety["Champion"] is None
           assert safety["order_permission"] is False
@@ -296,6 +323,8 @@ jobs:
               "Max DD",
               "SHAP top-k",
               "KMeans",
+              "Separation:",
+              "Exit-cost × trailing-geometry diagnostic matrix",
               "Champion=null",
               "trading_authorization=NO-GO",
           )
