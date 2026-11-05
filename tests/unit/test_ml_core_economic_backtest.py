@@ -485,6 +485,12 @@ def test_trade_management_config_rejects_invalid_assumptions() -> None:
         )
 
 
+def test_trade_management_config_allows_disabled_confidence_floor() -> None:
+    validate_trade_management_config(
+        TradeManagementConfig(confidence_threshold=None)
+    )
+
+
 def test_atr_take_profit_stop_loss_and_same_candle_collision() -> None:
     dates = pd.date_range("2026-01-01T00:00:00Z", periods=4, freq="15min")
     base = DataFrame(

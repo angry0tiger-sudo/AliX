@@ -49,7 +49,7 @@ class TradeManagementConfig:
     take_profit_atr_multiplier: float = 2.0
     stop_loss_atr_multiplier: float = 1.5
     horizon_candles: int = 12
-    confidence_threshold: float = 0.55
+    confidence_threshold: float | None = 0.55
     trailing_stop_enabled: bool = False
     trailing_activation_atr: float = 1.0
     trailing_step_atr: float = 1.0
@@ -164,7 +164,8 @@ def validate_trade_management_config(config: TradeManagementConfig) -> None:
         config.horizon_candles, "economic_horizon_candles_invalid"
     )
     _validate_trade_barrier_multipliers(config)
-    _validate_confidence_threshold(config.confidence_threshold)
+    if config.confidence_threshold is not None:
+        _validate_confidence_threshold(config.confidence_threshold)
     _validate_trailing_stop_settings(config)
     _validate_time_exit_settings(config)
 

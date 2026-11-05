@@ -137,9 +137,15 @@ def _validate_run_request(days: int, commit_sha: str) -> None:
     _validate_meta_threshold_contract()
 
 
-def _trade_management_config(confidence_threshold: float) -> TradeManagementConfig:
-    threshold = float(confidence_threshold)
-    if not math.isfinite(threshold) or not 0.0 <= threshold <= 1.0:
+def _trade_management_config(
+    confidence_threshold: float | None,
+) -> TradeManagementConfig:
+    threshold = (
+        None if confidence_threshold is None else float(confidence_threshold)
+    )
+    if threshold is not None and (
+        not math.isfinite(threshold) or not 0.0 < threshold <= 1.0
+    ):
         raise ValueError("v4af_meta_threshold_invalid")
     return TradeManagementConfig(
         atr_period=ATR_PERIOD_VALUE,
@@ -187,7 +193,7 @@ def _label_one_oof_primary_event(
         train_bars,
         actions,
         _execution_config(),
-        trade_management_config=_trade_management_config(0.0),
+        trade_management_config=_trade_management_config(None),
     )
     trades = replay["trades"]
     if len(trades) != 1:
@@ -481,9 +487,7 @@ def _run_economic_candidate(
         bars,
         actions,
         _execution_config(),
-        trade_management_config=_trade_management_config(
-            0.0 if threshold is None else threshold
-        ),
+        trade_management_config=_trade_management_config(threshold),
     )
     metrics = _summarize_replay(replay)
     decisions = _decision_rows(

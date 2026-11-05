@@ -100,9 +100,13 @@ def test_run_request_and_fixed_owner_geometry_are_strict() -> None:
     assert management.take_profit_atr_multiplier == 4.0
     assert management.horizon_candles == 24
     assert management.confidence_threshold == 0.6
+    unfiltered_management = v4af._trade_management_config(None)
+    assert unfiltered_management.confidence_threshold is None
 
 
-@pytest.mark.parametrize("threshold", [-0.01, 1.01, float("nan"), float("inf")])
+@pytest.mark.parametrize(
+    "threshold", [-0.01, 0.0, 1.01, float("nan"), float("inf")]
+)
 def test_invalid_meta_threshold_fails_closed(threshold: float) -> None:
     with pytest.raises(ValueError, match="meta_threshold_invalid"):
         v4af._trade_management_config(threshold)
@@ -413,7 +417,51 @@ def test_economic_candidate_applies_threshold_before_replay(
     ]
 
 
-def test_control_and_meta_candidate_ids_are_unambiguous() -> None:
+def test_unfiltered_control_uses_disabled_confidence_floor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bars = _bars(150)
+    observed: dict[str, Any] = {}
+
+    def fake_actions(
+        frame: DataFrame, indices: list[int], forward_end: int
+    ) -> list[dict[str, Any]]:
+        observed["accepted_indices"] = indices
+        return [{"signal": "BUY", "event_index": index} for index in indices]
+
+    def fake_simulate(
+        frame: DataFrame,
+        actions: list[dict[str, Any]],
+        config: Any,
+        *,
+        trade_management_config: Any,
+    ) -> dict[str, Any]:
+        observed["confidence_threshold"] = trade_management_config.confidence_threshold
+        return {"trades": [{"net_pnl_usd": 20.0} for _ in actions]}
+
+    monkeypatch.setattr(v4af, "_build_forward_actions", fake_actions)
+    monkeypatch.setattr(v4af, "simulate_signals", fake_simulate)
+    monkeypatch.setattr(v4af, "_summarize_replay", lambda replay: _completed_metrics())
+
+    candidate, trades, decisions = v4af._run_unfiltered_control(
+        bars,
+        [10, 20],
+        140,
+    )
+
+    assert observed["accepted_indices"] == [10, 20]
+    assert observed["confidence_threshold"] is None
+    assert candidate["selected_meta_probability_threshold"] is None
+    assert candidate["meta_accepted_buy_count"] == 2
+    assert candidate["meta_rejected_buy_count"] == 0
+    assert len(trades) == 2
+    assert [item["meta_filter_decision"] for item in decisions] == [
+        "ACCEPT",
+        "ACCEPT",
+    ]
+
+
+def test_control_and_meta_candidate_ids_are_unambiguous() -> None
     control = v4af._candidate_id(v4af.CONTROL_MODE)
     meta = v4af._candidate_id(v4af.MODE, 0.5)
     assert "UNFILTERED_CONTROL" in control
