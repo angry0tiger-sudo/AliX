@@ -13,6 +13,10 @@ import pandas as pd
 from pandas import DataFrame
 
 from scripts import run_ml_core_v4ac_cost_optimization as v4ac
+from scripts.run_ml_core_real_data_baseline import (
+    _load_diagnostic_datasets,
+    resample_ohlcv,
+)
 from services.ml_core.economic_backtest import (
     TradeManagementConfig,
     simulate_signals,
@@ -222,7 +226,7 @@ def _run_candidate(
 def _run_symbol(
     symbol: str, source_bars: DataFrame
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
-    bars = v4ac.resample_ohlcv(source_bars, TIMEFRAME)
+    bars = resample_ohlcv(source_bars, TIMEFRAME)
     _, primary_signals = v4ac._primary_features_and_signals(bars)
     train_end, forward_end = v4ac._outer_boundaries(len(bars))
     signal_indices = v4ac._forward_primary_signal_indices(
@@ -393,7 +397,7 @@ def run_v4ae(
     v4ac._validate_run_request(days, commit_sha)
     if TIMEFRAME not in v4ac.TIMEFRAMES:
         raise ValueError("v4ae_timeframe_out_of_policy")
-    datasets, provenance = v4ac._load_diagnostic_datasets(input_dir, days, commit_sha)
+    datasets, provenance = _load_diagnostic_datasets(input_dir, days, commit_sha)
     cells: list[dict[str, Any]] = []
     trades: list[dict[str, Any]] = []
     windows: list[dict[str, Any]] = []

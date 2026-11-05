@@ -11,6 +11,7 @@ import pandas as pd
 import pytest
 from pandas import DataFrame, Series
 
+from scripts import run_ml_core_v4ac_cost_optimization as v4ac
 from scripts import run_ml_core_v4ae_trailing_optimization as v4ae
 
 
@@ -116,15 +117,15 @@ def test_symbol_runner_executes_all_grid_rows_as_primary_only(
     features = DataFrame({"feature": np.ones(len(bars))})
     signals = Series(False, index=range(len(bars)), dtype=bool)
     signals.iloc[[700, 720]] = True
-    monkeypatch.setattr(v4ae.v4ac, "resample_ohlcv", lambda source, timeframe: bars)
+    monkeypatch.setattr(v4ac, "resample_ohlcv", lambda source, timeframe: bars)
     monkeypatch.setattr(
-        v4ae.v4ac,
+        v4ac,
         "_primary_features_and_signals",
         lambda source: (features, signals),
     )
-    monkeypatch.setattr(v4ae.v4ac, "_outer_boundaries", lambda count: (700, 850))
+    monkeypatch.setattr(v4ac, "_outer_boundaries", lambda count: (700, 850))
     monkeypatch.setattr(
-        v4ae.v4ac, "_forward_primary_signal_indices", lambda *args: [700, 720]
+        v4ac, "_forward_primary_signal_indices", lambda *args: [700, 720]
     )
     observed: list[str] = []
 
@@ -215,7 +216,7 @@ def test_run_v4ae_writes_report_and_trade_artifacts(
         )
 
     monkeypatch.setattr(
-        v4ae.v4ac,
+        v4ac,
         "_load_diagnostic_datasets",
         lambda *args: (
             {"BTCUSDT": DataFrame(), "ETHUSDT": DataFrame()},
