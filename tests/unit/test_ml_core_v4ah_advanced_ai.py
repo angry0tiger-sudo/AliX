@@ -47,6 +47,8 @@ def test_numeric_matrix_and_binary_label_guards() -> None:
     with pytest.raises(ValueError, match="bad"):
         v4ah._numeric_matrix(duplicate, "bad")
     with pytest.raises(ValueError, match="v4ah_binary_labels_invalid"):
+        v4ah._validate_binary_labels(np.array([0, 2] * 8), 16)
+    with pytest.raises(ValueError, match="v4ah_binary_class_support_insufficient"):
         v4ah._validate_binary_labels(np.ones(16), 16)
     with pytest.raises(ValueError, match="v4ah_binary_class_support_insufficient"):
         v4ah._validate_binary_labels(np.array([0] + [1] * 15), 16)
@@ -76,10 +78,15 @@ def test_regime_feature_pipeline_and_fail_closed_guards() -> None:
     insufficient.loc[:119, list(v4ah.REGIME_INPUT_COLUMNS)] = np.nan
     with pytest.raises(ValueError, match="v4ah_regime_training_support_insufficient"):
         v4ah.build_regime_features(insufficient, fit_end=200)
-    collision = frame.copy()
-    collision["%-regime_cluster_0"] = 0.0
-    with pytest.raises(ValueError, match="v4ah_regime_feature_collision"):
-        v4ah.build_regime_features(collision, fit_end=200)
+    for column in (
+        "%-regime_cluster_0",
+        "%-regime_center_distance",
+        "%-regime_state_valid",
+    ):
+        collision = frame.copy()
+        collision[column] = 0.0
+        with pytest.raises(ValueError, match="v4ah_regime_feature_collision"):
+            v4ah.build_regime_features(collision, fit_end=200)
 
 
 def test_three_way_chronological_purged_split_and_guards() -> None:
@@ -239,7 +246,8 @@ def test_adaptive_trailing_policy_training_and_prediction() -> None:
     )
     predicted = v4ah.predict_trailing_steps(model, features)
     assert len(predicted) == 45
-    assert set(predicted.tolist()).issubset(set(v4ah.V4AH_TRAILING_STEP_OPTIONS))
+    assert np.array_equal(predicted, np.full(45, 1.5))
+    assert diagnostics["target_step_counts"] == {"1.5": 45}
     assert diagnostics["all_counterfactual_exits_before_calibration"] is True
     with pytest.raises(ValueError, match="v4ah_trailing_counterfactual_schema_invalid"):
         v4ah.fit_adaptive_trailing_policy(
@@ -277,6 +285,10 @@ def test_fractional_kelly_and_sized_equity_curve() -> None:
     assert empty["trade_count"] == 0
     with pytest.raises(ValueError, match="v4ah_kelly_payoff_support_insufficient"):
         v4ah.estimate_training_payoff_ratio(np.array([0.01, -0.01] * 3))
+    with pytest.raises(ValueError, match="v4ah_kelly_training_returns_invalid"):
+        v4ah.estimate_training_payoff_ratio(np.array([[0.01, -0.01]]))
+    with pytest.raises(ValueError, match="v4ah_kelly_training_returns_invalid"):
+        v4ah.estimate_training_payoff_ratio(np.array([0.01, np.nan]))
     with pytest.raises(ValueError, match="v4ah_kelly_inputs_out_of_range"):
         v4ah.fractional_kelly_fraction(0.5, 0.0)
     with pytest.raises(ValueError, match="v4ah_sized_trade_alignment_invalid"):
