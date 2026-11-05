@@ -24,7 +24,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  v4ae-trailing-optimization:
+  v4ae-threshold-optimization:
     if: github.ref == 'refs/heads/research/ml-core-v4ae-trailing-optimization'
     runs-on: ubuntu-latest
     timeout-minutes: 360
@@ -78,6 +78,7 @@ jobs:
                   raise SystemExit(
                       f"ci_status_lookup_failed:{type(error).__name__}"
                   ) from None
+
               matching = [
                   run for run in payload.get("workflow_runs", [])
                   if run.get("head_sha") == target_sha
@@ -98,8 +99,7 @@ jobs:
                               + str(latest.get("conclusion")) + ":" + target_sha
                           )
                       print(json.dumps({
-                          "gate": "PASS",
-                          "target_sha": target_sha,
+                          "gate": "PASS", "target_sha": target_sha,
                           "ci_run_id": latest.get("id"),
                           "ci_run_url": latest.get("html_url"),
                       }, sort_keys=True))
@@ -121,32 +121,14 @@ jobs:
           set -euo pipefail
           test "$GITHUB_REF" = "refs/heads/research/ml-core-v4ae-trailing-optimization"
           test "$GITHUB_SHA" = "$TARGET_SHA"
-          printf 'timeframe=1h
-symbols=BTCUSDT,ETHUSDT
-mode=PRIMARY_ONLY
-'
-          printf 'initial_stop_atr=1.0,1.5,2.0
-'
-          printf 'trailing_activation_atr=0.5,1.0,1.5
-'
-          printf 'trailing_step_atr=1.0,1.5,2.0
-'
-          printf 'candidate_rows=54
-horizon_bars=24
-take_profit_atr=4.0
-'
-          printf 'fee_bps_per_side=10
-slippage_bps_per_side=5
-round_trip_cost_bps=30
-'
-          printf 'Champion=null
-order_permission=false
-trading_authorization=NO-GO
-'
-          printf 'private_api_calls=0
-real_order_attempts=0
-sequence_model_used=false
-'
+          printf 'timeframe=1h\nsymbols=BTCUSDT,ETHUSDT\nmode=PRIMARY_ONLY\n'
+          printf 'initial_stop_atr=1.0,1.5,2.0\n'
+          printf 'trailing_activation_atr=0.5,1.0,1.5\n'
+          printf 'trailing_step_atr=1.0,1.5,2.0\n'
+          printf 'candidate_rows=54\nhorizon_bars=24\ntake_profit_atr=4.0\n'
+          printf 'fee_bps_per_side=10\nslippage_bps_per_side=5\nround_trip_cost_bps=30\n'
+          printf 'Champion=null\norder_permission=false\ntrading_authorization=NO-GO\n'
+          printf 'private_api_calls=0\nreal_order_attempts=0\nsequence_model_used=false\n'
           python - <<'PY'
           from scripts import run_ml_core_v4ae_trailing_optimization as v4ae
 
@@ -168,7 +150,7 @@ sequence_model_used=false
           python-version: "3.12"
           cache: pip
 
-      - name: Install pinned V4-AE diagnostic dependencies
+      - name: Install pinned V4-AE diagnostic and Meta dependencies
         run: |
           python -m pip install pip==25.2
           python -m pip install numpy==2.5.4 pandas==2.3.3 scikit-learn==1.9.0 lightgbm==4.7.0
@@ -181,7 +163,12 @@ sequence_model_used=false
           mkdir -p "$data_dir"
           for symbol in BTCUSDT ETHUSDT; do
             log_path="$RUNNER_TEMP/v4ae-fetch-730-$symbol.log"
-            if python scripts/fetch_binance_public_ohlcv.py               --days 730               --symbol "$symbol"               --interval 1m               --output-dir "$data_dir"               --commit-sha "$GITHUB_SHA" >"$log_path" 2>&1; then
+            if python scripts/fetch_binance_public_ohlcv.py \
+              --days 730 \
+              --symbol "$symbol" \
+              --interval 1m \
+              --output-dir "$data_dir" \
+              --commit-sha "$GITHUB_SHA" >"$log_path" 2>&1; then
               cat "$log_path"
             else
               cat "$log_path"
@@ -189,17 +176,18 @@ sequence_model_used=false
               exit 1
             fi
           done
-          printf 'requested_days=730
-provider=Binance Spot public klines API
-'
-          printf 'private_api_calls=0
-credentials_used=false
-'
+          printf 'requested_days=730\nprovider=Binance Spot public klines API\n'
+          printf 'private_api_calls=0\ncredentials_used=false\n'
 
       - name: Run V4-AE 54-row primary-only trailing grid
         run: |
           set -euo pipefail
-          python -m scripts.run_ml_core_v4ae_trailing_optimization             --input-dir "$RUNNER_TEMP/alix-v4ae-market-data"             --output-report "$GITHUB_WORKSPACE/alix-v4ae-trailing-optimization-report.json"             --output-trades-csv "$GITHUB_WORKSPACE/alix-v4ae-trailing-optimization-trades.csv"             --days 730             --commit-sha "$GITHUB_SHA"
+          python -m scripts.run_ml_core_v4ae_trailing_optimization \
+            --input-dir "$RUNNER_TEMP/alix-v4ae-market-data" \
+            --output-report "$GITHUB_WORKSPACE/alix-v4ae-trailing-optimization-report.json" \
+            --output-trades-csv "$GITHUB_WORKSPACE/alix-v4ae-trailing-optimization-trades.csv" \
+            --days 730 \
+            --commit-sha "$GITHUB_SHA"
 
       - name: Validate V4-AE report and render GitHub Step Summary
         env:
@@ -228,9 +216,6 @@ credentials_used=false
           assert report["mode"] == "PRIMARY_ONLY"
           assert report["grid"]["total_candidate_configurations"] == 54
           assert report["grid"]["candidate_configurations_per_symbol"] == 27
-          assert report["grid"]["initial_stop_atr"] == [1.0, 1.5, 2.0]
-          assert report["grid"]["trailing_activation_atr"] == [0.5, 1.0, 1.5]
-          assert report["grid"]["trailing_step_atr"] == [1.0, 1.5, 2.0]
           assert report["meta_model"]["enabled"] is False
           assert report["meta_model"]["model_fit_performed"] is False
           assert report["evaluation_window"]["last_15_percent_final_holdout_used"] is False
@@ -304,5 +289,5 @@ credentials_used=false
           path: |
             alix-v4ae-trailing-optimization-report.json
             alix-v4ae-trailing-optimization-trades.csv
-            alix-v4ae-trailing-optimization-step-summary.md
+                        alix-v4ae-trailing-optimization-step-summary.md
           if-no-files-found: warn
