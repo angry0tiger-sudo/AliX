@@ -153,6 +153,7 @@ def test_oof_labels_use_exact_v4af_geometry_costs_and_purge(
                 "take_profit": trade_management_config.take_profit_atr_multiplier,
                 "horizon": trade_management_config.horizon_candles,
                 "trailing_enabled": trade_management_config.trailing_stop_enabled,
+                "confidence_threshold": trade_management_config.confidence_threshold,
             }
         )
         exit_time = pd.Timestamp(frame["date"].iloc[event_index + 5]).isoformat()
@@ -181,6 +182,7 @@ def test_oof_labels_use_exact_v4af_geometry_costs_and_purge(
     assert diagnostics["training_labels_matured_before_validation"] is True
     assert len(observed) == 2
     for item in observed:
+        assert item["confidence_threshold"] is None
         assert item["fee_bps"] == 10.0
         assert item["slippage_bps"] == 5.0
         assert item["initial_stop"] == 2.0
