@@ -552,6 +552,53 @@ def _expected_support_shortfall(error: ValueError) -> bool:
     }
 
 
+def _build_oof_training_or_skip(
+    bars: DataFrame,
+    features: DataFrame,
+    primary_signal: pd.Series,
+    train_end: int,
+) -> tuple[DataFrame | None, dict[str, Any], str | None]:
+    try:
+        training, diagnostics = _oof_training_frame(
+            bars, features, primary_signal, train_end
+        )
+    except ValueError as error:
+        if not _expected_support_shortfall(error):
+            raise
+        return None, {}, str(error)
+    return training, diagnostics, None
+
+
+def _split_purged_training_or_skip(
+    training: DataFrame,
+    train_end: int,
+    training_diagnostics: dict[str, Any],
+) -> tuple[
+    tuple[DataFrame, DataFrame, DataFrame] | None,
+    dict[str, Any],
+    str | None,
+]:
+    try:
+        fit_rows, temperature_rows, threshold_rows, split_diagnostics = (
+            advanced.split_fit_temperature_threshold(
+                training,
+                outer_train_end=train_end,
+            )
+        )
+    except ValueError as error:
+        split_diagnostics = cast(dict[str, Any], getattr(error, "diagnostics", {}))
+        if split_diagnostics:
+            training_diagnostics["purged_split_diagnostics"] = split_diagnostics
+        if not _expected_support_shortfall(error):
+            raise
+        return None, split_diagnostics, str(error)
+    return (
+        (fit_rows, temperature_rows, threshold_rows),
+        split_diagnostics,
+        None,
+    )
+
+
 def _fit_advanced_meta(
     bars: DataFrame,
     features: DataFrame,
@@ -561,32 +608,27 @@ def _fit_advanced_meta(
 ) -> dict[str, Any]:
     if not bool(train_gate.get("passed")):
         return {"skip_reason": "v4y_insufficient_primary_signals"}
-    training_diagnostics: dict[str, Any] = {}
-    split_diagnostics: dict[str, Any] = {}
-    try:
-        training, training_diagnostics = _oof_training_frame(
-            bars, features, primary_signal, train_end
-        )
-        try:
-            fit_rows, temperature_rows, threshold_rows, split_diagnostics = (
-                advanced.split_fit_temperature_threshold(
-                    training,
-                    outer_train_end=train_end,
-                )
-            )
-        except ValueError as error:
-            split_diagnostics = cast(dict[str, Any], getattr(error, "diagnostics", {}))
-            if split_diagnostics:
-                training_diagnostics["purged_split_diagnostics"] = split_diagnostics
-            raise
-    except ValueError as error:
-        if not _expected_support_shortfall(error):
-            raise
+    training, training_diagnostics, skip_reason = _build_oof_training_or_skip(
+        bars, features, primary_signal, train_end
+    )
+    if skip_reason is not None:
         return {
-            "skip_reason": str(error),
+            "skip_reason": skip_reason,
+            "training_diagnostics": training_diagnostics,
+            "split_diagnostics": {},
+        }
+    assert training is not None
+    split, split_diagnostics, skip_reason = _split_purged_training_or_skip(
+        training, train_end, training_diagnostics
+    )
+    if skip_reason is not None:
+        return {
+            "skip_reason": skip_reason,
             "training_diagnostics": training_diagnostics,
             "split_diagnostics": split_diagnostics,
         }
+    assert split is not None
+    fit_rows, temperature_rows, threshold_rows = split
     feature_names = _feature_columns(training)
     model, selected, rankings, shap_diagnostics = advanced.fit_shap_selected_lightgbm(
         fit_rows.loc[:, feature_names],
