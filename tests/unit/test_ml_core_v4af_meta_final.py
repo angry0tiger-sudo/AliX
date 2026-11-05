@@ -100,7 +100,7 @@ def test_run_request_and_fixed_owner_geometry_are_strict() -> None:
     assert execution.fee_bps == 25.0
     assert execution.slippage_bps == 20.0
     assert execution.position_fraction == 1.0
-    assert execution.maximum_drawdown == v4af.MAXIMUM_DRAWDOWN
+    assert execution.maximum_drawdown == 0.99
     assert management.trailing_stop_enabled is True
     assert management.stop_loss_atr_multiplier == 2.0
     assert management.trailing_activation_atr == 1.0
