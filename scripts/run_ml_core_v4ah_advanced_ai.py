@@ -776,7 +776,6 @@ def _safety_report() -> dict[str, Any]:
     }
 
 
-
 def _validate_report_identity_scope(report: dict[str, Any], commit_sha: str) -> None:
     if report.get("schema_version") != SCHEMA or report.get("commit_sha") != commit_sha:
         raise ValueError("v4ah_report_identity_invalid")
