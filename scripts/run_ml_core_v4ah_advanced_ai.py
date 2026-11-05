@@ -561,20 +561,34 @@ def _fit_advanced_meta(
 ) -> dict[str, Any]:
     if not bool(train_gate.get("passed")):
         return {"skip_reason": "v4y_insufficient_primary_signals"}
+    training_diagnostics: dict[str, Any] = {}
+    split_diagnostics: dict[str, Any] = {}
     try:
         training, training_diagnostics = _oof_training_frame(
             bars, features, primary_signal, train_end
         )
-        fit_rows, temperature_rows, threshold_rows, split_diagnostics = (
-            advanced.split_fit_temperature_threshold(
-                training,
-                outer_train_end=train_end,
+        try:
+            fit_rows, temperature_rows, threshold_rows, split_diagnostics = (
+                advanced.split_fit_temperature_threshold(
+                    training,
+                    outer_train_end=train_end,
+                )
             )
-        )
+        except ValueError as error:
+            split_diagnostics = cast(
+                dict[str, Any], getattr(error, "diagnostics", {})
+            )
+            if split_diagnostics:
+                training_diagnostics["purged_split_diagnostics"] = split_diagnostics
+            raise
     except ValueError as error:
         if not _expected_support_shortfall(error):
             raise
-        return {"skip_reason": str(error), "training_diagnostics": {}}
+        return {
+            "skip_reason": str(error),
+            "training_diagnostics": training_diagnostics,
+            "split_diagnostics": split_diagnostics,
+        }
     feature_names = _feature_columns(training)
     model, selected, rankings, shap_diagnostics = advanced.fit_shap_selected_lightgbm(
         fit_rows.loc[:, feature_names],
