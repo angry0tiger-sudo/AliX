@@ -99,8 +99,8 @@ def _positive_finite_probability_map(
 ) -> dict[int, float]:
     if not event_indices:
         return {}
-    validation = features.iloc[event_indices].loc[:, selected_features].reset_index(
-        drop=True
+    validation = (
+        features.iloc[event_indices].loc[:, selected_features].reset_index(drop=True)
     )
     raw = advanced._positive_probability(model, validation)
     probabilities = advanced.apply_temperature_scaling(raw, temperature)
@@ -167,9 +167,7 @@ def _counterfactual_training_data(
             _single_event_replay(bars, event_index, train_end, step)
             for step in advanced.V4AH_TRAILING_STEP_OPTIONS
         ]
-        feature_rows.append(
-            {name: float(row[name]) for name in selected_features}
-        )
+        feature_rows.append({name: float(row[name]) for name in selected_features})
         return_rows.append([float(item[0]["net_return_fraction"]) for item in outcomes])
         end_rows.append([float(item[1]) for item in outcomes])
     return (
@@ -335,8 +333,8 @@ def _policy_candidate(
 ) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
     if not event_indices:
         raise ValueError("v4ah_forward_primary_events_empty")
-    validation = features.iloc[event_indices].loc[:, selected_features].reset_index(
-        drop=True
+    validation = (
+        features.iloc[event_indices].loc[:, selected_features].reset_index(drop=True)
     )
     steps = advanced.predict_trailing_steps(trailing_model, validation)
     step_by_index = dict(zip(event_indices, steps.tolist(), strict=True))
@@ -429,6 +427,20 @@ def _policy_candidate(
     return candidate, enriched, decisions
 
 
+def _expected_support_shortfall(error: ValueError) -> bool:
+    return str(error) in {
+        "v4af_meta_oof_labels_empty",
+        "v4ah_three_way_training_schema_or_support_invalid",
+        "v4ah_fit_rows_insufficient_after_purge",
+        "v4ah_temperature_rows_insufficient_after_purge",
+        "v4ah_threshold_rows_insufficient",
+        "v4ah_binary_class_support_insufficient",
+        "v4ah_regime_training_support_insufficient",
+        "v4ah_trailing_policy_training_support_insufficient",
+        "v4ah_kelly_payoff_support_insufficient",
+    }
+
+
 def _fit_advanced_meta(
     bars: DataFrame,
     features: DataFrame,
@@ -449,6 +461,8 @@ def _fit_advanced_meta(
             )
         )
     except ValueError as error:
+        if not _expected_support_shortfall(error):
+            raise
         return {"skip_reason": str(error), "training_diagnostics": {}}
     feature_names = _feature_columns(training)
     model, selected, rankings, shap_diagnostics = advanced.fit_shap_selected_lightgbm(
@@ -500,6 +514,8 @@ def _fit_advanced_meta(
             train_end,
         )
     except ValueError as error:
+        if not _expected_support_shortfall(error):
+            raise
         policy_skip_reason = str(error)
     payoff_ratio: float | None = None
     payoff_diagnostics: dict[str, Any] = {}
@@ -508,6 +524,8 @@ def _fit_advanced_meta(
             fit_rows["net_return"].to_numpy(dtype=float)
         )
     except ValueError as error:
+        if not _expected_support_shortfall(error):
+            raise
         payoff_diagnostics = {"status": "SKIPPED", "reason": str(error)}
     return {
         "skip_reason": None,
@@ -523,7 +541,7 @@ def _fit_advanced_meta(
         "temperature": temperature,
         "threshold": threshold,
         "policy_model": policy_model,
-        "policy_diagnostics": policy_diagnostics,
+        "trailing_policy_diagnostics": policy_diagnostics,
         "policy_skip_reason": policy_skip_reason,
         "payoff_ratio": payoff_ratio,
         "payoff_diagnostics": payoff_diagnostics,
@@ -547,6 +565,12 @@ def _build_candidates(
     control["metrics"]["mean_unscaled_net_expectancy_usd_at_full_equity"] = (
         primary_expectancy
     )
+    if not event_indices:
+        candidates.extend(
+            _skipped_candidate(name, "v4ah_forward_primary_events_empty", 0)
+            for name in CANDIDATE_NAMES[1:]
+        )
+        return candidates, trades, decisions
     if meta.get("skip_reason") is not None:
         reason = str(meta["skip_reason"])
         candidates.extend(
@@ -575,7 +599,9 @@ def _build_candidates(
     trades.extend(fixed_trades)
     decisions.extend(fixed_decisions)
     if meta.get("policy_model") is None:
-        reason = str(meta.get("policy_skip_reason") or "v4ah_trailing_policy_unavailable")
+        reason = str(
+            meta.get("policy_skip_reason") or "v4ah_trailing_policy_unavailable"
+        )
         candidates.extend(
             _skipped_candidate(name, reason, len(event_indices))
             for name in CANDIDATE_NAMES[2:]
@@ -697,11 +723,15 @@ def _render_step_summary(report: dict[str, Any]) -> str:
     for item in report["candidates"]:
         metrics = item["metrics"]
         expectancy = metrics.get("mean_unscaled_net_expectancy_usd_at_full_equity")
+        win_rate = metrics.get("win_rate")
+        win_text = "N/A" if win_rate is None else f"{float(win_rate) * 100.0:.2f}"
+        drawdown = metrics.get("max_drawdown_percent")
+        drawdown_text = "N/A" if drawdown is None else f"{float(drawdown):.2f}"
         lines.append(
             f"| {item['mode']} | {metrics.get('trade_count', 0)} "
-            f"| {float(metrics['win_rate']) * 100.0:.2f} "
+            f"| {win_text} "
             f"| {_format_pf(metrics)} "
-            f"| {'N/A' if metrics.get('max_drawdown_percent') is None else f'{float(metrics['max_drawdown_percent']):.2f}'} "
+            f"| {drawdown_text} "
             f"| {float(metrics.get('net_pnl_total_usd', 0.0)):.2f} "
             f"| {'N/A' if expectancy is None else f'{float(expectancy):.4f}'} "
             f"| {'PASS' if item.get('acceptance_target_met') else 'NO'} "
@@ -794,7 +824,9 @@ def _build_report(
     return report
 
 
-def _empty_meta(reason: str, training_diagnostics: dict[str, Any] | None = None) -> dict[str, Any]:
+def _empty_meta(
+    reason: str, training_diagnostics: dict[str, Any] | None = None
+) -> dict[str, Any]:
     return {
         "skip_reason": reason,
         "training_diagnostics": training_diagnostics or {},
@@ -834,6 +866,8 @@ def run_v4ah(
     try:
         features, regime_diagnostics = _regime_features(base_features)
     except ValueError as error:
+        if not _expected_support_shortfall(error):
+            raise
         regime_diagnostics = {"status": "SKIPPED", "reason": str(error)}
         meta = _empty_meta(str(error))
         prepared = {"result": control}
@@ -841,19 +875,14 @@ def run_v4ah(
             research_bars, base_features, event_indices, forward_end, prepared, meta
         )
     else:
-        try:
-            meta = _fit_advanced_meta(
-                research_bars, features, primary_signal, train_end, train_gate
-            )
-        except (ImportError, RuntimeError) as error:
-            meta = _empty_meta(f"v4ah_model_runtime_unavailable:{error}")
+        meta = _fit_advanced_meta(
+            research_bars, features, primary_signal, train_end, train_gate
+        )
         prepared = {"result": control}
         candidates, trades, decisions = _build_candidates(
             research_bars, features, event_indices, forward_end, prepared, meta
         )
-    training_diagnostics = cast(
-        dict[str, Any], meta.get("training_diagnostics", {})
-    )
+    training_diagnostics = cast(dict[str, Any], meta.get("training_diagnostics", {}))
     report = _build_report(
         commit_sha,
         provenance,
