@@ -170,6 +170,56 @@ class _FakeShapExplainer:
         return [-importance, importance]
 
 
+def test_fit_advanced_meta_preserves_oof_diagnostics_on_class_support_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    training = DataFrame(
+        {
+            "event_index": np.arange(100),
+            "label_end_idx": np.arange(100) + 1,
+            "meta_label": [0] * 96 + [1] * 4,
+            "net_return": [-0.01] * 96 + [0.02] * 4,
+        }
+    )
+    diagnostics = {
+        "oof_primary_event_count": 100,
+        "matured_costed_oof_label_count": 100,
+        "label_class_counts": {"meta_failure": 96, "meta_success": 4},
+    }
+    monkeypatch.setattr(
+        v4ah_runner,
+        "_oof_training_frame",
+        lambda *args: (training, diagnostics.copy()),
+    )
+
+    def fail_split(*args: Any, **kwargs: Any) -> Any:
+        error = ValueError("v4ah_binary_class_support_insufficient")
+        setattr(
+            error,
+            "diagnostics",
+            {
+                "fit_rows": 70,
+                "temperature_rows": 15,
+                "threshold_rows": 15,
+                "fit_class_counts": {"meta_failure": 68, "meta_success": 2},
+            },
+        )
+        raise error
+
+    monkeypatch.setattr(v4ah_runner.advanced, "split_fit_temperature_threshold", fail_split)
+    result = v4ah_runner._fit_advanced_meta(
+        DataFrame({"close": np.arange(120, dtype=float)}),
+        DataFrame({"feature": np.arange(120, dtype=float)}),
+        pd.Series(np.ones(120, dtype=bool)),
+        110,
+        {"passed": True},
+    )
+    assert result["skip_reason"] == "v4ah_binary_class_support_insufficient"
+    assert result["training_diagnostics"]["matured_costed_oof_label_count"] == 100
+    assert result["training_diagnostics"]["label_class_counts"]["meta_success"] == 4
+    assert result["split_diagnostics"]["fit_class_counts"]["meta_success"] == 2
+
+
 def test_shap_lightgbm_pipeline_with_stubbed_optional_libraries(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
