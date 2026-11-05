@@ -700,39 +700,79 @@ def _run_exit_geometry_matrix(
     return matrix
 
 
-def _validate_exit_matrix(matrix: dict[str, Any]) -> None:
-    if not (
+def _validate_exit_matrix_scope(matrix: dict[str, Any]) -> None:
+    valid = (
         matrix.get("evaluation_split") == "FORWARD_VALIDATION"
         and matrix.get("final_holdout_used") is False
         and matrix.get("meta_model_used") is False
         and matrix.get("promotion_allowed") is False
-    ):
+    )
+    if not valid:
         raise ValueError("v4ai_exit_matrix_scope_invalid")
-    if matrix.get("cost_contract") != {
+
+
+def _validate_exit_matrix_cost_contract(matrix: dict[str, Any]) -> None:
+    expected = {
         "fee_bps_per_side": FEE_BPS_PER_SIDE,
         "slippage_bps_per_side": SLIPPAGE_BPS_PER_SIDE,
         "round_trip_cost_bps": ROUND_TRIP_COST_BPS,
-    }:
+    }
+    if matrix.get("cost_contract") != expected:
         raise ValueError("v4ai_exit_matrix_cost_invalid")
+
+
+def _exit_matrix_cells(matrix: dict[str, Any]) -> list[dict[str, Any]]:
     cells = matrix.get("cells")
     if not isinstance(cells, list) or len(cells) != len(EXIT_POLICIES):
         raise ValueError("v4ai_exit_matrix_incomplete")
-    if {item.get("policy") for item in cells} != {
-        item["name"] for item in EXIT_POLICIES
-    }:
+    return cast(list[dict[str, Any]], cells)
+
+
+def _validate_exit_matrix_policy_set(cells: list[dict[str, Any]]) -> None:
+    expected = {item["name"] for item in EXIT_POLICIES}
+    actual = {item.get("policy") for item in cells}
+    if actual != expected:
         raise ValueError("v4ai_exit_matrix_policy_invalid")
+
+
+def _validate_exit_matrix_cell_cost(cell: dict[str, Any]) -> None:
+    valid = (
+        cell.get("round_trip_cost_bps") == ROUND_TRIP_COST_BPS
+        and cell.get("fee_bps_per_side") == FEE_BPS_PER_SIDE
+        and cell.get("slippage_bps_per_side") == SLIPPAGE_BPS_PER_SIDE
+    )
+    if not valid:
+        raise ValueError("v4ai_exit_matrix_cell_invalid")
+
+
+def _validate_exit_matrix_cell_market(cell: dict[str, Any]) -> None:
+    if cell.get("symbol") != SYMBOL or cell.get("timeframe") != TIMEFRAME:
+        raise ValueError("v4ai_exit_matrix_cell_invalid")
+
+
+def _validate_exit_matrix_cell_scope(cell: dict[str, Any]) -> None:
+    valid = (
+        cell.get("diagnostic_only") is True
+        and cell.get("meta_model_used") is False
+        and cell.get("final_holdout_used") is False
+    )
+    if not valid:
+        raise ValueError("v4ai_exit_matrix_cell_invalid")
+
+
+def _validate_exit_matrix_cell(cell: dict[str, Any]) -> None:
+    _validate_exit_matrix_cell_cost(cell)
+    _validate_exit_matrix_cell_market(cell)
+    _validate_exit_matrix_cell_scope(cell)
+
+
+def _validate_exit_matrix(matrix: dict[str, Any]) -> None:
+    _validate_exit_matrix_scope(matrix)
+    _validate_exit_matrix_cost_contract(matrix)
+    cells = _exit_matrix_cells(matrix)
+    _validate_exit_matrix_policy_set(cells)
     for cell in cells:
-        if not (
-            cell.get("round_trip_cost_bps") == ROUND_TRIP_COST_BPS
-            and cell.get("fee_bps_per_side") == FEE_BPS_PER_SIDE
-            and cell.get("slippage_bps_per_side") == SLIPPAGE_BPS_PER_SIDE
-            and cell.get("symbol") == SYMBOL
-            and cell.get("timeframe") == TIMEFRAME
-            and cell.get("diagnostic_only") is True
-            and cell.get("meta_model_used") is False
-            and cell.get("final_holdout_used") is False
-        ):
-            raise ValueError("v4ai_exit_matrix_cell_invalid")
+        _validate_exit_matrix_cell(cell)
 
 
 def _safety_report() -> dict[str, Any]:
@@ -748,71 +788,123 @@ def _safety_report() -> dict[str, Any]:
     }
 
 
-def _validate_report(report: dict[str, Any], commit_sha: str) -> None:
-    if report.get("schema_version") != SCHEMA or report.get("commit_sha") != commit_sha:
+def _validate_report_identity(report: dict[str, Any], commit_sha: str) -> None:
+    identity_valid = (
+        report.get("schema_version") == SCHEMA
+        and report.get("commit_sha") == commit_sha
+    )
+    if not identity_valid:
         raise ValueError("v4ai_report_identity_invalid")
-    if report.get("symbols") != [SYMBOL] or report.get("timeframes") != [TIMEFRAME]:
+    scope_valid = (
+        report.get("symbols") == [SYMBOL]
+        and report.get("timeframes") == [TIMEFRAME]
+    )
+    if not scope_valid:
         raise ValueError("v4ai_report_scope_invalid")
-    if report.get("cost_contract") != {
+
+
+def _validate_report_cost_contract(report: dict[str, Any]) -> None:
+    expected = {
         "fee_type_assumption": "MAKER_FEE_PROXY",
         "fee_bps_per_side": FEE_BPS_PER_SIDE,
         "slippage_bps_per_side": SLIPPAGE_BPS_PER_SIDE,
         "round_trip_cost_bps": ROUND_TRIP_COST_BPS,
         "passive_limit_fill_simulation": False,
-    }:
+    }
+    if report.get("cost_contract") != expected:
         raise ValueError("v4ai_report_cost_contract_invalid")
-    if report.get("primary_filter") != {
+
+
+def _validate_report_primary_filter(report: dict[str, Any]) -> None:
+    expected = {
         "feature": ADX_FEATURE,
         "period": ADX_PERIOD,
         "threshold": ADX_THRESHOLD,
         "comparison": "STRICT_GT",
-    }:
+    }
+    if report.get("primary_filter") != expected:
         raise ValueError("v4ai_report_primary_filter_invalid")
+
+
+def _validate_report_holdout(report: dict[str, Any]) -> None:
     if report.get("final_holdout_used") is not False:
         raise ValueError("v4ai_final_holdout_contamination")
     chronological = report.get("chronological_evaluation", {})
     if chronological.get("final_15_percent_holdout_untouched") is not True:
         raise ValueError("v4ai_final_holdout_not_untouched")
-    if [item.get("mode") for item in report.get("candidates", [])] != list(
-        CANDIDATE_NAMES
-    ):
+
+
+def _validate_report_candidates(report: dict[str, Any]) -> None:
+    candidates = report.get("candidates", [])
+    modes = [item.get("mode") for item in candidates]
+    if modes != list(CANDIDATE_NAMES):
         raise ValueError("v4ai_candidate_matrix_invalid")
-    if any(
-        item.get("sequence_model_used") is not False for item in report["candidates"]
-    ):
-        raise ValueError("v4ai_sequence_model_forbidden")
-    _validate_exit_matrix(report.get("exit_geometry_matrix", {}))
+    for item in candidates:
+        if item.get("sequence_model_used") is not False:
+            raise ValueError("v4ai_sequence_model_forbidden")
+
+
+def _validate_report_safety(report: dict[str, Any]) -> None:
     safety = report.get("safety", {})
-    if not (
-        safety.get("Champion") is None
-        and safety.get("order_permission") is False
-        and safety.get("trading_authorization") == "NO-GO"
-        and safety.get("private_api_calls") == 0
-        and safety.get("real_order_attempts") == 0
-        and safety.get("sequence_model_used") is False
-    ):
+    if safety.get("Champion") is not None:
         raise ValueError("v4ai_fail_closed_safety_contract_invalid")
-    meta = report.get("meta_model", {})
+    if safety.get("order_permission") is not False:
+        raise ValueError("v4ai_fail_closed_safety_contract_invalid")
+    if safety.get("trading_authorization") != "NO-GO":
+        raise ValueError("v4ai_fail_closed_safety_contract_invalid")
+    if safety.get("private_api_calls") != 0 or safety.get("real_order_attempts") != 0:
+        raise ValueError("v4ai_fail_closed_safety_contract_invalid")
+    if safety.get("sequence_model_used") is not False:
+        raise ValueError("v4ai_fail_closed_safety_contract_invalid")
+
+
+def _validate_meta_threshold(meta: dict[str, Any]) -> None:
     threshold = meta.get("threshold_diagnostics", {})
-    separation = meta.get("separation_diagnostics", {})
-    if meta.get("enabled") and not (
+    valid = (
         threshold.get("status") == "SELECTED_TOP_70_PERCENT_ACCEPTANCE"
         and threshold.get("target_accept_fraction") == META_TARGET_ACCEPT_FRACTION
         and threshold.get("labels_used") is False
         and threshold.get("selection_scope") == "THIRD_PURGED_OOF_TRAINING_SLICE_ONLY"
-        and separation.get("metric_scope")
-        == "PURGED_OOF_TEMPERATURE_SLICE_OUT_OF_FIT_PREDICTIONS"
-        and separation.get("sample_count")
-        == meta.get("temperature_diagnostics", {}).get("calibration_rows")
-        and 0.0 <= float(separation.get("roc_auc", -1.0)) <= 1.0
-        and 0.0 <= float(separation.get("pr_auc_average_precision", -1.0)) <= 1.0
-    ):
+    )
+    if not valid:
         raise ValueError("v4ai_meta_threshold_or_separation_contract_invalid")
-    elif (
-        not meta.get("enabled")
-        and separation.get("status") != "NOT_AVAILABLE_MODEL_NOT_FIT"
-    ):
+
+
+def _validate_meta_separation(meta: dict[str, Any]) -> None:
+    separation = meta.get("separation_diagnostics", {})
+    temperature = meta.get("temperature_diagnostics", {})
+    valid_scope = (
+        separation.get("metric_scope")
+        == "PURGED_OOF_TEMPERATURE_SLICE_OUT_OF_FIT_PREDICTIONS"
+    )
+    if not valid_scope:
+        raise ValueError("v4ai_meta_threshold_or_separation_contract_invalid")
+    if separation.get("sample_count") != temperature.get("calibration_rows"):
+        raise ValueError("v4ai_meta_threshold_or_separation_contract_invalid")
+    roc_auc = float(separation.get("roc_auc", -1.0))
+    average_precision = float(separation.get("pr_auc_average_precision", -1.0))
+    if not 0.0 <= roc_auc <= 1.0 or not 0.0 <= average_precision <= 1.0:
+        raise ValueError("v4ai_meta_threshold_or_separation_contract_invalid")
+
+
+def _validate_meta_report(meta: dict[str, Any]) -> None:
+    separation = meta.get("separation_diagnostics", {})
+    if meta.get("enabled"):
+        _validate_meta_threshold(meta)
+        _validate_meta_separation(meta)
+    elif separation.get("status") != "NOT_AVAILABLE_MODEL_NOT_FIT":
         raise ValueError("v4ai_separation_status_missing")
+
+
+def _validate_report(report: dict[str, Any], commit_sha: str) -> None:
+    _validate_report_identity(report, commit_sha)
+    _validate_report_cost_contract(report)
+    _validate_report_primary_filter(report)
+    _validate_report_holdout(report)
+    _validate_report_candidates(report)
+    _validate_exit_matrix(report.get("exit_geometry_matrix", {}))
+    _validate_report_safety(report)
+    _validate_meta_report(report.get("meta_model", {}))
 
 
 def _format_pf(metrics: dict[str, Any]) -> str:
