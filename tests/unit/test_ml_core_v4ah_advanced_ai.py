@@ -222,6 +222,24 @@ def test_fit_advanced_meta_preserves_oof_diagnostics_on_class_support_failure(
     assert result["split_diagnostics"]["fit_class_counts"]["meta_success"] == 2
 
 
+def test_prepare_purged_training_slices_success_path() -> None:
+    slices, diagnostics, skip_reason = (
+        v4ah_runner._split_purged_training_or_skip(
+            _event_frame(), 900, {}
+        )
+    )
+    assert skip_reason is None
+    assert slices is not None
+    fit_rows, temperature_rows, threshold_rows = slices
+    assert (len(fit_rows), len(temperature_rows), len(threshold_rows)) == (
+        175,
+        37,
+        38,
+    )
+    assert diagnostics["fit_labels_end_before_temperature"] is True
+    assert diagnostics["temperature_labels_end_before_threshold"] is True
+
+
 def test_shap_lightgbm_pipeline_with_stubbed_optional_libraries(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
