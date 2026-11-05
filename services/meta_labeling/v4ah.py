@@ -125,9 +125,7 @@ def build_regime_features(
 
     result = base_features.reset_index(drop=True).copy()
     for cluster_id in range(cluster_count):
-        result[f"%-regime_cluster_{cluster_id}"] = (
-            states == cluster_id
-        ).astype(float)
+        result[f"%-regime_cluster_{cluster_id}"] = (states == cluster_id).astype(float)
     result["%-regime_center_distance"] = distances
     result["%-regime_state_valid"] = (states >= 0).astype(float)
     if not result.columns.is_unique:
@@ -202,9 +200,7 @@ def split_fit_temperature_threshold(
     fit_candidates = events.iloc[:fit_boundary]
     temperature_candidates = events.iloc[fit_boundary:temperature_boundary]
     threshold = events.iloc[temperature_boundary:].copy()
-    fit = fit_candidates.loc[
-        fit_candidates["label_end_idx"] < temperature_start
-    ].copy()
+    fit = fit_candidates.loc[fit_candidates["label_end_idx"] < temperature_start].copy()
     temperature = temperature_candidates.loc[
         temperature_candidates["label_end_idx"] < threshold_start
     ].copy()
@@ -233,8 +229,7 @@ def split_fit_temperature_threshold(
         "threshold_event_start": int(threshold["event_index"].min()),
         "threshold_event_end": int(threshold["event_index"].max()),
         "fit_labels_end_before_temperature": bool(
-            int(fit["label_end_idx"].max())
-            < int(temperature["event_index"].min())
+            int(fit["label_end_idx"].max()) < int(temperature["event_index"].min())
         ),
         "temperature_labels_end_before_threshold": bool(
             int(temperature["label_end_idx"].max())
@@ -402,8 +397,7 @@ def fit_temperature_scaler(
         epsilon = 1e-12
         loss = -np.mean(
             labels * np.log(np.clip(calibrated, epsilon, 1.0 - epsilon))
-            + (1 - labels)
-            * np.log(np.clip(1.0 - calibrated, epsilon, 1.0 - epsilon))
+            + (1 - labels) * np.log(np.clip(1.0 - calibrated, epsilon, 1.0 - epsilon))
         )
         return float(loss)
 
@@ -469,8 +463,8 @@ def calibration_diagnostics(
             continue
         mean_probability = float(np.mean(values[group]))
         observed_rate = float(np.mean(outcomes[group]))
-        weighted_error += len(group) / len(values) * abs(
-            mean_probability - observed_rate
+        weighted_error += (
+            len(group) / len(values) * abs(mean_probability - observed_rate)
         )
         curve.append(
             {
@@ -519,9 +513,13 @@ def select_net_expectancy_threshold(
             continue
         expectancy = float(np.mean(returns[selected]))
         proposal = (expectancy, selected_count, threshold)
-        if best is None or expectancy > best[0] or (
-            math.isclose(expectancy, best[0], rel_tol=0.0, abs_tol=1e-12)
-            and selected_count > best[1]
+        if (
+            best is None
+            or expectancy > best[0]
+            or (
+                math.isclose(expectancy, best[0], rel_tol=0.0, abs_tol=1e-12)
+                and selected_count > best[1]
+            )
         ):
             best = proposal
 
@@ -563,9 +561,7 @@ def fit_adaptive_trailing_policy(
     temperature-calibration boundary. This prevents an alternative stop path
     from leaking calibration-period prices into policy training.
     """
-    values = _numeric_matrix(
-        event_features, "v4ah_trailing_feature_matrix_invalid"
-    )
+    values = _numeric_matrix(event_features, "v4ah_trailing_feature_matrix_invalid")
     returns = np.asarray(candidate_net_returns, dtype=float)
     ends = np.asarray(candidate_label_end_indices, dtype=float)
     expected_shape = (len(values), len(V4AH_TRAILING_STEP_OPTIONS))
@@ -636,10 +632,7 @@ def estimate_training_payoff_ratio(net_returns: Any) -> tuple[float, dict[str, A
         raise ValueError("v4ah_kelly_training_returns_invalid")
     winners = values[values > 0.0]
     losers = values[values < 0.0]
-    if (
-        len(winners) < V4AH_MINIMUM_CLASS_ROWS
-        or len(losers) < V4AH_MINIMUM_CLASS_ROWS
-    ):
+    if len(winners) < V4AH_MINIMUM_CLASS_ROWS or len(losers) < V4AH_MINIMUM_CLASS_ROWS:
         raise ValueError("v4ah_kelly_payoff_support_insufficient")
     average_win = float(np.mean(winners))
     average_loss = abs(float(np.mean(losers)))
