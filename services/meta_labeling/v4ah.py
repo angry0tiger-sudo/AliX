@@ -36,6 +36,7 @@ REGIME_INPUT_COLUMNS: Final[tuple[str, ...]] = (
     "%-trend_ema_spread_12_26",
 )
 
+
 def _numeric_matrix(frame: DataFrame, error_code: str) -> np.ndarray:
     if frame.empty or not frame.columns.is_unique:
         raise ValueError(error_code)
@@ -43,6 +44,7 @@ def _numeric_matrix(frame: DataFrame, error_code: str) -> np.ndarray:
     if not np.isfinite(values).all():
         raise ValueError(error_code)
     return cast(np.ndarray, values)
+
 
 def _validate_binary_labels(labels: Any, expected_rows: int) -> np.ndarray:
     values = np.asarray(labels, dtype=float)
@@ -58,6 +60,7 @@ def _validate_binary_labels(labels: Any, expected_rows: int) -> np.ndarray:
     if int(counts.min()) < V4AH_MINIMUM_CLASS_ROWS:
         raise ValueError("v4ah_binary_class_support_insufficient")
     return values.astype(int)
+
 
 def _validate_regime_request(
     base_features: DataFrame, fit_end: int, cluster_count: int
@@ -80,6 +83,7 @@ def _validate_regime_request(
     ):
         raise ValueError("v4ah_regime_input_schema_invalid")
 
+
 def _regime_training_matrix(
     base_features: DataFrame, fit_end: int, cluster_count: int
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
@@ -93,6 +97,7 @@ def _regime_training_matrix(
     if len(train_values) < max(100, cluster_count * 20):
         raise ValueError("v4ah_regime_training_support_insufficient")
     return matrix, valid_mask, train_mask, train_values
+
 
 def _fit_regime_cluster_model(
     train_values: np.ndarray, cluster_count: int
@@ -114,6 +119,7 @@ def _fit_regime_cluster_model(
     model.fit(scaled_train)
     return scaler, model
 
+
 def _predict_regime_assignments(
     matrix: np.ndarray, valid_mask: np.ndarray, scaler: Any, model: Any
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -123,6 +129,7 @@ def _predict_regime_assignments(
     states[valid_mask] = model.predict(transformed)
     distances[valid_mask] = np.min(model.transform(transformed), axis=1)
     return states, distances
+
 
 def _assemble_regime_features(
     base_features: DataFrame,
@@ -158,6 +165,7 @@ def _assemble_regime_features(
     }
     return result, diagnostics
 
+
 def build_regime_features(
     base_features: DataFrame,
     *,
@@ -187,6 +195,7 @@ def build_regime_features(
     )
     return result, diagnostics, scaler, model
 
+
 def _validate_split_fractions(fit_fraction: float, temperature_fraction: float) -> None:
     if not 0.5 <= fit_fraction <= 0.85:
         raise ValueError("v4ah_fit_fraction_invalid")
@@ -194,6 +203,7 @@ def _validate_split_fractions(fit_fraction: float, temperature_fraction: float) 
         raise ValueError("v4ah_temperature_fraction_invalid")
     if fit_fraction + temperature_fraction >= 0.95:
         raise ValueError("v4ah_training_split_fractions_invalid")
+
 
 def _validated_training_events(
     labelled_events: DataFrame, outer_train_end: int
@@ -224,6 +234,7 @@ def _validated_training_events(
         raise ValueError("v4ah_training_label_crosses_outer_train")
     return events
 
+
 def _purged_training_slices(
     events: DataFrame, fit_fraction: float, temperature_fraction: float
 ) -> tuple[DataFrame, DataFrame, DataFrame, int, int]:
@@ -244,6 +255,7 @@ def _purged_training_slices(
     ].copy()
     return fit, temperature, threshold, temperature_start, threshold_start
 
+
 def _validate_purged_training_slices(
     fit: DataFrame,
     temperature: DataFrame,
@@ -263,6 +275,7 @@ def _validate_purged_training_slices(
         raise ValueError("v4ah_fit_temperature_purge_failed")
     if int(temperature["label_end_idx"].max()) >= threshold_start:
         raise ValueError("v4ah_temperature_threshold_purge_failed")
+
 
 def _training_split_diagnostics(
     fit: DataFrame,
@@ -293,6 +306,7 @@ def _training_split_diagnostics(
         "split_policy": "CHRONOLOGICAL_70_15_15_WITH_LABEL_END_PURGE",
     }
 
+
 def split_fit_temperature_threshold(
     labelled_events: DataFrame,
     *,
@@ -319,6 +333,7 @@ def split_fit_temperature_threshold(
         diagnostics,
     )
 
+
 def _new_v4ah_lightgbm_model() -> Any:
     import lightgbm as lgb  # type: ignore[import-not-found]
 
@@ -338,6 +353,7 @@ def _new_v4ah_lightgbm_model() -> Any:
         n_jobs=1,
         verbosity=-1,
     )
+
 
 def _tree_shap_matrix(
     model: Any, fit_features: DataFrame, expected_shape: tuple[int, ...]
@@ -359,6 +375,7 @@ def _tree_shap_matrix(
         raise ValueError("v4ah_shap_output_shape_invalid")
     return shap_values
 
+
 def _shap_feature_ranking(
     fit_features: DataFrame, shap_values: np.ndarray, top_k: int
 ) -> tuple[list[str], list[dict[str, Any]]]:
@@ -378,6 +395,7 @@ def _shap_feature_ranking(
         for rank, index in enumerate(order.tolist(), start=1)
     ]
     return selected_features, rankings
+
 
 def fit_shap_selected_lightgbm(
     fit_features: DataFrame,
@@ -412,6 +430,7 @@ def fit_shap_selected_lightgbm(
     }
     return final_model, selected_features, rankings, diagnostics
 
+
 def _positive_probability(model: Any, features: DataFrame) -> np.ndarray:
     values = _numeric_matrix(features, "v4ah_probability_features_invalid")
     classes = np.asarray(getattr(model, "classes_", []))
@@ -427,9 +446,11 @@ def _positive_probability(model: Any, features: DataFrame) -> np.ndarray:
         raise ValueError("v4ah_raw_probabilities_invalid")
     return probabilities[:, 1]
 
+
 def _logit(probabilities: np.ndarray) -> np.ndarray:
     clipped = np.clip(probabilities, 1e-7, 1.0 - 1e-7)
     return cast(np.ndarray, np.log(clipped / (1.0 - clipped)))
+
 
 def apply_temperature_scaling(probabilities: Any, temperature: float) -> np.ndarray:
     values = np.asarray(probabilities, dtype=float)
@@ -447,6 +468,7 @@ def apply_temperature_scaling(probabilities: Any, temperature: float) -> np.ndar
     if not np.isfinite(result).all():
         raise ValueError("v4ah_calibrated_probabilities_non_finite")
     return result
+
 
 def fit_temperature_scaler(
     calibration_probabilities: Any,
@@ -511,6 +533,7 @@ def fit_temperature_scaler(
     }
     return temperature, diagnostics
 
+
 def _validate_calibration_diagnostics_inputs(
     values: np.ndarray, outcomes: np.ndarray, bin_count: int
 ) -> None:
@@ -527,6 +550,7 @@ def _validate_calibration_diagnostics_inputs(
     )
     if not valid:
         raise ValueError("v4ah_calibration_diagnostics_inputs_invalid")
+
 
 def _equal_frequency_calibration_curve(
     values: np.ndarray, outcomes: np.ndarray, bin_count: int
@@ -551,6 +575,7 @@ def _equal_frequency_calibration_curve(
             )
     return curve, float(weighted_error)
 
+
 def calibration_diagnostics(
     probabilities: Any,
     labels: Any,
@@ -573,6 +598,7 @@ def calibration_diagnostics(
         "scope": "EXPLICIT_TRAINING_DIAGNOSTIC_NOT_FINAL_HOLDOUT",
     }
 
+
 def _validate_threshold_inputs(values: np.ndarray, returns: np.ndarray) -> None:
     valid = (
         values.ndim == 1
@@ -587,6 +613,7 @@ def _validate_threshold_inputs(values: np.ndarray, returns: np.ndarray) -> None:
     if not valid:
         raise ValueError("v4ah_threshold_inputs_invalid")
 
+
 def _threshold_candidate_is_better(
     candidate: tuple[float, int, float],
     best: tuple[float, int, float] | None,
@@ -596,6 +623,7 @@ def _threshold_candidate_is_better(
     return math.isclose(candidate[0], best[0], rel_tol=0.0, abs_tol=1e-12) and (
         candidate[1] > best[1]
     )
+
 
 def _best_net_expectancy_threshold(
     values: np.ndarray, returns: np.ndarray, minimum_selected: int
@@ -611,6 +639,7 @@ def _best_net_expectancy_threshold(
                 best = candidate
     return best
 
+
 def _no_positive_threshold_diagnostics(
     row_count: int, minimum_selected: int
 ) -> dict[str, Any]:
@@ -623,6 +652,7 @@ def _no_positive_threshold_diagnostics(
         "selected_rows": 0,
         "labels_used": True,
     }
+
 
 def select_net_expectancy_threshold(
     probabilities: Any,
@@ -649,6 +679,7 @@ def select_net_expectancy_threshold(
         "labels_used": True,
         "selection_scope": "THIRD_PURGED_TRAINING_SLICE_ONLY",
     }
+
 
 def fit_adaptive_trailing_policy(
     event_features: DataFrame,
@@ -715,6 +746,7 @@ def fit_adaptive_trailing_policy(
     }
     return model, diagnostics
 
+
 def predict_trailing_steps(model: Any, features: DataFrame) -> np.ndarray:
     values = _numeric_matrix(features, "v4ah_trailing_prediction_features_invalid")
     predictions = np.asarray(model.predict(values), dtype=float)
@@ -725,6 +757,7 @@ def predict_trailing_steps(model: Any, features: DataFrame) -> np.ndarray:
     ):
         raise ValueError("v4ah_trailing_predictions_invalid")
     return predictions
+
 
 def estimate_training_payoff_ratio(net_returns: Any) -> tuple[float, dict[str, Any]]:
     values = np.asarray(net_returns, dtype=float)
@@ -747,6 +780,7 @@ def estimate_training_payoff_ratio(net_returns: Any) -> tuple[float, dict[str, A
         "fit_scope": "PURGED_META_FIT_ROWS_ONLY",
     }
 
+
 def fractional_kelly_fraction(
     probability: float,
     payoff_ratio: float,
@@ -767,6 +801,7 @@ def fractional_kelly_fraction(
     full_kelly = probability - (1.0 - probability) / payoff_ratio
     return min(maximum_fraction, max(0.0, fractional_multiplier * full_kelly))
 
+
 def _validate_sized_trade_inputs(
     trades: list[dict[str, Any]], stake_fractions: list[float], initial_equity: float
 ) -> None:
@@ -774,6 +809,7 @@ def _validate_sized_trade_inputs(
         raise ValueError("v4ah_sized_trade_alignment_invalid")
     if initial_equity <= 0.0:
         raise ValueError("v4ah_initial_equity_invalid")
+
 
 def _apply_sized_trade(
     trade: dict[str, Any],
@@ -803,6 +839,7 @@ def _apply_sized_trade(
         "equity_after_trade_usd": next_equity,
     }
     return enriched, next_equity, next_peak, drawdown, pnl, int(raw_return > 0.0)
+
 
 def _sized_trade_metrics(
     pnl_values: list[float],
@@ -837,6 +874,7 @@ def _sized_trade_metrics(
             else 0.0
         ),
     }
+
 
 def summarize_sized_trades(
     trades: list[dict[str, Any]],
