@@ -96,6 +96,11 @@ def test_run_request_and_fixed_owner_geometry_are_strict() -> None:
     assert v4af.FEE_BPS_PER_SIDE == 25.0
     assert v4af.SLIPPAGE_BPS_PER_SIDE == 20.0
     assert v4af.ROUND_TRIP_COST_BPS == 90.0
+    execution = v4af._execution_config()
+    assert execution.fee_bps == 25.0
+    assert execution.slippage_bps == 20.0
+    assert execution.position_fraction == 1.0
+    assert execution.maximum_drawdown == v4af.MAXIMUM_DRAWDOWN
     assert management.trailing_stop_enabled is True
     assert management.stop_loss_atr_multiplier == 2.0
     assert management.trailing_activation_atr == 1.0

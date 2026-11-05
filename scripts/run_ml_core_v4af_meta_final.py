@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+from dataclasses import replace
 import json
 import math
 from pathlib import Path
@@ -21,7 +22,7 @@ from scripts.run_ml_core_v4ac_cost_optimization import (
     ATR_PERIOD,
     HORIZON_BARS,
     _build_forward_actions,
-    _execution_config,
+    _execution_config as _v4ac_execution_config,
     _outer_boundaries,
     _summarize_replay,
 )
@@ -69,6 +70,16 @@ ROUND_TRIP_COST_BPS = 90.0
 MINIMUM_TRADES_EXCLUSIVE = 30
 MINIMUM_NET_PROFIT_FACTOR_EXCLUSIVE = 1.5
 MAXIMUM_DRAWDOWN_INCLUSIVE = 15.0
+
+
+def _execution_config() -> Any:
+    """Use V4-AF's MRD v0.7 cost contract on the shared V4-AC replay settings."""
+    return replace(
+        _v4ac_execution_config(),
+        fee_bps=FEE_BPS_PER_SIDE,
+        slippage_bps=SLIPPAGE_BPS_PER_SIDE,
+    )
+
 
 V4AE_REFERENCE = {
     "run_id": 7,
