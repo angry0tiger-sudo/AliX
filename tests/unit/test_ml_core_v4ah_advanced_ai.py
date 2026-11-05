@@ -223,10 +223,8 @@ def test_fit_advanced_meta_preserves_oof_diagnostics_on_class_support_failure(
 
 
 def test_prepare_purged_training_slices_success_path() -> None:
-    slices, diagnostics, skip_reason = (
-        v4ah_runner._split_purged_training_or_skip(
-            _event_frame(), 900, {}
-        )
+    slices, diagnostics, skip_reason = v4ah_runner._split_purged_training_or_skip(
+        _event_frame(), 900, {}
     )
     assert skip_reason is None
     assert slices is not None
