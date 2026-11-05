@@ -7,7 +7,7 @@ This module has no exchange, account, order or production-risk dependencies.
 from __future__ import annotations
 
 import math
-from typing import Any, Final
+from typing import Any, Final, cast
 
 import numpy as np
 import pandas as pd
@@ -43,7 +43,7 @@ def _numeric_matrix(frame: DataFrame, error_code: str) -> np.ndarray:
     values = frame.apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
     if not np.isfinite(values).all():
         raise ValueError(error_code)
-    return values
+    return cast(np.ndarray, values)
 
 
 def _validate_binary_labels(labels: Any, expected_rows: int) -> np.ndarray:
@@ -101,8 +101,8 @@ def build_regime_features(
     if len(train_values) < max(100, cluster_count * 20):
         raise ValueError("v4ah_regime_training_support_insufficient")
 
-    from sklearn.cluster import KMeans
-    from sklearn.preprocessing import StandardScaler
+    from sklearn.cluster import KMeans  # type: ignore[import-untyped]
+    from sklearn.preprocessing import StandardScaler  # type: ignore[import-untyped]
 
     scaler = StandardScaler()
     scaled_train = scaler.fit_transform(train_values)
@@ -262,8 +262,8 @@ def fit_shap_selected_lightgbm(
     if len(values) < V4AH_MINIMUM_FIT_ROWS:
         raise ValueError("v4ah_fit_rows_insufficient")
 
-    import lightgbm as lgb
-    import shap
+    import lightgbm as lgb  # type: ignore[import-not-found]
+    import shap  # type: ignore[import-not-found]
 
     def new_model() -> Any:
         return lgb.LGBMClassifier(
@@ -348,7 +348,7 @@ def _positive_probability(model: Any, features: DataFrame) -> np.ndarray:
 
 def _logit(probabilities: np.ndarray) -> np.ndarray:
     clipped = np.clip(probabilities, 1e-7, 1.0 - 1e-7)
-    return np.log(clipped / (1.0 - clipped))
+    return cast(np.ndarray, np.log(clipped / (1.0 - clipped)))
 
 
 def apply_temperature_scaling(probabilities: Any, temperature: float) -> np.ndarray:
@@ -386,8 +386,8 @@ def fit_temperature_scaler(
     ):
         raise ValueError("v4ah_temperature_calibration_inputs_invalid")
     labels = _validate_binary_labels(labels, len(raw))
-    from scipy.optimize import minimize
-    from scipy.special import expit
+    from scipy.optimize import minimize  # type: ignore[import-untyped]
+    from scipy.special import expit  # type: ignore[import-untyped]
 
     logits = _logit(raw)
 
@@ -577,7 +577,7 @@ def fit_adaptive_trailing_policy(
     if int(usable.sum()) < V4AH_MINIMUM_TRAILING_POLICY_ROWS:
         raise ValueError("v4ah_trailing_policy_training_support_insufficient")
 
-    from sklearn.ensemble import RandomForestClassifier
+    from sklearn.ensemble import RandomForestClassifier  # type: ignore[import-untyped]
 
     selected_returns = returns[usable]
     targets = np.asarray(V4AH_TRAILING_STEP_OPTIONS, dtype=float)[
