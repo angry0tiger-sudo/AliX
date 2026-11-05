@@ -208,9 +208,7 @@ def test_fit_advanced_meta_preserves_oof_diagnostics_on_class_support_failure(
         )
         raise error
 
-    monkeypatch.setattr(
-        v4ah_runner.advanced, "split_fit_temperature_threshold", fail_split
-    )
+    monkeypatch.setattr(v4ah, "split_fit_temperature_threshold", fail_split)
     result = v4ah_runner._fit_advanced_meta(
         DataFrame({"close": np.arange(120, dtype=float)}),
         DataFrame({"feature": np.arange(120, dtype=float)}),
