@@ -14,12 +14,14 @@ import pandas as pd
 from pandas import DataFrame, Series
 
 V4AH_TOP_K_FEATURES: Final[int] = 30
+V4AH_MINIMUM_SHAP_FEATURES: Final[int] = 5
 V4AH_REGIME_COUNT: Final[int] = 3
 V4AH_FIT_FRACTION: Final[float] = 0.70
 V4AH_TEMPERATURE_FRACTION: Final[float] = 0.15
 V4AH_THRESHOLD_FRACTION: Final[float] = 0.15
 V4AH_MINIMUM_FIT_ROWS: Final[int] = 40
-V4AH_MINIMUM_CLASS_ROWS: Final[int] = 8
+# Diagnostic-phase floor only; keep both classes represented after purging.
+V4AH_MINIMUM_CLASS_ROWS: Final[int] = 3
 V4AH_MINIMUM_CALIBRATION_ROWS: Final[int] = 30
 V4AH_MINIMUM_THRESHOLD_ROWS: Final[int] = 20
 V4AH_MINIMUM_TRAILING_POLICY_ROWS: Final[int] = 30
@@ -447,8 +449,14 @@ def fit_shap_selected_lightgbm(
     top_k: int = V4AH_TOP_K_FEATURES,
 ) -> tuple[Any, list[str], list[dict[str, Any]], dict[str, Any]]:
     """Rank with TreeSHAP on Fit only, then refit on the top-k columns."""
-    if isinstance(top_k, bool) or not isinstance(top_k, int) or not 1 <= top_k <= 100:
+    if (
+        isinstance(top_k, bool)
+        or not isinstance(top_k, int)
+        or not V4AH_MINIMUM_SHAP_FEATURES <= top_k <= 100
+    ):
         raise ValueError("v4ah_shap_top_k_invalid")
+    if len(fit_features.columns) < V4AH_MINIMUM_SHAP_FEATURES:
+        raise ValueError("v4ah_shap_feature_support_insufficient")
     values = _numeric_matrix(fit_features, "v4ah_fit_feature_matrix_invalid")
     labels = _validate_binary_labels(fit_labels, len(values))
     if len(values) < V4AH_MINIMUM_FIT_ROWS:
@@ -464,6 +472,7 @@ def fit_shap_selected_lightgbm(
     diagnostics = {
         "method": "TREE_SHAP_MEAN_ABSOLUTE_ATTRIBUTION_ON_FIT_SLICE",
         "top_k_requested": top_k,
+        "minimum_selected_features": V4AH_MINIMUM_SHAP_FEATURES,
         "top_k_selected": len(selected_features),
         "input_feature_count": int(len(fit_features.columns)),
         "selected_features": selected_features,
