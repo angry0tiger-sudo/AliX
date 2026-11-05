@@ -897,9 +897,7 @@ def _render_step_summary(report: dict[str, Any]) -> str:
     )
     for cell in report["exit_geometry_matrix"]["cells"]:
         win_rate = cell["win_rate"]
-        win_rate_text = (
-            "N/A" if win_rate is None else f"{float(win_rate) * 100.0:.2f}"
-        )
+        win_rate_text = "N/A" if win_rate is None else f"{float(win_rate) * 100.0:.2f}"
         lines.append(
             f"| {cell['policy']} | {float(cell['initial_stop_atr']):.1f} "
             f"| {float(cell['take_profit_atr']):.1f} "

@@ -12,6 +12,7 @@ from pandas import DataFrame
 from scripts import run_ml_core_v4ac_cost_optimization as v4ac
 from scripts import run_ml_core_v4ai_maker_strategy as v4ai
 
+
 def _trade_rows() -> list[dict[str, Any]]:
     return [
         {
@@ -34,11 +35,13 @@ def _trade_rows() -> list[dict[str, Any]]:
         },
     ]
 
+
 def _matrix_replay() -> dict[str, Any]:
     return {
         "trades": _trade_rows(),
         "metrics": {"max_drawdown_percent": 1.25},
     }
+
 
 def _summary_metrics() -> dict[str, Any]:
     return {
@@ -54,6 +57,7 @@ def _summary_metrics() -> dict[str, Any]:
         "fees_total_usd": 30.0,
         "slippage_total_usd": 45.0,
     }
+
 
 def _valid_matrix() -> dict[str, Any]:
     policies = [dict(item) for item in v4ai.EXIT_POLICIES]
@@ -85,6 +89,7 @@ def _valid_matrix() -> dict[str, Any]:
         "cells": cells,
     }
 
+
 def _valid_report() -> dict[str, Any]:
     return {
         "schema_version": v4ai.SCHEMA,
@@ -113,22 +118,24 @@ def _valid_report() -> dict[str, Any]:
         "exit_geometry_matrix": _valid_matrix(),
         "meta_model": {
             "enabled": False,
-            "separation_diagnostics": {
-                "status": "NOT_AVAILABLE_MODEL_NOT_FIT"
-            },
+            "separation_diagnostics": {"status": "NOT_AVAILABLE_MODEL_NOT_FIT"},
         },
         "safety": v4ai._safety_report(),
     }
+
 
 def test_execution_cost_is_locked_to_thirty_bps() -> None:
     execution = v4ai._execution_config()
     assert execution.fee_bps == 10.0
     assert execution.slippage_bps == 5.0
-    assert 2.0 * (execution.fee_bps + execution.slippage_bps) == v4ai.ROUND_TRIP_COST_BPS
+    assert (
+        2.0 * (execution.fee_bps + execution.slippage_bps) == v4ai.ROUND_TRIP_COST_BPS
+    )
     with pytest.raises(ValueError, match="v4ai_maker_cost_contract_invalid"):
         v4ai._validate_cost_contract(
             type("BadExecution", (), {"fee_bps": 25.0, "slippage_bps": 20.0})()
         )
+
 
 def test_adx_filter_is_strict_and_rejects_non_finite_rows() -> None:
     features = DataFrame({v4ai.ADX_FEATURE: [19.9, 20.0, 20.1, 31.0, np.nan, np.inf]})
@@ -147,6 +154,7 @@ def test_adx_filter_is_strict_and_rejects_non_finite_rows() -> None:
             pd.Series([True, False, None], dtype=object),
             DataFrame({v4ai.ADX_FEATURE: [30.0, 31.0, 32.0]}),
         )
+
 
 def test_regime_feature_pipeline_uses_fixed_three_clusters(
     monkeypatch: pytest.MonkeyPatch,
@@ -181,6 +189,7 @@ def test_regime_feature_pipeline_uses_fixed_three_clusters(
     assert diagnostics["cluster_count"] == 3
     assert diagnostics["hard_regime_filter_enabled"] is False
 
+
 def test_percentile_seventy_threshold_uses_only_probability_values() -> None:
     probabilities = np.linspace(0.1, 0.9, 20)
     threshold, diagnostics = v4ai._select_top_percentile_threshold(probabilities)
@@ -193,6 +202,7 @@ def test_percentile_seventy_threshold_uses_only_probability_values() -> None:
     assert diagnostics["expected_top_fraction_before_ties"] == pytest.approx(0.70)
     with pytest.raises(ValueError, match="v4ai_threshold_probability_input_invalid"):
         v4ai._select_top_percentile_threshold([0.1, np.nan])
+
 
 def test_oof_meta_label_uses_exact_thirty_bps_cost_contract(
     monkeypatch: pytest.MonkeyPatch,
@@ -244,6 +254,7 @@ def test_oof_meta_label_uses_exact_thirty_bps_cost_contract(
     assert seen[0].fee_bps == 10.0
     assert seen[0].slippage_bps == 5.0
 
+
 def test_oof_training_diagnostics_record_maker_proxy_costs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -287,6 +298,7 @@ def test_oof_training_diagnostics_record_maker_proxy_costs(
         "round_trip_cost_bps": 30.0,
     }
     assert diagnostics["training_labels_matured_before_validation"] is True
+
 
 def test_exit_geometry_matrix_has_only_three_thirty_bps_cells(
     monkeypatch: pytest.MonkeyPatch,
@@ -332,6 +344,7 @@ def test_exit_geometry_matrix_has_only_three_thirty_bps_cells(
     with pytest.raises(ValueError, match="v4ai_exit_matrix_cost_invalid"):
         v4ai._validate_exit_matrix(invalid)
 
+
 def test_candidate_replay_uses_thirty_bps_and_reports_unscaled_expectancy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -373,6 +386,7 @@ def test_candidate_replay_uses_thirty_bps_and_reports_unscaled_expectancy(
     assert {item["round_trip_cost_bps"] for item in trades} == {30.0}
     assert seen[0].fee_bps == 10.0 and seen[0].slippage_bps == 5.0
 
+
 def test_skipped_meta_candidate_and_decisions_are_not_misreported_as_rejects() -> None:
     bars = DataFrame(
         {"date": pd.date_range("2024-01-01", periods=30, freq="h", tz="UTC")}
@@ -385,12 +399,14 @@ def test_skipped_meta_candidate_and_decisions_are_not_misreported_as_rejects() -
     assert all(item["meta_filter_decision"] == "SKIPPED" for item in decisions)
     assert all(item["executable_signal"] == "NOT_EVALUATED" for item in decisions)
 
+
 def test_report_rejects_any_cost_contract_other_than_thirty_bps() -> None:
     report = _valid_report()
     v4ai._validate_report(report, "a" * 40)
     report["cost_contract"]["round_trip_cost_bps"] = 90.0
     with pytest.raises(ValueError, match="v4ai_report_cost_contract_invalid"):
         v4ai._validate_report(report, "a" * 40)
+
 
 def test_report_rejects_open_safety_state_and_holdout_contamination() -> None:
     report = _valid_report()
@@ -401,6 +417,7 @@ def test_report_rejects_open_safety_state_and_holdout_contamination() -> None:
     report["final_holdout_used"] = True
     with pytest.raises(ValueError, match="v4ai_final_holdout_contamination"):
         v4ai._validate_report(report, "a" * 40)
+
 
 def test_report_validates_p70_threshold_scope_when_meta_is_enabled() -> None:
     report = _valid_report()
@@ -427,6 +444,7 @@ def test_report_validates_p70_threshold_scope_when_meta_is_enabled() -> None:
         ValueError, match="v4ai_meta_threshold_or_separation_contract_invalid"
     ):
         v4ai._validate_report(report, "a" * 40)
+
 
 def test_step_summary_discloses_maker_proxy_and_fill_model_limitation() -> None:
     report = _valid_report()
