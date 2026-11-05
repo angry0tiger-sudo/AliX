@@ -726,8 +726,6 @@ def summarize_sized_trades(
     profit = sum(value for value in pnl_values if value > 0.0)
     loss = abs(sum(value for value in pnl_values if value < 0.0))
     count = len(pnl_values)
-    unscaled_win = sum(value for value in unscaled_returns if value > 0.0)
-    unscaled_loss = abs(sum(value for value in unscaled_returns if value < 0.0))
     metrics = {
         "trade_count": count,
         "net_profit_factor": round(profit / loss, 8) if loss else None,
