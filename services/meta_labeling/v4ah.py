@@ -362,8 +362,7 @@ def _training_split_diagnostics(
             and temperature_label_end < threshold_event_start
         ),
         "all_slices_inside_outer_train": bool(
-            threshold_label_end is not None
-            and threshold_label_end < outer_train_end
+            threshold_label_end is not None and threshold_label_end < outer_train_end
         ),
         "split_policy": "CHRONOLOGICAL_70_15_15_WITH_LABEL_END_PURGE",
     }
