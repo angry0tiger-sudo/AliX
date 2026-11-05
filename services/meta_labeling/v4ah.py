@@ -307,12 +307,28 @@ def _validate_purged_training_slices(
         raise ValueError("v4ah_temperature_threshold_purge_failed")
 
 
+def _optional_int(value: Any) -> int | None:
+    """Represent an empty-slice aggregate as None instead of int(NaN)."""
+    if pd.isna(value):
+        return None
+    return int(value)
+
+
 def _training_split_diagnostics(
     fit: DataFrame,
     temperature: DataFrame,
     threshold: DataFrame,
     outer_train_end: int,
 ) -> dict[str, Any]:
+    fit_event_start = _optional_int(fit["event_index"].min())
+    fit_event_end = _optional_int(fit["event_index"].max())
+    temperature_event_start = _optional_int(temperature["event_index"].min())
+    temperature_event_end = _optional_int(temperature["event_index"].max())
+    threshold_event_start = _optional_int(threshold["event_index"].min())
+    threshold_event_end = _optional_int(threshold["event_index"].max())
+    fit_label_end = _optional_int(fit["label_end_idx"].max())
+    temperature_label_end = _optional_int(temperature["label_end_idx"].max())
+    threshold_label_end = _optional_int(threshold["label_end_idx"].max())
     return {
         "fit_rows": int(len(fit)),
         "temperature_rows": int(len(temperature)),
@@ -329,21 +345,25 @@ def _training_split_diagnostics(
             "meta_failure": int(threshold["meta_label"].eq(0).sum()),
             "meta_success": int(threshold["meta_label"].eq(1).sum()),
         },
-        "fit_event_start": int(fit["event_index"].min()),
-        "fit_event_end": int(fit["event_index"].max()),
-        "temperature_event_start": int(temperature["event_index"].min()),
-        "temperature_event_end": int(temperature["event_index"].max()),
-        "threshold_event_start": int(threshold["event_index"].min()),
-        "threshold_event_end": int(threshold["event_index"].max()),
+        "fit_event_start": fit_event_start,
+        "fit_event_end": fit_event_end,
+        "temperature_event_start": temperature_event_start,
+        "temperature_event_end": temperature_event_end,
+        "threshold_event_start": threshold_event_start,
+        "threshold_event_end": threshold_event_end,
         "fit_labels_end_before_temperature": bool(
-            int(fit["label_end_idx"].max()) < int(temperature["event_index"].min())
+            fit_label_end is not None
+            and temperature_event_start is not None
+            and fit_label_end < temperature_event_start
         ),
         "temperature_labels_end_before_threshold": bool(
-            int(temperature["label_end_idx"].max())
-            < int(threshold["event_index"].min())
+            temperature_label_end is not None
+            and threshold_event_start is not None
+            and temperature_label_end < threshold_event_start
         ),
         "all_slices_inside_outer_train": bool(
-            int(threshold["label_end_idx"].max()) < outer_train_end
+            threshold_label_end is not None
+            and threshold_label_end < outer_train_end
         ),
         "split_policy": "CHRONOLOGICAL_70_15_15_WITH_LABEL_END_PURGE",
     }
