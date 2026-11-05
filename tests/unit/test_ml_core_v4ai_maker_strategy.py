@@ -181,9 +181,7 @@ def test_regime_feature_pipeline_uses_fixed_three_clusters(
             object(),
         )
 
-    monkeypatch.setattr(
-        advanced, "build_regime_features", fake_build_regime_features
-    )
+    monkeypatch.setattr(advanced, "build_regime_features", fake_build_regime_features)
     transformed, diagnostics = v4ai._regime_features(DataFrame({"feature": [1.0, 2.0]}))
     assert observed == {"fit_end": 200, "cluster_count": 3}
     assert len(transformed) == 2
