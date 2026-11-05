@@ -1205,9 +1205,7 @@ def _render_candidate_summary_line(item: dict[str, Any]) -> str:
 
 
 def _render_candidate_summary_lines(report: dict[str, Any]) -> list[str]:
-    return [
-        _render_candidate_summary_line(item) for item in report["candidates"]
-    ]
+    return [_render_candidate_summary_line(item) for item in report["candidates"]]
 
 
 def _render_model_diagnostics_summary_lines(report: dict[str, Any]) -> list[str]:

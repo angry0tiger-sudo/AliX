@@ -671,9 +671,7 @@ def calibration_diagnostics(
     }
 
 
-def _validate_separation_inputs(
-    values: np.ndarray, outcomes: np.ndarray
-) -> np.ndarray:
+def _validate_separation_inputs(values: np.ndarray, outcomes: np.ndarray) -> np.ndarray:
     valid = (
         values.ndim == 1
         and outcomes.shape == values.shape
