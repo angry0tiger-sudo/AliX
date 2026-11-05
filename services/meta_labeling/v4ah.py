@@ -779,9 +779,12 @@ def predict_trailing_steps(model: Any, features: DataFrame) -> np.ndarray:
         or np.any(class_indices >= len(V4AH_TRAILING_STEP_OPTIONS))
     ):
         raise ValueError("v4ah_trailing_predictions_invalid")
-    return np.asarray(V4AH_TRAILING_STEP_OPTIONS, dtype=float)[
-        class_indices.astype(int)
-    ]
+    return cast(
+        np.ndarray,
+        np.asarray(V4AH_TRAILING_STEP_OPTIONS, dtype=float)[
+            class_indices.astype(int)
+        ],
+    )
 
 
 def estimate_training_payoff_ratio(net_returns: Any) -> tuple[float, dict[str, Any]]:
