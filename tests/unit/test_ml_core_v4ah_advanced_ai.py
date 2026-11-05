@@ -75,10 +75,14 @@ def test_numeric_matrix_and_binary_label_guards() -> None:
         v4ah._numeric_matrix(duplicate, "bad")
     with pytest.raises(ValueError, match="v4ah_binary_labels_invalid"):
         v4ah._validate_binary_labels(np.array([0, 2] * 8), 16)
+    diagnostic_floor = v4ah._validate_binary_labels(
+        np.array([0] * 13 + [1] * 3), 16
+    )
+    assert int(diagnostic_floor.sum()) == 3
+    with pytest.raises(ValueError, match="v4ah_binary_class_support_insufficient"):
+        v4ah._validate_binary_labels(np.array([0] * 14 + [1] * 2), 16)
     with pytest.raises(ValueError, match="v4ah_binary_class_support_insufficient"):
         v4ah._validate_binary_labels(np.ones(16), 16)
-    with pytest.raises(ValueError, match="v4ah_binary_class_support_insufficient"):
-        v4ah._validate_binary_labels(np.array([0] + [1] * 15), 16)
 
 
 def test_regime_feature_pipeline_and_fail_closed_guards() -> None:
@@ -243,13 +247,19 @@ def test_shap_lightgbm_pipeline_with_stubbed_optional_libraries(
     model, selected, rankings, diagnostics = v4ah.fit_shap_selected_lightgbm(
         features,
         labels,
-        top_k=3,
+        top_k=5,
     )
     assert model is models[-1]
     assert len(models) == 2
-    assert selected == ["e", "d", "c"]
+    assert selected == ["e", "d", "c", "b", "a"]
+    assert len(selected) >= v4ah.V4AH_MINIMUM_SHAP_FEATURES
     assert len(rankings) == 5
     assert diagnostics["importance_fit_scope"] == "PURGED_OOF_FIT_SLICE_ONLY"
+    assert diagnostics["top_k_selected"] == 5
+    with pytest.raises(ValueError, match="v4ah_shap_top_k_invalid"):
+        v4ah.fit_shap_selected_lightgbm(features, labels, top_k=4)
+    with pytest.raises(ValueError, match="v4ah_shap_feature_support_insufficient"):
+        v4ah.fit_shap_selected_lightgbm(features.iloc[:, :4], labels, top_k=5)
     with pytest.raises(ValueError, match="v4ah_shap_top_k_invalid"):
         v4ah.fit_shap_selected_lightgbm(features, labels, top_k=0)
 
