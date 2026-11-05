@@ -374,12 +374,6 @@ def test_exit_cost_diagnostic_matrix_is_matched_and_fail_closed(
 ) -> None:
     calls: list[tuple[Any, Any]] = []
     monkeypatch.setattr(
-        v4af if hasattr(v4ah_runner, "v4af") else v4ah_runner,
-        "_unused_test_hook",
-        lambda: None,
-        raising=False,
-    )
-    monkeypatch.setattr(
         v4ah_runner.v4af,
         "_build_forward_actions",
         lambda bars, indices, end: [{"signal": "BUY", "indices": indices, "end": end}],
@@ -446,7 +440,7 @@ def test_exit_cost_diagnostic_matrix_is_matched_and_fail_closed(
         v4ah_runner._validate_exit_cost_diagnostic_matrix(invalid)
 
 
-def test_adaptive_trailing_policy_training_and_prediction() -> None
+def test_adaptive_trailing_policy_training_and_prediction() -> None:
     rng = np.random.default_rng(7)
     features = DataFrame(rng.normal(size=(45, 4)), columns=list("abcd"))
     returns = np.tile(np.array([0.01, 0.02, 0.005]), (45, 1))
