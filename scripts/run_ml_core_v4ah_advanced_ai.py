@@ -575,9 +575,7 @@ def _fit_advanced_meta(
                 )
             )
         except ValueError as error:
-            split_diagnostics = cast(
-                dict[str, Any], getattr(error, "diagnostics", {})
-            )
+            split_diagnostics = cast(dict[str, Any], getattr(error, "diagnostics", {}))
             if split_diagnostics:
                 training_diagnostics["purged_split_diagnostics"] = split_diagnostics
             raise
