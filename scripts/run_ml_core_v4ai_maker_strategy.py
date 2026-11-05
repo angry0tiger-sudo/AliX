@@ -795,10 +795,9 @@ def _validate_report_identity(report: dict[str, Any], commit_sha: str) -> None:
     )
     if not identity_valid:
         raise ValueError("v4ai_report_identity_invalid")
-    scope_valid = (
-        report.get("symbols") == [SYMBOL]
-        and report.get("timeframes") == [TIMEFRAME]
-    )
+    scope_valid = report.get("symbols") == [SYMBOL] and report.get("timeframes") == [
+        TIMEFRAME
+    ]
     if not scope_valid:
         raise ValueError("v4ai_report_scope_invalid")
 
