@@ -159,8 +159,7 @@ def _training_oof_labels(
     if dates.isna().any() or dates.duplicated().any():
         raise ValueError("v4af_training_timestamps_invalid")
     index_by_timestamp = {
-        pd.Timestamp(timestamp): index
-        for index, timestamp in enumerate(dates.tolist())
+        pd.Timestamp(timestamp): index for index, timestamp in enumerate(dates.tolist())
     }
     records: list[dict[str, Any]] = []
     immature_event_count = 0
@@ -280,7 +279,9 @@ def _join_event_features(
     return training.reset_index(drop=True)
 
 
-def _calibrate_thresholds(calibration_probabilities: np.ndarray) -> list[dict[str, Any]]:
+def _calibrate_thresholds(
+    calibration_probabilities: np.ndarray,
+) -> list[dict[str, Any]]:
     values = np.asarray(calibration_probabilities, dtype=float)
     if (
         values.ndim != 1
@@ -462,9 +463,7 @@ def _run_economic_candidate(
         "meta_accepted_buy_count": len(accepted_indices),
         "meta_rejected_buy_count": len(event_indices) - len(accepted_indices),
         "achieved_validation_accept_fraction": (
-            len(accepted_indices) / float(len(event_indices))
-            if event_indices
-            else 0.0
+            len(accepted_indices) / float(len(event_indices)) if event_indices else 0.0
         ),
         "metrics": metrics,
         "acceptance_target_met": _candidate_acceptance_met(metrics),
@@ -520,7 +519,9 @@ def _candidate_id(mode: str, target_accept_fraction: float | None = None) -> str
         return f"{SYMBOL}|{TIMEFRAME}|{geometry}|{CONTROL_MODE}"
     if target_accept_fraction is None:
         raise ValueError("v4af_meta_candidate_fraction_required")
-    return f"{SYMBOL}|{TIMEFRAME}|{geometry}|META_TOP_{int(target_accept_fraction * 100)}"
+    return (
+        f"{SYMBOL}|{TIMEFRAME}|{geometry}|META_TOP_{int(target_accept_fraction * 100)}"
+    )
 
 
 def _format_pf(value: Any, infinite: bool) -> str:
@@ -580,9 +581,7 @@ def _render_step_summary(report: dict[str, Any]) -> str:
             "| Mode | Target Top % | Threshold | Cal. Accepted % | Primary BUYs | "
             "Meta Accepted | Trades | Gross PF | Net PF | Max DD % | Net PnL USD | Acceptance | Status |"
         ),
-        (
-            "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|"
-        ),
+        ("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|"),
     ]
     for item in report["candidates"]:
         metrics = item["metrics"]
@@ -870,9 +869,7 @@ def run_v4af(
     )
     primary_signal_counts = {
         "research_window_primary_buy_count": int(primary_buy_signal.sum()),
-        "train_primary_buy_count": int(
-            train_gate["observed_primary_buy_count"]
-        ),
+        "train_primary_buy_count": int(train_gate["observed_primary_buy_count"]),
         "forward_validation_primary_buy_count": int(
             primary_buy_signal.iloc[train_end:forward_end].sum()
         ),
@@ -951,9 +948,7 @@ def run_v4af(
                 model,
                 calibration_rows.loc[:, feature_columns],
             )
-            threshold_diagnostics = _calibrate_thresholds(
-                calibration_probabilities
-            )
+            threshold_diagnostics = _calibrate_thresholds(calibration_probabilities)
             validation_probabilities = _validation_probability_by_index(
                 features,
                 event_indices,

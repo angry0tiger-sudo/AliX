@@ -17,9 +17,7 @@ def _bars(rows: int = 140) -> DataFrame:
     close = np.linspace(100.0, 120.0, rows)
     return DataFrame(
         {
-            "date": pd.date_range(
-                "2024-01-01T00:00:00Z", periods=rows, freq="h"
-            ),
+            "date": pd.date_range("2024-01-01T00:00:00Z", periods=rows, freq="h"),
             "open": close,
             "high": close * 1.01,
             "low": close * 0.99,
