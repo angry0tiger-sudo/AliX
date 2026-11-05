@@ -15,6 +15,7 @@ on:
       - services/meta_labeling/v4y.py
       - services/ml_core/economic_backtest.py
       - services/ml_core/extended_features.py
+      - tests/unit/test_ml_core_v4af_meta_final.py
       - tests/unit/test_ml_core_v4ah_advanced_ai.py
   workflow_dispatch:
 permissions:
