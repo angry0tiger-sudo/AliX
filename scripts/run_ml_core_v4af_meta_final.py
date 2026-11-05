@@ -1128,6 +1128,7 @@ def _prepare_meta_training(
         oof_preparation["training_diagnostics"],
     )
 
+
 def _fit_and_calibrate_meta_model(
     features: DataFrame,
     fit_rows: DataFrame,
