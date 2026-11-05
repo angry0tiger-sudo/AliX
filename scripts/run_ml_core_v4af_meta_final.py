@@ -93,27 +93,48 @@ V4AE_REFERENCE = {
 }
 
 
-def _validate_run_request(days: int, commit_sha: str) -> None:
+def _validate_dataset_window(days: int) -> None:
     if days != DAYS:
         raise ValueError("v4af_dataset_window_must_be_730_days")
-    if len(commit_sha) != 40 or any(
-        character not in "0123456789abcdef" for character in commit_sha
-    ):
+
+
+def _validate_commit_sha(commit_sha: str) -> None:
+    valid = len(commit_sha) == 40 and all(
+        character in "0123456789abcdef" for character in commit_sha
+    )
+    if not valid:
         raise ValueError("v4af_commit_sha_invalid")
+
+
+def _validate_fixed_market_scope() -> None:
     if SYMBOL != "ETHUSDT" or TIMEFRAME != "1h":
         raise ValueError("v4af_scope_invalid")
-    if (
-        INITIAL_STOP_ATR != 2.0
-        or TRAILING_ACTIVATION_ATR != 1.5
-        or TRAILING_STEP_ATR != 1.5
-        or TAKE_PROFIT_ATR != 4.0
-        or HORIZON_BARS_VALUE != 24
-        or ROUND_TRIP_COST_BPS != 30.0
-    ):
+
+
+def _validate_fixed_exit_and_cost_contract() -> None:
+    geometry_is_valid = (
+        INITIAL_STOP_ATR == 2.0
+        and TRAILING_ACTIVATION_ATR == 1.5
+        and TRAILING_STEP_ATR == 1.5
+        and TAKE_PROFIT_ATR == 4.0
+        and HORIZON_BARS_VALUE == 24
+        and ROUND_TRIP_COST_BPS == 30.0
+    )
+    if not geometry_is_valid:
         raise ValueError("v4af_owner_geometry_or_cost_contract_invalid")
+
+
+def _validate_meta_threshold_contract() -> None:
     if TARGET_ACCEPT_FRACTIONS != (0.30, 0.50, 0.70):
         raise ValueError("v4af_meta_threshold_matrix_invalid")
 
+
+def _validate_run_request(days: int, commit_sha: str) -> None:
+    _validate_dataset_window(days)
+    _validate_commit_sha(commit_sha)
+    _validate_fixed_market_scope()
+    _validate_fixed_exit_and_cost_contract()
+    _validate_meta_threshold_contract()
 
 def _trade_management_config(confidence_threshold: float) -> TradeManagementConfig:
     threshold = float(confidence_threshold)
@@ -148,77 +169,72 @@ def _eligible_primary_event_indices(
     ]
 
 
-def _training_oof_labels(
-    bars: DataFrame,
-    primary_events: DataFrame,
+def _label_one_oof_primary_event(
+    event: dict[str, Any],
+    train_bars: DataFrame,
+    index_by_timestamp: dict[pd.Timestamp, int],
     train_end: int,
-) -> tuple[DataFrame, dict[str, Any]]:
-    """Label each OOF BUY with an isolated replay of the exact V4-AF trade geometry."""
-    train_bars = bars.iloc[:train_end].reset_index(drop=True)
-    dates = pd.to_datetime(train_bars["date"], utc=True, errors="coerce")
-    if dates.isna().any() or dates.duplicated().any():
-        raise ValueError("v4af_training_timestamps_invalid")
-    index_by_timestamp = {
-        pd.Timestamp(timestamp): index for index, timestamp in enumerate(dates.tolist())
-    }
-    records: list[dict[str, Any]] = []
-    immature_event_count = 0
-    events = primary_events.to_dict(orient="records")
-    for event in events:
-        event_index = int(event["event_index"])
-        if event.get("primary_signal") != "BUY" or event.get("primary_oof") is not True:
-            raise ValueError("v4af_meta_labels_require_oof_primary_buy_events")
-        if event_index + HORIZON_BARS_VALUE >= train_end:
-            immature_event_count += 1
-            continue
-        actions = _build_forward_actions(train_bars, [event_index], train_end)
-        replay = simulate_signals(
-            train_bars,
-            actions,
-            _execution_config(),
-            trade_management_config=_trade_management_config(0.0),
-        )
-        trades = replay["trades"]
-        if len(trades) != 1:
-            raise ValueError("v4af_isolated_oof_event_must_create_exactly_one_trade")
-        trade = trades[0]
-        exit_timestamp = pd.Timestamp(str(trade["exit_timestamp"]))
-        if exit_timestamp.tzinfo is None:
-            raise ValueError("v4af_training_exit_timestamp_timezone_required")
-        exit_index = index_by_timestamp.get(exit_timestamp.tz_convert("UTC"))
-        if exit_index is None or not event_index < exit_index < train_end:
-            raise ValueError("v4af_training_label_not_matured_inside_outer_train")
-        net_pnl = float(trade["net_pnl_usd"])
-        net_return = float(trade["net_return_fraction"])
-        if not math.isfinite(net_pnl) or not math.isfinite(net_return):
-            raise ValueError("v4af_training_label_outcome_non_finite")
-        records.append(
-            {
-                "event_index": event_index,
-                "fold_id": int(event["fold_id"]),
-                "label_end_idx": exit_index,
-                "meta_label": int(net_pnl > 0.0),
-                "net_pnl_usd": net_pnl,
-                "net_return": net_return,
-                "exit_reason": str(trade["exit_reason"]),
-                "primary_signal": "BUY",
-                "primary_oof": True,
-            }
-        )
-    if not records:
-        raise ValueError("v4af_meta_oof_labels_empty")
-    labelled = (
-        DataFrame.from_records(records)
-        .sort_values("event_index")
-        .reset_index(drop=True)
+) -> dict[str, Any] | None:
+    event_index = int(event["event_index"])
+    if event.get("primary_signal") != "BUY" or event.get("primary_oof") is not True:
+        raise ValueError("v4af_meta_labels_require_oof_primary_buy_events")
+    if event_index + HORIZON_BARS_VALUE >= train_end:
+        return None
+
+    actions = _build_forward_actions(train_bars, [event_index], train_end)
+    replay = simulate_signals(
+        train_bars,
+        actions,
+        _execution_config(),
+        trade_management_config=_trade_management_config(0.0),
     )
+    trades = replay["trades"]
+    if len(trades) != 1:
+        raise ValueError("v4af_isolated_oof_event_must_create_exactly_one_trade")
+    trade = trades[0]
+    exit_timestamp = pd.Timestamp(str(trade["exit_timestamp"]))
+    if exit_timestamp.tzinfo is None:
+        raise ValueError("v4af_training_exit_timestamp_timezone_required")
+    exit_index = index_by_timestamp.get(exit_timestamp.tz_convert("UTC"))
+    if exit_index is None or not event_index < exit_index < train_end:
+        raise ValueError("v4af_training_label_not_matured_inside_outer_train")
+
+    net_pnl = float(trade["net_pnl_usd"])
+    net_return = float(trade["net_return_fraction"])
+    if not math.isfinite(net_pnl) or not math.isfinite(net_return):
+        raise ValueError("v4af_training_label_outcome_non_finite")
+    return {
+        "event_index": event_index,
+        "fold_id": int(event["fold_id"]),
+        "label_end_idx": exit_index,
+        "meta_label": int(net_pnl > 0.0),
+        "net_pnl_usd": net_pnl,
+        "net_return": net_return,
+        "exit_reason": str(trade["exit_reason"]),
+        "primary_signal": "BUY",
+        "primary_oof": True,
+    }
+
+
+def _validate_training_label_frame(
+    labelled: DataFrame,
+    train_end: int,
+) -> None:
     if labelled["event_index"].duplicated().any():
         raise ValueError("v4af_meta_oof_labels_duplicate")
     if (labelled["label_end_idx"] >= train_end).any():
         raise ValueError("v4af_meta_training_outer_validation_contamination")
+
+
+def _training_label_diagnostics(
+    labelled: DataFrame,
+    primary_event_count: int,
+    immature_event_count: int,
+    train_end: int,
+) -> dict[str, Any]:
     class_counts = labelled["meta_label"].value_counts().to_dict()
-    diagnostics: dict[str, Any] = {
-        "oof_primary_event_count": int(len(primary_events)),
+    return {
+        "oof_primary_event_count": primary_event_count,
         "matured_costed_oof_label_count": int(len(labelled)),
         "immature_oof_event_count": immature_event_count,
         "oof_fold_count": V4Y_OOF_FOLD_COUNT,
@@ -252,8 +268,50 @@ def _training_oof_labels(
             "round_trip_cost_bps": ROUND_TRIP_COST_BPS,
         },
     }
-    return labelled, diagnostics
 
+
+def _training_oof_labels(
+    bars: DataFrame,
+    primary_events: DataFrame,
+    train_end: int,
+) -> tuple[DataFrame, dict[str, Any]]:
+    """Label OOF BUY events with isolated replays of the exact V4-AF geometry."""
+    train_bars = bars.iloc[:train_end].reset_index(drop=True)
+    dates = pd.to_datetime(train_bars["date"], utc=True, errors="coerce")
+    if dates.isna().any() or dates.duplicated().any():
+        raise ValueError("v4af_training_timestamps_invalid")
+    index_by_timestamp = {
+        pd.Timestamp(timestamp): index for index, timestamp in enumerate(dates.tolist())
+    }
+    records: list[dict[str, Any]] = []
+    immature_event_count = 0
+    for event in primary_events.to_dict(orient="records"):
+        record = _label_one_oof_primary_event(
+            event,
+            train_bars,
+            index_by_timestamp,
+            train_end,
+        )
+        if record is None:
+            immature_event_count += 1
+        else:
+            records.append(record)
+    if not records:
+        raise ValueError("v4af_meta_oof_labels_empty")
+
+    labelled = (
+        DataFrame.from_records(records)
+        .sort_values("event_index")
+        .reset_index(drop=True)
+    )
+    _validate_training_label_frame(labelled, train_end)
+    diagnostics = _training_label_diagnostics(
+        labelled,
+        len(primary_events),
+        immature_event_count,
+        train_end,
+    )
+    return labelled, diagnostics
 
 def _join_event_features(
     features: DataFrame,
@@ -534,10 +592,8 @@ def _format_percent(value: Any) -> str:
     return "N/A" if value is None else f"{float(value):.2f}"
 
 
-def _render_step_summary(report: dict[str, Any]) -> str:
-    if report.get("schema_version") != SCHEMA:
-        raise ValueError("v4af_step_summary_report_schema_invalid")
-    lines = [
+def _step_summary_header(report: dict[str, Any]) -> list[str]:
+    return [
         "## AliX V4-AF ETHUSDT Meta-Model on Fixed Trailing Geometry",
         "",
         f"Commit SHA: {report['commit_sha']}",
@@ -583,73 +639,101 @@ def _render_step_summary(report: dict[str, Any]) -> str:
         ),
         ("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|"),
     ]
-    for item in report["candidates"]:
-        metrics = item["metrics"]
-        calibration = item.get("threshold_calibration") or {}
-        threshold_text = (
-            "N/A"
-            if item.get("selected_meta_probability_threshold") is None
-            else f"{float(item['selected_meta_probability_threshold']):.6f}"
-        )
-        calibration_fraction = calibration.get("selected_calibration_fraction")
-        lines.append(
-            f"| {item['mode']} "
-            f"| {_format_percent(None if item.get('target_accept_fraction') is None else float(item['target_accept_fraction']) * 100.0)} "
-            f"| {threshold_text} "
-            f"| {_format_percent(None if calibration_fraction is None else float(calibration_fraction) * 100.0)} "
-            f"| {item.get('primary_buy_event_count', 0)} "
-            f"| {item.get('meta_accepted_buy_count', 0)} "
-            f"| {metrics.get('trade_count', 0)} "
-            f"| {_format_pf(metrics.get('gross_profit_factor'), bool(metrics.get('gross_profit_factor_infinite_no_losses')))} "
-            f"| {_format_pf(metrics.get('net_profit_factor'), bool(metrics.get('net_profit_factor_infinite_no_losses')))} "
-            f"| {_format_percent(metrics.get('max_drawdown_percent'))} "
-            f"| {_format_percent(metrics.get('net_pnl_total_usd'))} "
-            f"| {'PASS' if item.get('acceptance_target_met') else 'NO'} "
-            f"| {item['status']} |"
-        )
+
+
+def _step_summary_candidate_row(item: dict[str, Any]) -> str:
+    metrics = item["metrics"]
+    calibration = item.get("threshold_calibration") or {}
+    raw_threshold = item.get("selected_meta_probability_threshold")
+    threshold_text = "N/A" if raw_threshold is None else f"{float(raw_threshold):.6f}"
+    calibration_fraction = calibration.get("selected_calibration_fraction")
+    target_fraction = item.get("target_accept_fraction")
+    target_percent = (
+        None if target_fraction is None else float(target_fraction) * 100.0
+    )
+    accepted_percent = (
+        None
+        if calibration_fraction is None
+        else float(calibration_fraction) * 100.0
+    )
+    return (
+        f"| {item['mode']} "
+        f"| {_format_percent(target_percent)} "
+        f"| {threshold_text} "
+        f"| {_format_percent(accepted_percent)} "
+        f"| {item.get('primary_buy_event_count', 0)} "
+        f"| {item.get('meta_accepted_buy_count', 0)} "
+        f"| {metrics.get('trade_count', 0)} "
+        f"| {_format_pf(metrics.get('gross_profit_factor'), bool(metrics.get('gross_profit_factor_infinite_no_losses')))} "
+        f"| {_format_pf(metrics.get('net_profit_factor'), bool(metrics.get('net_profit_factor_infinite_no_losses')))} "
+        f"| {_format_percent(metrics.get('max_drawdown_percent'))} "
+        f"| {_format_percent(metrics.get('net_pnl_total_usd'))} "
+        f"| {'PASS' if item.get('acceptance_target_met') else 'NO'} "
+        f"| {item['status']} |"
+    )
+
+
+def _step_summary_footer(report: dict[str, Any]) -> list[str]:
     meta = report["meta_model"]
     training = meta.get("training_diagnostics") or {}
     fit = meta.get("fit_diagnostics") or {}
-    lines.extend(
-        [
-            "",
-            f"Candidate rows: {len(report['candidates'])}; model fit performed: {meta['model_fit_performed']}.",
-            (
-                f"OOF labels: {training.get('matured_costed_oof_label_count', 0)}; "
-                f"fit rows: {fit.get('fit_rows', 0)}; calibration rows: {fit.get('calibration_rows', 0)}."
-            ),
-            (
-                f"Rows meeting Trades >30, Net PF >1.5, and Max DD <=15%: "
-                f"{sum(bool(item.get('acceptance_target_met')) for item in report['candidates'])}."
-            ),
-            "",
-            (
-                "V4-AE selected-geometry reference (Step=1.5): 42 trades, Net PF=1.1538, "
-                "Max DD=9.44%. V4-AE historical best (Step=2.0): 42 trades, "
-                "Net PF=1.2477, Max DD=8.97%."
-            ),
-            "",
-            (
-                "Safety: Champion=null, order_permission=false, trading_authorization=NO-GO, "
-                "private_api_calls=0, real_order_attempts=0, sequence_model_used=false."
-            ),
-            "Research only; no private API, credentials, orders, or execution API are used.",
-            (
-                "Promotion status: BLOCKED_PENDING_INDEPENDENT_OOS_AND_OWNER_REVIEW. "
-                "No automatic Champion selection."
-            ),
-        ]
+    accepted_count = sum(
+        bool(item.get("acceptance_target_met")) for item in report["candidates"]
     )
+    return [
+        "",
+        f"Candidate rows: {len(report['candidates'])}; model fit performed: {meta['model_fit_performed']}.",
+        (
+            f"OOF labels: {training.get('matured_costed_oof_label_count', 0)}; "
+            f"fit rows: {fit.get('fit_rows', 0)}; calibration rows: {fit.get('calibration_rows', 0)}."
+        ),
+        (
+            f"Rows meeting Trades >30, Net PF >1.5, and Max DD <=15%: "
+            f"{accepted_count}."
+        ),
+        "",
+        (
+            "V4-AE selected-geometry reference (Step=1.5): 42 trades, Net PF=1.1538, "
+            "Max DD=9.44%. V4-AE historical best (Step=2.0): 42 trades, "
+            "Net PF=1.2477, Max DD=8.97%."
+        ),
+        "",
+        (
+            "Safety: Champion=null, order_permission=false, trading_authorization=NO-GO, "
+            "private_api_calls=0, real_order_attempts=0, sequence_model_used=false."
+        ),
+        "Research only; no private API, credentials, orders, or execution API are used.",
+        (
+            "Promotion status: BLOCKED_PENDING_INDEPENDENT_OOS_AND_OWNER_REVIEW. "
+            "No automatic Champion selection."
+        ),
+    ]
+
+
+def _render_step_summary(report: dict[str, Any]) -> str:
+    if report.get("schema_version") != SCHEMA:
+        raise ValueError("v4af_step_summary_report_schema_invalid")
+    lines = _step_summary_header(report)
+    lines.extend(_step_summary_candidate_row(item) for item in report["candidates"])
+    lines.extend(_step_summary_footer(report))
     return "\n".join(lines) + "\n"
 
-
-def _validate_report(report: dict[str, Any], commit_sha: str) -> None:
+def _validate_report_identity(
+    report: dict[str, Any],
+    commit_sha: str,
+) -> None:
     if report.get("schema_version") != SCHEMA or report.get("commit_sha") != commit_sha:
         raise ValueError("v4af_report_identity_invalid")
+
+
+def _validate_report_scope(report: dict[str, Any]) -> None:
     if report.get("symbols") != [SYMBOL] or report.get("timeframes") != [TIMEFRAME]:
         raise ValueError("v4af_report_scope_invalid")
     if report.get("mode") != MODE or len(report.get("candidates", [])) != 4:
         raise ValueError("v4af_candidate_matrix_invalid")
+
+
+def _validate_report_holdout(report: dict[str, Any]) -> None:
     chronological = report.get("chronological_evaluation")
     if (
         report.get("final_holdout_used") is not False
@@ -658,6 +742,9 @@ def _validate_report(report: dict[str, Any], commit_sha: str) -> None:
         or chronological.get("final_15_percent_holdout_untouched") is not True
     ):
         raise ValueError("v4af_final_holdout_must_remain_untouched")
+
+
+def _validate_report_thresholds(report: dict[str, Any]) -> None:
     fractions = [
         item.get("target_accept_fraction")
         for item in report["candidates"]
@@ -665,18 +752,28 @@ def _validate_report(report: dict[str, Any], commit_sha: str) -> None:
     ]
     if fractions != list(TARGET_ACCEPT_FRACTIONS):
         raise ValueError("v4af_meta_threshold_matrix_invalid")
+
+
+def _validate_report_safety(report: dict[str, Any]) -> None:
     safety = report["safety"]
-    if (
-        safety.get("Champion") is not None
-        or safety.get("order_permission") is not False
-        or safety.get("trading_authorization") != "NO-GO"
-        or safety.get("private_api_calls") != 0
-        or safety.get("real_order_attempts") != 0
-        or safety.get("sequence_model_used") is not False
-    ):
+    safety_is_closed = (
+        safety.get("Champion") is None
+        and safety.get("order_permission") is False
+        and safety.get("trading_authorization") == "NO-GO"
+        and safety.get("private_api_calls") == 0
+        and safety.get("real_order_attempts") == 0
+        and safety.get("sequence_model_used") is False
+    )
+    if not safety_is_closed:
         raise ValueError("v4af_fail_closed_safety_contract_invalid")
+
+
+def _validate_report_candidates(report: dict[str, Any]) -> None:
     for item in report["candidates"]:
-        if item.get("symbol") != SYMBOL or item.get("timeframe") != TIMEFRAME:
+        candidate_scope_is_valid = (
+            item.get("symbol") == SYMBOL and item.get("timeframe") == TIMEFRAME
+        )
+        if not candidate_scope_is_valid:
             raise ValueError("v4af_candidate_scope_invalid")
         if item.get("sequence_model_used") is not False:
             raise ValueError("v4af_sequence_model_forbidden")
@@ -686,6 +783,14 @@ def _validate_report(report: dict[str, Any], commit_sha: str) -> None:
         }:
             raise ValueError("v4af_candidate_status_invalid")
 
+
+def _validate_report(report: dict[str, Any], commit_sha: str) -> None:
+    _validate_report_identity(report, commit_sha)
+    _validate_report_scope(report)
+    _validate_report_holdout(report)
+    _validate_report_thresholds(report)
+    _validate_report_safety(report)
+    _validate_report_candidates(report)
 
 def _write_csv(
     path: Path,
@@ -829,16 +934,11 @@ def _build_report(
     return report
 
 
-def run_v4af(
+def _load_research_context(
     input_dir: Path,
-    output_report: Path,
-    output_trades_csv: Path,
-    output_decisions_csv: Path,
-    *,
     days: int,
     commit_sha: str,
-) -> dict[str, Any]:
-    _validate_run_request(days, commit_sha)
+) -> tuple[dict[str, Any], DataFrame, int, int, DataFrame, DataFrame, Series]:
     source_bars, provenance = _load_manifested_data(
         input_dir,
         SYMBOL,
@@ -848,7 +948,6 @@ def run_v4af(
     bars = resample_ohlcv(source_bars, TIMEFRAME)
     train_end, forward_end = _outer_boundaries(len(bars))
     research_bars = bars.iloc[:forward_end].reset_index(drop=True)
-
     profiles = build_feature_profiles(
         research_bars,
         profile_names=(FEATURE_PROFILE,),
@@ -861,13 +960,28 @@ def run_v4af(
     )
     if not set(V4Y_META_FEATURE_COLUMNS).issubset(features.columns):
         raise ValueError("v4af_meta_feature_schema_invalid")
+    return (
+        provenance,
+        bars,
+        train_end,
+        forward_end,
+        research_bars,
+        features,
+        primary_buy_signal,
+    )
 
+
+def _primary_signal_evaluation(
+    primary_buy_signal: Series,
+    train_end: int,
+    forward_end: int,
+) -> tuple[dict[str, int], dict[str, Any], list[int]]:
     train_gate = evaluate_primary_train_sample_gate(
         primary_buy_signal,
         train_start_index=V4Y_EMA_TREND_PERIOD,
         train_end_index=train_end,
     )
-    primary_signal_counts = {
+    signal_counts = {
         "research_window_primary_buy_count": int(primary_buy_signal.sum()),
         "train_primary_buy_count": int(train_gate["observed_primary_buy_count"]),
         "forward_validation_primary_buy_count": int(
@@ -879,12 +993,18 @@ def run_v4af(
         train_end,
         forward_end,
     )
+    return signal_counts, train_gate, event_indices
 
-    control_id = _candidate_id(CONTROL_MODE)
-    control, control_trades, control_decisions = _run_economic_candidate(
+
+def _run_unfiltered_control(
+    research_bars: DataFrame,
+    event_indices: list[int],
+    forward_end: int,
+) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
+    return _run_economic_candidate(
         bars=research_bars,
         event_indices=event_indices,
-        candidate_id=control_id,
+        candidate_id=_candidate_id(CONTROL_MODE),
         mode=CONTROL_MODE,
         threshold=None,
         target_accept_fraction=None,
@@ -892,106 +1012,252 @@ def run_v4af(
         forward_end=forward_end,
         calibration_diagnostics=None,
     )
-    candidates = [control]
-    trades = list(control_trades)
-    decisions = list(control_decisions)
 
-    training_diagnostics: dict[str, Any] = {
-        "primary_sample_gate": train_gate,
-    }
-    fit_diagnostics: dict[str, Any] = {}
-    threshold_diagnostics: list[dict[str, Any]] = []
-    model_fit_performed = False
 
+def _meta_training_sets(
+    research_bars: DataFrame,
+    features: DataFrame,
+    primary_buy_signal: Series,
+    train_end: int,
+) -> tuple[DataFrame, DataFrame, dict[str, Any]]:
+    oof_events = generate_v4y_oof_primary_events(
+        primary_buy_signal,
+        start_index=V4Y_EMA_TREND_PERIOD,
+        stop_index=train_end,
+        fold_count=V4Y_OOF_FOLD_COUNT,
+    )
+    labelled_events, training_diagnostics = _training_oof_labels(
+        research_bars,
+        oof_events,
+        train_end,
+    )
+    training = _join_event_features(features, labelled_events)
+    fit_rows, calibration_rows = split_meta_fit_calibration(
+        training,
+        outer_train_end_index=train_end,
+        calibration_fraction=V4Y_META_CALIBRATION_FRACTION,
+        minimum_fit_rows=V4Y_MINIMUM_FIT_ROWS,
+        minimum_class_rows=V4Y_MINIMUM_CLASS_ROWS,
+    )
+    return fit_rows, calibration_rows, training_diagnostics
+
+
+def _meta_training_skip_reason(error: ValueError) -> str | None:
+    code = str(error)
+    if code == "v4x_oof_primary_signals_empty":
+        return code
+    if code.startswith("v4af_meta_oof_labels_"):
+        return code
+    if code.startswith("v4x_insufficient_meta_"):
+        return code
+    return None
+
+
+def _prepare_meta_training(
+    research_bars: DataFrame,
+    features: DataFrame,
+    primary_buy_signal: Series,
+    train_end: int,
+    train_gate: dict[str, Any],
+) -> dict[str, Any]:
     if not bool(train_gate["passed"]):
-        skip_reason = "v4y_insufficient_primary_signals"
-    else:
-        try:
-            oof_events = generate_v4y_oof_primary_events(
-                primary_buy_signal,
-                start_index=V4Y_EMA_TREND_PERIOD,
-                stop_index=train_end,
-                fold_count=V4Y_OOF_FOLD_COUNT,
-            )
-            labelled_events, training_diagnostics = _training_oof_labels(
-                research_bars,
-                oof_events,
-                train_end,
-            )
-            training = _join_event_features(features, labelled_events)
-            fit_rows, calibration_rows = split_meta_fit_calibration(
-                training,
-                outer_train_end_index=train_end,
-                calibration_fraction=V4Y_META_CALIBRATION_FRACTION,
-                minimum_fit_rows=V4Y_MINIMUM_FIT_ROWS,
-                minimum_class_rows=V4Y_MINIMUM_CLASS_ROWS,
-            )
-        except ValueError as error:
-            code = str(error)
-            if code == "v4x_oof_primary_signals_empty" or code.startswith(
-                "v4af_meta_oof_labels_"
-            ):
-                skip_reason = code
-            elif code.startswith("v4x_insufficient_meta_"):
-                skip_reason = code
-            else:
-                raise
-        else:
-            feature_columns = list(features.columns)
-            model, fit_diagnostics = fit_lightgbm_meta_filter(
-                fit_rows.loc[:, feature_columns],
-                fit_rows["meta_label"],
-                calibration_rows.loc[:, feature_columns],
-                target_accept_fraction=0.50,
-            )
-            calibration_probabilities = predict_meta_probabilities(
-                model,
-                calibration_rows.loc[:, feature_columns],
-            )
-            threshold_diagnostics = _calibrate_thresholds(calibration_probabilities)
-            validation_probabilities = _validation_probability_by_index(
-                features,
-                event_indices,
-                model,
-            )
-            for calibration in threshold_diagnostics:
-                fraction = float(calibration["target_accept_fraction"])
-                threshold = float(calibration["selected_threshold"])
-                candidate_id = _candidate_id(MODE, fraction)
-                candidate, candidate_trades, candidate_decisions = (
-                    _run_economic_candidate(
-                        bars=research_bars,
-                        event_indices=event_indices,
-                        candidate_id=candidate_id,
-                        mode=MODE,
-                        threshold=threshold,
-                        target_accept_fraction=fraction,
-                        probability_by_index=validation_probabilities,
-                        forward_end=forward_end,
-                        calibration_diagnostics=calibration,
-                    )
-                )
-                candidates.append(candidate)
-                trades.extend(candidate_trades)
-                decisions.extend(candidate_decisions)
-            model_fit_performed = True
-            skip_reason = ""
-    if not model_fit_performed:
-        for fraction in TARGET_ACCEPT_FRACTIONS:
-            candidates.append(_skipped_meta_candidate(fraction, skip_reason))
+        return {
+            "skip_reason": "v4y_insufficient_primary_signals",
+            "training_diagnostics": {"primary_sample_gate": train_gate},
+        }
+    try:
+        fit_rows, calibration_rows, training_diagnostics = _meta_training_sets(
+            research_bars,
+            features,
+            primary_buy_signal,
+            train_end,
+        )
+    except ValueError as error:
+        skip_reason = _meta_training_skip_reason(error)
+        if skip_reason is None:
+            raise
+        return {
+            "skip_reason": skip_reason,
+            "training_diagnostics": {"primary_sample_gate": train_gate},
+        }
+    training_diagnostics["primary_sample_gate"] = train_gate
+    return {
+        "skip_reason": None,
+        "fit_rows": fit_rows,
+        "calibration_rows": calibration_rows,
+        "training_diagnostics": training_diagnostics,
+    }
 
+
+def _fit_and_calibrate_meta_model(
+    features: DataFrame,
+    fit_rows: DataFrame,
+    calibration_rows: DataFrame,
+) -> tuple[Any, dict[str, Any], list[dict[str, Any]]]:
+    feature_columns = list(features.columns)
+    model, fit_diagnostics = fit_lightgbm_meta_filter(
+        fit_rows.loc[:, feature_columns],
+        fit_rows["meta_label"],
+        calibration_rows.loc[:, feature_columns],
+        target_accept_fraction=0.50,
+    )
+    calibration_probabilities = predict_meta_probabilities(
+        model,
+        calibration_rows.loc[:, feature_columns],
+    )
+    threshold_diagnostics = _calibrate_thresholds(calibration_probabilities)
+    return model, fit_diagnostics, threshold_diagnostics
+
+
+def _run_meta_threshold_candidates(
+    research_bars: DataFrame,
+    features: DataFrame,
+    event_indices: list[int],
+    forward_end: int,
+    model: Any,
+    threshold_diagnostics: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    validation_probabilities = _validation_probability_by_index(
+        features,
+        event_indices,
+        model,
+    )
+    candidates: list[dict[str, Any]] = []
+    trades: list[dict[str, Any]] = []
+    decisions: list[dict[str, Any]] = []
+    for calibration in threshold_diagnostics:
+        fraction = float(calibration["target_accept_fraction"])
+        threshold = float(calibration["selected_threshold"])
+        candidate, candidate_trades, candidate_decisions = _run_economic_candidate(
+            bars=research_bars,
+            event_indices=event_indices,
+            candidate_id=_candidate_id(MODE, fraction),
+            mode=MODE,
+            threshold=threshold,
+            target_accept_fraction=fraction,
+            probability_by_index=validation_probabilities,
+            forward_end=forward_end,
+            calibration_diagnostics=calibration,
+        )
+        candidates.append(candidate)
+        trades.extend(candidate_trades)
+        decisions.extend(candidate_decisions)
+    return candidates, trades, decisions
+
+
+def _skipped_meta_candidates(reason: str) -> list[dict[str, Any]]:
+    return [
+        _skipped_meta_candidate(fraction, reason)
+        for fraction in TARGET_ACCEPT_FRACTIONS
+    ]
+
+
+def _run_meta_experiment(
+    research_bars: DataFrame,
+    features: DataFrame,
+    primary_buy_signal: Series,
+    train_end: int,
+    forward_end: int,
+    event_indices: list[int],
+    train_gate: dict[str, Any],
+) -> dict[str, Any]:
+    prepared = _prepare_meta_training(
+        research_bars,
+        features,
+        primary_buy_signal,
+        train_end,
+        train_gate,
+    )
+    training_diagnostics = prepared["training_diagnostics"]
+    if prepared["skip_reason"] is not None:
+        skip_reason = str(prepared["skip_reason"])
+        return {
+            "training_diagnostics": training_diagnostics,
+            "fit_diagnostics": {},
+            "threshold_diagnostics": [],
+            "model_fit_performed": False,
+            "candidates": _skipped_meta_candidates(skip_reason),
+            "trades": [],
+            "decisions": [],
+        }
+
+    model, fit_diagnostics, threshold_diagnostics = _fit_and_calibrate_meta_model(
+        features,
+        prepared["fit_rows"],
+        prepared["calibration_rows"],
+    )
+    candidates, trades, decisions = _run_meta_threshold_candidates(
+        research_bars,
+        features,
+        event_indices,
+        forward_end,
+        model,
+        threshold_diagnostics,
+    )
+    return {
+        "training_diagnostics": training_diagnostics,
+        "fit_diagnostics": fit_diagnostics,
+        "threshold_diagnostics": threshold_diagnostics,
+        "model_fit_performed": True,
+        "candidates": candidates,
+        "trades": trades,
+        "decisions": decisions,
+    }
+
+
+def run_v4af(
+    input_dir: Path,
+    output_report: Path,
+    output_trades_csv: Path,
+    output_decisions_csv: Path,
+    *,
+    days: int,
+    commit_sha: str,
+) -> dict[str, Any]:
+    _validate_run_request(days, commit_sha)
+    (
+        provenance,
+        bars,
+        train_end,
+        forward_end,
+        research_bars,
+        features,
+        primary_buy_signal,
+    ) = _load_research_context(input_dir, days, commit_sha)
+    signal_counts, train_gate, event_indices = _primary_signal_evaluation(
+        primary_buy_signal,
+        train_end,
+        forward_end,
+    )
+    control, control_trades, control_decisions = _run_unfiltered_control(
+        research_bars,
+        event_indices,
+        forward_end,
+    )
+    meta = _run_meta_experiment(
+        research_bars,
+        features,
+        primary_buy_signal,
+        train_end,
+        forward_end,
+        event_indices,
+        train_gate,
+    )
+    candidates = [control, *meta["candidates"]]
+    trades = [*control_trades, *meta["trades"]]
+    decisions = [*control_decisions, *meta["decisions"]]
     report = _build_report(
         commit_sha,
         provenance,
         bars,
         train_end,
         forward_end,
-        primary_signal_counts,
+        signal_counts,
         train_gate,
-        training_diagnostics,
-        fit_diagnostics,
-        threshold_diagnostics,
-        model_fit_performed,
+        meta["training_diagnostics"],
+        meta["fit_diagnostics"],
+        meta["threshold_diagnostics"],
+        bool(meta["model_fit_performed"]),
         candidates,
         trades,
         decisions,
@@ -1033,7 +1299,6 @@ def run_v4af(
     _write_csv(output_decisions_csv, decisions, decision_columns)
     print(_render_step_summary(report), end="")
     return report
-
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
