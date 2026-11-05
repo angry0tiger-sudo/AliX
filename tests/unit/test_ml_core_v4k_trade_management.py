@@ -5,9 +5,11 @@ from typing import Any
 import pytest
 
 from scripts.run_ml_core_v4k_trade_management import (
+    _validate_trade_ledger,
     trade_management_config,
     validate_v4j_baseline,
 )
+from services.ml_core.economic_backtest import TradeManagementConfig
 
 
 def _source_report() -> dict[str, Any]:
@@ -92,6 +94,28 @@ def test_trade_management_config_rejects_invalid_parameters() -> None:
         trade_management_config(take_profit_atr_multiplier=-1.0)
     with pytest.raises(ValueError, match="horizon_candles"):
         trade_management_config(horizon_candles=0)
+
+
+def test_trade_ledger_respects_optional_confidence_floor() -> None:
+    trade = {
+        "direction": "LONG",
+        "entry_confidence": 0.40,
+        "bars_held": 1,
+        "stop_loss_price": 95.0,
+        "barrier_reference_price": 100.0,
+        "take_profit_price": 105.0,
+    }
+
+    assert _validate_trade_ledger(
+        [trade],
+        TradeManagementConfig(confidence_threshold=None),
+    ) == {"LONG": 1, "SHORT": 0}
+
+    with pytest.raises(RuntimeError, match="confidence_invariant"):
+        _validate_trade_ledger(
+            [trade],
+            TradeManagementConfig(confidence_threshold=0.55),
+        )
 
 
 def test_v4j_baseline_requires_exact_spot_only_reference_and_safety() -> None:

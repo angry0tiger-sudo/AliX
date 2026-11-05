@@ -310,7 +310,11 @@ def _validate_trade_ledger(
         counts[direction] += 1
         if direction != "LONG":
             raise RuntimeError("economic_spot_only_position_invariant_violation")
-        if float(trade.get("entry_confidence", 0.0)) < management.confidence_threshold:
+        if (
+            management.confidence_threshold is not None
+            and float(trade.get("entry_confidence", 0.0))
+            < management.confidence_threshold
+        ):
             raise RuntimeError("v4k_trade_confidence_invariant_violation")
         held = int(trade.get("bars_held", 0))
         if held < 1 or held > management.horizon_candles:
