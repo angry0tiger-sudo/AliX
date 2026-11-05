@@ -348,9 +348,7 @@ def _fit_meta_model(
     if not bool(train_gate.get("passed")):
         return {
             "skip_reason": "v4ai_insufficient_adx_filtered_primary_signals",
-            "separation_diagnostics": {
-                "status": "NOT_AVAILABLE_MODEL_NOT_FIT"
-            },
+            "separation_diagnostics": {"status": "NOT_AVAILABLE_MODEL_NOT_FIT"},
         }
     try:
         training, training_diagnostics = _oof_training_frame(
@@ -412,9 +410,7 @@ def _fit_meta_model(
             "split_diagnostics": cast(
                 dict[str, Any], getattr(error, "diagnostics", {})
             ),
-            "separation_diagnostics": {
-                "status": "NOT_AVAILABLE_MODEL_NOT_FIT"
-            },
+            "separation_diagnostics": {"status": "NOT_AVAILABLE_MODEL_NOT_FIT"},
         }
 
 
@@ -533,7 +529,9 @@ def _skipped_decision_rows(
             "mode": META_CANDIDATE,
             "event_index": index,
             "signal_timestamp": pd.Timestamp(bars["date"].iloc[index]).isoformat(),
-            "execution_timestamp": pd.Timestamp(bars["date"].iloc[index + 1]).isoformat(),
+            "execution_timestamp": pd.Timestamp(
+                bars["date"].iloc[index + 1]
+            ).isoformat(),
             "meta_probability": None,
             "selected_meta_probability_threshold": None,
             "meta_filter_decision": "SKIPPED",
@@ -677,9 +675,7 @@ def _run_exit_geometry_matrix(
                 ],
                 "max_drawdown_percent": metrics["max_drawdown_percent"],
                 "net_pnl_total_usd": metrics["net_pnl_total_usd"],
-                "mean_unscaled_net_expectancy_usd_at_full_equity": _expectancy(
-                    trades
-                ),
+                "mean_unscaled_net_expectancy_usd_at_full_equity": _expectancy(trades),
                 "signal_count": len(event_indices),
                 "evaluation_split": "FORWARD_VALIDATION",
                 "meta_model_used": False,
@@ -781,7 +777,9 @@ def _validate_report(report: dict[str, Any], commit_sha: str) -> None:
         CANDIDATE_NAMES
     ):
         raise ValueError("v4ai_candidate_matrix_invalid")
-    if any(item.get("sequence_model_used") is not False for item in report["candidates"]):
+    if any(
+        item.get("sequence_model_used") is not False for item in report["candidates"]
+    ):
         raise ValueError("v4ai_sequence_model_forbidden")
     _validate_exit_matrix(report.get("exit_geometry_matrix", {}))
     safety = report.get("safety", {})
@@ -810,7 +808,10 @@ def _validate_report(report: dict[str, Any], commit_sha: str) -> None:
         and 0.0 <= float(separation.get("pr_auc_average_precision", -1.0)) <= 1.0
     ):
         raise ValueError("v4ai_meta_threshold_or_separation_contract_invalid")
-    elif not meta.get("enabled") and separation.get("status") != "NOT_AVAILABLE_MODEL_NOT_FIT":
+    elif (
+        not meta.get("enabled")
+        and separation.get("status") != "NOT_AVAILABLE_MODEL_NOT_FIT"
+    ):
         raise ValueError("v4ai_separation_status_missing")
 
 
@@ -902,7 +903,7 @@ def _render_step_summary(report: dict[str, Any]) -> str:
             f"| {float(cell['trailing_step_atr']):.1f} "
             f"| {float(cell['round_trip_cost_bps']):.0f} "
             f"| {cell['trade_count']} "
-            f"| {'N/A' if cell['win_rate'] is None else f'{float(cell['win_rate']) * 100.0:.2f}'} "
+            f"| {'N/A' if cell['win_rate'] is None else f'{float(cell["win_rate"]) * 100.0:.2f}'} 
             f"| {_format_pf(cell)} "
             f"| {float(cell['max_drawdown_percent']):.2f} "
             f"| {float(cell['net_pnl_total_usd']):.2f} "
@@ -1028,9 +1029,7 @@ def run_v4ai(
         base_features,
         base_primary_signal,
     ) = v4af._load_research_context(input_dir, days, commit_sha)
-    adx_signal, adx_diagnostics = _apply_adx_filter(
-        base_primary_signal, base_features
-    )
+    adx_signal, adx_diagnostics = _apply_adx_filter(base_primary_signal, base_features)
     base_event_indices = v4af._eligible_primary_event_indices(
         base_primary_signal, train_end, forward_end
     )
@@ -1099,9 +1098,7 @@ def run_v4ai(
         )
         probabilities = {}
         meta_trades = []
-        meta_decisions = _skipped_decision_rows(
-            research_bars, adx_event_indices
-        )
+        meta_decisions = _skipped_decision_rows(research_bars, adx_event_indices)
     candidates = [base_candidate, adx_candidate, meta_candidate]
     trades = [*base_trades, *adx_trades, *meta_trades]
     decisions = [*base_decisions, *adx_decisions, *meta_decisions]
