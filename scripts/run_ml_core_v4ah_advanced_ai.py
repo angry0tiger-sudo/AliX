@@ -115,22 +115,25 @@ def _trade_management(step: float) -> Any:
     return replace(base, trailing_step_atr=float(step))
 
 
-def _single_event_replay(
-    bars: DataFrame,
-    event_index: int,
-    window_end: int,
-    trailing_step: float,
-) -> tuple[dict[str, Any], int]:
+
+def _validate_event_replay_window(
+    bars: DataFrame, event_index: int, window_end: int
+) -> int:
     required_end = event_index + v4af.HORIZON_BARS_VALUE + 2
     if event_index < 0 or required_end > window_end or window_end > len(bars):
         raise ValueError("v4ah_counterfactual_event_window_invalid")
-    context_start = max(0, event_index - REGIME_WARMUP_BARS)
-    local = bars.iloc[context_start:required_end].reset_index(drop=True)
-    local_event = event_index - context_start
+    return required_end
+
+
+def _simulate_local_event(
+    local_bars: DataFrame, local_event_index: int, trailing_step: float
+) -> dict[str, Any]:
     build_actions = getattr(v4af, "_build_forward_actions")
-    actions = build_actions(local, [local_event], len(local))
+    actions = build_actions(
+        local_bars, [local_event_index], len(local_bars)
+    )
     replay = simulate_signals(
-        local,
+        local_bars,
         actions,
         getattr(v4af, "_execution_config")(),
         trade_management_config=_trade_management(trailing_step),
@@ -138,18 +141,38 @@ def _single_event_replay(
     trades = replay["trades"]
     if len(trades) != 1:
         raise ValueError("v4ah_isolated_event_trade_count_invalid")
-    timestamps = pd.to_datetime(local["date"], utc=True, errors="coerce")
+    return cast(dict[str, Any], trades[0])
+
+
+def _resolve_local_exit_index(
+    local_bars: DataFrame, trade: dict[str, Any], local_event_index: int
+) -> int:
+    timestamps = pd.to_datetime(local_bars["date"], utc=True, errors="coerce")
     if timestamps.isna().any() or timestamps.duplicated().any():
         raise ValueError("v4ah_isolated_event_timestamps_invalid")
-    exit_timestamp = pd.Timestamp(str(trades[0]["exit_timestamp"]))
+    exit_timestamp = pd.Timestamp(str(trade["exit_timestamp"]))
     if exit_timestamp.tzinfo is None:
         raise ValueError("v4ah_isolated_event_exit_timezone_invalid")
     lookup = {pd.Timestamp(value): index for index, value in enumerate(timestamps)}
     exit_local = lookup.get(exit_timestamp.tz_convert("UTC"))
-    if exit_local is None or exit_local <= local_event:
+    if exit_local is None or exit_local <= local_event_index:
         raise ValueError("v4ah_isolated_event_exit_index_invalid")
-    return cast(dict[str, Any], trades[0]), context_start + exit_local
+    return int(exit_local)
 
+
+def _single_event_replay(
+    bars: DataFrame,
+    event_index: int,
+    window_end: int,
+    trailing_step: float,
+) -> tuple[dict[str, Any], int]:
+    required_end = _validate_event_replay_window(bars, event_index, window_end)
+    context_start = max(0, event_index - REGIME_WARMUP_BARS)
+    local = bars.iloc[context_start:required_end].reset_index(drop=True)
+    local_event = event_index - context_start
+    trade = _simulate_local_event(local, local_event, trailing_step)
+    exit_local = _resolve_local_exit_index(local, trade, local_event)
+    return trade, context_start + exit_local
 
 def _counterfactual_training_data(
     bars: DataFrame,
@@ -319,6 +342,149 @@ def _fixed_meta_candidate(
     return candidate, trades, decisions
 
 
+
+def _policy_event_decision(
+    event_index: int,
+    probability: float | None,
+    threshold: float,
+    step: float,
+    name: str,
+    accepted: bool,
+    status: str,
+) -> dict[str, Any]:
+    return {
+        "candidate_id": _candidate_id(name),
+        "symbol": SYMBOL,
+        "timeframe": TIMEFRAME,
+        "mode": name,
+        "event_index": event_index,
+        "meta_probability": probability,
+        "selected_threshold": threshold,
+        "meta_filter_decision": "ACCEPT" if accepted else "REJECT",
+        "trailing_step_atr": step if accepted else None,
+        "portfolio_execution": status,
+        "split_role": "FORWARD_VALIDATION",
+    }
+
+
+def _execute_accepted_policy_event(
+    bars: DataFrame,
+    event_index: int,
+    forward_end: int,
+    step: float,
+    probability: float,
+    payoff_ratio: float | None,
+    last_exit_index: int,
+    name: str,
+) -> tuple[dict[str, Any] | None, float, int, str]:
+    if event_index + 1 <= last_exit_index:
+        return None, 0.0, last_exit_index, "SKIPPED_OVERLAPPING_POSITION"
+    trade, exit_index = _single_event_replay(
+        bars, event_index, forward_end, step
+    )
+    fraction = 1.0
+    if payoff_ratio is not None:
+        fraction = advanced.fractional_kelly_fraction(probability, payoff_ratio)
+    if fraction <= 0.0:
+        return None, 0.0, last_exit_index, "SKIPPED_ZERO_KELLY_FRACTION"
+    enriched = {
+        "candidate_id": _candidate_id(name),
+        "symbol": SYMBOL,
+        "timeframe": TIMEFRAME,
+        "mode": name,
+        "event_index": event_index,
+        "trailing_step_atr": step,
+        "meta_probability": probability,
+        "unscaled_net_pnl_usd": float(trade["net_pnl_usd"]),
+        **trade,
+    }
+    return enriched, fraction, exit_index, "EXECUTED"
+
+
+def _process_policy_event(
+    bars: DataFrame,
+    event_index: int,
+    forward_end: int,
+    probability: float | None,
+    threshold: float,
+    step: float,
+    payoff_ratio: float | None,
+    last_exit_index: int,
+    name: str,
+) -> tuple[dict[str, Any] | None, float, int, dict[str, Any]]:
+    probability_value = 0.0 if probability is None else float(probability)
+    accepted = probability is not None and probability_value >= threshold
+    if not accepted:
+        status = "REJECTED_BY_META"
+        trade = None
+        fraction = 0.0
+        next_exit_index = last_exit_index
+    else:
+        trade, fraction, next_exit_index, status = _execute_accepted_policy_event(
+            bars,
+            event_index,
+            forward_end,
+            step,
+            probability_value,
+            payoff_ratio,
+            last_exit_index,
+            name,
+        )
+    decision = _policy_event_decision(
+        event_index,
+        probability,
+        threshold,
+        step,
+        name,
+        accepted,
+        status,
+    )
+    return trade, fraction, next_exit_index, decision
+
+
+def _policy_event_stream(
+    bars: DataFrame,
+    event_indices: list[int],
+    forward_end: int,
+    probabilities: dict[int, float],
+    steps: dict[int, float],
+    threshold: float,
+    payoff_ratio: float | None,
+    name: str,
+) -> tuple[list[dict[str, Any]], list[float], list[dict[str, Any]]]:
+    trades: list[dict[str, Any]] = []
+    fractions: list[float] = []
+    decisions: list[dict[str, Any]] = []
+    last_exit_index = -1
+    for event_index in event_indices:
+        trade, fraction, last_exit_index, decision = _process_policy_event(
+            bars,
+            event_index,
+            forward_end,
+            probabilities.get(event_index),
+            threshold,
+            steps[event_index],
+            payoff_ratio,
+            last_exit_index,
+            name,
+        )
+        if trade is not None:
+            trades.append(trade)
+            fractions.append(fraction)
+        decisions.append(decision)
+    return trades, fractions, decisions
+
+
+def _count_accepted_policy_events(
+    event_indices: list[int],
+    probabilities: dict[int, float],
+    threshold: float,
+) -> int:
+    return sum(
+        probabilities.get(index, 0.0) >= threshold for index in event_indices
+    )
+
+
 def _policy_candidate(
     bars: DataFrame,
     features: DataFrame,
@@ -338,75 +504,23 @@ def _policy_candidate(
     validation = (
         features.iloc[event_indices].loc[:, selected_features].reset_index(drop=True)
     )
-    steps = advanced.predict_trailing_steps(trailing_model, validation)
-    step_by_index = dict(zip(event_indices, steps.tolist(), strict=True))
-    accepted = [
-        index for index in event_indices if probabilities.get(index, 0.0) >= threshold
-    ]
-    raw_trades: list[dict[str, Any]] = []
-    fractions: list[float] = []
-    decisions: list[dict[str, Any]] = []
-    last_exit_index = -1
-    for index in event_indices:
-        probability = probabilities.get(index)
-        probability_value = 0.0 if probability is None else float(probability)
-        is_accepted = probability is not None and probability_value >= threshold
-        execution_status = "REJECTED_BY_META"
-        if probability is not None and probability_value >= threshold:
-            if index + 1 <= last_exit_index:
-                execution_status = "SKIPPED_OVERLAPPING_POSITION"
-            else:
-                trade, exit_index = _single_event_replay(
-                    bars,
-                    index,
-                    forward_end,
-                    float(step_by_index[index]),
-                )
-                fraction = (
-                    1.0
-                    if payoff_ratio is None
-                    else advanced.fractional_kelly_fraction(
-                        probability_value, payoff_ratio
-                    )
-                )
-                if fraction > 0.0:
-                    raw_trades.append(
-                        {
-                            "candidate_id": _candidate_id(name),
-                            "symbol": SYMBOL,
-                            "timeframe": TIMEFRAME,
-                            "mode": name,
-                            "event_index": index,
-                            "trailing_step_atr": float(step_by_index[index]),
-                            "meta_probability": probability_value,
-                            "unscaled_net_pnl_usd": float(trade["net_pnl_usd"]),
-                            **trade,
-                        }
-                    )
-                    fractions.append(fraction)
-                    last_exit_index = exit_index
-                    execution_status = "EXECUTED"
-                else:
-                    execution_status = "SKIPPED_ZERO_KELLY_FRACTION"
-        decisions.append(
-            {
-                "candidate_id": _candidate_id(name),
-                "symbol": SYMBOL,
-                "timeframe": TIMEFRAME,
-                "mode": name,
-                "event_index": index,
-                "meta_probability": probability,
-                "selected_threshold": threshold,
-                "meta_filter_decision": "ACCEPT" if is_accepted else "REJECT",
-                "trailing_step_atr": (
-                    float(step_by_index[index]) if is_accepted else None
-                ),
-                "portfolio_execution": execution_status,
-                "split_role": "FORWARD_VALIDATION",
-            }
-        )
+    predicted = advanced.predict_trailing_steps(trailing_model, validation)
+    steps = dict(zip(event_indices, predicted.tolist(), strict=True))
+    raw_trades, fractions, decisions = _policy_event_stream(
+        bars,
+        event_indices,
+        forward_end,
+        probabilities,
+        steps,
+        threshold,
+        payoff_ratio,
+        name,
+    )
     metrics, enriched = _metrics_from_sized_trades(raw_trades, fractions)
     expectancy = _unscaled_expectancy(raw_trades)
+    accepted_count = _count_accepted_policy_events(
+        event_indices, probabilities, threshold
+    )
     candidate = {
         "candidate_id": _candidate_id(name),
         "symbol": SYMBOL,
@@ -415,10 +529,10 @@ def _policy_candidate(
         "status": "COMPLETED",
         "selected_meta_probability_threshold": threshold,
         "primary_buy_event_count": len(event_indices),
-        "meta_accepted_buy_count": len(accepted),
-        "meta_rejected_buy_count": len(event_indices) - len(accepted),
+        "meta_accepted_buy_count": accepted_count,
+        "meta_rejected_buy_count": len(event_indices) - accepted_count,
         "executed_trade_count": len(enriched),
-        "achieved_validation_accept_fraction": len(accepted) / len(event_indices),
+        "achieved_validation_accept_fraction": accepted_count / len(event_indices),
         "metrics": {
             **metrics,
             "mean_unscaled_net_expectancy_usd_at_full_equity": expectancy,
@@ -429,7 +543,6 @@ def _policy_candidate(
         "sequence_model_used": False,
     }
     return candidate, enriched, decisions
-
 
 def _expected_support_shortfall(error: ValueError) -> bool:
     return str(error) in {
@@ -669,37 +782,54 @@ def _safety_report() -> dict[str, Any]:
     }
 
 
-def _validate_report(report: dict[str, Any], commit_sha: str) -> None:
-    safety = report.get("safety", {})
-    chronology = report.get("chronological_evaluation", {})
-    candidates = report.get("candidates", [])
+
+def _validate_report_identity_scope(
+    report: dict[str, Any], commit_sha: str
+) -> None:
     if report.get("schema_version") != SCHEMA or report.get("commit_sha") != commit_sha:
         raise ValueError("v4ah_report_identity_invalid")
     if report.get("symbols") != [SYMBOL] or report.get("timeframes") != [TIMEFRAME]:
         raise ValueError("v4ah_report_scope_invalid")
+
+
+def _validate_report_cost_geometry(report: dict[str, Any]) -> None:
     geometry = report.get("fixed_exit_geometry", {})
-    costs = report.get("cost_contract", {})
-    if geometry != {
+    expected_geometry = {
         "initial_stop_atr": 2.0,
         "trailing_activation_atr": 1.0,
         "trailing_step_atr": 1.5,
         "take_profit_atr": 4.0,
         "horizon_bars": 24,
-    }:
+    }
+    if geometry != expected_geometry:
         raise ValueError("v4ah_report_exit_geometry_invalid")
-    if costs != {
+    costs = report.get("cost_contract", {})
+    expected_costs = {
         "fee_bps_per_side": 10.0,
         "slippage_bps_per_side": 5.0,
         "round_trip_cost_bps": 30.0,
-    }:
+    }
+    if costs != expected_costs:
         raise ValueError("v4ah_report_cost_contract_invalid")
+
+
+def _validate_report_candidate_matrix(
+    candidates: list[dict[str, Any]]
+) -> None:
     if [item.get("mode") for item in candidates] != list(CANDIDATE_NAMES):
         raise ValueError("v4ah_candidate_matrix_invalid")
+    if any(item.get("sequence_model_used") is not False for item in candidates):
+        raise ValueError("v4ah_sequence_model_forbidden")
+
+
+def _validate_report_holdout_safety(report: dict[str, Any]) -> None:
+    chronology = report.get("chronological_evaluation", {})
     if (
         report.get("final_holdout_used") is not False
         or chronology.get("final_15_percent_holdout_untouched") is not True
     ):
         raise ValueError("v4ah_final_holdout_contamination")
+    safety = report.get("safety", {})
     if not (
         safety.get("Champion") is None
         and safety.get("order_permission") is False
@@ -709,9 +839,13 @@ def _validate_report(report: dict[str, Any], commit_sha: str) -> None:
         and safety.get("sequence_model_used") is False
     ):
         raise ValueError("v4ah_fail_closed_safety_contract_invalid")
-    if any(item.get("sequence_model_used") is not False for item in candidates):
-        raise ValueError("v4ah_sequence_model_forbidden")
 
+
+def _validate_report(report: dict[str, Any], commit_sha: str) -> None:
+    _validate_report_identity_scope(report, commit_sha)
+    _validate_report_cost_geometry(report)
+    _validate_report_candidate_matrix(report.get("candidates", []))
+    _validate_report_holdout_safety(report)
 
 def _format_pf(metrics: dict[str, Any]) -> str:
     if metrics.get("net_profit_factor_infinite_no_losses"):
