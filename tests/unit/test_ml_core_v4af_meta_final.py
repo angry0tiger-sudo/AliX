@@ -461,7 +461,7 @@ def test_unfiltered_control_uses_disabled_confidence_floor(
     ]
 
 
-def test_control_and_meta_candidate_ids_are_unambiguous() -> None
+def test_control_and_meta_candidate_ids_are_unambiguous() -> None:
     control = v4af._candidate_id(v4af.CONTROL_MODE)
     meta = v4af._candidate_id(v4af.MODE, 0.5)
     assert "UNFILTERED_CONTROL" in control
