@@ -61,6 +61,18 @@ def _validate_binary_labels(labels: Any, expected_rows: int) -> np.ndarray:
     return values.astype(int)
 
 
+def _validate_regime_output_columns(
+    base_features: DataFrame, cluster_count: int
+) -> None:
+    generated_columns = {
+        *(f"%-regime_cluster_{cluster_id}" for cluster_id in range(cluster_count)),
+        "%-regime_center_distance",
+        "%-regime_state_valid",
+    }
+    if generated_columns.intersection(base_features.columns):
+        raise ValueError("v4ah_regime_feature_collision")
+
+
 def _validate_regime_request(
     base_features: DataFrame, fit_end: int, cluster_count: int
 ) -> None:
@@ -81,13 +93,7 @@ def _validate_regime_request(
         base_features.columns
     ):
         raise ValueError("v4ah_regime_input_schema_invalid")
-    generated_columns = {
-        *(f"%-regime_cluster_{cluster_id}" for cluster_id in range(cluster_count)),
-        "%-regime_center_distance",
-        "%-regime_state_valid",
-    }
-    if generated_columns.intersection(base_features.columns):
-        raise ValueError("v4ah_regime_feature_collision")
+    _validate_regime_output_columns(base_features, cluster_count)
 
 
 def _regime_training_matrix(
