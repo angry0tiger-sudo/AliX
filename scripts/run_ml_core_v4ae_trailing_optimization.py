@@ -115,9 +115,7 @@ def _trade_management_config(config: TrailingGridConfig) -> TradeManagementConfi
 
 
 def _expected_candidate_ids() -> set[str]:
-    return {
-        _candidate_id(symbol, config) for symbol in SYMBOLS for config in GRID
-    }
+    return {_candidate_id(symbol, config) for symbol in SYMBOLS for config in GRID}
 
 
 def _validate_candidate_matrix(cells: list[dict[str, Any]]) -> None:
@@ -239,7 +237,9 @@ def _run_symbol(
         "forward_end_exclusive": forward_end,
         "raw_forward_primary_signal_count": raw_count,
         "eligible_forward_primary_signal_count": len(signal_indices),
-        "forward_start_timestamp": pd.Timestamp(bars["date"].iloc[train_end]).isoformat(),
+        "forward_start_timestamp": pd.Timestamp(
+            bars["date"].iloc[train_end]
+        ).isoformat(),
         "forward_end_timestamp": pd.Timestamp(
             bars["date"].iloc[forward_end - 1]
         ).isoformat(),
@@ -393,9 +393,7 @@ def run_v4ae(
     v4ac._validate_run_request(days, commit_sha)
     if TIMEFRAME not in v4ac.TIMEFRAMES:
         raise ValueError("v4ae_timeframe_out_of_policy")
-    datasets, provenance = v4ac._load_diagnostic_datasets(
-        input_dir, days, commit_sha
-    )
+    datasets, provenance = v4ac._load_diagnostic_datasets(input_dir, days, commit_sha)
     cells: list[dict[str, Any]] = []
     trades: list[dict[str, Any]] = []
     windows: list[dict[str, Any]] = []

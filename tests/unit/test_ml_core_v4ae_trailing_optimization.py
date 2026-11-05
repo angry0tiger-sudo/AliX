@@ -43,7 +43,9 @@ def _synthetic_cells() -> list[dict[str, Any]]:
     return cells
 
 
-def test_grid_is_exact_27_configurations_per_symbol_and_contains_v4ad_baseline() -> None:
+def test_grid_is_exact_27_configurations_per_symbol_and_contains_v4ad_baseline() -> (
+    None
+):
     assert len(v4ae.GRID) == 27
     assert len({v4ae._policy_name(item) for item in v4ae.GRID}) == 27
     assert {item.initial_stop_atr for item in v4ae.GRID} == {1.0, 1.5, 2.0}
@@ -232,7 +234,10 @@ def test_run_v4ae_writes_report_and_trade_artifacts(
     )
     assert report_path.is_file()
     assert trades_path.is_file()
-    assert json.loads(report_path.read_text(encoding="utf-8"))["schema_version"] == v4ae.SCHEMA
+    assert (
+        json.loads(report_path.read_text(encoding="utf-8"))["schema_version"]
+        == v4ae.SCHEMA
+    )
     assert len(report["cells"]) == 54
 
 
