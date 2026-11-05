@@ -53,7 +53,7 @@ MODE = "META_FILTERED"
 CONTROL_MODE = "UNFILTERED_CONTROL"
 
 INITIAL_STOP_ATR = 2.0
-TRAILING_ACTIVATION_ATR = 1.5
+TRAILING_ACTIVATION_ATR = 1.0
 TRAILING_STEP_ATR = 1.5
 TAKE_PROFIT_ATR = 4.0
 ATR_PERIOD_VALUE = ATR_PERIOD
@@ -114,7 +114,7 @@ def _validate_fixed_market_scope() -> None:
 def _validate_fixed_exit_and_cost_contract() -> None:
     geometry_is_valid = (
         INITIAL_STOP_ATR == 2.0
-        and TRAILING_ACTIVATION_ATR == 1.5
+        and TRAILING_ACTIVATION_ATR == 1.0
         and TRAILING_STEP_ATR == 1.5
         and TAKE_PROFIT_ATR == 4.0
         and HORIZON_BARS_VALUE == 24
@@ -609,12 +609,12 @@ def _step_summary_header(report: dict[str, Any]) -> list[str]:
             "with Close > EMA200; closed-candle signal, next-bar-open execution."
         ),
         (
-            "Fixed exits: initial SL=2.0 ATR, activation=1.5 ATR, trailing step=1.5 ATR, "
+            "Fixed exits: initial SL=2.0 ATR, activation=1.0 ATR, trailing step=1.5 ATR, "
             "take-profit=4.0 ATR, horizon=24 bars."
         ),
         (
-            "The owner-selected Step=1.5 geometry is an explicit Owner Override. "
-            "V4-AE's historical highest cell was Step=2.0 (Net PF=1.2477), not Step=1.5."
+            "Owner-directed sensitivity: activation=1.0 ATR (baseline 1.5); step held at 1.5 ATR. "
+            "V4-AE selected reference: Activation=1.5 / Step=1.5 (Net PF=1.1538); historical best Step=2.0 (Net PF=1.2477)."
         ),
         (
             "Costs: 10 bps maker fee + 5 bps slippage per side; 30 bps round trip. "

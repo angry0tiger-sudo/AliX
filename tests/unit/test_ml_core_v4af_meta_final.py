@@ -90,12 +90,12 @@ def test_run_request_and_fixed_owner_geometry_are_strict() -> None:
     assert v4af.SYMBOL == "ETHUSDT"
     assert v4af.TIMEFRAME == "1h"
     assert v4af.INITIAL_STOP_ATR == 2.0
-    assert v4af.TRAILING_ACTIVATION_ATR == 1.5
+    assert v4af.TRAILING_ACTIVATION_ATR == 1.0
     assert v4af.TRAILING_STEP_ATR == 1.5
     assert v4af.TAKE_PROFIT_ATR == 4.0
     assert management.trailing_stop_enabled is True
     assert management.stop_loss_atr_multiplier == 2.0
-    assert management.trailing_activation_atr == 1.5
+    assert management.trailing_activation_atr == 1.0
     assert management.trailing_step_atr == 1.5
     assert management.take_profit_atr_multiplier == 4.0
     assert management.horizon_candles == 24
@@ -186,7 +186,7 @@ def test_oof_labels_use_exact_v4af_geometry_costs_and_purge(
         assert item["fee_bps"] == 10.0
         assert item["slippage_bps"] == 5.0
         assert item["initial_stop"] == 2.0
-        assert item["activation"] == 1.5
+        assert item["activation"] == 1.0
         assert item["step"] == 1.5
         assert item["take_profit"] == 4.0
         assert item["horizon"] == 24
@@ -404,7 +404,7 @@ def test_economic_candidate_applies_threshold_before_replay(
     management = observed["management"]
     assert management.trailing_stop_enabled is True
     assert management.stop_loss_atr_multiplier == 2.0
-    assert management.trailing_activation_atr == 1.5
+    assert management.trailing_activation_atr == 1.0
     assert management.trailing_step_atr == 1.5
     assert management.take_profit_atr_multiplier == 4.0
     assert len(trades) == 1

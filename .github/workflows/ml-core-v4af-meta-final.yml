@@ -141,7 +141,7 @@ jobs:
           test "$GITHUB_REF" = "refs/heads/research/ml-core-v4af-meta-final"
           test "$GITHUB_SHA" = "$TARGET_SHA"
           printf 'symbol=ETHUSDT\ntimeframe=1h\nmode=META_FILTERED\n'
-          printf 'initial_stop_atr=2.0\ntrailing_activation_atr=1.5\n'
+          printf 'initial_stop_atr=2.0\ntrailing_activation_atr=1.0\n'
           printf 'trailing_step_atr=1.5\ntake_profit_atr=4.0\nhorizon_bars=24\n'
           printf 'threshold_targets=0.30,0.50,0.70\n'
           printf 'fee_bps_per_side=10\nslippage_bps_per_side=5\nround_trip_cost_bps=30\n'
@@ -156,7 +156,7 @@ jobs:
           assert v4af.MODE == "META_FILTERED"
           assert v4af.CONTROL_MODE == "UNFILTERED_CONTROL"
           assert v4af.INITIAL_STOP_ATR == 2.0
-          assert v4af.TRAILING_ACTIVATION_ATR == 1.5
+          assert v4af.TRAILING_ACTIVATION_ATR == 1.0
           assert v4af.TRAILING_STEP_ATR == 1.5
           assert v4af.TAKE_PROFIT_ATR == 4.0
           assert v4af.TARGET_ACCEPT_FRACTIONS == (0.30, 0.50, 0.70)
@@ -235,7 +235,7 @@ jobs:
           assert len(report["candidates"]) == 4
           assert report["final_holdout_used"] is False
           assert report["fixed_exit_geometry"]["initial_stop_atr"] == 2.0
-          assert report["fixed_exit_geometry"]["trailing_activation_atr"] == 1.5
+          assert report["fixed_exit_geometry"]["trailing_activation_atr"] == 1.0
           assert report["fixed_exit_geometry"]["trailing_step_atr"] == 1.5
           assert report["fixed_exit_geometry"]["take_profit_atr"] == 4.0
           assert report["meta_model"]["enabled"] is True
