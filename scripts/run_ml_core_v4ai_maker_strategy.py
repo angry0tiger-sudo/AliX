@@ -896,6 +896,10 @@ def _render_step_summary(report: dict[str, Any]) -> str:
         ]
     )
     for cell in report["exit_geometry_matrix"]["cells"]:
+        win_rate = cell["win_rate"]
+        win_rate_text = (
+            "N/A" if win_rate is None else f"{float(win_rate) * 100.0:.2f}"
+        )
         lines.append(
             f"| {cell['policy']} | {float(cell['initial_stop_atr']):.1f} "
             f"| {float(cell['take_profit_atr']):.1f} "
@@ -903,7 +907,7 @@ def _render_step_summary(report: dict[str, Any]) -> str:
             f"| {float(cell['trailing_step_atr']):.1f} "
             f"| {float(cell['round_trip_cost_bps']):.0f} "
             f"| {cell['trade_count']} "
-            f"| {'N/A' if cell['win_rate'] is None else f'{float(cell["win_rate"]) * 100.0:.2f}'} 
+            f"| {win_rate_text} "
             f"| {_format_pf(cell)} "
             f"| {float(cell['max_drawdown_percent']):.2f} "
             f"| {float(cell['net_pnl_total_usd']):.2f} "
