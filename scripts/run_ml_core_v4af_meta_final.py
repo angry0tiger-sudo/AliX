@@ -1027,6 +1027,17 @@ def _meta_oof_training_frame(
     return _join_event_features(features, labelled_events), training_diagnostics
 
 
+def _meta_training_skip_reason(error: ValueError) -> str | None:
+    code = str(error)
+    if code == "v4x_oof_primary_signals_empty":
+        return code
+    if code.startswith("v4af_meta_oof_labels_"):
+        return code
+    if code.startswith("v4x_insufficient_meta_"):
+        return code
+    return None
+
+
 def _prepare_oof_training(
     research_bars: DataFrame,
     features: DataFrame,
