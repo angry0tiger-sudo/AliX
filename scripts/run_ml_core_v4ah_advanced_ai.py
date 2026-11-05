@@ -115,7 +115,6 @@ def _trade_management(step: float) -> Any:
     return replace(base, trailing_step_atr=float(step))
 
 
-
 def _validate_event_replay_window(
     bars: DataFrame, event_index: int, window_end: int
 ) -> int:
@@ -129,9 +128,7 @@ def _simulate_local_event(
     local_bars: DataFrame, local_event_index: int, trailing_step: float
 ) -> dict[str, Any]:
     build_actions = getattr(v4af, "_build_forward_actions")
-    actions = build_actions(
-        local_bars, [local_event_index], len(local_bars)
-    )
+    actions = build_actions(local_bars, [local_event_index], len(local_bars))
     replay = simulate_signals(
         local_bars,
         actions,
@@ -173,6 +170,7 @@ def _single_event_replay(
     trade = _simulate_local_event(local, local_event, trailing_step)
     exit_local = _resolve_local_exit_index(local, trade, local_event)
     return trade, context_start + exit_local
+
 
 def _counterfactual_training_data(
     bars: DataFrame,
@@ -342,7 +340,6 @@ def _fixed_meta_candidate(
     return candidate, trades, decisions
 
 
-
 def _policy_event_decision(
     event_index: int,
     probability: float | None,
@@ -379,9 +376,7 @@ def _execute_accepted_policy_event(
 ) -> tuple[dict[str, Any] | None, float, int, str]:
     if event_index + 1 <= last_exit_index:
         return None, 0.0, last_exit_index, "SKIPPED_OVERLAPPING_POSITION"
-    trade, exit_index = _single_event_replay(
-        bars, event_index, forward_end, step
-    )
+    trade, exit_index = _single_event_replay(bars, event_index, forward_end, step)
     fraction = 1.0
     if payoff_ratio is not None:
         fraction = advanced.fractional_kelly_fraction(probability, payoff_ratio)
@@ -480,9 +475,7 @@ def _count_accepted_policy_events(
     probabilities: dict[int, float],
     threshold: float,
 ) -> int:
-    return sum(
-        probabilities.get(index, 0.0) >= threshold for index in event_indices
-    )
+    return sum(probabilities.get(index, 0.0) >= threshold for index in event_indices)
 
 
 def _policy_candidate(
@@ -543,6 +536,7 @@ def _policy_candidate(
         "sequence_model_used": False,
     }
     return candidate, enriched, decisions
+
 
 def _expected_support_shortfall(error: ValueError) -> bool:
     return str(error) in {
@@ -783,9 +777,7 @@ def _safety_report() -> dict[str, Any]:
 
 
 
-def _validate_report_identity_scope(
-    report: dict[str, Any], commit_sha: str
-) -> None:
+def _validate_report_identity_scope(report: dict[str, Any], commit_sha: str) -> None:
     if report.get("schema_version") != SCHEMA or report.get("commit_sha") != commit_sha:
         raise ValueError("v4ah_report_identity_invalid")
     if report.get("symbols") != [SYMBOL] or report.get("timeframes") != [TIMEFRAME]:
@@ -813,9 +805,7 @@ def _validate_report_cost_geometry(report: dict[str, Any]) -> None:
         raise ValueError("v4ah_report_cost_contract_invalid")
 
 
-def _validate_report_candidate_matrix(
-    candidates: list[dict[str, Any]]
-) -> None:
+def _validate_report_candidate_matrix(candidates: list[dict[str, Any]]) -> None:
     if [item.get("mode") for item in candidates] != list(CANDIDATE_NAMES):
         raise ValueError("v4ah_candidate_matrix_invalid")
     if any(item.get("sequence_model_used") is not False for item in candidates):
@@ -846,6 +836,7 @@ def _validate_report(report: dict[str, Any], commit_sha: str) -> None:
     _validate_report_cost_geometry(report)
     _validate_report_candidate_matrix(report.get("candidates", []))
     _validate_report_holdout_safety(report)
+
 
 def _format_pf(metrics: dict[str, Any]) -> str:
     if metrics.get("net_profit_factor_infinite_no_losses"):
