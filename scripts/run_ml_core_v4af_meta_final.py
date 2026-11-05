@@ -1014,12 +1014,12 @@ def _run_unfiltered_control(
     )
 
 
-def _meta_training_sets(
+def _meta_oof_training_frame(
     research_bars: DataFrame,
     features: DataFrame,
     primary_buy_signal: Series,
     train_end: int,
-) -> tuple[DataFrame, DataFrame, dict[str, Any]]:
+) -> tuple[DataFrame, dict[str, Any]]:
     oof_events = generate_v4y_oof_primary_events(
         primary_buy_signal,
         start_index=V4Y_EMA_TREND_PERIOD,
@@ -1031,26 +1031,66 @@ def _meta_training_sets(
         oof_events,
         train_end,
     )
-    training = _join_event_features(features, labelled_events)
-    fit_rows, calibration_rows = split_meta_fit_calibration(
-        training,
-        outer_train_end_index=train_end,
-        calibration_fraction=V4Y_META_CALIBRATION_FRACTION,
-        minimum_fit_rows=V4Y_MINIMUM_FIT_ROWS,
-        minimum_class_rows=V4Y_MINIMUM_CLASS_ROWS,
-    )
-    return fit_rows, calibration_rows, training_diagnostics
+    return _join_event_features(features, labelled_events), training_diagnostics
 
 
-def _meta_training_skip_reason(error: ValueError) -> str | None:
-    code = str(error)
-    if code == "v4x_oof_primary_signals_empty":
-        return code
-    if code.startswith("v4af_meta_oof_labels_"):
-        return code
-    if code.startswith("v4x_insufficient_meta_"):
-        return code
-    return None
+def _prepare_oof_training(
+    research_bars: DataFrame,
+    features: DataFrame,
+    primary_buy_signal: Series,
+    train_end: int,
+    train_gate: dict[str, Any],
+) -> dict[str, Any]:
+    try:
+        training, diagnostics = _meta_oof_training_frame(
+            research_bars,
+            features,
+            primary_buy_signal,
+            train_end,
+        )
+    except ValueError as error:
+        skip_reason = _meta_training_skip_reason(error)
+        if skip_reason is None:
+            raise
+        return {
+            "skip_reason": skip_reason,
+            "training_diagnostics": {"primary_sample_gate": train_gate},
+        }
+    diagnostics["primary_sample_gate"] = train_gate
+    return {
+        "skip_reason": None,
+        "training": training,
+        "training_diagnostics": diagnostics,
+    }
+
+
+def _prepare_purged_meta_split(
+    training: DataFrame,
+    train_end: int,
+    training_diagnostics: dict[str, Any],
+) -> dict[str, Any]:
+    try:
+        fit_rows, calibration_rows = split_meta_fit_calibration(
+            training,
+            outer_train_end_index=train_end,
+            calibration_fraction=V4Y_META_CALIBRATION_FRACTION,
+            minimum_fit_rows=V4Y_MINIMUM_FIT_ROWS,
+            minimum_class_rows=V4Y_MINIMUM_CLASS_ROWS,
+        )
+    except ValueError as error:
+        skip_reason = _meta_training_skip_reason(error)
+        if skip_reason is None:
+            raise
+        return {
+            "skip_reason": skip_reason,
+            "training_diagnostics": training_diagnostics,
+        }
+    return {
+        "skip_reason": None,
+        "fit_rows": fit_rows,
+        "calibration_rows": calibration_rows,
+        "training_diagnostics": training_diagnostics,
+    }
 
 
 def _prepare_meta_training(
@@ -1065,29 +1105,20 @@ def _prepare_meta_training(
             "skip_reason": "v4y_insufficient_primary_signals",
             "training_diagnostics": {"primary_sample_gate": train_gate},
         }
-    try:
-        fit_rows, calibration_rows, training_diagnostics = _meta_training_sets(
-            research_bars,
-            features,
-            primary_buy_signal,
-            train_end,
-        )
-    except ValueError as error:
-        skip_reason = _meta_training_skip_reason(error)
-        if skip_reason is None:
-            raise
-        return {
-            "skip_reason": skip_reason,
-            "training_diagnostics": {"primary_sample_gate": train_gate},
-        }
-    training_diagnostics["primary_sample_gate"] = train_gate
-    return {
-        "skip_reason": None,
-        "fit_rows": fit_rows,
-        "calibration_rows": calibration_rows,
-        "training_diagnostics": training_diagnostics,
-    }
-
+    oof_preparation = _prepare_oof_training(
+        research_bars,
+        features,
+        primary_buy_signal,
+        train_end,
+        train_gate,
+    )
+    if oof_preparation["skip_reason"] is not None:
+        return oof_preparation
+    return _prepare_purged_meta_split(
+        oof_preparation["training"],
+        train_end,
+        oof_preparation["training_diagnostics"],
+    )
 
 def _fit_and_calibrate_meta_model(
     features: DataFrame,
