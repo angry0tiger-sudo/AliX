@@ -53,7 +53,6 @@ def _validate_binary_labels(labels: Any, expected_rows: int) -> np.ndarray:
         or len(values) != expected_rows
         or not np.isfinite(values).all()
         or not np.isin(values, (0.0, 1.0)).all()
-        or set(np.unique(values).tolist()) != {0.0, 1.0}
     ):
         raise ValueError("v4ah_binary_labels_invalid")
     counts = np.bincount(values.astype(int), minlength=2)
@@ -82,6 +81,13 @@ def _validate_regime_request(
         base_features.columns
     ):
         raise ValueError("v4ah_regime_input_schema_invalid")
+    generated_columns = {
+        *(f"%-regime_cluster_{cluster_id}" for cluster_id in range(cluster_count)),
+        "%-regime_center_distance",
+        "%-regime_state_valid",
+    }
+    if generated_columns.intersection(base_features.columns):
+        raise ValueError("v4ah_regime_feature_collision")
 
 
 def _regime_training_matrix(
@@ -728,9 +734,7 @@ def fit_adaptive_trailing_policy(
     from sklearn.ensemble import RandomForestClassifier  # type: ignore[import-untyped]
 
     selected_returns = returns[usable]
-    targets = np.asarray(V4AH_TRAILING_STEP_OPTIONS, dtype=float)[
-        np.argmax(selected_returns, axis=1)
-    ]
+    target_class_indices = np.argmax(selected_returns, axis=1).astype(int)
     model = RandomForestClassifier(
         n_estimators=80,
         max_depth=3,
@@ -740,8 +744,8 @@ def fit_adaptive_trailing_policy(
         random_state=42,
         n_jobs=1,
     )
-    model.fit(values[usable], targets)
-    classes, counts = np.unique(targets, return_counts=True)
+    model.fit(values[usable], target_class_indices)
+    classes, counts = np.unique(target_class_indices, return_counts=True)
     max_end = int(np.max(ends[usable]))
     if max_end >= calibration_start_index:
         raise ValueError("v4ah_trailing_policy_calibration_boundary_leakage")
@@ -755,8 +759,10 @@ def fit_adaptive_trailing_policy(
         "all_counterfactual_exits_before_calibration": True,
         "fit_scope": "PURGED_META_FIT_ROWS_ONLY",
         "target_step_counts": {
-            str(float(label)): int(count)
-            for label, count in zip(classes.tolist(), counts.tolist(), strict=True)
+            str(float(V4AH_TRAILING_STEP_OPTIONS[int(class_index)])): int(count)
+            for class_index, count in zip(
+                classes.tolist(), counts.tolist(), strict=True
+            )
         },
     }
     return model, diagnostics
@@ -764,19 +770,23 @@ def fit_adaptive_trailing_policy(
 
 def predict_trailing_steps(model: Any, features: DataFrame) -> np.ndarray:
     values = _numeric_matrix(features, "v4ah_trailing_prediction_features_invalid")
-    predictions = np.asarray(model.predict(values), dtype=float)
+    class_indices = np.asarray(model.predict(values), dtype=float)
     if (
-        predictions.shape != (len(values),)
-        or not np.isfinite(predictions).all()
-        or not set(predictions.tolist()).issubset(set(V4AH_TRAILING_STEP_OPTIONS))
+        class_indices.shape != (len(values),)
+        or not np.isfinite(class_indices).all()
+        or not np.equal(class_indices, np.floor(class_indices)).all()
+        or np.any(class_indices < 0)
+        or np.any(class_indices >= len(V4AH_TRAILING_STEP_OPTIONS))
     ):
         raise ValueError("v4ah_trailing_predictions_invalid")
-    return predictions
+    return np.asarray(V4AH_TRAILING_STEP_OPTIONS, dtype=float)[
+        class_indices.astype(int)
+    ]
 
 
 def estimate_training_payoff_ratio(net_returns: Any) -> tuple[float, dict[str, Any]]:
     values = np.asarray(net_returns, dtype=float)
-    if values.ndim != 1 or not np.isfinite(values).all() or len(values) < 10:
+    if values.ndim != 1 or not np.isfinite(values).all():
         raise ValueError("v4ah_kelly_training_returns_invalid")
     winners = values[values > 0.0]
     losers = values[values < 0.0]
