@@ -651,7 +651,13 @@ def _validate_report(report: dict[str, Any], commit_sha: str) -> None:
         raise ValueError("v4af_report_scope_invalid")
     if report.get("mode") != MODE or len(report.get("candidates", [])) != 4:
         raise ValueError("v4af_candidate_matrix_invalid")
-    if report.get("final_holdout_used") is not False:
+    chronological = report.get("chronological_evaluation")
+    if (
+        report.get("final_holdout_used") is not False
+        or not isinstance(chronological, dict)
+        or chronological.get("final_holdout_used") is not False
+        or chronological.get("final_15_percent_holdout_untouched") is not True
+    ):
         raise ValueError("v4af_final_holdout_must_remain_untouched")
     fractions = [
         item.get("target_accept_fraction")
@@ -813,6 +819,7 @@ def _build_report(
             "maximum_drawdown_inclusive": MAXIMUM_DRAWDOWN_INCLUSIVE,
             "purpose": "research_target_only_no_automatic_promotion",
         },
+        "final_holdout_used": False,
         "candidates": candidates,
         "trades": trades,
         "decisions": decisions,

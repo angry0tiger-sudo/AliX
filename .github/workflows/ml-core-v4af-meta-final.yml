@@ -1,0 +1,304 @@
+name: AliX V4-AF ETH Meta-Model Final Integration
+
+on:
+  push:
+    branches:
+      - research/ml-core-v4af-meta-final
+    paths:
+      - .github/workflows/ml-core-v4af-meta-final.yml
+      - scripts/run_ml_core_v4af_meta_final.py
+      - scripts/run_ml_core_v4ac_cost_optimization.py
+      - scripts/run_ml_core_real_data_baseline.py
+      - scripts/fetch_binance_public_ohlcv.py
+      - services/ml_core/economic_backtest.py
+      - services/ml_core/extended_features.py
+      - services/ml_core/binary_calibration.py
+      - services/meta_labeling/v4x.py
+      - services/meta_labeling/v4y.py
+      - tests/unit/test_ml_core_v4af_meta_final.py
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: alix-v4af-meta-final
+  cancel-in-progress: false
+
+jobs:
+  v4af-meta-final:
+    if: github.ref == 'refs/heads/research/ml-core-v4af-meta-final'
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      ALIx_ENV: paper
+      ALIx_DRY_RUN: "true"
+      ALIx_ALLOW_LIVE_TRADING: "false"
+      ALIx_REPORTING_ENABLED: "false"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Require Standard CI success for this exact V4-AF commit
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          TARGET_SHA: ${{ github.sha }}
+          TARGET_BRANCH: ${{ github.ref_name }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import time
+          from urllib.error import HTTPError, URLError
+          from urllib.request import Request, urlopen
+
+          repository = os.environ["GITHUB_REPOSITORY"]
+          target_sha = os.environ["TARGET_SHA"]
+          target_branch = os.environ["TARGET_BRANCH"]
+          token = os.environ["GH_TOKEN"]
+          expected_branch = "research/ml-core-v4af-meta-final"
+          if target_branch != expected_branch:
+              raise SystemExit("unsupported_v4af_branch:" + target_branch)
+
+          deadline = time.monotonic() + 90 * 60
+          url = (
+              f"https://api.github.com/repos/{repository}/actions/workflows/ci.yml/runs"
+              f"?head_sha={target_sha}&per_page=100"
+          )
+          while time.monotonic() < deadline:
+              request = Request(
+                  url,
+                  headers={
+                      "Accept": "application/vnd.github+json",
+                      "Authorization": f"Bearer {token}",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  },
+              )
+              try:
+                  with urlopen(request, timeout=20) as response:
+                      payload = json.load(response)
+              except (HTTPError, URLError, TimeoutError) as error:
+                  raise SystemExit(
+                      f"ci_status_lookup_failed:{type(error).__name__}"
+                  ) from None
+
+              matching = [
+                  run for run in payload.get("workflow_runs", [])
+                  if run.get("head_sha") == target_sha
+                  and run.get("head_branch") == expected_branch
+                  and run.get("event") == "push"
+              ]
+              if matching:
+                  latest = max(
+                      matching,
+                      key=lambda item: (
+                          item.get("run_number", 0),
+                          item.get("run_attempt", 0),
+                      ),
+                  )
+                  if latest.get("status") == "completed":
+                      if latest.get("conclusion") != "success":
+                          raise SystemExit(
+                              "ci_green_gate_blocked:"
+                              + str(latest.get("conclusion"))
+                              + ":"
+                              + target_sha
+                          )
+                      print(json.dumps({
+                          "gate": "PASS",
+                          "target_sha": target_sha,
+                          "ci_run_id": latest.get("id"),
+                          "ci_run_url": latest.get("html_url"),
+                          "ci_conclusion": latest.get("conclusion"),
+                      }, sort_keys=True))
+                      break
+              time.sleep(30)
+          else:
+              raise SystemExit("ci_green_gate_timeout:" + target_sha)
+          PY
+
+      - name: Checkout exact V4-AF commit without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up pinned Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install pinned V4-AF meta dependencies
+        run: |
+          python -m pip install pip==25.2
+          python -m pip install numpy==2.5.4 pandas==2.3.3 scikit-learn==1.9.0 lightgbm==4.7.0
+
+      - name: Confirm V4-AF scope, geometry, and fail-closed safety
+        env:
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/research/ml-core-v4af-meta-final"
+          test "$GITHUB_SHA" = "$TARGET_SHA"
+          printf 'symbol=ETHUSDT\ntimeframe=1h\nmode=META_FILTERED\n'
+          printf 'initial_stop_atr=2.0\ntrailing_activation_atr=1.5\n'
+          printf 'trailing_step_atr=1.5\ntake_profit_atr=4.0\nhorizon_bars=24\n'
+          printf 'threshold_targets=0.30,0.50,0.70\n'
+          printf 'fee_bps_per_side=10\nslippage_bps_per_side=5\nround_trip_cost_bps=30\n'
+          printf 'label_geometry=EXACT_V4AF_TRAILING_REPLAY\n'
+          printf 'Champion=null\norder_permission=false\ntrading_authorization=NO-GO\n'
+          printf 'private_api_calls=0\nreal_order_attempts=0\nsequence_model_used=false\n'
+          python - <<'PY'
+          from scripts import run_ml_core_v4af_meta_final as v4af
+
+          assert v4af.SYMBOL == "ETHUSDT"
+          assert v4af.TIMEFRAME == "1h"
+          assert v4af.MODE == "META_FILTERED"
+          assert v4af.CONTROL_MODE == "UNFILTERED_CONTROL"
+          assert v4af.INITIAL_STOP_ATR == 2.0
+          assert v4af.TRAILING_ACTIVATION_ATR == 1.5
+          assert v4af.TRAILING_STEP_ATR == 1.5
+          assert v4af.TAKE_PROFIT_ATR == 4.0
+          assert v4af.TARGET_ACCEPT_FRACTIONS == (0.30, 0.50, 0.70)
+          assert v4af.FEE_BPS_PER_SIDE == 10.0
+          assert v4af.SLIPPAGE_BPS_PER_SIDE == 5.0
+          safety = v4af._safety_report()
+          assert safety["Champion"] is None
+          assert safety["order_permission"] is False
+          assert safety["trading_authorization"] == "NO-GO"
+          assert safety["private_api_calls"] == 0
+          assert safety["real_order_attempts"] == 0
+          assert safety["sequence_model_used"] is False
+          print("V4-AF immutable scope and safety contract: PASS")
+          PY
+
+      - name: Fetch complete public Binance Spot 730-day ETHUSDT data
+        run: |
+          set -euo pipefail
+          data_dir="$RUNNER_TEMP/alix-v4af-market-data"
+          rm -rf "$data_dir"
+          mkdir -p "$data_dir"
+          log_path="$RUNNER_TEMP/v4af-fetch-730-ETHUSDT.log"
+          if python scripts/fetch_binance_public_ohlcv.py \
+            --days 730 \
+            --symbol ETHUSDT \
+            --interval 1m \
+            --output-dir "$data_dir" \
+            --commit-sha "$GITHUB_SHA" >"$log_path" 2>&1; then
+            cat "$log_path"
+          else
+            cat "$log_path"
+            echo "Public Spot fetch failed; refusing partial data." >&2
+            exit 1
+          fi
+          printf 'requested_days=730\nprovider=Binance Spot public klines API\n'
+          printf 'private_api_calls=0\ncredentials_used=false\n'
+
+      - name: Run V4-AF fixed-geometry Meta-Model comparison
+        run: |
+          set -euo pipefail
+          python -m scripts.run_ml_core_v4af_meta_final \
+            --input-dir "$RUNNER_TEMP/alix-v4af-market-data" \
+            --output-report "$GITHUB_WORKSPACE/alix-v4af-meta-final-report.json" \
+            --output-trades-csv "$GITHUB_WORKSPACE/alix-v4af-meta-final-trades.csv" \
+            --output-decisions-csv "$GITHUB_WORKSPACE/alix-v4af-meta-final-decisions.csv" \
+            --days 730 \
+            --commit-sha "$GITHUB_SHA"
+
+      - name: Validate V4-AF report and render GitHub Step Summary
+        env:
+          REPORT_PATH: "${{ github.workspace }}/alix-v4af-meta-final-report.json"
+          TRADES_CSV: "${{ github.workspace }}/alix-v4af-meta-final-trades.csv"
+          DECISIONS_CSV: "${{ github.workspace }}/alix-v4af-meta-final-decisions.csv"
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          python - <<'PY'
+          import csv
+          import json
+          import math
+          import os
+          from pathlib import Path
+
+          from scripts.run_ml_core_v4af_meta_final import (
+              _render_step_summary,
+              _validate_report,
+          )
+
+          report = json.loads(
+              Path(os.environ["REPORT_PATH"]).read_text(encoding="utf-8")
+          )
+          _validate_report(report, os.environ["TARGET_SHA"])
+          assert report["schema_version"] == "alix.ml-core.v4af-meta-final.v1"
+          assert report["symbols"] == ["ETHUSDT"]
+          assert report["timeframes"] == ["1h"]
+          assert report["mode"] == "META_FILTERED"
+          assert len(report["candidates"]) == 4
+          assert report["final_holdout_used"] is False
+          assert report["fixed_exit_geometry"]["initial_stop_atr"] == 2.0
+          assert report["fixed_exit_geometry"]["trailing_activation_atr"] == 1.5
+          assert report["fixed_exit_geometry"]["trailing_step_atr"] == 1.5
+          assert report["fixed_exit_geometry"]["take_profit_atr"] == 4.0
+          assert report["meta_model"]["enabled"] is True
+          assert report["safety"]["Champion"] is None
+          assert report["safety"]["order_permission"] is False
+          assert report["safety"]["trading_authorization"] == "NO-GO"
+          assert report["safety"]["private_api_calls"] == 0
+          assert report["safety"]["real_order_attempts"] == 0
+          assert report["safety"]["sequence_model_used"] is False
+
+          with Path(os.environ["TRADES_CSV"]).open(
+              newline="", encoding="utf-8"
+          ) as handle:
+              trades = list(csv.DictReader(handle))
+          for trade in trades:
+              assert trade["direction"] == "LONG"
+              assert trade["symbol"] == "ETHUSDT"
+              assert trade["timeframe"] == "1h"
+              gross = float(trade["gross_market_pnl_usd"])
+              fees = float(trade["fees_usd"])
+              slippage = float(trade["slippage_cost_usd"])
+              net = float(trade["net_pnl_usd"])
+              assert math.isclose(
+                  gross - fees - slippage, net, rel_tol=0.0, abs_tol=0.02
+              )
+
+          with Path(os.environ["DECISIONS_CSV"]).open(
+              newline="", encoding="utf-8"
+          ) as handle:
+              decisions = list(csv.DictReader(handle))
+          assert all(item["split_role"] == "FORWARD_VALIDATION" for item in decisions)
+          summary = _render_step_summary(report)
+          required = (
+              "UNFILTERED_CONTROL",
+              "META_FILTERED",
+              "0.30",
+              "0.50",
+              "0.70",
+              "Net PF",
+              "Max DD %",
+              "Champion=null",
+              "trading_authorization=NO-GO",
+          )
+          if any(value not in summary for value in required):
+              raise SystemExit("v4af_step_summary_required_metrics_missing")
+          with Path(os.environ["GITHUB_STEP_SUMMARY"]).open(
+              "a", encoding="utf-8"
+          ) as handle:
+              handle.write(summary)
+          Path("alix-v4af-meta-final-step-summary.md").write_text(
+              summary, encoding="utf-8"
+          )
+          print(summary, end="")
+          PY
+
+      - name: Upload V4-AF report, trades, decisions, and exact Step Summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alix-v4af-meta-final
+          path: |
+            alix-v4af-meta-final-report.json
+            alix-v4af-meta-final-trades.csv
+            alix-v4af-meta-final-decisions.csv
+            alix-v4af-meta-final-step-summary.md
+          if-no-files-found: warn
