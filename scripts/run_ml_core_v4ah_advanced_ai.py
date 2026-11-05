@@ -599,7 +599,7 @@ def _split_purged_training_or_skip(
     )
 
 
-def _fit_advanced_meta(
+def _prepare_advanced_training(
     bars: DataFrame,
     features: DataFrame,
     primary_signal: pd.Series,
@@ -607,7 +607,11 @@ def _fit_advanced_meta(
     train_gate: dict[str, Any],
 ) -> dict[str, Any]:
     if not bool(train_gate.get("passed")):
-        return {"skip_reason": "v4y_insufficient_primary_signals"}
+        return {
+            "skip_reason": "v4y_insufficient_primary_signals",
+            "training_diagnostics": {},
+            "split_diagnostics": {},
+        }
     training, training_diagnostics, skip_reason = _build_oof_training_or_skip(
         bars, features, primary_signal, train_end
     )
@@ -629,6 +633,22 @@ def _fit_advanced_meta(
         }
     assert split is not None
     fit_rows, temperature_rows, threshold_rows = split
+    return {
+        "skip_reason": None,
+        "training": training,
+        "fit_rows": fit_rows,
+        "temperature_rows": temperature_rows,
+        "threshold_rows": threshold_rows,
+        "training_diagnostics": training_diagnostics,
+        "split_diagnostics": split_diagnostics,
+    }
+
+
+def _fit_meta_predictor(prepared: dict[str, Any]) -> dict[str, Any]:
+    training = cast(DataFrame, prepared["training"])
+    fit_rows = cast(DataFrame, prepared["fit_rows"])
+    temperature_rows = cast(DataFrame, prepared["temperature_rows"])
+    threshold_rows = cast(DataFrame, prepared["threshold_rows"])
     feature_names = _feature_columns(training)
     model, selected, rankings, shap_diagnostics = advanced.fit_shap_selected_lightgbm(
         fit_rows.loc[:, feature_names],
@@ -656,17 +676,37 @@ def _fit_advanced_meta(
         calibrated_threshold,
         threshold_rows["meta_label"].to_numpy(dtype=int),
     )
+    result = {
+        "skip_reason": None,
+        "fit_diagnostics": shap_diagnostics,
+        "shap_rankings": rankings,
+        "temperature_diagnostics": temperature_diagnostics,
+        "threshold_diagnostics": threshold_diagnostics,
+        "calibration_diagnostics": calibration,
+    }
     if threshold is None:
-        return {
-            "skip_reason": "v4ah_no_positive_net_expectancy_threshold",
-            "training_diagnostics": training_diagnostics,
-            "split_diagnostics": split_diagnostics,
-            "fit_diagnostics": shap_diagnostics,
-            "shap_rankings": rankings,
-            "temperature_diagnostics": temperature_diagnostics,
-            "threshold_diagnostics": threshold_diagnostics,
-            "calibration_diagnostics": calibration,
+        result["skip_reason"] = "v4ah_no_positive_net_expectancy_threshold"
+        return result
+    result.update(
+        {
+            "model": model,
+            "selected_features": selected,
+            "temperature": temperature,
+            "threshold": threshold,
         }
+    )
+    return result
+
+
+def _fit_optional_meta_risk_policies(
+    bars: DataFrame,
+    prepared: dict[str, Any],
+    predictor: dict[str, Any],
+    train_end: int,
+) -> dict[str, Any]:
+    fit_rows = cast(DataFrame, prepared["fit_rows"])
+    temperature_rows = cast(DataFrame, prepared["temperature_rows"])
+    selected = cast(list[str], predictor["selected_features"])
     policy_model: Any = None
     policy_diagnostics: dict[str, Any] = {}
     policy_skip_reason: str | None = None
@@ -693,23 +733,48 @@ def _fit_advanced_meta(
             raise
         payoff_diagnostics = {"status": "SKIPPED", "reason": str(error)}
     return {
-        "skip_reason": None,
-        "training_diagnostics": training_diagnostics,
-        "split_diagnostics": split_diagnostics,
-        "fit_diagnostics": shap_diagnostics,
-        "shap_rankings": rankings,
-        "temperature_diagnostics": temperature_diagnostics,
-        "threshold_diagnostics": threshold_diagnostics,
-        "calibration_diagnostics": calibration,
-        "model": model,
-        "selected_features": selected,
-        "temperature": temperature,
-        "threshold": threshold,
         "policy_model": policy_model,
         "trailing_policy_diagnostics": policy_diagnostics,
         "policy_skip_reason": policy_skip_reason,
         "payoff_ratio": payoff_ratio,
         "payoff_diagnostics": payoff_diagnostics,
+    }
+
+
+def _fit_advanced_meta(
+    bars: DataFrame,
+    features: DataFrame,
+    primary_signal: pd.Series,
+    train_end: int,
+    train_gate: dict[str, Any],
+) -> dict[str, Any]:
+    prepared = _prepare_advanced_training(
+        bars, features, primary_signal, train_end, train_gate
+    )
+    if prepared["skip_reason"] is not None:
+        result = _empty_meta(
+            str(prepared["skip_reason"]),
+            cast(dict[str, Any], prepared["training_diagnostics"]),
+        )
+        result["split_diagnostics"] = prepared["split_diagnostics"]
+        return result
+    predictor = _fit_meta_predictor(prepared)
+    if predictor["skip_reason"] is not None:
+        return {
+            "skip_reason": predictor["skip_reason"],
+            "training_diagnostics": prepared["training_diagnostics"],
+            "split_diagnostics": prepared["split_diagnostics"],
+            **predictor,
+        }
+    risk_policies = _fit_optional_meta_risk_policies(
+        bars, prepared, predictor, train_end
+    )
+    return {
+        "skip_reason": None,
+        "training_diagnostics": prepared["training_diagnostics"],
+        "split_diagnostics": prepared["split_diagnostics"],
+        **predictor,
+        **risk_policies,
     }
 
 
