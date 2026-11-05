@@ -144,7 +144,7 @@ jobs:
           printf 'initial_stop_atr=2.0\ntrailing_activation_atr=1.0\n'
           printf 'trailing_step_atr=1.5\ntake_profit_atr=4.0\nhorizon_bars=24\n'
           printf 'threshold_targets=0.30,0.50,0.70\n'
-          printf 'fee_bps_per_side=10\nslippage_bps_per_side=5\nround_trip_cost_bps=30\n'
+          printf 'fee_bps_per_side=25\nslippage_bps_per_side=20\nround_trip_cost_bps=90\n'
           printf 'label_geometry=EXACT_V4AF_TRAILING_REPLAY\n'
           printf 'Champion=null\norder_permission=false\ntrading_authorization=NO-GO\n'
           printf 'private_api_calls=0\nreal_order_attempts=0\nsequence_model_used=false\n'
@@ -160,8 +160,9 @@ jobs:
           assert v4af.TRAILING_STEP_ATR == 1.5
           assert v4af.TAKE_PROFIT_ATR == 4.0
           assert v4af.TARGET_ACCEPT_FRACTIONS == (0.30, 0.50, 0.70)
-          assert v4af.FEE_BPS_PER_SIDE == 10.0
-          assert v4af.SLIPPAGE_BPS_PER_SIDE == 5.0
+          assert v4af.FEE_BPS_PER_SIDE == 25.0
+          assert v4af.SLIPPAGE_BPS_PER_SIDE == 20.0
+          assert v4af.ROUND_TRIP_COST_BPS == 90.0
           safety = v4af._safety_report()
           assert safety["Champion"] is None
           assert safety["order_permission"] is False

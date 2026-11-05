@@ -143,7 +143,7 @@ jobs:
           printf 'symbol=ETHUSDT\ntimeframe=1h\ndays=730\n'
           printf 'initial_stop_atr=2.0\ntrailing_activation_atr=1.0\n'
           printf 'trailing_reference_step_atr=1.5\ntake_profit_atr=4.0\nhorizon_bars=24\n'
-          printf 'fee_bps_per_side=10\nslippage_bps_per_side=5\nround_trip_cost_bps=30\n'
+          printf 'fee_bps_per_side=25\nslippage_bps_per_side=20\nround_trip_cost_bps=90\n'
           printf 'SHAP_top_k=30\nregime=KMeans_3_clusters\n'
           printf 'calibration=Temperature_Scaling\nKelly=fractional_0.25_max_0.10\n'
           printf 'Champion=null\norder_permission=false\ntrading_authorization=NO-GO\n'
@@ -159,9 +159,9 @@ jobs:
           assert v4af.TRAILING_STEP_ATR == 1.5
           assert v4af.TAKE_PROFIT_ATR == 4.0
           assert v4af.HORIZON_BARS_VALUE == 24
-          assert v4af.FEE_BPS_PER_SIDE == 10.0
-          assert v4af.SLIPPAGE_BPS_PER_SIDE == 5.0
-          assert v4af.ROUND_TRIP_COST_BPS == 30.0
+          assert v4af.FEE_BPS_PER_SIDE == 25.0
+          assert v4af.SLIPPAGE_BPS_PER_SIDE == 20.0
+          assert v4af.ROUND_TRIP_COST_BPS == 90.0
           assert v4ah.V4AH_TOP_K_FEATURES == 30
           assert v4ah.V4AH_REGIME_COUNT == 3
           assert v4ah.V4AH_FRACTIONAL_KELLY == 0.25
@@ -242,9 +242,9 @@ jobs:
               "horizon_bars": 24,
           }
           assert report["cost_contract"] == {
-              "fee_bps_per_side": 10.0,
-              "slippage_bps_per_side": 5.0,
-              "round_trip_cost_bps": 30.0,
+              "fee_bps_per_side": 25.0,
+              "slippage_bps_per_side": 20.0,
+              "round_trip_cost_bps": 90.0,
           }
           safety = report["safety"]
           assert safety["Champion"] is None

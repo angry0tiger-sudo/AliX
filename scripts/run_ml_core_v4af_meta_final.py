@@ -63,9 +63,9 @@ TARGET_ACCEPT_FRACTIONS = (0.30, 0.50, 0.70)
 TRAIN_FRACTION = 0.70
 FORWARD_END_FRACTION = 0.85
 DAYS = 730
-FEE_BPS_PER_SIDE = 10.0
-SLIPPAGE_BPS_PER_SIDE = 5.0
-ROUND_TRIP_COST_BPS = 30.0
+FEE_BPS_PER_SIDE = 25.0
+SLIPPAGE_BPS_PER_SIDE = 20.0
+ROUND_TRIP_COST_BPS = 90.0
 MINIMUM_TRADES_EXCLUSIVE = 30
 MINIMUM_NET_PROFIT_FACTOR_EXCLUSIVE = 1.5
 MAXIMUM_DRAWDOWN_INCLUSIVE = 15.0
@@ -118,7 +118,9 @@ def _validate_fixed_exit_and_cost_contract() -> None:
         and TRAILING_STEP_ATR == 1.5
         and TAKE_PROFIT_ATR == 4.0
         and HORIZON_BARS_VALUE == 24
-        and ROUND_TRIP_COST_BPS == 30.0
+        and FEE_BPS_PER_SIDE == 25.0
+        and SLIPPAGE_BPS_PER_SIDE == 20.0
+        and ROUND_TRIP_COST_BPS == 90.0
     )
     if not geometry_is_valid:
         raise ValueError("v4af_owner_geometry_or_cost_contract_invalid")

@@ -5,6 +5,7 @@
 **Base:** `2ac5b95d4384402bcf900169edbb9afa0a6b470d`  
 **Market scope:** Binance Spot public ETHUSDT, 1h, 730 days  
 **Execution authority:** None. No live or paper orders are permitted.
+**Execution cost contract:** 25 bps fee and 20 bps slippage per side, 90 bps round trip, per Master Reference v0.7 §5.4. The former 10/5 bps per-side V4-AF override is superseded for this research branch.
 
 ## 1. Evidence and problem statement
 

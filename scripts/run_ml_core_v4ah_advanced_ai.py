@@ -796,9 +796,9 @@ def _validate_report_cost_geometry(report: dict[str, Any]) -> None:
         raise ValueError("v4ah_report_exit_geometry_invalid")
     costs = report.get("cost_contract", {})
     expected_costs = {
-        "fee_bps_per_side": 10.0,
-        "slippage_bps_per_side": 5.0,
-        "round_trip_cost_bps": 30.0,
+        "fee_bps_per_side": 25.0,
+        "slippage_bps_per_side": 20.0,
+        "round_trip_cost_bps": 90.0,
     }
     if costs != expected_costs:
         raise ValueError("v4ah_report_cost_contract_invalid")
@@ -855,7 +855,7 @@ def _render_step_summary(report: dict[str, Any]) -> str:
         "Primary: causal Bollinger(20, 2.0) upper-band breakout with Close > EMA200.",
         "Execution: closed-candle signal, next-bar-open entry, no pyramiding.",
         "Geometry: SL=2.0 ATR, TP=4.0 ATR, trailing activation=1.0 ATR, reference step=1.5 ATR, horizon=24 bars.",
-        "Costs: maker fee=10 bps/side, slippage=5 bps/side, round trip=30 bps.",
+        "Costs: fee=25 bps/side, slippage=20 bps/side, round trip=90 bps (MRD v0.7).",
         "Training: outer 70%; purged OOF Fit/Temperature/Threshold slices=70/15/15.",
         "Evaluation: next 15% forward validation; final 15% holdout untouched.",
         "Model: LightGBM + TreeSHAP top-30 Fit-only selection; KMeans regimes as features.",

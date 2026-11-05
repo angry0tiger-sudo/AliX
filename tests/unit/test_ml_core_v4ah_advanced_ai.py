@@ -11,6 +11,7 @@ import pandas as pd
 import pytest
 from pandas import DataFrame
 
+from scripts import run_ml_core_v4ah_advanced_ai as v4ah_runner
 from services.meta_labeling import v4ah
 
 
@@ -32,6 +33,32 @@ def _regime_frame(row_count: int = 260) -> DataFrame:
         rng.normal(size=(row_count, len(v4ah.REGIME_INPUT_COLUMNS))),
         columns=list(v4ah.REGIME_INPUT_COLUMNS),
     )
+
+
+def test_v4ah_report_requires_master_reference_cost_contract() -> None:
+    report: dict[str, Any] = {
+        "fixed_exit_geometry": {
+            "initial_stop_atr": 2.0,
+            "trailing_activation_atr": 1.0,
+            "trailing_step_atr": 1.5,
+            "take_profit_atr": 4.0,
+            "horizon_bars": 24,
+        },
+        "cost_contract": {
+            "fee_bps_per_side": 25.0,
+            "slippage_bps_per_side": 20.0,
+            "round_trip_cost_bps": 90.0,
+        },
+    }
+    v4ah_runner._validate_report_cost_geometry(report)
+
+    report["cost_contract"] = {
+        "fee_bps_per_side": 10.0,
+        "slippage_bps_per_side": 5.0,
+        "round_trip_cost_bps": 30.0,
+    }
+    with pytest.raises(ValueError, match="v4ah_report_cost_contract_invalid"):
+        v4ah_runner._validate_report_cost_geometry(report)
 
 
 def test_numeric_matrix_and_binary_label_guards() -> None:

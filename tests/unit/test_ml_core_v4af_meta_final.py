@@ -93,6 +93,9 @@ def test_run_request_and_fixed_owner_geometry_are_strict() -> None:
     assert v4af.TRAILING_ACTIVATION_ATR == 1.0
     assert v4af.TRAILING_STEP_ATR == 1.5
     assert v4af.TAKE_PROFIT_ATR == 4.0
+    assert v4af.FEE_BPS_PER_SIDE == 25.0
+    assert v4af.SLIPPAGE_BPS_PER_SIDE == 20.0
+    assert v4af.ROUND_TRIP_COST_BPS == 90.0
     assert management.trailing_stop_enabled is True
     assert management.stop_loss_atr_multiplier == 2.0
     assert management.trailing_activation_atr == 1.0
@@ -183,8 +186,8 @@ def test_oof_labels_use_exact_v4af_geometry_costs_and_purge(
     assert len(observed) == 2
     for item in observed:
         assert item["confidence_threshold"] is None
-        assert item["fee_bps"] == 10.0
-        assert item["slippage_bps"] == 5.0
+        assert item["fee_bps"] == 25.0
+        assert item["slippage_bps"] == 20.0
         assert item["initial_stop"] == 2.0
         assert item["activation"] == 1.0
         assert item["step"] == 1.5
@@ -399,8 +402,8 @@ def test_economic_candidate_applies_threshold_before_replay(
     )
 
     assert observed["accepted_indices"] == [11]
-    assert observed["config"].fee_bps == 10.0
-    assert observed["config"].slippage_bps == 5.0
+    assert observed["config"].fee_bps == 25.0
+    assert observed["config"].slippage_bps == 20.0
     management = observed["management"]
     assert management.trailing_stop_enabled is True
     assert management.stop_loss_atr_multiplier == 2.0
