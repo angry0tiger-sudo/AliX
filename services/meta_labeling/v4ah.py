@@ -205,21 +205,26 @@ def _validate_split_fractions(fit_fraction: float, temperature_fraction: float) 
         raise ValueError("v4ah_training_split_fractions_invalid")
 
 
-def _validated_training_events(
-    labelled_events: DataFrame, outer_train_end: int
-) -> DataFrame:
+
+def _validate_labelled_event_schema(labelled_events: DataFrame) -> None:
     required = {"event_index", "label_end_idx", "meta_label", "net_return"}
     if not required.issubset(labelled_events.columns) or len(labelled_events) < 100:
         raise ValueError("v4ah_three_way_training_schema_or_support_invalid")
-    events = labelled_events.sort_values("event_index").reset_index(drop=True).copy()
-    if events["event_index"].duplicated().any():
-        raise ValueError("v4ah_training_events_duplicate")
+
+
+def _event_index_arrays(events: DataFrame) -> tuple[np.ndarray, np.ndarray]:
     event_indices = pd.to_numeric(events["event_index"], errors="coerce").to_numpy(
         dtype=float
     )
     label_ends = pd.to_numeric(events["label_end_idx"], errors="coerce").to_numpy(
         dtype=float
     )
+    return event_indices, label_ends
+
+
+def _validate_event_index_bounds(
+    event_indices: np.ndarray, label_ends: np.ndarray, outer_train_end: int
+) -> None:
     valid = (
         np.isfinite(event_indices).all()
         and np.isfinite(label_ends).all()
@@ -232,8 +237,18 @@ def _validated_training_events(
     )
     if not valid:
         raise ValueError("v4ah_training_label_crosses_outer_train")
-    return events
 
+
+def _validated_training_events(
+    labelled_events: DataFrame, outer_train_end: int
+) -> DataFrame:
+    _validate_labelled_event_schema(labelled_events)
+    events = labelled_events.sort_values("event_index").reset_index(drop=True).copy()
+    if events["event_index"].duplicated().any():
+        raise ValueError("v4ah_training_events_duplicate")
+    event_indices, label_ends = _event_index_arrays(events)
+    _validate_event_index_bounds(event_indices, label_ends, outer_train_end)
+    return events
 
 def _purged_training_slices(
     events: DataFrame, fit_fraction: float, temperature_fraction: float
@@ -841,6 +856,38 @@ def _apply_sized_trade(
     return enriched, next_equity, next_peak, drawdown, pnl, int(raw_return > 0.0)
 
 
+
+def _sized_profit_and_loss(pnl_values: list[float]) -> tuple[float, float]:
+    profit = sum(value for value in pnl_values if value > 0.0)
+    loss = abs(sum(value for value in pnl_values if value < 0.0))
+    return profit, loss
+
+
+def _sized_win_and_drawdown_metrics(
+    count: int, wins: int, maximum_drawdown: float
+) -> dict[str, Any]:
+    return {
+        "trade_count": count,
+        "win_rate": round(wins / count, 8) if count else 0.0,
+        "max_drawdown_percent": round(maximum_drawdown * 100.0, 8),
+    }
+
+
+def _sized_position_metrics(
+    stake_fractions: list[float], initial_equity: float, unscaled_returns: list[float]
+) -> dict[str, Any]:
+    mean_fraction = float(np.mean(stake_fractions)) if stake_fractions else 0.0
+    mean_return = float(np.mean(unscaled_returns)) if unscaled_returns else 0.0
+    return {
+        "mean_position_fraction": round(mean_fraction, 8),
+        "max_position_fraction": max(stake_fractions, default=0.0),
+        "mean_unscaled_net_return_fraction": round(mean_return, 8),
+        "mean_unscaled_net_expectancy_usd_at_full_equity": round(
+            mean_return * initial_equity, 8
+        ),
+    }
+
+
 def _sized_trade_metrics(
     pnl_values: list[float],
     unscaled_returns: list[float],
@@ -850,31 +897,23 @@ def _sized_trade_metrics(
     equity: float,
     initial_equity: float,
 ) -> dict[str, Any]:
-    profit = sum(value for value in pnl_values if value > 0.0)
-    loss = abs(sum(value for value in pnl_values if value < 0.0))
+    profit, loss = _sized_profit_and_loss(pnl_values)
     count = len(pnl_values)
-    return {
-        "trade_count": count,
-        "net_profit_factor": round(profit / loss, 8) if loss else None,
-        "net_profit_factor_infinite_no_losses": bool(profit > 0.0 and loss == 0.0),
-        "win_rate": round(wins / count, 8) if count else 0.0,
-        "max_drawdown_percent": round(maximum_drawdown * 100.0, 8),
-        "net_pnl_total_usd": round(sum(pnl_values), 8),
-        "ending_equity_usd": round(equity, 8),
-        "mean_position_fraction": (
-            round(float(np.mean(stake_fractions)), 8) if stake_fractions else 0.0
-        ),
-        "max_position_fraction": max(stake_fractions, default=0.0),
-        "mean_unscaled_net_return_fraction": (
-            round(float(np.mean(unscaled_returns)), 8) if unscaled_returns else 0.0
-        ),
-        "mean_unscaled_net_expectancy_usd_at_full_equity": (
-            round(float(np.mean(unscaled_returns)) * initial_equity, 8)
-            if unscaled_returns
-            else 0.0
-        ),
-    }
-
+    metrics = _sized_win_and_drawdown_metrics(count, wins, maximum_drawdown)
+    metrics.update(
+        {
+            "net_profit_factor": round(profit / loss, 8) if loss else None,
+            "net_profit_factor_infinite_no_losses": bool(
+                profit > 0.0 and loss == 0.0
+            ),
+            "net_pnl_total_usd": round(sum(pnl_values), 8),
+            "ending_equity_usd": round(equity, 8),
+        }
+    )
+    metrics.update(
+        _sized_position_metrics(stake_fractions, initial_equity, unscaled_returns)
+    )
+    return metrics
 
 def summarize_sized_trades(
     trades: list[dict[str, Any]],
