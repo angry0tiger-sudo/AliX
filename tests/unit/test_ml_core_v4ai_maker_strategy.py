@@ -11,6 +11,7 @@ from pandas import DataFrame
 
 from scripts import run_ml_core_v4ac_cost_optimization as v4ac
 from scripts import run_ml_core_v4ai_maker_strategy as v4ai
+from services.meta_labeling import v4ah as advanced
 
 
 def _trade_rows() -> list[dict[str, Any]]:
@@ -181,7 +182,7 @@ def test_regime_feature_pipeline_uses_fixed_three_clusters(
         )
 
     monkeypatch.setattr(
-        v4ai.advanced, "build_regime_features", fake_build_regime_features
+        advanced, "build_regime_features", fake_build_regime_features
     )
     transformed, diagnostics = v4ai._regime_features(DataFrame({"feature": [1.0, 2.0]}))
     assert observed == {"fit_end": 200, "cluster_count": 3}
