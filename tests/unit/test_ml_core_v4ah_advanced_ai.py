@@ -146,7 +146,7 @@ def test_three_way_chronological_purged_split_and_guards() -> None:
         ValueError, match="v4ah_fit_rows_insufficient_after_purge"
     ) as error:
         v4ah.split_fit_temperature_threshold(purged, outer_train_end=900)
-    purged_diagnostics = error.value.diagnostics
+    purged_diagnostics = getattr(error.value, "diagnostics", {})
     assert purged_diagnostics["fit_rows"] == 0
     assert purged_diagnostics["fit_event_start"] is None
     assert purged_diagnostics["fit_event_end"] is None
