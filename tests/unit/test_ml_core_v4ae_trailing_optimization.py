@@ -117,7 +117,7 @@ def test_symbol_runner_executes_all_grid_rows_as_primary_only(
     features = DataFrame({"feature": np.ones(len(bars))})
     signals = Series(False, index=range(len(bars)), dtype=bool)
     signals.iloc[[700, 720]] = True
-    monkeypatch.setattr(v4ac, "resample_ohlcv", lambda source, timeframe: bars)
+    monkeypatch.setattr(v4ae, "resample_ohlcv", lambda source, timeframe: bars)
     monkeypatch.setattr(
         v4ac,
         "_primary_features_and_signals",
@@ -216,7 +216,7 @@ def test_run_v4ae_writes_report_and_trade_artifacts(
         )
 
     monkeypatch.setattr(
-        v4ac,
+        v4ae,
         "_load_diagnostic_datasets",
         lambda *args: (
             {"BTCUSDT": DataFrame(), "ETHUSDT": DataFrame()},
