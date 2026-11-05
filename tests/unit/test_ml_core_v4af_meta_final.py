@@ -104,9 +104,7 @@ def test_run_request_and_fixed_owner_geometry_are_strict() -> None:
     assert unfiltered_management.confidence_threshold is None
 
 
-@pytest.mark.parametrize(
-    "threshold", [-0.01, 0.0, 1.01, float("nan"), float("inf")]
-)
+@pytest.mark.parametrize("threshold", [-0.01, 0.0, 1.01, float("nan"), float("inf")])
 def test_invalid_meta_threshold_fails_closed(threshold: float) -> None:
     with pytest.raises(ValueError, match="meta_threshold_invalid"):
         v4af._trade_management_config(threshold)

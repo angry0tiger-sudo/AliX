@@ -140,9 +140,7 @@ def _validate_run_request(days: int, commit_sha: str) -> None:
 def _trade_management_config(
     confidence_threshold: float | None,
 ) -> TradeManagementConfig:
-    threshold = (
-        None if confidence_threshold is None else float(confidence_threshold)
-    )
+    threshold = None if confidence_threshold is None else float(confidence_threshold)
     if threshold is not None and (
         not math.isfinite(threshold) or not 0.0 < threshold <= 1.0
     ):
