@@ -676,7 +676,7 @@ def _fit_meta_predictor(prepared: dict[str, Any]) -> dict[str, Any]:
         calibrated_threshold,
         threshold_rows["meta_label"].to_numpy(dtype=int),
     )
-    result = {
+    result: dict[str, Any] = {
         "skip_reason": None,
         "fit_diagnostics": shap_diagnostics,
         "shap_rankings": rankings,
