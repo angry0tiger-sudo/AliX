@@ -207,9 +207,7 @@ def test_split_with_fallback_fit_class_failure_preserves_slice_diagnostics() -> 
     with pytest.raises(
         ValueError, match="v4ah_binary_class_support_insufficient"
     ) as error:
-        v4ah.split_fit_temperature_threshold_with_fallback(
-            events, outer_train_end=900
-        )
+        v4ah.split_fit_temperature_threshold_with_fallback(events, outer_train_end=900)
     diagnostics = getattr(error.value, "diagnostics", {})
     assert diagnostics["fit_rows"] == 175
     assert diagnostics["fit_class_counts"] == {
