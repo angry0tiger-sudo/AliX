@@ -130,15 +130,11 @@ def _fetch_candle_stamps(start_ms: int, end_ms: int) -> tuple[list[int], int]:
     return stamps, page_count
 
 
-def _validate_day_boundaries(
-    stamps: list[int], start_ms: int, end_ms: int
-) -> None:
+def _validate_day_boundaries(stamps: list[int], start_ms: int, end_ms: int) -> None:
     if not stamps or stamps[0] != start_ms or stamps[-1] != end_ms:
         first = stamps[0] if stamps else None
         last = stamps[-1] if stamps else None
-        raise ValueError(
-            f"binance_day_boundary_mismatch:first={first}:last={last}"
-        )
+        raise ValueError(f"binance_day_boundary_mismatch:first={first}:last={last}")
 
 
 def _iso_utc(timestamp_ms: int) -> str:
