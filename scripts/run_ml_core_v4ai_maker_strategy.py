@@ -530,7 +530,10 @@ def _deflated_sharpe_diagnostics(
     }
     if len(trial_sharpes) < 2:
         return result
-    if int(metrics.get('return_observation_count', 0)) < DSR_MINIMUM_RETURN_OBSERVATIONS:
+    if (
+        int(metrics.get("return_observation_count", 0))
+        < DSR_MINIMUM_RETURN_OBSERVATIONS
+    ):
         result["dsr_status"] = "INSUFFICIENT_RETURN_OBSERVATIONS"
         return result
     observed_sharpe = metrics.get("sharpe_ratio_per_trade")
@@ -545,12 +548,9 @@ def _deflated_sharpe_diagnostics(
         return result
     trial_count = int(trial_values.size)
     euler_mascheroni = 0.5772156649015329
-    expected_max_multiplier = (
-        (1.0 - euler_mascheroni)
-        * float(norm.ppf(1.0 - 1.0 / trial_count))
-        + euler_mascheroni
-        * float(norm.ppf(1.0 - 1.0 / (trial_count * math.e)))
-    )
+    expected_max_multiplier = (1.0 - euler_mascheroni) * float(
+        norm.ppf(1.0 - 1.0 / trial_count)
+    ) + euler_mascheroni * float(norm.ppf(1.0 - 1.0 / (trial_count * math.e)))
     trial_mean = float(np.mean(trial_values))
     trial_std = float(np.std(trial_values, ddof=1))
     expected_max_sharpe = trial_mean + trial_std * expected_max_multiplier
@@ -567,7 +567,7 @@ def _deflated_sharpe_diagnostics(
         return result
     z_score = (
         (float(observed_sharpe) - expected_max_sharpe)
-        * math.sqrt(int(metrics['return_observation_count']) - 1)
+        * math.sqrt(int(metrics["return_observation_count"]) - 1)
         / math.sqrt(variance_term)
     )
     probability = float(norm.cdf(z_score))
@@ -585,14 +585,12 @@ def _deflated_sharpe_diagnostics(
     return result
 
 
-def _attach_dsr_to_cohort(
-    metric_rows: list[dict[str, Any]], trial_scope: str
-) -> None:
+def _attach_dsr_to_cohort(metric_rows: list[dict[str, Any]], trial_scope: str) -> None:
     trial_sharpes = [
-        float(metrics['sharpe_ratio_per_trade'])
+        float(metrics["sharpe_ratio_per_trade"])
         for metrics in metric_rows
-        if metrics.get('sharpe_ratio_per_trade') is not None
-        and math.isfinite(float(metrics['sharpe_ratio_per_trade']))
+        if metrics.get("sharpe_ratio_per_trade") is not None
+        and math.isfinite(float(metrics["sharpe_ratio_per_trade"]))
     ]
     for metrics in metric_rows:
         metrics.update(
@@ -600,9 +598,7 @@ def _attach_dsr_to_cohort(
         )
         metrics["zai_net_pf_gt_1_1"] = _profit_factor(metrics) > 1.1
         z_score = metrics.get("dsr_z_score")
-        metrics["zai_dsr_z_gt_1_0"] = (
-            z_score is not None and float(z_score) > 1.0
-        )
+        metrics["zai_dsr_z_gt_1_0"] = z_score is not None and float(z_score) > 1.0
 
 
 def _attach_dsr_diagnostics(
@@ -610,12 +606,10 @@ def _attach_dsr_diagnostics(
 ) -> None:
     candidate_metrics = [cast(dict[str, Any], item["metrics"]) for item in candidates]
     geometry_metrics = [cast(dict[str, Any], item) for item in exit_matrix["cells"]]
-    _attach_dsr_to_cohort(
-        candidate_metrics, "CURRENT_RUN_CANDIDATE_COHORT_ONLY"
-    )
-    _attach_dsr_to_cohort(
-        geometry_metrics, "CURRENT_RUN_EXIT_GEOMETRY_COHORT_ONLY"
-    )
+    _attach_dsr_to_cohort(candidate_metrics, "CURRENT_RUN_CANDIDATE_COHORT_ONLY")
+    _attach_dsr_to_cohort(geometry_metrics, "CURRENT_RUN_EXIT_GEOMETRY_COHORT_ONLY")
+
+
 
 def _candidate_passes(
     metrics: dict[str, Any],
