@@ -1859,9 +1859,13 @@ def _load_manifested_data(
         or manifest.get("missing_gap_ranges", []) != actual_gaps
     ):
         raise ValueError(f"public_data_gap_manifest_mismatch:{symbol}")
+    manifest_start = manifest.get("start_utc")
+    manifest_end = manifest.get("end_utc")
+    if not isinstance(manifest_start, str) or not isinstance(manifest_end, str):
+        raise ValueError(f"public_data_window_boundary_missing:{symbol}")
     if (
-        pd.to_datetime(manifest.get("start_utc"), utc=True) != candles["date"].iloc[0]
-        or pd.to_datetime(manifest.get("end_utc"), utc=True) != candles["date"].iloc[-1]
+        pd.to_datetime(manifest_start, utc=True) != candles["date"].iloc[0]
+        or pd.to_datetime(manifest_end, utc=True) != candles["date"].iloc[-1]
     ):
         raise ValueError(f"public_data_window_boundary_mismatch:{symbol}")
     provenance = {

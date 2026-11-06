@@ -10,6 +10,7 @@ import pandas as pd
 import pytest
 from pandas import DataFrame, Series
 
+from scripts.fetch_binance_public_ohlcv import GAP_POLICY_ALLOW_EXCHANGE_GAPS
 from scripts import run_ml_core_real_data_baseline as real_data
 from scripts import run_ml_core_v4af_meta_final as v4af
 
@@ -682,7 +683,7 @@ def test_manifested_gap_loader_recomputes_gap_ranges_and_checks_hash(
         "credentials_used": False,
         "private_api_calls": 0,
         "real_order_attempts": 0,
-        "gap_policy": real_data.GAP_POLICY_ALLOW_EXCHANGE_GAPS,
+        "gap_policy": GAP_POLICY_ALLOW_EXCHANGE_GAPS,
         "missing_intervals": 120,
         "missing_minute_intervals": 120,
         "missing_gap_ranges": gaps,

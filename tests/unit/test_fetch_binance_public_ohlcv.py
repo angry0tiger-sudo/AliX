@@ -1,4 +1,5 @@
 from __future__ import annotations
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
@@ -247,7 +248,7 @@ def _sparse_klines(stamps: list[int]) -> list[list[Any]]:
 
 def _provider_with_gap(
     start: int, end: int, missing_start: int, missing_end: int
-) -> Any:
+) -> Callable[[dict[str, str]], list[Any]]:
     real_stamps = [
         stamp
         for stamp in range(start, end + fetcher.INTERVAL_MS, fetcher.INTERVAL_MS)
