@@ -1145,6 +1145,26 @@ def _validate_report(report: dict[str, Any], commit_sha: str) -> None:
     _validate_meta_report(report.get("meta_model", {}))
 
 
+def _format_optional_ratio(value: Any) -> str:
+    if value is None:
+        return "N/A"
+    numeric = float(value)
+    return f"{numeric:.4f}" if math.isfinite(numeric) else "N/A"
+
+
+def _format_diagnostic_flag(value: Any) -> str:
+    if value is None:
+        return "N/A"
+    return "YES" if bool(value) else "NO"
+
+
+def _format_pf(metrics: dict[str, Any]) -> str:
+    if metrics.get("net_profit_factor_infinite_no_losses"):
+        return "INF"
+    value = metrics.get("net_profit_factor")
+    return "N/A" if value is None else f"{float(value):.4f}"
+
+
 def _format_optional_percent(value: Any, scale: float = 1.0) -> str:
     if value is None:
         return "N/A"
@@ -1277,6 +1297,7 @@ def _render_exit_geometry_row(cell: dict[str, Any]) -> str:
 
 def _render_exit_geometry_section(cells: list[dict[str, Any]]) -> list[str]:
     lines = [
+        "",
         "### ADX-filtered Primary exit-geometry matrix (30 bps only)",
         "| Policy | SL ATR | TP ATR | Activation ATR | Step ATR | Cost bps RT | Trades | Win % | Net PF | Max DD % | DSR Z | DSR P | DSR N | Sortino/trade | Z.AI PF>1.1 | Z.AI DSR Z>1 | Net PnL USD | Expectancy USD/trade |",
         "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---:|---:|",
