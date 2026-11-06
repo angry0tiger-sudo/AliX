@@ -13,6 +13,7 @@ from typing import Any, cast
 import numpy as np
 import pandas as pd
 from pandas import DataFrame, Series
+from scipy.stats import kurtosis, norm, skew
 
 import scripts.run_ml_core_v4ac_cost_optimization as v4ac
 import scripts.run_ml_core_v4af_meta_final as v4af
@@ -42,6 +43,8 @@ MINIMUM_TRADES = 30
 MINIMUM_NET_PF = 1.5
 MINIMUM_WIN_RATE = 0.45
 MAXIMUM_DRAWDOWN = 15.0
+DSR_MINIMUM_RETURN_OBSERVATIONS = 4
+SORTINO_TARGET_RETURN_PER_TRADE = 0.0
 BASE_CONTROL = "PRIMARY_BASE_CONTROL_30BPS"
 ADX_CONTROL = "PRIMARY_ADX20_30BPS"
 META_CANDIDATE = "META_TOP_70_ADX20_30BPS"
@@ -295,6 +298,7 @@ def _support_shortfall(error: ValueError) -> bool:
     prefixes = (
         "v4ah_fit_rows_insufficient",
         "v4ah_fit_rows_insufficient_after_purge",
+        "v4ah_temperature_rows_insufficient_after_purge",
         "v4ah_binary_class_support_insufficient",
         "v4ah_shap_feature_support_insufficient",
         "v4ah_temperature_calibration_inputs_invalid",
@@ -459,6 +463,160 @@ def _expectancy(trades: list[dict[str, Any]]) -> float:
     return float(np.mean(returns) * INITIAL_EQUITY) if returns else 0.0
 
 
+def _trade_risk_metrics(trades: list[dict[str, Any]]) -> dict[str, Any]:
+    returns = np.asarray(
+        [float(trade["net_return_fraction"]) for trade in trades], dtype=float
+    )
+    if returns.ndim != 1 or not np.isfinite(returns).all():
+        raise ValueError("v4ai_risk_metric_returns_invalid")
+    count = int(returns.size)
+    metrics: dict[str, Any] = {
+        "return_observation_count": count,
+        "sharpe_ratio_per_trade": None,
+        "sharpe_status": "INSUFFICIENT_TRADE_RETURNS",
+        "return_skewness": None,
+        "return_kurtosis_non_excess": None,
+        "sortino_ratio_per_trade": None,
+        "sortino_target_return_per_trade": SORTINO_TARGET_RETURN_PER_TRADE,
+        "sortino_status": "INSUFFICIENT_TRADE_RETURNS",
+        "dsr_z_score": None,
+        "dsr_probability": None,
+        "dsr_expected_max_sharpe_per_trade": None,
+        "dsr_trial_count": 0,
+        "dsr_trial_scope": "NOT_COMPUTED",
+        "dsr_status": "AWAITING_TRIAL_COHORT",
+    }
+    if count < 2:
+        return metrics
+    excess_returns = returns - SORTINO_TARGET_RETURN_PER_TRADE
+    downside = np.minimum(excess_returns, 0.0)
+    downside_deviation = float(np.sqrt(np.mean(np.square(downside))))
+    if downside_deviation > 0.0:
+        metrics["sortino_ratio_per_trade"] = float(
+            np.mean(excess_returns) / downside_deviation
+        )
+        metrics["sortino_status"] = "COMPUTED"
+    else:
+        metrics["sortino_status"] = "ZERO_DOWNSIDE_DEVIATION"
+    standard_deviation = float(np.std(returns, ddof=1))
+    if not math.isfinite(standard_deviation) or standard_deviation <= 0.0:
+        metrics["sharpe_status"] = "ZERO_RETURN_VOLATILITY"
+        return metrics
+    metrics.update(
+        {
+            "sharpe_ratio_per_trade": float(
+                np.mean(excess_returns) / standard_deviation
+            ),
+            "sharpe_status": "COMPUTED",
+            "return_skewness": float(skew(returns, bias=False)),
+            "return_kurtosis_non_excess": float(
+                kurtosis(returns, fisher=False, bias=False)
+            ),
+        }
+    )
+    return metrics
+
+
+def _deflated_sharpe_diagnostics(
+    metrics: dict[str, Any], trial_sharpes: list[float], trial_scope: str
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "dsr_z_score": None,
+        "dsr_probability": None,
+        "dsr_expected_max_sharpe_per_trade": None,
+        "dsr_trial_count": len(trial_sharpes),
+        "dsr_trial_scope": trial_scope,
+        "dsr_status": "INSUFFICIENT_TRIAL_SHARPES",
+    }
+    if len(trial_sharpes) < 2:
+        return result
+    if int(metrics.get('return_observation_count', 0)) < DSR_MINIMUM_RETURN_OBSERVATIONS:
+        result["dsr_status"] = "INSUFFICIENT_RETURN_OBSERVATIONS"
+        return result
+    observed_sharpe = metrics.get("sharpe_ratio_per_trade")
+    return_skewness = metrics.get("return_skewness")
+    return_kurtosis = metrics.get("return_kurtosis_non_excess")
+    if observed_sharpe is None or return_skewness is None or return_kurtosis is None:
+        result["dsr_status"] = "RETURN_DISTRIBUTION_UNAVAILABLE"
+        return result
+    trial_values = np.asarray(trial_sharpes, dtype=float)
+    if trial_values.ndim != 1 or not np.isfinite(trial_values).all():
+        result["dsr_status"] = "TRIAL_SHARPE_DISTRIBUTION_INVALID"
+        return result
+    trial_count = int(trial_values.size)
+    euler_mascheroni = 0.5772156649015329
+    expected_max_multiplier = (
+        (1.0 - euler_mascheroni)
+        * float(norm.ppf(1.0 - 1.0 / trial_count))
+        + euler_mascheroni
+        * float(norm.ppf(1.0 - 1.0 / (trial_count * math.e)))
+    )
+    trial_mean = float(np.mean(trial_values))
+    trial_std = float(np.std(trial_values, ddof=1))
+    expected_max_sharpe = trial_mean + trial_std * expected_max_multiplier
+    variance_term = (
+        1.0
+        - float(return_skewness) * float(observed_sharpe)
+        + ((float(return_kurtosis) - 1.0) / 4.0) * float(observed_sharpe) ** 2
+    )
+    if not math.isfinite(expected_max_sharpe) or not math.isfinite(variance_term):
+        result["dsr_status"] = "DSR_VARIANCE_INVALID"
+        return result
+    if variance_term <= 0.0:
+        result["dsr_status"] = "DSR_VARIANCE_INVALID"
+        return result
+    z_score = (
+        (float(observed_sharpe) - expected_max_sharpe)
+        * math.sqrt(int(metrics['return_observation_count']) - 1)
+        / math.sqrt(variance_term)
+    )
+    probability = float(norm.cdf(z_score))
+    if not math.isfinite(z_score) or not math.isfinite(probability):
+        result["dsr_status"] = "DSR_RESULT_NON_FINITE"
+        return result
+    result.update(
+        {
+            "dsr_z_score": float(z_score),
+            "dsr_probability": probability,
+            "dsr_expected_max_sharpe_per_trade": float(expected_max_sharpe),
+            "dsr_status": "COMPUTED",
+        }
+    )
+    return result
+
+
+def _attach_dsr_to_cohort(
+    metric_rows: list[dict[str, Any]], trial_scope: str
+) -> None:
+    trial_sharpes = [
+        float(metrics['sharpe_ratio_per_trade'])
+        for metrics in metric_rows
+        if metrics.get('sharpe_ratio_per_trade') is not None
+        and math.isfinite(float(metrics['sharpe_ratio_per_trade']))
+    ]
+    for metrics in metric_rows:
+        metrics.update(
+            _deflated_sharpe_diagnostics(metrics, trial_sharpes, trial_scope)
+        )
+        metrics["zai_net_pf_gt_1_1"] = _profit_factor(metrics) > 1.1
+        z_score = metrics.get("dsr_z_score")
+        metrics["zai_dsr_z_gt_1_0"] = (
+            z_score is not None and float(z_score) > 1.0
+        )
+
+
+def _attach_dsr_diagnostics(
+    candidates: list[dict[str, Any]], exit_matrix: dict[str, Any]
+) -> None:
+    candidate_metrics = [cast(dict[str, Any], item["metrics"]) for item in candidates]
+    geometry_metrics = [cast(dict[str, Any], item) for item in exit_matrix["cells"]]
+    _attach_dsr_to_cohort(
+        candidate_metrics, "CURRENT_RUN_CANDIDATE_COHORT_ONLY"
+    )
+    _attach_dsr_to_cohort(
+        geometry_metrics, "CURRENT_RUN_EXIT_GEOMETRY_COHORT_ONLY"
+    )
+
 def _candidate_passes(
     metrics: dict[str, Any],
     expectancy: float,
@@ -571,6 +729,7 @@ def _run_candidate(
     )
     trades = cast(list[dict[str, Any]], replay["trades"])
     metrics = v4ac._summarize_replay(replay)
+    metrics.update(_trade_risk_metrics(trades))
     expectancy = _expectancy(trades)
     metrics["mean_unscaled_net_expectancy_usd_at_full_equity"] = expectancy
     candidate = {
@@ -631,6 +790,7 @@ def _skipped_meta_candidate(reason: str, event_count: int) -> dict[str, Any]:
             "win_rate": None,
             "net_pnl_total_usd": 0.0,
             "mean_unscaled_net_expectancy_usd_at_full_equity": 0.0,
+            **_trade_risk_metrics([]),
         },
         "acceptance_target_met": False,
         "sequence_model_used": False,
@@ -676,6 +836,7 @@ def _run_exit_geometry_matrix(
                 "max_drawdown_percent": metrics["max_drawdown_percent"],
                 "net_pnl_total_usd": metrics["net_pnl_total_usd"],
                 "mean_unscaled_net_expectancy_usd_at_full_equity": _expectancy(trades),
+                **_trade_risk_metrics(trades),
                 "signal_count": len(event_indices),
                 "evaluation_split": "FORWARD_VALIDATION",
                 "meta_model_used": False,
@@ -775,8 +936,24 @@ def _validate_exit_matrix(matrix: dict[str, Any]) -> None:
         _validate_exit_matrix_cell(cell)
 
 
-def _safety_report() -> dict[str, Any]:
+def _risk_metric_contract() -> dict[str, Any]:
     return {
+        "return_basis": "NET_CLOSED_TRADE_RETURN_FRACTION",
+        "observation_unit": "CLOSED_TRADE",
+        "annualization": "NONE_IRREGULAR_TRADE_INTERVALS",
+        "sortino_target_return_per_trade": SORTINO_TARGET_RETURN_PER_TRADE,
+        "dsr_method": "BAILEY_LOPEZ_DE_PRADO_2014",
+        "dsr_probability_definition": "STANDARD_NORMAL_CDF_OF_DSR_Z_SCORE",
+        "dsr_trial_cohorts": [
+            "CURRENT_RUN_CANDIDATE_COHORT_ONLY",
+            "CURRENT_RUN_EXIT_GEOMETRY_COHORT_ONLY",
+        ],
+        "historical_trials_included": False,
+        "trial_independence_assumption": "UNVERIFIED",
+    }
+
+
+def _safety_report() -> dict[str, Any]:    return {
         "Champion": None,
         "order_permission": False,
         "trading_authorization": "NO-GO",
@@ -814,8 +991,12 @@ def _validate_report_cost_contract(report: dict[str, Any]) -> None:
         raise ValueError("v4ai_report_cost_contract_invalid")
 
 
-def _validate_report_primary_filter(report: dict[str, Any]) -> None:
-    expected = {
+def _validate_report_risk_contract(report: dict[str, Any]) -> None:
+    if report.get("risk_metric_contract") != _risk_metric_contract():
+        raise ValueError("v4ai_risk_metric_contract_invalid")
+
+
+def _validate_report_primary_filter(report: dict[str, Any]) -> None:    expected = {
         "feature": ADX_FEATURE,
         "period": ADX_PERIOD,
         "threshold": ADX_THRESHOLD,
@@ -898,6 +1079,7 @@ def _validate_meta_report(meta: dict[str, Any]) -> None:
 def _validate_report(report: dict[str, Any], commit_sha: str) -> None:
     _validate_report_identity(report, commit_sha)
     _validate_report_cost_contract(report)
+    _validate_report_risk_contract(report)
     _validate_report_primary_filter(report)
     _validate_report_holdout(report)
     _validate_report_candidates(report)
@@ -906,8 +1088,20 @@ def _validate_report(report: dict[str, Any], commit_sha: str) -> None:
     _validate_meta_report(report.get("meta_model", {}))
 
 
-def _format_pf(metrics: dict[str, Any]) -> str:
-    if metrics.get("net_profit_factor_infinite_no_losses"):
+def _format_optional_ratio(value: Any) -> str:
+    if value is None:
+        return "N/A"
+    numeric = float(value)
+    return f"{numeric:.4f}" if math.isfinite(numeric) else "N/A"
+
+
+def _format_diagnostic_flag(value: Any) -> str:
+    if value is None:
+        return "N/A"
+    return "YES" if bool(value) else "NO"
+
+
+def _format_pf(metrics: dict[str, Any]) -> str:    if metrics.get("net_profit_factor_infinite_no_losses"):
         return "INF"
     value = metrics.get("net_profit_factor")
     return "N/A" if value is None else f"{float(value):.4f}"
@@ -926,14 +1120,18 @@ def _render_step_summary(report: dict[str, Any]) -> str:
         "Execution: closed-candle signal, next-bar-open entry, no pyramiding.",
         "Maker-cost assumption: 10 bps fee + 5 bps slippage per side = 30 bps round trip.",
         "Important: fixed maker-fee proxy only; passive Limit queue/partial-fill mechanics are not simulated.",
+        "Risk returns: net closed-trade returns; Sharpe and Sortino are per-trade, not calendar-annualized; Sortino target=0.",
+        "DSR: Bailey-López de Prado expected-maximum-Sharpe deflation; DSR Z is unbounded and DSR probability=Phi(Z) is in [0, 1].",
+        "DSR trials are limited to each current-run comparison cohort; historical trials are not included and trial independence is unverified.",
+        "Z.AI diagnostic reference (not a promotion gate): Net PF >1.1 and DSR Z >1.0; the existing Net PF >1.5 acceptance gate remains unchanged.",
         "Fixed candidate geometry: SL=2.0 ATR, TP=4.0 ATR, activation=1.5 ATR, step=2.0 ATR, horizon=24 bars.",
         "Training: outer 70%; purged OOF Fit/Temperature/Threshold slices=70/15/15.",
         "Evaluation: next 15% forward validation; final 15% holdout untouched.",
         "Meta: LightGBM + TreeSHAP top-30 Fit-only selection; KMeans(3) regimes as features.",
         "Meta cutoff: accept the upper 70% of probabilities using the 30th percentile order statistic on the third purged OOF slice; ties are included.",
         "",
-        "| Candidate | Signals | Accepted | Trades | Win Rate % | Net PF | Max DD % | Net PnL USD | Net Expectancy USD/trade | Acceptance | Status |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|",
+        "| Candidate | Signals | Accepted | Trades | Win Rate % | Net PF | Max DD % | DSR Z | DSR P | DSR N | Sortino/trade | Z.AI PF>1.1 | Z.AI DSR Z>1 | Net PnL USD | Net Expectancy USD/trade | Acceptance | Status |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---:|---:|---|---|",
     ]
     for item in report["candidates"]:
         metrics = item["metrics"]
@@ -947,6 +1145,12 @@ def _render_step_summary(report: dict[str, Any]) -> str:
             f"| {'N/A' if win_rate is None else f'{float(win_rate) * 100.0:.2f}'} "
             f"| {_format_pf(metrics)} "
             f"| {'N/A' if drawdown is None else f'{float(drawdown):.2f}'} "
+            f"| {_format_optional_ratio(metrics.get('dsr_z_score'))} "
+            f"| {_format_optional_ratio(metrics.get('dsr_probability'))} "
+            f"| {metrics.get('dsr_trial_count', 'N/A')} "
+            f"| {_format_optional_ratio(metrics.get('sortino_ratio_per_trade'))} "
+            f"| {_format_diagnostic_flag(metrics.get('zai_net_pf_gt_1_1'))} "
+            f"| {_format_diagnostic_flag(metrics.get('zai_dsr_z_gt_1_0'))} "
             f"| {float(metrics.get('net_pnl_total_usd') or 0.0):.2f} "
             f"| {'N/A' if expectancy is None else f'{float(expectancy):.4f}'} "
             f"| {'PASS' if item.get('acceptance_target_met') else 'NO'} "
@@ -961,6 +1165,13 @@ def _render_step_summary(report: dict[str, Any]) -> str:
             "",
             f"Base Primary BUYs: {report['signal_counts']['base_primary_buy_count']}; ADX-filtered Primary BUYs: {report['signal_counts']['adx_filtered_primary_buy_count']}.",
             f"OOF labels: {meta.get('training_diagnostics', {}).get('matured_costed_oof_label_count', 0)}.",
+            (
+                "Purged OOF slices after label-end purge: "
+                f"fit={meta.get('split_diagnostics', {}).get('fit_rows', 'N/A')}; "
+                f"temperature={meta.get('split_diagnostics', {}).get('temperature_rows', 'N/A')}; "
+                f"threshold={meta.get('split_diagnostics', {}).get('threshold_rows', 'N/A')}."
+            ),
+            f"Meta fit: {'ENABLED' if meta.get('enabled') else 'SKIPPED'}; reason={meta.get('skip_reason') or 'N/A'}.",
             (
                 f"Regime: KMeans clusters={report.get('regime_diagnostics', {}).get('cluster_count', 'N/A')}; "
                 f"fit rows={report.get('regime_diagnostics', {}).get('fit_rows', 0)}."
@@ -982,8 +1193,8 @@ def _render_step_summary(report: dict[str, Any]) -> str:
             ),
             "",
             "### ADX-filtered Primary exit-geometry matrix (30 bps only)",
-            "| Policy | SL ATR | TP ATR | Activation ATR | Step ATR | Cost bps RT | Trades | Win % | Net PF | Max DD % | Net PnL USD | Expectancy USD/trade |",
-            "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+            "| Policy | SL ATR | TP ATR | Activation ATR | Step ATR | Cost bps RT | Trades | Win % | Net PF | Max DD % | DSR Z | DSR P | DSR N | Sortino/trade | Z.AI PF>1.1 | Z.AI DSR Z>1 | Net PnL USD | Expectancy USD/trade |",
+            "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---:|---:|",
         ]
     )
     for cell in report["exit_geometry_matrix"]["cells"]:
@@ -999,6 +1210,12 @@ def _render_step_summary(report: dict[str, Any]) -> str:
             f"| {win_rate_text} "
             f"| {_format_pf(cell)} "
             f"| {float(cell['max_drawdown_percent']):.2f} "
+            f"| {_format_optional_ratio(cell.get('dsr_z_score'))} "
+            f"| {_format_optional_ratio(cell.get('dsr_probability'))} "
+            f"| {cell.get('dsr_trial_count', 'N/A')} "
+            f"| {_format_optional_ratio(cell.get('sortino_ratio_per_trade'))} "
+            f"| {_format_diagnostic_flag(cell.get('zai_net_pf_gt_1_1'))} "
+            f"| {_format_diagnostic_flag(cell.get('zai_dsr_z_gt_1_0'))} "
             f"| {float(cell['net_pnl_total_usd']):.2f} "
             f"| {float(cell['mean_unscaled_net_expectancy_usd_at_full_equity']):.4f} |"
         )
@@ -1064,6 +1281,7 @@ def _build_report(
             "round_trip_cost_bps": ROUND_TRIP_COST_BPS,
             "passive_limit_fill_simulation": False,
         },
+        "risk_metric_contract": _risk_metric_contract(),
         "signal_counts": signal_counts,
         "adx_filter_diagnostics": adx_diagnostics,
         "primary_train_sample_gate": train_gate,
@@ -1198,6 +1416,7 @@ def run_v4ai(
     exit_matrix = _run_exit_geometry_matrix(
         research_bars, adx_event_indices, forward_end
     )
+    _attach_dsr_diagnostics(candidates, exit_matrix)
     report = _build_report(
         commit_sha,
         provenance,

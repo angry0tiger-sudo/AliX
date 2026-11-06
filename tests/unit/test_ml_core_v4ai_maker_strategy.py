@@ -104,6 +104,7 @@ def _valid_report() -> dict[str, Any]:
             "round_trip_cost_bps": 30.0,
             "passive_limit_fill_simulation": False,
         },
+        "risk_metric_contract": v4ai._risk_metric_contract(),
         "primary_filter": {
             "feature": v4ai.ADX_FEATURE,
             "period": 14,
@@ -202,6 +203,105 @@ def test_percentile_seventy_threshold_uses_only_probability_values() -> None:
     with pytest.raises(ValueError, match="v4ai_threshold_probability_input_invalid"):
         v4ai._select_top_percentile_threshold([0.1, np.nan])
 
+
+def test_trade_risk_metrics_use_net_closed_trade_returns() -> None:
+    values = np.asarray([0.02, -0.01, 0.03, -0.005], dtype=float)
+    trades = [{"net_return_fraction": float(value)} for value in values]
+    metrics = v4ai._trade_risk_metrics(trades)
+    expected_downside = float(
+        np.sqrt(np.mean(np.square(np.minimum(values, 0.0))))
+    )
+    assert metrics["return_observation_count"] == 4
+    assert metrics["sharpe_ratio_per_trade"] == pytest.approx(
+        np.mean(values) / np.std(values, ddof=1)
+    )
+    assert metrics["sortino_ratio_per_trade"] == pytest.approx(
+        np.mean(values) / expected_downside
+    )
+    assert np.isfinite(metrics["return_kurtosis_non_excess"])
+    assert metrics["sortino_target_return_per_trade"] == 0.0
+
+
+def test_dsr_is_deflated_within_explicit_run_local_trial_cohort() -> None:
+    return_sets = [
+        [0.010, -0.010, 0.020, -0.005, 0.015],
+        [0.020, -0.015, 0.010, -0.010, 0.005],
+        [-0.010, 0.005, 0.012, -0.003, 0.010],
+    ]
+    metrics_rows = []
+    for returns in return_sets:
+        metrics = v4ai._trade_risk_metrics(
+            [{"net_return_fraction": value} for value in returns]
+        )
+        metrics["net_profit_factor"] = 1.2
+        metrics["net_profit_factor_infinite_no_losses"] = False
+        metrics_rows.append(metrics)
+    v4ai._attach_dsr_to_cohort(metrics_rows, 'TEST_CURRENT_RUN_COHORT_ONLY')
+    assert all(item["dsr_status"] == "COMPUTED" for item in metrics_rows)
+    assert all(item["dsr_trial_count"] == 3 for item in metrics_rows)
+    assert all(0.0 <= item["dsr_probability"] <= 1.0 for item in metrics_rows)
+    assert all(item["zai_net_pf_gt_1_1"] is True for item in metrics_rows)
+    assert all(
+        item['dsr_trial_scope'] == 'TEST_CURRENT_RUN_COHORT_ONLY'
+        for item in metrics_rows
+    )
+
+
+def test_single_and_constant_trade_returns_do_not_invent_risk_ratios() -> None:
+    single = v4ai._trade_risk_metrics([{"net_return_fraction": 0.01}])
+    assert single["sharpe_ratio_per_trade"] is None
+    assert single["sortino_ratio_per_trade"] is None
+    constant = v4ai._trade_risk_metrics(
+        [{"net_return_fraction": 0.01}] * 4
+    )
+    assert constant["sharpe_ratio_per_trade"] is None
+    assert constant["sharpe_status"] == "ZERO_RETURN_VOLATILITY"
+    assert constant["sortino_ratio_per_trade"] is None
+    assert constant["sortino_status"] == "ZERO_DOWNSIDE_DEVIATION"
+
+
+def test_temperature_purge_shortfall_skips_meta_and_preserves_diagnostics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    training = DataFrame(
+        {
+            "event_index": [10, 20, 30],
+            "label_end_idx": [11, 21, 31],
+            "meta_label": [0, 1, 0],
+        }
+    )
+    training_diagnostics = {"matured_costed_oof_label_count": 3}
+    split_diagnostics = {
+        "fit_rows": 42,
+        "temperature_rows": 18,
+        "threshold_rows": 21,
+        "split_policy": "CHRONOLOGICAL_70_15_15_WITH_LABEL_END_PURGE",
+    }
+    monkeypatch.setattr(
+        v4ai, "_oof_training_frame",
+        lambda *args: (training, training_diagnostics.copy()),
+    )
+
+    def fail_temperature_split(*args: Any, **kwargs: Any) -> Any:
+        error = ValueError("v4ah_temperature_rows_insufficient_after_purge")
+        setattr(error, 'diagnostics', split_diagnostics.copy())
+        raise error
+
+    monkeypatch.setattr(
+        advanced,
+        "split_fit_temperature_threshold",
+        fail_temperature_split,
+    )
+    result = v4ai._fit_meta_model(
+        DataFrame({"close": [100.0, 101.0]}),
+        DataFrame({"feature": [1.0, 2.0]}),
+        pd.Series([True, True], dtype=bool),
+        100,
+        {"passed": True},
+    )
+    assert result["skip_reason"] == "v4ah_temperature_rows_insufficient_after_purge"
+    assert result["training_diagnostics"]["matured_costed_oof_label_count"] == 3
+    assert result["split_diagnostics"]["temperature_rows"] == 18
 
 def test_oof_meta_label_uses_exact_thirty_bps_cost_contract(
     monkeypatch: pytest.MonkeyPatch,
@@ -402,6 +502,10 @@ def test_skipped_meta_candidate_and_decisions_are_not_misreported_as_rejects() -
 def test_report_rejects_any_cost_contract_other_than_thirty_bps() -> None:
     report = _valid_report()
     v4ai._validate_report(report, "a" * 40)
+    report["risk_metric_contract"]["annualization"] = "ANNUALIZED"
+    with pytest.raises(ValueError, match="v4ai_risk_metric_contract_invalid"):
+        v4ai._validate_report(report, "a" * 40)
+    report = _valid_report()
     report["cost_contract"]["round_trip_cost_bps"] = 90.0
     with pytest.raises(ValueError, match="v4ai_report_cost_contract_invalid"):
         v4ai._validate_report(report, "a" * 40)
@@ -517,3 +621,9 @@ def test_step_summary_discloses_maker_proxy_and_fill_model_limitation() -> None:
     assert "passive Limit queue/partial-fill mechanics are not simulated" in summary
     assert "ROC-AUC=0.52" in summary
     assert "ADX-filtered Primary exit-geometry matrix (30 bps only)" in summary
+    assert "DSR Z" in summary
+    assert "DSR P" in summary
+    assert "Sortino/trade" in summary
+    assert "Z.AI diagnostic reference" in summary
+    assert "existing Net PF >1.5 acceptance gate remains unchanged" in summary
+    assert "historical trials are not included" in summary
