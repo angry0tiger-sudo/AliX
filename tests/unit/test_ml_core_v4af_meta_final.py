@@ -615,9 +615,9 @@ def test_trim_helper_cuts_at_last_gap_only() -> None:
 
 
 def test_minute_validator_allows_only_the_documented_exchange_gap() -> None:
-    stamps = pd.date_range(
-        "2023-03-24T00:00:00Z", periods=1440, freq="min"
-    ).delete(slice(720, 840))
+    stamps = pd.date_range("2023-03-24T00:00:00Z", periods=1440, freq="min").delete(
+        slice(720, 840)
+    )
     candles = pd.DataFrame(
         {
             "date": stamps,
@@ -628,9 +628,7 @@ def test_minute_validator_allows_only_the_documented_exchange_gap() -> None:
             "volume": 3.5,
         }
     )
-    validated = real_data._validate_minute_candles(
-        candles, allow_exchange_gaps=True
-    )
+    validated = real_data._validate_minute_candles(candles, allow_exchange_gaps=True)
     assert len(validated) == 1320
     wrong_date = pd.DataFrame(
         {
@@ -645,9 +643,7 @@ def test_minute_validator_allows_only_the_documented_exchange_gap() -> None:
         }
     )
     with pytest.raises(ValueError, match="minute_data_undocumented_exchange_gap"):
-        real_data._validate_minute_candles(
-            wrong_date, allow_exchange_gaps=True
-        )
+        real_data._validate_minute_candles(wrong_date, allow_exchange_gaps=True)
 
 
 def test_manifested_gap_loader_recomputes_gap_ranges_and_checks_hash(
@@ -656,9 +652,9 @@ def test_manifested_gap_loader_recomputes_gap_ranges_and_checks_hash(
     import hashlib
     import json
 
-    stamps = pd.date_range(
-        "2023-03-24T00:00:00Z", periods=1440, freq="min"
-    ).delete(slice(720, 840))
+    stamps = pd.date_range("2023-03-24T00:00:00Z", periods=1440, freq="min").delete(
+        slice(720, 840)
+    )
     candles = pd.DataFrame(
         {
             "date": stamps,

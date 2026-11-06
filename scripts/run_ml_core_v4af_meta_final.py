@@ -954,7 +954,11 @@ def _trim_to_latest_contiguous_hourly_segment(
     if timeframe not in TIMEFRAME_MINUTES:
         raise ValueError("v4af_gap_trim_timeframe_invalid")
     dates = pd.to_datetime(bars["date"], utc=True, errors="coerce")
-    if dates.isna().any() or dates.duplicated().any() or not dates.is_monotonic_increasing:
+    if (
+        dates.isna().any()
+        or dates.duplicated().any()
+        or not dates.is_monotonic_increasing
+    ):
         raise ValueError("v4af_resampled_timestamps_invalid")
     if len(dates) <= 1:
         return bars.reset_index(drop=True), {
@@ -1005,9 +1009,7 @@ def _load_research_context(
     bars = resample_ohlcv(
         source_bars, TIMEFRAME, allow_exchange_gaps=allow_exchange_gaps
     )
-    bars, trim_diagnostics = _trim_to_latest_contiguous_hourly_segment(
-        bars, TIMEFRAME
-    )
+    bars, trim_diagnostics = _trim_to_latest_contiguous_hourly_segment(bars, TIMEFRAME)
     provenance = {**provenance, "resample_gap_trim": trim_diagnostics}
     if len(bars) < 2:
         raise ValueError("v4af_contiguous_hourly_segment_insufficient")

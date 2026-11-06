@@ -218,7 +218,6 @@ def test_fetch_historical_candles_rejects_partial_or_misaligned_exact_windows() 
         )
 
 
-
 def test_five_year_window_is_allowed_with_disclosed_gap_policy() -> None:
     assert 1825 in fetcher.ALLOWED_DAYS
     assert fetcher.GAP_POLICY_ALLOW_EXCHANGE_GAPS != fetcher.GAP_POLICY
@@ -259,7 +258,9 @@ def _provider_with_gap(
         cursor = int(params["startTime"])
         upper = int(params["endTime"])
         return _sparse_klines(
-            [stamp for stamp in real_stamps if cursor <= stamp <= upper][:fetcher.PAGE_SIZE]
+            [stamp for stamp in real_stamps if cursor <= stamp <= upper][
+                : fetcher.PAGE_SIZE
+            ]
         )
 
     return provider
@@ -379,8 +380,7 @@ def test_gap_manifest_discloses_real_missing_minutes_without_fill(
         if not missing_start <= stamp <= missing_end
     ]
     rows = [
-        fetcher._parse_gap_tolerant_kline(row)
-        for row in _sparse_klines(real_stamps)
+        fetcher._parse_gap_tolerant_kline(row) for row in _sparse_klines(real_stamps)
     ]
     manifest = fetcher.write_artifacts(
         rows,

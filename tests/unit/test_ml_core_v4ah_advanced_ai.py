@@ -208,9 +208,7 @@ def test_split_with_fallback_identity_mode_for_degenerate_class_temperature_slic
     events = _event_frame(250)
     events.loc[175:211, "meta_label"] = 1
     fit, temperature, threshold, diagnostics = (
-        v4ah.split_fit_temperature_threshold_with_fallback(
-            events, outer_train_end=900
-        )
+        v4ah.split_fit_temperature_threshold_with_fallback(events, outer_train_end=900)
     )
     assert len(temperature) >= v4ah.V4AH_MINIMUM_CALIBRATION_ROWS
     assert int(temperature["meta_label"].sum()) == len(temperature)
@@ -293,10 +291,8 @@ def test_split_with_fallback_strict_guards_remain_enforced(
         fit_fraction: float,
         temperature_fraction: float,
     ) -> tuple[DataFrame, DataFrame, DataFrame, int, int]:
-        fit, _, threshold, temperature_start, threshold_start = (
-            original_purged_slices(
-                slice_events, fit_fraction, temperature_fraction
-            )
+        fit, _, threshold, temperature_start, threshold_start = original_purged_slices(
+            slice_events, fit_fraction, temperature_fraction
         )
         return (
             fit,

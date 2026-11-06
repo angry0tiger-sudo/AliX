@@ -388,9 +388,7 @@ def _fit_meta_model(
         if identity_temperature:
             separation = {
                 "status": "NOT_AVAILABLE_IDENTITY_TEMPERATURE_FALLBACK",
-                "metric_scope": (
-                    "PURGED_OOF_TEMPERATURE_SLICE_OUT_OF_FIT_PREDICTIONS"
-                ),
+                "metric_scope": ("PURGED_OOF_TEMPERATURE_SLICE_OUT_OF_FIT_PREDICTIONS"),
                 "probability_scope": "RAW_PRE_TEMPERATURE_CALIBRATION",
                 "sample_count": int(len(temperature_rows)),
                 "labels_used": False,

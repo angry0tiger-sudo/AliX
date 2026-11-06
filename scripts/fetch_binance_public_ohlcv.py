@@ -459,7 +459,9 @@ def write_artifacts(
         if not rows or missing_minutes < 0:
             raise ValueError("binance_historical_row_count_invalid_under_gap_policy")
         gap_ranges = _gap_ranges_from_stamps(stamps)
-        observed_missing = sum(int(item["missing_minute_intervals"]) for item in gap_ranges)
+        observed_missing = sum(
+            int(item["missing_minute_intervals"]) for item in gap_ranges
+        )
         if observed_missing != missing_minutes:
             raise ValueError("binance_historical_gap_count_mismatch")
         _validate_documented_exchange_gaps(gap_ranges)

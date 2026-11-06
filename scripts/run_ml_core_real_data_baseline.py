@@ -207,9 +207,7 @@ def resample_ohlcv(
     """Resample complete bars; never interpolate or synthesize candles."""
     if timeframe not in TIMEFRAME_MINUTES:
         raise ValueError("entry_timeframe_out_of_policy")
-    source = _validate_minute_candles(
-        candles, allow_exchange_gaps=allow_exchange_gaps
-    )
+    source = _validate_minute_candles(candles, allow_exchange_gaps=allow_exchange_gaps)
     minutes = TIMEFRAME_MINUTES[timeframe]
     indexed = source.set_index("date")
     rule = f"{minutes}min"
