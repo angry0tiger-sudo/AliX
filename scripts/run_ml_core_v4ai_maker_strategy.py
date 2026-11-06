@@ -953,7 +953,8 @@ def _risk_metric_contract() -> dict[str, Any]:
     }
 
 
-def _safety_report() -> dict[str, Any]:    return {
+def _safety_report() -> dict[str, Any]:
+    return {
         "Champion": None,
         "order_permission": False,
         "trading_authorization": "NO-GO",
@@ -996,7 +997,8 @@ def _validate_report_risk_contract(report: dict[str, Any]) -> None:
         raise ValueError("v4ai_risk_metric_contract_invalid")
 
 
-def _validate_report_primary_filter(report: dict[str, Any]) -> None:    expected = {
+def _validate_report_primary_filter(report: dict[str, Any]) -> None:
+    expected = {
         "feature": ADX_FEATURE,
         "period": ADX_PERIOD,
         "threshold": ADX_THRESHOLD,
@@ -1101,7 +1103,8 @@ def _format_diagnostic_flag(value: Any) -> str:
     return "YES" if bool(value) else "NO"
 
 
-def _format_pf(metrics: dict[str, Any]) -> str:    if metrics.get("net_profit_factor_infinite_no_losses"):
+def _format_pf(metrics: dict[str, Any]) -> str:
+    if metrics.get("net_profit_factor_infinite_no_losses"):
         return "INF"
     value = metrics.get("net_profit_factor")
     return "N/A" if value is None else f"{float(value):.4f}"
