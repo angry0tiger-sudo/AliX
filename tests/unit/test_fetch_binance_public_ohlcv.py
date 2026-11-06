@@ -358,7 +358,7 @@ def test_gap_tolerant_fetch_rejects_empty_pages_and_truncated_end() -> None:
                 fetcher.INTERVAL_MS,
             )
             if cursor <= stamp <= upper
-        ][:fetcher.PAGE_SIZE]
+        ][: fetcher.PAGE_SIZE]
         return _sparse_klines(stamps)
 
     with pytest.raises(ValueError, match="binance_historical_window_boundary_mismatch"):
