@@ -191,7 +191,7 @@ def _causal_wilder_rsi(close: Series) -> Series:
 
 def _finite_primary_feature_rows(features: DataFrame) -> np.ndarray:
     numeric = features.apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
-    return np.isfinite(numeric).all(axis=1)
+    return cast(np.ndarray, np.isfinite(numeric).all(axis=1))
 
 
 def _mean_reversion_primary_features(
@@ -423,7 +423,6 @@ def _oof_training_frame(
         primary_signal,
         start_index=EMA_TREND_PERIOD,
         stop_index=train_end,
-        fold_count=V4X_OOF_FOLD_COUNT,
     )
     labelled, diagnostics = _training_oof_labels(bars, oof_events, train_end)
     return v4af._join_event_features(features, labelled), diagnostics
