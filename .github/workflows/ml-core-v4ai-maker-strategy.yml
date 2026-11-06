@@ -22,6 +22,7 @@ on:
       - tests/unit/test_ml_core_v4ah_advanced_ai.py
       - tests/unit/test_fetch_binance_public_ohlcv.py
       - tests/unit/test_ml_core_real_data_baseline.py
+      - tests/unit/test_ml_core_v4af_meta_final.py
   workflow_dispatch:
 
 permissions:

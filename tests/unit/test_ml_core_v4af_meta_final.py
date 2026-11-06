@@ -617,7 +617,7 @@ def test_trim_helper_cuts_at_last_gap_only() -> None:
 
 def test_minute_validator_allows_only_the_documented_exchange_gap() -> None:
     stamps = pd.date_range("2023-03-24T00:00:00Z", periods=1440, freq="min").delete(
-        slice(720, 840)
+        slice(760, 840)
     )
     candles = pd.DataFrame(
         {
@@ -630,12 +630,12 @@ def test_minute_validator_allows_only_the_documented_exchange_gap() -> None:
         }
     )
     validated = real_data._validate_minute_candles(candles, allow_exchange_gaps=True)
-    assert len(validated) == 1320
+    assert len(validated) == 1360
     wrong_date = pd.DataFrame(
         {
             "date": pd.date_range(
                 "2023-03-25T00:00:00Z", periods=1440, freq="min"
-            ).delete(slice(720, 840)),
+            ).delete(slice(760, 840)),
             "open": 100.0,
             "high": 101.0,
             "low": 99.0,
@@ -654,7 +654,7 @@ def test_manifested_gap_loader_recomputes_gap_ranges_and_checks_hash(
     import json
 
     stamps = pd.date_range("2023-03-24T00:00:00Z", periods=1440, freq="min").delete(
-        slice(720, 840)
+        slice(760, 840)
     )
     candles = pd.DataFrame(
         {
@@ -675,7 +675,7 @@ def test_manifested_gap_loader_recomputes_gap_ranges_and_checks_hash(
         "symbol": "ETHUSDT",
         "interval": "1m",
         "requested_days": 1,
-        "row_count": 1320,
+        "row_count": 1360,
         "commit_sha": "a" * 40,
         "csv_sha256": digest,
         "provider": "Binance Spot public klines API",
@@ -684,8 +684,8 @@ def test_manifested_gap_loader_recomputes_gap_ranges_and_checks_hash(
         "private_api_calls": 0,
         "real_order_attempts": 0,
         "gap_policy": GAP_POLICY_ALLOW_EXCHANGE_GAPS,
-        "missing_intervals": 120,
-        "missing_minute_intervals": 120,
+        "missing_intervals": 80,
+        "missing_minute_intervals": 80,
         "missing_gap_ranges": gaps,
         "fetch_page_size_candles": 1000,
         "inter_page_delay_seconds": 0.25,
@@ -698,8 +698,8 @@ def test_manifested_gap_loader_recomputes_gap_ranges_and_checks_hash(
     loaded, provenance = real_data._load_manifested_data(
         tmp_path, "ETHUSDT", 1, "a" * 40, allow_exchange_gaps=True
     )
-    assert len(loaded) == 1320
-    assert provenance["missing_minute_intervals"] == 120
+    assert len(loaded) == 1360
+    assert provenance["missing_minute_intervals"] == 80
     assert provenance["missing_gap_ranges"] == gaps
 
     manifest["missing_gap_ranges"] = []
