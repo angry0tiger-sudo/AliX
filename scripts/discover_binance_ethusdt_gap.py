@@ -81,29 +81,42 @@ def _fetch_page(cursor_ms: int, end_ms: int) -> list[list[Any]]:
     raise RuntimeError(f"public_binance_fetch_failed:{last_error}") from None
 
 
-def _validated_page_stamps(
-    payload: list[list[Any]],
-    cursor_ms: int,
-    end_ms: int,
-    previous_last_ms: int | None,
-) -> list[int]:
-    stamps: list[int] = []
-    for item in payload:
-        if not isinstance(item, list) or len(item) < 6:
-            raise ValueError("binance_kline_shape_invalid")
-        stamp = item[0]
-        if isinstance(stamp, bool) or not isinstance(stamp, int):
-            raise ValueError("binance_kline_timestamp_invalid")
-        if stamp % INTERVAL_MS != 0 or not cursor_ms <= stamp <= end_ms:
-            raise ValueError(f"binance_kline_timestamp_out_of_window:{stamp}")
-        stamps.append(stamp)
+def _validate_kline_timestamp(
+    item: list[Any], cursor_ms: int, end_ms: int
+) -> int:
+    if len(item) < 6:
+        raise ValueError("binance_kline_shape_invalid")
+    stamp = item[0]
+    if isinstance(stamp, bool) or not isinstance(stamp, int):
+        raise ValueError("binance_kline_timestamp_invalid")
+    if stamp % INTERVAL_MS != 0 or not cursor_ms <= stamp <= end_ms:
+        raise ValueError(f"binance_kline_timestamp_out_of_window:{stamp}")
+    return stamp
 
+
+def _validate_page_sequence(
+    stamps: list[int], cursor_ms: int, previous_last_ms: int | None
+) -> None:
+    if not stamps:
+        raise ValueError("binance_kline_empty_page_under_gap_policy")
     if any(current <= previous for previous, current in zip(stamps, stamps[1:])):
         raise ValueError("binance_page_timestamps_not_strictly_increasing")
     if stamps[0] < cursor_ms:
         raise ValueError("binance_page_regressed_before_cursor")
     if previous_last_ms is not None and stamps[0] <= previous_last_ms:
         raise ValueError("binance_duplicate_or_regressed_timestamp")
+
+
+def _validated_page_stamps(
+    payload: list[list[Any]],
+    cursor_ms: int,
+    end_ms: int,
+    previous_last_ms: int | None,
+) -> list[int]:
+    stamps = [
+        _validate_kline_timestamp(item, cursor_ms, end_ms) for item in payload
+    ]
+    _validate_page_sequence(stamps, cursor_ms, previous_last_ms)
     return stamps
 
 
