@@ -81,9 +81,7 @@ def _fetch_page(cursor_ms: int, end_ms: int) -> list[list[Any]]:
     raise RuntimeError(f"public_binance_fetch_failed:{last_error}") from None
 
 
-def _validate_kline_timestamp(
-    item: list[Any], cursor_ms: int, end_ms: int
-) -> int:
+def _validate_kline_timestamp(item: list[Any], cursor_ms: int, end_ms: int) -> int:
     if len(item) < 6:
         raise ValueError("binance_kline_shape_invalid")
     stamp = item[0]
@@ -113,9 +111,7 @@ def _validated_page_stamps(
     end_ms: int,
     previous_last_ms: int | None,
 ) -> list[int]:
-    stamps = [
-        _validate_kline_timestamp(item, cursor_ms, end_ms) for item in payload
-    ]
+    stamps = [_validate_kline_timestamp(item, cursor_ms, end_ms) for item in payload]
     _validate_page_sequence(stamps, cursor_ms, previous_last_ms)
     return stamps
 
