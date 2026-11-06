@@ -8,12 +8,12 @@ import json
 import math
 from dataclasses import replace
 from pathlib import Path
+from statistics import NormalDist
 from typing import Any, cast
 
 import numpy as np
 import pandas as pd
 from pandas import DataFrame, Series
-from scipy.stats import kurtosis, norm, skew
 
 import scripts.run_ml_core_v4ac_cost_optimization as v4ac
 import scripts.run_ml_core_v4af_meta_final as v4af
@@ -502,18 +502,37 @@ def _trade_risk_metrics(trades: list[dict[str, Any]]) -> dict[str, Any]:
     if not math.isfinite(standard_deviation) or standard_deviation <= 0.0:
         metrics["sharpe_status"] = "ZERO_RETURN_VOLATILITY"
         return metrics
+    sample_mean = float(np.mean(returns))
+    centered_returns = returns - sample_mean
+    second_moment = float(np.mean(np.square(centered_returns)))
     metrics.update(
         {
             "sharpe_ratio_per_trade": float(
                 np.mean(excess_returns) / standard_deviation
             ),
             "sharpe_status": "COMPUTED",
-            "return_skewness": float(skew(returns, bias=False)),
-            "return_kurtosis_non_excess": float(
-                kurtosis(returns, fisher=False, bias=False)
-            ),
         }
     )
+    if count >= 4 and second_moment > 0.0 and math.isfinite(second_moment):
+        third_moment = float(np.mean(np.power(centered_returns, 3)))
+        fourth_moment = float(np.mean(np.power(centered_returns, 4)))
+        biased_skewness = third_moment / second_moment**1.5
+        adjusted_skewness = (
+            math.sqrt(count * (count - 1)) / (count - 2) * biased_skewness
+        )
+        biased_excess_kurtosis = fourth_moment / second_moment**2 - 3.0
+        adjusted_excess_kurtosis = (
+            (count - 1)
+            / ((count - 2) * (count - 3))
+            * ((count + 1) * biased_excess_kurtosis + 6.0)
+        )
+        if math.isfinite(adjusted_skewness) and math.isfinite(
+            adjusted_excess_kurtosis
+        ):
+            metrics["return_skewness"] = float(adjusted_skewness)
+            metrics["return_kurtosis_non_excess"] = float(
+                adjusted_excess_kurtosis + 3.0
+            )
     return metrics
 
 
@@ -548,9 +567,13 @@ def _deflated_sharpe_diagnostics(
         return result
     trial_count = int(trial_values.size)
     euler_mascheroni = 0.5772156649015329
-    expected_max_multiplier = (1.0 - euler_mascheroni) * float(
-        norm.ppf(1.0 - 1.0 / trial_count)
-    ) + euler_mascheroni * float(norm.ppf(1.0 - 1.0 / (trial_count * math.e)))
+    normal = NormalDist()
+    expected_max_multiplier = (
+        (1.0 - euler_mascheroni)
+        * normal.inv_cdf(1.0 - 1.0 / trial_count)
+        + euler_mascheroni
+        * normal.inv_cdf(1.0 - 1.0 / (trial_count * math.e))
+    )
     trial_mean = float(np.mean(trial_values))
     trial_std = float(np.std(trial_values, ddof=1))
     expected_max_sharpe = trial_mean + trial_std * expected_max_multiplier
@@ -570,7 +593,7 @@ def _deflated_sharpe_diagnostics(
         * math.sqrt(int(metrics["return_observation_count"]) - 1)
         / math.sqrt(variance_term)
     )
-    probability = float(norm.cdf(z_score))
+    probability = NormalDist().cdf(z_score)
     if not math.isfinite(z_score) or not math.isfinite(probability):
         result["dsr_status"] = "DSR_RESULT_NON_FINITE"
         return result
