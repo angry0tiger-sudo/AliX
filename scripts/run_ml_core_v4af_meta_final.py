@@ -15,6 +15,7 @@ import pandas as pd
 from pandas import DataFrame, Series
 
 from scripts.run_ml_core_real_data_baseline import (
+    TIMEFRAME_MINUTES,
     _load_manifested_data,
     resample_ohlcv,
 )
@@ -946,18 +947,70 @@ def _build_report(
     return report
 
 
+def _trim_to_latest_contiguous_hourly_segment(
+    bars: DataFrame, timeframe: str
+) -> tuple[DataFrame, dict[str, Any]]:
+    """Keep the latest uniform segment after any gap; never synthesize bars."""
+    if timeframe not in TIMEFRAME_MINUTES:
+        raise ValueError("v4af_gap_trim_timeframe_invalid")
+    dates = pd.to_datetime(bars["date"], utc=True, errors="coerce")
+    if dates.isna().any() or dates.duplicated().any() or not dates.is_monotonic_increasing:
+        raise ValueError("v4af_resampled_timestamps_invalid")
+    if len(dates) <= 1:
+        return bars.reset_index(drop=True), {
+            "status": "NO_GAP",
+            "trimmed_bars": 0,
+            "gap_count": 0,
+            "segment_start_utc": dates.iloc[0].isoformat() if len(dates) else None,
+        }
+    deltas = dates.diff().iloc[1:].dt.total_seconds() / 60.0
+    expected = float(TIMEFRAME_MINUTES[timeframe])
+    gap_mask = deltas != expected
+    if not bool(gap_mask.any()):
+        return bars.reset_index(drop=True), {
+            "status": "NO_GAP",
+            "trimmed_bars": 0,
+            "gap_count": 0,
+            "segment_start_utc": dates.iloc[0].isoformat(),
+        }
+    positions = gap_mask.to_numpy().nonzero()[0] + 1
+    first_dropped = int(positions[-1])
+    trimmed = bars.iloc[first_dropped:].reset_index(drop=True)
+    trimmed_dates = pd.to_datetime(trimmed["date"], utc=True)
+    trimmed_deltas = trimmed_dates.diff().iloc[1:].dt.total_seconds() / 60.0
+    if len(trimmed_deltas) and not bool((trimmed_deltas == expected).all()):
+        raise ValueError("v4af_latest_contiguous_segment_invalid")
+    return trimmed, {
+        "status": "TRIMMED_TO_LATEST_CONTIGUOUS_SEGMENT",
+        "trimmed_bars": first_dropped,
+        "gap_count": int(gap_mask.sum()),
+        "segment_start_utc": trimmed_dates.iloc[0].isoformat(),
+    }
+
+
 def _load_research_context(
     input_dir: Path,
     days: int,
     commit_sha: str,
+    *,
+    allow_exchange_gaps: bool = False,
 ) -> tuple[dict[str, Any], DataFrame, int, int, DataFrame, DataFrame, Series]:
     source_bars, provenance = _load_manifested_data(
         input_dir,
         SYMBOL,
         days,
         commit_sha,
+        allow_exchange_gaps=allow_exchange_gaps,
     )
-    bars = resample_ohlcv(source_bars, TIMEFRAME)
+    bars = resample_ohlcv(
+        source_bars, TIMEFRAME, allow_exchange_gaps=allow_exchange_gaps
+    )
+    bars, trim_diagnostics = _trim_to_latest_contiguous_hourly_segment(
+        bars, TIMEFRAME
+    )
+    provenance = {**provenance, "resample_gap_trim": trim_diagnostics}
+    if len(bars) < 2:
+        raise ValueError("v4af_contiguous_hourly_segment_insufficient")
     train_end, forward_end = _outer_boundaries(len(bars))
     research_bars = bars.iloc[:forward_end].reset_index(drop=True)
     profiles = build_feature_profiles(

@@ -144,7 +144,7 @@ jobs:
           set -euo pipefail
           test "$GITHUB_REF" = "refs/heads/research/ml-core-v4ai-maker-strategy"
           test "$GITHUB_SHA" = "$TARGET_SHA"
-          printf 'symbol=ETHUSDT\ntimeframe=1h\ndays=730\n'
+          printf 'symbol=ETHUSDT\ntimeframe=1h\ndays=1825\n'
           printf 'fee_type_assumption=MAKER_FEE_PROXY\nfee_bps_per_side=10\n'
           printf 'slippage_bps_per_side=5\nround_trip_cost_bps=30\n'
           printf 'primary_signal=BB20_UPPER_BREAKOUT_CLOSE_ABOVE_EMA200\n'
@@ -181,26 +181,28 @@ jobs:
           assert v4ah.V4AH_REGIME_COUNT == 3
           print("V4-AI scope, cost, base-signal, ADX-ablation, and closed-safety contracts: PASS")
           PY
-      - name: Fetch complete public Binance Spot 730-day ETHUSDT data
+      - name: Fetch complete public Binance Spot 1825-day ETHUSDT data
         run: |
           set -euo pipefail
           data_dir="$RUNNER_TEMP/alix-v4ai-market-data"
           rm -rf "$data_dir"
           mkdir -p "$data_dir"
-          log_path="$RUNNER_TEMP/v4ai-fetch-730-ETHUSDT.log"
+          log_path="$RUNNER_TEMP/v4ai-fetch-1825-ETHUSDT.log"
           if python scripts/fetch_binance_public_ohlcv.py \
-            --days 730 \
+            --days 1825 \
             --symbol ETHUSDT \
             --interval 1m \
             --output-dir "$data_dir" \
-            --commit-sha "$GITHUB_SHA" >"$log_path" 2>&1; then
+            --commit-sha "$GITHUB_SHA" \
+            --allow-exchange-gaps >"$log_path" 2>&1; then
             cat "$log_path"
           else
             cat "$log_path"
             echo "Public Spot fetch failed; refusing partial data." >&2
             exit 1
           fi
-          printf 'requested_days=730\nprovider=Binance Spot public klines API\n'
+          printf 'requested_days=1825\nprovider=Binance Spot public klines API\n'
+          printf 'exchange_gap_policy=only_120m_on_2023-03-24_utc_no_interpolation\n'
           printf 'private_api_calls=0\ncredentials_used=false\n'
       - name: Run V4-AI maker-fee, ADX, Meta P70, and exit-geometry evaluation
         run: |
@@ -210,7 +212,7 @@ jobs:
             --output-report "$GITHUB_WORKSPACE/alix-v4ai-maker-strategy-report.json" \
             --output-trades-csv "$GITHUB_WORKSPACE/alix-v4ai-maker-strategy-trades.csv" \
             --output-decisions-csv "$GITHUB_WORKSPACE/alix-v4ai-maker-strategy-decisions.csv" \
-            --days 730 \
+            --days 1825 \
             --commit-sha "$GITHUB_SHA"
       - name: Validate V4-AI report and publish GitHub Step Summary
         env:
@@ -241,7 +243,7 @@ jobs:
           assert report["schema_version"] == SCHEMA
           assert report["symbols"] == ["ETHUSDT"]
           assert report["timeframes"] == ["1h"]
-          assert report["dataset_days"] == 730
+          assert report["dataset_days"] == 1825
           assert [item["mode"] for item in report["candidates"]] == list(CANDIDATE_NAMES)
           assert report["final_holdout_used"] is False
           assert report["chronological_evaluation"][
@@ -260,6 +262,29 @@ jobs:
               "comparison": "STRICT_GT",
           }
           assert "adx_ablation_diagnostics" in report
+          provenance = report["dataset_provenance"]
+          assert provenance["requested_days"] == 1825
+          assert provenance["gap_policy"] == (
+              "accept only one 120-minute Binance Spot outage on 2023-03-24 UTC; "
+              "no interpolation, resampling, or synthetic fill"
+          )
+          missing = int(provenance["missing_minute_intervals"])
+          assert missing in (0, 120)
+          assert provenance["row_count"] + missing == 1825 * 24 * 60
+          if missing:
+              assert len(provenance["missing_gap_ranges"]) == 1
+              gap = provenance["missing_gap_ranges"][0]
+              assert gap["missing_minute_intervals"] == 120
+              assert gap["start_utc"][:10] == "2023-03-24"
+              assert gap["end_utc"][:10] == "2023-03-24"
+          else:
+              assert provenance["missing_gap_ranges"] == []
+          trim = provenance["resample_gap_trim"]
+          assert trim["status"] in (
+              "NO_GAP", "TRIMMED_TO_LATEST_CONTIGUOUS_SEGMENT"
+          )
+          if missing:
+              assert trim["status"] == "TRIMMED_TO_LATEST_CONTIGUOUS_SEGMENT"
           matrix = report["exit_geometry_matrix"]
           assert len(matrix["cells"]) == 3
           assert {
@@ -272,7 +297,12 @@ jobs:
                   "SELECTED_TOP_70_PERCENT_ACCEPTANCE"
               )
               assert meta["threshold_diagnostics"]["target_accept_fraction"] == 0.70
-              assert meta["threshold_diagnostics"]["cutoff_percentile"] == 0.30
+              assert math.isclose(
+                  float(meta["threshold_diagnostics"]["cutoff_percentile"]),
+                  0.30,
+                  rel_tol=0.0,
+                  abs_tol=1e-12,
+              )
               assert meta["threshold_diagnostics"]["labels_used"] is False
           else:
               assert meta["skip_reason"]
@@ -331,6 +361,8 @@ jobs:
               "Z.AI diagnostic reference",
               "existing Net PF >1.5 acceptance gate remains unchanged",
               "Base Primary exit-geometry matrix",
+              "1825 days requested",
+              "Dataset provenance:",
               "passive Limit queue/partial-fill mechanics are not simulated",
               "Champion=null",
               "trading_authorization=NO-GO",

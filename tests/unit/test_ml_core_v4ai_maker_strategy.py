@@ -284,6 +284,13 @@ def test_temperature_support_failure_skips_meta_and_preserves_diagnostics(
         "split_fit_temperature_threshold_with_fallback",
         fail_temperature_split,
     )
+    monkeypatch.setattr(
+        advanced,
+        "separation_diagnostics",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("identity fallback must not inspect Temperature labels")
+        ),
+    )
     result = v4ai._fit_meta_model(
         DataFrame({"close": [100.0, 101.0]}),
         DataFrame({"feature": [1.0, 2.0]}),
@@ -302,7 +309,7 @@ def test_temperature_support_failure_skips_meta_and_preserves_diagnostics(
 def test_identity_temperature_fallback_keeps_meta_model_enabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Thin-but-classed temperature slice: meta model survives with T=1."""
+    """Single-class Temperature slice keeps Meta enabled with identity T=1."""
     training = DataFrame(
         {
             "event_index": [10, 20, 30],
@@ -326,7 +333,7 @@ def test_identity_temperature_fallback_keeps_meta_model_enabled(
         {
             "event_index": [7, 8, 9, 10, 11, 12],
             "label_end_idx": [8, 9, 10, 11, 12, 13],
-            "meta_label": [0, 1, 0, 1, 0, 1],
+            "meta_label": [1, 1, 1, 1, 1, 1],
             "%-feat_a": [0.2, 0.5, 0.3, 0.6, 0.4, 0.7],
             "%-feat_b": [0.4, 0.3, 0.6, 0.2, 0.5, 0.1],
         }
@@ -400,7 +407,10 @@ def test_identity_temperature_fallback_keeps_meta_model_enabled(
         result["temperature_diagnostics"]["warning"]
         == advanced.V4AH_TEMPERATURE_IDENTITY_WARNING
     )
-    assert result["separation_diagnostics"]["sample_count"] == 6
+    assert result["separation_diagnostics"]["status"] == (
+        "NOT_AVAILABLE_IDENTITY_TEMPERATURE_FALLBACK"
+    )
+    assert result["separation_diagnostics"]["labels_used"] is False
     assert result["threshold_diagnostics"]["status"] == (
         "SELECTED_TOP_70_PERCENT_ACCEPTANCE"
     )
@@ -740,3 +750,11 @@ def test_step_summary_discloses_maker_proxy_and_fill_model_limitation() -> None:
     assert "Z.AI diagnostic reference" in summary
     assert "existing Net PF >1.5 acceptance gate remains unchanged" in summary
     assert "historical trials are not included" in summary
+
+
+def test_dataset_scope_expanded_to_1825_days_with_disclosed_gap_policy() -> None:
+    assert v4ai.DAYS == 1825
+    assert v4ai.ALLOW_EXCHANGE_GAPS is True
+    v4ai._validate_request(v4ai.DAYS, "a" * 40)
+    with pytest.raises(ValueError, match="v4ai_request_identity_invalid"):
+        v4ai._validate_request(730, "a" * 40)

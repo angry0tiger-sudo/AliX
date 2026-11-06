@@ -201,6 +201,36 @@ def test_split_with_fallback_calibrated_mode_matches_strict_split() -> None:
     assert strict_diagnostics["fit_rows"] == diagnostics["fit_rows"]
 
 
+def test_split_with_fallback_identity_mode_for_degenerate_class_temperature_slice() -> (
+    None
+):
+    """A large single-class Temperature slice degrades to identity, not skip."""
+    events = _event_frame(250)
+    events.loc[175:211, "meta_label"] = 1
+    fit, temperature, threshold, diagnostics = (
+        v4ah.split_fit_temperature_threshold_with_fallback(
+            events, outer_train_end=900
+        )
+    )
+    assert len(temperature) >= v4ah.V4AH_MINIMUM_CALIBRATION_ROWS
+    assert int(temperature["meta_label"].sum()) == len(temperature)
+    assert len(fit) == 175
+    assert len(threshold) == 38
+    assert (
+        diagnostics["temperature_calibration_mode"]
+        == v4ah.V4AH_TEMPERATURE_MODE_IDENTITY
+    )
+    assert (
+        diagnostics["temperature_fallback_warning"]
+        == v4ah.V4AH_TEMPERATURE_IDENTITY_WARNING
+    )
+    assert int(fit["meta_label"].sum()) > 0
+    assert int(fit["meta_label"].sum()) < len(fit)
+    assert int(fit["label_end_idx"].max()) < int(temperature["event_index"].min())
+    assert int(temperature["label_end_idx"].max()) < int(threshold["event_index"].min())
+    assert int(threshold["label_end_idx"].max()) < 900
+
+
 def test_split_with_fallback_fit_class_failure_preserves_slice_diagnostics() -> None:
     events = _event_frame(250)
     events.loc[:174, "meta_label"] = 0
@@ -240,16 +270,54 @@ def test_split_with_fallback_strict_guards_remain_enforced(
 
     single_class = events.copy()
     single_class.loc[105:126, "meta_label"] = 1
+    fit_slice, temperature_slice, _, degenerate_diagnostics = (
+        v4ah.split_fit_temperature_threshold_with_fallback(
+            single_class, outer_train_end=900
+        )
+    )
+    assert len(fit_slice) > 0 and len(temperature_slice) > 0
+    assert (
+        degenerate_diagnostics["temperature_calibration_mode"]
+        == v4ah.V4AH_TEMPERATURE_MODE_IDENTITY
+    )
+    assert (
+        degenerate_diagnostics["temperature_fallback_warning"]
+        == v4ah.V4AH_TEMPERATURE_IDENTITY_WARNING
+    )
+
+    empty_temperature = events.copy()
+    original_purged_slices = v4ah._purged_training_slices
+
+    def drop_temperature_slice(
+        slice_events: DataFrame,
+        fit_fraction: float,
+        temperature_fraction: float,
+    ) -> tuple[DataFrame, DataFrame, DataFrame, int, int]:
+        fit, _, threshold, temperature_start, threshold_start = (
+            original_purged_slices(
+                slice_events, fit_fraction, temperature_fraction
+            )
+        )
+        return (
+            fit,
+            fit.iloc[0:0].copy(),
+            threshold,
+            temperature_start,
+            threshold_start,
+        )
+
+    monkeypatch.setattr(v4ah, "_purged_training_slices", drop_temperature_slice)
     with pytest.raises(
         ValueError, match="v4ah_binary_class_support_insufficient_temperature_slice"
     ) as class_error:
         v4ah.split_fit_temperature_threshold_with_fallback(
-            single_class, outer_train_end=900
+            empty_temperature, outer_train_end=900
         )
     assert (
         getattr(class_error.value, "diagnostics", {})["temperature_calibration_mode"]
         == v4ah.V4AH_TEMPERATURE_MODE_UNAVAILABLE
     )
+    monkeypatch.setattr(v4ah, "_purged_training_slices", original_purged_slices)
 
     purge_violated = events.copy()
     original_purged_slices = v4ah._purged_training_slices

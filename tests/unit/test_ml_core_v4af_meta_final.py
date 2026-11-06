@@ -10,6 +10,7 @@ import pandas as pd
 import pytest
 from pandas import DataFrame, Series
 
+from scripts import run_ml_core_real_data_baseline as real_data
 from scripts import run_ml_core_v4af_meta_final as v4af
 
 
@@ -578,3 +579,137 @@ def test_v4ae_reference_distinguishes_owner_baseline_from_historical_best() -> N
     assert selected["net_profit_factor"] == 1.1538
     assert historical["trailing_step_atr"] == 2.0
     assert historical["net_profit_factor"] == 1.2477
+
+
+def test_trim_helper_noop_on_uniform_hourly_bars() -> None:
+    bars = _bars(rows=48)
+    trimmed, diagnostics = v4af._trim_to_latest_contiguous_hourly_segment(bars, "1h")
+    assert len(trimmed) == len(bars)
+    assert diagnostics["status"] == "NO_GAP"
+    assert diagnostics["trimmed_bars"] == 0
+
+
+def test_trim_helper_keeps_latest_contiguous_segment_after_gap() -> None:
+    bars = _bars(rows=48)
+    with_gap = pd.concat([bars.iloc[:20], bars.iloc[23:]], ignore_index=True)
+    trimmed, diagnostics = v4af._trim_to_latest_contiguous_hourly_segment(
+        with_gap, "1h"
+    )
+    assert diagnostics["status"] == "TRIMMED_TO_LATEST_CONTIGUOUS_SEGMENT"
+    assert diagnostics["trimmed_bars"] == 20
+    assert diagnostics["gap_count"] == 1
+    assert len(trimmed) == 25
+
+
+def test_trim_helper_cuts_at_last_gap_only() -> None:
+    bars = _bars(rows=60)
+    with_gaps = pd.concat(
+        [bars.iloc[:5], bars.iloc[10:30], bars.iloc[35:]], ignore_index=True
+    )
+    trimmed, diagnostics = v4af._trim_to_latest_contiguous_hourly_segment(
+        with_gaps, "1h"
+    )
+    assert diagnostics["gap_count"] == 2
+    assert diagnostics["trimmed_bars"] == 25
+    assert len(trimmed) == 25
+
+
+def test_minute_validator_allows_only_the_documented_exchange_gap() -> None:
+    stamps = pd.date_range(
+        "2023-03-24T00:00:00Z", periods=1440, freq="min"
+    ).delete(slice(720, 840))
+    candles = pd.DataFrame(
+        {
+            "date": stamps,
+            "open": 100.0,
+            "high": 101.0,
+            "low": 99.0,
+            "close": 100.5,
+            "volume": 3.5,
+        }
+    )
+    validated = real_data._validate_minute_candles(
+        candles, allow_exchange_gaps=True
+    )
+    assert len(validated) == 1320
+    wrong_date = pd.DataFrame(
+        {
+            "date": pd.date_range(
+                "2023-03-25T00:00:00Z", periods=1440, freq="min"
+            ).delete(slice(720, 840)),
+            "open": 100.0,
+            "high": 101.0,
+            "low": 99.0,
+            "close": 100.5,
+            "volume": 3.5,
+        }
+    )
+    with pytest.raises(ValueError, match="minute_data_undocumented_exchange_gap"):
+        real_data._validate_minute_candles(
+            wrong_date, allow_exchange_gaps=True
+        )
+
+
+def test_manifested_gap_loader_recomputes_gap_ranges_and_checks_hash(
+    tmp_path: Path,
+) -> None:
+    import hashlib
+    import json
+
+    stamps = pd.date_range(
+        "2023-03-24T00:00:00Z", periods=1440, freq="min"
+    ).delete(slice(720, 840))
+    candles = pd.DataFrame(
+        {
+            "date": stamps,
+            "open": 100.0,
+            "high": 101.0,
+            "low": 99.0,
+            "close": 100.5,
+            "volume": 3.5,
+        }
+    )
+    stem = "binance-ethusdt-1m"
+    csv_path = tmp_path / f"{stem}.csv"
+    candles.to_csv(csv_path, index=False)
+    digest = hashlib.sha256(csv_path.read_bytes()).hexdigest()
+    gaps = real_data._minute_gap_ranges(candles["date"])
+    manifest = {
+        "symbol": "ETHUSDT",
+        "interval": "1m",
+        "requested_days": 1,
+        "row_count": 1320,
+        "commit_sha": "a" * 40,
+        "csv_sha256": digest,
+        "provider": "Binance Spot public klines API",
+        "public_api_only": True,
+        "credentials_used": False,
+        "private_api_calls": 0,
+        "real_order_attempts": 0,
+        "gap_policy": real_data.GAP_POLICY_ALLOW_EXCHANGE_GAPS,
+        "missing_intervals": 120,
+        "missing_minute_intervals": 120,
+        "missing_gap_ranges": gaps,
+        "fetch_page_size_candles": 1000,
+        "inter_page_delay_seconds": 0.25,
+        "start_utc": candles["date"].iloc[0].strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "end_utc": candles["date"].iloc[-1].strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    (tmp_path / f"{stem}.manifest.json").write_text(
+        json.dumps(manifest), encoding="utf-8"
+    )
+    loaded, provenance = real_data._load_manifested_data(
+        tmp_path, "ETHUSDT", 1, "a" * 40, allow_exchange_gaps=True
+    )
+    assert len(loaded) == 1320
+    assert provenance["missing_minute_intervals"] == 120
+    assert provenance["missing_gap_ranges"] == gaps
+
+    manifest["missing_gap_ranges"] = []
+    (tmp_path / f"{stem}.manifest.json").write_text(
+        json.dumps(manifest), encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match="public_data_gap_manifest_mismatch"):
+        real_data._load_manifested_data(
+            tmp_path, "ETHUSDT", 1, "a" * 40, allow_exchange_gaps=True
+        )

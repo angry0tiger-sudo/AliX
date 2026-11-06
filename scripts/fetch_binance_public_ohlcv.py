@@ -18,12 +18,18 @@ HOST = "data-api.binance.vision"
 ENDPOINT = "/api/v3/klines"
 SCHEMA_VERSION = "alix.binance.public-ohlcv.v1"
 ALLOWED_SYMBOLS = ("BTCUSDT", "ETHUSDT")
-ALLOWED_DAYS = (1, 7, 30, 90, 730)
+ALLOWED_DAYS = (1, 7, 30, 90, 730, 1825)
 INTERVAL_MS = 60_000
 PAGE_SIZE = 1000
 PAGE_DELAY_SECONDS = 0.25
 RETRY_STATUSES = frozenset({418, 429, 500, 502, 503, 504})
 GAP_POLICY = "reject; no interpolation, resampling, or synthetic fill"
+GAP_POLICY_ALLOW_EXCHANGE_GAPS = (
+    "accept only one 120-minute Binance Spot outage on 2023-03-24 UTC; "
+    "no interpolation, resampling, or synthetic fill"
+)
+KNOWN_EXCHANGE_GAP_DATE_UTC = "2023-03-24"
+KNOWN_EXCHANGE_GAP_MISSING_MINUTES = 120
 
 
 def _http_error_detail(body: bytes) -> str:
@@ -166,12 +172,67 @@ def _parse_kline(raw: Any, expected_ms: int) -> dict[str, Any]:
     }
 
 
+def _gap_ranges_from_stamps(stamps: list[int]) -> list[dict[str, Any]]:
+    """Describe missing 1m candle opens; no missing rows are ever synthesized."""
+    if any(stamp % 60 != 0 for stamp in stamps):
+        raise ValueError("binance_historical_stamp_not_minute_aligned")
+    if any(current <= previous for previous, current in zip(stamps, stamps[1:])):
+        raise ValueError("binance_historical_stamps_not_strictly_increasing")
+    gaps: list[dict[str, Any]] = []
+    for previous, current in zip(stamps, stamps[1:]):
+        delta = current - previous
+        if delta % 60 != 0:
+            raise ValueError("binance_historical_stamp_interval_invalid")
+        missing = delta // 60 - 1
+        if missing <= 0:
+            continue
+        first_missing = datetime.fromtimestamp(previous + 60, timezone.utc)
+        last_missing = datetime.fromtimestamp(current - 60, timezone.utc)
+        gaps.append(
+            {
+                "start_utc": first_missing.isoformat().replace("+00:00", "Z"),
+                "end_utc": last_missing.isoformat().replace("+00:00", "Z"),
+                "missing_minute_intervals": int(missing),
+            }
+        )
+    return gaps
+
+
+def _validate_documented_exchange_gaps(gaps: list[dict[str, Any]]) -> int:
+    missing = sum(int(item["missing_minute_intervals"]) for item in gaps)
+    if missing == 0 and not gaps:
+        return 0
+    valid = (
+        missing == KNOWN_EXCHANGE_GAP_MISSING_MINUTES
+        and len(gaps) == 1
+        and str(gaps[0]["start_utc"])[:10] == KNOWN_EXCHANGE_GAP_DATE_UTC
+        and str(gaps[0]["end_utc"])[:10] == KNOWN_EXCHANGE_GAP_DATE_UTC
+    )
+    if not valid:
+        raise ValueError("binance_exchange_gap_out_of_policy")
+    return missing
+
+
+def _parse_gap_tolerant_kline(raw: Any) -> dict[str, Any]:
+    """Parse an aligned real kline whose timestamp may follow an outage."""
+    if not isinstance(raw, list) or len(raw) < 6:
+        raise ValueError("binance_kline_shape_invalid")
+    stamp = raw[0]
+    if isinstance(stamp, bool) or not isinstance(stamp, int):
+        raise ValueError("binance_kline_timestamp_invalid")
+    if stamp % INTERVAL_MS != 0:
+        raise ValueError(f"binance_kline_timestamp_not_minute_aligned:{stamp}")
+    return _parse_kline(raw, stamp)
+
+
 def _fetch_page(
     cursor: int,
     end_ms: int,
     symbol: str,
     request_json: Callable[[dict[str, str]], list[Any]],
     sleep_fn: Callable[[float], None],
+    *,
+    allow_exchange_gaps: bool = False,
 ) -> tuple[list[dict[str, Any]], int]:
     expected_count = min(PAGE_SIZE, (end_ms - cursor) // INTERVAL_MS + 1)
     params = {
@@ -185,6 +246,26 @@ def _fetch_page(
     for attempt in range(3):
         try:
             payload = request_json(params)
+            if allow_exchange_gaps:
+                if not payload:
+                    raise ValueError("binance_kline_empty_page_under_gap_policy")
+                if len(payload) > expected_count:
+                    raise ValueError(
+                        "binance_kline_page_count_overflow:"
+                        f"expected_max={expected_count}:actual={len(payload)}:start={cursor}"
+                    )
+                page = [_parse_gap_tolerant_kline(item) for item in payload]
+                stamps_ms = [int(row["timestamp"]) * 1000 for row in page]
+                if (
+                    stamps_ms[0] < cursor
+                    or stamps_ms[-1] > end_ms
+                    or any(
+                        current <= previous
+                        for previous, current in zip(stamps_ms, stamps_ms[1:])
+                    )
+                ):
+                    raise ValueError("binance_kline_page_window_invalid")
+                return page, expected_count
             if len(payload) != expected_count:
                 raise ValueError(
                     f"binance_kline_page_count_mismatch:expected={expected_count}:actual={len(payload)}:start={cursor}"
@@ -203,9 +284,26 @@ def _fetch_page(
 
 
 def _validate_complete_window(
-    rows: list[dict[str, Any]], expected_count: int, start_ms: int, end_ms: int
+    rows: list[dict[str, Any]],
+    expected_count: int,
+    start_ms: int,
+    end_ms: int,
+    *,
+    allow_exchange_gaps: bool = False,
 ) -> None:
     stamps = [int(row["timestamp"]) for row in rows]
+    if allow_exchange_gaps:
+        if not rows:
+            raise ValueError("binance_historical_window_empty_under_gap_policy")
+        if stamps[0] * 1000 != start_ms or stamps[-1] * 1000 != end_ms:
+            raise ValueError("binance_historical_window_boundary_mismatch")
+        gaps = _gap_ranges_from_stamps(stamps)
+        missing = expected_count - len(rows)
+        observed_missing = sum(int(item["missing_minute_intervals"]) for item in gaps)
+        if missing < 0 or observed_missing != missing:
+            raise ValueError("binance_historical_gap_count_mismatch")
+        _validate_documented_exchange_gaps(gaps)
+        return
     if len(rows) != expected_count:
         raise ValueError(
             f"binance_historical_row_count_mismatch:expected={expected_count}:actual={len(rows)}"
@@ -271,13 +369,30 @@ def _fetch_historical_pages(
     symbol: str,
     request_json: Callable[[dict[str, str]], list[Any]],
     sleep_fn: Callable[[float], None],
+    *,
+    allow_exchange_gaps: bool = False,
 ) -> list[dict[str, Any]]:
     cursor = start_ms
     rows: list[dict[str, Any]] = []
     while cursor <= end_ms:
-        page, page_count = _fetch_page(cursor, end_ms, symbol, request_json, sleep_fn)
+        page, page_count = _fetch_page(
+            cursor,
+            end_ms,
+            symbol,
+            request_json,
+            sleep_fn,
+            allow_exchange_gaps=allow_exchange_gaps,
+        )
+        if not page:
+            raise ValueError("binance_kline_empty_page_under_gap_policy")
         rows.extend(page)
-        cursor += page_count * INTERVAL_MS
+        if allow_exchange_gaps:
+            next_cursor = int(page[-1]["timestamp"]) * 1000 + INTERVAL_MS
+            if next_cursor <= cursor:
+                raise ValueError("binance_historical_cursor_did_not_advance")
+            cursor = next_cursor
+        else:
+            cursor += page_count * INTERVAL_MS
         if cursor <= end_ms:
             sleep_fn(PAGE_DELAY_SECONDS)
     return rows
@@ -292,13 +407,27 @@ def fetch_historical_candles(
     sleep_fn: Callable[[float], None] = time.sleep,
     start_utc: datetime | None = None,
     end_utc: datetime | None = None,
+    allow_exchange_gaps: bool = False,
 ) -> list[dict[str, Any]]:
     expected_count = _validate_fetch_request(days, now, symbol, start_utc, end_utc)
     start_ms, end_ms = _resolve_historical_bounds(
         now, expected_count, start_utc, end_utc
     )
-    rows = _fetch_historical_pages(start_ms, end_ms, symbol, request_json, sleep_fn)
-    _validate_complete_window(rows, expected_count, start_ms, end_ms)
+    rows = _fetch_historical_pages(
+        start_ms,
+        end_ms,
+        symbol,
+        request_json,
+        sleep_fn,
+        allow_exchange_gaps=allow_exchange_gaps,
+    )
+    _validate_complete_window(
+        rows,
+        expected_count,
+        start_ms,
+        end_ms,
+        allow_exchange_gaps=allow_exchange_gaps,
+    )
     return rows
 
 
@@ -310,18 +439,30 @@ def write_artifacts(
     retrieved_at: datetime,
     commit_sha: str,
     symbol: str,
+    allow_exchange_gaps: bool = False,
 ) -> dict[str, Any]:
     _validate_symbol(symbol)
     if retrieved_at.tzinfo is None or retrieved_at.utcoffset() is None:
         raise ValueError("retrieved_at_timezone_required")
     count = days * 1440
     stamps = [int(row["timestamp"]) for row in rows]
-    if not rows or len(rows) != count:
-        raise ValueError(
-            f"binance_historical_row_count_mismatch:expected={count}:actual={len(rows)}"
-        )
-    if any(b - a != 60 for a, b in zip(stamps, stamps[1:])):
-        raise ValueError("binance_historical_gap_detected_before_write")
+    missing_minutes = count - len(rows)
+    if not allow_exchange_gaps:
+        if not rows or len(rows) != count:
+            raise ValueError(
+                f"binance_historical_row_count_mismatch:expected={count}:actual={len(rows)}"
+            )
+        if any(b - a != 60 for a, b in zip(stamps, stamps[1:])):
+            raise ValueError("binance_historical_gap_detected_before_write")
+        gap_ranges: list[dict[str, Any]] = []
+    else:
+        if not rows or missing_minutes < 0:
+            raise ValueError("binance_historical_row_count_invalid_under_gap_policy")
+        gap_ranges = _gap_ranges_from_stamps(stamps)
+        observed_missing = sum(int(item["missing_minute_intervals"]) for item in gap_ranges)
+        if observed_missing != missing_minutes:
+            raise ValueError("binance_historical_gap_count_mismatch")
+        _validate_documented_exchange_gaps(gap_ranges)
     output_dir.mkdir(parents=True, exist_ok=True)
     stem = f"binance-{symbol.lower()}-1m"
     csv_path = output_dir / f"{stem}.csv"
@@ -348,9 +489,12 @@ def write_artifacts(
         "row_count": len(rows),
         "requested_days": days,
         "retrieved_at": retrieved_at.astimezone(timezone.utc).isoformat(),
-        "missing_intervals": 0,
-        "missing_minute_intervals": 0,
-        "gap_policy": GAP_POLICY,
+        "missing_intervals": missing_minutes if allow_exchange_gaps else 0,
+        "missing_minute_intervals": missing_minutes if allow_exchange_gaps else 0,
+        "missing_gap_ranges": gap_ranges,
+        "gap_policy": (
+            GAP_POLICY_ALLOW_EXCHANGE_GAPS if allow_exchange_gaps else GAP_POLICY
+        ),
         "fetch_page_size_candles": PAGE_SIZE,
         "inter_page_delay_seconds": PAGE_DELAY_SECONDS,
         "csv_sha256": digest,
@@ -389,6 +533,14 @@ def main() -> int:
         "--end-utc",
         help="Optional exact inclusive UTC candle-open timestamp from a source manifest.",
     )
+    parser.add_argument(
+        "--allow-exchange-gaps",
+        action="store_true",
+        help=(
+            "Accept only one 120-minute Binance Spot outage on 2023-03-24 UTC. "
+            "Default strict mode rejects all market-data gaps."
+        ),
+    )
     args = parser.parse_args()
     if (args.start_utc is None) != (args.end_utc is None):
         parser.error("--start-utc and --end-utc must be supplied together")
@@ -409,6 +561,7 @@ def main() -> int:
         symbol=args.symbol,
         start_utc=start_utc,
         end_utc=end_utc,
+        allow_exchange_gaps=args.allow_exchange_gaps,
     )
     manifest = write_artifacts(
         rows,
@@ -417,6 +570,7 @@ def main() -> int:
         retrieved_at=now,
         commit_sha=args.commit_sha,
         symbol=args.symbol,
+        allow_exchange_gaps=args.allow_exchange_gaps,
     )
     print(json.dumps(manifest, sort_keys=True, allow_nan=False))
     return 0

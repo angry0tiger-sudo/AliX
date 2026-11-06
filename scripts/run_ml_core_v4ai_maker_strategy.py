@@ -28,7 +28,8 @@ from services.ml_core.economic_backtest import simulate_signals
 SCHEMA = "alix.ml-core-v4ai-maker-strategy.v1"
 SYMBOL = "ETHUSDT"
 TIMEFRAME = "1h"
-DAYS = 730
+DAYS = 1825
+ALLOW_EXCHANGE_GAPS = True
 INITIAL_EQUITY = 10_000.0
 FEE_BPS_PER_SIDE = 10.0
 SLIPPAGE_BPS_PER_SIDE = 5.0
@@ -380,15 +381,20 @@ def _fit_meta_model(
         raw_temperature = advanced._positive_probability(
             model, temperature_rows.loc[:, selected]
         )
-        separation = advanced.separation_diagnostics(
-            raw_temperature,
-            temperature_rows["meta_label"].to_numpy(dtype=int),
-        )
         identity_temperature = (
             split_diagnostics.get("temperature_calibration_mode")
             == advanced.V4AH_TEMPERATURE_MODE_IDENTITY
         )
         if identity_temperature:
+            separation = {
+                "status": "NOT_AVAILABLE_IDENTITY_TEMPERATURE_FALLBACK",
+                "metric_scope": (
+                    "PURGED_OOF_TEMPERATURE_SLICE_OUT_OF_FIT_PREDICTIONS"
+                ),
+                "probability_scope": "RAW_PRE_TEMPERATURE_CALIBRATION",
+                "sample_count": int(len(temperature_rows)),
+                "labels_used": False,
+            }
             temperature = 1.0
             temperature_diagnostics = {
                 "method": "IDENTITY_FALLBACK_RAW_PROBABILITIES",
@@ -399,10 +405,14 @@ def _fit_meta_model(
                 "calibration_labels_used": False,
                 "initial_nll": None,
                 "calibrated_nll": None,
-                "fit_scope": "IDENTITY_NO_FIT_PURGED_SLICE_TOO_SMALL",
+                "fit_scope": "IDENTITY_NO_FIT_PURGED_SLICE_THIN_OR_DEGENERATE",
                 "warning": advanced.V4AH_TEMPERATURE_IDENTITY_WARNING,
             }
         else:
+            separation = advanced.separation_diagnostics(
+                raw_temperature,
+                temperature_rows["meta_label"].to_numpy(dtype=int),
+            )
             temperature, temperature_diagnostics = advanced.fit_temperature_scaler(
                 raw_temperature,
                 temperature_rows["meta_label"].to_numpy(dtype=int),
@@ -1203,7 +1213,7 @@ def _render_step_summary_header(report: dict[str, Any]) -> list[str]:
         "## AliX V4-AI ETHUSDT Maker-Fee Strategy Validation",
         "",
         f"Commit SHA: {report['commit_sha']}",
-        "Scope: ETHUSDT Spot, 1h, 730 days, public OHLCV only.",
+        "Scope: ETHUSDT Spot, 1h, 1825 days requested with trim to latest contiguous segment, public OHLCV only.",
         "Primary signal: causal Bollinger(20, 2.0) upper breakout with Close > EMA200.",
         "Primary ADX filter: DISABLED. ADX(14)>20 is retained only as a diagnostic ablation, not as an entry gate.",
         "Execution: closed-candle signal, next-bar-open entry, no pyramiding.",
@@ -1265,6 +1275,15 @@ def _render_meta_diagnostics(report: dict[str, Any]) -> list[str]:
     threshold_counts = split.get("threshold_class_counts", {})
     return [
         "",
+        (
+            f"Dataset provenance: requested_days={report['dataset_provenance'].get('requested_days', 'N/A')}; "
+            f"1m_rows={report['dataset_provenance'].get('row_count', 'N/A')}; "
+            f"missing_minutes={report['dataset_provenance'].get('missing_minute_intervals', 0)}; "
+            f"hourly_bars_after_trim={report.get('bar_count', 0)}; "
+            f"trim={report['dataset_provenance'].get('resample_gap_trim', {}).get('status', 'N/A')}; "
+            f"trimmed_bars={report['dataset_provenance'].get('resample_gap_trim', {}).get('trimmed_bars', 0)}; "
+            f"contiguous_start={report['dataset_provenance'].get('resample_gap_trim', {}).get('segment_start_utc', 'N/A')}."
+        ),
         f"Primary BUYs (ADX disabled): {report['signal_counts']['primary_buy_count']}; "
         f"ADX>20 diagnostic-ablation BUYs: {report['signal_counts']['adx_ablation_buy_count']}.",
         f"OOF primary events: {training.get('oof_primary_event_count', 0)}; "
@@ -1472,7 +1491,9 @@ def run_v4ai(
         research_bars,
         base_features,
         base_primary_signal,
-    ) = v4af._load_research_context(input_dir, days, commit_sha)
+    ) = v4af._load_research_context(
+        input_dir, days, commit_sha, allow_exchange_gaps=ALLOW_EXCHANGE_GAPS
+    )
 
     # ADX is retained strictly as a like-for-like diagnostic ablation. It does
     # not gate the Primary signal, OOF event generation, Meta fit, or Meta replay.

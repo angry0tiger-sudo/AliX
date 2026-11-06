@@ -15,6 +15,13 @@ import pandas as pd
 from pandas import DataFrame, Series
 from sklearn import metrics  # type: ignore[import-untyped]
 
+from scripts.fetch_binance_public_ohlcv import (
+    GAP_POLICY,
+    GAP_POLICY_ALLOW_EXCHANGE_GAPS,
+    KNOWN_EXCHANGE_GAP_DATE_UTC,
+    KNOWN_EXCHANGE_GAP_MISSING_MINUTES,
+)
+
 from services.ml_core.adaptive_targets import (
     EXIT_REASONS,
     LABEL_HORIZON_CANDLES,
@@ -83,13 +90,66 @@ def _feature_profile_diagnostics(profile: str) -> dict[str, Any]:
     }
 
 
-def _validated_minute_timestamps(values: Series) -> Series:
+def _minute_gap_ranges(dates: Series) -> list[dict[str, Any]]:
+    values = pd.to_datetime(dates, errors="coerce", utc=True)
+    if values.isna().any():
+        raise ValueError("timestamp_invalid")
+    seconds = values.astype("int64").to_numpy(dtype=np.int64) // 1_000_000_000
+    if any(current <= previous for previous, current in zip(seconds, seconds[1:])):
+        raise ValueError("timestamps_must_be_unique_and_increasing")
+    gaps: list[dict[str, Any]] = []
+    for previous, current in zip(seconds, seconds[1:]):
+        delta = current - previous
+        if delta % 60 != 0:
+            raise ValueError("minute_data_interval_mismatch")
+        missing = delta // 60 - 1
+        if missing <= 0:
+            continue
+        first_missing = pd.Timestamp(previous + 60, unit="s", tz="UTC")
+        last_missing = pd.Timestamp(current - 60, unit="s", tz="UTC")
+        gaps.append(
+            {
+                "start_utc": first_missing.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "end_utc": last_missing.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "missing_minute_intervals": int(missing),
+            }
+        )
+    return gaps
+
+
+def _validate_documented_exchange_gaps(gaps: list[dict[str, Any]]) -> int:
+    missing = sum(int(item["missing_minute_intervals"]) for item in gaps)
+    if missing == 0 and not gaps:
+        return 0
+    valid = (
+        missing == KNOWN_EXCHANGE_GAP_MISSING_MINUTES
+        and len(gaps) == 1
+        and str(gaps[0]["start_utc"])[:10] == KNOWN_EXCHANGE_GAP_DATE_UTC
+        and str(gaps[0]["end_utc"])[:10] == KNOWN_EXCHANGE_GAP_DATE_UTC
+    )
+    if not valid:
+        raise ValueError("minute_data_undocumented_exchange_gap")
+    return missing
+
+
+def _validated_minute_timestamps(
+    values: Series, allow_exchange_gaps: bool = False
+) -> Series:
     dates = pd.to_datetime(values, errors="coerce", utc=True)
     if dates.isna().any():
         raise ValueError("timestamp_invalid")
     if dates.duplicated().any() or not dates.is_monotonic_increasing:
         raise ValueError("timestamps_must_be_unique_and_increasing")
+    if not bool((dates.dt.second == 0).all()) or not bool(
+        (dates.dt.microsecond == 0).all()
+    ):
+        raise ValueError("minute_data_interval_mismatch")
     deltas = dates.diff().iloc[1:].dt.total_seconds().to_numpy(dtype=float)
+    if allow_exchange_gaps:
+        if len(deltas) and not bool(np.all(deltas > 0.0)):
+            raise ValueError("minute_data_interval_mismatch")
+        _validate_documented_exchange_gaps(_minute_gap_ranges(dates))
+        return dates
     if len(deltas) and not bool(np.all(deltas == 60.0)):
         raise ValueError("minute_data_gap_or_interval_mismatch")
     return dates
@@ -125,23 +185,31 @@ def _validate_minute_price_geometry(result: DataFrame) -> None:
         raise ValueError("ohlcv_geometry_invalid")
 
 
-def _validate_minute_candles(candles: DataFrame) -> DataFrame:
+def _validate_minute_candles(
+    candles: DataFrame, *, allow_exchange_gaps: bool = False
+) -> DataFrame:
     missing = sorted(set(OHLCV_COLUMNS) - set(candles.columns))
     if missing:
         raise ValueError(f"ohlcv_missing_columns:{','.join(missing)}")
     if candles.empty:
         raise ValueError("ohlcv_empty")
     result = candles.loc[:, list(OHLCV_COLUMNS)].copy().reset_index(drop=True)
-    result["date"] = _validated_minute_timestamps(result["date"])
+    result["date"] = _validated_minute_timestamps(
+        result["date"], allow_exchange_gaps=allow_exchange_gaps
+    )
     _validate_minute_numeric_values(result)
     return result
 
 
-def resample_ohlcv(candles: DataFrame, timeframe: str) -> DataFrame:
-    """Build target bars only from complete, gap-free one-minute public candles."""
+def resample_ohlcv(
+    candles: DataFrame, timeframe: str, *, allow_exchange_gaps: bool = False
+) -> DataFrame:
+    """Resample complete bars; never interpolate or synthesize candles."""
     if timeframe not in TIMEFRAME_MINUTES:
         raise ValueError("entry_timeframe_out_of_policy")
-    source = _validate_minute_candles(candles)
+    source = _validate_minute_candles(
+        candles, allow_exchange_gaps=allow_exchange_gaps
+    )
     minutes = TIMEFRAME_MINUTES[timeframe]
     indexed = source.set_index("date")
     rule = f"{minutes}min"
@@ -1725,7 +1793,12 @@ def run_walk_forward_experiment(
 
 
 def _load_manifested_data(
-    input_dir: Path, symbol: str, days: int, commit_sha: str
+    input_dir: Path,
+    symbol: str,
+    days: int,
+    commit_sha: str,
+    *,
+    allow_exchange_gaps: bool = False,
 ) -> tuple[DataFrame, dict[str, Any]]:
     stem = f"binance-{symbol.lower()}-1m"
     csv_path = input_dir / f"{stem}.csv"
@@ -1737,11 +1810,30 @@ def _load_manifested_data(
     manifest = cast(dict[str, Any], json.loads(manifest_bytes.decode("utf-8")))
     csv_digest = hashlib.sha256(csv_path.read_bytes()).hexdigest()
     expected_rows = days * 24 * 60
+    if allow_exchange_gaps:
+        gap_policy_required = GAP_POLICY_ALLOW_EXCHANGE_GAPS
+        missing = int(manifest.get("missing_minute_intervals", -1))
+        if missing not in (0, KNOWN_EXCHANGE_GAP_MISSING_MINUTES):
+            raise ValueError(f"public_data_manifest_validation_failed:{symbol}")
+        expected_rows -= missing
+        row_count_check = manifest.get("row_count") == expected_rows
+        missing_check = (
+            manifest.get("missing_intervals") == missing
+            and manifest.get("missing_minute_intervals") == missing
+        )
+    else:
+        gap_policy_required = GAP_POLICY
+        missing = 0
+        row_count_check = manifest.get("row_count") == expected_rows
+        missing_check = (
+            manifest.get("missing_intervals") == 0
+            and manifest.get("missing_minute_intervals") == 0
+        )
     checks = (
         manifest.get("symbol") == symbol,
         manifest.get("interval") == "1m",
         manifest.get("requested_days") == days,
-        manifest.get("row_count") == expected_rows,
+        row_count_check,
         manifest.get("commit_sha") == commit_sha,
         manifest.get("csv_sha256") == csv_digest,
         manifest.get("provider") == "Binance Spot public klines API",
@@ -1749,18 +1841,31 @@ def _load_manifested_data(
         manifest.get("credentials_used") is False,
         manifest.get("private_api_calls") == 0,
         manifest.get("real_order_attempts") == 0,
-        manifest.get("gap_policy")
-        == "reject; no interpolation, resampling, or synthetic fill",
-        manifest.get("missing_minute_intervals") == 0,
+        manifest.get("gap_policy") == gap_policy_required,
+        missing_check,
         manifest.get("fetch_page_size_candles") == 1000,
         manifest.get("inter_page_delay_seconds") == 0.25,
     )
     if not all(checks):
         raise ValueError(f"public_data_manifest_validation_failed:{symbol}")
 
-    candles = _validate_minute_candles(pd.read_csv(csv_path))
+    candles = _validate_minute_candles(
+        pd.read_csv(csv_path), allow_exchange_gaps=allow_exchange_gaps
+    )
     if len(candles) != expected_rows:
         raise ValueError(f"public_data_row_count_mismatch:{symbol}")
+    actual_gaps = _minute_gap_ranges(candles["date"]) if allow_exchange_gaps else []
+    actual_missing = _validate_documented_exchange_gaps(actual_gaps)
+    if allow_exchange_gaps and (
+        actual_missing != missing
+        or manifest.get("missing_gap_ranges", []) != actual_gaps
+    ):
+        raise ValueError(f"public_data_gap_manifest_mismatch:{symbol}")
+    if (
+        pd.to_datetime(manifest.get("start_utc"), utc=True) != candles["date"].iloc[0]
+        or pd.to_datetime(manifest.get("end_utc"), utc=True) != candles["date"].iloc[-1]
+    ):
+        raise ValueError(f"public_data_window_boundary_mismatch:{symbol}")
     provenance = {
         "symbol": symbol,
         "pair": f"{symbol[:-4]}/USDT",
@@ -1768,7 +1873,9 @@ def _load_manifested_data(
         "interval": "1m",
         "row_count": int(len(candles)),
         "requested_days": int(manifest["requested_days"]),
-        "missing_minute_intervals": int(manifest["missing_minute_intervals"]),
+        "missing_minute_intervals": int(missing),
+        "missing_gap_ranges": actual_gaps,
+        "gap_policy": manifest["gap_policy"],
         "fetch_page_size_candles": int(manifest["fetch_page_size_candles"]),
         "inter_page_delay_seconds": float(manifest["inter_page_delay_seconds"]),
         "start_utc": candles["date"].iloc[0].isoformat(),

@@ -416,7 +416,7 @@ def _temperature_slice_calibration_mode(temperature: DataFrame) -> str:
         and labels.sum() < float(labels.size)
     )
     if not both_classes:
-        return V4AH_TEMPERATURE_MODE_UNAVAILABLE
+        return V4AH_TEMPERATURE_MODE_IDENTITY
     if len(temperature) < V4AH_MINIMUM_CALIBRATION_ROWS:
         return V4AH_TEMPERATURE_MODE_IDENTITY
     return V4AH_TEMPERATURE_MODE_CALIBRATED
@@ -435,12 +435,16 @@ def split_fit_temperature_threshold_with_fallback(
     label-end purge boundaries, and outer-train containment are identical to
     ``split_fit_temperature_threshold`` and are never relaxed; no future data
     is used. Only the temperature-scaling step may degrade: when the purged
-    temperature slice holds both meta classes but fewer than
-    ``V4AH_MINIMUM_CALIBRATION_ROWS`` rows, the slices are returned with
+    temperature slice is non-empty but thin (< ``V4AH_MINIMUM_CALIBRATION_ROWS``
+    rows) or degenerate (a single meta class), the slices are returned with
     ``temperature_calibration_mode=IDENTITY_FALLBACK_RAW_PROBABILITIES`` so the
     caller can skip temperature fitting and use raw probabilities (identity
-    temperature) instead of crashing. Because temperature scaling is strictly
-    monotonic, rank-based threshold selection is invariant to this fallback.
+    temperature) instead of crashing or skipping the meta model entirely.
+    Because temperature scaling is strictly monotonic, rank-based threshold
+    selection is invariant to this fallback. Only an EMPTY temperature slice
+    (collapsed purge geometry) raises
+    ``v4ah_binary_class_support_insufficient_temperature_slice``, which the
+    runner converts into an honest skip via ``_support_shortfall``.
     Error precedence may differ from the strict variant; no invariant differs.
     """
     _validate_split_fractions(fit_fraction, temperature_fraction)
