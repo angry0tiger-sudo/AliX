@@ -461,7 +461,10 @@ def split_fit_temperature_threshold_with_fallback(
         raise fail("v4ah_fit_rows_insufficient_after_purge")
     if len(threshold) < V4AH_MINIMUM_THRESHOLD_ROWS:
         raise fail("v4ah_threshold_rows_insufficient")
-    _validate_binary_labels(fit["meta_label"], len(fit))
+    try:
+        _validate_binary_labels(fit["meta_label"], len(fit))
+    except ValueError as error:
+        raise fail(str(error)) from error
     if int(fit["label_end_idx"].max()) >= temperature_start:
         raise fail("v4ah_fit_temperature_purge_failed")
     if not temperature.empty and (

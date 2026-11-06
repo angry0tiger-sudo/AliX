@@ -201,6 +201,25 @@ def test_split_with_fallback_calibrated_mode_matches_strict_split() -> None:
     assert strict_diagnostics["fit_rows"] == diagnostics["fit_rows"]
 
 
+def test_split_with_fallback_fit_class_failure_preserves_slice_diagnostics() -> None:
+    events = _event_frame(250)
+    events.loc[:174, "meta_label"] = 0
+    with pytest.raises(
+        ValueError, match="v4ah_binary_class_support_insufficient"
+    ) as error:
+        v4ah.split_fit_temperature_threshold_with_fallback(
+            events, outer_train_end=900
+        )
+    diagnostics = getattr(error.value, "diagnostics", {})
+    assert diagnostics["fit_rows"] == 175
+    assert diagnostics["fit_class_counts"] == {
+        "meta_failure": 175,
+        "meta_success": 0,
+    }
+    assert diagnostics["temperature_rows"] == 37
+    assert diagnostics["threshold_rows"] == 38
+
+
 def test_split_with_fallback_strict_guards_remain_enforced(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

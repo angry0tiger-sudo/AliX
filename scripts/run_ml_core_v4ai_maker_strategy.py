@@ -1,4 +1,4 @@
-"""V4-AI ETHUSDT 1h maker-fee strategy validation with ADX-filtered primary signals."""
+"""V4-AI ETHUSDT 1h maker-fee validation for Bollinger/EMA200 primary signals."""
 
 from __future__ import annotations
 
@@ -45,10 +45,15 @@ MINIMUM_WIN_RATE = 0.45
 MAXIMUM_DRAWDOWN = 15.0
 DSR_MINIMUM_RETURN_OBSERVATIONS = 4
 SORTINO_TARGET_RETURN_PER_TRADE = 0.0
-BASE_CONTROL = "PRIMARY_BASE_CONTROL_30BPS"
-ADX_CONTROL = "PRIMARY_ADX20_30BPS"
-META_CANDIDATE = "META_TOP_70_ADX20_30BPS"
-CANDIDATE_NAMES = (BASE_CONTROL, ADX_CONTROL, META_CANDIDATE)
+BASE_CONTROL = "PRIMARY_BB20_EMA200_30BPS"
+ADX_ABLATION = "PRIMARY_ADX20_ABLATION_30BPS"
+META_CANDIDATE = "META_TOP_70_BASE_30BPS"
+CANDIDATE_NAMES = (BASE_CONTROL, ADX_ABLATION, META_CANDIDATE)
+PRIMARY_FILTER_CONTRACT: dict[str, str] = {
+    "feature": "close",
+    "reference": "CAUSAL_EMA200",
+    "comparison": "STRICT_GT",
+}
 LABEL_COLUMNS = {
     "event_index",
     "fold_id",
@@ -138,7 +143,7 @@ def _trade_management_config(policy: dict[str, Any] | None = None) -> Any:
     )
 
 
-def _apply_adx_filter(
+def _apply_adx_ablation(
     base_signal: Series,
     features: DataFrame,
 ) -> tuple[Series, dict[str, Any]]:
@@ -352,7 +357,7 @@ def _fit_meta_model(
 ) -> dict[str, Any]:
     if not bool(train_gate.get("passed")):
         return {
-            "skip_reason": "v4ai_insufficient_adx_filtered_primary_signals",
+            "skip_reason": "v4ai_insufficient_primary_signals",
             "separation_diagnostics": {"status": "NOT_AVAILABLE_MODEL_NOT_FIT"},
         }
     try:
@@ -468,7 +473,7 @@ def _forward_probability_map(
 def _candidate_id(mode: str) -> str:
     if mode not in CANDIDATE_NAMES:
         raise ValueError("v4ai_candidate_mode_invalid")
-    return f"{SYMBOL}|{TIMEFRAME}|ADX14_GT20|{mode}"
+    return f"{SYMBOL}|{TIMEFRAME}|BB20_UPPER_BREAKOUT_EMA200|{mode}"
 
 
 def _profit_factor(metrics: dict[str, Any]) -> float:
@@ -811,7 +816,7 @@ def _run_candidate(
         "timeframe": TIMEFRAME,
         "mode": mode,
         "status": "COMPLETED",
-        "filter": "ADX14_GT20" if mode != BASE_CONTROL else "NONE",
+        "filter": "ADX14_GT20_ABLATION" if mode == ADX_ABLATION else "NONE",
         "primary_signal_count": len(event_indices),
         "accepted_signal_count": len(accepted),
         "accepted_signal_fraction": (
@@ -850,7 +855,7 @@ def _skipped_meta_candidate(reason: str, event_count: int) -> dict[str, Any]:
         "mode": META_CANDIDATE,
         "status": "SKIPPED_INSUFFICIENT_META_SUPPORT",
         "skip_reason": reason,
-        "filter": "ADX14_GT20",
+        "filter": "NONE",
         "primary_signal_count": event_count,
         "accepted_signal_count": 0,
         "accepted_signal_fraction": 0.0,
@@ -1071,13 +1076,7 @@ def _validate_report_risk_contract(report: dict[str, Any]) -> None:
 
 
 def _validate_report_primary_filter(report: dict[str, Any]) -> None:
-    expected = {
-        "feature": ADX_FEATURE,
-        "period": ADX_PERIOD,
-        "threshold": ADX_THRESHOLD,
-        "comparison": "STRICT_GT",
-    }
-    if report.get("primary_filter") != expected:
+    if report.get("primary_filter") != PRIMARY_FILTER_CONTRACT:
         raise ValueError("v4ai_report_primary_filter_invalid")
 
 
@@ -1205,8 +1204,8 @@ def _render_step_summary_header(report: dict[str, Any]) -> list[str]:
         "",
         f"Commit SHA: {report['commit_sha']}",
         "Scope: ETHUSDT Spot, 1h, 730 days, public OHLCV only.",
-        "Primary base signal: causal Bollinger(20, 2.0) upper breakout and Close > EMA200.",
-        "Primary upgrade: ADX(14) strictly >20; non-finite ADX rows cannot signal.",
+        "Primary signal: causal Bollinger(20, 2.0) upper breakout with Close > EMA200.",
+        "Primary ADX filter: DISABLED. ADX(14)>20 is retained only as a diagnostic ablation, not as an entry gate.",
         "Execution: closed-candle signal, next-bar-open entry, no pyramiding.",
         "Maker-cost assumption: 10 bps fee + 5 bps slippage per side = 30 bps round trip.",
         "Important: fixed maker-fee proxy only; passive Limit queue/partial-fill mechanics are not simulated.",
@@ -1255,21 +1254,44 @@ def _render_candidate_section(candidates: list[dict[str, Any]]) -> list[str]:
 
 def _render_meta_diagnostics(report: dict[str, Any]) -> list[str]:
     meta = report.get("meta_model", {})
+    training = meta.get("training_diagnostics", {})
+    split = meta.get("split_diagnostics", {})
     separation = meta.get("separation_diagnostics", {})
     fit = meta.get("fit_diagnostics", {})
     threshold = meta.get("threshold_diagnostics", {})
+    label_counts = training.get("label_class_counts", {})
+    fit_counts = split.get("fit_class_counts", {})
+    temperature_counts = split.get("temperature_class_counts", {})
+    threshold_counts = split.get("threshold_class_counts", {})
     return [
         "",
-        f"Base Primary BUYs: {report['signal_counts']['base_primary_buy_count']}; ADX-filtered Primary BUYs: {report['signal_counts']['adx_filtered_primary_buy_count']}.",
-        f"OOF labels: {meta.get('training_diagnostics', {}).get('matured_costed_oof_label_count', 0)}.",
+        f"Primary BUYs (ADX disabled): {report['signal_counts']['primary_buy_count']}; "
+        f"ADX>20 diagnostic-ablation BUYs: {report['signal_counts']['adx_ablation_buy_count']}.",
+        f"OOF primary events: {training.get('oof_primary_event_count', 0)}; "
+        f"matured costed OOF labels: {training.get('matured_costed_oof_label_count', 0)}; "
+        f"immature excluded: {training.get('immature_oof_event_count', 0)}.",
         (
-            "Purged OOF slices after label-end purge: "
-            f"fit={meta.get('split_diagnostics', {}).get('fit_rows', 'N/A')}; "
-            f"temperature={meta.get('split_diagnostics', {}).get('temperature_rows', 'N/A')}; "
-            f"threshold={meta.get('split_diagnostics', {}).get('threshold_rows', 'N/A')}."
+            "OOF label classes failure/success: "
+            f"{label_counts.get('meta_failure', 'N/A')}/"
+            f"{label_counts.get('meta_success', 'N/A')}."
+        ),
+        (
+            "Purged OOF slices rows fit/temperature/threshold: "
+            f"{split.get('fit_rows', 'N/A')}/"
+            f"{split.get('temperature_rows', 'N/A')}/"
+            f"{split.get('threshold_rows', 'N/A')}."
+        ),
+        (
+            "Purged OOF classes failure/success fit="
+            f"{fit_counts.get('meta_failure', 'N/A')}/"
+            f"{fit_counts.get('meta_success', 'N/A')}; temperature="
+            f"{temperature_counts.get('meta_failure', 'N/A')}/"
+            f"{temperature_counts.get('meta_success', 'N/A')}; threshold="
+            f"{threshold_counts.get('meta_failure', 'N/A')}/"
+            f"{threshold_counts.get('meta_success', 'N/A')}."
         ),
         f"Meta fit: {'ENABLED' if meta.get('enabled') else 'SKIPPED'}; "
-        f"calibration={meta.get('split_diagnostics', {}).get('temperature_calibration_mode', 'N/A')}; "
+        f"calibration={split.get('temperature_calibration_mode', 'N/A')}; "
         f"reason={meta.get('skip_reason') or 'N/A'}.",
         (
             f"Regime: KMeans clusters={report.get('regime_diagnostics', {}).get('cluster_count', 'N/A')}; "
@@ -1318,7 +1340,7 @@ def _render_exit_geometry_row(cell: dict[str, Any]) -> str:
 def _render_exit_geometry_section(cells: list[dict[str, Any]]) -> list[str]:
     lines = [
         "",
-        "### ADX-filtered Primary exit-geometry matrix (30 bps only)",
+        "### Base Primary exit-geometry matrix (30 bps only)",
         "| Policy | SL ATR | TP ATR | Activation ATR | Step ATR | Cost bps RT | Trades | Win % | Net PF | Max DD % | DSR Z | DSR P | DSR N | Sortino/trade | Z.AI PF>1.1 | Z.AI DSR Z>1 | Net PnL USD | Expectancy USD/trade |",
         "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|---:|---:|",
     ]
@@ -1329,7 +1351,7 @@ def _render_exit_geometry_section(cells: list[dict[str, Any]]) -> list[str]:
 def _render_step_summary_footer() -> list[str]:
     return [
         "",
-        "Acceptance: Net PF >1.5, Max DD <15%, Win Rate >45%, Trades >=30; Meta must also outperform ADX Primary.",
+        "Acceptance: Net PF >1.5, Max DD <15%, Win Rate >45%, Trades >=30; Meta must also outperform Base Primary.",
         "Safety: Champion=null, order_permission=false, trading_authorization=NO-GO, private_api_calls=0, real_order_attempts=0, sequence_model_used=false.",
         "Research only. No private exchange API, credentials, live/paper orders, or production execution.",
         "Promotion: BLOCKED_PENDING_INDEPENDENT_OOS_AND_OWNER_REVIEW.",
@@ -1365,7 +1387,7 @@ def _build_report(
     train_end: int,
     forward_end: int,
     signal_counts: dict[str, int],
-    adx_diagnostics: dict[str, Any],
+    adx_ablation_diagnostics: dict[str, Any],
     train_gate: dict[str, Any],
     meta: dict[str, Any],
     regime_diagnostics: dict[str, Any],
@@ -1383,12 +1405,7 @@ def _build_report(
         "dataset_provenance": provenance,
         "bar_count": int(len(bars)),
         "primary_signal": "CAUSAL_BOLLINGER_20_UPPER_BREAKOUT_CLOSE_ABOVE_EMA200",
-        "primary_filter": {
-            "feature": ADX_FEATURE,
-            "period": ADX_PERIOD,
-            "threshold": ADX_THRESHOLD,
-            "comparison": "STRICT_GT",
-        },
+        "primary_filter": dict(PRIMARY_FILTER_CONTRACT),
         "fixed_exit_geometry": dict(PRIMARY_GEOMETRY),
         "cost_contract": {
             "fee_type_assumption": "MAKER_FEE_PROXY",
@@ -1399,7 +1416,7 @@ def _build_report(
         },
         "risk_metric_contract": _risk_metric_contract(),
         "signal_counts": signal_counts,
-        "adx_filter_diagnostics": adx_diagnostics,
+        "adx_ablation_diagnostics": adx_ablation_diagnostics,
         "primary_train_sample_gate": train_gate,
         "chronological_evaluation": {
             "train_end_index_exclusive": train_end,
@@ -1456,41 +1473,47 @@ def run_v4ai(
         base_features,
         base_primary_signal,
     ) = v4af._load_research_context(input_dir, days, commit_sha)
-    adx_signal, adx_diagnostics = _apply_adx_filter(base_primary_signal, base_features)
-    base_event_indices = v4af._eligible_primary_event_indices(
+
+    # ADX is retained strictly as a like-for-like diagnostic ablation. It does
+    # not gate the Primary signal, OOF event generation, Meta fit, or Meta replay.
+    adx_ablation_signal, adx_ablation_diagnostics = _apply_adx_ablation(
+        base_primary_signal, base_features
+    )
+    _, train_gate, primary_event_indices = v4af._primary_signal_evaluation(
         base_primary_signal, train_end, forward_end
     )
-    signal_counts = {
-        "base_primary_buy_count": int(base_primary_signal.sum()),
-        "adx_filtered_primary_buy_count": int(adx_signal.sum()),
-        "base_forward_event_count": len(base_event_indices),
-        "adx_filtered_forward_event_count": len(
-            v4af._eligible_primary_event_indices(adx_signal, train_end, forward_end)
-        ),
-    }
-    _, train_gate, adx_event_indices = v4af._primary_signal_evaluation(
-        adx_signal, train_end, forward_end
+    adx_ablation_event_indices = v4af._eligible_primary_event_indices(
+        adx_ablation_signal, train_end, forward_end
     )
-    base_candidate, base_trades, base_decisions = _run_candidate(
+    signal_counts = {
+        "primary_buy_count": int(base_primary_signal.sum()),
+        "adx_ablation_buy_count": int(adx_ablation_signal.sum()),
+        "primary_forward_event_count": len(primary_event_indices),
+        "adx_ablation_forward_event_count": len(adx_ablation_event_indices),
+    }
+
+    primary_candidate, primary_trades, primary_decisions = _run_candidate(
         research_bars,
-        base_event_indices,
+        primary_event_indices,
         forward_end,
         BASE_CONTROL,
         None,
         None,
     )
-    adx_candidate, adx_trades, adx_decisions = _run_candidate(
-        research_bars,
-        adx_event_indices,
-        forward_end,
-        ADX_CONTROL,
-        None,
-        None,
+    adx_ablation_candidate, adx_ablation_trades, adx_ablation_decisions = (
+        _run_candidate(
+            research_bars,
+            adx_ablation_event_indices,
+            forward_end,
+            ADX_ABLATION,
+            None,
+            None,
+        )
     )
     try:
         features, regime_diagnostics = _regime_features(base_features)
         meta = _fit_meta_model(
-            research_bars, features, adx_signal, train_end, train_gate
+            research_bars, features, base_primary_signal, train_end, train_gate
         )
     except ValueError as error:
         if not _support_shortfall(error):
@@ -1500,37 +1523,42 @@ def run_v4ai(
     if meta.get("skip_reason") is None:
         probabilities = _forward_probability_map(
             features,
-            adx_event_indices,
+            primary_event_indices,
             cast(list[str], meta["selected_features"]),
             meta["model"],
             float(meta["temperature"]),
         )
         meta_candidate, meta_trades, meta_decisions = _run_candidate(
             research_bars,
-            adx_event_indices,
+            primary_event_indices,
             forward_end,
             META_CANDIDATE,
             float(meta["threshold"]),
             probabilities,
-            adx_candidate["metrics"],
+            primary_candidate["metrics"],
             float(
-                adx_candidate["metrics"][
+                primary_candidate["metrics"][
                     "mean_unscaled_net_expectancy_usd_at_full_equity"
                 ]
             ),
         )
     else:
         meta_candidate = _skipped_meta_candidate(
-            str(meta["skip_reason"]), len(adx_event_indices)
+            str(meta["skip_reason"]), len(primary_event_indices)
         )
         probabilities = {}
         meta_trades = []
-        meta_decisions = _skipped_decision_rows(research_bars, adx_event_indices)
-    candidates = [base_candidate, adx_candidate, meta_candidate]
-    trades = [*base_trades, *adx_trades, *meta_trades]
-    decisions = [*base_decisions, *adx_decisions, *meta_decisions]
+        meta_decisions = _skipped_decision_rows(research_bars, primary_event_indices)
+
+    candidates = [primary_candidate, adx_ablation_candidate, meta_candidate]
+    trades = [*primary_trades, *adx_ablation_trades, *meta_trades]
+    decisions = [
+        *primary_decisions,
+        *adx_ablation_decisions,
+        *meta_decisions,
+    ]
     exit_matrix = _run_exit_geometry_matrix(
-        research_bars, adx_event_indices, forward_end
+        research_bars, primary_event_indices, forward_end
     )
     _attach_dsr_diagnostics(candidates, exit_matrix)
     report = _build_report(
@@ -1540,7 +1568,7 @@ def run_v4ai(
         train_end,
         forward_end,
         signal_counts,
-        adx_diagnostics,
+        adx_ablation_diagnostics,
         train_gate,
         meta,
         regime_diagnostics,

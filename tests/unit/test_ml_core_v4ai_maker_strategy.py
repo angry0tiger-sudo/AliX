@@ -105,12 +105,7 @@ def _valid_report() -> dict[str, Any]:
             "passive_limit_fill_simulation": False,
         },
         "risk_metric_contract": v4ai._risk_metric_contract(),
-        "primary_filter": {
-            "feature": v4ai.ADX_FEATURE,
-            "period": 14,
-            "threshold": 20.0,
-            "comparison": "STRICT_GT",
-        },
+        "primary_filter": dict(v4ai.PRIMARY_FILTER_CONTRACT),
         "final_holdout_used": False,
         "chronological_evaluation": {"final_15_percent_holdout_untouched": True},
         "candidates": [
@@ -139,10 +134,10 @@ def test_execution_cost_is_locked_to_thirty_bps() -> None:
         )
 
 
-def test_adx_filter_is_strict_and_rejects_non_finite_rows() -> None:
+def test_adx_ablation_is_strict_and_rejects_non_finite_rows() -> None:
     features = DataFrame({v4ai.ADX_FEATURE: [19.9, 20.0, 20.1, 31.0, np.nan, np.inf]})
     base = pd.Series([True] * 6, dtype=bool)
-    filtered, diagnostics = v4ai._apply_adx_filter(base, features)
+    filtered, diagnostics = v4ai._apply_adx_ablation(base, features)
     assert filtered.tolist() == [False, False, True, True, False, False]
     assert diagnostics["comparison"] == "STRICT_GT"
     assert diagnostics["base_primary_buy_count"] == 6
@@ -150,9 +145,9 @@ def test_adx_filter_is_strict_and_rejects_non_finite_rows() -> None:
     assert diagnostics["adx_qualified_rows"] == 2
     assert diagnostics["filtered_primary_buy_count"] == 2
     with pytest.raises(ValueError, match="v4ai_adx_feature_alignment_invalid"):
-        v4ai._apply_adx_filter(base, features.drop(columns=[v4ai.ADX_FEATURE]))
+        v4ai._apply_adx_ablation(base, features.drop(columns=[v4ai.ADX_FEATURE]))
     with pytest.raises(ValueError, match="v4ai_primary_signal_invalid"):
-        v4ai._apply_adx_filter(
+        v4ai._apply_adx_ablation(
             pd.Series([True, False, None], dtype=object),
             DataFrame({v4ai.ADX_FEATURE: [30.0, 31.0, 32.0]}),
         )
@@ -581,7 +576,7 @@ def test_candidate_replay_uses_thirty_bps_and_reports_unscaled_expectancy(
         ),
         [10, 20],
         90,
-        v4ai.ADX_CONTROL,
+        v4ai.ADX_ABLATION,
         None,
         None,
     )
@@ -592,6 +587,7 @@ def test_candidate_replay_uses_thirty_bps_and_reports_unscaled_expectancy(
     assert len(trades) == 2
     assert len(decisions) == 2
     assert {item["round_trip_cost_bps"] for item in trades} == {30.0}
+    assert candidate["filter"] == "ADX14_GT20_ABLATION"
     assert seen[0].fee_bps == 10.0 and seen[0].slippage_bps == 5.0
 
 
@@ -604,6 +600,7 @@ def test_skipped_meta_candidate_and_decisions_are_not_misreported_as_rejects() -
     )
     decisions = v4ai._skipped_decision_rows(bars, [5, 8])
     assert candidate["status"] == "SKIPPED_INSUFFICIENT_META_SUPPORT"
+    assert candidate["filter"] == "NONE"
     assert all(item["meta_filter_decision"] == "SKIPPED" for item in decisions)
     assert all(item["executable_signal"] == "NOT_EVALUATED" for item in decisions)
 
@@ -663,8 +660,8 @@ def test_step_summary_discloses_maker_proxy_and_fill_model_limitation() -> None:
     report.update(
         {
             "signal_counts": {
-                "base_primary_buy_count": 100,
-                "adx_filtered_primary_buy_count": 40,
+                "primary_buy_count": 100,
+                "adx_ablation_buy_count": 40,
             },
             "meta_model": {
                 "enabled": True,
@@ -728,12 +725,15 @@ def test_step_summary_discloses_maker_proxy_and_fill_model_limitation() -> None:
         }
     )
     summary = v4ai._render_step_summary(report)
-    assert "ADX(14) strictly >20" in summary
+    assert "Primary ADX filter: DISABLED" in summary
+    assert "diagnostic ablation" in summary
     assert "30 bps round trip" in summary
     assert "passive Limit queue/partial-fill mechanics are not simulated" in summary
     assert "ROC-AUC=0.52" in summary
     assert f"calibration={advanced.V4AH_TEMPERATURE_MODE_IDENTITY}" in summary
-    assert "ADX-filtered Primary exit-geometry matrix (30 bps only)" in summary
+    assert "Base Primary exit-geometry matrix (30 bps only)" in summary
+    assert "OOF label classes failure/success" in summary
+    assert "Purged OOF classes failure/success" in summary
     assert "DSR Z" in summary
     assert "DSR P" in summary
     assert "Sortino/trade" in summary
