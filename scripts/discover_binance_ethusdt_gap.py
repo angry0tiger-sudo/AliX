@@ -9,14 +9,14 @@ from __future__ import annotations
 import argparse
 import json
 import time
+import http.client
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
-from urllib.request import Request, urlopen
 
 HOST = "https://data-api.binance.vision"
+HOSTNAME = "data-api.binance.vision"
 ENDPOINT = "/api/v3/klines"
 SYMBOL = "ETHUSDT"
 INTERVAL = "1m"
@@ -41,15 +41,23 @@ def _fetch_page(cursor_ms: int, end_ms: int) -> list[list[Any]]:
             "limit": str(PAGE_SIZE),
         }
     )
-    request = Request(
-        f"{HOST}{ENDPOINT}?{params}",
-        headers={"Accept": "application/json", "User-Agent": "AliX-gap-audit/1.0"},
-    )
+    request_path = f"{ENDPOINT}?{params}"
     last_error: Exception | None = None
     for attempt in range(3):
         try:
-            with urlopen(request, timeout=30) as response:
-                payload = json.load(response)
+            with http.client.HTTPSConnection(HOSTNAME, timeout=30) as connection:
+                connection.request(
+                    "GET",
+                    request_path,
+                    headers={
+                        "Accept": "application/json",
+                        "User-Agent": "AliX-gap-audit/1.0",
+                    },
+                )
+                response = connection.getresponse()
+                if response.status != http.client.OK:
+                    raise ValueError(f"binance_http_status_invalid:{response.status}")
+                payload = json.loads(response.read().decode("utf-8"))
             if not isinstance(payload, list):
                 raise ValueError("binance_response_not_a_list")
             if not payload:
@@ -58,8 +66,8 @@ def _fetch_page(cursor_ms: int, end_ms: int) -> list[list[Any]]:
                 raise ValueError("binance_page_overflow")
             return payload
         except (
-            HTTPError,
-            URLError,
+            http.client.HTTPException,
+            OSError,
             TimeoutError,
             json.JSONDecodeError,
             ValueError,
