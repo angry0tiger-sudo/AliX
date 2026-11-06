@@ -610,7 +610,6 @@ def _attach_dsr_diagnostics(
     _attach_dsr_to_cohort(geometry_metrics, "CURRENT_RUN_EXIT_GEOMETRY_COHORT_ONLY")
 
 
-
 def _candidate_passes(
     metrics: dict[str, Any],
     expectancy: float,
