@@ -526,9 +526,7 @@ def _trade_risk_metrics(trades: list[dict[str, Any]]) -> dict[str, Any]:
             / ((count - 2) * (count - 3))
             * ((count + 1) * biased_excess_kurtosis + 6.0)
         )
-        if math.isfinite(adjusted_skewness) and math.isfinite(
-            adjusted_excess_kurtosis
-        ):
+        if math.isfinite(adjusted_skewness) and math.isfinite(adjusted_excess_kurtosis):
             metrics["return_skewness"] = float(adjusted_skewness)
             metrics["return_kurtosis_non_excess"] = float(
                 adjusted_excess_kurtosis + 3.0
@@ -568,12 +566,9 @@ def _deflated_sharpe_diagnostics(
     trial_count = int(trial_values.size)
     euler_mascheroni = 0.5772156649015329
     normal = NormalDist()
-    expected_max_multiplier = (
-        (1.0 - euler_mascheroni)
-        * normal.inv_cdf(1.0 - 1.0 / trial_count)
-        + euler_mascheroni
-        * normal.inv_cdf(1.0 - 1.0 / (trial_count * math.e))
-    )
+    expected_max_multiplier = (1.0 - euler_mascheroni) * normal.inv_cdf(
+        1.0 - 1.0 / trial_count
+    ) + euler_mascheroni * normal.inv_cdf(1.0 - 1.0 / (trial_count * math.e))
     trial_mean = float(np.mean(trial_values))
     trial_std = float(np.std(trial_values, ddof=1))
     expected_max_sharpe = trial_mean + trial_std * expected_max_multiplier
