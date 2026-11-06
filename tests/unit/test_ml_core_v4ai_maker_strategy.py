@@ -256,7 +256,7 @@ def test_single_and_constant_trade_returns_do_not_invent_risk_ratios() -> None:
     assert constant["sortino_status"] == "ZERO_DOWNSIDE_DEVIATION"
 
 
-def test_temperature_purge_shortfall_skips_meta_and_preserves_diagnostics(
+def test_temperature_support_failure_skips_meta_and_preserves_diagnostics(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     training = DataFrame(
@@ -280,13 +280,13 @@ def test_temperature_purge_shortfall_skips_meta_and_preserves_diagnostics(
     )
 
     def fail_temperature_split(*args: Any, **kwargs: Any) -> Any:
-        error = ValueError("v4ah_temperature_rows_insufficient_after_purge")
+        error = ValueError("v4ah_binary_class_support_insufficient_temperature_slice")
         setattr(error, "diagnostics", split_diagnostics.copy())
         raise error
 
     monkeypatch.setattr(
         advanced,
-        "split_fit_temperature_threshold",
+        "split_fit_temperature_threshold_with_fallback",
         fail_temperature_split,
     )
     result = v4ai._fit_meta_model(
@@ -296,9 +296,120 @@ def test_temperature_purge_shortfall_skips_meta_and_preserves_diagnostics(
         100,
         {"passed": True},
     )
-    assert result["skip_reason"] == "v4ah_temperature_rows_insufficient_after_purge"
+    assert (
+        result["skip_reason"]
+        == "v4ah_binary_class_support_insufficient_temperature_slice"
+    )
     assert result["training_diagnostics"]["matured_costed_oof_label_count"] == 3
     assert result["split_diagnostics"]["temperature_rows"] == 18
+
+
+def test_identity_temperature_fallback_keeps_meta_model_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Thin-but-classed temperature slice: meta model survives with T=1."""
+    training = DataFrame(
+        {
+            "event_index": [10, 20, 30],
+            "label_end_idx": [11, 21, 31],
+            "meta_label": [0, 1, 0],
+            "%-feat_a": [0.1, 0.5, 0.2],
+            "%-feat_b": [0.4, 0.2, 0.6],
+        }
+    )
+    training_diagnostics = {"matured_costed_oof_label_count": 3}
+    fit_rows = DataFrame(
+        {
+            "event_index": [1, 2, 3, 4, 5, 6],
+            "label_end_idx": [2, 3, 4, 5, 6, 7],
+            "meta_label": [0, 1, 0, 1, 0, 1],
+            "%-feat_a": [0.1, 0.4, 0.2, 0.5, 0.3, 0.6],
+            "%-feat_b": [0.3, 0.2, 0.5, 0.4, 0.6, 0.1],
+        }
+    )
+    temperature_rows = DataFrame(
+        {
+            "event_index": [7, 8, 9, 10, 11, 12],
+            "label_end_idx": [8, 9, 10, 11, 12, 13],
+            "meta_label": [0, 1, 0, 1, 0, 1],
+            "%-feat_a": [0.2, 0.5, 0.3, 0.6, 0.4, 0.7],
+            "%-feat_b": [0.4, 0.3, 0.6, 0.2, 0.5, 0.1],
+        }
+    )
+    threshold_rows = DataFrame(
+        {
+            "event_index": [13, 14, 15, 16, 17, 18],
+            "label_end_idx": [14, 15, 16, 17, 18, 19],
+            "meta_label": [0, 1, 0, 1, 0, 1],
+            "%-feat_a": [0.7, 0.4, 0.8, 0.5, 0.9, 0.6],
+            "%-feat_b": [0.1, 0.5, 0.2, 0.6, 0.3, 0.7],
+        }
+    )
+    split_diagnostics = {
+        "fit_rows": 6,
+        "temperature_rows": 6,
+        "threshold_rows": 6,
+        "temperature_calibration_mode": advanced.V4AH_TEMPERATURE_MODE_IDENTITY,
+        "temperature_fallback_warning": advanced.V4AH_TEMPERATURE_IDENTITY_WARNING,
+        "split_policy": "CHRONOLOGICAL_70_15_15_WITH_LABEL_END_PURGE",
+    }
+    monkeypatch.setattr(
+        v4ai,
+        "_oof_training_frame",
+        lambda *args: (training, training_diagnostics.copy()),
+    )
+    monkeypatch.setattr(
+        advanced,
+        "split_fit_temperature_threshold_with_fallback",
+        lambda *args, **kwargs: (
+            fit_rows,
+            temperature_rows,
+            threshold_rows,
+            split_diagnostics.copy(),
+        ),
+    )
+
+    class _FakeModel:
+        classes_ = np.array([0, 1])
+
+        def predict_proba(self, features: DataFrame) -> np.ndarray:
+            count = len(features)
+            rising = np.linspace(0.2, 0.8, count)
+            return np.column_stack([1.0 - rising, rising])
+
+    monkeypatch.setattr(
+        advanced,
+        "fit_shap_selected_lightgbm",
+        lambda *args, **kwargs: (
+            _FakeModel(),
+            ["%-feat_a", "%-feat_b"],
+            [],
+            {"top_k_selected": 2},
+        ),
+    )
+    result = v4ai._fit_meta_model(
+        DataFrame({"close": [100.0, 101.0]}),
+        DataFrame({"%-feat_a": [1.0, 2.0], "%-feat_b": [2.0, 1.0]}),
+        pd.Series([True, True], dtype=bool),
+        100,
+        {"passed": True},
+    )
+    assert result["skip_reason"] is None
+    assert result["temperature"] == 1.0
+    assert result["temperature_diagnostics"]["method"] == (
+        "IDENTITY_FALLBACK_RAW_PROBABILITIES"
+    )
+    assert result["temperature_diagnostics"]["calibration_labels_used"] is False
+    assert result["temperature_diagnostics"]["calibration_rows"] == 6
+    assert (
+        result["temperature_diagnostics"]["warning"]
+        == advanced.V4AH_TEMPERATURE_IDENTITY_WARNING
+    )
+    assert result["separation_diagnostics"]["sample_count"] == 6
+    assert result["threshold_diagnostics"]["status"] == (
+        "SELECTED_TOP_70_PERCENT_ACCEPTANCE"
+    )
+    assert 0.0 <= result["threshold"] <= 1.0
 
 
 def test_oof_meta_label_uses_exact_thirty_bps_cost_contract(

@@ -302,6 +302,7 @@ def _support_shortfall(error: ValueError) -> bool:
         "v4ah_binary_class_support_insufficient",
         "v4ah_shap_feature_support_insufficient",
         "v4ah_temperature_calibration_inputs_invalid",
+        "v4ah_separation_inputs_invalid",
         "v4x_insufficient_meta_",
         "v4ai_meta_oof_labels_empty",
         "v4x_oof_primary_signals_empty",
@@ -359,7 +360,7 @@ def _fit_meta_model(
             bars, features, primary_signal, train_end
         )
         fit_rows, temperature_rows, threshold_rows, split_diagnostics = (
-            advanced.split_fit_temperature_threshold(
+            advanced.split_fit_temperature_threshold_with_fallback(
                 training, outer_train_end=train_end
             )
         )
@@ -378,10 +379,29 @@ def _fit_meta_model(
             raw_temperature,
             temperature_rows["meta_label"].to_numpy(dtype=int),
         )
-        temperature, temperature_diagnostics = advanced.fit_temperature_scaler(
-            raw_temperature,
-            temperature_rows["meta_label"].to_numpy(dtype=int),
+        identity_temperature = (
+            split_diagnostics.get("temperature_calibration_mode")
+            == advanced.V4AH_TEMPERATURE_MODE_IDENTITY
         )
+        if identity_temperature:
+            temperature = 1.0
+            temperature_diagnostics = {
+                "method": "IDENTITY_FALLBACK_RAW_PROBABILITIES",
+                "temperature": 1.0,
+                "optimizer_success": None,
+                "optimizer_iterations": None,
+                "calibration_rows": int(len(temperature_rows)),
+                "calibration_labels_used": False,
+                "initial_nll": None,
+                "calibrated_nll": None,
+                "fit_scope": "IDENTITY_NO_FIT_PURGED_SLICE_TOO_SMALL",
+                "warning": advanced.V4AH_TEMPERATURE_IDENTITY_WARNING,
+            }
+        else:
+            temperature, temperature_diagnostics = advanced.fit_temperature_scaler(
+                raw_temperature,
+                temperature_rows["meta_label"].to_numpy(dtype=int),
+            )
         raw_threshold = advanced._positive_probability(
             model, threshold_rows.loc[:, selected]
         )
@@ -1248,7 +1268,9 @@ def _render_meta_diagnostics(report: dict[str, Any]) -> list[str]:
             f"temperature={meta.get('split_diagnostics', {}).get('temperature_rows', 'N/A')}; "
             f"threshold={meta.get('split_diagnostics', {}).get('threshold_rows', 'N/A')}."
         ),
-        f"Meta fit: {'ENABLED' if meta.get('enabled') else 'SKIPPED'}; reason={meta.get('skip_reason') or 'N/A'}.",
+        f"Meta fit: {'ENABLED' if meta.get('enabled') else 'SKIPPED'}; "
+        f"calibration={meta.get('split_diagnostics', {}).get('temperature_calibration_mode', 'N/A')}; "
+        f"reason={meta.get('skip_reason') or 'N/A'}.",
         (
             f"Regime: KMeans clusters={report.get('regime_diagnostics', {}).get('cluster_count', 'N/A')}; "
             f"fit rows={report.get('regime_diagnostics', {}).get('fit_rows', 0)}."

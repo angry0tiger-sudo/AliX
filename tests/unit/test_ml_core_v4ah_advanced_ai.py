@@ -157,6 +157,101 @@ def test_three_way_chronological_purged_split_and_guards() -> None:
         v4ah.split_fit_temperature_threshold(imbalanced, outer_train_end=900)
 
 
+def test_split_with_fallback_identity_mode_for_thin_temperature_slice() -> None:
+    """Thin-but-classed temperature slice degrades to identity, never crashes."""
+    events = _event_frame(150)
+    fit, temperature, threshold, diagnostics = (
+        v4ah.split_fit_temperature_threshold_with_fallback(events, outer_train_end=900)
+    )
+    assert len(fit) == 105
+    assert 0 < len(temperature) < v4ah.V4AH_MINIMUM_CALIBRATION_ROWS
+    assert len(threshold) >= v4ah.V4AH_MINIMUM_THRESHOLD_ROWS
+    assert (
+        diagnostics["temperature_calibration_mode"]
+        == v4ah.V4AH_TEMPERATURE_MODE_IDENTITY
+    )
+    assert (
+        diagnostics["temperature_fallback_warning"]
+        == v4ah.V4AH_TEMPERATURE_IDENTITY_WARNING
+    )
+    assert int(temperature["meta_label"].sum()) > 0
+    assert int(temperature["meta_label"].sum()) < len(temperature)
+    assert int(fit["label_end_idx"].max()) < int(temperature["event_index"].min())
+    assert int(temperature["label_end_idx"].max()) < int(threshold["event_index"].min())
+    assert int(threshold["label_end_idx"].max()) < 900
+
+
+def test_split_with_fallback_calibrated_mode_matches_strict_split() -> None:
+    """Healthy support keeps the exact strict-split behavior and mode label."""
+    events = _event_frame(250)
+    fit, temperature, threshold, diagnostics = (
+        v4ah.split_fit_temperature_threshold_with_fallback(events, outer_train_end=900)
+    )
+    strict_fit, strict_temperature, strict_threshold, strict_diagnostics = (
+        v4ah.split_fit_temperature_threshold(events, outer_train_end=900)
+    )
+    assert len(fit) == len(strict_fit) == 175
+    assert len(temperature) == len(strict_temperature) == 37
+    assert len(threshold) == len(strict_threshold) == 38
+    assert (
+        diagnostics["temperature_calibration_mode"]
+        == v4ah.V4AH_TEMPERATURE_MODE_CALIBRATED
+    )
+    assert diagnostics["temperature_fallback_warning"] is None
+    assert strict_diagnostics["fit_rows"] == diagnostics["fit_rows"]
+
+
+def test_split_with_fallback_strict_guards_remain_enforced(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fit/threshold minimums and purge boundaries are never relaxed."""
+    events = _event_frame(150)
+    fit_purged = events.copy()
+    fit_purged.loc[:104, "label_end_idx"] = int(events["event_index"].iloc[105])
+    with pytest.raises(
+        ValueError, match="v4ah_fit_rows_insufficient_after_purge"
+    ) as fit_error:
+        v4ah.split_fit_temperature_threshold_with_fallback(
+            fit_purged, outer_train_end=900
+        )
+    assert getattr(fit_error.value, "diagnostics", {})["fit_rows"] == 0
+
+    with pytest.raises(ValueError, match="v4ah_threshold_rows_insufficient"):
+        v4ah.split_fit_temperature_threshold_with_fallback(
+            _event_frame(120), outer_train_end=900
+        )
+
+    single_class = events.copy()
+    single_class.loc[105:126, "meta_label"] = 1
+    with pytest.raises(
+        ValueError, match="v4ah_binary_class_support_insufficient_temperature_slice"
+    ) as class_error:
+        v4ah.split_fit_temperature_threshold_with_fallback(
+            single_class, outer_train_end=900
+        )
+    assert (
+        getattr(class_error.value, "diagnostics", {})["temperature_calibration_mode"]
+        == v4ah.V4AH_TEMPERATURE_MODE_UNAVAILABLE
+    )
+
+    purge_violated = events.copy()
+    original_purged_slices = v4ah._purged_training_slices
+
+    def violate_temperature_purge(slice_events, fit_fraction, temperature_fraction):
+        fit, temperature, threshold, temperature_start, threshold_start = (
+            original_purged_slices(slice_events, fit_fraction, temperature_fraction)
+        )
+        temperature = temperature.copy()
+        temperature["label_end_idx"] = threshold_start
+        return fit, temperature, threshold, temperature_start, threshold_start
+
+    monkeypatch.setattr(v4ah, "_purged_training_slices", violate_temperature_purge)
+    with pytest.raises(ValueError, match="v4ah_temperature_threshold_purge_failed"):
+        v4ah.split_fit_temperature_threshold_with_fallback(
+            purge_violated, outer_train_end=900
+        )
+
+
 class _FakeLightGBMModel:
     def __init__(self) -> None:
         self.classes_ = np.array([0, 1])

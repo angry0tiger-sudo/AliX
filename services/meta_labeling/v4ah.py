@@ -27,6 +27,12 @@ V4AH_MINIMUM_CALIBRATION_ROWS: Final[int] = 30
 V4AH_MINIMUM_THRESHOLD_ROWS: Final[int] = 20
 V4AH_MINIMUM_TRAILING_POLICY_ROWS: Final[int] = 30
 V4AH_TEMPERATURE_BOUNDS: Final[tuple[float, float]] = (0.05, 20.0)
+V4AH_TEMPERATURE_MODE_CALIBRATED: Final[str] = "TEMPERATURE_SLICE_CALIBRATED"
+V4AH_TEMPERATURE_MODE_IDENTITY: Final[str] = "IDENTITY_FALLBACK_RAW_PROBABILITIES"
+V4AH_TEMPERATURE_MODE_UNAVAILABLE: Final[str] = "TEMPERATURE_SUPPORT_UNAVAILABLE"
+V4AH_TEMPERATURE_IDENTITY_WARNING: Final[str] = (
+    "v4ah_temperature_calibration_rows_insufficient_identity_fallback"
+)
 V4AH_TRAILING_STEP_OPTIONS: Final[tuple[float, ...]] = (1.0, 1.5, 2.0)
 V4AH_FRACTIONAL_KELLY: Final[float] = 0.25
 V4AH_MAXIMUM_KELLY_FRACTION: Final[float] = 0.10
@@ -391,6 +397,86 @@ def split_fit_temperature_threshold(
     except ValueError as error:
         setattr(error, "diagnostics", diagnostics)
         raise
+    return (
+        fit.reset_index(drop=True),
+        temperature.reset_index(drop=True),
+        threshold.reset_index(drop=True),
+        diagnostics,
+    )
+
+
+def _temperature_slice_calibration_mode(temperature: DataFrame) -> str:
+    """Classify the purged temperature slice without relaxing any invariant."""
+    if temperature.empty:
+        return V4AH_TEMPERATURE_MODE_UNAVAILABLE
+    labels = np.asarray(temperature["meta_label"], dtype=float)
+    both_classes = bool(
+        np.isin(labels, (0.0, 1.0)).all()
+        and labels.sum() > 0.0
+        and labels.sum() < float(labels.size)
+    )
+    if not both_classes:
+        return V4AH_TEMPERATURE_MODE_UNAVAILABLE
+    if len(temperature) < V4AH_MINIMUM_CALIBRATION_ROWS:
+        return V4AH_TEMPERATURE_MODE_IDENTITY
+    return V4AH_TEMPERATURE_MODE_CALIBRATED
+
+
+def split_fit_temperature_threshold_with_fallback(
+    labelled_events: DataFrame,
+    *,
+    outer_train_end: int,
+    fit_fraction: float = V4AH_FIT_FRACTION,
+    temperature_fraction: float = V4AH_TEMPERATURE_FRACTION,
+) -> tuple[DataFrame, DataFrame, DataFrame, dict[str, Any]]:
+    """Purged split that degrades only temperature scaling when support is thin.
+
+    Fit-slice and threshold-slice row minimums, binary-label validation,
+    label-end purge boundaries, and outer-train containment are identical to
+    ``split_fit_temperature_threshold`` and are never relaxed; no future data
+    is used. Only the temperature-scaling step may degrade: when the purged
+    temperature slice holds both meta classes but fewer than
+    ``V4AH_MINIMUM_CALIBRATION_ROWS`` rows, the slices are returned with
+    ``temperature_calibration_mode=IDENTITY_FALLBACK_RAW_PROBABILITIES`` so the
+    caller can skip temperature fitting and use raw probabilities (identity
+    temperature) instead of crashing. Because temperature scaling is strictly
+    monotonic, rank-based threshold selection is invariant to this fallback.
+    Error precedence may differ from the strict variant; no invariant differs.
+    """
+    _validate_split_fractions(fit_fraction, temperature_fraction)
+    events = _validated_training_events(labelled_events, outer_train_end)
+    fit, temperature, threshold, temperature_start, threshold_start = (
+        _purged_training_slices(events, fit_fraction, temperature_fraction)
+    )
+    diagnostics = _training_split_diagnostics(
+        fit, temperature, threshold, outer_train_end
+    )
+
+    def fail(error_code: str) -> ValueError:
+        error = ValueError(error_code)
+        setattr(error, "diagnostics", diagnostics)
+        return error
+
+    if len(fit) < V4AH_MINIMUM_FIT_ROWS:
+        raise fail("v4ah_fit_rows_insufficient_after_purge")
+    if len(threshold) < V4AH_MINIMUM_THRESHOLD_ROWS:
+        raise fail("v4ah_threshold_rows_insufficient")
+    _validate_binary_labels(fit["meta_label"], len(fit))
+    if int(fit["label_end_idx"].max()) >= temperature_start:
+        raise fail("v4ah_fit_temperature_purge_failed")
+    if not temperature.empty and (
+        int(temperature["label_end_idx"].max()) >= threshold_start
+    ):
+        raise fail("v4ah_temperature_threshold_purge_failed")
+    mode = _temperature_slice_calibration_mode(temperature)
+    diagnostics["temperature_calibration_mode"] = mode
+    diagnostics["temperature_fallback_warning"] = (
+        V4AH_TEMPERATURE_IDENTITY_WARNING
+        if mode == V4AH_TEMPERATURE_MODE_IDENTITY
+        else None
+    )
+    if mode == V4AH_TEMPERATURE_MODE_UNAVAILABLE:
+        raise fail("v4ah_binary_class_support_insufficient_temperature_slice")
     return (
         fit.reset_index(drop=True),
         temperature.reset_index(drop=True),
