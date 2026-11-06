@@ -649,8 +649,7 @@ def test_exit_geometry_matrix_has_only_three_thirty_bps_cells(
         v4ai._validate_exit_matrix(invalid)
     invalid_geometry = {
         **matrix,
-        "cells": [{**matrix["cells"][0], "take_profit_atr": 2.0}]
-        + matrix["cells"][1:],
+        "cells": [{**matrix["cells"][0], "take_profit_atr": 2.0}] + matrix["cells"][1:],
     }
     with pytest.raises(ValueError, match="v4ai_exit_matrix_geometry_invalid"):
         v4ai._validate_exit_matrix(invalid_geometry)
@@ -727,9 +726,7 @@ def test_report_rejects_any_cost_contract_other_than_thirty_bps() -> None:
 
 def test_report_rejects_legacy_breakout_primary_identity() -> None:
     report = _valid_report()
-    report["primary_signal"] = (
-        "CAUSAL_BOLLINGER_20_UPPER_BREAKOUT_CLOSE_ABOVE_EMA200"
-    )
+    report["primary_signal"] = "CAUSAL_BOLLINGER_20_UPPER_BREAKOUT_CLOSE_ABOVE_EMA200"
     with pytest.raises(ValueError, match="v4ai_report_primary_filter_invalid"):
         v4ai._validate_report(report, "a" * 40)
 

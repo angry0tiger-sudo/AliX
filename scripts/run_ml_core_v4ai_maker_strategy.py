@@ -213,9 +213,11 @@ def _mean_reversion_primary_features(
         min_periods=EMA_TREND_PERIOD,
     ).mean()
 
-    features = base_features.drop(
-        columns=list(LEGACY_PRIMARY_FEATURE_COLUMNS)
-    ).reset_index(drop=True).copy()
+    features = (
+        base_features.drop(columns=list(LEGACY_PRIMARY_FEATURE_COLUMNS))
+        .reset_index(drop=True)
+        .copy()
+    )
     features[RSI_FEATURE] = rsi
     features[EMA_DISTANCE_FEATURE] = close / ema - 1.0
 
@@ -225,12 +227,16 @@ def _mean_reversion_primary_features(
     oversold = rsi.lt(RSI_OVERSOLD_THRESHOLD)
     trend_aligned = close.gt(ema)
     signal = (
-        oversold
-        & trend_aligned
-        & Series(valid_rsi)
-        & Series(valid_ema)
-        & Series(valid_features)
-    ).fillna(False).astype(bool)
+        (
+            oversold
+            & trend_aligned
+            & Series(valid_rsi)
+            & Series(valid_ema)
+            & Series(valid_features)
+        )
+        .fillna(False)
+        .astype(bool)
+    )
     diagnostics = {
         "generation": PRIMARY_SIGNAL_GENERATION,
         "rsi_method": "WILDER_EMA_ALPHA_1_OVER_14_ADJUST_FALSE",
