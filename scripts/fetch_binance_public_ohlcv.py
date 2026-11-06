@@ -225,6 +225,52 @@ def _parse_gap_tolerant_kline(raw: Any) -> dict[str, Any]:
     return _parse_kline(raw, stamp)
 
 
+def _parse_gap_tolerant_page(
+    payload: list[Any], cursor: int, end_ms: int, expected_count: int
+) -> list[dict[str, Any]]:
+    if not payload:
+        raise ValueError("binance_kline_empty_page_under_gap_policy")
+    if len(payload) > expected_count:
+        raise ValueError(
+            "binance_kline_page_count_overflow:"
+            f"expected_max={expected_count}:actual={len(payload)}:start={cursor}"
+        )
+    page = [_parse_gap_tolerant_kline(item) for item in payload]
+    stamps_ms = [int(row["timestamp"]) * 1000 for row in page]
+    inside_window = stamps_ms[0] >= cursor and stamps_ms[-1] <= end_ms
+    increasing = all(
+        current > previous for previous, current in zip(stamps_ms, stamps_ms[1:])
+    )
+    if not inside_window or not increasing:
+        raise ValueError("binance_kline_page_window_invalid")
+    return page
+
+
+def _parse_strict_page(
+    payload: list[Any], cursor: int, expected_count: int
+) -> list[dict[str, Any]]:
+    if len(payload) != expected_count:
+        raise ValueError(
+            f"binance_kline_page_count_mismatch:expected={expected_count}:actual={len(payload)}:start={cursor}"
+        )
+    return [
+        _parse_kline(item, cursor + index * INTERVAL_MS)
+        for index, item in enumerate(payload)
+    ]
+
+
+def _parse_requested_page(
+    payload: list[Any],
+    cursor: int,
+    end_ms: int,
+    expected_count: int,
+    allow_exchange_gaps: bool,
+) -> list[dict[str, Any]]:
+    if allow_exchange_gaps:
+        return _parse_gap_tolerant_page(payload, cursor, end_ms, expected_count)
+    return _parse_strict_page(payload, cursor, expected_count)
+
+
 def _fetch_page(
     cursor: int,
     end_ms: int,
@@ -246,34 +292,9 @@ def _fetch_page(
     for attempt in range(3):
         try:
             payload = request_json(params)
-            if allow_exchange_gaps:
-                if not payload:
-                    raise ValueError("binance_kline_empty_page_under_gap_policy")
-                if len(payload) > expected_count:
-                    raise ValueError(
-                        "binance_kline_page_count_overflow:"
-                        f"expected_max={expected_count}:actual={len(payload)}:start={cursor}"
-                    )
-                page = [_parse_gap_tolerant_kline(item) for item in payload]
-                stamps_ms = [int(row["timestamp"]) * 1000 for row in page]
-                if (
-                    stamps_ms[0] < cursor
-                    or stamps_ms[-1] > end_ms
-                    or any(
-                        current <= previous
-                        for previous, current in zip(stamps_ms, stamps_ms[1:])
-                    )
-                ):
-                    raise ValueError("binance_kline_page_window_invalid")
-                return page, expected_count
-            if len(payload) != expected_count:
-                raise ValueError(
-                    f"binance_kline_page_count_mismatch:expected={expected_count}:actual={len(payload)}:start={cursor}"
-                )
-            page = [
-                _parse_kline(item, cursor + index * INTERVAL_MS)
-                for index, item in enumerate(payload)
-            ]
+            page = _parse_requested_page(
+                payload, cursor, end_ms, expected_count, allow_exchange_gaps
+            )
             return page, expected_count
         except ValueError as exc:
             last_error = exc
@@ -281,6 +302,38 @@ def _fetch_page(
                 sleep_fn(2**attempt)
     assert last_error is not None
     raise ValueError(f"{last_error}:attempts=3") from None
+
+
+def _validate_gap_tolerant_window(
+    stamps: list[int], expected_count: int, start_ms: int, end_ms: int
+) -> None:
+    if not stamps:
+        raise ValueError("binance_historical_window_empty_under_gap_policy")
+    boundaries_match = stamps[0] * 1000 == start_ms and stamps[-1] * 1000 == end_ms
+    if not boundaries_match:
+        raise ValueError("binance_historical_window_boundary_mismatch")
+    gaps = _gap_ranges_from_stamps(stamps)
+    missing = expected_count - len(stamps)
+    observed_missing = sum(int(item["missing_minute_intervals"]) for item in gaps)
+    if missing < 0 or observed_missing != missing:
+        raise ValueError("binance_historical_gap_count_mismatch")
+    _validate_documented_exchange_gaps(gaps)
+
+
+def _validate_strict_window(
+    stamps: list[int], expected_count: int, start_ms: int, end_ms: int
+) -> None:
+    if len(stamps) != expected_count:
+        raise ValueError(
+            f"binance_historical_row_count_mismatch:expected={expected_count}:actual={len(stamps)}"
+        )
+    has_gap = any(
+        current - previous != 60 for previous, current in zip(stamps, stamps[1:])
+    )
+    if has_gap:
+        raise ValueError("binance_historical_gap_detected")
+    if not stamps or stamps[0] * 1000 != start_ms or stamps[-1] * 1000 != end_ms:
+        raise ValueError("binance_historical_window_boundary_mismatch")
 
 
 def _validate_complete_window(
@@ -293,25 +346,9 @@ def _validate_complete_window(
 ) -> None:
     stamps = [int(row["timestamp"]) for row in rows]
     if allow_exchange_gaps:
-        if not rows:
-            raise ValueError("binance_historical_window_empty_under_gap_policy")
-        if stamps[0] * 1000 != start_ms or stamps[-1] * 1000 != end_ms:
-            raise ValueError("binance_historical_window_boundary_mismatch")
-        gaps = _gap_ranges_from_stamps(stamps)
-        missing = expected_count - len(rows)
-        observed_missing = sum(int(item["missing_minute_intervals"]) for item in gaps)
-        if missing < 0 or observed_missing != missing:
-            raise ValueError("binance_historical_gap_count_mismatch")
-        _validate_documented_exchange_gaps(gaps)
-        return
-    if len(rows) != expected_count:
-        raise ValueError(
-            f"binance_historical_row_count_mismatch:expected={expected_count}:actual={len(rows)}"
-        )
-    if any(current - previous != 60 for previous, current in zip(stamps, stamps[1:])):
-        raise ValueError("binance_historical_gap_detected")
-    if stamps[0] * 1000 != start_ms or stamps[-1] * 1000 != end_ms:
-        raise ValueError("binance_historical_window_boundary_mismatch")
+        _validate_gap_tolerant_window(stamps, expected_count, start_ms, end_ms)
+    else:
+        _validate_strict_window(stamps, expected_count, start_ms, end_ms)
 
 
 def _validate_fetch_request(
@@ -431,40 +468,35 @@ def fetch_historical_candles(
     return rows
 
 
-def write_artifacts(
-    rows: list[dict[str, Any]],
-    *,
-    output_dir: Path,
-    days: int,
-    retrieved_at: datetime,
-    commit_sha: str,
-    symbol: str,
-    allow_exchange_gaps: bool = False,
-) -> dict[str, Any]:
-    _validate_symbol(symbol)
-    if retrieved_at.tzinfo is None or retrieved_at.utcoffset() is None:
-        raise ValueError("retrieved_at_timezone_required")
-    count = days * 1440
+def _validate_artifact_rows(
+    rows: list[dict[str, Any]], expected_count: int, allow_exchange_gaps: bool
+) -> tuple[int, list[dict[str, Any]]]:
     stamps = [int(row["timestamp"]) for row in rows]
-    missing_minutes = count - len(rows)
+    missing_minutes = expected_count - len(rows)
     if not allow_exchange_gaps:
-        if not rows or len(rows) != count:
+        if not rows or len(rows) != expected_count:
             raise ValueError(
-                f"binance_historical_row_count_mismatch:expected={count}:actual={len(rows)}"
+                f"binance_historical_row_count_mismatch:expected={expected_count}:actual={len(rows)}"
             )
-        if any(b - a != 60 for a, b in zip(stamps, stamps[1:])):
-            raise ValueError("binance_historical_gap_detected_before_write")
-        gap_ranges: list[dict[str, Any]] = []
-    else:
-        if not rows or missing_minutes < 0:
-            raise ValueError("binance_historical_row_count_invalid_under_gap_policy")
-        gap_ranges = _gap_ranges_from_stamps(stamps)
-        observed_missing = sum(
-            int(item["missing_minute_intervals"]) for item in gap_ranges
+        continuous = all(
+            current - previous == 60 for previous, current in zip(stamps, stamps[1:])
         )
-        if observed_missing != missing_minutes:
-            raise ValueError("binance_historical_gap_count_mismatch")
-        _validate_documented_exchange_gaps(gap_ranges)
+        if not continuous:
+            raise ValueError("binance_historical_gap_detected_before_write")
+        return 0, []
+    if not rows or missing_minutes < 0:
+        raise ValueError("binance_historical_row_count_invalid_under_gap_policy")
+    gap_ranges = _gap_ranges_from_stamps(stamps)
+    observed_missing = sum(int(item["missing_minute_intervals"]) for item in gap_ranges)
+    if observed_missing != missing_minutes:
+        raise ValueError("binance_historical_gap_count_mismatch")
+    _validate_documented_exchange_gaps(gap_ranges)
+    return missing_minutes, gap_ranges
+
+
+def _write_candles_csv(
+    rows: list[dict[str, Any]], output_dir: Path, symbol: str
+) -> tuple[Path, str]:
     output_dir.mkdir(parents=True, exist_ok=True)
     stem = f"binance-{symbol.lower()}-1m"
     csv_path = output_dir / f"{stem}.csv"
@@ -478,7 +510,22 @@ def write_artifacts(
             writer.writerow({key: row[key] for key in writer.fieldnames})
     temporary.replace(csv_path)
     digest = hashlib.sha256(csv_path.read_bytes()).hexdigest()
-    manifest: dict[str, Any] = {
+    return csv_path, digest
+
+
+def _build_fetch_manifest(
+    rows: list[dict[str, Any]],
+    *,
+    days: int,
+    retrieved_at: datetime,
+    commit_sha: str,
+    symbol: str,
+    missing_minutes: int,
+    gap_ranges: list[dict[str, Any]],
+    allow_exchange_gaps: bool,
+    csv_digest: str,
+) -> dict[str, Any]:
+    return {
         "schema_version": SCHEMA_VERSION,
         "provider": "Binance Spot public klines API",
         "host": HOST,
@@ -491,15 +538,15 @@ def write_artifacts(
         "row_count": len(rows),
         "requested_days": days,
         "retrieved_at": retrieved_at.astimezone(timezone.utc).isoformat(),
-        "missing_intervals": missing_minutes if allow_exchange_gaps else 0,
-        "missing_minute_intervals": missing_minutes if allow_exchange_gaps else 0,
+        "missing_intervals": missing_minutes,
+        "missing_minute_intervals": missing_minutes,
         "missing_gap_ranges": gap_ranges,
         "gap_policy": (
             GAP_POLICY_ALLOW_EXCHANGE_GAPS if allow_exchange_gaps else GAP_POLICY
         ),
         "fetch_page_size_candles": PAGE_SIZE,
         "inter_page_delay_seconds": PAGE_DELAY_SECONDS,
-        "csv_sha256": digest,
+        "csv_sha256": csv_digest,
         "commit_sha": commit_sha,
         "data_authority": "PUBLIC_MARKET_DATA_ONLY_NOT_ACCOUNT_ORDER_OR_FILL_TRUTH",
         "public_api_only": True,
@@ -513,7 +560,38 @@ def write_artifacts(
         "economic_acceptance": "NO-GO",
         "trading_authorization": "NO-GO",
     }
-    (output_dir / f"{stem}.manifest.json").write_text(
+
+
+def write_artifacts(
+    rows: list[dict[str, Any]],
+    *,
+    output_dir: Path,
+    days: int,
+    retrieved_at: datetime,
+    commit_sha: str,
+    symbol: str,
+    allow_exchange_gaps: bool = False,
+) -> dict[str, Any]:
+    _validate_symbol(symbol)
+    if retrieved_at.tzinfo is None or retrieved_at.utcoffset() is None:
+        raise ValueError("retrieved_at_timezone_required")
+    missing, gap_ranges = _validate_artifact_rows(
+        rows, days * 1440, allow_exchange_gaps
+    )
+    csv_path, digest = _write_candles_csv(rows, output_dir, symbol)
+    manifest = _build_fetch_manifest(
+        rows,
+        days=days,
+        retrieved_at=retrieved_at,
+        commit_sha=commit_sha,
+        symbol=symbol,
+        missing_minutes=missing,
+        gap_ranges=gap_ranges,
+        allow_exchange_gaps=allow_exchange_gaps,
+        csv_digest=digest,
+    )
+    manifest_path = csv_path.with_suffix(".manifest.json")
+    manifest_path.write_text(
         json.dumps(manifest, indent=2, sort_keys=True, allow_nan=False) + "\n",
         encoding="utf-8",
     )

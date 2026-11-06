@@ -132,26 +132,42 @@ def _validate_documented_exchange_gaps(gaps: list[dict[str, Any]]) -> int:
     return missing
 
 
-def _validated_minute_timestamps(
-    values: Series, allow_exchange_gaps: bool = False
-) -> Series:
-    dates = pd.to_datetime(values, errors="coerce", utc=True)
+def _validate_timestamp_sequence(dates: Series) -> None:
     if dates.isna().any():
         raise ValueError("timestamp_invalid")
     if dates.duplicated().any() or not dates.is_monotonic_increasing:
         raise ValueError("timestamps_must_be_unique_and_increasing")
-    if not bool((dates.dt.second == 0).all()) or not bool(
-        (dates.dt.microsecond == 0).all()
-    ):
+
+
+def _validate_minute_precision(dates: Series) -> None:
+    whole_seconds = bool((dates.dt.second == 0).all())
+    whole_microseconds = bool((dates.dt.microsecond == 0).all())
+    if not whole_seconds or not whole_microseconds:
         raise ValueError("minute_data_interval_mismatch")
-    deltas = dates.diff().iloc[1:].dt.total_seconds().to_numpy(dtype=float)
-    if allow_exchange_gaps:
-        if len(deltas) and not bool(np.all(deltas > 0.0)):
-            raise ValueError("minute_data_interval_mismatch")
-        _validate_documented_exchange_gaps(_minute_gap_ranges(dates))
-        return dates
+
+
+def _validate_strict_minute_spacing(deltas: np.ndarray) -> None:
     if len(deltas) and not bool(np.all(deltas == 60.0)):
         raise ValueError("minute_data_gap_or_interval_mismatch")
+
+
+def _validate_exchange_gap_spacing(dates: Series, deltas: np.ndarray) -> None:
+    if len(deltas) and not bool(np.all(deltas > 0.0)):
+        raise ValueError("minute_data_interval_mismatch")
+    _validate_documented_exchange_gaps(_minute_gap_ranges(dates))
+
+
+def _validated_minute_timestamps(
+    values: Series, allow_exchange_gaps: bool = False
+) -> Series:
+    dates = pd.to_datetime(values, errors="coerce", utc=True)
+    _validate_timestamp_sequence(dates)
+    _validate_minute_precision(dates)
+    deltas = dates.diff().iloc[1:].dt.total_seconds().to_numpy(dtype=float)
+    if allow_exchange_gaps:
+        _validate_exchange_gap_spacing(dates, deltas)
+    else:
+        _validate_strict_minute_spacing(deltas)
     return dates
 
 
@@ -1790,48 +1806,38 @@ def run_walk_forward_experiment(
     return result
 
 
-def _load_manifested_data(
-    input_dir: Path,
+def _manifest_window_contract(
+    manifest: dict[str, Any], days: int, allow_exchange_gaps: bool
+) -> tuple[int, int, str]:
+    expected_rows = days * 24 * 60
+    if allow_exchange_gaps:
+        missing = int(manifest.get("missing_minute_intervals", -1))
+        if missing not in (0, KNOWN_EXCHANGE_GAP_MISSING_MINUTES):
+            raise ValueError("public_data_manifest_gap_count_invalid")
+        return (
+            expected_rows - missing,
+            missing,
+            GAP_POLICY_ALLOW_EXCHANGE_GAPS,
+        )
+    return expected_rows, 0, GAP_POLICY
+
+
+def _validate_manifest_contract(
+    manifest: dict[str, Any],
+    *,
     symbol: str,
     days: int,
     commit_sha: str,
-    *,
-    allow_exchange_gaps: bool = False,
-) -> tuple[DataFrame, dict[str, Any]]:
-    stem = f"binance-{symbol.lower()}-1m"
-    csv_path = input_dir / f"{stem}.csv"
-    manifest_path = input_dir / f"{stem}.manifest.json"
-    if not csv_path.is_file() or not manifest_path.is_file():
-        raise ValueError(f"public_data_artifact_missing:{symbol}")
-
-    manifest_bytes = manifest_path.read_bytes()
-    manifest = cast(dict[str, Any], json.loads(manifest_bytes.decode("utf-8")))
-    csv_digest = hashlib.sha256(csv_path.read_bytes()).hexdigest()
-    expected_rows = days * 24 * 60
-    if allow_exchange_gaps:
-        gap_policy_required = GAP_POLICY_ALLOW_EXCHANGE_GAPS
-        missing = int(manifest.get("missing_minute_intervals", -1))
-        if missing not in (0, KNOWN_EXCHANGE_GAP_MISSING_MINUTES):
-            raise ValueError(f"public_data_manifest_validation_failed:{symbol}")
-        expected_rows -= missing
-        row_count_check = manifest.get("row_count") == expected_rows
-        missing_check = (
-            manifest.get("missing_intervals") == missing
-            and manifest.get("missing_minute_intervals") == missing
-        )
-    else:
-        gap_policy_required = GAP_POLICY
-        missing = 0
-        row_count_check = manifest.get("row_count") == expected_rows
-        missing_check = (
-            manifest.get("missing_intervals") == 0
-            and manifest.get("missing_minute_intervals") == 0
-        )
+    csv_digest: str,
+    expected_rows: int,
+    missing: int,
+    expected_gap_policy: str,
+) -> None:
     checks = (
         manifest.get("symbol") == symbol,
         manifest.get("interval") == "1m",
         manifest.get("requested_days") == days,
-        row_count_check,
+        manifest.get("row_count") == expected_rows,
         manifest.get("commit_sha") == commit_sha,
         manifest.get("csv_sha256") == csv_digest,
         manifest.get("provider") == "Binance Spot public klines API",
@@ -1839,14 +1845,25 @@ def _load_manifested_data(
         manifest.get("credentials_used") is False,
         manifest.get("private_api_calls") == 0,
         manifest.get("real_order_attempts") == 0,
-        manifest.get("gap_policy") == gap_policy_required,
-        missing_check,
+        manifest.get("gap_policy") == expected_gap_policy,
+        manifest.get("missing_intervals") == missing,
+        manifest.get("missing_minute_intervals") == missing,
         manifest.get("fetch_page_size_candles") == 1000,
         manifest.get("inter_page_delay_seconds") == 0.25,
     )
     if not all(checks):
         raise ValueError(f"public_data_manifest_validation_failed:{symbol}")
 
+
+def _load_and_validate_manifest_candles(
+    csv_path: Path,
+    manifest: dict[str, Any],
+    *,
+    symbol: str,
+    expected_rows: int,
+    missing: int,
+    allow_exchange_gaps: bool,
+) -> tuple[DataFrame, list[dict[str, Any]]]:
     candles = _validate_minute_candles(
         pd.read_csv(csv_path), allow_exchange_gaps=allow_exchange_gaps
     )
@@ -1854,21 +1871,37 @@ def _load_manifested_data(
         raise ValueError(f"public_data_row_count_mismatch:{symbol}")
     actual_gaps = _minute_gap_ranges(candles["date"]) if allow_exchange_gaps else []
     actual_missing = _validate_documented_exchange_gaps(actual_gaps)
-    if allow_exchange_gaps and (
-        actual_missing != missing
-        or manifest.get("missing_gap_ranges", []) != actual_gaps
-    ):
+    if actual_missing != missing:
         raise ValueError(f"public_data_gap_manifest_mismatch:{symbol}")
-    manifest_start = manifest.get("start_utc")
-    manifest_end = manifest.get("end_utc")
-    if not isinstance(manifest_start, str) or not isinstance(manifest_end, str):
+    if allow_exchange_gaps and manifest.get("missing_gap_ranges", []) != actual_gaps:
+        raise ValueError(f"public_data_gap_manifest_mismatch:{symbol}")
+    return candles, actual_gaps
+
+
+def _validate_manifest_boundaries(
+    manifest: dict[str, Any], candles: DataFrame, symbol: str
+) -> None:
+    start_utc = manifest.get("start_utc")
+    end_utc = manifest.get("end_utc")
+    if not isinstance(start_utc, str) or not isinstance(end_utc, str):
         raise ValueError(f"public_data_window_boundary_missing:{symbol}")
-    if (
-        pd.to_datetime(manifest_start, utc=True) != candles["date"].iloc[0]
-        or pd.to_datetime(manifest_end, utc=True) != candles["date"].iloc[-1]
-    ):
+    start_matches = pd.to_datetime(start_utc, utc=True) == candles["date"].iloc[0]
+    end_matches = pd.to_datetime(end_utc, utc=True) == candles["date"].iloc[-1]
+    if not start_matches or not end_matches:
         raise ValueError(f"public_data_window_boundary_mismatch:{symbol}")
-    provenance = {
+
+
+def _manifest_data_provenance(
+    manifest: dict[str, Any],
+    candles: DataFrame,
+    *,
+    symbol: str,
+    missing: int,
+    actual_gaps: list[dict[str, Any]],
+    csv_digest: str,
+    manifest_digest: str,
+) -> dict[str, Any]:
+    return {
         "symbol": symbol,
         "pair": f"{symbol[:-4]}/USDT",
         "provider": manifest["provider"],
@@ -1883,10 +1916,59 @@ def _load_manifested_data(
         "start_utc": candles["date"].iloc[0].isoformat(),
         "end_utc": candles["date"].iloc[-1].isoformat(),
         "csv_sha256": csv_digest,
-        "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+        "manifest_sha256": manifest_digest,
         "public_api_only": True,
         "credentials_used": False,
     }
+
+
+def _load_manifested_data(
+    input_dir: Path,
+    symbol: str,
+    days: int,
+    commit_sha: str,
+    *,
+    allow_exchange_gaps: bool = False,
+) -> tuple[DataFrame, dict[str, Any]]:
+    stem = f"binance-{symbol.lower()}-1m"
+    csv_path = input_dir / f"{stem}.csv"
+    manifest_path = input_dir / f"{stem}.manifest.json"
+    if not csv_path.is_file() or not manifest_path.is_file():
+        raise ValueError(f"public_data_artifact_missing:{symbol}")
+    manifest_bytes = manifest_path.read_bytes()
+    manifest = cast(dict[str, Any], json.loads(manifest_bytes.decode("utf-8")))
+    csv_digest = hashlib.sha256(csv_path.read_bytes()).hexdigest()
+    expected_rows, missing, gap_policy = _manifest_window_contract(
+        manifest, days, allow_exchange_gaps
+    )
+    _validate_manifest_contract(
+        manifest,
+        symbol=symbol,
+        days=days,
+        commit_sha=commit_sha,
+        csv_digest=csv_digest,
+        expected_rows=expected_rows,
+        missing=missing,
+        expected_gap_policy=gap_policy,
+    )
+    candles, actual_gaps = _load_and_validate_manifest_candles(
+        csv_path,
+        manifest,
+        symbol=symbol,
+        expected_rows=expected_rows,
+        missing=missing,
+        allow_exchange_gaps=allow_exchange_gaps,
+    )
+    _validate_manifest_boundaries(manifest, candles, symbol)
+    provenance = _manifest_data_provenance(
+        manifest,
+        candles,
+        symbol=symbol,
+        missing=missing,
+        actual_gaps=actual_gaps,
+        csv_digest=csv_digest,
+        manifest_digest=hashlib.sha256(manifest_bytes).hexdigest(),
+    )
     return candles, provenance
 
 
