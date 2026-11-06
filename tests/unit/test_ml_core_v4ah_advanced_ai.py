@@ -237,7 +237,11 @@ def test_split_with_fallback_strict_guards_remain_enforced(
     purge_violated = events.copy()
     original_purged_slices = v4ah._purged_training_slices
 
-    def violate_temperature_purge(slice_events, fit_fraction, temperature_fraction):
+    def violate_temperature_purge(
+        slice_events: DataFrame,
+        fit_fraction: float,
+        temperature_fraction: float,
+    ) -> tuple[DataFrame, DataFrame, DataFrame, int, int]:
         fit, temperature, threshold, temperature_start, threshold_start = (
             original_purged_slices(slice_events, fit_fraction, temperature_fraction)
         )
