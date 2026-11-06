@@ -89,7 +89,7 @@ def _validate_kline_timestamp(item: list[Any], cursor_ms: int, end_ms: int) -> i
         raise ValueError("binance_kline_timestamp_invalid")
     if stamp % INTERVAL_MS != 0 or not cursor_ms <= stamp <= end_ms:
         raise ValueError(f"binance_kline_timestamp_out_of_window:{stamp}")
-    return stamp
+    return int(stamp)
 
 
 def _validate_page_sequence(
