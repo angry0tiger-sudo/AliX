@@ -118,7 +118,14 @@ def _valid_report() -> dict[str, Any]:
             "ema_period": 200,
             "rsi_comparison": "STRICT_LT",
             "trend_comparison": "CLOSE_STRICTLY_ABOVE_EMA200",
+            "rsi_valid_rows": 39_800,
+            "ema_valid_rows": 39_801,
+            "feature_valid_rows": 39_800,
+            "oversold_rows": 2_400,
+            "trend_aligned_rows": 20_000,
+            "primary_buy_count": 100,
             "lookahead_used": False,
+            "execution_timing": "CLOSED_1H_BAR_NEXT_BAR_OPEN",
         },
         "fixed_exit_geometry": dict(v4ai.PRIMARY_GEOMETRY),
         "cost_contract": {
@@ -169,7 +176,11 @@ def test_rsi_mean_reversion_signal_is_causal_and_drops_breakout_features() -> No
     assert bool(signal.iloc[-1])
     assert float(features.iloc[-1][v4ai.RSI_FEATURE]) < 30.0
     assert float(features.iloc[-1][v4ai.EMA_DISTANCE_FEATURE]) > 0.0
-    assert not set(v4ai.LEGACY_PRIMARY_FEATURE_COLUMNS).intersection(features.columns)
+    breakout_only_features = (
+        set(v4ai.LEGACY_PRIMARY_FEATURE_COLUMNS) - {v4ai.EMA_DISTANCE_FEATURE}
+    )
+    assert not breakout_only_features.intersection(features.columns)
+    assert v4ai.EMA_DISTANCE_FEATURE in features.columns
     assert diagnostics["generation"] == v4ai.PRIMARY_SIGNAL_GENERATION
     assert diagnostics["lookahead_used"] is False
     assert diagnostics["rsi_comparison"] == "STRICT_LT"
