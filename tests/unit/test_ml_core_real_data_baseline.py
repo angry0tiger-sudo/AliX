@@ -663,9 +663,7 @@ def test_manifest_gap_window_contract_rejects_obsolete_120_minute_count() -> Non
 
 
 def test_manifest_loader_rejects_unverified_gap_symbol(tmp_path: Path) -> None:
-    with pytest.raises(
-        ValueError, match="public_data_gap_policy_symbol_unsupported"
-    ):
+    with pytest.raises(ValueError, match="public_data_gap_policy_symbol_unsupported"):
         _load_manifested_data(
             tmp_path,
             "BTCUSDT",

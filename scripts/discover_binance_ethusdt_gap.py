@@ -3,6 +3,7 @@
 Uses only Binance's unauthenticated public market-data endpoint. It does not
 create, amend, or submit orders and does not synthesize missing candles.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -56,7 +57,13 @@ def _fetch_page(cursor_ms: int, end_ms: int) -> list[list[Any]]:
             if len(payload) > PAGE_SIZE:
                 raise ValueError("binance_page_overflow")
             return payload
-        except (HTTPError, URLError, TimeoutError, json.JSONDecodeError, ValueError) as exc:
+        except (
+            HTTPError,
+            URLError,
+            TimeoutError,
+            json.JSONDecodeError,
+            ValueError,
+        ) as exc:
             last_error = exc
             if attempt < 2:
                 time.sleep(2**attempt)
@@ -117,10 +124,14 @@ def discover() -> dict[str, Any]:
                 {
                     "start_utc": datetime.fromtimestamp(
                         (previous + INTERVAL_MS) / 1000, timezone.utc
-                    ).isoformat().replace("+00:00", "Z"),
+                    )
+                    .isoformat()
+                    .replace("+00:00", "Z"),
                     "end_utc": datetime.fromtimestamp(
                         (current - INTERVAL_MS) / 1000, timezone.utc
-                    ).isoformat().replace("+00:00", "Z"),
+                    )
+                    .isoformat()
+                    .replace("+00:00", "Z"),
                     "missing_candles": int(missing),
                 }
             )
@@ -148,10 +159,14 @@ def discover() -> dict[str, Any]:
         "gap_ranges": gaps,
         "first_observed_open_utc": datetime.fromtimestamp(
             stamps[0] / 1000, timezone.utc
-        ).isoformat().replace("+00:00", "Z"),
+        )
+        .isoformat()
+        .replace("+00:00", "Z"),
         "last_observed_open_utc": datetime.fromtimestamp(
             stamps[-1] / 1000, timezone.utc
-        ).isoformat().replace("+00:00", "Z"),
+        )
+        .isoformat()
+        .replace("+00:00", "Z"),
         "page_count": page_count,
         "public_api_only": True,
         "credentials_used": False,

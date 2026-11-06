@@ -337,7 +337,9 @@ def test_gap_tolerant_fetch_rejects_undocumented_date_time_or_duration() -> None
             days=1,
             now=now,
             symbol="ETHUSDT",
-            request_json=_provider_with_gap(start, end, wrong_time_start, wrong_time_end),
+            request_json=_provider_with_gap(
+                start, end, wrong_time_start, wrong_time_end
+            ),
             sleep_fn=lambda _seconds: None,
             allow_exchange_gaps=True,
         )
@@ -407,9 +409,7 @@ def test_strict_mode_still_fails_closed_on_exchange_gap() -> None:
 
 def test_gap_tolerant_fetch_rejects_unverified_symbol() -> None:
     now, start, end, missing_start, missing_end = _known_outage_window()
-    with pytest.raises(
-        ValueError, match="binance_exchange_gap_symbol_out_of_policy"
-    ):
+    with pytest.raises(ValueError, match="binance_exchange_gap_symbol_out_of_policy"):
         fetcher.fetch_historical_candles(
             days=1,
             now=now,
@@ -432,9 +432,7 @@ def test_gap_tolerant_artifact_writer_rejects_unverified_symbol(
     rows = [
         fetcher._parse_gap_tolerant_kline(row) for row in _sparse_klines(real_stamps)
     ]
-    with pytest.raises(
-        ValueError, match="binance_exchange_gap_symbol_out_of_policy"
-    ):
+    with pytest.raises(ValueError, match="binance_exchange_gap_symbol_out_of_policy"):
         fetcher.write_artifacts(
             rows,
             output_dir=tmp_path,
