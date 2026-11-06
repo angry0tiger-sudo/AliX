@@ -668,6 +668,9 @@ def test_step_summary_discloses_maker_proxy_and_fill_model_limitation() -> None:
             },
             "meta_model": {
                 "enabled": True,
+                "split_diagnostics": {
+                    "temperature_calibration_mode": advanced.V4AH_TEMPERATURE_MODE_IDENTITY,
+                },
                 "training_diagnostics": {"matured_costed_oof_label_count": 20},
                 "fit_diagnostics": {"top_k_selected": 30},
                 "separation_diagnostics": {
@@ -729,6 +732,9 @@ def test_step_summary_discloses_maker_proxy_and_fill_model_limitation() -> None:
     assert "30 bps round trip" in summary
     assert "passive Limit queue/partial-fill mechanics are not simulated" in summary
     assert "ROC-AUC=0.52" in summary
+    assert (
+        f"calibration={advanced.V4AH_TEMPERATURE_MODE_IDENTITY}" in summary
+    )
     assert "ADX-filtered Primary exit-geometry matrix (30 bps only)" in summary
     assert "DSR Z" in summary
     assert "DSR P" in summary
