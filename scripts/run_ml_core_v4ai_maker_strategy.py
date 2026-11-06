@@ -504,9 +504,7 @@ def _return_shape_metrics(returns: np.ndarray, count: int) -> dict[str, Any]:
     third_moment = float(np.mean(np.power(centered_returns, 3)))
     fourth_moment = float(np.mean(np.power(centered_returns, 4)))
     biased_skewness = third_moment / second_moment**1.5
-    adjusted_skewness = (
-        math.sqrt(count * (count - 1)) / (count - 2) * biased_skewness
-    )
+    adjusted_skewness = math.sqrt(count * (count - 1)) / (count - 2) * biased_skewness
     biased_excess_kurtosis = fourth_moment / second_moment**2 - 3.0
     adjusted_excess_kurtosis = (
         (count - 1)
@@ -553,12 +551,13 @@ def _trade_risk_metrics(trades: list[dict[str, Any]]) -> dict[str, Any]:
     return metrics
 
 
-def _dsr_input_status(
-    metrics: dict[str, Any], trial_sharpe_count: int
-) -> str | None:
+def _dsr_input_status(metrics: dict[str, Any], trial_sharpe_count: int) -> str | None:
     if trial_sharpe_count < 2:
         return "INSUFFICIENT_TRIAL_SHARPES"
-    if int(metrics.get("return_observation_count", 0)) < DSR_MINIMUM_RETURN_OBSERVATIONS:
+    if (
+        int(metrics.get("return_observation_count", 0))
+        < DSR_MINIMUM_RETURN_OBSERVATIONS
+    ):
         return "INSUFFICIENT_RETURN_OBSERVATIONS"
     required_values = (
         metrics.get("sharpe_ratio_per_trade"),
@@ -574,15 +573,13 @@ def _expected_maximum_sharpe(trial_values: np.ndarray) -> float:
     trial_count = int(trial_values.size)
     euler_mascheroni = 0.5772156649015329
     normal = NormalDist()
-    expected_max_multiplier = (
-        (1.0 - euler_mascheroni)
-        * normal.inv_cdf(1.0 - 1.0 / trial_count)
-        + euler_mascheroni
-        * normal.inv_cdf(1.0 - 1.0 / (trial_count * math.e))
+    expected_max_multiplier = (1.0 - euler_mascheroni) * normal.inv_cdf(
+        1.0 - 1.0 / trial_count
+    ) + euler_mascheroni * normal.inv_cdf(1.0 - 1.0 / (trial_count * math.e))
+    return (
+        float(np.mean(trial_values))
+        + float(np.std(trial_values, ddof=1)) * expected_max_multiplier
     )
-    return float(np.mean(trial_values)) + float(
-        np.std(trial_values, ddof=1)
-    ) * expected_max_multiplier
 
 
 def _dsr_variance_term(
@@ -646,6 +643,7 @@ def _deflated_sharpe_diagnostics(
         }
     )
     return result
+
 
 def _attach_dsr_to_cohort(metric_rows: list[dict[str, Any]], trial_scope: str) -> None:
     trial_sharpes = [
@@ -1325,6 +1323,7 @@ def _render_step_summary(report: dict[str, Any]) -> str:
     lines.extend(_render_exit_geometry_section(report["exit_geometry_matrix"]["cells"]))
     lines.extend(_render_step_summary_footer())
     return "\n".join(lines) + "\n"
+
 
 def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
