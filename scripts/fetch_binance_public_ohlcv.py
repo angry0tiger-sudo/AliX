@@ -468,30 +468,43 @@ def fetch_historical_candles(
     return rows
 
 
-def _validate_artifact_rows(
-    rows: list[dict[str, Any]], expected_count: int, allow_exchange_gaps: bool
+def _validate_strict_artifact_rows(
+    rows: list[dict[str, Any]], expected_count: int
 ) -> tuple[int, list[dict[str, Any]]]:
-    stamps = [int(row["timestamp"]) for row in rows]
-    missing_minutes = expected_count - len(rows)
-    if not allow_exchange_gaps:
-        if not rows or len(rows) != expected_count:
-            raise ValueError(
-                f"binance_historical_row_count_mismatch:expected={expected_count}:actual={len(rows)}"
-            )
-        continuous = all(
-            current - previous == 60 for previous, current in zip(stamps, stamps[1:])
+    if not rows or len(rows) != expected_count:
+        raise ValueError(
+            f"binance_historical_row_count_mismatch:expected={expected_count}:actual={len(rows)}"
         )
-        if not continuous:
-            raise ValueError("binance_historical_gap_detected_before_write")
-        return 0, []
+    stamps = [int(row["timestamp"]) for row in rows]
+    continuous = all(
+        current - previous == 60 for previous, current in zip(stamps, stamps[1:])
+    )
+    if not continuous:
+        raise ValueError("binance_historical_gap_detected_before_write")
+    return 0, []
+
+
+def _validate_gap_tolerant_artifact_rows(
+    rows: list[dict[str, Any]], expected_count: int
+) -> tuple[int, list[dict[str, Any]]]:
+    missing_minutes = expected_count - len(rows)
     if not rows or missing_minutes < 0:
         raise ValueError("binance_historical_row_count_invalid_under_gap_policy")
+    stamps = [int(row["timestamp"]) for row in rows]
     gap_ranges = _gap_ranges_from_stamps(stamps)
     observed_missing = sum(int(item["missing_minute_intervals"]) for item in gap_ranges)
     if observed_missing != missing_minutes:
         raise ValueError("binance_historical_gap_count_mismatch")
     _validate_documented_exchange_gaps(gap_ranges)
     return missing_minutes, gap_ranges
+
+
+def _validate_artifact_rows(
+    rows: list[dict[str, Any]], expected_count: int, allow_exchange_gaps: bool
+) -> tuple[int, list[dict[str, Any]]]:
+    if allow_exchange_gaps:
+        return _validate_gap_tolerant_artifact_rows(rows, expected_count)
+    return _validate_strict_artifact_rows(rows, expected_count)
 
 
 def _write_candles_csv(
