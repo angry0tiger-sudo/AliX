@@ -222,8 +222,10 @@ def test_fetch_historical_candles_rejects_partial_or_misaligned_exact_windows() 
 def test_five_year_window_is_allowed_with_disclosed_gap_policy() -> None:
     assert 1825 in fetcher.ALLOWED_DAYS
     assert fetcher.GAP_POLICY_ALLOW_EXCHANGE_GAPS != fetcher.GAP_POLICY
-    assert fetcher.KNOWN_EXCHANGE_GAP_DATE_UTC == "2023-03-24"
-    assert fetcher.KNOWN_EXCHANGE_GAP_MISSING_MINUTES == 120
+    assert fetcher.KNOWN_EXCHANGE_GAP_SYMBOL == "ETHUSDT"
+    assert fetcher.KNOWN_EXCHANGE_GAP_START_UTC == "2023-03-24T12:40:00Z"
+    assert fetcher.KNOWN_EXCHANGE_GAP_END_UTC == "2023-03-24T13:59:00Z"
+    assert fetcher.KNOWN_EXCHANGE_GAP_MISSING_MINUTES == 80
 
 
 def _sparse_klines(stamps: list[int]) -> list[list[Any]]:
@@ -271,8 +273,8 @@ def _known_outage_window() -> tuple[datetime, int, int, int, int]:
     now = datetime(2023, 3, 25, 0, 0, tzinfo=timezone.utc)
     end = int(now.timestamp() * 1000) - fetcher.INTERVAL_MS
     start = end - 1439 * fetcher.INTERVAL_MS
-    missing_start = start + 720 * fetcher.INTERVAL_MS
-    missing_end = missing_start + 119 * fetcher.INTERVAL_MS
+    missing_start = start + 760 * fetcher.INTERVAL_MS
+    missing_end = missing_start + 79 * fetcher.INTERVAL_MS
     return now, start, end, missing_start, missing_end
 
 
@@ -288,48 +290,67 @@ def test_gap_tolerant_fetch_accepts_only_the_documented_2023_outage() -> None:
     rows = fetcher.fetch_historical_candles(
         days=1,
         now=now,
+        symbol="ETHUSDT",
         request_json=tracking_provider,
         sleep_fn=lambda _seconds: None,
         allow_exchange_gaps=True,
     )
     stamps = [int(row["timestamp"]) for row in rows]
-    assert len(rows) == 1440 - 120
+    assert len(rows) == 1440 - 80
     assert stamps[0] * 1000 == start
     assert stamps[-1] * 1000 == end
     assert all((stamp * 1000) % fetcher.INTERVAL_MS == 0 for stamp in stamps)
     assert fetcher._gap_ranges_from_stamps(stamps) == [
         {
-            "start_utc": "2023-03-24T12:00:00Z",
+            "start_utc": "2023-03-24T12:40:00Z",
             "end_utc": "2023-03-24T13:59:00Z",
-            "missing_minute_intervals": 120,
+            "missing_minute_intervals": 80,
         }
     ]
     cursors = [int(item["startTime"]) for item in calls]
     assert all(current > previous for previous, current in zip(cursors, cursors[1:]))
 
 
-def test_gap_tolerant_fetch_rejects_undocumented_gap_date_or_duration() -> None:
+def test_gap_tolerant_fetch_rejects_undocumented_date_time_or_duration() -> None:
+    # Same 80-minute gap on another day is not covered by the empirical exception.
     now = datetime(2026, 10, 29, 12, 0, tzinfo=timezone.utc)
     end = int(now.timestamp() * 1000) - fetcher.INTERVAL_MS
     start = end - 1439 * fetcher.INTERVAL_MS
-    missing_start = start + 720 * fetcher.INTERVAL_MS
-    missing_end = missing_start + 119 * fetcher.INTERVAL_MS
+    missing_start = start + 760 * fetcher.INTERVAL_MS
+    missing_end = missing_start + 79 * fetcher.INTERVAL_MS
     with pytest.raises(ValueError, match="binance_exchange_gap_out_of_policy"):
         fetcher.fetch_historical_candles(
             days=1,
             now=now,
+            symbol="ETHUSDT",
             request_json=_provider_with_gap(start, end, missing_start, missing_end),
             sleep_fn=lambda _seconds: None,
             allow_exchange_gaps=True,
         )
 
+    # Correct date and duration, but a different UTC start minute is rejected.
+    now, start, end, _, _ = _known_outage_window()
+    wrong_time_start = start + 720 * fetcher.INTERVAL_MS
+    wrong_time_end = wrong_time_start + 79 * fetcher.INTERVAL_MS
+    with pytest.raises(ValueError, match="binance_exchange_gap_out_of_policy"):
+        fetcher.fetch_historical_candles(
+            days=1,
+            now=now,
+            symbol="ETHUSDT",
+            request_json=_provider_with_gap(start, end, wrong_time_start, wrong_time_end),
+            sleep_fn=lambda _seconds: None,
+            allow_exchange_gaps=True,
+        )
+
+    # Correct start minute but a 79-minute duration is also rejected.
     now, start, end, missing_start, _ = _known_outage_window()
     with pytest.raises(ValueError, match="binance_exchange_gap_out_of_policy"):
         fetcher.fetch_historical_candles(
             days=1,
             now=now,
+            symbol="ETHUSDT",
             request_json=_provider_with_gap(
-                start, end, missing_start, missing_start + 118 * fetcher.INTERVAL_MS
+                start, end, missing_start, missing_start + 78 * fetcher.INTERVAL_MS
             ),
             sleep_fn=lambda _seconds: None,
             allow_exchange_gaps=True,
@@ -342,6 +363,7 @@ def test_gap_tolerant_fetch_rejects_empty_pages_and_truncated_end() -> None:
         fetcher.fetch_historical_candles(
             days=1,
             now=now,
+            symbol="ETHUSDT",
             request_json=lambda _params: [],
             sleep_fn=lambda _seconds: None,
             allow_exchange_gaps=True,
@@ -365,6 +387,7 @@ def test_gap_tolerant_fetch_rejects_empty_pages_and_truncated_end() -> None:
         fetcher.fetch_historical_candles(
             days=1,
             now=now,
+            symbol="ETHUSDT",
             request_json=truncated_provider,
             sleep_fn=lambda _seconds: None,
             allow_exchange_gaps=True,
@@ -379,6 +402,47 @@ def test_strict_mode_still_fails_closed_on_exchange_gap() -> None:
             now=now,
             request_json=_provider_with_gap(start, end, missing_start, missing_end),
             sleep_fn=lambda _seconds: None,
+        )
+
+
+def test_gap_tolerant_fetch_rejects_unverified_symbol() -> None:
+    now, start, end, missing_start, missing_end = _known_outage_window()
+    with pytest.raises(
+        ValueError, match="binance_exchange_gap_symbol_out_of_policy"
+    ):
+        fetcher.fetch_historical_candles(
+            days=1,
+            now=now,
+            symbol="BTCUSDT",
+            request_json=_provider_with_gap(start, end, missing_start, missing_end),
+            sleep_fn=lambda _seconds: None,
+            allow_exchange_gaps=True,
+        )
+
+
+def test_gap_tolerant_artifact_writer_rejects_unverified_symbol(
+    tmp_path: Path,
+) -> None:
+    now, start, end, missing_start, missing_end = _known_outage_window()
+    real_stamps = [
+        stamp
+        for stamp in range(start, end + fetcher.INTERVAL_MS, fetcher.INTERVAL_MS)
+        if not missing_start <= stamp <= missing_end
+    ]
+    rows = [
+        fetcher._parse_gap_tolerant_kline(row) for row in _sparse_klines(real_stamps)
+    ]
+    with pytest.raises(
+        ValueError, match="binance_exchange_gap_symbol_out_of_policy"
+    ):
+        fetcher.write_artifacts(
+            rows,
+            output_dir=tmp_path,
+            days=1,
+            retrieved_at=now,
+            commit_sha="abc123",
+            symbol="BTCUSDT",
+            allow_exchange_gaps=True,
         )
 
 
@@ -406,8 +470,8 @@ def test_gap_manifest_discloses_real_missing_minutes_without_fill(
     saved = json.loads(
         (tmp_path / "binance-ethusdt-1m.manifest.json").read_text(encoding="utf-8")
     )
-    assert saved["row_count"] == 1320
-    assert saved["missing_minute_intervals"] == 120
+    assert saved["row_count"] == 1360
+    assert saved["missing_minute_intervals"] == 80
     saved_real_seconds = [int(row["timestamp"]) for row in rows]
     assert saved["missing_gap_ranges"] == fetcher._gap_ranges_from_stamps(
         saved_real_seconds

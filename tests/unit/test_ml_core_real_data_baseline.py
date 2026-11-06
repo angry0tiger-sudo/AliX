@@ -8,8 +8,11 @@ import pandas as pd
 import pytest
 from pandas import DataFrame, Series
 
+from scripts.fetch_binance_public_ohlcv import GAP_POLICY_ALLOW_EXCHANGE_GAPS
 from scripts.run_ml_core_real_data_baseline import (
     _build_diagnostic_report,
+    _load_manifested_data,
+    _manifest_window_contract,
     _new_classifier,
     _validate_barrier_scenarios,
     baseline_validation_diagnostics,
@@ -22,6 +25,7 @@ from scripts.run_ml_core_real_data_baseline import (
     run_experiment,
     sample_gate_diagnostics,
     validation_classification_diagnostics,
+    _validate_documented_exchange_gaps,
     hold_class_metrics,
     hold_threshold_predictions,
     optimize_hold_threshold,
@@ -606,3 +610,64 @@ def test_probability_metrics_use_disjoint_calibration_and_forward_rows() -> None
     assert result["calibration"]["sample_count"] == 20
     assert result["forward_validation"]["sample_count"] == 80
     assert result["calibration_overlap"] is False
+
+
+def test_documented_gap_validator_requires_exact_empirical_time_range() -> None:
+    documented = [
+        {
+            "start_utc": "2023-03-24T12:40:00Z",
+            "end_utc": "2023-03-24T13:59:00Z",
+            "missing_minute_intervals": 80,
+        }
+    ]
+    assert _validate_documented_exchange_gaps(documented) == 80
+
+    wrong_time = [
+        {
+            "start_utc": "2023-03-24T12:00:00Z",
+            "end_utc": "2023-03-24T13:19:00Z",
+            "missing_minute_intervals": 80,
+        }
+    ]
+    with pytest.raises(ValueError, match="minute_data_undocumented_exchange_gap"):
+        _validate_documented_exchange_gaps(wrong_time)
+
+    wrong_duration = [
+        {
+            "start_utc": "2023-03-24T12:40:00Z",
+            "end_utc": "2023-03-24T13:58:00Z",
+            "missing_minute_intervals": 79,
+        }
+    ]
+    with pytest.raises(ValueError, match="minute_data_undocumented_exchange_gap"):
+        _validate_documented_exchange_gaps(wrong_duration)
+
+
+def test_manifest_gap_window_contract_uses_empirical_count() -> None:
+    manifest = {"missing_minute_intervals": 80}
+    expected_rows, missing, policy = _manifest_window_contract(
+        manifest, 1825, allow_exchange_gaps=True
+    )
+    assert expected_rows == 1825 * 24 * 60 - 80
+    assert missing == 80
+    assert policy == GAP_POLICY_ALLOW_EXCHANGE_GAPS
+
+
+def test_manifest_gap_window_contract_rejects_obsolete_120_minute_count() -> None:
+    with pytest.raises(ValueError, match="public_data_manifest_gap_count_invalid"):
+        _manifest_window_contract(
+            {"missing_minute_intervals": 120}, 1825, allow_exchange_gaps=True
+        )
+
+
+def test_manifest_loader_rejects_unverified_gap_symbol(tmp_path: Path) -> None:
+    with pytest.raises(
+        ValueError, match="public_data_gap_policy_symbol_unsupported"
+    ):
+        _load_manifested_data(
+            tmp_path,
+            "BTCUSDT",
+            1825,
+            "a" * 40,
+            allow_exchange_gaps=True,
+        )

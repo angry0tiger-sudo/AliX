@@ -1,4 +1,6 @@
 name: AliX V4-AI Maker Strategy Economic Validation
+# Owner-directed retrigger: the fail-closed exception is bound to ETHUSDT's empirically
+# observed 80 missing 1m opens from 2023-03-24T12:40:00Z through 13:59:00Z.
 
 on:
   push:
@@ -17,6 +19,8 @@ on:
       - services/ml_core/extended_features.py
       - tests/unit/test_ml_core_v4ai_maker_strategy.py
       - tests/unit/test_ml_core_v4ah_advanced_ai.py
+      - tests/unit/test_fetch_binance_public_ohlcv.py
+      - tests/unit/test_ml_core_real_data_baseline.py
   workflow_dispatch:
 
 permissions:
@@ -202,7 +206,7 @@ jobs:
             exit 1
           fi
           printf 'requested_days=1825\nprovider=Binance Spot public klines API\n'
-          printf 'exchange_gap_policy=only_120m_on_2023-03-24_utc_no_interpolation\n'
+          printf 'exchange_gap_policy=only_80m_ethusdt_2023-03-24T12:40Z_to_13:59Z_no_interpolation\n'
           printf 'private_api_calls=0\ncredentials_used=false\n'
       - name: Run V4-AI maker-fee, ADX, Meta P70, and exit-geometry evaluation
         run: |
@@ -264,19 +268,22 @@ jobs:
           assert "adx_ablation_diagnostics" in report
           provenance = report["dataset_provenance"]
           assert provenance["requested_days"] == 1825
+          assert provenance["symbol"] == "ETHUSDT"
+          assert provenance["interval"] == "1m"
           assert provenance["gap_policy"] == (
-              "accept only one 120-minute Binance Spot outage on 2023-03-24 UTC; "
+              "accept only the empirically observed 80-minute ETHUSDT Binance Spot gap "
+              "from 2023-03-24T12:40:00Z through 2023-03-24T13:59:00Z; "
               "no interpolation, resampling, or synthetic fill"
           )
           missing = int(provenance["missing_minute_intervals"])
-          assert missing in (0, 120)
+          assert missing in (0, 80)
           assert provenance["row_count"] + missing == 1825 * 24 * 60
           if missing:
               assert len(provenance["missing_gap_ranges"]) == 1
               gap = provenance["missing_gap_ranges"][0]
-              assert gap["missing_minute_intervals"] == 120
-              assert gap["start_utc"][:10] == "2023-03-24"
-              assert gap["end_utc"][:10] == "2023-03-24"
+              assert gap["missing_minute_intervals"] == 80
+              assert gap["start_utc"] == "2023-03-24T12:40:00Z"
+              assert gap["end_utc"] == "2023-03-24T13:59:00Z"
           else:
               assert provenance["missing_gap_ranges"] == []
           trim = provenance["resample_gap_trim"]

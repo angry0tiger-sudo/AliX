@@ -24,12 +24,20 @@ PAGE_SIZE = 1000
 PAGE_DELAY_SECONDS = 0.25
 RETRY_STATUSES = frozenset({418, 429, 500, 502, 503, 504})
 GAP_POLICY = "reject; no interpolation, resampling, or synthetic fill"
+KNOWN_EXCHANGE_GAP_SYMBOL = "ETHUSDT"
+KNOWN_EXCHANGE_GAP_START_UTC = "2023-03-24T12:40:00Z"
+KNOWN_EXCHANGE_GAP_END_UTC = "2023-03-24T13:59:00Z"
+KNOWN_EXCHANGE_GAP_MISSING_MINUTES = 80
 GAP_POLICY_ALLOW_EXCHANGE_GAPS = (
-    "accept only one 120-minute Binance Spot outage on 2023-03-24 UTC; "
+    "accept only the empirically observed 80-minute ETHUSDT Binance Spot gap "
+    "from 2023-03-24T12:40:00Z through 2023-03-24T13:59:00Z; "
     "no interpolation, resampling, or synthetic fill"
 )
-KNOWN_EXCHANGE_GAP_DATE_UTC = "2023-03-24"
-KNOWN_EXCHANGE_GAP_MISSING_MINUTES = 120
+
+
+def _validate_gap_policy_symbol(symbol: str, allow_exchange_gaps: bool) -> None:
+    if allow_exchange_gaps and symbol != KNOWN_EXCHANGE_GAP_SYMBOL:
+        raise ValueError("binance_exchange_gap_symbol_out_of_policy")
 
 
 def _http_error_detail(body: bytes) -> str:
@@ -205,8 +213,8 @@ def _validate_documented_exchange_gaps(gaps: list[dict[str, Any]]) -> int:
     valid = (
         missing == KNOWN_EXCHANGE_GAP_MISSING_MINUTES
         and len(gaps) == 1
-        and str(gaps[0]["start_utc"])[:10] == KNOWN_EXCHANGE_GAP_DATE_UTC
-        and str(gaps[0]["end_utc"])[:10] == KNOWN_EXCHANGE_GAP_DATE_UTC
+        and gaps[0]["start_utc"] == KNOWN_EXCHANGE_GAP_START_UTC
+        and gaps[0]["end_utc"] == KNOWN_EXCHANGE_GAP_END_UTC
     )
     if not valid:
         raise ValueError("binance_exchange_gap_out_of_policy")
@@ -447,6 +455,7 @@ def fetch_historical_candles(
     allow_exchange_gaps: bool = False,
 ) -> list[dict[str, Any]]:
     expected_count = _validate_fetch_request(days, now, symbol, start_utc, end_utc)
+    _validate_gap_policy_symbol(symbol, allow_exchange_gaps)
     start_ms, end_ms = _resolve_historical_bounds(
         now, expected_count, start_utc, end_utc
     )
@@ -586,6 +595,7 @@ def write_artifacts(
     allow_exchange_gaps: bool = False,
 ) -> dict[str, Any]:
     _validate_symbol(symbol)
+    _validate_gap_policy_symbol(symbol, allow_exchange_gaps)
     if retrieved_at.tzinfo is None or retrieved_at.utcoffset() is None:
         raise ValueError("retrieved_at_timezone_required")
     missing, gap_ranges = _validate_artifact_rows(
@@ -630,7 +640,8 @@ def main() -> int:
         "--allow-exchange-gaps",
         action="store_true",
         help=(
-            "Accept only one 120-minute Binance Spot outage on 2023-03-24 UTC. "
+            "Accept only the empirically verified 80-minute ETHUSDT gap from "
+            "2023-03-24T12:40:00Z through 13:59:00Z. "
             "Default strict mode rejects all market-data gaps."
         ),
     )

@@ -18,8 +18,10 @@ from sklearn import metrics  # type: ignore[import-untyped]
 from scripts.fetch_binance_public_ohlcv import (
     GAP_POLICY,
     GAP_POLICY_ALLOW_EXCHANGE_GAPS,
-    KNOWN_EXCHANGE_GAP_DATE_UTC,
+    KNOWN_EXCHANGE_GAP_END_UTC,
     KNOWN_EXCHANGE_GAP_MISSING_MINUTES,
+    KNOWN_EXCHANGE_GAP_START_UTC,
+    KNOWN_EXCHANGE_GAP_SYMBOL,
 )
 
 from services.ml_core.adaptive_targets import (
@@ -124,8 +126,8 @@ def _validate_documented_exchange_gaps(gaps: list[dict[str, Any]]) -> int:
     valid = (
         missing == KNOWN_EXCHANGE_GAP_MISSING_MINUTES
         and len(gaps) == 1
-        and str(gaps[0]["start_utc"])[:10] == KNOWN_EXCHANGE_GAP_DATE_UTC
-        and str(gaps[0]["end_utc"])[:10] == KNOWN_EXCHANGE_GAP_DATE_UTC
+        and gaps[0]["start_utc"] == KNOWN_EXCHANGE_GAP_START_UTC
+        and gaps[0]["end_utc"] == KNOWN_EXCHANGE_GAP_END_UTC
     )
     if not valid:
         raise ValueError("minute_data_undocumented_exchange_gap")
@@ -1930,6 +1932,8 @@ def _load_manifested_data(
     *,
     allow_exchange_gaps: bool = False,
 ) -> tuple[DataFrame, dict[str, Any]]:
+    if allow_exchange_gaps and symbol != KNOWN_EXCHANGE_GAP_SYMBOL:
+        raise ValueError("public_data_gap_policy_symbol_unsupported")
     stem = f"binance-{symbol.lower()}-1m"
     csv_path = input_dir / f"{stem}.csv"
     manifest_path = input_dir / f"{stem}.manifest.json"
