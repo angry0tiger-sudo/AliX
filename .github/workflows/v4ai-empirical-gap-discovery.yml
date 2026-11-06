@@ -1,0 +1,55 @@
+name: AliX V4-AI Empirical ETHUSDT Gap Discovery
+
+on:
+  push:
+    branches:
+      - research/ml-core-v4ai-maker-strategy
+    paths:
+      - .github/workflows/v4ai-empirical-gap-discovery.yml
+      - scripts/discover_binance_ethusdt_gap.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: alix-v4ai-empirical-ethusdt-gap-discovery
+  cancel-in-progress: false
+
+jobs:
+  empirical-gap-discovery:
+    if: github.ref == 'refs/heads/research/ml-core-v4ai-maker-strategy'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      ALIx_ENV: paper
+      ALIx_DRY_RUN: "true"
+      ALIx_ALLOW_LIVE_TRADING: "false"
+      ALIx_REPORTING_ENABLED: "false"
+    steps:
+      - name: Checkout exact research commit without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Fetch and audit actual ETHUSDT 1m candle opens for 2023-03-24 UTC
+        run: |
+          set -euo pipefail
+          python scripts/discover_binance_ethusdt_gap.py \
+            --output alix-v4ai-ethusdt-gap-discovery.json
+          printf 'commit_sha=%s\n' "$GITHUB_SHA"
+          printf 'public_api_only=true\ncredentials_used=false\n'
+          printf 'private_api_calls=0\nreal_order_attempts=0\n'
+          printf 'Champion=null\norder_permission=false\ntrading_authorization=NO-GO\n'
+      - name: Upload empirical gap discovery report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alix-v4ai-ethusdt-gap-discovery
+          path: alix-v4ai-ethusdt-gap-discovery.json
+          if-no-files-found: error
+          retention-days: 14
