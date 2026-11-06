@@ -81,33 +81,44 @@ def _fetch_page(cursor_ms: int, end_ms: int) -> list[list[Any]]:
     raise RuntimeError(f"public_binance_fetch_failed:{last_error}") from None
 
 
-def discover() -> dict[str, Any]:
-    start_ms = _epoch_ms(START)
-    end_ms = _epoch_ms(END)
+def _validated_page_stamps(
+    payload: list[list[Any]],
+    cursor_ms: int,
+    end_ms: int,
+    previous_last_ms: int | None,
+) -> list[int]:
+    stamps: list[int] = []
+    for item in payload:
+        if not isinstance(item, list) or len(item) < 6:
+            raise ValueError("binance_kline_shape_invalid")
+        stamp = item[0]
+        if isinstance(stamp, bool) or not isinstance(stamp, int):
+            raise ValueError("binance_kline_timestamp_invalid")
+        if stamp % INTERVAL_MS != 0 or not cursor_ms <= stamp <= end_ms:
+            raise ValueError(f"binance_kline_timestamp_out_of_window:{stamp}")
+        stamps.append(stamp)
+
+    if any(current <= previous for previous, current in zip(stamps, stamps[1:])):
+        raise ValueError("binance_page_timestamps_not_strictly_increasing")
+    if stamps[0] < cursor_ms:
+        raise ValueError("binance_page_regressed_before_cursor")
+    if previous_last_ms is not None and stamps[0] <= previous_last_ms:
+        raise ValueError("binance_duplicate_or_regressed_timestamp")
+    return stamps
+
+
+def _fetch_candle_stamps(start_ms: int, end_ms: int) -> tuple[list[int], int]:
     cursor_ms = start_ms
     stamps: list[int] = []
     page_count = 0
-
     while cursor_ms <= end_ms:
         payload = _fetch_page(cursor_ms, end_ms)
-        page_stamps: list[int] = []
-        for item in payload:
-            if not isinstance(item, list) or len(item) < 6:
-                raise ValueError("binance_kline_shape_invalid")
-            stamp = item[0]
-            if isinstance(stamp, bool) or not isinstance(stamp, int):
-                raise ValueError("binance_kline_timestamp_invalid")
-            if stamp % INTERVAL_MS != 0 or not cursor_ms <= stamp <= end_ms:
-                raise ValueError(f"binance_kline_timestamp_out_of_window:{stamp}")
-            page_stamps.append(stamp)
-
-        if any(b <= a for a, b in zip(page_stamps, page_stamps[1:])):
-            raise ValueError("binance_page_timestamps_not_strictly_increasing")
-        if page_stamps[0] < cursor_ms:
-            raise ValueError("binance_page_regressed_before_cursor")
-        if stamps and page_stamps[0] <= stamps[-1]:
-            raise ValueError("binance_duplicate_or_regressed_timestamp")
-
+        page_stamps = _validated_page_stamps(
+            payload,
+            cursor_ms,
+            end_ms,
+            stamps[-1] if stamps else None,
+        )
         stamps.extend(page_stamps)
         page_count += 1
         next_cursor = page_stamps[-1] + INTERVAL_MS
@@ -116,14 +127,29 @@ def discover() -> dict[str, Any]:
         cursor_ms = next_cursor
         if cursor_ms <= end_ms:
             time.sleep(PAGE_DELAY_SECONDS)
+    return stamps, page_count
 
+
+def _validate_day_boundaries(
+    stamps: list[int], start_ms: int, end_ms: int
+) -> None:
     if not stamps or stamps[0] != start_ms or stamps[-1] != end_ms:
+        first = stamps[0] if stamps else None
+        last = stamps[-1] if stamps else None
         raise ValueError(
-            "binance_day_boundary_mismatch:"
-            f"first={stamps[0] if stamps else None}:"
-            f"last={stamps[-1] if stamps else None}"
+            f"binance_day_boundary_mismatch:first={first}:last={last}"
         )
 
+
+def _iso_utc(timestamp_ms: int) -> str:
+    return (
+        datetime.fromtimestamp(timestamp_ms / 1000, timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+
+
+def _gap_ranges_from_stamps(stamps: list[int]) -> list[dict[str, Any]]:
     gaps: list[dict[str, Any]] = []
     for previous, current in zip(stamps, stamps[1:]):
         delta = current - previous
@@ -133,29 +159,34 @@ def discover() -> dict[str, Any]:
         if missing > 0:
             gaps.append(
                 {
-                    "start_utc": datetime.fromtimestamp(
-                        (previous + INTERVAL_MS) / 1000, timezone.utc
-                    )
-                    .isoformat()
-                    .replace("+00:00", "Z"),
-                    "end_utc": datetime.fromtimestamp(
-                        (current - INTERVAL_MS) / 1000, timezone.utc
-                    )
-                    .isoformat()
-                    .replace("+00:00", "Z"),
+                    "start_utc": _iso_utc(previous + INTERVAL_MS),
+                    "end_utc": _iso_utc(current - INTERVAL_MS),
                     "missing_candles": int(missing),
                 }
             )
+    return gaps
 
-    expected_count = 24 * 60
-    missing_count = expected_count - len(stamps)
+
+def _validate_gap_count(
+    expected_count: int, observed_count: int, gaps: list[dict[str, Any]]
+) -> int:
+    missing_count = expected_count - observed_count
     observed_gap_count = sum(int(gap["missing_candles"]) for gap in gaps)
     if missing_count < 0 or missing_count != observed_gap_count:
         raise ValueError(
             f"binance_gap_count_mismatch:expected_missing={missing_count}:"
             f"observed_missing={observed_gap_count}"
         )
+    return missing_count
 
+
+def _build_report(
+    stamps: list[int],
+    page_count: int,
+    expected_count: int,
+    missing_count: int,
+    gaps: list[dict[str, Any]],
+) -> dict[str, Any]:
     return {
         "schema_version": "alix.v4ai.ethusdt-gap-discovery.v1",
         "provider": "Binance Spot public klines API",
@@ -168,16 +199,8 @@ def discover() -> dict[str, Any]:
         "observed_candle_opens": len(stamps),
         "missing_candle_opens": missing_count,
         "gap_ranges": gaps,
-        "first_observed_open_utc": datetime.fromtimestamp(
-            stamps[0] / 1000, timezone.utc
-        )
-        .isoformat()
-        .replace("+00:00", "Z"),
-        "last_observed_open_utc": datetime.fromtimestamp(
-            stamps[-1] / 1000, timezone.utc
-        )
-        .isoformat()
-        .replace("+00:00", "Z"),
+        "first_observed_open_utc": _iso_utc(stamps[0]),
+        "last_observed_open_utc": _iso_utc(stamps[-1]),
         "page_count": page_count,
         "public_api_only": True,
         "credentials_used": False,
@@ -188,6 +211,17 @@ def discover() -> dict[str, Any]:
         "order_permission": False,
         "trading_authorization": "NO-GO",
     }
+
+
+def discover() -> dict[str, Any]:
+    start_ms = _epoch_ms(START)
+    end_ms = _epoch_ms(END)
+    expected_count = 24 * 60
+    stamps, page_count = _fetch_candle_stamps(start_ms, end_ms)
+    _validate_day_boundaries(stamps, start_ms, end_ms)
+    gaps = _gap_ranges_from_stamps(stamps)
+    missing_count = _validate_gap_count(expected_count, len(stamps), gaps)
+    return _build_report(stamps, page_count, expected_count, missing_count, gaps)
 
 
 def main() -> int:
