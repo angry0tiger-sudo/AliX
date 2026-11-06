@@ -1,4 +1,4 @@
-"""V4-AI ETHUSDT 1h maker-fee validation for Bollinger/EMA200 primary signals."""
+"""V4-AJ ETHUSDT 1h maker-fee validation for RSI mean-reversion primary signals."""
 
 from __future__ import annotations
 
@@ -18,14 +18,13 @@ from pandas import DataFrame, Series
 import scripts.run_ml_core_v4ac_cost_optimization as v4ac
 import scripts.run_ml_core_v4af_meta_final as v4af
 from services.meta_labeling import v4ah as advanced
-from services.meta_labeling.v4y import (
-    V4Y_EMA_TREND_PERIOD,
-    V4Y_OOF_FOLD_COUNT,
-    generate_v4y_oof_primary_events,
+from services.meta_labeling.v4x import (
+    V4X_OOF_FOLD_COUNT,
+    generate_oof_primary_events,
 )
 from services.ml_core.economic_backtest import simulate_signals
 
-SCHEMA = "alix.ml-core-v4ai-maker-strategy.v1"
+SCHEMA = "alix.ml-core-v4ai-maker-strategy.v2"
 SYMBOL = "ETHUSDT"
 TIMEFRAME = "1h"
 DAYS = 1825
@@ -37,6 +36,19 @@ ROUND_TRIP_COST_BPS = 30.0
 ADX_FEATURE = "%-trend_adx_14"
 ADX_PERIOD = 14
 ADX_THRESHOLD = 20.0
+RSI_PERIOD = 14
+RSI_OVERSOLD_THRESHOLD = 30.0
+EMA_TREND_PERIOD = 200
+RSI_FEATURE = "%-primary_rsi_14"
+EMA_DISTANCE_FEATURE = "%-primary_close_vs_ema200_pct"
+PRIMARY_SIGNAL_GENERATION = "CAUSAL_WILDER_RSI14_LT30_CLOSE_ABOVE_EMA200"
+LEGACY_PRIMARY_FEATURE_COLUMNS = (
+    "%-primary_bollinger_bandwidth_pct",
+    "%-primary_close_vs_bollinger_upper_pct",
+    "%-primary_close_vs_ema200_pct",
+    "%-primary_ema200_slope_10_pct",
+    "%-primary_breakout_distance_pct",
+)
 REGIME_WARMUP_BARS = 200
 REGIME_CLUSTER_COUNT = 3
 META_TARGET_ACCEPT_FRACTION = 0.70
@@ -46,14 +58,18 @@ MINIMUM_WIN_RATE = 0.45
 MAXIMUM_DRAWDOWN = 15.0
 DSR_MINIMUM_RETURN_OBSERVATIONS = 4
 SORTINO_TARGET_RETURN_PER_TRADE = 0.0
-BASE_CONTROL = "PRIMARY_BB20_EMA200_30BPS"
-ADX_ABLATION = "PRIMARY_ADX20_ABLATION_30BPS"
-META_CANDIDATE = "META_TOP_70_BASE_30BPS"
+BASE_CONTROL = "PRIMARY_RSI_MR_30BPS"
+ADX_ABLATION = "PRIMARY_ADX20_ABLATION_RSI_MR_30BPS"
+META_CANDIDATE = "META_TOP_70_RSI_MR_30BPS"
 CANDIDATE_NAMES = (BASE_CONTROL, ADX_ABLATION, META_CANDIDATE)
 PRIMARY_FILTER_CONTRACT: dict[str, str] = {
-    "feature": "close",
-    "reference": "CAUSAL_EMA200",
-    "comparison": "STRICT_GT",
+    "indicator": "WILDER_RSI",
+    "rsi_period": "14",
+    "rsi_threshold": "30.0",
+    "rsi_comparison": "STRICT_LT",
+    "trend_feature": "close",
+    "trend_reference": "CAUSAL_EMA200",
+    "trend_comparison": "STRICT_GT",
 }
 LABEL_COLUMNS = {
     "event_index",
@@ -67,8 +83,8 @@ LABEL_COLUMNS = {
     "primary_oof",
 }
 PRIMARY_GEOMETRY: dict[str, float] = {
-    "initial_stop_atr": 2.0,
-    "take_profit_atr": 4.0,
+    "initial_stop_atr": 1.5,
+    "take_profit_atr": 2.5,
     "trailing_activation_atr": 1.5,
     "trailing_step_atr": 2.0,
     "horizon_bars": 24.0,
@@ -76,22 +92,22 @@ PRIMARY_GEOMETRY: dict[str, float] = {
 EXIT_POLICIES: tuple[dict[str, float | str], ...] = (
     {
         "name": "V4AI_REFERENCE",
-        "initial_stop_atr": 2.0,
-        "take_profit_atr": 4.0,
+        "initial_stop_atr": 1.5,
+        "take_profit_atr": 2.5,
         "trailing_activation_atr": 1.0,
         "trailing_step_atr": 1.5,
     },
     {
         "name": "V4AE_HISTORICAL_BEST",
-        "initial_stop_atr": 2.0,
-        "take_profit_atr": 4.0,
+        "initial_stop_atr": 1.5,
+        "take_profit_atr": 2.5,
         "trailing_activation_atr": 1.5,
         "trailing_step_atr": 2.0,
     },
     {
         "name": "V4AF_OWNER_GEOMETRY",
-        "initial_stop_atr": 2.0,
-        "take_profit_atr": 4.0,
+        "initial_stop_atr": 1.5,
+        "take_profit_atr": 2.5,
         "trailing_activation_atr": 1.5,
         "trailing_step_atr": 1.5,
     },
@@ -142,6 +158,114 @@ def _trade_management_config(policy: dict[str, Any] | None = None) -> Any:
         trailing_activation_atr=float(selected["trailing_activation_atr"]),
         trailing_step_atr=float(selected["trailing_step_atr"]),
     )
+
+
+def _validated_primary_close(bars: DataFrame) -> Series:
+    if "close" not in bars.columns:
+        raise ValueError("v4ai_primary_close_column_missing")
+    close = pd.to_numeric(bars["close"], errors="coerce").reset_index(drop=True)
+    values = close.to_numpy(dtype=float)
+    if not np.isfinite(values).all() or bool((close <= 0.0).any()):
+        raise ValueError("v4ai_primary_close_values_invalid")
+    return close
+
+
+def _causal_wilder_rsi(close: Series) -> Series:
+    changes = close.diff()
+    gains = changes.clip(lower=0.0)
+    losses = -changes.clip(upper=0.0)
+    average_gain = gains.ewm(
+        alpha=1.0 / RSI_PERIOD,
+        adjust=False,
+        min_periods=RSI_PERIOD,
+    ).mean()
+    average_loss = losses.ewm(
+        alpha=1.0 / RSI_PERIOD,
+        adjust=False,
+        min_periods=RSI_PERIOD,
+    ).mean()
+    average_movement = average_gain + average_loss
+    rsi = 100.0 * average_gain / average_movement.where(average_movement > 0.0)
+    return rsi.mask(average_movement.eq(0.0), 50.0)
+
+
+def _finite_primary_feature_rows(features: DataFrame) -> np.ndarray:
+    numeric = features.apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
+    return np.isfinite(numeric).all(axis=1)
+
+
+def _mean_reversion_primary_features(
+    bars: DataFrame,
+    base_features: DataFrame,
+) -> tuple[DataFrame, Series, dict[str, Any]]:
+    if len(bars) != len(base_features) or bars.empty:
+        raise ValueError("v4ai_primary_feature_alignment_invalid")
+    if not base_features.columns.is_unique:
+        raise ValueError("v4ai_primary_feature_columns_invalid")
+    if not set(LEGACY_PRIMARY_FEATURE_COLUMNS).issubset(base_features.columns):
+        raise ValueError("v4ai_legacy_breakout_feature_schema_invalid")
+
+    close = _validated_primary_close(bars)
+    rsi = _causal_wilder_rsi(close)
+    ema = close.ewm(
+        span=EMA_TREND_PERIOD,
+        adjust=False,
+        min_periods=EMA_TREND_PERIOD,
+    ).mean()
+
+    features = base_features.drop(
+        columns=list(LEGACY_PRIMARY_FEATURE_COLUMNS)
+    ).reset_index(drop=True).copy()
+    features[RSI_FEATURE] = rsi
+    features[EMA_DISTANCE_FEATURE] = close / ema - 1.0
+
+    valid_rsi = np.isfinite(rsi.to_numpy(dtype=float))
+    valid_ema = np.isfinite(ema.to_numpy(dtype=float))
+    valid_features = _finite_primary_feature_rows(features)
+    oversold = rsi.lt(RSI_OVERSOLD_THRESHOLD)
+    trend_aligned = close.gt(ema)
+    signal = (
+        oversold
+        & trend_aligned
+        & Series(valid_rsi)
+        & Series(valid_ema)
+        & Series(valid_features)
+    ).fillna(False).astype(bool)
+    diagnostics = {
+        "generation": PRIMARY_SIGNAL_GENERATION,
+        "rsi_method": "WILDER_EMA_ALPHA_1_OVER_14_ADJUST_FALSE",
+        "rsi_period": RSI_PERIOD,
+        "rsi_threshold": RSI_OVERSOLD_THRESHOLD,
+        "rsi_comparison": "STRICT_LT",
+        "ema_period": EMA_TREND_PERIOD,
+        "ema_method": "CAUSAL_SPAN_200_ADJUST_FALSE",
+        "trend_comparison": "CLOSE_STRICTLY_ABOVE_EMA200",
+        "rsi_valid_rows": int(valid_rsi.sum()),
+        "ema_valid_rows": int(valid_ema.sum()),
+        "feature_valid_rows": int(valid_features.sum()),
+        "oversold_rows": int((oversold & Series(valid_rsi)).sum()),
+        "trend_aligned_rows": int((trend_aligned & Series(valid_ema)).sum()),
+        "primary_buy_count": int(signal.sum()),
+        "lookahead_used": False,
+        "execution_timing": "CLOSED_1H_BAR_NEXT_BAR_OPEN",
+    }
+    signal.name = "primary_buy_signal"
+    return features, signal, diagnostics
+
+
+def _generate_primary_oof_events(
+    primary_signal: Series,
+    start_index: int,
+    stop_index: int,
+) -> DataFrame:
+    events = generate_oof_primary_events(
+        primary_signal,
+        start_index=start_index,
+        stop_index=stop_index,
+        fold_count=V4X_OOF_FOLD_COUNT,
+    )
+    events["primary_signal_generation"] = PRIMARY_SIGNAL_GENERATION
+    return events
 
 
 def _apply_adx_ablation(
@@ -263,7 +387,7 @@ def _training_oof_labels(
         "oof_primary_event_count": int(len(oof_events)),
         "matured_costed_oof_label_count": int(len(labelled)),
         "immature_oof_event_count": immature,
-        "oof_fold_count": V4Y_OOF_FOLD_COUNT,
+        "oof_fold_count": V4X_OOF_FOLD_COUNT,
         "oof_fold_ids": sorted(int(value) for value in labelled["fold_id"].unique()),
         "label_class_counts": {
             "meta_failure": int(class_counts.get(0, 0)),
@@ -289,11 +413,11 @@ def _oof_training_frame(
     primary_signal: Series,
     train_end: int,
 ) -> tuple[DataFrame, dict[str, Any]]:
-    oof_events = generate_v4y_oof_primary_events(
+    oof_events = _generate_primary_oof_events(
         primary_signal,
-        start_index=V4Y_EMA_TREND_PERIOD,
+        start_index=EMA_TREND_PERIOD,
         stop_index=train_end,
-        fold_count=V4Y_OOF_FOLD_COUNT,
+        fold_count=V4X_OOF_FOLD_COUNT,
     )
     labelled, diagnostics = _training_oof_labels(bars, oof_events, train_end)
     return v4af._join_event_features(features, labelled), diagnostics
@@ -481,7 +605,7 @@ def _forward_probability_map(
 def _candidate_id(mode: str) -> str:
     if mode not in CANDIDATE_NAMES:
         raise ValueError("v4ai_candidate_mode_invalid")
-    return f"{SYMBOL}|{TIMEFRAME}|BB20_UPPER_BREAKOUT_EMA200|{mode}"
+    return f"{SYMBOL}|{TIMEFRAME}|RSI14_MEAN_REVERSION_EMA200|{mode}"
 
 
 def _profit_factor(metrics: dict[str, Any]) -> float:
@@ -1007,10 +1131,29 @@ def _validate_exit_matrix_cell_scope(cell: dict[str, Any]) -> None:
         raise ValueError("v4ai_exit_matrix_cell_invalid")
 
 
+def _validate_exit_matrix_cell_geometry(cell: dict[str, Any]) -> None:
+    policy_name = cell.get("policy")
+    policy = next(
+        (item for item in EXIT_POLICIES if item["name"] == policy_name),
+        None,
+    )
+    if policy is None:
+        raise ValueError("v4ai_exit_matrix_policy_invalid")
+    for field in (
+        "initial_stop_atr",
+        "take_profit_atr",
+        "trailing_activation_atr",
+        "trailing_step_atr",
+    ):
+        if cell.get(field) != policy[field]:
+            raise ValueError("v4ai_exit_matrix_geometry_invalid")
+
+
 def _validate_exit_matrix_cell(cell: dict[str, Any]) -> None:
     _validate_exit_matrix_cell_cost(cell)
     _validate_exit_matrix_cell_market(cell)
     _validate_exit_matrix_cell_scope(cell)
+    _validate_exit_matrix_cell_geometry(cell)
 
 
 def _validate_exit_matrix(matrix: dict[str, Any]) -> None:
@@ -1084,8 +1227,25 @@ def _validate_report_risk_contract(report: dict[str, Any]) -> None:
 
 
 def _validate_report_primary_filter(report: dict[str, Any]) -> None:
-    if report.get("primary_filter") != PRIMARY_FILTER_CONTRACT:
+    diagnostics = report.get("primary_signal_diagnostics", {})
+    valid = (
+        report.get("primary_signal") == PRIMARY_SIGNAL_GENERATION
+        and report.get("primary_filter") == PRIMARY_FILTER_CONTRACT
+        and diagnostics.get("generation") == PRIMARY_SIGNAL_GENERATION
+        and diagnostics.get("rsi_period") == RSI_PERIOD
+        and diagnostics.get("rsi_threshold") == RSI_OVERSOLD_THRESHOLD
+        and diagnostics.get("ema_period") == EMA_TREND_PERIOD
+        and diagnostics.get("rsi_comparison") == "STRICT_LT"
+        and diagnostics.get("trend_comparison") == "CLOSE_STRICTLY_ABOVE_EMA200"
+        and diagnostics.get("lookahead_used") is False
+    )
+    if not valid:
         raise ValueError("v4ai_report_primary_filter_invalid")
+
+
+def _validate_report_geometry(report: dict[str, Any]) -> None:
+    if report.get("fixed_exit_geometry") != PRIMARY_GEOMETRY:
+        raise ValueError("v4ai_report_fixed_exit_geometry_invalid")
 
 
 def _validate_report_holdout(report: dict[str, Any]) -> None:
@@ -1163,6 +1323,7 @@ def _validate_report(report: dict[str, Any], commit_sha: str) -> None:
     _validate_report_cost_contract(report)
     _validate_report_risk_contract(report)
     _validate_report_primary_filter(report)
+    _validate_report_geometry(report)
     _validate_report_holdout(report)
     _validate_report_candidates(report)
     _validate_exit_matrix(report.get("exit_geometry_matrix", {}))
@@ -1208,11 +1369,11 @@ def _format_acceptance(item: dict[str, Any]) -> str:
 
 def _render_step_summary_header(report: dict[str, Any]) -> list[str]:
     return [
-        "## AliX V4-AI ETHUSDT Maker-Fee Strategy Validation",
+        "## AliX V4-AJ ETHUSDT RSI Mean-Reversion Maker-Fee Validation",
         "",
         f"Commit SHA: {report['commit_sha']}",
         "Scope: ETHUSDT Spot, 1h, 1825 days requested with trim to latest contiguous segment, public OHLCV only.",
-        "Primary signal: causal Bollinger(20, 2.0) upper breakout with Close > EMA200.",
+        "Primary signal: causal Wilder RSI(14) < 30 AND Close > EMA200; execute next-bar open.",
         "Primary ADX filter: DISABLED. ADX(14)>20 is retained only as a diagnostic ablation, not as an entry gate.",
         "Execution: closed-candle signal, next-bar-open entry, no pyramiding.",
         "Maker-cost assumption: 10 bps fee + 5 bps slippage per side = 30 bps round trip.",
@@ -1221,7 +1382,7 @@ def _render_step_summary_header(report: dict[str, Any]) -> list[str]:
         "DSR: Bailey-López de Prado expected-maximum-Sharpe deflation; DSR Z is unbounded and DSR probability=Phi(Z) is in [0, 1].",
         "DSR trials are limited to each current-run comparison cohort; historical trials are not included and trial independence is unverified.",
         "Z.AI diagnostic reference (not a promotion gate): Net PF >1.1 and DSR Z >1.0; the existing Net PF >1.5 acceptance gate remains unchanged.",
-        "Fixed candidate geometry: SL=2.0 ATR, TP=4.0 ATR, activation=1.5 ATR, step=2.0 ATR, horizon=24 bars.",
+        "Fixed candidate geometry: SL=1.5 ATR, TP=2.5 ATR, activation=1.5 ATR, step=2.0 ATR, horizon=24 bars.",
         "Training: outer 70%; purged OOF Fit/Temperature/Threshold slices=70/15/15.",
         "Evaluation: next 15% forward validation; final 15% holdout untouched.",
         "Meta: LightGBM + TreeSHAP top-30 Fit-only selection; KMeans(3) regimes as features.",
@@ -1281,6 +1442,14 @@ def _render_meta_diagnostics(report: dict[str, Any]) -> list[str]:
             f"trim={report['dataset_provenance'].get('resample_gap_trim', {}).get('status', 'N/A')}; "
             f"trimmed_bars={report['dataset_provenance'].get('resample_gap_trim', {}).get('trimmed_bars', 0)}; "
             f"contiguous_start={report['dataset_provenance'].get('resample_gap_trim', {}).get('segment_start_utc', 'N/A')}."
+        ),
+        (
+            "Primary RSI diagnostics: "
+            f"valid={report['primary_signal_diagnostics']['rsi_valid_rows']}; "
+            f"oversold={report['primary_signal_diagnostics']['oversold_rows']}; "
+            f"Close>EMA200={report['primary_signal_diagnostics']['trend_aligned_rows']}; "
+            f"BUY={report['primary_signal_diagnostics']['primary_buy_count']}; "
+            f"lookahead={report['primary_signal_diagnostics']['lookahead_used']}."
         ),
         f"Primary BUYs (ADX disabled): {report['signal_counts']['primary_buy_count']}; "
         f"ADX>20 diagnostic-ablation BUYs: {report['signal_counts']['adx_ablation_buy_count']}.",
@@ -1404,6 +1573,7 @@ def _build_report(
     train_end: int,
     forward_end: int,
     signal_counts: dict[str, int],
+    primary_signal_diagnostics: dict[str, Any],
     adx_ablation_diagnostics: dict[str, Any],
     train_gate: dict[str, Any],
     meta: dict[str, Any],
@@ -1421,8 +1591,9 @@ def _build_report(
         "dataset_days": DAYS,
         "dataset_provenance": provenance,
         "bar_count": int(len(bars)),
-        "primary_signal": "CAUSAL_BOLLINGER_20_UPPER_BREAKOUT_CLOSE_ABOVE_EMA200",
+        "primary_signal": PRIMARY_SIGNAL_GENERATION,
         "primary_filter": dict(PRIMARY_FILTER_CONTRACT),
+        "primary_signal_diagnostics": dict(primary_signal_diagnostics),
         "fixed_exit_geometry": dict(PRIMARY_GEOMETRY),
         "cost_contract": {
             "fee_type_assumption": "MAKER_FEE_PROXY",
@@ -1488,24 +1659,26 @@ def run_v4ai(
         forward_end,
         research_bars,
         base_features,
-        base_primary_signal,
+        _legacy_breakout_signal,
     ) = v4af._load_research_context(
         input_dir, days, commit_sha, allow_exchange_gaps=ALLOW_EXCHANGE_GAPS
     )
+    primary_features, primary_signal, primary_signal_diagnostics = (
+        _mean_reversion_primary_features(research_bars, base_features)
+    )
 
-    # ADX is retained strictly as a like-for-like diagnostic ablation. It does
-    # not gate the Primary signal, OOF event generation, Meta fit, or Meta replay.
+    # ADX is retained strictly as a diagnostic-only ablation of the RSI signal.
     adx_ablation_signal, adx_ablation_diagnostics = _apply_adx_ablation(
-        base_primary_signal, base_features
+        primary_signal, primary_features
     )
     _, train_gate, primary_event_indices = v4af._primary_signal_evaluation(
-        base_primary_signal, train_end, forward_end
+        primary_signal, train_end, forward_end
     )
     adx_ablation_event_indices = v4af._eligible_primary_event_indices(
         adx_ablation_signal, train_end, forward_end
     )
     signal_counts = {
-        "primary_buy_count": int(base_primary_signal.sum()),
+        "primary_buy_count": int(primary_signal.sum()),
         "adx_ablation_buy_count": int(adx_ablation_signal.sum()),
         "primary_forward_event_count": len(primary_event_indices),
         "adx_ablation_forward_event_count": len(adx_ablation_event_indices),
@@ -1530,9 +1703,9 @@ def run_v4ai(
         )
     )
     try:
-        features, regime_diagnostics = _regime_features(base_features)
+        features, regime_diagnostics = _regime_features(primary_features)
         meta = _fit_meta_model(
-            research_bars, features, base_primary_signal, train_end, train_gate
+            research_bars, features, primary_signal, train_end, train_gate
         )
     except ValueError as error:
         if not _support_shortfall(error):
@@ -1587,6 +1760,7 @@ def run_v4ai(
         train_end,
         forward_end,
         signal_counts,
+        primary_signal_diagnostics,
         adx_ablation_diagnostics,
         train_gate,
         meta,

@@ -1,4 +1,4 @@
-"""Unit tests for V4-AI maker-fee and ADX-filtered research contracts."""
+"""Unit tests for V4-AJ RSI mean-reversion and maker-fee research contracts."""
 
 from __future__ import annotations
 
@@ -67,6 +67,10 @@ def _valid_matrix() -> dict[str, Any]:
             "policy": str(policy["name"]),
             "symbol": "ETHUSDT",
             "timeframe": "1h",
+            "initial_stop_atr": policy["initial_stop_atr"],
+            "take_profit_atr": policy["take_profit_atr"],
+            "trailing_activation_atr": policy["trailing_activation_atr"],
+            "trailing_step_atr": policy["trailing_step_atr"],
             "fee_bps_per_side": 10.0,
             "slippage_bps_per_side": 5.0,
             "round_trip_cost_bps": 30.0,
@@ -91,12 +95,32 @@ def _valid_matrix() -> dict[str, Any]:
     }
 
 
+def _primary_feature_frame(count: int) -> DataFrame:
+    return DataFrame(
+        {
+            name: np.zeros(count, dtype=float)
+            for name in v4ai.LEGACY_PRIMARY_FEATURE_COLUMNS
+        }
+    )
+
+
 def _valid_report() -> dict[str, Any]:
     return {
         "schema_version": v4ai.SCHEMA,
         "commit_sha": "a" * 40,
         "symbols": ["ETHUSDT"],
         "timeframes": ["1h"],
+        "primary_signal": v4ai.PRIMARY_SIGNAL_GENERATION,
+        "primary_signal_diagnostics": {
+            "generation": v4ai.PRIMARY_SIGNAL_GENERATION,
+            "rsi_period": 14,
+            "rsi_threshold": 30.0,
+            "ema_period": 200,
+            "rsi_comparison": "STRICT_LT",
+            "trend_comparison": "CLOSE_STRICTLY_ABOVE_EMA200",
+            "lookahead_used": False,
+        },
+        "fixed_exit_geometry": dict(v4ai.PRIMARY_GEOMETRY),
         "cost_contract": {
             "fee_type_assumption": "MAKER_FEE_PROXY",
             "fee_bps_per_side": 10.0,
@@ -132,6 +156,69 @@ def test_execution_cost_is_locked_to_thirty_bps() -> None:
         v4ai._validate_cost_contract(
             type("BadExecution", (), {"fee_bps": 25.0, "slippage_bps": 20.0})()
         )
+
+
+def test_rsi_mean_reversion_signal_is_causal_and_drops_breakout_features() -> None:
+    rising = np.linspace(100.0, 150.0, 240)
+    pullback = 150.0 - np.arange(1, 16, dtype=float) * 0.5
+    bars = DataFrame({"close": np.concatenate((rising, pullback))})
+    features, signal, diagnostics = v4ai._mean_reversion_primary_features(
+        bars, _primary_feature_frame(len(bars))
+    )
+    assert signal.dtype == bool
+    assert bool(signal.iloc[-1])
+    assert float(features.iloc[-1][v4ai.RSI_FEATURE]) < 30.0
+    assert float(features.iloc[-1][v4ai.EMA_DISTANCE_FEATURE]) > 0.0
+    assert not set(v4ai.LEGACY_PRIMARY_FEATURE_COLUMNS).intersection(features.columns)
+    assert diagnostics["generation"] == v4ai.PRIMARY_SIGNAL_GENERATION
+    assert diagnostics["lookahead_used"] is False
+    assert diagnostics["rsi_comparison"] == "STRICT_LT"
+    assert diagnostics["trend_comparison"] == "CLOSE_STRICTLY_ABOVE_EMA200"
+
+    prefix_bars = bars.iloc[:240].reset_index(drop=True)
+    prefix_features = _primary_feature_frame(240)
+    _, prefix_signal, _ = v4ai._mean_reversion_primary_features(
+        prefix_bars, prefix_features
+    )
+    pd.testing.assert_series_equal(
+        signal.iloc[:240].reset_index(drop=True),
+        prefix_signal.reset_index(drop=True),
+        check_names=False,
+    )
+
+
+def test_rsi_oversold_without_close_above_ema200_does_not_buy() -> None:
+    falling = np.linspace(150.0, 100.0, 240)
+    continued_fall = 100.0 - np.arange(1, 16, dtype=float) * 0.5
+    bars = DataFrame({"close": np.concatenate((falling, continued_fall))})
+    features, signal, diagnostics = v4ai._mean_reversion_primary_features(
+        bars, _primary_feature_frame(len(bars))
+    )
+    assert diagnostics["oversold_rows"] > 0
+    assert diagnostics["trend_aligned_rows"] == 0
+    assert int(signal.sum()) == 0
+    assert float(features.iloc[-1][v4ai.EMA_DISTANCE_FEATURE]) < 0.0
+
+
+def test_rsi_signal_rejects_invalid_prices_and_feature_alignment() -> None:
+    with pytest.raises(ValueError, match="v4ai_primary_close_values_invalid"):
+        v4ai._mean_reversion_primary_features(
+            DataFrame({"close": [100.0, 101.0, np.nan]}),
+            _primary_feature_frame(3),
+        )
+    with pytest.raises(ValueError, match="v4ai_primary_feature_alignment_invalid"):
+        v4ai._mean_reversion_primary_features(
+            DataFrame({"close": [100.0, 101.0]}),
+            _primary_feature_frame(3),
+        )
+
+
+def test_v4aj_exit_geometry_is_sl_1_5_tp_2_5() -> None:
+    management = v4ai._trade_management_config()
+    assert management.stop_loss_atr_multiplier == 1.5
+    assert management.take_profit_atr_multiplier == 2.5
+    assert all(item["initial_stop_atr"] == 1.5 for item in v4ai.EXIT_POLICIES)
+    assert all(item["take_profit_atr"] == 2.5 for item in v4ai.EXIT_POLICIES)
 
 
 def test_adx_ablation_is_strict_and_rejects_non_finite_rows() -> None:
@@ -542,6 +629,10 @@ def test_exit_geometry_matrix_has_only_three_thirty_bps_cells(
     assert {cell["round_trip_cost_bps"] for cell in matrix["cells"]} == {30.0}
     assert {call[0].fee_bps for call in seen} == {10.0}
     assert {call[0].slippage_bps for call in seen} == {5.0}
+    assert {call[1].stop_loss_atr_multiplier for call in seen} == {1.5}
+    assert {call[1].take_profit_atr_multiplier for call in seen} == {2.5}
+    assert {cell["initial_stop_atr"] for cell in matrix["cells"]} == {1.5}
+    assert {cell["take_profit_atr"] for cell in matrix["cells"]} == {2.5}
     assert {cell["policy"] for cell in matrix["cells"]} == {
         "V4AI_REFERENCE",
         "V4AE_HISTORICAL_BEST",
@@ -556,6 +647,13 @@ def test_exit_geometry_matrix_has_only_three_thirty_bps_cells(
     }
     with pytest.raises(ValueError, match="v4ai_exit_matrix_cost_invalid"):
         v4ai._validate_exit_matrix(invalid)
+    invalid_geometry = {
+        **matrix,
+        "cells": [{**matrix["cells"][0], "take_profit_atr": 2.0}]
+        + matrix["cells"][1:],
+    }
+    with pytest.raises(ValueError, match="v4ai_exit_matrix_geometry_invalid"):
+        v4ai._validate_exit_matrix(invalid_geometry)
 
 
 def test_candidate_replay_uses_thirty_bps_and_reports_unscaled_expectancy(
@@ -624,6 +722,22 @@ def test_report_rejects_any_cost_contract_other_than_thirty_bps() -> None:
     report = _valid_report()
     report["cost_contract"]["round_trip_cost_bps"] = 90.0
     with pytest.raises(ValueError, match="v4ai_report_cost_contract_invalid"):
+        v4ai._validate_report(report, "a" * 40)
+
+
+def test_report_rejects_legacy_breakout_primary_identity() -> None:
+    report = _valid_report()
+    report["primary_signal"] = (
+        "CAUSAL_BOLLINGER_20_UPPER_BREAKOUT_CLOSE_ABOVE_EMA200"
+    )
+    with pytest.raises(ValueError, match="v4ai_report_primary_filter_invalid"):
+        v4ai._validate_report(report, "a" * 40)
+
+
+def test_report_rejects_wrong_fixed_exit_geometry() -> None:
+    report = _valid_report()
+    report["fixed_exit_geometry"]["take_profit_atr"] = 4.0
+    with pytest.raises(ValueError, match="v4ai_report_fixed_exit_geometry_invalid"):
         v4ai._validate_report(report, "a" * 40)
 
 
@@ -709,8 +823,8 @@ def test_step_summary_discloses_maker_proxy_and_fill_model_limitation() -> None:
                 "cells": [
                     {
                         **cell,
-                        "initial_stop_atr": 2.0,
-                        "take_profit_atr": 4.0,
+                        "initial_stop_atr": 1.5,
+                        "take_profit_atr": 2.5,
                         "trailing_activation_atr": 1.5,
                         "trailing_step_atr": 2.0,
                         "trade_count": 2,
@@ -746,6 +860,10 @@ def test_step_summary_discloses_maker_proxy_and_fill_model_limitation() -> None:
         }
     )
     summary = v4ai._render_step_summary(report)
+    assert "Primary signal: causal Wilder RSI(14) < 30 AND Close > EMA200" in summary
+    assert "Fixed candidate geometry: SL=1.5 ATR, TP=2.5 ATR" in summary
+    assert "PRIMARY_RSI_MR_30BPS" in summary
+    assert "META_TOP_70_RSI_MR_30BPS" in summary
     assert "Primary ADX filter: DISABLED" in summary
     assert "diagnostic ablation" in summary
     assert "30 bps round trip" in summary

@@ -1,4 +1,4 @@
-name: AliX V4-AI Maker Strategy Economic Validation
+name: AliX V4-AJ RSI Mean-Reversion Economic Validation
 # Owner-directed retrigger: the fail-closed exception is bound to ETHUSDT's empirically
 # observed 80 missing 1m opens from 2023-03-24T12:40:00Z through 13:59:00Z.
 
@@ -143,7 +143,7 @@ jobs:
             scikit-learn==1.9.0 \
             lightgbm==4.7.0 \
             shap==0.54.1
-      - name: Confirm V4-AI scope, primary signal, and fail-closed safety
+      - name: Confirm V4-AJ scope, primary signal, and fail-closed safety
         env:
           TARGET_SHA: ${{ github.sha }}
         run: |
@@ -153,10 +153,10 @@ jobs:
           printf 'symbol=ETHUSDT\ntimeframe=1h\ndays=1825\n'
           printf 'fee_type_assumption=MAKER_FEE_PROXY\nfee_bps_per_side=10\n'
           printf 'slippage_bps_per_side=5\nround_trip_cost_bps=30\n'
-          printf 'primary_signal=BB20_UPPER_BREAKOUT_CLOSE_ABOVE_EMA200\n'
+          printf 'primary_signal=CAUSAL_WILDER_RSI14_LT30_CLOSE_ABOVE_EMA200\n'
           printf 'primary_adx_filter=DISABLED\nadx20_role=DIAGNOSTIC_ABLATION_ONLY\n'
           printf 'meta_threshold=top_70_percent_acceptance_from_30th_percentile_of_third_purged_OOF_slice\n'
-          printf 'exit_geometry=SL2.0_TP4.0_ACT1.5_STEP2.0\n'
+          printf 'exit_geometry=SL1.5_TP2.5_ACT1.5_STEP2.0\n'
           printf 'Champion=null\norder_permission=false\ntrading_authorization=NO-GO\n'
           printf 'private_api_calls=0\nreal_order_attempts=0\nsequence_model_used=false\n'
           python - <<'PY'
@@ -167,22 +167,34 @@ jobs:
           assert execution.fee_bps == 10.0
           assert execution.slippage_bps == 5.0
           assert v4ai.ROUND_TRIP_COST_BPS == 30.0
+          assert v4ai.PRIMARY_SIGNAL_GENERATION == (
+              "CAUSAL_WILDER_RSI14_LT30_CLOSE_ABOVE_EMA200"
+          )
           assert v4ai.PRIMARY_FILTER_CONTRACT == {
-              "feature": "close",
-              "reference": "CAUSAL_EMA200",
-              "comparison": "STRICT_GT",
+              "indicator": "WILDER_RSI",
+              "rsi_period": "14",
+              "rsi_threshold": "30.0",
+              "rsi_comparison": "STRICT_LT",
+              "trend_feature": "close",
+              "trend_reference": "CAUSAL_EMA200",
+              "trend_comparison": "STRICT_GT",
           }
           assert v4ai.ADX_PERIOD == 14
           assert v4ai.ADX_THRESHOLD == 20.0
           assert v4ai.META_TARGET_ACCEPT_FRACTION == 0.70
           assert v4ai.REGIME_CLUSTER_COUNT == 3
           assert v4ai.PRIMARY_GEOMETRY == {
-              "initial_stop_atr": 2.0,
-              "take_profit_atr": 4.0,
+              "initial_stop_atr": 1.5,
+              "take_profit_atr": 2.5,
               "trailing_activation_atr": 1.5,
               "trailing_step_atr": 2.0,
               "horizon_bars": 24.0,
           }
+          assert all(
+              policy["initial_stop_atr"] == 1.5
+              and policy["take_profit_atr"] == 2.5
+              for policy in v4ai.EXIT_POLICIES
+          )
           assert v4ah.V4AH_TOP_K_FEATURES == 30
           assert v4ah.V4AH_REGIME_COUNT == 3
           print("V4-AI scope, cost, base-signal, ADX-ablation, and closed-safety contracts: PASS")
@@ -262,11 +274,22 @@ jobs:
               "round_trip_cost_bps": 30.0,
               "passive_limit_fill_simulation": False,
           }
+          assert report["primary_signal"] == (
+              "CAUSAL_WILDER_RSI14_LT30_CLOSE_ABOVE_EMA200"
+          )
           assert report["primary_filter"] == {
-              "feature": "close",
-              "reference": "CAUSAL_EMA200",
-              "comparison": "STRICT_GT",
+              "indicator": "WILDER_RSI",
+              "rsi_period": "14",
+              "rsi_threshold": "30.0",
+              "rsi_comparison": "STRICT_LT",
+              "trend_feature": "close",
+              "trend_reference": "CAUSAL_EMA200",
+              "trend_comparison": "STRICT_GT",
           }
+          assert report["primary_signal_diagnostics"]["lookahead_used"] is False
+          assert report["primary_signal_diagnostics"]["rsi_period"] == 14
+          assert report["fixed_exit_geometry"]["initial_stop_atr"] == 1.5
+          assert report["fixed_exit_geometry"]["take_profit_atr"] == 2.5
           assert "adx_ablation_diagnostics" in report
           provenance = report["dataset_provenance"]
           assert provenance["requested_days"] == 1825
@@ -300,6 +323,8 @@ jobs:
               item["round_trip_cost_bps"] for item in matrix["cells"]
           } == {ROUND_TRIP_COST_BPS}
           assert all(item["diagnostic_only"] for item in matrix["cells"])
+          assert all(item["initial_stop_atr"] == 1.5 for item in matrix["cells"])
+          assert all(item["take_profit_atr"] == 2.5 for item in matrix["cells"])
           meta = report["meta_model"]
           if meta["enabled"]:
               assert meta["threshold_diagnostics"]["status"] == (
@@ -355,9 +380,11 @@ jobs:
           )
           summary = _render_step_summary(report)
           required = (
-              "PRIMARY_BB20_EMA200_30BPS",
-              "PRIMARY_ADX20_ABLATION_30BPS",
-              "META_TOP_70_BASE_30BPS",
+              "PRIMARY_RSI_MR_30BPS",
+              "PRIMARY_ADX20_ABLATION_RSI_MR_30BPS",
+              "META_TOP_70_RSI_MR_30BPS",
+              "Primary signal: causal Wilder RSI(14) < 30 AND Close > EMA200",
+              "Fixed candidate geometry: SL=1.5 ATR, TP=2.5 ATR",
               "Primary ADX filter: DISABLED",
               "diagnostic ablation",
               "OOF label classes failure/success",
@@ -388,7 +415,7 @@ jobs:
           print(summary, end="")
           meta_candidate = next(
               item for item in report["candidates"]
-              if item["mode"] == "META_TOP_70_BASE_30BPS"
+              if item["mode"] == "META_TOP_70_RSI_MR_30BPS"
           )
           meta_trade_count = int(meta_candidate["metrics"]["trade_count"])
           if not meta["enabled"]:
