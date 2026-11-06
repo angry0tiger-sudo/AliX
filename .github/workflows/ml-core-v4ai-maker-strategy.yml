@@ -13,6 +13,7 @@ on:
       - scripts/run_ml_core_v4ac_cost_optimization.py
       - scripts/run_ml_core_real_data_baseline.py
       - scripts/fetch_binance_public_ohlcv.py
+      - scripts/discover_binance_ethusdt_gap.py
       - services/meta_labeling/v4ah.py
       - services/meta_labeling/v4y.py
       - services/ml_core/economic_backtest.py

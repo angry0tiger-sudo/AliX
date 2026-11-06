@@ -7,9 +7,10 @@ create, amend, or submit orders and does not synthesize missing candles.
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import time
-import http.client
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -45,7 +46,9 @@ def _fetch_page(cursor_ms: int, end_ms: int) -> list[list[Any]]:
     last_error: Exception | None = None
     for attempt in range(3):
         try:
-            with http.client.HTTPSConnection(HOSTNAME, timeout=30) as connection:
+            with closing(
+                http.client.HTTPSConnection(HOSTNAME, timeout=30)
+            ) as connection:
                 connection.request(
                     "GET",
                     request_path,
