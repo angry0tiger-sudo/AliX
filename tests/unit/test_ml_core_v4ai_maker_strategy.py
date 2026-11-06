@@ -669,6 +669,17 @@ def test_step_summary_discloses_maker_proxy_and_fill_model_limitation() -> None:
     report = _valid_report()
     report.update(
         {
+            "bar_count": 40_000,
+            "dataset_provenance": {
+                "requested_days": 1825,
+                "row_count": 1825 * 24 * 60,
+                "missing_minute_intervals": 0,
+                "resample_gap_trim": {
+                    "status": "NO_GAP",
+                    "trimmed_bars": 0,
+                    "segment_start_utc": "2021-11-07T00:00:00+00:00",
+                },
+            },
             "signal_counts": {
                 "primary_buy_count": 100,
                 "adx_ablation_buy_count": 40,

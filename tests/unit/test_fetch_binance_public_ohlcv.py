@@ -347,9 +347,20 @@ def test_gap_tolerant_fetch_rejects_empty_pages_and_truncated_end() -> None:
             allow_exchange_gaps=True,
         )
 
-    truncated_provider = _provider_with_gap(
-        start, end - fetcher.INTERVAL_MS, missing_start, missing_end
-    )
+    def truncated_provider(params: dict[str, str]) -> list[Any]:
+        cursor = int(params["startTime"])
+        upper = int(params["endTime"])
+        stamps = [
+            stamp
+            for stamp in range(
+                start + fetcher.INTERVAL_MS,
+                end + fetcher.INTERVAL_MS,
+                fetcher.INTERVAL_MS,
+            )
+            if cursor <= stamp <= upper
+        ][:fetcher.PAGE_SIZE]
+        return _sparse_klines(stamps)
+
     with pytest.raises(ValueError, match="binance_historical_window_boundary_mismatch"):
         fetcher.fetch_historical_candles(
             days=1,
@@ -397,7 +408,10 @@ def test_gap_manifest_discloses_real_missing_minutes_without_fill(
     )
     assert saved["row_count"] == 1320
     assert saved["missing_minute_intervals"] == 120
-    assert saved["missing_gap_ranges"] == fetcher._gap_ranges_from_stamps(real_stamps)
+    saved_real_seconds = [int(row["timestamp"]) for row in rows]
+    assert saved["missing_gap_ranges"] == fetcher._gap_ranges_from_stamps(
+        saved_real_seconds
+    )
     assert saved["gap_policy"] == fetcher.GAP_POLICY_ALLOW_EXCHANGE_GAPS
     assert saved["private_api_calls"] == 0 and saved["real_order_attempts"] == 0
     assert saved["Champion"] is None and saved["order_permission"] is False
