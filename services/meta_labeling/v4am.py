@@ -243,58 +243,70 @@ def _forward_backward(
 
 
 def _validate_hmm_training_values(train_values: np.ndarray) -> None:
-    if train_values.ndim != 2:
-        raise ValueError("v4am_hmm_training_support_insufficient")
-    if train_values.shape[1] != 2:
-        raise ValueError("v4am_hmm_training_support_insufficient")
-    if len(train_values) < HMM_MINIMUM_TRAIN_ROWS:
-        raise ValueError("v4am_hmm_training_support_insufficient")
-    if not np.isfinite(train_values).all():
+    valid = (
+        train_values.ndim == 2
+        and train_values.shape[1] == 2
+        and len(train_values) >= HMM_MINIMUM_TRAIN_ROWS
+        and np.isfinite(train_values).all()
+    )
+    if not valid:
         raise ValueError("v4am_hmm_training_support_insufficient")
 
 
 def _initialize_gaussian_hmm(
     train_values: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    state_count = HMM_STATE_COUNT
     order = np.argsort(train_values[:, 0], kind="stable")
-    chunks = np.array_split(order, state_count)
+    chunks = np.array_split(order, HMM_STATE_COUNT)
     means = np.vstack([train_values[chunk].mean(axis=0) for chunk in chunks])
     global_variance = np.maximum(train_values.var(axis=0), HMM_VARIANCE_FLOOR)
-    variances = np.tile(global_variance, (state_count, 1))
-    start_probabilities = np.full(state_count, 1.0 / state_count, dtype=float)
+    variances = np.tile(global_variance, (HMM_STATE_COUNT, 1))
+    start_probabilities = np.full(HMM_STATE_COUNT, 1.0 / HMM_STATE_COUNT, dtype=float)
     transition_matrix = np.full(
-        (state_count, state_count), 0.10 / (state_count - 1), dtype=float
+        (HMM_STATE_COUNT, HMM_STATE_COUNT),
+        0.10 / (HMM_STATE_COUNT - 1),
+        dtype=float,
     )
     np.fill_diagonal(transition_matrix, 0.90)
     return start_probabilities, transition_matrix, means, variances
 
 
-def _update_gaussian_hmm_parameters(
-    train_values: np.ndarray,
-    gamma: np.ndarray,
-    xi: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    state_count = HMM_STATE_COUNT
-    start_probabilities = gamma[0] + 1e-3
-    start_probabilities /= start_probabilities.sum()
-    transition_matrix = xi + 1e-3
-    transition_matrix /= transition_matrix.sum(axis=1, keepdims=True)
+def _update_hmm_emission_parameters(
+    train_values: np.ndarray, gamma: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
     state_weights = gamma.sum(axis=0)
     if np.any(state_weights <= 1e-8):
         raise ValueError("v4am_hmm_state_support_collapsed")
     means = (gamma.T @ train_values) / state_weights[:, np.newaxis]
-    variances = np.empty((state_count, train_values.shape[1]), dtype=float)
-    for state in range(state_count):
+    variances = np.empty_like(means)
+    for state in range(HMM_STATE_COUNT):
         deviations = train_values - means[state]
         variances[state] = (gamma[:, state, np.newaxis] * deviations**2).sum(
             axis=0
         ) / state_weights[state]
-    variances = np.maximum(variances, HMM_VARIANCE_FLOOR)
-    return start_probabilities, transition_matrix, means, variances
+    return means, np.maximum(variances, HMM_VARIANCE_FLOOR)
 
 
-def _hmm_likelihood_converged(current: float, previous: float) -> bool:
+def _gaussian_hmm_em_step(
+    train_values: np.ndarray,
+    start_probabilities: np.ndarray,
+    transition_matrix: np.ndarray,
+    means: np.ndarray,
+    variances: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, float]:
+    emission = _emission_log_probabilities(train_values, means, variances)
+    gamma, xi, likelihood = _forward_backward(
+        emission, start_probabilities, transition_matrix
+    )
+    next_start = gamma[0] + 1e-3
+    next_start /= next_start.sum()
+    next_transition = xi + 1e-3
+    next_transition /= next_transition.sum(axis=1, keepdims=True)
+    next_means, next_variances = _update_hmm_emission_parameters(train_values, gamma)
+    return next_start, next_transition, next_means, next_variances, likelihood
+
+
+def _hmm_likelihood_converged(previous: float, current: float) -> bool:
     return (
         math.isfinite(previous) and abs(current - previous) <= HMM_CONVERGENCE_TOLERANCE
     )
@@ -304,29 +316,29 @@ def _fit_gaussian_hmm(
     train_values: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]:
     _validate_hmm_training_values(train_values)
-    (
-        start_probabilities,
-        transition_matrix,
-        means,
-        variances,
-    ) = _initialize_gaussian_hmm(train_values)
+    start_probabilities, transition_matrix, means, variances = _initialize_gaussian_hmm(
+        train_values
+    )
     previous_likelihood = -math.inf
-    converged = False
     likelihood = -math.inf
+    converged = False
     iteration_count = 0
     for iteration in range(1, HMM_MAXIMUM_ITERATIONS + 1):
-        emission = _emission_log_probabilities(train_values, means, variances)
-        gamma, xi, likelihood = _forward_backward(
-            emission, start_probabilities, transition_matrix
-        )
         (
             start_probabilities,
             transition_matrix,
             means,
             variances,
-        ) = _update_gaussian_hmm_parameters(train_values, gamma, xi)
+            likelihood,
+        ) = _gaussian_hmm_em_step(
+            train_values,
+            start_probabilities,
+            transition_matrix,
+            means,
+            variances,
+        )
         iteration_count = iteration
-        if _hmm_likelihood_converged(likelihood, previous_likelihood):
+        if _hmm_likelihood_converged(previous_likelihood, likelihood):
             converged = True
             break
         previous_likelihood = likelihood
@@ -337,7 +349,6 @@ def _fit_gaussian_hmm(
         "state_count": HMM_STATE_COUNT,
     }
     return start_probabilities, transition_matrix, means, variances, diagnostics
-
 
 
 def _causal_forward_filter(

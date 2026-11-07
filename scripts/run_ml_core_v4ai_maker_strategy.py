@@ -736,20 +736,22 @@ def _regime_reactive_primary_signal(
     return transformed, signal, diagnostics
 
 
-def _validate_volatility_target_window(features: DataFrame, train_end: int) -> None:
-    column = regime_engine.REALIZED_VOLATILITY_FEATURE
-    if column not in features.columns:
-        raise ValueError("v4am_volatility_target_input_invalid")
-    if isinstance(train_end, bool) or not isinstance(train_end, int):
-        raise ValueError("v4am_volatility_target_input_invalid")
-    if not 1 <= train_end <= len(features):
-        raise ValueError("v4am_volatility_target_input_invalid")
-
-
-def _training_volatility_target(
-    volatility: np.ndarray,
+def _validate_volatility_target_inputs(
+    features: DataFrame,
     train_end: int,
-) -> tuple[float, int]:
+    event_indices: list[int],
+) -> tuple[np.ndarray, float]:
+    column = regime_engine.REALIZED_VOLATILITY_FEATURE
+    if (
+        column not in features.columns
+        or isinstance(train_end, bool)
+        or not isinstance(train_end, int)
+        or not 1 <= train_end <= len(features)
+    ):
+        raise ValueError("v4am_volatility_target_input_invalid")
+    if event_indices != sorted(set(event_indices)):
+        raise ValueError("v4am_position_fraction_event_order_invalid")
+    volatility = pd.to_numeric(features[column], errors="coerce").to_numpy(dtype=float)
     training_values = volatility[:train_end]
     training_values = training_values[
         np.isfinite(training_values) & (training_values > 0.0)
@@ -759,18 +761,14 @@ def _training_volatility_target(
     target_volatility = float(np.median(training_values))
     if not math.isfinite(target_volatility) or target_volatility <= 0.0:
         raise ValueError("v4am_volatility_target_invalid")
-    return target_volatility, len(training_values)
+    return volatility, target_volatility
 
 
-def _validate_position_fraction_event_order(event_indices: list[int]) -> None:
-    if event_indices != sorted(set(event_indices)):
-        raise ValueError("v4am_position_fraction_event_order_invalid")
-
-
-def _event_position_fraction(
+def _event_inverse_volatility_fraction(
     index: int,
-    train_end: int,
     volatility: np.ndarray,
+    *,
+    train_end: int,
     target_volatility: float,
 ) -> float:
     if index < train_end or index >= len(volatility):
@@ -784,13 +782,29 @@ def _event_position_fraction(
     return fraction
 
 
-def _volatility_target_diagnostics(
-    fractions: dict[int, float],
-    target_volatility: float,
-    training_rows: int,
-) -> dict[str, Any]:
+def _volatility_target_position_fractions(
+    features: DataFrame,
+    *,
+    train_end: int,
+    event_indices: list[int],
+) -> tuple[dict[int, float], dict[str, Any]]:
+    volatility, target_volatility = _validate_volatility_target_inputs(
+        features, train_end, event_indices
+    )
+    fractions = {
+        index: _event_inverse_volatility_fraction(
+            index,
+            volatility,
+            train_end=train_end,
+            target_volatility=target_volatility,
+        )
+        for index in event_indices
+    }
     values = list(fractions.values())
-    return {
+    training_rows = int(
+        np.sum(np.isfinite(volatility[:train_end]) & (volatility[:train_end] > 0.0))
+    )
+    diagnostics = {
         "method": "INVERSE_24H_REALIZED_VOLATILITY",
         "target_reference": "MEDIAN_OF_OUTER_TRAIN_24H_REALIZED_VOLATILITY",
         "target_volatility": target_volatility,
@@ -802,31 +816,7 @@ def _volatility_target_diagnostics(
         "fraction_median": float(np.median(values)) if values else None,
         "fraction_max": max(values) if values else None,
     }
-
-
-def _volatility_target_position_fractions(
-    features: DataFrame,
-    *,
-    train_end: int,
-    event_indices: list[int],
-) -> tuple[dict[int, float], dict[str, Any]]:
-    _validate_volatility_target_window(features, train_end)
-    volatility = pd.to_numeric(
-        features[regime_engine.REALIZED_VOLATILITY_FEATURE], errors="coerce"
-    ).to_numpy(dtype=float)
-    target_volatility, training_rows = _training_volatility_target(
-        volatility, train_end
-    )
-    _validate_position_fraction_event_order(event_indices)
-    fractions = {
-        index: _event_position_fraction(index, train_end, volatility, target_volatility)
-        for index in event_indices
-    }
-    diagnostics = _volatility_target_diagnostics(
-        fractions, target_volatility, training_rows
-    )
     return fractions, diagnostics
-
 
 
 def _apply_position_fractions(
@@ -1186,90 +1176,33 @@ def _skipped_decision_rows(
     ]
 
 
-def _candidate_signal_is_accepted(
-    index: int,
-    threshold: float | None,
-    probabilities: dict[int, float] | None,
-) -> bool:
-    if threshold is None:
-        return True
-    if probabilities is None:
-        return False
-    probability = probabilities.get(index)
-    return probability is not None and float(probability) >= threshold
-
-
 def _accepted_candidate_events(
     event_indices: list[int],
     threshold: float | None,
     probabilities: dict[int, float] | None,
 ) -> list[int]:
+    if threshold is None:
+        return list(event_indices)
+    if probabilities is None:
+        return []
     return [
         index
         for index in event_indices
-        if _candidate_signal_is_accepted(index, threshold, probabilities)
+        if probabilities.get(index) is not None
+        and float(probabilities[index]) >= threshold
     ]
 
 
-def _candidate_replay(
-    bars: DataFrame,
-    accepted: list[int],
-    forward_end: int,
-    position_fractions: dict[int, float] | None,
-) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    actions = v4ac._build_forward_actions(bars, accepted, forward_end)
-    if position_fractions is not None:
-        _apply_position_fractions(actions, position_fractions)
-    replay = simulate_signals(
-        bars,
-        actions,
-        _execution_config(),
-        trade_management_config=_trade_management_config(),
-    )
-    return cast(list[dict[str, Any]], replay["trades"]), replay
-
-
-def _candidate_metrics(
-    replay: dict[str, Any],
-    trades: list[dict[str, Any]],
-) -> tuple[dict[str, Any], float]:
-    metrics = v4ac._summarize_replay(replay)
-    metrics.update(_trade_risk_metrics(trades))
-    expectancy = _expectancy(trades)
-    metrics["mean_unscaled_net_expectancy_usd_at_full_equity"] = expectancy
-    return metrics, expectancy
-
-
-def _candidate_filter_name(mode: str) -> str:
-    if mode == ADX_ABLATION:
-        return "ADX14_GT20_DIAGNOSTIC_ABLATION"
-    return "NONE"
-
-
-def _accepted_signal_fraction(accepted_count: int, event_count: int) -> float:
-    if not event_count:
-        return 0.0
-    return accepted_count / event_count
-
-
-def _candidate_sizing_method(
-    position_fractions: dict[int, float] | None,
-) -> str:
-    if position_fractions is not None:
-        return "INVERSE_24H_REALIZED_VOLATILITY"
-    return "FIXED_CONFIG"
-
-
-def _candidate_report(
+def _candidate_summary(
     mode: str,
     event_count: int,
     accepted_count: int,
     threshold: float | None,
+    position_fractions: dict[int, float] | None,
     metrics: dict[str, Any],
     expectancy: float,
     primary_metrics: dict[str, Any] | None,
     primary_expectancy: float | None,
-    position_fractions: dict[int, float] | None,
 ) -> dict[str, Any]:
     return {
         "candidate_id": _candidate_id(mode),
@@ -1277,14 +1210,18 @@ def _candidate_report(
         "timeframe": TIMEFRAME,
         "mode": mode,
         "status": "COMPLETED",
-        "filter": _candidate_filter_name(mode),
+        "filter": "ADX14_GT20_DIAGNOSTIC_ABLATION" if mode == ADX_ABLATION else "NONE",
         "primary_signal_count": event_count,
         "accepted_signal_count": accepted_count,
-        "accepted_signal_fraction": _accepted_signal_fraction(
-            accepted_count, event_count
-        ),
+        "accepted_signal_fraction": accepted_count / event_count
+        if event_count
+        else 0.0,
         "selected_meta_probability_threshold": threshold,
-        "position_sizing_method": _candidate_sizing_method(position_fractions),
+        "position_sizing_method": (
+            "INVERSE_24H_REALIZED_VOLATILITY"
+            if position_fractions is not None
+            else "FIXED_CONFIG"
+        ),
         "metrics": metrics,
         "acceptance_target_met": _candidate_passes(
             metrics, expectancy, primary_metrics, primary_expectancy
@@ -1294,14 +1231,12 @@ def _candidate_report(
 
 
 def _enrich_candidate_trades(
-    trades: list[dict[str, Any]],
-    candidate: dict[str, Any],
-    mode: str,
+    trades: list[dict[str, Any]], candidate_id: str, mode: str
 ) -> list[dict[str, Any]]:
     return [
         {
             **trade,
-            "candidate_id": candidate["candidate_id"],
+            "candidate_id": candidate_id,
             "symbol": SYMBOL,
             "timeframe": TIMEFRAME,
             "mode": mode,
@@ -1326,25 +1261,36 @@ def _run_candidate(
     position_fractions: dict[int, float] | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
     accepted = _accepted_candidate_events(event_indices, threshold, probabilities)
-    trades, replay = _candidate_replay(bars, accepted, forward_end, position_fractions)
-    metrics, expectancy = _candidate_metrics(replay, trades)
-    candidate = _candidate_report(
+    actions = v4ac._build_forward_actions(bars, accepted, forward_end)
+    if position_fractions is not None:
+        _apply_position_fractions(actions, position_fractions)
+    replay = simulate_signals(
+        bars,
+        actions,
+        _execution_config(),
+        trade_management_config=_trade_management_config(),
+    )
+    trades = cast(list[dict[str, Any]], replay["trades"])
+    metrics = v4ac._summarize_replay(replay)
+    metrics.update(_trade_risk_metrics(trades))
+    expectancy = _expectancy(trades)
+    metrics["mean_unscaled_net_expectancy_usd_at_full_equity"] = expectancy
+    candidate = _candidate_summary(
         mode,
         len(event_indices),
         len(accepted),
         threshold,
+        position_fractions,
         metrics,
         expectancy,
         primary_metrics,
         primary_expectancy,
-        position_fractions,
     )
-    enriched = _enrich_candidate_trades(trades, candidate, mode)
+    enriched = _enrich_candidate_trades(trades, str(candidate["candidate_id"]), mode)
     decisions = _decision_rows(
         bars, event_indices, probabilities, threshold, mode, position_fractions
     )
     return candidate, enriched, decisions
-
 
 
 def _skipped_meta_candidate(reason: str, event_count: int) -> dict[str, Any]:
@@ -1689,52 +1635,11 @@ def _validate_regime_chronological_bounds(
         raise ValueError("v4ai_report_hmm_causality_contract_invalid")
 
 
-def _validate_report_hmm_fit_scope(regime: dict[str, Any]) -> None:
-    valid = (
-        regime.get("fit_scope") == "OUTER_TRAIN_ONLY"
-        and regime.get("estimation_method") == "BAUM_WELCH_TRAINING_SLICE_ONLY"
-        and regime.get("fit_rows", 0) >= regime_engine.HMM_MINIMUM_TRAIN_ROWS
-    )
-    if not valid:
-        raise ValueError("v4ai_report_hmm_causality_contract_invalid")
-
-
-def _validate_report_hmm_posterior(regime: dict[str, Any]) -> None:
-    valid = (
-        regime.get("posterior_method") == "CAUSAL_FORWARD_FILTER"
-        and regime.get("smoothing_used") is False
-        and regime.get("lookahead_used") is False
-    )
-    if not valid:
-        raise ValueError("v4ai_report_hmm_causality_contract_invalid")
-
-
-def _validate_report_hmm_windows(
-    regime: dict[str, Any],
-    chronological: dict[str, Any],
-) -> None:
-    valid = (
-        regime.get("fit_end_index_exclusive")
-        == chronological.get("train_end_index_exclusive")
-        and regime.get("apply_end_index_exclusive")
-        == chronological.get("forward_validation_end_index_exclusive")
-        and regime.get("final_holdout_features_unavailable") is True
-    )
-    if not valid:
-        raise ValueError("v4ai_report_hmm_causality_contract_invalid")
-
-
 def _validate_report_regime(report: dict[str, Any]) -> None:
     regime = report.get("regime_diagnostics", {})
     chronological = report.get("chronological_evaluation", {})
-    if regime.get("algorithm") != "GAUSSIAN_HMM_DIAGONAL":
-        raise ValueError("v4ai_report_hmm_causality_contract_invalid")
-    if regime.get("state_count") != regime_engine.HMM_STATE_COUNT:
-        raise ValueError("v4ai_report_hmm_causality_contract_invalid")
-    _validate_report_hmm_fit_scope(regime)
-    _validate_report_hmm_posterior(regime)
-    _validate_report_hmm_windows(regime, chronological)
-
+    _validate_regime_model_identity(regime)
+    _validate_regime_chronological_bounds(regime, chronological)
 
 
 def _validate_report_geometry(report: dict[str, Any]) -> None:
