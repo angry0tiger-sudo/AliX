@@ -688,7 +688,6 @@ def _hmm_feature_inputs(
     return transformed, diagnostics
 
 
-
 def _regime_features(
     features: DataFrame,
     *,
@@ -1665,7 +1664,6 @@ def _validate_report_selector_parameters(diagnostics: dict[str, Any]) -> None:
     )
     if not valid:
         raise ValueError("v4ai_report_regime_selector_invalid")
-
 
 
 def _validate_report_sizing_parameters(diagnostics: dict[str, Any]) -> None:
