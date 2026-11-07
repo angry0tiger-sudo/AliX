@@ -133,8 +133,15 @@ EXIT_POLICIES: tuple[dict[str, float | str], ...] = (
 
 
 def _performance_log(stage: str, event: str, **details: Any) -> None:
-    record = {"component": "V4AN_PERFORMANCE", "stage": stage, "event": event, **details}
-    print("V4AN_PERF " + json.dumps(record, sort_keys=True, allow_nan=False), flush=True)
+    record = {
+        "component": "V4AN_PERFORMANCE",
+        "stage": stage,
+        "event": event,
+        **details,
+    }
+    print(
+        "V4AN_PERF " + json.dumps(record, sort_keys=True, allow_nan=False), flush=True
+    )
 
 
 def _log_oof_progress(
@@ -394,7 +401,9 @@ def _label_one_oof_event(
     event_index = int(event["event_index"])
     if event.get("primary_signal") != "BUY" or event.get("primary_oof") is not True:
         raise ValueError("v4ai_oof_labels_require_oof_primary_buy_events")
-    selected_management = _trade_management_config() if management is None else management
+    selected_management = (
+        _trade_management_config() if management is None else management
+    )
     horizon = int(selected_management.horizon_candles)
     if event_index + horizon >= train_end:
         return None
@@ -2273,7 +2282,9 @@ def run_v4ai(
 ) -> dict[str, Any]:
     _validate_request(days, commit_sha)
     run_started = time.perf_counter()
-    _performance_log("run", "start", commit_sha=commit_sha, days=days, timeframe=TIMEFRAME)
+    _performance_log(
+        "run", "start", commit_sha=commit_sha, days=days, timeframe=TIMEFRAME
+    )
     data_stage_started = time.perf_counter()
     (
         provenance,
@@ -2404,7 +2415,11 @@ def run_v4ai(
         "complete",
         elapsed_seconds=round(time.perf_counter() - meta_stage_started, 3),
         meta_enabled=meta.get("skip_reason") is None,
-        oof_labels=int(meta.get("training_diagnostics", {}).get("matured_costed_oof_label_count", 0)),
+        oof_labels=int(
+            meta.get("training_diagnostics", {}).get(
+                "matured_costed_oof_label_count", 0
+            )
+        ),
     )
     if meta.get("skip_reason") is None:
         probabilities = _forward_probability_map(
