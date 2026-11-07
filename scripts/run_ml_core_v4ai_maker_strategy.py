@@ -884,7 +884,7 @@ def _forward_probability_map(
 def _candidate_id(mode: str) -> str:
     if mode not in CANDIDATE_NAMES:
         raise ValueError("v4ai_candidate_mode_invalid")
-    return f"{SYMBOL}|{TIMEFRAME}|CUSUM_HMM_REGIME_REACTIVE|{mode}"
+    return f"{SYMBOL}|{TIMEFRAME}|HMM_REGIME_ADAPTIVE_NO_CUSUM|{mode}"
 
 
 def _profit_factor(metrics: dict[str, Any]) -> float:
@@ -1374,6 +1374,7 @@ def _run_exit_geometry_matrix(
                 "take_profit_atr": policy["take_profit_atr"],
                 "trailing_activation_atr": policy["trailing_activation_atr"],
                 "trailing_step_atr": policy["trailing_step_atr"],
+                "horizon_candles": int(PRIMARY_GEOMETRY["horizon_bars"]),
                 "fee_bps_per_side": FEE_BPS_PER_SIDE,
                 "slippage_bps_per_side": SLIPPAGE_BPS_PER_SIDE,
                 "round_trip_cost_bps": ROUND_TRIP_COST_BPS,
@@ -1457,7 +1458,11 @@ def _validate_exit_matrix_cell_cost(cell: dict[str, Any]) -> None:
 
 
 def _validate_exit_matrix_cell_market(cell: dict[str, Any]) -> None:
-    if cell.get("symbol") != SYMBOL or cell.get("timeframe") != TIMEFRAME:
+    if (
+        cell.get("symbol") != SYMBOL
+        or cell.get("timeframe") != TIMEFRAME
+        or cell.get("horizon_candles") != int(PRIMARY_GEOMETRY["horizon_bars"])
+    ):
         raise ValueError("v4ai_exit_matrix_cell_invalid")
 
 
@@ -1811,29 +1816,30 @@ def _format_acceptance(item: dict[str, Any]) -> str:
 
 def _render_step_summary_header(report: dict[str, Any]) -> list[str]:
     return [
-        "## AliX V4-AM ETHUSDT CUSUM + Gaussian HMM Regime-Reactive Validation",
+        "## AliX V4-AN ETHUSDT 30m HMM Regime-Adaptive Economic Validation",
         "",
         f"Commit SHA: {report['commit_sha']}",
-        "Scope: ETHUSDT Spot, 1h, 1825 days requested with trim to latest contiguous segment, public OHLCV only.",
-        "Primary event trigger: two-sided CUSUM on closed-bar log returns, standardized by trailing 24-bar volatility; threshold=2.0 sigma.",
-        "Regime model: diagonal Gaussian HMM(3), estimated on outer-train only; forward validation uses causal forward-filter posterior, never smoothed posterior.",
-        "Hard selector: dominant HMM posterior only; Trending Up selects Donchian(20) breakout, Ranging selects Wilder RSI(14)<30 after negative CUSUM, Trending Down is long-only Spot risk-off.",
-        "No soft strategy blend and no Short entries: the existing economic simulator is Spot-long only.",
-        "Primary ADX filter: DISABLED; ADX20 is diagnostic-ablation only.",
-        "Execution: closed-candle signal, next-bar-open entry, no pyramiding.",
-        "Volatility targeting: position fraction = min(1, outer-train median 24-bar realized volatility / event-time realized volatility). No leverage.",
+        "Scope: ETHUSDT Spot, 30m analysis bars built from provenance-verified 1m public OHLCV; 1825 days requested with trim to latest contiguous segment.",
+        "Primary event trigger: every completed 30m candle is evaluated; no CUSUM event or CUSUM-derived filter is used.",
+        "HMM input volatility: trailing 48-bar realized volatility (24 hours on 30m bars); diagonal Gaussian HMM(3) is fit on outer-train only and forward-filtered causally.",
+        "Hard selector: dominant HMM posterior only; Trending Up buys on Close > EMA50, Ranging buys on Wilder RSI(14)<45, Trending Down remains flat.",
+        "No soft strategy blend, no short entries, no pyramiding, and no leverage; the economic simulator remains Spot-long only.",
+        "Execution: closed 30m candle signal, next-bar-open entry.",
+        "ADX20 remains diagnostic-ablation only and does not gate the Primary candidate.",
+        "Volatility targeting: inverse 24-hour realized volatility from the 48-bar feature, using the outer-train median and a 1x cap.",
         "Maker-cost assumption: 10 bps fee + 5 bps slippage per side = 30 bps round trip.",
         "Important: fixed maker-fee proxy only; passive Limit queue/partial-fill mechanics are not simulated.",
         "Risk returns: net closed-trade returns; Sharpe and Sortino are per-trade, not calendar-annualized; Sortino target=0.",
         "DSR: Bailey-López de Prado expected-maximum-Sharpe deflation; DSR Z is unbounded and DSR probability=Phi(Z) is in [0, 1].",
         "DSR trials are limited to each current-run comparison cohort; historical trials are not included and trial independence is unverified.",
         "Z.AI diagnostic reference (not a promotion gate): Net PF >1.1 and DSR Z >1.0; the existing Net PF >1.5 acceptance gate remains unchanged.",
-        "Fixed candidate geometry: SL=1.5 ATR, TP=2.5 ATR, activation=1.5 ATR, step=2.0 ATR, horizon=24 bars.",
+        "Fixed candidate geometry: SL=1.5 ATR, TP=2.5 ATR, activation=1.5 ATR, step=2.0 ATR, horizon=48 bars.",
         "Training: outer 70%; purged OOF Fit/Temperature/Threshold slices=70/15/15.",
         "Evaluation: next 15% forward validation; final 15% holdout untouched.",
-        "Meta: LightGBM + TreeSHAP top-30 Fit-only selection; HMM posterior probabilities and CUSUM drift magnitude are explicit Meta features. No LSTM/sequence model.",
+        "Meta: LightGBM + TreeSHAP top-30 Fit-only selection; causal HMM posterior probabilities, 48-bar realized volatility, EMA and RSI features are used; no CUSUM feature, no LSTM/sequence model.",
         "Meta cutoff: accept the upper 70% of probabilities using the 30th percentile order statistic on the third purged OOF slice; ties are included.",
     ]
+
 
 
 def _render_candidate_row(item: dict[str, Any]) -> str:
@@ -1879,7 +1885,7 @@ def _render_meta_diagnostics(report: dict[str, Any]) -> list[str]:
     temperature_counts = split.get("temperature_class_counts", {})
     threshold_counts = split.get("threshold_class_counts", {})
     primary = report.get("primary_signal_diagnostics", {})
-    cusum = primary.get("cusum", {})
+    hmm_features = primary.get("hmm_features", {})
     selector = primary.get("selector", {})
     sizing = primary.get("volatility_targeting", {})
     regime = report.get("regime_diagnostics", {})
@@ -1889,21 +1895,20 @@ def _render_meta_diagnostics(report: dict[str, Any]) -> list[str]:
             f"Dataset provenance: requested_days={report['dataset_provenance'].get('requested_days', 'N/A')}; "
             f"1m_rows={report['dataset_provenance'].get('row_count', 'N/A')}; "
             f"missing_minutes={report['dataset_provenance'].get('missing_minute_intervals', 0)}; "
-            f"hourly_bars_after_trim={report.get('bar_count', 0)}; "
+            f"30m_bars_after_trim={report.get('bar_count', 0)}; "
             f"trim={report['dataset_provenance'].get('resample_gap_trim', {}).get('status', 'N/A')}; "
             f"trimmed_bars={report['dataset_provenance'].get('resample_gap_trim', {}).get('trimmed_bars', 0)}; "
             f"contiguous_start={report['dataset_provenance'].get('resample_gap_trim', {}).get('segment_start_utc', 'N/A')}."
         ),
         (
-            f"CUSUM: threshold={cusum.get('threshold_sigma', 'N/A')} sigma; "
-            f"window={cusum.get('rolling_window_bars', 'N/A')}; "
-            f"positive/negative/total events={cusum.get('positive_event_count', 0)}/"
-            f"{cusum.get('negative_event_count', 0)}/{cusum.get('total_event_count', 0)}; "
-            f"lookahead={cusum.get('lookahead_used', 'N/A')}."
+            f"HMM input volatility window={hmm_features.get('realized_volatility_window_bars', 'N/A')} bars; "
+            f"valid volatility rows={hmm_features.get('valid_realized_volatility_rows', 0)}; "
+            f"lookahead={hmm_features.get('lookahead_used', 'N/A')}; "
+            f"CUSUM used={hmm_features.get('cusum_used', 'N/A')}."
         ),
         (
-            f"Hard selector: momentum/Donchian signals={selector.get('momentum_signal_count', 0)}; "
-            f"mean-reversion/RSI signals={selector.get('mean_reversion_signal_count', 0)}; "
+            f"Hard selector: Close>EMA50 signals={selector.get('momentum_signal_count', 0)}; "
+            f"RSI<45 ranging signals={selector.get('mean_reversion_signal_count', 0)}; "
             f"dominant regimes Up/Down-risk-off/Range="
             f"{selector.get('dominant_trending_up_rows', 0)}/"
             f"{selector.get('dominant_trending_down_risk_off_rows', 0)}/"
@@ -1985,27 +1990,6 @@ def _render_meta_diagnostics(report: dict[str, Any]) -> list[str]:
         ),
     ]
 
-
-def _render_exit_geometry_row(cell: dict[str, Any]) -> str:
-    return (
-        f"| {cell['policy']} | {float(cell['initial_stop_atr']):.1f} "
-        f"| {float(cell['take_profit_atr']):.1f} "
-        f"| {float(cell['trailing_activation_atr']):.1f} "
-        f"| {float(cell['trailing_step_atr']):.1f} "
-        f"| {float(cell['round_trip_cost_bps']):.0f} "
-        f"| {cell['trade_count']} "
-        f"| {_format_optional_percent(cell['win_rate'], 100.0)} "
-        f"| {_format_pf(cell)} "
-        f"| {_format_optional_percent(cell['max_drawdown_percent'])} "
-        f"| {_format_optional_ratio(cell.get('dsr_z_score'))} "
-        f"| {_format_optional_ratio(cell.get('dsr_probability'))} "
-        f"| {cell.get('dsr_trial_count', 'N/A')} "
-        f"| {_format_optional_ratio(cell.get('sortino_ratio_per_trade'))} "
-        f"| {_format_diagnostic_flag(cell.get('zai_net_pf_gt_1_1'))} "
-        f"| {_format_diagnostic_flag(cell.get('zai_dsr_z_gt_1_0'))} "
-        f"| {_format_optional_fixed(cell['net_pnl_total_usd'], 2)} "
-        f"| {_format_optional_fixed(cell['mean_unscaled_net_expectancy_usd_at_full_equity'], 4)} |"
-    )
 
 
 def _render_exit_geometry_section(cells: list[dict[str, Any]]) -> list[str]:
@@ -2146,13 +2130,19 @@ def run_v4ai(
         base_features,
         _legacy_breakout_signal,
     ) = v4af._load_research_context(
-        input_dir, days, commit_sha, allow_exchange_gaps=ALLOW_EXCHANGE_GAPS
+        input_dir,
+        days,
+        commit_sha,
+        allow_exchange_gaps=ALLOW_EXCHANGE_GAPS,
+        timeframe=TIMEFRAME,
     )
     technical_features, _legacy_static_signal, _technical_diagnostics = (
         _ema_trend_rsi_primary_features(research_bars, base_features)
     )
-    features, cusum_diagnostics = _cusum_features(
-        research_bars, technical_features, apply_end=forward_end
+    features, hmm_feature_diagnostics = _hmm_feature_inputs(
+        research_bars,
+        technical_features,
+        apply_end=forward_end,
     )
     features, regime_diagnostics = _regime_features(
         features, train_end=train_end, apply_end=forward_end
@@ -2163,23 +2153,33 @@ def run_v4ai(
     adx_ablation_signal, adx_ablation_diagnostics = _apply_adx_ablation(
         primary_signal, features
     )
+    horizon_candles = int(PRIMARY_GEOMETRY["horizon_bars"])
     primary_window_counts, train_gate, primary_event_indices = (
-        v4af._primary_signal_evaluation(primary_signal, train_end, forward_end)
+        v4af._primary_signal_evaluation(
+            primary_signal,
+            train_end,
+            forward_end,
+            horizon_candles=horizon_candles,
+            train_start_index=REGIME_WARMUP_BARS,
+        )
     )
     adx_ablation_event_indices = v4af._eligible_primary_event_indices(
-        adx_ablation_signal, train_end, forward_end
+        adx_ablation_signal,
+        train_end,
+        forward_end,
+        horizon_candles=horizon_candles,
     )
     position_fractions, sizing_diagnostics = _volatility_target_position_fractions(
         features, train_end=train_end, event_indices=primary_event_indices
     )
     primary_signal_diagnostics = {
         "generation": PRIMARY_SIGNAL_GENERATION,
-        "cusum": cusum_diagnostics,
+        "hmm_features": hmm_feature_diagnostics,
         "selector": selector_diagnostics,
         "volatility_targeting": sizing_diagnostics,
         "research_signal_count_target": RESEARCH_SIGNAL_COUNT_TARGET,
         "lookahead_used": False,
-        "execution_timing": "CLOSED_1H_BAR_NEXT_BAR_OPEN",
+        "execution_timing": "CLOSED_30M_BAR_NEXT_BAR_OPEN",
     }
     signal_counts = {
         "primary_buy_count": int(primary_signal.sum()),
@@ -2291,6 +2291,7 @@ def run_v4ai(
     summary = _render_step_summary(report)
     print(summary, end="")
     return report
+
 
 
 def main() -> int:
