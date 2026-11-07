@@ -955,7 +955,7 @@ def test_step_summary_discloses_maker_proxy_and_fill_model_limitation() -> None:
     assert "research target >=100=PASS" in summary
     assert "Meta outer-train minimum=50" in summary
     assert "ADX20 diagnostic-ablation BUYs: 400." in summary
-    assert "diagnostic ablation" in summary
+    assert "ADX20 diagnostic-ablation BUYs:" in summary
     assert "30 bps round trip" in summary
     assert "passive Limit queue/partial-fill mechanics are not simulated" in summary
     assert "ROC-AUC=0.52" in summary
