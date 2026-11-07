@@ -217,7 +217,9 @@ def test_execution_cost_is_locked_to_thirty_bps() -> None:
         )
 
 
-def test_close_above_ema50_with_rsi45_feature_is_causal_and_drops_breakout_features() -> None:
+def test_close_above_ema50_with_rsi45_feature_is_causal_and_drops_breakout_features() -> (
+    None
+):
     rising = np.linspace(100.0, 250.0, 240)
     pullback = 250.0 - np.arange(1, 16, dtype=float) * 0.5
     bars = DataFrame({"close": np.concatenate((rising, pullback))})
@@ -954,8 +956,14 @@ def test_step_summary_discloses_maker_proxy_and_fill_model_limitation() -> None:
         }
     )
     summary = v4ai._render_step_summary(report)
-    assert "Primary event trigger: every completed 30m candle is evaluated; no CUSUM event or CUSUM-derived filter is used." in summary
-    assert "Fixed candidate geometry: SL=1.5 ATR, TP=2.5 ATR, activation=1.5 ATR, step=2.0 ATR, horizon=48 bars." in summary
+    assert (
+        "Primary event trigger: every completed 30m candle is evaluated; no CUSUM event or CUSUM-derived filter is used."
+        in summary
+    )
+    assert (
+        "Fixed candidate geometry: SL=1.5 ATR, TP=2.5 ATR, activation=1.5 ATR, step=2.0 ATR, horizon=48 bars."
+        in summary
+    )
     assert "PRIMARY_HMM_REGIME_ADAPTIVE_30M_30BPS" in summary
     assert "META_TOP_70_HMM_REGIME_ADAPTIVE_30M_30BPS" in summary
     assert "Primary BUYs research/train/forward: 800/560/120" in summary
@@ -1007,7 +1015,9 @@ def test_dataset_scope_expanded_to_1825_days_with_disclosed_gap_policy() -> None
         v4ai._validate_request(730, "a" * 40)
 
 
-def test_regime_reactive_selector_uses_only_the_dominant_strategy_without_cusum() -> None:
+def test_regime_reactive_selector_uses_only_the_dominant_strategy_without_cusum() -> (
+    None
+):
     rows = 100
     bars = DataFrame({"close": np.full(rows, 100.0)})
     features = _primary_feature_frame(rows)
@@ -1047,9 +1057,7 @@ def test_hmm_feature_inputs_use_48_bar_volatility_and_mask_holdout() -> None:
     bars = DataFrame({"close": close})
     base = _primary_feature_frame(rows)
 
-    features, diagnostics = v4ai._hmm_feature_inputs(
-        bars, base, apply_end=100
-    )
+    features, diagnostics = v4ai._hmm_feature_inputs(bars, base, apply_end=100)
     volatility = features[regime_engine.REALIZED_VOLATILITY_FEATURE]
     assert diagnostics["realized_volatility_window_bars"] == 48
     assert diagnostics["lookahead_used"] is False
@@ -1072,7 +1080,6 @@ def test_hmm_feature_inputs_use_48_bar_volatility_and_mask_holdout() -> None:
         prefix_features[regime_engine.REALIZED_VOLATILITY_FEATURE],
         check_names=False,
     )
-
 
 
 def test_inverse_volatility_targeting_uses_train_median_and_caps_at_one() -> None:

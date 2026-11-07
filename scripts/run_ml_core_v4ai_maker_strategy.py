@@ -287,7 +287,6 @@ def _ema_trend_rsi_primary_features(
     return features, signal, diagnostics
 
 
-
 def _generate_primary_oof_events(
     primary_signal: Series,
     start_index: int,
@@ -667,7 +666,6 @@ def _hmm_feature_inputs(
     return transformed, diagnostics
 
 
-
 def _regime_features(
     features: DataFrame,
     *,
@@ -701,9 +699,8 @@ def _regime_reactive_primary_signal(
         raise ValueError("v4an_selector_input_schema_invalid")
     close = pd.to_numeric(bars["close"], errors="coerce").reset_index(drop=True)
     close_values = close.to_numpy(dtype=float)
-    if (
-        not np.isfinite(close_values[:apply_end]).all()
-        or bool((close.iloc[:apply_end] <= 0.0).any())
+    if not np.isfinite(close_values[:apply_end]).all() or bool(
+        (close.iloc[:apply_end] <= 0.0).any()
     ):
         raise ValueError("v4an_selector_market_values_invalid")
     hmm_columns = [
@@ -723,11 +720,7 @@ def _regime_reactive_primary_signal(
     ema50_distance = pd.to_numeric(
         features[EMA50_DISTANCE_FEATURE], errors="coerce"
     ).to_numpy(dtype=float)
-    valid = (
-        valid_hmm
-        & np.isfinite(rsi)
-        & np.isfinite(ema50_distance)
-    )
+    valid = valid_hmm & np.isfinite(rsi) & np.isfinite(ema50_distance)
     trending_up = valid & (dominant == 0)
     trending_down = valid & (dominant == 1)
     ranging = valid & (dominant == 2)
@@ -762,7 +755,6 @@ def _regime_reactive_primary_signal(
         "execution_timing": "CLOSED_30M_BAR_NEXT_BAR_OPEN",
     }
     return features.reset_index(drop=True), signal, diagnostics
-
 
 
 def _validate_volatility_target_inputs(
@@ -1603,7 +1595,6 @@ def _validate_report_hmm_feature_parameters(
         raise ValueError("v4an_report_hmm_feature_contract_invalid")
 
 
-
 def _validate_report_selector_parameters(diagnostics: dict[str, Any]) -> None:
     selector = diagnostics.get("selector", {})
     valid = (
@@ -1615,8 +1606,7 @@ def _validate_report_selector_parameters(diagnostics: dict[str, Any]) -> None:
         and selector.get("range_rsi_threshold") == RANGE_RSI_ENTRY_THRESHOLD
         and selector.get("momentum_strategy")
         == "CLOSE_ABOVE_EMA50_TRENDING_UP_ONLY_SPOT_LONG"
-        and selector.get("mean_reversion_strategy")
-        == "WILDER_RSI14_LT45_RANGING_ONLY"
+        and selector.get("mean_reversion_strategy") == "WILDER_RSI14_LT45_RANGING_ONLY"
         and selector.get("downtrend_policy") == "RISK_OFF_NO_LONG_ENTRY_SPOT_ONLY"
         and selector.get("no_cusum_filter") is True
         and selector.get("short_entries_enabled") is False
@@ -1624,7 +1614,6 @@ def _validate_report_selector_parameters(diagnostics: dict[str, Any]) -> None:
     )
     if not valid:
         raise ValueError("v4ai_report_regime_selector_invalid")
-
 
 
 def _validate_report_sizing_parameters(diagnostics: dict[str, Any]) -> None:
@@ -1845,7 +1834,6 @@ def _render_step_summary_header(report: dict[str, Any]) -> list[str]:
     ]
 
 
-
 def _render_candidate_row(item: dict[str, Any]) -> str:
     metrics = item["metrics"]
     return (
@@ -1993,7 +1981,6 @@ def _render_meta_diagnostics(report: dict[str, Any]) -> list[str]:
             f"selected OOF fraction={threshold.get('selected_fraction', 'N/A')}."
         ),
     ]
-
 
 
 def _render_exit_geometry_row(cell: dict[str, Any]) -> str:
@@ -2316,7 +2303,6 @@ def run_v4ai(
     summary = _render_step_summary(report)
     print(summary, end="")
     return report
-
 
 
 def main() -> int:

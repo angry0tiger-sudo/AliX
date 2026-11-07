@@ -1007,7 +1007,6 @@ def _trim_to_latest_contiguous_hourly_segment(
     return _trim_to_latest_contiguous_segment(bars, timeframe)
 
 
-
 def _load_research_context(
     input_dir: Path,
     days: int,
@@ -1061,7 +1060,6 @@ def _load_research_context(
     )
 
 
-
 def _primary_signal_evaluation(
     primary_buy_signal: Series,
     train_end: int,
@@ -1089,7 +1087,6 @@ def _primary_signal_evaluation(
         horizon_candles=horizon_candles,
     )
     return signal_counts, train_gate, event_indices
-
 
 
 def _run_unfiltered_control(
