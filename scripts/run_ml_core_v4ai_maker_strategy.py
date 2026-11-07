@@ -1783,6 +1783,7 @@ def _render_step_summary_header(report: dict[str, Any]) -> list[str]:
         "Regime model: diagonal Gaussian HMM(3), estimated on outer-train only; forward validation uses causal forward-filter posterior, never smoothed posterior.",
         "Hard selector: dominant HMM posterior only; Trending Up selects Donchian(20) breakout, Ranging selects Wilder RSI(14)<30 after negative CUSUM, Trending Down is long-only Spot risk-off.",
         "No soft strategy blend and no Short entries: the existing economic simulator is Spot-long only.",
+        "Primary ADX filter: DISABLED; ADX20 is diagnostic-ablation only.",
         "Execution: closed-candle signal, next-bar-open entry, no pyramiding.",
         "Volatility targeting: position fraction = min(1, outer-train median 24-bar realized volatility / event-time realized volatility). No leverage.",
         "Maker-cost assumption: 10 bps fee + 5 bps slippage per side = 30 bps round trip.",
