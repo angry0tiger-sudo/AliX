@@ -17,6 +17,7 @@ from pandas import DataFrame, Series
 
 import scripts.run_ml_core_v4ac_cost_optimization as v4ac
 import scripts.run_ml_core_v4af_meta_final as v4af
+from scripts.run_ml_core_real_data_baseline import TIMEFRAME_MINUTES
 from services.meta_labeling import v4ah as advanced
 from services.meta_labeling import v4am as regime_engine
 from services.meta_labeling.v4x import (
@@ -134,7 +135,7 @@ def _validate_request(days: int, commit_sha: str) -> None:
     )
     if days != DAYS or not valid_sha:
         raise ValueError("v4ai_request_identity_invalid")
-    if v4af.SYMBOL != SYMBOL or TIMEFRAME not in v4af.TIMEFRAME_MINUTES:
+    if v4af.SYMBOL != SYMBOL or TIMEFRAME not in TIMEFRAME_MINUTES:
         raise ValueError("v4ai_market_scope_invalid")
     _validate_cost_contract(_execution_config())
 
