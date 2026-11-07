@@ -615,6 +615,35 @@ def test_trim_helper_cuts_at_last_gap_only() -> None:
     assert len(trimmed) == 25
 
 
+def test_trim_helper_supports_uniform_30m_bars_and_trims_at_gaps() -> None:
+    bars = _bars(rows=48)
+    bars["date"] = pd.date_range(
+        "2024-01-01T00:00:00Z", periods=48, freq="30min"
+    )
+    trimmed, diagnostics = v4af._trim_to_latest_contiguous_segment(bars, "30m")
+    assert len(trimmed) == 48
+    assert diagnostics["status"] == "NO_GAP"
+
+    with_gap = pd.concat([bars.iloc[:20], bars.iloc[23:]], ignore_index=True)
+    latest, gap_diagnostics = v4af._trim_to_latest_contiguous_segment(
+        with_gap, "30m"
+    )
+    assert gap_diagnostics["status"] == "TRIMMED_TO_LATEST_CONTIGUOUS_SEGMENT"
+    assert gap_diagnostics["trimmed_bars"] == 20
+    assert len(latest) == 25
+
+
+def test_primary_event_eligibility_uses_explicit_48_bar_horizon() -> None:
+    signal = pd.Series([True] * 200, dtype=bool)
+    events = v4af._eligible_primary_event_indices(
+        signal, 70, 180, horizon_candles=48
+    )
+    assert events
+    assert events[0] == 70
+    assert events[-1] == 130
+    assert len(events) == 61
+
+
 def test_minute_validator_allows_only_the_documented_exchange_gap() -> None:
     stamps = pd.date_range("2023-03-24T00:00:00Z", periods=1440, freq="min").delete(
         slice(760, 840)

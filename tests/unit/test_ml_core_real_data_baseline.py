@@ -89,6 +89,19 @@ def test_resample_uses_only_complete_candles() -> None:
     assert (bars["volume"] == 15.0).all()
 
 
+def test_resample_30m_uses_only_complete_candles() -> None:
+    bars = resample_ohlcv(minute_frame(rows=65), "30m")
+
+    assert len(bars) == 2
+    assert bars["date"].tolist() == [
+        pd.Timestamp("2026-01-01T00:00:00Z"),
+        pd.Timestamp("2026-01-01T00:30:00Z"),
+    ]
+    assert (bars["volume"] == 30.0).all()
+    assert bars["close"].iloc[0] == minute_frame(rows=65)["close"].iloc[29]
+    assert bars["close"].iloc[1] == minute_frame(rows=65)["close"].iloc[59]
+
+
 def test_resample_rejects_minute_gaps() -> None:
     candles = minute_frame().drop(index=17).reset_index(drop=True)
 
