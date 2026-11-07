@@ -275,6 +275,7 @@ def _ema_trend_rsi_primary_features(
     signal.name = "primary_buy_signal"
     return features, signal, diagnostics
 
+
 def _generate_primary_oof_events(
     primary_signal: Series,
     start_index: int,
@@ -1260,7 +1261,8 @@ def _validate_report_primary_filter(report: dict[str, Any]) -> None:
         and diagnostics.get("ema_slow_period") == EMA_SLOW_PERIOD
         and diagnostics.get("rsi_comparison") == "STRICT_LT"
         and diagnostics.get("trend_comparison") == "EMA50_STRICTLY_ABOVE_EMA200"
-        and diagnostics.get("research_signal_count_target") == RESEARCH_SIGNAL_COUNT_TARGET
+        and diagnostics.get("research_signal_count_target")
+        == RESEARCH_SIGNAL_COUNT_TARGET
         and diagnostics.get("lookahead_used") is False
     )
     if not valid:
@@ -1520,7 +1522,9 @@ def _render_meta_diagnostics(report: dict[str, Any]) -> list[str]:
         (
             f"WARNING: Meta was skipped ({meta.get('skip_reason')}); Primary metrics remain reportable, "
             "Meta validation is unavailable, and promotion remains blocked."
-        ) if not meta.get("enabled") else "Meta model trained; forward validation is reported separately.",
+        )
+        if not meta.get("enabled")
+        else "Meta model trained; forward validation is reported separately.",
         (
             f"Regime: KMeans clusters={report.get('regime_diagnostics', {}).get('cluster_count', 'N/A')}; "
             f"fit rows={report.get('regime_diagnostics', {}).get('fit_rows', 0)}."
@@ -1721,7 +1725,9 @@ def run_v4ai(
     )
     signal_counts = {
         "primary_buy_count": int(primary_signal.sum()),
-        "train_primary_buy_count": int(primary_window_counts["train_primary_buy_count"]),
+        "train_primary_buy_count": int(
+            primary_window_counts["train_primary_buy_count"]
+        ),
         "forward_validation_primary_buy_count": int(
             primary_window_counts["forward_validation_primary_buy_count"]
         ),

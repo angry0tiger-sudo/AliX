@@ -247,15 +247,11 @@ def test_primary_oof_events_use_the_v4ak_signal_generation() -> None:
         [False] * 200 + [index % 4 == 0 for index in range(600)],
         dtype=bool,
     )
-    events = v4ai._generate_primary_oof_events(
-        signal, start_index=200, stop_index=800
-    )
+    events = v4ai._generate_primary_oof_events(signal, start_index=200, stop_index=800)
     assert len(events) >= 100
     assert events["primary_oof"].all()
     assert events["primary_signal"].eq("BUY").all()
-    assert events["primary_signal_generation"].eq(
-        v4ai.PRIMARY_SIGNAL_GENERATION
-    ).all()
+    assert events["primary_signal_generation"].eq(v4ai.PRIMARY_SIGNAL_GENERATION).all()
 
 
 def test_v4ak_exit_geometry_is_sl_1_5_tp_2_5() -> None:
