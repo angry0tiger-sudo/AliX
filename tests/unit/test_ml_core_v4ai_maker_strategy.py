@@ -13,6 +13,8 @@ from scripts import run_ml_core_v4ac_cost_optimization as v4ac
 from scripts import run_ml_core_v4ai_maker_strategy as v4ai
 from services.meta_labeling import v4ah as advanced
 from services.meta_labeling import v4am as regime_engine
+from services.ml_core.adaptive_targets import calculate_atr
+from services.ml_core.economic_backtest import simulate_signals
 
 
 def _trade_rows() -> list[dict[str, Any]]:
@@ -667,9 +669,9 @@ def test_oof_label_bounded_replay_matches_full_history_simulator(
     event_index = 20
     train_end = row_count
     management = v4ai._trade_management_config()
-    atr_values = v4ai.calculate_atr(bars, period=management.atr_period)
+    atr_values = calculate_atr(bars, period=management.atr_period)
     full_actions = v4ac._build_forward_actions(bars, [event_index], train_end)
-    full_replay = v4ai.simulate_signals(
+    full_replay = simulate_signals(
         bars,
         full_actions,
         v4ai._execution_config(),
@@ -680,7 +682,7 @@ def test_oof_label_bounded_replay_matches_full_history_simulator(
     index_by_timestamp = {
         pd.Timestamp(value): index for index, value in enumerate(dates)
     }
-    original_simulator = v4ai.simulate_signals
+    original_simulator = simulate_signals
     observed_window_lengths: list[int] = []
 
     def recording_simulator(
