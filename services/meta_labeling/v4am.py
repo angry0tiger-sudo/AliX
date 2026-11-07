@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from typing import Any, Final
+from typing import Any, Final, cast
 
 import numpy as np
 import pandas as pd
@@ -169,7 +169,7 @@ def _logsumexp(values: np.ndarray, axis: int) -> np.ndarray:
     if not np.isfinite(maximum).all():
         raise ValueError("v4am_hmm_log_probability_invalid")
     result = maximum + np.log(np.exp(values - maximum).sum(axis=axis, keepdims=True))
-    return np.squeeze(result, axis=axis)
+    return cast(np.ndarray, np.squeeze(result, axis=axis))
 
 
 def _emission_log_probabilities(
@@ -190,7 +190,7 @@ def _emission_log_probabilities(
     result = log_density.sum(axis=2)
     if not np.isfinite(result).all():
         raise ValueError("v4am_hmm_emission_non_finite")
-    return result
+    return cast(np.ndarray, result)
 
 
 def _forward_backward(

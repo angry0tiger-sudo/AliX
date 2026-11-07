@@ -100,7 +100,7 @@ def test_hmm_is_train_only_and_emits_causal_normalized_posteriors() -> None:
     ]
     posterior = transformed.loc[:764, posterior_columns].dropna()
     assert len(posterior) > 500
-    np.testing.assert_allclose(posterior.sum(axis=1).to_numpy(), 1.0, atol=1e-8)
+    np.testing.assert_allclose(posterior.sum(axis=1).to_numpy(dtype=np.float64), 1.0, atol=1e-8)
     assert transformed.loc[765:, posterior_columns].isna().all().all()
 
 
@@ -112,9 +112,11 @@ def test_hmm_training_parameters_ignore_forward_validation_values() -> None:
     altered.loc[600:, v4am.REALIZED_VOLATILITY_FEATURE] = 0.08
     _, second = v4am.build_hmm_regime_features(altered, train_end=600, apply_end=765)
     np.testing.assert_allclose(
-        first["state_means_original_scale"], second["state_means_original_scale"]
+        np.asarray(first["state_means_original_scale"], dtype=np.float64),
+        np.asarray(second["state_means_original_scale"], dtype=np.float64)
     )
-    np.testing.assert_allclose(first["transition_matrix"], second["transition_matrix"])
+    np.testing.assert_allclose(np.asarray(first["transition_matrix"], dtype=np.float64),
+        np.asarray(second["transition_matrix"], dtype=np.float64))
 
 
 def test_hmm_forward_filter_is_prefix_causal() -> None:
@@ -130,8 +132,8 @@ def test_hmm_forward_filter_is_prefix_causal() -> None:
         v4am.HMM_RANGING_FEATURE,
     ):
         np.testing.assert_allclose(
-            first.loc[:799, column].to_numpy(),
-            second.loc[:799, column].to_numpy(),
+            first.loc[:799, column].to_numpy(dtype=np.float64),
+            second.loc[:799, column].to_numpy(dtype=np.float64),
             equal_nan=True,
         )
 

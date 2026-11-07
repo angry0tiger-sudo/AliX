@@ -12,6 +12,7 @@ from pandas import DataFrame
 from scripts import run_ml_core_v4ac_cost_optimization as v4ac
 from scripts import run_ml_core_v4ai_maker_strategy as v4ai
 from services.meta_labeling import v4ah as advanced
+from services.meta_labeling import v4am as regime_engine
 
 
 def _trade_rows() -> list[dict[str, Any]]:
@@ -332,8 +333,8 @@ def test_regime_feature_pipeline_uses_three_state_causal_hmm() -> None:
     volatility = log_returns.rolling(24, min_periods=24).std(ddof=0)
     features = DataFrame(
         {
-            v4ai.regime_engine.LOG_RETURN_FEATURE: log_returns,
-            v4ai.regime_engine.REALIZED_VOLATILITY_FEATURE: volatility,
+            regime_engine.LOG_RETURN_FEATURE: log_returns,
+            regime_engine.REALIZED_VOLATILITY_FEATURE: volatility,
         }
     )
     transformed, diagnostics = v4ai._regime_features(
@@ -345,9 +346,9 @@ def test_regime_feature_pipeline_uses_three_state_causal_hmm() -> None:
     assert diagnostics["posterior_method"] == "CAUSAL_FORWARD_FILTER"
     assert diagnostics["smoothing_used"] is False
     assert diagnostics["lookahead_used"] is False
-    assert v4ai.regime_engine.HMM_TRENDING_UP_FEATURE in transformed
-    assert v4ai.regime_engine.HMM_TRENDING_DOWN_FEATURE in transformed
-    assert v4ai.regime_engine.HMM_RANGING_FEATURE in transformed
+    assert regime_engine.HMM_TRENDING_UP_FEATURE in transformed
+    assert regime_engine.HMM_TRENDING_DOWN_FEATURE in transformed
+    assert regime_engine.HMM_RANGING_FEATURE in transformed
 
 
 def test_percentile_seventy_threshold_uses_only_probability_values() -> None:
@@ -1006,20 +1007,20 @@ def test_regime_reactive_selector_uses_only_the_dominant_strategy() -> None:
     close[70], high[70] = 110.0, 111.0
     bars = DataFrame({"close": close, "high": high})
     features = _primary_feature_frame(rows)
-    features[v4ai.regime_engine.CUSUM_POSITIVE_EVENT_FEATURE] = 0.0
-    features[v4ai.regime_engine.CUSUM_NEGATIVE_EVENT_FEATURE] = 0.0
-    features[v4ai.regime_engine.CUSUM_DRIFT_FEATURE] = 0.0
-    features[v4ai.regime_engine.HMM_TRENDING_UP_FEATURE] = 0.1
-    features[v4ai.regime_engine.HMM_TRENDING_DOWN_FEATURE] = 0.1
-    features[v4ai.regime_engine.HMM_RANGING_FEATURE] = 0.8
-    features.loc[25, v4ai.regime_engine.HMM_TRENDING_UP_FEATURE] = 0.9
-    features.loc[25, v4ai.regime_engine.HMM_RANGING_FEATURE] = 0.05
-    features.loc[25, v4ai.regime_engine.CUSUM_POSITIVE_EVENT_FEATURE] = 1.0
+    features[regime_engine.CUSUM_POSITIVE_EVENT_FEATURE] = 0.0
+    features[regime_engine.CUSUM_NEGATIVE_EVENT_FEATURE] = 0.0
+    features[regime_engine.CUSUM_DRIFT_FEATURE] = 0.0
+    features[regime_engine.HMM_TRENDING_UP_FEATURE] = 0.1
+    features[regime_engine.HMM_TRENDING_DOWN_FEATURE] = 0.1
+    features[regime_engine.HMM_RANGING_FEATURE] = 0.8
+    features.loc[25, regime_engine.HMM_TRENDING_UP_FEATURE] = 0.9
+    features.loc[25, regime_engine.HMM_RANGING_FEATURE] = 0.05
+    features.loc[25, regime_engine.CUSUM_POSITIVE_EVENT_FEATURE] = 1.0
     features.loc[50, v4ai.RSI_FEATURE] = 25.0
-    features.loc[50, v4ai.regime_engine.CUSUM_NEGATIVE_EVENT_FEATURE] = 1.0
-    features.loc[70, v4ai.regime_engine.HMM_TRENDING_DOWN_FEATURE] = 0.9
-    features.loc[70, v4ai.regime_engine.HMM_RANGING_FEATURE] = 0.05
-    features.loc[70, v4ai.regime_engine.CUSUM_POSITIVE_EVENT_FEATURE] = 1.0
+    features.loc[50, regime_engine.CUSUM_NEGATIVE_EVENT_FEATURE] = 1.0
+    features.loc[70, regime_engine.HMM_TRENDING_DOWN_FEATURE] = 0.9
+    features.loc[70, regime_engine.HMM_RANGING_FEATURE] = 0.05
+    features.loc[70, regime_engine.CUSUM_POSITIVE_EVENT_FEATURE] = 1.0
     transformed, signal, diagnostics = v4ai._regime_reactive_primary_signal(
         bars, features, apply_end=rows
     )
@@ -1036,7 +1037,7 @@ def test_regime_reactive_selector_uses_only_the_dominant_strategy() -> None:
 
 def test_inverse_volatility_targeting_uses_train_median_and_caps_at_one() -> None:
     features = DataFrame(
-        {v4ai.regime_engine.REALIZED_VOLATILITY_FEATURE: [0.01] * 250 + [0.02, 0.005]}
+        {regime_engine.REALIZED_VOLATILITY_FEATURE: [0.01] * 250 + [0.02, 0.005]}
     )
     fractions, diagnostics = v4ai._volatility_target_position_fractions(
         features, train_end=250, event_indices=[250, 251]
@@ -1048,7 +1049,7 @@ def test_inverse_volatility_targeting_uses_train_median_and_caps_at_one() -> Non
 
 def test_inverse_volatility_targeting_rejects_missing_event_volatility() -> None:
     features = DataFrame(
-        {v4ai.regime_engine.REALIZED_VOLATILITY_FEATURE: [0.01] * 250 + [np.nan]}
+        {regime_engine.REALIZED_VOLATILITY_FEATURE: [0.01] * 250 + [np.nan]}
     )
     with pytest.raises(ValueError, match="v4am_position_fraction_volatility_invalid"):
         v4ai._volatility_target_position_fractions(
