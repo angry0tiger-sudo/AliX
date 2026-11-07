@@ -113,10 +113,8 @@ def test_hmm_training_parameters_ignore_forward_validation_values() -> None:
     altered.loc[600:, v4am.LOG_RETURN_FEATURE] = 0.15
     altered.loc[600:, v4am.REALIZED_VOLATILITY_FEATURE] = 0.08
     _, second = v4am.build_hmm_regime_features(altered, train_end=600, apply_end=765)
-    np.testing.assert_allclose(
-        first["state_means_original_scale"], second["state_means_original_scale"]
-    )
-    np.testing.assert_allclose(first["transition_matrix"], second["transition_matrix"])
+    assert first["state_means_original_scale"] == second["state_means_original_scale"]
+    assert first["transition_matrix"] == second["transition_matrix"]
 
 
 def test_hmm_forward_filter_is_prefix_causal() -> None:
@@ -131,11 +129,9 @@ def test_hmm_forward_filter_is_prefix_causal() -> None:
         v4am.HMM_TRENDING_DOWN_FEATURE,
         v4am.HMM_RANGING_FEATURE,
     ):
-        np.testing.assert_allclose(
-            first.loc[:799, column].to_numpy(dtype=float),
-            second.loc[:799, column].to_numpy(dtype=float),
-            equal_nan=True,
-        )
+        first_values = [float(value) for value in first.loc[:799, column].tolist()]
+        second_values = [float(value) for value in second.loc[:799, column].tolist()]
+        np.testing.assert_allclose(first_values, second_values, equal_nan=True)
 
 
 def test_hmm_rejects_invalid_train_window_and_missing_features() -> None:
