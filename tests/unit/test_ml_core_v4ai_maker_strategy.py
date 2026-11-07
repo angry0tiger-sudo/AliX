@@ -639,6 +639,7 @@ def test_oof_meta_label_uses_exact_thirty_bps_cost_contract(
         {pd.Timestamp(value): index for index, value in enumerate(dates)},
         80,
         atr_values=pd.Series(np.ones(len(bars))),
+        management=v4ai._trade_management_config(),
     )
     assert result is not None
     assert result["meta_label"] == 1
@@ -649,6 +650,50 @@ def test_oof_meta_label_uses_exact_thirty_bps_cost_contract(
     assert seen[0][1] == 49
     assert seen[0][2] == 49
     assert seen[0][3][0]["event"] == 0
+
+
+def test_oof_label_rejects_non_oof_buy_and_skips_immature_event() -> None:
+    dates = pd.date_range("2024-01-01", periods=100, freq="30min", tz="UTC")
+    bars = DataFrame({"date": dates})
+    index_by_timestamp = {
+        pd.Timestamp(value): index for index, value in enumerate(dates)
+    }
+    management = v4ai._trade_management_config()
+    atr_values = pd.Series(np.ones(len(bars)))
+    non_oof_event = {
+        "event_index": 10,
+        "fold_id": 0,
+        "primary_signal": "BUY",
+        "primary_oof": False,
+    }
+    with pytest.raises(
+        ValueError, match="v4ai_oof_labels_require_oof_primary_buy_events"
+    ):
+        v4ai._label_one_oof_event(
+            non_oof_event,
+            bars,
+            index_by_timestamp,
+            len(bars),
+            atr_values=atr_values,
+            management=management,
+        )
+    immature_event = {
+        "event_index": 52,
+        "fold_id": 0,
+        "primary_signal": "BUY",
+        "primary_oof": True,
+    }
+    assert (
+        v4ai._label_one_oof_event(
+            immature_event,
+            bars,
+            index_by_timestamp,
+            len(bars),
+            atr_values=atr_values,
+            management=management,
+        )
+        is None
+    )
 
 
 def test_oof_label_bounded_replay_matches_full_history_simulator(

@@ -389,47 +389,33 @@ def _isolated_oof_replay_inputs(
     return window_bars, actions, window_atr
 
 
-def _label_one_oof_event(
+def _validated_oof_event_index(
     event: dict[str, Any],
-    train_bars: DataFrame,
-    index_by_timestamp: dict[pd.Timestamp, int],
     train_end: int,
-    *,
-    atr_values: Series | None = None,
-    management: Any | None = None,
-) -> dict[str, Any] | None:
+    management: Any,
+) -> int | None:
     event_index = int(event["event_index"])
     if event.get("primary_signal") != "BUY" or event.get("primary_oof") is not True:
         raise ValueError("v4ai_oof_labels_require_oof_primary_buy_events")
-    selected_management = (
-        _trade_management_config() if management is None else management
-    )
-    horizon = int(selected_management.horizon_candles)
-    if event_index + horizon >= train_end:
+    if event_index + int(management.horizon_candles) >= train_end:
         return None
-    selected_atr = (
-        calculate_atr(train_bars, period=int(selected_management.atr_period))
-        if atr_values is None
-        else atr_values
-    )
-    replay_bars, actions, replay_atr = _isolated_oof_replay_inputs(
-        train_bars,
-        event_index,
-        train_end,
-        selected_atr,
-        selected_management,
-    )
-    replay = simulate_signals(
-        replay_bars,
-        actions,
-        _execution_config(),
-        trade_management_config=selected_management,
-        atr_values=replay_atr,
-    )
+    return event_index
+
+
+def _single_oof_replay_trade(replay: dict[str, Any]) -> dict[str, Any]:
     trades = cast(list[dict[str, Any]], replay["trades"])
     if len(trades) != 1:
         raise ValueError("v4ai_oof_event_trade_count_invalid")
-    trade = trades[0]
+    return trades[0]
+
+
+def _oof_label_record(
+    event: dict[str, Any],
+    event_index: int,
+    train_end: int,
+    index_by_timestamp: dict[pd.Timestamp, int],
+    trade: dict[str, Any],
+) -> dict[str, Any]:
     exit_timestamp = pd.Timestamp(str(trade["exit_timestamp"]))
     if exit_timestamp.tzinfo is None:
         raise ValueError("v4ai_oof_exit_timezone_invalid")
@@ -451,6 +437,36 @@ def _label_one_oof_event(
         "primary_signal": "BUY",
         "primary_oof": True,
     }
+
+
+def _label_one_oof_event(
+    event: dict[str, Any],
+    train_bars: DataFrame,
+    index_by_timestamp: dict[pd.Timestamp, int],
+    train_end: int,
+    *,
+    atr_values: Series,
+    management: Any,
+) -> dict[str, Any] | None:
+    event_index = _validated_oof_event_index(event, train_end, management)
+    if event_index is None:
+        return None
+    replay_bars, actions, replay_atr = _isolated_oof_replay_inputs(
+        train_bars,
+        event_index,
+        train_end,
+        atr_values,
+        management,
+    )
+    replay = simulate_signals(
+        replay_bars,
+        actions,
+        _execution_config(),
+        trade_management_config=management,
+        atr_values=replay_atr,
+    )
+    trade = _single_oof_replay_trade(replay)
+    return _oof_label_record(event, event_index, train_end, index_by_timestamp, trade)
 
 
 def _training_oof_labels(
