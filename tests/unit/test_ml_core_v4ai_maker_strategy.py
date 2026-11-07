@@ -773,7 +773,7 @@ def test_candidate_replay_uses_thirty_bps_and_reports_unscaled_expectancy(
     assert len(trades) == 2
     assert len(decisions) == 2
     assert {item["round_trip_cost_bps"] for item in trades} == {30.0}
-    assert candidate["filter"] == "ADX14_GT20_ABLATION"
+    assert candidate["filter"] == "ADX14_GT20_DIAGNOSTIC_ABLATION"
     assert seen[0].fee_bps == 10.0 and seen[0].slippage_bps == 5.0
 
 
@@ -954,7 +954,7 @@ def test_step_summary_discloses_maker_proxy_and_fill_model_limitation() -> None:
     assert "Primary BUYs research/train/forward: 800/560/120" in summary
     assert "research target >=100=PASS" in summary
     assert "Meta outer-train minimum=50" in summary
-    assert "Primary ADX filter: DISABLED" in summary
+    assert "ADX20 diagnostic-ablation BUYs: 400." in summary
     assert "diagnostic ablation" in summary
     assert "30 bps round trip" in summary
     assert "passive Limit queue/partial-fill mechanics are not simulated" in summary
