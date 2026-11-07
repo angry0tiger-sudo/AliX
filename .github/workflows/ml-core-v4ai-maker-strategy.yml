@@ -156,7 +156,7 @@ jobs:
           printf 'symbol=ETHUSDT\ntimeframe=1h\ndays=1825\n'
           printf 'fee_type_assumption=MAKER_FEE_PROXY\nfee_bps_per_side=10\n'
           printf 'slippage_bps_per_side=5\nround_trip_cost_bps=30\n'
-          printf 'primary_signal=CAUSAL_WILDER_RSI14_LT40_EMA50_ABOVE_EMA200\n'
+          printf 'primary_signal=CAUSAL_CUSUM2SIGMA_GAUSSIAN_HMM3_REGIME_REACTIVE_HARD_SELECTOR\n'
           printf 'primary_adx_filter=DISABLED\nadx20_role=DIAGNOSTIC_ABLATION_ONLY\n'
           printf 'meta_threshold=top_70_percent_acceptance_from_30th_percentile_of_third_purged_OOF_slice\n'
           printf 'exit_geometry=SL1.5_TP2.5_ACT1.5_STEP2.0\n'

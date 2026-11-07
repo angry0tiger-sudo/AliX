@@ -1,4 +1,4 @@
-"""V4-AK ETHUSDT 1h maker-fee validation for EMA50/EMA200 trend and RSI40 entries."""
+"""V4-AM ETHUSDT 1h causal CUSUM and Gaussian-HMM regime-switching validation."""
 
 from __future__ import annotations
 
@@ -82,7 +82,6 @@ PRIMARY_FILTER_CONTRACT: dict[str, str] = {
     "downtrend_policy": "LONG_ONLY_SPOT_RISK_OFF_NO_SHORT_ENTRY",
     "position_sizing": "INVERSE_24H_REALIZED_VOL_TRAINING_MEDIAN_TARGET_CAPPED_AT_1X",
 }
-LABEL_COLUMNS = {
 
 LABEL_COLUMNS = {
     "event_index",

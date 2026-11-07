@@ -1,4 +1,4 @@
-"""Unit tests for V4-AK EMA50/EMA200 trend and RSI40 research contracts."""
+"""Unit tests for V4-AM CUSUM and regime-reactive strategy contracts."""
 
 from __future__ import annotations
 
