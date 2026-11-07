@@ -106,6 +106,7 @@ EXIT_POLICIES: tuple[dict[str, float | str], ...] = (
         "take_profit_atr": 2.5,
         "trailing_activation_atr": 1.0,
         "trailing_step_atr": 1.5,
+        "horizon_bars": 48.0,
     },
     {
         "name": "V4AE_HISTORICAL_BEST",
@@ -113,6 +114,7 @@ EXIT_POLICIES: tuple[dict[str, float | str], ...] = (
         "take_profit_atr": 2.5,
         "trailing_activation_atr": 1.5,
         "trailing_step_atr": 2.0,
+        "horizon_bars": 48.0,
     },
     {
         "name": "V4AF_OWNER_GEOMETRY",
@@ -120,6 +122,7 @@ EXIT_POLICIES: tuple[dict[str, float | str], ...] = (
         "take_profit_atr": 2.5,
         "trailing_activation_atr": 1.5,
         "trailing_step_atr": 1.5,
+        "horizon_bars": 48.0,
     },
 )
 

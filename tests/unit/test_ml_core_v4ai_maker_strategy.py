@@ -1,4 +1,4 @@
-"""Unit tests for V4-AM CUSUM and regime-reactive strategy contracts."""
+"""Unit tests for V4-AN 30m HMM regime-adaptive strategy contracts."""
 
 from __future__ import annotations
 
@@ -67,11 +67,12 @@ def _valid_matrix() -> dict[str, Any]:
         {
             "policy": str(policy["name"]),
             "symbol": "ETHUSDT",
-            "timeframe": "1h",
+            "timeframe": "30m",
             "initial_stop_atr": policy["initial_stop_atr"],
             "take_profit_atr": policy["take_profit_atr"],
             "trailing_activation_atr": policy["trailing_activation_atr"],
             "trailing_step_atr": policy["trailing_step_atr"],
+            "horizon_candles": 48,
             "fee_bps_per_side": 10.0,
             "slippage_bps_per_side": 5.0,
             "round_trip_cost_bps": 30.0,
@@ -110,30 +111,33 @@ def _valid_report() -> dict[str, Any]:
         "schema_version": v4ai.SCHEMA,
         "commit_sha": "a" * 40,
         "symbols": ["ETHUSDT"],
-        "timeframes": ["1h"],
+        "timeframes": ["30m"],
         "primary_signal": v4ai.PRIMARY_SIGNAL_GENERATION,
         "primary_signal_diagnostics": {
             "generation": v4ai.PRIMARY_SIGNAL_GENERATION,
             "lookahead_used": False,
             "research_signal_count_target": 100,
-            "cusum": {
-                "algorithm": "TWO_SIDED_CUSUM_STANDARDIZED_LOG_RETURN",
-                "rolling_window_bars": 24,
-                "threshold_sigma": 2.0,
-                "drift_allowance_sigma": 0.5,
-                "positive_event_count": 100,
-                "negative_event_count": 80,
-                "total_event_count": 180,
+            "hmm_features": {
+                "generation": v4ai.HMM_FEATURE_GENERATION,
+                "realized_volatility_window_bars": 48,
+                "valid_log_return_rows": 500,
+                "valid_realized_volatility_rows": 453,
+                "apply_end_index_exclusive": 850,
                 "final_holdout_features_unavailable": True,
                 "lookahead_used": False,
+                "cusum_used": False,
             },
             "selector": {
-                "selector_type": "REGIME_REACTIVE_HARD_SELECTOR",
+                "selector_type": "HMM_REGIME_HARD_SELECTOR",
                 "hard_selector_enabled": True,
                 "soft_blend_enabled": False,
-                "donchian_lookback": 20,
+                "trend_ema_period": 50,
                 "range_rsi_period": 14,
-                "range_rsi_threshold": 30.0,
+                "range_rsi_threshold": 45.0,
+                "momentum_strategy": "CLOSE_ABOVE_EMA50_TRENDING_UP_ONLY_SPOT_LONG",
+                "mean_reversion_strategy": "WILDER_RSI14_LT45_RANGING_ONLY",
+                "downtrend_policy": "RISK_OFF_NO_LONG_ENTRY_SPOT_ONLY",
+                "no_cusum_filter": True,
                 "short_entries_enabled": False,
                 "lookahead_used": False,
                 "momentum_signal_count": 40,
@@ -145,7 +149,7 @@ def _valid_report() -> dict[str, Any]:
             },
             "volatility_targeting": {
                 "method": "INVERSE_24H_REALIZED_VOLATILITY",
-                "target_reference": "MEDIAN_OF_OUTER_TRAIN_24H_REALIZED_VOLATILITY",
+                "target_reference": "MEDIAN_OF_OUTER_TRAIN_48_BAR_REALIZED_VOLATILITY",
                 "target_volatility": 0.001,
                 "training_rows": 600,
                 "sizing_cap": 1.0,
@@ -213,26 +217,26 @@ def test_execution_cost_is_locked_to_thirty_bps() -> None:
         )
 
 
-def test_ema50_ema200_rsi40_signal_is_causal_and_drops_breakout_features() -> None:
-    rising = np.linspace(100.0, 150.0, 240)
-    pullback = 150.0 - np.arange(1, 16, dtype=float) * 0.5
+def test_close_above_ema50_with_rsi45_feature_is_causal_and_drops_breakout_features() -> None:
+    rising = np.linspace(100.0, 250.0, 240)
+    pullback = 250.0 - np.arange(1, 16, dtype=float) * 0.5
     bars = DataFrame({"close": np.concatenate((rising, pullback))})
     features, signal, diagnostics = v4ai._ema_trend_rsi_primary_features(
         bars, _primary_feature_frame(len(bars))
     )
     assert signal.dtype == bool
     assert bool(signal.iloc[-1])
-    assert float(features.iloc[-1][v4ai.RSI_FEATURE]) < 40.0
-    assert float(features.iloc[-1][v4ai.EMA_DISTANCE_FEATURE]) > 0.0
+    assert float(features.iloc[-1][v4ai.RSI_FEATURE]) < 45.0
+    assert float(features.iloc[-1][v4ai.EMA50_DISTANCE_FEATURE]) > 0.0
     breakout_only_features = set(v4ai.LEGACY_PRIMARY_FEATURE_COLUMNS) - {
         v4ai.EMA_DISTANCE_FEATURE
     }
     assert not breakout_only_features.intersection(features.columns)
-    assert v4ai.EMA_DISTANCE_FEATURE in features.columns
+    assert v4ai.EMA50_DISTANCE_FEATURE in features.columns
     assert diagnostics["generation"] == v4ai.TECHNICAL_FEATURE_GENERATION
     assert diagnostics["lookahead_used"] is False
     assert diagnostics["rsi_comparison"] == "STRICT_LT"
-    assert diagnostics["trend_comparison"] == "EMA50_STRICTLY_ABOVE_EMA200"
+    assert diagnostics["trend_comparison"] == "CLOSE_STRICTLY_ABOVE_EMA50"
 
     prefix_bars = bars.iloc[:240].reset_index(drop=True)
     prefix_features = _primary_feature_frame(240)
@@ -280,7 +284,7 @@ def test_rsi_at_or_above_40_does_not_buy_even_in_bull_trend() -> None:
     assert diagnostics["trend_aligned_rows"] > 0
     assert diagnostics["oversold_rows"] == 0
     assert int(signal.sum()) == 0
-    assert float(features.iloc[-1][v4ai.RSI_FEATURE]) >= 40.0
+    assert float(features.iloc[-1][v4ai.RSI_FEATURE]) >= 45.0
     assert float(features.iloc[-1][v4ai.EMA_SPREAD_FEATURE]) > 0.0
 
 
@@ -300,6 +304,8 @@ def test_v4ak_exit_geometry_is_sl_1_5_tp_2_5() -> None:
     management = v4ai._trade_management_config()
     assert management.stop_loss_atr_multiplier == 1.5
     assert management.take_profit_atr_multiplier == 2.5
+    assert management.horizon_candles == 48
+    assert all(item["horizon_bars"] == 48.0 for item in v4ai.EXIT_POLICIES)
     assert all(item["initial_stop_atr"] == 1.5 for item in v4ai.EXIT_POLICIES)
     assert all(item["take_profit_atr"] == 2.5 for item in v4ai.EXIT_POLICIES)
 
@@ -330,7 +336,7 @@ def test_regime_feature_pipeline_uses_three_state_causal_hmm() -> None:
     returns[400:] -= 0.0008
     close = 2_000.0 * np.exp(np.cumsum(returns))
     log_returns = pd.Series(np.log(close)).diff()
-    volatility = log_returns.rolling(24, min_periods=24).std(ddof=0)
+    volatility = log_returns.rolling(48, min_periods=48).std(ddof=0)
     features = DataFrame(
         {
             regime_engine.LOG_RETURN_FEATURE: log_returns,
@@ -586,7 +592,7 @@ def test_identity_temperature_fallback_keeps_meta_model_enabled(
 def test_oof_meta_label_uses_exact_thirty_bps_cost_contract(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    dates = pd.date_range("2024-01-01", periods=40, freq="h", tz="UTC")
+    dates = pd.date_range("2024-01-01", periods=80, freq="30min", tz="UTC")
     bars = DataFrame({"date": dates})
     monkeypatch.setattr(
         v4ac,
@@ -624,7 +630,7 @@ def test_oof_meta_label_uses_exact_thirty_bps_cost_contract(
         },
         bars,
         {pd.Timestamp(value): index for index, value in enumerate(dates)},
-        40,
+        80,
     )
     assert result is not None
     assert result["meta_label"] == 1
@@ -876,6 +882,7 @@ def test_step_summary_discloses_maker_proxy_and_fill_model_limitation() -> None:
                     "trimmed_bars": 0,
                     "segment_start_utc": "2021-11-07T00:00:00+00:00",
                 },
+                "analysis_timeframe": "30m",
             },
             "signal_counts": {
                 "primary_buy_count": 800,
@@ -947,15 +954,15 @@ def test_step_summary_discloses_maker_proxy_and_fill_model_limitation() -> None:
         }
     )
     summary = v4ai._render_step_summary(report)
-    assert "Primary event trigger: two-sided CUSUM on closed-bar log returns" in summary
-    assert "Fixed candidate geometry: SL=1.5 ATR, TP=2.5 ATR" in summary
-    assert "PRIMARY_CUSUM_HMM_REGIME_REACTIVE_30BPS" in summary
-    assert "META_TOP_70_CUSUM_HMM_REGIME_REACTIVE_30BPS" in summary
+    assert "Primary event trigger: every completed 30m candle is evaluated; no CUSUM event or CUSUM-derived filter is used." in summary
+    assert "Fixed candidate geometry: SL=1.5 ATR, TP=2.5 ATR, activation=1.5 ATR, step=2.0 ATR, horizon=48 bars." in summary
+    assert "PRIMARY_HMM_REGIME_ADAPTIVE_30M_30BPS" in summary
+    assert "META_TOP_70_HMM_REGIME_ADAPTIVE_30M_30BPS" in summary
     assert "Primary BUYs research/train/forward: 800/560/120" in summary
     assert "research target >=100=PASS" in summary
     assert "Meta outer-train minimum=50" in summary
     assert "ADX20 diagnostic-ablation BUYs: 400." in summary
-    assert "Primary ADX filter: DISABLED; ADX20 is diagnostic-ablation only." in summary
+    assert "HMM input volatility window=48 bars" in summary
     assert "ADX20 diagnostic-ablation BUYs:" in summary
     assert "30 bps round trip" in summary
     assert "passive Limit queue/partial-fill mechanics are not simulated" in summary
@@ -989,7 +996,7 @@ def test_step_summary_discloses_maker_proxy_and_fill_model_limitation() -> None:
         skipped_summary
     )
     assert "Primary metrics remain reportable" in skipped_summary
-    assert "META_TOP_70_CUSUM_HMM_REGIME_REACTIVE_30BPS" in skipped_summary
+    assert "META_TOP_70_HMM_REGIME_ADAPTIVE_30M_30BPS" in skipped_summary
 
 
 def test_dataset_scope_expanded_to_1825_days_with_disclosed_gap_policy() -> None:
@@ -1000,28 +1007,21 @@ def test_dataset_scope_expanded_to_1825_days_with_disclosed_gap_policy() -> None
         v4ai._validate_request(730, "a" * 40)
 
 
-def test_regime_reactive_selector_uses_only_the_dominant_strategy() -> None:
+def test_regime_reactive_selector_uses_only_the_dominant_strategy_without_cusum() -> None:
     rows = 100
-    close = np.full(rows, 100.0)
-    high = np.full(rows, 101.0)
-    close[25], high[25] = 105.0, 106.0
-    close[70], high[70] = 110.0, 111.0
-    bars = DataFrame({"close": close, "high": high})
+    bars = DataFrame({"close": np.full(rows, 100.0)})
     features = _primary_feature_frame(rows)
-    features[regime_engine.CUSUM_POSITIVE_EVENT_FEATURE] = 0.0
-    features[regime_engine.CUSUM_NEGATIVE_EVENT_FEATURE] = 0.0
-    features[regime_engine.CUSUM_DRIFT_FEATURE] = 0.0
+    features[v4ai.RSI_FEATURE] = 50.0
+    features[v4ai.EMA50_DISTANCE_FEATURE] = 0.01
     features[regime_engine.HMM_TRENDING_UP_FEATURE] = 0.1
     features[regime_engine.HMM_TRENDING_DOWN_FEATURE] = 0.1
     features[regime_engine.HMM_RANGING_FEATURE] = 0.8
     features.loc[25, regime_engine.HMM_TRENDING_UP_FEATURE] = 0.9
     features.loc[25, regime_engine.HMM_RANGING_FEATURE] = 0.05
-    features.loc[25, regime_engine.CUSUM_POSITIVE_EVENT_FEATURE] = 1.0
-    features.loc[50, v4ai.RSI_FEATURE] = 25.0
-    features.loc[50, regime_engine.CUSUM_NEGATIVE_EVENT_FEATURE] = 1.0
+    features.loc[50, v4ai.RSI_FEATURE] = 44.0
     features.loc[70, regime_engine.HMM_TRENDING_DOWN_FEATURE] = 0.9
     features.loc[70, regime_engine.HMM_RANGING_FEATURE] = 0.05
-    features.loc[70, regime_engine.CUSUM_POSITIVE_EVENT_FEATURE] = 1.0
+
     transformed, signal, diagnostics = v4ai._regime_reactive_primary_signal(
         bars, features, apply_end=rows
     )
@@ -1031,9 +1031,48 @@ def test_regime_reactive_selector_uses_only_the_dominant_strategy() -> None:
     assert diagnostics["hard_selector_enabled"] is True
     assert diagnostics["soft_blend_enabled"] is False
     assert diagnostics["short_entries_enabled"] is False
+    assert diagnostics["no_cusum_filter"] is True
     assert diagnostics["momentum_signal_count"] == 1
     assert diagnostics["mean_reversion_signal_count"] == 1
-    assert v4ai.DONCHIAN_DISTANCE_FEATURE in transformed
+    assert not {
+        regime_engine.CUSUM_POSITIVE_EVENT_FEATURE,
+        regime_engine.CUSUM_NEGATIVE_EVENT_FEATURE,
+        regime_engine.CUSUM_DRIFT_FEATURE,
+    }.intersection(transformed.columns)
+
+
+def test_hmm_feature_inputs_use_48_bar_volatility_and_mask_holdout() -> None:
+    rows = 120
+    close = 2_000.0 * np.exp(np.cumsum(np.linspace(-0.0002, 0.0003, rows)))
+    bars = DataFrame({"close": close})
+    base = _primary_feature_frame(rows)
+
+    features, diagnostics = v4ai._hmm_feature_inputs(
+        bars, base, apply_end=100
+    )
+    volatility = features[regime_engine.REALIZED_VOLATILITY_FEATURE]
+    assert diagnostics["realized_volatility_window_bars"] == 48
+    assert diagnostics["lookahead_used"] is False
+    assert diagnostics["cusum_used"] is False
+    assert diagnostics["final_holdout_features_unavailable"] is True
+    assert volatility.iloc[:48].isna().all()
+    assert volatility.iloc[48:100].notna().all()
+    assert volatility.iloc[100:].isna().all()
+    assert regime_engine.CUSUM_POSITIVE_EVENT_FEATURE not in features
+    assert regime_engine.CUSUM_NEGATIVE_EVENT_FEATURE not in features
+    assert regime_engine.CUSUM_DRIFT_FEATURE not in features
+
+    prefix_features, _ = v4ai._hmm_feature_inputs(
+        bars.iloc[:100].reset_index(drop=True),
+        _primary_feature_frame(100),
+        apply_end=100,
+    )
+    pd.testing.assert_series_equal(
+        volatility.iloc[:100].reset_index(drop=True),
+        prefix_features[regime_engine.REALIZED_VOLATILITY_FEATURE],
+        check_names=False,
+    )
+
 
 
 def test_inverse_volatility_targeting_uses_train_median_and_caps_at_one() -> None:
