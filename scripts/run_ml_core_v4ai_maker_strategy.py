@@ -1,4 +1,4 @@
-"""V4-AM ETHUSDT 1h causal CUSUM and Gaussian-HMM regime-switching validation."""
+"""V4-AN ETHUSDT 30m HMM regime-adaptive economic validation."""
 
 from __future__ import annotations
 
@@ -57,6 +57,7 @@ LEGACY_PRIMARY_FEATURE_COLUMNS = (
 REGIME_WARMUP_BARS = 200
 REGIME_CLUSTER_COUNT = 3
 HMM_FEATURE_WINDOW_BARS = 48
+HMM_REALIZED_VOLATILITY_FEATURE = "%-v4an_realized_volatility_48"
 RANGE_RSI_ENTRY_THRESHOLD = 45.0
 TECHNICAL_FEATURE_GENERATION = "CAUSAL_WILDER_RSI14_EMA50_EMA200_FEATURES_ONLY"
 HMM_FEATURE_GENERATION = "CLOSED_BAR_LOG_RETURN_AND_TRAILING_48_BAR_REALIZED_VOLATILITY"
@@ -627,6 +628,7 @@ def _hmm_feature_inputs(
     generated = {
         regime_engine.LOG_RETURN_FEATURE,
         regime_engine.REALIZED_VOLATILITY_FEATURE,
+        HMM_REALIZED_VOLATILITY_FEATURE,
     }
     if generated.intersection(features.columns):
         raise ValueError("v4an_hmm_feature_collision")
@@ -672,9 +674,17 @@ def _regime_features(
     train_end: int,
     apply_end: int,
 ) -> tuple[DataFrame, dict[str, Any]]:
-    return regime_engine.build_hmm_regime_features(
+    transformed, diagnostics = regime_engine.build_hmm_regime_features(
         features, train_end=train_end, apply_end=apply_end
     )
+    if HMM_REALIZED_VOLATILITY_FEATURE in transformed.columns:
+        raise ValueError("v4an_hmm_feature_collision")
+    transformed = transformed.rename(
+        columns={
+            regime_engine.REALIZED_VOLATILITY_FEATURE: HMM_REALIZED_VOLATILITY_FEATURE
+        }
+    )
+    return transformed, diagnostics
 
 
 def _regime_reactive_primary_signal(
@@ -762,7 +772,7 @@ def _validate_volatility_target_inputs(
     train_end: int,
     event_indices: list[int],
 ) -> tuple[np.ndarray, float]:
-    column = regime_engine.REALIZED_VOLATILITY_FEATURE
+    column = HMM_REALIZED_VOLATILITY_FEATURE
     if (
         column not in features.columns
         or isinstance(train_end, bool)
@@ -2003,6 +2013,7 @@ def _render_exit_geometry_row(cell: dict[str, Any]) -> str:
         f"| {_format_optional_fixed(cell['net_pnl_total_usd'], 2)} "
         f"| {_format_optional_fixed(cell['mean_unscaled_net_expectancy_usd_at_full_equity'], 4)} |"
     )
+
 
 def _render_exit_geometry_section(cells: list[dict[str, Any]]) -> list[str]:
     lines = [

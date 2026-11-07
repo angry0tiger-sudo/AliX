@@ -357,6 +357,8 @@ def test_regime_feature_pipeline_uses_three_state_causal_hmm() -> None:
     assert regime_engine.HMM_TRENDING_UP_FEATURE in transformed
     assert regime_engine.HMM_TRENDING_DOWN_FEATURE in transformed
     assert regime_engine.HMM_RANGING_FEATURE in transformed
+    assert v4ai.HMM_REALIZED_VOLATILITY_FEATURE in transformed
+    assert regime_engine.REALIZED_VOLATILITY_FEATURE not in transformed
 
 
 def test_percentile_seventy_threshold_uses_only_probability_values() -> None:
@@ -1084,7 +1086,7 @@ def test_hmm_feature_inputs_use_48_bar_volatility_and_mask_holdout() -> None:
 
 def test_inverse_volatility_targeting_uses_train_median_and_caps_at_one() -> None:
     features = DataFrame(
-        {regime_engine.REALIZED_VOLATILITY_FEATURE: [0.01] * 250 + [0.02, 0.005]}
+        {v4ai.HMM_REALIZED_VOLATILITY_FEATURE: [0.01] * 250 + [0.02, 0.005]}
     )
     fractions, diagnostics = v4ai._volatility_target_position_fractions(
         features, train_end=250, event_indices=[250, 251]
@@ -1096,7 +1098,7 @@ def test_inverse_volatility_targeting_uses_train_median_and_caps_at_one() -> Non
 
 def test_inverse_volatility_targeting_rejects_missing_event_volatility() -> None:
     features = DataFrame(
-        {regime_engine.REALIZED_VOLATILITY_FEATURE: [0.01] * 250 + [np.nan]}
+        {v4ai.HMM_REALIZED_VOLATILITY_FEATURE: [0.01] * 250 + [np.nan]}
     )
     with pytest.raises(ValueError, match="v4am_position_fraction_volatility_invalid"):
         v4ai._volatility_target_position_fractions(

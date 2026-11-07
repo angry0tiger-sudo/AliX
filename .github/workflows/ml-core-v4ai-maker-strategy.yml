@@ -218,7 +218,7 @@ jobs:
           printf 'requested_days=1825\nprovider=Binance Spot public klines API\n'
           printf 'exchange_gap_policy=only_80m_ethusdt_2023-03-24T12:40Z_to_13:59Z_no_interpolation\n'
           printf 'private_api_calls=0\ncredentials_used=false\n'
-      - name: Run V4-AN CUSUM/HMM Regime-Reactive, ADX, Meta P70, and exit-geometry evaluation
+      - name: Run V4-AN 30m HMM Regime-Adaptive, ADX diagnostic, Meta P70, and exit-geometry evaluation
         run: |
           set -euo pipefail
           python -m scripts.run_ml_core_v4ai_maker_strategy \
