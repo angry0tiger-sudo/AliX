@@ -1249,24 +1249,51 @@ def _validate_report_risk_contract(report: dict[str, Any]) -> None:
         raise ValueError("v4ai_risk_metric_contract_invalid")
 
 
-def _validate_report_primary_filter(report: dict[str, Any]) -> None:
-    diagnostics = report.get("primary_signal_diagnostics", {})
+def _validate_report_primary_identity(
+    report: dict[str, Any],
+    diagnostics: dict[str, Any],
+) -> None:
     valid = (
         report.get("primary_signal") == PRIMARY_SIGNAL_GENERATION
         and report.get("primary_filter") == PRIMARY_FILTER_CONTRACT
         and diagnostics.get("generation") == PRIMARY_SIGNAL_GENERATION
-        and diagnostics.get("rsi_period") == RSI_PERIOD
-        and diagnostics.get("rsi_threshold") == RSI_ENTRY_THRESHOLD
-        and diagnostics.get("ema_fast_period") == EMA_FAST_PERIOD
-        and diagnostics.get("ema_slow_period") == EMA_SLOW_PERIOD
-        and diagnostics.get("rsi_comparison") == "STRICT_LT"
-        and diagnostics.get("trend_comparison") == "EMA50_STRICTLY_ABOVE_EMA200"
-        and diagnostics.get("research_signal_count_target")
-        == RESEARCH_SIGNAL_COUNT_TARGET
         and diagnostics.get("lookahead_used") is False
     )
     if not valid:
         raise ValueError("v4ai_report_primary_filter_invalid")
+
+
+def _validate_report_rsi_parameters(diagnostics: dict[str, Any]) -> None:
+    valid = (
+        diagnostics.get("rsi_period") == RSI_PERIOD
+        and diagnostics.get("rsi_threshold") == RSI_ENTRY_THRESHOLD
+        and diagnostics.get("rsi_comparison") == "STRICT_LT"
+    )
+    if not valid:
+        raise ValueError("v4ai_report_primary_filter_invalid")
+
+
+def _validate_report_ema_parameters(diagnostics: dict[str, Any]) -> None:
+    valid = (
+        diagnostics.get("ema_fast_period") == EMA_FAST_PERIOD
+        and diagnostics.get("ema_slow_period") == EMA_SLOW_PERIOD
+        and diagnostics.get("trend_comparison") == "EMA50_STRICTLY_ABOVE_EMA200"
+    )
+    if not valid:
+        raise ValueError("v4ai_report_primary_filter_invalid")
+
+
+def _validate_report_signal_count_target(diagnostics: dict[str, Any]) -> None:
+    if diagnostics.get("research_signal_count_target") != RESEARCH_SIGNAL_COUNT_TARGET:
+        raise ValueError("v4ai_report_primary_filter_invalid")
+
+
+def _validate_report_primary_filter(report: dict[str, Any]) -> None:
+    diagnostics = report.get("primary_signal_diagnostics", {})
+    _validate_report_primary_identity(report, diagnostics)
+    _validate_report_rsi_parameters(diagnostics)
+    _validate_report_ema_parameters(diagnostics)
+    _validate_report_signal_count_target(diagnostics)
 
 
 def _validate_report_geometry(report: dict[str, Any]) -> None:
