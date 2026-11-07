@@ -805,9 +805,6 @@ def _apply_position_fractions(
             raise ValueError("v4am_position_fraction_action_missing_or_invalid")
         action["position_fraction"] = float(fraction)
 
-
-
-
 def _forward_probability_map(
     features: DataFrame,
     event_indices: list[int],
