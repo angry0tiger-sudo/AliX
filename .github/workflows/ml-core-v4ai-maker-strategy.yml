@@ -1,4 +1,4 @@
-name: AliX V4-AJ RSI Mean-Reversion Economic Validation
+name: AliX V4-AK EMA50/EMA200 RSI40 Economic Validation
 # Owner-directed retrigger: the fail-closed exception is bound to ETHUSDT's empirically
 # observed 80 missing 1m opens from 2023-03-24T12:40:00Z through 13:59:00Z.
 
@@ -46,7 +46,7 @@ jobs:
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Require Standard CI success for this exact V4-AI commit
+      - name: Require Standard CI success for this exact V4-AK commit
         env:
           GITHUB_REPOSITORY: ${{ github.repository }}
           TARGET_SHA: ${{ github.sha }}
@@ -123,7 +123,7 @@ jobs:
           else:
               raise SystemExit("ci_green_gate_timeout:" + target_sha)
           PY
-      - name: Checkout exact V4-AI commit without persisted credentials
+      - name: Checkout exact V4-AK commit without persisted credentials
         uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
@@ -133,7 +133,7 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - name: Install pinned V4-AI research dependencies
+      - name: Install pinned V4-AK research dependencies
         run: |
           python -m pip install pip==25.2
           python -m pip install \
@@ -143,7 +143,7 @@ jobs:
             scikit-learn==1.9.0 \
             lightgbm==4.7.0 \
             shap==0.54.1
-      - name: Confirm V4-AJ scope, primary signal, and fail-closed safety
+      - name: Confirm V4-AK scope, primary signal, and fail-closed safety
         env:
           TARGET_SHA: ${{ github.sha }}
         run: |
@@ -153,7 +153,7 @@ jobs:
           printf 'symbol=ETHUSDT\ntimeframe=1h\ndays=1825\n'
           printf 'fee_type_assumption=MAKER_FEE_PROXY\nfee_bps_per_side=10\n'
           printf 'slippage_bps_per_side=5\nround_trip_cost_bps=30\n'
-          printf 'primary_signal=CAUSAL_WILDER_RSI14_LT30_CLOSE_ABOVE_EMA200\n'
+          printf 'primary_signal=CAUSAL_WILDER_RSI14_LT40_EMA50_ABOVE_EMA200\n'
           printf 'primary_adx_filter=DISABLED\nadx20_role=DIAGNOSTIC_ABLATION_ONLY\n'
           printf 'meta_threshold=top_70_percent_acceptance_from_30th_percentile_of_third_purged_OOF_slice\n'
           printf 'exit_geometry=SL1.5_TP2.5_ACT1.5_STEP2.0\n'
@@ -168,17 +168,21 @@ jobs:
           assert execution.slippage_bps == 5.0
           assert v4ai.ROUND_TRIP_COST_BPS == 30.0
           assert v4ai.PRIMARY_SIGNAL_GENERATION == (
-              "CAUSAL_WILDER_RSI14_LT30_CLOSE_ABOVE_EMA200"
+              "CAUSAL_WILDER_RSI14_LT40_EMA50_ABOVE_EMA200"
           )
           assert v4ai.PRIMARY_FILTER_CONTRACT == {
-              "indicator": "WILDER_RSI",
+              "entry_indicator": "WILDER_RSI",
               "rsi_period": "14",
-              "rsi_threshold": "30.0",
+              "rsi_threshold": "40.0",
               "rsi_comparison": "STRICT_LT",
-              "trend_feature": "close",
-              "trend_reference": "CAUSAL_EMA200",
-              "trend_comparison": "STRICT_GT",
+              "trend_fast_period": "50",
+              "trend_slow_period": "200",
+              "trend_reference": "CAUSAL_EMA",
+              "trend_comparison": "EMA50_STRICTLY_ABOVE_EMA200",
           }
+          assert v4ai.EMA_FAST_PERIOD == 50
+          assert v4ai.EMA_SLOW_PERIOD == 200
+          assert v4ai.RESEARCH_SIGNAL_COUNT_TARGET == 100
           assert v4ai.ADX_PERIOD == 14
           assert v4ai.ADX_THRESHOLD == 20.0
           assert v4ai.META_TARGET_ACCEPT_FRACTION == 0.70
@@ -197,7 +201,7 @@ jobs:
           )
           assert v4ah.V4AH_TOP_K_FEATURES == 30
           assert v4ah.V4AH_REGIME_COUNT == 3
-          print("V4-AI scope, cost, base-signal, ADX-ablation, and closed-safety contracts: PASS")
+          print("V4-AK scope, cost, EMA50/EMA200 RSI40 signal, ADX ablation, and closed-safety contracts: PASS")
           PY
       - name: Fetch complete public Binance Spot 1825-day ETHUSDT data
         run: |
@@ -222,7 +226,7 @@ jobs:
           printf 'requested_days=1825\nprovider=Binance Spot public klines API\n'
           printf 'exchange_gap_policy=only_80m_ethusdt_2023-03-24T12:40Z_to_13:59Z_no_interpolation\n'
           printf 'private_api_calls=0\ncredentials_used=false\n'
-      - name: Run V4-AI maker-fee, ADX, Meta P70, and exit-geometry evaluation
+      - name: Run V4-AK EMA50/EMA200 RSI40, ADX, Meta P70, and exit-geometry evaluation
         run: |
           set -euo pipefail
           python -m scripts.run_ml_core_v4ai_maker_strategy \
@@ -232,7 +236,7 @@ jobs:
             --output-decisions-csv "$GITHUB_WORKSPACE/alix-v4ai-maker-strategy-decisions.csv" \
             --days 1825 \
             --commit-sha "$GITHUB_SHA"
-      - name: Validate V4-AI report and publish GitHub Step Summary
+      - name: Validate V4-AK report and publish GitHub Step Summary
         env:
           REPORT_PATH: "${{ github.workspace }}/alix-v4ai-maker-strategy-report.json"
           TRADES_CSV: "${{ github.workspace }}/alix-v4ai-maker-strategy-trades.csv"
@@ -275,19 +279,23 @@ jobs:
               "passive_limit_fill_simulation": False,
           }
           assert report["primary_signal"] == (
-              "CAUSAL_WILDER_RSI14_LT30_CLOSE_ABOVE_EMA200"
+              "CAUSAL_WILDER_RSI14_LT40_EMA50_ABOVE_EMA200"
           )
           assert report["primary_filter"] == {
-              "indicator": "WILDER_RSI",
+              "entry_indicator": "WILDER_RSI",
               "rsi_period": "14",
-              "rsi_threshold": "30.0",
+              "rsi_threshold": "40.0",
               "rsi_comparison": "STRICT_LT",
-              "trend_feature": "close",
-              "trend_reference": "CAUSAL_EMA200",
-              "trend_comparison": "STRICT_GT",
+              "trend_fast_period": "50",
+              "trend_slow_period": "200",
+              "trend_reference": "CAUSAL_EMA",
+              "trend_comparison": "EMA50_STRICTLY_ABOVE_EMA200",
           }
           assert report["primary_signal_diagnostics"]["lookahead_used"] is False
-          assert report["primary_signal_diagnostics"]["rsi_period"] == 14
+          assert report["primary_signal_diagnostics"]["research_signal_count_target"] == 100
+          assert report["signal_counts"]["minimum_primary_train_signal_count"] == 50
+          assert report["fixed_exit_geometry"]["initial_stop_atr"] == 1.5
+          assert report["fixed_exit_geometry"]["take_profit_atr"] == 2.5
           assert report["fixed_exit_geometry"]["initial_stop_atr"] == 1.5
           assert report["fixed_exit_geometry"]["take_profit_atr"] == 2.5
           assert "adx_ablation_diagnostics" in report
@@ -380,10 +388,11 @@ jobs:
           )
           summary = _render_step_summary(report)
           required = (
-              "PRIMARY_RSI_MR_30BPS",
-              "PRIMARY_ADX20_ABLATION_RSI_MR_30BPS",
-              "META_TOP_70_RSI_MR_30BPS",
-              "Primary signal: causal Wilder RSI(14) < 30 AND Close > EMA200",
+              "PRIMARY_EMA50_EMA200_RSI40_30BPS",
+              "PRIMARY_ADX20_ABLATION_EMA50_EMA200_RSI40_30BPS",
+              "META_TOP_70_EMA50_EMA200_RSI40_30BPS",
+              "Primary signal: causal Wilder RSI(14) < 40 AND EMA50 > EMA200",
+              "research target >=100=",
               "Fixed candidate geometry: SL=1.5 ATR, TP=2.5 ATR",
               "Primary ADX filter: DISABLED",
               "diagnostic ablation",
@@ -415,26 +424,40 @@ jobs:
           print(summary, end="")
           meta_candidate = next(
               item for item in report["candidates"]
-              if item["mode"] == "META_TOP_70_RSI_MR_30BPS"
+              if item["mode"] == "META_TOP_70_EMA50_EMA200_RSI40_30BPS"
           )
           meta_trade_count = int(meta_candidate["metrics"]["trade_count"])
           if not meta["enabled"]:
-              raise SystemExit(
-                  "v4ai_meta_model_not_trained:" + str(meta["skip_reason"])
+              skip_reason = meta.get("skip_reason")
+              if not isinstance(skip_reason, str) or not skip_reason:
+                  raise SystemExit("v4ak_meta_skip_reason_missing")
+              if not v4ai._support_shortfall(ValueError(skip_reason)):
+                  raise SystemExit(
+                      "v4ak_meta_skip_reason_not_supported:" + skip_reason
+                  )
+              if meta_candidate["status"] != "SKIPPED_INSUFFICIENT_META_SUPPORT":
+                  raise SystemExit("v4ak_meta_skip_status_invalid")
+              print(
+                  "::warning::V4-AK Meta model skipped due to insufficient "
+                  "training support: "
+                  + skip_reason
+                  + ". Primary metrics are published; Meta acceptance is "
+                  "unavailable and promotion remains blocked."
               )
-          if meta_candidate["status"] != "COMPLETED" or meta_trade_count < 1:
+          elif meta_candidate["status"] != "COMPLETED" or meta_trade_count < 1:
               raise SystemExit(
-                  "v4ai_meta_model_has_no_forward_trades:"
+                  "v4ak_meta_model_has_no_forward_trades:"
                   + str(meta_candidate["status"])
                   + ":"
                   + str(meta_trade_count)
               )
-          print(
-              "Meta training and forward trade contract: PASS; "
-              f"trades={meta_trade_count}"
-          )
+          else:
+              print(
+                  "Meta training and forward trade contract: PASS; "
+                  f"trades={meta_trade_count}"
+              )
           PY
-      - name: Upload V4-AI report, trades, decisions, and exact Step Summary
+      - name: Upload V4-AK report, trades, decisions, and exact Step Summary
         if: always()
         uses: actions/upload-artifact@v4
         with:

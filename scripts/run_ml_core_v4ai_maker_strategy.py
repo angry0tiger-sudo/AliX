@@ -1,4 +1,4 @@
-"""V4-AJ ETHUSDT 1h maker-fee validation for RSI mean-reversion primary signals."""
+"""V4-AK ETHUSDT 1h maker-fee validation for EMA50/EMA200 trend and RSI40 entries."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ from services.meta_labeling.v4x import (
 )
 from services.ml_core.economic_backtest import simulate_signals
 
-SCHEMA = "alix.ml-core-v4ai-maker-strategy.v2"
+SCHEMA = "alix.ml-core-v4ai-maker-strategy.v3"
 SYMBOL = "ETHUSDT"
 TIMEFRAME = "1h"
 DAYS = 1825
@@ -37,11 +37,14 @@ ADX_FEATURE = "%-trend_adx_14"
 ADX_PERIOD = 14
 ADX_THRESHOLD = 20.0
 RSI_PERIOD = 14
-RSI_OVERSOLD_THRESHOLD = 30.0
-EMA_TREND_PERIOD = 200
+RSI_ENTRY_THRESHOLD = 40.0
+EMA_FAST_PERIOD = 50
+EMA_SLOW_PERIOD = 200
 RSI_FEATURE = "%-primary_rsi_14"
 EMA_DISTANCE_FEATURE = "%-primary_close_vs_ema200_pct"
-PRIMARY_SIGNAL_GENERATION = "CAUSAL_WILDER_RSI14_LT30_CLOSE_ABOVE_EMA200"
+EMA_SPREAD_FEATURE = "%-primary_ema50_vs_ema200_pct"
+PRIMARY_SIGNAL_GENERATION = "CAUSAL_WILDER_RSI14_LT40_EMA50_ABOVE_EMA200"
+RESEARCH_SIGNAL_COUNT_TARGET = 100
 LEGACY_PRIMARY_FEATURE_COLUMNS = (
     "%-primary_bollinger_bandwidth_pct",
     "%-primary_close_vs_bollinger_upper_pct",
@@ -58,18 +61,19 @@ MINIMUM_WIN_RATE = 0.45
 MAXIMUM_DRAWDOWN = 15.0
 DSR_MINIMUM_RETURN_OBSERVATIONS = 4
 SORTINO_TARGET_RETURN_PER_TRADE = 0.0
-BASE_CONTROL = "PRIMARY_RSI_MR_30BPS"
-ADX_ABLATION = "PRIMARY_ADX20_ABLATION_RSI_MR_30BPS"
-META_CANDIDATE = "META_TOP_70_RSI_MR_30BPS"
+BASE_CONTROL = "PRIMARY_EMA50_EMA200_RSI40_30BPS"
+ADX_ABLATION = "PRIMARY_ADX20_ABLATION_EMA50_EMA200_RSI40_30BPS"
+META_CANDIDATE = "META_TOP_70_EMA50_EMA200_RSI40_30BPS"
 CANDIDATE_NAMES = (BASE_CONTROL, ADX_ABLATION, META_CANDIDATE)
 PRIMARY_FILTER_CONTRACT: dict[str, str] = {
-    "indicator": "WILDER_RSI",
+    "entry_indicator": "WILDER_RSI",
     "rsi_period": "14",
-    "rsi_threshold": "30.0",
+    "rsi_threshold": "40.0",
     "rsi_comparison": "STRICT_LT",
-    "trend_feature": "close",
-    "trend_reference": "CAUSAL_EMA200",
-    "trend_comparison": "STRICT_GT",
+    "trend_fast_period": "50",
+    "trend_slow_period": "200",
+    "trend_reference": "CAUSAL_EMA",
+    "trend_comparison": "EMA50_STRICTLY_ABOVE_EMA200",
 }
 LABEL_COLUMNS = {
     "event_index",
@@ -194,7 +198,7 @@ def _finite_primary_feature_rows(features: DataFrame) -> np.ndarray:
     return cast(np.ndarray, np.isfinite(numeric).all(axis=1))
 
 
-def _mean_reversion_primary_features(
+def _ema_trend_rsi_primary_features(
     bars: DataFrame,
     base_features: DataFrame,
 ) -> tuple[DataFrame, Series, dict[str, Any]]:
@@ -207,10 +211,15 @@ def _mean_reversion_primary_features(
 
     close = _validated_primary_close(bars)
     rsi = _causal_wilder_rsi(close)
-    ema = close.ewm(
-        span=EMA_TREND_PERIOD,
+    ema_fast = close.ewm(
+        span=EMA_FAST_PERIOD,
         adjust=False,
-        min_periods=EMA_TREND_PERIOD,
+        min_periods=EMA_FAST_PERIOD,
+    ).mean()
+    ema_slow = close.ewm(
+        span=EMA_SLOW_PERIOD,
+        adjust=False,
+        min_periods=EMA_SLOW_PERIOD,
     ).mean()
 
     features = (
@@ -219,16 +228,19 @@ def _mean_reversion_primary_features(
         .copy()
     )
     features[RSI_FEATURE] = rsi
-    features[EMA_DISTANCE_FEATURE] = close / ema - 1.0
+    features[EMA_DISTANCE_FEATURE] = close / ema_slow - 1.0
+    features[EMA_SPREAD_FEATURE] = ema_fast / ema_slow - 1.0
 
     valid_rsi = np.isfinite(rsi.to_numpy(dtype=float))
-    valid_ema = np.isfinite(ema.to_numpy(dtype=float))
+    valid_ema_fast = np.isfinite(ema_fast.to_numpy(dtype=float))
+    valid_ema_slow = np.isfinite(ema_slow.to_numpy(dtype=float))
+    valid_ema = valid_ema_fast & valid_ema_slow
     valid_features = _finite_primary_feature_rows(features)
-    oversold = rsi.lt(RSI_OVERSOLD_THRESHOLD)
-    trend_aligned = close.gt(ema)
+    entry_oversold = rsi.lt(RSI_ENTRY_THRESHOLD)
+    trend_aligned = ema_fast.gt(ema_slow)
     signal = (
         (
-            oversold
+            entry_oversold
             & trend_aligned
             & Series(valid_rsi)
             & Series(valid_ema)
@@ -241,23 +253,27 @@ def _mean_reversion_primary_features(
         "generation": PRIMARY_SIGNAL_GENERATION,
         "rsi_method": "WILDER_EMA_ALPHA_1_OVER_14_ADJUST_FALSE",
         "rsi_period": RSI_PERIOD,
-        "rsi_threshold": RSI_OVERSOLD_THRESHOLD,
+        "rsi_threshold": RSI_ENTRY_THRESHOLD,
         "rsi_comparison": "STRICT_LT",
-        "ema_period": EMA_TREND_PERIOD,
-        "ema_method": "CAUSAL_SPAN_200_ADJUST_FALSE",
-        "trend_comparison": "CLOSE_STRICTLY_ABOVE_EMA200",
+        "ema_fast_period": EMA_FAST_PERIOD,
+        "ema_slow_period": EMA_SLOW_PERIOD,
+        "ema_method": "CAUSAL_SPAN_ADJUST_FALSE",
+        "trend_comparison": "EMA50_STRICTLY_ABOVE_EMA200",
         "rsi_valid_rows": int(valid_rsi.sum()),
+        "ema_fast_valid_rows": int(valid_ema_fast.sum()),
+        "ema_slow_valid_rows": int(valid_ema_slow.sum()),
         "ema_valid_rows": int(valid_ema.sum()),
         "feature_valid_rows": int(valid_features.sum()),
-        "oversold_rows": int((oversold & Series(valid_rsi)).sum()),
+        "oversold_rows": int((entry_oversold & Series(valid_rsi)).sum()),
         "trend_aligned_rows": int((trend_aligned & Series(valid_ema)).sum()),
         "primary_buy_count": int(signal.sum()),
+        "research_signal_count_target": RESEARCH_SIGNAL_COUNT_TARGET,
+        "research_signal_target_met": int(signal.sum()) >= RESEARCH_SIGNAL_COUNT_TARGET,
         "lookahead_used": False,
         "execution_timing": "CLOSED_1H_BAR_NEXT_BAR_OPEN",
     }
     signal.name = "primary_buy_signal"
     return features, signal, diagnostics
-
 
 def _generate_primary_oof_events(
     primary_signal: Series,
@@ -421,7 +437,7 @@ def _oof_training_frame(
 ) -> tuple[DataFrame, dict[str, Any]]:
     oof_events = _generate_primary_oof_events(
         primary_signal,
-        start_index=EMA_TREND_PERIOD,
+        start_index=EMA_SLOW_PERIOD,
         stop_index=train_end,
     )
     labelled, diagnostics = _training_oof_labels(bars, oof_events, train_end)
@@ -431,6 +447,7 @@ def _oof_training_frame(
 def _support_shortfall(error: ValueError) -> bool:
     code = str(error)
     prefixes = (
+        "v4ai_insufficient_primary_signals",
         "v4ah_fit_rows_insufficient",
         "v4ah_fit_rows_insufficient_after_purge",
         "v4ah_temperature_rows_insufficient_after_purge",
@@ -610,7 +627,7 @@ def _forward_probability_map(
 def _candidate_id(mode: str) -> str:
     if mode not in CANDIDATE_NAMES:
         raise ValueError("v4ai_candidate_mode_invalid")
-    return f"{SYMBOL}|{TIMEFRAME}|RSI14_MEAN_REVERSION_EMA200|{mode}"
+    return f"{SYMBOL}|{TIMEFRAME}|EMA50_EMA200_RSI40|{mode}"
 
 
 def _profit_factor(metrics: dict[str, Any]) -> float:
@@ -1238,15 +1255,16 @@ def _validate_report_primary_filter(report: dict[str, Any]) -> None:
         and report.get("primary_filter") == PRIMARY_FILTER_CONTRACT
         and diagnostics.get("generation") == PRIMARY_SIGNAL_GENERATION
         and diagnostics.get("rsi_period") == RSI_PERIOD
-        and diagnostics.get("rsi_threshold") == RSI_OVERSOLD_THRESHOLD
-        and diagnostics.get("ema_period") == EMA_TREND_PERIOD
+        and diagnostics.get("rsi_threshold") == RSI_ENTRY_THRESHOLD
+        and diagnostics.get("ema_fast_period") == EMA_FAST_PERIOD
+        and diagnostics.get("ema_slow_period") == EMA_SLOW_PERIOD
         and diagnostics.get("rsi_comparison") == "STRICT_LT"
-        and diagnostics.get("trend_comparison") == "CLOSE_STRICTLY_ABOVE_EMA200"
+        and diagnostics.get("trend_comparison") == "EMA50_STRICTLY_ABOVE_EMA200"
+        and diagnostics.get("research_signal_count_target") == RESEARCH_SIGNAL_COUNT_TARGET
         and diagnostics.get("lookahead_used") is False
     )
     if not valid:
         raise ValueError("v4ai_report_primary_filter_invalid")
-
 
 def _validate_report_geometry(report: dict[str, Any]) -> None:
     if report.get("fixed_exit_geometry") != PRIMARY_GEOMETRY:
@@ -1319,9 +1337,14 @@ def _validate_meta_report(meta: dict[str, Any]) -> None:
     if meta.get("enabled"):
         _validate_meta_threshold(meta)
         _validate_meta_separation(meta)
-    elif separation.get("status") != "NOT_AVAILABLE_MODEL_NOT_FIT":
+        return
+    if separation.get("status") != "NOT_AVAILABLE_MODEL_NOT_FIT":
         raise ValueError("v4ai_separation_status_missing")
-
+    skip_reason = meta.get("skip_reason")
+    if not isinstance(skip_reason, str) or not skip_reason:
+        raise ValueError("v4ai_meta_skip_reason_missing")
+    if not _support_shortfall(ValueError(skip_reason)):
+        raise ValueError("v4ai_meta_skip_reason_not_supported")
 
 def _validate_report(report: dict[str, Any], commit_sha: str) -> None:
     _validate_report_identity(report, commit_sha)
@@ -1374,11 +1397,11 @@ def _format_acceptance(item: dict[str, Any]) -> str:
 
 def _render_step_summary_header(report: dict[str, Any]) -> list[str]:
     return [
-        "## AliX V4-AJ ETHUSDT RSI Mean-Reversion Maker-Fee Validation",
+        "## AliX V4-AK ETHUSDT EMA50/EMA200 + RSI40 Maker-Fee Validation",
         "",
         f"Commit SHA: {report['commit_sha']}",
         "Scope: ETHUSDT Spot, 1h, 1825 days requested with trim to latest contiguous segment, public OHLCV only.",
-        "Primary signal: causal Wilder RSI(14) < 30 AND Close > EMA200; execute next-bar open.",
+        "Primary signal: causal Wilder RSI(14) < 40 AND EMA50 > EMA200; execute next-bar open.",
         "Primary ADX filter: DISABLED. ADX(14)>20 is retained only as a diagnostic ablation, not as an entry gate.",
         "Execution: closed-candle signal, next-bar-open entry, no pyramiding.",
         "Maker-cost assumption: 10 bps fee + 5 bps slippage per side = 30 bps round trip.",
@@ -1449,15 +1472,25 @@ def _render_meta_diagnostics(report: dict[str, Any]) -> list[str]:
             f"contiguous_start={report['dataset_provenance'].get('resample_gap_trim', {}).get('segment_start_utc', 'N/A')}."
         ),
         (
-            "Primary RSI diagnostics: "
-            f"valid={report['primary_signal_diagnostics']['rsi_valid_rows']}; "
-            f"oversold={report['primary_signal_diagnostics']['oversold_rows']}; "
-            f"Close>EMA200={report['primary_signal_diagnostics']['trend_aligned_rows']}; "
+            "Primary EMA/RSI diagnostics: "
+            f"RSI valid={report['primary_signal_diagnostics']['rsi_valid_rows']}; "
+            f"RSI<40={report['primary_signal_diagnostics']['oversold_rows']}; "
+            f"EMA50/EMA200 valid={report['primary_signal_diagnostics']['ema_valid_rows']}; "
+            f"EMA50>EMA200={report['primary_signal_diagnostics']['trend_aligned_rows']}; "
             f"BUY={report['primary_signal_diagnostics']['primary_buy_count']}; "
             f"lookahead={report['primary_signal_diagnostics']['lookahead_used']}."
         ),
-        f"Primary BUYs (ADX disabled): {report['signal_counts']['primary_buy_count']}; "
-        f"ADX>20 diagnostic-ablation BUYs: {report['signal_counts']['adx_ablation_buy_count']}.",
+        (
+            "Primary BUYs research/train/forward: "
+            f"{report['signal_counts']['primary_buy_count']}/"
+            f"{report['signal_counts']['train_primary_buy_count']}/"
+            f"{report['signal_counts']['forward_validation_primary_buy_count']}; "
+            f"research target >=100="
+            f"{'PASS' if report['signal_counts']['research_signal_target_met'] else 'WARNING'}; "
+            f"Meta outer-train minimum="
+            f"{report['signal_counts']['minimum_primary_train_signal_count']}."
+        ),
+        f"ADX20 diagnostic-ablation BUYs: {report['signal_counts']['adx_ablation_buy_count']}.",
         f"OOF primary events: {training.get('oof_primary_event_count', 0)}; "
         f"matured costed OOF labels: {training.get('matured_costed_oof_label_count', 0)}; "
         f"immature excluded: {training.get('immature_oof_event_count', 0)}.",
@@ -1484,6 +1517,10 @@ def _render_meta_diagnostics(report: dict[str, Any]) -> list[str]:
         f"Meta fit: {'ENABLED' if meta.get('enabled') else 'SKIPPED'}; "
         f"calibration={split.get('temperature_calibration_mode', 'N/A')}; "
         f"reason={meta.get('skip_reason') or 'N/A'}.",
+        (
+            f"WARNING: Meta was skipped ({meta.get('skip_reason')}); Primary metrics remain reportable, "
+            "Meta validation is unavailable, and promotion remains blocked."
+        ) if not meta.get("enabled") else "Meta model trained; forward validation is reported separately.",
         (
             f"Regime: KMeans clusters={report.get('regime_diagnostics', {}).get('cluster_count', 'N/A')}; "
             f"fit rows={report.get('regime_diagnostics', {}).get('fit_rows', 0)}."
@@ -1669,21 +1706,30 @@ def run_v4ai(
         input_dir, days, commit_sha, allow_exchange_gaps=ALLOW_EXCHANGE_GAPS
     )
     primary_features, primary_signal, primary_signal_diagnostics = (
-        _mean_reversion_primary_features(research_bars, base_features)
+        _ema_trend_rsi_primary_features(research_bars, base_features)
     )
 
     # ADX is retained strictly as a diagnostic-only ablation of the RSI signal.
     adx_ablation_signal, adx_ablation_diagnostics = _apply_adx_ablation(
         primary_signal, primary_features
     )
-    _, train_gate, primary_event_indices = v4af._primary_signal_evaluation(
-        primary_signal, train_end, forward_end
+    primary_window_counts, train_gate, primary_event_indices = (
+        v4af._primary_signal_evaluation(primary_signal, train_end, forward_end)
     )
     adx_ablation_event_indices = v4af._eligible_primary_event_indices(
         adx_ablation_signal, train_end, forward_end
     )
     signal_counts = {
         "primary_buy_count": int(primary_signal.sum()),
+        "train_primary_buy_count": int(primary_window_counts["train_primary_buy_count"]),
+        "forward_validation_primary_buy_count": int(
+            primary_window_counts["forward_validation_primary_buy_count"]
+        ),
+        "minimum_primary_train_signal_count": int(
+            train_gate["minimum_primary_buy_count"]
+        ),
+        "research_signal_target_met": int(primary_signal.sum())
+        >= RESEARCH_SIGNAL_COUNT_TARGET,
         "adx_ablation_buy_count": int(adx_ablation_signal.sum()),
         "primary_forward_event_count": len(primary_event_indices),
         "adx_ablation_forward_event_count": len(adx_ablation_event_indices),

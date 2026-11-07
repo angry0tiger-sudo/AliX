@@ -1,4 +1,4 @@
-"""Unit tests for V4-AJ RSI mean-reversion and maker-fee research contracts."""
+"""Unit tests for V4-AK EMA50/EMA200 trend and RSI40 research contracts."""
 
 from __future__ import annotations
 
@@ -114,16 +114,21 @@ def _valid_report() -> dict[str, Any]:
         "primary_signal_diagnostics": {
             "generation": v4ai.PRIMARY_SIGNAL_GENERATION,
             "rsi_period": 14,
-            "rsi_threshold": 30.0,
-            "ema_period": 200,
+            "rsi_threshold": 40.0,
+            "ema_fast_period": 50,
+            "ema_slow_period": 200,
             "rsi_comparison": "STRICT_LT",
-            "trend_comparison": "CLOSE_STRICTLY_ABOVE_EMA200",
+            "trend_comparison": "EMA50_STRICTLY_ABOVE_EMA200",
             "rsi_valid_rows": 39_800,
+            "ema_fast_valid_rows": 39_950,
+            "ema_slow_valid_rows": 39_801,
             "ema_valid_rows": 39_801,
             "feature_valid_rows": 39_800,
-            "oversold_rows": 2_400,
+            "oversold_rows": 8_400,
             "trend_aligned_rows": 20_000,
-            "primary_buy_count": 100,
+            "primary_buy_count": 800,
+            "research_signal_count_target": 100,
+            "research_signal_target_met": True,
             "lookahead_used": False,
             "execution_timing": "CLOSED_1H_BAR_NEXT_BAR_OPEN",
         },
@@ -146,6 +151,7 @@ def _valid_report() -> dict[str, Any]:
         "exit_geometry_matrix": _valid_matrix(),
         "meta_model": {
             "enabled": False,
+            "skip_reason": "v4ai_insufficient_primary_signals",
             "separation_diagnostics": {"status": "NOT_AVAILABLE_MODEL_NOT_FIT"},
         },
         "safety": v4ai._safety_report(),
@@ -165,16 +171,16 @@ def test_execution_cost_is_locked_to_thirty_bps() -> None:
         )
 
 
-def test_rsi_mean_reversion_signal_is_causal_and_drops_breakout_features() -> None:
+def test_ema50_ema200_rsi40_signal_is_causal_and_drops_breakout_features() -> None:
     rising = np.linspace(100.0, 150.0, 240)
     pullback = 150.0 - np.arange(1, 16, dtype=float) * 0.5
     bars = DataFrame({"close": np.concatenate((rising, pullback))})
-    features, signal, diagnostics = v4ai._mean_reversion_primary_features(
+    features, signal, diagnostics = v4ai._ema_trend_rsi_primary_features(
         bars, _primary_feature_frame(len(bars))
     )
     assert signal.dtype == bool
     assert bool(signal.iloc[-1])
-    assert float(features.iloc[-1][v4ai.RSI_FEATURE]) < 30.0
+    assert float(features.iloc[-1][v4ai.RSI_FEATURE]) < 40.0
     assert float(features.iloc[-1][v4ai.EMA_DISTANCE_FEATURE]) > 0.0
     breakout_only_features = set(v4ai.LEGACY_PRIMARY_FEATURE_COLUMNS) - {
         v4ai.EMA_DISTANCE_FEATURE
@@ -184,11 +190,11 @@ def test_rsi_mean_reversion_signal_is_causal_and_drops_breakout_features() -> No
     assert diagnostics["generation"] == v4ai.PRIMARY_SIGNAL_GENERATION
     assert diagnostics["lookahead_used"] is False
     assert diagnostics["rsi_comparison"] == "STRICT_LT"
-    assert diagnostics["trend_comparison"] == "CLOSE_STRICTLY_ABOVE_EMA200"
+    assert diagnostics["trend_comparison"] == "EMA50_STRICTLY_ABOVE_EMA200"
 
     prefix_bars = bars.iloc[:240].reset_index(drop=True)
     prefix_features = _primary_feature_frame(240)
-    _, prefix_signal, _ = v4ai._mean_reversion_primary_features(
+    _, prefix_signal, _ = v4ai._ema_trend_rsi_primary_features(
         prefix_bars, prefix_features
     )
     pd.testing.assert_series_equal(
@@ -198,11 +204,11 @@ def test_rsi_mean_reversion_signal_is_causal_and_drops_breakout_features() -> No
     )
 
 
-def test_rsi_oversold_without_close_above_ema200_does_not_buy() -> None:
+def test_rsi_below_40_without_ema50_above_ema200_does_not_buy() -> None:
     falling = np.linspace(150.0, 100.0, 240)
     continued_fall = 100.0 - np.arange(1, 16, dtype=float) * 0.5
     bars = DataFrame({"close": np.concatenate((falling, continued_fall))})
-    features, signal, diagnostics = v4ai._mean_reversion_primary_features(
+    features, signal, diagnostics = v4ai._ema_trend_rsi_primary_features(
         bars, _primary_feature_frame(len(bars))
     )
     assert diagnostics["oversold_rows"] > 0
@@ -211,20 +217,48 @@ def test_rsi_oversold_without_close_above_ema200_does_not_buy() -> None:
     assert float(features.iloc[-1][v4ai.EMA_DISTANCE_FEATURE]) < 0.0
 
 
-def test_rsi_signal_rejects_invalid_prices_and_feature_alignment() -> None:
+def test_v4ak_signal_rejects_invalid_prices_and_feature_alignment() -> None:
     with pytest.raises(ValueError, match="v4ai_primary_close_values_invalid"):
-        v4ai._mean_reversion_primary_features(
+        v4ai._ema_trend_rsi_primary_features(
             DataFrame({"close": [100.0, 101.0, np.nan]}),
             _primary_feature_frame(3),
         )
     with pytest.raises(ValueError, match="v4ai_primary_feature_alignment_invalid"):
-        v4ai._mean_reversion_primary_features(
+        v4ai._ema_trend_rsi_primary_features(
             DataFrame({"close": [100.0, 101.0]}),
             _primary_feature_frame(3),
         )
 
 
-def test_v4aj_exit_geometry_is_sl_1_5_tp_2_5() -> None:
+def test_rsi_at_or_above_40_does_not_buy_even_in_bull_trend() -> None:
+    bars = DataFrame({"close": np.linspace(100.0, 150.0, 260)})
+    features, signal, diagnostics = v4ai._ema_trend_rsi_primary_features(
+        bars, _primary_feature_frame(len(bars))
+    )
+    assert diagnostics["trend_aligned_rows"] > 0
+    assert diagnostics["oversold_rows"] == 0
+    assert int(signal.sum()) == 0
+    assert float(features.iloc[-1][v4ai.RSI_FEATURE]) >= 40.0
+    assert float(features.iloc[-1][v4ai.EMA_SPREAD_FEATURE]) > 0.0
+
+
+def test_primary_oof_events_use_the_v4ak_signal_generation() -> None:
+    signal = pd.Series(
+        [False] * 200 + [index % 4 == 0 for index in range(600)],
+        dtype=bool,
+    )
+    events = v4ai._generate_primary_oof_events(
+        signal, start_index=200, stop_index=800
+    )
+    assert len(events) >= 100
+    assert events["primary_oof"].all()
+    assert events["primary_signal"].eq("BUY").all()
+    assert events["primary_signal_generation"].eq(
+        v4ai.PRIMARY_SIGNAL_GENERATION
+    ).all()
+
+
+def test_v4ak_exit_geometry_is_sl_1_5_tp_2_5() -> None:
     management = v4ai._trade_management_config()
     assert management.stop_loss_atr_multiplier == 1.5
     assert management.take_profit_atr_multiplier == 2.5
@@ -787,6 +821,13 @@ def test_report_validates_p70_threshold_scope_when_meta_is_enabled() -> None:
         v4ai._validate_report(report, "a" * 40)
 
 
+def test_report_rejects_unrecognized_meta_skip_reason() -> None:
+    report = _valid_report()
+    report["meta_model"]["skip_reason"] = "unexpected_model_runtime_failure"
+    with pytest.raises(ValueError, match="v4ai_meta_skip_reason_not_supported"):
+        v4ai._validate_report(report, "a" * 40)
+
+
 def test_step_summary_discloses_maker_proxy_and_fill_model_limitation() -> None:
     report = _valid_report()
     report.update(
@@ -803,8 +844,12 @@ def test_step_summary_discloses_maker_proxy_and_fill_model_limitation() -> None:
                 },
             },
             "signal_counts": {
-                "primary_buy_count": 100,
-                "adx_ablation_buy_count": 40,
+                "primary_buy_count": 800,
+                "train_primary_buy_count": 560,
+                "forward_validation_primary_buy_count": 120,
+                "minimum_primary_train_signal_count": 50,
+                "research_signal_target_met": True,
+                "adx_ablation_buy_count": 400,
             },
             "meta_model": {
                 "enabled": True,
@@ -868,10 +913,13 @@ def test_step_summary_discloses_maker_proxy_and_fill_model_limitation() -> None:
         }
     )
     summary = v4ai._render_step_summary(report)
-    assert "Primary signal: causal Wilder RSI(14) < 30 AND Close > EMA200" in summary
+    assert "Primary signal: causal Wilder RSI(14) < 40 AND EMA50 > EMA200" in summary
     assert "Fixed candidate geometry: SL=1.5 ATR, TP=2.5 ATR" in summary
-    assert "PRIMARY_RSI_MR_30BPS" in summary
-    assert "META_TOP_70_RSI_MR_30BPS" in summary
+    assert "PRIMARY_EMA50_EMA200_RSI40_30BPS" in summary
+    assert "META_TOP_70_EMA50_EMA200_RSI40_30BPS" in summary
+    assert "Primary BUYs research/train/forward: 800/560/120" in summary
+    assert "research target >=100=PASS" in summary
+    assert "Meta outer-train minimum=50" in summary
     assert "Primary ADX filter: DISABLED" in summary
     assert "diagnostic ablation" in summary
     assert "30 bps round trip" in summary
@@ -887,6 +935,26 @@ def test_step_summary_discloses_maker_proxy_and_fill_model_limitation() -> None:
     assert "Z.AI diagnostic reference" in summary
     assert "existing Net PF >1.5 acceptance gate remains unchanged" in summary
     assert "historical trials are not included" in summary
+
+    report["meta_model"] = {
+        "enabled": False,
+        "skip_reason": "v4ai_insufficient_primary_signals",
+        "separation_diagnostics": {"status": "NOT_AVAILABLE_MODEL_NOT_FIT"},
+    }
+    meta_candidate = next(
+        item for item in report["candidates"] if item["mode"] == v4ai.META_CANDIDATE
+    )
+    meta_candidate["status"] = "SKIPPED_INSUFFICIENT_META_SUPPORT"
+    meta_candidate["accepted_signal_count"] = 0
+    meta_candidate["metrics"]["trade_count"] = 0
+    meta_candidate["metrics"]["win_rate"] = None
+    meta_candidate["metrics"]["net_profit_factor"] = None
+    skipped_summary = v4ai._render_step_summary(report)
+    assert "WARNING: Meta was skipped (v4ai_insufficient_primary_signals)" in (
+        skipped_summary
+    )
+    assert "Primary metrics remain reportable" in skipped_summary
+    assert "META_TOP_70_EMA50_EMA200_RSI40_30BPS" in skipped_summary
 
 
 def test_dataset_scope_expanded_to_1825_days_with_disclosed_gap_policy() -> None:
