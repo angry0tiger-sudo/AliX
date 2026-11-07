@@ -1268,6 +1268,7 @@ def _validate_report_primary_filter(report: dict[str, Any]) -> None:
     if not valid:
         raise ValueError("v4ai_report_primary_filter_invalid")
 
+
 def _validate_report_geometry(report: dict[str, Any]) -> None:
     if report.get("fixed_exit_geometry") != PRIMARY_GEOMETRY:
         raise ValueError("v4ai_report_fixed_exit_geometry_invalid")
@@ -1347,6 +1348,7 @@ def _validate_meta_report(meta: dict[str, Any]) -> None:
         raise ValueError("v4ai_meta_skip_reason_missing")
     if not _support_shortfall(ValueError(skip_reason)):
         raise ValueError("v4ai_meta_skip_reason_not_supported")
+
 
 def _validate_report(report: dict[str, Any], commit_sha: str) -> None:
     _validate_report_identity(report, commit_sha)
