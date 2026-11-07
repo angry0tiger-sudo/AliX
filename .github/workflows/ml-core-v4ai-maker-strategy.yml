@@ -1,4 +1,4 @@
-name: AliX V4-AK EMA50/EMA200 RSI40 Economic Validation
+name: AliX V4-AM CUSUM/HMM Regime-Reactive Economic Validation
 # Owner-directed retrigger: the fail-closed exception is bound to ETHUSDT's empirically
 # observed 80 missing 1m opens from 2023-03-24T12:40:00Z through 13:59:00Z.
 
@@ -15,14 +15,17 @@ on:
       - scripts/fetch_binance_public_ohlcv.py
       - scripts/discover_binance_ethusdt_gap.py
       - services/meta_labeling/v4ah.py
+      - services/meta_labeling/v4am.py
       - services/meta_labeling/v4y.py
       - services/ml_core/economic_backtest.py
       - services/ml_core/extended_features.py
       - tests/unit/test_ml_core_v4ai_maker_strategy.py
+      - tests/unit/test_ml_core_v4am_regime.py
       - tests/unit/test_ml_core_v4ah_advanced_ai.py
       - tests/unit/test_fetch_binance_public_ohlcv.py
       - tests/unit/test_ml_core_real_data_baseline.py
       - tests/unit/test_ml_core_v4af_meta_final.py
+      - tests/unit/test_ml_core_economic_backtest.py
   workflow_dispatch:
 
 permissions:
@@ -30,7 +33,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: alix-v4ai-maker-strategy-economic
+  group: alix-v4am-maker-strategy-economic
   cancel-in-progress: false
 
 jobs:
@@ -46,7 +49,7 @@ jobs:
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Require Standard CI success for this exact V4-AK commit
+      - name: Require Standard CI success for this exact V4-AM commit
         env:
           GITHUB_REPOSITORY: ${{ github.repository }}
           TARGET_SHA: ${{ github.sha }}
@@ -123,7 +126,7 @@ jobs:
           else:
               raise SystemExit("ci_green_gate_timeout:" + target_sha)
           PY
-      - name: Checkout exact V4-AK commit without persisted credentials
+      - name: Checkout exact V4-AM commit without persisted credentials
         uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
@@ -133,7 +136,7 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - name: Install pinned V4-AK research dependencies
+      - name: Install pinned V4-AM research dependencies
         run: |
           python -m pip install pip==25.2
           python -m pip install \
@@ -143,7 +146,7 @@ jobs:
             scikit-learn==1.9.0 \
             lightgbm==4.7.0 \
             shap==0.54.1
-      - name: Confirm V4-AK scope, primary signal, and fail-closed safety
+      - name: Confirm V4-AM scope, primary signal, and fail-closed safety
         env:
           TARGET_SHA: ${{ github.sha }}
         run: |
@@ -167,19 +170,31 @@ jobs:
           assert execution.fee_bps == 10.0
           assert execution.slippage_bps == 5.0
           assert v4ai.ROUND_TRIP_COST_BPS == 30.0
+          from services.meta_labeling import v4am
           assert v4ai.PRIMARY_SIGNAL_GENERATION == (
-              "CAUSAL_WILDER_RSI14_LT40_EMA50_ABOVE_EMA200"
+              "CAUSAL_CUSUM2SIGMA_GAUSSIAN_HMM3_REGIME_REACTIVE_HARD_SELECTOR"
           )
           assert v4ai.PRIMARY_FILTER_CONTRACT == {
-              "entry_indicator": "WILDER_RSI",
-              "rsi_period": "14",
-              "rsi_threshold": "40.0",
-              "rsi_comparison": "STRICT_LT",
-              "trend_fast_period": "50",
-              "trend_slow_period": "200",
-              "trend_reference": "CAUSAL_EMA",
-              "trend_comparison": "EMA50_STRICTLY_ABOVE_EMA200",
+              "event_filter": "TWO_SIDED_CUSUM_STANDARDIZED_LOG_RETURN",
+              "cusum_window": "24",
+              "cusum_threshold_sigma": "2.0",
+              "cusum_drift_allowance_sigma": "0.5",
+              "regime_model": "DIAGONAL_GAUSSIAN_HMM_3_STATE",
+              "regime_state_selection": "DOMINANT_POSTERIOR_HARD_SELECTOR",
+              "momentum_strategy": "DONCHIAN_UPPER_BREAKOUT_20_TRENDING_UP_ONLY_SPOT_LONG",
+              "mean_reversion_strategy": "WILDER_RSI14_LT30_CUSUM_NEGATIVE_RANGING_ONLY",
+              "downtrend_policy": "LONG_ONLY_SPOT_RISK_OFF_NO_SHORT_ENTRY",
+              "position_sizing": "INVERSE_24H_REALIZED_VOL_TRAINING_MEDIAN_TARGET_CAPPED_AT_1X",
           }
+          assert v4am.CUSUM_WINDOW == 24
+          assert v4am.CUSUM_THRESHOLD_SIGMA == 2.0
+          assert v4am.CUSUM_DRIFT_ALLOWANCE_SIGMA == 0.5
+          assert v4am.HMM_STATE_COUNT == 3
+          assert v4am.HMM_MINIMUM_TRAIN_ROWS == 100
+          assert v4ai.DONCHIAN_LOOKBACK == 20
+          assert v4ai.RANGE_RSI_ENTRY_THRESHOLD == 30.0
+          assert v4ai.RESEARCH_SIGNAL_COUNT_TARGET == 100
+
           assert v4ai.EMA_FAST_PERIOD == 50
           assert v4ai.EMA_SLOW_PERIOD == 200
           assert v4ai.RESEARCH_SIGNAL_COUNT_TARGET == 100
@@ -201,7 +216,7 @@ jobs:
           )
           assert v4ah.V4AH_TOP_K_FEATURES == 30
           assert v4ah.V4AH_REGIME_COUNT == 3
-          print("V4-AK scope, cost, EMA50/EMA200 RSI40 signal, ADX ablation, and closed-safety contracts: PASS")
+          print("V4-AM scope, cost, CUSUM/HMM Regime-Reactive signal, ADX ablation, and closed-safety contracts: PASS")
           PY
       - name: Fetch complete public Binance Spot 1825-day ETHUSDT data
         run: |
@@ -226,21 +241,21 @@ jobs:
           printf 'requested_days=1825\nprovider=Binance Spot public klines API\n'
           printf 'exchange_gap_policy=only_80m_ethusdt_2023-03-24T12:40Z_to_13:59Z_no_interpolation\n'
           printf 'private_api_calls=0\ncredentials_used=false\n'
-      - name: Run V4-AK EMA50/EMA200 RSI40, ADX, Meta P70, and exit-geometry evaluation
+      - name: Run V4-AM CUSUM/HMM Regime-Reactive, ADX, Meta P70, and exit-geometry evaluation
         run: |
           set -euo pipefail
           python -m scripts.run_ml_core_v4ai_maker_strategy \
             --input-dir "$RUNNER_TEMP/alix-v4ai-market-data" \
-            --output-report "$GITHUB_WORKSPACE/alix-v4ai-maker-strategy-report.json" \
-            --output-trades-csv "$GITHUB_WORKSPACE/alix-v4ai-maker-strategy-trades.csv" \
-            --output-decisions-csv "$GITHUB_WORKSPACE/alix-v4ai-maker-strategy-decisions.csv" \
+            --output-report "$GITHUB_WORKSPACE/alix-v4am-maker-strategy-report.json" \
+            --output-trades-csv "$GITHUB_WORKSPACE/alix-v4am-maker-strategy-trades.csv" \
+            --output-decisions-csv "$GITHUB_WORKSPACE/alix-v4am-maker-strategy-decisions.csv" \
             --days 1825 \
             --commit-sha "$GITHUB_SHA"
-      - name: Validate V4-AK report and publish GitHub Step Summary
+      - name: Validate V4-AM report and publish GitHub Step Summary
         env:
-          REPORT_PATH: "${{ github.workspace }}/alix-v4ai-maker-strategy-report.json"
-          TRADES_CSV: "${{ github.workspace }}/alix-v4ai-maker-strategy-trades.csv"
-          DECISIONS_CSV: "${{ github.workspace }}/alix-v4ai-maker-strategy-decisions.csv"
+          REPORT_PATH: "${{ github.workspace }}/alix-v4am-maker-strategy-report.json"
+          TRADES_CSV: "${{ github.workspace }}/alix-v4am-maker-strategy-trades.csv"
+          DECISIONS_CSV: "${{ github.workspace }}/alix-v4am-maker-strategy-decisions.csv"
           TARGET_SHA: ${{ github.sha }}
         run: |
           python - <<'PY'
@@ -278,22 +293,38 @@ jobs:
               "round_trip_cost_bps": 30.0,
               "passive_limit_fill_simulation": False,
           }
-          assert report["primary_signal"] == (
-              "CAUSAL_WILDER_RSI14_LT40_EMA50_ABOVE_EMA200"
+          from scripts.run_ml_core_v4ai_maker_strategy import (
+              PRIMARY_FILTER_CONTRACT,
+              PRIMARY_SIGNAL_GENERATION,
           )
-          assert report["primary_filter"] == {
-              "entry_indicator": "WILDER_RSI",
-              "rsi_period": "14",
-              "rsi_threshold": "40.0",
-              "rsi_comparison": "STRICT_LT",
-              "trend_fast_period": "50",
-              "trend_slow_period": "200",
-              "trend_reference": "CAUSAL_EMA",
-              "trend_comparison": "EMA50_STRICTLY_ABOVE_EMA200",
-          }
-          assert report["primary_signal_diagnostics"]["lookahead_used"] is False
-          assert report["primary_signal_diagnostics"]["research_signal_count_target"] == 100
+          assert report["primary_signal"] == PRIMARY_SIGNAL_GENERATION
+          assert report["primary_filter"] == PRIMARY_FILTER_CONTRACT
+          primary_diagnostics = report["primary_signal_diagnostics"]
+          assert primary_diagnostics["lookahead_used"] is False
+          assert primary_diagnostics["research_signal_count_target"] == 100
+          cusum = primary_diagnostics["cusum"]
+          assert cusum["algorithm"] == "TWO_SIDED_CUSUM_STANDARDIZED_LOG_RETURN"
+          assert cusum["threshold_sigma"] == 2.0
+          assert cusum["lookahead_used"] is False
+          assert cusum["final_holdout_features_unavailable"] is True
+          selector = primary_diagnostics["selector"]
+          assert selector["hard_selector_enabled"] is True
+          assert selector["soft_blend_enabled"] is False
+          assert selector["short_entries_enabled"] is False
+          sizing = primary_diagnostics["volatility_targeting"]
+          assert sizing["sizing_cap"] == 1.0
+          assert sizing["leverage_enabled"] is False
+          regime = report["regime_diagnostics"]
+          assert regime["algorithm"] == "GAUSSIAN_HMM_DIAGONAL"
+          assert regime["state_count"] == 3
+          assert regime["fit_scope"] == "OUTER_TRAIN_ONLY"
+          assert regime["fit_end_index_exclusive"] == report["chronological_evaluation"]["train_end_index_exclusive"]
+          assert regime["posterior_method"] == "CAUSAL_FORWARD_FILTER"
+          assert regime["smoothing_used"] is False
+          assert regime["lookahead_used"] is False
+          assert regime["final_holdout_features_unavailable"] is True
           assert report["signal_counts"]["minimum_primary_train_signal_count"] == 50
+
           assert report["fixed_exit_geometry"]["initial_stop_atr"] == 1.5
           assert report["fixed_exit_geometry"]["take_profit_atr"] == 2.5
           assert report["fixed_exit_geometry"]["initial_stop_atr"] == 1.5
@@ -367,6 +398,8 @@ jobs:
               assert trade["timeframe"] == "1h"
               assert trade["direction"] == "LONG"
               assert float(trade["round_trip_cost_bps"]) == 30.0
+              fraction = float(trade["position_fraction"])
+              assert 0.0 < fraction <= 1.0
               gross = float(trade["gross_market_pnl_usd"])
               fees = float(trade["fees_usd"])
               slippage = float(trade["slippage_cost_usd"])
@@ -388,10 +421,13 @@ jobs:
           )
           summary = _render_step_summary(report)
           required = (
-              "PRIMARY_EMA50_EMA200_RSI40_30BPS",
-              "PRIMARY_ADX20_ABLATION_EMA50_EMA200_RSI40_30BPS",
-              "META_TOP_70_EMA50_EMA200_RSI40_30BPS",
-              "Primary signal: causal Wilder RSI(14) < 40 AND EMA50 > EMA200",
+              "PRIMARY_CUSUM_HMM_REGIME_REACTIVE_30BPS",
+              "PRIMARY_ADX20_DIAGNOSTIC_ABLATION_CUSUM_HMM_30BPS",
+              "META_TOP_70_CUSUM_HMM_REGIME_REACTIVE_30BPS",
+              "Primary event trigger: two-sided CUSUM on closed-bar log returns",
+              "Regime model: diagonal Gaussian HMM(3)",
+              "Hard selector:",
+              "Volatility targeting:",
               "research target >=100=",
               "Fixed candidate geometry: SL=1.5 ATR, TP=2.5 ATR",
               "Primary ADX filter: DISABLED",
@@ -418,27 +454,27 @@ jobs:
               "a", encoding="utf-8"
           ) as handle:
               handle.write(summary)
-          Path("alix-v4ai-maker-strategy-step-summary.md").write_text(
+          Path("alix-v4am-maker-strategy-step-summary.md").write_text(
               summary, encoding="utf-8"
           )
           print(summary, end="")
           meta_candidate = next(
               item for item in report["candidates"]
-              if item["mode"] == "META_TOP_70_EMA50_EMA200_RSI40_30BPS"
+              if item["mode"] == "META_TOP_70_CUSUM_HMM_REGIME_REACTIVE_30BPS"
           )
           meta_trade_count = int(meta_candidate["metrics"]["trade_count"])
           if not meta["enabled"]:
               skip_reason = meta.get("skip_reason")
               if not isinstance(skip_reason, str) or not skip_reason:
-                  raise SystemExit("v4ak_meta_skip_reason_missing")
+                  raise SystemExit("v4am_meta_skip_reason_missing")
               if not v4ai._support_shortfall(ValueError(skip_reason)):
                   raise SystemExit(
-                      "v4ak_meta_skip_reason_not_supported:" + skip_reason
+                      "v4am_meta_skip_reason_not_supported:" + skip_reason
                   )
               if meta_candidate["status"] != "SKIPPED_INSUFFICIENT_META_SUPPORT":
-                  raise SystemExit("v4ak_meta_skip_status_invalid")
+                  raise SystemExit("v4am_meta_skip_status_invalid")
               print(
-                  "::warning::V4-AK Meta model skipped due to insufficient "
+                  "::warning::V4-AM Meta model skipped due to insufficient "
                   "training support: "
                   + skip_reason
                   + ". Primary metrics are published; Meta acceptance is "
@@ -446,7 +482,7 @@ jobs:
               )
           elif meta_candidate["status"] != "COMPLETED" or meta_trade_count < 1:
               raise SystemExit(
-                  "v4ak_meta_model_has_no_forward_trades:"
+                  "v4am_meta_model_has_no_forward_trades:"
                   + str(meta_candidate["status"])
                   + ":"
                   + str(meta_trade_count)
@@ -457,14 +493,14 @@ jobs:
                   f"trades={meta_trade_count}"
               )
           PY
-      - name: Upload V4-AK report, trades, decisions, and exact Step Summary
+      - name: Upload V4-AM report, trades, decisions, and exact Step Summary
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: alix-v4ai-maker-strategy-economic
+          name: alix-v4am-maker-strategy-economic
           path: |
-            alix-v4ai-maker-strategy-report.json
-            alix-v4ai-maker-strategy-trades.csv
-            alix-v4ai-maker-strategy-decisions.csv
-            alix-v4ai-maker-strategy-step-summary.md
+            alix-v4am-maker-strategy-report.json
+            alix-v4am-maker-strategy-trades.csv
+            alix-v4am-maker-strategy-decisions.csv
+            alix-v4am-maker-strategy-step-summary.md
           if-no-files-found: warn

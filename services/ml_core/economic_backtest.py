@@ -641,11 +641,23 @@ def _open_position(
     atr_reference_timestamp: pd.Timestamp,
     config: ExecutionConfig,
     management: TradeManagementConfig,
+    position_fraction: float | None = None,
 ) -> tuple[OpenPosition, float]:
     """Open a 1x-equity Spot long and attach causal ATR barriers."""
     fee_rate = config.fee_bps / 10_000.0
     slippage_rate = config.slippage_bps / 10_000.0
-    quantity = equity * config.position_fraction / reference_price
+    selected_fraction = (
+        config.position_fraction
+        if position_fraction is None
+        else float(position_fraction)
+    )
+    if (
+        not np.isfinite(selected_fraction)
+        or not 0.0 < selected_fraction <= 1.0
+    ):
+        raise ValueError("economic_signal_position_fraction_invalid")
+    effective_fraction = min(config.position_fraction, selected_fraction)
+    quantity = equity * effective_fraction / reference_price
     entry_fill = reference_price * (1.0 + direction * slippage_rate)
     entry_fee = quantity * entry_fill * fee_rate
     entry_slippage = quantity * abs(entry_fill - reference_price)
@@ -834,6 +846,7 @@ def _close_position(
         "exit_reference_price": round(reference_price, 10),
         "exit_fill_price": round(exit_fill, 10),
         "exit_trigger_type": exit_trigger_type,
+        "position_fraction": round(position.quantity * position.entry_reference_price / position.equity_at_entry, 10),
         "quantity": round(position.quantity, 10),
         "gross_market_pnl_usd": round(gross_pnl, 8),
         "fees_usd": round(fees, 8),
@@ -1178,6 +1191,7 @@ def _open_for_signal(
         atr_timestamp,
         config,
         management,
+        position_fraction=signal_item.get("position_fraction"),
     )
     _update_equity_extrema(state, marked_equity)
     _append_equity_event(state, timestamp, marked_equity, "POSITION_OPENED")

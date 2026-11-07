@@ -18,13 +18,14 @@ from pandas import DataFrame, Series
 import scripts.run_ml_core_v4ac_cost_optimization as v4ac
 import scripts.run_ml_core_v4af_meta_final as v4af
 from services.meta_labeling import v4ah as advanced
+from services.meta_labeling import v4am as regime_engine
 from services.meta_labeling.v4x import (
     V4X_OOF_FOLD_COUNT,
     generate_oof_primary_events,
 )
 from services.ml_core.economic_backtest import simulate_signals
 
-SCHEMA = "alix.ml-core-v4ai-maker-strategy.v3"
+SCHEMA = "alix.ml-core-v4ai-maker-strategy.v4"
 SYMBOL = "ETHUSDT"
 TIMEFRAME = "1h"
 DAYS = 1825
@@ -43,7 +44,7 @@ EMA_SLOW_PERIOD = 200
 RSI_FEATURE = "%-primary_rsi_14"
 EMA_DISTANCE_FEATURE = "%-primary_close_vs_ema200_pct"
 EMA_SPREAD_FEATURE = "%-primary_ema50_vs_ema200_pct"
-PRIMARY_SIGNAL_GENERATION = "CAUSAL_WILDER_RSI14_LT40_EMA50_ABOVE_EMA200"
+PRIMARY_SIGNAL_GENERATION = "CAUSAL_CUSUM2SIGMA_GAUSSIAN_HMM3_REGIME_REACTIVE_HARD_SELECTOR"
 RESEARCH_SIGNAL_COUNT_TARGET = 100
 LEGACY_PRIMARY_FEATURE_COLUMNS = (
     "%-primary_bollinger_bandwidth_pct",
@@ -54,6 +55,10 @@ LEGACY_PRIMARY_FEATURE_COLUMNS = (
 )
 REGIME_WARMUP_BARS = 200
 REGIME_CLUSTER_COUNT = 3
+DONCHIAN_LOOKBACK = 20
+RANGE_RSI_ENTRY_THRESHOLD = 30.0
+DONCHIAN_DISTANCE_FEATURE = "%-v4am_donchian_breakout_distance_pct"
+TECHNICAL_FEATURE_GENERATION = "CAUSAL_WILDER_RSI14_EMA50_EMA200_FEATURES_ONLY"
 META_TARGET_ACCEPT_FRACTION = 0.70
 MINIMUM_TRADES = 30
 MINIMUM_NET_PF = 1.5
@@ -61,20 +66,24 @@ MINIMUM_WIN_RATE = 0.45
 MAXIMUM_DRAWDOWN = 15.0
 DSR_MINIMUM_RETURN_OBSERVATIONS = 4
 SORTINO_TARGET_RETURN_PER_TRADE = 0.0
-BASE_CONTROL = "PRIMARY_EMA50_EMA200_RSI40_30BPS"
-ADX_ABLATION = "PRIMARY_ADX20_ABLATION_EMA50_EMA200_RSI40_30BPS"
-META_CANDIDATE = "META_TOP_70_EMA50_EMA200_RSI40_30BPS"
+BASE_CONTROL = "PRIMARY_CUSUM_HMM_REGIME_REACTIVE_30BPS"
+ADX_ABLATION = "PRIMARY_ADX20_DIAGNOSTIC_ABLATION_CUSUM_HMM_30BPS"
+META_CANDIDATE = "META_TOP_70_CUSUM_HMM_REGIME_REACTIVE_30BPS"
 CANDIDATE_NAMES = (BASE_CONTROL, ADX_ABLATION, META_CANDIDATE)
 PRIMARY_FILTER_CONTRACT: dict[str, str] = {
-    "entry_indicator": "WILDER_RSI",
-    "rsi_period": "14",
-    "rsi_threshold": "40.0",
-    "rsi_comparison": "STRICT_LT",
-    "trend_fast_period": "50",
-    "trend_slow_period": "200",
-    "trend_reference": "CAUSAL_EMA",
-    "trend_comparison": "EMA50_STRICTLY_ABOVE_EMA200",
+    "event_filter": "TWO_SIDED_CUSUM_STANDARDIZED_LOG_RETURN",
+    "cusum_window": "24",
+    "cusum_threshold_sigma": "2.0",
+    "cusum_drift_allowance_sigma": "0.5",
+    "regime_model": "DIAGONAL_GAUSSIAN_HMM_3_STATE",
+    "regime_state_selection": "DOMINANT_POSTERIOR_HARD_SELECTOR",
+    "momentum_strategy": "DONCHIAN_UPPER_BREAKOUT_20_TRENDING_UP_ONLY_SPOT_LONG",
+    "mean_reversion_strategy": "WILDER_RSI14_LT30_CUSUM_NEGATIVE_RANGING_ONLY",
+    "downtrend_policy": "LONG_ONLY_SPOT_RISK_OFF_NO_SHORT_ENTRY",
+    "position_sizing": "INVERSE_24H_REALIZED_VOL_TRAINING_MEDIAN_TARGET_CAPPED_AT_1X",
 }
+LABEL_COLUMNS = {
+
 LABEL_COLUMNS = {
     "event_index",
     "fold_id",
@@ -250,7 +259,7 @@ def _ema_trend_rsi_primary_features(
         .astype(bool)
     )
     diagnostics = {
-        "generation": PRIMARY_SIGNAL_GENERATION,
+        "generation": TECHNICAL_FEATURE_GENERATION,
         "rsi_method": "WILDER_EMA_ALPHA_1_OVER_14_ADJUST_FALSE",
         "rsi_period": RSI_PERIOD,
         "rsi_threshold": RSI_ENTRY_THRESHOLD,
@@ -598,13 +607,194 @@ def _fit_meta_model(
         }
 
 
-def _regime_features(features: DataFrame) -> tuple[DataFrame, dict[str, Any]]:
-    transformed, diagnostics, _, _ = advanced.build_regime_features(
-        features,
-        fit_end=REGIME_WARMUP_BARS,
-        cluster_count=REGIME_CLUSTER_COUNT,
+def _cusum_features(
+    bars: DataFrame,
+    features: DataFrame,
+    *,
+    apply_end: int,
+) -> tuple[DataFrame, dict[str, Any]]:
+    return regime_engine.build_cusum_features(bars, features, apply_end=apply_end)
+
+
+def _regime_features(
+    features: DataFrame,
+    *,
+    train_end: int,
+    apply_end: int,
+) -> tuple[DataFrame, dict[str, Any]]:
+    return regime_engine.build_hmm_regime_features(
+        features, train_end=train_end, apply_end=apply_end
     )
-    return transformed, diagnostics
+
+
+def _regime_reactive_primary_signal(
+    bars: DataFrame,
+    features: DataFrame,
+    *,
+    apply_end: int,
+) -> tuple[DataFrame, Series, dict[str, Any]]:
+    required = {
+        regime_engine.CUSUM_POSITIVE_EVENT_FEATURE,
+        regime_engine.CUSUM_NEGATIVE_EVENT_FEATURE,
+        regime_engine.CUSUM_DRIFT_FEATURE,
+        regime_engine.HMM_TRENDING_UP_FEATURE,
+        regime_engine.HMM_TRENDING_DOWN_FEATURE,
+        regime_engine.HMM_RANGING_FEATURE,
+        RSI_FEATURE,
+    }
+    if (
+        len(bars) != len(features)
+        or not 2 <= apply_end <= len(bars)
+        or not required.issubset(features.columns)
+        or not {"close", "high"}.issubset(bars.columns)
+    ):
+        raise ValueError("v4am_selector_input_schema_invalid")
+    if DONCHIAN_DISTANCE_FEATURE in features.columns:
+        raise ValueError("v4am_selector_feature_collision")
+    close = pd.to_numeric(bars["close"], errors="coerce").reset_index(drop=True)
+    high = pd.to_numeric(bars["high"], errors="coerce").reset_index(drop=True)
+    if not (
+        np.isfinite(close.iloc[:apply_end].to_numpy(dtype=float)).all()
+        and np.isfinite(high.iloc[:apply_end].to_numpy(dtype=float)).all()
+        and bool((close.iloc[:apply_end] > 0.0).all())
+        and bool((high.iloc[:apply_end] > 0.0).all())
+    ):
+        raise ValueError("v4am_selector_market_values_invalid")
+    donchian_upper = high.shift(1).rolling(
+        DONCHIAN_LOOKBACK, min_periods=DONCHIAN_LOOKBACK
+    ).max()
+    hmm_columns = [
+        regime_engine.HMM_TRENDING_UP_FEATURE,
+        regime_engine.HMM_TRENDING_DOWN_FEATURE,
+        regime_engine.HMM_RANGING_FEATURE,
+    ]
+    probabilities = features.loc[:, hmm_columns].apply(
+        pd.to_numeric, errors="coerce"
+    ).to_numpy(dtype=float)
+    valid_hmm = np.isfinite(probabilities).all(axis=1)
+    dominant = np.full(len(features), -1, dtype=int)
+    dominant[valid_hmm] = np.argmax(probabilities[valid_hmm], axis=1)
+    positive_cusum = pd.to_numeric(
+        features[regime_engine.CUSUM_POSITIVE_EVENT_FEATURE], errors="coerce"
+    ).to_numpy(dtype=float)
+    negative_cusum = pd.to_numeric(
+        features[regime_engine.CUSUM_NEGATIVE_EVENT_FEATURE], errors="coerce"
+    ).to_numpy(dtype=float)
+    rsi = pd.to_numeric(features[RSI_FEATURE], errors="coerce").to_numpy(dtype=float)
+    upper = donchian_upper.to_numpy(dtype=float)
+    close_values = close.to_numpy(dtype=float)
+    valid = valid_hmm & np.isfinite(positive_cusum) & np.isfinite(negative_cusum)
+    trending_up = valid & (dominant == 0)
+    trending_down = valid & (dominant == 1)
+    ranging = valid & (dominant == 2)
+    momentum_signal = (
+        trending_up & (positive_cusum >= 1.0)
+        & np.isfinite(upper) & (close_values > upper)
+    )
+    mean_reversion_signal = (
+        ranging & (negative_cusum >= 1.0)
+        & np.isfinite(rsi) & (rsi < RANGE_RSI_ENTRY_THRESHOLD)
+    )
+    signal_values = np.zeros(len(features), dtype=bool)
+    signal_values[:apply_end] = (
+        momentum_signal[:apply_end] | mean_reversion_signal[:apply_end]
+    )
+    transformed = features.reset_index(drop=True).copy()
+    distance_values = (close / donchian_upper - 1.0).to_numpy(dtype=float)
+    distance_values[apply_end:] = np.nan
+    transformed[DONCHIAN_DISTANCE_FEATURE] = distance_values
+    signal = Series(signal_values, dtype=bool, name="primary_buy_signal")
+    diagnostics = {
+        "generation": PRIMARY_SIGNAL_GENERATION,
+        "selector_type": "REGIME_REACTIVE_HARD_SELECTOR",
+        "dominant_state_policy": "ARGMAX_POSTERIOR_EXACTLY_ONE_REGIME",
+        "momentum_strategy": "DONCHIAN_20_BREAKOUT_WITH_POSITIVE_CUSUM_IN_TRENDING_UP",
+        "mean_reversion_strategy": "WILDER_RSI14_LT30_WITH_NEGATIVE_CUSUM_IN_RANGING",
+        "downtrend_policy": "RISK_OFF_NO_LONG_ENTRY_SPOT_ONLY",
+        "donchian_lookback": DONCHIAN_LOOKBACK,
+        "range_rsi_period": RSI_PERIOD,
+        "range_rsi_threshold": RANGE_RSI_ENTRY_THRESHOLD,
+        "dominant_trending_up_rows": int(trending_up[:apply_end].sum()),
+        "dominant_trending_down_risk_off_rows": int(trending_down[:apply_end].sum()),
+        "dominant_ranging_rows": int(ranging[:apply_end].sum()),
+        "momentum_signal_count": int(momentum_signal[:apply_end].sum()),
+        "mean_reversion_signal_count": int(mean_reversion_signal[:apply_end].sum()),
+        "primary_buy_count": int(signal.sum()),
+        "hard_selector_enabled": True,
+        "soft_blend_enabled": False,
+        "short_entries_enabled": False,
+        "lookahead_used": False,
+        "execution_timing": "CLOSED_1H_BAR_NEXT_BAR_OPEN",
+    }
+    return transformed, signal, diagnostics
+
+
+def _volatility_target_position_fractions(
+    features: DataFrame,
+    *,
+    train_end: int,
+    event_indices: list[int],
+) -> tuple[dict[int, float], dict[str, Any]]:
+    column = regime_engine.REALIZED_VOLATILITY_FEATURE
+    if (
+        column not in features.columns
+        or isinstance(train_end, bool)
+        or not isinstance(train_end, int)
+        or not 1 <= train_end <= len(features)
+    ):
+        raise ValueError("v4am_volatility_target_input_invalid")
+    volatility = pd.to_numeric(features[column], errors="coerce").to_numpy(dtype=float)
+    training_values = volatility[:train_end]
+    training_values = training_values[
+        np.isfinite(training_values) & (training_values > 0.0)
+    ]
+    if len(training_values) < regime_engine.HMM_MINIMUM_TRAIN_ROWS:
+        raise ValueError("v4am_volatility_target_training_support_insufficient")
+    target_volatility = float(np.median(training_values))
+    if not math.isfinite(target_volatility) or target_volatility <= 0.0:
+        raise ValueError("v4am_volatility_target_invalid")
+    if event_indices != sorted(set(event_indices)):
+        raise ValueError("v4am_position_fraction_event_order_invalid")
+    fractions: dict[int, float] = {}
+    for index in event_indices:
+        if index < train_end or index >= len(volatility):
+            raise ValueError("v4am_position_fraction_event_window_invalid")
+        current_volatility = float(volatility[index])
+        if not math.isfinite(current_volatility) or current_volatility <= 0.0:
+            raise ValueError("v4am_position_fraction_volatility_invalid")
+        fraction = min(1.0, target_volatility / current_volatility)
+        if not math.isfinite(fraction) or not 0.0 < fraction <= 1.0:
+            raise ValueError("v4am_position_fraction_out_of_bounds")
+        fractions[index] = fraction
+    values = list(fractions.values())
+    return fractions, {
+        "method": "INVERSE_24H_REALIZED_VOLATILITY",
+        "target_reference": "MEDIAN_OF_OUTER_TRAIN_24H_REALIZED_VOLATILITY",
+        "target_volatility": target_volatility,
+        "training_rows": int(len(training_values)),
+        "sizing_cap": 1.0,
+        "leverage_enabled": False,
+        "event_count": len(fractions),
+        "fraction_min": min(values) if values else None,
+        "fraction_median": float(np.median(values)) if values else None,
+        "fraction_max": max(values) if values else None,
+    }
+
+
+def _apply_position_fractions(
+    actions: list[dict[str, Any]],
+    position_fractions: dict[int, float],
+) -> None:
+    for action in actions:
+        if action.get("signal") != "BUY":
+            continue
+        index = int(action["row_index"])
+        fraction = position_fractions.get(index)
+        if fraction is None or not math.isfinite(float(fraction)) or not 0.0 < float(fraction) <= 1.0:
+            raise ValueError("v4am_position_fraction_action_missing_or_invalid")
+        action["position_fraction"] = float(fraction)
+
+
 
 
 def _forward_probability_map(
@@ -628,7 +818,7 @@ def _forward_probability_map(
 def _candidate_id(mode: str) -> str:
     if mode not in CANDIDATE_NAMES:
         raise ValueError("v4ai_candidate_mode_invalid")
-    return f"{SYMBOL}|{TIMEFRAME}|EMA50_EMA200_RSI40|{mode}"
+    return f"{SYMBOL}|{TIMEFRAME}|CUSUM_HMM_REGIME_REACTIVE|{mode}"
 
 
 def _profit_factor(metrics: dict[str, Any]) -> float:
@@ -881,6 +1071,7 @@ def _decision_rows(
     probabilities: dict[int, float] | None,
     threshold: float | None,
     mode: str,
+    position_fractions: dict[int, float] | None = None,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for index in event_indices:
@@ -888,29 +1079,30 @@ def _decision_rows(
         accepted = threshold is None or (
             probability is not None and probability >= threshold
         )
-        rows.append(
-            {
-                "candidate_id": _candidate_id(mode),
-                "symbol": SYMBOL,
-                "timeframe": TIMEFRAME,
-                "mode": mode,
-                "event_index": index,
-                "signal_timestamp": pd.Timestamp(bars["date"].iloc[index]).isoformat(),
-                "execution_timestamp": pd.Timestamp(
-                    bars["date"].iloc[index + 1]
-                ).isoformat(),
-                "meta_probability": probability,
-                "selected_meta_probability_threshold": threshold,
-                "meta_filter_decision": "ACCEPT" if accepted else "REJECT",
-                "executable_signal": "BUY" if accepted else "NO_ENTRY",
-                "split_role": "FORWARD_VALIDATION",
-            }
-        )
+        rows.append({
+            "candidate_id": _candidate_id(mode),
+            "symbol": SYMBOL,
+            "timeframe": TIMEFRAME,
+            "mode": mode,
+            "event_index": index,
+            "signal_timestamp": pd.Timestamp(bars["date"].iloc[index]).isoformat(),
+            "execution_timestamp": pd.Timestamp(bars["date"].iloc[index + 1]).isoformat(),
+            "meta_probability": probability,
+            "selected_meta_probability_threshold": threshold,
+            "position_fraction": (
+                position_fractions.get(index) if position_fractions is not None else None
+            ),
+            "meta_filter_decision": "ACCEPT" if accepted else "REJECT",
+            "executable_signal": "BUY" if accepted else "NO_ENTRY",
+            "split_role": "FORWARD_VALIDATION",
+        })
     return rows
 
 
 def _skipped_decision_rows(
-    bars: DataFrame, event_indices: list[int]
+    bars: DataFrame,
+    event_indices: list[int],
+    position_fractions: dict[int, float] | None = None,
 ) -> list[dict[str, Any]]:
     return [
         {
@@ -920,17 +1112,20 @@ def _skipped_decision_rows(
             "mode": META_CANDIDATE,
             "event_index": index,
             "signal_timestamp": pd.Timestamp(bars["date"].iloc[index]).isoformat(),
-            "execution_timestamp": pd.Timestamp(
-                bars["date"].iloc[index + 1]
-            ).isoformat(),
+            "execution_timestamp": pd.Timestamp(bars["date"].iloc[index + 1]).isoformat(),
             "meta_probability": None,
             "selected_meta_probability_threshold": None,
+            "position_fraction": (
+                position_fractions.get(index) if position_fractions is not None else None
+            ),
             "meta_filter_decision": "SKIPPED",
             "executable_signal": "NOT_EVALUATED",
             "split_role": "FORWARD_VALIDATION",
         }
         for index in event_indices
     ]
+
+
 
 
 def _run_candidate(
@@ -942,22 +1137,21 @@ def _run_candidate(
     probabilities: dict[int, float] | None,
     primary_metrics: dict[str, Any] | None = None,
     primary_expectancy: float | None = None,
+    position_fractions: dict[int, float] | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
     accepted = [
-        index
-        for index in event_indices
-        if threshold is None
-        or (
+        index for index in event_indices
+        if threshold is None or (
             probabilities is not None
             and probabilities.get(index) is not None
             and float(probabilities[index]) >= threshold
         )
     ]
     actions = v4ac._build_forward_actions(bars, accepted, forward_end)
+    if position_fractions is not None:
+        _apply_position_fractions(actions, position_fractions)
     replay = simulate_signals(
-        bars,
-        actions,
-        _execution_config(),
+        bars, actions, _execution_config(),
         trade_management_config=_trade_management_config(),
     )
     trades = cast(list[dict[str, Any]], replay["trades"])
@@ -971,35 +1165,33 @@ def _run_candidate(
         "timeframe": TIMEFRAME,
         "mode": mode,
         "status": "COMPLETED",
-        "filter": "ADX14_GT20_ABLATION" if mode == ADX_ABLATION else "NONE",
+        "filter": "ADX14_GT20_DIAGNOSTIC_ABLATION" if mode == ADX_ABLATION else "NONE",
         "primary_signal_count": len(event_indices),
         "accepted_signal_count": len(accepted),
-        "accepted_signal_fraction": (
-            len(accepted) / len(event_indices) if event_indices else 0.0
-        ),
+        "accepted_signal_fraction": len(accepted) / len(event_indices) if event_indices else 0.0,
         "selected_meta_probability_threshold": threshold,
+        "position_sizing_method": "INVERSE_24H_REALIZED_VOLATILITY" if position_fractions is not None else "FIXED_CONFIG",
         "metrics": metrics,
-        "acceptance_target_met": _candidate_passes(
-            metrics, expectancy, primary_metrics, primary_expectancy
-        ),
+        "acceptance_target_met": _candidate_passes(metrics, expectancy, primary_metrics, primary_expectancy),
         "sequence_model_used": False,
     }
-    enriched = [
-        {
-            **trade,
-            "candidate_id": candidate["candidate_id"],
-            "symbol": SYMBOL,
-            "timeframe": TIMEFRAME,
-            "mode": mode,
-            "fee_bps_per_side": FEE_BPS_PER_SIDE,
-            "slippage_bps_per_side": SLIPPAGE_BPS_PER_SIDE,
-            "round_trip_cost_bps": ROUND_TRIP_COST_BPS,
-            "evaluation_split": "FORWARD_VALIDATION",
-        }
-        for trade in trades
-    ]
-    decisions = _decision_rows(bars, event_indices, probabilities, threshold, mode)
+    enriched = [{
+        **trade,
+        "candidate_id": candidate["candidate_id"],
+        "symbol": SYMBOL,
+        "timeframe": TIMEFRAME,
+        "mode": mode,
+        "fee_bps_per_side": FEE_BPS_PER_SIDE,
+        "slippage_bps_per_side": SLIPPAGE_BPS_PER_SIDE,
+        "round_trip_cost_bps": ROUND_TRIP_COST_BPS,
+        "evaluation_split": "FORWARD_VALIDATION",
+    } for trade in trades]
+    decisions = _decision_rows(
+        bars, event_indices, probabilities, threshold, mode, position_fractions
+    )
     return candidate, enriched, decisions
+
+
 
 
 def _skipped_meta_candidate(reason: str, event_count: int) -> dict[str, Any]:
@@ -1034,49 +1226,45 @@ def _run_exit_geometry_matrix(
     bars: DataFrame,
     event_indices: list[int],
     forward_end: int,
+    position_fractions: dict[int, float] | None = None,
 ) -> dict[str, Any]:
     actions = v4ac._build_forward_actions(bars, event_indices, forward_end)
+    if position_fractions is not None:
+        _apply_position_fractions(actions, position_fractions)
     execution = _execution_config()
     cells: list[dict[str, Any]] = []
     for policy in EXIT_POLICIES:
         management = _trade_management_config(cast(dict[str, Any], policy))
         replay = simulate_signals(
-            bars,
-            actions,
-            execution,
-            trade_management_config=management,
+            bars, actions, execution, trade_management_config=management
         )
         trades = cast(list[dict[str, Any]], replay["trades"])
         metrics = v4ac._summarize_replay(replay)
-        cells.append(
-            {
-                "policy": policy["name"],
-                "symbol": SYMBOL,
-                "timeframe": TIMEFRAME,
-                "initial_stop_atr": policy["initial_stop_atr"],
-                "take_profit_atr": policy["take_profit_atr"],
-                "trailing_activation_atr": policy["trailing_activation_atr"],
-                "trailing_step_atr": policy["trailing_step_atr"],
-                "fee_bps_per_side": FEE_BPS_PER_SIDE,
-                "slippage_bps_per_side": SLIPPAGE_BPS_PER_SIDE,
-                "round_trip_cost_bps": ROUND_TRIP_COST_BPS,
-                "trade_count": metrics["trade_count"],
-                "win_rate": metrics["win_rate"],
-                "net_profit_factor": metrics["net_profit_factor"],
-                "net_profit_factor_infinite_no_losses": metrics[
-                    "net_profit_factor_infinite_no_losses"
-                ],
-                "max_drawdown_percent": metrics["max_drawdown_percent"],
-                "net_pnl_total_usd": metrics["net_pnl_total_usd"],
-                "mean_unscaled_net_expectancy_usd_at_full_equity": _expectancy(trades),
-                **_trade_risk_metrics(trades),
-                "signal_count": len(event_indices),
-                "evaluation_split": "FORWARD_VALIDATION",
-                "meta_model_used": False,
-                "final_holdout_used": False,
-                "diagnostic_only": True,
-            }
-        )
+        cells.append({
+            "policy": policy["name"],
+            "symbol": SYMBOL,
+            "timeframe": TIMEFRAME,
+            "initial_stop_atr": policy["initial_stop_atr"],
+            "take_profit_atr": policy["take_profit_atr"],
+            "trailing_activation_atr": policy["trailing_activation_atr"],
+            "trailing_step_atr": policy["trailing_step_atr"],
+            "fee_bps_per_side": FEE_BPS_PER_SIDE,
+            "slippage_bps_per_side": SLIPPAGE_BPS_PER_SIDE,
+            "round_trip_cost_bps": ROUND_TRIP_COST_BPS,
+            "trade_count": metrics["trade_count"],
+            "win_rate": metrics["win_rate"],
+            "net_profit_factor": metrics["net_profit_factor"],
+            "net_profit_factor_infinite_no_losses": metrics["net_profit_factor_infinite_no_losses"],
+            "max_drawdown_percent": metrics["max_drawdown_percent"],
+            "net_pnl_total_usd": metrics["net_pnl_total_usd"],
+            "mean_unscaled_net_expectancy_usd_at_full_equity": _expectancy(trades),
+            **_trade_risk_metrics(trades),
+            "signal_count": len(event_indices),
+            "evaluation_split": "FORWARD_VALIDATION",
+            "meta_model_used": False,
+            "final_holdout_used": False,
+            "diagnostic_only": True,
+        })
     matrix = {
         "evaluation_split": "FORWARD_VALIDATION",
         "final_holdout_used": False,
@@ -1092,6 +1280,8 @@ def _run_exit_geometry_matrix(
     }
     _validate_exit_matrix(matrix)
     return matrix
+
+
 
 
 def _validate_exit_matrix_scope(matrix: dict[str, Any]) -> None:
@@ -1250,50 +1440,92 @@ def _validate_report_risk_contract(report: dict[str, Any]) -> None:
 
 
 def _validate_report_primary_identity(
-    report: dict[str, Any],
-    diagnostics: dict[str, Any],
+    report: dict[str, Any], diagnostics: dict[str, Any]
 ) -> None:
+    if (
+        report.get("primary_signal") != PRIMARY_SIGNAL_GENERATION
+        or report.get("primary_filter") != PRIMARY_FILTER_CONTRACT
+        or diagnostics.get("generation") != PRIMARY_SIGNAL_GENERATION
+        or diagnostics.get("lookahead_used") is not False
+    ):
+        raise ValueError("v4ai_report_primary_filter_invalid")
+
+
+def _validate_report_cusum_parameters(diagnostics: dict[str, Any]) -> None:
+    cusum = diagnostics.get("cusum", {})
     valid = (
-        report.get("primary_signal") == PRIMARY_SIGNAL_GENERATION
-        and report.get("primary_filter") == PRIMARY_FILTER_CONTRACT
-        and diagnostics.get("generation") == PRIMARY_SIGNAL_GENERATION
-        and diagnostics.get("lookahead_used") is False
+        cusum.get("algorithm") == "TWO_SIDED_CUSUM_STANDARDIZED_LOG_RETURN"
+        and cusum.get("rolling_window_bars") == regime_engine.CUSUM_WINDOW
+        and cusum.get("threshold_sigma") == regime_engine.CUSUM_THRESHOLD_SIGMA
+        and cusum.get("drift_allowance_sigma") == regime_engine.CUSUM_DRIFT_ALLOWANCE_SIGMA
+        and cusum.get("lookahead_used") is False
+        and cusum.get("final_holdout_features_unavailable") is True
     )
     if not valid:
-        raise ValueError("v4ai_report_primary_filter_invalid")
+        raise ValueError("v4ai_report_cusum_contract_invalid")
 
 
-def _validate_report_rsi_parameters(diagnostics: dict[str, Any]) -> None:
+def _validate_report_selector_parameters(diagnostics: dict[str, Any]) -> None:
+    selector = diagnostics.get("selector", {})
     valid = (
-        diagnostics.get("rsi_period") == RSI_PERIOD
-        and diagnostics.get("rsi_threshold") == RSI_ENTRY_THRESHOLD
-        and diagnostics.get("rsi_comparison") == "STRICT_LT"
+        selector.get("selector_type") == "REGIME_REACTIVE_HARD_SELECTOR"
+        and selector.get("hard_selector_enabled") is True
+        and selector.get("soft_blend_enabled") is False
+        and selector.get("donchian_lookback") == DONCHIAN_LOOKBACK
+        and selector.get("range_rsi_period") == RSI_PERIOD
+        and selector.get("range_rsi_threshold") == RANGE_RSI_ENTRY_THRESHOLD
+        and selector.get("short_entries_enabled") is False
+        and selector.get("lookahead_used") is False
     )
     if not valid:
-        raise ValueError("v4ai_report_primary_filter_invalid")
+        raise ValueError("v4ai_report_regime_selector_invalid")
 
 
-def _validate_report_ema_parameters(diagnostics: dict[str, Any]) -> None:
+def _validate_report_sizing_parameters(diagnostics: dict[str, Any]) -> None:
+    sizing = diagnostics.get("volatility_targeting", {})
     valid = (
-        diagnostics.get("ema_fast_period") == EMA_FAST_PERIOD
-        and diagnostics.get("ema_slow_period") == EMA_SLOW_PERIOD
-        and diagnostics.get("trend_comparison") == "EMA50_STRICTLY_ABOVE_EMA200"
+        sizing.get("method") == "INVERSE_24H_REALIZED_VOLATILITY"
+        and sizing.get("target_reference") == "MEDIAN_OF_OUTER_TRAIN_24H_REALIZED_VOLATILITY"
+        and sizing.get("sizing_cap") == 1.0
+        and sizing.get("leverage_enabled") is False
+        and sizing.get("training_rows", 0) >= regime_engine.HMM_MINIMUM_TRAIN_ROWS
     )
     if not valid:
-        raise ValueError("v4ai_report_primary_filter_invalid")
-
-
-def _validate_report_signal_count_target(diagnostics: dict[str, Any]) -> None:
-    if diagnostics.get("research_signal_count_target") != RESEARCH_SIGNAL_COUNT_TARGET:
-        raise ValueError("v4ai_report_primary_filter_invalid")
+        raise ValueError("v4ai_report_volatility_target_contract_invalid")
 
 
 def _validate_report_primary_filter(report: dict[str, Any]) -> None:
     diagnostics = report.get("primary_signal_diagnostics", {})
     _validate_report_primary_identity(report, diagnostics)
-    _validate_report_rsi_parameters(diagnostics)
-    _validate_report_ema_parameters(diagnostics)
-    _validate_report_signal_count_target(diagnostics)
+    _validate_report_cusum_parameters(diagnostics)
+    _validate_report_selector_parameters(diagnostics)
+    _validate_report_sizing_parameters(diagnostics)
+    if diagnostics.get("research_signal_count_target") != RESEARCH_SIGNAL_COUNT_TARGET:
+        raise ValueError("v4ai_report_primary_filter_invalid")
+
+
+def _validate_report_regime(report: dict[str, Any]) -> None:
+    regime = report.get("regime_diagnostics", {})
+    chronological = report.get("chronological_evaluation", {})
+    train_end = chronological.get("train_end_index_exclusive")
+    forward_end = chronological.get("forward_validation_end_index_exclusive")
+    valid = (
+        regime.get("algorithm") == "GAUSSIAN_HMM_DIAGONAL"
+        and regime.get("state_count") == regime_engine.HMM_STATE_COUNT
+        and regime.get("fit_scope") == "OUTER_TRAIN_ONLY"
+        and regime.get("estimation_method") == "BAUM_WELCH_TRAINING_SLICE_ONLY"
+        and regime.get("posterior_method") == "CAUSAL_FORWARD_FILTER"
+        and regime.get("smoothing_used") is False
+        and regime.get("lookahead_used") is False
+        and regime.get("fit_rows", 0) >= regime_engine.HMM_MINIMUM_TRAIN_ROWS
+        and regime.get("fit_end_index_exclusive") == train_end
+        and regime.get("apply_end_index_exclusive") == forward_end
+        and regime.get("final_holdout_features_unavailable") is True
+    )
+    if not valid:
+        raise ValueError("v4ai_report_hmm_causality_contract_invalid")
+
+
 
 
 def _validate_report_geometry(report: dict[str, Any]) -> None:
@@ -1382,6 +1614,7 @@ def _validate_report(report: dict[str, Any], commit_sha: str) -> None:
     _validate_report_cost_contract(report)
     _validate_report_risk_contract(report)
     _validate_report_primary_filter(report)
+    _validate_report_regime(report)
     _validate_report_geometry(report)
     _validate_report_holdout(report)
     _validate_report_candidates(report)
@@ -1428,13 +1661,16 @@ def _format_acceptance(item: dict[str, Any]) -> str:
 
 def _render_step_summary_header(report: dict[str, Any]) -> list[str]:
     return [
-        "## AliX V4-AK ETHUSDT EMA50/EMA200 + RSI40 Maker-Fee Validation",
+        "## AliX V4-AM ETHUSDT CUSUM + Gaussian HMM Regime-Reactive Validation",
         "",
         f"Commit SHA: {report['commit_sha']}",
         "Scope: ETHUSDT Spot, 1h, 1825 days requested with trim to latest contiguous segment, public OHLCV only.",
-        "Primary signal: causal Wilder RSI(14) < 40 AND EMA50 > EMA200; execute next-bar open.",
-        "Primary ADX filter: DISABLED. ADX(14)>20 is retained only as a diagnostic ablation, not as an entry gate.",
+        "Primary event trigger: two-sided CUSUM on closed-bar log returns, standardized by trailing 24-bar volatility; threshold=2.0 sigma.",
+        "Regime model: diagonal Gaussian HMM(3), estimated on outer-train only; forward validation uses causal forward-filter posterior, never smoothed posterior.",
+        "Hard selector: dominant HMM posterior only; Trending Up selects Donchian(20) breakout, Ranging selects Wilder RSI(14)<30 after negative CUSUM, Trending Down is long-only Spot risk-off.",
+        "No soft strategy blend and no Short entries: the existing economic simulator is Spot-long only.",
         "Execution: closed-candle signal, next-bar-open entry, no pyramiding.",
+        "Volatility targeting: position fraction = min(1, outer-train median 24-bar realized volatility / event-time realized volatility). No leverage.",
         "Maker-cost assumption: 10 bps fee + 5 bps slippage per side = 30 bps round trip.",
         "Important: fixed maker-fee proxy only; passive Limit queue/partial-fill mechanics are not simulated.",
         "Risk returns: net closed-trade returns; Sharpe and Sortino are per-trade, not calendar-annualized; Sortino target=0.",
@@ -1444,9 +1680,11 @@ def _render_step_summary_header(report: dict[str, Any]) -> list[str]:
         "Fixed candidate geometry: SL=1.5 ATR, TP=2.5 ATR, activation=1.5 ATR, step=2.0 ATR, horizon=24 bars.",
         "Training: outer 70%; purged OOF Fit/Temperature/Threshold slices=70/15/15.",
         "Evaluation: next 15% forward validation; final 15% holdout untouched.",
-        "Meta: LightGBM + TreeSHAP top-30 Fit-only selection; KMeans(3) regimes as features.",
+        "Meta: LightGBM + TreeSHAP top-30 Fit-only selection; HMM posterior probabilities and CUSUM drift magnitude are explicit Meta features. No LSTM/sequence model.",
         "Meta cutoff: accept the upper 70% of probabilities using the 30th percentile order statistic on the third purged OOF slice; ties are included.",
     ]
+
+
 
 
 def _render_candidate_row(item: dict[str, Any]) -> str:
@@ -1491,6 +1729,11 @@ def _render_meta_diagnostics(report: dict[str, Any]) -> list[str]:
     fit_counts = split.get("fit_class_counts", {})
     temperature_counts = split.get("temperature_class_counts", {})
     threshold_counts = split.get("threshold_class_counts", {})
+    primary = report.get("primary_signal_diagnostics", {})
+    cusum = primary.get("cusum", {})
+    selector = primary.get("selector", {})
+    sizing = primary.get("volatility_targeting", {})
+    regime = report.get("regime_diagnostics", {})
     return [
         "",
         (
@@ -1503,13 +1746,20 @@ def _render_meta_diagnostics(report: dict[str, Any]) -> list[str]:
             f"contiguous_start={report['dataset_provenance'].get('resample_gap_trim', {}).get('segment_start_utc', 'N/A')}."
         ),
         (
-            "Primary EMA/RSI diagnostics: "
-            f"RSI valid={report['primary_signal_diagnostics']['rsi_valid_rows']}; "
-            f"RSI<40={report['primary_signal_diagnostics']['oversold_rows']}; "
-            f"EMA50/EMA200 valid={report['primary_signal_diagnostics']['ema_valid_rows']}; "
-            f"EMA50>EMA200={report['primary_signal_diagnostics']['trend_aligned_rows']}; "
-            f"BUY={report['primary_signal_diagnostics']['primary_buy_count']}; "
-            f"lookahead={report['primary_signal_diagnostics']['lookahead_used']}."
+            f"CUSUM: threshold={cusum.get('threshold_sigma', 'N/A')} sigma; "
+            f"window={cusum.get('rolling_window_bars', 'N/A')}; "
+            f"positive/negative/total events={cusum.get('positive_event_count', 0)}/"
+            f"{cusum.get('negative_event_count', 0)}/{cusum.get('total_event_count', 0)}; "
+            f"lookahead={cusum.get('lookahead_used', 'N/A')}."
+        ),
+        (
+            f"Hard selector: momentum/Donchian signals={selector.get('momentum_signal_count', 0)}; "
+            f"mean-reversion/RSI signals={selector.get('mean_reversion_signal_count', 0)}; "
+            f"dominant regimes Up/Down-risk-off/Range="
+            f"{selector.get('dominant_trending_up_rows', 0)}/"
+            f"{selector.get('dominant_trending_down_risk_off_rows', 0)}/"
+            f"{selector.get('dominant_ranging_rows', 0)}; "
+            f"BUY={selector.get('primary_buy_count', 0)}; hard-only={selector.get('hard_selector_enabled', False)}."
         ),
         (
             "Primary BUYs research/train/forward: "
@@ -1522,6 +1772,21 @@ def _render_meta_diagnostics(report: dict[str, Any]) -> list[str]:
             f"{report['signal_counts']['minimum_primary_train_signal_count']}."
         ),
         f"ADX20 diagnostic-ablation BUYs: {report['signal_counts']['adx_ablation_buy_count']}.",
+        (
+            f"Gaussian HMM: states={regime.get('state_count', 'N/A')}; "
+            f"fit_rows={regime.get('fit_rows', 0)}; fit_end={regime.get('fit_end_index_exclusive', 'N/A')}; "
+            f"fit_scope={regime.get('fit_scope', 'N/A')}; "
+            f"posterior={regime.get('posterior_method', 'N/A')}; "
+            f"smoothing={regime.get('smoothing_used', 'N/A')}; "
+            f"lookahead={regime.get('lookahead_used', 'N/A')}."
+        ),
+        (
+            f"Volatility targeting: method={sizing.get('method', 'N/A')}; "
+            f"training median target={sizing.get('target_volatility', 'N/A')}; "
+            f"position fraction min/median/max={sizing.get('fraction_min', 'N/A')}/"
+            f"{sizing.get('fraction_median', 'N/A')}/{sizing.get('fraction_max', 'N/A')}; "
+            f"leverage={sizing.get('leverage_enabled', 'N/A')}."
+        ),
         f"OOF primary events: {training.get('oof_primary_event_count', 0)}; "
         f"matured costed OOF labels: {training.get('matured_costed_oof_label_count', 0)}; "
         f"immature excluded: {training.get('immature_oof_event_count', 0)}.",
@@ -1554,10 +1819,6 @@ def _render_meta_diagnostics(report: dict[str, Any]) -> list[str]:
         )
         if not meta.get("enabled")
         else "Meta model trained; forward validation is reported separately.",
-        (
-            f"Regime: KMeans clusters={report.get('regime_diagnostics', {}).get('cluster_count', 'N/A')}; "
-            f"fit rows={report.get('regime_diagnostics', {}).get('fit_rows', 0)}."
-        ),
         f"SHAP top-k: {fit.get('top_k_selected', 0)}.",
         (
             f"Separation: ROC-AUC={separation.get('roc_auc', 'N/A')}; "
@@ -1574,6 +1835,8 @@ def _render_meta_diagnostics(report: dict[str, Any]) -> list[str]:
             f"selected OOF fraction={threshold.get('selected_fraction', 'N/A')}."
         ),
     ]
+
+
 
 
 def _render_exit_geometry_row(cell: dict[str, Any]) -> str:
@@ -1728,23 +1991,25 @@ def run_v4ai(
 ) -> dict[str, Any]:
     _validate_request(days, commit_sha)
     (
-        provenance,
-        bars,
-        train_end,
-        forward_end,
-        research_bars,
-        base_features,
-        _legacy_breakout_signal,
+        provenance, bars, train_end, forward_end, research_bars,
+        base_features, _legacy_breakout_signal,
     ) = v4af._load_research_context(
         input_dir, days, commit_sha, allow_exchange_gaps=ALLOW_EXCHANGE_GAPS
     )
-    primary_features, primary_signal, primary_signal_diagnostics = (
+    technical_features, _legacy_static_signal, _technical_diagnostics = (
         _ema_trend_rsi_primary_features(research_bars, base_features)
     )
-
-    # ADX is retained strictly as a diagnostic-only ablation of the RSI signal.
+    features, cusum_diagnostics = _cusum_features(
+        research_bars, technical_features, apply_end=forward_end
+    )
+    features, regime_diagnostics = _regime_features(
+        features, train_end=train_end, apply_end=forward_end
+    )
+    features, primary_signal, selector_diagnostics = _regime_reactive_primary_signal(
+        research_bars, features, apply_end=forward_end
+    )
     adx_ablation_signal, adx_ablation_diagnostics = _apply_adx_ablation(
-        primary_signal, primary_features
+        primary_signal, features
     )
     primary_window_counts, train_gate, primary_event_indices = (
         v4af._primary_signal_evaluation(primary_signal, train_end, forward_end)
@@ -1752,44 +2017,39 @@ def run_v4ai(
     adx_ablation_event_indices = v4af._eligible_primary_event_indices(
         adx_ablation_signal, train_end, forward_end
     )
+    position_fractions, sizing_diagnostics = _volatility_target_position_fractions(
+        features, train_end=train_end, event_indices=primary_event_indices
+    )
+    primary_signal_diagnostics = {
+        "generation": PRIMARY_SIGNAL_GENERATION,
+        "cusum": cusum_diagnostics,
+        "selector": selector_diagnostics,
+        "volatility_targeting": sizing_diagnostics,
+        "research_signal_count_target": RESEARCH_SIGNAL_COUNT_TARGET,
+        "lookahead_used": False,
+        "execution_timing": "CLOSED_1H_BAR_NEXT_BAR_OPEN",
+    }
     signal_counts = {
         "primary_buy_count": int(primary_signal.sum()),
-        "train_primary_buy_count": int(
-            primary_window_counts["train_primary_buy_count"]
-        ),
-        "forward_validation_primary_buy_count": int(
-            primary_window_counts["forward_validation_primary_buy_count"]
-        ),
-        "minimum_primary_train_signal_count": int(
-            train_gate["minimum_primary_buy_count"]
-        ),
-        "research_signal_target_met": int(primary_signal.sum())
-        >= RESEARCH_SIGNAL_COUNT_TARGET,
+        "train_primary_buy_count": int(primary_window_counts["train_primary_buy_count"]),
+        "forward_validation_primary_buy_count": int(primary_window_counts["forward_validation_primary_buy_count"]),
+        "minimum_primary_train_signal_count": int(train_gate["minimum_primary_buy_count"]),
+        "research_signal_target_met": int(primary_signal.sum()) >= RESEARCH_SIGNAL_COUNT_TARGET,
         "adx_ablation_buy_count": int(adx_ablation_signal.sum()),
         "primary_forward_event_count": len(primary_event_indices),
         "adx_ablation_forward_event_count": len(adx_ablation_event_indices),
     }
-
     primary_candidate, primary_trades, primary_decisions = _run_candidate(
-        research_bars,
-        primary_event_indices,
-        forward_end,
-        BASE_CONTROL,
-        None,
-        None,
+        research_bars, primary_event_indices, forward_end, BASE_CONTROL,
+        None, None, position_fractions=position_fractions,
     )
     adx_ablation_candidate, adx_ablation_trades, adx_ablation_decisions = (
         _run_candidate(
-            research_bars,
-            adx_ablation_event_indices,
-            forward_end,
-            ADX_ABLATION,
-            None,
-            None,
+            research_bars, adx_ablation_event_indices, forward_end, ADX_ABLATION,
+            None, None, position_fractions=position_fractions,
         )
     )
     try:
-        features, regime_diagnostics = _regime_features(primary_features)
         meta = _fit_meta_model(
             research_bars, features, primary_signal, train_end, train_gate
         )
@@ -1797,64 +2057,38 @@ def run_v4ai(
         if not _support_shortfall(error):
             raise
         meta = _empty_meta(str(error))
-        regime_diagnostics = {"status": "SKIPPED", "reason": str(error)}
     if meta.get("skip_reason") is None:
         probabilities = _forward_probability_map(
-            features,
-            primary_event_indices,
+            features, primary_event_indices,
             cast(list[str], meta["selected_features"]),
-            meta["model"],
-            float(meta["temperature"]),
+            meta["model"], float(meta["temperature"]),
         )
         meta_candidate, meta_trades, meta_decisions = _run_candidate(
-            research_bars,
-            primary_event_indices,
-            forward_end,
-            META_CANDIDATE,
-            float(meta["threshold"]),
-            probabilities,
+            research_bars, primary_event_indices, forward_end, META_CANDIDATE,
+            float(meta["threshold"]), probabilities,
             primary_candidate["metrics"],
-            float(
-                primary_candidate["metrics"][
-                    "mean_unscaled_net_expectancy_usd_at_full_equity"
-                ]
-            ),
+            float(primary_candidate["metrics"]["mean_unscaled_net_expectancy_usd_at_full_equity"]),
+            position_fractions,
         )
     else:
         meta_candidate = _skipped_meta_candidate(
             str(meta["skip_reason"]), len(primary_event_indices)
         )
-        probabilities = {}
         meta_trades = []
-        meta_decisions = _skipped_decision_rows(research_bars, primary_event_indices)
-
+        meta_decisions = _skipped_decision_rows(
+            research_bars, primary_event_indices, position_fractions
+        )
     candidates = [primary_candidate, adx_ablation_candidate, meta_candidate]
     trades = [*primary_trades, *adx_ablation_trades, *meta_trades]
-    decisions = [
-        *primary_decisions,
-        *adx_ablation_decisions,
-        *meta_decisions,
-    ]
+    decisions = [*primary_decisions, *adx_ablation_decisions, *meta_decisions]
     exit_matrix = _run_exit_geometry_matrix(
-        research_bars, primary_event_indices, forward_end
+        research_bars, primary_event_indices, forward_end, position_fractions
     )
     _attach_dsr_diagnostics(candidates, exit_matrix)
     report = _build_report(
-        commit_sha,
-        provenance,
-        bars,
-        train_end,
-        forward_end,
-        signal_counts,
-        primary_signal_diagnostics,
-        adx_ablation_diagnostics,
-        train_gate,
-        meta,
-        regime_diagnostics,
-        candidates,
-        trades,
-        decisions,
-        exit_matrix,
+        commit_sha, provenance, bars, train_end, forward_end, signal_counts,
+        primary_signal_diagnostics, adx_ablation_diagnostics, train_gate, meta,
+        regime_diagnostics, candidates, trades, decisions, exit_matrix,
     )
     output_report.parent.mkdir(parents=True, exist_ok=True)
     output_report.write_text(
@@ -1866,6 +2100,8 @@ def run_v4ai(
     summary = _render_step_summary(report)
     print(summary, end="")
     return report
+
+
 
 
 def main() -> int:

@@ -857,3 +857,29 @@ def test_tp_sl_sweep_validation_is_fail_closed() -> None:
             ExecutionConfig(),
             TradeManagementConfig(atr_period=1, confidence_threshold=0.55),
         )
+
+
+def test_signal_position_fraction_scales_quantity_without_leverage() -> None:
+    bars = _bars(6)
+    signal = {
+        "signal_timestamp": bars["date"].iloc[0].isoformat(),
+        "execution_timestamp": bars["date"].iloc[1].isoformat(),
+        "signal": "BUY",
+        "raw_signal": "BUY",
+        "buy_probability": 1.0,
+    }
+    management = TradeManagementConfig(atr_period=1)
+    config = ExecutionConfig(fee_bps=0.0, slippage_bps=0.0)
+    full = _simulate(
+        bars, [dict(signal)], config, management=management, atr_values=[10.0] * 6
+    )
+    quarter = _simulate(
+        bars, [{**signal, "position_fraction": 0.25}],
+        config, management=management, atr_values=[10.0] * 6,
+    )
+    assert len(full["trades"]) == len(quarter["trades"]) == 1
+    full_trade = full["trades"][0]
+    quarter_trade = quarter["trades"][0]
+    assert quarter_trade["quantity"] == pytest.approx(full_trade["quantity"] * 0.25)
+    assert quarter_trade["position_fraction"] == pytest.approx(0.25)
+    assert 0.0 < quarter_trade["position_fraction"] <= 1.0
