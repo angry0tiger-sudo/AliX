@@ -1996,6 +1996,27 @@ def _render_meta_diagnostics(report: dict[str, Any]) -> list[str]:
 
 
 
+def _render_exit_geometry_row(cell: dict[str, Any]) -> str:
+    return (
+        f"| {cell['policy']} | {float(cell['initial_stop_atr']):.1f} "
+        f"| {float(cell['take_profit_atr']):.1f} "
+        f"| {float(cell['trailing_activation_atr']):.1f} "
+        f"| {float(cell['trailing_step_atr']):.1f} "
+        f"| {float(cell['round_trip_cost_bps']):.0f} "
+        f"| {cell['trade_count']} "
+        f"| {_format_optional_percent(cell['win_rate'], 100.0)} "
+        f"| {_format_pf(cell)} "
+        f"| {_format_optional_percent(cell['max_drawdown_percent'])} "
+        f"| {_format_optional_ratio(cell.get('dsr_z_score'))} "
+        f"| {_format_optional_ratio(cell.get('dsr_probability'))} "
+        f"| {cell.get('dsr_trial_count', 'N/A')} "
+        f"| {_format_optional_ratio(cell.get('sortino_ratio_per_trade'))} "
+        f"| {_format_diagnostic_flag(cell.get('zai_net_pf_gt_1_1'))} "
+        f"| {_format_diagnostic_flag(cell.get('zai_dsr_z_gt_1_0'))} "
+        f"| {_format_optional_fixed(cell['net_pnl_total_usd'], 2)} "
+        f"| {_format_optional_fixed(cell['mean_unscaled_net_expectancy_usd_at_full_equity'], 4)} |"
+    )
+
 def _render_exit_geometry_section(cells: list[dict[str, Any]]) -> list[str]:
     lines = [
         "",
