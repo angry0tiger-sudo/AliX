@@ -175,10 +175,18 @@ def _eligible_primary_event_indices(
     primary_buy_signal: Series,
     train_end: int,
     forward_end: int,
+    *,
+    horizon_candles: int = HORIZON_BARS_VALUE,
 ) -> list[int]:
     if len(primary_buy_signal) < forward_end or not 0 <= train_end < forward_end:
         raise ValueError("v4af_validation_signal_window_invalid")
-    last_eligible = forward_end - HORIZON_BARS_VALUE - 2
+    if (
+        isinstance(horizon_candles, bool)
+        or not isinstance(horizon_candles, int)
+        or horizon_candles < 1
+    ):
+        raise ValueError("v4af_validation_horizon_invalid")
+    last_eligible = forward_end - horizon_candles - 2
     if last_eligible < train_end:
         raise ValueError("v4af_validation_window_has_no_matured_events")
     return [
@@ -947,10 +955,10 @@ def _build_report(
     return report
 
 
-def _trim_to_latest_contiguous_hourly_segment(
+def _trim_to_latest_contiguous_segment(
     bars: DataFrame, timeframe: str
 ) -> tuple[DataFrame, dict[str, Any]]:
-    """Keep the latest uniform segment after any gap; never synthesize bars."""
+    """Keep the latest uniform timeframe segment; never synthesize bars."""
     if timeframe not in TIMEFRAME_MINUTES:
         raise ValueError("v4af_gap_trim_timeframe_invalid")
     dates = pd.to_datetime(bars["date"], utc=True, errors="coerce")
@@ -992,13 +1000,24 @@ def _trim_to_latest_contiguous_hourly_segment(
     }
 
 
+def _trim_to_latest_contiguous_hourly_segment(
+    bars: DataFrame, timeframe: str
+) -> tuple[DataFrame, dict[str, Any]]:
+    """Backward-compatible V4-AF helper name."""
+    return _trim_to_latest_contiguous_segment(bars, timeframe)
+
+
+
 def _load_research_context(
     input_dir: Path,
     days: int,
     commit_sha: str,
     *,
     allow_exchange_gaps: bool = False,
+    timeframe: str = TIMEFRAME,
 ) -> tuple[dict[str, Any], DataFrame, int, int, DataFrame, DataFrame, Series]:
+    if timeframe not in TIMEFRAME_MINUTES:
+        raise ValueError("v4af_research_context_timeframe_invalid")
     source_bars, provenance = _load_manifested_data(
         input_dir,
         SYMBOL,
@@ -1007,12 +1026,16 @@ def _load_research_context(
         allow_exchange_gaps=allow_exchange_gaps,
     )
     bars = resample_ohlcv(
-        source_bars, TIMEFRAME, allow_exchange_gaps=allow_exchange_gaps
+        source_bars, timeframe, allow_exchange_gaps=allow_exchange_gaps
     )
-    bars, trim_diagnostics = _trim_to_latest_contiguous_hourly_segment(bars, TIMEFRAME)
-    provenance = {**provenance, "resample_gap_trim": trim_diagnostics}
+    bars, trim_diagnostics = _trim_to_latest_contiguous_segment(bars, timeframe)
+    provenance = {
+        **provenance,
+        "analysis_timeframe": timeframe,
+        "resample_gap_trim": trim_diagnostics,
+    }
     if len(bars) < 2:
-        raise ValueError("v4af_contiguous_hourly_segment_insufficient")
+        raise ValueError("v4af_contiguous_timeframe_segment_insufficient")
     train_end, forward_end = _outer_boundaries(len(bars))
     research_bars = bars.iloc[:forward_end].reset_index(drop=True)
     profiles = build_feature_profiles(
@@ -1038,14 +1061,18 @@ def _load_research_context(
     )
 
 
+
 def _primary_signal_evaluation(
     primary_buy_signal: Series,
     train_end: int,
     forward_end: int,
+    *,
+    horizon_candles: int = HORIZON_BARS_VALUE,
+    train_start_index: int = V4Y_EMA_TREND_PERIOD,
 ) -> tuple[dict[str, int], dict[str, Any], list[int]]:
     train_gate = evaluate_primary_train_sample_gate(
         primary_buy_signal,
-        train_start_index=V4Y_EMA_TREND_PERIOD,
+        train_start_index=train_start_index,
         train_end_index=train_end,
     )
     signal_counts = {
@@ -1059,8 +1086,10 @@ def _primary_signal_evaluation(
         primary_buy_signal,
         train_end,
         forward_end,
+        horizon_candles=horizon_candles,
     )
     return signal_counts, train_gate, event_indices
+
 
 
 def _run_unfiltered_control(
