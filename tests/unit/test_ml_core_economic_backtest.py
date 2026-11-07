@@ -874,8 +874,11 @@ def test_signal_position_fraction_scales_quantity_without_leverage() -> None:
         bars, [dict(signal)], config, management=management, atr_values=[10.0] * 6
     )
     quarter = _simulate(
-        bars, [{**signal, "position_fraction": 0.25}],
-        config, management=management, atr_values=[10.0] * 6,
+        bars,
+        [{**signal, "position_fraction": 0.25}],
+        config,
+        management=management,
+        atr_values=[10.0] * 6,
     )
     assert len(full["trades"]) == len(quarter["trades"]) == 1
     full_trade = full["trades"][0]

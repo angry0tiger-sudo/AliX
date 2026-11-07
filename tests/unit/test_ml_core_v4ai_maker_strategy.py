@@ -155,8 +155,6 @@ def _valid_report() -> dict[str, Any]:
                 "fraction_max": 1.0,
             },
         },
-
-
         "fixed_exit_geometry": dict(v4ai.PRIMARY_GEOMETRY),
         "cost_contract": {
             "fee_type_assumption": "MAKER_FEE_PROXY",
@@ -332,10 +330,12 @@ def test_regime_feature_pipeline_uses_three_state_causal_hmm() -> None:
     close = 2_000.0 * np.exp(np.cumsum(returns))
     log_returns = pd.Series(np.log(close)).diff()
     volatility = log_returns.rolling(24, min_periods=24).std(ddof=0)
-    features = DataFrame({
-        v4ai.regime_engine.LOG_RETURN_FEATURE: log_returns,
-        v4ai.regime_engine.REALIZED_VOLATILITY_FEATURE: volatility,
-    })
+    features = DataFrame(
+        {
+            v4ai.regime_engine.LOG_RETURN_FEATURE: log_returns,
+            v4ai.regime_engine.REALIZED_VOLATILITY_FEATURE: volatility,
+        }
+    )
     transformed, diagnostics = v4ai._regime_features(
         features, train_end=400, apply_end=500
     )
@@ -348,8 +348,6 @@ def test_regime_feature_pipeline_uses_three_state_causal_hmm() -> None:
     assert v4ai.regime_engine.HMM_TRENDING_UP_FEATURE in transformed
     assert v4ai.regime_engine.HMM_TRENDING_DOWN_FEATURE in transformed
     assert v4ai.regime_engine.HMM_RANGING_FEATURE in transformed
-
-
 
 
 def test_percentile_seventy_threshold_uses_only_probability_values() -> None:
@@ -1037,10 +1035,9 @@ def test_regime_reactive_selector_uses_only_the_dominant_strategy() -> None:
 
 
 def test_inverse_volatility_targeting_uses_train_median_and_caps_at_one() -> None:
-    features = DataFrame({
-        v4ai.regime_engine.REALIZED_VOLATILITY_FEATURE:
-            [0.01] * 250 + [0.02, 0.005]
-    })
+    features = DataFrame(
+        {v4ai.regime_engine.REALIZED_VOLATILITY_FEATURE: [0.01] * 250 + [0.02, 0.005]}
+    )
     fractions, diagnostics = v4ai._volatility_target_position_fractions(
         features, train_end=250, event_indices=[250, 251]
     )
@@ -1050,10 +1047,9 @@ def test_inverse_volatility_targeting_uses_train_median_and_caps_at_one() -> Non
 
 
 def test_inverse_volatility_targeting_rejects_missing_event_volatility() -> None:
-    features = DataFrame({
-        v4ai.regime_engine.REALIZED_VOLATILITY_FEATURE:
-            [0.01] * 250 + [np.nan]
-    })
+    features = DataFrame(
+        {v4ai.regime_engine.REALIZED_VOLATILITY_FEATURE: [0.01] * 250 + [np.nan]}
+    )
     with pytest.raises(ValueError, match="v4am_position_fraction_volatility_invalid"):
         v4ai._volatility_target_position_fractions(
             features, train_end=250, event_indices=[250]

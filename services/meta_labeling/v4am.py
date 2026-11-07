@@ -31,11 +31,17 @@ HMM_STATE_VALID_FEATURE: Final[str] = "%-hmm_state_valid"
 
 
 def _validate_window_end(apply_end: int, row_count: int) -> None:
-    if isinstance(apply_end, bool) or not isinstance(apply_end, int) or not 2 <= apply_end <= row_count:
+    if (
+        isinstance(apply_end, bool)
+        or not isinstance(apply_end, int)
+        or not 2 <= apply_end <= row_count
+    ):
         raise ValueError("v4am_apply_window_invalid")
 
 
-def _validate_cusum_inputs(bars: DataFrame, base_features: DataFrame, apply_end: int) -> None:
+def _validate_cusum_inputs(
+    bars: DataFrame, base_features: DataFrame, apply_end: int
+) -> None:
     _validate_window_end(apply_end, len(bars))
     if len(bars) != len(base_features) or bars.empty:
         raise ValueError("v4am_feature_alignment_invalid")
@@ -53,7 +59,9 @@ def _validate_cusum_inputs(bars: DataFrame, base_features: DataFrame, apply_end:
     }
     if generated.intersection(base_features.columns):
         raise ValueError("v4am_cusum_feature_collision")
-    close = pd.to_numeric(bars["close"].iloc[:apply_end], errors="coerce").to_numpy(dtype=float)
+    close = pd.to_numeric(bars["close"].iloc[:apply_end], errors="coerce").to_numpy(
+        dtype=float
+    )
     if not np.isfinite(close).all() or np.any(close <= 0.0):
         raise ValueError("v4am_close_values_invalid")
 
@@ -74,8 +82,12 @@ def _causal_cusum_events(
             positive_sum = 0.0
             negative_sum = 0.0
             continue
-        positive_sum = max(0.0, positive_sum + float(standardized_return) - drift_allowance_sigma)
-        negative_sum = min(0.0, negative_sum + float(standardized_return) + drift_allowance_sigma)
+        positive_sum = max(
+            0.0, positive_sum + float(standardized_return) - drift_allowance_sigma
+        )
+        negative_sum = min(
+            0.0, negative_sum + float(standardized_return) + drift_allowance_sigma
+        )
         magnitude = max(positive_sum, abs(negative_sum))
         if positive_sum >= threshold_sigma:
             positive_events[index] = 1.0
@@ -101,7 +113,9 @@ def build_cusum_features(
     _validate_cusum_inputs(bars, base_features, apply_end)
     close = pd.to_numeric(bars["close"], errors="coerce").reset_index(drop=True)
     log_returns = np.log(close.iloc[:apply_end]).diff()
-    realized_volatility = log_returns.rolling(CUSUM_WINDOW, min_periods=CUSUM_WINDOW).std(ddof=0)
+    realized_volatility = log_returns.rolling(
+        CUSUM_WINDOW, min_periods=CUSUM_WINDOW
+    ).std(ddof=0)
     standardized_returns = (
         log_returns / realized_volatility.where(realized_volatility > 0.0)
     ).to_numpy(dtype=float)
@@ -120,7 +134,9 @@ def build_cusum_features(
         CUSUM_NEGATIVE_EVENT_FEATURE: np.full(row_count, np.nan, dtype=float),
     }
     arrays[LOG_RETURN_FEATURE][:apply_end] = log_returns.to_numpy(dtype=float)
-    arrays[REALIZED_VOLATILITY_FEATURE][:apply_end] = realized_volatility.to_numpy(dtype=float)
+    arrays[REALIZED_VOLATILITY_FEATURE][:apply_end] = realized_volatility.to_numpy(
+        dtype=float
+    )
     arrays[CUSUM_STANDARDIZED_RETURN_FEATURE][:apply_end] = standardized_returns
     arrays[CUSUM_DRIFT_FEATURE][:apply_end] = drift
     arrays[CUSUM_POSITIVE_EVENT_FEATURE][:apply_end] = positive
@@ -159,7 +175,12 @@ def _logsumexp(values: np.ndarray, axis: int) -> np.ndarray:
 def _emission_log_probabilities(
     observations: np.ndarray, means: np.ndarray, variances: np.ndarray
 ) -> np.ndarray:
-    if observations.ndim != 2 or means.ndim != 2 or variances.shape != means.shape or observations.shape[1] != means.shape[1]:
+    if (
+        observations.ndim != 2
+        or means.ndim != 2
+        or variances.shape != means.shape
+        or observations.shape[1] != means.shape[1]
+    ):
         raise ValueError("v4am_hmm_emission_shape_invalid")
     squared = (observations[:, np.newaxis, :] - means[np.newaxis, :, :]) ** 2
     log_density = -0.5 * (
@@ -178,7 +199,11 @@ def _forward_backward(
     transition_matrix: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray, float]:
     row_count, state_count = emission_log_probabilities.shape
-    if row_count < 2 or start_probabilities.shape != (state_count,) or transition_matrix.shape != (state_count, state_count):
+    if (
+        row_count < 2
+        or start_probabilities.shape != (state_count,)
+        or transition_matrix.shape != (state_count, state_count)
+    ):
         raise ValueError("v4am_hmm_forward_backward_shape_invalid")
     log_start = np.log(np.clip(start_probabilities, 1e-300, 1.0))
     log_transition = np.log(np.clip(transition_matrix, 1e-300, 1.0))
@@ -208,7 +233,11 @@ def _forward_backward(
         - log_likelihood
     )
     xi = np.exp(log_xi).sum(axis=0)
-    if not (np.isfinite(gamma).all() and np.isfinite(xi).all() and math.isfinite(log_likelihood)):
+    if not (
+        np.isfinite(gamma).all()
+        and np.isfinite(xi).all()
+        and math.isfinite(log_likelihood)
+    ):
         raise ValueError("v4am_hmm_estimation_non_finite")
     return gamma, xi, log_likelihood
 
@@ -216,7 +245,12 @@ def _forward_backward(
 def _fit_gaussian_hmm(
     train_values: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]:
-    if train_values.ndim != 2 or train_values.shape[1] != 2 or len(train_values) < HMM_MINIMUM_TRAIN_ROWS or not np.isfinite(train_values).all():
+    if (
+        train_values.ndim != 2
+        or train_values.shape[1] != 2
+        or len(train_values) < HMM_MINIMUM_TRAIN_ROWS
+        or not np.isfinite(train_values).all()
+    ):
         raise ValueError("v4am_hmm_training_support_insufficient")
     state_count = HMM_STATE_COUNT
     order = np.argsort(train_values[:, 0], kind="stable")
@@ -225,7 +259,9 @@ def _fit_gaussian_hmm(
     global_variance = np.maximum(train_values.var(axis=0), HMM_VARIANCE_FLOOR)
     variances = np.tile(global_variance, (state_count, 1))
     start_probabilities = np.full(state_count, 1.0 / state_count, dtype=float)
-    transition_matrix = np.full((state_count, state_count), 0.10 / (state_count - 1), dtype=float)
+    transition_matrix = np.full(
+        (state_count, state_count), 0.10 / (state_count - 1), dtype=float
+    )
     np.fill_diagonal(transition_matrix, 0.90)
     previous_likelihood = -math.inf
     converged = False
@@ -233,7 +269,9 @@ def _fit_gaussian_hmm(
     iteration_count = 0
     for iteration in range(1, HMM_MAXIMUM_ITERATIONS + 1):
         emission = _emission_log_probabilities(train_values, means, variances)
-        gamma, xi, likelihood = _forward_backward(emission, start_probabilities, transition_matrix)
+        gamma, xi, likelihood = _forward_backward(
+            emission, start_probabilities, transition_matrix
+        )
         start_probabilities = gamma[0] + 1e-3
         start_probabilities /= start_probabilities.sum()
         transition_matrix = xi + 1e-3
@@ -244,12 +282,15 @@ def _fit_gaussian_hmm(
         means = (gamma.T @ train_values) / state_weights[:, np.newaxis]
         for state in range(state_count):
             deviations = train_values - means[state]
-            variances[state] = (
-                gamma[:, state, np.newaxis] * deviations**2
-            ).sum(axis=0) / state_weights[state]
+            variances[state] = (gamma[:, state, np.newaxis] * deviations**2).sum(
+                axis=0
+            ) / state_weights[state]
         variances = np.maximum(variances, HMM_VARIANCE_FLOOR)
         iteration_count = iteration
-        if math.isfinite(previous_likelihood) and abs(likelihood - previous_likelihood) <= HMM_CONVERGENCE_TOLERANCE:
+        if (
+            math.isfinite(previous_likelihood)
+            and abs(likelihood - previous_likelihood) <= HMM_CONVERGENCE_TOLERANCE
+        ):
             converged = True
             break
         previous_likelihood = likelihood
@@ -280,7 +321,9 @@ def _causal_forward_filter(
         if not bool(valid_mask[index]):
             previous_log_alpha = None
             continue
-        emission = _emission_log_probabilities(observations[index : index + 1], means, variances)[0]
+        emission = _emission_log_probabilities(
+            observations[index : index + 1], means, variances
+        )[0]
         if previous_log_alpha is None:
             current = log_start + emission
         else:
@@ -294,15 +337,25 @@ def _causal_forward_filter(
     return posterior
 
 
-def _validate_hmm_inputs(features: DataFrame, train_end: int, apply_end: int) -> tuple[np.ndarray, np.ndarray]:
+def _validate_hmm_inputs(
+    features: DataFrame, train_end: int, apply_end: int
+) -> tuple[np.ndarray, np.ndarray]:
     _validate_window_end(apply_end, len(features))
-    if isinstance(train_end, bool) or not isinstance(train_end, int) or not HMM_MINIMUM_TRAIN_ROWS <= train_end < apply_end:
+    if (
+        isinstance(train_end, bool)
+        or not isinstance(train_end, int)
+        or not HMM_MINIMUM_TRAIN_ROWS <= train_end < apply_end
+    ):
         raise ValueError("v4am_hmm_training_window_invalid")
     if not features.columns.is_unique:
         raise ValueError("v4am_feature_schema_invalid")
     if {LOG_RETURN_FEATURE, REALIZED_VOLATILITY_FEATURE}.difference(features.columns):
         raise ValueError("v4am_hmm_input_features_missing")
-    matrix = features.loc[:, [LOG_RETURN_FEATURE, REALIZED_VOLATILITY_FEATURE]].apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
+    matrix = (
+        features.loc[:, [LOG_RETURN_FEATURE, REALIZED_VOLATILITY_FEATURE]]
+        .apply(pd.to_numeric, errors="coerce")
+        .to_numpy(dtype=float)
+    )
     valid_mask = np.isfinite(matrix).all(axis=1)
     train_mask = valid_mask & (np.arange(len(features)) < train_end)
     if int(train_mask.sum()) < HMM_MINIMUM_TRAIN_ROWS:
@@ -359,10 +412,18 @@ def build_hmm_regime_features(
         HMM_RANGING_FEATURE: np.full(row_count, np.nan, dtype=float),
         HMM_STATE_VALID_FEATURE: np.full(row_count, np.nan, dtype=float),
     }
-    output_arrays[HMM_TRENDING_UP_FEATURE][:apply_end] = posterior_raw[:apply_end, up_state]
-    output_arrays[HMM_TRENDING_DOWN_FEATURE][:apply_end] = posterior_raw[:apply_end, down_state]
-    output_arrays[HMM_RANGING_FEATURE][:apply_end] = posterior_raw[:apply_end, ranging_state]
-    output_arrays[HMM_STATE_VALID_FEATURE][:apply_end] = np.isfinite(posterior_raw[:apply_end]).all(axis=1).astype(float)
+    output_arrays[HMM_TRENDING_UP_FEATURE][:apply_end] = posterior_raw[
+        :apply_end, up_state
+    ]
+    output_arrays[HMM_TRENDING_DOWN_FEATURE][:apply_end] = posterior_raw[
+        :apply_end, down_state
+    ]
+    output_arrays[HMM_RANGING_FEATURE][:apply_end] = posterior_raw[
+        :apply_end, ranging_state
+    ]
+    output_arrays[HMM_STATE_VALID_FEATURE][:apply_end] = (
+        np.isfinite(posterior_raw[:apply_end]).all(axis=1).astype(float)
+    )
     transformed = base_features.reset_index(drop=True).copy()
     for name, values in output_arrays.items():
         if name in transformed.columns:
@@ -388,7 +449,11 @@ def build_hmm_regime_features(
         "smoothing_used": False,
         "lookahead_used": False,
         "mapping_method": "ORDER_BY_MEAN_STANDARDIZED_LOG_RETURN",
-        "state_mapping": {"trending_down": down_state, "ranging": ranging_state, "trending_up": up_state},
+        "state_mapping": {
+            "trending_down": down_state,
+            "ranging": ranging_state,
+            "trending_up": up_state,
+        },
         "train_posterior_dominant_counts": semantic_counts,
         "scaler_mean_train_only": scaler_mean.tolist(),
         "scaler_scale_train_only": scaler_scale.tolist(),
@@ -397,7 +462,9 @@ def build_hmm_regime_features(
         ).tolist(),
         "transition_matrix": transition_matrix.tolist(),
         "start_probabilities": start_probabilities.tolist(),
-        "invalid_rows_before_apply_end": int((~np.isfinite(posterior_raw[:apply_end]).all(axis=1)).sum()),
+        "invalid_rows_before_apply_end": int(
+            (~np.isfinite(posterior_raw[:apply_end]).all(axis=1)).sum()
+        ),
         "final_holdout_features_unavailable": bool(
             all(np.isnan(values[apply_end:]).all() for values in output_arrays.values())
         ),

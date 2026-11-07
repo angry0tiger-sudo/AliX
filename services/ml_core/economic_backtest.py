@@ -651,10 +651,7 @@ def _open_position(
         if position_fraction is None
         else float(position_fraction)
     )
-    if (
-        not np.isfinite(selected_fraction)
-        or not 0.0 < selected_fraction <= 1.0
-    ):
+    if not np.isfinite(selected_fraction) or not 0.0 < selected_fraction <= 1.0:
         raise ValueError("economic_signal_position_fraction_invalid")
     effective_fraction = min(config.position_fraction, selected_fraction)
     quantity = equity * effective_fraction / reference_price
@@ -846,7 +843,12 @@ def _close_position(
         "exit_reference_price": round(reference_price, 10),
         "exit_fill_price": round(exit_fill, 10),
         "exit_trigger_type": exit_trigger_type,
-        "position_fraction": round(position.quantity * position.entry_reference_price / position.equity_at_entry, 10),
+        "position_fraction": round(
+            position.quantity
+            * position.entry_reference_price
+            / position.equity_at_entry,
+            10,
+        ),
         "quantity": round(position.quantity, 10),
         "gross_market_pnl_usd": round(gross_pnl, 8),
         "fees_usd": round(fees, 8),

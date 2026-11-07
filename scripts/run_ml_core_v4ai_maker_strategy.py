@@ -44,7 +44,9 @@ EMA_SLOW_PERIOD = 200
 RSI_FEATURE = "%-primary_rsi_14"
 EMA_DISTANCE_FEATURE = "%-primary_close_vs_ema200_pct"
 EMA_SPREAD_FEATURE = "%-primary_ema50_vs_ema200_pct"
-PRIMARY_SIGNAL_GENERATION = "CAUSAL_CUSUM2SIGMA_GAUSSIAN_HMM3_REGIME_REACTIVE_HARD_SELECTOR"
+PRIMARY_SIGNAL_GENERATION = (
+    "CAUSAL_CUSUM2SIGMA_GAUSSIAN_HMM3_REGIME_REACTIVE_HARD_SELECTOR"
+)
 RESEARCH_SIGNAL_COUNT_TARGET = 100
 LEGACY_PRIMARY_FEATURE_COLUMNS = (
     "%-primary_bollinger_bandwidth_pct",
@@ -659,17 +661,19 @@ def _regime_reactive_primary_signal(
         and bool((high.iloc[:apply_end] > 0.0).all())
     ):
         raise ValueError("v4am_selector_market_values_invalid")
-    donchian_upper = high.shift(1).rolling(
-        DONCHIAN_LOOKBACK, min_periods=DONCHIAN_LOOKBACK
-    ).max()
+    donchian_upper = (
+        high.shift(1).rolling(DONCHIAN_LOOKBACK, min_periods=DONCHIAN_LOOKBACK).max()
+    )
     hmm_columns = [
         regime_engine.HMM_TRENDING_UP_FEATURE,
         regime_engine.HMM_TRENDING_DOWN_FEATURE,
         regime_engine.HMM_RANGING_FEATURE,
     ]
-    probabilities = features.loc[:, hmm_columns].apply(
-        pd.to_numeric, errors="coerce"
-    ).to_numpy(dtype=float)
+    probabilities = (
+        features.loc[:, hmm_columns]
+        .apply(pd.to_numeric, errors="coerce")
+        .to_numpy(dtype=float)
+    )
     valid_hmm = np.isfinite(probabilities).all(axis=1)
     dominant = np.full(len(features), -1, dtype=int)
     dominant[valid_hmm] = np.argmax(probabilities[valid_hmm], axis=1)
@@ -687,12 +691,16 @@ def _regime_reactive_primary_signal(
     trending_down = valid & (dominant == 1)
     ranging = valid & (dominant == 2)
     momentum_signal = (
-        trending_up & (positive_cusum >= 1.0)
-        & np.isfinite(upper) & (close_values > upper)
+        trending_up
+        & (positive_cusum >= 1.0)
+        & np.isfinite(upper)
+        & (close_values > upper)
     )
     mean_reversion_signal = (
-        ranging & (negative_cusum >= 1.0)
-        & np.isfinite(rsi) & (rsi < RANGE_RSI_ENTRY_THRESHOLD)
+        ranging
+        & (negative_cusum >= 1.0)
+        & np.isfinite(rsi)
+        & (rsi < RANGE_RSI_ENTRY_THRESHOLD)
     )
     signal_values = np.zeros(len(features), dtype=bool)
     signal_values[:apply_end] = (
@@ -789,7 +797,11 @@ def _apply_position_fractions(
             continue
         index = int(action["row_index"])
         fraction = position_fractions.get(index)
-        if fraction is None or not math.isfinite(float(fraction)) or not 0.0 < float(fraction) <= 1.0:
+        if (
+            fraction is None
+            or not math.isfinite(float(fraction))
+            or not 0.0 < float(fraction) <= 1.0
+        ):
             raise ValueError("v4am_position_fraction_action_missing_or_invalid")
         action["position_fraction"] = float(fraction)
 
@@ -1078,23 +1090,29 @@ def _decision_rows(
         accepted = threshold is None or (
             probability is not None and probability >= threshold
         )
-        rows.append({
-            "candidate_id": _candidate_id(mode),
-            "symbol": SYMBOL,
-            "timeframe": TIMEFRAME,
-            "mode": mode,
-            "event_index": index,
-            "signal_timestamp": pd.Timestamp(bars["date"].iloc[index]).isoformat(),
-            "execution_timestamp": pd.Timestamp(bars["date"].iloc[index + 1]).isoformat(),
-            "meta_probability": probability,
-            "selected_meta_probability_threshold": threshold,
-            "position_fraction": (
-                position_fractions.get(index) if position_fractions is not None else None
-            ),
-            "meta_filter_decision": "ACCEPT" if accepted else "REJECT",
-            "executable_signal": "BUY" if accepted else "NO_ENTRY",
-            "split_role": "FORWARD_VALIDATION",
-        })
+        rows.append(
+            {
+                "candidate_id": _candidate_id(mode),
+                "symbol": SYMBOL,
+                "timeframe": TIMEFRAME,
+                "mode": mode,
+                "event_index": index,
+                "signal_timestamp": pd.Timestamp(bars["date"].iloc[index]).isoformat(),
+                "execution_timestamp": pd.Timestamp(
+                    bars["date"].iloc[index + 1]
+                ).isoformat(),
+                "meta_probability": probability,
+                "selected_meta_probability_threshold": threshold,
+                "position_fraction": (
+                    position_fractions.get(index)
+                    if position_fractions is not None
+                    else None
+                ),
+                "meta_filter_decision": "ACCEPT" if accepted else "REJECT",
+                "executable_signal": "BUY" if accepted else "NO_ENTRY",
+                "split_role": "FORWARD_VALIDATION",
+            }
+        )
     return rows
 
 
@@ -1111,11 +1129,15 @@ def _skipped_decision_rows(
             "mode": META_CANDIDATE,
             "event_index": index,
             "signal_timestamp": pd.Timestamp(bars["date"].iloc[index]).isoformat(),
-            "execution_timestamp": pd.Timestamp(bars["date"].iloc[index + 1]).isoformat(),
+            "execution_timestamp": pd.Timestamp(
+                bars["date"].iloc[index + 1]
+            ).isoformat(),
             "meta_probability": None,
             "selected_meta_probability_threshold": None,
             "position_fraction": (
-                position_fractions.get(index) if position_fractions is not None else None
+                position_fractions.get(index)
+                if position_fractions is not None
+                else None
             ),
             "meta_filter_decision": "SKIPPED",
             "executable_signal": "NOT_EVALUATED",
@@ -1123,8 +1145,6 @@ def _skipped_decision_rows(
         }
         for index in event_indices
     ]
-
-
 
 
 def _run_candidate(
@@ -1139,8 +1159,10 @@ def _run_candidate(
     position_fractions: dict[int, float] | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
     accepted = [
-        index for index in event_indices
-        if threshold is None or (
+        index
+        for index in event_indices
+        if threshold is None
+        or (
             probabilities is not None
             and probabilities.get(index) is not None
             and float(probabilities[index]) >= threshold
@@ -1150,7 +1172,9 @@ def _run_candidate(
     if position_fractions is not None:
         _apply_position_fractions(actions, position_fractions)
     replay = simulate_signals(
-        bars, actions, _execution_config(),
+        bars,
+        actions,
+        _execution_config(),
         trade_management_config=_trade_management_config(),
     )
     trades = cast(list[dict[str, Any]], replay["trades"])
@@ -1167,30 +1191,37 @@ def _run_candidate(
         "filter": "ADX14_GT20_DIAGNOSTIC_ABLATION" if mode == ADX_ABLATION else "NONE",
         "primary_signal_count": len(event_indices),
         "accepted_signal_count": len(accepted),
-        "accepted_signal_fraction": len(accepted) / len(event_indices) if event_indices else 0.0,
+        "accepted_signal_fraction": len(accepted) / len(event_indices)
+        if event_indices
+        else 0.0,
         "selected_meta_probability_threshold": threshold,
-        "position_sizing_method": "INVERSE_24H_REALIZED_VOLATILITY" if position_fractions is not None else "FIXED_CONFIG",
+        "position_sizing_method": "INVERSE_24H_REALIZED_VOLATILITY"
+        if position_fractions is not None
+        else "FIXED_CONFIG",
         "metrics": metrics,
-        "acceptance_target_met": _candidate_passes(metrics, expectancy, primary_metrics, primary_expectancy),
+        "acceptance_target_met": _candidate_passes(
+            metrics, expectancy, primary_metrics, primary_expectancy
+        ),
         "sequence_model_used": False,
     }
-    enriched = [{
-        **trade,
-        "candidate_id": candidate["candidate_id"],
-        "symbol": SYMBOL,
-        "timeframe": TIMEFRAME,
-        "mode": mode,
-        "fee_bps_per_side": FEE_BPS_PER_SIDE,
-        "slippage_bps_per_side": SLIPPAGE_BPS_PER_SIDE,
-        "round_trip_cost_bps": ROUND_TRIP_COST_BPS,
-        "evaluation_split": "FORWARD_VALIDATION",
-    } for trade in trades]
+    enriched = [
+        {
+            **trade,
+            "candidate_id": candidate["candidate_id"],
+            "symbol": SYMBOL,
+            "timeframe": TIMEFRAME,
+            "mode": mode,
+            "fee_bps_per_side": FEE_BPS_PER_SIDE,
+            "slippage_bps_per_side": SLIPPAGE_BPS_PER_SIDE,
+            "round_trip_cost_bps": ROUND_TRIP_COST_BPS,
+            "evaluation_split": "FORWARD_VALIDATION",
+        }
+        for trade in trades
+    ]
     decisions = _decision_rows(
         bars, event_indices, probabilities, threshold, mode, position_fractions
     )
     return candidate, enriched, decisions
-
-
 
 
 def _skipped_meta_candidate(reason: str, event_count: int) -> dict[str, Any]:
@@ -1239,31 +1270,35 @@ def _run_exit_geometry_matrix(
         )
         trades = cast(list[dict[str, Any]], replay["trades"])
         metrics = v4ac._summarize_replay(replay)
-        cells.append({
-            "policy": policy["name"],
-            "symbol": SYMBOL,
-            "timeframe": TIMEFRAME,
-            "initial_stop_atr": policy["initial_stop_atr"],
-            "take_profit_atr": policy["take_profit_atr"],
-            "trailing_activation_atr": policy["trailing_activation_atr"],
-            "trailing_step_atr": policy["trailing_step_atr"],
-            "fee_bps_per_side": FEE_BPS_PER_SIDE,
-            "slippage_bps_per_side": SLIPPAGE_BPS_PER_SIDE,
-            "round_trip_cost_bps": ROUND_TRIP_COST_BPS,
-            "trade_count": metrics["trade_count"],
-            "win_rate": metrics["win_rate"],
-            "net_profit_factor": metrics["net_profit_factor"],
-            "net_profit_factor_infinite_no_losses": metrics["net_profit_factor_infinite_no_losses"],
-            "max_drawdown_percent": metrics["max_drawdown_percent"],
-            "net_pnl_total_usd": metrics["net_pnl_total_usd"],
-            "mean_unscaled_net_expectancy_usd_at_full_equity": _expectancy(trades),
-            **_trade_risk_metrics(trades),
-            "signal_count": len(event_indices),
-            "evaluation_split": "FORWARD_VALIDATION",
-            "meta_model_used": False,
-            "final_holdout_used": False,
-            "diagnostic_only": True,
-        })
+        cells.append(
+            {
+                "policy": policy["name"],
+                "symbol": SYMBOL,
+                "timeframe": TIMEFRAME,
+                "initial_stop_atr": policy["initial_stop_atr"],
+                "take_profit_atr": policy["take_profit_atr"],
+                "trailing_activation_atr": policy["trailing_activation_atr"],
+                "trailing_step_atr": policy["trailing_step_atr"],
+                "fee_bps_per_side": FEE_BPS_PER_SIDE,
+                "slippage_bps_per_side": SLIPPAGE_BPS_PER_SIDE,
+                "round_trip_cost_bps": ROUND_TRIP_COST_BPS,
+                "trade_count": metrics["trade_count"],
+                "win_rate": metrics["win_rate"],
+                "net_profit_factor": metrics["net_profit_factor"],
+                "net_profit_factor_infinite_no_losses": metrics[
+                    "net_profit_factor_infinite_no_losses"
+                ],
+                "max_drawdown_percent": metrics["max_drawdown_percent"],
+                "net_pnl_total_usd": metrics["net_pnl_total_usd"],
+                "mean_unscaled_net_expectancy_usd_at_full_equity": _expectancy(trades),
+                **_trade_risk_metrics(trades),
+                "signal_count": len(event_indices),
+                "evaluation_split": "FORWARD_VALIDATION",
+                "meta_model_used": False,
+                "final_holdout_used": False,
+                "diagnostic_only": True,
+            }
+        )
     matrix = {
         "evaluation_split": "FORWARD_VALIDATION",
         "final_holdout_used": False,
@@ -1279,8 +1314,6 @@ def _run_exit_geometry_matrix(
     }
     _validate_exit_matrix(matrix)
     return matrix
-
-
 
 
 def _validate_exit_matrix_scope(matrix: dict[str, Any]) -> None:
@@ -1456,7 +1489,8 @@ def _validate_report_cusum_parameters(diagnostics: dict[str, Any]) -> None:
         cusum.get("algorithm") == "TWO_SIDED_CUSUM_STANDARDIZED_LOG_RETURN"
         and cusum.get("rolling_window_bars") == regime_engine.CUSUM_WINDOW
         and cusum.get("threshold_sigma") == regime_engine.CUSUM_THRESHOLD_SIGMA
-        and cusum.get("drift_allowance_sigma") == regime_engine.CUSUM_DRIFT_ALLOWANCE_SIGMA
+        and cusum.get("drift_allowance_sigma")
+        == regime_engine.CUSUM_DRIFT_ALLOWANCE_SIGMA
         and cusum.get("lookahead_used") is False
         and cusum.get("final_holdout_features_unavailable") is True
     )
@@ -1484,7 +1518,8 @@ def _validate_report_sizing_parameters(diagnostics: dict[str, Any]) -> None:
     sizing = diagnostics.get("volatility_targeting", {})
     valid = (
         sizing.get("method") == "INVERSE_24H_REALIZED_VOLATILITY"
-        and sizing.get("target_reference") == "MEDIAN_OF_OUTER_TRAIN_24H_REALIZED_VOLATILITY"
+        and sizing.get("target_reference")
+        == "MEDIAN_OF_OUTER_TRAIN_24H_REALIZED_VOLATILITY"
         and sizing.get("sizing_cap") == 1.0
         and sizing.get("leverage_enabled") is False
         and sizing.get("training_rows", 0) >= regime_engine.HMM_MINIMUM_TRAIN_ROWS
@@ -1523,8 +1558,6 @@ def _validate_report_regime(report: dict[str, Any]) -> None:
     )
     if not valid:
         raise ValueError("v4ai_report_hmm_causality_contract_invalid")
-
-
 
 
 def _validate_report_geometry(report: dict[str, Any]) -> None:
@@ -1684,8 +1717,6 @@ def _render_step_summary_header(report: dict[str, Any]) -> list[str]:
     ]
 
 
-
-
 def _render_candidate_row(item: dict[str, Any]) -> str:
     metrics = item["metrics"]
     return (
@@ -1834,8 +1865,6 @@ def _render_meta_diagnostics(report: dict[str, Any]) -> list[str]:
             f"selected OOF fraction={threshold.get('selected_fraction', 'N/A')}."
         ),
     ]
-
-
 
 
 def _render_exit_geometry_row(cell: dict[str, Any]) -> str:
@@ -1990,8 +2019,13 @@ def run_v4ai(
 ) -> dict[str, Any]:
     _validate_request(days, commit_sha)
     (
-        provenance, bars, train_end, forward_end, research_bars,
-        base_features, _legacy_breakout_signal,
+        provenance,
+        bars,
+        train_end,
+        forward_end,
+        research_bars,
+        base_features,
+        _legacy_breakout_signal,
     ) = v4af._load_research_context(
         input_dir, days, commit_sha, allow_exchange_gaps=ALLOW_EXCHANGE_GAPS
     )
@@ -2030,22 +2064,39 @@ def run_v4ai(
     }
     signal_counts = {
         "primary_buy_count": int(primary_signal.sum()),
-        "train_primary_buy_count": int(primary_window_counts["train_primary_buy_count"]),
-        "forward_validation_primary_buy_count": int(primary_window_counts["forward_validation_primary_buy_count"]),
-        "minimum_primary_train_signal_count": int(train_gate["minimum_primary_buy_count"]),
-        "research_signal_target_met": int(primary_signal.sum()) >= RESEARCH_SIGNAL_COUNT_TARGET,
+        "train_primary_buy_count": int(
+            primary_window_counts["train_primary_buy_count"]
+        ),
+        "forward_validation_primary_buy_count": int(
+            primary_window_counts["forward_validation_primary_buy_count"]
+        ),
+        "minimum_primary_train_signal_count": int(
+            train_gate["minimum_primary_buy_count"]
+        ),
+        "research_signal_target_met": int(primary_signal.sum())
+        >= RESEARCH_SIGNAL_COUNT_TARGET,
         "adx_ablation_buy_count": int(adx_ablation_signal.sum()),
         "primary_forward_event_count": len(primary_event_indices),
         "adx_ablation_forward_event_count": len(adx_ablation_event_indices),
     }
     primary_candidate, primary_trades, primary_decisions = _run_candidate(
-        research_bars, primary_event_indices, forward_end, BASE_CONTROL,
-        None, None, position_fractions=position_fractions,
+        research_bars,
+        primary_event_indices,
+        forward_end,
+        BASE_CONTROL,
+        None,
+        None,
+        position_fractions=position_fractions,
     )
     adx_ablation_candidate, adx_ablation_trades, adx_ablation_decisions = (
         _run_candidate(
-            research_bars, adx_ablation_event_indices, forward_end, ADX_ABLATION,
-            None, None, position_fractions=position_fractions,
+            research_bars,
+            adx_ablation_event_indices,
+            forward_end,
+            ADX_ABLATION,
+            None,
+            None,
+            position_fractions=position_fractions,
         )
     )
     try:
@@ -2058,15 +2109,25 @@ def run_v4ai(
         meta = _empty_meta(str(error))
     if meta.get("skip_reason") is None:
         probabilities = _forward_probability_map(
-            features, primary_event_indices,
+            features,
+            primary_event_indices,
             cast(list[str], meta["selected_features"]),
-            meta["model"], float(meta["temperature"]),
+            meta["model"],
+            float(meta["temperature"]),
         )
         meta_candidate, meta_trades, meta_decisions = _run_candidate(
-            research_bars, primary_event_indices, forward_end, META_CANDIDATE,
-            float(meta["threshold"]), probabilities,
+            research_bars,
+            primary_event_indices,
+            forward_end,
+            META_CANDIDATE,
+            float(meta["threshold"]),
+            probabilities,
             primary_candidate["metrics"],
-            float(primary_candidate["metrics"]["mean_unscaled_net_expectancy_usd_at_full_equity"]),
+            float(
+                primary_candidate["metrics"][
+                    "mean_unscaled_net_expectancy_usd_at_full_equity"
+                ]
+            ),
             position_fractions,
         )
     else:
@@ -2085,9 +2146,21 @@ def run_v4ai(
     )
     _attach_dsr_diagnostics(candidates, exit_matrix)
     report = _build_report(
-        commit_sha, provenance, bars, train_end, forward_end, signal_counts,
-        primary_signal_diagnostics, adx_ablation_diagnostics, train_gate, meta,
-        regime_diagnostics, candidates, trades, decisions, exit_matrix,
+        commit_sha,
+        provenance,
+        bars,
+        train_end,
+        forward_end,
+        signal_counts,
+        primary_signal_diagnostics,
+        adx_ablation_diagnostics,
+        train_gate,
+        meta,
+        regime_diagnostics,
+        candidates,
+        trades,
+        decisions,
+        exit_matrix,
     )
     output_report.parent.mkdir(parents=True, exist_ok=True)
     output_report.write_text(
@@ -2099,8 +2172,6 @@ def run_v4ai(
     summary = _render_step_summary(report)
     print(summary, end="")
     return report
-
-
 
 
 def main() -> int:

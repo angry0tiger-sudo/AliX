@@ -29,17 +29,23 @@ def _hmm_input(rows: int = 900) -> DataFrame:
     bars = _market_frame(rows)
     close_returns = np.log(bars["close"]).diff()
     volatility = close_returns.rolling(24, min_periods=24).std(ddof=0)
-    return DataFrame({
-        v4am.LOG_RETURN_FEATURE: close_returns,
-        v4am.REALIZED_VOLATILITY_FEATURE: volatility,
-    })
+    return DataFrame(
+        {
+            v4am.LOG_RETURN_FEATURE: close_returns,
+            v4am.REALIZED_VOLATILITY_FEATURE: volatility,
+        }
+    )
 
 
 def test_cusum_is_causal_and_does_not_populate_final_holdout() -> None:
     bars = _market_frame(400)
-    transformed, diagnostics = v4am.build_cusum_features(bars, _base_features(bars), apply_end=340)
+    transformed, diagnostics = v4am.build_cusum_features(
+        bars, _base_features(bars), apply_end=340
+    )
     prefix_bars = bars.iloc[:300].reset_index(drop=True)
-    prefix, _ = v4am.build_cusum_features(prefix_bars, _base_features(prefix_bars), apply_end=300)
+    prefix, _ = v4am.build_cusum_features(
+        prefix_bars, _base_features(prefix_bars), apply_end=300
+    )
     pd.testing.assert_series_equal(
         transformed.loc[:299, v4am.CUSUM_DRIFT_FEATURE].reset_index(drop=True),
         prefix[v4am.CUSUM_DRIFT_FEATURE].reset_index(drop=True),
@@ -105,7 +111,9 @@ def test_hmm_training_parameters_ignore_forward_validation_values() -> None:
     altered.loc[600:, v4am.LOG_RETURN_FEATURE] = 0.15
     altered.loc[600:, v4am.REALIZED_VOLATILITY_FEATURE] = 0.08
     _, second = v4am.build_hmm_regime_features(altered, train_end=600, apply_end=765)
-    np.testing.assert_allclose(first["state_means_original_scale"], second["state_means_original_scale"])
+    np.testing.assert_allclose(
+        first["state_means_original_scale"], second["state_means_original_scale"]
+    )
     np.testing.assert_allclose(first["transition_matrix"], second["transition_matrix"])
 
 
@@ -133,4 +141,6 @@ def test_hmm_rejects_invalid_train_window_and_missing_features() -> None:
     with pytest.raises(ValueError, match="v4am_hmm_training_window_invalid"):
         v4am.build_hmm_regime_features(features, train_end=99, apply_end=250)
     with pytest.raises(ValueError, match="v4am_hmm_input_features_missing"):
-        v4am.build_hmm_regime_features(DataFrame({"other": np.ones(300)}), train_end=200, apply_end=250)
+        v4am.build_hmm_regime_features(
+            DataFrame({"other": np.ones(300)}), train_end=200, apply_end=250
+        )
