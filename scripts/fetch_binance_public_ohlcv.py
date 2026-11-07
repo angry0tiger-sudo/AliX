@@ -523,15 +523,14 @@ def _write_candles_csv(
     stem = f"binance-{symbol.lower()}-1m"
     csv_path = output_dir / f"{stem}.csv"
     temporary = output_dir / f"{stem}.csv.tmp"
+    fieldnames = ("date", "open", "high", "low", "close", "volume")
     with temporary.open("w", encoding="utf-8", newline="") as stream:
-        writer = csv.DictWriter(
-            stream, fieldnames=("date", "open", "high", "low", "close", "volume")
-        )
-        writer.writeheader()
-        for row in rows:
-            writer.writerow({key: row[key] for key in writer.fieldnames})
+        writer = csv.writer(stream)
+        writer.writerow(fieldnames)
+        writer.writerows((row[key] for key in fieldnames) for row in rows)
     temporary.replace(csv_path)
-    digest = hashlib.sha256(csv_path.read_bytes()).hexdigest()
+    with csv_path.open("rb") as stream:
+        digest = hashlib.file_digest(stream, "sha256").hexdigest()
     return csv_path, digest
 
 

@@ -611,8 +611,9 @@ def test_oof_meta_label_uses_exact_thirty_bps_cost_contract(
         execution: Any,
         *,
         trade_management_config: Any,
+        atr_values: pd.Series,
     ) -> dict[str, Any]:
-        seen.append(execution)
+        seen.append((execution, len(frame), len(atr_values), actions))
         return {
             "trades": [
                 {
@@ -635,13 +636,91 @@ def test_oof_meta_label_uses_exact_thirty_bps_cost_contract(
         bars,
         {pd.Timestamp(value): index for index, value in enumerate(dates)},
         80,
+        atr_values=pd.Series(np.ones(len(bars))),
     )
     assert result is not None
     assert result["meta_label"] == 1
     assert result["net_pnl_usd"] == 12.0
     assert result["label_end_idx"] == 5
-    assert seen[0].fee_bps == 10.0
-    assert seen[0].slippage_bps == 5.0
+    assert seen[0][0].fee_bps == 10.0
+    assert seen[0][0].slippage_bps == 5.0
+    assert seen[0][1] == 49
+    assert seen[0][2] == 49
+    assert seen[0][3][0]["row_index"] == 0
+
+
+def test_oof_label_bounded_replay_matches_full_history_simulator(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    row_count = 100
+    dates = pd.date_range("2024-01-01", periods=row_count, freq="30min", tz="UTC")
+    bars = DataFrame(
+        {
+            "date": dates,
+            "open": np.full(row_count, 100.0),
+            "high": np.full(row_count, 101.0),
+            "low": np.full(row_count, 99.0),
+            "close": np.full(row_count, 100.0),
+            "volume": np.full(row_count, 10.0),
+        }
+    )
+    event_index = 20
+    train_end = row_count
+    management = v4ai._trade_management_config()
+    atr_values = v4ai.calculate_atr(bars, period=management.atr_period)
+    full_actions = v4ac._build_forward_actions(bars, [event_index], train_end)
+    full_replay = v4ai.simulate_signals(
+        bars,
+        full_actions,
+        v4ai._execution_config(),
+        trade_management_config=management,
+        atr_values=atr_values,
+    )
+    expected = full_replay["trades"][0]
+    index_by_timestamp = {
+        pd.Timestamp(value): index for index, value in enumerate(dates)
+    }
+    original_simulator = v4ai.simulate_signals
+    observed_window_lengths: list[int] = []
+
+    def recording_simulator(
+        replay_bars: DataFrame,
+        actions: list[dict[str, Any]],
+        execution: Any,
+        *,
+        trade_management_config: Any,
+        atr_values: pd.Series,
+    ) -> dict[str, Any]:
+        observed_window_lengths.append(len(replay_bars))
+        return original_simulator(
+            replay_bars,
+            actions,
+            execution,
+            trade_management_config=trade_management_config,
+            atr_values=atr_values,
+        )
+
+    monkeypatch.setattr(v4ai, "simulate_signals", recording_simulator)
+    actual = v4ai._label_one_oof_event(
+        {
+            "event_index": event_index,
+            "fold_id": 0,
+            "primary_signal": "BUY",
+            "primary_oof": True,
+        },
+        bars,
+        index_by_timestamp,
+        train_end,
+        atr_values=atr_values,
+        management=management,
+    )
+    assert actual is not None
+    assert observed_window_lengths == [management.horizon_candles + 1]
+    assert actual["label_end_idx"] == index_by_timestamp[pd.Timestamp(expected["exit_timestamp"])]
+    assert actual["exit_reason"] == expected["exit_reason"]
+    assert actual["net_pnl_usd"] == expected["net_pnl_usd"]
+    assert actual["net_return"] == expected["net_return_fraction"]
+    assert actual["meta_label"] == int(expected["net_pnl_usd"] > 0.0)
 
 
 def test_oof_training_diagnostics_record_maker_proxy_costs(
@@ -663,7 +742,12 @@ def test_oof_training_diagnostics_record_maker_proxy_costs(
         train_bars: DataFrame,
         index_by_timestamp: dict[pd.Timestamp, int],
         train_end: int,
+        *,
+        atr_values: pd.Series,
+        management: Any,
     ) -> dict[str, Any]:
+        assert len(atr_values) == len(train_bars)
+        assert management.horizon_candles == 48
         index = int(event["event_index"])
         return {
             "event_index": index,
@@ -677,8 +761,17 @@ def test_oof_training_diagnostics_record_maker_proxy_costs(
             "primary_oof": True,
         }
 
+    atr_calls = 0
+
+    def fake_calculate_atr(frame: DataFrame, period: int) -> pd.Series:
+        nonlocal atr_calls
+        atr_calls += 1
+        return pd.Series(np.ones(len(frame)))
+
+    monkeypatch.setattr(v4ai, "calculate_atr", fake_calculate_atr)
     monkeypatch.setattr(v4ai, "_label_one_oof_event", fake_label)
     labelled, diagnostics = v4ai._training_oof_labels(bars, events, 50)
+    assert atr_calls == 1
     assert len(labelled) == 4
     assert diagnostics["matured_costed_oof_label_count"] == 4
     assert diagnostics["label_execution_costs"] == {
@@ -687,6 +780,8 @@ def test_oof_training_diagnostics_record_maker_proxy_costs(
         "round_trip_cost_bps": 30.0,
     }
     assert diagnostics["training_labels_matured_before_validation"] is True
+    assert diagnostics["training_atr_precomputed_once"] is True
+    assert diagnostics["replay_window_bars"] == 49
 
 
 def test_exit_geometry_matrix_has_only_three_thirty_bps_cells(

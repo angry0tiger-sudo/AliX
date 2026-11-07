@@ -6,6 +6,7 @@ import argparse
 import csv
 import json
 import math
+import time
 from dataclasses import replace
 from pathlib import Path
 from statistics import NormalDist
@@ -14,6 +15,8 @@ from typing import Any, cast
 import numpy as np
 import pandas as pd
 from pandas import DataFrame, Series
+
+from services.ml_core.adaptive_targets import calculate_atr
 
 import scripts.run_ml_core_v4ac_cost_optimization as v4ac
 import scripts.run_ml_core_v4af_meta_final as v4af
@@ -127,6 +130,30 @@ EXIT_POLICIES: tuple[dict[str, float | str], ...] = (
         "horizon_bars": 48.0,
     },
 )
+
+
+def _performance_log(stage: str, event: str, **details: Any) -> None:
+    record = {"component": "V4AN_PERFORMANCE", "stage": stage, "event": event, **details}
+    print("V4AN_PERF " + json.dumps(record, sort_keys=True, allow_nan=False), flush=True)
+
+
+def _log_oof_progress(
+    processed: int,
+    total: int,
+    started_at: float,
+    labelled_count: int,
+    immature_count: int,
+) -> None:
+    if processed % 1_000 == 0 or processed == total:
+        _performance_log(
+            "oof_label_replay",
+            "progress",
+            processed=processed,
+            total=total,
+            labelled=labelled_count,
+            immature=immature_count,
+            elapsed_seconds=round(time.perf_counter() - started_at, 3),
+        )
 
 
 def _validate_request(days: int, commit_sha: str) -> None:
@@ -337,23 +364,58 @@ def _feature_columns(training: DataFrame) -> list[str]:
     return columns
 
 
+def _isolated_oof_replay_inputs(
+    train_bars: DataFrame,
+    event_index: int,
+    train_end: int,
+    atr_values: Series,
+    management: Any,
+) -> tuple[DataFrame, list[dict[str, Any]], Series]:
+    if len(atr_values) != len(train_bars):
+        raise ValueError("v4ai_training_atr_alignment_invalid")
+    window_end = min(train_end, event_index + int(management.horizon_candles) + 1)
+    window_bars = train_bars.iloc[event_index:window_end].reset_index(drop=True)
+    if len(window_bars) <= int(management.horizon_candles):
+        raise ValueError("v4ai_oof_replay_window_insufficient")
+    window_atr = atr_values.iloc[event_index:window_end].reset_index(drop=True)
+    actions = v4ac._build_forward_actions(window_bars, [0], len(window_bars))
+    return window_bars, actions, window_atr
+
+
 def _label_one_oof_event(
     event: dict[str, Any],
     train_bars: DataFrame,
     index_by_timestamp: dict[pd.Timestamp, int],
     train_end: int,
+    *,
+    atr_values: Series | None = None,
+    management: Any | None = None,
 ) -> dict[str, Any] | None:
     event_index = int(event["event_index"])
     if event.get("primary_signal") != "BUY" or event.get("primary_oof") is not True:
         raise ValueError("v4ai_oof_labels_require_oof_primary_buy_events")
-    if event_index + int(PRIMARY_GEOMETRY["horizon_bars"]) >= train_end:
+    selected_management = _trade_management_config() if management is None else management
+    horizon = int(selected_management.horizon_candles)
+    if event_index + horizon >= train_end:
         return None
-    actions = v4ac._build_forward_actions(train_bars, [event_index], train_end)
-    replay = simulate_signals(
+    selected_atr = (
+        calculate_atr(train_bars, period=int(selected_management.atr_period))
+        if atr_values is None
+        else atr_values
+    )
+    replay_bars, actions, replay_atr = _isolated_oof_replay_inputs(
         train_bars,
+        event_index,
+        train_end,
+        selected_atr,
+        selected_management,
+    )
+    replay = simulate_signals(
+        replay_bars,
         actions,
         _execution_config(),
-        trade_management_config=_trade_management_config(),
+        trade_management_config=selected_management,
+        atr_values=replay_atr,
     )
     trades = cast(list[dict[str, Any]], replay["trades"])
     if len(trades) != 1:
@@ -387,6 +449,7 @@ def _training_oof_labels(
     oof_events: DataFrame,
     train_end: int,
 ) -> tuple[DataFrame, dict[str, Any]]:
+    started_at = time.perf_counter()
     train_bars = bars.iloc[:train_end].reset_index(drop=True)
     dates = pd.to_datetime(train_bars["date"], utc=True, errors="coerce")
     if dates.isna().any() or dates.duplicated().any():
@@ -394,19 +457,32 @@ def _training_oof_labels(
     index_by_timestamp = {
         pd.Timestamp(value): index for index, value in enumerate(dates.tolist())
     }
+    management = _trade_management_config()
+    atr_values = calculate_atr(train_bars, period=int(management.atr_period))
+    total_events = len(oof_events)
+    _performance_log(
+        "oof_label_replay",
+        "start",
+        event_count=total_events,
+        training_rows=len(train_bars),
+        replay_window_bars=int(management.horizon_candles) + 1,
+    )
     records: list[dict[str, Any]] = []
     immature = 0
-    for event in oof_events.to_dict(orient="records"):
+    for processed, event in enumerate(oof_events.to_dict(orient="records"), start=1):
         record = _label_one_oof_event(
             cast(dict[str, Any], event),
             train_bars,
             index_by_timestamp,
             train_end,
+            atr_values=atr_values,
+            management=management,
         )
         if record is None:
             immature += 1
         else:
             records.append(record)
+        _log_oof_progress(processed, total_events, started_at, len(records), immature)
     if not records:
         raise ValueError("v4ai_meta_oof_labels_empty")
     labelled = (
@@ -439,7 +515,17 @@ def _training_oof_labels(
         "training_labels_matured_before_validation": bool(
             int(labelled["label_end_idx"].max()) < train_end
         ),
+        "replay_window_bars": int(management.horizon_candles) + 1,
+        "training_atr_precomputed_once": True,
     }
+    _performance_log(
+        "oof_label_replay",
+        "complete",
+        event_count=total_events,
+        labelled=len(labelled),
+        immature=immature,
+        elapsed_seconds=round(time.perf_counter() - started_at, 3),
+    )
     return labelled, diagnostics
 
 
@@ -1972,6 +2058,8 @@ def _render_meta_diagnostics(report: dict[str, Any]) -> list[str]:
             f"Gaussian HMM: states={regime.get('state_count', 'N/A')}; "
             f"fit_rows={regime.get('fit_rows', 0)}; fit_end={regime.get('fit_end_index_exclusive', 'N/A')}; "
             f"fit_scope={regime.get('fit_scope', 'N/A')}; "
+            f"iterations={regime.get('iterations', 'N/A')}/{regime.get('maximum_iterations', 'N/A')}; "
+            f"converged={regime.get('converged', 'N/A')}; "
             f"posterior={regime.get('posterior_method', 'N/A')}; "
             f"smoothing={regime.get('smoothing_used', 'N/A')}; "
             f"lookahead={regime.get('lookahead_used', 'N/A')}."
@@ -2184,6 +2272,9 @@ def run_v4ai(
     commit_sha: str,
 ) -> dict[str, Any]:
     _validate_request(days, commit_sha)
+    run_started = time.perf_counter()
+    _performance_log("run", "start", commit_sha=commit_sha, days=days, timeframe=TIMEFRAME)
+    data_stage_started = time.perf_counter()
     (
         provenance,
         bars,
@@ -2199,6 +2290,14 @@ def run_v4ai(
         allow_exchange_gaps=ALLOW_EXCHANGE_GAPS,
         timeframe=TIMEFRAME,
     )
+    _performance_log(
+        "data_load_and_30m_resample",
+        "complete",
+        elapsed_seconds=round(time.perf_counter() - data_stage_started, 3),
+        minute_rows=int(provenance.get("row_count", 0)),
+        analysis_bars=len(research_bars),
+    )
+    feature_stage_started = time.perf_counter()
     technical_features, _legacy_static_signal, _technical_diagnostics = (
         _ema_trend_rsi_primary_features(research_bars, base_features)
     )
@@ -2212,6 +2311,15 @@ def run_v4ai(
     )
     features, primary_signal, selector_diagnostics = _regime_reactive_primary_signal(
         research_bars, features, apply_end=forward_end
+    )
+    _performance_log(
+        "technical_features_hmm_and_primary_signals",
+        "complete",
+        elapsed_seconds=round(time.perf_counter() - feature_stage_started, 3),
+        hmm_fit_rows=int(regime_diagnostics.get("fit_rows", 0)),
+        hmm_iterations=int(regime_diagnostics.get("iterations", 0)),
+        hmm_maximum_iterations=int(regime_diagnostics.get("maximum_iterations", 0)),
+        primary_buy_count=int(primary_signal.sum()),
     )
     adx_ablation_signal, adx_ablation_diagnostics = _apply_adx_ablation(
         primary_signal, features
@@ -2261,6 +2369,7 @@ def run_v4ai(
         "primary_forward_event_count": len(primary_event_indices),
         "adx_ablation_forward_event_count": len(adx_ablation_event_indices),
     }
+    candidate_replay_started = time.perf_counter()
     primary_candidate, primary_trades, primary_decisions = _run_candidate(
         research_bars,
         primary_event_indices,
@@ -2281,6 +2390,7 @@ def run_v4ai(
             position_fractions=position_fractions,
         )
     )
+    meta_stage_started = time.perf_counter()
     try:
         meta = _fit_meta_model(
             research_bars, features, primary_signal, train_end, train_gate
@@ -2289,6 +2399,13 @@ def run_v4ai(
         if not _support_shortfall(error):
             raise
         meta = _empty_meta(str(error))
+    _performance_log(
+        "meta_oof_labels_shap_lightgbm_and_calibration",
+        "complete",
+        elapsed_seconds=round(time.perf_counter() - meta_stage_started, 3),
+        meta_enabled=meta.get("skip_reason") is None,
+        oof_labels=int(meta.get("training_diagnostics", {}).get("matured_costed_oof_label_count", 0)),
+    )
     if meta.get("skip_reason") is None:
         probabilities = _forward_probability_map(
             features,
@@ -2320,11 +2437,27 @@ def run_v4ai(
         meta_decisions = _skipped_decision_rows(
             research_bars, primary_event_indices, position_fractions
         )
+    _performance_log(
+        "forward_candidate_replays",
+        "complete",
+        elapsed_seconds=round(time.perf_counter() - candidate_replay_started, 3),
+        primary_trades=int(primary_candidate["metrics"]["trade_count"]),
+        adx_trades=int(adx_ablation_candidate["metrics"]["trade_count"]),
+        meta_trades=int(meta_candidate["metrics"]["trade_count"]),
+    )
     candidates = [primary_candidate, adx_ablation_candidate, meta_candidate]
     trades = [*primary_trades, *adx_ablation_trades, *meta_trades]
     decisions = [*primary_decisions, *adx_ablation_decisions, *meta_decisions]
+    exit_matrix_started = time.perf_counter()
     exit_matrix = _run_exit_geometry_matrix(
         research_bars, primary_event_indices, forward_end, position_fractions
+    )
+    _performance_log(
+        "exit_geometry_matrix",
+        "complete",
+        elapsed_seconds=round(time.perf_counter() - exit_matrix_started, 3),
+        cells=len(exit_matrix["cells"]),
+        events=len(primary_event_indices),
     )
     _attach_dsr_diagnostics(candidates, exit_matrix)
     report = _build_report(
@@ -2353,6 +2486,13 @@ def run_v4ai(
     _write_csv(output_decisions_csv, decisions)
     summary = _render_step_summary(report)
     print(summary, end="")
+    _performance_log(
+        "run",
+        "complete",
+        elapsed_seconds=round(time.perf_counter() - run_started, 3),
+        total_trades=int(len(trades)),
+        total_decisions=int(len(decisions)),
+    )
     return report
 
 

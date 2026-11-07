@@ -111,6 +111,35 @@ def test_manifest_hash_safety_fields_and_gap_rejection(tmp_path: Path) -> None:
         )
 
 
+def test_csv_writer_keeps_exact_field_order_bytes_and_sha256(tmp_path: Path) -> None:
+    rows = [
+        {
+            "date": "2024-01-01T00:00:00Z",
+            "open": "100.0",
+            "high": "101.0",
+            "low": "99.0",
+            "close": "100.5",
+            "volume": "12.0",
+        },
+        {
+            "date": "2024-01-01T00:01:00Z",
+            "open": "100.5",
+            "high": "102.0",
+            "low": "100.0",
+            "close": "101.5",
+            "volume": "13.0",
+        },
+    ]
+    path, digest = fetcher._write_candles_csv(rows, tmp_path, "ETHUSDT")
+    expected = (
+        "date,open,high,low,close,volume\r\n"
+        "2024-01-01T00:00:00Z,100.0,101.0,99.0,100.5,12.0\r\n"
+        "2024-01-01T00:01:00Z,100.5,102.0,100.0,101.5,13.0\r\n"
+    ).encode("utf-8")
+    assert path.read_bytes() == expected
+    assert digest == hashlib.sha256(expected).hexdigest()
+
+
 def test_request_uses_official_market_data_host_and_surfaces_http_451(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

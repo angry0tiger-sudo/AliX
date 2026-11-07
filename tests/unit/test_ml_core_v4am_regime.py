@@ -88,6 +88,8 @@ def test_hmm_is_train_only_and_emits_causal_normalized_posteriors() -> None:
     )
     assert diagnostics["algorithm"] == "GAUSSIAN_HMM_DIAGONAL"
     assert diagnostics["state_count"] == 3
+    assert diagnostics["maximum_iterations"] == 15
+    assert 1 <= diagnostics["iterations"] <= 15
     assert diagnostics["fit_end_index_exclusive"] == 600
     assert diagnostics["fit_scope"] == "OUTER_TRAIN_ONLY"
     assert diagnostics["posterior_method"] == "CAUSAL_FORWARD_FILTER"
@@ -132,6 +134,57 @@ def test_hmm_forward_filter_is_prefix_causal() -> None:
         first_values = [float(value) for value in first.loc[:799, column].tolist()]
         second_values = [float(value) for value in second.loc[:799, column].tolist()]
         np.testing.assert_allclose(first_values, second_values, equal_nan=True)
+
+
+def test_hmm_forward_filter_batched_emissions_match_stepwise_causal_reference() -> None:
+    observations = np.asarray(
+        [
+            [np.nan, np.nan],
+            [-0.2, 0.1],
+            [0.1, 0.2],
+            [np.nan, np.nan],
+            [0.3, 0.4],
+            [0.4, 0.2],
+            [np.nan, np.nan],
+            [-0.1, 0.3],
+        ],
+        dtype=float,
+    )
+    valid_mask = np.asarray([False, True, True, False, True, True, False, True])
+    start = np.asarray([0.2, 0.5, 0.3], dtype=float)
+    transition = np.asarray(
+        [[0.8, 0.1, 0.1], [0.1, 0.8, 0.1], [0.1, 0.2, 0.7]],
+        dtype=float,
+    )
+    means = np.asarray([[-0.2, 0.1], [0.2, 0.2], [0.5, 0.4]], dtype=float)
+    variances = np.asarray([[0.3, 0.2], [0.2, 0.4], [0.4, 0.3]], dtype=float)
+    apply_end = 7
+    actual = v4am._causal_forward_filter(
+        observations, valid_mask, apply_end, start, transition, means, variances
+    )
+    expected = np.full((len(observations), len(start)), np.nan, dtype=float)
+    log_start = np.log(np.clip(start, 1e-300, 1.0))
+    log_transition = np.log(np.clip(transition, 1e-300, 1.0))
+    previous: np.ndarray | None = None
+    for index in range(apply_end):
+        if not bool(valid_mask[index]):
+            previous = None
+            continue
+        emission = v4am._emission_log_probabilities(
+            observations[index : index + 1], means, variances
+        )[0]
+        if previous is None:
+            current = log_start + emission
+        else:
+            current = (
+                v4am._logsumexp(previous[:, np.newaxis] + log_transition, axis=0)
+                + emission
+            )
+        normalizer = float(v4am._logsumexp(current, axis=0))
+        previous = current - normalizer
+        expected[index] = np.exp(previous)
+    np.testing.assert_allclose(actual, expected, rtol=0.0, atol=1e-14, equal_nan=True)
+    assert np.isnan(actual[7]).all()
 
 
 def test_hmm_rejects_invalid_train_window_and_missing_features() -> None:

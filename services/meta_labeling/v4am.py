@@ -14,7 +14,7 @@ CUSUM_THRESHOLD_SIGMA: Final[float] = 2.0
 CUSUM_DRIFT_ALLOWANCE_SIGMA: Final[float] = 0.5
 HMM_STATE_COUNT: Final[int] = 3
 HMM_MINIMUM_TRAIN_ROWS: Final[int] = 100
-HMM_MAXIMUM_ITERATIONS: Final[int] = 50
+HMM_MAXIMUM_ITERATIONS: Final[int] = 15
 HMM_CONVERGENCE_TOLERANCE: Final[float] = 1e-5
 HMM_VARIANCE_FLOOR: Final[float] = 1e-3
 
@@ -344,6 +344,7 @@ def _fit_gaussian_hmm(
         previous_likelihood = likelihood
     diagnostics = {
         "iterations": iteration_count,
+        "maximum_iterations": HMM_MAXIMUM_ITERATIONS,
         "converged": converged,
         "log_likelihood": float(likelihood),
         "state_count": HMM_STATE_COUNT,
@@ -364,15 +365,18 @@ def _causal_forward_filter(
     posterior = np.full((len(observations), state_count), np.nan, dtype=float)
     log_start = np.log(np.clip(start_probabilities, 1e-300, 1.0))
     log_transition = np.log(np.clip(transition_matrix, 1e-300, 1.0))
+    valid_indices = np.flatnonzero(valid_mask[:apply_end])
+    emissions = _emission_log_probabilities(
+        observations[valid_indices], means, variances
+    )
     previous_log_alpha: np.ndarray | None = None
-    for index in range(apply_end):
-        if not bool(valid_mask[index]):
-            previous_log_alpha = None
-            continue
-        emission = _emission_log_probabilities(
-            observations[index : index + 1], means, variances
-        )[0]
-        if previous_log_alpha is None:
+    previous_index: int | None = None
+    for index, emission in zip(valid_indices.tolist(), emissions, strict=True):
+        if (
+            previous_log_alpha is None
+            or previous_index is None
+            or index != previous_index + 1
+        ):
             current = log_start + emission
         else:
             current = (
@@ -382,6 +386,7 @@ def _causal_forward_filter(
         normalizer = float(_logsumexp(current, axis=0))
         previous_log_alpha = current - normalizer
         posterior[index] = np.exp(previous_log_alpha)
+        previous_index = index
     return posterior
 
 
