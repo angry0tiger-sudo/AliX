@@ -100,7 +100,9 @@ def test_hmm_is_train_only_and_emits_causal_normalized_posteriors() -> None:
     ]
     posterior = transformed.loc[:764, posterior_columns].dropna()
     assert len(posterior) > 500
-    np.testing.assert_allclose(np.asarray(posterior.sum(axis=1), dtype=float), 1.0, atol=1e-8)
+    np.testing.assert_allclose(
+        np.asarray(posterior.sum(axis=1), dtype=float), 1.0, atol=1e-8
+    )
     assert transformed.loc[765:, posterior_columns].isna().all().all()
 
 
