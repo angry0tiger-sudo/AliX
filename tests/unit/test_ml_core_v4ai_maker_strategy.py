@@ -646,7 +646,7 @@ def test_oof_meta_label_uses_exact_thirty_bps_cost_contract(
     assert seen[0][0].slippage_bps == 5.0
     assert seen[0][1] == 49
     assert seen[0][2] == 49
-    assert seen[0][3][0]["row_index"] == 0
+    assert seen[0][3][0]["event"] == 0
 
 
 def test_oof_label_bounded_replay_matches_full_history_simulator(
@@ -716,7 +716,8 @@ def test_oof_label_bounded_replay_matches_full_history_simulator(
     )
     assert actual is not None
     assert observed_window_lengths == [management.horizon_candles + 1]
-    assert actual["label_end_idx"] == index_by_timestamp[pd.Timestamp(expected["exit_timestamp"])]
+    expected_exit_index = index_by_timestamp[pd.Timestamp(expected["exit_timestamp"])]
+    assert actual["label_end_idx"] == expected_exit_index
     assert actual["exit_reason"] == expected["exit_reason"]
     assert actual["net_pnl_usd"] == expected["net_pnl_usd"]
     assert actual["net_return"] == expected["net_return_fraction"]
