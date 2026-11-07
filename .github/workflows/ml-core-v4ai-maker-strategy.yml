@@ -431,7 +431,7 @@ jobs:
               "research target >=100=",
               "Fixed candidate geometry: SL=1.5 ATR, TP=2.5 ATR",
               "Primary ADX filter: DISABLED",
-              "diagnostic ablation",
+              "ADX20 diagnostic-ablation BUYs:",
               "OOF label classes failure/success",
               "Purged OOF classes failure/success",
               "30 bps round trip",
