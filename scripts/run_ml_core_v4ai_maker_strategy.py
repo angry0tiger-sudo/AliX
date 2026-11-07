@@ -25,9 +25,9 @@ from services.meta_labeling.v4x import (
 )
 from services.ml_core.economic_backtest import simulate_signals
 
-SCHEMA = "alix.ml-core-v4ai-maker-strategy.v4"
+SCHEMA = "alix.ml-core-v4an-regime-adaptive.v1"
 SYMBOL = "ETHUSDT"
-TIMEFRAME = "1h"
+TIMEFRAME = "30m"
 DAYS = 1825
 ALLOW_EXCHANGE_GAPS = True
 INITIAL_EQUITY = 10_000.0
@@ -38,15 +38,14 @@ ADX_FEATURE = "%-trend_adx_14"
 ADX_PERIOD = 14
 ADX_THRESHOLD = 20.0
 RSI_PERIOD = 14
-RSI_ENTRY_THRESHOLD = 40.0
+RSI_ENTRY_THRESHOLD = 45.0
 EMA_FAST_PERIOD = 50
 EMA_SLOW_PERIOD = 200
 RSI_FEATURE = "%-primary_rsi_14"
+EMA50_DISTANCE_FEATURE = "%-primary_close_vs_ema50_pct"
 EMA_DISTANCE_FEATURE = "%-primary_close_vs_ema200_pct"
 EMA_SPREAD_FEATURE = "%-primary_ema50_vs_ema200_pct"
-PRIMARY_SIGNAL_GENERATION = (
-    "CAUSAL_CUSUM2SIGMA_GAUSSIAN_HMM3_REGIME_REACTIVE_HARD_SELECTOR"
-)
+PRIMARY_SIGNAL_GENERATION = "HMM3_REGIME_ADAPTIVE_EMA50_RSI45_NO_CUSUM"
 RESEARCH_SIGNAL_COUNT_TARGET = 100
 LEGACY_PRIMARY_FEATURE_COLUMNS = (
     "%-primary_bollinger_bandwidth_pct",
@@ -57,10 +56,10 @@ LEGACY_PRIMARY_FEATURE_COLUMNS = (
 )
 REGIME_WARMUP_BARS = 200
 REGIME_CLUSTER_COUNT = 3
-DONCHIAN_LOOKBACK = 20
-RANGE_RSI_ENTRY_THRESHOLD = 30.0
-DONCHIAN_DISTANCE_FEATURE = "%-v4am_donchian_breakout_distance_pct"
+HMM_FEATURE_WINDOW_BARS = 48
+RANGE_RSI_ENTRY_THRESHOLD = 45.0
 TECHNICAL_FEATURE_GENERATION = "CAUSAL_WILDER_RSI14_EMA50_EMA200_FEATURES_ONLY"
+HMM_FEATURE_GENERATION = "CLOSED_BAR_LOG_RETURN_AND_TRAILING_48_BAR_REALIZED_VOLATILITY"
 META_TARGET_ACCEPT_FRACTION = 0.70
 MINIMUM_TRADES = 30
 MINIMUM_NET_PF = 1.5
@@ -68,21 +67,18 @@ MINIMUM_WIN_RATE = 0.45
 MAXIMUM_DRAWDOWN = 15.0
 DSR_MINIMUM_RETURN_OBSERVATIONS = 4
 SORTINO_TARGET_RETURN_PER_TRADE = 0.0
-BASE_CONTROL = "PRIMARY_CUSUM_HMM_REGIME_REACTIVE_30BPS"
-ADX_ABLATION = "PRIMARY_ADX20_DIAGNOSTIC_ABLATION_CUSUM_HMM_30BPS"
-META_CANDIDATE = "META_TOP_70_CUSUM_HMM_REGIME_REACTIVE_30BPS"
+BASE_CONTROL = "PRIMARY_HMM_REGIME_ADAPTIVE_30M_30BPS"
+ADX_ABLATION = "PRIMARY_ADX20_DIAGNOSTIC_ABLATION_HMM_30M_30BPS"
+META_CANDIDATE = "META_TOP_70_HMM_REGIME_ADAPTIVE_30M_30BPS"
 CANDIDATE_NAMES = (BASE_CONTROL, ADX_ABLATION, META_CANDIDATE)
 PRIMARY_FILTER_CONTRACT: dict[str, str] = {
-    "event_filter": "TWO_SIDED_CUSUM_STANDARDIZED_LOG_RETURN",
-    "cusum_window": "24",
-    "cusum_threshold_sigma": "2.0",
-    "cusum_drift_allowance_sigma": "0.5",
+    "event_filter": "EVERY_CLOSED_30M_BAR_NO_CUSUM_EVENT_FILTER",
     "regime_model": "DIAGONAL_GAUSSIAN_HMM_3_STATE",
     "regime_state_selection": "DOMINANT_POSTERIOR_HARD_SELECTOR",
-    "momentum_strategy": "DONCHIAN_UPPER_BREAKOUT_20_TRENDING_UP_ONLY_SPOT_LONG",
-    "mean_reversion_strategy": "WILDER_RSI14_LT30_CUSUM_NEGATIVE_RANGING_ONLY",
-    "downtrend_policy": "LONG_ONLY_SPOT_RISK_OFF_NO_SHORT_ENTRY",
-    "position_sizing": "INVERSE_24H_REALIZED_VOL_TRAINING_MEDIAN_TARGET_CAPPED_AT_1X",
+    "momentum_strategy": "CLOSE_ABOVE_EMA50_TRENDING_UP_ONLY_SPOT_LONG",
+    "mean_reversion_strategy": "WILDER_RSI14_LT45_RANGING_ONLY",
+    "downtrend_policy": "SPOT_LONG_ONLY_NO_ENTRY",
+    "position_sizing": "INVERSE_24H_REALIZED_VOL_48_BAR_OUTER_TRAIN_MEDIAN_CAPPED_AT_1X",
 }
 
 LABEL_COLUMNS = {
@@ -101,7 +97,7 @@ PRIMARY_GEOMETRY: dict[str, float] = {
     "take_profit_atr": 2.5,
     "trailing_activation_atr": 1.5,
     "trailing_step_atr": 2.0,
-    "horizon_bars": 24.0,
+    "horizon_bars": 48.0,
 }
 EXIT_POLICIES: tuple[dict[str, float | str], ...] = (
     {
@@ -134,7 +130,7 @@ def _validate_request(days: int, commit_sha: str) -> None:
     )
     if days != DAYS or not valid_sha:
         raise ValueError("v4ai_request_identity_invalid")
-    if v4af.SYMBOL != SYMBOL or v4af.TIMEFRAME != TIMEFRAME:
+    if v4af.SYMBOL != SYMBOL or TIMEFRAME not in v4af.TIMEFRAME_MINUTES:
         raise ValueError("v4ai_market_scope_invalid")
     _validate_cost_contract(_execution_config())
 
@@ -171,6 +167,7 @@ def _trade_management_config(policy: dict[str, Any] | None = None) -> Any:
         trailing_stop_enabled=True,
         trailing_activation_atr=float(selected["trailing_activation_atr"]),
         trailing_step_atr=float(selected["trailing_step_atr"]),
+        horizon_candles=int(selected["horizon_bars"]),
     )
 
 
@@ -238,6 +235,7 @@ def _ema_trend_rsi_primary_features(
         .copy()
     )
     features[RSI_FEATURE] = rsi
+    features[EMA50_DISTANCE_FEATURE] = close / ema_fast - 1.0
     features[EMA_DISTANCE_FEATURE] = close / ema_slow - 1.0
     features[EMA_SPREAD_FEATURE] = ema_fast / ema_slow - 1.0
 
@@ -247,7 +245,7 @@ def _ema_trend_rsi_primary_features(
     valid_ema = valid_ema_fast & valid_ema_slow
     valid_features = _finite_primary_feature_rows(features)
     entry_oversold = rsi.lt(RSI_ENTRY_THRESHOLD)
-    trend_aligned = ema_fast.gt(ema_slow)
+    trend_aligned = close.gt(ema_fast)
     signal = (
         (
             entry_oversold
@@ -268,22 +266,23 @@ def _ema_trend_rsi_primary_features(
         "ema_fast_period": EMA_FAST_PERIOD,
         "ema_slow_period": EMA_SLOW_PERIOD,
         "ema_method": "CAUSAL_SPAN_ADJUST_FALSE",
-        "trend_comparison": "EMA50_STRICTLY_ABOVE_EMA200",
+        "trend_comparison": "CLOSE_STRICTLY_ABOVE_EMA50",
         "rsi_valid_rows": int(valid_rsi.sum()),
         "ema_fast_valid_rows": int(valid_ema_fast.sum()),
         "ema_slow_valid_rows": int(valid_ema_slow.sum()),
         "ema_valid_rows": int(valid_ema.sum()),
         "feature_valid_rows": int(valid_features.sum()),
         "oversold_rows": int((entry_oversold & Series(valid_rsi)).sum()),
-        "trend_aligned_rows": int((trend_aligned & Series(valid_ema)).sum()),
+        "trend_aligned_rows": int((trend_aligned & Series(valid_ema_fast)).sum()),
         "primary_buy_count": int(signal.sum()),
         "research_signal_count_target": RESEARCH_SIGNAL_COUNT_TARGET,
         "research_signal_target_met": int(signal.sum()) >= RESEARCH_SIGNAL_COUNT_TARGET,
         "lookahead_used": False,
-        "execution_timing": "CLOSED_1H_BAR_NEXT_BAR_OPEN",
+        "execution_timing": "CLOSED_30M_BAR_NEXT_BAR_OPEN",
     }
     signal.name = "primary_buy_signal"
     return features, signal, diagnostics
+
 
 
 def _generate_primary_oof_events(
@@ -343,7 +342,7 @@ def _label_one_oof_event(
     event_index = int(event["event_index"])
     if event.get("primary_signal") != "BUY" or event.get("primary_oof") is not True:
         raise ValueError("v4ai_oof_labels_require_oof_primary_buy_events")
-    if event_index + v4af.HORIZON_BARS_VALUE >= train_end:
+    if event_index + int(PRIMARY_GEOMETRY["horizon_bars"]) >= train_end:
         return None
     actions = v4ac._build_forward_actions(train_bars, [event_index], train_end)
     replay = simulate_signals(
@@ -608,13 +607,62 @@ def _fit_meta_model(
         }
 
 
-def _cusum_features(
+def _hmm_feature_inputs(
     bars: DataFrame,
     features: DataFrame,
     *,
     apply_end: int,
 ) -> tuple[DataFrame, dict[str, Any]]:
-    return regime_engine.build_cusum_features(bars, features, apply_end=apply_end)
+    if (
+        len(bars) != len(features)
+        or bars.empty
+        or isinstance(apply_end, bool)
+        or not isinstance(apply_end, int)
+        or not 2 <= apply_end <= len(bars)
+        or "close" not in bars.columns
+    ):
+        raise ValueError("v4an_hmm_feature_input_invalid")
+    generated = {
+        regime_engine.LOG_RETURN_FEATURE,
+        regime_engine.REALIZED_VOLATILITY_FEATURE,
+    }
+    if generated.intersection(features.columns):
+        raise ValueError("v4an_hmm_feature_collision")
+    close = pd.to_numeric(bars["close"].iloc[:apply_end], errors="coerce").reset_index(
+        drop=True
+    )
+    close_values = close.to_numpy(dtype=float)
+    if not np.isfinite(close_values).all() or bool((close <= 0.0).any()):
+        raise ValueError("v4an_hmm_close_values_invalid")
+    log_returns = np.log(close).diff()
+    realized_volatility = log_returns.rolling(
+        HMM_FEATURE_WINDOW_BARS,
+        min_periods=HMM_FEATURE_WINDOW_BARS,
+    ).std(ddof=0)
+    log_return_values = np.full(len(bars), np.nan, dtype=float)
+    volatility_values = np.full(len(bars), np.nan, dtype=float)
+    log_return_values[:apply_end] = log_returns.to_numpy(dtype=float)
+    volatility_values[:apply_end] = realized_volatility.to_numpy(dtype=float)
+    transformed = features.reset_index(drop=True).copy()
+    transformed[regime_engine.LOG_RETURN_FEATURE] = log_return_values
+    transformed[regime_engine.REALIZED_VOLATILITY_FEATURE] = volatility_values
+    diagnostics = {
+        "generation": HMM_FEATURE_GENERATION,
+        "realized_volatility_window_bars": HMM_FEATURE_WINDOW_BARS,
+        "valid_log_return_rows": int(np.isfinite(log_return_values[:apply_end]).sum()),
+        "valid_realized_volatility_rows": int(
+            np.isfinite(volatility_values[:apply_end]).sum()
+        ),
+        "apply_end_index_exclusive": apply_end,
+        "final_holdout_features_unavailable": bool(
+            np.isnan(log_return_values[apply_end:]).all()
+            and np.isnan(volatility_values[apply_end:]).all()
+        ),
+        "lookahead_used": False,
+        "cusum_used": False,
+    }
+    return transformed, diagnostics
+
 
 
 def _regime_features(
@@ -635,35 +683,26 @@ def _regime_reactive_primary_signal(
     apply_end: int,
 ) -> tuple[DataFrame, Series, dict[str, Any]]:
     required = {
-        regime_engine.CUSUM_POSITIVE_EVENT_FEATURE,
-        regime_engine.CUSUM_NEGATIVE_EVENT_FEATURE,
-        regime_engine.CUSUM_DRIFT_FEATURE,
         regime_engine.HMM_TRENDING_UP_FEATURE,
         regime_engine.HMM_TRENDING_DOWN_FEATURE,
         regime_engine.HMM_RANGING_FEATURE,
         RSI_FEATURE,
+        EMA50_DISTANCE_FEATURE,
     }
     if (
         len(bars) != len(features)
         or not 2 <= apply_end <= len(bars)
         or not required.issubset(features.columns)
-        or not {"close", "high"}.issubset(bars.columns)
+        or "close" not in bars.columns
     ):
-        raise ValueError("v4am_selector_input_schema_invalid")
-    if DONCHIAN_DISTANCE_FEATURE in features.columns:
-        raise ValueError("v4am_selector_feature_collision")
+        raise ValueError("v4an_selector_input_schema_invalid")
     close = pd.to_numeric(bars["close"], errors="coerce").reset_index(drop=True)
-    high = pd.to_numeric(bars["high"], errors="coerce").reset_index(drop=True)
-    if not (
-        np.isfinite(close.iloc[:apply_end].to_numpy(dtype=float)).all()
-        and np.isfinite(high.iloc[:apply_end].to_numpy(dtype=float)).all()
-        and bool((close.iloc[:apply_end] > 0.0).all())
-        and bool((high.iloc[:apply_end] > 0.0).all())
+    close_values = close.to_numpy(dtype=float)
+    if (
+        not np.isfinite(close_values[:apply_end]).all()
+        or bool((close.iloc[:apply_end] <= 0.0).any())
     ):
-        raise ValueError("v4am_selector_market_values_invalid")
-    donchian_upper = (
-        high.shift(1).rolling(DONCHIAN_LOOKBACK, min_periods=DONCHIAN_LOOKBACK).max()
-    )
+        raise ValueError("v4an_selector_market_values_invalid")
     hmm_columns = [
         regime_engine.HMM_TRENDING_UP_FEATURE,
         regime_engine.HMM_TRENDING_DOWN_FEATURE,
@@ -677,48 +716,33 @@ def _regime_reactive_primary_signal(
     valid_hmm = np.isfinite(probabilities).all(axis=1)
     dominant = np.full(len(features), -1, dtype=int)
     dominant[valid_hmm] = np.argmax(probabilities[valid_hmm], axis=1)
-    positive_cusum = pd.to_numeric(
-        features[regime_engine.CUSUM_POSITIVE_EVENT_FEATURE], errors="coerce"
-    ).to_numpy(dtype=float)
-    negative_cusum = pd.to_numeric(
-        features[regime_engine.CUSUM_NEGATIVE_EVENT_FEATURE], errors="coerce"
-    ).to_numpy(dtype=float)
     rsi = pd.to_numeric(features[RSI_FEATURE], errors="coerce").to_numpy(dtype=float)
-    upper = donchian_upper.to_numpy(dtype=float)
-    close_values = close.to_numpy(dtype=float)
-    valid = valid_hmm & np.isfinite(positive_cusum) & np.isfinite(negative_cusum)
+    ema50_distance = pd.to_numeric(
+        features[EMA50_DISTANCE_FEATURE], errors="coerce"
+    ).to_numpy(dtype=float)
+    valid = (
+        valid_hmm
+        & np.isfinite(rsi)
+        & np.isfinite(ema50_distance)
+    )
     trending_up = valid & (dominant == 0)
     trending_down = valid & (dominant == 1)
     ranging = valid & (dominant == 2)
-    momentum_signal = (
-        trending_up
-        & (positive_cusum >= 1.0)
-        & np.isfinite(upper)
-        & (close_values > upper)
-    )
-    mean_reversion_signal = (
-        ranging
-        & (negative_cusum >= 1.0)
-        & np.isfinite(rsi)
-        & (rsi < RANGE_RSI_ENTRY_THRESHOLD)
-    )
+    momentum_signal = trending_up & (ema50_distance > 0.0)
+    mean_reversion_signal = ranging & (rsi < RANGE_RSI_ENTRY_THRESHOLD)
     signal_values = np.zeros(len(features), dtype=bool)
     signal_values[:apply_end] = (
         momentum_signal[:apply_end] | mean_reversion_signal[:apply_end]
     )
-    transformed = features.reset_index(drop=True).copy()
-    distance_values = (close / donchian_upper - 1.0).to_numpy(dtype=float)
-    distance_values[apply_end:] = np.nan
-    transformed[DONCHIAN_DISTANCE_FEATURE] = distance_values
     signal = Series(signal_values, dtype=bool, name="primary_buy_signal")
     diagnostics = {
         "generation": PRIMARY_SIGNAL_GENERATION,
-        "selector_type": "REGIME_REACTIVE_HARD_SELECTOR",
+        "selector_type": "HMM_REGIME_HARD_SELECTOR",
         "dominant_state_policy": "ARGMAX_POSTERIOR_EXACTLY_ONE_REGIME",
-        "momentum_strategy": "DONCHIAN_20_BREAKOUT_WITH_POSITIVE_CUSUM_IN_TRENDING_UP",
-        "mean_reversion_strategy": "WILDER_RSI14_LT30_WITH_NEGATIVE_CUSUM_IN_RANGING",
+        "momentum_strategy": "CLOSE_ABOVE_EMA50_TRENDING_UP_ONLY_SPOT_LONG",
+        "mean_reversion_strategy": "WILDER_RSI14_LT45_RANGING_ONLY",
         "downtrend_policy": "RISK_OFF_NO_LONG_ENTRY_SPOT_ONLY",
-        "donchian_lookback": DONCHIAN_LOOKBACK,
+        "trend_ema_period": EMA_FAST_PERIOD,
         "range_rsi_period": RSI_PERIOD,
         "range_rsi_threshold": RANGE_RSI_ENTRY_THRESHOLD,
         "dominant_trending_up_rows": int(trending_up[:apply_end].sum()),
@@ -730,10 +754,12 @@ def _regime_reactive_primary_signal(
         "hard_selector_enabled": True,
         "soft_blend_enabled": False,
         "short_entries_enabled": False,
+        "no_cusum_filter": True,
         "lookahead_used": False,
-        "execution_timing": "CLOSED_1H_BAR_NEXT_BAR_OPEN",
+        "execution_timing": "CLOSED_30M_BAR_NEXT_BAR_OPEN",
     }
-    return transformed, signal, diagnostics
+    return features.reset_index(drop=True), signal, diagnostics
+
 
 
 def _validate_volatility_target_inputs(
@@ -806,7 +832,7 @@ def _volatility_target_position_fractions(
     )
     diagnostics = {
         "method": "INVERSE_24H_REALIZED_VOLATILITY",
-        "target_reference": "MEDIAN_OF_OUTER_TRAIN_24H_REALIZED_VOLATILITY",
+        "target_reference": "MEDIAN_OF_OUTER_TRAIN_48_BAR_REALIZED_VOLATILITY",
         "target_volatility": target_volatility,
         "training_rows": training_rows,
         "sizing_cap": 1.0,
@@ -1552,30 +1578,39 @@ def _validate_report_primary_identity(
         raise ValueError("v4ai_report_primary_filter_invalid")
 
 
-def _validate_report_cusum_parameters(diagnostics: dict[str, Any]) -> None:
-    cusum = diagnostics.get("cusum", {})
+def _validate_report_hmm_feature_parameters(
+    diagnostics: dict[str, Any],
+) -> None:
+    hmm_features = diagnostics.get("hmm_features", {})
     valid = (
-        cusum.get("algorithm") == "TWO_SIDED_CUSUM_STANDARDIZED_LOG_RETURN"
-        and cusum.get("rolling_window_bars") == regime_engine.CUSUM_WINDOW
-        and cusum.get("threshold_sigma") == regime_engine.CUSUM_THRESHOLD_SIGMA
-        and cusum.get("drift_allowance_sigma")
-        == regime_engine.CUSUM_DRIFT_ALLOWANCE_SIGMA
-        and cusum.get("lookahead_used") is False
-        and cusum.get("final_holdout_features_unavailable") is True
+        hmm_features.get("generation") == HMM_FEATURE_GENERATION
+        and hmm_features.get("realized_volatility_window_bars")
+        == HMM_FEATURE_WINDOW_BARS
+        and hmm_features.get("lookahead_used") is False
+        and hmm_features.get("cusum_used") is False
+        and hmm_features.get("final_holdout_features_unavailable") is True
+        and "cusum" not in diagnostics
     )
     if not valid:
-        raise ValueError("v4ai_report_cusum_contract_invalid")
+        raise ValueError("v4an_report_hmm_feature_contract_invalid")
+
 
 
 def _validate_report_selector_parameters(diagnostics: dict[str, Any]) -> None:
     selector = diagnostics.get("selector", {})
     valid = (
-        selector.get("selector_type") == "REGIME_REACTIVE_HARD_SELECTOR"
+        selector.get("selector_type") == "HMM_REGIME_HARD_SELECTOR"
         and selector.get("hard_selector_enabled") is True
         and selector.get("soft_blend_enabled") is False
-        and selector.get("donchian_lookback") == DONCHIAN_LOOKBACK
+        and selector.get("trend_ema_period") == EMA_FAST_PERIOD
         and selector.get("range_rsi_period") == RSI_PERIOD
         and selector.get("range_rsi_threshold") == RANGE_RSI_ENTRY_THRESHOLD
+        and selector.get("momentum_strategy")
+        == "CLOSE_ABOVE_EMA50_TRENDING_UP_ONLY_SPOT_LONG"
+        and selector.get("mean_reversion_strategy")
+        == "WILDER_RSI14_LT45_RANGING_ONLY"
+        and selector.get("downtrend_policy") == "RISK_OFF_NO_LONG_ENTRY_SPOT_ONLY"
+        and selector.get("no_cusum_filter") is True
         and selector.get("short_entries_enabled") is False
         and selector.get("lookahead_used") is False
     )
@@ -1583,12 +1618,13 @@ def _validate_report_selector_parameters(diagnostics: dict[str, Any]) -> None:
         raise ValueError("v4ai_report_regime_selector_invalid")
 
 
+
 def _validate_report_sizing_parameters(diagnostics: dict[str, Any]) -> None:
     sizing = diagnostics.get("volatility_targeting", {})
     valid = (
         sizing.get("method") == "INVERSE_24H_REALIZED_VOLATILITY"
         and sizing.get("target_reference")
-        == "MEDIAN_OF_OUTER_TRAIN_24H_REALIZED_VOLATILITY"
+        == "MEDIAN_OF_OUTER_TRAIN_48_BAR_REALIZED_VOLATILITY"
         and sizing.get("sizing_cap") == 1.0
         and sizing.get("leverage_enabled") is False
         and sizing.get("training_rows", 0) >= regime_engine.HMM_MINIMUM_TRAIN_ROWS
@@ -1600,7 +1636,7 @@ def _validate_report_sizing_parameters(diagnostics: dict[str, Any]) -> None:
 def _validate_report_primary_filter(report: dict[str, Any]) -> None:
     diagnostics = report.get("primary_signal_diagnostics", {})
     _validate_report_primary_identity(report, diagnostics)
-    _validate_report_cusum_parameters(diagnostics)
+    _validate_report_hmm_feature_parameters(diagnostics)
     _validate_report_selector_parameters(diagnostics)
     _validate_report_sizing_parameters(diagnostics)
     if diagnostics.get("research_signal_count_target") != RESEARCH_SIGNAL_COUNT_TARGET:
