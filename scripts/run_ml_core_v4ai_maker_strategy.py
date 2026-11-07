@@ -611,21 +611,24 @@ def _fit_meta_model(
         }
 
 
-def _hmm_feature_inputs(
+def _validate_hmm_feature_alignment(
     bars: DataFrame,
     features: DataFrame,
-    *,
-    apply_end: int,
-) -> tuple[DataFrame, dict[str, Any]]:
+) -> None:
+    if len(bars) != len(features) or bars.empty or "close" not in bars.columns:
+        raise ValueError("v4an_hmm_feature_input_invalid")
+
+
+def _validate_hmm_feature_window(bars: DataFrame, apply_end: int) -> None:
     if (
-        len(bars) != len(features)
-        or bars.empty
-        or isinstance(apply_end, bool)
+        isinstance(apply_end, bool)
         or not isinstance(apply_end, int)
         or not 2 <= apply_end <= len(bars)
-        or "close" not in bars.columns
     ):
         raise ValueError("v4an_hmm_feature_input_invalid")
+
+
+def _validate_hmm_feature_collision(features: DataFrame) -> None:
     generated = {
         regime_engine.LOG_RETURN_FEATURE,
         regime_engine.REALIZED_VOLATILITY_FEATURE,
@@ -633,12 +636,28 @@ def _hmm_feature_inputs(
     }
     if generated.intersection(features.columns):
         raise ValueError("v4an_hmm_feature_collision")
+
+
+def _validated_hmm_close(bars: DataFrame, apply_end: int) -> Series:
     close = pd.to_numeric(bars["close"].iloc[:apply_end], errors="coerce").reset_index(
         drop=True
     )
     close_values = close.to_numpy(dtype=float)
     if not np.isfinite(close_values).all() or bool((close <= 0.0).any()):
         raise ValueError("v4an_hmm_close_values_invalid")
+    return close
+
+
+def _hmm_feature_inputs(
+    bars: DataFrame,
+    features: DataFrame,
+    *,
+    apply_end: int,
+) -> tuple[DataFrame, dict[str, Any]]:
+    _validate_hmm_feature_alignment(bars, features)
+    _validate_hmm_feature_window(bars, apply_end)
+    _validate_hmm_feature_collision(features)
+    close = _validated_hmm_close(bars, apply_end)
     log_returns = np.log(close).diff()
     realized_volatility = log_returns.rolling(
         HMM_FEATURE_WINDOW_BARS,
@@ -667,6 +686,7 @@ def _hmm_feature_inputs(
         "cusum_used": False,
     }
     return transformed, diagnostics
+
 
 
 def _regime_features(
@@ -1606,25 +1626,46 @@ def _validate_report_hmm_feature_parameters(
         raise ValueError("v4an_report_hmm_feature_contract_invalid")
 
 
-def _validate_report_selector_parameters(diagnostics: dict[str, Any]) -> None:
-    selector = diagnostics.get("selector", {})
-    valid = (
+def _selector_regime_contract_valid(selector: dict[str, Any]) -> bool:
+    return (
         selector.get("selector_type") == "HMM_REGIME_HARD_SELECTOR"
         and selector.get("hard_selector_enabled") is True
         and selector.get("soft_blend_enabled") is False
-        and selector.get("trend_ema_period") == EMA_FAST_PERIOD
+    )
+
+
+def _selector_entry_contract_valid(selector: dict[str, Any]) -> bool:
+    return (
+        selector.get("trend_ema_period") == EMA_FAST_PERIOD
         and selector.get("range_rsi_period") == RSI_PERIOD
         and selector.get("range_rsi_threshold") == RANGE_RSI_ENTRY_THRESHOLD
         and selector.get("momentum_strategy")
         == "CLOSE_ABOVE_EMA50_TRENDING_UP_ONLY_SPOT_LONG"
         and selector.get("mean_reversion_strategy") == "WILDER_RSI14_LT45_RANGING_ONLY"
-        and selector.get("downtrend_policy") == "RISK_OFF_NO_LONG_ENTRY_SPOT_ONLY"
+    )
+
+
+def _selector_safety_contract_valid(selector: dict[str, Any]) -> bool:
+    return (
+        selector.get("downtrend_policy") == "RISK_OFF_NO_LONG_ENTRY_SPOT_ONLY"
         and selector.get("no_cusum_filter") is True
         and selector.get("short_entries_enabled") is False
         and selector.get("lookahead_used") is False
     )
+
+
+def _validate_report_selector_parameters(diagnostics: dict[str, Any]) -> None:
+    selector = diagnostics.get("selector", {})
+    valid = all(
+        (
+            _selector_regime_contract_valid(selector),
+            _selector_entry_contract_valid(selector),
+            _selector_safety_contract_valid(selector),
+        )
+    )
     if not valid:
         raise ValueError("v4ai_report_regime_selector_invalid")
+
 
 
 def _validate_report_sizing_parameters(diagnostics: dict[str, Any]) -> None:
