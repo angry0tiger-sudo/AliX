@@ -47,9 +47,12 @@ def build_v4aq_meta_features(
 ) -> DataFrame:
     """Build causal Donchian context plus the two external numeric features."""
     _validate_inputs(bars, external_features)
-    high = _validated_price(bars, "high")
-    low = _validated_price(bars, "low")
-    close = _validated_price(bars, "close")
+    original_index = bars.index
+    normalized_bars = bars.reset_index(drop=True)
+    normalized_external = external_features.reset_index(drop=True)
+    high = _validated_price(normalized_bars, "high")
+    low = _validated_price(normalized_bars, "low")
+    close = _validated_price(normalized_bars, "close")
     previous_high = high.shift(1).rolling(
         V4AQ_PRIMARY_LOOKBACK,
         min_periods=V4AQ_PRIMARY_LOOKBACK,
@@ -66,12 +69,13 @@ def build_v4aq_meta_features(
         },
         index=bars.index,
     )
-    external = external_features.apply(pd.to_numeric, errors="coerce").astype(float)
+    external = normalized_external.apply(pd.to_numeric, errors="coerce").astype(float)
     if bool(np.isinf(external.to_numpy(dtype=float)).any()):
         raise ValueError("v4aq_external_feature_infinite")
     result = pd.concat([technical, external], axis=1)
     if tuple(result.columns) != V4AQ_META_FEATURE_COLUMNS:
         raise ValueError("v4aq_meta_feature_schema_mismatch")
+    result.index = original_index
     return result
 
 

@@ -230,9 +230,9 @@ def build_external_market_features(
                 oi_change,
                 maximum_age=SUPPORTED_TIMEFRAMES[oi_period] * 3 + PUBLICATION_LAG,
             ),
-        },
-        index=bars.index,
+        }
     )
+    output.index = bars.index
     output = output.loc[:, list(EXTERNAL_FEATURE_COLUMNS)].astype(float)
     values = output.to_numpy(dtype=float)
     if bool(np.isinf(values).any()):

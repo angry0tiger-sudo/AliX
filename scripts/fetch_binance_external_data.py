@@ -118,6 +118,10 @@ def fetch_public_history(
         raise ValueError("ai6_symbol_selection_invalid")
     if any(symbol not in ALLOWED_SYMBOLS for symbol in symbols):
         raise ValueError("ai6_symbol_not_allowed")
+    if requested_days != 1825:
+        raise ValueError("ai6_requested_days_must_be_1825")
+    if len(commit_sha) != 40 or any(character not in "0123456789abcdef" for character in commit_sha):
+        raise ValueError("ai6_commit_sha_invalid")
     end = pd.Timestamp.now(tz="UTC").floor("min")
     start = end - pd.Timedelta(days=requested_days) + pd.Timedelta(minutes=1)
     connector = BinanceUsdMFuturesConnector(UrllibPublicJsonTransport())

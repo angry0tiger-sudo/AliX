@@ -422,6 +422,43 @@ class UrllibPublicJsonTransport:
             raise TimeoutError("binance_public_request_timeout_or_network_error") from None
 
 
+def _covers_requested_window(
+    first: datetime | None,
+    last: datetime | None,
+    start: datetime,
+    end: datetime,
+) -> bool:
+    if first is None or last is None:
+        return False
+    tolerance = timedelta(days=1)
+    return first <= start + tolerance and last >= end - tolerance
+
+
+def _funding_has_large_gaps(records: Sequence[FundingRatePoint]) -> bool:
+    return any(
+        later.funding_time - earlier.funding_time > timedelta(days=1)
+        for earlier, later in zip(records, records[1:])
+    )
+
+
+def _oi_coverage_metrics(
+    snapshot: BinanceFuturesSnapshot,
+) -> tuple[float, int, bool]:
+    if not snapshot.open_interest:
+        return 0.0, 0, False
+    period = timedelta(hours=4)
+    duration = snapshot.requested_end - snapshot.oi_requested_start
+    expected = max(1, int(duration.total_seconds() // period.total_seconds()) + 1)
+    actual = len(snapshot.open_interest)
+    fraction = min(1.0, actual / expected)
+    first = snapshot.open_interest[0].timestamp
+    last = snapshot.open_interest[-1].timestamp
+    complete_span = _covers_requested_window(
+        first, last, snapshot.oi_requested_start, snapshot.requested_end
+    )
+    return fraction, max(0, expected - actual), complete_span and fraction >= 0.98
+
+
 def snapshot_manifest(
     snapshot: BinanceFuturesSnapshot,
     *,
@@ -445,11 +482,29 @@ def snapshot_manifest(
         if len(oi) > 1
         else 0.0
     )
-    funding_start = funding[0].funding_time.isoformat() if funding else None
-    funding_end = funding[-1].funding_time.isoformat() if funding else None
-    oi_start = oi[0].timestamp.isoformat() if oi else None
-    oi_end = oi[-1].timestamp.isoformat() if oi else None
-    oi_full_history = oi_days >= requested_days - 1.0 and bool(oi)
+    funding_start_time = funding[0].funding_time if funding else None
+    funding_end_time = funding[-1].funding_time if funding else None
+    oi_start_time = oi[0].timestamp if oi else None
+    oi_end_time = oi[-1].timestamp if oi else None
+    funding_full_history = (
+        _covers_requested_window(
+            funding_start_time,
+            funding_end_time,
+            snapshot.requested_start,
+            snapshot.requested_end,
+        )
+        and not _funding_has_large_gaps(funding)
+    )
+    oi_fraction, oi_missing_periods, oi_full_span = _oi_coverage_metrics(snapshot)
+    oi_full_history = (
+        oi_full_span
+        and oi_days >= requested_days - 1.0
+        and snapshot.oi_requested_start <= snapshot.requested_start + timedelta(days=1)
+    )
+    funding_start = funding_start_time.isoformat() if funding_start_time else None
+    funding_end = funding_end_time.isoformat() if funding_end_time else None
+    oi_start = oi_start_time.isoformat() if oi_start_time else None
+    oi_end = oi_end_time.isoformat() if oi_end_time else None
     return {
         "schema_version": "alix.binance.usdm-external-market.v1",
         "commit_sha": commit_sha,
@@ -474,7 +529,10 @@ def snapshot_manifest(
             "observed_span_days": round(funding_days, 6),
             "availability_policy": "fundingTime_plus_5_minutes_conservative_proxy",
             "history_limit_days_documented": None,
-            "coverage_status": "OBSERVED_WINDOW_ONLY",
+            "full_requested_history_available": funding_full_history,
+            "coverage_status": (
+                "FULL_REQUESTED_HISTORY" if funding_full_history else "PARTIAL_FUNDING_HISTORY"
+            ),
         },
         "open_interest": {
             "endpoint": OPEN_INTEREST_HISTORY_PATH,
@@ -486,6 +544,9 @@ def snapshot_manifest(
             "first_timestamp_utc": oi_start,
             "last_timestamp_utc": oi_end,
             "observed_span_days": round(oi_days, 6),
+            "coverage_fraction": round(oi_fraction, 6),
+            "expected_period_count": len(oi) + oi_missing_periods,
+            "missing_period_count": oi_missing_periods,
             "availability_policy": "timestamp_plus_period_plus_5_minutes_conservative_proxy",
             "full_requested_history_available": oi_full_history,
             "coverage_status": (
