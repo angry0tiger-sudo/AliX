@@ -82,12 +82,16 @@ def build_v4aq_meta_features(
     low = _validated_price(normalized, "low")
     close = _validated_price(normalized, "close")
     if strategy == DONCHIAN_STRATEGY:
-        prior_high = high.shift(1).rolling(
-            V4AQ_PRIMARY_LOOKBACK, min_periods=V4AQ_PRIMARY_LOOKBACK
-        ).max()
-        prior_low = low.shift(1).rolling(
-            V4AQ_PRIMARY_LOOKBACK, min_periods=V4AQ_PRIMARY_LOOKBACK
-        ).min()
+        prior_high = (
+            high.shift(1)
+            .rolling(V4AQ_PRIMARY_LOOKBACK, min_periods=V4AQ_PRIMARY_LOOKBACK)
+            .max()
+        )
+        prior_low = (
+            low.shift(1)
+            .rolling(V4AQ_PRIMARY_LOOKBACK, min_periods=V4AQ_PRIMARY_LOOKBACK)
+            .min()
+        )
         context = DataFrame(
             {
                 "primary_context_1": close / prior_high - 1.0,
@@ -107,9 +111,11 @@ def build_v4aq_meta_features(
                 "primary_context_2": close / ema - 1.0,
             }
         )
-    external = external_features.reset_index(drop=True).apply(
-        pd.to_numeric, errors="coerce"
-    ).astype(float)
+    external = (
+        external_features.reset_index(drop=True)
+        .apply(pd.to_numeric, errors="coerce")
+        .astype(float)
+    )
     if bool(np.isinf(external.to_numpy(dtype=float)).any()):
         raise ValueError("v4aq_external_feature_infinite")
     result = pd.concat([context, external], axis=1)

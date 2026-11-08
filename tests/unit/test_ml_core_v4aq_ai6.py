@@ -117,9 +117,7 @@ def test_forward_labeling_applies_30bps_cost_and_rejects_gap_and_tail() -> None:
     bars.loc[2, "open"] = 100.0
     bars.loc[2, "close"] = 99.0
     events = DataFrame({"event_index": [0, 1, 7]})
-    labelled = ai6._label_primary_events(
-        bars, events, timeframe="4h", horizon_bars=1
-    )
+    labelled = ai6._label_primary_events(bars, events, timeframe="4h", horizon_bars=1)
     assert labelled["event_index"].tolist() == [0, 1]
     assert labelled["meta_label"].tolist() == [1, 0]
     assert labelled.loc[0, "net_return_fraction"] > 0.0
@@ -282,10 +280,7 @@ def test_evaluate_primary_group_fails_closed_when_training_support_is_invalid(
     bars = _bars(40, "4h")
     primary = Series(np.zeros(len(bars), dtype=bool))
     features = DataFrame(
-        {
-            name: np.ones(len(bars))
-            for name in ai6.V4AQ_META_FEATURE_COLUMNS
-        }
+        {name: np.ones(len(bars)) for name in ai6.V4AQ_META_FEATURE_COLUMNS}
     )
     monkeypatch.setattr(
         v4x,
@@ -312,7 +307,10 @@ def test_blocked_run_builds_and_validates_all_36_no_fit_cells(
 ) -> None:
     candidates = [
         ai6._placeholder_candidate(
-            symbol, timeframe, strategy, geometry,
+            symbol,
+            timeframe,
+            strategy,
+            geometry,
             status="NOT_RUN_INSUFFICIENT_FUNDING_HISTORY",
         )
         for symbol in v4ap.ASSETS
@@ -403,10 +401,7 @@ def test_v4aq_ai6_sweep_runs_exact_grid_and_keeps_final_holdout_untouched(
 
     def fake_primary_context(bars, external, *, strategy):
         return DataFrame(
-            {
-                name: np.ones(len(bars))
-                for name in ai6.V4AQ_META_FEATURE_COLUMNS
-            },
+            {name: np.ones(len(bars)) for name in ai6.V4AQ_META_FEATURE_COLUMNS},
             index=bars.index,
         )
 
@@ -420,23 +415,37 @@ def test_v4aq_ai6_sweep_runs_exact_grid_and_keeps_final_holdout_untouched(
         calls["models"] += 1
         filtered = Series(False, index=bars.index)
         filtered.iloc[train_end:forward_end] = signal.iloc[train_end:forward_end]
-        return filtered, {
-            "fit_performed": True,
-            "fit_status": "FITTED",
-            "fit_rows": 100,
-            "calibration_rows": 20,
-            "validation_event_count": int(signal.iloc[train_end:forward_end].sum()),
-            "validation_labeled_event_count": int(signal.iloc[train_end:forward_end].sum()),
-            "roc_auc": 0.61,
-            "roc_auc_status": "COMPUTED",
-            "threshold": 0.5,
-            "accepted_event_count": int(filtered.sum()),
-            "acceptance_rate": 0.5,
-        }, []
+        return (
+            filtered,
+            {
+                "fit_performed": True,
+                "fit_status": "FITTED",
+                "fit_rows": 100,
+                "calibration_rows": 20,
+                "validation_event_count": int(signal.iloc[train_end:forward_end].sum()),
+                "validation_labeled_event_count": int(
+                    signal.iloc[train_end:forward_end].sum()
+                ),
+                "roc_auc": 0.61,
+                "roc_auc_status": "COMPUTED",
+                "threshold": 0.5,
+                "accepted_event_count": int(filtered.sum()),
+                "acceptance_rate": 0.5,
+            },
+            [],
+        )
 
     def fake_run_candidate(
-        bars, *, symbol, timeframe, strategy, geometry, signal,
-        strategy_diagnostics, execution, documented_gap_ranges=(),
+        bars,
+        *,
+        symbol,
+        timeframe,
+        strategy,
+        geometry,
+        signal,
+        strategy_diagnostics,
+        execution,
+        documented_gap_ranges=(),
     ):
         calls["candidates"] += 1
         candidate = {

@@ -117,8 +117,10 @@ def _parse_funding_row(row: object, symbol: str) -> FundingRatePoint:
     funding_time = _exchange_timestamp(row.get("fundingTime"), "fundingTime")
     rate = _numeric(row.get("fundingRate"), "fundingRate")
     raw_mark = row.get("markPrice")
-    mark = None if raw_mark in (None, "") else _numeric(
-        raw_mark, "markPrice", positive=True
+    mark = (
+        None
+        if raw_mark in (None, "")
+        else _numeric(raw_mark, "markPrice", positive=True)
     )
     return FundingRatePoint(
         symbol=symbol,
@@ -401,7 +403,9 @@ class BinancePublicHttpsTransport:
         except ProviderError:
             raise
         except (OSError, TimeoutError, HTTPException):
-            raise TimeoutError("binance_public_request_timeout_or_network_error") from None
+            raise TimeoutError(
+                "binance_public_request_timeout_or_network_error"
+            ) from None
         finally:
             connection.close()
 
@@ -439,8 +443,7 @@ def _funding_coverage_metrics(
     coverage_fraction = min(1.0, len(records) / expected_events)
     complete = (
         covers_boundaries
-        and max_gap_hours
-        <= FUNDING_MAX_EVENT_GAP.total_seconds() / 3600
+        and max_gap_hours <= FUNDING_MAX_EVENT_GAP.total_seconds() / 3600
         and coverage_fraction >= 0.90
     )
     missing_estimate = max(0, expected_events - len(records))
@@ -452,7 +455,11 @@ def _validate_snapshot_manifest_request(commit_sha: str, requested_days: int) ->
         character not in "0123456789abcdef" for character in commit_sha
     ):
         raise ProviderError("binance_commit_sha_invalid")
-    if isinstance(requested_days, bool) or not isinstance(requested_days, int) or requested_days <= 0:
+    if (
+        isinstance(requested_days, bool)
+        or not isinstance(requested_days, int)
+        or requested_days <= 0
+    ):
         raise ProviderError("binance_requested_days_invalid")
 
 
@@ -464,13 +471,21 @@ def snapshot_manifest(
 ) -> dict[str, object]:
     """Describe exact Funding coverage and closed safety state without fabricating gaps."""
     _validate_snapshot_manifest_request(commit_sha, requested_days)
-    span, max_gap_hours, missing_estimate, complete = _funding_coverage_metrics(snapshot)
+    span, max_gap_hours, missing_estimate, complete = _funding_coverage_metrics(
+        snapshot
+    )
     records = snapshot.funding_rates
     first = records[0].funding_time.isoformat() if records else None
     last = records[-1].funding_time.isoformat() if records else None
     expected_events = max(
         1,
-        int(round((snapshot.requested_end - snapshot.requested_start).total_seconds() / (8 * 3600))) + 1,
+        int(
+            round(
+                (snapshot.requested_end - snapshot.requested_start).total_seconds()
+                / (8 * 3600)
+            )
+        )
+        + 1,
     )
     return {
         "schema_version": MANIFEST_SCHEMA_VERSION,
@@ -502,7 +517,9 @@ def snapshot_manifest(
             "coverage_fraction_estimate": (
                 min(1.0, len(records) / expected_events) if records else 0.0
             ),
-            "coverage_status": "FULL_REQUESTED_HISTORY" if complete else "INSUFFICIENT_HISTORY",
+            "coverage_status": "FULL_REQUESTED_HISTORY"
+            if complete
+            else "INSUFFICIENT_HISTORY",
             "full_requested_history_available": complete,
             "available_at_policy": "fundingTime + 5 minutes (conservative research proxy)",
         },

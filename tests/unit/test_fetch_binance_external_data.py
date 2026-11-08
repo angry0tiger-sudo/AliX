@@ -105,9 +105,10 @@ def test_write_snapshot_persists_funding_csv_manifest_and_hash_only(
     assert funding_path.is_file()
     assert manifest == persisted
     assert manifest["funding_csv"] == funding_path.name
-    assert manifest["funding_csv_sha256"] == hashlib.sha256(
-        funding_path.read_bytes()
-    ).hexdigest()
+    assert (
+        manifest["funding_csv_sha256"]
+        == hashlib.sha256(funding_path.read_bytes()).hexdigest()
+    )
     assert len(pd.read_csv(funding_path)) == 3
     assert "open_interest" not in manifest
     assert "open_interest_csv" not in manifest

@@ -79,9 +79,9 @@ def _validate_funding(
         raise ValueError("ai6_funding_schema_or_data_invalid")
     if not funding["symbol"].eq(symbol).all():
         raise ValueError("ai6_funding_symbol_mismatch")
-    event_time = _utc_series(
-        funding["funding_time"], "funding_time"
-    ).reset_index(drop=True)
+    event_time = _utc_series(funding["funding_time"], "funding_time").reset_index(
+        drop=True
+    )
     available = _utc_series(
         funding["available_at"], "funding_available_at"
     ).reset_index(drop=True)
@@ -109,8 +109,8 @@ def _segmented_funding_features(
         rolling = selected.rolling(window=window, min_periods=minimum_periods)
         mean = rolling.mean()
         standard_deviation = rolling.std(ddof=0)
-        zscore.loc[indexes] = (
-            (selected - mean) / standard_deviation.where(standard_deviation > 1e-12)
+        zscore.loc[indexes] = (selected - mean) / standard_deviation.where(
+            standard_deviation > 1e-12
         )
         moving_average.loc[indexes] = mean
     return zscore, moving_average
@@ -170,9 +170,8 @@ def build_external_market_features(
     Funding publication is conservatively approximated as fundingTime + 5 minutes.
     This is a research availability proxy, not a provider-certified publication time.
     """
-    if (
-        not np.isfinite(funding_max_age.total_seconds())
-        or funding_max_age <= timedelta(0)
+    if not np.isfinite(funding_max_age.total_seconds()) or funding_max_age <= timedelta(
+        0
     ):
         raise ValueError("ai6_funding_max_age_invalid")
     _, decisions = _validate_bars(bars, timeframe)

@@ -78,9 +78,7 @@ def _full_snapshot(days: int = 365) -> BinanceFundingSnapshot:
         )
         for index in range(count)
     )
-    return BinanceFundingSnapshot(
-        "BTCUSDT", START, end, rates, RETRIEVED
-    )
+    return BinanceFundingSnapshot("BTCUSDT", START, end, rates, RETRIEVED)
 
 
 def test_funding_paginates_and_resumes_after_last_observed_timestamp() -> None:
@@ -192,9 +190,7 @@ def test_deduplication_accepts_identical_replays_and_rejects_conflicts() -> None
 
 
 def test_request_builder_allows_only_the_public_funding_endpoint() -> None:
-    url = _request_url(
-        "/fapi/v1/fundingRate", {"symbol": "BTCUSDT", "limit": 1000}
-    )
+    url = _request_url("/fapi/v1/fundingRate", {"symbol": "BTCUSDT", "limit": 1000})
     assert url.startswith(BINANCE_FUTURES_BASE_URL)
     with pytest.raises(ProviderError, match="endpoint_not_allowed"):
         _request_url("/fapi/v1/order", {"symbol": "BTCUSDT"})
@@ -373,9 +369,7 @@ class _FakeHttpsConnection:
         self.requests: list[tuple[str, str, dict[str, str]]] = []
         self.closed = False
 
-    def request(
-        self, method: str, target: str, *, headers: dict[str, str]
-    ) -> None:
+    def request(self, method: str, target: str, *, headers: dict[str, str]) -> None:
         self.requests.append((method, target, headers))
         if self.failure is not None:
             raise self.failure
@@ -456,8 +450,6 @@ def test_https_transport_rejects_wrong_host_path_bytes_and_timeout() -> None:
     with pytest.raises(ProviderError, match="encoding_invalid"):
         transport._response_body(b"\\xff")
     with pytest.raises(ProviderError, match="response_too_large"):
-        transport._response_body(
-            b"x" * (provider_module.MAX_RESPONSE_BYTES + 1)
-        )
+        transport._response_body(b"x" * (provider_module.MAX_RESPONSE_BYTES + 1))
     with pytest.raises(ProviderError, match="timeout_configuration_invalid"):
         BinancePublicHttpsTransport(timeout_seconds=0)

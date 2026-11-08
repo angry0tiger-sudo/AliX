@@ -79,18 +79,15 @@ def test_builder_rejects_bad_alignment_schema_prices_and_strategy() -> None:
         )
     with pytest.raises(ValueError, match="external_feature_schema_invalid"):
         v4aq.build_v4aq_meta_features(
-            bars, DataFrame({"unknown": np.ones(len(bars))}),
+            bars,
+            DataFrame({"unknown": np.ones(len(bars))}),
             strategy=v4aq.DONCHIAN_STRATEGY,
         )
     with pytest.raises(ValueError, match="strategy_not_supported"):
-        v4aq.build_v4aq_meta_features(
-            bars, external, strategy="OTHER"
-        )
+        v4aq.build_v4aq_meta_features(bars, external, strategy="OTHER")
     mismatched = external.set_axis(range(100, 100 + len(external)))
     with pytest.raises(ValueError, match="index_mismatch"):
-        v4aq.build_v4aq_meta_features(
-            bars, mismatched, strategy=v4aq.DONCHIAN_STRATEGY
-        )
+        v4aq.build_v4aq_meta_features(bars, mismatched, strategy=v4aq.DONCHIAN_STRATEGY)
     invalid = bars.copy()
     invalid.loc[0, "high"] = np.nan
     with pytest.raises(ValueError, match="price_invalid:high"):
@@ -100,9 +97,7 @@ def test_builder_rejects_bad_alignment_schema_prices_and_strategy() -> None:
     infinite = external.copy()
     infinite.loc[0, "funding_rate_zscore"] = np.inf
     with pytest.raises(ValueError, match="external_feature_infinite"):
-        v4aq.build_v4aq_meta_features(
-            bars, infinite, strategy=v4aq.DONCHIAN_STRATEGY
-        )
+        v4aq.build_v4aq_meta_features(bars, infinite, strategy=v4aq.DONCHIAN_STRATEGY)
 
 
 def test_lightgbm_wrapper_enforces_schema_and_delegates_fit(
@@ -138,7 +133,8 @@ def test_lightgbm_wrapper_enforces_schema_and_delegates_fit(
     assert seen["target_accept_fraction"] == 0.3
     assert diagnostics["feature_columns"] == list(v4aq.V4AQ_META_FEATURE_COLUMNS)
     assert diagnostics["external_features_used"] == [
-        "funding_rate_zscore", "funding_rate_ma"
+        "funding_rate_zscore",
+        "funding_rate_ma",
     ]
 
 
@@ -153,9 +149,7 @@ def test_wrapper_rejects_missing_features_and_misaligned_labels() -> None:
     with pytest.raises(ValueError, match="features_not_complete:fit"):
         v4aq.fit_v4aq_lightgbm_meta_filter(invalid, labels, frame.iloc[:8])
     with pytest.raises(ValueError, match="label_alignment_invalid"):
-        v4aq.fit_v4aq_lightgbm_meta_filter(
-            frame, labels.iloc[:-1], frame.iloc[:8]
-        )
+        v4aq.fit_v4aq_lightgbm_meta_filter(frame, labels.iloc[:-1], frame.iloc[:8])
 
 
 def test_probability_wrapper_checks_schema_then_delegates(
@@ -170,8 +164,10 @@ def test_probability_wrapper_checks_schema_then_delegates(
         "predict_meta_probabilities",
         lambda model, features: np.array([0.2, 0.5, 0.8]),
     )
-    assert v4aq.predict_v4aq_meta_probabilities(
-        object(), frame
-    ).tolist() == [0.2, 0.5, 0.8]
+    assert v4aq.predict_v4aq_meta_probabilities(object(), frame).tolist() == [
+        0.2,
+        0.5,
+        0.8,
+    ]
     with pytest.raises(ValueError, match="schema_mismatch:prediction"):
         v4aq.predict_v4aq_meta_probabilities(object(), frame.iloc[:, :2])

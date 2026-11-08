@@ -144,9 +144,7 @@ def _read_funding_artifact(
     funding["available_at"] = pd.to_datetime(
         funding["available_at"], utc=True, errors="coerce"
     )
-    funding["funding_rate"] = pd.to_numeric(
-        funding["funding_rate"], errors="coerce"
-    )
+    funding["funding_rate"] = pd.to_numeric(funding["funding_rate"], errors="coerce")
     if (
         funding[["funding_time", "available_at", "funding_rate"]].isna().any().any()
         or not np.isfinite(funding["funding_rate"].to_numpy(dtype=float)).all()
@@ -180,9 +178,7 @@ def _label_primary_events(
     row_count = len(bars)
     valid = (indices >= 0) & (end_indices < row_count)
     dates = pd.to_datetime(bars["date"], utc=True).astype("int64").to_numpy()
-    interval_ns = int(
-        pd.Timedelta(minutes=v4ap.TIMEFRAME_MINUTES[timeframe]).value
-    )
+    interval_ns = int(pd.Timedelta(minutes=v4ap.TIMEFRAME_MINUTES[timeframe]).value)
     gap_flags = np.zeros(row_count, dtype=np.int64)
     if row_count > 1:
         gap_flags[1:] = np.diff(dates) != interval_ns
@@ -227,9 +223,7 @@ def _label_primary_events(
     exit_fill = exit_reference * (1.0 - slippage_rate)
     entry_fee = entry_fill * fee_rate
     exit_fee = exit_fill * fee_rate
-    net_return = (
-        exit_fill - entry_fill - entry_fee - exit_fee
-    ) / entry_reference
+    net_return = (exit_fill - entry_fill - entry_fee - exit_fee) / entry_reference
     result = events.iloc[safe_positions].copy().reset_index(drop=True)
     result["label_end_idx"] = final_indices.astype(int)
     result["net_return_fraction"] = net_return.astype(float)
@@ -307,20 +301,24 @@ def _evaluate_primary_group(
         )
     except ValueError as error:
         status = f"BLOCKED_TRAINING_SUPPORT:{error}"
-        return empty, {
-            "fit_performed": False,
-            "fit_status": status,
-            "fit_rows": 0,
-            "calibration_rows": 0,
-            "oof_event_count": 0,
-            "validation_event_count": 0,
-            "validation_labeled_event_count": 0,
-            "roc_auc": None,
-            "roc_auc_status": "NOT_EVALUATED",
-            "threshold": None,
-            "accepted_event_count": 0,
-            "acceptance_rate": 0.0,
-        }, []
+        return (
+            empty,
+            {
+                "fit_performed": False,
+                "fit_status": status,
+                "fit_rows": 0,
+                "calibration_rows": 0,
+                "oof_event_count": 0,
+                "validation_event_count": 0,
+                "validation_labeled_event_count": 0,
+                "roc_auc": None,
+                "roc_auc_status": "NOT_EVALUATED",
+                "threshold": None,
+                "accepted_event_count": 0,
+                "acceptance_rate": 0.0,
+            },
+            [],
+        )
 
     validation_stop = max(train_end, forward_end - horizon_bars)
     validation_indices = (
@@ -476,12 +474,8 @@ def _candidate_acceptance(candidate: dict[str, Any]) -> dict[str, bool]:
     win_rate = candidate.get("win_rate")
     win_rate_passed = win_rate is not None and float(win_rate) >= MINIMUM_WIN_RATE
     profit_factor = candidate.get("net_profit_factor")
-    pf_passed = (
-        candidate.get("net_profit_factor_infinite_no_losses") is True
-        or (
-            profit_factor is not None
-            and float(profit_factor) >= MINIMUM_NET_PROFIT_FACTOR
-        )
+    pf_passed = candidate.get("net_profit_factor_infinite_no_losses") is True or (
+        profit_factor is not None and float(profit_factor) >= MINIMUM_NET_PROFIT_FACTOR
     )
     dsr = candidate.get("dsr_z_score")
     dsr_passed = dsr is not None and float(dsr) > MINIMUM_DSR_Z
@@ -508,9 +502,7 @@ def _build_report(
     model_groups: list[dict[str, Any]],
     status: str,
 ) -> dict[str, Any]:
-    qualifying = [
-        str(item["candidate_id"]) for item in candidates if item["qualifies"]
-    ]
+    qualifying = [str(item["candidate_id"]) for item in candidates if item["qualifies"]]
     pf_candidates = [
         str(item["candidate_id"])
         for item in candidates
@@ -568,7 +560,9 @@ def _build_report(
             "family": "LightGBM binary classifier via existing V4-X purged OOF/calibration contract",
             "fit_performed": model_fit_count > 0,
             "fit_group_count": model_fit_count,
-            "expected_fit_group_count": len(v4ap.ASSETS) * len(v4ap.TIMEFRAMES) * len(v4ap.STRATEGIES),
+            "expected_fit_group_count": len(v4ap.ASSETS)
+            * len(v4ap.TIMEFRAMES)
+            * len(v4ap.STRATEGIES),
             "groups": model_groups,
             "features": list(V4AQ_META_FEATURE_COLUMNS),
             "external_features": list(EXTERNAL_FEATURE_COLUMNS),
@@ -615,7 +609,9 @@ def _build_report(
             if status == "BLOCKED_INSUFFICIENT_FUNDING_HISTORY"
             else {
                 "candidate_count": len(candidates),
-                "total_trade_count": sum(int(item["trade_count"]) for item in candidates),
+                "total_trade_count": sum(
+                    int(item["trade_count"]) for item in candidates
+                ),
                 "meta_models_fitted": model_fit_count,
                 "dsr_trial_count": v4ap.DSR_TRIAL_COUNT,
                 "economic_scope": "FORWARD_VALIDATION_ONLY; FINAL_15_PERCENT_UNTOUCHED",
@@ -644,9 +640,14 @@ def _validate_report(report: dict[str, Any], expected_commit_sha: str) -> None:
         raise ValueError("ai6_report_commit_mismatch")
     if report.get("dataset", {}).get("requested_days") != REQUESTED_DAYS:
         raise ValueError("ai6_dataset_window_invalid")
-    if report.get("execution_assumptions", {}).get("round_trip_cost_bps") != ROUND_TRIP_COST_BPS:
+    if (
+        report.get("execution_assumptions", {}).get("round_trip_cost_bps")
+        != ROUND_TRIP_COST_BPS
+    ):
         raise ValueError("ai6_cost_contract_invalid")
-    if report.get("funding", {}).get("feature_columns") != list(EXTERNAL_FEATURE_COLUMNS):
+    if report.get("funding", {}).get("feature_columns") != list(
+        EXTERNAL_FEATURE_COLUMNS
+    ):
         raise ValueError("ai6_funding_feature_contract_invalid")
     if report.get("funding", {}).get("open_interest_used") is not False:
         raise ValueError("ai6_open_interest_must_be_disabled")
@@ -671,7 +672,8 @@ def _validate_report(report: dict[str, Any], expected_commit_sha: str) -> None:
             candidate.get("symbol") not in v4ap.ASSETS
             or candidate.get("timeframe") not in v4ap.TIMEFRAMES
             or candidate.get("strategy") not in v4ap.STRATEGIES
-            or candidate.get("geometry") not in {item["name"] for item in v4ap.EXIT_GEOMETRIES}
+            or candidate.get("geometry")
+            not in {item["name"] for item in v4ap.EXIT_GEOMETRIES}
             or candidate.get("round_trip_cost_bps") != ROUND_TRIP_COST_BPS
             or candidate.get("roc_auc_reference") != ROC_AUC_REFERENCE
             or candidate.get("dsr_trial_count") != v4ap.DSR_TRIAL_COUNT
@@ -696,9 +698,15 @@ def _validate_report(report: dict[str, Any], expected_commit_sha: str) -> None:
         "BLOCKED_INSUFFICIENT_FUNDING_HISTORY",
     ):
         raise ValueError("ai6_report_status_invalid")
-    if status == "BLOCKED_INSUFFICIENT_FUNDING_HISTORY" and report.get("economic_results") is not None:
+    if (
+        status == "BLOCKED_INSUFFICIENT_FUNDING_HISTORY"
+        and report.get("economic_results") is not None
+    ):
         raise ValueError("ai6_blocked_run_has_economic_results")
-    if status == "COMPLETED_RESEARCH_EVALUATION" and report.get("economic_results") is None:
+    if (
+        status == "COMPLETED_RESEARCH_EVALUATION"
+        and report.get("economic_results") is None
+    ):
         raise ValueError("ai6_completed_run_missing_economic_results")
 
 
@@ -798,7 +806,9 @@ def _render_summary(report: dict[str, Any]) -> str:
                 "RL must not generate, replace, or modify Primary entry signals.",
             ]
         )
-    elif report["conclusion"] == "NET_PF_GATE_MET_BUT_FULL_STATISTICAL_ACCEPTANCE_FAILED":
+    elif (
+        report["conclusion"] == "NET_PF_GATE_MET_BUT_FULL_STATISTICAL_ACCEPTANCE_FAILED"
+    ):
         lines.extend(
             [
                 "",
@@ -828,7 +838,9 @@ def _render_summary(report: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _write_rows(path: Path, rows: list[dict[str, Any]], fallback_columns: tuple[str, ...]) -> None:
+def _write_rows(
+    path: Path, rows: list[dict[str, Any]], fallback_columns: tuple[str, ...]
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fieldnames = list(rows[0]) if rows else list(fallback_columns)
     with path.open("w", encoding="utf-8", newline="") as handle:
@@ -949,8 +961,13 @@ def run_v4aq_ai6(
                 horizon_bars = (
                     v4ap.HORIZON_HOURS * 60 // v4ap.TIMEFRAME_MINUTES[timeframe]
                 )
-                if train_end <= horizon_bars + 5 or forward_end <= train_end + horizon_bars:
-                    raise ValueError(f"ai6_resampled_window_too_short:{symbol}:{timeframe}")
+                if (
+                    train_end <= horizon_bars + 5
+                    or forward_end <= train_end + horizon_bars
+                ):
+                    raise ValueError(
+                        f"ai6_resampled_window_too_short:{symbol}:{timeframe}"
+                    )
                 evaluation_bars = (
                     full_bars.iloc[:forward_end].copy().reset_index(drop=True)
                 )
@@ -969,14 +986,16 @@ def run_v4aq_ai6(
                         funding_features,
                         strategy=strategy,
                     )
-                    filtered_signal, group_result, decision_rows = _evaluate_primary_group(
-                        evaluation_bars,
-                        primary_features,
-                        primary_signal,
-                        strategy=strategy,
-                        timeframe=timeframe,
-                        train_end=train_end,
-                        forward_end=forward_end,
+                    filtered_signal, group_result, decision_rows = (
+                        _evaluate_primary_group(
+                            evaluation_bars,
+                            primary_features,
+                            primary_signal,
+                            strategy=strategy,
+                            timeframe=timeframe,
+                            train_end=train_end,
+                            forward_end=forward_end,
+                        )
                     )
                     model_groups.append(
                         {
@@ -1011,12 +1030,16 @@ def run_v4aq_ai6(
                                 "roc_auc_above_reference": (
                                     None
                                     if group_result["roc_auc"] is None
-                                    else bool(group_result["roc_auc"] > ROC_AUC_REFERENCE)
+                                    else bool(
+                                        group_result["roc_auc"] > ROC_AUC_REFERENCE
+                                    )
                                 ),
                                 "unfiltered_primary_signal_count": int(
                                     strategy_diagnostics["primary_signal_count"]
                                 ),
-                                "meta_filtered_signal_count": int(filtered_signal.sum()),
+                                "meta_filtered_signal_count": int(
+                                    filtered_signal.sum()
+                                ),
                                 "meta_filter_acceptance_rate": group_result[
                                     "acceptance_rate"
                                 ],
