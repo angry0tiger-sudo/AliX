@@ -262,9 +262,9 @@ def _roc_auc(
     positive_count = int(np.count_nonzero(positive))
     negative_count = len(labels) - positive_count
     rank_sum = float(ranks[positive].sum())
-    value = (
-        rank_sum - positive_count * (positive_count + 1) / 2.0
-    ) / (positive_count * negative_count)
+    value = (rank_sum - positive_count * (positive_count + 1) / 2.0) / (
+        positive_count * negative_count
+    )
     if not math.isfinite(value):
         return None, "ROC_AUC_NON_FINITE"
     return float(value), "COMPUTED"
