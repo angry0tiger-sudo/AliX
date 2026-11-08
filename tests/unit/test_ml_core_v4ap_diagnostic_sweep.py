@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from scripts import fetch_binance_public_ohlcv as fetcher
 from scripts import run_ml_core_v4ap_diagnostic_sweep as sweep
 
 
@@ -240,7 +241,7 @@ def test_manifest_rejects_private_or_unbound_data() -> None:
     start = pd.Timestamp("2021-11-02T00:00:00Z")
     end = start + pd.Timedelta(days=1825) - pd.Timedelta(minutes=1)
     manifest = {
-        "schema_version": sweep.market_fetcher.SCHEMA_VERSION,
+        "schema_version": fetcher.SCHEMA_VERSION,
         "provider": "Binance Spot public klines API",
         "symbol": "BTCUSDT",
         "pair": "BTC/USDT",

@@ -134,6 +134,8 @@ def _validate_manifest(
     """Fail closed on provenance, window, cost-independent safety, and gap policy."""
     expected_rows = DAYS * 24 * 60
     missing = manifest.get("missing_minute_intervals")
+    if isinstance(missing, bool) or not isinstance(missing, int):
+        raise ValueError(f"v4ap_market_manifest_invalid_missing_count:{symbol}")
     expected_missing = (0, 80) if symbol == "ETHUSDT" else (0,)
     expected_fields = (
         manifest.get("schema_version") == market_fetcher.SCHEMA_VERSION,
@@ -144,7 +146,7 @@ def _validate_manifest(
         manifest.get("requested_days") == DAYS,
         manifest.get("start_utc") == _iso_utc(start_utc),
         manifest.get("end_utc") == _iso_utc(end_utc),
-        manifest.get("row_count") == expected_rows - int(missing or 0),
+        manifest.get("row_count") == expected_rows - missing,
         missing in expected_missing,
         manifest.get("csv_sha256") == csv_digest,
         manifest.get("commit_sha") == commit_sha,
@@ -171,7 +173,7 @@ def _validate_manifest(
         }
         if symbol != "ETHUSDT" or gap_ranges != [expected_gap]:
             raise ValueError("v4ap_eth_gap_manifest_out_of_policy")
-    return int(missing)
+    return missing
 
 
 def _validate_minute_cadence(
