@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import timedelta
-from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -45,7 +44,7 @@ def test_execution_cost_contract_is_exactly_30_bps_round_trip() -> None:
 
 def test_mean_reversion_requires_rsi_below_30_and_close_above_ema200() -> None:
     rising = np.linspace(80.0, 120.0, 260)
-    decline = np.linspace(120.0, 117.0, 16)
+    decline = np.linspace(120.0, 115.0, 32)
     bars = make_bars(np.concatenate((rising, decline)))
     signal, diagnostics = sweep.generate_mean_reversion_signal(bars)
     assert bool(signal.iloc[-1])
@@ -201,7 +200,7 @@ def test_no_edge_summary_contains_exact_required_conclusion() -> None:
     report: dict[str, Any] = {
         "commit_sha": "a" * 40,
         "dataset": {
-            "start_utc": "2021-11-01T00:00:00Z",
+            "start_utc": "2021-11-02T00:00:00Z",
             "end_utc": "2026-11-01T23:59:00Z",
             "assets": {
                 symbol: {
@@ -226,11 +225,16 @@ def test_no_edge_summary_contains_exact_required_conclusion() -> None:
     }
     summary = sweep.render_step_summary(report)
     assert sweep.CONCLUSION_NO_EDGE in summary
-    assert summary.count("| ETHUSDT |") + summary.count("| BTCUSDT |") == 36
+    results_section = summary.split("## Results: all 36 combinations", 1)[1].split("## Conclusion", 1)[0]
+    result_rows = [
+        line for line in results_section.splitlines()
+        if line.startswith("| ETHUSDT |") or line.startswith("| BTCUSDT |")
+    ]
+    assert len(result_rows) == 36
 
 
 def test_manifest_rejects_private_or_unbound_data() -> None:
-    start = pd.Timestamp("2021-11-01T00:00:00Z")
+    start = pd.Timestamp("2021-11-02T00:00:00Z")
     end = start + pd.Timedelta(days=1825) - pd.Timedelta(minutes=1)
     manifest = {
         "schema_version": sweep.market_fetcher.SCHEMA_VERSION,
@@ -279,7 +283,7 @@ def test_manifest_rejects_private_or_unbound_data() -> None:
 
 
 def test_request_requires_exact_1825_day_minute_aligned_window() -> None:
-    start = "2021-11-01T00:00:00Z"
+    start = "2021-11-02T00:00:00Z"
     end = "2026-11-01T23:59:00Z"
     parsed_start, parsed_end = sweep._validate_request("a" * 40, start, end)
     assert parsed_end - parsed_start == pd.Timedelta(days=1825) - pd.Timedelta(minutes=1)
