@@ -179,6 +179,7 @@ jobs:
               "regime_state_selection": "DOMINANT_POSTERIOR_HARD_SELECTOR",
               "momentum_strategy": "DONCHIAN20_CLOSE_BREAKOUT_TRENDING_UP_ONLY_SPOT_LONG",
               "mean_reversion_strategy": "DISABLED",
+              "breakout_reference": "HIGHEST_HIGH_OF_PREVIOUS_20_COMPLETED_30M_BARS",
               "downtrend_policy": "SPOT_LONG_ONLY_NO_ENTRY",
               "position_sizing": "INVERSE_24H_REALIZED_VOL_48_BAR_OUTER_TRAIN_MEDIAN_CAPPED_AT_1X",
           }
