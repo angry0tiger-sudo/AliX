@@ -206,7 +206,7 @@ def test_read_funding_artifact_rejects_hash_safety_and_window_mismatch(
 def test_evaluate_primary_group_uses_purged_oof_fit_and_forward_auc(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    bars = _bars(120, "4h")
+    bars = _bars(200, "4h")
     primary = Series(np.arange(len(bars)) % 3 == 0)
     features = DataFrame(
         {
@@ -264,8 +264,8 @@ def test_evaluate_primary_group_uses_purged_oof_fit_and_forward_auc(
         primary,
         strategy=v4ap.STRATEGIES[1],
         timeframe="4h",
-        train_end=80,
-        forward_end=110,
+        train_end=160,
+        forward_end=190,
     )
     assert diagnostics["fit_performed"] is True
     assert diagnostics["fit_status"] == "FITTED"
@@ -377,6 +377,7 @@ def test_v4aq_ai6_sweep_runs_exact_grid_and_keeps_final_holdout_untouched(
         return DataFrame(), {
             "symbol": symbol,
             "row_count": 1000,
+            "missing_gap_ranges": [],
             "public_api_only": True,
         }
 
