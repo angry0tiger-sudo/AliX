@@ -33,7 +33,6 @@ PUBLICATION_LAG = timedelta(minutes=5)
 MAX_RESPONSE_BYTES = 2_000_000
 MAX_RETRY_ATTEMPTS = 3
 MAX_FUNDING_PAGES = 1000
-MAX_OI_PAGES = 10
 
 
 class JsonTransport(Protocol):
@@ -211,6 +210,8 @@ def _get_payload(
             continue
         except Exception:
             raise ProviderError("binance_public_transport_error") from None
+        if not isinstance(response, ConnectorResponse):
+            raise ProviderError("binance_transport_response_invalid")
         if response.status_code == 418:
             raise ProviderError("binance_public_ip_banned")
         if _retryable_status(response.status_code):
@@ -302,42 +303,28 @@ class BinanceUsdMFuturesConnector:
     def _fetch_open_interest(
         self, symbol: str, start: datetime, end: datetime, period: str
     ) -> tuple[datetime, tuple[OpenInterestPoint, ...]]:
-        earliest_supported = end - timedelta(days=OPEN_INTEREST_HISTORY_LIMIT_DAYS)
-        effective_start = max(start, earliest_supported)
-        cursor = _epoch_milliseconds(effective_start)
-        end_ms = _epoch_milliseconds(end)
-        collected: list[OpenInterestPoint] = []
-        for _ in range(MAX_OI_PAGES):
-            url = _request_url(
-                OPEN_INTEREST_HISTORY_PATH,
-                {
-                    "symbol": symbol,
-                    "period": period,
-                    "startTime": cursor,
-                    "endTime": end_ms,
-                    "limit": OPEN_INTEREST_PAGE_LIMIT,
-                },
-            )
-            payload = _get_payload(self._transport, url, self._sleeper)
-            if not isinstance(payload, list) or len(payload) > OPEN_INTEREST_PAGE_LIMIT:
-                raise ProviderError("binance_oi_page_schema_invalid")
-            page = [_parse_open_interest_row(row, symbol, period) for row in payload]
-            if not page:
-                break
-            for record in page:
-                if not effective_start <= record.timestamp <= end:
-                    raise ProviderError("binance_oi_timestamp_outside_window")
-            collected.extend(page)
-            last_ms = max(_epoch_milliseconds(item.timestamp) for item in page)
-            if len(page) < OPEN_INTEREST_PAGE_LIMIT:
-                break
-            if last_ms < cursor or last_ms == 2**63 - 1:
-                raise ProviderError("binance_oi_pagination_stalled")
-            cursor = last_ms + 1
-            self._sleeper(self._inter_page_delay)
-        else:
-            raise ProviderError("binance_oi_page_limit_exceeded")
-        return effective_start, _deduplicate_open_interest(collected)
+        effective_start = max(
+            start,
+            end - timedelta(days=OPEN_INTEREST_HISTORY_LIMIT_DAYS),
+        )
+        url = _request_url(
+            OPEN_INTEREST_HISTORY_PATH,
+            {
+                "symbol": symbol,
+                "period": period,
+                "startTime": _epoch_milliseconds(effective_start),
+                "endTime": _epoch_milliseconds(end),
+                "limit": OPEN_INTEREST_PAGE_LIMIT,
+            },
+        )
+        payload = _get_payload(self._transport, url, self._sleeper)
+        if not isinstance(payload, list) or len(payload) > OPEN_INTEREST_PAGE_LIMIT:
+            raise ProviderError("binance_oi_page_schema_invalid")
+        page = [_parse_open_interest_row(row, symbol, period) for row in payload]
+        if any(not effective_start <= record.timestamp <= end for record in page):
+            raise ProviderError("binance_oi_timestamp_outside_window")
+        records = _deduplicate_open_interest(page)
+        return effective_start, records
 
     def fetch(
         self,
