@@ -53,14 +53,22 @@ def build_v4aq_meta_features(
     high = _validated_price(normalized_bars, "high")
     low = _validated_price(normalized_bars, "low")
     close = _validated_price(normalized_bars, "close")
-    previous_high = high.shift(1).rolling(
-        V4AQ_PRIMARY_LOOKBACK,
-        min_periods=V4AQ_PRIMARY_LOOKBACK,
-    ).max()
-    previous_low = low.shift(1).rolling(
-        V4AQ_PRIMARY_LOOKBACK,
-        min_periods=V4AQ_PRIMARY_LOOKBACK,
-    ).min()
+    previous_high = (
+        high.shift(1)
+        .rolling(
+            V4AQ_PRIMARY_LOOKBACK,
+            min_periods=V4AQ_PRIMARY_LOOKBACK,
+        )
+        .max()
+    )
+    previous_low = (
+        low.shift(1)
+        .rolling(
+            V4AQ_PRIMARY_LOOKBACK,
+            min_periods=V4AQ_PRIMARY_LOOKBACK,
+        )
+        .min()
+    )
     channel_width = (previous_high - previous_low) / close
     technical = DataFrame(
         {

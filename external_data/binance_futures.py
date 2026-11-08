@@ -19,7 +19,12 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlsplit
 from urllib.request import Request, urlopen
 
-from external_data.contracts import ConnectorResponse, ProviderError, RateLimitStatus, parse_timestamp
+from external_data.contracts import (
+    ConnectorResponse,
+    ProviderError,
+    RateLimitStatus,
+    parse_timestamp,
+)
 
 BINANCE_FUTURES_BASE_URL = "https://fapi.binance.com"
 FUNDING_RATE_PATH = "/fapi/v1/fundingRate"
@@ -133,7 +138,11 @@ def _parse_funding_row(row: object, symbol: str) -> FundingRatePoint:
     funding_time = _exchange_timestamp(row.get("fundingTime"), "fundingTime")
     rate = _numeric(row.get("fundingRate"), "fundingRate")
     raw_mark = row.get("markPrice")
-    mark = None if raw_mark in (None, "") else _numeric(raw_mark, "markPrice", positive=True)
+    mark = (
+        None
+        if raw_mark in (None, "")
+        else _numeric(raw_mark, "markPrice", positive=True)
+    )
     return FundingRatePoint(
         symbol=symbol,
         funding_time=funding_time,
@@ -152,8 +161,10 @@ def _parse_open_interest_row(
     timestamp = _exchange_timestamp(row.get("timestamp"), "timestamp")
     interest = _numeric(row.get("sumOpenInterest"), "sumOpenInterest", positive=True)
     raw_value = row.get("sumOpenInterestValue")
-    value = None if raw_value in (None, "") else _numeric(
-        raw_value, "sumOpenInterestValue", positive=True
+    value = (
+        None
+        if raw_value in (None, "")
+        else _numeric(raw_value, "sumOpenInterestValue", positive=True)
     )
     period_duration = timedelta(hours=4)
     return OpenInterestPoint(
@@ -216,7 +227,9 @@ def _get_payload(
             raise ProviderError("binance_public_ip_banned")
         if _retryable_status(response.status_code):
             if attempt + 1 == MAX_RETRY_ATTEMPTS:
-                raise ProviderError(f"binance_public_http_status:{response.status_code}")
+                raise ProviderError(
+                    f"binance_public_http_status:{response.status_code}"
+                )
             sleeper(float(2**attempt))
             continue
         return _response_payload(response)
@@ -406,7 +419,9 @@ class UrllibPublicJsonTransport:
                 ),
             )
         except (URLError, TimeoutError, OSError):
-            raise TimeoutError("binance_public_request_timeout_or_network_error") from None
+            raise TimeoutError(
+                "binance_public_request_timeout_or_network_error"
+            ) from None
 
 
 def _covers_requested_window(
@@ -462,9 +477,15 @@ def snapshot_manifest(
     requested_days: int,
 ) -> dict[str, object]:
     """Build a canonical manifest without implying complete OI history."""
-    if len(commit_sha) != 40 or any(character not in "0123456789abcdef" for character in commit_sha):
+    if len(commit_sha) != 40 or any(
+        character not in "0123456789abcdef" for character in commit_sha
+    ):
         raise ProviderError("binance_commit_sha_invalid")
-    if isinstance(requested_days, bool) or not isinstance(requested_days, int) or requested_days < 1:
+    if (
+        isinstance(requested_days, bool)
+        or not isinstance(requested_days, int)
+        or requested_days < 1
+    ):
         raise ProviderError("binance_requested_days_invalid")
     funding = snapshot.funding_rates
     oi = snapshot.open_interest
@@ -482,15 +503,12 @@ def snapshot_manifest(
     funding_end_time = funding[-1].funding_time if funding else None
     oi_start_time = oi[0].timestamp if oi else None
     oi_end_time = oi[-1].timestamp if oi else None
-    funding_full_history = (
-        _covers_requested_window(
-            funding_start_time,
-            funding_end_time,
-            snapshot.requested_start,
-            snapshot.requested_end,
-        )
-        and not _funding_has_large_gaps(funding)
-    )
+    funding_full_history = _covers_requested_window(
+        funding_start_time,
+        funding_end_time,
+        snapshot.requested_start,
+        snapshot.requested_end,
+    ) and not _funding_has_large_gaps(funding)
     oi_fraction, oi_missing_periods, oi_full_span = _oi_coverage_metrics(snapshot)
     oi_full_history = (
         oi_full_span
@@ -527,7 +545,9 @@ def snapshot_manifest(
             "history_limit_days_documented": None,
             "full_requested_history_available": funding_full_history,
             "coverage_status": (
-                "FULL_REQUESTED_HISTORY" if funding_full_history else "PARTIAL_FUNDING_HISTORY"
+                "FULL_REQUESTED_HISTORY"
+                if funding_full_history
+                else "PARTIAL_FUNDING_HISTORY"
             ),
         },
         "open_interest": {
@@ -546,7 +566,9 @@ def snapshot_manifest(
             "availability_policy": "timestamp_plus_period_plus_5_minutes_conservative_proxy",
             "full_requested_history_available": oi_full_history,
             "coverage_status": (
-                "FULL_REQUESTED_HISTORY" if oi_full_history else "INSUFFICIENT_HISTORICAL_WINDOW"
+                "FULL_REQUESTED_HISTORY"
+                if oi_full_history
+                else "INSUFFICIENT_HISTORICAL_WINDOW"
             ),
             "missing_periods_are_not_filled": True,
         },

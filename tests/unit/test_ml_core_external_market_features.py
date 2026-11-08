@@ -126,7 +126,9 @@ def test_long_funding_gap_resets_rolling_zscore_warmup() -> None:
 
 def test_feature_builder_rejects_bad_bars_and_external_schema() -> None:
     with pytest.raises(ValueError, match="timeframe_not_supported"):
-        build_external_market_features(_bars(), _funding(), _oi(), symbol="BTCUSDT", timeframe="1h")
+        build_external_market_features(
+            _bars(), _funding(), _oi(), symbol="BTCUSDT", timeframe="1h"
+        )
     with pytest.raises(ValueError, match="bars_schema_invalid"):
         build_external_market_features(DataFrame(), _funding(), _oi(), symbol="BTCUSDT")
     duplicate = _bars()
@@ -178,5 +180,9 @@ def test_feature_builder_rejects_duplicate_or_unsorted_source_times() -> None:
 def test_funding_max_age_must_be_positive() -> None:
     with pytest.raises(ValueError, match="funding_max_age_invalid"):
         build_external_market_features(
-            _bars(), _funding(), _oi(), symbol="BTCUSDT", funding_max_age=pd.Timedelta(0)
+            _bars(),
+            _funding(),
+            _oi(),
+            symbol="BTCUSDT",
+            funding_max_age=pd.Timedelta(0),
         )

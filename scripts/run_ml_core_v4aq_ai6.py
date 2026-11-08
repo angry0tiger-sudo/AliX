@@ -105,7 +105,9 @@ def _verify_manifested_csvs(
     )
     for section, filename_key, digest_key in sections:
         if not isinstance(manifest.get(section), dict):
-            raise ValueError(f"v4aq_external_manifest_section_missing:{symbol}:{section}")
+            raise ValueError(
+                f"v4aq_external_manifest_section_missing:{symbol}:{section}"
+            )
         path = external_dir / str(manifest.get(filename_key, ""))
         if not path.is_file() or _sha256(path) != manifest.get(digest_key):
             raise ValueError(f"v4aq_external_csv_hash_mismatch:{symbol}:{section}")
@@ -261,9 +263,7 @@ def _forward_event_probabilities(
     selected = features.iloc[indices].reset_index(drop=True)
     complete = selected.notna().all(axis=1)
     complete &= np.isfinite(selected.to_numpy(dtype=float)).all(axis=1)
-    valid_indices = [
-        index for index, valid in zip(indices, complete.tolist()) if valid
-    ]
+    valid_indices = [index for index, valid in zip(indices, complete.tolist()) if valid]
     if not valid_indices:
         raise ValueError("v4aq_forward_external_features_unavailable")
     probabilities = predict_v4aq_meta_probabilities(
@@ -272,10 +272,7 @@ def _forward_event_probabilities(
     )
     return (
         indices,
-        {
-            index: float(value)
-            for index, value in zip(valid_indices, probabilities)
-        },
+        {index: float(value) for index, value in zip(valid_indices, probabilities)},
         len(indices) - len(valid_indices),
     )
 
@@ -327,7 +324,9 @@ def _run_economic_comparison(
     )
     threshold = float(model_diagnostics["selected_threshold"])
     accepted = [
-        index for index, probability in probabilities.items() if probability >= threshold
+        index
+        for index, probability in probabilities.items()
+        if probability >= threshold
     ]
     control_result, control_trades = _run_candidate(
         bars,

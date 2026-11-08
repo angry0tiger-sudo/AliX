@@ -12,8 +12,12 @@ def _write_symbol_fixture(directory, symbol: str, commit_sha: str) -> None:
     stem = f"binance-{symbol.lower()}"
     funding_path = directory / f"{stem}-funding.csv"
     oi_path = directory / f"{stem}-open-interest.csv"
-    funding_path.write_text("symbol,funding_time,funding_rate,available_at\n", encoding="utf-8")
-    oi_path.write_text("symbol,period,timestamp,sum_open_interest,available_at\n", encoding="utf-8")
+    funding_path.write_text(
+        "symbol,funding_time,funding_rate,available_at\n", encoding="utf-8"
+    )
+    oi_path.write_text(
+        "symbol,period,timestamp,sum_open_interest,available_at\n", encoding="utf-8"
+    )
     funding_hash = hashlib.sha256(funding_path.read_bytes()).hexdigest()
     oi_hash = hashlib.sha256(oi_path.read_bytes()).hexdigest()
     manifest = {

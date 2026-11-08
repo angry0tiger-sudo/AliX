@@ -61,8 +61,14 @@ def test_write_snapshot_emits_hashed_csvs_and_provenance_manifest(tmp_path) -> N
     oi_path = tmp_path / "binance-btcusdt-open-interest.csv"
     manifest_path = tmp_path / "binance-btcusdt-manifest.json"
     persisted = json.loads(manifest_path.read_text(encoding="utf-8"))
-    assert persisted["funding_csv_sha256"] == hashlib.sha256(funding_path.read_bytes()).hexdigest()
-    assert persisted["open_interest_csv_sha256"] == hashlib.sha256(oi_path.read_bytes()).hexdigest()
+    assert (
+        persisted["funding_csv_sha256"]
+        == hashlib.sha256(funding_path.read_bytes()).hexdigest()
+    )
+    assert (
+        persisted["open_interest_csv_sha256"]
+        == hashlib.sha256(oi_path.read_bytes()).hexdigest()
+    )
     assert persisted["private_api_calls"] == 0
     assert persisted["credentials_used"] is False
     assert persisted["research_status"] == "BLOCKED_INSUFFICIENT_OI_HISTORY"

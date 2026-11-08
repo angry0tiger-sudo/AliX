@@ -86,9 +86,16 @@ def test_funding_paginates_and_oi_window_is_capped_to_latest_month() -> None:
     ]
     page_two_time = START + timedelta(hours=8 * FUNDING_PAGE_LIMIT)
     oi_start = END - timedelta(days=OPEN_INTEREST_HISTORY_LIMIT_DAYS)
-    oi_rows = [_oi_row(oi_start), _oi_row(oi_start + timedelta(hours=4), interest="101.0")]
+    oi_rows = [
+        _oi_row(oi_start),
+        _oi_row(oi_start + timedelta(hours=4), interest="101.0"),
+    ]
     transport = FakeTransport(
-        [_response(page_one), _response([_funding_row(page_two_time)]), _response(oi_rows)]
+        [
+            _response(page_one),
+            _response([_funding_row(page_two_time)]),
+            _response(oi_rows),
+        ]
     )
     delays: list[float] = []
     connector = BinanceUsdMFuturesConnector(
@@ -104,7 +111,9 @@ def test_funding_paginates_and_oi_window_is_capped_to_latest_month() -> None:
     assert len(snapshot.open_interest) == 2
     assert snapshot.oi_requested_start == oi_start
     assert snapshot.funding_rates[0].available_at == START + timedelta(minutes=5)
-    assert snapshot.open_interest[0].available_at == oi_start + timedelta(hours=4, minutes=5)
+    assert snapshot.open_interest[0].available_at == oi_start + timedelta(
+        hours=4, minutes=5
+    )
     first_query = parse_qs(urlsplit(transport.urls[0]).query)
     second_query = parse_qs(urlsplit(transport.urls[1]).query)
     oi_query = parse_qs(urlsplit(transport.urls[2]).query)
@@ -229,7 +238,9 @@ def test_payload_reader_rejects_invalid_responses_and_json() -> None:
         _response_payload(ConnectorResponse(401, "{}", RETRIEVED))
     with pytest.raises(ProviderError, match="response_too_large"):
         _response_payload(
-            ConnectorResponse(200, "x" * (provider_module.MAX_RESPONSE_BYTES + 1), RETRIEVED)
+            ConnectorResponse(
+                200, "x" * (provider_module.MAX_RESPONSE_BYTES + 1), RETRIEVED
+            )
         )
     with pytest.raises(ProviderError, match="json_invalid"):
         _response_payload(ConnectorResponse(200, "{", RETRIEVED))

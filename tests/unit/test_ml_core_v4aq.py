@@ -34,7 +34,7 @@ def test_v4aq_meta_features_are_causal_and_preserve_external_missing_rows() -> N
     external.loc[0, "oi_change"] = np.nan
     features = v4aq.build_v4aq_meta_features(bars, external)
     assert tuple(features.columns) == v4aq.V4AQ_META_FEATURE_COLUMNS
-    assert features.iloc[:v4aq.V4AQ_PRIMARY_LOOKBACK].isna().all(axis=None)
+    assert features.iloc[: v4aq.V4AQ_PRIMARY_LOOKBACK].isna().all(axis=None)
     assert pd.isna(features.loc[0, "oi_change"])
     assert np.isfinite(features.iloc[21:].to_numpy(dtype=float)).all()
     changed = bars.copy()

@@ -75,8 +75,12 @@ def _validate_funding(
         raise ValueError("ai6_funding_schema_or_data_invalid")
     if not funding["symbol"].eq(symbol).all():
         raise ValueError("ai6_funding_symbol_mismatch")
-    event_time = _utc_series(funding["funding_time"], "funding_time").reset_index(drop=True)
-    available = _utc_series(funding["available_at"], "funding_available_at").reset_index(drop=True)
+    event_time = _utc_series(funding["funding_time"], "funding_time").reset_index(
+        drop=True
+    )
+    available = _utc_series(
+        funding["available_at"], "funding_available_at"
+    ).reset_index(drop=True)
     rates = _numeric_series(funding, "funding_rate", positive=False)
     _validate_ordered_timestamps(event_time, "funding")
     _validate_ordered_timestamps(available, "funding_available")
@@ -98,8 +102,12 @@ def _validate_open_interest(
         raise ValueError("ai6_oi_symbol_mismatch")
     if not open_interest["period"].eq(period).all() or period != "4h":
         raise ValueError("ai6_oi_period_mismatch")
-    event_time = _utc_series(open_interest["timestamp"], "oi_timestamp").reset_index(drop=True)
-    available = _utc_series(open_interest["available_at"], "oi_available_at").reset_index(drop=True)
+    event_time = _utc_series(open_interest["timestamp"], "oi_timestamp").reset_index(
+        drop=True
+    )
+    available = _utc_series(
+        open_interest["available_at"], "oi_available_at"
+    ).reset_index(drop=True)
     values = _numeric_series(open_interest, "sum_open_interest", positive=True)
     _validate_ordered_timestamps(event_time, "open_interest")
     _validate_ordered_timestamps(available, "open_interest_available")
@@ -200,7 +208,9 @@ def build_external_market_features(
     available only after the period close + 5 minutes. These are explicit
     research proxies, not claims about Binance's original publication clock.
     """
-    if not np.isfinite(funding_max_age.total_seconds()) or funding_max_age <= timedelta(0):
+    if not np.isfinite(funding_max_age.total_seconds()) or funding_max_age <= timedelta(
+        0
+    ):
         raise ValueError("ai6_funding_max_age_invalid")
     _, decisions = _validate_bars(bars, timeframe)
     funding_time, funding_available, funding_rate = _validate_funding(

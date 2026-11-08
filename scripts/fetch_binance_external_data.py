@@ -120,7 +120,9 @@ def fetch_public_history(
         raise ValueError("ai6_symbol_not_allowed")
     if requested_days != 1825:
         raise ValueError("ai6_requested_days_must_be_1825")
-    if len(commit_sha) != 40 or any(character not in "0123456789abcdef" for character in commit_sha):
+    if len(commit_sha) != 40 or any(
+        character not in "0123456789abcdef" for character in commit_sha
+    ):
         raise ValueError("ai6_commit_sha_invalid")
     end = pd.Timestamp.now(tz="UTC").floor("min")
     start = end - pd.Timedelta(days=requested_days) + pd.Timedelta(minutes=1)
@@ -151,7 +153,9 @@ def fetch_public_history(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--symbols", nargs="+", choices=ALLOWED_SYMBOLS, default=list(ALLOWED_SYMBOLS))
+    parser.add_argument(
+        "--symbols", nargs="+", choices=ALLOWED_SYMBOLS, default=list(ALLOWED_SYMBOLS)
+    )
     parser.add_argument("--days", type=int, choices=(1825,), default=1825)
     parser.add_argument("--oi-period", choices=("4h",), default="4h")
     parser.add_argument("--commit-sha", required=True)
@@ -164,7 +168,10 @@ def main() -> int:
         oi_period=args.oi_period,
         output_dir=args.output_dir,
     )
-    if any(item["research_status"] != "READY_FOR_FULL_WINDOW_FEATURE_JOIN" for item in manifests):
+    if any(
+        item["research_status"] != "READY_FOR_FULL_WINDOW_FEATURE_JOIN"
+        for item in manifests
+    ):
         print("AI6_STATUS=BLOCKED_INSUFFICIENT_OI_HISTORY")
     return 0
 
