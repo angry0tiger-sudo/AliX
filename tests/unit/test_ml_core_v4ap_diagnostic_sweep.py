@@ -108,8 +108,7 @@ def test_execution_signals_are_next_bar_and_have_no_entry_at_boundary() -> None:
     assert entries == len(buys)
     assert entries == 4
     assert all(
-        pd.Timestamp(item["signal_timestamp"]) >= bars["date"].iloc[13]
-        for item in buys
+        pd.Timestamp(item["signal_timestamp"]) >= bars["date"].iloc[13] for item in buys
     )
     assert any(
         pd.Timestamp(item["signal_timestamp"]) == bars["date"].iloc[13]
