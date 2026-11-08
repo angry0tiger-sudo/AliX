@@ -251,6 +251,7 @@ def test_fetch_historical_candles_rejects_partial_or_misaligned_exact_windows() 
 def test_five_year_window_is_allowed_with_disclosed_gap_policy() -> None:
     assert 1825 in fetcher.ALLOWED_DAYS
     assert fetcher.GAP_POLICY_ALLOW_EXCHANGE_GAPS != fetcher.GAP_POLICY
+    assert fetcher.KNOWN_EXCHANGE_GAP_SYMBOL == "ETHUSDT"
     assert fetcher.KNOWN_EXCHANGE_GAP_SYMBOLS == ("BTCUSDT", "ETHUSDT")
     assert fetcher.KNOWN_EXCHANGE_GAP_START_UTC == "2023-03-24T12:40:00Z"
     assert fetcher.KNOWN_EXCHANGE_GAP_END_UTC == "2023-03-24T13:59:00Z"

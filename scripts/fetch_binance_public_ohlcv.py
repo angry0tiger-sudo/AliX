@@ -24,6 +24,8 @@ PAGE_SIZE = 1000
 PAGE_DELAY_SECONDS = 0.25
 RETRY_STATUSES = frozenset({418, 429, 500, 502, 503, 504})
 GAP_POLICY = "reject; no interpolation, resampling, or synthetic fill"
+# Legacy single-asset V4 baseline contract; V4-AP uses the approved tuple below.
+KNOWN_EXCHANGE_GAP_SYMBOL = "ETHUSDT"
 KNOWN_EXCHANGE_GAP_SYMBOLS = ("BTCUSDT", "ETHUSDT")
 KNOWN_EXCHANGE_GAP_START_UTC = "2023-03-24T12:40:00Z"
 KNOWN_EXCHANGE_GAP_END_UTC = "2023-03-24T13:59:00Z"
