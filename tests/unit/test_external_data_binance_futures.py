@@ -459,7 +459,9 @@ def test_https_transport_sends_only_public_get_headers(
     fake = _FakeHttpsConnection(_FakeHttpsResponse(200, b'{"status":"ok"}'))
     captured: dict[str, object] = {}
 
-    def fake_connection(host: str, *, port: int, timeout: float) -> _FakeHttpsConnection:
+    def fake_connection(
+        host: str, *, port: int, timeout: float
+    ) -> _FakeHttpsConnection:
         captured["host"] = host
         captured["port"] = port
         captured["timeout"] = timeout
@@ -483,9 +485,7 @@ def test_https_transport_sends_only_public_get_headers(
 def test_https_transport_maps_rate_limits_and_rejects_network_failures(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    limited = _FakeHttpsConnection(
-        _FakeHttpsResponse(429, b'{"error":"limited"}')
-    )
+    limited = _FakeHttpsConnection(_FakeHttpsResponse(429, b'{"error":"limited"}'))
     monkeypatch.setattr(
         provider_module,
         "HTTPSConnection",
@@ -508,7 +508,6 @@ def test_https_transport_maps_rate_limits_and_rejects_network_failures(
             f"{BINANCE_FUTURES_BASE_URL}/fapi/v1/fundingRate"
         )
     assert failed.closed is True
-
 
 
 def test_https_transport_rejects_wrong_host_path_and_invalid_bytes() -> None:

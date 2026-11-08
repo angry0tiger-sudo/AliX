@@ -444,7 +444,6 @@ class BinancePublicHttpsTransport:
             connection.close()
 
 
-
 def _covers_requested_window(
     first: datetime | None,
     last: datetime | None,
