@@ -116,7 +116,9 @@ def test_funding_paginates_and_oi_window_is_capped_to_latest_month() -> None:
     second_query = parse_qs(urlsplit(transport.urls[1]).query)
     oi_query = parse_qs(urlsplit(transport.urls[2]).query)
     assert first_query["limit"] == ["1000"]
-    assert int(second_query["startTime"][0]) == _epoch_milliseconds(page_two_time)
+    # Full pages resume after the last observed settlement, not the next sparse event.
+    last_page_time = START + timedelta(hours=8 * (FUNDING_PAGE_LIMIT - 1))
+    assert int(second_query["startTime"][0]) == _epoch_milliseconds(last_page_time) + 1
     assert int(oi_query["startTime"][0]) == _epoch_milliseconds(oi_start)
     assert oi_query["period"] == ["4h"]
     assert delays == [0.0]

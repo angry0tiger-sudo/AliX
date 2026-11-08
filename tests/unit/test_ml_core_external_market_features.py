@@ -114,9 +114,10 @@ def test_missing_oi_interval_breaks_percentage_change_without_interpolation() ->
     features, _ = build_external_market_features(
         bars, _funding(24), oi, symbol="BTCUSDT"
     )
-    assert pd.isna(features["oi_change"].iloc[13])
+    # At bar 12 close the post-gap OI aggregate is not yet available (+4h + 5m).
+    assert pd.isna(features["oi_change"].iloc[12])
     _assert_finite_feature_values(
-        np.asarray([features["oi_change"].iloc[14]], dtype=float)
+        np.asarray([features["oi_change"].iloc[13]], dtype=float)
     )
 
 

@@ -44,10 +44,23 @@ def test_v4aq_meta_features_are_causal_and_preserve_external_missing_rows() -> N
     external.loc[0, "oi_change"] = np.nan
     features = v4aq.build_v4aq_meta_features(bars, external)
     assert tuple(features.columns) == v4aq.V4AQ_META_FEATURE_COLUMNS
+    technical_features = features.loc[
+        :,
+        [
+            "primary_close_vs_donchian_high_pct",
+            "primary_donchian_channel_width_pct",
+        ],
+    ]
     _assert_v4aq_missing(
-        features.iloc[: v4aq.V4AQ_PRIMARY_LOOKBACK].to_numpy(dtype=float)
+        technical_features.iloc[: v4aq.V4AQ_PRIMARY_LOOKBACK].to_numpy(dtype=float)
     )
     _assert_v4aq_missing(np.asarray([features.loc[0, "oi_change"]], dtype=float))
+    _assert_v4aq_finite(
+        features.loc[
+            1 : v4aq.V4AQ_PRIMARY_LOOKBACK - 1,
+            ["funding_rate_zscore", "oi_change"],
+        ].to_numpy(dtype=float)
+    )
     _assert_v4aq_finite(features.iloc[21:].to_numpy(dtype=float))
     changed = bars.copy()
     changed.loc[30:, ["high", "low", "close"]] *= 100.0
