@@ -1,36 +1,48 @@
-"""V4-AQ Donchian + point-in-time Funding/OI LightGBM meta feature contract."""
+"""V4-AQ Funding-only Meta feature contract for both V4-AP primary strategies."""
 
 from __future__ import annotations
+
+from typing import Any
 
 import numpy as np
 import pandas as pd
 from pandas import DataFrame, Series
-from typing import Any
 
 from services.meta_labeling.v4x import (
     fit_lightgbm_meta_filter,
     predict_meta_probabilities,
 )
 
-V4AQ_SCHEMA_VERSION = "alix.ml-core.v4aq-meta-model.v1"
+V4AQ_SCHEMA_VERSION = "alix.ml-core.v4aq-meta-model.v2"
 V4AQ_PRIMARY_LOOKBACK = 20
+V4AQ_EMA_LOOKBACK = 200
 V4AQ_META_FEATURE_COLUMNS = (
-    "primary_close_vs_donchian_high_pct",
-    "primary_donchian_channel_width_pct",
+    "primary_context_1",
+    "primary_context_2",
     "funding_rate_zscore",
-    "oi_change",
+    "funding_rate_ma",
 )
+MEAN_REVERSION_STRATEGY = "MEAN_REVERSION_RSI_LT_30_CLOSE_GT_EMA200"
+DONCHIAN_STRATEGY = "DONCHIAN20_CLOSE_BREAKOUT"
+SUPPORTED_STRATEGIES = (MEAN_REVERSION_STRATEGY, DONCHIAN_STRATEGY)
 
 
-def _validate_inputs(bars: DataFrame, external_features: DataFrame) -> None:
+def _validate_inputs(
+    bars: DataFrame,
+    external_features: DataFrame,
+    strategy: str,
+) -> None:
     if bars.empty or len(bars) != len(external_features):
         raise ValueError("v4aq_feature_input_alignment_invalid")
     if not {"high", "low", "close"}.issubset(bars.columns):
         raise ValueError("v4aq_ohlc_columns_missing")
-    if tuple(external_features.columns) != ("funding_rate_zscore", "oi_change"):
+    external_columns = ("funding_rate_zscore", "funding_rate_ma")
+    if tuple(external_features.columns) != external_columns:
         raise ValueError("v4aq_external_feature_schema_invalid")
     if not external_features.index.equals(bars.index):
         raise ValueError("v4aq_external_feature_index_mismatch")
+    if strategy not in SUPPORTED_STRATEGIES:
+        raise ValueError("v4aq_primary_strategy_not_supported")
 
 
 def _validated_price(bars: DataFrame, column: str) -> Series:
@@ -41,46 +53,66 @@ def _validated_price(bars: DataFrame, column: str) -> Series:
     return values.reset_index(drop=True)
 
 
+def _wilder_rsi(close: Series, period: int = 14) -> Series:
+    change = close.diff()
+    gains = change.clip(lower=0.0)
+    losses = -change.clip(upper=0.0)
+    average_gain = gains.ewm(
+        alpha=1.0 / period, adjust=False, min_periods=period
+    ).mean()
+    average_loss = losses.ewm(
+        alpha=1.0 / period, adjust=False, min_periods=period
+    ).mean()
+    movement = average_gain + average_loss
+    result = 100.0 * average_gain / movement.where(movement > 0.0)
+    return result.mask(movement.eq(0.0), 50.0)
+
+
 def build_v4aq_meta_features(
     bars: DataFrame,
     external_features: DataFrame,
+    *,
+    strategy: str,
 ) -> DataFrame:
-    """Build causal Donchian context plus the two external numeric features."""
-    _validate_inputs(bars, external_features)
+    """Build strategy-matched primary context plus two causal Funding features."""
+    _validate_inputs(bars, external_features, strategy)
     original_index = bars.index
-    normalized_bars = bars.reset_index(drop=True)
-    normalized_external = external_features.reset_index(drop=True)
-    high = _validated_price(normalized_bars, "high")
-    low = _validated_price(normalized_bars, "low")
-    close = _validated_price(normalized_bars, "close")
-    previous_high = (
-        high.shift(1)
-        .rolling(
-            V4AQ_PRIMARY_LOOKBACK,
-            min_periods=V4AQ_PRIMARY_LOOKBACK,
+    normalized = bars.reset_index(drop=True)
+    high = _validated_price(normalized, "high")
+    low = _validated_price(normalized, "low")
+    close = _validated_price(normalized, "close")
+    if strategy == DONCHIAN_STRATEGY:
+        prior_high = high.shift(1).rolling(
+            V4AQ_PRIMARY_LOOKBACK, min_periods=V4AQ_PRIMARY_LOOKBACK
+        ).max()
+        prior_low = low.shift(1).rolling(
+            V4AQ_PRIMARY_LOOKBACK, min_periods=V4AQ_PRIMARY_LOOKBACK
+        ).min()
+        context = DataFrame(
+            {
+                "primary_context_1": close / prior_high - 1.0,
+                "primary_context_2": (prior_high - prior_low) / close,
+            }
         )
-        .max()
-    )
-    previous_low = (
-        low.shift(1)
-        .rolling(
-            V4AQ_PRIMARY_LOOKBACK,
-            min_periods=V4AQ_PRIMARY_LOOKBACK,
+    else:
+        rsi = _wilder_rsi(close)
+        ema = close.ewm(
+            span=V4AQ_EMA_LOOKBACK,
+            adjust=False,
+            min_periods=V4AQ_EMA_LOOKBACK,
+        ).mean()
+        context = DataFrame(
+            {
+                "primary_context_1": rsi / 100.0,
+                "primary_context_2": close / ema - 1.0,
+            }
         )
-        .min()
-    )
-    channel_width = (previous_high - previous_low) / close
-    technical = DataFrame(
-        {
-            "primary_close_vs_donchian_high_pct": close / previous_high - 1.0,
-            "primary_donchian_channel_width_pct": channel_width,
-        },
-        index=normalized_bars.index,
-    )
-    external = normalized_external.apply(pd.to_numeric, errors="coerce").astype(float)
+    external = external_features.reset_index(drop=True).apply(
+        pd.to_numeric, errors="coerce"
+    ).astype(float)
     if bool(np.isinf(external.to_numpy(dtype=float)).any()):
         raise ValueError("v4aq_external_feature_infinite")
-    result = pd.concat([technical, external], axis=1)
+    result = pd.concat([context, external], axis=1)
     if tuple(result.columns) != V4AQ_META_FEATURE_COLUMNS:
         raise ValueError("v4aq_meta_feature_schema_mismatch")
     result.index = original_index
@@ -102,7 +134,7 @@ def fit_v4aq_lightgbm_meta_filter(
     *,
     target_accept_fraction: float = 0.50,
 ) -> tuple[Any, dict[str, Any]]:
-    """Fit the existing OOF LightGBM filter using AI-6's fixed four-column schema."""
+    """Fit the existing purged OOF LightGBM model; calibrate without labels."""
     _validate_fit_matrix(fit_features, "fit")
     _validate_fit_matrix(calibration_features, "calibration")
     if len(fit_features) != len(fit_labels):
@@ -117,7 +149,7 @@ def fit_v4aq_lightgbm_meta_filter(
     diagnostics["feature_columns"] = list(V4AQ_META_FEATURE_COLUMNS)
     diagnostics["external_features_used"] = [
         "funding_rate_zscore",
-        "oi_change",
+        "funding_rate_ma",
     ]
     return model, diagnostics
 
@@ -126,5 +158,6 @@ def predict_v4aq_meta_probabilities(
     model: Any,
     features: DataFrame,
 ) -> np.ndarray:
+    """Predict positive-class probabilities for Primary BUY events."""
     _validate_fit_matrix(features, "prediction")
     return predict_meta_probabilities(model, features)

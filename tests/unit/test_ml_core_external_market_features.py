@@ -13,7 +13,7 @@ from services.ml_core.external_market_features import (
 START = pd.Timestamp("2026-01-01T00:00:00Z")
 
 
-def _bars(count: int = 28) -> DataFrame:
+def _bars(count: int = 100) -> DataFrame:
     return DataFrame(
         {
             "date": pd.date_range(START, periods=count, freq="4h"),
@@ -26,173 +26,139 @@ def _bars(count: int = 28) -> DataFrame:
     )
 
 
-def _funding(count: int = 24) -> DataFrame:
+def _funding(count: int = 80) -> DataFrame:
     times = pd.date_range(START, periods=count, freq="4h")
+    rates = np.sin(np.arange(count) / 3.0) * 0.001
     return DataFrame(
         {
             "symbol": "BTCUSDT",
             "funding_time": times,
-            "funding_rate": np.linspace(-0.001, 0.001, count),
+            "funding_rate": rates,
             "available_at": times + pd.Timedelta(minutes=5),
         }
     )
 
 
-def _oi(count: int = 28) -> DataFrame:
-    times = pd.date_range(START, periods=count, freq="4h")
-    return DataFrame(
-        {
-            "symbol": "BTCUSDT",
-            "period": "4h",
-            "timestamp": times,
-            "sum_open_interest": np.linspace(100.0, 200.0, count),
-            "available_at": times + pd.Timedelta(hours=4, minutes=5),
-        }
-    )
-
-
-def _assert_finite_feature_values(values: np.ndarray) -> None:
-    if not bool(np.isfinite(values).all()):
-        raise AssertionError("expected finite feature values")
-
-
-def test_external_features_are_causal_and_have_exact_schema() -> None:
+def test_funding_features_are_causal_and_have_exact_schema() -> None:
     bars = _bars()
-    funding = _funding()
-    oi = _oi()
     features, diagnostics = build_external_market_features(
-        bars, funding, oi, symbol="BTCUSDT"
+        bars, _funding(), symbol="BTCUSDT", timeframe="4h"
     )
     assert tuple(features.columns) == EXTERNAL_FEATURE_COLUMNS
     assert features.index.equals(bars.index)
-    assert features["funding_rate_zscore"].iloc[:18].isna().all()
-    _assert_finite_feature_values(
-        features["funding_rate_zscore"].iloc[20:].to_numpy(dtype=float)
-    )
-    assert features["oi_change"].iloc[:2].isna().all()
-    _assert_finite_feature_values(features["oi_change"].iloc[3:].to_numpy(dtype=float))
+    assert features["funding_rate_zscore"].iloc[:19].isna().all()
+    assert features["funding_rate_ma"].iloc[:19].isna().all()
+    assert np.isfinite(features.iloc[20:].to_numpy(dtype=float)).all()
     assert diagnostics["interpolation_used"] is False
     assert diagnostics["backfill_used"] is False
     assert diagnostics["future_observations_joined"] == 0
+    assert diagnostics["complete_funding_feature_rows"] > 0
 
 
-def test_external_features_preserve_custom_bar_index() -> None:
-    bars = _bars().set_axis(range(100, 128))
-    funding = _funding()
-    oi = _oi()
-    features, _ = build_external_market_features(bars, funding, oi, symbol="BTCUSDT")
-    assert features.index.equals(bars.index)
-
-
-def test_funding_and_oi_observations_are_not_visible_before_available_at() -> None:
-    bars = _bars(24)
-    funding = _funding(24)
-    oi = _oi(24)
-    bars.loc[0, "date"] = START - pd.Timedelta(hours=4)
-    features, _ = build_external_market_features(bars, funding, oi, symbol="BTCUSDT")
-    assert pd.isna(features["funding_rate_zscore"].iloc[0])
-    assert pd.isna(features["oi_change"].iloc[0])
-
-
-def test_stale_external_observations_become_missing_not_filled() -> None:
-    bars = _bars(30)
-    funding = _funding(22).iloc[:22].copy()
-    oi = _oi(22).iloc[:22].copy()
-    bars["date"] = pd.date_range(
-        START + pd.Timedelta(days=10), periods=len(bars), freq="4h"
+def test_custom_indexes_and_future_publication_are_preserved() -> None:
+    bars = _bars().set_axis(range(100, 200))
+    features, _ = build_external_market_features(
+        bars, _funding(), symbol="BTCUSDT", timeframe="4h"
     )
+    assert features.index.equals(bars.index)
+    before = bars.copy()
+    before.loc[100, "date"] = START - pd.Timedelta(hours=4)
+    delayed, _ = build_external_market_features(
+        before, _funding(), symbol="BTCUSDT", timeframe="4h"
+    )
+    assert delayed.iloc[0].isna().all()
+
+
+def test_stale_funding_observations_are_not_carried_forward() -> None:
+    bars = _bars()
+    bars["date"] += pd.Timedelta(days=10)
     features, diagnostics = build_external_market_features(
-        bars, funding, oi, symbol="BTCUSDT"
+        bars, _funding(), symbol="BTCUSDT", timeframe="4h"
     )
     assert features.isna().all(axis=None)
-    assert diagnostics["complete_external_feature_rows"] == 0
+    assert diagnostics["complete_funding_feature_rows"] == 0
 
 
-def test_missing_oi_interval_breaks_percentage_change_without_interpolation() -> None:
-    bars = _bars(30)
-    oi = _oi(24).drop(index=10).reset_index(drop=True)
+def test_long_gap_resets_funding_rolling_warmup() -> None:
+    funding = _funding(80)
+    funding.loc[40:, "funding_time"] += pd.Timedelta(days=4)
+    funding.loc[40:, "available_at"] += pd.Timedelta(days=4)
+    bars = _bars(130)
     features, _ = build_external_market_features(
-        bars, _funding(24), oi, symbol="BTCUSDT"
+        bars, funding, symbol="BTCUSDT", timeframe="4h"
     )
-    # At bar 12 close the post-gap OI aggregate is not yet available (+4h + 5m).
-    assert pd.isna(features["oi_change"].iloc[12])
-    _assert_finite_feature_values(
-        np.asarray([features["oi_change"].iloc[13]], dtype=float)
-    )
+    second_event = pd.Timestamp(funding["funding_time"].iloc[40])
+    after_gap = bars["date"] >= second_event
+    assert features.loc[after_gap, "funding_rate_zscore"].iloc[:19].isna().all()
+    assert features.loc[after_gap, "funding_rate_ma"].iloc[:19].isna().all()
 
 
-def test_long_funding_gap_resets_rolling_zscore_warmup() -> None:
-    funding = _funding(42)
-    funding.loc[21:, "funding_time"] += pd.Timedelta(days=4)
-    funding.loc[21:, "available_at"] += pd.Timedelta(days=4)
-    bars = _bars(50)
-    features, _ = build_external_market_features(
-        bars, funding, _oi(50), symbol="BTCUSDT"
-    )
-    second_event_time = pd.Timestamp(funding["funding_time"].iloc[21])
-    second_group_rows = bars["date"] >= second_event_time
-    assert features.loc[second_group_rows, "funding_rate_zscore"].iloc[:18].isna().all()
-
-
-def test_feature_builder_rejects_bad_bars_and_external_schema() -> None:
+def test_builder_rejects_invalid_timeframes_bars_and_funding_schema() -> None:
     with pytest.raises(ValueError, match="timeframe_not_supported"):
         build_external_market_features(
-            _bars(), _funding(), _oi(), symbol="BTCUSDT", timeframe="1h"
+            _bars(), _funding(), symbol="BTCUSDT", timeframe="1m"
         )
     with pytest.raises(ValueError, match="bars_schema_invalid"):
-        build_external_market_features(DataFrame(), _funding(), _oi(), symbol="BTCUSDT")
+        build_external_market_features(
+            DataFrame(), _funding(), symbol="BTCUSDT", timeframe="4h"
+        )
     duplicate = _bars()
     duplicate.loc[1, "date"] = duplicate.loc[0, "date"]
     with pytest.raises(ValueError, match="not_unique_increasing"):
-        build_external_market_features(duplicate, _funding(), _oi(), symbol="BTCUSDT")
+        build_external_market_features(
+            duplicate, _funding(), symbol="BTCUSDT", timeframe="4h"
+        )
     with pytest.raises(ValueError, match="funding_schema_or_data_invalid"):
-        build_external_market_features(_bars(), DataFrame(), _oi(), symbol="BTCUSDT")
+        build_external_market_features(
+            _bars(), DataFrame(), symbol="BTCUSDT", timeframe="4h"
+        )
 
 
-def test_feature_builder_rejects_symbol_period_timestamp_and_numeric_mismatch() -> None:
+def test_builder_rejects_wrong_symbol_early_availability_and_invalid_rates() -> None:
     funding = _funding()
     funding.loc[0, "symbol"] = "ETHUSDT"
     with pytest.raises(ValueError, match="funding_symbol_mismatch"):
-        build_external_market_features(_bars(), funding, _oi(), symbol="BTCUSDT")
-    oi = _oi()
-    oi.loc[1, "period"] = "1h"
-    with pytest.raises(ValueError, match="oi_period_mismatch"):
-        build_external_market_features(_bars(), _funding(), oi, symbol="BTCUSDT")
+        build_external_market_features(
+            _bars(), funding, symbol="BTCUSDT", timeframe="4h"
+        )
     funding = _funding()
     funding.loc[0, "available_at"] = funding.loc[0, "funding_time"]
     with pytest.raises(ValueError, match="available_before_conservative_lag"):
-        build_external_market_features(_bars(), funding, _oi(), symbol="BTCUSDT")
-    oi = _oi()
-    oi.loc[0, "available_at"] = oi.loc[0, "timestamp"]
-    with pytest.raises(ValueError, match="available_before_period_close"):
-        build_external_market_features(_bars(), _funding(), oi, symbol="BTCUSDT")
-    oi = _oi()
-    oi.loc[1, "sum_open_interest"] = 0.0
+        build_external_market_features(
+            _bars(), funding, symbol="BTCUSDT", timeframe="4h"
+        )
+    funding = _funding()
+    funding.loc[0, "funding_rate"] = np.inf
     with pytest.raises(ValueError, match="numeric_invalid"):
-        build_external_market_features(_bars(), _funding(), oi, symbol="BTCUSDT")
+        build_external_market_features(
+            _bars(), funding, symbol="BTCUSDT", timeframe="4h"
+        )
 
 
-def test_feature_builder_rejects_duplicate_or_unsorted_source_times() -> None:
+def test_builder_rejects_duplicate_or_unsorted_funding_timestamps() -> None:
     funding = _funding()
     funding.loc[4, "funding_time"] = funding.loc[3, "funding_time"]
     with pytest.raises(ValueError, match="not_unique_increasing:funding"):
-        build_external_market_features(_bars(), funding, _oi(), symbol="BTCUSDT")
-    oi = _oi()
-    oi.loc[5, "timestamp"], oi.loc[6, "timestamp"] = (
-        oi.loc[6, "timestamp"],
-        oi.loc[5, "timestamp"],
+        build_external_market_features(
+            _bars(), funding, symbol="BTCUSDT", timeframe="4h"
+        )
+    funding = _funding()
+    funding.loc[10, "available_at"], funding.loc[11, "available_at"] = (
+        funding.loc[11, "available_at"],
+        funding.loc[10, "available_at"],
     )
-    oi["available_at"] = oi["timestamp"] + pd.Timedelta(hours=4, minutes=5)
-    with pytest.raises(ValueError, match="not_unique_increasing:open_interest"):
-        build_external_market_features(_bars(), _funding(), oi, symbol="BTCUSDT")
+    with pytest.raises(ValueError, match="not_unique_increasing:funding_available"):
+        build_external_market_features(
+            _bars(), funding, symbol="BTCUSDT", timeframe="4h"
+        )
 
 
-def test_funding_max_age_must_be_positive() -> None:
+def test_funding_age_must_be_positive() -> None:
     with pytest.raises(ValueError, match="funding_max_age_invalid"):
         build_external_market_features(
             _bars(),
             _funding(),
-            _oi(),
             symbol="BTCUSDT",
+            timeframe="4h",
             funding_max_age=pd.Timedelta(0),
         )
