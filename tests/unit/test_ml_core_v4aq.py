@@ -54,7 +54,8 @@ def test_mean_reversion_context_respects_ema200_warmup_and_index() -> None:
         bars, external, strategy=v4aq.MEAN_REVERSION_STRATEGY
     )
     assert features.index.equals(bars.index)
-    assert features.iloc[:199, :2].isna().all(axis=None)
+    assert features["primary_context_2"].iloc[:199].isna().all()
+    assert features["primary_context_1"].iloc[14:].notna().all()
     assert np.isfinite(features.iloc[200:, :2].to_numpy(dtype=float)).all()
 
 

@@ -1,31 +1,52 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 from pathlib import Path
 
+import numpy as np
+import pandas as pd
+from pandas import DataFrame, Series
 import pytest
 
 from scripts import run_ml_core_v4aq_ai6 as ai6
+from scripts import run_ml_core_v4ap_diagnostic_sweep as v4ap
+from services.meta_labeling import v4x
+
+UTC = timezone.utc
+START = pd.Timestamp("2021-01-01T00:00:00Z")
+END = START + pd.Timedelta(days=1825) - pd.Timedelta(minutes=1)
+COMMIT = "a" * 40
 
 
-def _write_symbol_fixture(directory: Path, symbol: str, commit_sha: str) -> None:
+def _funding_artifact(directory: Path, symbol: str, *, ready: bool = True) -> dict:
     stem = f"binance-{symbol.lower()}"
-    funding_path = directory / f"{stem}-funding.csv"
-    oi_path = directory / f"{stem}-open-interest.csv"
-    funding_path.write_text(
-        "symbol,funding_time,funding_rate,available_at\n", encoding="utf-8"
+    csv_path = directory / f"{stem}-funding.csv"
+    timestamps = pd.date_range(START, END, periods=20)
+    rows = DataFrame(
+        {
+            "symbol": symbol,
+            "funding_time": timestamps.astype(str),
+            "funding_rate": np.linspace(-0.001, 0.001, len(timestamps)),
+            "mark_price": np.full(len(timestamps), 50000.0),
+            "available_at": (timestamps + pd.Timedelta(minutes=5)).astype(str),
+            "content_hash": [f"{index:064x}" for index in range(len(timestamps))],
+        },
+        columns=ai6.FUNDING_CSV_COLUMNS,
     )
-    oi_path.write_text(
-        "symbol,period,timestamp,sum_open_interest,available_at\n", encoding="utf-8"
-    )
-    funding_hash = hashlib.sha256(funding_path.read_bytes()).hexdigest()
-    oi_hash = hashlib.sha256(oi_path.read_bytes()).hexdigest()
+    rows.to_csv(csv_path, index=False)
+    digest = hashlib.sha256(csv_path.read_bytes()).hexdigest()
     manifest = {
-        "schema_version": "alix.binance.usdm-external-market.v1",
-        "commit_sha": commit_sha,
+        "schema_version": "alix.binance.usdm-funding.v1",
+        "commit_sha": COMMIT,
+        "provider": "Binance USD-M public Funding Rate History",
+        "host": "fapi.binance.com",
+        "endpoint": "/fapi/v1/fundingRate",
         "symbol": symbol,
         "requested_days": 1825,
+        "requested_start_utc": START.isoformat(),
+        "requested_end_utc": END.isoformat(),
         "public_api_only": True,
         "credentials_used": False,
         "api_key_header_sent": False,
@@ -35,87 +56,470 @@ def _write_symbol_fixture(directory: Path, symbol: str, commit_sha: str) -> None
         "order_permission": False,
         "trading_authorization": "NO-GO",
         "funding": {
-            "observed_span_days": 1824.0,
-            "row_count": 5000,
-            "coverage_status": "FULL_REQUESTED_HISTORY",
-            "full_requested_history_available": True,
+            "row_count": len(rows),
+            "observed_span_days": 1825.0,
+            "coverage_status": (
+                "FULL_REQUESTED_HISTORY" if ready else "INSUFFICIENT_HISTORY"
+            ),
+            "full_requested_history_available": ready,
         },
-        "open_interest": {
-            "observed_span_days": 30.0,
-            "row_count": 180,
-            "coverage_status": "INSUFFICIENT_HISTORICAL_WINDOW",
-            "full_requested_history_available": False,
-        },
-        "funding_csv": funding_path.name,
-        "funding_csv_sha256": funding_hash,
-        "open_interest_csv": oi_path.name,
-        "open_interest_csv_sha256": oi_hash,
+        "funding_csv": csv_path.name,
+        "funding_csv_sha256": digest,
+        "research_status": (
+            "READY_FOR_FUNDING_FEATURE_JOIN"
+            if ready
+            else "BLOCKED_INSUFFICIENT_FUNDING_HISTORY"
+        ),
     }
     (directory / f"{stem}-manifest.json").write_text(
         json.dumps(manifest), encoding="utf-8"
     )
+    return manifest
 
 
-def test_ai6_runner_blocks_fit_and_writes_explicit_coverage_verdict(
-    tmp_path: Path,
-) -> None:
-    external_dir = tmp_path / "external"
-    external_dir.mkdir()
-    commit_sha = "d" * 40
-    _write_symbol_fixture(external_dir, "BTCUSDT", commit_sha)
-    _write_symbol_fixture(external_dir, "ETHUSDT", commit_sha)
-    output_report = tmp_path / "out" / "report.json"
-    output_trades = tmp_path / "out" / "trades.csv"
-    output_decisions = tmp_path / "out" / "decisions.csv"
-
-    report = ai6.run_v4aq_ai6(
-        tmp_path / "spot-not-required-when-blocked",
-        external_dir,
-        output_report,
-        output_trades,
-        output_decisions,
-        commit_sha=commit_sha,
+def _bars(rows: int = 120, timeframe: str = "4h") -> DataFrame:
+    frequency = {"15m": "15min", "1h": "1h", "4h": "4h"}[timeframe]
+    close = 100.0 + np.arange(rows) * 0.05 + np.sin(np.arange(rows) / 3.0)
+    return DataFrame(
+        {
+            "date": pd.date_range(START, periods=rows, freq=frequency),
+            "open": close,
+            "high": close + 1.0,
+            "low": close - 1.0,
+            "close": close,
+            "volume": np.full(rows, 10.0),
+        }
     )
 
-    assert report["status"] == "BLOCKED_INSUFFICIENT_EXTERNAL_HISTORY"
-    assert report["model"]["fit_performed"] is False
-    assert report["economic_results"] is None
-    assert report["Champion"] is None
-    assert report["order_permission"] is False
-    assert report["trading_authorization"] == "NO-GO"
-    assert report["private_api_calls"] == 0
-    assert output_trades.is_file() and output_decisions.is_file()
-    summary = ai6._render_summary(report)
-    assert "LightGBM fit: NOT RUN" in summary
-    assert "INSUFFICIENT_HISTORICAL_WINDOW" in summary
+
+def test_roc_auc_is_computed_only_with_both_classes() -> None:
+    auc, status = ai6._roc_auc(
+        np.asarray([0, 1, 0, 1]),
+        np.asarray([0.1, 0.9, 0.2, 0.8]),
+    )
+    assert auc == pytest.approx(1.0)
+    assert status == "COMPUTED"
+
+    missing, missing_status = ai6._roc_auc(
+        np.asarray([1, 1, 1]), np.asarray([0.2, 0.3, 0.4])
+    )
+    assert missing is None
+    assert missing_status == "VALIDATION_REQUIRES_BOTH_CLASSES"
+
+    with pytest.raises(ValueError, match="input_alignment_invalid"):
+        ai6._roc_auc(np.asarray([0, 1]), np.asarray([0.5]))
 
 
-def test_ai6_runner_rejects_manifest_hash_or_safety_mismatch(
+def test_forward_labeling_applies_30bps_cost_and_rejects_gap_and_tail() -> None:
+    bars = _bars(8, "4h")
+    bars.loc[1, "open"] = 100.0
+    bars.loc[1, "close"] = 101.0
+    bars.loc[2, "open"] = 100.0
+    bars.loc[2, "close"] = 99.0
+    events = DataFrame({"event_index": [0, 1, 7]})
+    labelled = ai6._label_primary_events(
+        bars, events, timeframe="4h", horizon_bars=1
+    )
+    assert labelled["event_index"].tolist() == [0, 1]
+    assert labelled["meta_label"].tolist() == [1, 0]
+    assert labelled.loc[0, "net_return_fraction"] > 0.0
+    assert labelled.loc[1, "net_return_fraction"] < 0.0
+
+    discontinuous = bars.copy()
+    discontinuous.loc[2, "date"] += pd.Timedelta(minutes=1)
+    gap_labels = ai6._label_primary_events(
+        discontinuous,
+        DataFrame({"event_index": [0, 1]}),
+        timeframe="4h",
+        horizon_bars=1,
+    )
+    assert gap_labels["event_index"].tolist() == [0]
+
+
+def test_candidate_acceptance_requires_all_economic_and_statistical_gates() -> None:
+    candidate = {
+        "trade_count": 100,
+        "win_rate": 0.55,
+        "net_profit_factor": 1.25,
+        "dsr_z_score": 0.1,
+    }
+    accepted = ai6._candidate_acceptance(candidate)
+    assert accepted["statistical_edge_accepted"] is True
+
+    candidate["dsr_z_score"] = None
+    rejected = ai6._candidate_acceptance(candidate)
+    assert rejected["net_profit_factor_passed"] is True
+    assert rejected["dsr_passed"] is False
+    assert rejected["statistical_edge_accepted"] is False
+
+    candidate["dsr_z_score"] = 0.1
+    candidate["trade_count"] = 49
+    assert ai6._candidate_acceptance(candidate)["statistical_edge_accepted"] is False
+
+
+def test_read_funding_artifact_verifies_provenance_hash_and_oi_absence(
     tmp_path: Path,
 ) -> None:
-    external_dir = tmp_path / "external"
-    external_dir.mkdir()
-    commit_sha = "e" * 40
-    _write_symbol_fixture(external_dir, "BTCUSDT", commit_sha)
-    _write_symbol_fixture(external_dir, "ETHUSDT", commit_sha)
-    manifest_path = external_dir / "binance-btcusdt-manifest.json"
+    manifest = _funding_artifact(tmp_path, "BTCUSDT")
+    funding, received, ready = ai6._read_funding_artifact(
+        tmp_path, "BTCUSDT", COMMIT, START, END
+    )
+    assert ready is True
+    assert len(funding) == 20
+    assert received == manifest
+
+    manifest_path = tmp_path / "binance-btcusdt-manifest.json"
+    manifest["open_interest"] = {"row_count": 1}
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(ValueError, match="oi_contract_must_be_absent"):
+        ai6._read_funding_artifact(tmp_path, "BTCUSDT", COMMIT, START, END)
+
+
+def test_read_funding_artifact_rejects_hash_safety_and_window_mismatch(
+    tmp_path: Path,
+) -> None:
+    manifest = _funding_artifact(tmp_path, "BTCUSDT")
+    csv_path = tmp_path / manifest["funding_csv"]
+    csv_path.write_text(csv_path.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="csv_hash_mismatch"):
+        ai6._read_funding_artifact(tmp_path, "BTCUSDT", COMMIT, START, END)
+
+    _funding_artifact(tmp_path, "BTCUSDT")
+    manifest_path = tmp_path / "binance-btcusdt-manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["private_api_calls"] = 1
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     with pytest.raises(ValueError, match="manifest_contract_invalid"):
-        ai6._read_symbol_manifest(external_dir, "BTCUSDT", commit_sha)
+        ai6._read_funding_artifact(tmp_path, "BTCUSDT", COMMIT, START, END)
+
+    _funding_artifact(tmp_path, "BTCUSDT")
+    with pytest.raises(ValueError, match="window_mismatch"):
+        ai6._read_funding_artifact(
+            tmp_path,
+            "BTCUSDT",
+            COMMIT,
+            START + pd.Timedelta(minutes=1),
+            END,
+        )
 
 
-def test_ai6_acceptance_helper_does_not_promote_net_pf_without_dsr() -> None:
-    result = ai6._candidate_acceptance(
+def test_evaluate_primary_group_uses_purged_oof_fit_and_forward_auc(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bars = _bars(120, "4h")
+    primary = Series(np.arange(len(bars)) % 3 == 0)
+    features = DataFrame(
         {
-            "trade_count": 100,
-            "win_rate": 0.55,
-            "net_profit_factor": 1.25,
+            name: np.linspace(0.1, 1.0, len(bars))
+            for name in ai6.V4AQ_META_FEATURE_COLUMNS
         }
     )
-    assert result["trade_count_passed"] is True
-    assert result["win_rate_passed"] is True
-    assert result["net_profit_factor_passed"] is True
-    assert result["dsr_passed"] is False
-    assert result["statistical_edge_accepted"] is False
+
+    def fake_oof(signal, *, start_index, stop_index, fold_count):
+        indexes = np.arange(start_index + 2, stop_index - 2, 2)
+        return DataFrame(
+            {
+                "event_index": indexes,
+                "primary_signal": "BUY",
+                "primary_oof": True,
+                "fold_id": np.arange(len(indexes)) % fold_count,
+            }
+        )
+
+    def fake_labels(frame, events, *, timeframe, horizon_bars):
+        result = events.copy().reset_index(drop=True)
+        result["label_end_idx"] = result["event_index"] + horizon_bars
+        result["meta_label"] = np.arange(len(result)) % 2
+        result["net_return_fraction"] = np.where(
+            result["meta_label"].eq(1), 0.01, -0.01
+        )
+        return result
+
+    def fake_split(events, *, outer_train_end_index):
+        return events.iloc[:-20].copy(), events.iloc[-20:].copy()
+
+    def fake_fit(fit_features, fit_labels, calibration_features, **kwargs):
+        assert len(fit_features) >= 40
+        assert fit_labels.nunique() == 2
+        assert len(calibration_features) == 20
+        return object(), {
+            "fit_rows": len(fit_features),
+            "calibration_rows": len(calibration_features),
+            "selected_threshold": 0.5,
+        }
+
+    monkeypatch.setattr(v4x, "generate_oof_primary_events", fake_oof)
+    monkeypatch.setattr(v4x, "split_meta_fit_calibration", fake_split)
+    monkeypatch.setattr(ai6, "_label_primary_events", fake_labels)
+    monkeypatch.setattr(ai6, "fit_v4aq_lightgbm_meta_filter", fake_fit)
+    monkeypatch.setattr(
+        ai6,
+        "predict_v4aq_meta_probabilities",
+        lambda model, frame: np.linspace(0.1, 0.9, len(frame)),
+    )
+
+    filtered, diagnostics, decisions = ai6._evaluate_primary_group(
+        bars,
+        features,
+        primary,
+        strategy=v4ap.STRATEGIES[1],
+        timeframe="4h",
+        train_end=80,
+        forward_end=110,
+    )
+    assert diagnostics["fit_performed"] is True
+    assert diagnostics["fit_status"] == "FITTED"
+    assert diagnostics["roc_auc_status"] == "COMPUTED"
+    assert diagnostics["roc_auc"] is not None
+    assert diagnostics["threshold"] == 0.5
+    assert len(decisions) == diagnostics["validation_labeled_event_count"]
+    assert filtered.any()
+
+
+def test_evaluate_primary_group_fails_closed_when_training_support_is_invalid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bars = _bars(40, "4h")
+    primary = Series(np.zeros(len(bars), dtype=bool))
+    features = DataFrame(
+        {
+            name: np.ones(len(bars))
+            for name in ai6.V4AQ_META_FEATURE_COLUMNS
+        }
+    )
+    monkeypatch.setattr(
+        v4x,
+        "generate_oof_primary_events",
+        lambda *args, **kwargs: DataFrame(),
+    )
+    filtered, diagnostics, decisions = ai6._evaluate_primary_group(
+        bars,
+        features,
+        primary,
+        strategy=v4ap.STRATEGIES[0],
+        timeframe="4h",
+        train_end=25,
+        forward_end=35,
+    )
+    assert not filtered.any()
+    assert diagnostics["fit_performed"] is False
+    assert diagnostics["fit_status"].startswith("BLOCKED_TRAINING_SUPPORT")
+    assert decisions == []
+
+
+def test_blocked_run_builds_and_validates_all_36_no_fit_cells(
+    tmp_path: Path,
+) -> None:
+    candidates = [
+        ai6._placeholder_candidate(
+            symbol, timeframe, strategy, geometry,
+            status="NOT_RUN_INSUFFICIENT_FUNDING_HISTORY",
+        )
+        for symbol in v4ap.ASSETS
+        for timeframe in v4ap.TIMEFRAMES
+        for strategy in v4ap.STRATEGIES
+        for geometry in v4ap.EXIT_GEOMETRIES
+    ]
+    dsr = v4ap._attach_dsr_to_cohort(candidates)
+    for candidate in candidates:
+        candidate["qualifies"] = v4ap._candidate_qualifies(candidate)
+    funding_manifest = {
+        "research_status": "BLOCKED_INSUFFICIENT_FUNDING_HISTORY",
+        "funding": {"full_requested_history_available": False},
+    }
+    report = ai6._build_report(
+        commit_sha=COMMIT,
+        start_utc=START,
+        end_utc=END,
+        market_provenance={},
+        funding_provenance={
+            "BTCUSDT": funding_manifest,
+            "ETHUSDT": funding_manifest,
+        },
+        candidates=candidates,
+        dsr_cohort=dsr,
+        model_groups=[],
+        status="BLOCKED_INSUFFICIENT_FUNDING_HISTORY",
+    )
+    ai6._validate_report(report, COMMIT)
+    assert len(report["candidates"]) == 36
+    assert report["economic_results"] is None
+    assert report["model"]["fit_performed"] is False
+    assert report["Champion"] is None
+    summary = ai6._render_summary(report)
+    assert "all 36 combinations" in summary.lower()
+    assert "ROC-AUC" in summary
+    assert "Net PF" in summary
+    assert "DSR Z" in summary
+    assert "OI: DISABLED" in summary
+
+
+def test_invalid_ai6_report_is_rejected() -> None:
+    with pytest.raises(ValueError, match="report_schema_invalid"):
+        ai6._validate_report({"schema_version": "wrong"}, COMMIT)
+    with pytest.raises(ValueError, match="commit_sha_invalid"):
+        ai6._validate_commit_sha("bad")
+
+
+def test_v4aq_ai6_sweep_runs_exact_grid_and_keeps_final_holdout_untouched(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    external_dir = tmp_path / "external"
+    external_dir.mkdir()
+    _funding_artifact(external_dir, "BTCUSDT")
+    _funding_artifact(external_dir, "ETHUSDT")
+    start_utc = START.isoformat()
+    end_utc = END.isoformat()
+    calls: dict[str, int] = {"models": 0, "candidates": 0}
+
+    def fake_load_market(input_dir, *, symbol, commit_sha, start_utc, end_utc):
+        return DataFrame(), {
+            "symbol": symbol,
+            "row_count": 1000,
+            "public_api_only": True,
+        }
+
+    def fake_resample(minute_data, timeframe):
+        return _bars(400, timeframe)
+
+    def fake_external(bars, funding, *, symbol, timeframe):
+        return (
+            DataFrame(
+                {
+                    "funding_rate_zscore": np.zeros(len(bars)),
+                    "funding_rate_ma": np.zeros(len(bars)),
+                },
+                index=bars.index,
+            ),
+            {"complete_funding_feature_rows": len(bars)},
+        )
+
+    def fake_primary_context(bars, external, *, strategy):
+        return DataFrame(
+            {
+                name: np.ones(len(bars))
+                for name in ai6.V4AQ_META_FEATURE_COLUMNS
+            },
+            index=bars.index,
+        )
+
+    def fake_signal(bars):
+        signal = Series(np.arange(len(bars)) % 5 == 0, index=bars.index)
+        return signal, {"primary_signal_count": int(signal.sum())}
+
+    def fake_evaluate(
+        bars, features, signal, *, strategy, timeframe, train_end, forward_end
+    ):
+        calls["models"] += 1
+        filtered = Series(False, index=bars.index)
+        filtered.iloc[train_end:forward_end] = signal.iloc[train_end:forward_end]
+        return filtered, {
+            "fit_performed": True,
+            "fit_status": "FITTED",
+            "fit_rows": 100,
+            "calibration_rows": 20,
+            "validation_event_count": int(signal.iloc[train_end:forward_end].sum()),
+            "validation_labeled_event_count": int(signal.iloc[train_end:forward_end].sum()),
+            "roc_auc": 0.61,
+            "roc_auc_status": "COMPUTED",
+            "threshold": 0.5,
+            "accepted_event_count": int(filtered.sum()),
+            "acceptance_rate": 0.5,
+        }, []
+
+    def fake_run_candidate(
+        bars, *, symbol, timeframe, strategy, geometry, signal,
+        strategy_diagnostics, execution, documented_gap_ranges=(),
+    ):
+        calls["candidates"] += 1
+        candidate = {
+            "candidate_id": v4ap._candidate_id(
+                symbol, timeframe, strategy, geometry["name"]
+            ),
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "strategy": strategy,
+            "geometry": geometry["name"],
+            "bars_evaluated": len(bars),
+            "raw_signal_count": strategy_diagnostics["primary_signal_count"],
+            "eligible_entry_signal_count": int(signal.sum()),
+            "gap_flatten_count": 0,
+            "trade_count": 60,
+            "win_rate": 0.5,
+            "net_profit_factor": 1.2,
+            "net_profit_factor_infinite_no_losses": False,
+            "max_drawdown_percent": 5.0,
+            "net_pnl_usd": 100.0,
+            "net_expectancy_usd_per_trade": 1.0,
+            "total_fees_usd": 10.0,
+            "total_slippage_cost_usd": 5.0,
+            "round_trip_cost_bps": 30.0,
+            "fee_bps_per_side": 10.0,
+            "slippage_bps_per_side": 5.0,
+            "stop_loss_atr": geometry["stop_loss_atr"],
+            "take_profit_atr": geometry["take_profit_atr"],
+            "trailing_enabled": geometry["trailing_enabled"],
+            "trailing_activation_atr": geometry["trailing_activation_atr"],
+            "trailing_step_atr": geometry["trailing_step_atr"],
+            "horizon_hours_nominal": 24,
+            "horizon_bars": 6,
+            "same_candle_collision_policy": "STOP_LOSS_WINS",
+            "execution_policy": "CLOSED_BAR_NEXT_BAR_OPEN",
+            "return_observation_count": 60,
+            "sharpe_ratio_per_trade": 2.0,
+            "return_skewness": 0.0,
+            "return_kurtosis_non_excess": 3.0,
+            "sharpe_status": "COMPUTED",
+        }
+        return candidate, []
+
+    def fake_dsr(candidates):
+        for candidate in candidates:
+            candidate["dsr_z_score"] = 0.0
+            candidate["dsr_trial_count"] = 36
+        return {
+            "trial_count": 36,
+            "valid_sharpe_estimate_count": 36,
+            "trial_scope": "ALL_36_PREREGISTERED_COMBINATIONS",
+        }
+
+    monkeypatch.setattr(v4ap, "_load_market_data", fake_load_market)
+    monkeypatch.setattr(v4ap, "resample_ohlcv", fake_resample)
+    monkeypatch.setattr(v4ap, "generate_mean_reversion_signal", fake_signal)
+    monkeypatch.setattr(v4ap, "generate_donchian_breakout_signal", fake_signal)
+    monkeypatch.setattr(v4ap, "_execution_config", lambda: object())
+    monkeypatch.setattr(v4ap, "_run_candidate", fake_run_candidate)
+    monkeypatch.setattr(v4ap, "_attach_dsr_to_cohort", fake_dsr)
+    monkeypatch.setattr(v4ap, "_candidate_qualifies", lambda candidate: False)
+    monkeypatch.setattr(ai6, "build_external_market_features", fake_external)
+    monkeypatch.setattr(ai6, "build_v4aq_meta_features", fake_primary_context)
+    monkeypatch.setattr(ai6, "_evaluate_primary_group", fake_evaluate)
+
+    report_path = tmp_path / "report.json"
+    trades_path = tmp_path / "trades.csv"
+    decisions_path = tmp_path / "decisions.csv"
+    summary_path = tmp_path / "summary.md"
+    report = ai6.run_v4aq_ai6(
+        tmp_path / "spot",
+        external_dir,
+        report_path,
+        trades_path,
+        decisions_path,
+        summary_path,
+        commit_sha=COMMIT,
+        start_utc=start_utc,
+        end_utc=end_utc,
+    )
+
+    assert report["status"] == "COMPLETED_RESEARCH_EVALUATION"
+    assert len(report["candidates"]) == 36
+    assert calls == {"models": 12, "candidates": 36}
+    assert report["model"]["fit_group_count"] == 12
+    assert report["dataset"]["final_holdout_fraction"] == pytest.approx(0.15)
+    assert report["dataset"]["final_holdout_status"].startswith("UNTOUCHED")
+    assert report["funding"]["open_interest_used"] is False
+    assert report["Champion"] is None
+    assert report["trading_authorization"] == "NO-GO"
+    assert report_path.is_file() and trades_path.is_file()
+    assert decisions_path.is_file() and summary_path.is_file()
