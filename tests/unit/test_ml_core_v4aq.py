@@ -80,12 +80,6 @@ def test_v4aq_feature_builder_rejects_invalid_prices_and_infinite_external() -> 
 def test_lightgbm_wrapper_enforces_schema_and_delegates_fit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    features = _external().rename(
-        columns={
-            "funding_rate_zscore": "funding_rate_zscore",
-            "oi_change": "oi_change",
-        }
-    )
     fit = DataFrame(
         {
             "primary_close_vs_donchian_high_pct": np.ones(40),

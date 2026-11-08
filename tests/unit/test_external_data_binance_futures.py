@@ -295,7 +295,6 @@ def test_funding_and_oi_fetchers_reject_bad_page_shapes_and_windows() -> None:
     with pytest.raises(ProviderError, match="funding_timestamp_outside_window"):
         connector.fetch("BTCUSDT", start=START, end=END)
 
-    oi_start = END - timedelta(days=30)
     connector = BinanceUsdMFuturesConnector(
         FakeTransport([_response([]), _response([_oi_row(START)])]),
         sleeper=lambda _: None,

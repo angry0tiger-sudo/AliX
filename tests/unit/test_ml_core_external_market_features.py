@@ -10,7 +10,6 @@ from services.ml_core.external_market_features import (
     build_external_market_features,
 )
 
-UTC = timezone.utc
 START = pd.Timestamp("2026-01-01T00:00:00Z")
 
 

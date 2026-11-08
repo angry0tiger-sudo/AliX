@@ -570,6 +570,5 @@ def snapshot_manifest(
         "Champion": None,
         "order_permission": False,
         "trading_authorization": "NO-GO",
-        "private_api_calls": 0,
         "real_order_attempts": 0,
     }
