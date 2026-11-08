@@ -475,7 +475,9 @@ def _trade_return_diagnostics(trades: list[dict[str, Any]]) -> dict[str, Any]:
         "sharpe_ratio_per_trade": None,
         "return_skewness": None,
         "return_kurtosis_non_excess": None,
-        "sharpe_status": ("NO_TRADES_DSR_UNDEFINED" if count == 0 else "INSUFFICIENT_TRADE_RETURNS"),
+        "sharpe_status": (
+            "NO_TRADES_DSR_UNDEFINED" if count == 0 else "INSUFFICIENT_TRADE_RETURNS"
+        ),
     }
     if count < 2:
         return result
