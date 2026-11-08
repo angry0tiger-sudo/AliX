@@ -520,7 +520,9 @@ def _build_report(
             and float(item["net_profit_factor"]) >= MINIMUM_NET_PROFIT_FACTOR
         )
     ]
-    if qualifying:
+    if status == "BLOCKED_INSUFFICIENT_FUNDING_HISTORY":
+        conclusion = "FUNDING_COVERAGE_INSUFFICIENT_NO_ECONOMIC_CONCLUSION"
+    elif qualifying:
         conclusion = "FUNDING_EDGE_ACCEPTED_UNDER_ALL_PREREGISTERED_GATES"
     elif pf_candidates:
         conclusion = "NET_PF_GATE_MET_BUT_FULL_STATISTICAL_ACCEPTANCE_FAILED"
@@ -778,7 +780,16 @@ def _render_summary(report: dict[str, Any]) -> str:
             f"Fully accepted candidate count: {len(report['qualifying_candidate_ids'])}",
         ]
     )
-    if report["conclusion"] == "NO_NET_PF_EDGE_FOUND_IN_FUNDING_ONLY_FEATURES":
+    if report["status"] == "BLOCKED_INSUFFICIENT_FUNDING_HISTORY":
+        lines.extend(
+            [
+                "",
+                "Funding coverage is insufficient. No model was fitted and no economic replay was performed.",
+                "This is a data-coverage block, NOT evidence for or against statistical edge.",
+                "External Data phase remains UNRESOLVED pending a viable Funding source/window.",
+            ]
+        )
+    elif report["conclusion"] == "NO_NET_PF_EDGE_FOUND_IN_FUNDING_ONLY_FEATURES":
         lines.extend(
             [
                 "",
