@@ -121,6 +121,7 @@ def _validate_fetch_request(
     _validate_fetch_commit_sha(commit_sha)
     return _parse_fetch_window(start_utc, end_utc, requested_days)
 
+
 def fetch_public_history(
     *,
     symbols: tuple[str, ...],
