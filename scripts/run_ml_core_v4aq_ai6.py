@@ -13,10 +13,10 @@ from typing import Any
 import numpy as np
 import pandas as pd
 from pandas import DataFrame, Series
-from sklearn.metrics import roc_auc_score
 
 from scripts import run_ml_core_v4ap_diagnostic_sweep as v4ap
 from services.meta_labeling import v4x
+from services.ml_core.economic_backtest import resample_ohlcv
 from services.meta_labeling.v4aq import (
     V4AQ_META_FEATURE_COLUMNS,
     build_v4aq_meta_features,
@@ -105,12 +105,13 @@ def _read_funding_artifact(
         raw.get("Champion") is None,
         raw.get("order_permission") is False,
         raw.get("trading_authorization") == "NO-GO",
-        isinstance(funding_meta, dict),
         raw.get("requested_start_utc") is not None,
         raw.get("requested_end_utc") is not None,
     )
     if not all(expected):
         raise ValueError(f"ai6_funding_manifest_contract_invalid:{symbol}")
+    if not isinstance(funding_meta, dict):
+        raise ValueError(f"ai6_funding_manifest_section_invalid:{symbol}")
     requested_start = pd.Timestamp(raw["requested_start_utc"])
     requested_end = pd.Timestamp(raw["requested_end_utc"])
     if (
@@ -239,10 +240,34 @@ def _roc_auc(
         raise ValueError("ai6_roc_auc_input_alignment_invalid")
     if len(labels) < 2 or set(np.unique(labels).tolist()) != {0, 1}:
         return None, "VALIDATION_REQUIRES_BOTH_CLASSES"
-    value = float(roc_auc_score(labels.astype(int), probabilities.astype(float)))
+    scores = probabilities.astype(float)
+    if (
+        not np.isfinite(scores).all()
+        or bool((scores < 0.0).any())
+        or bool((scores > 1.0).any())
+    ):
+        return None, "ROC_AUC_NON_FINITE"
+    order = np.argsort(scores, kind="mergesort")
+    sorted_scores = scores[order]
+    ranks = np.empty(len(scores), dtype=float)
+    start = 0
+    while start < len(scores):
+        stop = start + 1
+        while stop < len(scores) and sorted_scores[stop] == sorted_scores[start]:
+            stop += 1
+        average_rank = ((start + 1) + stop) / 2.0
+        ranks[order[start:stop]] = average_rank
+        start = stop
+    positive = labels.astype(int) == 1
+    positive_count = int(np.count_nonzero(positive))
+    negative_count = len(labels) - positive_count
+    rank_sum = float(ranks[positive].sum())
+    value = (
+        rank_sum - positive_count * (positive_count + 1) / 2.0
+    ) / (positive_count * negative_count)
     if not math.isfinite(value):
         return None, "ROC_AUC_NON_FINITE"
-    return value, "COMPUTED"
+    return float(value), "COMPUTED"
 
 
 def _evaluate_primary_group(
@@ -955,7 +980,7 @@ def run_v4aq_ai6(
                 for gap in asset_provenance["missing_gap_ranges"]
             )
             for timeframe in v4ap.TIMEFRAMES:
-                full_bars = v4ap.resample_ohlcv(minute_data, timeframe)
+                full_bars = resample_ohlcv(minute_data, timeframe)
                 train_end = int(len(full_bars) * TRAIN_FRACTION)
                 forward_end = int(len(full_bars) * FORWARD_END_FRACTION)
                 horizon_bars = (
