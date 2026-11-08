@@ -46,7 +46,7 @@ def test_donchian_meta_context_is_causal_and_preserves_funding_missing_rows() ->
     assert tuple(features.columns) == v4aq.V4AQ_META_FEATURE_COLUMNS
     assert _v4aq_values_are_finite(features.iloc[21:].to_numpy(dtype=float))
     assert _v4aq_values_are_missing(features.iloc[: v4aq.V4AQ_PRIMARY_LOOKBACK, :2])
-    assert pd.isna(features.loc[0, "funding_rate_ma"])
+    assert bool(pd.isna(features.loc[0, "funding_rate_ma"]))
     changed = bars.copy()
     changed.loc[30:, ["high", "low", "close"]] *= 100.0
     changed_features = v4aq.build_v4aq_meta_features(
