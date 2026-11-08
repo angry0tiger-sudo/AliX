@@ -1209,6 +1209,7 @@ def test_regime_reactive_selector_uses_donchian20_only_in_trending_up() -> None:
     assert diagnostics["no_cusum_filter"] is True
     assert diagnostics["momentum_signal_count"] == 1
     assert diagnostics["mean_reversion_signal_count"] == 0
+    assert diagnostics["downtrend_policy"] == "RISK_OFF_NO_LONG_ENTRY_SPOT_ONLY"
     assert not {
         regime_engine.CUSUM_POSITIVE_EVENT_FEATURE,
         regime_engine.CUSUM_NEGATIVE_EVENT_FEATURE,

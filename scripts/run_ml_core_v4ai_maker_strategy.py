@@ -872,6 +872,7 @@ def _regime_reactive_primary_signal(
         "dominant_state_policy": "ARGMAX_POSTERIOR_EXACTLY_ONE_REGIME",
         "momentum_strategy": "DONCHIAN20_CLOSE_BREAKOUT_TRENDING_UP_ONLY_SPOT_LONG",
         "mean_reversion_strategy": "DISABLED",
+        "downtrend_policy": "RISK_OFF_NO_LONG_ENTRY_SPOT_ONLY",
         "breakout_reference": "HIGHEST_HIGH_OF_PREVIOUS_20_COMPLETED_30M_BARS",
         "breakout_comparison": "CLOSE_STRICTLY_GREATER_THAN_PRIOR_20_BAR_HIGH",
         "donchian_lookback_bars": DONCHIAN_LOOKBACK_BARS,

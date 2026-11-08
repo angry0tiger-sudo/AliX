@@ -292,6 +292,7 @@ jobs:
           assert selector["no_cusum_filter"] is True
           assert selector["momentum_strategy"] == "DONCHIAN20_CLOSE_BREAKOUT_TRENDING_UP_ONLY_SPOT_LONG"
           assert selector["mean_reversion_strategy"] == "DISABLED"
+          assert selector["downtrend_policy"] == "RISK_OFF_NO_LONG_ENTRY_SPOT_ONLY"
           assert selector["donchian_lookback_bars"] == 20
           assert selector["breakout_reference"] == "HIGHEST_HIGH_OF_PREVIOUS_20_COMPLETED_30M_BARS"
           assert selector["breakout_comparison"] == "CLOSE_STRICTLY_GREATER_THAN_PRIOR_20_BAR_HIGH"
