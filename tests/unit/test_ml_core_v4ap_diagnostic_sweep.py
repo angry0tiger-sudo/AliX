@@ -143,7 +143,7 @@ def test_minute_cadence_rejects_undocumented_gap() -> None:
             utc=True,
         )
     )
-    with pytest.raises(ValueError, match="v4ap_market_gap_out_of_policy"):
+    with pytest.raises(ValueError, match="v4ap_eth_gap_timestamp_mismatch"):
         sweep._validate_minute_cadence(
             dates,
             symbol="ETHUSDT",
@@ -294,7 +294,7 @@ def test_manifest_rejects_private_or_unbound_data() -> None:
 
 def test_request_requires_exact_1825_day_minute_aligned_window() -> None:
     start = "2021-11-02T00:00:00Z"
-    end = "2026-11-01T23:59:00Z"
+    end = "2026-10-31T23:59:00Z"
     parsed_start, parsed_end = sweep._validate_request("a" * 40, start, end)
     assert parsed_end - parsed_start == pd.Timedelta(days=1825) - pd.Timedelta(
         minutes=1
@@ -302,4 +302,4 @@ def test_request_requires_exact_1825_day_minute_aligned_window() -> None:
     with pytest.raises(
         ValueError, match="v4ap_source_window_must_cover_exact_1825_days"
     ):
-        sweep._validate_request("a" * 40, start, "2026-11-01T23:58:00Z")
+        sweep._validate_request("a" * 40, start, "2026-10-31T23:58:00Z")
