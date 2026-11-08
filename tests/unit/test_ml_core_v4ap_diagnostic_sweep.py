@@ -225,9 +225,12 @@ def test_no_edge_summary_contains_exact_required_conclusion() -> None:
     }
     summary = sweep.render_step_summary(report)
     assert sweep.CONCLUSION_NO_EDGE in summary
-    results_section = summary.split("## Results: all 36 combinations", 1)[1].split("## Conclusion", 1)[0]
+    results_section = summary.split("## Results: all 36 combinations", 1)[1].split(
+        "## Conclusion", 1
+    )[0]
     result_rows = [
-        line for line in results_section.splitlines()
+        line
+        for line in results_section.splitlines()
         if line.startswith("| ETHUSDT |") or line.startswith("| BTCUSDT |")
     ]
     assert len(result_rows) == 36
@@ -286,6 +289,10 @@ def test_request_requires_exact_1825_day_minute_aligned_window() -> None:
     start = "2021-11-02T00:00:00Z"
     end = "2026-11-01T23:59:00Z"
     parsed_start, parsed_end = sweep._validate_request("a" * 40, start, end)
-    assert parsed_end - parsed_start == pd.Timedelta(days=1825) - pd.Timedelta(minutes=1)
-    with pytest.raises(ValueError, match="v4ap_source_window_must_cover_exact_1825_days"):
+    assert parsed_end - parsed_start == pd.Timedelta(days=1825) - pd.Timedelta(
+        minutes=1
+    )
+    with pytest.raises(
+        ValueError, match="v4ap_source_window_must_cover_exact_1825_days"
+    ):
         sweep._validate_request("a" * 40, start, "2026-11-01T23:58:00Z")

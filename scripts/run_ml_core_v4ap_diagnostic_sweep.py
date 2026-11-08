@@ -72,18 +72,14 @@ MINIMUM_TRADE_COUNT = 50
 MINIMUM_WIN_RATE = 0.40
 MINIMUM_NET_PROFIT_FACTOR = 1.10
 MINIMUM_DSR_Z = 0.0
-DSR_TRIAL_COUNT = len(ASSETS) * len(TIMEFRAMES) * len(STRATEGIES) * len(
-    EXIT_GEOMETRIES
-)
+DSR_TRIAL_COUNT = len(ASSETS) * len(TIMEFRAMES) * len(STRATEGIES) * len(EXIT_GEOMETRIES)
 DSR_MINIMUM_RETURN_OBSERVATIONS = 4
 KNOWN_ETH_GAP_START_UTC = "2023-03-24T12:40:00Z"
 KNOWN_ETH_GAP_END_UTC = "2023-03-24T13:59:00Z"
 KNOWN_ETH_GAP_PREVIOUS_CANDLE_UTC = "2023-03-24T12:39:00Z"
 KNOWN_ETH_GAP_NEXT_CANDLE_UTC = "2023-03-24T14:00:00Z"
 CSV_COLUMNS = ("date", "open", "high", "low", "close", "volume")
-CONCLUSION_NO_EDGE = (
-    "CONCLUSION: NO STATISTICAL EDGE FOUND IN CURRENT FEATURE SET."
-)
+CONCLUSION_NO_EDGE = "CONCLUSION: NO STATISTICAL EDGE FOUND IN CURRENT FEATURE SET."
 CONCLUSION_EDGE_FOUND = "CONCLUSION: EDGE CANDIDATE FOUND IN CURRENT FEATURE SET."
 
 
@@ -179,8 +175,12 @@ def _validate_manifest(
 
 
 def _validate_minute_cadence(
-    dates: Series, *, symbol: str, missing_minutes: int,
-    start_utc: pd.Timestamp, end_utc: pd.Timestamp
+    dates: Series,
+    *,
+    symbol: str,
+    missing_minutes: int,
+    start_utc: pd.Timestamp,
+    end_utc: pd.Timestamp,
 ) -> None:
     """Accept only a continuous minute series or the one documented ETH gap."""
     if dates.empty or dates.isna().any() or dates.duplicated().any():
@@ -301,11 +301,15 @@ def generate_mean_reversion_signal(bars: DataFrame) -> tuple[Series, dict[str, A
         min_periods=EMA_TREND_PERIOD,
     ).mean()
     signal = (
-        rsi.lt(RSI_ENTRY_THRESHOLD)
-        & close.gt(ema_200)
-        & Series(np.isfinite(rsi.to_numpy(dtype=float)))
-        & Series(np.isfinite(ema_200.to_numpy(dtype=float)))
-    ).fillna(False).astype(bool)
+        (
+            rsi.lt(RSI_ENTRY_THRESHOLD)
+            & close.gt(ema_200)
+            & Series(np.isfinite(rsi.to_numpy(dtype=float)))
+            & Series(np.isfinite(ema_200.to_numpy(dtype=float)))
+        )
+        .fillna(False)
+        .astype(bool)
+    )
     signal.name = "primary_buy_signal"
     diagnostics = {
         "rsi_period": RSI_PERIOD,
@@ -333,12 +337,18 @@ def generate_donchian_breakout_signal(
     close = pd.to_numeric(bars["close"], errors="coerce").reset_index(drop=True)
     if not np.isfinite(high.to_numpy(dtype=float)).all() or bool((high <= 0.0).any()):
         raise ValueError("v4ap_donchian_high_invalid")
-    if not np.isfinite(close.to_numpy(dtype=float)).all() or bool((close <= 0.0).any()):
+    if not np.isfinite(close.to_numpy(dtype=float)).all() or bool(
+        (close <= 0.0).any()
+    ):
         raise ValueError("v4ap_donchian_close_invalid")
-    prior_20_high = high.shift(1).rolling(
-        window=DONCHIAN_LOOKBACK, min_periods=DONCHIAN_LOOKBACK
-    ).max()
-    signal = (close.gt(prior_20_high) & prior_20_high.notna()).fillna(False).astype(bool)
+    prior_20_high = (
+        high.shift(1)
+        .rolling(window=DONCHIAN_LOOKBACK, min_periods=DONCHIAN_LOOKBACK)
+        .max()
+    )
+    signal = (
+        (close.gt(prior_20_high) & prior_20_high.notna()).fillna(False).astype(bool)
+    )
     signal.name = "primary_buy_signal"
     diagnostics = {
         "lookback_bars": DONCHIAN_LOOKBACK,
@@ -366,7 +376,7 @@ def _build_execution_signals(
         raise ValueError("v4ap_signal_execution_policy_invalid")
     dates = pd.to_datetime(bars["date"], utc=True).reset_index(drop=True)
     expected_delta = pd.Timedelta(minutes=TIMEFRAME_MINUTES[timeframe])
-    indices = np.flatnonzero(primary_signal.to_numpy(dtype=bool))
+    signal_values = primary_signal.to_numpy(dtype=bool)
     eligible_entry_count = 0
     gap_flatten_count = 0
     execution_signals: list[dict[str, Any]] = []
@@ -390,7 +400,7 @@ def _build_execution_signals(
             continue
         if index > last_entry_signal_index or index == last_index - 1:
             continue
-        if index not in indices:
+        if not signal_values[index]:
             continue
         execution_signals.append(
             {
@@ -475,15 +485,13 @@ def _expected_maximum_sharpe(
         raise ValueError("v4ap_dsr_trial_sharpe_distribution_invalid")
     euler_mascheroni = 0.5772156649015329
     normal = NormalDist()
-    expected_max_multiplier = (
-        (1.0 - euler_mascheroni)
-        * normal.inv_cdf(1.0 - 1.0 / total_trial_count)
-        + euler_mascheroni
-        * normal.inv_cdf(1.0 - 1.0 / (total_trial_count * math.e))
+    expected_max_multiplier = (1.0 - euler_mascheroni) * normal.inv_cdf(
+        1.0 - 1.0 / total_trial_count
+    ) + euler_mascheroni * normal.inv_cdf(1.0 - 1.0 / (total_trial_count * math.e))
+    return (
+        float(np.mean(trial_values))
+        + float(np.std(trial_values, ddof=1)) * expected_max_multiplier
     )
-    return float(np.mean(trial_values)) + float(
-        np.std(trial_values, ddof=1)
-    ) * expected_max_multiplier
 
 
 def _attach_dsr_to_cohort(candidates: list[dict[str, Any]]) -> dict[str, Any]:
@@ -514,9 +522,7 @@ def _attach_dsr_to_cohort(candidates: list[dict[str, Any]]) -> dict[str, Any]:
                 }
             )
         return cohort
-    expected_maximum = _expected_maximum_sharpe(
-        valid_sharpes, DSR_TRIAL_COUNT
-    )
+    expected_maximum = _expected_maximum_sharpe(valid_sharpes, DSR_TRIAL_COUNT)
     cohort["expected_maximum_sharpe_per_trade"] = expected_maximum
     for item in candidates:
         skew = item.get("return_skewness")
@@ -591,9 +597,7 @@ def _candidate_qualifies(candidate: dict[str, Any]) -> bool:
     )
 
 
-def _candidate_id(
-    symbol: str, timeframe: str, strategy: str, geometry: str
-) -> str:
+def _candidate_id(symbol: str, timeframe: str, strategy: str, geometry: str) -> str:
     return "|".join((symbol, timeframe, strategy, geometry))
 
 
@@ -658,18 +662,14 @@ def _run_candidate(
         "gap_flatten_count": gap_flatten_count,
         "trade_count": int(metrics["trade_count"]),
         "win_rate": float(metrics["win_rate"]),
-        "net_profit_factor": (
-            float(pf_value) if pf_value is not None else None
-        ),
+        "net_profit_factor": (float(pf_value) if pf_value is not None else None),
         "net_profit_factor_infinite_no_losses": bool(
             metrics["profit_factor_infinite_no_losses"]
         ),
         "max_drawdown_percent": float(metrics["max_drawdown_percent"]),
         "net_pnl_usd": float(metrics["final_equity_usd"])
         - float(metrics["initial_equity_usd"]),
-        "net_expectancy_usd_per_trade": metrics[
-            "average_net_pnl_per_trade_usd"
-        ],
+        "net_expectancy_usd_per_trade": metrics["average_net_pnl_per_trade_usd"],
         "total_fees_usd": float(replay["total_fees_usd"]),
         "total_slippage_cost_usd": float(replay["total_slippage_cost_usd"]),
         "round_trip_cost_bps": ROUND_TRIP_COST_BPS,
@@ -888,7 +888,10 @@ def _validate_report(report: dict[str, Any], expected_commit_sha: str) -> None:
         raise ValueError("v4ap_final_conclusion_invalid")
     if report.get("dsr_cohort", {}).get("trial_count") != DSR_TRIAL_COUNT:
         raise ValueError("v4ap_dsr_trial_count_invalid")
-    if report.get("preregistered_grid", {}).get("expected_combinations") != DSR_TRIAL_COUNT:
+    if (
+        report.get("preregistered_grid", {}).get("expected_combinations")
+        != DSR_TRIAL_COUNT
+    ):
         raise ValueError("v4ap_preregistered_grid_invalid")
     if any(report.get("model_usage", {}).values()):
         raise ValueError("v4ap_forbidden_model_usage_detected")
@@ -904,9 +907,10 @@ def _validate_report(report: dict[str, Any], expected_commit_sha: str) -> None:
     ):
         raise ValueError("v4ap_safety_contract_invalid")
     execution = report.get("execution_assumptions")
-    if not isinstance(execution, dict) or execution.get(
-        "round_trip_cost_bps"
-    ) != ROUND_TRIP_COST_BPS:
+    if (
+        not isinstance(execution, dict)
+        or execution.get("round_trip_cost_bps") != ROUND_TRIP_COST_BPS
+    ):
         raise ValueError("v4ap_execution_cost_contract_invalid")
 
 
