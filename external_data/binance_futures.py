@@ -246,7 +246,10 @@ def _get_with_retry(
         try:
             response = _transport_attempt(transport, url)
         except ProviderError as error:
-            if str(error) != "binance_public_timeout" or attempt + 1 == MAX_RETRY_ATTEMPTS:
+            if (
+                str(error) != "binance_public_timeout"
+                or attempt + 1 == MAX_RETRY_ATTEMPTS
+            ):
                 raise
             sleeper(float(2**attempt))
             continue
