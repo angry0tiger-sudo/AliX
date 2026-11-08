@@ -337,9 +337,7 @@ def generate_donchian_breakout_signal(
     close = pd.to_numeric(bars["close"], errors="coerce").reset_index(drop=True)
     if not np.isfinite(high.to_numpy(dtype=float)).all() or bool((high <= 0.0).any()):
         raise ValueError("v4ap_donchian_high_invalid")
-    if not np.isfinite(close.to_numpy(dtype=float)).all() or bool(
-        (close <= 0.0).any()
-    ):
+    if not np.isfinite(close.to_numpy(dtype=float)).all() or bool((close <= 0.0).any()):
         raise ValueError("v4ap_donchian_close_invalid")
     prior_20_high = (
         high.shift(1)
