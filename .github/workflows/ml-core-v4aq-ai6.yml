@@ -1,4 +1,4 @@
-name: AliX V4-AQ Phase AI-6 Funding/OI Diagnostic
+name: AliX V4-AQ AI-6 Funding-only 36-Cell Economic Sweep
 
 on:
   push:
@@ -8,9 +8,12 @@ on:
       - .github/workflows/ml-core-v4aq-ai6.yml
       - external_data/binance_futures.py
       - scripts/fetch_binance_external_data.py
+      - scripts/fetch_binance_public_ohlcv.py
       - scripts/run_ml_core_v4aq_ai6.py
+      - scripts/run_ml_core_v4ap_diagnostic_sweep.py
       - services/ml_core/external_market_features.py
       - services/meta_labeling/v4aq.py
+      - services/meta_labeling/v4x.py
       - tests/unit/test_external_data_binance_futures.py
       - tests/unit/test_fetch_binance_external_data.py
       - tests/unit/test_ml_core_external_market_features.py
@@ -31,7 +34,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  v4aq-ai6:
+  v4aq-ai6-funding-only:
     if: github.ref == 'refs/heads/research/ml-core-v4aq-ai6'
     runs-on: ubuntu-latest
     timeout-minutes: 360
@@ -135,7 +138,7 @@ jobs:
           python -m pip install pip==25.2
           python -m pip install numpy==2.5.4 pandas==2.3.3 scikit-learn==1.9.0 lightgbm==4.7.0
 
-      - name: Verify immutable data, cost, model and safety contracts
+      - name: Verify Funding-only, immutable data, economic and safety contracts
         env:
           TARGET_SHA: ${{ github.sha }}
         run: |
@@ -145,65 +148,102 @@ jobs:
           python - <<'PY'
           from external_data.binance_futures import (
               ALLOWED_SYMBOLS,
-              OPEN_INTEREST_HISTORY_LIMIT_DAYS,
+              FUNDING_PAGE_LIMIT,
               FUNDING_RATE_PATH,
-              OPEN_INTEREST_HISTORY_PATH,
           )
           from scripts import run_ml_core_v4aq_ai6 as ai6
-          from services.meta_labeling.v4aq import V4AQ_META_FEATURE_COLUMNS
           from scripts import run_ml_core_v4ap_diagnostic_sweep as v4ap
+          from services.meta_labeling.v4aq import V4AQ_META_FEATURE_COLUMNS
+          from services.ml_core.external_market_features import EXTERNAL_FEATURE_COLUMNS
 
           assert ALLOWED_SYMBOLS == ("BTCUSDT", "ETHUSDT")
-          assert OPEN_INTEREST_HISTORY_LIMIT_DAYS == 30
           assert FUNDING_RATE_PATH == "/fapi/v1/fundingRate"
-          assert OPEN_INTEREST_HISTORY_PATH == "/futures/data/openInterestHist"
+          assert FUNDING_PAGE_LIMIT == 1000
           assert ai6.REQUESTED_DAYS == 1825
           assert ai6.ROUND_TRIP_COST_BPS == 30.0
-          assert ai6.SYMBOL == "BTCUSDT"
-          assert ai6.TIMEFRAME == "4h"
+          assert ai6.ROC_AUC_REFERENCE == 0.51
           assert ai6.MINIMUM_TRADE_COUNT == 50
           assert ai6.MINIMUM_WIN_RATE == 0.40
           assert ai6.MINIMUM_NET_PROFIT_FACTOR == 1.10
-          assert tuple(V4AQ_META_FEATURE_COLUMNS) == (
-              "primary_close_vs_donchian_high_pct",
-              "primary_donchian_channel_width_pct",
+          assert ai6.MINIMUM_DSR_Z == 0.0
+          assert tuple(EXTERNAL_FEATURE_COLUMNS) == (
               "funding_rate_zscore",
-              "oi_change",
+              "funding_rate_ma",
           )
+          assert tuple(V4AQ_META_FEATURE_COLUMNS) == (
+              "primary_context_1",
+              "primary_context_2",
+              "funding_rate_zscore",
+              "funding_rate_ma",
+          )
+          assert len(v4ap._grid_candidate_ids()) == 36
           assert v4ap.ROUND_TRIP_COST_BPS == 30.0
-          print("AI-6 public-data and fail-closed research contract: PASS")
+          print("AI-6 Funding-only model and economic contracts: PASS")
           PY
           printf 'Champion=null\norder_permission=false\ntrading_authorization=NO-GO\n'
           printf 'private_api_calls=0\nreal_order_attempts=0\ncredentials_used=false\n'
 
-      - name: Fetch 1825-day BTCUSDT Binance Spot public 1m baseline
+      - name: Fetch 1825-day BTCUSDT Spot 1m baseline and declare exact common window
         run: |
           set -euo pipefail
           spot_dir="$RUNNER_TEMP/alix-v4aq-spot"
           mkdir -p "$spot_dir"
-          python scripts/fetch_binance_public_ohlcv.py \
+          python -m scripts.fetch_binance_public_ohlcv \
             --days 1825 \
             --symbol BTCUSDT \
             --interval 1m \
             --output-dir "$spot_dir" \
             --commit-sha "$GITHUB_SHA" \
             --allow-exchange-gaps
-          echo "SPOT_DIR=$spot_dir" >> "$GITHUB_ENV"
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
 
-      - name: Fetch public Funding and bounded OI history for BTCUSDT and ETHUSDT
+          root = Path(os.environ["RUNNER_TEMP"]) / "alix-v4aq-spot"
+          path = root / "binance-btcusdt-1m.manifest.json"
+          manifest = json.loads(path.read_text(encoding="utf-8"))
+          start = manifest["start_utc"]
+          end = manifest["end_utc"]
+          if manifest["requested_days"] != 1825:
+              raise SystemExit("ai6_btc_spot_window_invalid")
+          if manifest["symbol"] != "BTCUSDT" or manifest["credentials_used"] is not False:
+              raise SystemExit("ai6_btc_spot_provenance_invalid")
+          with Path(os.environ["GITHUB_ENV"]).open("a", encoding="utf-8") as handle:
+              handle.write(f"SPOT_DIR={root}\n")
+              handle.write(f"DATA_START_UTC={start}\n")
+              handle.write(f"DATA_END_UTC={end}\n")
+          print(f"COMMON_DATA_WINDOW={start}..{end}")
+          PY
+
+      - name: Fetch ETHUSDT Spot 1m baseline over the identical BTC window
         run: |
           set -euo pipefail
-          external_dir="$RUNNER_TEMP/alix-v4aq-external"
+          python -m scripts.fetch_binance_public_ohlcv \
+            --days 1825 \
+            --symbol ETHUSDT \
+            --interval 1m \
+            --output-dir "$SPOT_DIR" \
+            --commit-sha "$GITHUB_SHA" \
+            --start-utc "$DATA_START_UTC" \
+            --end-utc "$DATA_END_UTC" \
+            --allow-exchange-gaps
+
+      - name: Fetch public Funding Rate history only for BTCUSDT and ETHUSDT
+        run: |
+          set -euo pipefail
+          external_dir="$RUNNER_TEMP/alix-v4aq-funding"
           mkdir -p "$external_dir"
-          python scripts/fetch_binance_external_data.py \
+          python -m scripts.fetch_binance_external_data \
             --symbols BTCUSDT ETHUSDT \
             --days 1825 \
-            --oi-period 4h \
+            --start-utc "$DATA_START_UTC" \
+            --end-utc "$DATA_END_UTC" \
             --commit-sha "$GITHUB_SHA" \
             --output-dir "$external_dir"
           echo "EXTERNAL_DIR=$external_dir" >> "$GITHUB_ENV"
 
-      - name: Run AI-6 coverage-gated LightGBM and economic diagnostic
+      - name: Run Funding-only 36-cell LightGBM and economic sweep
         run: |
           set -euo pipefail
           python -m scripts.run_ml_core_v4aq_ai6 \
@@ -212,44 +252,72 @@ jobs:
             --output-report "$GITHUB_WORKSPACE/alix-v4aq-ai6-report.json" \
             --output-trades-csv "$GITHUB_WORKSPACE/alix-v4aq-ai6-trades.csv" \
             --output-decisions-csv "$GITHUB_WORKSPACE/alix-v4aq-ai6-decisions.csv" \
-            --commit-sha "$GITHUB_SHA"
+            --output-summary "$GITHUB_WORKSPACE/alix-v4aq-ai6-step-summary.md" \
+            --commit-sha "$GITHUB_SHA" \
+            --start-utc "$DATA_START_UTC" \
+            --end-utc "$DATA_END_UTC"
 
-      - name: Validate exact AI-6 report and publish Step Summary
+      - name: Validate exact 36-cell Funding-only report and publish Step Summary
         env:
           REPORT_PATH: ${{ github.workspace }}/alix-v4aq-ai6-report.json
           SUMMARY_PATH: ${{ github.workspace }}/alix-v4aq-ai6-step-summary.md
           TARGET_SHA: ${{ github.sha }}
         run: |
+          set -euo pipefail
           python - <<'PY'
           import json
           import os
           from pathlib import Path
 
-          from scripts.run_ml_core_v4aq_ai6 import _render_summary
+          from scripts import run_ml_core_v4aq_ai6 as ai6
+          from scripts import run_ml_core_v4ap_diagnostic_sweep as v4ap
 
           report = json.loads(
               Path(os.environ["REPORT_PATH"]).read_text(encoding="utf-8")
           )
           assert report["commit_sha"] == os.environ["TARGET_SHA"]
-          assert report["schema_version"] == "alix.ml-core.v4aq-ai6.v1"
-          assert report["experiment"]["requested_days"] == 1825
-          assert report["experiment"]["round_trip_cost_bps"] == 30.0
+          assert report["schema_version"] == ai6.REPORT_SCHEMA_VERSION
+          assert report["dataset"]["requested_days"] == 1825
+          assert report["execution_assumptions"]["round_trip_cost_bps"] == 30.0
+          assert report["funding"]["endpoint"] == "/fapi/v1/fundingRate"
+          assert report["funding"]["feature_columns"] == [
+              "funding_rate_zscore", "funding_rate_ma"
+          ]
+          assert report["funding"]["open_interest_used"] is False
+          assert report["model_usage"]["open_interest_used"] is False
+          assert len(report["candidates"]) == 36
+          assert {
+              row["candidate_id"] for row in report["candidates"]
+          } == v4ap._grid_candidate_ids()
           assert report["Champion"] is None
           assert report["order_permission"] is False
           assert report["trading_authorization"] == "NO-GO"
           assert report["private_api_calls"] == 0
           assert report["real_order_attempts"] == 0
-          if report["status"] == "BLOCKED_INSUFFICIENT_EXTERNAL_HISTORY":
+          assert report["credentials_used"] is False
+          if report["status"] == "BLOCKED_INSUFFICIENT_FUNDING_HISTORY":
               assert report["model"]["fit_performed"] is False
+              assert report["model"]["fit_group_count"] == 0
               assert report["economic_results"] is None
-              assert report["economic_acceptance"] == "NOT_EVALUATED"
           elif report["status"] == "COMPLETED_RESEARCH_EVALUATION":
-              assert report["model"]["fit_performed"] is True
-              assert report["economic_results"] is not None
+              assert report["economic_results"]["candidate_count"] == 36
+              assert report["model"]["expected_fit_group_count"] == 12
+              for row in report["candidates"]:
+                  for field in (
+                      "roc_auc",
+                      "net_profit_factor",
+                      "win_rate",
+                      "dsr_z_score",
+                      "trade_count",
+                  ):
+                      assert field in row
           else:
               raise SystemExit("ai6_report_status_invalid")
-          summary = _render_summary(report)
-          Path(os.environ["SUMMARY_PATH"]).write_text(summary, encoding="utf-8")
+
+          summary_path = Path(os.environ["SUMMARY_PATH"])
+          summary = summary_path.read_text(encoding="utf-8")
+          if summary.count("| BTCUSDT |") + summary.count("| ETHUSDT |") < 36:
+              raise SystemExit("ai6_step_summary_missing_candidate_rows")
           with Path(os.environ["GITHUB_STEP_SUMMARY"]).open(
               "a", encoding="utf-8"
           ) as handle:
@@ -257,14 +325,14 @@ jobs:
           print(summary, end="")
           PY
 
-      - name: Upload AI-6 raw data, manifests, report and ledgers
+      - name: Upload AI-6 public data, manifests, report and ledgers
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: alix-v4aq-ai6-public-data-and-meta-report
+          name: alix-v4aq-ai6-funding-only-36-cell
           path: |
             ${{ runner.temp }}/alix-v4aq-spot/
-            ${{ runner.temp }}/alix-v4aq-external/
+            ${{ runner.temp }}/alix-v4aq-funding/
             alix-v4aq-ai6-report.json
             alix-v4aq-ai6-trades.csv
             alix-v4aq-ai6-decisions.csv
