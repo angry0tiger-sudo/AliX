@@ -304,11 +304,7 @@ def test_funding_fetcher_rejects_bad_page_shapes_and_out_of_window_rows() -> Non
 
     connector = BybitLinearFundingConnector(
         FakeTransport(
-            [
-                _response(
-                    {"retCode": 0, "result": {"category": "inverse", "list": []}}
-                )
-            ]
+            [_response({"retCode": 0, "result": {"category": "inverse", "list": []}})]
         ),
         sleeper=lambda _: None,
     )
@@ -317,11 +313,7 @@ def test_funding_fetcher_rejects_bad_page_shapes_and_out_of_window_rows() -> Non
 
     connector = BybitLinearFundingConnector(
         FakeTransport(
-            [
-                _response(
-                    {"retCode": 0, "result": {"category": "linear", "list": {}}}
-                )
-            ]
+            [_response({"retCode": 0, "result": {"category": "linear", "list": {}}})]
         ),
         sleeper=lambda _: None,
     )
