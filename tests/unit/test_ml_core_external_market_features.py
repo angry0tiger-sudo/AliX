@@ -70,9 +70,7 @@ def test_external_features_are_causal_and_have_exact_schema() -> None:
         features["funding_rate_zscore"].iloc[20:].to_numpy(dtype=float)
     )
     assert features["oi_change"].iloc[:2].isna().all()
-    _assert_finite_feature_values(
-        features["oi_change"].iloc[3:].to_numpy(dtype=float)
-    )
+    _assert_finite_feature_values(features["oi_change"].iloc[3:].to_numpy(dtype=float))
     assert diagnostics["interpolation_used"] is False
     assert diagnostics["backfill_used"] is False
     assert diagnostics["future_observations_joined"] == 0

@@ -9,9 +9,7 @@ import pytest
 from scripts import run_ml_core_v4aq_ai6 as ai6
 
 
-def _write_symbol_fixture(
-    directory: Path, symbol: str, commit_sha: str
-) -> None:
+def _write_symbol_fixture(directory: Path, symbol: str, commit_sha: str) -> None:
     stem = f"binance-{symbol.lower()}"
     funding_path = directory / f"{stem}-funding.csv"
     oi_path = directory / f"{stem}-open-interest.csv"
