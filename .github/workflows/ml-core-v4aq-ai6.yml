@@ -39,10 +39,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 360
     env:
-      ALIx_ENV: paper
-      ALIx_DRY_RUN: "true"
-      ALIx_ALLOW_LIVE_TRADING: "false"
-      ALIx_REPORTING_ENABLED: "false"
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
       GH_TOKEN: ${{ github.token }}
     steps:

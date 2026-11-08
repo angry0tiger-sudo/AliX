@@ -1,83 +1,103 @@
-# Owner Directive: Phase AI-6 Public Funding and Open-Interest Research
+# Owner Directive: AI-6 Funding-Only 36-Cell Economic Evaluation
 
-- directive_id: ALIX-OD-2026-11-08-AI6-BINANCE-PUBLIC
+- directive_id: ALIX-OD-2026-11-08-AI6-FUNDING-ONLY
 - owner: angry0tiger-sudo
 - timestamp: 2026-11-08
-- approval_status: Authorized for bounded internal research implementation and public-data diagnostic only.
+- approval_status: Authorized for bounded internal Funding-only research implementation and economic diagnosis.
 - branch: research/ml-core-v4aq-ai6
-- base_sha: 798ef2d49bcbc715d35b16862a2cf83aa0865486
-- parent_verdict: V4-AP, 36/36 combinations failed the preregistered statistical acceptance rule.
+- parent_base: V4-AP / AI-6 implementation branch
+- supersedes: the Funding+Open-Interest scope in the initial AI-6 directive, for this phase only.
 
-## Purpose
+## 1. Owner decision
 
-V4-AP concluded:
+Open Interest is removed entirely from the active AI-6 implementation. Binance's public Open Interest Statistics endpoint exposes only a limited recent history and cannot support the required 1825-day training window. Do not fetch, store, feature-engineer, join, or model Open Interest in this phase.
 
-`NO STATISTICAL EDGE FOUND IN CURRENT FEATURE SET.`
+Funding Rate History remains the sole external source. Use only the unauthenticated public HTTPS GET endpoint:
 
-Phase AI-6 investigates whether public derivatives market context improves the existing Primary + Meta-Model research pipeline. The initial source is Binance USD-M public Funding Rate and Open Interest History for BTCUSDT and ETHUSDT. The selected economic follow-up is BTCUSDT 4h Donchian20 with the existing BALANCED exit geometry. Funding/OI are Meta-Model features, not a replacement for the Primary signal.
+- Host: fapi.binance.com
+- Path: /fapi/v1/fundingRate
+- Symbols: BTCUSDT and ETHUSDT
+- Window: the exact 1825-day window proven by the corresponding Spot OHLCV manifests
+- Pagination: provider timestamps, bounded page size/retries, and no synthetic records
 
-## Narrow supersession of the previous Phase 6 directive
+No alternate provider, archive, endpoint, credential, private API, account endpoint, proxy/VPN/tunnel change, or order endpoint is authorized by this directive.
 
-This directive supersedes only the prior blanket prohibition on real provider calls for the following exact internal-research scope:
+## 2. Funding data semantics and features
 
-- HTTPS GET to `fapi.binance.com/fapi/v1/fundingRate`.
-- HTTPS GET to `fapi.binance.com/futures/data/openInterestHist`.
-- Symbols: BTCUSDT and ETHUSDT.
-- OI period: 4h.
-- Unauthenticated public market-data access only.
-- Retention: versioned research artifact and manifest within this GitHub Actions run, subject to the repository's artifact retention control.
-- No redistribution or claim of commercial-use rights is authorized by this directive.
+1. Preserve provider funding settlement timestamp, local retrieval timestamp, conservative availability timestamp, record content hash, CSV hash, and manifest provenance.
+2. Funding is considered available no earlier than fundingTime + 5 minutes. This is a conservative research proxy, not a provider-certified historical publication timestamp.
+3. Build exactly two causal external features:
+   - funding_rate_zscore
+   - funding_rate_ma
+4. Use a 30-settlement rolling window with at least 20 observations; reset warm-up after a settlement gap exceeding 48 hours.
+5. Use backward as-of joins only when available_at <= decision_time; maximum observation age is 48 hours.
+6. Require exact 1825-day source boundaries, first/last settlement within one day of the requested boundary, maximum observed settlement gap no greater than 48 hours, and estimated settlement coverage fraction >= 90%.
+7. Missing, stale, malformed, duplicated, out-of-order, or incomplete Funding data must fail closed. Never interpolate, backfill, forward-fill beyond the maximum age, or synthesize a Funding observation.
+8. The active connector must expose only the Funding endpoint. No OI class, OI endpoint, OI fetch option, oi_change feature, or OI join may remain in the active data pipeline.
 
-All other restrictions in the earlier Phase 6 directive remain in force. No other provider, unofficial endpoint, credential, private API, account endpoint, notification, proxy/VPN/tunnel modification, exchange connectivity for trading, or order endpoint is authorized. No live, dry-run, or paper trading session may be started.
+## 3. Economic sweep
 
-## Required data semantics
+Use the existing V4-AP 36-cell grid and economic execution implementation, without altering its primary signal definitions, exit geometries, gap treatment, or transaction-cost assumptions:
 
-1. Preserve exact provider timestamps, local retrieval timestamps, and conservative `available_at` research proxies separately.
-2. Funding is treated as available no earlier than `fundingTime + 5 minutes`.
-3. Four-hour OI aggregates are treated as available no earlier than `timestamp + 4 hours + 5 minutes`.
-4. These availability offsets are conservative implementation assumptions, not provider-certified historical publication timestamps. Record the assumption in manifests and reports.
-5. Funding z-score and OI change are computed causally. Historical feature rows may use only observations whose `available_at` is no later than the decision timestamp.
-6. Missing, stale, malformed, duplicated, out-of-order, or unapproved observations fail closed or remain missing. No interpolation, backfill, synthetic row, or fabricated historical value is permitted.
-7. Preserve raw provider observation identity through a content hash and the resulting CSV hash.
+- Assets: BTCUSDT and ETHUSDT.
+- Timeframes: 15m, 1h, 4h.
+- Primary strategies: the existing RSI/EMA mean-reversion rule and Donchian20 close breakout.
+- Exit geometries: TIGHT, BALANCED, TRAILING.
+- Total: 2 x 3 x 2 x 3 = 36 combinations.
+- Source: public Binance Spot 1m OHLCV, exact common 1825-day window for both assets.
+- Costs: 10 bps fee + 5 bps slippage per side = exactly 30 bps round trip.
+- Primary remains the sole source of entry events. Funding features may filter Primary BUY events only.
 
-## Historical coverage limitation
+Fit one Funding-only LightGBM Meta filter for each asset/timeframe/primary-strategy group (12 groups). Reuse each group's frozen, out-of-sample filtered event stream to evaluate the three exit geometries. Do not fit a separate Meta model per exit.
 
-Binance USD-M Open Interest History is limited to the latest 30 days. It cannot provide the requested 1825-day OI history through this endpoint. Therefore:
+Use the existing V4-X purged OOF and fit/calibration split. Training events are confined to the first 70% of the chronological dataset. Select the acceptance threshold only from purged in-training calibration probabilities; never use forward-validation labels to select it. Evaluate the 70%-85% forward interval. Preserve the final 15% as an untouched holdout, excluded from fitting, threshold selection, and the reported economic decision.
 
-- Funding may be collected over the requested five-year interval, subject to returned coverage.
-- OI must report its actual first/last timestamps, row count, observed span, missing-period count and coverage fraction.
-- The 1825-day LightGBM fit and economic replay must be skipped unless the OI manifest proves complete requested-window coverage with every expected four-hour period observed.
-- A 30-day OI slice must not be joined to five years of OHLCV as if it were a five-year feature history.
-- No substitute archive or external provider may be activated without a separate owner directive and provider-rights review.
+The model target is the fixed 24-hour forward close outcome net of the 30 bps execution costs. Report forward-validation ROC-AUC and whether it exceeds the diagnostic reference 0.51. ROC-AUC is diagnostic, not a standalone promotion rule.
 
-The correct result when coverage is insufficient is a successful diagnostic run with status `BLOCKED_INSUFFICIENT_EXTERNAL_HISTORY`, an explicit reason, and no model fit. It is not an economic failure or evidence that Funding/OI lack value.
+## 4. Preregistered candidate acceptance
 
-## Modeling scope
+Report, for all 36 combinations:
 
-- Primary remains the causal Donchian20 close breakout.
-- `funding_rate_zscore` and `oi_change` are added to a fixed V4-AQ Meta-Model feature schema alongside causal Primary context.
-- Reuse the existing LightGBM OOF, purging, calibration and Meta-Labeling contracts.
-- Use the V4-AP BALANCED geometry and exactly 30 bps round-trip cost assumptions.
-- The Meta-Model filters Primary BUY events only. It cannot issue independent entry signals, alter position sizing, approve risk, or change policy.
-- The forward validation is diagnostic only. DSR is not inferred from a single selected cell. No Promotion/Champion is permitted from Net PF alone.
+- ROC-AUC and comparison to 0.51.
+- Net Profit Factor.
+- Win Rate.
+- DSR Z-score.
+- Trade count, signals, costs, drawdown, and candidate decision.
 
-## Safety and governance
+A cell is accepted only when every condition passes:
 
-- `Champion = null`
-- `order_permission = false`
-- `trading_authorization = NO-GO`
-- `private_api_calls = 0`
-- `real_order_attempts = 0`
-- No change to Freqtrade order lifecycle, Risk Gate, Kill Switch, live configuration, or account secrets.
-- All implementation, tests, fetches, and evaluations execute in GitHub Actions. No local execution.
-- Standard CI, security, type, complexity, architecture and dependency checks remain unchanged.
+- Trades >= 50.
+- Win Rate >= 40%.
+- Net PF >= 1.10.
+- DSR Z > 0.
+
+Use the full 36-cell cohort as the nominal DSR trial count. Clearly disclose that statistical independence among candidates has not been verified. Net PF >= 1.10 alone is not a promotion decision.
+
+If no cell reaches Net PF >= 1.10, close the External Data phase with a negative Funding-only diagnostic and proceed to the separately isolated RL Research track. RL may be investigated only for risk management and position sizing; it must never create, replace, or modify Primary entry signals. If any cell reaches the PF threshold but fails the remaining gates, do not label it a winner.
+
+## 5. Workflow failure correction
+
+AI-6 Workflow #15 failed at the Funding fetch command with ModuleNotFoundError: No module named 'external_data'. The OHLCV fetch had completed; this was a Python module invocation/path failure, not insufficient Funding/OI history or a pagination failure.
+
+All repository scripts in the workflow must be invoked as modules from the repository root (for example, python -m scripts.fetch_binance_external_data). The workflow must check out the exact commit SHA and require successful Standard CI for that same SHA before any data fetch.
+
+## 6. Safety, engineering and governance invariants
+
+- Champion = null
+- order_permission = false
+- trading_authorization = NO-GO
+- private_api_calls = 0
+- real_order_attempts = 0
+- No live, dry-run, or paper trading session may be started.
+- No interaction with exchange accounts, balances, positions, or orders.
+- No changes to Freqtrade order lifecycle, Risk Gate, Kill Switch, or live configuration.
+- Standard CI, security, dependency, architecture, complexity, type, and coverage gates remain unchanged.
 - Coverage must remain >= 90%.
-- Do not merge without explicit owner approval.
+- All code, tests, public-data fetches, and experiments execute in GitHub Actions. No local execution.
+- main remains at its owner-pinned SHA; no merge without explicit owner approval.
 
-## Acceptance evidence
+## 7. Completion evidence
 
-- Green Standard CI for the exact AI-6 SHA.
-- Public-only endpoint manifest and exact data hashes for both assets.
-- Actual Funding/OI coverage reported independently.
-- If full five-year OI is unavailable, the model fit and economic replay must be explicitly NOT RUN.
-- If complete data later becomes available through separately approved provenance, the report must include control vs Meta-filtered forward results, all costs, missing feature counts, untouched final holdout status, and closed safety invariants.
+A successful workflow must publish a Step Summary with all 36 rows, exact run SHA, dataset window, Funding coverage, ROC-AUC, Net PF, Win Rate, DSR Z, trade count, acceptance outcome, and closed safety state.
+
+If Funding coverage fails its preflight, publish a successful fail-closed blocked report with 36 explicit NOT-RUN rows, no model fit, and no economic results. Do not mislabel a data coverage block as evidence of no statistical edge.
