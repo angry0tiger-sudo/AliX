@@ -47,9 +47,7 @@ def test_v4aq_meta_features_are_causal_and_preserve_external_missing_rows() -> N
     _assert_v4aq_missing(
         features.iloc[: v4aq.V4AQ_PRIMARY_LOOKBACK].to_numpy(dtype=float)
     )
-    _assert_v4aq_missing(
-        np.asarray([features.loc[0, "oi_change"]], dtype=float)
-    )
+    _assert_v4aq_missing(np.asarray([features.loc[0, "oi_change"]], dtype=float))
     _assert_v4aq_finite(features.iloc[21:].to_numpy(dtype=float))
     changed = bars.copy()
     changed.loc[30:, ["high", "low", "close"]] *= 100.0
