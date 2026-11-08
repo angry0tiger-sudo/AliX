@@ -176,6 +176,42 @@ def _validate_manifest(
     return missing
 
 
+
+def _validate_minute_timestamp_bounds(
+    dates: Series,
+    *,
+    symbol: str,
+    start_utc: pd.Timestamp,
+    end_utc: pd.Timestamp,
+) -> None:
+    """Validate the ordered minute series and its exact inclusive UTC bounds."""
+    if dates.empty or dates.isna().any() or dates.duplicated().any():
+        raise ValueError(f"v4ap_market_timestamps_invalid:{symbol}")
+    if not dates.is_monotonic_increasing:
+        raise ValueError(f"v4ap_market_timestamps_not_monotonic:{symbol}")
+    if pd.Timestamp(dates.iloc[0]) != start_utc:
+        raise ValueError(f"v4ap_market_start_mismatch:{symbol}")
+    if pd.Timestamp(dates.iloc[-1]) != end_utc:
+        raise ValueError(f"v4ap_market_end_mismatch:{symbol}")
+
+
+def _validate_documented_eth_gap(
+    dates: Series, invalid_intervals: Series, symbol: str
+) -> None:
+    """Accept only the single documented 80-minute ETHUSDT source gap."""
+    if symbol != "ETHUSDT" or len(invalid_intervals) != 1:
+        raise ValueError("v4ap_market_gap_out_of_policy")
+    gap_index = int(invalid_intervals.index[0])
+    expected_previous = pd.Timestamp(KNOWN_ETH_GAP_PREVIOUS_CANDLE_UTC)
+    expected_next = pd.Timestamp(KNOWN_ETH_GAP_NEXT_CANDLE_UTC)
+    if (
+        invalid_intervals.iloc[0] != pd.Timedelta(minutes=81)
+        or pd.Timestamp(dates.iloc[gap_index - 1]) != expected_previous
+        or pd.Timestamp(dates.iloc[gap_index]) != expected_next
+    ):
+        raise ValueError("v4ap_eth_gap_timestamp_mismatch")
+
+
 def _validate_minute_cadence(
     dates: Series,
     *,
@@ -185,32 +221,16 @@ def _validate_minute_cadence(
     end_utc: pd.Timestamp,
 ) -> None:
     """Accept only a continuous minute series or the one documented ETH gap."""
-    if dates.empty or dates.isna().any() or dates.duplicated().any():
-        raise ValueError(f"v4ap_market_timestamps_invalid:{symbol}")
-    if not dates.is_monotonic_increasing:
-        raise ValueError(f"v4ap_market_timestamps_not_monotonic:{symbol}")
-    if pd.Timestamp(dates.iloc[0]) != start_utc:
-        raise ValueError(f"v4ap_market_start_mismatch:{symbol}")
-    if pd.Timestamp(dates.iloc[-1]) != end_utc:
-        raise ValueError(f"v4ap_market_end_mismatch:{symbol}")
+    _validate_minute_timestamp_bounds(
+        dates, symbol=symbol, start_utc=start_utc, end_utc=end_utc
+    )
     differences = dates.diff().dropna()
-    invalid = differences.loc[differences != pd.Timedelta(minutes=1)]
+    invalid_intervals = differences.loc[differences != pd.Timedelta(minutes=1)]
     if missing_minutes == 0:
-        if not invalid.empty:
+        if not invalid_intervals.empty:
             raise ValueError(f"v4ap_undocumented_market_gap:{symbol}")
         return
-    if symbol != "ETHUSDT" or len(invalid) != 1:
-        raise ValueError("v4ap_market_gap_out_of_policy")
-    gap_index = int(invalid.index[0])
-    expected_previous = pd.Timestamp(KNOWN_ETH_GAP_PREVIOUS_CANDLE_UTC)
-    expected_next = pd.Timestamp(KNOWN_ETH_GAP_NEXT_CANDLE_UTC)
-    if (
-        invalid.iloc[0] != pd.Timedelta(minutes=81)
-        or pd.Timestamp(dates.iloc[gap_index - 1]) != expected_previous
-        or pd.Timestamp(dates.iloc[gap_index]) != expected_next
-    ):
-        raise ValueError("v4ap_eth_gap_timestamp_mismatch")
-
+    _validate_documented_eth_gap(dates, invalid_intervals, symbol)
 
 def _load_market_data(
     input_dir: Path,
@@ -362,6 +382,43 @@ def generate_donchian_breakout_signal(
     return signal, diagnostics
 
 
+
+def _validate_signal_execution_inputs(
+    bars: DataFrame,
+    primary_signal: Series,
+    timeframe: str,
+    horizon_bars: int,
+) -> None:
+    """Fail closed when signal rows or execution horizon are not aligned."""
+    if len(bars) != len(primary_signal) or len(bars) < 2:
+        raise ValueError("v4ap_signal_bar_alignment_invalid")
+    if timeframe not in TIMEFRAME_MINUTES or horizon_bars < 1:
+        raise ValueError("v4ap_signal_execution_policy_invalid")
+
+
+def _execution_action(
+    signal_timestamp: pd.Timestamp,
+    execution_timestamp: pd.Timestamp,
+    action: str,
+) -> dict[str, Any]:
+    """Create a deterministic next-bar execution instruction."""
+    return {
+        "signal_timestamp": signal_timestamp.isoformat(),
+        "execution_timestamp": execution_timestamp.isoformat(),
+        "signal": action,
+        "buy_probability": 1.0,
+        "position_fraction": 1.0,
+    }
+
+
+def _entry_signal_is_eligible(
+    signal_index: int, last_index: int, horizon_bars: int
+) -> bool:
+    """Require a full vertical-barrier horizon before the dataset boundary."""
+    last_entry_signal_index = last_index - horizon_bars - 1
+    return signal_index <= last_entry_signal_index and signal_index != last_index - 1
+
+
 def _build_execution_signals(
     bars: DataFrame,
     primary_signal: Series,
@@ -370,10 +427,7 @@ def _build_execution_signals(
     horizon_bars: int,
 ) -> tuple[list[dict[str, Any]], int, int]:
     """Map closed-bar signals to next opens and flatten across data discontinuities."""
-    if len(bars) != len(primary_signal) or len(bars) < 2:
-        raise ValueError("v4ap_signal_bar_alignment_invalid")
-    if timeframe not in TIMEFRAME_MINUTES or horizon_bars < 1:
-        raise ValueError("v4ap_signal_execution_policy_invalid")
+    _validate_signal_execution_inputs(bars, primary_signal, timeframe, horizon_bars)
     dates = pd.to_datetime(bars["date"], utc=True).reset_index(drop=True)
     expected_delta = pd.Timedelta(minutes=TIMEFRAME_MINUTES[timeframe])
     signal_values = primary_signal.to_numpy(dtype=bool)
@@ -381,52 +435,34 @@ def _build_execution_signals(
     gap_flatten_count = 0
     execution_signals: list[dict[str, Any]] = []
     last_index = len(bars) - 1
-    last_entry_signal_index = last_index - horizon_bars - 1
     for index in range(last_index):
         next_date = pd.Timestamp(dates.iloc[index + 1])
         current_date = pd.Timestamp(dates.iloc[index])
         is_gap_boundary = next_date - current_date != expected_delta
         if is_gap_boundary:
             execution_signals.append(
-                {
-                    "signal_timestamp": current_date.isoformat(),
-                    "execution_timestamp": next_date.isoformat(),
-                    "signal": "SELL",
-                    "buy_probability": 1.0,
-                    "position_fraction": 1.0,
-                }
+                _execution_action(current_date, next_date, "SELL")
             )
             gap_flatten_count += 1
             continue
-        if index > last_entry_signal_index or index == last_index - 1:
+        if not _entry_signal_is_eligible(index, last_index, horizon_bars):
             continue
         if not signal_values[index]:
             continue
-        execution_signals.append(
-            {
-                "signal_timestamp": current_date.isoformat(),
-                "execution_timestamp": next_date.isoformat(),
-                "signal": "BUY",
-                "buy_probability": 1.0,
-                "position_fraction": 1.0,
-            }
-        )
+        execution_signals.append(_execution_action(current_date, next_date, "BUY"))
         eligible_entry_count += 1
     if last_index > 0:
         execution_signals.append(
-            {
-                "signal_timestamp": pd.Timestamp(dates.iloc[-2]).isoformat(),
-                "execution_timestamp": pd.Timestamp(dates.iloc[-1]).isoformat(),
-                "signal": "NO_ENTRY",
-                "buy_probability": 1.0,
-                "position_fraction": 1.0,
-            }
+            _execution_action(
+                pd.Timestamp(dates.iloc[-2]),
+                pd.Timestamp(dates.iloc[-1]),
+                "NO_ENTRY",
+            )
         )
     execution_signals.sort(key=lambda item: item["execution_timestamp"])
     if not execution_signals:
         raise ValueError("v4ap_execution_signal_set_empty")
     return execution_signals, eligible_entry_count, gap_flatten_count
-
 
 def _trade_return_diagnostics(trades: list[dict[str, Any]]) -> dict[str, Any]:
     """Calculate per-trade Sharpe and higher moments for DSR, without annualizing."""
@@ -494,6 +530,72 @@ def _expected_maximum_sharpe(
     )
 
 
+
+def _unavailable_candidate_dsr(valid_sharpe_count: int) -> dict[str, Any]:
+    """Return explicit fail-closed DSR fields when the cohort is too small."""
+    return {
+        "dsr_z_score": None,
+        "dsr_probability": None,
+        "dsr_trial_count": DSR_TRIAL_COUNT,
+        "dsr_valid_sharpe_estimate_count": valid_sharpe_count,
+        "dsr_trial_scope": "ALL_36_PREREGISTERED_COMBINATIONS",
+        "dsr_status": "INSUFFICIENT_TRIAL_SHARPE_ESTIMATES",
+    }
+
+
+def _candidate_dsr_diagnostics(
+    item: dict[str, Any],
+    expected_maximum: float,
+    valid_sharpe_count: int,
+) -> dict[str, Any]:
+    """Calculate one candidate's deflated Sharpe result or an explicit failure state."""
+    skew = item.get("return_skewness")
+    kurtosis = item.get("return_kurtosis_non_excess")
+    observed = item.get("sharpe_ratio_per_trade")
+    count = int(item.get("return_observation_count", 0))
+    if (
+        observed is None
+        or skew is None
+        or kurtosis is None
+        or count < DSR_MINIMUM_RETURN_OBSERVATIONS
+    ):
+        dsr_status = "RETURN_DISTRIBUTION_UNAVAILABLE"
+        z_score = None
+        probability = None
+    else:
+        variance_term = (
+            1.0
+            - float(skew) * float(observed)
+            + ((float(kurtosis) - 1.0) / 4.0) * float(observed) ** 2
+        )
+        if not math.isfinite(variance_term) or variance_term <= 0.0:
+            dsr_status = "DSR_VARIANCE_INVALID"
+            z_score = None
+            probability = None
+        else:
+            z_score = (
+                (float(observed) - expected_maximum)
+                * math.sqrt(count - 1)
+                / math.sqrt(variance_term)
+            )
+            probability = NormalDist().cdf(z_score)
+            if not math.isfinite(z_score) or not math.isfinite(probability):
+                dsr_status = "DSR_RESULT_NON_FINITE"
+                z_score = None
+                probability = None
+            else:
+                dsr_status = "COMPUTED"
+    return {
+        "dsr_z_score": z_score,
+        "dsr_probability": probability,
+        "dsr_expected_maximum_sharpe_per_trade": expected_maximum,
+        "dsr_trial_count": DSR_TRIAL_COUNT,
+        "dsr_valid_sharpe_estimate_count": valid_sharpe_count,
+        "dsr_trial_scope": "ALL_36_PREREGISTERED_COMBINATIONS",
+        "dsr_status": dsr_status,
+    }
+
+
 def _attach_dsr_to_cohort(candidates: list[dict[str, Any]]) -> dict[str, Any]:
     """Attach DSR using the complete 36-test cohort, not only successful cells."""
     valid_sharpes = [
@@ -511,69 +613,17 @@ def _attach_dsr_to_cohort(candidates: list[dict[str, Any]]) -> dict[str, Any]:
     }
     if len(valid_sharpes) < 2:
         for item in candidates:
-            item.update(
-                {
-                    "dsr_z_score": None,
-                    "dsr_probability": None,
-                    "dsr_trial_count": DSR_TRIAL_COUNT,
-                    "dsr_valid_sharpe_estimate_count": len(valid_sharpes),
-                    "dsr_trial_scope": cohort["trial_scope"],
-                    "dsr_status": "INSUFFICIENT_TRIAL_SHARPE_ESTIMATES",
-                }
-            )
+            item.update(_unavailable_candidate_dsr(len(valid_sharpes)))
         return cohort
     expected_maximum = _expected_maximum_sharpe(valid_sharpes, DSR_TRIAL_COUNT)
     cohort["expected_maximum_sharpe_per_trade"] = expected_maximum
     for item in candidates:
-        skew = item.get("return_skewness")
-        kurtosis = item.get("return_kurtosis_non_excess")
-        observed = item.get("sharpe_ratio_per_trade")
-        count = int(item.get("return_observation_count", 0))
-        if (
-            observed is None
-            or skew is None
-            or kurtosis is None
-            or count < DSR_MINIMUM_RETURN_OBSERVATIONS
-        ):
-            dsr_status = "RETURN_DISTRIBUTION_UNAVAILABLE"
-            z_score = None
-            probability = None
-        else:
-            variance_term = (
-                1.0
-                - float(skew) * float(observed)
-                + ((float(kurtosis) - 1.0) / 4.0) * float(observed) ** 2
-            )
-            if not math.isfinite(variance_term) or variance_term <= 0.0:
-                dsr_status = "DSR_VARIANCE_INVALID"
-                z_score = None
-                probability = None
-            else:
-                z_score = (
-                    (float(observed) - expected_maximum)
-                    * math.sqrt(count - 1)
-                    / math.sqrt(variance_term)
-                )
-                probability = NormalDist().cdf(z_score)
-                if not math.isfinite(z_score) or not math.isfinite(probability):
-                    dsr_status = "DSR_RESULT_NON_FINITE"
-                    z_score = None
-                    probability = None
-                else:
-                    dsr_status = "COMPUTED"
         item.update(
-            {
-                "dsr_z_score": z_score,
-                "dsr_probability": probability,
-                "dsr_expected_maximum_sharpe_per_trade": expected_maximum,
-                "dsr_trial_count": DSR_TRIAL_COUNT,
-                "dsr_valid_sharpe_estimate_count": len(valid_sharpes),
-                "dsr_trial_scope": cohort["trial_scope"],
-                "dsr_status": dsr_status,
-            }
+            _candidate_dsr_diagnostics(
+                item, expected_maximum, len(valid_sharpes)
+            )
         )
     return cohort
-
 
 def _candidate_qualifies(candidate: dict[str, Any]) -> bool:
     """Apply the owner's four strict, pre-registered acceptance dimensions."""
@@ -851,33 +901,51 @@ def _build_report(
     }
 
 
-def _validate_report(report: dict[str, Any], expected_commit_sha: str) -> None:
-    """Validate every preregistered cell, costs, conclusion, and fail-closed state."""
-    if report.get("schema_version") != SCHEMA:
-        raise ValueError("v4ap_report_schema_invalid")
-    if report.get("commit_sha") != expected_commit_sha:
-        raise ValueError("v4ap_report_commit_mismatch")
+
+def _candidate_report_contract_is_valid(candidate: dict[str, Any]) -> bool:
+    """Check one row's fixed costs, dimensions, and decision consistency."""
+    expected = (
+        ROUND_TRIP_COST_BPS,
+        FEE_BPS_PER_SIDE,
+        SLIPPAGE_BPS_PER_SIDE,
+    )
+    actual = (
+        candidate.get("round_trip_cost_bps"),
+        candidate.get("fee_bps_per_side"),
+        candidate.get("slippage_bps_per_side"),
+    )
+    valid_geometry_names = {str(item["name"]) for item in EXIT_GEOMETRIES}
+    return (
+        actual == expected
+        and candidate.get("timeframe") in TIMEFRAMES
+        and candidate.get("symbol") in ASSETS
+        and candidate.get("strategy") in STRATEGIES
+        and candidate.get("geometry") in valid_geometry_names
+        and candidate.get("qualifies") is _candidate_qualifies(candidate)
+    )
+
+
+def _validate_candidate_grid(report: dict[str, Any]) -> list[dict[str, Any]]:
+    """Require exactly the preregistered unique 36 candidate identities."""
     candidates = report.get("candidates")
     if not isinstance(candidates, list) or len(candidates) != DSR_TRIAL_COUNT:
         raise ValueError("v4ap_candidate_grid_cardinality_invalid")
-    candidate_ids = {
-        str(item.get("candidate_id")) for item in candidates if isinstance(item, dict)
-    }
+    candidate_ids: set[str] = set()
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            raise ValueError("v4ap_candidate_row_invalid")
+        candidate_ids.add(str(candidate.get("candidate_id")))
+        if not _candidate_report_contract_is_valid(candidate):
+            raise ValueError("v4ap_candidate_contract_invalid")
     if candidate_ids != _grid_candidate_ids():
         raise ValueError("v4ap_candidate_grid_identity_invalid")
-    for candidate in candidates:
-        if (
-            candidate.get("round_trip_cost_bps") != ROUND_TRIP_COST_BPS
-            or candidate.get("fee_bps_per_side") != FEE_BPS_PER_SIDE
-            or candidate.get("slippage_bps_per_side") != SLIPPAGE_BPS_PER_SIDE
-            or candidate.get("timeframe") not in TIMEFRAMES
-            or candidate.get("symbol") not in ASSETS
-            or candidate.get("strategy") not in STRATEGIES
-            or candidate.get("geometry")
-            not in {str(item["name"]) for item in EXIT_GEOMETRIES}
-            or candidate.get("qualifies") is not _candidate_qualifies(candidate)
-        ):
-            raise ValueError("v4ap_candidate_contract_invalid")
+    return candidates
+
+
+def _validate_report_decision(
+    report: dict[str, Any], candidates: list[dict[str, Any]]
+) -> None:
+    """Recompute the qualification list and exact terminal decision."""
     qualifying = [
         item["candidate_id"] for item in candidates if _candidate_qualifies(item)
     ]
@@ -886,6 +954,10 @@ def _validate_report(report: dict[str, Any], expected_commit_sha: str) -> None:
     expected_conclusion = CONCLUSION_EDGE_FOUND if qualifying else CONCLUSION_NO_EDGE
     if report.get("conclusion") != expected_conclusion:
         raise ValueError("v4ap_final_conclusion_invalid")
+
+
+def _validate_report_trial_scope(report: dict[str, Any]) -> None:
+    """Keep the DSR and grid correction anchored to all 36 registered trials."""
     if report.get("dsr_cohort", {}).get("trial_count") != DSR_TRIAL_COUNT:
         raise ValueError("v4ap_dsr_trial_count_invalid")
     if (
@@ -893,26 +965,52 @@ def _validate_report(report: dict[str, Any], expected_commit_sha: str) -> None:
         != DSR_TRIAL_COUNT
     ):
         raise ValueError("v4ap_preregistered_grid_invalid")
-    if any(report.get("model_usage", {}).values()):
+
+
+def _validate_report_safety(report: dict[str, Any]) -> None:
+    """Reject AI usage or any promotion/trading permission in the report."""
+    expected_model_usage = {
+        "meta_model_used": False,
+        "hmm_used": False,
+        "cusum_used": False,
+        "lstm_used": False,
+        "reinforcement_learning_used": False,
+    }
+    if report.get("model_usage") != expected_model_usage:
         raise ValueError("v4ap_forbidden_model_usage_detected")
-    safety = report.get("safety")
-    if not isinstance(safety, dict) or not (
-        safety.get("Champion") is None
-        and safety.get("order_permission") is False
-        and safety.get("trading_authorization") == "NO-GO"
-        and safety.get("private_api_calls") == 0
-        and safety.get("real_order_attempts") == 0
-        and safety.get("credentials_used") is False
-        and safety.get("sequence_model_used") is False
-    ):
+    expected_safety = {
+        "Champion": None,
+        "order_permission": False,
+        "trading_authorization": "NO-GO",
+        "private_api_calls": 0,
+        "real_order_attempts": 0,
+        "credentials_used": False,
+        "sequence_model_used": False,
+    }
+    if report.get("safety") != expected_safety:
         raise ValueError("v4ap_safety_contract_invalid")
+
+
+def _validate_report_execution(report: dict[str, Any]) -> None:
+    """Require the report to disclose and preserve the 30 bps cost assumption."""
     execution = report.get("execution_assumptions")
-    if (
-        not isinstance(execution, dict)
-        or execution.get("round_trip_cost_bps") != ROUND_TRIP_COST_BPS
-    ):
+    if not isinstance(execution, dict):
+        raise ValueError("v4ap_execution_cost_contract_invalid")
+    if execution.get("round_trip_cost_bps") != ROUND_TRIP_COST_BPS:
         raise ValueError("v4ap_execution_cost_contract_invalid")
 
+
+def _validate_report(report: dict[str, Any], expected_commit_sha: str) -> None:
+    """Validate the preregistered grid, DSR scope, conclusion, and safety state."""
+    if report.get("schema_version") != SCHEMA:
+        raise ValueError("v4ap_report_schema_invalid")
+    if report.get("commit_sha") != expected_commit_sha:
+        raise ValueError("v4ap_report_commit_mismatch")
+    candidates = _validate_candidate_grid(report)
+    _validate_report_decision(report, candidates)
+    _validate_report_trial_scope(report)
+    _validate_report_safety(report)
+    _validate_report_execution(report)
 
 def _format_number(value: Any, decimals: int = 4) -> str:
     if value is None:
