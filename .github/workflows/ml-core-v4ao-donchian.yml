@@ -34,7 +34,7 @@ permissions:
 
 concurrency:
   group: alix-v4ao-30m-regime-economic
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   v4ao-30m-regime-economic:
