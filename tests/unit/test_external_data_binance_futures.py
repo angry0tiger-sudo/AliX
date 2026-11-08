@@ -271,7 +271,11 @@ def test_get_payload_fails_closed_for_ban_server_error_transport_and_host() -> N
         _get_payload(FakeTransport([_response({}, status=418)]), url, lambda _: None)
 
     server_errors = FakeTransport(
-        [_response({}, status=500), _response({}, status=502), _response({}, status=503)]
+        [
+            _response({}, status=500),
+            _response({}, status=502),
+            _response({}, status=503),
+        ]
     )
     with pytest.raises(ProviderError, match="http_status:503"):
         _get_payload(server_errors, url, lambda _: None)
@@ -280,7 +284,9 @@ def test_get_payload_fails_closed_for_ban_server_error_transport_and_host() -> N
         _get_payload(FakeTransport([RuntimeError("no network")]), url, lambda _: None)
 
     with pytest.raises(ProviderError, match="host_not_allowed"):
-        _get_payload(FakeTransport([]), "https://example.com/fapi/v1/fundingRate", lambda _: None)
+        _get_payload(
+            FakeTransport([]), "https://example.com/fapi/v1/fundingRate", lambda _: None
+        )
 
     with pytest.raises(ProviderError, match="public_timeout"):
         _get_payload(
@@ -418,7 +424,9 @@ class _FakeUrllibResponse:
         return self._body[:maximum]
 
 
-def test_urllib_transport_sends_only_public_get_headers(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_urllib_transport_sends_only_public_get_headers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     captured: dict[str, object] = {}
 
     def fake_urlopen(request: object, *, timeout: float) -> _FakeUrllibResponse:
