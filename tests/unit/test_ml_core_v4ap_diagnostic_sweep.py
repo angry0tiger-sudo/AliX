@@ -75,8 +75,31 @@ def test_donchian_uses_only_previous_20_completed_highs() -> None:
 
 
 def test_execution_signals_are_next_bar_and_have_no_entry_at_boundary() -> None:
-    bars = make_bars(np.full(8, 100.0))
-    primary = pd.Series([True, False, True, True, False, True, True, True])
+    bars = make_bars(np.full(20, 100.0))
+    primary = pd.Series(
+        [
+            True,
+            False,
+            True,
+            True,
+            False,
+            True,
+            True,
+            True,
+            False,
+            False,
+            False,
+            False,
+            False,
+            True,
+            True,
+            True,
+            True,
+            False,
+            True,
+            True,
+        ]
+    )
     actions, entries, gap_flattens = sweep._build_execution_signals(
         bars, primary, timeframe="15m", horizon_bars=2
     )
@@ -84,9 +107,13 @@ def test_execution_signals_are_next_bar_and_have_no_entry_at_boundary() -> None:
     terminal = [item for item in actions if item["signal"] == "NO_ENTRY"]
     assert entries == len(buys)
     assert entries == 4
+    assert all(
+        pd.Timestamp(item["signal_timestamp"]) >= bars["date"].iloc[13]
+        for item in buys
+    )
     assert any(
-        pd.Timestamp(item["signal_timestamp"]) == bars["date"].iloc[5]
-        and pd.Timestamp(item["execution_timestamp"]) == bars["date"].iloc[6]
+        pd.Timestamp(item["signal_timestamp"]) == bars["date"].iloc[13]
+        and pd.Timestamp(item["execution_timestamp"]) == bars["date"].iloc[14]
         for item in buys
     )
     assert gap_flattens == 0
