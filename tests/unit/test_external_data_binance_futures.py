@@ -9,21 +9,17 @@ import pytest
 from external_data.binance_futures import (
     BINANCE_FUTURES_BASE_URL,
     FUNDING_PAGE_LIMIT,
-    OPEN_INTEREST_HISTORY_LIMIT_DAYS,
-    BinanceFuturesSnapshot,
+    BinanceFundingSnapshot,
     BinancePublicHttpsTransport,
     BinanceUsdMFuturesConnector,
     FundingRatePoint,
-    OpenInterestPoint,
     _content_hash,
     _deduplicate_funding,
-    _deduplicate_open_interest,
     _epoch_milliseconds,
     _exchange_timestamp,
     _get_payload,
     _numeric,
     _parse_funding_row,
-    _parse_open_interest_row,
     _request_url,
     _response_payload,
     snapshot_manifest,
@@ -33,7 +29,7 @@ import external_data.binance_futures as provider_module
 
 UTC = timezone.utc
 START = datetime(2020, 1, 1, tzinfo=UTC)
-END = datetime(2021, 1, 1, tzinfo=UTC)
+END = START + timedelta(days=365) - timedelta(minutes=1)
 RETRIEVED = datetime(2026, 11, 8, tzinfo=UTC)
 
 
@@ -43,15 +39,6 @@ def _funding_row(timestamp: datetime, *, rate: str = "0.0001") -> dict[str, obje
         "fundingTime": _epoch_milliseconds(timestamp),
         "fundingRate": rate,
         "markPrice": "50000.0",
-    }
-
-
-def _oi_row(timestamp: datetime, *, interest: str = "100.0") -> dict[str, object]:
-    return {
-        "symbol": "BTCUSDT",
-        "sumOpenInterest": interest,
-        "sumOpenInterestValue": "5000000.0",
-        "timestamp": _epoch_milliseconds(timestamp),
     }
 
 
@@ -77,61 +64,63 @@ class FakeTransport:
         return result
 
 
-def test_funding_paginates_and_oi_window_is_capped_to_latest_month() -> None:
+def _full_snapshot(days: int = 365) -> BinanceFundingSnapshot:
+    end = START + timedelta(days=days) - timedelta(minutes=1)
+    count = days * 3 + 1
+    rates = tuple(
+        FundingRatePoint(
+            "BTCUSDT",
+            START + timedelta(hours=8 * index),
+            0.0001 + index / 100_000_000,
+            50000.0,
+            START + timedelta(hours=8 * index, minutes=5),
+            _content_hash({"funding": index}),
+        )
+        for index in range(count)
+    )
+    return BinanceFundingSnapshot(
+        "BTCUSDT", START, end, rates, RETRIEVED
+    )
+
+
+def test_funding_paginates_and_resumes_after_last_observed_timestamp() -> None:
     page_one = [
         _funding_row(START + timedelta(hours=8 * index), rate=str(index / 100_000))
         for index in range(FUNDING_PAGE_LIMIT)
     ]
     page_two_time = START + timedelta(hours=8 * FUNDING_PAGE_LIMIT)
-    oi_start = END - timedelta(days=OPEN_INTEREST_HISTORY_LIMIT_DAYS)
-    oi_rows = [
-        _oi_row(oi_start),
-        _oi_row(oi_start + timedelta(hours=4), interest="101.0"),
-    ]
     transport = FakeTransport(
-        [
-            _response(page_one),
-            _response([_funding_row(page_two_time)]),
-            _response(oi_rows),
-        ]
+        [_response(page_one), _response([_funding_row(page_two_time)])]
     )
     delays: list[float] = []
     connector = BinanceUsdMFuturesConnector(
-        transport,
-        sleeper=delays.append,
-        inter_page_delay_seconds=0.0,
+        transport, sleeper=delays.append, inter_page_delay_seconds=0.0
     )
 
-    snapshot = connector.fetch("BTCUSDT", start=START, end=END, oi_period="4h")
+    snapshot = connector.fetch(
+        "BTCUSDT",
+        start=START,
+        end=START + timedelta(days=400),
+    )
 
     assert snapshot.symbol == "BTCUSDT"
     assert len(snapshot.funding_rates) == FUNDING_PAGE_LIMIT + 1
-    assert len(snapshot.open_interest) == 2
-    assert snapshot.oi_requested_start == oi_start
     assert snapshot.funding_rates[0].available_at == START + timedelta(minutes=5)
-    assert snapshot.open_interest[0].available_at == oi_start + timedelta(
-        hours=4, minutes=5
-    )
     first_query = parse_qs(urlsplit(transport.urls[0]).query)
     second_query = parse_qs(urlsplit(transport.urls[1]).query)
-    oi_query = parse_qs(urlsplit(transport.urls[2]).query)
     assert first_query["limit"] == ["1000"]
-    # Full pages resume after the last observed settlement, not the next sparse event.
     last_page_time = START + timedelta(hours=8 * (FUNDING_PAGE_LIMIT - 1))
     assert int(second_query["startTime"][0]) == _epoch_milliseconds(last_page_time) + 1
-    assert int(oi_query["startTime"][0]) == _epoch_milliseconds(oi_start)
-    assert oi_query["period"] == ["4h"]
     assert delays == [0.0]
+    assert all(urlsplit(url).path == "/fapi/v1/fundingRate" for url in transport.urls)
 
 
-def test_fetch_rejects_unapproved_symbol_period_and_invalid_window_before_io() -> None:
+def test_fetch_rejects_unapproved_symbols_and_invalid_windows_before_io() -> None:
     transport = FakeTransport([])
     connector = BinanceUsdMFuturesConnector(transport, sleeper=lambda _: None)
 
     with pytest.raises(ProviderError, match="symbol_not_allowed"):
         connector.fetch("DOGEUSDT", start=START, end=END)
-    with pytest.raises(ProviderError, match="period_not_allowed"):
-        connector.fetch("BTCUSDT", start=START, end=END, oi_period="5m")
     with pytest.raises(ProviderError, match="time_window_invalid"):
         connector.fetch("BTCUSDT", start=END, end=START)
     with pytest.raises(ProviderError, match="timezone_required"):
@@ -172,7 +161,7 @@ def test_numeric_parser_fails_closed(value: object, positive: bool) -> None:
         _numeric(value, "test", positive=positive)
 
 
-def test_funding_parser_keeps_negative_and_null_mark_price() -> None:
+def test_funding_parser_preserves_negative_rates_and_null_mark_price() -> None:
     row = _funding_row(START, rate="-0.001")
     row["markPrice"] = ""
     parsed = _parse_funding_row(row, "BTCUSDT")
@@ -193,38 +182,24 @@ def test_funding_parser_rejects_wrong_symbol_and_invalid_mark_price() -> None:
         _parse_funding_row(row, "BTCUSDT")
 
 
-def test_open_interest_parser_validates_positive_values_and_availability() -> None:
-    parsed = _parse_open_interest_row(_oi_row(START), "BTCUSDT", "4h")
-    assert parsed.sum_open_interest == 100.0
-    assert parsed.available_at == START + timedelta(hours=4, minutes=5)
-    row = _oi_row(START, interest="0")
-    with pytest.raises(ProviderError, match="numeric_invalid:sumOpenInterest"):
-        _parse_open_interest_row(row, "BTCUSDT", "4h")
-
-
 def test_deduplication_accepts_identical_replays_and_rejects_conflicts() -> None:
     row = _funding_row(START)
     one = _parse_funding_row(row, "BTCUSDT")
     assert _deduplicate_funding([one, one]) == (one,)
-    other = _parse_funding_row({**row, "fundingRate": "0.0002"}, "BTCUSDT")
+    changed = _parse_funding_row({**row, "fundingRate": "0.0002"}, "BTCUSDT")
     with pytest.raises(ProviderError, match="funding_timestamp_conflict"):
-        _deduplicate_funding([one, other])
+        _deduplicate_funding([one, changed])
 
-    oi_row = _oi_row(START)
-    oi_one = _parse_open_interest_row(oi_row, "BTCUSDT", "4h")
-    assert _deduplicate_open_interest([oi_one, oi_one]) == (oi_one,)
-    oi_other = _parse_open_interest_row(
-        {**oi_row, "sumOpenInterest": "120.0"}, "BTCUSDT", "4h"
+
+def test_request_builder_allows_only_the_public_funding_endpoint() -> None:
+    url = _request_url(
+        "/fapi/v1/fundingRate", {"symbol": "BTCUSDT", "limit": 1000}
     )
-    with pytest.raises(ProviderError, match="oi_timestamp_conflict"):
-        _deduplicate_open_interest([oi_one, oi_other])
-
-
-def test_request_builder_restricts_endpoint_paths() -> None:
-    url = _request_url("/fapi/v1/fundingRate", {"symbol": "BTCUSDT", "limit": 1000})
     assert url.startswith(BINANCE_FUTURES_BASE_URL)
     with pytest.raises(ProviderError, match="endpoint_not_allowed"):
         _request_url("/fapi/v1/order", {"symbol": "BTCUSDT"})
+    with pytest.raises(ProviderError, match="endpoint_not_allowed"):
+        _request_url("/futures/data/openInterestHist", {"symbol": "BTCUSDT"})
 
 
 def test_payload_reader_rejects_invalid_responses_and_json() -> None:
@@ -281,11 +256,15 @@ def test_get_payload_fails_closed_for_ban_server_error_transport_and_host() -> N
         _get_payload(server_errors, url, lambda _: None)
 
     with pytest.raises(ProviderError, match="transport_error"):
-        _get_payload(FakeTransport([RuntimeError("no network")]), url, lambda _: None)
+        _get_payload(FakeTransport([RuntimeError("offline")]), url, lambda _: None)
 
     with pytest.raises(ProviderError, match="host_not_allowed"):
         _get_payload(
             FakeTransport([]), "https://example.com/fapi/v1/fundingRate", lambda _: None
+        )
+    with pytest.raises(ProviderError, match="host_not_allowed"):
+        _get_payload(
+            FakeTransport([]), "https://fapi.binance.com/fapi/v1/order", lambda _: None
         )
 
     with pytest.raises(ProviderError, match="public_timeout"):
@@ -296,7 +275,7 @@ def test_get_payload_fails_closed_for_ban_server_error_transport_and_host() -> N
         )
 
 
-def test_funding_and_oi_fetchers_reject_bad_page_shapes_and_windows() -> None:
+def test_funding_fetcher_rejects_bad_page_shapes_and_out_of_window_rows() -> None:
     connector = BinanceUsdMFuturesConnector(
         FakeTransport([_response({"not": "a list"})]),
         sleeper=lambda _: None,
@@ -306,79 +285,43 @@ def test_funding_and_oi_fetchers_reject_bad_page_shapes_and_windows() -> None:
 
     outside = _funding_row(END + timedelta(minutes=1))
     connector = BinanceUsdMFuturesConnector(
-        FakeTransport([_response([outside])]),
-        sleeper=lambda _: None,
+        FakeTransport([_response([outside])]), sleeper=lambda _: None
     )
     with pytest.raises(ProviderError, match="funding_timestamp_outside_window"):
         connector.fetch("BTCUSDT", start=START, end=END)
 
+    unsorted = [
+        _funding_row(START + timedelta(hours=8)),
+        _funding_row(START),
+    ]
     connector = BinanceUsdMFuturesConnector(
-        FakeTransport([_response([]), _response([_oi_row(START)])]),
-        sleeper=lambda _: None,
+        FakeTransport([_response(unsorted)]), sleeper=lambda _: None
     )
-    with pytest.raises(ProviderError, match="oi_timestamp_outside_window"):
+    with pytest.raises(ProviderError, match="funding_page_order_invalid"):
         connector.fetch("BTCUSDT", start=START, end=END)
 
 
-def test_connector_allows_empty_pages_but_preserves_empty_history() -> None:
+def test_connector_preserves_empty_funding_history() -> None:
     connector = BinanceUsdMFuturesConnector(
-        FakeTransport([_response([]), _response([])]),
-        sleeper=lambda _: None,
+        FakeTransport([_response([])]), sleeper=lambda _: None
     )
     snapshot = connector.fetch("BTCUSDT", start=START, end=END)
     assert snapshot.funding_rates == ()
-    assert snapshot.open_interest == ()
 
 
-def _full_snapshot(days: int = 365) -> BinanceFuturesSnapshot:
-    end = START + timedelta(days=days)
-    funding = tuple(
-        FundingRatePoint(
-            "BTCUSDT",
-            START + timedelta(hours=8 * index),
-            0.0001,
-            50000.0,
-            START + timedelta(hours=8 * index, minutes=5),
-            _content_hash({"funding": index}),
-        )
-        for index in range(days * 3 + 1)
-    )
-    oi = tuple(
-        OpenInterestPoint(
-            "BTCUSDT",
-            "4h",
-            START + timedelta(hours=4 * index),
-            100.0 + index,
-            5_000_000.0,
-            START + timedelta(hours=4 * index, minutes=5),
-            _content_hash({"oi": index}),
-        )
-        for index in range(days * 6 + 1)
-    )
-    return BinanceFuturesSnapshot(
-        "BTCUSDT",
-        START,
-        end,
-        START,
-        funding,
-        oi,
-        RETRIEVED,
-        "4h",
-    )
-
-
-def test_snapshot_manifest_accepts_full_coverage_and_keeps_safety_closed() -> None:
+def test_snapshot_manifest_accepts_full_funding_coverage_and_closed_safety() -> None:
     manifest = snapshot_manifest(
         _full_snapshot(),
         commit_sha="a" * 40,
         requested_days=365,
     )
-    funding_section = manifest["funding"]
-    oi_section = manifest["open_interest"]
-    assert isinstance(funding_section, dict)
-    assert isinstance(oi_section, dict)
-    assert funding_section["full_requested_history_available"] is True
-    assert oi_section["full_requested_history_available"] is True
+    funding = manifest["funding"]
+    assert isinstance(funding, dict)
+    assert funding["full_requested_history_available"] is True
+    assert funding["coverage_status"] == "FULL_REQUESTED_HISTORY"
+    assert funding["coverage_fraction_estimate"] >= 0.90
+    assert manifest["endpoint"] == "/fapi/v1/fundingRate"
+    assert "open_interest" not in manifest
     assert manifest["private_api_calls"] == 0
     assert manifest["credentials_used"] is False
     assert manifest["Champion"] is None
@@ -386,32 +329,27 @@ def test_snapshot_manifest_accepts_full_coverage_and_keeps_safety_closed() -> No
     assert manifest["trading_authorization"] == "NO-GO"
 
 
-def test_snapshot_manifest_blocks_latest_month_oi_and_records_missing_periods() -> None:
-    full = _full_snapshot(days=30)
-    bounded = BinanceFuturesSnapshot(
-        full.symbol,
-        START,
-        START + timedelta(days=1825),
-        START + timedelta(days=1795),
-        full.funding_rates,
-        full.open_interest,
+def test_snapshot_manifest_blocks_sparse_or_incomplete_funding_history() -> None:
+    complete = _full_snapshot(days=30)
+    sparse = BinanceFundingSnapshot(
+        complete.symbol,
+        complete.requested_start,
+        complete.requested_end,
+        complete.funding_rates[::4],
         RETRIEVED,
-        "4h",
     )
     manifest = snapshot_manifest(
-        bounded,
+        sparse,
         commit_sha="b" * 40,
         requested_days=1825,
     )
-    oi_section = manifest["open_interest"]
-    assert isinstance(oi_section, dict)
-    assert oi_section["full_requested_history_available"] is False
-    assert manifest["research_status"] == "BLOCKED_INSUFFICIENT_OI_HISTORY"
-    assert oi_section["missing_periods_are_not_filled"] is True
+    funding = manifest["funding"]
+    assert funding["full_requested_history_available"] is False
+    assert manifest["research_status"] == "BLOCKED_INSUFFICIENT_FUNDING_HISTORY"
     with pytest.raises(ProviderError, match="commit_sha_invalid"):
-        snapshot_manifest(bounded, commit_sha="bad", requested_days=1825)
+        snapshot_manifest(sparse, commit_sha="bad", requested_days=1825)
     with pytest.raises(ProviderError, match="requested_days_invalid"):
-        snapshot_manifest(bounded, commit_sha="b" * 40, requested_days=0)
+        snapshot_manifest(sparse, commit_sha="b" * 40, requested_days=0)
 
 
 class _FakeHttpsResponse:
@@ -436,11 +374,7 @@ class _FakeHttpsConnection:
         self.closed = False
 
     def request(
-        self,
-        method: str,
-        target: str,
-        *,
-        headers: dict[str, str],
+        self, method: str, target: str, *, headers: dict[str, str]
     ) -> None:
         self.requests.append((method, target, headers))
         if self.failure is not None:
@@ -464,14 +398,13 @@ def test_https_transport_sends_only_public_get_headers(
     def fake_connection(
         host: str, *, port: int, timeout: float
     ) -> _FakeHttpsConnection:
-        captured["host"] = host
-        captured["port"] = port
-        captured["timeout"] = timeout
+        captured.update({"host": host, "port": port, "timeout": timeout})
         return fake
 
     monkeypatch.setattr(provider_module, "HTTPSConnection", fake_connection)
-    transport = BinancePublicHttpsTransport(timeout_seconds=9.0)
-    response = transport.get(f"{BINANCE_FUTURES_BASE_URL}/fapi/v1/fundingRate")
+    response = BinancePublicHttpsTransport(timeout_seconds=9.0).get(
+        f"{BINANCE_FUTURES_BASE_URL}/fapi/v1/fundingRate"
+    )
     method, target, headers = fake.requests[0]
     assert response.status_code == 200
     assert response.body == '{"status":"ok"}'
@@ -484,7 +417,7 @@ def test_https_transport_sends_only_public_get_headers(
     assert fake.closed is True
 
 
-def test_https_transport_maps_rate_limits_and_rejects_network_failures(
+def test_https_transport_maps_rate_limits_and_network_failures(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     limited = _FakeHttpsConnection(_FakeHttpsResponse(429, b'{"error":"limited"}'))
@@ -512,7 +445,7 @@ def test_https_transport_maps_rate_limits_and_rejects_network_failures(
     assert failed.closed is True
 
 
-def test_https_transport_rejects_wrong_host_path_and_invalid_bytes() -> None:
+def test_https_transport_rejects_wrong_host_path_bytes_and_timeout() -> None:
     transport = BinancePublicHttpsTransport()
     with pytest.raises(ProviderError, match="host_or_path_not_allowed"):
         transport.get("https://example.com/data")
@@ -521,8 +454,10 @@ def test_https_transport_rejects_wrong_host_path_and_invalid_bytes() -> None:
     with pytest.raises(ProviderError, match="host_or_path_not_allowed"):
         transport.get("http://fapi.binance.com/fapi/v1/fundingRate")
     with pytest.raises(ProviderError, match="encoding_invalid"):
-        transport._response_body(b"\xff")
+        transport._response_body(b"\\xff")
     with pytest.raises(ProviderError, match="response_too_large"):
-        transport._response_body(b"x" * (provider_module.MAX_RESPONSE_BYTES + 1))
+        transport._response_body(
+            b"x" * (provider_module.MAX_RESPONSE_BYTES + 1)
+        )
     with pytest.raises(ProviderError, match="timeout_configuration_invalid"):
         BinancePublicHttpsTransport(timeout_seconds=0)
