@@ -541,7 +541,9 @@ def _candidate_has_net_pf_gate(candidate: dict[str, Any]) -> bool:
 
 
 def _report_decision(
-    candidates: list[dict[str, Any]], status: str
+    candidates: list[dict[str, Any]],
+    model_groups: list[dict[str, Any]],
+    status: str,
 ) -> tuple[str, list[str], list[str], int]:
     qualifying = [
         str(item["candidate_id"]) for item in candidates if item["qualifies"]
@@ -551,7 +553,7 @@ def _report_decision(
         for item in candidates
         if _candidate_has_net_pf_gate(item)
     ]
-    model_fit_count = sum(bool(item.get("fit_performed")) for item in candidates)
+    model_fit_count = sum(bool(item.get("fit_performed")) for item in model_groups)
     if status == "BLOCKED_INSUFFICIENT_FUNDING_HISTORY":
         conclusion = "FUNDING_COVERAGE_INSUFFICIENT_NO_ECONOMIC_CONCLUSION"
     elif qualifying:
@@ -564,7 +566,6 @@ def _report_decision(
 
 
 def _report_dataset_block(
-    commit_sha: str,
     start_utc: pd.Timestamp,
     end_utc: pd.Timestamp,
     market_provenance: dict[str, dict[str, Any]],
@@ -656,7 +657,7 @@ def _build_report(
     status: str,
 ) -> dict[str, Any]:
     conclusion, qualifying, pf_candidates, model_fit_count = _report_decision(
-        candidates, status
+        candidates, model_groups, status
     )
     return {
         "schema_version": REPORT_SCHEMA_VERSION,
@@ -664,7 +665,7 @@ def _build_report(
         "status": status,
         "diagnostic": "V4-AQ_FUNDING_ONLY_META_FILTERED_36_CELL_SWEEP",
         "dataset": _report_dataset_block(
-            commit_sha, start_utc, end_utc, market_provenance
+            start_utc, end_utc, market_provenance
         ),
         "funding": _report_funding_block(funding_provenance),
         "preregistered_grid": {
