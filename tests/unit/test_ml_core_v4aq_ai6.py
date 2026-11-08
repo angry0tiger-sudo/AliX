@@ -4,6 +4,7 @@ from datetime import timezone
 import hashlib
 import json
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -13,6 +14,7 @@ import pytest
 from scripts import run_ml_core_v4aq_ai6 as ai6
 from scripts import run_ml_core_v4ap_diagnostic_sweep as v4ap
 from services.meta_labeling import v4x
+from services.meta_labeling.v4aq import V4AQ_META_FEATURE_COLUMNS
 
 UTC = timezone.utc
 START = pd.Timestamp("2021-01-01T00:00:00Z")
@@ -20,7 +22,7 @@ END = START + pd.Timedelta(days=1825) - pd.Timedelta(minutes=1)
 COMMIT = "a" * 40
 
 
-def _funding_artifact(directory: Path, symbol: str, *, ready: bool = True) -> dict:
+def _funding_artifact(directory: Path, symbol: str, *, ready: bool = True) -> dict[str, Any]:
     stem = f"binance-{symbol.lower()}"
     csv_path = directory / f"{stem}-funding.csv"
     timestamps = pd.date_range(START, END, periods=20)
@@ -120,11 +122,16 @@ def test_forward_labeling_applies_30bps_cost_and_rejects_gap_and_tail() -> None:
     labelled = ai6._label_primary_events(bars, events, timeframe="4h", horizon_bars=1)
     assert labelled["event_index"].tolist() == [0, 1]
     assert labelled["meta_label"].tolist() == [1, 0]
-    assert labelled.loc[0, "net_return_fraction"] > 0.0
-    assert labelled.loc[1, "net_return_fraction"] < 0.0
+    net_returns = labelled["net_return_fraction"].to_numpy(dtype=float)
+    assert net_returns[0] > 0.0
+    assert net_returns[1] < 0.0
 
     discontinuous = bars.copy()
-    discontinuous.loc[2, "date"] += pd.Timedelta(minutes=1)
+    discontinuous_dates = pd.to_datetime(discontinuous["date"], utc=True)
+    discontinuous_dates.iloc[2] = (
+        discontinuous_dates.iloc[2] + pd.Timedelta(minutes=1)
+    )
+    discontinuous["date"] = discontinuous_dates
     gap_labels = ai6._label_primary_events(
         discontinuous,
         DataFrame({"event_index": [0, 1]}),
@@ -135,7 +142,7 @@ def test_forward_labeling_applies_30bps_cost_and_rejects_gap_and_tail() -> None:
 
 
 def test_candidate_acceptance_requires_all_economic_and_statistical_gates() -> None:
-    candidate = {
+    candidate: dict[str, Any] = {
         "trade_count": 100,
         "win_rate": 0.55,
         "net_profit_factor": 1.25,
@@ -209,11 +216,17 @@ def test_evaluate_primary_group_uses_purged_oof_fit_and_forward_auc(
     features = DataFrame(
         {
             name: np.linspace(0.1, 1.0, len(bars))
-            for name in ai6.V4AQ_META_FEATURE_COLUMNS
+            for name in V4AQ_META_FEATURE_COLUMNS
         }
     )
 
-    def fake_oof(signal, *, start_index, stop_index, fold_count):
+    def fake_oof(
+        signal: Series[bool],
+        *,
+        start_index: int,
+        stop_index: int,
+        fold_count: int,
+    ) -> DataFrame:
         indexes = np.arange(start_index + 2, stop_index - 2, 2)
         return DataFrame(
             {
@@ -224,7 +237,13 @@ def test_evaluate_primary_group_uses_purged_oof_fit_and_forward_auc(
             }
         )
 
-    def fake_labels(frame, events, *, timeframe, horizon_bars):
+    def fake_labels(
+        frame: DataFrame,
+        events: DataFrame,
+        *,
+        timeframe: str,
+        horizon_bars: int,
+    ) -> DataFrame:
         result = events.copy().reset_index(drop=True)
         result["label_end_idx"] = result["event_index"] + horizon_bars
         result["meta_label"] = np.arange(len(result)) % 2
@@ -233,10 +252,17 @@ def test_evaluate_primary_group_uses_purged_oof_fit_and_forward_auc(
         )
         return result
 
-    def fake_split(events, *, outer_train_end_index):
+    def fake_split(
+        events: DataFrame, *, outer_train_end_index: int
+    ) -> tuple[DataFrame, DataFrame]:
         return events.iloc[:-20].copy(), events.iloc[-20:].copy()
 
-    def fake_fit(fit_features, fit_labels, calibration_features, **kwargs):
+    def fake_fit(
+        fit_features: DataFrame,
+        fit_labels: Series[int],
+        calibration_features: DataFrame,
+        **kwargs: Any,
+    ) -> tuple[object, dict[str, Any]]:
         assert len(fit_features) >= 40
         assert fit_labels.nunique() == 2
         assert len(calibration_features) == 20
@@ -280,7 +306,7 @@ def test_evaluate_primary_group_fails_closed_when_training_support_is_invalid(
     bars = _bars(40, "4h")
     primary = Series(np.zeros(len(bars), dtype=bool))
     features = DataFrame(
-        {name: np.ones(len(bars)) for name in ai6.V4AQ_META_FEATURE_COLUMNS}
+        {name: np.ones(len(bars)) for name in V4AQ_META_FEATURE_COLUMNS}
     )
     monkeypatch.setattr(
         v4x,
@@ -376,7 +402,14 @@ def test_v4aq_ai6_sweep_runs_exact_grid_and_keeps_final_holdout_untouched(
     end_utc = END.isoformat()
     calls: dict[str, int] = {"models": 0, "candidates": 0}
 
-    def fake_load_market(input_dir, *, symbol, commit_sha, start_utc, end_utc):
+    def fake_load_market(
+        input_dir: Path,
+        *,
+        symbol: str,
+        commit_sha: str,
+        start_utc: pd.Timestamp,
+        end_utc: pd.Timestamp,
+    ) -> tuple[DataFrame, dict[str, Any]]:
         return DataFrame(), {
             "symbol": symbol,
             "row_count": 1000,
@@ -384,10 +417,16 @@ def test_v4aq_ai6_sweep_runs_exact_grid_and_keeps_final_holdout_untouched(
             "public_api_only": True,
         }
 
-    def fake_resample(minute_data, timeframe):
+    def fake_resample(minute_data: DataFrame, timeframe: str) -> DataFrame:
         return _bars(400, timeframe)
 
-    def fake_external(bars, funding, *, symbol, timeframe):
+    def fake_external(
+        bars: DataFrame,
+        funding: DataFrame,
+        *,
+        symbol: str,
+        timeframe: str,
+    ) -> tuple[DataFrame, dict[str, int]]:
         return (
             DataFrame(
                 {
@@ -399,19 +438,28 @@ def test_v4aq_ai6_sweep_runs_exact_grid_and_keeps_final_holdout_untouched(
             {"complete_funding_feature_rows": len(bars)},
         )
 
-    def fake_primary_context(bars, external, *, strategy):
+    def fake_primary_context(
+        bars: DataFrame, external: DataFrame, *, strategy: str
+    ) -> DataFrame:
         return DataFrame(
-            {name: np.ones(len(bars)) for name in ai6.V4AQ_META_FEATURE_COLUMNS},
+            {name: np.ones(len(bars)) for name in V4AQ_META_FEATURE_COLUMNS},
             index=bars.index,
         )
 
-    def fake_signal(bars):
+    def fake_signal(bars: DataFrame) -> tuple[Series[bool], dict[str, int]]:
         signal = Series(np.arange(len(bars)) % 5 == 0, index=bars.index)
         return signal, {"primary_signal_count": int(signal.sum())}
 
     def fake_evaluate(
-        bars, features, signal, *, strategy, timeframe, train_end, forward_end
-    ):
+        bars: DataFrame,
+        features: DataFrame,
+        signal: Series[bool],
+        *,
+        strategy: str,
+        timeframe: str,
+        train_end: int,
+        forward_end: int,
+    ) -> tuple[Series[bool], dict[str, Any], list[dict[str, Any]]]:
         calls["models"] += 1
         filtered = Series(False, index=bars.index)
         filtered.iloc[train_end:forward_end] = signal.iloc[train_end:forward_end]
@@ -436,17 +484,17 @@ def test_v4aq_ai6_sweep_runs_exact_grid_and_keeps_final_holdout_untouched(
         )
 
     def fake_run_candidate(
-        bars,
+        bars: DataFrame,
         *,
-        symbol,
-        timeframe,
-        strategy,
-        geometry,
-        signal,
-        strategy_diagnostics,
-        execution,
-        documented_gap_ranges=(),
-    ):
+        symbol: str,
+        timeframe: str,
+        strategy: str,
+        geometry: dict[str, Any],
+        signal: Series[bool],
+        strategy_diagnostics: dict[str, Any],
+        execution: Any,
+        documented_gap_ranges: tuple[tuple[str, str], ...] = (),
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         calls["candidates"] += 1
         candidate = {
             "candidate_id": v4ap._candidate_id(
@@ -489,7 +537,7 @@ def test_v4aq_ai6_sweep_runs_exact_grid_and_keeps_final_holdout_untouched(
         }
         return candidate, []
 
-    def fake_dsr(candidates):
+    def fake_dsr(candidates: list[dict[str, Any]]) -> dict[str, Any]:
         for candidate in candidates:
             candidate["dsr_z_score"] = 0.0
             candidate["dsr_trial_count"] = 36

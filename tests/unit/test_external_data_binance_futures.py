@@ -340,6 +340,7 @@ def test_snapshot_manifest_blocks_sparse_or_incomplete_funding_history() -> None
         requested_days=1825,
     )
     funding = manifest["funding"]
+    assert isinstance(funding, dict)
     assert funding["full_requested_history_available"] is False
     assert manifest["research_status"] == "BLOCKED_INSUFFICIENT_FUNDING_HISTORY"
     with pytest.raises(ProviderError, match="commit_sha_invalid"):

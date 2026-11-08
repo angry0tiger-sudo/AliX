@@ -8,6 +8,16 @@ from pandas import DataFrame, Series
 import services.meta_labeling.v4aq as v4aq
 
 
+def _assert_v4aq_finite(values: np.ndarray) -> None:
+    if not bool(np.isfinite(values).all()):
+        raise AssertionError("expected finite meta features")
+
+
+def _assert_v4aq_missing(values: DataFrame) -> None:
+    if not bool(values.isna().all(axis=None)):
+        raise AssertionError("expected missing warm-up meta features")
+
+
 def _bars(rows: int = 260) -> DataFrame:
     close = 100.0 + np.sin(np.arange(rows) / 9.0) * 5.0 + np.arange(rows) * 0.02
     return DataFrame(
@@ -36,9 +46,9 @@ def test_donchian_meta_context_is_causal_and_preserves_funding_missing_rows() ->
         bars, external, strategy=v4aq.DONCHIAN_STRATEGY
     )
     assert tuple(features.columns) == v4aq.V4AQ_META_FEATURE_COLUMNS
-    assert features.iloc[: v4aq.V4AQ_PRIMARY_LOOKBACK, :2].isna().all(axis=None)
+    _assert_v4aq_missing(features.iloc[: v4aq.V4AQ_PRIMARY_LOOKBACK, :2])
     assert pd.isna(features.loc[0, "funding_rate_ma"])
-    assert np.isfinite(features.iloc[21:].to_numpy(dtype=float)).all()
+    _assert_v4aq_finite(features.iloc[21:].to_numpy(dtype=float))
     changed = bars.copy()
     changed.loc[30:, ["high", "low", "close"]] *= 100.0
     changed_features = v4aq.build_v4aq_meta_features(

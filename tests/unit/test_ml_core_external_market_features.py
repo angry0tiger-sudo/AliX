@@ -52,7 +52,7 @@ def test_funding_features_are_causal_and_have_exact_schema() -> None:
     assert diagnostics["interpolation_used"] is False
     assert diagnostics["backfill_used"] is False
     assert diagnostics["future_observations_joined"] == 0
-    assert diagnostics["complete_funding_feature_rows"] > 0
+    assert int(diagnostics["complete_funding_feature_rows"]) > 0
 
 
 def test_custom_indexes_and_future_publication_are_preserved() -> None:
