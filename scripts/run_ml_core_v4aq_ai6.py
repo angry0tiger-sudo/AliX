@@ -70,24 +70,11 @@ def _validate_commit_sha(commit_sha: str) -> None:
         raise ValueError("ai6_commit_sha_invalid")
 
 
-def _read_funding_artifact(
-    external_dir: Path,
-    symbol: str,
-    commit_sha: str,
-    start_utc: pd.Timestamp,
-    end_utc: pd.Timestamp,
-) -> tuple[DataFrame, dict[str, Any], bool]:
-    """Verify one Funding CSV and its source manifest; reject all OI-era schemas."""
-    stem = f"binance-{symbol.lower()}"
-    manifest_path = external_dir / f"{stem}-manifest.json"
-    if not manifest_path.is_file():
-        raise ValueError(f"ai6_funding_manifest_missing:{symbol}")
-    raw = json.loads(manifest_path.read_text(encoding="utf-8"))
-    if not isinstance(raw, dict):
-        raise ValueError(f"ai6_funding_manifest_schema_invalid:{symbol}")
+def _validate_funding_manifest_contract(
+    raw: dict[str, Any], symbol: str, commit_sha: str
+) -> dict[str, Any]:
     if "open_interest" in raw or "open_interest_csv" in raw:
         raise ValueError(f"ai6_oi_contract_must_be_absent:{symbol}")
-    funding_meta = raw.get("funding")
     expected = (
         raw.get("schema_version") == "alix.binance.usdm-funding.v1",
         raw.get("commit_sha") == commit_sha,
@@ -109,33 +96,73 @@ def _read_funding_artifact(
     )
     if not all(expected):
         raise ValueError(f"ai6_funding_manifest_contract_invalid:{symbol}")
+    funding_meta = raw.get("funding")
     if not isinstance(funding_meta, dict):
         raise ValueError(f"ai6_funding_manifest_section_invalid:{symbol}")
+    return funding_meta
+
+
+def _validate_funding_manifest_window(
+    raw: dict[str, Any],
+    symbol: str,
+    start_utc: pd.Timestamp,
+    end_utc: pd.Timestamp,
+) -> None:
     requested_start = pd.Timestamp(raw["requested_start_utc"])
     requested_end = pd.Timestamp(raw["requested_end_utc"])
-    if (
-        requested_start.tzinfo is None
-        or requested_end.tzinfo is None
-        or requested_start.tz_convert("UTC") != start_utc
-        or requested_end.tz_convert("UTC") != end_utc
-    ):
+    matches = (
+        requested_start.tzinfo is not None
+        and requested_end.tzinfo is not None
+        and requested_start.tz_convert("UTC") == start_utc
+        and requested_end.tz_convert("UTC") == end_utc
+    )
+    if not matches:
         raise ValueError(f"ai6_funding_manifest_window_mismatch:{symbol}")
+
+
+def _load_funding_manifest(
+    external_dir: Path,
+    symbol: str,
+    commit_sha: str,
+    start_utc: pd.Timestamp,
+    end_utc: pd.Timestamp,
+) -> tuple[dict[str, Any], dict[str, Any], str]:
+    stem = f"binance-{symbol.lower()}"
+    manifest_path = external_dir / f"{stem}-manifest.json"
+    if not manifest_path.is_file():
+        raise ValueError(f"ai6_funding_manifest_missing:{symbol}")
+    raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError(f"ai6_funding_manifest_schema_invalid:{symbol}")
+    funding_meta = _validate_funding_manifest_contract(raw, symbol, commit_sha)
+    _validate_funding_manifest_window(raw, symbol, start_utc, end_utc)
     csv_name = raw.get("funding_csv")
     if csv_name != f"{stem}-funding.csv":
         raise ValueError(f"ai6_funding_csv_name_invalid:{symbol}")
+    return raw, funding_meta, str(csv_name)
+
+
+def _read_funding_csv(
+    external_dir: Path,
+    symbol: str,
+    csv_name: str,
+    raw: dict[str, Any],
+    funding_meta: dict[str, Any],
+) -> DataFrame:
     csv_path = external_dir / csv_name
     if not csv_path.is_file():
         raise ValueError(f"ai6_funding_csv_missing:{symbol}")
-    digest = _sha256(csv_path)
-    if digest != raw.get("funding_csv_sha256"):
+    if _sha256(csv_path) != raw.get("funding_csv_sha256"):
         raise ValueError(f"ai6_funding_csv_hash_mismatch:{symbol}")
     funding = pd.read_csv(csv_path)
     if tuple(funding.columns) != FUNDING_CSV_COLUMNS:
         raise ValueError(f"ai6_funding_csv_schema_invalid:{symbol}")
     if len(funding) != funding_meta.get("row_count"):
         raise ValueError(f"ai6_funding_row_count_mismatch:{symbol}")
-    if funding.empty:
-        return funding, raw, False
+    return funding
+
+
+def _validate_funding_csv_values(funding: DataFrame, symbol: str) -> None:
     if not funding["symbol"].eq(symbol).all():
         raise ValueError(f"ai6_funding_symbol_mismatch:{symbol}")
     funding["funding_time"] = pd.to_datetime(
@@ -144,22 +171,48 @@ def _read_funding_artifact(
     funding["available_at"] = pd.to_datetime(
         funding["available_at"], utc=True, errors="coerce"
     )
-    funding["funding_rate"] = pd.to_numeric(funding["funding_rate"], errors="coerce")
-    if (
+    funding["funding_rate"] = pd.to_numeric(
+        funding["funding_rate"], errors="coerce"
+    )
+    invalid = (
         funding[["funding_time", "available_at", "funding_rate"]].isna().any().any()
         or not np.isfinite(funding["funding_rate"].to_numpy(dtype=float)).all()
         or funding["funding_time"].duplicated().any()
         or not funding["funding_time"].is_monotonic_increasing
-    ):
+    )
+    if invalid:
         raise ValueError(f"ai6_funding_csv_values_invalid:{symbol}")
-    ready = (
+
+
+def _funding_coverage_ready(
+    raw: dict[str, Any], funding_meta: dict[str, Any]
+) -> bool:
+    return bool(
         raw.get("research_status") == "READY_FOR_FUNDING_FEATURE_JOIN"
         and funding_meta.get("full_requested_history_available") is True
         and funding_meta.get("coverage_status") == "FULL_REQUESTED_HISTORY"
         and int(funding_meta.get("row_count", 0)) >= 20
     )
-    return funding, raw, bool(ready)
 
+
+def _read_funding_artifact(
+    external_dir: Path,
+    symbol: str,
+    commit_sha: str,
+    start_utc: pd.Timestamp,
+    end_utc: pd.Timestamp,
+) -> tuple[DataFrame, dict[str, Any], bool]:
+    """Verify one Funding CSV and its source manifest; reject all OI-era schemas."""
+    raw, funding_meta, csv_name = _load_funding_manifest(
+        external_dir, symbol, commit_sha, start_utc, end_utc
+    )
+    funding = _read_funding_csv(
+        external_dir, symbol, csv_name, raw, funding_meta
+    )
+    if funding.empty:
+        return funding, raw, False
+    _validate_funding_csv_values(funding, symbol)
+    return funding, raw, _funding_coverage_ready(raw, funding_meta)
 
 def _label_primary_events(
     bars: DataFrame,
@@ -477,6 +530,119 @@ def _candidate_acceptance(candidate: dict[str, Any]) -> dict[str, bool]:
     }
 
 
+def _candidate_has_net_pf_gate(candidate: dict[str, Any]) -> bool:
+    if candidate.get("net_profit_factor_infinite_no_losses") is True:
+        return True
+    profit_factor = candidate.get("net_profit_factor")
+    return (
+        profit_factor is not None
+        and float(profit_factor) >= MINIMUM_NET_PROFIT_FACTOR
+    )
+
+
+def _report_decision(
+    candidates: list[dict[str, Any]], status: str
+) -> tuple[str, list[str], list[str], int]:
+    qualifying = [
+        str(item["candidate_id"]) for item in candidates if item["qualifies"]
+    ]
+    pf_candidates = [
+        str(item["candidate_id"])
+        for item in candidates
+        if _candidate_has_net_pf_gate(item)
+    ]
+    model_fit_count = sum(bool(item.get("fit_performed")) for item in candidates)
+    if status == "BLOCKED_INSUFFICIENT_FUNDING_HISTORY":
+        conclusion = "FUNDING_COVERAGE_INSUFFICIENT_NO_ECONOMIC_CONCLUSION"
+    elif qualifying:
+        conclusion = "FUNDING_EDGE_ACCEPTED_UNDER_ALL_PREREGISTERED_GATES"
+    elif pf_candidates:
+        conclusion = "NET_PF_GATE_MET_BUT_FULL_STATISTICAL_ACCEPTANCE_FAILED"
+    else:
+        conclusion = "NO_NET_PF_EDGE_FOUND_IN_FUNDING_ONLY_FEATURES"
+    return conclusion, qualifying, pf_candidates, model_fit_count
+
+
+def _report_dataset_block(
+    commit_sha: str,
+    start_utc: pd.Timestamp,
+    end_utc: pd.Timestamp,
+    market_provenance: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "requested_days": REQUESTED_DAYS,
+        "source_interval": "1m",
+        "start_utc": v4ap._iso_utc(start_utc),
+        "end_utc": v4ap._iso_utc(end_utc),
+        "assets": market_provenance,
+        "analysis_timeframes": list(v4ap.TIMEFRAMES),
+        "train_fraction": TRAIN_FRACTION,
+        "forward_validation_end_fraction": FORWARD_END_FRACTION,
+        "final_holdout_fraction": 1.0 - FORWARD_END_FRACTION,
+        "final_holdout_status": "UNTOUCHED_NOT_USED_FOR_FIT_THRESHOLD_OR_ECONOMIC_DECISION",
+        "missing_candles": "NEVER_INTERPOLATED_OR_SYNTHETICALLY_FILLED",
+    }
+
+
+def _report_funding_block(
+    funding_provenance: dict[str, dict[str, Any]]
+) -> dict[str, Any]:
+    return {
+        "provider": "Binance USD-M public Funding Rate History",
+        "host": "fapi.binance.com",
+        "endpoint": "/fapi/v1/fundingRate",
+        "feature_columns": list(EXTERNAL_FEATURE_COLUMNS),
+        "available_at_policy": "fundingTime + 5 minutes (conservative research proxy)",
+        "maximum_observation_age": "2 days",
+        "coverage": funding_provenance,
+        "open_interest_used": False,
+    }
+
+
+def _report_model_block(
+    model_groups: list[dict[str, Any]], model_fit_count: int
+) -> dict[str, Any]:
+    return {
+        "family": "LightGBM binary classifier via existing V4-X purged OOF/calibration contract",
+        "fit_performed": model_fit_count > 0,
+        "fit_group_count": model_fit_count,
+        "expected_fit_group_count": (
+            len(v4ap.ASSETS) * len(v4ap.TIMEFRAMES) * len(v4ap.STRATEGIES)
+        ),
+        "groups": model_groups,
+        "features": list(V4AQ_META_FEATURE_COLUMNS),
+        "external_features": list(EXTERNAL_FEATURE_COLUMNS),
+        "training_target": (
+            "PRIMARY_BUY_ONLY_FIXED_24H_FORWARD_CLOSE_NET_RETURN_AFTER_30BPS_COSTS"
+        ),
+        "validation_metric": "NOT_EVALUATED_ROC_AUC_DEFERRED_FOR_ECONOMIC_SWEEP",
+        "threshold_policy": (
+            "SELECTED_FROM_PURGED_IN_TRAIN_CALIBRATION_PROBABILITIES_ONLY; "
+            "NO_FORWARD_VALIDATION_LABELS_USED_FOR_THRESHOLD"
+        ),
+        "scope": (
+            "ONE_MODEL_PER_ASSET_TIMEFRAME_PRIMARY_STRATEGY; "
+            "SAME_FORWARD_PREDICTIONS_REUSED_FOR_THREE_EXIT_GEOMETRIES"
+        ),
+    }
+
+
+def _report_economic_results(
+    status: str, candidates: list[dict[str, Any]], model_fit_count: int
+) -> dict[str, Any] | None:
+    if status == "BLOCKED_INSUFFICIENT_FUNDING_HISTORY":
+        return None
+    return {
+        "candidate_count": len(candidates),
+        "total_trade_count": sum(
+            int(item["trade_count"]) for item in candidates
+        ),
+        "meta_models_fitted": model_fit_count,
+        "dsr_trial_count": v4ap.DSR_TRIAL_COUNT,
+        "economic_scope": "FORWARD_VALIDATION_ONLY; FINAL_15_PERCENT_UNTOUCHED",
+    }
+
+
 def _build_report(
     *,
     commit_sha: str,
@@ -489,53 +655,18 @@ def _build_report(
     model_groups: list[dict[str, Any]],
     status: str,
 ) -> dict[str, Any]:
-    qualifying = [str(item["candidate_id"]) for item in candidates if item["qualifies"]]
-    pf_candidates = [
-        str(item["candidate_id"])
-        for item in candidates
-        if item.get("net_profit_factor_infinite_no_losses") is True
-        or (
-            item.get("net_profit_factor") is not None
-            and float(item["net_profit_factor"]) >= MINIMUM_NET_PROFIT_FACTOR
-        )
-    ]
-    if status == "BLOCKED_INSUFFICIENT_FUNDING_HISTORY":
-        conclusion = "FUNDING_COVERAGE_INSUFFICIENT_NO_ECONOMIC_CONCLUSION"
-    elif qualifying:
-        conclusion = "FUNDING_EDGE_ACCEPTED_UNDER_ALL_PREREGISTERED_GATES"
-    elif pf_candidates:
-        conclusion = "NET_PF_GATE_MET_BUT_FULL_STATISTICAL_ACCEPTANCE_FAILED"
-    else:
-        conclusion = "NO_NET_PF_EDGE_FOUND_IN_FUNDING_ONLY_FEATURES"
-    model_fit_count = sum(bool(item.get("fit_performed")) for item in model_groups)
-    report: dict[str, Any] = {
+    conclusion, qualifying, pf_candidates, model_fit_count = _report_decision(
+        candidates, status
+    )
+    return {
         "schema_version": REPORT_SCHEMA_VERSION,
         "commit_sha": commit_sha,
         "status": status,
         "diagnostic": "V4-AQ_FUNDING_ONLY_META_FILTERED_36_CELL_SWEEP",
-        "dataset": {
-            "requested_days": REQUESTED_DAYS,
-            "source_interval": "1m",
-            "start_utc": v4ap._iso_utc(start_utc),
-            "end_utc": v4ap._iso_utc(end_utc),
-            "assets": market_provenance,
-            "analysis_timeframes": list(v4ap.TIMEFRAMES),
-            "train_fraction": TRAIN_FRACTION,
-            "forward_validation_end_fraction": FORWARD_END_FRACTION,
-            "final_holdout_fraction": 1.0 - FORWARD_END_FRACTION,
-            "final_holdout_status": "UNTOUCHED_NOT_USED_FOR_FIT_THRESHOLD_OR_ECONOMIC_DECISION",
-            "missing_candles": "NEVER_INTERPOLATED_OR_SYNTHETICALLY_FILLED",
-        },
-        "funding": {
-            "provider": "Binance USD-M public Funding Rate History",
-            "host": "fapi.binance.com",
-            "endpoint": "/fapi/v1/fundingRate",
-            "feature_columns": list(EXTERNAL_FEATURE_COLUMNS),
-            "available_at_policy": "fundingTime + 5 minutes (conservative research proxy)",
-            "maximum_observation_age": "2 days",
-            "coverage": funding_provenance,
-            "open_interest_used": False,
-        },
+        "dataset": _report_dataset_block(
+            commit_sha, start_utc, end_utc, market_provenance
+        ),
+        "funding": _report_funding_block(funding_provenance),
         "preregistered_grid": {
             "assets": list(v4ap.ASSETS),
             "timeframes": list(v4ap.TIMEFRAMES),
@@ -543,29 +674,7 @@ def _build_report(
             "exit_geometries": [dict(item) for item in v4ap.EXIT_GEOMETRIES],
             "expected_combinations": v4ap.DSR_TRIAL_COUNT,
         },
-        "model": {
-            "family": "LightGBM binary classifier via existing V4-X purged OOF/calibration contract",
-            "fit_performed": model_fit_count > 0,
-            "fit_group_count": model_fit_count,
-            "expected_fit_group_count": len(v4ap.ASSETS)
-            * len(v4ap.TIMEFRAMES)
-            * len(v4ap.STRATEGIES),
-            "groups": model_groups,
-            "features": list(V4AQ_META_FEATURE_COLUMNS),
-            "external_features": list(EXTERNAL_FEATURE_COLUMNS),
-            "training_target": (
-                "PRIMARY_BUY_ONLY_FIXED_24H_FORWARD_CLOSE_NET_RETURN_AFTER_30BPS_COSTS"
-            ),
-            "validation_metric": "NOT_EVALUATED_ROC_AUC_DEFERRED_FOR_ECONOMIC_SWEEP",
-            "threshold_policy": (
-                "SELECTED_FROM_PURGED_IN_TRAIN_CALIBRATION_PROBABILITIES_ONLY; "
-                "NO_FORWARD_VALIDATION_LABELS_USED_FOR_THRESHOLD"
-            ),
-            "scope": (
-                "ONE_MODEL_PER_ASSET_TIMEFRAME_PRIMARY_STRATEGY; "
-                "SAME_FORWARD_PREDICTIONS_REUSED_FOR_THREE_EXIT_GEOMETRIES"
-            ),
-        },
+        "model": _report_model_block(model_groups, model_fit_count),
         "execution_assumptions": {
             "market": "BINANCE_SPOT_PUBLIC_OHLCV",
             "direction": "SPOT_LONG_ONLY",
@@ -591,18 +700,8 @@ def _build_report(
         "qualifying_candidate_ids": qualifying,
         "net_pf_threshold_candidate_ids": pf_candidates,
         "conclusion": conclusion,
-        "economic_results": (
-            None
-            if status == "BLOCKED_INSUFFICIENT_FUNDING_HISTORY"
-            else {
-                "candidate_count": len(candidates),
-                "total_trade_count": sum(
-                    int(item["trade_count"]) for item in candidates
-                ),
-                "meta_models_fitted": model_fit_count,
-                "dsr_trial_count": v4ap.DSR_TRIAL_COUNT,
-                "economic_scope": "FORWARD_VALIDATION_ONLY; FINAL_15_PERCENT_UNTOUCHED",
-            }
+        "economic_results": _report_economic_results(
+            status, candidates, model_fit_count
         ),
         "model_usage": {
             "meta_model_used": True,
@@ -617,16 +716,19 @@ def _build_report(
         "credentials_used": False,
         "promotion_status": "BLOCKED_OWNER_REVIEW_AND_INDEPENDENT_VALIDATION",
     }
-    return report
 
-
-def _validate_report(report: dict[str, Any], expected_commit_sha: str) -> None:
+def _validate_report_identity(report: dict[str, Any], expected_sha: str) -> None:
     if report.get("schema_version") != REPORT_SCHEMA_VERSION:
         raise ValueError("ai6_report_schema_invalid")
-    if report.get("commit_sha") != expected_commit_sha:
+    if report.get("commit_sha") != expected_sha:
         raise ValueError("ai6_report_commit_mismatch")
     if report.get("dataset", {}).get("requested_days") != REQUESTED_DAYS:
         raise ValueError("ai6_dataset_window_invalid")
+
+
+def _validate_report_cost_and_feature_contracts(
+    report: dict[str, Any]
+) -> None:
     if (
         report.get("execution_assumptions", {}).get("round_trip_cost_bps")
         != ROUND_TRIP_COST_BPS
@@ -640,45 +742,62 @@ def _validate_report(report: dict[str, Any], expected_commit_sha: str) -> None:
         raise ValueError("ai6_open_interest_must_be_disabled")
     if report.get("model_usage", {}).get("open_interest_used") is not False:
         raise ValueError("ai6_model_open_interest_must_be_disabled")
-    expected_safety = {
-        **SAFETY,
-        "credentials_used": False,
-    }
+
+
+def _validate_report_safety(report: dict[str, Any]) -> None:
+    expected_safety = {**SAFETY, "credentials_used": False}
     actual_safety = {key: report.get(key) for key in expected_safety}
     if actual_safety != expected_safety:
         raise ValueError("ai6_safety_contract_invalid")
+
+
+def _validate_report_candidate_row(candidate: object) -> dict[str, Any]:
+    if not isinstance(candidate, dict):
+        raise ValueError("ai6_candidate_row_invalid")
+    valid_identity = (
+        candidate.get("symbol") in v4ap.ASSETS
+        and candidate.get("timeframe") in v4ap.TIMEFRAMES
+        and candidate.get("strategy") in v4ap.STRATEGIES
+        and candidate.get("geometry")
+        in {item["name"] for item in v4ap.EXIT_GEOMETRIES}
+        and candidate.get("round_trip_cost_bps") == ROUND_TRIP_COST_BPS
+        and candidate.get("roc_auc_reference") == ROC_AUC_REFERENCE
+        and candidate.get("dsr_trial_count") == v4ap.DSR_TRIAL_COUNT
+    )
+    if not valid_identity:
+        raise ValueError("ai6_candidate_contract_invalid")
+    expected_decision = v4ap._candidate_qualifies(candidate)
+    if candidate.get("qualifies") is not expected_decision:
+        raise ValueError("ai6_candidate_decision_invalid")
+    return candidate
+
+
+def _validate_report_candidate_grid(report: dict[str, Any]) -> list[dict[str, Any]]:
     candidates = report.get("candidates")
     if not isinstance(candidates, list) or len(candidates) != v4ap.DSR_TRIAL_COUNT:
         raise ValueError("ai6_candidate_grid_cardinality_invalid")
-    candidate_ids: set[str] = set()
-    for candidate in candidates:
-        if not isinstance(candidate, dict):
-            raise ValueError("ai6_candidate_row_invalid")
-        candidate_ids.add(str(candidate.get("candidate_id")))
-        if (
-            candidate.get("symbol") not in v4ap.ASSETS
-            or candidate.get("timeframe") not in v4ap.TIMEFRAMES
-            or candidate.get("strategy") not in v4ap.STRATEGIES
-            or candidate.get("geometry")
-            not in {item["name"] for item in v4ap.EXIT_GEOMETRIES}
-            or candidate.get("round_trip_cost_bps") != ROUND_TRIP_COST_BPS
-            or candidate.get("roc_auc_reference") != ROC_AUC_REFERENCE
-            or candidate.get("dsr_trial_count") != v4ap.DSR_TRIAL_COUNT
-        ):
-            raise ValueError("ai6_candidate_contract_invalid")
-        if candidate.get("qualifies") is not v4ap._candidate_qualifies(candidate):
-            raise ValueError("ai6_candidate_decision_invalid")
+    checked = [
+        _validate_report_candidate_row(candidate) for candidate in candidates
+    ]
+    candidate_ids = {str(candidate.get("candidate_id")) for candidate in checked}
     if candidate_ids != v4ap._grid_candidate_ids():
         raise ValueError("ai6_candidate_grid_identity_invalid")
     qualifying = [
         str(item["candidate_id"])
-        for item in candidates
+        for item in checked
         if v4ap._candidate_qualifies(item)
     ]
     if report.get("qualifying_candidate_ids") != qualifying:
         raise ValueError("ai6_qualifying_candidate_list_invalid")
+    return checked
+
+
+def _validate_report_dsr(report: dict[str, Any]) -> None:
     if report.get("dsr_cohort", {}).get("trial_count") != v4ap.DSR_TRIAL_COUNT:
         raise ValueError("ai6_dsr_trial_count_invalid")
+
+
+def _validate_report_status(report: dict[str, Any]) -> None:
     status = report.get("status")
     if status not in (
         "COMPLETED_RESEARCH_EVALUATION",
@@ -696,6 +815,14 @@ def _validate_report(report: dict[str, Any], expected_commit_sha: str) -> None:
     ):
         raise ValueError("ai6_completed_run_missing_economic_results")
 
+
+def _validate_report(report: dict[str, Any], expected_commit_sha: str) -> None:
+    _validate_report_identity(report, expected_commit_sha)
+    _validate_report_cost_and_feature_contracts(report)
+    _validate_report_safety(report)
+    _validate_report_candidate_grid(report)
+    _validate_report_dsr(report)
+    _validate_report_status(report)
 
 def _format_number(value: Any, decimals: int = 4) -> str:
     if value is None:
@@ -875,6 +1002,313 @@ def _write_outputs(
     print(summary, end="")
 
 
+def _load_funding_inputs(
+    external_dir: Path,
+    commit_sha: str,
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+) -> tuple[dict[str, DataFrame], dict[str, dict[str, Any]], bool]:
+    funding_frames: dict[str, DataFrame] = {}
+    funding_provenance: dict[str, dict[str, Any]] = {}
+    funding_ready = True
+    for symbol in v4ap.ASSETS:
+        frame, manifest, ready = _read_funding_artifact(
+            external_dir, symbol, commit_sha, start, end
+        )
+        funding_frames[symbol] = frame
+        funding_provenance[symbol] = manifest
+        funding_ready = funding_ready and ready
+    return funding_frames, funding_provenance, funding_ready
+
+
+def _blocked_candidates() -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    for symbol in v4ap.ASSETS:
+        for timeframe in v4ap.TIMEFRAMES:
+            for strategy in v4ap.STRATEGIES:
+                for geometry in v4ap.EXIT_GEOMETRIES:
+                    candidates.append(
+                        _placeholder_candidate(
+                            symbol,
+                            timeframe,
+                            strategy,
+                            geometry,
+                            status="NOT_RUN_INSUFFICIENT_FUNDING_HISTORY",
+                        )
+                    )
+    return candidates
+
+
+def _build_gap_ranges(asset_provenance: dict[str, Any]) -> tuple[tuple[str, str], ...]:
+    return tuple(
+        (str(gap["start_utc"]), str(gap["end_utc"]))
+        for gap in asset_provenance["missing_gap_ranges"]
+    )
+
+
+def _annotate_sweep_candidate(
+    candidate: dict[str, Any],
+    *,
+    group_result: dict[str, Any],
+    strategy_diagnostics: dict[str, Any],
+    filtered_signal: Series,
+    train_end: int,
+    forward_end: int,
+) -> None:
+    group_auc = group_result["roc_auc"]
+    candidate.update(
+        {
+            "roc_auc": group_auc,
+            "roc_auc_reference": ROC_AUC_REFERENCE,
+            "roc_auc_status": group_result["roc_auc_status"],
+            "roc_auc_above_reference": (
+                None if group_auc is None else bool(group_auc > ROC_AUC_REFERENCE)
+            ),
+            "unfiltered_primary_signal_count": int(
+                strategy_diagnostics["primary_signal_count"]
+            ),
+            "meta_filtered_signal_count": int(filtered_signal.sum()),
+            "meta_filter_acceptance_rate": group_result["acceptance_rate"],
+            "meta_model_fit_status": group_result["fit_status"],
+            "meta_model_fit_rows": group_result["fit_rows"],
+            "meta_model_calibration_rows": group_result["calibration_rows"],
+            "validation_event_count": group_result["validation_event_count"],
+            "validation_labeled_event_count": group_result[
+                "validation_labeled_event_count"
+            ],
+            "meta_threshold": group_result["threshold"],
+            "validation_start_index": train_end,
+            "validation_end_exclusive": forward_end,
+        }
+    )
+
+
+def _run_primary_strategy_sweep(
+    evaluation_bars: DataFrame,
+    *,
+    symbol: str,
+    timeframe: str,
+    strategy: str,
+    signal_generator: Any,
+    funding_diagnostics: dict[str, Any],
+    execution: Any,
+    documented_gap_ranges: tuple[tuple[str, str], ...],
+    train_end: int,
+    forward_end: int,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+    primary_signal, strategy_diagnostics = signal_generator(evaluation_bars)
+    primary_features = build_v4aq_meta_features(
+        evaluation_bars, funding_diagnostics["features"], strategy=strategy
+    )
+    filtered_signal, group_result, decision_rows = _evaluate_primary_group(
+        evaluation_bars,
+        primary_features,
+        primary_signal,
+        strategy=strategy,
+        timeframe=timeframe,
+        train_end=train_end,
+        forward_end=forward_end,
+    )
+    model_group = {
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "strategy": strategy,
+        "funding_feature_diagnostics": funding_diagnostics["diagnostics"],
+        **group_result,
+    }
+    candidate_rows: list[dict[str, Any]] = []
+    trade_rows: list[dict[str, Any]] = []
+    decision_records = [
+        {"symbol": symbol, "timeframe": timeframe, "strategy": strategy, **row}
+        for row in decision_rows
+    ]
+    for geometry in v4ap.EXIT_GEOMETRIES:
+        run_diagnostics = {
+            **strategy_diagnostics,
+            "primary_signal_count": int(filtered_signal.sum()),
+        }
+        candidate, candidate_trades = v4ap._run_candidate(
+            evaluation_bars,
+            symbol=symbol,
+            timeframe=timeframe,
+            strategy=strategy,
+            geometry=geometry,
+            signal=filtered_signal,
+            strategy_diagnostics=run_diagnostics,
+            execution=execution,
+            documented_gap_ranges=documented_gap_ranges,
+        )
+        _annotate_sweep_candidate(
+            candidate,
+            group_result=group_result,
+            strategy_diagnostics=strategy_diagnostics,
+            filtered_signal=filtered_signal,
+            train_end=train_end,
+            forward_end=forward_end,
+        )
+        candidate_rows.append(candidate)
+        trade_rows.extend(candidate_trades)
+    return candidate_rows, trade_rows, decision_records, model_group
+
+
+def _prepare_timeframe_features(
+    evaluation_bars: DataFrame,
+    funding_frame: DataFrame,
+    symbol: str,
+    timeframe: str,
+) -> tuple[DataFrame, dict[str, Any]]:
+    features, diagnostics = build_external_market_features(
+        evaluation_bars,
+        funding_frame,
+        symbol=symbol,
+        timeframe=timeframe,
+    )
+    return features, {"features": features, "diagnostics": diagnostics}
+
+
+def _run_timeframe_sweep(
+    minute_data: DataFrame,
+    funding_frame: DataFrame,
+    *,
+    symbol: str,
+    timeframe: str,
+    signal_generators: dict[str, Any],
+    execution: Any,
+    documented_gap_ranges: tuple[tuple[str, str], ...],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    full_bars = resample_ohlcv(minute_data, timeframe)
+    train_end = int(len(full_bars) * TRAIN_FRACTION)
+    forward_end = int(len(full_bars) * FORWARD_END_FRACTION)
+    horizon_bars = v4ap.HORIZON_HOURS * 60 // v4ap.TIMEFRAME_MINUTES[timeframe]
+    if (
+        train_end <= horizon_bars + 5
+        or forward_end <= train_end + horizon_bars
+    ):
+        raise ValueError(f"ai6_resampled_window_too_short:{symbol}:{timeframe}")
+    evaluation_bars = full_bars.iloc[:forward_end].copy().reset_index(drop=True)
+    funding_features, funding_feature_diagnostics = _prepare_timeframe_features(
+        evaluation_bars, funding_frame, symbol, timeframe
+    )
+    strategy_context = {
+        "features": funding_features,
+        "diagnostics": funding_feature_diagnostics["diagnostics"],
+    }
+    candidate_rows: list[dict[str, Any]] = []
+    trade_rows: list[dict[str, Any]] = []
+    decision_rows: list[dict[str, Any]] = []
+    model_groups: list[dict[str, Any]] = []
+    for strategy in v4ap.STRATEGIES:
+        candidates, trades, decisions, model_group = _run_primary_strategy_sweep(
+            evaluation_bars,
+            symbol=symbol,
+            timeframe=timeframe,
+            strategy=strategy,
+            signal_generator=signal_generators[strategy],
+            funding_diagnostics=strategy_context,
+            execution=execution,
+            documented_gap_ranges=documented_gap_ranges,
+            train_end=train_end,
+            forward_end=forward_end,
+        )
+        candidate_rows.extend(candidates)
+        trade_rows.extend(trades)
+        decision_rows.extend(decisions)
+        model_groups.append(model_group)
+    return candidate_rows, trade_rows, decision_rows, model_groups
+
+
+def _run_asset_sweep(
+    input_dir: Path,
+    funding_frame: DataFrame,
+    *,
+    symbol: str,
+    commit_sha: str,
+    start_utc: pd.Timestamp,
+    end_utc: pd.Timestamp,
+    signal_generators: dict[str, Any],
+    execution: Any,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+    minute_data, asset_provenance = v4ap._load_market_data(
+        input_dir,
+        symbol=symbol,
+        commit_sha=commit_sha,
+        start_utc=start_utc,
+        end_utc=end_utc,
+    )
+    documented_gap_ranges = _build_gap_ranges(asset_provenance)
+    candidate_rows: list[dict[str, Any]] = []
+    trade_rows: list[dict[str, Any]] = []
+    decision_rows: list[dict[str, Any]] = []
+    model_groups: list[dict[str, Any]] = []
+    for timeframe in v4ap.TIMEFRAMES:
+        candidates, trades, decisions, groups = _run_timeframe_sweep(
+            minute_data,
+            funding_frame,
+            symbol=symbol,
+            timeframe=timeframe,
+            signal_generators=signal_generators,
+            execution=execution,
+            documented_gap_ranges=document_gap_ranges,
+        )
+        candidate_rows.extend(candidates)
+        trade_rows.extend(trades)
+        decision_rows.extend(decisions)
+        model_groups.extend(groups)
+    return (
+        candidate_rows,
+        trade_rows,
+        decision_rows,
+        model_groups,
+        asset_provenance,
+    )
+
+
+def _run_complete_sweep(
+    input_dir: Path,
+    funding_frames: dict[str, DataFrame],
+    commit_sha: str,
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+) -> tuple[
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    dict[str, dict[str, Any]],
+    list[dict[str, Any]],
+]:
+    execution = v4ap._execution_config()
+    signal_generators = {
+        v4ap.STRATEGIES[0]: v4ap.generate_mean_reversion_signal,
+        v4ap.STRATEGIES[1]: v4ap.generate_donchian_breakout_signal,
+    }
+    candidates: list[dict[str, Any]] = []
+    trades: list[dict[str, Any]] = []
+    decisions: list[dict[str, Any]] = []
+    market_provenance: dict[str, dict[str, Any]] = {}
+    model_groups: list[dict[str, Any]] = []
+    for symbol in v4ap.ASSETS:
+        asset_candidates, asset_trades, asset_decisions, asset_groups, provenance = (
+            _run_asset_sweep(
+                input_dir,
+                funding_frames[symbol],
+                symbol=symbol,
+                commit_sha=commit_sha,
+                start_utc=start,
+                end_utc=end,
+                signal_generators=signal_generators,
+                execution=execution,
+            )
+        )
+        candidates.extend(asset_candidates)
+        trades.extend(asset_trades)
+        decisions.extend(asset_decisions)
+        model_groups.extend(asset_groups)
+        market_provenance[symbol] = provenance
+    if len(candidates) != v4ap.DSR_TRIAL_COUNT:
+        raise ValueError("ai6_sweep_candidate_count_invalid")
+    return candidates, trades, decisions, market_provenance, model_groups
+
+
 def run_v4aq_ai6(
     input_dir: Path,
     external_dir: Path,
@@ -890,180 +1324,25 @@ def run_v4aq_ai6(
     """Run the Funding-only 36-cell sweep after exact-window coverage verification."""
     _validate_commit_sha(commit_sha)
     start, end = v4ap._validate_request(commit_sha, start_utc, end_utc)
-    funding_frames: dict[str, DataFrame] = {}
-    funding_provenance: dict[str, dict[str, Any]] = {}
-    funding_ready = True
-    for symbol in v4ap.ASSETS:
-        frame, manifest, ready = _read_funding_artifact(
-            external_dir, symbol, commit_sha, start, end
-        )
-        funding_frames[symbol] = frame
-        funding_provenance[symbol] = manifest
-        funding_ready = funding_ready and ready
-
-    candidates: list[dict[str, Any]] = []
-    trades: list[dict[str, Any]] = []
-    decisions: list[dict[str, Any]] = []
+    funding_frames, funding_provenance, funding_ready = _load_funding_inputs(
+        external_dir, commit_sha, start, end
+    )
     market_provenance: dict[str, dict[str, Any]] = {}
     model_groups: list[dict[str, Any]] = []
-
-    if not funding_ready:
-        for symbol in v4ap.ASSETS:
-            for timeframe in v4ap.TIMEFRAMES:
-                for strategy in v4ap.STRATEGIES:
-                    for geometry in v4ap.EXIT_GEOMETRIES:
-                        candidates.append(
-                            _placeholder_candidate(
-                                symbol,
-                                timeframe,
-                                strategy,
-                                geometry,
-                                status="NOT_RUN_INSUFFICIENT_FUNDING_HISTORY",
-                            )
-                        )
-        status = "BLOCKED_INSUFFICIENT_FUNDING_HISTORY"
-    else:
-        execution = v4ap._execution_config()
-        signal_generators = {
-            v4ap.STRATEGIES[0]: v4ap.generate_mean_reversion_signal,
-            v4ap.STRATEGIES[1]: v4ap.generate_donchian_breakout_signal,
-        }
-        for symbol in v4ap.ASSETS:
-            minute_data, asset_provenance = v4ap._load_market_data(
-                input_dir,
-                symbol=symbol,
-                commit_sha=commit_sha,
-                start_utc=start,
-                end_utc=end,
-            )
-            market_provenance[symbol] = asset_provenance
-            documented_gap_ranges = tuple(
-                (str(gap["start_utc"]), str(gap["end_utc"]))
-                for gap in asset_provenance["missing_gap_ranges"]
-            )
-            for timeframe in v4ap.TIMEFRAMES:
-                full_bars = resample_ohlcv(minute_data, timeframe)
-                train_end = int(len(full_bars) * TRAIN_FRACTION)
-                forward_end = int(len(full_bars) * FORWARD_END_FRACTION)
-                horizon_bars = (
-                    v4ap.HORIZON_HOURS * 60 // v4ap.TIMEFRAME_MINUTES[timeframe]
-                )
-                if (
-                    train_end <= horizon_bars + 5
-                    or forward_end <= train_end + horizon_bars
-                ):
-                    raise ValueError(
-                        f"ai6_resampled_window_too_short:{symbol}:{timeframe}"
-                    )
-                evaluation_bars = (
-                    full_bars.iloc[:forward_end].copy().reset_index(drop=True)
-                )
-                funding_features, funding_diagnostics = build_external_market_features(
-                    evaluation_bars,
-                    funding_frames[symbol],
-                    symbol=symbol,
-                    timeframe=timeframe,
-                )
-                for strategy in v4ap.STRATEGIES:
-                    primary_signal, strategy_diagnostics = signal_generators[strategy](
-                        evaluation_bars
-                    )
-                    primary_features = build_v4aq_meta_features(
-                        evaluation_bars,
-                        funding_features,
-                        strategy=strategy,
-                    )
-                    filtered_signal, group_result, decision_rows = (
-                        _evaluate_primary_group(
-                            evaluation_bars,
-                            primary_features,
-                            primary_signal,
-                            strategy=strategy,
-                            timeframe=timeframe,
-                            train_end=train_end,
-                            forward_end=forward_end,
-                        )
-                    )
-                    model_groups.append(
-                        {
-                            "symbol": symbol,
-                            "timeframe": timeframe,
-                            "strategy": strategy,
-                            "funding_feature_diagnostics": funding_diagnostics,
-                            **group_result,
-                        }
-                    )
-                    for geometry in v4ap.EXIT_GEOMETRIES:
-                        run_diagnostics = {
-                            **strategy_diagnostics,
-                            "primary_signal_count": int(filtered_signal.sum()),
-                        }
-                        candidate, candidate_trades = v4ap._run_candidate(
-                            evaluation_bars,
-                            symbol=symbol,
-                            timeframe=timeframe,
-                            strategy=strategy,
-                            geometry=geometry,
-                            signal=filtered_signal,
-                            strategy_diagnostics=run_diagnostics,
-                            execution=execution,
-                            documented_gap_ranges=documented_gap_ranges,
-                        )
-                        candidate.update(
-                            {
-                                "roc_auc": group_result["roc_auc"],
-                                "roc_auc_reference": ROC_AUC_REFERENCE,
-                                "roc_auc_status": group_result["roc_auc_status"],
-                                "roc_auc_above_reference": (
-                                    None
-                                    if group_result["roc_auc"] is None
-                                    else bool(
-                                        group_result["roc_auc"] > ROC_AUC_REFERENCE
-                                    )
-                                ),
-                                "unfiltered_primary_signal_count": int(
-                                    strategy_diagnostics["primary_signal_count"]
-                                ),
-                                "meta_filtered_signal_count": int(
-                                    filtered_signal.sum()
-                                ),
-                                "meta_filter_acceptance_rate": group_result[
-                                    "acceptance_rate"
-                                ],
-                                "meta_model_fit_status": group_result["fit_status"],
-                                "meta_model_fit_rows": group_result["fit_rows"],
-                                "meta_model_calibration_rows": group_result[
-                                    "calibration_rows"
-                                ],
-                                "validation_event_count": group_result[
-                                    "validation_event_count"
-                                ],
-                                "validation_labeled_event_count": group_result[
-                                    "validation_labeled_event_count"
-                                ],
-                                "meta_threshold": group_result["threshold"],
-                                "validation_start_index": train_end,
-                                "validation_end_exclusive": forward_end,
-                            }
-                        )
-                        candidates.append(candidate)
-                        trades.extend(candidate_trades)
-                    for row in decision_rows:
-                        decisions.append(
-                            {
-                                "symbol": symbol,
-                                "timeframe": timeframe,
-                                "strategy": strategy,
-                                **row,
-                            }
-                        )
-                del evaluation_bars
-                del full_bars
-            del minute_data
-        if len(candidates) != v4ap.DSR_TRIAL_COUNT:
-            raise ValueError("ai6_sweep_candidate_count_invalid")
+    trades: list[dict[str, Any]] = []
+    decisions: list[dict[str, Any]] = []
+    if funding_ready:
+        (
+            candidates,
+            trades,
+            decisions,
+            market_provenance,
+            model_groups,
+        ) = _run_complete_sweep(input_dir, funding_frames, commit_sha, start, end)
         status = "COMPLETED_RESEARCH_EVALUATION"
-
+    else:
+        candidates = _blocked_candidates()
+        status = "BLOCKED_INSUFFICIENT_FUNDING_HISTORY"
     dsr_cohort = v4ap._attach_dsr_to_cohort(candidates)
     for candidate in candidates:
         candidate["qualifies"] = v4ap._candidate_qualifies(candidate)
@@ -1088,7 +1367,6 @@ def run_v4aq_ai6(
         decisions,
     )
     return report
-
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)

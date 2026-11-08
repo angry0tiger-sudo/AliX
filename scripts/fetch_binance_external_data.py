@@ -76,23 +76,29 @@ def _write_snapshot(
     return manifest
 
 
-def _validate_fetch_request(
-    symbols: tuple[str, ...],
-    requested_days: int,
-    commit_sha: str,
-    start_utc: str,
-    end_utc: str,
-) -> tuple[pd.Timestamp, pd.Timestamp]:
+def _validate_fetch_symbols(symbols: tuple[str, ...]) -> None:
     if not symbols or len(set(symbols)) != len(symbols):
         raise ValueError("ai6_symbol_selection_invalid")
     if any(symbol not in ALLOWED_SYMBOLS for symbol in symbols):
         raise ValueError("ai6_symbol_not_allowed")
+
+
+def _validate_fetch_days(requested_days: int) -> None:
     if requested_days != 1825:
         raise ValueError("ai6_requested_days_must_be_1825")
-    if len(commit_sha) != 40 or any(
-        character not in "0123456789abcdef" for character in commit_sha
-    ):
+
+
+def _validate_fetch_commit_sha(commit_sha: str) -> None:
+    valid_sha = len(commit_sha) == 40 and all(
+        character in "0123456789abcdef" for character in commit_sha
+    )
+    if not valid_sha:
         raise ValueError("ai6_commit_sha_invalid")
+
+
+def _parse_fetch_window(
+    start_utc: str, end_utc: str, requested_days: int
+) -> tuple[pd.Timestamp, pd.Timestamp]:
     start = pd.Timestamp(start_utc)
     end = pd.Timestamp(end_utc)
     if start.tzinfo is None or end.tzinfo is None or start >= end:
@@ -102,6 +108,18 @@ def _validate_fetch_request(
         raise ValueError("ai6_funding_window_must_match_1825_days")
     return start.tz_convert("UTC"), end.tz_convert("UTC")
 
+
+def _validate_fetch_request(
+    symbols: tuple[str, ...],
+    requested_days: int,
+    commit_sha: str,
+    start_utc: str,
+    end_utc: str,
+) -> tuple[pd.Timestamp, pd.Timestamp]:
+    _validate_fetch_symbols(symbols)
+    _validate_fetch_days(requested_days)
+    _validate_fetch_commit_sha(commit_sha)
+    return _parse_fetch_window(start_utc, end_utc, requested_days)
 
 def fetch_public_history(
     *,
