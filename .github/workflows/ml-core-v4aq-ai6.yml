@@ -41,13 +41,13 @@ jobs:
       ALIx_ALLOW_LIVE_TRADING: "false"
       ALIx_REPORTING_ENABLED: "false"
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
-      GH_TOKEN: \${{ github.token }}
+      GH_TOKEN: ${{ github.token }}
     steps:
       - name: Require Standard CI success for this exact AI-6 commit
         env:
-          GITHUB_REPOSITORY: \${{ github.repository }}
-          TARGET_SHA: \${{ github.sha }}
-          TARGET_BRANCH: \${{ github.ref_name }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          TARGET_SHA: ${{ github.sha }}
+          TARGET_BRANCH: ${{ github.ref_name }}
         run: |
           python - <<'PY'
           import json
@@ -122,7 +122,7 @@ jobs:
       - name: Checkout exact AI-6 commit without persisted credentials
         uses: actions/checkout@v4
         with:
-          ref: \${{ github.sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Set up pinned Python
@@ -137,7 +137,7 @@ jobs:
 
       - name: Verify immutable data, cost, model and safety contracts
         env:
-          TARGET_SHA: \${{ github.sha }}
+          TARGET_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           test "$GITHUB_REF" = "refs/heads/research/ml-core-v4aq-ai6"
@@ -216,9 +216,9 @@ jobs:
 
       - name: Validate exact AI-6 report and publish Step Summary
         env:
-          REPORT_PATH: \${{ github.workspace }}/alix-v4aq-ai6-report.json
-          SUMMARY_PATH: \${{ github.workspace }}/alix-v4aq-ai6-step-summary.md
-          TARGET_SHA: \${{ github.sha }}
+          REPORT_PATH: ${{ github.workspace }}/alix-v4aq-ai6-report.json
+          SUMMARY_PATH: ${{ github.workspace }}/alix-v4aq-ai6-step-summary.md
+          TARGET_SHA: ${{ github.sha }}
         run: |
           python - <<'PY'
           import json
@@ -263,8 +263,8 @@ jobs:
         with:
           name: alix-v4aq-ai6-public-data-and-meta-report
           path: |
-            \${{ runner.temp }}/alix-v4aq-spot/
-            \${{ runner.temp }}/alix-v4aq-external/
+            ${{ runner.temp }}/alix-v4aq-spot/
+            ${{ runner.temp }}/alix-v4aq-external/
             alix-v4aq-ai6-report.json
             alix-v4aq-ai6-trades.csv
             alix-v4aq-ai6-decisions.csv
