@@ -258,11 +258,11 @@ def test_get_payload_fails_closed_for_ban_server_error_transport_and_host() -> N
     with pytest.raises(ProviderError, match="transport_error"):
         _get_payload(FakeTransport([RuntimeError("offline")]), url, lambda _: None)
 
-    with pytest.raises(ProviderError, match="host_not_allowed"):
+    with pytest.raises(ProviderError, match="host_or_path_not_allowed"):
         _get_payload(
             FakeTransport([]), "https://example.com/fapi/v1/fundingRate", lambda _: None
         )
-    with pytest.raises(ProviderError, match="host_not_allowed"):
+    with pytest.raises(ProviderError, match="host_or_path_not_allowed"):
         _get_payload(
             FakeTransport([]), "https://fapi.binance.com/fapi/v1/order", lambda _: None
         )
