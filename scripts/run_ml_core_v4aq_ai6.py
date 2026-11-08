@@ -1249,7 +1249,7 @@ def _run_asset_sweep(
             timeframe=timeframe,
             signal_generators=signal_generators,
             execution=execution,
-            documented_gap_ranges=document_gap_ranges,
+            documented_gap_ranges=documented_gap_ranges,
         )
         candidate_rows.extend(candidates)
         trade_rows.extend(trades)
