@@ -154,9 +154,12 @@ jobs:
           assert v4ap.EXIT_GEOMETRIES[2]["take_profit_atr"] == 10.0
           assert v4ap.EXIT_GEOMETRIES[2]["trailing_activation_atr"] == 1.0
           assert v4ap.EXIT_GEOMETRIES[2]["trailing_step_atr"] == 1.5
-          assert all(v4ap.TIMEFRAME_MINUTES[tf] * v4ap.HORIZON_HOURS // 60
-                     == v4ap.HORIZON_HOURS * 60 // v4ap.TIMEFRAME_MINUTES[tf]
-                     for tf in v4ap.TIMEFRAMES)
+          assert all(
+              (v4ap.HORIZON_HOURS * 60 // v4ap.TIMEFRAME_MINUTES[tf])
+              * v4ap.TIMEFRAME_MINUTES[tf]
+              == v4ap.HORIZON_HOURS * 60
+              for tf in v4ap.TIMEFRAMES
+          )
           assert v4ap._grid_candidate_ids() and len(v4ap._grid_candidate_ids()) == 36
           execution = v4ap._execution_config()
           assert execution.position_fraction == 1.0
@@ -260,8 +263,9 @@ jobs:
           _validate_report(report, os.environ["TARGET_SHA"])
           summary_path = Path(os.environ["SUMMARY_PATH"])
           summary = summary_path.read_text(encoding="utf-8")
+          results_section = summary.split("## Results: all 36 combinations", 1)[1].split("## Conclusion", 1)[0]
           result_rows = [
-              line for line in summary.splitlines()
+              line for line in results_section.splitlines()
               if line.startswith("| ETHUSDT |") or line.startswith("| BTCUSDT |")
           ]
           if len(result_rows) != DSR_TRIAL_COUNT:
