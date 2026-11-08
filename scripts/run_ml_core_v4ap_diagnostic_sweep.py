@@ -414,8 +414,8 @@ def _entry_signal_is_eligible(
     signal_index: int, last_index: int, horizon_bars: int
 ) -> bool:
     """Require a full vertical-barrier horizon before the dataset boundary."""
-    last_entry_signal_index = last_index - horizon_bars - 1
-    return signal_index <= last_entry_signal_index and signal_index != last_index - 1
+    last_entry_signal_index = last_index - horizon_bars
+    return signal_index <= last_entry_signal_index
 
 
 def _build_execution_signals(
