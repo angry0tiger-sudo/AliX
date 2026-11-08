@@ -42,7 +42,7 @@ def _funding(count: int = 80) -> DataFrame:
 def test_funding_features_are_causal_and_have_exact_schema() -> None:
     bars = _bars()
     features, diagnostics = build_external_market_features(
-        bars, _funding(), symbol="BTCUSDT", timeframe="4h"
+        bars, _funding(100), symbol="BTCUSDT", timeframe="4h"
     )
     assert tuple(features.columns) == EXTERNAL_FEATURE_COLUMNS
     assert features.index.equals(bars.index)
@@ -71,7 +71,7 @@ def test_custom_indexes_and_future_publication_are_preserved() -> None:
 
 def test_stale_funding_observations_are_not_carried_forward() -> None:
     bars = _bars()
-    bars["date"] += pd.Timedelta(days=10)
+    bars["date"] += pd.Timedelta(days=30)
     features, diagnostics = build_external_market_features(
         bars, _funding(), symbol="BTCUSDT", timeframe="4h"
     )

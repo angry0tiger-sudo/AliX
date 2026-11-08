@@ -399,7 +399,7 @@ def test_v4aq_ai6_sweep_runs_exact_grid_and_keeps_final_holdout_untouched(
         }
 
     def fake_resample(minute_data: DataFrame, timeframe: str) -> DataFrame:
-        return _bars(400, timeframe)
+        return _bars(800, timeframe)
 
     def fake_external(
         bars: DataFrame,
@@ -529,7 +529,7 @@ def test_v4aq_ai6_sweep_runs_exact_grid_and_keeps_final_holdout_untouched(
         }
 
     monkeypatch.setattr(v4ap, "_load_market_data", fake_load_market)
-    monkeypatch.setattr(v4ap, "resample_ohlcv", fake_resample)
+    monkeypatch.setattr(ai6, "resample_ohlcv", fake_resample)
     monkeypatch.setattr(v4ap, "generate_mean_reversion_signal", fake_signal)
     monkeypatch.setattr(v4ap, "generate_donchian_breakout_signal", fake_signal)
     monkeypatch.setattr(v4ap, "_execution_config", lambda: object())

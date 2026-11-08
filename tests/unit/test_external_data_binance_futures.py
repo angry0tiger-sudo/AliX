@@ -449,7 +449,7 @@ def test_https_transport_rejects_wrong_host_path_bytes_and_timeout() -> None:
     with pytest.raises(ProviderError, match="host_or_path_not_allowed"):
         transport.get("http://fapi.binance.com/fapi/v1/fundingRate")
     with pytest.raises(ProviderError, match="encoding_invalid"):
-        transport._response_body(b"\\xff")
+        transport._response_body(b"\xff")
     with pytest.raises(ProviderError, match="response_too_large"):
         transport._response_body(b"x" * (provider_module.MAX_RESPONSE_BYTES + 1))
     with pytest.raises(ProviderError, match="timeout_configuration_invalid"):

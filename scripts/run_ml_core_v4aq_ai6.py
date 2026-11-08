@@ -166,10 +166,10 @@ def _validate_funding_csv_values(funding: DataFrame, symbol: str) -> None:
     if not funding["symbol"].eq(symbol).all():
         raise ValueError(f"ai6_funding_symbol_mismatch:{symbol}")
     funding["funding_time"] = pd.to_datetime(
-        funding["funding_time"], utc=True, errors="coerce"
+        funding["funding_time"], format="mixed", utc=True, errors="coerce"
     )
     funding["available_at"] = pd.to_datetime(
-        funding["available_at"], utc=True, errors="coerce"
+        funding["available_at"], format="mixed", utc=True, errors="coerce"
     )
     funding["funding_rate"] = pd.to_numeric(funding["funding_rate"], errors="coerce")
     invalid = (
