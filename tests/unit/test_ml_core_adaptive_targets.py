@@ -300,3 +300,97 @@ def test_entry_slippage_requires_next_open_reference_and_valid_nonnegative_value
                 entry_reference="NEXT_BAR_OPEN",
                 entry_slippage_bps=invalid,
             )
+
+
+@pytest.mark.parametrize("timeframe_minutes", [15, 60, 240])
+def test_documented_spot_gap_resets_atr_warmup_for_v4ap_timeframes(
+    timeframe_minutes: int,
+) -> None:
+    gap_start = pd.Timestamp("2023-03-24T12:40:00Z")
+    gap_end = pd.Timestamp("2023-03-24T13:59:00Z")
+    interval = pd.Timedelta(minutes=timeframe_minutes)
+    frequency = f"{timeframe_minutes}min"
+    first_affected_bucket = gap_start.floor(frequency)
+    last_affected_bucket = gap_end.floor(frequency)
+    previous_bar = first_affected_bucket - interval
+    next_bar = last_affected_bucket + interval
+
+    before_gap = pd.date_range(end=previous_bar, periods=14, freq=interval)
+    after_gap = pd.date_range(start=next_bar, periods=14, freq=interval)
+    dates = before_gap.append(after_gap)
+    close = np.concatenate((np.full(14, 200.0), np.full(14, 100.0)))
+    candles = DataFrame(
+        {
+            "date": dates,
+            "open": close,
+            "high": close + 1.0,
+            "low": close - 1.0,
+            "close": close,
+            "volume": np.full(len(close), 10.0),
+        }
+    )
+
+    atr = calculate_atr(
+        candles,
+        period=14,
+        expected_interval=interval,
+        documented_gap_ranges=((str(gap_start), str(gap_end)),),
+    )
+
+    assert atr.iloc[13] == pytest.approx(2.0)
+    assert atr.iloc[14:27].isna().all()
+    assert atr.iloc[27] == pytest.approx(2.0)
+
+
+def test_atr_rejects_missing_or_malformed_documented_gap_authorization() -> None:
+    gap_start = pd.Timestamp("2023-03-24T12:40:00Z")
+    gap_end = pd.Timestamp("2023-03-24T13:59:00Z")
+    interval = pd.Timedelta(minutes=15)
+    previous_bar = gap_start.floor("15min") - interval
+    next_bar = gap_end.floor("15min") + interval
+    dates = pd.date_range(end=previous_bar, periods=14, freq=interval).append(
+        pd.date_range(start=next_bar, periods=14, freq=interval)
+    )
+    close = np.full(len(dates), 100.0)
+    candles = DataFrame(
+        {
+            "date": dates,
+            "open": close,
+            "high": close + 1.0,
+            "low": close - 1.0,
+            "close": close,
+            "volume": np.full(len(close), 10.0),
+        }
+    )
+
+    with pytest.raises(ValueError, match="timestamp_interval_inconsistent"):
+        calculate_atr(candles, period=14, expected_interval=interval)
+
+    with pytest.raises(
+        ValueError, match="timestamp_documented_gap_manifest_invalid"
+    ):
+        calculate_atr(
+            candles,
+            period=14,
+            expected_interval=interval,
+            documented_gap_ranges=(
+                ("2023-03-24T12:40:00Z", "2023-03-24T14:00:00Z"),
+            ),
+        )
+
+
+@pytest.mark.parametrize("mutation", ["duplicate", "unsorted"])
+def test_atr_rejects_duplicate_and_unsorted_timestamps(mutation: str) -> None:
+    candles = market_frame(16)
+    if mutation == "duplicate":
+        candles.loc[8, "date"] = candles.loc[7, "date"]
+    else:
+        candles.loc[8, "date"], candles.loc[9, "date"] = (
+            candles.loc[9, "date"],
+            candles.loc[8, "date"],
+        )
+
+    with pytest.raises(
+        ValueError, match="timestamps_must_be_unique_and_increasing"
+    ):
+        calculate_atr(candles)

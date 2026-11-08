@@ -432,6 +432,7 @@ def _build_execution_signals(
     signal_values = primary_signal.to_numpy(dtype=bool)
     eligible_entry_count = 0
     gap_flatten_count = 0
+    atr_ready_from_index = ATR_PERIOD - 1
     execution_signals: list[dict[str, Any]] = []
     last_index = len(bars) - 1
     for index in range(last_index):
@@ -441,6 +442,9 @@ def _build_execution_signals(
         if is_gap_boundary:
             execution_signals.append(_execution_action(current_date, next_date, "SELL"))
             gap_flatten_count += 1
+            atr_ready_from_index = max(atr_ready_from_index, index + ATR_PERIOD)
+            continue
+        if index < atr_ready_from_index:
             continue
         if not _entry_signal_is_eligible(index, last_index, horizon_bars):
             continue
@@ -715,6 +719,7 @@ def _run_candidate(
     signal: Series,
     strategy_diagnostics: dict[str, Any],
     execution: ExecutionConfig,
+    documented_gap_ranges: tuple[tuple[str, str], ...] = (),
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Execute one Primary-only cell with the shared existing economic simulator."""
     horizon_bars = HORIZON_HOURS * 60 // TIMEFRAME_MINUTES[timeframe]
@@ -737,6 +742,8 @@ def _run_candidate(
         execution_signals,
         execution,
         trade_management_config=management,
+        expected_interval=pd.Timedelta(minutes=TIMEFRAME_MINUTES[timeframe]),
+        documented_gap_ranges=documented_gap_ranges,
     )
     metrics = replay["metrics"]
     trades = replay["trades"]
@@ -1199,6 +1206,10 @@ def run_v4ap(
             end_utc=end,
         )
         provenance[symbol] = asset_provenance
+        documented_gap_ranges = tuple(
+            (str(gap["start_utc"]), str(gap["end_utc"]))
+            for gap in asset_provenance["missing_gap_ranges"]
+        )
         for timeframe in TIMEFRAMES:
             bars = resample_ohlcv(minute_data, timeframe)
             signal_generators = {
@@ -1217,6 +1228,7 @@ def run_v4ap(
                         signal=signal,
                         strategy_diagnostics=diagnostics,
                         execution=execution,
+                        documented_gap_ranges=documented_gap_ranges,
                     )
                     candidates.append(candidate)
                     all_trades.extend(trade_rows)

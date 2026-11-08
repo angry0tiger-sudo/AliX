@@ -389,3 +389,24 @@ def test_request_requires_exact_1825_day_minute_aligned_window() -> None:
         ValueError, match="v4ap_source_window_must_cover_exact_1825_days"
     ):
         sweep._validate_request("a" * 40, start, "2026-10-31T23:58:00Z")
+
+
+def test_execution_signals_block_entries_until_post_gap_atr_warmup_completes() -> None:
+    bars = make_bars(np.full(20, 100.0))
+    bars.loc[2:, "date"] = bars.loc[2:, "date"] + timedelta(minutes=90)
+    primary = pd.Series(np.ones(len(bars), dtype=bool))
+
+    actions, entries, gap_flattens = sweep._build_execution_signals(
+        bars, primary, timeframe="15m", horizon_bars=1
+    )
+
+    buys = [item for item in actions if item["signal"] == "BUY"]
+    sells = [item for item in actions if item["signal"] == "SELL"]
+    assert gap_flattens == 1
+    assert sells
+    assert entries == len(buys) == 4
+    assert all(
+        pd.Timestamp(item["signal_timestamp"]) >= bars["date"].iloc[15]
+        for item in buys
+    )
+    assert pd.Timestamp(buys[0]["signal_timestamp"]) == bars["date"].iloc[15]

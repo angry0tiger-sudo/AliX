@@ -1390,10 +1390,18 @@ def _execution_atr_values(
     normalized: DataFrame,
     atr_values: pd.Series | None,
     management: TradeManagementConfig,
+    *,
+    expected_interval: pd.Timedelta | None = None,
+    documented_gap_ranges: tuple[tuple[str, str], ...] = (),
 ) -> pd.Series:
-    """Use supplied deterministic test ATR or causal ATR from normalized bars."""
+    """Use supplied deterministic test ATR or manifest-gated causal ATR."""
     if atr_values is None:
-        return calculate_atr(normalized, period=management.atr_period)
+        return calculate_atr(
+            normalized,
+            period=management.atr_period,
+            expected_interval=expected_interval,
+            documented_gap_ranges=documented_gap_ranges,
+        )
     if len(atr_values) != len(normalized):
         raise ValueError("economic_atr_length_mismatch")
     return pd.to_numeric(atr_values, errors="coerce").reset_index(drop=True)
@@ -1519,6 +1527,8 @@ def simulate_signals(
     *,
     trade_management_config: TradeManagementConfig | None = None,
     atr_values: pd.Series | None = None,
+    expected_interval: pd.Timedelta | None = None,
+    documented_gap_ranges: tuple[tuple[str, str], ...] = (),
 ) -> dict[str, Any]:
     """Replay Spot entries with ATR barriers, SELL exits, and vertical expiry."""
     validate_execution_config(config)
@@ -1527,7 +1537,13 @@ def simulate_signals(
     if not signals:
         raise ValueError("economic_bars_or_signals_empty")
     normalized = _normalize_execution_bars(bars)
-    selected_atr = _execution_atr_values(normalized, atr_values, management)
+    selected_atr = _execution_atr_values(
+        normalized,
+        atr_values,
+        management,
+        expected_interval=expected_interval,
+        documented_gap_ranges=documented_gap_ranges,
+    )
     index_by_time = {
         timestamp: index for index, timestamp in enumerate(normalized["date"].tolist())
     }
