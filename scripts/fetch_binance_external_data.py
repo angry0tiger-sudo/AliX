@@ -12,8 +12,8 @@ import pandas as pd
 from external_data.binance_futures import (
     ALLOWED_SYMBOLS,
     BinanceFuturesSnapshot,
+    BinancePublicHttpsTransport,
     BinanceUsdMFuturesConnector,
-    UrllibPublicJsonTransport,
     snapshot_manifest,
 )
 
@@ -126,7 +126,7 @@ def fetch_public_history(
         raise ValueError("ai6_commit_sha_invalid")
     end = pd.Timestamp.now(tz="UTC").floor("min")
     start = end - pd.Timedelta(days=requested_days) + pd.Timedelta(minutes=1)
-    connector = BinanceUsdMFuturesConnector(UrllibPublicJsonTransport())
+    connector = BinanceUsdMFuturesConnector(BinancePublicHttpsTransport())
     manifests: list[dict[str, Any]] = []
     for symbol in symbols:
         snapshot = connector.fetch(

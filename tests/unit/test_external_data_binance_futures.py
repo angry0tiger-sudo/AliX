@@ -1,13 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from email.message import Message
-from io import BytesIO
 import json
-from typing import cast
-from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlsplit
-from urllib.request import Request
 
 import pytest
 
@@ -16,10 +11,10 @@ from external_data.binance_futures import (
     FUNDING_PAGE_LIMIT,
     OPEN_INTEREST_HISTORY_LIMIT_DAYS,
     BinanceFuturesSnapshot,
+    BinancePublicHttpsTransport,
     BinanceUsdMFuturesConnector,
     FundingRatePoint,
     OpenInterestPoint,
-    UrllibPublicJsonTransport,
     _content_hash,
     _deduplicate_funding,
     _deduplicate_open_interest,
@@ -417,85 +412,116 @@ def test_snapshot_manifest_blocks_latest_month_oi_and_records_missing_periods() 
         snapshot_manifest(bounded, commit_sha="b" * 40, requested_days=0)
 
 
-class _FakeUrllibResponse:
-    status = 200
-
-    def __init__(self, body: bytes) -> None:
+class _FakeHttpsResponse:
+    def __init__(self, status: int, body: bytes) -> None:
+        self.status = status
         self._body = body
-
-    def __enter__(self) -> "_FakeUrllibResponse":
-        return self
-
-    def __exit__(self, *_: object) -> None:
-        return None
 
     def read(self, maximum: int) -> bytes:
         return self._body[:maximum]
 
 
-def test_urllib_transport_sends_only_public_get_headers(
+class _FakeHttpsConnection:
+    def __init__(
+        self,
+        response: _FakeHttpsResponse | None = None,
+        *,
+        failure: Exception | None = None,
+    ) -> None:
+        self.response = response
+        self.failure = failure
+        self.requests: list[tuple[str, str, dict[str, str]]] = []
+        self.closed = False
+
+    def request(
+        self,
+        method: str,
+        target: str,
+        *,
+        headers: dict[str, str],
+    ) -> None:
+        self.requests.append((method, target, headers))
+        if self.failure is not None:
+            raise self.failure
+
+    def getresponse(self) -> _FakeHttpsResponse:
+        if self.response is None:
+            raise AssertionError("fixture response missing")
+        return self.response
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def test_https_transport_sends_only_public_get_headers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    fake = _FakeHttpsConnection(_FakeHttpsResponse(200, b'{"status":"ok"}'))
     captured: dict[str, object] = {}
 
-    def fake_urlopen(request: object, *, timeout: float) -> _FakeUrllibResponse:
-        captured["request"] = request
+    def fake_connection(host: str, *, port: int, timeout: float) -> _FakeHttpsConnection:
+        captured["host"] = host
+        captured["port"] = port
         captured["timeout"] = timeout
-        return _FakeUrllibResponse(b'{"status":"ok"}')
+        return fake
 
-    monkeypatch.setattr(provider_module, "urlopen", fake_urlopen)
-    transport = UrllibPublicJsonTransport(timeout_seconds=9.0)
+    monkeypatch.setattr(provider_module, "HTTPSConnection", fake_connection)
+    transport = BinancePublicHttpsTransport(timeout_seconds=9.0)
     response = transport.get(f"{BINANCE_FUTURES_BASE_URL}/fapi/v1/fundingRate")
-    request = cast(Request, captured["request"])
+    method, target, headers = fake.requests[0]
     assert response.status_code == 200
     assert response.body == '{"status":"ok"}'
-    assert request.get_method() == "GET"
-    assert request.get_header("Authorization") is None
-    assert request.get_header("X-mbx-apikey") is None
-    assert captured["timeout"] == 9.0
+    assert method == "GET"
+    assert target == "/fapi/v1/fundingRate"
+    assert headers["Accept"] == "application/json"
+    assert "Authorization" not in headers
+    assert "X-mbx-apikey" not in headers
+    assert captured == {"host": "fapi.binance.com", "port": 443, "timeout": 9.0}
+    assert fake.closed is True
 
 
-def test_urllib_transport_handles_http_errors_and_rejects_network_failures(
+def test_https_transport_maps_rate_limits_and_rejects_network_failures(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def limited_urlopen(request: object, *, timeout: float) -> object:
-        raise HTTPError(
-            url="https://fapi.binance.com/fapi/v1/fundingRate",
-            code=429,
-            msg="rate limited",
-            hdrs=Message(),
-            fp=BytesIO(b'{"error":"limited"}'),
-        )
-
-    monkeypatch.setattr(provider_module, "urlopen", limited_urlopen)
-    response = UrllibPublicJsonTransport().get(
+    limited = _FakeHttpsConnection(
+        _FakeHttpsResponse(429, b'{"error":"limited"}')
+    )
+    monkeypatch.setattr(
+        provider_module,
+        "HTTPSConnection",
+        lambda host, *, port, timeout: limited,
+    )
+    response = BinancePublicHttpsTransport().get(
         f"{BINANCE_FUTURES_BASE_URL}/fapi/v1/fundingRate"
     )
     assert response.status_code == 429
     assert response.rate_limit_status == RateLimitStatus.LIMITED
 
-    def failed_urlopen(request: object, *, timeout: float) -> object:
-        raise URLError("offline")
-
-    monkeypatch.setattr(provider_module, "urlopen", failed_urlopen)
+    failed = _FakeHttpsConnection(failure=OSError("offline"))
+    monkeypatch.setattr(
+        provider_module,
+        "HTTPSConnection",
+        lambda host, *, port, timeout: failed,
+    )
     with pytest.raises(TimeoutError):
-        UrllibPublicJsonTransport().get(
+        BinancePublicHttpsTransport().get(
             f"{BINANCE_FUTURES_BASE_URL}/fapi/v1/fundingRate"
         )
+    assert failed.closed is True
 
 
-def test_urllib_transport_rejects_wrong_host_and_invalid_bytes(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    transport = UrllibPublicJsonTransport()
-    with pytest.raises(ProviderError, match="host_not_allowed"):
+
+def test_https_transport_rejects_wrong_host_path_and_invalid_bytes() -> None:
+    transport = BinancePublicHttpsTransport()
+    with pytest.raises(ProviderError, match="host_or_path_not_allowed"):
         transport.get("https://example.com/data")
-
+    with pytest.raises(ProviderError, match="host_or_path_not_allowed"):
+        transport.get("https://fapi.binance.com/fapi/v1/order")
+    with pytest.raises(ProviderError, match="host_or_path_not_allowed"):
+        transport.get("http://fapi.binance.com/fapi/v1/fundingRate")
     with pytest.raises(ProviderError, match="encoding_invalid"):
         transport._response_body(b"\xff")
-
     with pytest.raises(ProviderError, match="response_too_large"):
         transport._response_body(b"x" * (provider_module.MAX_RESPONSE_BYTES + 1))
-
     with pytest.raises(ProviderError, match="timeout_configuration_invalid"):
-        UrllibPublicJsonTransport(timeout_seconds=0)
+        BinancePublicHttpsTransport(timeout_seconds=0)

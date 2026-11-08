@@ -10,14 +10,13 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from http.client import HTTPSConnection, HTTPException
 import hashlib
 import json
 import math
 import time
 from typing import Protocol
-from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlsplit
-from urllib.request import Request, urlopen
 
 from external_data.contracts import (
     ConnectorResponse,
@@ -367,8 +366,12 @@ class BinanceUsdMFuturesConnector:
         )
 
 
-class UrllibPublicJsonTransport:
-    """Bounded urllib transport. It never reads API keys or sends auth headers."""
+class BinancePublicHttpsTransport:
+    """Bounded HTTPS GET transport with a fixed host/path allow-list.
+
+    HTTPSConnection uses Python's default TLS context, including certificate
+    verification. The client sends no credentials and cannot follow redirects.
+    """
 
     def __init__(self, *, timeout_seconds: float = 20.0) -> None:
         if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
@@ -384,44 +387,62 @@ class UrllibPublicJsonTransport:
         except UnicodeDecodeError:
             raise ProviderError("binance_public_response_encoding_invalid") from None
 
-    def get(self, url: str) -> ConnectorResponse:
+    @staticmethod
+    def _validated_request_target(url: str) -> tuple[str, str]:
         parsed = urlsplit(url)
-        if parsed.scheme != "https" or parsed.hostname != "fapi.binance.com":
-            raise ProviderError("binance_public_host_not_allowed")
-        request = Request(
-            url,
-            headers={
-                "Accept": "application/json",
-                "User-Agent": "AliX-AI6-Research/1.0",
-            },
-            method="GET",
-        )
+        if (
+            parsed.scheme != "https"
+            or parsed.hostname != "fapi.binance.com"
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.port not in (None, 443)
+            or parsed.fragment
+            or parsed.path not in (FUNDING_RATE_PATH, OPEN_INTEREST_HISTORY_PATH)
+        ):
+            raise ProviderError("binance_public_host_or_path_not_allowed")
+        target = parsed.path
+        if parsed.query:
+            target = f"{target}?{parsed.query}"
+        return "fapi.binance.com", target
+
+    def get(self, url: str) -> ConnectorResponse:
+        host, target = self._validated_request_target(url)
         received_at = datetime.now(timezone.utc)
+        connection = HTTPSConnection(host, port=443, timeout=self._timeout)
         try:
-            with urlopen(request, timeout=self._timeout) as response:
-                body = self._response_body(response.read(MAX_RESPONSE_BYTES + 1))
-                return ConnectorResponse(
-                    status_code=int(response.status),
-                    body=body,
-                    received_at=received_at,
-                )
-        except HTTPError as error:
-            return ConnectorResponse(
-                status_code=int(error.code),
-                body=self._response_body(error.read(MAX_RESPONSE_BYTES + 1)),
-                received_at=received_at,
-                rate_limit_status=(
-                    RateLimitStatus.LIMITED
-                    if error.code == 429
-                    else RateLimitStatus.BLOCKED
-                    if error.code in (418, 403)
-                    else RateLimitStatus.OK
-                ),
+            connection.request(
+                "GET",
+                target,
+                headers={
+                    "Accept": "application/json",
+                    "User-Agent": "AliX-AI6-Research/1.0",
+                },
             )
-        except (URLError, TimeoutError, OSError):
+            response = connection.getresponse()
+            body = self._response_body(response.read(MAX_RESPONSE_BYTES + 1))
+            status = int(response.status)
+            rate_status = (
+                RateLimitStatus.LIMITED
+                if status == 429
+                else RateLimitStatus.BLOCKED
+                if status in (418, 403)
+                else RateLimitStatus.OK
+            )
+            return ConnectorResponse(
+                status_code=status,
+                body=body,
+                received_at=received_at,
+                rate_limit_status=rate_status,
+            )
+        except ProviderError:
+            raise
+        except (OSError, TimeoutError, HTTPException):
             raise TimeoutError(
                 "binance_public_request_timeout_or_network_error"
             ) from None
+        finally:
+            connection.close()
+
 
 
 def _covers_requested_window(
