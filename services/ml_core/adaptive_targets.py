@@ -66,44 +66,121 @@ def _positive_integer(value: int, name: str) -> None:
         raise ValueError(f"{name}_must_be_positive_integer")
 
 
+def _parse_documented_gap_timestamp(value: str | pd.Timestamp) -> pd.Timestamp:
+    """Parse a timezone-aware documented-gap endpoint as UTC."""
+    try:
+        timestamp = pd.Timestamp(value)
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError("timestamp_documented_gap_manifest_invalid") from None
+    if timestamp.tzinfo is None or timestamp.utcoffset() is None:
+        raise ValueError("timestamp_documented_gap_manifest_invalid")
+    return timestamp.tz_convert("UTC")
+
+
+def _validate_documented_gap_range(
+    gap: tuple[str | pd.Timestamp, str | pd.Timestamp]
+    | list[str | pd.Timestamp],
+) -> tuple[pd.Timestamp, pd.Timestamp]:
+    """Validate one exact, inclusive 80-minute Binance Spot gap declaration."""
+    if not isinstance(gap, (tuple, list)) or len(gap) != 2:
+        raise ValueError("timestamp_documented_gap_manifest_invalid")
+    start = _parse_documented_gap_timestamp(gap[0])
+    end = _parse_documented_gap_timestamp(gap[1])
+    if start != pd.Timestamp(DOCUMENTED_BINANCE_SPOT_GAP_START_UTC):
+        raise ValueError("timestamp_documented_gap_manifest_invalid")
+    if end != pd.Timestamp(DOCUMENTED_BINANCE_SPOT_GAP_END_UTC):
+        raise ValueError("timestamp_documented_gap_manifest_invalid")
+    if end - start != pd.Timedelta(minutes=79):
+        raise ValueError("timestamp_documented_gap_manifest_invalid")
+    return start, end
+
+
 def _validated_documented_gap_ranges(
     documented_gap_ranges: tuple[tuple[str | pd.Timestamp, str | pd.Timestamp], ...]
     | list[tuple[str | pd.Timestamp, str | pd.Timestamp]],
 ) -> tuple[tuple[pd.Timestamp, pd.Timestamp], ...]:
-    """Accept only the exact 80 missing Binance Spot minute timestamps."""
+    """Accept only the exact, single documented Binance Spot gap."""
     if not isinstance(documented_gap_ranges, (tuple, list)):
         raise ValueError("timestamp_documented_gap_manifest_invalid")
     if len(documented_gap_ranges) > 1:
         raise ValueError("timestamp_documented_gap_manifest_invalid")
+    return tuple(_validate_documented_gap_range(gap) for gap in documented_gap_ranges)
 
-    expected_start = pd.Timestamp(DOCUMENTED_BINANCE_SPOT_GAP_START_UTC)
-    expected_end = pd.Timestamp(DOCUMENTED_BINANCE_SPOT_GAP_END_UTC)
-    validated: list[tuple[pd.Timestamp, pd.Timestamp]] = []
-    for gap in documented_gap_ranges:
-        if not isinstance(gap, (tuple, list)) or len(gap) != 2:
-            raise ValueError("timestamp_documented_gap_manifest_invalid")
-        try:
-            start = pd.Timestamp(gap[0])
-            end = pd.Timestamp(gap[1])
-        except (TypeError, ValueError, OverflowError):
-            raise ValueError("timestamp_documented_gap_manifest_invalid") from None
-        if (
-            start.tzinfo is None
-            or start.utcoffset() is None
-            or end.tzinfo is None
-            or end.utcoffset() is None
-        ):
-            raise ValueError("timestamp_documented_gap_manifest_invalid")
-        start = start.tz_convert("UTC")
-        end = end.tz_convert("UTC")
-        if (
-            start != expected_start
-            or end != expected_end
-            or end - start != pd.Timedelta(minutes=79)
-        ):
-            raise ValueError("timestamp_documented_gap_manifest_invalid")
-        validated.append((start, end))
-    return tuple(validated)
+
+def _validate_inferred_timestamp_cadence(
+    deltas: pd.Series,
+    documented_gaps: tuple[tuple[pd.Timestamp, pd.Timestamp], ...],
+) -> None:
+    """Preserve the legacy fixed-cadence contract when no interval is supplied."""
+    if documented_gaps:
+        raise ValueError("timestamp_expected_interval_required")
+    seconds = deltas.dt.total_seconds().to_numpy(dtype=float)
+    if not bool(np.isfinite(seconds).all()):
+        raise ValueError("timestamp_interval_inconsistent")
+    if bool(np.any(seconds <= 0)):
+        raise ValueError("timestamp_interval_inconsistent")
+    if len(seconds) and not bool(np.all(seconds == seconds[0])):
+        raise ValueError("timestamp_interval_inconsistent")
+
+
+def _validated_expected_interval(value: pd.Timedelta) -> pd.Timedelta:
+    """Require a positive expected interval aligned to whole minutes."""
+    try:
+        interval = pd.Timedelta(value)
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError("timestamp_expected_interval_invalid") from None
+    if pd.isna(interval) or interval <= pd.Timedelta(0):
+        raise ValueError("timestamp_expected_interval_invalid")
+    minutes = interval / pd.Timedelta(minutes=1)
+    if not float(minutes).is_integer():
+        raise ValueError("timestamp_expected_interval_invalid")
+    return interval
+
+
+def _allowed_gap_transition_indices(
+    dates: pd.Series,
+    interval: pd.Timedelta,
+    documented_gaps: tuple[tuple[pd.Timestamp, pd.Timestamp], ...],
+) -> tuple[int, ...]:
+    """Map the source manifest gap to its epoch-aligned resampled-bar boundary."""
+    frequency = f"{int(interval / pd.Timedelta(minutes=1))}min"
+    allowed_indices: list[int] = []
+    for gap_start, gap_end in documented_gaps:
+        first_bucket = gap_start.floor(frequency)
+        last_bucket = gap_end.floor(frequency)
+        expected_previous = first_bucket - interval
+        expected_next = last_bucket + interval
+        matches = [
+            index
+            for index in range(1, len(dates))
+            if pd.Timestamp(dates.iloc[index - 1]) == expected_previous
+            and pd.Timestamp(dates.iloc[index]) == expected_next
+        ]
+        if len(matches) != 1:
+            raise ValueError("timestamp_documented_gap_boundary_mismatch")
+        allowed_indices.append(matches[0])
+    if len(set(allowed_indices)) != len(allowed_indices):
+        raise ValueError("timestamp_documented_gap_manifest_invalid")
+    return tuple(allowed_indices)
+
+
+def _observed_gap_transition_indices(
+    deltas: pd.Series, expected_interval: pd.Timedelta
+) -> tuple[int, ...]:
+    """Return every observed cadence break as the index of its post-gap candle."""
+    return tuple(
+        index
+        for index, delta in enumerate(deltas, start=1)
+        if delta != expected_interval
+    )
+
+
+def _validate_gap_transition_indices(
+    observed_indices: tuple[int, ...], allowed_indices: tuple[int, ...]
+) -> None:
+    """Require the observed discontinuities to match the manifest exactly."""
+    if set(observed_indices) != set(allowed_indices):
+        raise ValueError("timestamp_interval_inconsistent")
 
 
 def _gap_transition_indices(
@@ -114,56 +191,17 @@ def _gap_transition_indices(
     | list[tuple[str | pd.Timestamp, str | pd.Timestamp]],
 ) -> tuple[int, ...]:
     """Validate regular cadence plus only manifest-authorized segment transitions."""
-    gaps = _validated_documented_gap_ranges(documented_gap_ranges)
+    documented_gaps = _validated_documented_gap_ranges(documented_gap_ranges)
     deltas = dates.diff().iloc[1:]
-
     if expected_interval is None:
-        if gaps:
-            raise ValueError("timestamp_expected_interval_required")
-        if len(deltas):
-            seconds = deltas.dt.total_seconds().to_numpy(dtype=float)
-            if (
-                not bool(np.isfinite(seconds).all())
-                or bool(np.any(seconds <= 0))
-                or not bool(np.all(seconds == seconds[0]))
-            ):
-                raise ValueError("timestamp_interval_inconsistent")
+        _validate_inferred_timestamp_cadence(deltas, documented_gaps)
         return ()
-
-    try:
-        interval = pd.Timedelta(expected_interval)
-    except (TypeError, ValueError, OverflowError):
-        raise ValueError("timestamp_expected_interval_invalid") from None
-    if pd.isna(interval) or interval <= pd.Timedelta(0):
-        raise ValueError("timestamp_expected_interval_invalid")
-    interval_minutes = interval / pd.Timedelta(minutes=1)
-    if not float(interval_minutes).is_integer():
-        raise ValueError("timestamp_expected_interval_invalid")
-    frequency = f"{int(interval_minutes)}min"
-
-    allowed_indices: list[int] = []
-    for gap_start, gap_end in gaps:
-        first_affected_bucket = gap_start.floor(frequency)
-        last_affected_bucket = gap_end.floor(frequency)
-        expected_previous = first_affected_bucket - interval
-        expected_next = last_affected_bucket + interval
-        matches = [
-            index
-            for index in range(1, len(dates))
-            if pd.Timestamp(dates.iloc[index - 1]) == expected_previous
-            and pd.Timestamp(dates.iloc[index]) == expected_next
-        ]
-        if len(matches) != 1:
-            raise ValueError("timestamp_documented_gap_boundary_mismatch")
-        allowed_indices.extend(matches)
-
-    if len(set(allowed_indices)) != len(allowed_indices):
-        raise ValueError("timestamp_documented_gap_manifest_invalid")
-    observed_indices = [
-        index for index, delta in enumerate(deltas, start=1) if delta != interval
-    ]
-    if set(observed_indices) != set(allowed_indices):
-        raise ValueError("timestamp_interval_inconsistent")
+    interval = _validated_expected_interval(expected_interval)
+    allowed_indices = _allowed_gap_transition_indices(
+        dates, interval, documented_gaps
+    )
+    observed_indices = _observed_gap_transition_indices(deltas, interval)
+    _validate_gap_transition_indices(observed_indices, allowed_indices)
     return tuple(sorted(allowed_indices))
 
 
