@@ -1,4 +1,4 @@
-"""Run the V4-AQ Donchian + external Funding/OI LightGBM experiment."""
+"""AI-6 Funding-only Meta-Labeling 36-cell economic evaluation."""
 
 from __future__ import annotations
 
@@ -6,16 +6,16 @@ import argparse
 import csv
 import hashlib
 import json
+import math
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
 from pandas import DataFrame, Series
+from sklearn.metrics import roc_auc_score
 
-from scripts import run_ml_core_real_data_baseline
 from scripts import run_ml_core_v4ap_diagnostic_sweep as v4ap
-from scripts.fetch_binance_public_ohlcv import SCHEMA_VERSION as SPOT_SCHEMA_VERSION
 from services.meta_labeling import v4x
 from services.meta_labeling.v4aq import (
     V4AQ_META_FEATURE_COLUMNS,
@@ -23,34 +23,40 @@ from services.meta_labeling.v4aq import (
     fit_v4aq_lightgbm_meta_filter,
     predict_v4aq_meta_probabilities,
 )
-from services.ml_core.adaptive_targets import (
-    ATR_PERIOD,
-    apply_adaptive_triple_barrier,
-    calculate_atr,
+from services.ml_core.external_market_features import (
+    EXTERNAL_FEATURE_COLUMNS,
+    build_external_market_features,
 )
 
-REPORT_SCHEMA_VERSION = "alix.ml-core.v4aq-ai6.v1"
-SYMBOL = "BTCUSDT"
-TIMEFRAME = "4h"
+REPORT_SCHEMA_VERSION = "alix.ml-core.v4aq-ai6.v2"
 REQUESTED_DAYS = 1825
 TRAIN_FRACTION = 0.70
 FORWARD_END_FRACTION = 0.85
 OOF_FOLD_COUNT = 5
-HORIZON_BARS = 6
-BALANCED_EXIT = {
-    "name": "BALANCED",
-    "stop_loss_atr": 1.5,
-    "take_profit_atr": 3.0,
-    "trailing_enabled": False,
-    "trailing_activation_atr": None,
-    "trailing_step_atr": None,
-}
+TARGET_ACCEPT_FRACTION = 0.50
+ROUND_TRIP_COST_BPS = 30.0
 FEE_BPS_PER_SIDE = 10.0
 SLIPPAGE_BPS_PER_SIDE = 5.0
-ROUND_TRIP_COST_BPS = 30.0
+ROC_AUC_REFERENCE = 0.51
 MINIMUM_TRADE_COUNT = 50
 MINIMUM_WIN_RATE = 0.40
 MINIMUM_NET_PROFIT_FACTOR = 1.10
+MINIMUM_DSR_Z = 0.0
+FUNDING_CSV_COLUMNS = (
+    "symbol",
+    "funding_time",
+    "funding_rate",
+    "mark_price",
+    "available_at",
+    "content_hash",
+)
+SAFETY = {
+    "Champion": None,
+    "order_permission": False,
+    "trading_authorization": "NO-GO",
+    "private_api_calls": 0,
+    "real_order_attempts": 0,
+}
 
 
 def _sha256(path: Path) -> str:
@@ -58,566 +64,805 @@ def _sha256(path: Path) -> str:
         return hashlib.file_digest(handle, "sha256").hexdigest()
 
 
-def _validate_sha(commit_sha: str) -> None:
-    if len(commit_sha) != 40 or any(c not in "0123456789abcdef" for c in commit_sha):
-        raise ValueError("v4aq_commit_sha_invalid")
+def _validate_commit_sha(commit_sha: str) -> None:
+    if len(commit_sha) != 40 or any(
+        character not in "0123456789abcdef" for character in commit_sha
+    ):
+        raise ValueError("ai6_commit_sha_invalid")
 
 
-def _read_symbol_manifest(
+def _read_funding_artifact(
     external_dir: Path,
     symbol: str,
     commit_sha: str,
-) -> dict[str, Any]:
+    start_utc: pd.Timestamp,
+    end_utc: pd.Timestamp,
+) -> tuple[DataFrame, dict[str, Any], bool]:
+    """Verify one Funding CSV and its source manifest; reject all OI-era schemas."""
     stem = f"binance-{symbol.lower()}"
-    path = external_dir / f"{stem}-manifest.json"
-    if not path.is_file():
-        raise ValueError(f"v4aq_external_manifest_missing:{symbol}")
-    raw_manifest = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(raw_manifest, dict):
-        raise ValueError(f"v4aq_external_manifest_schema_invalid:{symbol}")
-    manifest: dict[str, Any] = raw_manifest
+    manifest_path = external_dir / f"{stem}-manifest.json"
+    if not manifest_path.is_file():
+        raise ValueError(f"ai6_funding_manifest_missing:{symbol}")
+    raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError(f"ai6_funding_manifest_schema_invalid:{symbol}")
+    if "open_interest" in raw or "open_interest_csv" in raw:
+        raise ValueError(f"ai6_oi_contract_must_be_absent:{symbol}")
+    funding_meta = raw.get("funding")
     expected = (
-        manifest.get("schema_version") == "alix.binance.usdm-external-market.v1",
-        manifest.get("commit_sha") == commit_sha,
-        manifest.get("symbol") == symbol,
-        manifest.get("requested_days") == REQUESTED_DAYS,
-        manifest.get("public_api_only") is True,
-        manifest.get("credentials_used") is False,
-        manifest.get("api_key_header_sent") is False,
-        manifest.get("private_api_calls") == 0,
-        manifest.get("exchange_order_calls") == 0,
-        manifest.get("Champion") is None,
-        manifest.get("order_permission") is False,
-        manifest.get("trading_authorization") == "NO-GO",
+        raw.get("schema_version") == "alix.binance.usdm-funding.v1",
+        raw.get("commit_sha") == commit_sha,
+        raw.get("provider") == "Binance USD-M public Funding Rate History",
+        raw.get("host") == "fapi.binance.com",
+        raw.get("endpoint") == "/fapi/v1/fundingRate",
+        raw.get("symbol") == symbol,
+        raw.get("requested_days") == REQUESTED_DAYS,
+        raw.get("public_api_only") is True,
+        raw.get("credentials_used") is False,
+        raw.get("api_key_header_sent") is False,
+        raw.get("private_api_calls") == 0,
+        raw.get("exchange_order_calls") == 0,
+        raw.get("Champion") is None,
+        raw.get("order_permission") is False,
+        raw.get("trading_authorization") == "NO-GO",
+        isinstance(funding_meta, dict),
+        raw.get("requested_start_utc") is not None,
+        raw.get("requested_end_utc") is not None,
     )
     if not all(expected):
-        raise ValueError(f"v4aq_external_manifest_contract_invalid:{symbol}")
-    _verify_manifested_csvs(external_dir, stem, manifest, symbol)
-    return manifest
-
-
-def _verify_manifested_csvs(
-    external_dir: Path,
-    stem: str,
-    manifest: dict[str, Any],
-    symbol: str,
-) -> None:
-    sections = (
-        ("funding", "funding_csv", "funding_csv_sha256"),
-        ("open_interest", "open_interest_csv", "open_interest_csv_sha256"),
+        raise ValueError(f"ai6_funding_manifest_contract_invalid:{symbol}")
+    requested_start = pd.Timestamp(raw["requested_start_utc"])
+    requested_end = pd.Timestamp(raw["requested_end_utc"])
+    if (
+        requested_start.tzinfo is None
+        or requested_end.tzinfo is None
+        or requested_start.tz_convert("UTC") != start_utc
+        or requested_end.tz_convert("UTC") != end_utc
+    ):
+        raise ValueError(f"ai6_funding_manifest_window_mismatch:{symbol}")
+    csv_name = raw.get("funding_csv")
+    if csv_name != f"{stem}-funding.csv":
+        raise ValueError(f"ai6_funding_csv_name_invalid:{symbol}")
+    csv_path = external_dir / csv_name
+    if not csv_path.is_file():
+        raise ValueError(f"ai6_funding_csv_missing:{symbol}")
+    digest = _sha256(csv_path)
+    if digest != raw.get("funding_csv_sha256"):
+        raise ValueError(f"ai6_funding_csv_hash_mismatch:{symbol}")
+    funding = pd.read_csv(csv_path)
+    if tuple(funding.columns) != FUNDING_CSV_COLUMNS:
+        raise ValueError(f"ai6_funding_csv_schema_invalid:{symbol}")
+    if len(funding) != funding_meta.get("row_count"):
+        raise ValueError(f"ai6_funding_row_count_mismatch:{symbol}")
+    if funding.empty:
+        return funding, raw, False
+    if not funding["symbol"].eq(symbol).all():
+        raise ValueError(f"ai6_funding_symbol_mismatch:{symbol}")
+    funding["funding_time"] = pd.to_datetime(
+        funding["funding_time"], utc=True, errors="coerce"
     )
-    for section, filename_key, digest_key in sections:
-        if not isinstance(manifest.get(section), dict):
-            raise ValueError(
-                f"v4aq_external_manifest_section_missing:{symbol}:{section}"
-            )
-        path = external_dir / str(manifest.get(filename_key, ""))
-        if not path.is_file() or _sha256(path) != manifest.get(digest_key):
-            raise ValueError(f"v4aq_external_csv_hash_mismatch:{symbol}:{section}")
-
-
-def _external_coverage(
-    manifests: dict[str, dict[str, Any]],
-) -> dict[str, Any]:
-    coverage: dict[str, Any] = {}
-    for symbol, manifest in manifests.items():
-        funding = dict(manifest["funding"])
-        oi = dict(manifest["open_interest"])
-        coverage[symbol] = {
-            "funding": funding,
-            "open_interest": oi,
-            "full_requested_history": (
-                funding.get("full_requested_history_available") is True
-                and oi.get("full_requested_history_available") is True
-            ),
-        }
-    return coverage
-
-
-def _coverage_is_complete(coverage: dict[str, Any]) -> bool:
-    selected = coverage.get(SYMBOL)
-    return isinstance(selected, dict) and selected.get("full_requested_history") is True
-
-
-def _read_external_frames(
-    external_dir: Path,
-    symbol: str,
-) -> tuple[DataFrame, DataFrame]:
-    stem = f"binance-{symbol.lower()}"
-    return (
-        pd.read_csv(external_dir / f"{stem}-funding.csv"),
-        pd.read_csv(external_dir / f"{stem}-open-interest.csv"),
+    funding["available_at"] = pd.to_datetime(
+        funding["available_at"], utc=True, errors="coerce"
     )
-
-
-def _load_spot_bars(
-    input_dir: Path,
-    commit_sha: str,
-) -> tuple[DataFrame, dict[str, Any], dict[str, Any]]:
-    manifest_path = input_dir / f"binance-{SYMBOL.lower()}-1m.manifest.json"
-    if not manifest_path.is_file():
-        raise ValueError("v4aq_spot_manifest_missing")
-    source_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    if source_manifest.get("schema_version") != SPOT_SCHEMA_VERSION:
-        raise ValueError("v4aq_spot_manifest_schema_invalid")
-    bars_1m, provenance = v4ap._load_market_data(
-        input_dir,
-        symbol=SYMBOL,
-        commit_sha=commit_sha,
-        start_utc=pd.Timestamp(source_manifest["start_utc"]),
-        end_utc=pd.Timestamp(source_manifest["end_utc"]),
+    funding["funding_rate"] = pd.to_numeric(
+        funding["funding_rate"], errors="coerce"
     )
-    bars = run_ml_core_real_data_baseline.resample_ohlcv(
-        bars_1m, TIMEFRAME, allow_exchange_gaps=True
+    if (
+        funding[["funding_time", "available_at", "funding_rate"]].isna().any().any()
+        or not np.isfinite(funding["funding_rate"].to_numpy(dtype=float)).all()
+        or funding["funding_time"].duplicated().any()
+        or not funding["funding_time"].is_monotonic_increasing
+    ):
+        raise ValueError(f"ai6_funding_csv_values_invalid:{symbol}")
+    ready = (
+        raw.get("research_status") == "READY_FOR_FUNDING_FEATURE_JOIN"
+        and funding_meta.get("full_requested_history_available") is True
+        and funding_meta.get("coverage_status") == "FULL_REQUESTED_HISTORY"
+        and int(funding_meta.get("row_count", 0)) >= 20
     )
-    from scripts import run_ml_core_v4af_meta_final as v4af
-
-    bars, gap_diagnostics = v4af._trim_to_latest_contiguous_segment(bars, TIMEFRAME)
-    bars = bars.reset_index(drop=True)
-    if len(bars) < 2_000:
-        raise ValueError("v4aq_contiguous_spot_history_insufficient")
-    return bars, provenance, gap_diagnostics
+    return funding, raw, bool(ready)
 
 
-def _training_label_frame(
+def _label_primary_events(
     bars: DataFrame,
-    meta_features: DataFrame,
-    primary_signal: Series,
-    train_end: int,
-) -> DataFrame:
-    train_bars = bars.iloc[:train_end].reset_index(drop=True)
-    train_signal = primary_signal.iloc[:train_end].reset_index(drop=True)
-    oof_events = v4x.generate_oof_primary_events(
-        train_signal,
-        start_index=21,
-        stop_index=train_end,
-        fold_count=OOF_FOLD_COUNT,
-    )
-    atr = calculate_atr(train_bars, period=ATR_PERIOD)
-    barrier_labels = apply_adaptive_triple_barrier(
-        train_bars,
-        atr_values=atr,
-        atr_period=ATR_PERIOD,
-        horizon_candles=HORIZON_BARS,
-        take_profit_multiplier=3.0,
-        stop_loss_multiplier=1.5,
-        entry_reference="NEXT_BAR_OPEN",
-        entry_slippage_bps=SLIPPAGE_BPS_PER_SIDE,
-    )
-    costed = v4x.build_costed_meta_labels(
-        train_bars,
-        oof_events,
-        barrier_labels,
-        fee_bps_per_side=FEE_BPS_PER_SIDE,
-        slippage_bps_per_side=SLIPPAGE_BPS_PER_SIDE,
-        entry_slippage_bps=SLIPPAGE_BPS_PER_SIDE,
-    )
-    indices = costed["event_index"].to_numpy(dtype=int)
-    selected = meta_features.iloc[indices].reset_index(drop=True)
-    complete = selected.notna().all(axis=1)
-    complete &= np.isfinite(selected.to_numpy(dtype=float)).all(axis=1)
-    costed = costed.loc[complete].reset_index(drop=True)
-    selected = selected.loc[complete].reset_index(drop=True)
-    selected.insert(0, "event_index", costed["event_index"].to_numpy(dtype=int))
-    training = costed.merge(
-        selected,
-        on="event_index",
-        how="inner",
-        validate="one_to_one",
-    ).sort_values("event_index")
-    if len(training) != len(costed) or training.empty:
-        raise ValueError("v4aq_meta_training_alignment_invalid")
-    return training.reset_index(drop=True)
-
-
-def _fit_meta_model(
-    training: DataFrame,
-    train_end: int,
-) -> tuple[Any, dict[str, Any]]:
-    fit_rows, calibration_rows = v4x.split_meta_fit_calibration(
-        training,
-        outer_train_end_index=train_end,
-        calibration_fraction=0.15,
-        minimum_fit_rows=40,
-        minimum_class_rows=8,
-    )
-    model, diagnostics = fit_v4aq_lightgbm_meta_filter(
-        fit_rows.loc[:, list(V4AQ_META_FEATURE_COLUMNS)],
-        fit_rows["meta_label"],
-        calibration_rows.loc[:, list(V4AQ_META_FEATURE_COLUMNS)],
-        target_accept_fraction=0.50,
-    )
-    return model, diagnostics
-
-
-def _forward_event_probabilities(
-    features: DataFrame,
-    primary_signal: Series,
-    model: Any,
-    train_end: int,
-    forward_end: int,
-) -> tuple[list[int], dict[int, float], int]:
-    last_eligible = forward_end - HORIZON_BARS - 2
-    indices = [
-        index
-        for index in range(train_end, last_eligible + 1)
-        if bool(primary_signal.iloc[index])
-    ]
-    if not indices:
-        raise ValueError("v4aq_forward_primary_events_empty")
-    selected = features.iloc[indices].reset_index(drop=True)
-    complete = selected.notna().all(axis=1)
-    complete &= np.isfinite(selected.to_numpy(dtype=float)).all(axis=1)
-    valid_indices = [index for index, valid in zip(indices, complete.tolist()) if valid]
-    if not valid_indices:
-        raise ValueError("v4aq_forward_external_features_unavailable")
-    probabilities = predict_v4aq_meta_probabilities(
-        model,
-        features.iloc[valid_indices].reset_index(drop=True),
-    )
-    return (
-        indices,
-        {index: float(value) for index, value in zip(valid_indices, probabilities)},
-        len(indices) - len(valid_indices),
-    )
-
-
-def _validation_signal(bars: DataFrame, indices: list[int]) -> Series:
-    signal = Series(False, index=bars.index, dtype=bool, name="primary_buy_signal")
-    if indices:
-        signal.iloc[indices] = True
-    return signal
-
-
-def _run_candidate(
-    bars: DataFrame,
-    signal: Series,
+    events: DataFrame,
     *,
-    raw_signal_count: int,
-    candidate_label: str,
-) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    diagnostics = {
-        "primary_signal_count": raw_signal_count,
-        "lookahead_used": False,
-        "primary_rule": "CLOSE_ABOVE_PRIOR_20_COMPLETED_BAR_HIGHS",
-    }
-    result, trades = v4ap._run_candidate(
-        bars,
-        symbol=SYMBOL,
-        timeframe=TIMEFRAME,
-        strategy="DONCHIAN20_CLOSE_BREAKOUT",
-        geometry=BALANCED_EXIT,
-        signal=signal,
-        strategy_diagnostics=diagnostics,
-        execution=v4ap._execution_config(),
+    timeframe: str,
+    horizon_bars: int,
+) -> DataFrame:
+    """Label OOF BUY events by fixed 24h net close return using the 30bp cost model."""
+    if events.empty or "event_index" not in events.columns:
+        return DataFrame()
+    if timeframe not in v4ap.TIMEFRAME_MINUTES or horizon_bars <= 0:
+        raise ValueError("ai6_label_horizon_configuration_invalid")
+    indices = events["event_index"].to_numpy(dtype=int)
+    end_indices = indices + horizon_bars
+    row_count = len(bars)
+    valid = (indices >= 0) & (end_indices < row_count)
+    dates = pd.to_datetime(bars["date"], utc=True).astype("int64").to_numpy()
+    interval_ns = int(
+        pd.Timedelta(minutes=v4ap.TIMEFRAME_MINUTES[timeframe]).value
     )
-    result["candidate_label"] = candidate_label
-    return result, trades
+    gap_flags = np.zeros(row_count, dtype=np.int64)
+    if row_count > 1:
+        gap_flags[1:] = np.diff(dates) != interval_ns
+    gap_prefix = np.cumsum(gap_flags)
+    safe_positions = np.flatnonzero(valid)
+    if safe_positions.size:
+        valid[safe_positions] &= (
+            dates[end_indices[safe_positions]] - dates[indices[safe_positions]]
+            == horizon_bars * interval_ns
+        )
+        valid[safe_positions] &= (
+            gap_prefix[end_indices[safe_positions]]
+            - gap_prefix[indices[safe_positions]]
+            == 0
+        )
+    safe_positions = np.flatnonzero(valid)
+    if safe_positions.size == 0:
+        return DataFrame()
+    event_indices = indices[safe_positions]
+    final_indices = end_indices[safe_positions]
+    opens = pd.to_numeric(bars["open"], errors="coerce").to_numpy(dtype=float)
+    closes = pd.to_numeric(bars["close"], errors="coerce").to_numpy(dtype=float)
+    entry_reference = opens[event_indices + 1]
+    exit_reference = closes[final_indices]
+    price_valid = (
+        np.isfinite(entry_reference)
+        & np.isfinite(exit_reference)
+        & (entry_reference > 0.0)
+        & (exit_reference > 0.0)
+    )
+    if not price_valid.all():
+        safe_positions = safe_positions[price_valid]
+        event_indices = event_indices[price_valid]
+        final_indices = final_indices[price_valid]
+        entry_reference = entry_reference[price_valid]
+        exit_reference = exit_reference[price_valid]
+    if safe_positions.size == 0:
+        return DataFrame()
+    fee_rate = FEE_BPS_PER_SIDE / 10_000.0
+    slippage_rate = SLIPPAGE_BPS_PER_SIDE / 10_000.0
+    entry_fill = entry_reference * (1.0 + slippage_rate)
+    exit_fill = exit_reference * (1.0 - slippage_rate)
+    entry_fee = entry_fill * fee_rate
+    exit_fee = exit_fill * fee_rate
+    net_return = (
+        exit_fill - entry_fill - entry_fee - exit_fee
+    ) / entry_reference
+    result = events.iloc[safe_positions].copy().reset_index(drop=True)
+    result["label_end_idx"] = final_indices.astype(int)
+    result["net_return_fraction"] = net_return.astype(float)
+    result["meta_label"] = (net_return > 0.0).astype(int)
+    return result
 
 
-def _run_economic_comparison(
+def _roc_auc(
+    labels: np.ndarray,
+    probabilities: np.ndarray,
+) -> tuple[float | None, str]:
+    if labels.ndim != 1 or probabilities.ndim != 1 or len(labels) != len(probabilities):
+        raise ValueError("ai6_roc_auc_input_alignment_invalid")
+    if len(labels) < 2 or set(np.unique(labels).tolist()) != {0, 1}:
+        return None, "VALIDATION_REQUIRES_BOTH_CLASSES"
+    value = float(roc_auc_score(labels.astype(int), probabilities.astype(float)))
+    if not math.isfinite(value):
+        return None, "ROC_AUC_NON_FINITE"
+    return value, "COMPUTED"
+
+
+def _evaluate_primary_group(
     bars: DataFrame,
     features: DataFrame,
     primary_signal: Series,
-    model: Any,
-    model_diagnostics: dict[str, Any],
+    *,
+    strategy: str,
+    timeframe: str,
     train_end: int,
     forward_end: int,
-) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
-    events, probabilities, missing_features = _forward_event_probabilities(
-        features, primary_signal, model, train_end, forward_end
-    )
-    threshold = float(model_diagnostics["selected_threshold"])
-    accepted = [
-        index
-        for index, probability in probabilities.items()
-        if probability >= threshold
-    ]
-    control_result, control_trades = _run_candidate(
-        bars,
-        _validation_signal(bars, events),
-        raw_signal_count=len(events),
-        candidate_label="UNFILTERED_CONTROL",
-    )
-    meta_result, meta_trades = _run_candidate(
-        bars,
-        _validation_signal(bars, accepted),
-        raw_signal_count=len(events),
-        candidate_label="META_FILTERED",
-    )
-    decisions = [
-        {
-            "event_index": index,
-            "signal_timestamp": pd.Timestamp(bars["date"].iloc[index]).isoformat(),
-            "meta_probability": probabilities.get(index),
-            "selected_threshold": threshold,
-            "decision": (
-                "ACCEPT"
-                if index in accepted
-                else "REJECT_NO_POINT_IN_TIME_FEATURES"
-                if index not in probabilities
-                else "REJECT_LOW_META_PROBABILITY"
-            ),
-            "split_role": "FORWARD_VALIDATION",
-            "executable_signal": "BUY" if index in accepted else "NO_ENTRY",
-        }
-        for index in events
-    ]
-    pf = meta_result.get("net_profit_factor")
-    return (
-        {
-            "control": control_result,
-            "meta_filtered": meta_result,
-            "forward_primary_event_count": len(events),
-            "meta_feature_missing_event_count": missing_features,
-            "meta_accepted_event_count": len(accepted),
-            "meta_rejected_event_count": len(events) - len(accepted),
-            "model_threshold": threshold,
-            "net_pf_gate": {
-                "minimum_net_profit_factor": MINIMUM_NET_PROFIT_FACTOR,
-                "passed": pf is not None and float(pf) >= MINIMUM_NET_PROFIT_FACTOR,
-            },
-            "full_statistical_acceptance": (
-                "NOT_EVALUATED_DSR_NOT_PREREGISTERED_FOR_SINGLE_CELL"
-            ),
-        },
-        [*control_trades, *meta_trades],
-        decisions,
-    )
-
-
-def _candidate_acceptance(metrics: dict[str, Any]) -> dict[str, Any]:
-    count = int(metrics.get("trade_count", 0))
-    win = float(metrics.get("win_rate", 0.0))
-    raw_pf = metrics.get("net_profit_factor")
-    net_pf = None if raw_pf is None else float(raw_pf)
-    return {
-        "trade_count": count,
-        "win_rate": win,
-        "net_profit_factor": net_pf,
-        "trade_count_passed": count >= 50,
-        "win_rate_passed": win >= 0.40,
-        "net_profit_factor_passed": net_pf is not None and net_pf >= 1.10,
-        "dsr_z": None,
-        "dsr_passed": False,
-        "statistical_edge_accepted": False,
-    }
-
-
-def _build_blocked_report(
-    commit_sha: str,
-    coverage: dict[str, Any],
-) -> dict[str, Any]:
-    return {
-        "schema_version": REPORT_SCHEMA_VERSION,
-        "status": "BLOCKED_INSUFFICIENT_EXTERNAL_HISTORY",
-        "commit_sha": commit_sha,
-        "experiment": {
-            "symbol": SYMBOL,
-            "timeframe": TIMEFRAME,
-            "strategy": "DONCHIAN20_CLOSE_BREAKOUT",
-            "exit": "BALANCED",
-            "requested_days": REQUESTED_DAYS,
-            "round_trip_cost_bps": ROUND_TRIP_COST_BPS,
-        },
-        "external_data_coverage": coverage,
-        "model": {
-            "family": "LightGBM binary meta-filter",
+) -> tuple[Series, dict[str, Any], list[dict[str, Any]]]:
+    """Fit one purged OOF model and apply its frozen threshold to forward BUY events."""
+    horizon_bars = v4ap.HORIZON_HOURS * 60 // v4ap.TIMEFRAME_MINUTES[timeframe]
+    empty = Series(np.zeros(len(bars), dtype=bool), index=bars.index, dtype=bool)
+    try:
+        stop_index = train_end - horizon_bars
+        if stop_index <= 5:
+            raise ValueError("ai6_training_window_too_short")
+        oof_events = v4x.generate_oof_primary_events(
+            primary_signal.reset_index(drop=True),
+            start_index=0,
+            stop_index=stop_index,
+            fold_count=OOF_FOLD_COUNT,
+        )
+        labelled = _label_primary_events(
+            bars,
+            oof_events,
+            timeframe=timeframe,
+            horizon_bars=horizon_bars,
+        )
+        if labelled.empty:
+            raise ValueError("ai6_oof_training_labels_empty")
+        feature_values = features.iloc[
+            labelled["event_index"].to_numpy(dtype=int)
+        ].to_numpy(dtype=float)
+        complete = np.isfinite(feature_values).all(axis=1)
+        labelled = labelled.loc[complete].reset_index(drop=True)
+        if labelled.empty:
+            raise ValueError("ai6_oof_funding_features_incomplete")
+        fit_events, calibration_events = v4x.split_meta_fit_calibration(
+            labelled,
+            outer_train_end_index=train_end,
+        )
+        fit_features = features.iloc[
+            fit_events["event_index"].to_numpy(dtype=int)
+        ].reset_index(drop=True)
+        calibration_features = features.iloc[
+            calibration_events["event_index"].to_numpy(dtype=int)
+        ].reset_index(drop=True)
+        model, fit_diagnostics = fit_v4aq_lightgbm_meta_filter(
+            fit_features,
+            Series(fit_events["meta_label"].to_numpy(dtype=int)),
+            calibration_features,
+            target_accept_fraction=TARGET_ACCEPT_FRACTION,
+        )
+    except ValueError as error:
+        status = f"BLOCKED_TRAINING_SUPPORT:{error}"
+        return empty, {
             "fit_performed": False,
-            "feature_columns": list(V4AQ_META_FEATURE_COLUMNS),
-            "skip_reason": "binance_public_open_interest_history_limited_to_latest_30_days",
-        },
-        "economic_results": None,
-        "economic_acceptance": "NOT_EVALUATED",
-        "promotion_status": "BLOCKED_NO_ECONOMIC_GATE",
-        "Champion": None,
-        "order_permission": False,
-        "trading_authorization": "NO-GO",
-        "private_api_calls": 0,
-        "real_order_attempts": 0,
-        "limitations": [
-            "No five-year Binance Open Interest History is available from the documented public endpoint.",
-            "The LightGBM fit and economic replay were not run on incomplete external-feature history.",
-            "No missing OI observations were interpolated, backfilled or synthesized.",
-        ],
+            "fit_status": status,
+            "fit_rows": 0,
+            "calibration_rows": 0,
+            "oof_event_count": 0,
+            "validation_event_count": 0,
+            "validation_labeled_event_count": 0,
+            "roc_auc": None,
+            "roc_auc_status": "NOT_EVALUATED",
+            "threshold": None,
+            "accepted_event_count": 0,
+            "acceptance_rate": 0.0,
+        }, []
+
+    validation_stop = max(train_end, forward_end - horizon_bars)
+    validation_indices = (
+        np.flatnonzero(
+            primary_signal.iloc[train_end:validation_stop].to_numpy(dtype=bool)
+        )
+        + train_end
+    )
+    validation_events = DataFrame(
+        {
+            "event_index": validation_indices.astype(int),
+            "primary_signal": "BUY",
+            "primary_oof": False,
+            "fold_id": -1,
+        }
+    )
+    labelled_validation = _label_primary_events(
+        bars,
+        validation_events,
+        timeframe=timeframe,
+        horizon_bars=horizon_bars,
+    )
+    if labelled_validation.empty:
+        probabilities = np.asarray([], dtype=float)
+        labels = np.asarray([], dtype=int)
+        validation_features = DataFrame(columns=V4AQ_META_FEATURE_COLUMNS)
+    else:
+        feature_values = features.iloc[
+            labelled_validation["event_index"].to_numpy(dtype=int)
+        ].to_numpy(dtype=float)
+        complete = np.isfinite(feature_values).all(axis=1)
+        labelled_validation = labelled_validation.loc[complete].reset_index(drop=True)
+        validation_features = features.iloc[
+            labelled_validation["event_index"].to_numpy(dtype=int)
+        ].reset_index(drop=True)
+        probabilities = (
+            predict_v4aq_meta_probabilities(model, validation_features)
+            if len(validation_features)
+            else np.asarray([], dtype=float)
+        )
+        labels = labelled_validation["meta_label"].to_numpy(dtype=int)
+    auc, auc_status = _roc_auc(labels, probabilities)
+    threshold = float(fit_diagnostics["selected_threshold"])
+    accepted = probabilities >= threshold
+    accepted_indices = labelled_validation["event_index"].to_numpy(dtype=int)[accepted]
+    filtered = np.zeros(len(bars), dtype=bool)
+    if accepted_indices.size:
+        filtered[accepted_indices] = True
+    decision_rows = [
+        {
+            "event_index": int(event_index),
+            "probability": float(probability),
+            "selected_threshold": threshold,
+            "meta_label": int(label),
+            "net_target_return_fraction": float(net_return),
+            "accepted": bool(selected),
+            "target_horizon_hours": v4ap.HORIZON_HOURS,
+        }
+        for event_index, probability, label, net_return, selected in zip(
+            labelled_validation["event_index"].to_numpy(dtype=int),
+            probabilities,
+            labels,
+            labelled_validation["net_return_fraction"].to_numpy(dtype=float),
+            accepted,
+        )
+    ]
+    result = {
+        "fit_performed": True,
+        "fit_status": "FITTED",
+        "fit_rows": int(fit_diagnostics["fit_rows"]),
+        "calibration_rows": int(fit_diagnostics["calibration_rows"]),
+        "oof_event_count": int(len(labelled)),
+        "validation_event_count": int(len(validation_indices)),
+        "validation_labeled_event_count": int(len(labelled_validation)),
+        "roc_auc": auc,
+        "roc_auc_status": auc_status,
+        "threshold": threshold,
+        "accepted_event_count": int(accepted.sum()),
+        "acceptance_rate": (
+            float(accepted.sum() / len(accepted)) if len(accepted) else 0.0
+        ),
+        "fit_diagnostics": fit_diagnostics,
     }
+    return Series(filtered, index=bars.index, dtype=bool), result, decision_rows
 
 
-def _build_completed_report(
-    commit_sha: str,
-    spot_provenance: dict[str, Any],
-    gap_diagnostics: dict[str, Any],
-    coverage: dict[str, Any],
-    model_diagnostics: dict[str, Any],
-    comparison: dict[str, Any],
-    training: DataFrame,
-    external_diagnostics: dict[str, Any],
-    signal_diagnostics: dict[str, Any],
+def _placeholder_candidate(
+    symbol: str,
+    timeframe: str,
+    strategy: str,
+    geometry: dict[str, Any],
+    *,
+    status: str,
 ) -> dict[str, Any]:
+    candidate = {
+        "candidate_id": v4ap._candidate_id(
+            symbol, timeframe, strategy, str(geometry["name"])
+        ),
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "strategy": strategy,
+        "geometry": str(geometry["name"]),
+        "bars_evaluated": 0,
+        "raw_signal_count": 0,
+        "eligible_entry_signal_count": 0,
+        "gap_flatten_count": 0,
+        "trade_count": 0,
+        "win_rate": 0.0,
+        "net_profit_factor": 0.0,
+        "net_profit_factor_infinite_no_losses": False,
+        "max_drawdown_percent": 0.0,
+        "net_pnl_usd": 0.0,
+        "net_expectancy_usd_per_trade": None,
+        "total_fees_usd": 0.0,
+        "total_slippage_cost_usd": 0.0,
+        "round_trip_cost_bps": ROUND_TRIP_COST_BPS,
+        "fee_bps_per_side": FEE_BPS_PER_SIDE,
+        "slippage_bps_per_side": SLIPPAGE_BPS_PER_SIDE,
+        "stop_loss_atr": float(geometry["stop_loss_atr"]),
+        "take_profit_atr": float(geometry["take_profit_atr"]),
+        "trailing_enabled": bool(geometry["trailing_enabled"]),
+        "trailing_activation_atr": geometry["trailing_activation_atr"],
+        "trailing_step_atr": geometry["trailing_step_atr"],
+        "horizon_hours_nominal": v4ap.HORIZON_HOURS,
+        "horizon_bars": v4ap.HORIZON_HOURS * 60 // v4ap.TIMEFRAME_MINUTES[timeframe],
+        "same_candle_collision_policy": "STOP_LOSS_WINS",
+        "execution_policy": "CLOSED_BAR_NEXT_BAR_OPEN",
+        "return_observation_count": 0,
+        "sharpe_ratio_per_trade": None,
+        "return_skewness": None,
+        "return_kurtosis_non_excess": None,
+        "sharpe_status": "NO_TRADES_DSR_UNDEFINED",
+        "roc_auc": None,
+        "roc_auc_reference": ROC_AUC_REFERENCE,
+        "roc_auc_status": "NOT_EVALUATED",
+        "roc_auc_above_reference": None,
+        "unfiltered_primary_signal_count": 0,
+        "meta_filtered_signal_count": 0,
+        "meta_filter_acceptance_rate": 0.0,
+        "meta_model_fit_status": status,
+        "meta_model_fit_rows": 0,
+        "meta_model_calibration_rows": 0,
+        "validation_event_count": 0,
+        "validation_labeled_event_count": 0,
+        "meta_threshold": None,
+        "qualifies": False,
+    }
+    return candidate
+
+
+def _candidate_acceptance(candidate: dict[str, Any]) -> dict[str, bool]:
+    trade_count_passed = int(candidate.get("trade_count", 0)) >= MINIMUM_TRADE_COUNT
+    win_rate = candidate.get("win_rate")
+    win_rate_passed = win_rate is not None and float(win_rate) >= MINIMUM_WIN_RATE
+    profit_factor = candidate.get("net_profit_factor")
+    pf_passed = (
+        candidate.get("net_profit_factor_infinite_no_losses") is True
+        or (
+            profit_factor is not None
+            and float(profit_factor) >= MINIMUM_NET_PROFIT_FACTOR
+        )
+    )
+    dsr = candidate.get("dsr_z_score")
+    dsr_passed = dsr is not None and float(dsr) > MINIMUM_DSR_Z
     return {
-        "schema_version": REPORT_SCHEMA_VERSION,
-        "status": "COMPLETED_RESEARCH_EVALUATION",
-        "commit_sha": commit_sha,
-        "experiment": {
-            "symbol": SYMBOL,
-            "timeframe": TIMEFRAME,
-            "strategy": "DONCHIAN20_CLOSE_BREAKOUT",
-            "exit": "BALANCED",
-            "requested_days": REQUESTED_DAYS,
-            "round_trip_cost_bps": ROUND_TRIP_COST_BPS,
-            "final_15_percent_untouched": True,
-        },
-        "spot_provenance": spot_provenance,
-        "gap_diagnostics": gap_diagnostics,
-        "external_data_coverage": coverage,
-        "model": {
-            "family": "LightGBM binary meta-filter",
-            "fit_performed": True,
-            "fit_diagnostics": model_diagnostics,
-            "feature_columns": list(V4AQ_META_FEATURE_COLUMNS),
-            "training_rows": int(len(training)),
-        },
-        "external_feature_diagnostics": external_diagnostics,
-        "primary_signal_diagnostics": signal_diagnostics,
-        "economic_results": comparison,
-        "meta_acceptance": _candidate_acceptance(comparison["meta_filtered"]),
-        "economic_acceptance": "NO-GO",
-        "promotion_status": "BLOCKED_NO_ECONOMIC_GATE",
-        "Champion": None,
-        "order_permission": False,
-        "trading_authorization": "NO-GO",
-        "private_api_calls": 0,
-        "real_order_attempts": 0,
-        "limitations": [
-            "This single-cell forward-validation comparison is not a preregistered multi-trial promotion test.",
-            "DSR is not evaluated for this single-cell follow-up; Net PF alone cannot establish statistical edge.",
-        ],
+        "trade_count_passed": bool(trade_count_passed),
+        "win_rate_passed": bool(win_rate_passed),
+        "net_profit_factor_passed": bool(pf_passed),
+        "dsr_passed": bool(dsr_passed),
+        "statistical_edge_accepted": bool(
+            trade_count_passed and win_rate_passed and pf_passed and dsr_passed
+        ),
     }
 
 
-def _write_csv(
-    path: Path,
-    rows: list[dict[str, Any]],
-    columns: tuple[str, ...],
-) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=columns, extrasaction="raise")
-        writer.writeheader()
-        writer.writerows(rows)
+def _build_report(
+    *,
+    commit_sha: str,
+    start_utc: pd.Timestamp,
+    end_utc: pd.Timestamp,
+    market_provenance: dict[str, dict[str, Any]],
+    funding_provenance: dict[str, dict[str, Any]],
+    candidates: list[dict[str, Any]],
+    dsr_cohort: dict[str, Any],
+    model_groups: list[dict[str, Any]],
+    status: str,
+) -> dict[str, Any]:
+    qualifying = [
+        str(item["candidate_id"]) for item in candidates if item["qualifies"]
+    ]
+    pf_candidates = [
+        str(item["candidate_id"])
+        for item in candidates
+        if item.get("net_profit_factor_infinite_no_losses") is True
+        or (
+            item.get("net_profit_factor") is not None
+            and float(item["net_profit_factor"]) >= MINIMUM_NET_PROFIT_FACTOR
+        )
+    ]
+    if qualifying:
+        conclusion = "FUNDING_EDGE_ACCEPTED_UNDER_ALL_PREREGISTERED_GATES"
+    elif pf_candidates:
+        conclusion = "NET_PF_GATE_MET_BUT_FULL_STATISTICAL_ACCEPTANCE_FAILED"
+    else:
+        conclusion = "NO_NET_PF_EDGE_FOUND_IN_FUNDING_ONLY_FEATURES"
+    model_fit_count = sum(bool(item.get("fit_performed")) for item in model_groups)
+    report: dict[str, Any] = {
+        "schema_version": REPORT_SCHEMA_VERSION,
+        "commit_sha": commit_sha,
+        "status": status,
+        "diagnostic": "V4-AQ_FUNDING_ONLY_META_FILTERED_36_CELL_SWEEP",
+        "dataset": {
+            "requested_days": REQUESTED_DAYS,
+            "source_interval": "1m",
+            "start_utc": v4ap._iso_utc(start_utc),
+            "end_utc": v4ap._iso_utc(end_utc),
+            "assets": market_provenance,
+            "analysis_timeframes": list(v4ap.TIMEFRAMES),
+            "train_fraction": TRAIN_FRACTION,
+            "forward_validation_end_fraction": FORWARD_END_FRACTION,
+            "final_holdout_fraction": 1.0 - FORWARD_END_FRACTION,
+            "final_holdout_status": "UNTOUCHED_NOT_USED_FOR_FIT_THRESHOLD_OR_ECONOMIC_DECISION",
+            "missing_candles": "NEVER_INTERPOLATED_OR_SYNTHETICALLY_FILLED",
+        },
+        "funding": {
+            "provider": "Binance USD-M public Funding Rate History",
+            "host": "fapi.binance.com",
+            "endpoint": "/fapi/v1/fundingRate",
+            "feature_columns": list(EXTERNAL_FEATURE_COLUMNS),
+            "available_at_policy": "fundingTime + 5 minutes (conservative research proxy)",
+            "maximum_observation_age": "2 days",
+            "coverage": funding_provenance,
+            "open_interest_used": False,
+        },
+        "preregistered_grid": {
+            "assets": list(v4ap.ASSETS),
+            "timeframes": list(v4ap.TIMEFRAMES),
+            "strategies": list(v4ap.STRATEGIES),
+            "exit_geometries": [dict(item) for item in v4ap.EXIT_GEOMETRIES],
+            "expected_combinations": v4ap.DSR_TRIAL_COUNT,
+        },
+        "model": {
+            "family": "LightGBM binary classifier via existing V4-X purged OOF/calibration contract",
+            "fit_performed": model_fit_count > 0,
+            "fit_group_count": model_fit_count,
+            "expected_fit_group_count": len(v4ap.ASSETS) * len(v4ap.TIMEFRAMES) * len(v4ap.STRATEGIES),
+            "groups": model_groups,
+            "features": list(V4AQ_META_FEATURE_COLUMNS),
+            "external_features": list(EXTERNAL_FEATURE_COLUMNS),
+            "training_target": (
+                "PRIMARY_BUY_ONLY_FIXED_24H_FORWARD_CLOSE_NET_RETURN_AFTER_30BPS_COSTS"
+            ),
+            "validation_metric": "ROC_AUC_ON_FORWARD_70_TO_85_PERCENT_EVENT_LABELS",
+            "threshold_policy": (
+                "SELECTED_FROM_PURGED_IN_TRAIN_CALIBRATION_PROBABILITIES_ONLY; "
+                "NO_FORWARD_VALIDATION_LABELS_USED_FOR_THRESHOLD"
+            ),
+            "scope": (
+                "ONE_MODEL_PER_ASSET_TIMEFRAME_PRIMARY_STRATEGY; "
+                "SAME_FORWARD_PREDICTIONS_REUSED_FOR_THREE_EXIT_GEOMETRIES"
+            ),
+        },
+        "execution_assumptions": {
+            "market": "BINANCE_SPOT_PUBLIC_OHLCV",
+            "direction": "SPOT_LONG_ONLY",
+            "signal_timing": "COMPLETED_BAR_CLOSE_NEXT_BAR_OPEN",
+            "fee_bps_per_side": FEE_BPS_PER_SIDE,
+            "slippage_bps_per_side": SLIPPAGE_BPS_PER_SIDE,
+            "round_trip_cost_bps": ROUND_TRIP_COST_BPS,
+            "horizon_hours_nominal": v4ap.HORIZON_HOURS,
+            "same_candle_collision_policy": "STOP_LOSS_WINS",
+            "position_fraction": 1.0,
+            "pyramiding": False,
+        },
+        "decision_rule": {
+            "minimum_trade_count": MINIMUM_TRADE_COUNT,
+            "minimum_win_rate": MINIMUM_WIN_RATE,
+            "minimum_net_profit_factor": MINIMUM_NET_PROFIT_FACTOR,
+            "minimum_dsr_z_exclusive": MINIMUM_DSR_Z,
+            "roc_auc_reference": ROC_AUC_REFERENCE,
+            "profit_factor_is_not_sufficient_without_trade_count_win_rate_and_dsr": True,
+        },
+        "dsr_cohort": dsr_cohort,
+        "candidates": candidates,
+        "qualifying_candidate_ids": qualifying,
+        "net_pf_threshold_candidate_ids": pf_candidates,
+        "conclusion": conclusion,
+        "economic_results": (
+            None
+            if status == "BLOCKED_INSUFFICIENT_FUNDING_HISTORY"
+            else {
+                "candidate_count": len(candidates),
+                "total_trade_count": sum(int(item["trade_count"]) for item in candidates),
+                "meta_models_fitted": model_fit_count,
+                "dsr_trial_count": v4ap.DSR_TRIAL_COUNT,
+                "economic_scope": "FORWARD_VALIDATION_ONLY; FINAL_15_PERCENT_UNTOUCHED",
+            }
+        ),
+        "model_usage": {
+            "meta_model_used": True,
+            "funding_features_used": True,
+            "open_interest_used": False,
+            "hmm_used": False,
+            "cusum_used": False,
+            "lstm_used": False,
+            "reinforcement_learning_used": False,
+        },
+        **SAFETY,
+        "credentials_used": False,
+        "promotion_status": "BLOCKED_OWNER_REVIEW_AND_INDEPENDENT_VALIDATION",
+    }
+    return report
+
+
+def _validate_report(report: dict[str, Any], expected_commit_sha: str) -> None:
+    if report.get("schema_version") != REPORT_SCHEMA_VERSION:
+        raise ValueError("ai6_report_schema_invalid")
+    if report.get("commit_sha") != expected_commit_sha:
+        raise ValueError("ai6_report_commit_mismatch")
+    if report.get("dataset", {}).get("requested_days") != REQUESTED_DAYS:
+        raise ValueError("ai6_dataset_window_invalid")
+    if report.get("execution_assumptions", {}).get("round_trip_cost_bps") != ROUND_TRIP_COST_BPS:
+        raise ValueError("ai6_cost_contract_invalid")
+    if report.get("funding", {}).get("feature_columns") != list(EXTERNAL_FEATURE_COLUMNS):
+        raise ValueError("ai6_funding_feature_contract_invalid")
+    if report.get("funding", {}).get("open_interest_used") is not False:
+        raise ValueError("ai6_open_interest_must_be_disabled")
+    if report.get("model_usage", {}).get("open_interest_used") is not False:
+        raise ValueError("ai6_model_open_interest_must_be_disabled")
+    expected_safety = {
+        **SAFETY,
+        "credentials_used": False,
+    }
+    actual_safety = {key: report.get(key) for key in expected_safety}
+    if actual_safety != expected_safety:
+        raise ValueError("ai6_safety_contract_invalid")
+    candidates = report.get("candidates")
+    if not isinstance(candidates, list) or len(candidates) != v4ap.DSR_TRIAL_COUNT:
+        raise ValueError("ai6_candidate_grid_cardinality_invalid")
+    candidate_ids: set[str] = set()
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            raise ValueError("ai6_candidate_row_invalid")
+        candidate_ids.add(str(candidate.get("candidate_id")))
+        if (
+            candidate.get("symbol") not in v4ap.ASSETS
+            or candidate.get("timeframe") not in v4ap.TIMEFRAMES
+            or candidate.get("strategy") not in v4ap.STRATEGIES
+            or candidate.get("geometry") not in {item["name"] for item in v4ap.EXIT_GEOMETRIES}
+            or candidate.get("round_trip_cost_bps") != ROUND_TRIP_COST_BPS
+            or candidate.get("roc_auc_reference") != ROC_AUC_REFERENCE
+            or candidate.get("dsr_trial_count") != v4ap.DSR_TRIAL_COUNT
+        ):
+            raise ValueError("ai6_candidate_contract_invalid")
+        if candidate.get("qualifies") is not v4ap._candidate_qualifies(candidate):
+            raise ValueError("ai6_candidate_decision_invalid")
+    if candidate_ids != v4ap._grid_candidate_ids():
+        raise ValueError("ai6_candidate_grid_identity_invalid")
+    qualifying = [
+        str(item["candidate_id"])
+        for item in candidates
+        if v4ap._candidate_qualifies(item)
+    ]
+    if report.get("qualifying_candidate_ids") != qualifying:
+        raise ValueError("ai6_qualifying_candidate_list_invalid")
+    if report.get("dsr_cohort", {}).get("trial_count") != v4ap.DSR_TRIAL_COUNT:
+        raise ValueError("ai6_dsr_trial_count_invalid")
+    status = report.get("status")
+    if status not in (
+        "COMPLETED_RESEARCH_EVALUATION",
+        "BLOCKED_INSUFFICIENT_FUNDING_HISTORY",
+    ):
+        raise ValueError("ai6_report_status_invalid")
+    if status == "BLOCKED_INSUFFICIENT_FUNDING_HISTORY" and report.get("economic_results") is not None:
+        raise ValueError("ai6_blocked_run_has_economic_results")
+    if status == "COMPLETED_RESEARCH_EVALUATION" and report.get("economic_results") is None:
+        raise ValueError("ai6_completed_run_missing_economic_results")
+
+
+def _format_number(value: Any, decimals: int = 4) -> str:
+    if value is None:
+        return "N/A"
+    return f"{float(value):.{decimals}f}"
 
 
 def _render_summary(report: dict[str, Any]) -> str:
     lines = [
-        "# AliX V4-AQ Phase AI-6",
+        "# AliX AI-6: Funding-only 36-cell Economic Sweep",
         "",
-        f"- Commit: {report['commit_sha']}",
-        f"- Status: **{report['status']}**",
-        f"- Candidate: {SYMBOL} / {TIMEFRAME} / DONCHIAN20 / BALANCED",
-        f"- Costs: {ROUND_TRIP_COST_BPS:.2f} bps round trip",
+        f"Commit SHA: {report['commit_sha']}",
+        f"Status: {report['status']}",
+        f"Dataset: {REQUESTED_DAYS} days | 1m Spot OHLCV | "
+        f"{report['dataset']['start_utc']} through {report['dataset']['end_utc']}",
+        "Assets: BTCUSDT, ETHUSDT | Timeframes: 15m, 1h, 4h",
+        "Features: funding_rate_zscore, funding_rate_ma | OI: DISABLED",
+        "Primary signals remain the two preregistered V4-AP rules; Funding only filters BUY events.",
+        "Model scope: 12 asset/timeframe/strategy fits; each prediction stream is reused across 3 exits.",
+        "Forward validation: 70%-85%; final 15% remains untouched.",
+        "Training target: fixed 24h net close return after 30 bps round-trip costs.",
+        "Execution: next-bar-open spot long; 10 bps fee + 5 bps slippage per side = 30 bps round trip.",
         "",
+        "## Acceptance",
+        "Trades >= 50; Win Rate >= 40%; Net PF >= 1.10; DSR Z > 0.0.",
+        "ROC-AUC is reported against the 0.51 reference and is diagnostic, not a promotion gate.",
+        "DSR uses the full 36-cell preregistered cohort; trial independence is not verified.",
+        "",
+        "## All 36 combinations",
+        "",
+        "| Asset | TF | Strategy | Exit | ROC-AUC | AUC >0.51 | Signals | Trades | Win Rate % | Net PF | DSR Z | Fit status | Decision |",
+        "|---|---:|---|---|---:|---:|---:|---:|---:|---:|---:|---|---|",
     ]
-    if report["economic_results"] is None:
+    for item in report["candidates"]:
+        pf = (
+            "∞"
+            if item.get("net_profit_factor_infinite_no_losses")
+            else _format_number(item.get("net_profit_factor"))
+        )
+        auc = _format_number(item.get("roc_auc"))
+        above = (
+            "N/A"
+            if item.get("roc_auc_above_reference") is None
+            else "YES"
+            if item["roc_auc_above_reference"]
+            else "NO"
+        )
+        lines.append(
+            "| "
+            + " | ".join(
+                (
+                    str(item["symbol"]),
+                    str(item["timeframe"]),
+                    str(item["strategy"]),
+                    str(item["geometry"]),
+                    auc,
+                    above,
+                    str(item.get("meta_filtered_signal_count", 0)),
+                    str(item["trade_count"]),
+                    _format_number(float(item["win_rate"]) * 100.0, 2),
+                    pf,
+                    _format_number(item.get("dsr_z_score")),
+                    str(item.get("meta_model_fit_status", "UNKNOWN")),
+                    "PASS" if item["qualifies"] else "NO",
+                )
+            )
+            + " |"
+        )
+    lines.extend(
+        [
+            "",
+            "## Conclusion",
+            "",
+            str(report["conclusion"]),
+            "",
+            f"Net PF >= 1.10 candidate count: {len(report['net_pf_threshold_candidate_ids'])}",
+            f"Fully accepted candidate count: {len(report['qualifying_candidate_ids'])}",
+        ]
+    )
+    if report["conclusion"] == "NO_NET_PF_EDGE_FOUND_IN_FUNDING_ONLY_FEATURES":
         lines.extend(
             [
-                "## External data coverage",
                 "",
-                "| Asset | Funding span days | OI span days | OI rows | Coverage status |",
-                "|---|---:|---:|---:|---|",
+                "External Data phase: CLOSE after this completed negative diagnostic.",
+                "Next research track: isolated RL for risk management and position sizing only.",
+                "RL must not generate, replace, or modify Primary entry signals.",
             ]
         )
-        for symbol, item in report["external_data_coverage"].items():
-            funding = item["funding"]
-            oi = item["open_interest"]
-            lines.append(
-                f"| {symbol} | {funding['observed_span_days']:.3f} | "
-                f"{oi['observed_span_days']:.3f} | {oi['row_count']} | "
-                f"{oi['coverage_status']} |"
-            )
+    elif report["conclusion"] == "NET_PF_GATE_MET_BUT_FULL_STATISTICAL_ACCEPTANCE_FAILED":
         lines.extend(
             [
                 "",
-                "LightGBM fit: NOT RUN. External data does not cover the full "
-                "1825-day training window. No imputation or short-window edge claim is allowed.",
+                "Profit-factor threshold was reached in at least one cell, but no cell passed all pre-registered statistical gates.",
+                "This is not a validated winner and does not authorize promotion or trading.",
             ]
         )
     else:
-        control = report["economic_results"]["control"]
-        meta = report["economic_results"]["meta_filtered"]
         lines.extend(
             [
-                "## Forward-validation comparison",
                 "",
-                "| Mode | Trades | Win % | Net PF | Net PnL USD |",
-                "|---|---:|---:|---:|---:|",
-                f"| Control | {control['trade_count']} | {control['win_rate']:.2%} | "
-                f"{control['net_profit_factor']} | {control['net_pnl_usd']:.2f} |",
-                f"| Meta | {meta['trade_count']} | {meta['win_rate']:.2%} | "
-                f"{meta['net_profit_factor']} | {meta['net_pnl_usd']:.2f} |",
-                "",
-                f"- Net PF >= 1.10: {report['economic_results']['net_pf_gate']['passed']}",
-                "- DSR: NOT EVALUATED",
-                "- Promotion: NO-GO",
+                "One or more cells passed all economic and statistical gates.",
+                "This remains a research candidate only; independent owner review is required.",
             ]
         )
     lines.extend(
         [
             "",
-            "Champion=null | order_permission=false | trading_authorization=NO-GO | private_api_calls=0",
+            "## Safety / promotion",
+            "",
+            "Champion=null | order_permission=false | trading_authorization=NO-GO",
+            "private_api_calls=0 | real_order_attempts=0 | credentials_used=false",
+            "No order session, paper session, dry-run session, or exchange account access was used.",
             "",
         ]
     )
     return "\n".join(lines)
 
 
-def _validate_run_request(commit_sha: str) -> None:
-    _validate_sha(commit_sha)
-    if ROUND_TRIP_COST_BPS != v4ap.ROUND_TRIP_COST_BPS:
-        raise ValueError("v4aq_v4ap_cost_contract_mismatch")
+def _write_rows(path: Path, rows: list[dict[str, Any]], fallback_columns: tuple[str, ...]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames = list(rows[0]) if rows else list(fallback_columns)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore")
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(
+                {
+                    key: json.dumps(value, sort_keys=True, allow_nan=False)
+                    if isinstance(value, (dict, list, tuple))
+                    else value
+                    for key, value in row.items()
+                }
+            )
 
 
-def _run_complete_experiment(
-    input_dir: Path,
-    external_dir: Path,
-    commit_sha: str,
-    coverage: dict[str, Any],
-) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
-    bars, spot_provenance, gap_diagnostics = _load_spot_bars(input_dir, commit_sha)
-    funding, oi = _read_external_frames(external_dir, SYMBOL)
-    from services.ml_core.external_market_features import build_external_market_features
-
-    external_features, external_diagnostics = build_external_market_features(
-        bars, funding, oi, symbol=SYMBOL, timeframe=TIMEFRAME, oi_period="4h"
+def _write_outputs(
+    report: dict[str, Any],
+    output_report: Path,
+    output_trades_csv: Path,
+    output_decisions_csv: Path,
+    output_summary: Path,
+    trades: list[dict[str, Any]],
+    decisions: list[dict[str, Any]],
+) -> None:
+    _validate_report(report, str(report["commit_sha"]))
+    output_report.parent.mkdir(parents=True, exist_ok=True)
+    output_report.write_text(
+        json.dumps(report, indent=2, sort_keys=True, allow_nan=False) + "\n",
+        encoding="utf-8",
     )
-    meta_features = build_v4aq_meta_features(bars, external_features)
-    primary_signal, signal_diagnostics = v4ap.generate_donchian_breakout_signal(bars)
-    train_end = int(len(bars) * TRAIN_FRACTION)
-    forward_end = int(len(bars) * FORWARD_END_FRACTION)
-    if train_end <= 100 or forward_end - train_end <= HORIZON_BARS + 2:
-        raise ValueError("v4aq_research_split_invalid")
-    training = _training_label_frame(bars, meta_features, primary_signal, train_end)
-    model, model_diagnostics = _fit_meta_model(training, train_end)
-    comparison, trades, decisions = _run_economic_comparison(
-        bars.iloc[:forward_end].reset_index(drop=True),
-        meta_features.iloc[:forward_end].reset_index(drop=True),
-        primary_signal.iloc[:forward_end].reset_index(drop=True),
-        model,
-        model_diagnostics,
-        train_end,
-        forward_end,
+    _write_rows(
+        output_trades_csv,
+        trades,
+        ("candidate_id", "symbol", "timeframe", "strategy", "geometry"),
     )
-    report = _build_completed_report(
-        commit_sha,
-        spot_provenance,
-        gap_diagnostics,
-        coverage,
-        model_diagnostics,
-        comparison,
-        training,
-        external_diagnostics,
-        signal_diagnostics,
+    _write_rows(
+        output_decisions_csv,
+        decisions,
+        ("symbol", "timeframe", "strategy", "event_index", "probability", "accepted"),
     )
-    return report, trades, decisions
+    summary = _render_summary(report)
+    output_summary.parent.mkdir(parents=True, exist_ok=True)
+    output_summary.write_text(summary, encoding="utf-8")
+    print(summary, end="")
 
 
 def run_v4aq_ai6(
@@ -626,48 +871,201 @@ def run_v4aq_ai6(
     output_report: Path,
     output_trades_csv: Path,
     output_decisions_csv: Path,
+    output_summary: Path,
     *,
     commit_sha: str,
+    start_utc: str,
+    end_utc: str,
 ) -> dict[str, Any]:
-    """Run coverage preflight and fit/evaluate only on a complete 5-year window."""
-    _validate_run_request(commit_sha)
-    manifests = {
-        symbol: _read_symbol_manifest(external_dir, symbol, commit_sha)
-        for symbol in ("BTCUSDT", "ETHUSDT")
-    }
-    coverage = _external_coverage(manifests)
+    """Run the Funding-only 36-cell sweep after exact-window coverage verification."""
+    _validate_commit_sha(commit_sha)
+    start, end = v4ap._validate_request(commit_sha, start_utc, end_utc)
+    funding_frames: dict[str, DataFrame] = {}
+    funding_provenance: dict[str, dict[str, Any]] = {}
+    funding_ready = True
+    for symbol in v4ap.ASSETS:
+        frame, manifest, ready = _read_funding_artifact(
+            external_dir, symbol, commit_sha, start, end
+        )
+        funding_frames[symbol] = frame
+        funding_provenance[symbol] = manifest
+        funding_ready = funding_ready and ready
+
+    candidates: list[dict[str, Any]] = []
     trades: list[dict[str, Any]] = []
     decisions: list[dict[str, Any]] = []
-    if not _coverage_is_complete(coverage):
-        report = _build_blocked_report(commit_sha, coverage)
+    market_provenance: dict[str, dict[str, Any]] = {}
+    model_groups: list[dict[str, Any]] = []
+
+    if not funding_ready:
+        for symbol in v4ap.ASSETS:
+            for timeframe in v4ap.TIMEFRAMES:
+                for strategy in v4ap.STRATEGIES:
+                    for geometry in v4ap.EXIT_GEOMETRIES:
+                        candidates.append(
+                            _placeholder_candidate(
+                                symbol,
+                                timeframe,
+                                strategy,
+                                geometry,
+                                status="NOT_RUN_INSUFFICIENT_FUNDING_HISTORY",
+                            )
+                        )
+        status = "BLOCKED_INSUFFICIENT_FUNDING_HISTORY"
     else:
-        report, trades, decisions = _run_complete_experiment(
-            input_dir, external_dir, commit_sha, coverage
-        )
-    output_report.parent.mkdir(parents=True, exist_ok=True)
-    output_report.write_text(
-        json.dumps(report, indent=2, sort_keys=True, allow_nan=False) + "\n",
-        encoding="utf-8",
+        execution = v4ap._execution_config()
+        signal_generators = {
+            v4ap.STRATEGIES[0]: v4ap.generate_mean_reversion_signal,
+            v4ap.STRATEGIES[1]: v4ap.generate_donchian_breakout_signal,
+        }
+        for symbol in v4ap.ASSETS:
+            minute_data, asset_provenance = v4ap._load_market_data(
+                input_dir,
+                symbol=symbol,
+                commit_sha=commit_sha,
+                start_utc=start,
+                end_utc=end,
+            )
+            market_provenance[symbol] = asset_provenance
+            documented_gap_ranges = tuple(
+                (str(gap["start_utc"]), str(gap["end_utc"]))
+                for gap in asset_provenance["missing_gap_ranges"]
+            )
+            for timeframe in v4ap.TIMEFRAMES:
+                full_bars = v4ap.resample_ohlcv(minute_data, timeframe)
+                train_end = int(len(full_bars) * TRAIN_FRACTION)
+                forward_end = int(len(full_bars) * FORWARD_END_FRACTION)
+                horizon_bars = (
+                    v4ap.HORIZON_HOURS * 60 // v4ap.TIMEFRAME_MINUTES[timeframe]
+                )
+                if train_end <= horizon_bars + 5 or forward_end <= train_end + horizon_bars:
+                    raise ValueError(f"ai6_resampled_window_too_short:{symbol}:{timeframe}")
+                evaluation_bars = (
+                    full_bars.iloc[:forward_end].copy().reset_index(drop=True)
+                )
+                funding_features, funding_diagnostics = build_external_market_features(
+                    evaluation_bars,
+                    funding_frames[symbol],
+                    symbol=symbol,
+                    timeframe=timeframe,
+                )
+                for strategy in v4ap.STRATEGIES:
+                    primary_signal, strategy_diagnostics = signal_generators[strategy](
+                        evaluation_bars
+                    )
+                    primary_features = build_v4aq_meta_features(
+                        evaluation_bars,
+                        funding_features,
+                        strategy=strategy,
+                    )
+                    filtered_signal, group_result, decision_rows = _evaluate_primary_group(
+                        evaluation_bars,
+                        primary_features,
+                        primary_signal,
+                        strategy=strategy,
+                        timeframe=timeframe,
+                        train_end=train_end,
+                        forward_end=forward_end,
+                    )
+                    model_groups.append(
+                        {
+                            "symbol": symbol,
+                            "timeframe": timeframe,
+                            "strategy": strategy,
+                            "funding_feature_diagnostics": funding_diagnostics,
+                            **group_result,
+                        }
+                    )
+                    for geometry in v4ap.EXIT_GEOMETRIES:
+                        run_diagnostics = {
+                            **strategy_diagnostics,
+                            "primary_signal_count": int(filtered_signal.sum()),
+                        }
+                        candidate, candidate_trades = v4ap._run_candidate(
+                            evaluation_bars,
+                            symbol=symbol,
+                            timeframe=timeframe,
+                            strategy=strategy,
+                            geometry=geometry,
+                            signal=filtered_signal,
+                            strategy_diagnostics=run_diagnostics,
+                            execution=execution,
+                            documented_gap_ranges=documented_gap_ranges,
+                        )
+                        candidate.update(
+                            {
+                                "roc_auc": group_result["roc_auc"],
+                                "roc_auc_reference": ROC_AUC_REFERENCE,
+                                "roc_auc_status": group_result["roc_auc_status"],
+                                "roc_auc_above_reference": (
+                                    None
+                                    if group_result["roc_auc"] is None
+                                    else bool(group_result["roc_auc"] > ROC_AUC_REFERENCE)
+                                ),
+                                "unfiltered_primary_signal_count": int(
+                                    strategy_diagnostics["primary_signal_count"]
+                                ),
+                                "meta_filtered_signal_count": int(filtered_signal.sum()),
+                                "meta_filter_acceptance_rate": group_result[
+                                    "acceptance_rate"
+                                ],
+                                "meta_model_fit_status": group_result["fit_status"],
+                                "meta_model_fit_rows": group_result["fit_rows"],
+                                "meta_model_calibration_rows": group_result[
+                                    "calibration_rows"
+                                ],
+                                "validation_event_count": group_result[
+                                    "validation_event_count"
+                                ],
+                                "validation_labeled_event_count": group_result[
+                                    "validation_labeled_event_count"
+                                ],
+                                "meta_threshold": group_result["threshold"],
+                                "validation_start_index": train_end,
+                                "validation_end_exclusive": forward_end,
+                            }
+                        )
+                        candidates.append(candidate)
+                        trades.extend(candidate_trades)
+                    for row in decision_rows:
+                        decisions.append(
+                            {
+                                "symbol": symbol,
+                                "timeframe": timeframe,
+                                "strategy": strategy,
+                                **row,
+                            }
+                        )
+                del evaluation_bars
+                del full_bars
+            del minute_data
+        if len(candidates) != v4ap.DSR_TRIAL_COUNT:
+            raise ValueError("ai6_sweep_candidate_count_invalid")
+        status = "COMPLETED_RESEARCH_EVALUATION"
+
+    dsr_cohort = v4ap._attach_dsr_to_cohort(candidates)
+    for candidate in candidates:
+        candidate["qualifies"] = v4ap._candidate_qualifies(candidate)
+    report = _build_report(
+        commit_sha=commit_sha,
+        start_utc=start,
+        end_utc=end,
+        market_provenance=market_provenance,
+        funding_provenance=funding_provenance,
+        candidates=candidates,
+        dsr_cohort=dsr_cohort,
+        model_groups=model_groups,
+        status=status,
     )
-    _write_csv(
+    _write_outputs(
+        report,
+        output_report,
         output_trades_csv,
-        trades,
-        ("candidate_id", "symbol", "timeframe", "strategy", "geometry", "net_pnl_usd"),
-    )
-    _write_csv(
         output_decisions_csv,
+        output_summary,
+        trades,
         decisions,
-        (
-            "event_index",
-            "signal_timestamp",
-            "meta_probability",
-            "selected_threshold",
-            "decision",
-            "split_role",
-            "executable_signal",
-        ),
     )
-    print(_render_summary(report), end="")
     return report
 
 
@@ -678,7 +1076,10 @@ def main() -> int:
     parser.add_argument("--output-report", type=Path, required=True)
     parser.add_argument("--output-trades-csv", type=Path, required=True)
     parser.add_argument("--output-decisions-csv", type=Path, required=True)
+    parser.add_argument("--output-summary", type=Path, required=True)
     parser.add_argument("--commit-sha", required=True)
+    parser.add_argument("--start-utc", required=True)
+    parser.add_argument("--end-utc", required=True)
     args = parser.parse_args()
     run_v4aq_ai6(
         args.input_dir,
@@ -686,7 +1087,10 @@ def main() -> int:
         args.output_report,
         args.output_trades_csv,
         args.output_decisions_csv,
+        args.output_summary,
         commit_sha=args.commit_sha,
+        start_utc=args.start_utc,
+        end_utc=args.end_utc,
     )
     return 0
 
