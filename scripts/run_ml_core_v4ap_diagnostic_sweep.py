@@ -616,9 +616,7 @@ def _attach_dsr_to_cohort(candidates: list[dict[str, Any]]) -> dict[str, Any]:
     cohort["expected_maximum_sharpe_per_trade"] = expected_maximum
     for item in candidates:
         item.update(
-            _candidate_dsr_diagnostics(
-                item, expected_maximum, len(valid_sharpes)
-            )
+            _candidate_dsr_diagnostics(item, expected_maximum, len(valid_sharpes))
         )
     return cohort
 
