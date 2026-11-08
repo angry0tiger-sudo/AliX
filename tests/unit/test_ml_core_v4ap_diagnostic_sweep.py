@@ -169,6 +169,42 @@ def test_dsr_uses_all_36_preregistered_trials() -> None:
     assert all(item["dsr_status"] == "COMPUTED" for item in candidates)
 
 
+def test_zero_trade_candidate_metrics_are_explicit_and_dsr_is_undefined() -> None:
+    metrics = {
+        "trade_count": 0,
+        "win_rate": 0.0,
+        "profit_factor_net_of_costs": None,
+        "profit_factor_infinite_no_losses": False,
+        "max_drawdown_percent": 0.0,
+    }
+    fields = sweep._candidate_performance_fields(metrics, [])
+    assert fields == {
+        "trade_count": 0,
+        "win_rate": 0.0,
+        "net_profit_factor": 0.0,
+        "net_profit_factor_infinite_no_losses": False,
+        "max_drawdown_percent": 0.0,
+    }
+    returns = sweep._trade_return_diagnostics([])
+    assert returns["return_observation_count"] == 0
+    assert returns["sharpe_ratio_per_trade"] is None
+    assert returns["sharpe_status"] == "NO_TRADES_DSR_UNDEFINED"
+
+    candidate = {
+        "trade_count": 0,
+        "return_observation_count": 0,
+        "sharpe_ratio_per_trade": None,
+        "return_skewness": None,
+        "return_kurtosis_non_excess": None,
+    }
+    dsr = sweep._candidate_dsr_diagnostics(candidate, 0.5, 10)
+    assert dsr["dsr_z_score"] is None
+    assert dsr["dsr_status"] == "NO_TRADES_DSR_UNDEFINED"
+    unavailable = sweep._unavailable_candidate_dsr(0, 0)
+    assert unavailable["dsr_z_score"] is None
+    assert unavailable["dsr_status"] == "NO_TRADES_DSR_UNDEFINED"
+
+
 def test_acceptance_thresholds_are_inclusive_except_dsr_z() -> None:
     candidate = {
         "trade_count": 50,
@@ -196,7 +232,7 @@ def test_no_edge_summary_contains_exact_required_conclusion() -> None:
                 "raw_signal_count": 0,
                 "trade_count": 0,
                 "win_rate": 0.0,
-                "net_profit_factor": None,
+                "net_profit_factor": 0.0,
                 "net_profit_factor_infinite_no_losses": False,
                 "max_drawdown_percent": 0.0,
                 "dsr_z_score": None,
@@ -242,6 +278,7 @@ def test_no_edge_summary_contains_exact_required_conclusion() -> None:
         if line.startswith("| ETHUSDT |") or line.startswith("| BTCUSDT |")
     ]
     assert len(result_rows) == 36
+    assert "| 0 | 0.00 | 0.0000 | 0.00 | N/A |" in result_rows[0]
 
 
 def test_manifest_rejects_private_or_unbound_data() -> None:

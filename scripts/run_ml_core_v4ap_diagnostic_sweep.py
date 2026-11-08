@@ -475,7 +475,7 @@ def _trade_return_diagnostics(trades: list[dict[str, Any]]) -> dict[str, Any]:
         "sharpe_ratio_per_trade": None,
         "return_skewness": None,
         "return_kurtosis_non_excess": None,
-        "sharpe_status": "INSUFFICIENT_TRADE_RETURNS",
+        "sharpe_status": ("NO_TRADES_DSR_UNDEFINED" if count == 0 else "INSUFFICIENT_TRADE_RETURNS"),
     }
     if count < 2:
         return result
@@ -528,15 +528,21 @@ def _expected_maximum_sharpe(
     )
 
 
-def _unavailable_candidate_dsr(valid_sharpe_count: int) -> dict[str, Any]:
-    """Return explicit fail-closed DSR fields when the cohort is too small."""
+def _unavailable_candidate_dsr(
+    valid_sharpe_count: int, trade_count: int
+) -> dict[str, Any]:
+    """Return undefined DSR for no-trade cells or insufficient cohort support."""
     return {
         "dsr_z_score": None,
         "dsr_probability": None,
         "dsr_trial_count": DSR_TRIAL_COUNT,
         "dsr_valid_sharpe_estimate_count": valid_sharpe_count,
         "dsr_trial_scope": "ALL_36_PREREGISTERED_COMBINATIONS",
-        "dsr_status": "INSUFFICIENT_TRIAL_SHARPE_ESTIMATES",
+        "dsr_status": (
+            "NO_TRADES_DSR_UNDEFINED"
+            if trade_count == 0
+            else "INSUFFICIENT_TRIAL_SHARPE_ESTIMATES"
+        ),
     }
 
 
@@ -550,7 +556,11 @@ def _candidate_dsr_diagnostics(
     kurtosis = item.get("return_kurtosis_non_excess")
     observed = item.get("sharpe_ratio_per_trade")
     count = int(item.get("return_observation_count", 0))
-    if (
+    if count == 0:
+        dsr_status = "NO_TRADES_DSR_UNDEFINED"
+        z_score = None
+        probability = None
+    elif (
         observed is None
         or skew is None
         or kurtosis is None
@@ -610,7 +620,11 @@ def _attach_dsr_to_cohort(candidates: list[dict[str, Any]]) -> dict[str, Any]:
     }
     if len(valid_sharpes) < 2:
         for item in candidates:
-            item.update(_unavailable_candidate_dsr(len(valid_sharpes)))
+            item.update(
+                _unavailable_candidate_dsr(
+                    len(valid_sharpes), int(item.get("trade_count", 0))
+                )
+            )
         return cohort
     expected_maximum = _expected_maximum_sharpe(valid_sharpes, DSR_TRIAL_COUNT)
     cohort["expected_maximum_sharpe_per_trade"] = expected_maximum
@@ -657,6 +671,35 @@ def _grid_candidate_ids() -> set[str]:
     }
 
 
+def _candidate_performance_fields(
+    metrics: dict[str, Any], trades: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Normalize simulator metrics, retaining an explicit zero-trade result row."""
+    trade_count = len(trades)
+    if int(metrics["trade_count"]) != trade_count:
+        raise ValueError("v4ap_simulator_trade_count_mismatch")
+    if trade_count == 0:
+        return {
+            "trade_count": 0,
+            "win_rate": 0.0,
+            "net_profit_factor": 0.0,
+            "net_profit_factor_infinite_no_losses": False,
+            "max_drawdown_percent": 0.0,
+        }
+    profit_factor = metrics.get("profit_factor_net_of_costs")
+    return {
+        "trade_count": trade_count,
+        "win_rate": float(metrics["win_rate"]),
+        "net_profit_factor": (
+            float(profit_factor) if profit_factor is not None else None
+        ),
+        "net_profit_factor_infinite_no_losses": bool(
+            metrics["profit_factor_infinite_no_losses"]
+        ),
+        "max_drawdown_percent": float(metrics["max_drawdown_percent"]),
+    }
+
+
 def _run_candidate(
     bars: DataFrame,
     *,
@@ -693,7 +736,6 @@ def _run_candidate(
     metrics = replay["metrics"]
     trades = replay["trades"]
     risk = _trade_return_diagnostics(trades)
-    pf_value = metrics.get("profit_factor_net_of_costs")
     candidate: dict[str, Any] = {
         "candidate_id": _candidate_id(
             symbol, timeframe, strategy, str(geometry["name"])
@@ -706,13 +748,7 @@ def _run_candidate(
         "raw_signal_count": int(strategy_diagnostics["primary_signal_count"]),
         "eligible_entry_signal_count": entry_signal_count,
         "gap_flatten_count": gap_flatten_count,
-        "trade_count": int(metrics["trade_count"]),
-        "win_rate": float(metrics["win_rate"]),
-        "net_profit_factor": (float(pf_value) if pf_value is not None else None),
-        "net_profit_factor_infinite_no_losses": bool(
-            metrics["profit_factor_infinite_no_losses"]
-        ),
-        "max_drawdown_percent": float(metrics["max_drawdown_percent"]),
+        **_candidate_performance_fields(metrics, trades),
         "net_pnl_usd": float(metrics["final_equity_usd"])
         - float(metrics["initial_equity_usd"]),
         "net_expectancy_usd_per_trade": metrics["average_net_pnl_per_trade_usd"],

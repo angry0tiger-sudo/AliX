@@ -341,7 +341,13 @@ def test_gap_tolerant_fetch_accepts_only_the_documented_2023_outage(
         }
     ]
     cursors = [int(item["startTime"]) for item in calls]
-    assert all(current > previous for current, previous in zip(cursors, cursors[1:]))
+    page_cursors = list(dict.fromkeys(cursors))
+    assert cursors[0] == start
+    assert all(current >= previous for previous, current in zip(cursors, cursors[1:]))
+    assert len(page_cursors) >= 2
+    assert all(
+        current > previous for previous, current in zip(page_cursors, page_cursors[1:])
+    )
 
 
 @pytest.mark.parametrize("symbol", fetcher.KNOWN_EXCHANGE_GAP_SYMBOLS)
