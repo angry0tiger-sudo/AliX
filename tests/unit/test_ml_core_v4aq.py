@@ -8,14 +8,12 @@ from pandas import DataFrame, Series
 import services.meta_labeling.v4aq as v4aq
 
 
-def _assert_v4aq_finite(values: np.ndarray) -> None:
-    if not bool(np.isfinite(values).all()):
-        raise AssertionError("expected finite meta features")
+def _v4aq_values_are_finite(values: np.ndarray) -> bool:
+    return bool(np.isfinite(values).all())
 
 
-def _assert_v4aq_missing(values: DataFrame) -> None:
-    if not bool(values.isna().all(axis=None)):
-        raise AssertionError("expected missing warm-up meta features")
+def _v4aq_values_are_missing(values: DataFrame) -> bool:
+    return bool(values.isna().all(axis=None))
 
 
 def _bars(rows: int = 260) -> DataFrame:
@@ -46,8 +44,8 @@ def test_donchian_meta_context_is_causal_and_preserves_funding_missing_rows() ->
         bars, external, strategy=v4aq.DONCHIAN_STRATEGY
     )
     assert tuple(features.columns) == v4aq.V4AQ_META_FEATURE_COLUMNS
-    _assert_v4aq_finite(features.iloc[21:].to_numpy(dtype=float))
-    _assert_v4aq_missing(features.iloc[: v4aq.V4AQ_PRIMARY_LOOKBACK, :2])
+    assert _v4aq_values_are_finite(features.iloc[21:].to_numpy(dtype=float))
+    assert _v4aq_values_are_missing(features.iloc[: v4aq.V4AQ_PRIMARY_LOOKBACK, :2])
     assert pd.isna(features.loc[0, "funding_rate_ma"])
     changed = bars.copy()
     changed.loc[30:, ["high", "low", "close"]] *= 100.0
