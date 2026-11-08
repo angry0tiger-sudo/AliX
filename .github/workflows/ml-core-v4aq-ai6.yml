@@ -1,0 +1,273 @@
+name: AliX V4-AQ Phase AI-6 Funding/OI Diagnostic
+
+on:
+  push:
+    branches:
+      - research/ml-core-v4aq-ai6
+    paths:
+      - .github/workflows/ml-core-v4aq-ai6.yml
+      - external_data/binance_futures.py
+      - scripts/fetch_binance_external_data.py
+      - scripts/run_ml_core_v4aq_ai6.py
+      - services/ml_core/external_market_features.py
+      - services/meta_labeling/v4aq.py
+      - tests/unit/test_external_data_binance_futures.py
+      - tests/unit/test_fetch_binance_external_data.py
+      - tests/unit/test_ml_core_external_market_features.py
+      - tests/unit/test_ml_core_v4aq.py
+      - tests/unit/test_ml_core_v4aq_ai6.py
+      - docs/governance/owner-directives/2026-11-08-ai6-binance-public-market-data.md
+      - docs/architecture/decisions/ADR-0007-binance-funding-open-interest-ai6.md
+      - docs/data-provider-registry.md
+      - external_data/README.md
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: alix-v4aq-ai6
+  cancel-in-progress: true
+
+jobs:
+  v4aq-ai6:
+    if: github.ref == 'refs/heads/research/ml-core-v4aq-ai6'
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      ALIx_ENV: paper
+      ALIx_DRY_RUN: "true"
+      ALIx_ALLOW_LIVE_TRADING: "false"
+      ALIx_REPORTING_ENABLED: "false"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      GH_TOKEN: \${{ github.token }}
+    steps:
+      - name: Require Standard CI success for this exact AI-6 commit
+        env:
+          GITHUB_REPOSITORY: \${{ github.repository }}
+          TARGET_SHA: \${{ github.sha }}
+          TARGET_BRANCH: \${{ github.ref_name }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import time
+          from urllib.error import HTTPError, URLError
+          from urllib.request import Request, urlopen
+
+          repository = os.environ["GITHUB_REPOSITORY"]
+          target_sha = os.environ["TARGET_SHA"]
+          target_branch = os.environ["TARGET_BRANCH"]
+          expected_branch = "research/ml-core-v4aq-ai6"
+          if target_branch != expected_branch:
+              raise SystemExit("unsupported_ai6_branch:" + target_branch)
+
+          deadline = time.monotonic() + 90 * 60
+          url = (
+              f"https://api.github.com/repos/{repository}/actions/workflows/ci.yml/runs"
+              f"?head_sha={target_sha}&per_page=100"
+          )
+          while time.monotonic() < deadline:
+              request = Request(
+                  url,
+                  headers={
+                      "Accept": "application/vnd.github+json",
+                      "Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  },
+              )
+              try:
+                  with urlopen(request, timeout=20) as response:
+                      payload = json.load(response)
+              except (HTTPError, URLError, TimeoutError) as error:
+                  raise SystemExit(
+                      f"ci_status_lookup_failed:{type(error).__name__}"
+                  ) from None
+              matching = [
+                  run for run in payload.get("workflow_runs", [])
+                  if run.get("head_sha") == target_sha
+                  and run.get("head_branch") == expected_branch
+                  and run.get("event") == "push"
+              ]
+              if matching:
+                  latest = max(
+                      matching,
+                      key=lambda item: (
+                          item.get("run_number", 0),
+                          item.get("run_attempt", 0),
+                      ),
+                  )
+                  if latest.get("status") == "completed":
+                      if latest.get("conclusion") != "success":
+                          raise SystemExit(
+                              "ci_green_gate_blocked:"
+                              + str(latest.get("conclusion"))
+                              + ":"
+                              + target_sha
+                          )
+                      print(json.dumps({
+                          "gate": "PASS",
+                          "target_sha": target_sha,
+                          "ci_run_id": latest.get("id"),
+                          "ci_run_url": latest.get("html_url"),
+                          "ci_conclusion": latest.get("conclusion"),
+                      }, sort_keys=True))
+                      break
+              time.sleep(30)
+          else:
+              raise SystemExit("ci_green_gate_timeout:" + target_sha)
+          PY
+
+      - name: Checkout exact AI-6 commit without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          ref: \${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up pinned Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned research dependencies only
+        run: |
+          python -m pip install pip==25.2
+          python -m pip install numpy==2.5.4 pandas==2.3.3 scikit-learn==1.9.0 lightgbm==4.7.0
+
+      - name: Verify immutable data, cost, model and safety contracts
+        env:
+          TARGET_SHA: \${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/research/ml-core-v4aq-ai6"
+          test "$GITHUB_SHA" = "$TARGET_SHA"
+          python - <<'PY'
+          from external_data.binance_futures import (
+              ALLOWED_SYMBOLS,
+              OPEN_INTEREST_HISTORY_LIMIT_DAYS,
+              FUNDING_RATE_PATH,
+              OPEN_INTEREST_HISTORY_PATH,
+          )
+          from scripts import run_ml_core_v4aq_ai6 as ai6
+          from services.meta_labeling.v4aq import V4AQ_META_FEATURE_COLUMNS
+          from scripts import run_ml_core_v4ap_diagnostic_sweep as v4ap
+
+          assert ALLOWED_SYMBOLS == ("BTCUSDT", "ETHUSDT")
+          assert OPEN_INTEREST_HISTORY_LIMIT_DAYS == 30
+          assert FUNDING_RATE_PATH == "/fapi/v1/fundingRate"
+          assert OPEN_INTEREST_HISTORY_PATH == "/futures/data/openInterestHist"
+          assert ai6.REQUESTED_DAYS == 1825
+          assert ai6.ROUND_TRIP_COST_BPS == 30.0
+          assert ai6.SYMBOL == "BTCUSDT"
+          assert ai6.TIMEFRAME == "4h"
+          assert ai6.MINIMUM_TRADE_COUNT == 50
+          assert ai6.MINIMUM_WIN_RATE == 0.40
+          assert ai6.MINIMUM_NET_PROFIT_FACTOR == 1.10
+          assert tuple(V4AQ_META_FEATURE_COLUMNS) == (
+              "primary_close_vs_donchian_high_pct",
+              "primary_donchian_channel_width_pct",
+              "funding_rate_zscore",
+              "oi_change",
+          )
+          assert v4ap.ROUND_TRIP_COST_BPS == 30.0
+          print("AI-6 public-data and fail-closed research contract: PASS")
+          PY
+          printf 'Champion=null\norder_permission=false\ntrading_authorization=NO-GO\n'
+          printf 'private_api_calls=0\nreal_order_attempts=0\ncredentials_used=false\n'
+
+      - name: Fetch 1825-day BTCUSDT Binance Spot public 1m baseline
+        run: |
+          set -euo pipefail
+          spot_dir="$RUNNER_TEMP/alix-v4aq-spot"
+          mkdir -p "$spot_dir"
+          python scripts/fetch_binance_public_ohlcv.py \
+            --days 1825 \
+            --symbol BTCUSDT \
+            --interval 1m \
+            --output-dir "$spot_dir" \
+            --commit-sha "$GITHUB_SHA" \
+            --allow-exchange-gaps
+          echo "SPOT_DIR=$spot_dir" >> "$GITHUB_ENV"
+
+      - name: Fetch public Funding and bounded OI history for BTCUSDT and ETHUSDT
+        run: |
+          set -euo pipefail
+          external_dir="$RUNNER_TEMP/alix-v4aq-external"
+          mkdir -p "$external_dir"
+          python scripts/fetch_binance_external_data.py \
+            --symbols BTCUSDT ETHUSDT \
+            --days 1825 \
+            --oi-period 4h \
+            --commit-sha "$GITHUB_SHA" \
+            --output-dir "$external_dir"
+          echo "EXTERNAL_DIR=$external_dir" >> "$GITHUB_ENV"
+
+      - name: Run AI-6 coverage-gated LightGBM and economic diagnostic
+        run: |
+          set -euo pipefail
+          python -m scripts.run_ml_core_v4aq_ai6 \
+            --input-dir "$SPOT_DIR" \
+            --external-dir "$EXTERNAL_DIR" \
+            --output-report "$GITHUB_WORKSPACE/alix-v4aq-ai6-report.json" \
+            --output-trades-csv "$GITHUB_WORKSPACE/alix-v4aq-ai6-trades.csv" \
+            --output-decisions-csv "$GITHUB_WORKSPACE/alix-v4aq-ai6-decisions.csv" \
+            --commit-sha "$GITHUB_SHA"
+
+      - name: Validate exact AI-6 report and publish Step Summary
+        env:
+          REPORT_PATH: \${{ github.workspace }}/alix-v4aq-ai6-report.json
+          SUMMARY_PATH: \${{ github.workspace }}/alix-v4aq-ai6-step-summary.md
+          TARGET_SHA: \${{ github.sha }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          from scripts.run_ml_core_v4aq_ai6 import _render_summary
+
+          report = json.loads(
+              Path(os.environ["REPORT_PATH"]).read_text(encoding="utf-8")
+          )
+          assert report["commit_sha"] == os.environ["TARGET_SHA"]
+          assert report["schema_version"] == "alix.ml-core.v4aq-ai6.v1"
+          assert report["experiment"]["requested_days"] == 1825
+          assert report["experiment"]["round_trip_cost_bps"] == 30.0
+          assert report["Champion"] is None
+          assert report["order_permission"] is False
+          assert report["trading_authorization"] == "NO-GO"
+          assert report["private_api_calls"] == 0
+          assert report["real_order_attempts"] == 0
+          if report["status"] == "BLOCKED_INSUFFICIENT_EXTERNAL_HISTORY":
+              assert report["model"]["fit_performed"] is False
+              assert report["economic_results"] is None
+              assert report["economic_acceptance"] == "NOT_EVALUATED"
+          elif report["status"] == "COMPLETED_RESEARCH_EVALUATION":
+              assert report["model"]["fit_performed"] is True
+              assert report["economic_results"] is not None
+          else:
+              raise SystemExit("ai6_report_status_invalid")
+          summary = _render_summary(report)
+          Path(os.environ["SUMMARY_PATH"]).write_text(summary, encoding="utf-8")
+          with Path(os.environ["GITHUB_STEP_SUMMARY"]).open(
+              "a", encoding="utf-8"
+          ) as handle:
+              handle.write(summary)
+          print(summary, end="")
+          PY
+
+      - name: Upload AI-6 raw data, manifests, report and ledgers
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alix-v4aq-ai6-public-data-and-meta-report
+          path: |
+            \${{ runner.temp }}/alix-v4aq-spot/
+            \${{ runner.temp }}/alix-v4aq-external/
+            alix-v4aq-ai6-report.json
+            alix-v4aq-ai6-trades.csv
+            alix-v4aq-ai6-decisions.csv
+            alix-v4aq-ai6-step-summary.md
+          if-no-files-found: warn
+          retention-days: 30
