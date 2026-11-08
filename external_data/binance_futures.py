@@ -270,7 +270,6 @@ def _get_payload(
     return _response_payload(response)
 
 
-
 def _deduplicate_funding(
     records: Sequence[FundingRatePoint],
 ) -> tuple[FundingRatePoint, ...]:
@@ -372,7 +371,6 @@ class BinanceUsdMFuturesConnector:
         else:
             raise ProviderError("binance_funding_page_limit_exceeded")
         return _deduplicate_funding(collected)
-
 
     def _fetch_open_interest(
         self, symbol: str, start: datetime, end: datetime, period: str
