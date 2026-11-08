@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 from pandas import DataFrame, Series
 
+from scripts import run_ml_core_real_data_baseline
 from scripts import run_ml_core_v4ap_diagnostic_sweep as v4ap
 from scripts.fetch_binance_public_ohlcv import SCHEMA_VERSION as SPOT_SCHEMA_VERSION
 from services.meta_labeling import v4x
@@ -27,7 +28,6 @@ from services.ml_core.adaptive_targets import (
     apply_adaptive_triple_barrier,
     calculate_atr,
 )
-from services.ml_core.economic_backtest import resample_ohlcv
 
 REPORT_SCHEMA_VERSION = "alix.ml-core.v4aq-ai6.v1"
 SYMBOL = "BTCUSDT"
@@ -72,7 +72,10 @@ def _read_symbol_manifest(
     path = external_dir / f"{stem}-manifest.json"
     if not path.is_file():
         raise ValueError(f"v4aq_external_manifest_missing:{symbol}")
-    manifest = json.loads(path.read_text(encoding="utf-8"))
+    raw_manifest = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(raw_manifest, dict):
+        raise ValueError(f"v4aq_external_manifest_schema_invalid:{symbol}")
+    manifest: dict[str, Any] = raw_manifest
     expected = (
         manifest.get("schema_version") == "alix.binance.usdm-external-market.v1",
         manifest.get("commit_sha") == commit_sha,
@@ -164,7 +167,9 @@ def _load_spot_bars(
         start_utc=pd.Timestamp(source_manifest["start_utc"]),
         end_utc=pd.Timestamp(source_manifest["end_utc"]),
     )
-    bars = resample_ohlcv(bars_1m, TIMEFRAME, allow_exchange_gaps=True)
+    bars = run_ml_core_real_data_baseline.resample_ohlcv(
+        bars_1m, TIMEFRAME, allow_exchange_gaps=True
+    )
     from scripts import run_ml_core_v4af_meta_final as v4af
 
     bars, gap_diagnostics = v4af._trim_to_latest_contiguous_segment(bars, TIMEFRAME)

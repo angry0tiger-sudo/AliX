@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from email.message import Message
 from io import BytesIO
 import json
+from typing import cast
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlsplit
+from urllib.request import Request
 
 import pytest
 
@@ -373,8 +376,12 @@ def test_snapshot_manifest_accepts_full_coverage_and_keeps_safety_closed() -> No
         commit_sha="a" * 40,
         requested_days=365,
     )
-    assert manifest["funding"]["full_requested_history_available"] is True
-    assert manifest["open_interest"]["full_requested_history_available"] is True
+    funding_section = manifest["funding"]
+    oi_section = manifest["open_interest"]
+    assert isinstance(funding_section, dict)
+    assert isinstance(oi_section, dict)
+    assert funding_section["full_requested_history_available"] is True
+    assert oi_section["full_requested_history_available"] is True
     assert manifest["private_api_calls"] == 0
     assert manifest["credentials_used"] is False
     assert manifest["Champion"] is None
@@ -399,9 +406,11 @@ def test_snapshot_manifest_blocks_latest_month_oi_and_records_missing_periods() 
         commit_sha="b" * 40,
         requested_days=1825,
     )
-    assert manifest["open_interest"]["full_requested_history_available"] is False
+    oi_section = manifest["open_interest"]
+    assert isinstance(oi_section, dict)
+    assert oi_section["full_requested_history_available"] is False
     assert manifest["research_status"] == "BLOCKED_INSUFFICIENT_OI_HISTORY"
-    assert manifest["open_interest"]["missing_periods_are_not_filled"] is True
+    assert oi_section["missing_periods_are_not_filled"] is True
     with pytest.raises(ProviderError, match="commit_sha_invalid"):
         snapshot_manifest(bounded, commit_sha="bad", requested_days=1825)
     with pytest.raises(ProviderError, match="requested_days_invalid"):
@@ -437,10 +446,10 @@ def test_urllib_transport_sends_only_public_get_headers(
     monkeypatch.setattr(provider_module, "urlopen", fake_urlopen)
     transport = UrllibPublicJsonTransport(timeout_seconds=9.0)
     response = transport.get(f"{BINANCE_FUTURES_BASE_URL}/fapi/v1/fundingRate")
-    request = captured["request"]
+    request = cast(Request, captured["request"])
     assert response.status_code == 200
     assert response.body == '{"status":"ok"}'
-    assert getattr(request, "method") == "GET"
+    assert request.get_method() == "GET"
     assert request.get_header("Authorization") is None
     assert request.get_header("X-mbx-apikey") is None
     assert captured["timeout"] == 9.0
@@ -454,7 +463,7 @@ def test_urllib_transport_handles_http_errors_and_rejects_network_failures(
             url="https://fapi.binance.com/fapi/v1/fundingRate",
             code=429,
             msg="rate limited",
-            hdrs=None,
+            hdrs=Message(),
             fp=BytesIO(b'{"error":"limited"}'),
         )
 

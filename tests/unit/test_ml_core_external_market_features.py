@@ -51,6 +51,11 @@ def _oi(count: int = 28) -> DataFrame:
     )
 
 
+def _assert_finite_feature_values(values: np.ndarray) -> None:
+    if not bool(np.isfinite(values).all()):
+        raise AssertionError("expected finite feature values")
+
+
 def test_external_features_are_causal_and_have_exact_schema() -> None:
     bars = _bars()
     funding = _funding()
@@ -61,9 +66,13 @@ def test_external_features_are_causal_and_have_exact_schema() -> None:
     assert tuple(features.columns) == EXTERNAL_FEATURE_COLUMNS
     assert features.index.equals(bars.index)
     assert features["funding_rate_zscore"].iloc[:18].isna().all()
-    assert np.isfinite(features["funding_rate_zscore"].iloc[20:]).all()
+    _assert_finite_feature_values(
+        features["funding_rate_zscore"].iloc[20:].to_numpy(dtype=float)
+    )
     assert features["oi_change"].iloc[:2].isna().all()
-    assert np.isfinite(features["oi_change"].iloc[3:]).all()
+    _assert_finite_feature_values(
+        features["oi_change"].iloc[3:].to_numpy(dtype=float)
+    )
     assert diagnostics["interpolation_used"] is False
     assert diagnostics["backfill_used"] is False
     assert diagnostics["future_observations_joined"] == 0
@@ -108,7 +117,9 @@ def test_missing_oi_interval_breaks_percentage_change_without_interpolation() ->
         bars, _funding(24), oi, symbol="BTCUSDT"
     )
     assert pd.isna(features["oi_change"].iloc[13])
-    assert pd.isfinite(features["oi_change"].iloc[14])
+    _assert_finite_feature_values(
+        np.asarray([features["oi_change"].iloc[14]], dtype=float)
+    )
 
 
 def test_long_funding_gap_resets_rolling_zscore_warmup() -> None:

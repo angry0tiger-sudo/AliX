@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+from pathlib import Path
 
 import pytest
 
 from scripts import run_ml_core_v4aq_ai6 as ai6
 
 
-def _write_symbol_fixture(directory, symbol: str, commit_sha: str) -> None:
+def _write_symbol_fixture(
+    directory: Path, symbol: str, commit_sha: str
+) -> None:
     stem = f"binance-{symbol.lower()}"
     funding_path = directory / f"{stem}-funding.csv"
     oi_path = directory / f"{stem}-open-interest.csv"
@@ -55,7 +58,9 @@ def _write_symbol_fixture(directory, symbol: str, commit_sha: str) -> None:
     )
 
 
-def test_ai6_runner_blocks_fit_and_writes_explicit_coverage_verdict(tmp_path) -> None:
+def test_ai6_runner_blocks_fit_and_writes_explicit_coverage_verdict(
+    tmp_path: Path,
+) -> None:
     external_dir = tmp_path / "external"
     external_dir.mkdir()
     commit_sha = "d" * 40
@@ -87,7 +92,9 @@ def test_ai6_runner_blocks_fit_and_writes_explicit_coverage_verdict(tmp_path) ->
     assert "INSUFFICIENT_HISTORICAL_WINDOW" in summary
 
 
-def test_ai6_runner_rejects_manifest_hash_or_safety_mismatch(tmp_path) -> None:
+def test_ai6_runner_rejects_manifest_hash_or_safety_mismatch(
+    tmp_path: Path,
+) -> None:
     external_dir = tmp_path / "external"
     external_dir.mkdir()
     commit_sha = "e" * 40

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import numpy as np
 import pandas as pd
@@ -18,6 +18,8 @@ SUPPORTED_TIMEFRAMES = {"4h": pd.Timedelta(hours=4)}
 
 
 def _utc_timestamp(value: object, field_name: str) -> pd.Timestamp:
+    if not isinstance(value, (str, datetime, np.datetime64)):
+        raise ValueError(f"ai6_timestamp_invalid:{field_name}")
     try:
         timestamp = pd.Timestamp(value)
     except (TypeError, ValueError, OverflowError):

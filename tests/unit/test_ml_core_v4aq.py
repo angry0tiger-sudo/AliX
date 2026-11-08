@@ -28,6 +28,11 @@ def _external(rows: int = 35) -> DataFrame:
     )
 
 
+def _assert_v4aq_finite(values: np.ndarray) -> None:
+    if not bool(np.isfinite(values).all()):
+        raise AssertionError("expected finite V4-AQ meta features")
+
+
 def test_v4aq_meta_features_are_causal_and_preserve_external_missing_rows() -> None:
     bars = _bars()
     external = _external()
@@ -36,7 +41,7 @@ def test_v4aq_meta_features_are_causal_and_preserve_external_missing_rows() -> N
     assert tuple(features.columns) == v4aq.V4AQ_META_FEATURE_COLUMNS
     assert features.iloc[: v4aq.V4AQ_PRIMARY_LOOKBACK].isna().all(axis=None)
     assert pd.isna(features.loc[0, "oi_change"])
-    assert np.isfinite(features.iloc[21:].to_numpy(dtype=float)).all()
+    _assert_v4aq_finite(features.iloc[21:].to_numpy(dtype=float))
     changed = bars.copy()
     changed.loc[30:, ["high", "low", "close"]] *= 100.0
     changed_features = v4aq.build_v4aq_meta_features(changed, external)

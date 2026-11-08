@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pandas as pd
 
@@ -16,7 +17,9 @@ from scripts import fetch_binance_external_data as fetcher
 UTC = timezone.utc
 
 
-def test_write_snapshot_emits_hashed_csvs_and_provenance_manifest(tmp_path) -> None:
+def test_write_snapshot_emits_hashed_csvs_and_provenance_manifest(
+    tmp_path: Path,
+) -> None:
     start = datetime(2025, 1, 1, tzinfo=UTC)
     funding = tuple(
         FundingRatePoint(
