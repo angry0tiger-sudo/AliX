@@ -850,16 +850,18 @@ def _regime_reactive_primary_signal(
     trending_up = valid_hmm & (dominant == 0)
     # Shift before rolling so the signal candle's High is excluded.
     # This is the highest High of the preceding 20 completed 30m bars.
-    previous_high = high.shift(1).rolling(
-        window=DONCHIAN_LOOKBACK_BARS,
-        min_periods=DONCHIAN_LOOKBACK_BARS,
-    ).max()
+    previous_high = (
+        high.shift(1)
+        .rolling(
+            window=DONCHIAN_LOOKBACK_BARS,
+            min_periods=DONCHIAN_LOOKBACK_BARS,
+        )
+        .max()
+    )
     previous_high_values = previous_high.to_numpy(dtype=float)
     valid_channel = np.isfinite(previous_high_values)
     breakout_signal = (
-        trending_up
-        & valid_channel
-        & (close_values > previous_high_values)
+        trending_up & valid_channel & (close_values > previous_high_values)
     )
     signal_values = np.zeros(len(features), dtype=bool)
     signal_values[:apply_end] = breakout_signal[:apply_end]
@@ -890,6 +892,7 @@ def _regime_reactive_primary_signal(
         "execution_timing": "CLOSED_30M_BAR_NEXT_BAR_OPEN",
     }
     return features.reset_index(drop=True), signal, diagnostics
+
 
 def _validate_volatility_target_inputs(
     features: DataFrame,
