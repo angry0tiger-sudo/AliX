@@ -443,7 +443,16 @@ def _oi_coverage_metrics(
     complete_span = _covers_requested_window(
         first, last, snapshot.oi_requested_start, snapshot.requested_end
     )
-    return fraction, max(0, expected - actual), complete_span and fraction >= 0.98
+    expected_interval = timedelta(hours=4)
+    all_intervals_observed = all(
+        later.timestamp - earlier.timestamp == expected_interval
+        for earlier, later in zip(snapshot.open_interest, snapshot.open_interest[1:])
+    )
+    return (
+        fraction,
+        max(0, expected - actual),
+        complete_span and actual == expected and all_intervals_observed,
+    )
 
 
 def snapshot_manifest(

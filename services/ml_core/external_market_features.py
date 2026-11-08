@@ -136,9 +136,9 @@ def _open_interest_change(
 ) -> Series:
     """Use observed adjacent snapshots only; a missing interval breaks the change."""
     elapsed = event_time.diff()
-    maximum_interval = SUPPORTED_TIMEFRAMES[period] * 2
+    expected_interval = SUPPORTED_TIMEFRAMES[period]
     changes = values.pct_change(fill_method=None)
-    return changes.where(elapsed.le(maximum_interval))
+    return changes.where(elapsed.eq(expected_interval))
 
 
 def _asof_values(
