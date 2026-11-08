@@ -78,8 +78,7 @@ def _parse_documented_gap_timestamp(value: str | pd.Timestamp) -> pd.Timestamp:
 
 
 def _validate_documented_gap_range(
-    gap: tuple[str | pd.Timestamp, str | pd.Timestamp]
-    | list[str | pd.Timestamp],
+    gap: tuple[str | pd.Timestamp, str | pd.Timestamp] | list[str | pd.Timestamp],
 ) -> tuple[pd.Timestamp, pd.Timestamp]:
     """Validate one exact, inclusive 80-minute Binance Spot gap declaration."""
     if not isinstance(gap, (tuple, list)) or len(gap) != 2:
@@ -197,9 +196,7 @@ def _gap_transition_indices(
         _validate_inferred_timestamp_cadence(deltas, documented_gaps)
         return ()
     interval = _validated_expected_interval(expected_interval)
-    allowed_indices = _allowed_gap_transition_indices(
-        dates, interval, documented_gaps
-    )
+    allowed_indices = _allowed_gap_transition_indices(dates, interval, documented_gaps)
     observed_indices = _observed_gap_transition_indices(deltas, interval)
     _validate_gap_transition_indices(observed_indices, allowed_indices)
     return tuple(sorted(allowed_indices))
