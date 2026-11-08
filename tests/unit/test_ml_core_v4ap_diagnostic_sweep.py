@@ -83,6 +83,12 @@ def test_execution_signals_are_next_bar_and_have_no_entry_at_boundary() -> None:
     buys = [item for item in actions if item["signal"] == "BUY"]
     terminal = [item for item in actions if item["signal"] == "NO_ENTRY"]
     assert entries == len(buys)
+    assert entries == 4
+    assert any(
+        pd.Timestamp(item["signal_timestamp"]) == bars["date"].iloc[5]
+        and pd.Timestamp(item["execution_timestamp"]) == bars["date"].iloc[6]
+        for item in buys
+    )
     assert gap_flattens == 0
     assert len(terminal) == 1
     assert all(
