@@ -43,7 +43,11 @@ def _funding_row(timestamp: datetime, *, rate: str = "0.0001") -> dict[str, obje
 
 def _response(payload: object, status: int = 200) -> ConnectorResponse:
     if isinstance(payload, list):
-        payload = {"retCode": 0, "retMsg": "OK", "result": {"category": "linear", "list": list(reversed(payload))}}
+        payload = {
+            "retCode": 0,
+            "retMsg": "OK",
+            "result": {"category": "linear", "list": list(reversed(payload))},
+        }
     return ConnectorResponse(
         status_code=status,
         body=json.dumps(payload),
@@ -84,7 +88,9 @@ def _full_snapshot(days: int = 365) -> BybitFundingSnapshot:
 
 def test_funding_paginates_and_resumes_after_last_observed_timestamp() -> None:
     page_one = [
-        _funding_row(START + timedelta(hours=8 * (index + 200)), rate=str(index / 100_000))
+        _funding_row(
+            START + timedelta(hours=8 * (index + 200)), rate=str(index / 100_000)
+        )
         for index in range(FUNDING_PAGE_LIMIT)
     ]
     page_two_time = START + timedelta(hours=8 * 199)
@@ -110,10 +116,14 @@ def test_funding_paginates_and_resumes_after_last_observed_timestamp() -> None:
     assert first_query["limit"] == ["200"]
     assert "startTime" not in first_query
     first_page_oldest = START + timedelta(hours=8 * 200)
-    assert int(first_query["endTime"][0]) == _epoch_milliseconds(START + timedelta(days=400))
+    assert int(first_query["endTime"][0]) == _epoch_milliseconds(
+        START + timedelta(days=400)
+    )
     assert int(second_query["endTime"][0]) == _epoch_milliseconds(first_page_oldest) - 1
     assert delays == [0.0]
-    assert all(urlsplit(url).path == "/v5/market/funding/history" for url in transport.urls)
+    assert all(
+        urlsplit(url).path == "/v5/market/funding/history" for url in transport.urls
+    )
 
 
 def test_fetch_rejects_unapproved_symbols_and_invalid_windows_before_io() -> None:
@@ -133,7 +143,6 @@ def test_fetch_rejects_unapproved_symbols_and_invalid_windows_before_io() -> Non
     ("value", "reason"),
     [
         (True, "timestamp_invalid"),
-
         (float("nan"), "timestamp_invalid"),
         (float("inf"), "timestamp_invalid"),
         (-1, "timestamp_invalid"),
@@ -193,7 +202,9 @@ def test_deduplication_accepts_identical_replays_and_rejects_conflicts() -> None
 
 
 def test_request_builder_allows_only_the_public_funding_endpoint() -> None:
-    url = _request_url("/v5/market/funding/history", {"symbol": "BTCUSDT", "limit": 1000})
+    url = _request_url(
+        "/v5/market/funding/history", {"symbol": "BTCUSDT", "limit": 200}
+    )
     assert url.startswith(BYBIT_PUBLIC_BASE_URL)
     with pytest.raises(ProviderError, match="endpoint_not_allowed"):
         _request_url("/v5/order/create", {"symbol": "BTCUSDT"})
@@ -259,7 +270,9 @@ def test_get_payload_fails_closed_for_ban_server_error_transport_and_host() -> N
 
     with pytest.raises(ProviderError, match="host_or_path_not_allowed"):
         _get_payload(
-            FakeTransport([]), "https://example.com/v5/market/funding/history", lambda _: None
+            FakeTransport([]),
+            "https://example.com/v5/market/funding/history",
+            lambda _: None,
         )
     with pytest.raises(ProviderError, match="host_or_path_not_allowed"):
         _get_payload(

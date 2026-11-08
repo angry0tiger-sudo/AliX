@@ -116,7 +116,9 @@ def _content_hash(row: Mapping[str, object]) -> str:
 def _parse_funding_row(row: object, symbol: str) -> FundingRatePoint:
     if not isinstance(row, Mapping) or row.get("symbol") != symbol:
         raise ProviderError("bybit_funding_record_symbol_or_schema_invalid")
-    funding_time = _exchange_timestamp(row.get("fundingRateTimestamp"), "fundingRateTimestamp")
+    funding_time = _exchange_timestamp(
+        row.get("fundingRateTimestamp"), "fundingRateTimestamp"
+    )
     rate = _numeric(row.get("fundingRate"), "fundingRate")
     mark = None
     return FundingRatePoint(
@@ -279,7 +281,10 @@ class BybitLinearFundingConnector:
         if not isinstance(rows, list) or len(rows) > FUNDING_PAGE_LIMIT:
             raise ProviderError("bybit_funding_page_schema_invalid")
         page = [_parse_funding_row(row, symbol) for row in rows]
-        if any(later.funding_time >= earlier.funding_time for earlier, later in zip(page, page[1:])):
+        if any(
+            later.funding_time >= earlier.funding_time
+            for earlier, later in zip(page, page[1:])
+        ):
             raise ProviderError("bybit_funding_page_order_invalid")
         return sorted(page, key=lambda item: item.funding_time)
 
