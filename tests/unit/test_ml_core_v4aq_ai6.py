@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 
+import pytest
+
 from scripts import run_ml_core_v4aq_ai6 as ai6
 
 

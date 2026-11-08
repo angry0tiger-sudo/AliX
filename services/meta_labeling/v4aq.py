@@ -67,7 +67,7 @@ def build_v4aq_meta_features(
             "primary_close_vs_donchian_high_pct": close / previous_high - 1.0,
             "primary_donchian_channel_width_pct": channel_width,
         },
-        index=bars.index,
+        index=normalized_bars.index,
     )
     external = normalized_external.apply(pd.to_numeric, errors="coerce").astype(float)
     if bool(np.isinf(external.to_numpy(dtype=float)).any()):

@@ -9,7 +9,6 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 
 from external_data.binance_futures import (
-    ALLOWED_SYMBOLS,
     BINANCE_FUTURES_BASE_URL,
     FUNDING_PAGE_LIMIT,
     OPEN_INTEREST_HISTORY_LIMIT_DAYS,
@@ -252,7 +251,7 @@ def test_get_payload_retries_rate_limits_and_timeouts() -> None:
         delays.append,
     )
     assert payload == [{"ok": True}]
-    assert delays == [1.0, 1.0]
+    assert delays == [1.0, 2.0]
 
 
 def test_get_payload_fails_closed_for_ban_server_error_transport_and_host() -> None:

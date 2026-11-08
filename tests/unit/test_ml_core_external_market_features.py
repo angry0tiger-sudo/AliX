@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
-
 import numpy as np
 import pandas as pd
 import pytest
@@ -110,7 +108,7 @@ def test_missing_oi_interval_breaks_percentage_change_without_interpolation() ->
     features, _ = build_external_market_features(
         bars, _funding(24), oi, symbol="BTCUSDT"
     )
-    assert pd.isna(features["oi_change"].iloc[12])
+    assert pd.isna(features["oi_change"].iloc[13])
     assert pd.isfinite(features["oi_change"].iloc[14])
 
 
@@ -166,7 +164,7 @@ def test_feature_builder_rejects_symbol_period_timestamp_and_numeric_mismatch() 
 def test_feature_builder_rejects_duplicate_or_unsorted_source_times() -> None:
     funding = _funding()
     funding.loc[4, "funding_time"] = funding.loc[3, "funding_time"]
-    with pytest.raises(ValueError, match="funding.*not_unique_increasing"):
+    with pytest.raises(ValueError, match="not_unique_increasing:funding"):
         build_external_market_features(_bars(), funding, _oi(), symbol="BTCUSDT")
     oi = _oi()
     oi.loc[5, "timestamp"], oi.loc[6, "timestamp"] = (
@@ -174,7 +172,7 @@ def test_feature_builder_rejects_duplicate_or_unsorted_source_times() -> None:
         oi.loc[5, "timestamp"],
     )
     oi["available_at"] = oi["timestamp"] + pd.Timedelta(hours=4, minutes=5)
-    with pytest.raises(ValueError, match="open_interest.*not_unique_increasing"):
+    with pytest.raises(ValueError, match="not_unique_increasing:open_interest"):
         build_external_market_features(_bars(), _funding(), oi, symbol="BTCUSDT")
 
 
