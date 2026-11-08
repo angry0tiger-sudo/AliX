@@ -176,7 +176,6 @@ def _validate_manifest(
     return missing
 
 
-
 def _validate_minute_timestamp_bounds(
     dates: Series,
     *,
@@ -231,6 +230,7 @@ def _validate_minute_cadence(
             raise ValueError(f"v4ap_undocumented_market_gap:{symbol}")
         return
     _validate_documented_eth_gap(dates, invalid_intervals, symbol)
+
 
 def _load_market_data(
     input_dir: Path,
@@ -382,7 +382,6 @@ def generate_donchian_breakout_signal(
     return signal, diagnostics
 
 
-
 def _validate_signal_execution_inputs(
     bars: DataFrame,
     primary_signal: Series,
@@ -440,9 +439,7 @@ def _build_execution_signals(
         current_date = pd.Timestamp(dates.iloc[index])
         is_gap_boundary = next_date - current_date != expected_delta
         if is_gap_boundary:
-            execution_signals.append(
-                _execution_action(current_date, next_date, "SELL")
-            )
+            execution_signals.append(_execution_action(current_date, next_date, "SELL"))
             gap_flatten_count += 1
             continue
         if not _entry_signal_is_eligible(index, last_index, horizon_bars):
@@ -463,6 +460,7 @@ def _build_execution_signals(
     if not execution_signals:
         raise ValueError("v4ap_execution_signal_set_empty")
     return execution_signals, eligible_entry_count, gap_flatten_count
+
 
 def _trade_return_diagnostics(trades: list[dict[str, Any]]) -> dict[str, Any]:
     """Calculate per-trade Sharpe and higher moments for DSR, without annualizing."""
@@ -528,7 +526,6 @@ def _expected_maximum_sharpe(
         float(np.mean(trial_values))
         + float(np.std(trial_values, ddof=1)) * expected_max_multiplier
     )
-
 
 
 def _unavailable_candidate_dsr(valid_sharpe_count: int) -> dict[str, Any]:
@@ -624,6 +621,7 @@ def _attach_dsr_to_cohort(candidates: list[dict[str, Any]]) -> dict[str, Any]:
             )
         )
     return cohort
+
 
 def _candidate_qualifies(candidate: dict[str, Any]) -> bool:
     """Apply the owner's four strict, pre-registered acceptance dimensions."""
@@ -901,7 +899,6 @@ def _build_report(
     }
 
 
-
 def _candidate_report_contract_is_valid(candidate: dict[str, Any]) -> bool:
     """Check one row's fixed costs, dimensions, and decision consistency."""
     expected = (
@@ -1011,6 +1008,7 @@ def _validate_report(report: dict[str, Any], expected_commit_sha: str) -> None:
     _validate_report_trial_scope(report)
     _validate_report_safety(report)
     _validate_report_execution(report)
+
 
 def _format_number(value: Any, decimals: int = 4) -> str:
     if value is None:
