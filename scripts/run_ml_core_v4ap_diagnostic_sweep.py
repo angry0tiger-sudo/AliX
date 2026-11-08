@@ -462,6 +462,15 @@ def _build_execution_signals(
     return execution_signals, eligible_entry_count, gap_flatten_count
 
 
+def _trade_return_sample_status(count: int) -> str:
+    """Distinguish empty trade samples from other insufficient DSR samples."""
+    return (
+        "NO_TRADES_DSR_UNDEFINED"
+        if count == 0
+        else "INSUFFICIENT_TRADE_RETURNS"
+    )
+
+
 def _trade_return_diagnostics(trades: list[dict[str, Any]]) -> dict[str, Any]:
     """Calculate per-trade Sharpe and higher moments for DSR, without annualizing."""
     returns = np.asarray(
@@ -475,9 +484,7 @@ def _trade_return_diagnostics(trades: list[dict[str, Any]]) -> dict[str, Any]:
         "sharpe_ratio_per_trade": None,
         "return_skewness": None,
         "return_kurtosis_non_excess": None,
-        "sharpe_status": (
-            "NO_TRADES_DSR_UNDEFINED" if count == 0 else "INSUFFICIENT_TRADE_RETURNS"
-        ),
+        "sharpe_status": _trade_return_sample_status(count),
     }
     if count < 2:
         return result
