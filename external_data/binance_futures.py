@@ -1,8 +1,7 @@
-"""Public Binance USD-M funding and open-interest history with bounded provenance.
+"""Public Binance USD-M Funding Rate history with bounded provenance.
 
-Only unauthenticated public market-data GET endpoints are implemented. The
-Binance Open Interest History endpoint is capped to the latest 30 days; the
-connector records that limitation and never fabricates older observations.
+Only the allow-listed unauthenticated Funding Rate GET endpoint is implemented.
+No Open Interest, account, private, or order endpoint exists in this adapter.
 """
 
 from __future__ import annotations
@@ -27,28 +26,27 @@ from external_data.contracts import (
 
 BINANCE_FUTURES_BASE_URL = "https://fapi.binance.com"
 FUNDING_RATE_PATH = "/fapi/v1/fundingRate"
-OPEN_INTEREST_HISTORY_PATH = "/futures/data/openInterestHist"
 ALLOWED_SYMBOLS = ("BTCUSDT", "ETHUSDT")
-ALLOWED_OI_PERIODS = ("4h",)
 FUNDING_PAGE_LIMIT = 1000
-OPEN_INTEREST_PAGE_LIMIT = 500
-OPEN_INTEREST_HISTORY_LIMIT_DAYS = 30
 PUBLICATION_LAG = timedelta(minutes=5)
 MAX_RESPONSE_BYTES = 2_000_000
 MAX_RETRY_ATTEMPTS = 3
 MAX_FUNDING_PAGES = 1000
+FUNDING_MAX_EVENT_GAP = timedelta(days=2)
+COVERAGE_BOUNDARY_TOLERANCE = timedelta(days=1)
+MANIFEST_SCHEMA_VERSION = "alix.binance.usdm-funding.v1"
 
 
 class JsonTransport(Protocol):
-    """Small transport contract; tests inject fixtures and Actions inject urllib."""
+    """Injected transport contract for deterministic tests and bounded HTTPS."""
 
     def get(self, url: str) -> ConnectorResponse:
-        """Perform one unauthenticated GET and return the response envelope."""
+        """Perform one unauthenticated public GET."""
 
 
 @dataclass(frozen=True, slots=True)
 class FundingRatePoint:
-    """One Binance funding settlement observation with conservative availability."""
+    """One provider settlement with a conservative point-in-time availability."""
 
     symbol: str
     funding_time: datetime
@@ -59,41 +57,23 @@ class FundingRatePoint:
 
 
 @dataclass(frozen=True, slots=True)
-class OpenInterestPoint:
-    """One period-aggregated open-interest observation."""
-
-    symbol: str
-    period: str
-    timestamp: datetime
-    sum_open_interest: float
-    sum_open_interest_value: float | None
-    available_at: datetime
-    content_hash: str
-
-
-@dataclass(frozen=True, slots=True)
-class BinanceFuturesSnapshot:
-    """Fetched public series and the actual historical window returned."""
+class BinanceFundingSnapshot:
+    """Funding observations and the exact requested UTC window."""
 
     symbol: str
     requested_start: datetime
     requested_end: datetime
-    oi_requested_start: datetime
     funding_rates: tuple[FundingRatePoint, ...]
-    open_interest: tuple[OpenInterestPoint, ...]
     retrieved_at: datetime
-    oi_period: str
 
 
 def _utc(value: datetime | str, field_name: str) -> datetime:
     return parse_timestamp(value, field_name)
 
 
-def _validate_request(symbol: str, start: datetime, end: datetime, period: str) -> None:
+def _validate_request(symbol: str, start: datetime, end: datetime) -> None:
     if symbol not in ALLOWED_SYMBOLS:
         raise ProviderError("binance_futures_symbol_not_allowed")
-    if period not in ALLOWED_OI_PERIODS:
-        raise ProviderError("binance_oi_period_not_allowed")
     if start >= end:
         raise ProviderError("binance_futures_time_window_invalid")
 
@@ -137,10 +117,8 @@ def _parse_funding_row(row: object, symbol: str) -> FundingRatePoint:
     funding_time = _exchange_timestamp(row.get("fundingTime"), "fundingTime")
     rate = _numeric(row.get("fundingRate"), "fundingRate")
     raw_mark = row.get("markPrice")
-    mark = (
-        None
-        if raw_mark in (None, "")
-        else _numeric(raw_mark, "markPrice", positive=True)
+    mark = None if raw_mark in (None, "") else _numeric(
+        raw_mark, "markPrice", positive=True
     )
     return FundingRatePoint(
         symbol=symbol,
@@ -152,33 +130,8 @@ def _parse_funding_row(row: object, symbol: str) -> FundingRatePoint:
     )
 
 
-def _parse_open_interest_row(
-    row: object, symbol: str, period: str
-) -> OpenInterestPoint:
-    if not isinstance(row, Mapping) or row.get("symbol") != symbol:
-        raise ProviderError("binance_oi_record_symbol_or_schema_invalid")
-    timestamp = _exchange_timestamp(row.get("timestamp"), "timestamp")
-    interest = _numeric(row.get("sumOpenInterest"), "sumOpenInterest", positive=True)
-    raw_value = row.get("sumOpenInterestValue")
-    value = (
-        None
-        if raw_value in (None, "")
-        else _numeric(raw_value, "sumOpenInterestValue", positive=True)
-    )
-    period_duration = timedelta(hours=4)
-    return OpenInterestPoint(
-        symbol=symbol,
-        period=period,
-        timestamp=timestamp,
-        sum_open_interest=interest,
-        sum_open_interest_value=value,
-        available_at=timestamp + period_duration + PUBLICATION_LAG,
-        content_hash=_content_hash(row),
-    )
-
-
 def _request_url(path: str, parameters: Mapping[str, object]) -> str:
-    if path not in (FUNDING_RATE_PATH, OPEN_INTEREST_HISTORY_PATH):
+    if path != FUNDING_RATE_PATH:
         raise ProviderError("binance_public_endpoint_not_allowed")
     return f"{BINANCE_FUTURES_BASE_URL}{path}?{urlencode(parameters)}"
 
@@ -204,14 +157,19 @@ def _response_payload(response: ConnectorResponse) -> object:
 
 def _validate_public_transport_url(url: str) -> None:
     parsed = urlsplit(url)
-    if parsed.scheme != "https" or parsed.hostname != "fapi.binance.com":
-        raise ProviderError("binance_public_host_not_allowed")
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname != "fapi.binance.com"
+        or parsed.path != FUNDING_RATE_PATH
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.port not in (None, 443)
+        or parsed.fragment
+    ):
+        raise ProviderError("binance_public_host_or_path_not_allowed")
 
 
-def _transport_attempt(
-    transport: JsonTransport,
-    url: str,
-) -> ConnectorResponse:
+def _transport_attempt(transport: JsonTransport, url: str) -> ConnectorResponse:
     try:
         response = transport.get(url)
     except TimeoutError:
@@ -266,8 +224,7 @@ def _get_payload(
     sleeper: Callable[[float], None],
 ) -> object:
     _validate_public_transport_url(url)
-    response = _get_with_retry(transport, url, sleeper)
-    return _response_payload(response)
+    return _response_payload(_get_with_retry(transport, url, sleeper))
 
 
 def _deduplicate_funding(
@@ -282,20 +239,8 @@ def _deduplicate_funding(
     return tuple(by_time[key] for key in sorted(by_time))
 
 
-def _deduplicate_open_interest(
-    records: Sequence[OpenInterestPoint],
-) -> tuple[OpenInterestPoint, ...]:
-    by_time: dict[datetime, OpenInterestPoint] = {}
-    for item in records:
-        previous = by_time.get(item.timestamp)
-        if previous is not None and previous.content_hash != item.content_hash:
-            raise ProviderError("binance_oi_timestamp_conflict")
-        by_time[item.timestamp] = item
-    return tuple(by_time[key] for key in sorted(by_time))
-
-
 class BinanceUsdMFuturesConnector:
-    """Read-only public Funding/OI adapter with explicit history-window limits."""
+    """Read-only public Funding Rate adapter with bounded pagination."""
 
     def __init__(
         self,
@@ -338,6 +283,11 @@ class BinanceUsdMFuturesConnector:
     ) -> None:
         if any(not start <= record.funding_time <= end for record in page):
             raise ProviderError("binance_funding_timestamp_outside_window")
+        if any(
+            later.funding_time <= earlier.funding_time
+            for earlier, later in zip(page, page[1:])
+        ):
+            raise ProviderError("binance_funding_page_order_invalid")
 
     def _next_funding_cursor(
         self,
@@ -347,7 +297,7 @@ class BinanceUsdMFuturesConnector:
         if len(page) < FUNDING_PAGE_LIMIT:
             return None
         last_ms = max(_epoch_milliseconds(item.funding_time) for item in page)
-        if last_ms < cursor or last_ms == 2**63 - 1:
+        if last_ms < cursor or last_ms >= 2**63 - 1:
             raise ProviderError("binance_funding_pagination_stalled")
         self._sleeper(self._inter_page_delay)
         return last_ms + 1
@@ -372,66 +322,29 @@ class BinanceUsdMFuturesConnector:
             raise ProviderError("binance_funding_page_limit_exceeded")
         return _deduplicate_funding(collected)
 
-    def _fetch_open_interest(
-        self, symbol: str, start: datetime, end: datetime, period: str
-    ) -> tuple[datetime, tuple[OpenInterestPoint, ...]]:
-        effective_start = max(
-            start,
-            end - timedelta(days=OPEN_INTEREST_HISTORY_LIMIT_DAYS),
-        )
-        url = _request_url(
-            OPEN_INTEREST_HISTORY_PATH,
-            {
-                "symbol": symbol,
-                "period": period,
-                "startTime": _epoch_milliseconds(effective_start),
-                "endTime": _epoch_milliseconds(end),
-                "limit": OPEN_INTEREST_PAGE_LIMIT,
-            },
-        )
-        payload = _get_payload(self._transport, url, self._sleeper)
-        if not isinstance(payload, list) or len(payload) > OPEN_INTEREST_PAGE_LIMIT:
-            raise ProviderError("binance_oi_page_schema_invalid")
-        page = [_parse_open_interest_row(row, symbol, period) for row in payload]
-        if any(not effective_start <= record.timestamp <= end for record in page):
-            raise ProviderError("binance_oi_timestamp_outside_window")
-        records = _deduplicate_open_interest(page)
-        return effective_start, records
-
     def fetch(
         self,
         symbol: str,
         *,
         start: datetime | str,
         end: datetime | str,
-        oi_period: str = "4h",
-    ) -> BinanceFuturesSnapshot:
-        """Fetch five-year-capable funding and latest-month-only OI history."""
+    ) -> BinanceFundingSnapshot:
+        """Fetch all available Funding Rate settlements in the requested window."""
         start_utc = _utc(start, "start")
         end_utc = _utc(end, "end")
-        _validate_request(symbol, start_utc, end_utc, oi_period)
+        _validate_request(symbol, start_utc, end_utc)
         funding = self._fetch_funding(symbol, start_utc, end_utc)
-        oi_start, open_interest = self._fetch_open_interest(
-            symbol, start_utc, end_utc, oi_period
-        )
-        return BinanceFuturesSnapshot(
+        return BinanceFundingSnapshot(
             symbol=symbol,
             requested_start=start_utc,
             requested_end=end_utc,
-            oi_requested_start=oi_start,
             funding_rates=funding,
-            open_interest=open_interest,
             retrieved_at=datetime.now(timezone.utc),
-            oi_period=oi_period,
         )
 
 
 class BinancePublicHttpsTransport:
-    """Bounded HTTPS GET transport with a fixed host/path allow-list.
-
-    HTTPSConnection uses Python's default TLS context, including certificate
-    verification. The client sends no credentials and cannot follow redirects.
-    """
+    """Verified-TLS HTTPS GET transport with a fixed public endpoint allow-list."""
 
     def __init__(self, *, timeout_seconds: float = 20.0) -> None:
         if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
@@ -449,17 +362,8 @@ class BinancePublicHttpsTransport:
 
     @staticmethod
     def _validated_request_target(url: str) -> tuple[str, str]:
+        _validate_public_transport_url(url)
         parsed = urlsplit(url)
-        if (
-            parsed.scheme != "https"
-            or parsed.hostname != "fapi.binance.com"
-            or parsed.username is not None
-            or parsed.password is not None
-            or parsed.port not in (None, 443)
-            or parsed.fragment
-            or parsed.path not in (FUNDING_RATE_PATH, OPEN_INTEREST_HISTORY_PATH)
-        ):
-            raise ProviderError("binance_public_host_or_path_not_allowed")
         target = parsed.path
         if parsed.query:
             target = f"{target}?{parsed.query}"
@@ -475,7 +379,7 @@ class BinancePublicHttpsTransport:
                 target,
                 headers={
                     "Accept": "application/json",
-                    "User-Agent": "AliX-AI6-Research/1.0",
+                    "User-Agent": "AliX-AI6-Funding-Research/1.0",
                 },
             )
             response = connection.getresponse()
@@ -497,198 +401,100 @@ class BinancePublicHttpsTransport:
         except ProviderError:
             raise
         except (OSError, TimeoutError, HTTPException):
-            raise TimeoutError(
-                "binance_public_request_timeout_or_network_error"
-            ) from None
+            raise TimeoutError("binance_public_request_timeout_or_network_error") from None
         finally:
             connection.close()
 
 
-def _covers_requested_window(
-    first: datetime | None,
-    last: datetime | None,
-    start: datetime,
-    end: datetime,
-) -> bool:
-    if first is None or last is None:
-        return False
-    tolerance = timedelta(days=1)
-    return first <= start + tolerance and last >= end - tolerance
-
-
-def _funding_has_large_gaps(records: Sequence[FundingRatePoint]) -> bool:
-    return any(
-        later.funding_time - earlier.funding_time > timedelta(days=1)
-        for earlier, later in zip(records, records[1:])
+def _funding_coverage_metrics(
+    snapshot: BinanceFundingSnapshot,
+) -> tuple[float, float, int, bool]:
+    records = snapshot.funding_rates
+    if not records:
+        return 0.0, 0.0, 0, False
+    first = records[0].funding_time
+    last = records[-1].funding_time
+    span = max(0.0, (last - first).total_seconds() / 86400.0)
+    max_gap_hours = max(
+        (
+            (later.funding_time - earlier.funding_time).total_seconds() / 3600.0
+            for earlier, later in zip(records, records[1:])
+        ),
+        default=0.0,
     )
-
-
-def _oi_coverage_metrics(
-    snapshot: BinanceFuturesSnapshot,
-) -> tuple[float, int, bool]:
-    if not snapshot.open_interest:
-        return 0.0, 0, False
-    period = timedelta(hours=4)
-    duration = snapshot.requested_end - snapshot.oi_requested_start
-    expected = max(1, int(duration.total_seconds() // period.total_seconds()) + 1)
-    actual = len(snapshot.open_interest)
-    fraction = min(1.0, actual / expected)
-    first = snapshot.open_interest[0].timestamp
-    last = snapshot.open_interest[-1].timestamp
-    complete_span = _covers_requested_window(
-        first, last, snapshot.oi_requested_start, snapshot.requested_end
+    covers_boundaries = (
+        first <= snapshot.requested_start + COVERAGE_BOUNDARY_TOLERANCE
+        and last >= snapshot.requested_end - COVERAGE_BOUNDARY_TOLERANCE
     )
-    expected_interval = timedelta(hours=4)
-    all_intervals_observed = all(
-        later.timestamp - earlier.timestamp == expected_interval
-        for earlier, later in zip(snapshot.open_interest, snapshot.open_interest[1:])
-    )
-    return (
-        fraction,
-        max(0, expected - actual),
-        complete_span and actual == expected and all_intervals_observed,
-    )
+    complete = covers_boundaries and max_gap_hours <= FUNDING_MAX_EVENT_GAP.total_seconds() / 3600
+    expected_events = max(1, int(round((snapshot.requested_end - snapshot.requested_start).total_seconds() / (8 * 3600))) + 1)
+    coverage_fraction = min(1.0, len(records) / expected_events)
+    missing_estimate = max(0, expected_events - len(records))
+    return span, max_gap_hours, missing_estimate, complete
 
 
-def _validate_snapshot_manifest_request(
-    commit_sha: str,
-    requested_days: int,
-) -> None:
+def _validate_snapshot_manifest_request(commit_sha: str, requested_days: int) -> None:
     if len(commit_sha) != 40 or any(
         character not in "0123456789abcdef" for character in commit_sha
     ):
         raise ProviderError("binance_commit_sha_invalid")
-    if (
-        isinstance(requested_days, bool)
-        or not isinstance(requested_days, int)
-        or requested_days < 1
-    ):
+    if isinstance(requested_days, bool) or not isinstance(requested_days, int) or requested_days <= 0:
         raise ProviderError("binance_requested_days_invalid")
 
 
-def _funding_manifest_section(
-    snapshot: BinanceFuturesSnapshot,
-) -> dict[str, object]:
-    records = snapshot.funding_rates
-    first = records[0].funding_time if records else None
-    last = records[-1].funding_time if records else None
-    span_days = (
-        (last - first).total_seconds() / 86400.0
-        if first is not None and last is not None
-        else 0.0
-    )
-    complete = _covers_requested_window(
-        first, last, snapshot.requested_start, snapshot.requested_end
-    ) and not _funding_has_large_gaps(records)
-    return {
-        "endpoint": FUNDING_RATE_PATH,
-        "page_limit": FUNDING_PAGE_LIMIT,
-        "row_count": len(records),
-        "first_timestamp_utc": first.isoformat() if first is not None else None,
-        "last_timestamp_utc": last.isoformat() if last is not None else None,
-        "observed_span_days": round(span_days, 6),
-        "availability_policy": "fundingTime_plus_5_minutes_conservative_proxy",
-        "history_limit_days_documented": None,
-        "full_requested_history_available": complete,
-        "coverage_status": (
-            "FULL_REQUESTED_HISTORY" if complete else "PARTIAL_FUNDING_HISTORY"
-        ),
-    }
-
-
-def _open_interest_manifest_section(
-    snapshot: BinanceFuturesSnapshot,
-    requested_days: int,
-) -> dict[str, object]:
-    records = snapshot.open_interest
-    first = records[0].timestamp if records else None
-    last = records[-1].timestamp if records else None
-    span_days = (
-        (last - first).total_seconds() / 86400.0
-        if first is not None and last is not None
-        else 0.0
-    )
-    fraction, missing_count, full_span = _oi_coverage_metrics(snapshot)
-    full_history = (
-        full_span
-        and span_days >= requested_days - 1.0
-        and snapshot.oi_requested_start <= snapshot.requested_start + timedelta(days=1)
-    )
-    return {
-        "endpoint": OPEN_INTEREST_HISTORY_PATH,
-        "period": snapshot.oi_period,
-        "page_limit": OPEN_INTEREST_PAGE_LIMIT,
-        "documented_history_limit_days": OPEN_INTEREST_HISTORY_LIMIT_DAYS,
-        "requested_start_utc": snapshot.oi_requested_start.isoformat(),
-        "row_count": len(records),
-        "first_timestamp_utc": first.isoformat() if first is not None else None,
-        "last_timestamp_utc": last.isoformat() if last is not None else None,
-        "observed_span_days": round(span_days, 6),
-        "coverage_fraction": round(fraction, 6),
-        "expected_period_count": len(records) + missing_count,
-        "missing_period_count": missing_count,
-        "availability_policy": "timestamp_plus_period_plus_5_minutes_conservative_proxy",
-        "full_requested_history_available": full_history,
-        "coverage_status": (
-            "FULL_REQUESTED_HISTORY"
-            if full_history
-            else "INSUFFICIENT_HISTORICAL_WINDOW"
-        ),
-        "missing_periods_are_not_filled": True,
-    }
-
-
-def _snapshot_manifest_limitations() -> list[str]:
-    return [
-        "Binance Open Interest History exposes only the latest 30 days; it cannot supply a five-year OI series.",
-        "The availability timestamps are conservative research proxies, not a source-certified historical publication-time feed.",
-        "No missing OI observations are backfilled, interpolated, or synthesized.",
-        "Internal research metadata does not grant redistribution or commercial-use rights.",
-    ]
-
-
 def snapshot_manifest(
-    snapshot: BinanceFuturesSnapshot,
+    snapshot: BinanceFundingSnapshot,
     *,
     commit_sha: str,
     requested_days: int,
 ) -> dict[str, object]:
-    """Build a canonical manifest without implying complete OI history."""
+    """Describe exact Funding coverage and closed safety state without fabricating gaps."""
     _validate_snapshot_manifest_request(commit_sha, requested_days)
-    funding = _funding_manifest_section(snapshot)
-    oi = _open_interest_manifest_section(snapshot, requested_days)
-    full_oi_history = oi["full_requested_history_available"] is True
+    span, max_gap_hours, missing_estimate, complete = _funding_coverage_metrics(snapshot)
+    records = snapshot.funding_rates
+    first = records[0].funding_time.isoformat() if records else None
+    last = records[-1].funding_time.isoformat() if records else None
+    expected_events = max(
+        1,
+        int(round((snapshot.requested_end - snapshot.requested_start).total_seconds() / (8 * 3600))) + 1,
+    )
     return {
-        "schema_version": "alix.binance.usdm-external-market.v1",
+        "schema_version": MANIFEST_SCHEMA_VERSION,
         "commit_sha": commit_sha,
+        "provider": "Binance USD-M public Funding Rate History",
+        "host": "fapi.binance.com",
+        "endpoint": FUNDING_RATE_PATH,
         "symbol": snapshot.symbol,
-        "provider": "Binance USD-M Futures public market-data API",
-        "base_url": BINANCE_FUTURES_BASE_URL,
+        "requested_days": requested_days,
+        "requested_start_utc": snapshot.requested_start.isoformat(),
+        "requested_end_utc": snapshot.requested_end.isoformat(),
+        "retrieved_at": snapshot.retrieved_at.isoformat(),
         "public_api_only": True,
         "credentials_used": False,
         "api_key_header_sent": False,
         "private_api_calls": 0,
         "exchange_order_calls": 0,
-        "requested_days": requested_days,
-        "requested_start_utc": snapshot.requested_start.isoformat(),
-        "requested_end_utc": snapshot.requested_end.isoformat(),
-        "retrieved_at": snapshot.retrieved_at.isoformat(),
-        "funding": funding,
-        "open_interest": oi,
-        "data_quality": {
-            "timestamps_unique_and_ordered": True,
-            "numeric_values_finite": True,
-            "missing_oi_periods_interpolated": False,
-            "synthetic_rows_created": 0,
-        },
-        "limitations": _snapshot_manifest_limitations(),
-        "research_status": (
-            "READY_FOR_FULL_WINDOW_FEATURE_JOIN"
-            if full_oi_history
-            else "BLOCKED_INSUFFICIENT_OI_HISTORY"
-        ),
         "Champion": None,
         "order_permission": False,
         "trading_authorization": "NO-GO",
-        "real_order_attempts": 0,
+        "funding": {
+            "row_count": len(records),
+            "first_funding_time": first,
+            "last_funding_time": last,
+            "observed_span_days": span,
+            "max_event_gap_hours": max_gap_hours,
+            "expected_settlements_estimate": expected_events,
+            "missing_settlements_estimate": missing_estimate,
+            "coverage_fraction_estimate": (
+                min(1.0, len(records) / expected_events) if records else 0.0
+            ),
+            "coverage_status": "FULL_REQUESTED_HISTORY" if complete else "INSUFFICIENT_HISTORY",
+            "full_requested_history_available": complete,
+            "available_at_policy": "fundingTime + 5 minutes (conservative research proxy)",
+        },
+        "research_status": (
+            "READY_FOR_FUNDING_FEATURE_JOIN"
+            if complete
+            else "BLOCKED_INSUFFICIENT_FUNDING_HISTORY"
+        ),
     }
