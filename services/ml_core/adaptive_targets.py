@@ -292,11 +292,9 @@ def calculate_atr(
     segment_ends = (*gap_indices, len(normalized))
     for segment_start, segment_end in zip(segment_starts, segment_ends):
         segment_true_range = true_range.iloc[segment_start:segment_end]
-        atr.iloc[segment_start:segment_end] = (
-            segment_true_range.rolling(window=period, min_periods=period)
-            .mean()
-            .to_numpy(dtype=float)
-        )
+        atr.iloc[segment_start:segment_end] = segment_true_range.rolling(
+            window=period, min_periods=period
+        ).mean()
     return atr.rename(f"atr_{period}")
 
 
