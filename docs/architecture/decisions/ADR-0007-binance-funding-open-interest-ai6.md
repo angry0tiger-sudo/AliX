@@ -1,8 +1,8 @@
-# ADR-0007: Binance USD-M Funding-Only Research and V4-AQ Meta Features
+# ADR-0007: Bybit V5 Linear Funding-Only Research and V4-AQ Meta Features
 
 - Status: Accepted for bounded internal Funding-only research; no production or trading promotion.
 - Date: 2026-11-08.
-- Owner authorization: docs/governance/owner-directives/2026-11-08-ai6-binance-public-market-data.md.
+- Owner authorization: docs/governance/owner-directives/2026-11-08-ai6-bybit-public-market-data.md.
 - Branch: research/ml-core-v4aq-ai6.
 
 ## Context
@@ -14,7 +14,7 @@ AI-6 initially proposed both Binance Funding Rate and Open Interest History. The
 ## Decision
 
 1. Drop Open Interest from this phase. The active adapter, fetcher, manifests, feature engineering, model schema, workflow, and tests must not fetch or use OI.
-2. Retain only Binance USD-M public Funding Rate History at /fapi/v1/fundingRate, using unauthenticated GET requests for BTCUSDT and ETHUSDT.
+2. Retain only Bybit V5 public Linear Funding Rate History at /v5/market/funding/history, using unauthenticated GET requests for BTCUSDT and ETHUSDT.
 3. Persist raw funding settlement times, conservative available_at proxies, content hashes, CSV hashes, exact requested window, and coverage diagnostics.
 4. Derive causal funding_rate_zscore and funding_rate_ma features with a 30-settlement rolling window, minimum 20 observations, a 48-hour gap reset, and a 48-hour maximum as-of age.
 5. Keep Primary signal generation independent of Funding. Funding is strictly Meta-Model context and may filter existing Primary BUY events only.

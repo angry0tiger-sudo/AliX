@@ -4,12 +4,12 @@ Phase 6 provides versioned provider and record contracts, injected-transport ada
 
 ## AI-6 Binance Funding-only research adapter
 
-The active AI-6 adapter is limited to unauthenticated Binance USD-M public Funding Rate History for BTCUSDT and ETHUSDT:
+The active AI-6 adapter is limited to unauthenticated Bybit V5 Linear public Funding Rate History for BTCUSDT and ETHUSDT:
 
-- Endpoint: GET https://fapi.binance.com/fapi/v1/fundingRate.
+- Endpoint: GET https://api.bybit.com/v5/market/funding/history.
 - Pagination: provider funding timestamps, bounded page size and retries.
 - Features: funding_rate_zscore and funding_rate_ma.
-- Availability: fundingTime + 5 minutes conservative research proxy.
+- Availability: fundingRateTimestamp + 5 minutes conservative research proxy.
 - Joins: backward as-of only; observation age is capped at 48 hours.
 - Coverage: exact 1825-day window, boundary validation, settlement-gap validation and >=90% estimated expected-event coverage.
 - Provenance: source settlement timestamp, retrieval timestamp, availability timestamp, record content hash, CSV SHA-256, manifest, and safety fields.

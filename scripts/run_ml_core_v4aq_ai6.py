@@ -76,11 +76,13 @@ def _validate_funding_manifest_contract(
     if "open_interest" in raw or "open_interest_csv" in raw:
         raise ValueError(f"ai6_oi_contract_must_be_absent:{symbol}")
     expected = (
-        raw.get("schema_version") == "alix.binance.usdm-funding.v1",
+        raw.get("schema_version") == "alix.bybit.linear-funding.v1",
         raw.get("commit_sha") == commit_sha,
-        raw.get("provider") == "Binance USD-M public Funding Rate History",
-        raw.get("host") == "fapi.binance.com",
-        raw.get("endpoint") == "/fapi/v1/fundingRate",
+        raw.get("provider") == "Bybit V5 public Linear Funding Rate History",
+        raw.get("host") == "api.bybit.com",
+        raw.get("endpoint") == "/v5/market/funding/history",
+        raw.get("category") == "linear",
+        raw.get("page_limit") == 200,
         raw.get("symbol") == symbol,
         raw.get("requested_days") == REQUESTED_DAYS,
         raw.get("public_api_only") is True,
@@ -127,7 +129,7 @@ def _load_funding_manifest(
     start_utc: pd.Timestamp,
     end_utc: pd.Timestamp,
 ) -> tuple[dict[str, Any], dict[str, Any], str]:
-    stem = f"binance-{symbol.lower()}"
+    stem = f"bybit-{symbol.lower()}"
     manifest_path = external_dir / f"{stem}-manifest.json"
     if not manifest_path.is_file():
         raise ValueError(f"ai6_funding_manifest_missing:{symbol}")
@@ -581,11 +583,11 @@ def _report_funding_block(
     funding_provenance: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
     return {
-        "provider": "Binance USD-M public Funding Rate History",
-        "host": "fapi.binance.com",
-        "endpoint": "/fapi/v1/fundingRate",
+        "provider": "Bybit V5 public Linear Funding Rate History",
+        "host": "api.bybit.com",
+        "endpoint": "/v5/market/funding/history",
         "feature_columns": list(EXTERNAL_FEATURE_COLUMNS),
-        "available_at_policy": "fundingTime + 5 minutes (conservative research proxy)",
+        "available_at_policy": "fundingRateTimestamp + 5 minutes (conservative research proxy)",
         "maximum_observation_age": "2 days",
         "coverage": funding_provenance,
         "open_interest_used": False,

@@ -25,7 +25,7 @@ COMMIT = "a" * 40
 def _funding_artifact(
     directory: Path, symbol: str, *, ready: bool = True
 ) -> dict[str, Any]:
-    stem = f"binance-{symbol.lower()}"
+    stem = f"bybit-{symbol.lower()}"
     csv_path = directory / f"{stem}-funding.csv"
     timestamps = pd.date_range(START, END, periods=20)
     rows = DataFrame(
@@ -33,7 +33,7 @@ def _funding_artifact(
             "symbol": symbol,
             "funding_time": timestamps.astype(str),
             "funding_rate": np.linspace(-0.001, 0.001, len(timestamps)),
-            "mark_price": np.full(len(timestamps), 50000.0),
+            "mark_price": [None] * len(timestamps),
             "available_at": (timestamps + pd.Timedelta(minutes=5)).astype(str),
             "content_hash": [f"{index:064x}" for index in range(len(timestamps))],
         },
@@ -42,11 +42,13 @@ def _funding_artifact(
     rows.to_csv(csv_path, index=False)
     digest = hashlib.sha256(csv_path.read_bytes()).hexdigest()
     manifest = {
-        "schema_version": "alix.binance.usdm-funding.v1",
+        "schema_version": "alix.bybit.linear-funding.v1",
         "commit_sha": COMMIT,
-        "provider": "Binance USD-M public Funding Rate History",
-        "host": "fapi.binance.com",
-        "endpoint": "/fapi/v1/fundingRate",
+        "provider": "Bybit V5 public Linear Funding Rate History",
+        "host": "api.bybit.com",
+        "endpoint": "/v5/market/funding/history",
+        "category": "linear",
+        "page_limit": 200,
         "symbol": symbol,
         "requested_days": 1825,
         "requested_start_utc": START.isoformat(),
@@ -155,7 +157,7 @@ def test_read_funding_artifact_verifies_provenance_hash_and_oi_absence(
     assert len(funding) == 20
     assert received == manifest
 
-    manifest_path = tmp_path / "binance-btcusdt-manifest.json"
+    manifest_path = tmp_path / "bybit-btcusdt-manifest.json"
     manifest["open_interest"] = {"row_count": 1}
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     with pytest.raises(ValueError, match="oi_contract_must_be_absent"):
@@ -172,7 +174,7 @@ def test_read_funding_artifact_rejects_hash_safety_and_window_mismatch(
         ai6._read_funding_artifact(tmp_path, "BTCUSDT", COMMIT, START, END)
 
     _funding_artifact(tmp_path, "BTCUSDT")
-    manifest_path = tmp_path / "binance-btcusdt-manifest.json"
+    manifest_path = tmp_path / "bybit-btcusdt-manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["private_api_calls"] = 1
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
