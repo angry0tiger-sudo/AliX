@@ -135,6 +135,7 @@ def _valid_report() -> dict[str, Any]:
                 "soft_blend_enabled": False,
                 "donchian_lookback_bars": 20,
                 "breakout_reference": "HIGHEST_HIGH_OF_PREVIOUS_20_COMPLETED_30M_BARS",
+                "breakout_comparison": "CLOSE_STRICTLY_GREATER_THAN_PRIOR_20_BAR_HIGH",
                 "momentum_strategy": "DONCHIAN20_CLOSE_BREAKOUT_TRENDING_UP_ONLY_SPOT_LONG",
                 "mean_reversion_strategy": "DISABLED",
                 "downtrend_policy": "RISK_OFF_NO_LONG_ENTRY_SPOT_ONLY",
@@ -1172,8 +1173,8 @@ def test_regime_reactive_selector_uses_donchian20_only_in_trending_up() -> None:
     high[25], close[25] = 200.0, 101.0
     high[50], close[50] = 210.0, 201.0
     high[70], close[70] = 220.0, 211.0
-    high[90], close[90] = 300.0, 100.0
-    high[91], close[91] = 301.0, 150.0
+    high[90], close[90] = 300.0, 220.0
+    high[91], close[91] = 301.0, 300.0
     bars = DataFrame({"high": high, "close": close})
     features = _primary_feature_frame(rows)
     features[v4ai.RSI_FEATURE] = 10.0

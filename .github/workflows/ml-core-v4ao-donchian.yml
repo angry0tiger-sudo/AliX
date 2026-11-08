@@ -1,4 +1,4 @@
-name: AliX V4-AO 30m HMM Regime-Adaptive Economic Validation
+name: AliX V4-AO 30m HMM Donchian Breakout Economic Validation
 # Owner-directed retrigger: the fail-closed exception is bound to ETHUSDT's empirically
 # observed 80 missing 1m opens from 2023-03-24T12:40:00Z through 13:59:00Z.
 
@@ -68,7 +68,7 @@ jobs:
           token = os.environ["GH_TOKEN"]
           expected_branch = "research/ml-core-v4ao-donchian"
           if target_branch != expected_branch:
-              raise SystemExit("unsupported_v4ai_branch:" + target_branch)
+              raise SystemExit("unsupported_v4ao_branch:" + target_branch)
 
           deadline = time.monotonic() + 90 * 60
           url = (
@@ -218,7 +218,7 @@ jobs:
           printf 'requested_days=1825\nprovider=Binance Spot public klines API\n'
           printf 'exchange_gap_policy=only_80m_ethusdt_2023-03-24T12:40Z_to_13:59Z_no_interpolation\n'
           printf 'private_api_calls=0\ncredentials_used=false\n'
-      - name: Run V4-AO 30m HMM Regime-Adaptive, ADX diagnostic, Meta P70, and exit-geometry evaluation
+      - name: Run V4-AO 30m HMM Donchian Breakout, ADX diagnostic, Meta P70, and exit-geometry evaluation
         run: |
           set -euo pipefail
           python -m scripts.run_ml_core_v4ai_maker_strategy \
@@ -294,6 +294,7 @@ jobs:
           assert selector["mean_reversion_strategy"] == "DISABLED"
           assert selector["donchian_lookback_bars"] == 20
           assert selector["breakout_reference"] == "HIGHEST_HIGH_OF_PREVIOUS_20_COMPLETED_30M_BARS"
+          assert selector["breakout_comparison"] == "CLOSE_STRICTLY_GREATER_THAN_PRIOR_20_BAR_HIGH"
           sizing = primary_diagnostics["volatility_targeting"]
           assert sizing["sizing_cap"] == 1.0
           assert sizing["leverage_enabled"] is False

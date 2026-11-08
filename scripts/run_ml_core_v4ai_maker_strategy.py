@@ -1739,12 +1739,14 @@ def _selector_regime_contract_valid(selector: dict[str, Any]) -> bool:
 
 def _selector_entry_contract_valid(selector: dict[str, Any]) -> bool:
     return (
-        selector.get("trend_ema_period") == EMA_FAST_PERIOD
-        and selector.get("range_rsi_period") == RSI_PERIOD
-        and selector.get("range_rsi_threshold") == RANGE_RSI_ENTRY_THRESHOLD
+        selector.get("donchian_lookback_bars") == DONCHIAN_LOOKBACK_BARS
+        and selector.get("breakout_reference")
+        == "HIGHEST_HIGH_OF_PREVIOUS_20_COMPLETED_30M_BARS"
+        and selector.get("breakout_comparison")
+        == "CLOSE_STRICTLY_GREATER_THAN_PRIOR_20_BAR_HIGH"
         and selector.get("momentum_strategy")
-        == "CLOSE_ABOVE_EMA50_TRENDING_UP_ONLY_SPOT_LONG"
-        and selector.get("mean_reversion_strategy") == "WILDER_RSI14_LT45_RANGING_ONLY"
+        == "DONCHIAN20_CLOSE_BREAKOUT_TRENDING_UP_ONLY_SPOT_LONG"
+        and selector.get("mean_reversion_strategy") == "DISABLED"
     )
 
 
