@@ -464,11 +464,7 @@ def _build_execution_signals(
 
 def _trade_return_sample_status(count: int) -> str:
     """Distinguish empty trade samples from other insufficient DSR samples."""
-    return (
-        "NO_TRADES_DSR_UNDEFINED"
-        if count == 0
-        else "INSUFFICIENT_TRADE_RETURNS"
-    )
+    return "NO_TRADES_DSR_UNDEFINED" if count == 0 else "INSUFFICIENT_TRADE_RETURNS"
 
 
 def _trade_return_diagnostics(trades: list[dict[str, Any]]) -> dict[str, Any]:
