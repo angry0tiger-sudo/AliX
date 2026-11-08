@@ -1,6 +1,6 @@
 # AliX Data Provider Registry
 
-A public API, public model card or working mock is not approval for commercial processing, historical retention, redistribution or automated trading. No live external provider is activated by Phase 6.
+A public API, public model card or working mock is not approval for commercial processing, historical retention, redistribution or automated trading. Provider status is specific to a source, endpoint, purpose and date.
 
 | Provider ID | Kind | Official reference | Use rights / terms | Quota, retention and time semantics | Status |
 |---|---|---|---|---|---|
@@ -15,11 +15,12 @@ A public API, public model card or working mock is not approval for commercial p
 | Telegram API | Social text | https://core.telegram.org/api | Channel rights and use-case approval required | Preserve message time and local receipt time | Conditional |
 | Persian news / RSS | News text | Official provider-specific RSS/API URL required before activation | Copyright, processing and retention rights unverified until source is named | Provider-specific polling quota and timestamps required | Conditional |
 | News API / economic calendar | News and event data | Provider-specific terms and endpoint required | Commercial-use and retention review pending | Contract quota and event/publication/available times required | Conditional |
+| Binance USD-M public market data | Derivatives analytics: funding rate and open interest | https://developers.binance.com/docs/derivatives/usds-margined-futures/market-data/rest-api/Get-Funding-Rate-History and https://developers.binance.com/docs/derivatives/usds-margined-futures/market-data/rest-api/Open-Interest-Statistics | Owner-authorized bounded internal research only; no redistribution or commercial-use rights inferred. Provider contract/retention review still required before production or commercial use. | Funding paginated by start/end; OI History exposes only latest 30 days. Source timestamps and conservative available_at proxies are separately retained. | Conditional, AI-6 internal research scope only; production NO-GO |
 
 ## Required evidence before a real source becomes active
 
 Record the provider and official endpoint, legal entity and contract/tier, allowed purpose, commercial and non-display rights where relevant, rate-limit policy, retention/deletion and redistribution terms, timestamp semantics, stable identifiers/revisions, source owner, review date, fallback policy, contract tests and evidence link.
 
-The field license_status=approved means the actual use case has been reviewed and authorized. It must not be inferred from a public endpoint, an API key, a permissive-looking badge, or a successful mock.
+The field license_status=approved means the actual use case has been reviewed and authorized. It must not be inferred from a public endpoint, an API key, a permissive-looking badge, or a successful mock. The AI-6 owner directive is a narrow authorization for the internal research run only; it is not a production provider approval.
 
 Do not scrape, use unofficial endpoints, reuse personal session cookies, rotate accounts/proxies to bypass limits, or ingest private/restricted content without permission. Missing or expired approval fails closed before transport access. External analytics never replace Freqtrade/exchange truth for fills or balances.
