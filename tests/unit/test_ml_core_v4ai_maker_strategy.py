@@ -1112,7 +1112,7 @@ def test_step_summary_discloses_maker_proxy_and_fill_model_limitation() -> None:
         in summary
     )
     assert (
-        "Fixed candidate geometry: SL=1.5 ATR, TP=2.5 ATR, activation=1.5 ATR, step=2.0 ATR, horizon=48 bars."
+        "Fixed candidate geometry: SL=2.0 ATR, TP=10.0 ATR, activation=1.0 ATR, step=1.5 ATR, horizon=48 bars."
         in summary
     )
     assert "PRIMARY_HMM_DONCHIAN20_TRENDING_UP_30M_30BPS" in summary
