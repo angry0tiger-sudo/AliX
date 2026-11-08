@@ -2,12 +2,12 @@
 
 Phase 6 provides versioned provider and record contracts, injected-transport adapters, separate in-memory stores, and available-at-only point-in-time joins.
 
-## AI-6 Binance Funding-only research adapter
+## AI-6 Bybit Funding-only research adapter
 
 The active AI-6 adapter is limited to unauthenticated Bybit V5 Linear public Funding Rate History for BTCUSDT and ETHUSDT:
 
 - Endpoint: GET https://api.bybit.com/v5/market/funding/history.
-- Pagination: provider funding timestamps, bounded page size and retries.
+- Pagination: descending endTime-only requests, max 200 records per page, moving backwards by one millisecond from the oldest record.
 - Features: funding_rate_zscore and funding_rate_ma.
 - Availability: fundingRateTimestamp + 5 minutes conservative research proxy.
 - Joins: backward as-of only; observation age is capped at 48 hours.

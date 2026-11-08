@@ -263,7 +263,7 @@ def test_get_payload_fails_closed_for_ban_server_error_transport_and_host() -> N
         )
     with pytest.raises(ProviderError, match="host_or_path_not_allowed"):
         _get_payload(
-            FakeTransport([]), "https://api.bybit.com/fapi/v1/order", lambda _: None
+            FakeTransport([]), "https://api.bybit.com/v5/order/create", lambda _: None
         )
 
     with pytest.raises(ProviderError, match="public_timeout"):
@@ -448,7 +448,7 @@ def test_https_transport_rejects_wrong_host_path_bytes_and_timeout() -> None:
     with pytest.raises(ProviderError, match="host_or_path_not_allowed"):
         transport.get("https://example.com/data")
     with pytest.raises(ProviderError, match="host_or_path_not_allowed"):
-        transport.get("https://api.bybit.com/fapi/v1/order")
+        transport.get("https://api.bybit.com/v5/order/create")
     with pytest.raises(ProviderError, match="host_or_path_not_allowed"):
         transport.get("http://api.bybit.com/v5/market/funding/history")
     with pytest.raises(ProviderError, match="encoding_invalid"):

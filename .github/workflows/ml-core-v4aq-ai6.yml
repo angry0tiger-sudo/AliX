@@ -275,7 +275,7 @@ jobs:
           assert report["schema_version"] == ai6.REPORT_SCHEMA_VERSION
           assert report["dataset"]["requested_days"] == 1825
           assert report["execution_assumptions"]["round_trip_cost_bps"] == 30.0
-          assert report["funding"]["endpoint"] == "/fapi/v1/fundingRate"
+          assert report["funding"]["endpoint"] == "/v5/market/funding/history"
           assert report["funding"]["feature_columns"] == [
               "funding_rate_zscore", "funding_rate_ma"
           ]

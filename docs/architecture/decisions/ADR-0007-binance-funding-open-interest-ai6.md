@@ -2,14 +2,14 @@
 
 - Status: Accepted for bounded internal Funding-only research; no production or trading promotion.
 - Date: 2026-11-08.
-- Owner authorization: docs/governance/owner-directives/2026-11-08-ai6-bybit-public-market-data.md.
+- Owner authorization: docs/governance/owner-directives/2026-11-09-ai6-bybit-funding-provider.md.
 - Branch: research/ml-core-v4aq-ai6.
 
 ## Context
 
 V4-AP tested 36 preregistered Primary-only combinations across BTCUSDT/ETHUSDT, 15m/1h/4h, two Primary strategies, and three exit geometries at 30 bps round-trip cost. Its measured result was NO STATISTICAL EDGE FOUND IN CURRENT FEATURE SET.
 
-AI-6 initially proposed both Binance Funding Rate and Open Interest History. The public OI Statistics endpoint only supports a short recent window and cannot provide the required 1825-day series. A 30-day OI slice cannot be joined to five years of OHLCV without severe coverage bias.
+AI-6 initially proposed both Binance Funding Rate and Open Interest History. Binance Funding was later blocked by HTTP 451 from the GitHub-hosted runner, so the owner-authorized Bybit provider switch supersedes only the source selection. The public OI Statistics endpoint only supports a short recent window and cannot provide the required 1825-day series. A 30-day OI slice cannot be joined to five years of OHLCV without severe coverage bias.
 
 ## Decision
 
