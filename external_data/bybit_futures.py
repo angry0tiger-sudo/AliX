@@ -240,6 +240,33 @@ def _deduplicate_funding(
     return tuple(by_time[key] for key in sorted(by_time))
 
 
+def _validate_bybit_funding_result(payload: object) -> Mapping[str, object]:
+    if not isinstance(payload, Mapping):
+        raise ProviderError("bybit_funding_response_status_invalid")
+    ret_code = payload.get("retCode")
+    if isinstance(ret_code, bool) or not isinstance(ret_code, int) or ret_code != 0:
+        raise ProviderError("bybit_funding_response_status_invalid")
+    result = payload.get("result")
+    if not isinstance(result, Mapping) or result.get("category") != "linear":
+        raise ProviderError("bybit_funding_page_schema_invalid")
+    return result
+
+
+def _parse_bybit_funding_rows(
+    result: Mapping[str, object], symbol: str
+) -> list[FundingRatePoint]:
+    rows = result.get("list")
+    if not isinstance(rows, list) or len(rows) > FUNDING_PAGE_LIMIT:
+        raise ProviderError("bybit_funding_page_schema_invalid")
+    page = [_parse_funding_row(row, symbol) for row in rows]
+    if any(
+        later.funding_time >= earlier.funding_time
+        for earlier, later in zip(page, page[1:])
+    ):
+        raise ProviderError("bybit_funding_page_order_invalid")
+    return sorted(page, key=lambda item: item.funding_time)
+
+
 class BybitLinearFundingConnector:
     """Read-only public Funding Rate adapter with bounded pagination."""
 
@@ -271,24 +298,8 @@ class BybitLinearFundingConnector:
             },
         )
         payload = _get_payload(self._transport, url, self._sleeper)
-        if not isinstance(payload, Mapping):
-            raise ProviderError("bybit_funding_response_status_invalid")
-        ret_code = payload.get("retCode")
-        if isinstance(ret_code, bool) or not isinstance(ret_code, int) or ret_code != 0:
-            raise ProviderError("bybit_funding_response_status_invalid")
-        result = payload.get("result")
-        if not isinstance(result, Mapping) or result.get("category") != "linear":
-            raise ProviderError("bybit_funding_page_schema_invalid")
-        rows = result.get("list")
-        if not isinstance(rows, list) or len(rows) > FUNDING_PAGE_LIMIT:
-            raise ProviderError("bybit_funding_page_schema_invalid")
-        page = [_parse_funding_row(row, symbol) for row in rows]
-        if any(
-            later.funding_time >= earlier.funding_time
-            for earlier, later in zip(page, page[1:])
-        ):
-            raise ProviderError("bybit_funding_page_order_invalid")
-        return sorted(page, key=lambda item: item.funding_time)
+        result = _validate_bybit_funding_result(payload)
+        return _parse_bybit_funding_rows(result, symbol)
 
     @staticmethod
     def _validate_funding_page(

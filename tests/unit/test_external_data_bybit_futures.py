@@ -295,6 +295,27 @@ def test_funding_fetcher_rejects_bad_page_shapes_and_out_of_window_rows() -> Non
     with pytest.raises(ProviderError, match="funding_response_status_invalid"):
         connector.fetch("BTCUSDT", start=START, end=END)
 
+    connector = BybitLinearFundingConnector(
+        FakeTransport([_response("not-an-envelope")]),
+        sleeper=lambda _: None,
+    )
+    with pytest.raises(ProviderError, match="funding_response_status_invalid"):
+        connector.fetch("BTCUSDT", start=START, end=END)
+
+    connector = BybitLinearFundingConnector(
+        FakeTransport([_response({"retCode": 0, "result": {"category": "inverse", "list": []}})]),
+        sleeper=lambda _: None,
+    )
+    with pytest.raises(ProviderError, match="funding_page_schema_invalid"):
+        connector.fetch("BTCUSDT", start=START, end=END)
+
+    connector = BybitLinearFundingConnector(
+        FakeTransport([_response({"retCode": 0, "result": {"category": "linear", "list": {}}})]),
+        sleeper=lambda _: None,
+    )
+    with pytest.raises(ProviderError, match="funding_page_schema_invalid"):
+        connector.fetch("BTCUSDT", start=START, end=END)
+
     outside = _funding_row(END + timedelta(minutes=1))
     connector = BybitLinearFundingConnector(
         FakeTransport([_response([outside])]), sleeper=lambda _: None
