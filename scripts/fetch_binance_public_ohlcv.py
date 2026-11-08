@@ -24,19 +24,19 @@ PAGE_SIZE = 1000
 PAGE_DELAY_SECONDS = 0.25
 RETRY_STATUSES = frozenset({418, 429, 500, 502, 503, 504})
 GAP_POLICY = "reject; no interpolation, resampling, or synthetic fill"
-KNOWN_EXCHANGE_GAP_SYMBOL = "ETHUSDT"
+KNOWN_EXCHANGE_GAP_SYMBOLS = ("BTCUSDT", "ETHUSDT")
 KNOWN_EXCHANGE_GAP_START_UTC = "2023-03-24T12:40:00Z"
 KNOWN_EXCHANGE_GAP_END_UTC = "2023-03-24T13:59:00Z"
 KNOWN_EXCHANGE_GAP_MISSING_MINUTES = 80
 GAP_POLICY_ALLOW_EXCHANGE_GAPS = (
-    "accept only the empirically observed 80-minute ETHUSDT Binance Spot gap "
-    "from 2023-03-24T12:40:00Z through 2023-03-24T13:59:00Z; "
-    "no interpolation, resampling, or synthetic fill"
+    "accept only the empirically observed 80-minute Binance Spot gap for "
+    "BTCUSDT and ETHUSDT from 2023-03-24T12:40:00Z through "
+    "2023-03-24T13:59:00Z; no interpolation, resampling, or synthetic fill"
 )
 
 
 def _validate_gap_policy_symbol(symbol: str, allow_exchange_gaps: bool) -> None:
-    if allow_exchange_gaps and symbol != KNOWN_EXCHANGE_GAP_SYMBOL:
+    if allow_exchange_gaps and symbol not in KNOWN_EXCHANGE_GAP_SYMBOLS:
         raise ValueError("binance_exchange_gap_symbol_out_of_policy")
 
 
@@ -639,8 +639,8 @@ def main() -> int:
         "--allow-exchange-gaps",
         action="store_true",
         help=(
-            "Accept only the empirically verified 80-minute ETHUSDT gap from "
-            "2023-03-24T12:40:00Z through 13:59:00Z. "
+            "Accept only the empirically verified 80-minute BTCUSDT/ETHUSDT gap "
+            "from 2023-03-24T12:40:00Z through 13:59:00Z. "
             "Default strict mode rejects all market-data gaps."
         ),
     )

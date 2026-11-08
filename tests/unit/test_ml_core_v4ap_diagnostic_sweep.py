@@ -111,7 +111,9 @@ def test_execution_signals_flatten_at_timeframe_discontinuity() -> None:
     assert any(item["signal"] == "SELL" for item in actions)
 
 
-def test_minute_cadence_accepts_only_documented_eth_gap() -> None:
+
+@pytest.mark.parametrize("symbol", sweep.ASSETS)
+def test_minute_cadence_accepts_only_documented_spot_gap(symbol: str) -> None:
     dates = pd.Series(
         pd.to_datetime(
             [
@@ -125,12 +127,11 @@ def test_minute_cadence_accepts_only_documented_eth_gap() -> None:
     )
     sweep._validate_minute_cadence(
         dates,
-        symbol="ETHUSDT",
+        symbol=symbol,
         missing_minutes=80,
         start_utc=pd.Timestamp("2023-03-24T12:38:00Z"),
         end_utc=pd.Timestamp("2023-03-24T14:01:00Z"),
     )
-
 
 def test_minute_cadence_rejects_undocumented_gap() -> None:
     dates = pd.Series(
@@ -143,7 +144,7 @@ def test_minute_cadence_rejects_undocumented_gap() -> None:
             utc=True,
         )
     )
-    with pytest.raises(ValueError, match="v4ap_eth_gap_timestamp_mismatch"):
+    with pytest.raises(ValueError, match="v4ap_market_gap_timestamp_mismatch"):
         sweep._validate_minute_cadence(
             dates,
             symbol="ETHUSDT",
@@ -290,6 +291,54 @@ def test_manifest_rejects_private_or_unbound_data() -> None:
             end_utc=end,
             csv_digest="c" * 64,
         )
+
+
+@pytest.mark.parametrize("symbol", sweep.ASSETS)
+def test_manifest_accepts_only_documented_spot_gap_for_each_asset(
+    symbol: str,
+) -> None:
+    start = pd.Timestamp("2021-11-02T00:00:00Z")
+    end = start + pd.Timedelta(days=1825) - pd.Timedelta(minutes=1)
+    manifest = {
+        "schema_version": fetcher.SCHEMA_VERSION,
+        "provider": "Binance Spot public klines API",
+        "symbol": symbol,
+        "pair": f"{symbol[:-4]}/USDT",
+        "interval": "1m",
+        "requested_days": 1825,
+        "start_utc": sweep._iso_utc(start),
+        "end_utc": sweep._iso_utc(end),
+        "row_count": 1825 * 1440 - 80,
+        "missing_minute_intervals": 80,
+        "missing_gap_ranges": [
+            {
+                "start_utc": "2023-03-24T12:40:00Z",
+                "end_utc": "2023-03-24T13:59:00Z",
+                "missing_minute_intervals": 80,
+            }
+        ],
+        "csv_sha256": "d" * 64,
+        "commit_sha": "a" * 40,
+        "public_api_only": True,
+        "credentials_used": False,
+        "private_api_calls": 0,
+        "real_order_attempts": 0,
+        "exchange_calls": 0,
+        "Champion": None,
+        "order_permission": False,
+        "trading_authorization": "NO-GO",
+    }
+    assert (
+        sweep._validate_manifest(
+            manifest,
+            symbol=symbol,
+            commit_sha="a" * 40,
+            start_utc=start,
+            end_utc=end,
+            csv_digest="d" * 64,
+        )
+        == 80
+    )
 
 
 def test_request_requires_exact_1825_day_minute_aligned_window() -> None:

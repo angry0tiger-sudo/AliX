@@ -74,10 +74,10 @@ MINIMUM_NET_PROFIT_FACTOR = 1.10
 MINIMUM_DSR_Z = 0.0
 DSR_TRIAL_COUNT = len(ASSETS) * len(TIMEFRAMES) * len(STRATEGIES) * len(EXIT_GEOMETRIES)
 DSR_MINIMUM_RETURN_OBSERVATIONS = 4
-KNOWN_ETH_GAP_START_UTC = "2023-03-24T12:40:00Z"
-KNOWN_ETH_GAP_END_UTC = "2023-03-24T13:59:00Z"
-KNOWN_ETH_GAP_PREVIOUS_CANDLE_UTC = "2023-03-24T12:39:00Z"
-KNOWN_ETH_GAP_NEXT_CANDLE_UTC = "2023-03-24T14:00:00Z"
+KNOWN_SPOT_GAP_START_UTC = "2023-03-24T12:40:00Z"
+KNOWN_SPOT_GAP_END_UTC = "2023-03-24T13:59:00Z"
+KNOWN_SPOT_GAP_PREVIOUS_CANDLE_UTC = "2023-03-24T12:39:00Z"
+KNOWN_SPOT_GAP_NEXT_CANDLE_UTC = "2023-03-24T14:00:00Z"
 CSV_COLUMNS = ("date", "open", "high", "low", "close", "volume")
 CONCLUSION_NO_EDGE = "CONCLUSION: NO STATISTICAL EDGE FOUND IN CURRENT FEATURE SET."
 CONCLUSION_EDGE_FOUND = "CONCLUSION: EDGE CANDIDATE FOUND IN CURRENT FEATURE SET."
@@ -136,7 +136,7 @@ def _validate_manifest(
     missing = manifest.get("missing_minute_intervals")
     if isinstance(missing, bool) or not isinstance(missing, int):
         raise ValueError(f"v4ap_market_manifest_invalid_missing_count:{symbol}")
-    expected_missing = (0, 80) if symbol == "ETHUSDT" else (0,)
+    expected_missing = (0, 80) if symbol in ASSETS else (0,)
     expected_fields = (
         manifest.get("schema_version") == market_fetcher.SCHEMA_VERSION,
         manifest.get("provider") == "Binance Spot public klines API",
@@ -167,12 +167,12 @@ def _validate_manifest(
             raise ValueError(f"v4ap_unexpected_gap_metadata:{symbol}")
     else:
         expected_gap = {
-            "start_utc": KNOWN_ETH_GAP_START_UTC,
-            "end_utc": KNOWN_ETH_GAP_END_UTC,
+            "start_utc": KNOWN_SPOT_GAP_START_UTC,
+            "end_utc": KNOWN_SPOT_GAP_END_UTC,
             "missing_minute_intervals": 80,
         }
-        if symbol != "ETHUSDT" or gap_ranges != [expected_gap]:
-            raise ValueError("v4ap_eth_gap_manifest_out_of_policy")
+        if symbol not in ASSETS or gap_ranges != [expected_gap]:
+            raise ValueError("v4ap_market_gap_manifest_out_of_policy")
     return missing
 
 
@@ -194,22 +194,22 @@ def _validate_minute_timestamp_bounds(
         raise ValueError(f"v4ap_market_end_mismatch:{symbol}")
 
 
-def _validate_documented_eth_gap(
+
+def _validate_documented_spot_gap(
     dates: Series, invalid_intervals: Series, symbol: str
 ) -> None:
-    """Accept only the single documented 80-minute ETHUSDT source gap."""
-    if symbol != "ETHUSDT" or len(invalid_intervals) != 1:
+    """Accept only the one observed 80-minute Binance Spot gap for sweep assets."""
+    if symbol not in ASSETS or len(invalid_intervals) != 1:
         raise ValueError("v4ap_market_gap_out_of_policy")
     gap_index = int(invalid_intervals.index[0])
-    expected_previous = pd.Timestamp(KNOWN_ETH_GAP_PREVIOUS_CANDLE_UTC)
-    expected_next = pd.Timestamp(KNOWN_ETH_GAP_NEXT_CANDLE_UTC)
+    expected_previous = pd.Timestamp(KNOWN_SPOT_GAP_PREVIOUS_CANDLE_UTC)
+    expected_next = pd.Timestamp(KNOWN_SPOT_GAP_NEXT_CANDLE_UTC)
     if (
         invalid_intervals.iloc[0] != pd.Timedelta(minutes=81)
         or pd.Timestamp(dates.iloc[gap_index - 1]) != expected_previous
         or pd.Timestamp(dates.iloc[gap_index]) != expected_next
     ):
-        raise ValueError("v4ap_eth_gap_timestamp_mismatch")
-
+        raise ValueError("v4ap_market_gap_timestamp_mismatch")
 
 def _validate_minute_cadence(
     dates: Series,
@@ -219,7 +219,7 @@ def _validate_minute_cadence(
     start_utc: pd.Timestamp,
     end_utc: pd.Timestamp,
 ) -> None:
-    """Accept only a continuous minute series or the one documented ETH gap."""
+    """Accept continuous data or the exact documented 80-minute two-asset gap."""
     _validate_minute_timestamp_bounds(
         dates, symbol=symbol, start_utc=start_utc, end_utc=end_utc
     )
@@ -229,7 +229,7 @@ def _validate_minute_cadence(
         if not invalid_intervals.empty:
             raise ValueError(f"v4ap_undocumented_market_gap:{symbol}")
         return
-    _validate_documented_eth_gap(dates, invalid_intervals, symbol)
+    _validate_documented_spot_gap(dates, invalid_intervals, symbol)
 
 
 def _load_market_data(
@@ -240,7 +240,7 @@ def _load_market_data(
     start_utc: pd.Timestamp,
     end_utc: pd.Timestamp,
 ) -> tuple[DataFrame, dict[str, Any]]:
-    """Load byte-verified public 1m data and preserve both sides of the ETH gap."""
+    """Load byte-verified public 1m data and preserve both sides of the source gap."""
     stem = f"binance-{symbol.lower()}-1m"
     csv_path = input_dir / f"{stem}.csv"
     manifest_path = input_dir / f"{stem}.manifest.json"
@@ -812,9 +812,9 @@ def _build_report(
             "analysis_timeframes": list(TIMEFRAMES),
             "bar_aggregation": "UTC_EPOCH_ALIGNED_OHLCV_COMPLETE_BARS_ONLY",
             "missing_candles": "NEVER_INTERPOLATED_OR_SYNTHETICALLY_FILLED",
-            "eth_gap_policy": (
-                "ONLY_THE_DOCUMENTED_80_MINUTE_ETHUSDT_GAP_MAY_BE_ACCEPTED; "
-                "ALL_OTHER_GAPS_FAIL_CLOSED"
+            "documented_spot_gap_policy": (
+                "ONLY_THE_DOCUMENTED_80_MINUTE_BINANCE_SPOT_GAP_FOR_BTCUSDT_AND_ETHUSDT "
+                "MAY_BE_ACCEPTED; ALL_OTHER_GAPS_FAIL_CLOSED"
             ),
         },
         "preregistered_grid": {

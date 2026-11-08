@@ -19,7 +19,7 @@ The sweep contains exactly 36 unique cells:
 
 ## Explicit implementation assumptions
 
-The owner directive does not specify a vertical time barrier. To keep elapsed exposure comparable across timeframes and preserve the V4-AO reference duration, the sweep uses a nominal 24-hour horizon: 96 complete 15m bars, 24 complete 1h bars, and 6 complete 4h bars. Incomplete analysis bars are dropped, never interpolated. An open position is flattened at the first available open after an analysis-bar data discontinuity. For ETHUSDT, only the already documented 80-minute source gap from 2023-03-24 12:40Z through 13:59Z is accepted; both sides of the gap are retained.
+The owner directive does not specify a vertical time barrier. To keep elapsed exposure comparable across timeframes and preserve the V4-AO reference duration, the sweep uses a nominal 24-hour horizon: 96 complete 15m bars, 24 complete 1h bars, and 6 complete 4h bars. Incomplete analysis bars are dropped, never interpolated. An open position is flattened at the first available open after an analysis-bar data discontinuity. For both BTCUSDT and ETHUSDT, only the 80-minute Binance Spot source gap observed from 2023-03-24 12:40Z through 13:59Z is accepted; this exception is limited to that exact interval and duration, both sides of the gap are retained, and no candles are interpolated or synthesized.
 
 Signals are evaluated on completed candles and executed at the next available analysis candle open. Entry events that would cross a missing analysis interval are suppressed. The last 24 hours of new entries are suppressed so each admitted entry has the full nominal horizon inside the dataset. Positions do not pyramid; the simulator remains Spot-long only.
 

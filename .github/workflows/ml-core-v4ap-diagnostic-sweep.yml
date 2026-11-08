@@ -192,10 +192,7 @@ jobs:
           fetch_symbol() {
             symbol="$1"
             log_path="$RUNNER_TEMP/v4ap-fetch-$symbol.log"
-            extra_args=()
-            if [ "$symbol" = "ETHUSDT" ]; then
-              extra_args+=(--allow-exchange-gaps)
-            fi
+            extra_args=(--allow-exchange-gaps)
             if python scripts/fetch_binance_public_ohlcv.py \
               --days 1825 \
               --symbol "$symbol" \
