@@ -406,7 +406,6 @@ def test_execution_signals_block_entries_until_post_gap_atr_warmup_completes() -
     assert sells
     assert entries == len(buys) == 4
     assert all(
-        pd.Timestamp(item["signal_timestamp"]) >= bars["date"].iloc[15]
-        for item in buys
+        pd.Timestamp(item["signal_timestamp"]) >= bars["date"].iloc[15] for item in buys
     )
     assert pd.Timestamp(buys[0]["signal_timestamp"]) == bars["date"].iloc[15]

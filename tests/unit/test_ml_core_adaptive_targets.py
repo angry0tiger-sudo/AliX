@@ -366,16 +366,12 @@ def test_atr_rejects_missing_or_malformed_documented_gap_authorization() -> None
     with pytest.raises(ValueError, match="timestamp_interval_inconsistent"):
         calculate_atr(candles, period=14, expected_interval=interval)
 
-    with pytest.raises(
-        ValueError, match="timestamp_documented_gap_manifest_invalid"
-    ):
+    with pytest.raises(ValueError, match="timestamp_documented_gap_manifest_invalid"):
         calculate_atr(
             candles,
             period=14,
             expected_interval=interval,
-            documented_gap_ranges=(
-                ("2023-03-24T12:40:00Z", "2023-03-24T14:00:00Z"),
-            ),
+            documented_gap_ranges=(("2023-03-24T12:40:00Z", "2023-03-24T14:00:00Z"),),
         )
 
 
@@ -390,7 +386,5 @@ def test_atr_rejects_duplicate_and_unsorted_timestamps(mutation: str) -> None:
             candles.loc[8, "date"],
         )
 
-    with pytest.raises(
-        ValueError, match="timestamps_must_be_unique_and_increasing"
-    ):
+    with pytest.raises(ValueError, match="timestamps_must_be_unique_and_increasing"):
         calculate_atr(candles)

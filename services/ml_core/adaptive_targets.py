@@ -110,9 +110,7 @@ def _gap_transition_indices(
     dates: pd.Series,
     *,
     expected_interval: pd.Timedelta | None,
-    documented_gap_ranges: tuple[
-        tuple[str | pd.Timestamp, str | pd.Timestamp], ...
-    ]
+    documented_gap_ranges: tuple[tuple[str | pd.Timestamp, str | pd.Timestamp], ...]
     | list[tuple[str | pd.Timestamp, str | pd.Timestamp]],
 ) -> tuple[int, ...]:
     """Validate regular cadence plus only manifest-authorized segment transitions."""
@@ -162,9 +160,7 @@ def _gap_transition_indices(
     if len(set(allowed_indices)) != len(allowed_indices):
         raise ValueError("timestamp_documented_gap_manifest_invalid")
     observed_indices = [
-        index
-        for index, delta in enumerate(deltas, start=1)
-        if delta != interval
+        index for index, delta in enumerate(deltas, start=1) if delta != interval
     ]
     if set(observed_indices) != set(allowed_indices):
         raise ValueError("timestamp_interval_inconsistent")
@@ -175,9 +171,7 @@ def _validate_timestamps(
     values: pd.Series,
     *,
     expected_interval: pd.Timedelta | None = None,
-    documented_gap_ranges: tuple[
-        tuple[str | pd.Timestamp, str | pd.Timestamp], ...
-    ]
+    documented_gap_ranges: tuple[tuple[str | pd.Timestamp, str | pd.Timestamp], ...]
     | list[tuple[str | pd.Timestamp, str | pd.Timestamp]] = (),
 ) -> pd.Series:
     dates = pd.to_datetime(values, errors="coerce")
@@ -232,9 +226,7 @@ def _validated_ohlcv(
     candles: DataFrame,
     *,
     expected_interval: pd.Timedelta | None = None,
-    documented_gap_ranges: tuple[
-        tuple[str | pd.Timestamp, str | pd.Timestamp], ...
-    ]
+    documented_gap_ranges: tuple[tuple[str | pd.Timestamp, str | pd.Timestamp], ...]
     | list[tuple[str | pd.Timestamp, str | pd.Timestamp]] = (),
 ) -> DataFrame:
     missing = sorted(set(_OHLCV_COLUMNS) - set(candles.columns))
@@ -260,9 +252,7 @@ def calculate_atr(
     period: int = ATR_PERIOD,
     *,
     expected_interval: pd.Timedelta | None = None,
-    documented_gap_ranges: tuple[
-        tuple[str | pd.Timestamp, str | pd.Timestamp], ...
-    ]
+    documented_gap_ranges: tuple[tuple[str | pd.Timestamp, str | pd.Timestamp], ...]
     | list[tuple[str | pd.Timestamp, str | pd.Timestamp]] = (),
 ) -> pd.Series:
     """Calculate causal ATR independently inside each manifest-validated segment.
@@ -302,9 +292,11 @@ def calculate_atr(
     segment_ends = (*gap_indices, len(normalized))
     for segment_start, segment_end in zip(segment_starts, segment_ends):
         segment_true_range = true_range.iloc[segment_start:segment_end]
-        atr.iloc[segment_start:segment_end] = segment_true_range.rolling(
-            window=period, min_periods=period
-        ).mean().to_numpy(dtype=float)
+        atr.iloc[segment_start:segment_end] = (
+            segment_true_range.rolling(window=period, min_periods=period)
+            .mean()
+            .to_numpy(dtype=float)
+        )
     return atr.rename(f"atr_{period}")
 
 
