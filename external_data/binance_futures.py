@@ -426,9 +426,23 @@ def _funding_coverage_metrics(
         first <= snapshot.requested_start + COVERAGE_BOUNDARY_TOLERANCE
         and last >= snapshot.requested_end - COVERAGE_BOUNDARY_TOLERANCE
     )
-    complete = covers_boundaries and max_gap_hours <= FUNDING_MAX_EVENT_GAP.total_seconds() / 3600
-    expected_events = max(1, int(round((snapshot.requested_end - snapshot.requested_start).total_seconds() / (8 * 3600))) + 1)
+    expected_events = max(
+        1,
+        int(
+            round(
+                (snapshot.requested_end - snapshot.requested_start).total_seconds()
+                / (8 * 3600)
+            )
+        )
+        + 1,
+    )
     coverage_fraction = min(1.0, len(records) / expected_events)
+    complete = (
+        covers_boundaries
+        and max_gap_hours
+        <= FUNDING_MAX_EVENT_GAP.total_seconds() / 3600
+        and coverage_fraction >= 0.90
+    )
     missing_estimate = max(0, expected_events - len(records))
     return span, max_gap_hours, missing_estimate, complete
 
