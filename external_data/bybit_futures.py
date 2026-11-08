@@ -496,7 +496,7 @@ def snapshot_manifest(
     return {
         "schema_version": MANIFEST_SCHEMA_VERSION,
         "commit_sha": commit_sha,
-        "provider": "Bybit V5 Linear public Funding Rate History",
+        "provider": "Bybit V5 public Linear Funding Rate History",
         "host": "api.bybit.com",
         "endpoint": FUNDING_RATE_PATH,
         "category": "linear",
