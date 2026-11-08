@@ -29,7 +29,7 @@ from services.meta_labeling.v4x import (
 )
 from services.ml_core.economic_backtest import simulate_signals
 
-SCHEMA = "alix.ml-core-v4an-regime-adaptive.v1"
+SCHEMA = "alix.ml-core-v4ao-donchian.v1"
 SYMBOL = "ETHUSDT"
 TIMEFRAME = "30m"
 DAYS = 1825
@@ -49,7 +49,7 @@ RSI_FEATURE = "%-primary_rsi_14"
 EMA50_DISTANCE_FEATURE = "%-primary_close_vs_ema50_pct"
 EMA_DISTANCE_FEATURE = "%-primary_close_vs_ema200_pct"
 EMA_SPREAD_FEATURE = "%-primary_ema50_vs_ema200_pct"
-PRIMARY_SIGNAL_GENERATION = "HMM3_REGIME_ADAPTIVE_EMA50_RSI45_NO_CUSUM"
+PRIMARY_SIGNAL_GENERATION = "HMM3_REGIME_ADAPTIVE_DONCHIAN20_NO_CUSUM"
 RESEARCH_SIGNAL_COUNT_TARGET = 100
 LEGACY_PRIMARY_FEATURE_COLUMNS = (
     "%-primary_bollinger_bandwidth_pct",
@@ -63,6 +63,7 @@ REGIME_CLUSTER_COUNT = 3
 HMM_FEATURE_WINDOW_BARS = 48
 HMM_REALIZED_VOLATILITY_FEATURE = "%-v4an_realized_volatility_48"
 RANGE_RSI_ENTRY_THRESHOLD = 45.0
+DONCHIAN_LOOKBACK_BARS = 20
 TECHNICAL_FEATURE_GENERATION = "CAUSAL_WILDER_RSI14_EMA50_EMA200_FEATURES_ONLY"
 HMM_FEATURE_GENERATION = "CLOSED_BAR_LOG_RETURN_AND_TRAILING_48_BAR_REALIZED_VOLATILITY"
 META_TARGET_ACCEPT_FRACTION = 0.70
@@ -72,16 +73,17 @@ MINIMUM_WIN_RATE = 0.45
 MAXIMUM_DRAWDOWN = 15.0
 DSR_MINIMUM_RETURN_OBSERVATIONS = 4
 SORTINO_TARGET_RETURN_PER_TRADE = 0.0
-BASE_CONTROL = "PRIMARY_HMM_REGIME_ADAPTIVE_30M_30BPS"
-ADX_ABLATION = "PRIMARY_ADX20_DIAGNOSTIC_ABLATION_HMM_30M_30BPS"
-META_CANDIDATE = "META_TOP_70_HMM_REGIME_ADAPTIVE_30M_30BPS"
+BASE_CONTROL = "PRIMARY_HMM_DONCHIAN20_TRENDING_UP_30M_30BPS"
+ADX_ABLATION = "PRIMARY_ADX20_DIAGNOSTIC_ABLATION_HMM_DONCHIAN20_30M_30BPS"
+META_CANDIDATE = "META_TOP_70_HMM_DONCHIAN20_30M_30BPS"
 CANDIDATE_NAMES = (BASE_CONTROL, ADX_ABLATION, META_CANDIDATE)
 PRIMARY_FILTER_CONTRACT: dict[str, str] = {
     "event_filter": "EVERY_CLOSED_30M_BAR_NO_CUSUM_EVENT_FILTER",
     "regime_model": "DIAGONAL_GAUSSIAN_HMM_3_STATE",
     "regime_state_selection": "DOMINANT_POSTERIOR_HARD_SELECTOR",
-    "momentum_strategy": "CLOSE_ABOVE_EMA50_TRENDING_UP_ONLY_SPOT_LONG",
-    "mean_reversion_strategy": "WILDER_RSI14_LT45_RANGING_ONLY",
+    "momentum_strategy": "DONCHIAN20_CLOSE_BREAKOUT_TRENDING_UP_ONLY_SPOT_LONG",
+    "mean_reversion_strategy": "DISABLED",
+    "breakout_reference": "HIGHEST_HIGH_OF_PREVIOUS_20_COMPLETED_30M_BARS",
     "downtrend_policy": "SPOT_LONG_ONLY_NO_ENTRY",
     "position_sizing": "INVERSE_24H_REALIZED_VOL_48_BAR_OUTER_TRAIN_MEDIAN_CAPPED_AT_1X",
 }
@@ -98,34 +100,18 @@ LABEL_COLUMNS = {
     "primary_oof",
 }
 PRIMARY_GEOMETRY: dict[str, float] = {
-    "initial_stop_atr": 1.5,
-    "take_profit_atr": 2.5,
-    "trailing_activation_atr": 1.5,
-    "trailing_step_atr": 2.0,
+    "initial_stop_atr": 2.0,
+    "take_profit_atr": 10.0,
+    "trailing_activation_atr": 1.0,
+    "trailing_step_atr": 1.5,
     "horizon_bars": 48.0,
 }
 EXIT_POLICIES: tuple[dict[str, float | str], ...] = (
     {
-        "name": "V4AI_REFERENCE",
-        "initial_stop_atr": 1.5,
-        "take_profit_atr": 2.5,
+        "name": "V4AO_DONCHIAN_TRAILING_OWNER_GEOMETRY",
+        "initial_stop_atr": 2.0,
+        "take_profit_atr": 10.0,
         "trailing_activation_atr": 1.0,
-        "trailing_step_atr": 1.5,
-        "horizon_bars": 48.0,
-    },
-    {
-        "name": "V4AE_HISTORICAL_BEST",
-        "initial_stop_atr": 1.5,
-        "take_profit_atr": 2.5,
-        "trailing_activation_atr": 1.5,
-        "trailing_step_atr": 2.0,
-        "horizon_bars": 48.0,
-    },
-    {
-        "name": "V4AF_OWNER_GEOMETRY",
-        "initial_stop_atr": 1.5,
-        "take_profit_atr": 2.5,
-        "trailing_activation_atr": 1.5,
         "trailing_step_atr": 1.5,
         "horizon_bars": 48.0,
     },
@@ -134,7 +120,7 @@ EXIT_POLICIES: tuple[dict[str, float | str], ...] = (
 
 def _performance_log(stage: str, event: str, **details: Any) -> None:
     record = {
-        "component": "V4AN_PERFORMANCE",
+        "component": "V4AO_PERFORMANCE",
         "stage": stage,
         "event": event,
         **details,
@@ -828,20 +814,24 @@ def _regime_reactive_primary_signal(
         regime_engine.HMM_TRENDING_UP_FEATURE,
         regime_engine.HMM_TRENDING_DOWN_FEATURE,
         regime_engine.HMM_RANGING_FEATURE,
-        RSI_FEATURE,
-        EMA50_DISTANCE_FEATURE,
     }
     if (
         len(bars) != len(features)
         or not 2 <= apply_end <= len(bars)
         or not required.issubset(features.columns)
-        or "close" not in bars.columns
+        or not {"close", "high"}.issubset(bars.columns)
     ):
         raise ValueError("v4an_selector_input_schema_invalid")
     close = pd.to_numeric(bars["close"], errors="coerce").reset_index(drop=True)
+    high = pd.to_numeric(bars["high"], errors="coerce").reset_index(drop=True)
     close_values = close.to_numpy(dtype=float)
-    if not np.isfinite(close_values[:apply_end]).all() or bool(
-        (close.iloc[:apply_end] <= 0.0).any()
+    high_values = high.to_numpy(dtype=float)
+    if (
+        not np.isfinite(close_values[:apply_end]).all()
+        or not np.isfinite(high_values[:apply_end]).all()
+        or bool((close.iloc[:apply_end] <= 0.0).any())
+        or bool((high.iloc[:apply_end] <= 0.0).any())
+        or bool((high.iloc[:apply_end] < close.iloc[:apply_end]).any())
     ):
         raise ValueError("v4an_selector_market_values_invalid")
     hmm_columns = [
@@ -857,36 +847,40 @@ def _regime_reactive_primary_signal(
     valid_hmm = np.isfinite(probabilities).all(axis=1)
     dominant = np.full(len(features), -1, dtype=int)
     dominant[valid_hmm] = np.argmax(probabilities[valid_hmm], axis=1)
-    rsi = pd.to_numeric(features[RSI_FEATURE], errors="coerce").to_numpy(dtype=float)
-    ema50_distance = pd.to_numeric(
-        features[EMA50_DISTANCE_FEATURE], errors="coerce"
-    ).to_numpy(dtype=float)
-    valid = valid_hmm & np.isfinite(rsi) & np.isfinite(ema50_distance)
-    trending_up = valid & (dominant == 0)
-    trending_down = valid & (dominant == 1)
-    ranging = valid & (dominant == 2)
-    momentum_signal = trending_up & (ema50_distance > 0.0)
-    mean_reversion_signal = ranging & (rsi < RANGE_RSI_ENTRY_THRESHOLD)
-    signal_values = np.zeros(len(features), dtype=bool)
-    signal_values[:apply_end] = (
-        momentum_signal[:apply_end] | mean_reversion_signal[:apply_end]
+    trending_up = valid_hmm & (dominant == 0)
+    # Shift before rolling so the signal candle's High is excluded.
+    # This is the highest High of the preceding 20 completed 30m bars.
+    previous_high = high.shift(1).rolling(
+        window=DONCHIAN_LOOKBACK_BARS,
+        min_periods=DONCHIAN_LOOKBACK_BARS,
+    ).max()
+    previous_high_values = previous_high.to_numpy(dtype=float)
+    valid_channel = np.isfinite(previous_high_values)
+    breakout_signal = (
+        trending_up
+        & valid_channel
+        & (close_values > previous_high_values)
     )
+    signal_values = np.zeros(len(features), dtype=bool)
+    signal_values[:apply_end] = breakout_signal[:apply_end]
     signal = Series(signal_values, dtype=bool, name="primary_buy_signal")
     diagnostics = {
         "generation": PRIMARY_SIGNAL_GENERATION,
         "selector_type": "HMM_REGIME_HARD_SELECTOR",
         "dominant_state_policy": "ARGMAX_POSTERIOR_EXACTLY_ONE_REGIME",
-        "momentum_strategy": "CLOSE_ABOVE_EMA50_TRENDING_UP_ONLY_SPOT_LONG",
-        "mean_reversion_strategy": "WILDER_RSI14_LT45_RANGING_ONLY",
-        "downtrend_policy": "RISK_OFF_NO_LONG_ENTRY_SPOT_ONLY",
-        "trend_ema_period": EMA_FAST_PERIOD,
-        "range_rsi_period": RSI_PERIOD,
-        "range_rsi_threshold": RANGE_RSI_ENTRY_THRESHOLD,
+        "momentum_strategy": "DONCHIAN20_CLOSE_BREAKOUT_TRENDING_UP_ONLY_SPOT_LONG",
+        "mean_reversion_strategy": "DISABLED",
+        "breakout_reference": "HIGHEST_HIGH_OF_PREVIOUS_20_COMPLETED_30M_BARS",
+        "breakout_comparison": "CLOSE_STRICTLY_GREATER_THAN_PRIOR_20_BAR_HIGH",
+        "donchian_lookback_bars": DONCHIAN_LOOKBACK_BARS,
+        "donchian_channel_valid_rows": int(valid_channel[:apply_end].sum()),
         "dominant_trending_up_rows": int(trending_up[:apply_end].sum()),
-        "dominant_trending_down_risk_off_rows": int(trending_down[:apply_end].sum()),
-        "dominant_ranging_rows": int(ranging[:apply_end].sum()),
-        "momentum_signal_count": int(momentum_signal[:apply_end].sum()),
-        "mean_reversion_signal_count": int(mean_reversion_signal[:apply_end].sum()),
+        "dominant_trending_down_risk_off_rows": int(
+            (valid_hmm & (dominant == 1))[:apply_end].sum()
+        ),
+        "dominant_ranging_rows": int((valid_hmm & (dominant == 2))[:apply_end].sum()),
+        "momentum_signal_count": int(breakout_signal[:apply_end].sum()),
+        "mean_reversion_signal_count": 0,
         "primary_buy_count": int(signal.sum()),
         "hard_selector_enabled": True,
         "soft_blend_enabled": False,
@@ -896,7 +890,6 @@ def _regime_reactive_primary_signal(
         "execution_timing": "CLOSED_30M_BAR_NEXT_BAR_OPEN",
     }
     return features.reset_index(drop=True), signal, diagnostics
-
 
 def _validate_volatility_target_inputs(
     features: DataFrame,
@@ -1969,14 +1962,14 @@ def _format_acceptance(item: dict[str, Any]) -> str:
 
 def _render_step_summary_header(report: dict[str, Any]) -> list[str]:
     return [
-        "## AliX V4-AN ETHUSDT 30m HMM Regime-Adaptive Economic Validation",
+        "## AliX V4-AO ETHUSDT 30m HMM Donchian Breakout Economic Validation",
         "",
         f"Commit SHA: {report['commit_sha']}",
         "Scope: ETHUSDT Spot, 30m analysis bars built from provenance-verified 1m public OHLCV; 1825 days requested with trim to latest contiguous segment.",
         "Primary event trigger: every completed 30m candle is evaluated; no CUSUM event or CUSUM-derived filter is used.",
         "Regime model: diagonal Gaussian HMM(3), fit on outer-train only and forward-filtered causally, without smoothing.",
         "HMM input volatility: trailing 48-bar realized volatility (24 hours on 30m bars).",
-        "Hard selector: dominant HMM posterior only; Trending Up buys on Close > EMA50, Ranging buys on Wilder RSI(14)<45, Trending Down remains flat.",
+        "Hard selector: dominant HMM state must be Trending Up; buy only when completed 30m Close breaks above the highest High of the preceding 20 completed bars; Ranging and Trending Down remain flat.",
         "No soft strategy blend, no short entries, no pyramiding, and no leverage; the economic simulator remains Spot-long only.",
         "Execution: closed 30m candle signal, next-bar-open entry.",
         "ADX20 remains diagnostic-ablation only and does not gate the Primary candidate.",
@@ -1987,10 +1980,10 @@ def _render_step_summary_header(report: dict[str, Any]) -> list[str]:
         "DSR: Bailey-López de Prado expected-maximum-Sharpe deflation; DSR Z is unbounded and DSR probability=Phi(Z) is in [0, 1].",
         "DSR trials are limited to each current-run comparison cohort; historical trials are not included and trial independence is unverified.",
         "Z.AI diagnostic reference (not a promotion gate): Net PF >1.1 and DSR Z >1.0; the existing Net PF >1.5 acceptance gate remains unchanged.",
-        "Fixed candidate geometry: SL=1.5 ATR, TP=2.5 ATR, activation=1.5 ATR, step=2.0 ATR, horizon=48 bars.",
+        "Fixed candidate geometry: SL=2.0 ATR, TP=10.0 ATR, activation=1.0 ATR, step=1.5 ATR, horizon=48 bars.",
         "Training: outer 70%; purged OOF Fit/Temperature/Threshold slices=70/15/15.",
         "Evaluation: next 15% forward validation; final 15% holdout untouched.",
-        "Meta: LightGBM + TreeSHAP top-30 Fit-only selection; causal HMM posterior probabilities, 48-bar realized volatility, EMA and RSI features are used; no CUSUM feature, no LSTM/sequence model.",
+        "Meta: LightGBM + TreeSHAP top-30 Fit-only selection; causal HMM posterior probabilities, 48-bar realized volatility, EMA and RSI features remain Meta inputs only and are not Primary entry gates; no CUSUM feature, no LSTM/sequence model.",
         "Meta cutoff: accept the upper 70% of probabilities using the 30th percentile order statistic on the third purged OOF slice; ties are included.",
     ]
 
@@ -2060,8 +2053,8 @@ def _render_meta_diagnostics(report: dict[str, Any]) -> list[str]:
             f"CUSUM used={hmm_features.get('cusum_used', 'N/A')}."
         ),
         (
-            f"Hard selector: Close>EMA50 signals={selector.get('momentum_signal_count', 0)}; "
-            f"RSI<45 ranging signals={selector.get('mean_reversion_signal_count', 0)}; "
+            f"Hard selector: Donchian20 breakout signals={selector.get('momentum_signal_count', 0)}; "
+            f"valid prior-high windows={selector.get('donchian_channel_valid_rows', 0)}; "
             f"dominant regimes Up/Down-risk-off/Range="
             f"{selector.get('dominant_trending_up_rows', 0)}/"
             f"{selector.get('dominant_trending_down_risk_off_rows', 0)}/"

@@ -133,17 +133,17 @@ def _valid_report() -> dict[str, Any]:
                 "selector_type": "HMM_REGIME_HARD_SELECTOR",
                 "hard_selector_enabled": True,
                 "soft_blend_enabled": False,
-                "trend_ema_period": 50,
-                "range_rsi_period": 14,
-                "range_rsi_threshold": 45.0,
-                "momentum_strategy": "CLOSE_ABOVE_EMA50_TRENDING_UP_ONLY_SPOT_LONG",
-                "mean_reversion_strategy": "WILDER_RSI14_LT45_RANGING_ONLY",
+                "donchian_lookback_bars": 20,
+                "breakout_reference": "HIGHEST_HIGH_OF_PREVIOUS_20_COMPLETED_30M_BARS",
+                "momentum_strategy": "DONCHIAN20_CLOSE_BREAKOUT_TRENDING_UP_ONLY_SPOT_LONG",
+                "mean_reversion_strategy": "DISABLED",
                 "downtrend_policy": "RISK_OFF_NO_LONG_ENTRY_SPOT_ONLY",
                 "no_cusum_filter": True,
                 "short_entries_enabled": False,
                 "lookahead_used": False,
                 "momentum_signal_count": 40,
-                "mean_reversion_signal_count": 30,
+                "mean_reversion_signal_count": 0,
+                "donchian_channel_valid_rows": 450,
                 "dominant_trending_up_rows": 200,
                 "dominant_trending_down_risk_off_rows": 100,
                 "dominant_ranging_rows": 200,
@@ -304,14 +304,19 @@ def test_primary_oof_events_use_the_v4ak_signal_generation() -> None:
     assert events["primary_signal_generation"].eq(v4ai.PRIMARY_SIGNAL_GENERATION).all()
 
 
-def test_v4ak_exit_geometry_is_sl_1_5_tp_2_5() -> None:
+def test_v4ao_exit_geometry_uses_owner_directed_trailing_settings() -> None:
     management = v4ai._trade_management_config()
-    assert management.stop_loss_atr_multiplier == 1.5
-    assert management.take_profit_atr_multiplier == 2.5
+    assert management.stop_loss_atr_multiplier == 2.0
+    assert management.take_profit_atr_multiplier == 10.0
+    assert management.trailing_stop_enabled is True
+    assert management.trailing_activation_atr == 1.0
+    assert management.trailing_step_atr == 1.5
     assert management.horizon_candles == 48
     assert all(item["horizon_bars"] == 48.0 for item in v4ai.EXIT_POLICIES)
-    assert all(item["initial_stop_atr"] == 1.5 for item in v4ai.EXIT_POLICIES)
-    assert all(item["take_profit_atr"] == 2.5 for item in v4ai.EXIT_POLICIES)
+    assert all(item["initial_stop_atr"] == 2.0 for item in v4ai.EXIT_POLICIES)
+    assert all(item["take_profit_atr"] == 10.0 for item in v4ai.EXIT_POLICIES)
+    assert all(item["trailing_activation_atr"] == 1.0 for item in v4ai.EXIT_POLICIES)
+    assert all(item["trailing_step_atr"] == 1.5 for item in v4ai.EXIT_POLICIES)
 
 
 def test_adx_ablation_is_strict_and_rejects_non_finite_rows() -> None:
@@ -832,7 +837,7 @@ def test_oof_training_diagnostics_record_maker_proxy_costs(
     assert diagnostics["replay_window_bars"] == 49
 
 
-def test_exit_geometry_matrix_has_only_three_thirty_bps_cells(
+def test_exit_geometry_matrix_has_single_v4ao_thirty_bps_cell(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     seen: list[Any] = []
@@ -857,18 +862,18 @@ def test_exit_geometry_matrix_has_only_three_thirty_bps_cells(
     matrix = v4ai._run_exit_geometry_matrix(
         DataFrame({"close": [100.0, 101.0]}), [10, 20], 100
     )
-    assert len(matrix["cells"]) == 3
+    assert len(matrix["cells"]) == 1
     assert {cell["round_trip_cost_bps"] for cell in matrix["cells"]} == {30.0}
     assert {call[0].fee_bps for call in seen} == {10.0}
     assert {call[0].slippage_bps for call in seen} == {5.0}
-    assert {call[1].stop_loss_atr_multiplier for call in seen} == {1.5}
-    assert {call[1].take_profit_atr_multiplier for call in seen} == {2.5}
-    assert {cell["initial_stop_atr"] for cell in matrix["cells"]} == {1.5}
-    assert {cell["take_profit_atr"] for cell in matrix["cells"]} == {2.5}
+    assert {call[1].stop_loss_atr_multiplier for call in seen} == {2.0}
+    assert {call[1].take_profit_atr_multiplier for call in seen} == {10.0}
+    assert {cell["initial_stop_atr"] for cell in matrix["cells"]} == {2.0}
+    assert {cell["take_profit_atr"] for cell in matrix["cells"]} == {10.0}
+    assert {call[1].trailing_activation_atr for call in seen} == {1.0}
+    assert {call[1].trailing_step_atr for call in seen} == {1.5}
     assert {cell["policy"] for cell in matrix["cells"]} == {
-        "V4AI_REFERENCE",
-        "V4AE_HISTORICAL_BEST",
-        "V4AF_OWNER_GEOMETRY",
+        "V4AO_DONCHIAN_TRAILING_OWNER_GEOMETRY",
     }
     v4ai._validate_exit_matrix(matrix)
     invalid = dict(matrix)
@@ -1109,8 +1114,8 @@ def test_step_summary_discloses_maker_proxy_and_fill_model_limitation() -> None:
         "Fixed candidate geometry: SL=1.5 ATR, TP=2.5 ATR, activation=1.5 ATR, step=2.0 ATR, horizon=48 bars."
         in summary
     )
-    assert "PRIMARY_HMM_REGIME_ADAPTIVE_30M_30BPS" in summary
-    assert "META_TOP_70_HMM_REGIME_ADAPTIVE_30M_30BPS" in summary
+    assert "PRIMARY_HMM_DONCHIAN20_TRENDING_UP_30M_30BPS" in summary
+    assert "META_TOP_70_HMM_DONCHIAN20_30M_30BPS" in summary
     assert "Primary BUYs research/train/forward: 800/560/120" in summary
     assert "research target >=100=PASS" in summary
     assert "Meta outer-train minimum=50" in summary
@@ -1149,7 +1154,7 @@ def test_step_summary_discloses_maker_proxy_and_fill_model_limitation() -> None:
         skipped_summary
     )
     assert "Primary metrics remain reportable" in skipped_summary
-    assert "META_TOP_70_HMM_REGIME_ADAPTIVE_30M_30BPS" in skipped_summary
+    assert "META_TOP_70_HMM_DONCHIAN20_30M_30BPS" in skipped_summary
 
 
 def test_dataset_scope_expanded_to_1825_days_with_disclosed_gap_policy() -> None:
@@ -1160,40 +1165,73 @@ def test_dataset_scope_expanded_to_1825_days_with_disclosed_gap_policy() -> None
         v4ai._validate_request(730, "a" * 40)
 
 
-def test_regime_reactive_selector_uses_only_the_dominant_strategy_without_cusum() -> (
-    None
-):
+def test_regime_reactive_selector_uses_donchian20_only_in_trending_up() -> None:
     rows = 100
-    bars = DataFrame({"close": np.full(rows, 100.0)})
+    high = np.full(rows, 100.0)
+    close = np.full(rows, 99.0)
+    high[25], close[25] = 200.0, 101.0
+    high[50], close[50] = 210.0, 201.0
+    high[70], close[70] = 220.0, 211.0
+    high[90], close[90] = 300.0, 100.0
+    high[91], close[91] = 301.0, 150.0
+    bars = DataFrame({"high": high, "close": close})
     features = _primary_feature_frame(rows)
-    features[v4ai.RSI_FEATURE] = 50.0
-    features[v4ai.EMA50_DISTANCE_FEATURE] = 0.01
+    features[v4ai.RSI_FEATURE] = 10.0
+    features[v4ai.EMA50_DISTANCE_FEATURE] = -0.10
     features[regime_engine.HMM_TRENDING_UP_FEATURE] = 0.1
     features[regime_engine.HMM_TRENDING_DOWN_FEATURE] = 0.1
     features[regime_engine.HMM_RANGING_FEATURE] = 0.8
     features.loc[25, regime_engine.HMM_TRENDING_UP_FEATURE] = 0.9
     features.loc[25, regime_engine.HMM_RANGING_FEATURE] = 0.05
-    features.loc[50, v4ai.RSI_FEATURE] = 44.0
     features.loc[70, regime_engine.HMM_TRENDING_DOWN_FEATURE] = 0.9
     features.loc[70, regime_engine.HMM_RANGING_FEATURE] = 0.05
-
+    features.loc[90, regime_engine.HMM_TRENDING_UP_FEATURE] = 0.9
+    features.loc[90, regime_engine.HMM_RANGING_FEATURE] = 0.05
+    features.loc[91, regime_engine.HMM_TRENDING_UP_FEATURE] = 0.9
+    features.loc[91, regime_engine.HMM_RANGING_FEATURE] = 0.05
     transformed, signal, diagnostics = v4ai._regime_reactive_primary_signal(
-        bars, features, apply_end=rows
+        bars, features, apply_end=95
     )
     assert bool(signal.iloc[25])
-    assert bool(signal.iloc[50])
+    assert not bool(signal.iloc[50])
     assert not bool(signal.iloc[70])
+    assert not bool(signal.iloc[90])
+    assert not bool(signal.iloc[91])
+    assert not bool(signal.iloc[95:].any())
+    assert diagnostics["donchian_lookback_bars"] == 20
+    assert diagnostics["breakout_reference"] == (
+        "HIGHEST_HIGH_OF_PREVIOUS_20_COMPLETED_30M_BARS"
+    )
     assert diagnostics["hard_selector_enabled"] is True
     assert diagnostics["soft_blend_enabled"] is False
     assert diagnostics["short_entries_enabled"] is False
     assert diagnostics["no_cusum_filter"] is True
     assert diagnostics["momentum_signal_count"] == 1
-    assert diagnostics["mean_reversion_signal_count"] == 1
+    assert diagnostics["mean_reversion_signal_count"] == 0
     assert not {
         regime_engine.CUSUM_POSITIVE_EVENT_FEATURE,
         regime_engine.CUSUM_NEGATIVE_EVENT_FEATURE,
         regime_engine.CUSUM_DRIFT_FEATURE,
     }.intersection(transformed.columns)
+
+
+def test_donchian_breakout_requires_full_history_and_strict_close_crossing() -> None:
+    rows = 30
+    high = np.full(rows, 100.0)
+    close = np.full(rows, 99.0)
+    high[19], close[19] = 102.0, 101.0
+    high[20], close[20] = 100.0, 99.0
+    high[21], close[21] = 250.0, 102.01
+    bars = DataFrame({"high": high, "close": close})
+    features = _primary_feature_frame(rows)
+    features[regime_engine.HMM_TRENDING_UP_FEATURE] = 0.9
+    features[regime_engine.HMM_TRENDING_DOWN_FEATURE] = 0.05
+    features[regime_engine.HMM_RANGING_FEATURE] = 0.05
+    _, signal, diagnostics = v4ai._regime_reactive_primary_signal(
+        bars, features, apply_end=rows
+    )
+    assert signal.tolist() == [False] * 21 + [True] + [False] * 8
+    assert diagnostics["donchian_channel_valid_rows"] == rows - 20
 
 
 def test_hmm_feature_inputs_use_48_bar_volatility_and_mask_holdout() -> None:

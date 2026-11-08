@@ -1,0 +1,493 @@
+name: AliX V4-AO 30m HMM Regime-Adaptive Economic Validation
+# Owner-directed retrigger: the fail-closed exception is bound to ETHUSDT's empirically
+# observed 80 missing 1m opens from 2023-03-24T12:40:00Z through 13:59:00Z.
+
+on:
+  push:
+    branches:
+      - research/ml-core-v4ao-donchian
+    paths:
+      - .github/workflows/ml-core-v4ao-donchian.yml
+      - scripts/run_ml_core_v4ai_maker_strategy.py
+      - scripts/run_ml_core_v4af_meta_final.py
+      - scripts/run_ml_core_v4ac_cost_optimization.py
+      - scripts/run_ml_core_real_data_baseline.py
+      - scripts/fetch_binance_public_ohlcv.py
+      - scripts/discover_binance_ethusdt_gap.py
+      - services/meta_labeling/v4ah.py
+      - services/meta_labeling/v4am.py
+      - services/meta_labeling/v4y.py
+      - services/ml_core/economic_backtest.py
+      - services/ml_core/extended_features.py
+      - tests/unit/test_ml_core_v4ai_maker_strategy.py
+      - tests/unit/test_ml_core_v4am_regime.py
+      - tests/unit/test_ml_core_v4ah_advanced_ai.py
+      - tests/unit/test_fetch_binance_public_ohlcv.py
+      - tests/unit/test_ml_core_real_data_baseline.py
+      - tests/unit/test_ml_core_v4af_meta_final.py
+      - tests/unit/test_ml_core_economic_backtest.py
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: alix-v4ao-30m-regime-economic
+  cancel-in-progress: false
+
+jobs:
+  v4ao-30m-regime-economic:
+    if: github.ref == 'refs/heads/research/ml-core-v4ao-donchian'
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      ALIx_ENV: paper
+      ALIx_DRY_RUN: "true"
+      ALIx_ALLOW_LIVE_TRADING: "false"
+      ALIx_REPORTING_ENABLED: "false"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Require Standard CI success for this exact V4-AO commit
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          TARGET_SHA: ${{ github.sha }}
+          TARGET_BRANCH: ${{ github.ref_name }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import time
+          from urllib.error import HTTPError, URLError
+          from urllib.request import Request, urlopen
+
+          repository = os.environ["GITHUB_REPOSITORY"]
+          target_sha = os.environ["TARGET_SHA"]
+          target_branch = os.environ["TARGET_BRANCH"]
+          token = os.environ["GH_TOKEN"]
+          expected_branch = "research/ml-core-v4ao-donchian"
+          if target_branch != expected_branch:
+              raise SystemExit("unsupported_v4ai_branch:" + target_branch)
+
+          deadline = time.monotonic() + 90 * 60
+          url = (
+              f"https://api.github.com/repos/{repository}/actions/workflows/ci.yml/runs"
+              f"?head_sha={target_sha}&per_page=100"
+          )
+          while time.monotonic() < deadline:
+              request = Request(
+                  url,
+                  headers={
+                      "Accept": "application/vnd.github+json",
+                      "Authorization": f"Bearer {token}",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  },
+              )
+              try:
+                  with urlopen(request, timeout=20) as response:
+                      payload = json.load(response)
+              except (HTTPError, URLError, TimeoutError) as error:
+                  raise SystemExit(
+                      f"ci_status_lookup_failed:{type(error).__name__}"
+                  ) from None
+
+              matching = [
+                  run for run in payload.get("workflow_runs", [])
+                  if run.get("head_sha") == target_sha
+                  and run.get("head_branch") == expected_branch
+                  and run.get("event") == "push"
+              ]
+              if matching:
+                  latest = max(
+                      matching,
+                      key=lambda item: (
+                          item.get("run_number", 0),
+                          item.get("run_attempt", 0),
+                      ),
+                  )
+                  if latest.get("status") == "completed":
+                      if latest.get("conclusion") != "success":
+                          raise SystemExit(
+                              "ci_green_gate_blocked:"
+                              + str(latest.get("conclusion"))
+                              + ":"
+                              + target_sha
+                          )
+                      print(json.dumps({
+                          "gate": "PASS",
+                          "target_sha": target_sha,
+                          "ci_run_id": latest.get("id"),
+                          "ci_run_url": latest.get("html_url"),
+                          "ci_conclusion": latest.get("conclusion"),
+                      }, sort_keys=True))
+                      break
+              time.sleep(30)
+          else:
+              raise SystemExit("ci_green_gate_timeout:" + target_sha)
+          PY
+      - name: Checkout exact V4-AO commit without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set up pinned Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install pinned V4-AO research dependencies
+        run: |
+          python -m pip install pip==25.2
+          python -m pip install \
+            numpy==2.5.4 \
+            pandas==2.3.3 \
+            scipy==1.18.1 \
+            scikit-learn==1.9.0 \
+            lightgbm==4.7.0 \
+            shap==0.54.1
+      - name: Confirm V4-AO scope, primary signal, and fail-closed safety
+        env:
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/research/ml-core-v4ao-donchian"
+          test "$GITHUB_SHA" = "$TARGET_SHA"
+          printf 'symbol=ETHUSDT\nsource_interval=1m\ntimeframe=30m\ndays=1825\n'
+          printf 'fee_type_assumption=MAKER_FEE_PROXY\nfee_bps_per_side=10\n'
+          printf 'slippage_bps_per_side=5\nround_trip_cost_bps=30\n'
+          printf 'primary_signal=HMM3_REGIME_ADAPTIVE_DONCHIAN20_NO_CUSUM\n'
+          printf 'hmm_realized_volatility_window_bars=48\ntriple_barrier_horizon_bars=48\n'
+          printf 'adx20_role=DIAGNOSTIC_ABLATION_ONLY\n'
+          printf 'meta_threshold=top_70_percent_acceptance_from_30th_percentile_of_third_purged_OOF_slice\n'
+          printf 'exit_geometry=SL2.0_TP10.0_ACT1.0_STEP1.5_HORIZON48\n'
+          printf 'Champion=null\norder_permission=false\ntrading_authorization=NO-GO\n'
+          printf 'private_api_calls=0\nreal_order_attempts=0\nsequence_model_used=false\n'
+          python - <<'PY'
+          from scripts import run_ml_core_v4ai_maker_strategy as v4ai
+          from services.meta_labeling import v4ah, v4am
+
+          execution = v4ai._execution_config()
+          assert execution.fee_bps == 10.0
+          assert execution.slippage_bps == 5.0
+          assert v4ai.ROUND_TRIP_COST_BPS == 30.0
+          assert v4ai.TIMEFRAME == "30m"
+          assert v4ai.PRIMARY_SIGNAL_GENERATION == "HMM3_REGIME_ADAPTIVE_DONCHIAN20_NO_CUSUM"
+          assert v4ai.PRIMARY_FILTER_CONTRACT == {
+              "event_filter": "EVERY_CLOSED_30M_BAR_NO_CUSUM_EVENT_FILTER",
+              "regime_model": "DIAGONAL_GAUSSIAN_HMM_3_STATE",
+              "regime_state_selection": "DOMINANT_POSTERIOR_HARD_SELECTOR",
+              "momentum_strategy": "DONCHIAN20_CLOSE_BREAKOUT_TRENDING_UP_ONLY_SPOT_LONG",
+              "mean_reversion_strategy": "DISABLED",
+              "downtrend_policy": "SPOT_LONG_ONLY_NO_ENTRY",
+              "position_sizing": "INVERSE_24H_REALIZED_VOL_48_BAR_OUTER_TRAIN_MEDIAN_CAPPED_AT_1X",
+          }
+          assert v4am.HMM_STATE_COUNT == 3
+          assert v4am.HMM_MINIMUM_TRAIN_ROWS == 100
+          assert v4ai.HMM_FEATURE_WINDOW_BARS == 48
+          assert v4ai.EMA_FAST_PERIOD == 50
+          assert v4ai.RSI_PERIOD == 14
+          assert v4ai.RANGE_RSI_ENTRY_THRESHOLD == 45.0
+          assert v4ai.ADX_PERIOD == 14 and v4ai.ADX_THRESHOLD == 20.0
+          assert v4ai.META_TARGET_ACCEPT_FRACTION == 0.70
+          assert v4ai.PRIMARY_GEOMETRY["horizon_bars"] == 48.0
+          assert all(policy["horizon_bars"] == 48.0 for policy in v4ai.EXIT_POLICIES)
+          assert v4ah.V4AH_TOP_K_FEATURES == 30 and v4ah.V4AH_REGIME_COUNT == 3
+          print("V4-AO scope, HMM, no-CUSUM, 30 bps, 48-bar geometry, Meta and safety: PASS")
+          PY
+      - name: Fetch complete public Binance Spot 1825-day ETHUSDT data
+        run: |
+          set -euo pipefail
+          data_dir="$RUNNER_TEMP/alix-v4ao-market-data"
+          rm -rf "$data_dir"
+          mkdir -p "$data_dir"
+          log_path="$RUNNER_TEMP/v4ao-fetch-1825-ETHUSDT.log"
+          if python scripts/fetch_binance_public_ohlcv.py \
+            --days 1825 \
+            --symbol ETHUSDT \
+            --interval 1m \
+            --output-dir "$data_dir" \
+            --commit-sha "$GITHUB_SHA" \
+            --allow-exchange-gaps >"$log_path" 2>&1; then
+            cat "$log_path"
+          else
+            cat "$log_path"
+            echo "Public Spot fetch failed; refusing partial data." >&2
+            exit 1
+          fi
+          printf 'requested_days=1825\nprovider=Binance Spot public klines API\n'
+          printf 'exchange_gap_policy=only_80m_ethusdt_2023-03-24T12:40Z_to_13:59Z_no_interpolation\n'
+          printf 'private_api_calls=0\ncredentials_used=false\n'
+      - name: Run V4-AO 30m HMM Regime-Adaptive, ADX diagnostic, Meta P70, and exit-geometry evaluation
+        run: |
+          set -euo pipefail
+          python -m scripts.run_ml_core_v4ai_maker_strategy \
+            --input-dir "$RUNNER_TEMP/alix-v4ao-market-data" \
+            --output-report "$GITHUB_WORKSPACE/alix-v4ao-30m-regime-report.json" \
+            --output-trades-csv "$GITHUB_WORKSPACE/alix-v4ao-30m-regime-trades.csv" \
+            --output-decisions-csv "$GITHUB_WORKSPACE/alix-v4ao-30m-regime-decisions.csv" \
+            --days 1825 \
+            --commit-sha "$GITHUB_SHA"
+      - name: Validate V4-AO report and publish GitHub Step Summary
+        env:
+          REPORT_PATH: "${{ github.workspace }}/alix-v4ao-30m-regime-report.json"
+          TRADES_CSV: "${{ github.workspace }}/alix-v4ao-30m-regime-trades.csv"
+          DECISIONS_CSV: "${{ github.workspace }}/alix-v4ao-30m-regime-decisions.csv"
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          python - <<'PY'
+          import csv
+          import json
+          import math
+          import os
+          from pathlib import Path
+
+          from scripts.run_ml_core_v4ai_maker_strategy import (
+              CANDIDATE_NAMES,
+              ROUND_TRIP_COST_BPS,
+              SCHEMA,
+              _render_step_summary,
+              _validate_report,
+          )
+
+          report = json.loads(
+              Path(os.environ["REPORT_PATH"]).read_text(encoding="utf-8")
+          )
+          _validate_report(report, os.environ["TARGET_SHA"])
+          assert report["schema_version"] == SCHEMA
+          assert report["symbols"] == ["ETHUSDT"]
+          assert report["timeframes"] == ["30m"]
+          assert report["dataset_days"] == 1825
+          assert [item["mode"] for item in report["candidates"]] == list(CANDIDATE_NAMES)
+          assert report["final_holdout_used"] is False
+          assert report["chronological_evaluation"][
+              "final_15_percent_holdout_untouched"
+          ] is True
+          assert report["cost_contract"] == {
+              "fee_type_assumption": "MAKER_FEE_PROXY",
+              "fee_bps_per_side": 10.0,
+              "slippage_bps_per_side": 5.0,
+              "round_trip_cost_bps": 30.0,
+              "passive_limit_fill_simulation": False,
+          }
+          from scripts.run_ml_core_v4ai_maker_strategy import (
+              PRIMARY_FILTER_CONTRACT,
+              PRIMARY_SIGNAL_GENERATION,
+          )
+          assert report["primary_signal"] == PRIMARY_SIGNAL_GENERATION
+          assert report["primary_filter"] == PRIMARY_FILTER_CONTRACT
+          primary_diagnostics = report["primary_signal_diagnostics"]
+          assert primary_diagnostics["lookahead_used"] is False
+          assert primary_diagnostics["research_signal_count_target"] == 100
+          assert "cusum" not in primary_diagnostics
+          hmm_features = primary_diagnostics["hmm_features"]
+          assert hmm_features["realized_volatility_window_bars"] == 48
+          assert hmm_features["lookahead_used"] is False
+          assert hmm_features["cusum_used"] is False
+          assert hmm_features["final_holdout_features_unavailable"] is True
+          selector = primary_diagnostics["selector"]
+          assert selector["hard_selector_enabled"] is True
+          assert selector["soft_blend_enabled"] is False
+          assert selector["short_entries_enabled"] is False
+          assert selector["no_cusum_filter"] is True
+          assert selector["momentum_strategy"] == "DONCHIAN20_CLOSE_BREAKOUT_TRENDING_UP_ONLY_SPOT_LONG"
+          assert selector["mean_reversion_strategy"] == "DISABLED"
+          assert selector["donchian_lookback_bars"] == 20
+          assert selector["breakout_reference"] == "HIGHEST_HIGH_OF_PREVIOUS_20_COMPLETED_30M_BARS"
+          sizing = primary_diagnostics["volatility_targeting"]
+          assert sizing["sizing_cap"] == 1.0
+          assert sizing["leverage_enabled"] is False
+          regime = report["regime_diagnostics"]
+          assert regime["algorithm"] == "GAUSSIAN_HMM_DIAGONAL"
+          assert regime["state_count"] == 3
+          assert regime["fit_scope"] == "OUTER_TRAIN_ONLY"
+          assert regime["fit_end_index_exclusive"] == report["chronological_evaluation"]["train_end_index_exclusive"]
+          assert regime["posterior_method"] == "CAUSAL_FORWARD_FILTER"
+          assert regime["smoothing_used"] is False
+          assert regime["lookahead_used"] is False
+          assert regime["final_holdout_features_unavailable"] is True
+          assert report["signal_counts"]["minimum_primary_train_signal_count"] == 50
+
+          assert report["fixed_exit_geometry"]["initial_stop_atr"] == 2.0
+          assert report["fixed_exit_geometry"]["take_profit_atr"] == 10.0
+          assert report["fixed_exit_geometry"]["trailing_activation_atr"] == 1.0
+          assert report["fixed_exit_geometry"]["trailing_step_atr"] == 1.5
+          assert report["fixed_exit_geometry"]["horizon_bars"] == 48.0
+          assert "adx_ablation_diagnostics" in report
+          provenance = report["dataset_provenance"]
+          assert provenance["requested_days"] == 1825
+          assert provenance["symbol"] == "ETHUSDT"
+          assert provenance["interval"] == "1m"
+          assert provenance["analysis_timeframe"] == "30m"
+          assert provenance["gap_policy"] == (
+              "accept only the empirically observed 80-minute ETHUSDT Binance Spot gap "
+              "from 2023-03-24T12:40:00Z through 2023-03-24T13:59:00Z; "
+              "no interpolation, resampling, or synthetic fill"
+          )
+          missing = int(provenance["missing_minute_intervals"])
+          assert missing in (0, 80)
+          assert provenance["row_count"] + missing == 1825 * 24 * 60
+          if missing:
+              assert len(provenance["missing_gap_ranges"]) == 1
+              gap = provenance["missing_gap_ranges"][0]
+              assert gap["missing_minute_intervals"] == 80
+              assert gap["start_utc"] == "2023-03-24T12:40:00Z"
+              assert gap["end_utc"] == "2023-03-24T13:59:00Z"
+          else:
+              assert provenance["missing_gap_ranges"] == []
+          trim = provenance["resample_gap_trim"]
+          assert trim["status"] in (
+              "NO_GAP", "TRIMMED_TO_LATEST_CONTIGUOUS_SEGMENT"
+          )
+          if missing:
+              assert trim["status"] == "TRIMMED_TO_LATEST_CONTIGUOUS_SEGMENT"
+          matrix = report["exit_geometry_matrix"]
+          assert len(matrix["cells"]) == 1
+          assert {
+              item["round_trip_cost_bps"] for item in matrix["cells"]
+          } == {ROUND_TRIP_COST_BPS}
+          assert all(item["diagnostic_only"] for item in matrix["cells"])
+          assert all(item["initial_stop_atr"] == 2.0 for item in matrix["cells"])
+          assert all(item["take_profit_atr"] == 10.0 for item in matrix["cells"])
+          assert all(item["trailing_activation_atr"] == 1.0 for item in matrix["cells"])
+          assert all(item["trailing_step_atr"] == 1.5 for item in matrix["cells"])
+          meta = report["meta_model"]
+          if meta["enabled"]:
+              assert meta["threshold_diagnostics"]["status"] == (
+                  "SELECTED_TOP_70_PERCENT_ACCEPTANCE"
+              )
+              assert meta["threshold_diagnostics"]["target_accept_fraction"] == 0.70
+              assert math.isclose(
+                  float(meta["threshold_diagnostics"]["cutoff_percentile"]),
+                  0.30,
+                  rel_tol=0.0,
+                  abs_tol=1e-12,
+              )
+              assert meta["threshold_diagnostics"]["labels_used"] is False
+          else:
+              assert meta["skip_reason"]
+
+          safety = report["safety"]
+          assert safety["Champion"] is None
+          assert safety["order_permission"] is False
+          assert safety["trading_authorization"] == "NO-GO"
+          assert safety["private_api_calls"] == 0
+          assert safety["real_order_attempts"] == 0
+          assert safety["sequence_model_used"] is False
+
+          with Path(os.environ["TRADES_CSV"]).open(
+              newline="", encoding="utf-8"
+          ) as handle:
+              trades = list(csv.DictReader(handle))
+          assert len(trades) == report["trade_count"]
+          for trade in trades:
+              assert trade["symbol"] == "ETHUSDT"
+              assert trade["timeframe"] == "30m"
+              assert trade["direction"] == "LONG"
+              assert float(trade["round_trip_cost_bps"]) == 30.0
+              fraction = float(trade["position_fraction"])
+              assert 0.0 < fraction <= 1.0
+              gross = float(trade["gross_market_pnl_usd"])
+              fees = float(trade["fees_usd"])
+              slippage = float(trade["slippage_cost_usd"])
+              net = float(trade["net_pnl_usd"])
+              assert math.isclose(
+                  gross - fees - slippage,
+                  net,
+                  rel_tol=0.0,
+                  abs_tol=0.02,
+              )
+
+          with Path(os.environ["DECISIONS_CSV"]).open(
+              newline="", encoding="utf-8"
+          ) as handle:
+              decisions = list(csv.DictReader(handle))
+          assert len(decisions) == report["decision_count"]
+          assert all(
+              row["split_role"] == "FORWARD_VALIDATION" for row in decisions
+          )
+          summary = _render_step_summary(report)
+          required = (
+              "PRIMARY_HMM_DONCHIAN20_TRENDING_UP_30M_30BPS",
+              "PRIMARY_ADX20_DIAGNOSTIC_ABLATION_HMM_DONCHIAN20_30M_30BPS",
+              "META_TOP_70_HMM_DONCHIAN20_30M_30BPS",
+              "Primary event trigger: every completed 30m candle is evaluated; no CUSUM event or CUSUM-derived filter is used.",
+              "Regime model: diagonal Gaussian HMM(3)",
+              "HMM input volatility window=48 bars",
+              "Hard selector:",
+              "Volatility targeting:",
+              "research target >=100=",
+              "Fixed candidate geometry: SL=2.0 ATR, TP=10.0 ATR, activation=1.0 ATR, step=1.5 ATR, horizon=48 bars",
+              "ADX20 diagnostic-ablation BUYs:",
+              "OOF label classes failure/success",
+              "Purged OOF classes failure/success",
+              "30 bps round trip",
+              "ROC-AUC=",
+              "DSR Z",
+              "DSR P",
+              "Sortino/trade",
+              "Z.AI diagnostic reference",
+              "existing Net PF >1.5 acceptance gate remains unchanged",
+              "Base Primary exit-geometry matrix",
+              "1825 days requested",
+              "Dataset provenance:",
+              "passive Limit queue/partial-fill mechanics are not simulated",
+              "Champion=null",
+              "trading_authorization=NO-GO",
+          )
+          if any(value not in summary for value in required):
+              raise SystemExit("v4ai_step_summary_required_metrics_missing")
+          with Path(os.environ["GITHUB_STEP_SUMMARY"]).open(
+              "a", encoding="utf-8"
+          ) as handle:
+              handle.write(summary)
+          Path("alix-v4ao-30m-regime-step-summary.md").write_text(
+              summary, encoding="utf-8"
+          )
+          print(summary, end="")
+          meta_candidate = next(
+              item for item in report["candidates"]
+              if item["mode"] == "META_TOP_70_HMM_DONCHIAN20_30M_30BPS"
+          )
+          meta_trade_count = int(meta_candidate["metrics"]["trade_count"])
+          if not meta["enabled"]:
+              skip_reason = meta.get("skip_reason")
+              if not isinstance(skip_reason, str) or not skip_reason:
+                  raise SystemExit("v4ao_meta_skip_reason_missing")
+              if not v4ai._support_shortfall(ValueError(skip_reason)):
+                  raise SystemExit(
+                      "v4ao_meta_skip_reason_not_supported:" + skip_reason
+                  )
+              if meta_candidate["status"] != "SKIPPED_INSUFFICIENT_META_SUPPORT":
+                  raise SystemExit("v4ao_meta_skip_status_invalid")
+              print(
+                  "::warning::V4-AO Meta model skipped due to insufficient "
+                  "training support: "
+                  + skip_reason
+                  + ". Primary metrics are published; Meta acceptance is "
+                  "unavailable and promotion remains blocked."
+              )
+          elif meta_candidate["status"] != "COMPLETED" or meta_trade_count < 1:
+              raise SystemExit(
+                  "v4ao_meta_model_has_no_forward_trades:"
+                  + str(meta_candidate["status"])
+                  + ":"
+                  + str(meta_trade_count)
+              )
+          else:
+              print(
+                  "Meta training and forward trade contract: PASS; "
+                  f"trades={meta_trade_count}"
+              )
+          PY
+      - name: Upload V4-AO report, trades, decisions, and exact Step Summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alix-v4ao-30m-regime-economic
+          path: |
+            alix-v4ao-30m-regime-report.json
+            alix-v4ao-30m-regime-trades.csv
+            alix-v4ao-30m-regime-decisions.csv
+            alix-v4ao-30m-regime-step-summary.md
+          if-no-files-found: warn
