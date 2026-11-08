@@ -194,7 +194,6 @@ def _validate_minute_timestamp_bounds(
         raise ValueError(f"v4ap_market_end_mismatch:{symbol}")
 
 
-
 def _validate_documented_spot_gap(
     dates: Series, invalid_intervals: Series, symbol: str
 ) -> None:
@@ -210,6 +209,7 @@ def _validate_documented_spot_gap(
         or pd.Timestamp(dates.iloc[gap_index]) != expected_next
     ):
         raise ValueError("v4ap_market_gap_timestamp_mismatch")
+
 
 def _validate_minute_cadence(
     dates: Series,

@@ -307,7 +307,6 @@ def _known_outage_window() -> tuple[datetime, int, int, int, int]:
     return now, start, end, missing_start, missing_end
 
 
-
 @pytest.mark.parametrize("symbol", fetcher.KNOWN_EXCHANGE_GAP_SYMBOLS)
 def test_gap_tolerant_fetch_accepts_only_the_documented_2023_outage(
     symbol: str,
@@ -394,6 +393,7 @@ def test_gap_tolerant_fetch_rejects_undocumented_date_time_or_duration(
             allow_exchange_gaps=True,
         )
 
+
 def test_gap_tolerant_fetch_rejects_empty_pages_and_truncated_end() -> None:
     now, start, end, missing_start, missing_end = _known_outage_window()
     with pytest.raises(ValueError, match="binance_kline_empty_page_under_gap_policy"):
@@ -429,7 +429,6 @@ def test_gap_tolerant_fetch_rejects_empty_pages_and_truncated_end() -> None:
             sleep_fn=lambda _seconds: None,
             allow_exchange_gaps=True,
         )
-
 
 
 @pytest.mark.parametrize("symbol", fetcher.KNOWN_EXCHANGE_GAP_SYMBOLS)
@@ -473,6 +472,7 @@ def test_gap_tolerant_artifact_writer_rejects_symbol_outside_approved_universe(
             allow_exchange_gaps=True,
         )
 
+
 @pytest.mark.parametrize("symbol", fetcher.KNOWN_EXCHANGE_GAP_SYMBOLS)
 def test_gap_manifest_discloses_real_missing_minutes_without_fill(
     tmp_path: Path, symbol: str
@@ -496,7 +496,9 @@ def test_gap_manifest_discloses_real_missing_minutes_without_fill(
         allow_exchange_gaps=True,
     )
     saved = json.loads(
-        (tmp_path / f"binance-{symbol.lower()}-1m.manifest.json").read_text(encoding="utf-8")
+        (tmp_path / f"binance-{symbol.lower()}-1m.manifest.json").read_text(
+            encoding="utf-8"
+        )
     )
     assert saved["row_count"] == 1360
     assert saved["missing_minute_intervals"] == 80

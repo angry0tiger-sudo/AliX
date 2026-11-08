@@ -111,7 +111,6 @@ def test_execution_signals_flatten_at_timeframe_discontinuity() -> None:
     assert any(item["signal"] == "SELL" for item in actions)
 
 
-
 @pytest.mark.parametrize("symbol", sweep.ASSETS)
 def test_minute_cadence_accepts_only_documented_spot_gap(symbol: str) -> None:
     dates = pd.Series(
@@ -132,6 +131,7 @@ def test_minute_cadence_accepts_only_documented_spot_gap(symbol: str) -> None:
         start_utc=pd.Timestamp("2023-03-24T12:38:00Z"),
         end_utc=pd.Timestamp("2023-03-24T14:01:00Z"),
     )
+
 
 def test_minute_cadence_rejects_undocumented_gap() -> None:
     dates = pd.Series(
