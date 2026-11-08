@@ -345,6 +345,9 @@ def test_blocked_run_builds_and_validates_all_36_no_fit_cells(
     assert len(report["candidates"]) == 36
     assert report["economic_results"] is None
     assert report["model"]["fit_performed"] is False
+    assert report["conclusion"] == (
+        "FUNDING_COVERAGE_INSUFFICIENT_NO_ECONOMIC_CONCLUSION"
+    )
     assert report["Champion"] is None
     summary = ai6._render_summary(report)
     assert "all 36 combinations" in summary.lower()
@@ -352,6 +355,8 @@ def test_blocked_run_builds_and_validates_all_36_no_fit_cells(
     assert "Net PF" in summary
     assert "DSR Z" in summary
     assert "OI: DISABLED" in summary
+    assert "NOT evidence for or against statistical edge" in summary
+    assert "CLOSE after this completed negative diagnostic" not in summary
 
 
 def test_invalid_ai6_report_is_rejected() -> None:
