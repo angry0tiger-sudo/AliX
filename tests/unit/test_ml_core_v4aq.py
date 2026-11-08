@@ -46,9 +46,9 @@ def test_donchian_meta_context_is_causal_and_preserves_funding_missing_rows() ->
         bars, external, strategy=v4aq.DONCHIAN_STRATEGY
     )
     assert tuple(features.columns) == v4aq.V4AQ_META_FEATURE_COLUMNS
+    _assert_v4aq_finite(features.iloc[21:].to_numpy(dtype=float))
     _assert_v4aq_missing(features.iloc[: v4aq.V4AQ_PRIMARY_LOOKBACK, :2])
     assert pd.isna(features.loc[0, "funding_rate_ma"])
-    _assert_v4aq_finite(features.iloc[21:].to_numpy(dtype=float))
     changed = bars.copy()
     changed.loc[30:, ["high", "low", "close"]] *= 100.0
     changed_features = v4aq.build_v4aq_meta_features(
