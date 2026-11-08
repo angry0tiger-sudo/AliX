@@ -22,6 +22,7 @@ AI-6 initially proposed both Binance Funding Rate and Open Interest History. The
 7. Evaluate the complete 36-cell V4-AP grid. Fit 12 Meta models grouped by asset/timeframe/Primary strategy, and reuse each out-of-sample filtered event stream for the three exit geometries.
 8. Freeze the Meta threshold from in-training calibration. Score ROC-AUC on forward labels over the 70%-85% interval. The final 15% remains untouched.
 9. Require >=50 trades, >=40% win rate, Net PF >=1.10 and DSR Z >0 for a passing cell. DSR uses 36 nominal trials; independence is not verified.
+10. ROC-AUC is not an economic acceptance gate. For this run it is explicitly N/A (not computed); Net PF, Win Rate, trade count and DSR remain the decision metrics.
 
 ## Consequences
 

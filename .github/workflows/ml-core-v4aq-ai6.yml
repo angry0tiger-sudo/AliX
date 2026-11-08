@@ -301,12 +301,17 @@ jobs:
               for row in report["candidates"]:
                   for field in (
                       "roc_auc",
+                      "roc_auc_status",
                       "net_profit_factor",
                       "win_rate",
                       "dsr_z_score",
                       "trade_count",
                   ):
                       assert field in row
+                  assert row["roc_auc"] is None
+                  assert row["roc_auc_status"] == (
+                      "NOT_EVALUATED_ROC_AUC_DEFERRED_FOR_ECONOMIC_SWEEP"
+                  )
           else:
               raise SystemExit("ai6_report_status_invalid")
 

@@ -22,7 +22,9 @@ END = START + pd.Timedelta(days=1825) - pd.Timedelta(minutes=1)
 COMMIT = "a" * 40
 
 
-def _funding_artifact(directory: Path, symbol: str, *, ready: bool = True) -> dict[str, Any]:
+def _funding_artifact(
+    directory: Path, symbol: str, *, ready: bool = True
+) -> dict[str, Any]:
     stem = f"binance-{symbol.lower()}"
     csv_path = directory / f"{stem}-funding.csv"
     timestamps = pd.date_range(START, END, periods=20)
@@ -94,24 +96,6 @@ def _bars(rows: int = 120, timeframe: str = "4h") -> DataFrame:
     )
 
 
-def test_roc_auc_is_computed_only_with_both_classes() -> None:
-    auc, status = ai6._roc_auc(
-        np.asarray([0, 1, 0, 1]),
-        np.asarray([0.1, 0.9, 0.2, 0.8]),
-    )
-    assert auc == pytest.approx(1.0)
-    assert status == "COMPUTED"
-
-    missing, missing_status = ai6._roc_auc(
-        np.asarray([1, 1, 1]), np.asarray([0.2, 0.3, 0.4])
-    )
-    assert missing is None
-    assert missing_status == "VALIDATION_REQUIRES_BOTH_CLASSES"
-
-    with pytest.raises(ValueError, match="input_alignment_invalid"):
-        ai6._roc_auc(np.asarray([0, 1]), np.asarray([0.5]))
-
-
 def test_forward_labeling_applies_30bps_cost_and_rejects_gap_and_tail() -> None:
     bars = _bars(8, "4h")
     bars.loc[1, "open"] = 100.0
@@ -128,9 +112,7 @@ def test_forward_labeling_applies_30bps_cost_and_rejects_gap_and_tail() -> None:
 
     discontinuous = bars.copy()
     discontinuous_dates = pd.to_datetime(discontinuous["date"], utc=True)
-    discontinuous_dates.iloc[2] = (
-        discontinuous_dates.iloc[2] + pd.Timedelta(minutes=1)
-    )
+    discontinuous_dates.iloc[2] = discontinuous_dates.iloc[2] + pd.Timedelta(minutes=1)
     discontinuous["date"] = discontinuous_dates
     gap_labels = ai6._label_primary_events(
         discontinuous,
@@ -208,16 +190,13 @@ def test_read_funding_artifact_rejects_hash_safety_and_window_mismatch(
         )
 
 
-def test_evaluate_primary_group_uses_purged_oof_fit_and_forward_auc(
+def test_evaluate_primary_group_uses_purged_oof_fit_and_defers_auc(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     bars = _bars(200, "4h")
     primary = Series(np.arange(len(bars)) % 3 == 0)
     features = DataFrame(
-        {
-            name: np.linspace(0.1, 1.0, len(bars))
-            for name in V4AQ_META_FEATURE_COLUMNS
-        }
+        {name: np.linspace(0.1, 1.0, len(bars)) for name in V4AQ_META_FEATURE_COLUMNS}
     )
 
     def fake_oof(
@@ -293,8 +272,10 @@ def test_evaluate_primary_group_uses_purged_oof_fit_and_forward_auc(
     )
     assert diagnostics["fit_performed"] is True
     assert diagnostics["fit_status"] == "FITTED"
-    assert diagnostics["roc_auc_status"] == "COMPUTED"
-    assert diagnostics["roc_auc"] is not None
+    assert diagnostics["roc_auc_status"] == (
+        "NOT_EVALUATED_ROC_AUC_DEFERRED_FOR_ECONOMIC_SWEEP"
+    )
+    assert diagnostics["roc_auc"] is None
     assert diagnostics["threshold"] == 0.5
     assert len(decisions) == diagnostics["validation_labeled_event_count"]
     assert filtered.any()

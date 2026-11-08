@@ -232,44 +232,6 @@ def _label_primary_events(
     return result
 
 
-def _roc_auc(
-    labels: np.ndarray,
-    probabilities: np.ndarray,
-) -> tuple[float | None, str]:
-    if labels.ndim != 1 or probabilities.ndim != 1 or len(labels) != len(probabilities):
-        raise ValueError("ai6_roc_auc_input_alignment_invalid")
-    if len(labels) < 2 or set(np.unique(labels).tolist()) != {0, 1}:
-        return None, "VALIDATION_REQUIRES_BOTH_CLASSES"
-    scores = probabilities.astype(float)
-    if (
-        not np.isfinite(scores).all()
-        or bool((scores < 0.0).any())
-        or bool((scores > 1.0).any())
-    ):
-        return None, "ROC_AUC_NON_FINITE"
-    order = np.argsort(scores, kind="mergesort")
-    sorted_scores = scores[order]
-    ranks = np.empty(len(scores), dtype=float)
-    start = 0
-    while start < len(scores):
-        stop = start + 1
-        while stop < len(scores) and sorted_scores[stop] == sorted_scores[start]:
-            stop += 1
-        average_rank = ((start + 1) + stop) / 2.0
-        ranks[order[start:stop]] = average_rank
-        start = stop
-    positive = labels.astype(int) == 1
-    positive_count = int(np.count_nonzero(positive))
-    negative_count = len(labels) - positive_count
-    rank_sum = float(ranks[positive].sum())
-    value = (rank_sum - positive_count * (positive_count + 1) / 2.0) / (
-        positive_count * negative_count
-    )
-    if not math.isfinite(value):
-        return None, "ROC_AUC_NON_FINITE"
-    return float(value), "COMPUTED"
-
-
 def _evaluate_primary_group(
     bars: DataFrame,
     features: DataFrame,
@@ -337,7 +299,7 @@ def _evaluate_primary_group(
                 "validation_event_count": 0,
                 "validation_labeled_event_count": 0,
                 "roc_auc": None,
-                "roc_auc_status": "NOT_EVALUATED",
+                "roc_auc_status": "NOT_EVALUATED_ROC_AUC_DEFERRED_FOR_ECONOMIC_SWEEP",
                 "threshold": None,
                 "accepted_event_count": 0,
                 "acceptance_rate": 0.0,
@@ -385,7 +347,8 @@ def _evaluate_primary_group(
             else np.asarray([], dtype=float)
         )
         labels = labelled_validation["meta_label"].to_numpy(dtype=int)
-    auc, auc_status = _roc_auc(labels, probabilities)
+    auc = None
+    auc_status = "NOT_EVALUATED_ROC_AUC_DEFERRED_FOR_ECONOMIC_SWEEP"
     threshold = float(fit_diagnostics["selected_threshold"])
     accepted = probabilities >= threshold
     accepted_indices = labelled_validation["event_index"].to_numpy(dtype=int)[accepted]
@@ -478,7 +441,7 @@ def _placeholder_candidate(
         "sharpe_status": "NO_TRADES_DSR_UNDEFINED",
         "roc_auc": None,
         "roc_auc_reference": ROC_AUC_REFERENCE,
-        "roc_auc_status": "NOT_EVALUATED",
+        "roc_auc_status": "NOT_EVALUATED_ROC_AUC_DEFERRED_FOR_ECONOMIC_SWEEP",
         "roc_auc_above_reference": None,
         "unfiltered_primary_signal_count": 0,
         "meta_filtered_signal_count": 0,
@@ -594,7 +557,7 @@ def _build_report(
             "training_target": (
                 "PRIMARY_BUY_ONLY_FIXED_24H_FORWARD_CLOSE_NET_RETURN_AFTER_30BPS_COSTS"
             ),
-            "validation_metric": "ROC_AUC_ON_FORWARD_70_TO_85_PERCENT_EVENT_LABELS",
+            "validation_metric": "NOT_EVALUATED_ROC_AUC_DEFERRED_FOR_ECONOMIC_SWEEP",
             "threshold_policy": (
                 "SELECTED_FROM_PURGED_IN_TRAIN_CALIBRATION_PROBABILITIES_ONLY; "
                 "NO_FORWARD_VALIDATION_LABELS_USED_FOR_THRESHOLD"
@@ -759,7 +722,7 @@ def _render_summary(report: dict[str, Any]) -> str:
         "",
         "## Acceptance",
         "Trades >= 50; Win Rate >= 40%; Net PF >= 1.10; DSR Z > 0.0.",
-        "ROC-AUC is reported against the 0.51 reference and is diagnostic, not a promotion gate.",
+        "ROC-AUC: N/A for this run; deferred to keep focus on the preregistered economic sweep. It is not an acceptance gate.",
         "DSR uses the full 36-cell preregistered cohort; trial independence is not verified.",
         "",
         "## All 36 combinations",
