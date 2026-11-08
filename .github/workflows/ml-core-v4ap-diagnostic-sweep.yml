@@ -1,0 +1,294 @@
+name: AliX V4-AP 36-Cell Primary Economic Diagnostic Sweep
+
+on:
+  push:
+    branches:
+      - research/ml-core-v4ap-diagnostic-sweep
+    paths:
+      - .github/workflows/ml-core-v4ap-diagnostic-sweep.yml
+      - scripts/run_ml_core_v4ap_diagnostic_sweep.py
+      - scripts/fetch_binance_public_ohlcv.py
+      - services/ml_core/economic_backtest.py
+      - services/ml_core/adaptive_targets.py
+      - tests/unit/test_ml_core_v4ap_diagnostic_sweep.py
+      - tests/unit/test_fetch_binance_public_ohlcv.py
+      - tests/unit/test_ml_core_economic_backtest.py
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: alix-v4ap-diagnostic-sweep
+  cancel-in-progress: true
+
+jobs:
+  v4ap-diagnostic-sweep:
+    if: github.ref == 'refs/heads/research/ml-core-v4ap-diagnostic-sweep'
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      ALIx_ENV: paper
+      ALIx_DRY_RUN: "true"
+      ALIx_ALLOW_LIVE_TRADING: "false"
+      ALIx_REPORTING_ENABLED: "false"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Require Standard CI success for this exact V4-AP commit
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          TARGET_SHA: ${{ github.sha }}
+          TARGET_BRANCH: ${{ github.ref_name }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import time
+          from urllib.error import HTTPError, URLError
+          from urllib.request import Request, urlopen
+
+          repository = os.environ["GITHUB_REPOSITORY"]
+          target_sha = os.environ["TARGET_SHA"]
+          target_branch = os.environ["TARGET_BRANCH"]
+          token = os.environ["GH_TOKEN"]
+          expected_branch = "research/ml-core-v4ap-diagnostic-sweep"
+          if target_branch != expected_branch:
+              raise SystemExit("unsupported_v4ap_branch:" + target_branch)
+
+          deadline = time.monotonic() + 90 * 60
+          url = (
+              f"https://api.github.com/repos/{repository}/actions/workflows/ci.yml/runs"
+              f"?head_sha={target_sha}&per_page=100"
+          )
+          while time.monotonic() < deadline:
+              request = Request(
+                  url,
+                  headers={
+                      "Accept": "application/vnd.github+json",
+                      "Authorization": f"Bearer {token}",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  },
+              )
+              try:
+                  with urlopen(request, timeout=20) as response:
+                      payload = json.load(response)
+              except (HTTPError, URLError, TimeoutError) as error:
+                  raise SystemExit(
+                      f"ci_status_lookup_failed:{type(error).__name__}"
+                  ) from None
+              matching = [
+                  run for run in payload.get("workflow_runs", [])
+                  if run.get("head_sha") == target_sha
+                  and run.get("head_branch") == expected_branch
+                  and run.get("event") == "push"
+              ]
+              if matching:
+                  latest = max(
+                      matching,
+                      key=lambda item: (
+                          item.get("run_number", 0),
+                          item.get("run_attempt", 0),
+                      ),
+                  )
+                  if latest.get("status") == "completed":
+                      if latest.get("conclusion") != "success":
+                          raise SystemExit(
+                              "ci_green_gate_blocked:"
+                              + str(latest.get("conclusion"))
+                              + ":"
+                              + target_sha
+                          )
+                      print(json.dumps({
+                          "gate": "PASS",
+                          "target_sha": target_sha,
+                          "ci_run_id": latest.get("id"),
+                          "ci_run_url": latest.get("html_url"),
+                          "ci_conclusion": latest.get("conclusion"),
+                      }, sort_keys=True))
+                      break
+              time.sleep(30)
+          else:
+              raise SystemExit("ci_green_gate_timeout:" + target_sha)
+          PY
+      - name: Checkout exact V4-AP commit without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set up pinned Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install pinned Primary-only economic dependencies
+        run: |
+          python -m pip install pip==25.2
+          python -m pip install numpy==2.5.4 pandas==2.3.3
+      - name: Confirm exact V4-AP grid, costs, raw signals, and fail-closed safety
+        env:
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/research/ml-core-v4ap-diagnostic-sweep"
+          test "$GITHUB_SHA" = "$TARGET_SHA"
+          python - <<'PY'
+          from scripts import run_ml_core_v4ap_diagnostic_sweep as v4ap
+
+          assert v4ap.DAYS == 1825
+          assert v4ap.DSR_TRIAL_COUNT == 36
+          assert v4ap.ASSETS == ("ETHUSDT", "BTCUSDT")
+          assert v4ap.TIMEFRAMES == ("15m", "1h", "4h")
+          assert v4ap.ROUND_TRIP_COST_BPS == 30.0
+          assert v4ap._execution_config().fee_bps == 10.0
+          assert v4ap._execution_config().slippage_bps == 5.0
+          assert {item["name"] for item in v4ap.EXIT_GEOMETRIES} == {
+              "TIGHT", "BALANCED", "TRAILING"
+          }
+          assert v4ap.EXIT_GEOMETRIES[0]["stop_loss_atr"] == 1.0
+          assert v4ap.EXIT_GEOMETRIES[0]["take_profit_atr"] == 1.5
+          assert v4ap.EXIT_GEOMETRIES[1]["stop_loss_atr"] == 1.5
+          assert v4ap.EXIT_GEOMETRIES[1]["take_profit_atr"] == 3.0
+          assert v4ap.EXIT_GEOMETRIES[2]["stop_loss_atr"] == 2.0
+          assert v4ap.EXIT_GEOMETRIES[2]["take_profit_atr"] == 10.0
+          assert v4ap.EXIT_GEOMETRIES[2]["trailing_activation_atr"] == 1.0
+          assert v4ap.EXIT_GEOMETRIES[2]["trailing_step_atr"] == 1.5
+          assert all(v4ap.TIMEFRAME_MINUTES[tf] * v4ap.HORIZON_HOURS // 60
+                     == v4ap.HORIZON_HOURS * 60 // v4ap.TIMEFRAME_MINUTES[tf]
+                     for tf in v4ap.TIMEFRAMES)
+          assert v4ap._grid_candidate_ids() and len(v4ap._grid_candidate_ids()) == 36
+          execution = v4ap._execution_config()
+          assert execution.position_fraction == 1.0
+          print(
+              "V4-AP contract PASS: 36 Primary-only cells; 30 bps; "
+              "no Meta/HMM/CUSUM/LSTM; safety remains closed."
+          )
+          PY
+          printf 'Champion=null\norder_permission=false\ntrading_authorization=NO-GO\n'
+          printf 'private_api_calls=0\nreal_order_attempts=0\ncredentials_used=false\n'
+      - name: Establish one shared 1825-day UTC data window
+        id: window
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          from datetime import datetime, timedelta, timezone
+
+          end = datetime.now(timezone.utc).replace(second=0, microsecond=0) - timedelta(minutes=1)
+          start = end - timedelta(days=1825) + timedelta(minutes=1)
+          print("start_utc=" + start.isoformat(timespec="seconds").replace("+00:00", "Z"))
+          print("end_utc=" + end.isoformat(timespec="seconds").replace("+00:00", "Z"))
+          PY
+      - name: Fetch both 1825-day Binance Spot public 1m datasets concurrently
+        env:
+          DATA_START_UTC: ${{ steps.window.outputs.start_utc }}
+          DATA_END_UTC: ${{ steps.window.outputs.end_utc }}
+        run: |
+          set -euo pipefail
+          data_dir="$RUNNER_TEMP/alix-v4ap-market-data"
+          mkdir -p "$data_dir"
+          fetch_symbol() {
+            symbol="$1"
+            log_path="$RUNNER_TEMP/v4ap-fetch-$symbol.log"
+            extra_args=()
+            if [ "$symbol" = "ETHUSDT" ]; then
+              extra_args+=(--allow-exchange-gaps)
+            fi
+            if python scripts/fetch_binance_public_ohlcv.py \
+              --days 1825 \
+              --symbol "$symbol" \
+              --interval 1m \
+              --output-dir "$data_dir" \
+              --commit-sha "$GITHUB_SHA" \
+              --start-utc "$DATA_START_UTC" \
+              --end-utc "$DATA_END_UTC" \
+              "${extra_args[@]}" >"$log_path" 2>&1; then
+              cat "$log_path"
+            else
+              cat "$log_path"
+              return 1
+            fi
+          }
+          fetch_symbol ETHUSDT &
+          eth_pid=$!
+          fetch_symbol BTCUSDT &
+          btc_pid=$!
+          eth_status=0
+          btc_status=0
+          wait "$eth_pid" || eth_status=$?
+          wait "$btc_pid" || btc_status=$?
+          if [ "$eth_status" -ne 0 ] || [ "$btc_status" -ne 0 ]; then
+            echo "Public market-data fetch failed; refusing partial data."
+            exit 1
+          fi
+          printf 'shared_start_utc=%s\nshared_end_utc=%s\n' "$DATA_START_UTC" "$DATA_END_UTC"
+          printf 'requested_days=1825\nsource_interval=1m\nprivate_api_calls=0\n'
+          printf 'no_interpolation=true\n'
+      - name: Run all 36 Primary-only economic combinations
+        env:
+          DATA_START_UTC: ${{ steps.window.outputs.start_utc }}
+          DATA_END_UTC: ${{ steps.window.outputs.end_utc }}
+        run: |
+          set -euo pipefail
+          python -m scripts.run_ml_core_v4ap_diagnostic_sweep \
+            --input-dir "$RUNNER_TEMP/alix-v4ap-market-data" \
+            --output-report "$GITHUB_WORKSPACE/alix-v4ap-diagnostic-report.json" \
+            --output-trades-csv "$GITHUB_WORKSPACE/alix-v4ap-diagnostic-trades.csv" \
+            --output-summary "$GITHUB_WORKSPACE/alix-v4ap-diagnostic-step-summary.md" \
+            --commit-sha "$GITHUB_SHA" \
+            --start-utc "$DATA_START_UTC" \
+            --end-utc "$DATA_END_UTC"
+      - name: Validate the complete 36-cell report and publish exact Step Summary
+        env:
+          REPORT_PATH: ${{ github.workspace }}/alix-v4ap-diagnostic-report.json
+          SUMMARY_PATH: ${{ github.workspace }}/alix-v4ap-diagnostic-step-summary.md
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          from scripts.run_ml_core_v4ap_diagnostic_sweep import (
+              CONCLUSION_NO_EDGE,
+              DSR_TRIAL_COUNT,
+              _validate_report,
+          )
+
+          report = json.loads(
+              Path(os.environ["REPORT_PATH"]).read_text(encoding="utf-8")
+          )
+          _validate_report(report, os.environ["TARGET_SHA"])
+          summary_path = Path(os.environ["SUMMARY_PATH"])
+          summary = summary_path.read_text(encoding="utf-8")
+          result_rows = [
+              line for line in summary.splitlines()
+              if line.startswith("| ETHUSDT |") or line.startswith("| BTCUSDT |")
+          ]
+          if len(result_rows) != DSR_TRIAL_COUNT:
+              raise SystemExit("v4ap_step_summary_must_contain_all_36_cells")
+          if report["conclusion"] == CONCLUSION_NO_EDGE:
+              if CONCLUSION_NO_EDGE not in summary:
+                  raise SystemExit("v4ap_no_edge_conclusion_missing_from_summary")
+          if "Champion=null" not in summary or "trading_authorization=NO-GO" not in summary:
+              raise SystemExit("v4ap_fail_closed_summary_fields_missing")
+          with Path(os.environ["GITHUB_STEP_SUMMARY"]).open(
+              "a", encoding="utf-8"
+          ) as handle:
+              handle.write(summary)
+              handle.write("\n")
+          print(
+              "V4-AP Step Summary PASS: 36 unique combinations; "
+              "cost, DSR, conclusion, and safety contracts verified."
+          )
+          PY
+      - name: Upload V4-AP report, complete trade ledger, and Step Summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alix-v4ap-36-cell-diagnostic-sweep
+          path: |
+            alix-v4ap-diagnostic-report.json
+            alix-v4ap-diagnostic-trades.csv
+            alix-v4ap-diagnostic-step-summary.md
+          if-no-files-found: warn
+          compression-level: 6
