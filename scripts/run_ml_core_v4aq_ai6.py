@@ -742,16 +742,16 @@ def _validate_report_safety(report: dict[str, Any]) -> None:
 def _validate_report_candidate_row(candidate: object) -> dict[str, Any]:
     if not isinstance(candidate, dict):
         raise ValueError("ai6_candidate_row_invalid")
-    valid_identity = (
-        candidate.get("symbol") in v4ap.ASSETS
-        and candidate.get("timeframe") in v4ap.TIMEFRAMES
-        and candidate.get("strategy") in v4ap.STRATEGIES
-        and candidate.get("geometry") in {item["name"] for item in v4ap.EXIT_GEOMETRIES}
-        and candidate.get("round_trip_cost_bps") == ROUND_TRIP_COST_BPS
-        and candidate.get("roc_auc_reference") == ROC_AUC_REFERENCE
-        and candidate.get("dsr_trial_count") == v4ap.DSR_TRIAL_COUNT
+    identity_checks = (
+        candidate.get("symbol") in v4ap.ASSETS,
+        candidate.get("timeframe") in v4ap.TIMEFRAMES,
+        candidate.get("strategy") in v4ap.STRATEGIES,
+        candidate.get("geometry") in {item["name"] for item in v4ap.EXIT_GEOMETRIES},
+        candidate.get("round_trip_cost_bps") == ROUND_TRIP_COST_BPS,
+        candidate.get("roc_auc_reference") == ROC_AUC_REFERENCE,
+        candidate.get("dsr_trial_count") == v4ap.DSR_TRIAL_COUNT,
     )
-    if not valid_identity:
+    if not all(identity_checks):
         raise ValueError("ai6_candidate_contract_invalid")
     expected_decision = v4ap._candidate_qualifies(candidate)
     if candidate.get("qualifies") is not expected_decision:
