@@ -271,7 +271,9 @@ class BybitLinearFundingConnector:
             },
         )
         payload = _get_payload(self._transport, url, self._sleeper)
-        ret_code = payload.get("retCode") if isinstance(payload, Mapping) else None
+        if not isinstance(payload, Mapping):
+            raise ProviderError("bybit_funding_response_status_invalid")
+        ret_code = payload.get("retCode")
         if isinstance(ret_code, bool) or not isinstance(ret_code, int) or ret_code != 0:
             raise ProviderError("bybit_funding_response_status_invalid")
         result = payload.get("result")
