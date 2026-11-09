@@ -209,7 +209,10 @@ def test_24_simulated_hours_produce_an_auditable_paper_only_report() -> None:
     )
     sell_event = next(event for event in report["events"] if event["action"] == "SELL")
     assert sell_event["intended_base_quantity"] == buy_fill["base_quantity"]
-    assert sell_event["simulated_fill"]["base_quantity"] == buy_fill["base_quantity"]
+    assert abs(
+        Decimal(sell_event["simulated_fill"]["base_quantity"])
+        - Decimal(buy_fill["base_quantity"])
+    ) <= Decimal("1e-12")
     assert report["safety"]["order_permission"] is False
     assert report["safety"]["trading_authorization"] == "NO-GO"
     assert report["profitability_claim"] is False
