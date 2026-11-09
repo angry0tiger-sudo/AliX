@@ -300,9 +300,7 @@ class RiskAllocationEnv(gym.Env[Float32Array, np.int64]):
             raise ValueError("risk_action_out_of_range")
         return action_index
 
-    def _resolve_target_exposure(
-        self, action_index: int
-    ) -> tuple[bool, float, float]:
+    def _resolve_target_exposure(self, action_index: int) -> tuple[bool, float, float]:
         signal = bool(self._primary_signal[self._index])
         proposed_target = ACTION_FRACTIONS[action_index]
         current_price = float(self._market[self._index, CLOSE_COLUMN])
