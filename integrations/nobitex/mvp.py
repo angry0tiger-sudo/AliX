@@ -630,7 +630,6 @@ def plan_maker_slices(
     )
 
 
-
 def plan_maker_slices_for_base_quantity(
     snapshot: OrderBookSnapshot,
     *,
