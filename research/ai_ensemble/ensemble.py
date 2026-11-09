@@ -160,7 +160,7 @@ class StackingEnsemble:
         target = _binary_labels(labels, len(data))
         if len(label_end_indices) != len(data):
             raise ValueError("stacking_label_end_indices_row_mismatch")
-        if not training_indices:
+        if len(training_indices) == 0:
             raise ValueError("stacking_training_indices_empty")
         selected = tuple(int(index) for index in training_indices)
         if selected != tuple(sorted(set(selected))) or selected[0] < 0 or selected[-1] >= len(data):

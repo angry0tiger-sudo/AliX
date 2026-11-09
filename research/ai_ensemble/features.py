@@ -167,14 +167,17 @@ def build_causal_features(
     The first rows remain NaN until each rolling indicator has enough history.
     Callers must drop those rows explicitly; this function never fills them.
     """
-    required = set(REQUIRED_OHLCV_COLUMNS) | set(REQUIRED_MICROSTRUCTURE_COLUMNS[1:])
-    missing = sorted(required - set(market_data.columns))
+    missing = sorted(
+        (set(REQUIRED_OHLCV_COLUMNS) | set(REQUIRED_MICROSTRUCTURE_COLUMNS))
+        - set(market_data.columns)
+    )
     if missing:
         raise ValueError(f"market_data_missing_columns:{','.join(missing)}")
-    data = _validate_ohlcv(market_data, interval)
-    for column in REQUIRED_MICROSTRUCTURE_COLUMNS[1:]:
-        if column not in data.columns:
-            raise ValueError(f"market_data_missing_columns:{column}")
+    data = merge_market_archives(
+        market_data.loc[:, list(REQUIRED_OHLCV_COLUMNS)],
+        market_data.loc[:, list(REQUIRED_MICROSTRUCTURE_COLUMNS)],
+        interval=interval,
+    )
     close = data["close"].astype(float)
     high = data["high"].astype(float)
     low = data["low"].astype(float)

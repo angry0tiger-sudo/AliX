@@ -54,7 +54,7 @@ class CausalGaussianHMM:
             raise ValueError("hmm_probability_normalization_failed")
         return values / totals
 
-    def _require_fitted(self) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    def _require_fitted(self) -> None:
         if (
             not self.is_fitted_
             or self.location_ is None
@@ -66,13 +66,14 @@ class CausalGaussianHMM:
             or self.state_order_ is None
         ):
             raise RuntimeError("hmm_model_not_fitted")
-        return self.location_, self.scale_, self.means_, self.variances_
 
     def _emissions(self, observations: np.ndarray) -> np.ndarray:
-        _, _, means, variances = self._require_fitted()
-        delta = observations[:, None, :] - means[None, :, :]
+        if self.means_ is None or self.variances_ is None:
+            raise RuntimeError("hmm_parameters_not_initialized")
+        delta = observations[:, None, :] - self.means_[None, :, :]
         log_probability = -0.5 * (
-            np.log(2.0 * np.pi * variances)[None, :, :] + (delta * delta) / variances[None, :, :]
+            np.log(2.0 * np.pi * self.variances_)[None, :, :]
+            + (delta * delta) / self.variances_[None, :, :]
         ).sum(axis=2)
         shifted = log_probability - log_probability.max(axis=1, keepdims=True)
         return np.exp(shifted)
@@ -124,9 +125,7 @@ class CausalGaussianHMM:
         self.means_ = np.vstack(
             [normalized[sorted_indices[position]] for position in quantile_positions]
         )
-        base_variance = np.maximum(
-            normalized.var(axis=0), self.covariance_floor
-        )
+        base_variance = np.maximum(normalized.var(axis=0), self.covariance_floor)
         self.variances_ = np.tile(base_variance, (self.n_states, 1))
         self.initial_probabilities_ = np.full(self.n_states, 1.0 / self.n_states)
         self.transition_matrix_ = np.full(
@@ -168,15 +167,17 @@ class CausalGaussianHMM:
         initial_state_probabilities: np.ndarray | None = None,
     ) -> np.ndarray:
         """Return P(state_t | observations_0..t), never smoothed P(state_t | all)."""
-        location, scale, _, _ = self._require_fitted()
-        observations = self._matrix(values, name="hmm_filter_observations")
-        if observations.shape[1] != len(location):
-            raise ValueError("hmm_filter_feature_count_mismatch")
-        normalized = (observations - location) / scale
-        emissions = self._emissions(normalized)
+        self._require_fitted()
+        assert self.location_ is not None
+        assert self.scale_ is not None
         assert self.initial_probabilities_ is not None
         assert self.transition_matrix_ is not None
         assert self.state_order_ is not None
+        observations = self._matrix(values, name="hmm_filter_observations")
+        if observations.shape[1] != len(self.location_):
+            raise ValueError("hmm_filter_feature_count_mismatch")
+        normalized = (observations - self.location_) / self.scale_
+        emissions = self._emissions(normalized)
         if initial_state_probabilities is None:
             prior = self.initial_probabilities_.copy()
         else:

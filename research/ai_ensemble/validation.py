@@ -47,7 +47,7 @@ def create_purged_walk_forward_folds(
         raise ValueError("walk_forward_minimum_train_samples_invalid")
     if not isfinite(first_validation_fraction) or not 0.40 <= first_validation_fraction < 0.90:
         raise ValueError("walk_forward_first_validation_fraction_invalid")
-    if not eligible_indices:
+    if len(eligible_indices) == 0:
         raise ValueError("walk_forward_eligible_indices_empty")
     if len(label_end_indices) <= max(eligible_indices):
         raise ValueError("walk_forward_label_end_indices_short")
