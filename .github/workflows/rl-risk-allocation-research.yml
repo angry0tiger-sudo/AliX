@@ -130,6 +130,30 @@ jobs:
           name: ${{ inputs.dataset_artifact_name }}
           path: ${{ runner.temp }}/alix-rl-market-data
 
+      - name: Normalize the historical public Spot artifact layout
+        env:
+          DATASET_DIR: ${{ runner.temp }}/alix-rl-market-data
+        run: |
+          set -euo pipefail
+          for symbol in btcusdt ethusdt; do
+            for suffix in csv manifest.json; do
+              name="binance-$symbol-1m.$suffix"
+              source_path="$(find "$DATASET_DIR" -type f -name "$name" -print -quit)"
+              if [ -z "$source_path" ]; then
+                echo "required_dataset_file_missing:$name" >&2
+                exit 1
+              fi
+              target_path="$DATASET_DIR/$name"
+              if [ "$source_path" != "$target_path" ]; then
+                cp "$source_path" "$target_path"
+              fi
+            done
+          done
+          test -s "$DATASET_DIR/binance-btcusdt-1m.csv"
+          test -s "$DATASET_DIR/binance-btcusdt-1m.manifest.json"
+          test -s "$DATASET_DIR/binance-ethusdt-1m.csv"
+          test -s "$DATASET_DIR/binance-ethusdt-1m.manifest.json"
+
       - name: Install isolated, pinned RL research dependencies
         run: |
           python -m pip install pip==25.2

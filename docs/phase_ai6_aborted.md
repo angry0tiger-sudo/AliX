@@ -19,6 +19,7 @@ This is a project-priority decision. It is **not** a statistical or economic fin
 - The available GitHub integration in this session exposed read-only workflow-run inspection but no workflow-run cancellation operation. The owner should cancel run #57 manually in GitHub Actions if it is still queued. This record is not a cancellation confirmation.
 - Standard CI #2102 succeeded on the base SHA ef14d9ecbf06a0a984977b869fcdc75c60c38115.
 - V4-AP workflow run #26 (42493418590) completed its 36-cell Primary-only research, but its artifact contains the report/trade ledger/summary, not the underlying five-year OHLCV CSV and manifests. It is therefore not a valid input artifact for PPO training.
+- A separate historical AI-6 Run #56 (42568102847) produced an artifact named `alix-v4aq-ai6-funding-only-36-cell` (Artifact ID 13656392210). The ZIP contains public Spot 1m CSVs and matching manifests for BTCUSDT and ETHUSDT. Both manifests attest to 1825 days, 2,627,920 rows, the same UTC window, and the documented 80-minute gap; the CSV SHA-256 values were verified against the downloaded files. Funding itself was blocked, so this artifact is used only for its Spot OHLCV files. Its files are nested under `_temp/alix-v4aq-spot/`; the manual PPO workflow normalizes the paths without modifying file contents. This is the selected immutable training input, subject to re-validation by the trainer.
 
 ## New approved research scope
 
