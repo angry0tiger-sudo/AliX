@@ -62,20 +62,35 @@ class Candle:
     volume: float
 
     def validate(self) -> None:
-        if self.timestamp.tzinfo is None or self.timestamp.utcoffset() is None:
-            raise ValueError("candle_timestamp_must_be_timezone_aware")
-        values = (self.open, self.high, self.low, self.close, self.volume)
-        if not all(math.isfinite(value) for value in values):
-            raise ValueError("candle_values_must_be_finite")
-        if min(self.open, self.high, self.low, self.close) <= 0.0 or self.volume < 0.0:
-            raise ValueError("candle_ohlcv_geometry_invalid")
-        if self.high < max(self.open, self.close) or self.low > min(
-            self.open, self.close
-        ):
-            raise ValueError("candle_ohlc_geometry_invalid")
+        _validate_candle_timestamp(self)
+        _validate_candle_values(self)
+        _validate_candle_geometry(self)
+
+
+def _validate_candle_timestamp(candle: Candle) -> None:
+    if candle.timestamp.tzinfo is None or candle.timestamp.utcoffset() is None:
+        raise ValueError("candle_timestamp_must_be_timezone_aware")
+
+
+def _validate_candle_values(candle: Candle) -> None:
+    values = (candle.open, candle.high, candle.low, candle.close, candle.volume)
+    if not all(math.isfinite(value) for value in values):
+        raise ValueError("candle_values_must_be_finite")
+    if min(candle.open, candle.high, candle.low, candle.close) <= 0.0:
+        raise ValueError("candle_ohlcv_geometry_invalid")
+    if candle.volume < 0.0:
+        raise ValueError("candle_ohlcv_geometry_invalid")
+
+
+def _validate_candle_geometry(candle: Candle) -> None:
+    if candle.high < max(candle.open, candle.close):
+        raise ValueError("candle_ohlc_geometry_invalid")
+    if candle.low > min(candle.open, candle.close):
+        raise ValueError("candle_ohlc_geometry_invalid")
 
 
 @dataclass(frozen=True, slots=True)
+class BookLevel:@dataclass(frozen=True, slots=True)
 class BookLevel:
     price: Decimal
     amount: Decimal
@@ -298,25 +313,77 @@ def _positive_decimal(value: object, field_name: str) -> Decimal:
     return number
 
 
+def _validate_book_level_item(item: object, side: str) -> None:
+    if not isinstance(item, (list, tuple)) or len(item) != 2:
+        raise OrderBookError(f"orderbook_{side}_level_invalid")
+
+
+def _parse_book_level(item: object, side: str) -> BookLevel:
+    _validate_book_level_item(item, side)
+    if not isinstance(item, (list, tuple)):
+        raise OrderBookError(f"orderbook_{side}_level_invalid")
+    return BookLevel(
+        price=_positive_decimal(item[0], f"{side}_price"),
+        amount=_positive_decimal(item[1], f"{side}_amount"),
+    )
+
+
+def _validate_book_level_order(levels: tuple[BookLevel, ...], side: str) -> None:
+    prices = [level.price for level in levels]
+    if side == "bids":
+        invalid_order = any(a <= b for a, b in zip(prices, prices[1:]))
+        if invalid_order:
+            raise OrderBookError("orderbook_bids_not_strictly_descending")
+    elif side == "asks":
+        invalid_order = any(a >= b for a, b in zip(prices, prices[1:]))
+        if invalid_order:
+            raise OrderBookError("orderbook_asks_not_strictly_ascending")
+    else:
+        raise ValueError("orderbook_side_invalid")
+
+
 def _parse_book_levels(value: object, side: str) -> tuple[BookLevel, ...]:
     if not isinstance(value, list) or not value:
         raise OrderBookError(f"orderbook_{side}_missing")
-    levels: list[BookLevel] = []
-    for item in value:
-        if not isinstance(item, (list, tuple)) or len(item) != 2:
-            raise OrderBookError(f"orderbook_{side}_level_invalid")
-        levels.append(
-            BookLevel(
-                price=_positive_decimal(item[0], f"{side}_price"),
-                amount=_positive_decimal(item[1], f"{side}_amount"),
-            )
-        )
-    prices = [level.price for level in levels]
-    if side == "bids" and any(a <= b for a, b in zip(prices, prices[1:])):
-        raise OrderBookError("orderbook_bids_not_strictly_descending")
-    if side == "asks" and any(a >= b for a, b in zip(prices, prices[1:])):
-        raise OrderBookError("orderbook_asks_not_strictly_ascending")
-    return tuple(levels)
+    levels = tuple(_parse_book_level(item, side) for item in value)
+    _validate_book_level_order(levels, side)
+    return levels
+
+
+def _parse_orderbook_timestamp(payload: Mapping[str, Any]) -> datetime:
+    if payload.get("status") != "ok":
+        raise OrderBookError("orderbook_status_not_ok")
+    raw_update = payload.get("lastUpdate")
+    if isinstance(raw_update, bool) or not isinstance(raw_update, (int, str)):
+        raise OrderBookError("orderbook_last_update_invalid")
+    rendered_update = str(raw_update)
+    if not rendered_update.isdigit():
+        raise OrderBookError("orderbook_last_update_must_be_epoch_milliseconds")
+    timestamp_ms = int(rendered_update)
+    if timestamp_ms < 1_000_000_000_000:
+        raise OrderBookError("orderbook_last_update_must_be_epoch_milliseconds")
+    return datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone.utc)
+
+
+def _validate_orderbook_freshness(
+    last_update: datetime, received_at: datetime, max_age_seconds: float
+) -> datetime:
+    if received_at.tzinfo is None or received_at.utcoffset() is None:
+        raise OrderBookError("orderbook_received_at_timezone_required")
+    if not math.isfinite(max_age_seconds) or max_age_seconds <= 0:
+        raise ValueError("orderbook_max_age_out_of_range")
+    received_utc = received_at.astimezone(timezone.utc)
+    age = (received_utc - last_update).total_seconds()
+    if age < 0 or age > max_age_seconds:
+        raise OrderBookError("orderbook_snapshot_stale_or_from_future")
+    return received_utc
+
+
+def _validate_uncrossed_book(
+    bids: tuple[BookLevel, ...], asks: tuple[BookLevel, ...]
+) -> None:
+    if bids[0].price >= asks[0].price:
+        raise OrderBookError("orderbook_best_prices_crossed")
 
 
 def parse_order_book(
@@ -326,27 +393,13 @@ def parse_order_book(
     received_at: datetime,
     max_age_seconds: float = MAX_BOOK_AGE_SECONDS,
 ) -> OrderBookSnapshot:
-    if payload.get("status") != "ok":
-        raise OrderBookError("orderbook_status_not_ok")
-    raw_update = payload.get("lastUpdate")
-    if isinstance(raw_update, bool) or not isinstance(raw_update, (int, str)):
-        raise OrderBookError("orderbook_last_update_invalid")
-    rendered_update = str(raw_update)
-    if not rendered_update.isdigit() or int(rendered_update) < 1_000_000_000_000:
-        raise OrderBookError("orderbook_last_update_must_be_epoch_milliseconds")
-    if received_at.tzinfo is None or received_at.utcoffset() is None:
-        raise OrderBookError("orderbook_received_at_timezone_required")
-    if not math.isfinite(max_age_seconds) or max_age_seconds <= 0:
-        raise ValueError("orderbook_max_age_out_of_range")
-    last_update = datetime.fromtimestamp(int(rendered_update) / 1000, tz=timezone.utc)
-    received_utc = received_at.astimezone(timezone.utc)
-    age = (received_utc - last_update).total_seconds()
-    if age < 0 or age > max_age_seconds:
-        raise OrderBookError("orderbook_snapshot_stale_or_from_future")
+    last_update = _parse_orderbook_timestamp(payload)
+    received_utc = _validate_orderbook_freshness(
+        last_update, received_at, max_age_seconds
+    )
     bids = _parse_book_levels(payload.get("bids"), "bids")
     asks = _parse_book_levels(payload.get("asks"), "asks")
-    if bids[0].price >= asks[0].price:
-        raise OrderBookError("orderbook_best_prices_crossed")
+    _validate_uncrossed_book(bids, asks)
     return OrderBookSnapshot(
         symbol=symbol,
         last_update=last_update,
@@ -466,46 +519,65 @@ def liquidity_gate(
     )
 
 
-def plan_maker_slices(
-    snapshot: OrderBookSnapshot,
-    *,
-    side: str,
-    intended_quote_notional: Decimal,
-    band: Decimal = PRICE_BAND,
-    max_participation: Decimal = MAX_PARTICIPATION,
-) -> MakerOrderPlan:
+def _validate_maker_request(side: str, max_participation: Decimal) -> None:
     if side not in {"buy", "sell"}:
         raise ValueError("order_side_must_be_buy_or_sell")
     if not Decimal("0") < max_participation <= Decimal("0.25"):
         raise ValueError("maker_participation_out_of_range")
-    gate = liquidity_gate(
-        snapshot, side=side, intended_quote_notional=intended_quote_notional, band=band
-    )
-    if not gate.approved:
-        raise LiquidityRejected(gate.reason)
+
+
+def _passive_levels_and_opposite(
+    snapshot: OrderBookSnapshot, side: str, band: Decimal
+) -> tuple[tuple[BookLevel, ...], Decimal]:
     mid = snapshot.mid_price
     if side == "buy":
-        passive_levels = tuple(
+        levels = tuple(
             level
             for level in snapshot.bids
             if level.price >= mid * (Decimal("1") - band)
         )
-        best_opposite = snapshot.asks[0].price
-    else:
-        passive_levels = tuple(
-            level
-            for level in snapshot.asks
-            if level.price <= mid * (Decimal("1") + band)
-        )
-        best_opposite = snapshot.bids[0].price
-    remaining = gate.intended_quote_notional
+        return levels, snapshot.asks[0].price
+    levels = tuple(
+        level
+        for level in snapshot.asks
+        if level.price <= mid * (Decimal("1") + band)
+    )
+    return levels, snapshot.bids[0].price
+
+
+def _validate_passive_limit(
+    side: str, level: BookLevel, best_opposite: Decimal
+) -> None:
+    would_cross = (
+        side == "buy" and level.price >= best_opposite
+    ) or (
+        side == "sell" and level.price <= best_opposite
+    )
+    if would_cross:
+        raise OrderBookError("passive_limit_would_cross_opposite_best")
+
+
+def _maker_child_notional(
+    remaining: Decimal, level: BookLevel, participation: Decimal
+) -> Decimal:
+    return min(remaining, level.quote_notional * participation)
+
+
+def _build_passive_slices(
+    levels: tuple[BookLevel, ...],
+    *,
+    side: str,
+    best_opposite: Decimal,
+    intended_quote_notional: Decimal,
+    max_participation: Decimal,
+) -> tuple[MakerSlice, ...]:
+    remaining = intended_quote_notional
     slices: list[MakerSlice] = []
-    for level in passive_levels:
-        if (side == "buy" and level.price >= best_opposite) or (
-            side == "sell" and level.price <= best_opposite
-        ):
-            raise OrderBookError("passive_limit_would_cross_opposite_best")
-        child_notional = min(remaining, level.quote_notional * max_participation)
+    for level in levels:
+        _validate_passive_limit(side, level, best_opposite)
+        child_notional = _maker_child_notional(
+            remaining, level, max_participation
+        )
         if child_notional <= 0:
             continue
         slices.append(
@@ -521,19 +593,53 @@ def plan_maker_slices(
             break
     if remaining > Decimal("1e-18"):
         raise LiquidityRejected("PASSIVE_SIDE_DEPTH_BELOW_PARTICIPATION_CAP")
-    if (
-        sum((item.quote_notional for item in slices), Decimal("0"))
-        != gate.intended_quote_notional
-    ):
+    return tuple(slices)
+
+
+def _validate_slice_total(
+    slices: tuple[MakerSlice, ...], intended_quote_notional: Decimal
+) -> None:
+    total = sum(
+        (item.quote_notional for item in slices), Decimal("0")
+    )
+    if total != intended_quote_notional:
         raise LiquidityRejected("CHILD_SLICE_TOTAL_MISMATCH")
+
+
+def plan_maker_slices(
+    snapshot: OrderBookSnapshot,
+    *,
+    side: str,
+    intended_quote_notional: Decimal,
+    band: Decimal = PRICE_BAND,
+    max_participation: Decimal = MAX_PARTICIPATION,
+) -> MakerOrderPlan:
+    _validate_maker_request(side, max_participation)
+    gate = liquidity_gate(
+        snapshot, side=side, intended_quote_notional=intended_quote_notional, band=band
+    )
+    if not gate.approved:
+        raise LiquidityRejected(gate.reason)
+    passive_levels, best_opposite = _passive_levels_and_opposite(
+        snapshot, side, band
+    )
+    slices = _build_passive_slices(
+        passive_levels,
+        side=side,
+        best_opposite=best_opposite,
+        intended_quote_notional=gate.intended_quote_notional,
+        max_participation=max_participation,
+    )
+    _validate_slice_total(slices, gate.intended_quote_notional)
     return MakerOrderPlan(
         symbol=snapshot.symbol,
         side=side,
         intended_quote_notional=gate.intended_quote_notional,
         liquidity=gate,
-        child_slices=tuple(slices),
+        child_slices=slices,
         execution_permission=False,
     )
+
 
 
 def plan_maker_slices_for_base_quantity(
@@ -584,7 +690,7 @@ class DonchianAtrStrategy:
             raise ValueError("mvp_trailing_stop_must_be_two_atr")
         self.lookback = lookback
         self.atr_period = atr_period
-        self.trailing_atr_multiplier = trailing_atr_multiplier
+        self.trailing_stop_multiplier = trailing_atr_multiplier
         self.history: list[Candle] = []
         self._true_ranges: list[float] = []
         self._atr: float | None = None
@@ -611,52 +717,68 @@ class DonchianAtrStrategy:
                 self._atr * (self.atr_period - 1) + true_range
             ) / self.atr_period
         return self._atr
-
-    def on_bar(self, candle: Candle) -> StrategyDecision | None:
+    def _validate_incoming_candle(self, candle: Candle) -> None:
         candle.validate()
         if self.history and candle.timestamp <= self.history[-1].timestamp:
             raise ValueError("strategy_candles_must_be_strictly_increasing")
-        previous_bars = self.history[-self.lookback :]
-        prior_high = (
-            max(item.high for item in previous_bars)
-            if len(previous_bars) == self.lookback
-            else None
-        )
-        atr = self._update_atr(candle)
-        decision: StrategyDecision | None = None
 
-        if self.position_open:
-            if self.trailing_stop is None or self.high_water_mark is None:
-                raise RuntimeError("strategy_open_position_state_incomplete")
-            if candle.low <= self.trailing_stop:
-                exit_reference = min(candle.open, self.trailing_stop)
-                decision = StrategyDecision(
-                    action="SELL",
-                    reference_price=exit_reference,
-                    atr=atr or self.last_entry_atr or 0.0,
-                    stop_price=self.trailing_stop,
-                    reason="TRAILING_STOP_2_ATR",
-                    bar_high=candle.high,
-                )
-            else:
-                self.high_water_mark = max(self.high_water_mark, candle.high)
-                if atr is not None:
-                    ratcheted = (
-                        self.high_water_mark - self.trailing_atr_multiplier * atr
-                    )
-                    self.trailing_stop = max(self.trailing_stop, ratcheted)
-        elif atr is not None and prior_high is not None and candle.close > prior_high:
-            decision = StrategyDecision(
-                action="BUY",
-                reference_price=candle.close,
-                atr=atr,
-                stop_price=candle.close - self.trailing_atr_multiplier * atr,
-                reason="DONCHIAN_20_CLOSE_BREAKOUT",
+    def _prior_channel_high(self) -> float | None:
+        previous_bars = self.history[-self.lookback :]
+        if len(previous_bars) != self.lookback:
+            return None
+        return max(item.high for item in previous_bars)
+
+    def _manage_open_position(
+        self, candle: Candle, atr: float | None
+    ) -> StrategyDecision | None:
+        if self.trailing_stop is None or self.high_water_mark is None:
+            raise RuntimeError("strategy_open_position_state_incomplete")
+        if candle.low <= self.trailing_stop:
+            return StrategyDecision(
+                action="SELL",
+                reference_price=min(candle.open, self.trailing_stop),
+                atr=atr or self.last_entry_atr or 0.0,
+                stop_price=self.trailing_stop,
+                reason="TRAILING_STOP_2_ATR",
                 bar_high=candle.high,
             )
+        self.high_water_mark = max(self.high_water_mark, candle.high)
+        self._ratchet_trailing_stop(atr)
+        return None
 
+    def _ratchet_trailing_stop(self, atr: float | None) -> None:
+        if atr is None or self.high_water_mark is None or self.trailing_stop is None:
+            return
+        ratcheted = (
+            self.high_water_mark - self.trailing_stop_multiplier * atr
+        )
+        self.trailing_stop = max(self.trailing_stop, ratcheted)
+
+    def _detect_breakout(
+        self, candle: Candle, prior_high: float | None, atr: float | None
+    ) -> StrategyDecision | None:
+        if atr is None or prior_high is None or candle.close <= prior_high:
+            return None
+        return StrategyDecision(
+            action="BUY",
+            reference_price=candle.close,
+            atr=atr,
+            stop_price=candle.close - self.trailing_stop_multiplier * atr,
+            reason="DONCHIAN_20_CLOSE_BREAKOUT",
+            bar_high=candle.high,
+        )
+
+    def on_bar(self, candle: Candle) -> StrategyDecision | None:
+        self._validate_incoming_candle(candle)
+        prior_high = self._prior_channel_high()
+        atr = self._update_atr(candle)
+        if self.position_open:
+            decision = self._manage_open_position(candle, atr)
+        else:
+            decision = self._detect_breakout(candle, prior_high, atr)
         self.history.append(candle)
         return decision
+
 
     def register_entry_fill(self, price: float, atr: float, bar_high: float) -> None:
         if self.position_open or not all(
