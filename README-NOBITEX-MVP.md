@@ -41,6 +41,10 @@ cp config/nobitex-mvp.env.example .env
 
 The paper MVP needs **no API key**. The credential fields in the example are intentionally empty.
 
+The public order-book client is network-disabled by default. A public GET
+requires both `dry_run=False` and an explicit `owner_approved=True` constructor
+argument. The 24-hour simulation does not instantiate or call that client.
+
 ### API key handling
 
 The API key string previously supplied by the Owner is the public half of a key pair, not a bearer token. Nobitex API-Key signing requires the matching private signing key as well. The private half must never be pasted into chat, committed, logged, or placed in a checked-in file. This MVP does not implement authenticated signing because there is no live order route until the maker-only contract is verified.
@@ -54,7 +58,8 @@ python -m scripts.run_nobitex_mvp --simulate-hours 24 --seed 17
 This replays 48 synthetic 30-minute candles (24 simulated market-hours) in accelerated time. It uses a deterministic synthetic order book and simulated maker-intent fills. It does not contact Nobitex.
 
 The JSON report records:
-- processed bars and BUY/SELL signals;
+- every generated BUY/SELL signal, reference price, ATR and stop;
+- intended quote notional, liquidity-gate evidence, and every planned child slice;
 - simulated fills, child-slice count, and liquidity rejections;
 - zero exchange API calls, zero real orders, and zero real fills;
 - `Champion=null`, `order_permission=false`, and `trading_authorization=NO-GO`.

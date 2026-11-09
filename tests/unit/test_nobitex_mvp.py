@@ -12,6 +12,7 @@ from integrations.nobitex.mvp import (
     LiquidityRejected,
     LiveExecutionBlocked,
     MvpConfig,
+    NobitexPublicOrderBookClient,
     OrderBookError,
     OrderBookSnapshot,
     TokenBucket,
@@ -64,28 +65,26 @@ def test_liquidity_gate_rejects_depth_below_full_intended_order() -> None:
         bids=(BookLevel(Decimal("999"), Decimal("0.1")),),
         asks=(BookLevel(Decimal("1001"), Decimal("0.1")),),
     )
-    result = liquidity_gate(
-        book, side="buy", intended_quote_notional=Decimal("500")
-    )
+    result = liquidity_gate(book, side="buy", intended_quote_notional=Decimal("500"))
     assert not result.approved
     assert result.available_quote_depth < result.intended_quote_notional
     with pytest.raises(LiquidityRejected):
-        plan_maker_slices(
-            book, side="buy", intended_quote_notional=Decimal("500")
-        )
+        plan_maker_slices(book, side="buy", intended_quote_notional=Decimal("500"))
 
 
 def test_order_slicing_respects_depth_participation_and_non_crossing_prices() -> None:
     book = synthetic_order_book(1000.0, "BTCUSDT")
-    plan = plan_maker_slices(
-        book, side="buy", intended_quote_notional=Decimal("500")
-    )
+    plan = plan_maker_slices(book, side="buy", intended_quote_notional=Decimal("500"))
     assert plan.liquidity.approved
     assert plan.execution_permission is False
     assert plan.child_slices
-    assert sum((part.quote_notional for part in plan.child_slices), Decimal("0")) == Decimal("500")
+    assert sum(
+        (part.quote_notional for part in plan.child_slices), Decimal("0")
+    ) == Decimal("500")
     assert all(part.post_only_required for part in plan.child_slices)
-    assert all(not part.exchange_enforced_post_only_confirmed for part in plan.child_slices)
+    assert all(
+        not part.exchange_enforced_post_only_confirmed for part in plan.child_slices
+    )
     assert all(part.limit_price < book.asks[0].price for part in plan.child_slices)
     for part in plan.child_slices:
         matching = next(level for level in book.bids if level.price == part.limit_price)
@@ -94,9 +93,7 @@ def test_order_slicing_respects_depth_participation_and_non_crossing_prices() ->
 
 def test_sell_slices_are_passive_and_bounded_by_ask_depth() -> None:
     book = synthetic_order_book(1000.0, "BTCUSDT")
-    plan = plan_maker_slices(
-        book, side="sell", intended_quote_notional=Decimal("500")
-    )
+    plan = plan_maker_slices(book, side="sell", intended_quote_notional=Decimal("500"))
     assert plan.liquidity.approved
     assert all(part.limit_price > book.bids[0].price for part in plan.child_slices)
     assert sum((part.quote_notional for part in plan.child_slices), Decimal("0")) == Decimal("500")
@@ -129,11 +126,15 @@ def test_config_defaults_fail_closed_and_live_is_blocked() -> None:
         )
 
 
+def test_public_orderbook_network_is_blocked_by_default() -> None:
+    client = NobitexPublicOrderBookClient()
+    with pytest.raises(LiveExecutionBlocked, match="explicit_owner_approval"):
+        client.fetch_order_book("BTCUSDT", now=NOW)
+
+
 def test_live_order_submission_is_hard_blocked_without_network_path() -> None:
     book = synthetic_order_book(1000.0, "BTCUSDT")
-    plan = plan_maker_slices(
-        book, side="buy", intended_quote_notional=Decimal("100")
-    )
+    plan = plan_maker_slices(book, side="buy", intended_quote_notional=Decimal("100"))
     with pytest.raises(LiveExecutionBlocked, match="postOnly"):
         submit_live_maker_order(plan)
 
@@ -151,17 +152,15 @@ def test_donchian_strategy_uses_prior_closed_bars_and_two_atr_trailing() -> None
             10.0,
         )
         assert strategy.on_bar(candle) is None
-    breakout = Candle(
-        start + timedelta(minutes=600), 100.0, 103.0, 99.9, 102.0, 10.0
-    )
+    breakout = Candle(start + timedelta(minutes=600), 100.0, 103.0, 99.9, 102.0, 10.0)
     decision = strategy.on_bar(breakout)
     assert decision is not None
     assert decision.action == "BUY"
     assert decision.reason == "DONCHIAN_20_CLOSE_BREAKOUT"
-    strategy.register_entry_fill(decision.reference_price, decision.atr, decision.bar_high)
-    next_bar = Candle(
-        start + timedelta(minutes=630), 102.0, 105.0, 102.1, 104.5, 10.0
+    strategy.register_entry_fill(
+        decision.reference_price, decision.atr, decision.bar_high
     )
+    next_bar = Candle(start + timedelta(minutes=630), 102.0, 105.0, 101.9, 104.5, 10.0)
     assert strategy.on_bar(next_bar) is None
     assert strategy.trailing_stop is not None
     old_stop = strategy.trailing_stop
@@ -186,6 +185,11 @@ def test_24_simulated_hours_produce_an_auditable_paper_only_report() -> None:
     assert report["counts"]["buy_signals"] >= 1
     assert report["execution"]["api_calls"] == 0
     assert report["execution"]["actual_exchange_orders"] == 0
+    assert len(report["events"]) == (
+        report["counts"]["simulated_buy_fills"]
+        + report["counts"]["simulated_sell_fills"]
+        + report["counts"]["liquidity_rejections"]
+    )
     assert report["safety"]["order_permission"] is False
     assert report["safety"]["trading_authorization"] == "NO-GO"
     assert report["profitability_claim"] is False

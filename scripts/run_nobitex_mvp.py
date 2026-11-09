@@ -17,9 +17,7 @@ def main() -> int:
     args = parser.parse_args()
     values = load_env_file(args.env_file)
     config = MvpConfig.from_environment(values)
-    report = run_paper_simulation(
-        config, hours=args.simulate_hours, seed=args.seed
-    )
+    report = run_paper_simulation(config, hours=args.simulate_hours, seed=args.seed)
     print(json.dumps(report, indent=2, sort_keys=True))
     return 0
 

@@ -5,10 +5,10 @@ order-book client. Live order submission is intentionally unavailable because
 the published Nobitex Spot order contract does not document exchange-enforced
 post-only execution.
 """
+
 from __future__ import annotations
 
 import json
-import logging
 import math
 import os
 import random
@@ -20,7 +20,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from http.client import HTTPSConnection, HTTPException
 from pathlib import Path
-from typing import Any, Callable, Mapping, Protocol
+from typing import Any, Callable, Mapping
 
 API_HOST = "apiv2.nobitex.ir"
 ORDERBOOK_PATH_PREFIX = "/v3/orderbook/"
@@ -35,10 +35,7 @@ TRAILING_ATR_MULTIPLIER = 2.0
 DEFAULT_TIMEFRAME_MINUTES = 30
 LIVE_ORDER_SUBMISSION_SUPPORTED = False
 
-logger = logging.getLogger("alix.nobitex_mvp")
-
-
-class MvpError(RuntimeError):
+remove loggerclass MvpError(RuntimeError):
     """Base exception for MVP execution failures."""
 
 
@@ -52,11 +49,6 @@ class OrderBookError(MvpError):
 
 class LiquidityRejected(MvpError):
     """The requested size exceeds approved depth or passive maker capacity."""
-
-
-class HttpJsonGetter(Protocol):
-    def get_json(self, path: str) -> Mapping[str, Any]:
-        """Fetch one public JSON resource using GET only."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,7 +68,9 @@ class Candle:
             raise ValueError("candle_values_must_be_finite")
         if min(self.open, self.high, self.low, self.close) <= 0.0 or self.volume < 0.0:
             raise ValueError("candle_ohlcv_geometry_invalid")
-        if self.high < max(self.open, self.close) or self.low > min(self.open, self.close):
+        if self.high < max(self.open, self.close) or self.low > min(
+            self.open, self.close
+        ):
             raise ValueError("candle_ohlc_geometry_invalid")
 
 
@@ -220,9 +214,11 @@ class MvpConfig:
         return config
 
 
-def load_env_file(path: Path, inherited: Mapping[str, str] | None = None) -> dict[str, str]:
+def load_env_file(
+    path: Path, inherited: Mapping[str, str] | None = None
+) -> dict[str, str]:
     """Load simple KEY=VALUE lines; process environment values take precedence."""
-    values = dict(inherited or os.environ)
+    values = dict(os.environ if inherited is None else inherited)
     if not path.is_file():
         return values
     for raw_line in path.read_text(encoding="utf-8").splitlines():
@@ -339,6 +335,8 @@ def parse_order_book(
         raise OrderBookError("orderbook_last_update_must_be_epoch_milliseconds")
     if received_at.tzinfo is None or received_at.utcoffset() is None:
         raise OrderBookError("orderbook_received_at_timezone_required")
+    if not math.isfinite(max_age_seconds) or max_age_seconds <= 0:
+        raise ValueError("orderbook_max_age_out_of_range")
     last_update = datetime.fromtimestamp(int(rendered_update) / 1000, tz=timezone.utc)
     received_utc = received_at.astimezone(timezone.utc)
     age = (received_utc - last_update).total_seconds()
@@ -366,6 +364,8 @@ class NobitexPublicOrderBookClient:
         host: str = API_HOST,
         timeout_seconds: float = 10.0,
         rate_limiter: TokenBucket | None = None,
+        dry_run: bool = True,
+        owner_approved: bool = False,
     ) -> None:
         if host != API_HOST:
             raise ValueError("nobitex_api_host_not_in_allowlist")
@@ -374,10 +374,16 @@ class NobitexPublicOrderBookClient:
         self.host = host
         self.timeout_seconds = timeout_seconds
         self.rate_limiter = rate_limiter or public_rate_limiter()
+        self.dry_run = dry_run
+        self.owner_approved = owner_approved
 
     def fetch_order_book(
         self, symbol: str, *, now: datetime | None = None
     ) -> OrderBookSnapshot:
+        if self.dry_run or not self.owner_approved:
+            raise LiveExecutionBlocked(
+                "public_api_calls_require_dry_run_false_and_explicit_owner_approval"
+            )
         normalized = symbol.upper()
         if not re.fullmatch(r"[A-Z0-9]{5,20}", normalized):
             raise ValueError("nobitex_symbol_invalid")
@@ -404,7 +410,13 @@ class NobitexPublicOrderBookClient:
             payload = json.loads(body.decode("utf-8"))
             if not isinstance(payload, dict):
                 raise OrderBookError("orderbook_payload_not_object")
-        except (HTTPException, TimeoutError, OSError, UnicodeDecodeError, json.JSONDecodeError):
+        except (
+            HTTPException,
+            TimeoutError,
+            OSError,
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+        ):
             raise OrderBookError("orderbook_public_get_failed") from None
         finally:
             connection.close()
@@ -473,12 +485,16 @@ def plan_maker_slices(
     mid = snapshot.mid_price
     if side == "buy":
         passive_levels = tuple(
-            level for level in snapshot.bids if level.price >= mid * (Decimal("1") - band)
+            level
+            for level in snapshot.bids
+            if level.price >= mid * (Decimal("1") - band)
         )
         best_opposite = snapshot.asks[0].price
     else:
         passive_levels = tuple(
-            level for level in snapshot.asks if level.price <= mid * (Decimal("1") + band)
+            level
+            for level in snapshot.asks
+            if level.price <= mid * (Decimal("1") + band)
         )
         best_opposite = snapshot.bids[0].price
     remaining = gate.intended_quote_notional
@@ -504,7 +520,10 @@ def plan_maker_slices(
             break
     if remaining > Decimal("1e-18"):
         raise LiquidityRejected("PASSIVE_SIDE_DEPTH_BELOW_PARTICIPATION_CAP")
-    if sum((item.quote_notional for item in slices), Decimal("0")) != gate.intended_quote_notional:
+    if (
+        sum((item.quote_notional for item in slices), Decimal("0"))
+        != gate.intended_quote_notional
+    ):
         raise LiquidityRejected("CHILD_SLICE_TOTAL_MISMATCH")
     return MakerOrderPlan(
         symbol=snapshot.symbol,
@@ -588,7 +607,9 @@ class DonchianAtrStrategy:
             else:
                 self.high_water_mark = max(self.high_water_mark, candle.high)
                 if atr is not None:
-                    ratcheted = self.high_water_mark - self.trailing_atr_multiplier * atr
+                    ratcheted = (
+                        self.high_water_mark - self.trailing_atr_multiplier * atr
+                    )
                     self.trailing_stop = max(self.trailing_stop, ratcheted)
         elif atr is not None and prior_high is not None and candle.close > prior_high:
             decision = StrategyDecision(
@@ -724,7 +745,7 @@ def synthetic_candles(
     price = 100.0
     start = datetime(2026, 1, 1, tzinfo=timezone.utc)
     for index in range(count):
-        phase = index % 24
+        phase = index % 32
         if phase < 20:
             drift = 0.00005 * math.sin(index)
         elif phase < 24:
@@ -765,6 +786,7 @@ def run_paper_simulation(
     )
     executor = SimulatedPaperExecutor()
     held_quantity = Decimal("0")
+    events: list[dict[str, Any]] = []
     counts = {
         "bars_processed": 0,
         "buy_signals": 0,
@@ -781,6 +803,15 @@ def run_paper_simulation(
         decision = strategy.on_bar(candle)
         if decision is None:
             continue
+        event: dict[str, Any] = {
+            "timestamp": candle.timestamp.isoformat(),
+            "event": "SIGNAL",
+            "action": decision.action,
+            "reference_price": decision.reference_price,
+            "atr": decision.atr,
+            "stop_price": decision.stop_price,
+            "reason": decision.reason,
+        }
         if decision.action == "BUY":
             counts["buy_signals"] += 1
             notional = risk_sizer.quote_notional(decision.reference_price, decision.atr)
@@ -789,6 +820,7 @@ def run_paper_simulation(
             if held_quantity <= 0:
                 raise RuntimeError("paper_exit_without_held_quantity")
             notional = held_quantity * Decimal(str(decision.reference_price))
+        event["intended_quote_notional"] = str(notional)
         book = synthetic_order_book(decision.reference_price, config.symbol)
         try:
             plan = plan_maker_slices(
@@ -796,9 +828,30 @@ def run_paper_simulation(
                 side=decision.action.lower(),
                 intended_quote_notional=notional,
             )
-        except LiquidityRejected:
+        except LiquidityRejected as error:
             counts["liquidity_rejections"] += 1
+            event["status"] = "LIQUIDITY_REJECTED"
+            event["rejection_reason"] = str(error)
+            events.append(event)
             continue
+        event["liquidity_gate"] = {
+            "approved": plan.liquidity.approved,
+            "available_quote_depth": str(plan.liquidity.available_quote_depth),
+            "band_fraction": str(plan.liquidity.band_fraction),
+        }
+        event["child_orders"] = [
+            {
+                "side": child.side,
+                "limit_price": str(child.limit_price),
+                "base_quantity": str(child.base_quantity),
+                "quote_notional": str(child.quote_notional),
+                "post_only_required": child.post_only_required,
+                "exchange_enforced_post_only_confirmed": (
+                    child.exchange_enforced_post_only_confirmed
+                ),
+            }
+            for child in plan.child_slices
+        ]
         fill = executor.fill(plan)
         counts["simulated_child_orders"] += fill.child_order_count
         if fill.side == "buy":
@@ -808,9 +861,18 @@ def run_paper_simulation(
             )
             counts["simulated_buy_fills"] += 1
         else:
-            held_quantity = max(Decimal("0"), held_quantity - fill.base_quantity)
+            held_quantity = Decimal("0")
             strategy.register_exit_fill()
             counts["simulated_sell_fills"] += 1
+        event["status"] = "SIMULATED_FILL"
+        event["simulated_fill"] = {
+            "base_quantity": str(fill.base_quantity),
+            "quote_notional": str(fill.quote_notional),
+            "average_price": str(fill.average_price),
+            "child_order_count": fill.child_order_count,
+            "simulated": fill.simulated,
+        }
+        events.append(event)
     return {
         "schema_version": "alix.nobitex-mvp.paper-report.v1",
         "mode": "PAPER_SIMULATION",
@@ -834,7 +896,9 @@ def run_paper_simulation(
             "actual_exchange_orders": 0,
             "actual_exchange_fills": 0,
             "api_calls": 0,
+            "fee_model": "NOT_MODELED; CURRENT_NOBITEX_FEES_REQUIRED_FOR_ANY_FUTURE_LIVE_RUN",
         },
+        "events": events,
         "safety": {
             "dry_run": True,
             "allow_live_trading": False,
