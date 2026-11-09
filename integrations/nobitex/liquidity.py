@@ -344,3 +344,46 @@ class NobitexMockOrderBookAdapter:
 
     @classmethod
     def plan_maker_slices(
+        cls,
+        snapshot: OrderBookSnapshot,
+        *,
+        side: str,
+        intended_quote_notional: Decimal,
+        price_band_fraction: Decimal = DEFAULT_PRICE_BAND,
+        max_participation: Decimal = DEFAULT_MAX_PARTICIPATION,
+    ) -> MockMakerOrderPlan:
+        normalized_side = _validate_side(side)
+        participation = _validate_band(max_participation)
+        if participation <= 0:
+            raise ValueError("max_participation_must_be_positive")
+        gate = cls.liquidity_gate(
+            snapshot,
+            side=normalized_side,
+            intended_quote_notional=intended_quote_notional,
+            price_band_fraction=price_band_fraction,
+        )
+        if not gate.approved:
+            raise LiquidityGateRejected(gate.reason)
+
+        passive_levels = cls._passive_levels(
+            snapshot, normalized_side, price_band_fraction
+        )
+        best_opposite = (
+            snapshot.asks[0].price
+            if normalized_side == "buy"
+            else snapshot.bids[0].price
+        )
+        slices = _build_passive_slices(
+            passive_levels,
+            side=normalized_side,
+            best_opposite=best_opposite,
+            intended_quote_notional=gate.intended_quote_notional,
+            participation=participation,
+        )
+        return MockMakerOrderPlan(
+            pair=snapshot.pair,
+            side=normalized_side,
+            intended_quote_notional=gate.intended_quote_notional,
+            liquidity=gate,
+            child_slices=slices,
+        )
