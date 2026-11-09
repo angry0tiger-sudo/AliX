@@ -205,7 +205,9 @@ def test_24_simulated_hours_produce_an_auditable_paper_only_report() -> None:
         + report["counts"]["liquidity_rejections"]
     )
     buy_fill = next(
-        event["simulated_fill"] for event in report["events"] if event["action"] == "BUY"
+        event["simulated_fill"]
+        for event in report["events"]
+        if event["action"] == "BUY"
     )
     sell_event = next(event for event in report["events"] if event["action"] == "SELL")
     assert sell_event["intended_base_quantity"] == buy_fill["base_quantity"]
