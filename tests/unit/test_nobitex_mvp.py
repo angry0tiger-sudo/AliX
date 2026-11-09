@@ -96,7 +96,9 @@ def test_sell_slices_are_passive_and_bounded_by_ask_depth() -> None:
     plan = plan_maker_slices(book, side="sell", intended_quote_notional=Decimal("500"))
     assert plan.liquidity.approved
     assert all(part.limit_price > book.bids[0].price for part in plan.child_slices)
-    assert sum((part.quote_notional for part in plan.child_slices), Decimal("0")) == Decimal("500")
+    assert sum(
+        (part.quote_notional for part in plan.child_slices), Decimal("0")
+    ) == Decimal("500")
 
 
 def test_token_bucket_uses_refill_without_bursting_past_capacity() -> None:
