@@ -90,7 +90,6 @@ def _validate_candle_geometry(candle: Candle) -> None:
 
 
 @dataclass(frozen=True, slots=True)
-class BookLevel:@dataclass(frozen=True, slots=True)
 class BookLevel:
     price: Decimal
     amount: Decimal
