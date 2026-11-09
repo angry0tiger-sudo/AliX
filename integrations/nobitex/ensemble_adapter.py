@@ -9,21 +9,21 @@ from typing import Protocol
 import numpy as np
 from pandas import DataFrame
 
-from research.ai_ensemble.risk import (
-    KellySizingConfig,
-    KellySizingResult,
-    fractional_kelly_size,
-)
 from integrations.nobitex.mvp import (
     MAX_BOOK_AGE_SECONDS,
     MAX_PARTICIPATION,
     PRICE_BAND,
-    BookOrderPlan if False else MakerOrderPlan,
+    LiveExecutionBlocked,
     LiquidityRejected,
+    MakerOrderPlan,
     OrderBookError,
     OrderBookSnapshot,
-    LiveExecutionBlocked,
     plan_maker_slices_for_base_quantity,
+)
+from research.ai_ensemble.risk import (
+    KellySizingConfig,
+    KellySizingResult,
+    fractional_kelly_size,
 )
 
 
