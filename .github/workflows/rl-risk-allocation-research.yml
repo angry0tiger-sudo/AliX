@@ -1,0 +1,187 @@
+name: AliX Offline RL Risk Allocation PPO Research
+
+on:
+  workflow_dispatch:
+    inputs:
+      dataset_run_id:
+        description: GitHub Actions run ID containing the immutable five-year OHLCV artifact
+        type: string
+        required: true
+      dataset_artifact_name:
+        description: Artifact name containing both CSV files and matching manifests
+        type: string
+        required: true
+      timeframe:
+        description: Permitted entry timeframe
+        type: choice
+        required: true
+        default: 1h
+        options:
+          - 15m
+          - 30m
+          - 1h
+          - 4h
+      timesteps:
+        description: PPO training timesteps
+        type: number
+        required: true
+        default: 200000
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: alix-rl-risk-allocation-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  offline-risk-allocation:
+    if: github.ref == 'refs/heads/research/ml-core-ai6-rl-nobitex'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      ALIx_ENV: paper
+      ALIx_DRY_RUN: "true"
+      ALIx_ALLOW_LIVE_TRADING: "false"
+      ALIx_REPORTING_ENABLED: "false"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout exact research commit without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up pinned Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Validate dispatch inputs and require Standard CI for this exact SHA
+        env:
+          TARGET_SHA: ${{ github.sha }}
+          DATASET_RUN_ID: ${{ inputs.dataset_run_id }}
+          DATASET_ARTIFACT_NAME: ${{ inputs.dataset_artifact_name }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          import re
+          from urllib.request import Request, urlopen
+
+          repository = os.environ["GITHUB_REPOSITORY"]
+          target_sha = os.environ["TARGET_SHA"]
+          run_id = os.environ["DATASET_RUN_ID"]
+          artifact = os.environ["DATASET_ARTIFACT_NAME"]
+          if os.environ["GITHUB_REF"] != "refs/heads/research/ml-core-ai6-rl-nobitex":
+              raise SystemExit("rl_research_branch_not_allowed")
+          if not re.fullmatch(r"[0-9]{1,20}", run_id):
+              raise SystemExit("dataset_run_id_invalid")
+          if not re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", artifact):
+              raise SystemExit("dataset_artifact_name_invalid")
+          url = (
+              f"https://api.github.com/repos/{repository}/actions/workflows/ci.yml/runs"
+              f"?head_sha={target_sha}&per_page=100"
+          )
+          request = Request(
+              url,
+              headers={
+                  "Accept": "application/vnd.github+json",
+                  "Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+                  "X-GitHub-Api-Version": "2022-11-28",
+              },
+          )
+          with urlopen(request, timeout=20) as response:
+              payload = json.load(response)
+          matches = [
+              item for item in payload.get("workflow_runs", [])
+              if item.get("head_sha") == target_sha
+              and item.get("head_branch") == "research/ml-core-ai6-rl-nobitex"
+              and item.get("event") == "push"
+              and item.get("status") == "completed"
+          ]
+          if not matches:
+              raise SystemExit("standard_ci_for_exact_sha_not_found")
+          latest = max(
+              matches,
+              key=lambda item: (item.get("run_number", 0), item.get("run_attempt", 0)),
+          )
+          if latest.get("conclusion") != "success":
+              raise SystemExit("standard_ci_for_exact_sha_not_success")
+          print(json.dumps({
+              "standard_ci": "PASS",
+              "target_sha": target_sha,
+              "standard_ci_run_id": latest.get("id"),
+              "dataset_run_id": run_id,
+              "dataset_artifact_name": artifact,
+          }, sort_keys=True))
+          PY
+
+      - name: Download the owner-selected immutable GitHub dataset artifact
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.dataset_run_id }}
+          name: ${{ inputs.dataset_artifact_name }}
+          path: ${{ runner.temp }}/alix-rl-market-data
+
+      - name: Install isolated, pinned RL research dependencies
+        run: |
+          python -m pip install pip==25.2
+          python -m pip install -r requirements-rl-research.txt
+          python -m pip install pip-audit==2.9.0
+          pip-audit -r requirements-rl-research.txt
+
+      - name: Train PPO risk allocator from the immutable artifact
+        run: |
+          set -euo pipefail
+          python -m scripts.train_risk_allocation_ppo \
+            --input-dir "$RUNNER_TEMP/alix-rl-market-data" \
+            --output-dir "$GITHUB_WORKSPACE/alix-rl-risk-output" \
+            --timeframe "${{ inputs.timeframe }}" \
+            --timesteps "${{ inputs.timesteps }}" \
+            --seed 17 \
+            --commit-sha "$GITHUB_SHA"
+
+      - name: Validate report and closed safety state
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          report = json.loads(
+              Path("alix-rl-risk-output/risk-allocation-ppo-report.json").read_text(encoding="utf-8")
+          )
+          assert report["commit_sha"] == "${{ github.sha }}"
+          assert report["research_scope"] == "RISK_ALLOCATION_ONLY_NOT_PRIMARY_SIGNAL_GENERATION"
+          assert report["entry_timeframe"] in {"15m", "30m", "1h", "4h"}
+          assert report["execution_assumptions"]["round_trip_cost_bps"] == 30.0
+          assert report["temporal_split"]["final_holdout_fraction"] == 0.15
+          assert report["temporal_split"]["final_holdout_status"].startswith("RESERVED")
+          assert report["economic_acceptance"] == "NOT_EVALUATED"
+          assert report["Champion"] is None
+          assert report["order_permission"] is False
+          assert report["trading_authorization"] == "NO-GO"
+          assert report["private_api_calls"] == 0
+          assert report["real_order_attempts"] == 0
+          assert report["nobitex_api_calls"] == 0
+          assert report["orders_or_execution_api_used"] is False
+          model = Path("alix-rl-risk-output/risk_allocation_ppo.zip")
+          assert model.is_file() and model.stat().st_size > 0
+          print("RL research report validated; no trading authority or execution path was used.")
+          PY
+
+      - name: Upload PPO model and audit report
+        uses: actions/upload-artifact@v4
+        with:
+          name: alix-rl-risk-allocation-ppo
+          path: |
+            alix-rl-risk-output/risk_allocation_ppo.zip
+            alix-rl-risk-output/risk-allocation-ppo-report.json
+          if-no-files-found: error
+          retention-days: 30

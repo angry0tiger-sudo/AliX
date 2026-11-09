@@ -1,0 +1,5 @@
+# Isolated offline RL research dependencies; not part of the production runtime.
+numpy==2.5.4
+pandas==2.3.3
+gymnasium==1.4.0
+stable-baselines3==2.9.2
