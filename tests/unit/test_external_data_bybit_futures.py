@@ -110,7 +110,9 @@ def test_funding_paginates_and_resumes_after_last_observed_timestamp() -> None:
 
     assert snapshot.symbol == "BTCUSDT"
     assert len(snapshot.funding_rates) == FUNDING_PAGE_LIMIT + 1
-    assert snapshot.funding_rates[0].available_at == page_two_time + timedelta(minutes=5)
+    assert snapshot.funding_rates[0].available_at == page_two_time + timedelta(
+        minutes=5
+    )
     first_query = parse_qs(urlsplit(transport.urls[0]).query)
     second_query = parse_qs(urlsplit(transport.urls[1]).query)
     assert first_query["limit"] == ["200"]
@@ -237,7 +239,7 @@ def test_get_payload_retries_rate_limits_and_timeouts() -> None:
         [
             _response({"error": "limited"}, status=429),
             TimeoutError("fixture timeout"),
-            _response([{"ok": True}]),
+            _response([_funding_row(START)]),
         ]
     )
     delays: list[float] = []
@@ -249,7 +251,10 @@ def test_get_payload_retries_rate_limits_and_timeouts() -> None:
     assert payload == {
         "retCode": 0,
         "retMsg": "OK",
-        "result": {"category": "linear", "list": [{"ok": True}]},
+        "result": {
+            "category": "linear",
+            "list": [_funding_row(START)],
+        },
     }
     assert delays == [1.0, 2.0]
 
