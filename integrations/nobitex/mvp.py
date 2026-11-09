@@ -536,6 +536,39 @@ def plan_maker_slices(
     )
 
 
+def plan_maker_slices_for_base_quantity(
+    snapshot: OrderBookSnapshot,
+    *,
+    side: str,
+    intended_base_quantity: Decimal,
+    band: Decimal = PRICE_BAND,
+    max_participation: Decimal = MAX_PARTICIPATION,
+) -> MakerOrderPlan:
+    """Plan passive slices whose total base quantity matches the requested position."""
+    target_quantity = _positive_decimal(
+        intended_base_quantity, "intended_base_quantity"
+    )
+    estimated_notional = target_quantity * snapshot.mid_price
+    tolerance = max(target_quantity * Decimal("1e-12"), Decimal("1e-18"))
+    for _ in range(12):
+        plan = plan_maker_slices(
+            snapshot,
+            side=side,
+            intended_quote_notional=estimated_notional,
+            band=band,
+            max_participation=max_participation,
+        )
+        planned_quantity = sum(
+            (child.base_quantity for child in plan.child_slices), Decimal("0")
+        )
+        if planned_quantity <= 0:
+            raise LiquidityRejected("PASSIVE_SLICE_BASE_QUANTITY_ZERO")
+        if abs(planned_quantity - target_quantity) <= tolerance:
+            return plan
+        estimated_notional *= target_quantity / planned_quantity
+    raise LiquidityRejected("BASE_QUANTITY_SLICE_CONVERGENCE_FAILED")
+
+
 class DonchianAtrStrategy:
     """Long-only Donchian-20 close breakout with a ratcheting 2-ATR stop."""
 
@@ -821,14 +854,24 @@ def run_paper_simulation(
             if held_quantity <= 0:
                 raise RuntimeError("paper_exit_without_held_quantity")
             notional = held_quantity * Decimal(str(decision.reference_price))
+            event["intended_base_quantity"] = str(held_quantity)
         event["intended_quote_notional"] = str(notional)
         book = synthetic_order_book(decision.reference_price, config.symbol)
         try:
-            plan = plan_maker_slices(
-                book,
-                side=decision.action.lower(),
-                intended_quote_notional=notional,
-            )
+            if decision.action == "BUY":
+                plan = plan_maker_slices(
+                    book,
+                    side="buy",
+                    intended_quote_notional=notional,
+                )
+            else:
+                plan = plan_maker_slices_for_base_quantity(
+                    book,
+                    side="sell",
+                    intended_base_quantity=held_quantity,
+                )
+                notional = plan.intended_quote_notional
+                event["intended_quote_notional"] = str(notional)
         except LiquidityRejected as error:
             counts["liquidity_rejections"] += 1
             event["status"] = "LIQUIDITY_REJECTED"
@@ -862,6 +905,9 @@ def run_paper_simulation(
             )
             counts["simulated_buy_fills"] += 1
         else:
+            tolerance = max(held_quantity * Decimal("1e-12"), Decimal("1e-18"))
+            if abs(fill.base_quantity - held_quantity) > tolerance:
+                raise RuntimeError("paper_exit_did_not_close_full_base_quantity")
             held_quantity = Decimal("0")
             strategy.register_exit_fill()
             counts["simulated_sell_fills"] += 1

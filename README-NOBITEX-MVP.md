@@ -60,7 +60,7 @@ This replays 48 synthetic 30-minute candles (24 simulated market-hours) in accel
 The JSON report records:
 - every generated BUY/SELL signal, reference price, ATR and stop;
 - intended quote notional, liquidity-gate evidence, and every planned child slice;
-- simulated fills, child-slice count, and liquidity rejections;
+- simulated fills, exact base-quantity position closure, child-slice count, and liquidity rejections;
 - zero exchange API calls, zero real orders, and zero real fills;
 - `Champion=null`, `order_permission=false`, and `trading_authorization=NO-GO`.
 

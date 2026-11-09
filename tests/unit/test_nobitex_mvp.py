@@ -19,6 +19,7 @@ from integrations.nobitex.mvp import (
     liquidity_gate,
     parse_order_book,
     plan_maker_slices,
+    plan_maker_slices_for_base_quantity,
     run_paper_simulation,
     submit_live_maker_order,
     synthetic_order_book,
@@ -99,6 +100,17 @@ def test_sell_slices_are_passive_and_bounded_by_ask_depth() -> None:
     assert sum(
         (part.quote_notional for part in plan.child_slices), Decimal("0")
     ) == Decimal("500")
+
+
+def test_sell_slices_match_requested_base_quantity() -> None:
+    book = synthetic_order_book(1000.0, "BTCUSDT")
+    intended = Decimal("1.234567")
+    plan = plan_maker_slices_for_base_quantity(
+        book, side="sell", intended_base_quantity=intended
+    )
+    planned = sum((part.base_quantity for part in plan.child_slices), Decimal("0"))
+    assert abs(planned - intended) <= Decimal("1e-12")
+    assert plan.liquidity.approved
 
 
 def test_token_bucket_uses_refill_without_bursting_past_capacity() -> None:
@@ -192,6 +204,12 @@ def test_24_simulated_hours_produce_an_auditable_paper_only_report() -> None:
         + report["counts"]["simulated_sell_fills"]
         + report["counts"]["liquidity_rejections"]
     )
+    buy_fill = next(
+        event["simulated_fill"] for event in report["events"] if event["action"] == "BUY"
+    )
+    sell_event = next(event for event in report["events"] if event["action"] == "SELL")
+    assert sell_event["intended_base_quantity"] == buy_fill["base_quantity"]
+    assert sell_event["simulated_fill"]["base_quantity"] == buy_fill["base_quantity"]
     assert report["safety"]["order_permission"] is False
     assert report["safety"]["trading_authorization"] == "NO-GO"
     assert report["profitability_claim"] is False
