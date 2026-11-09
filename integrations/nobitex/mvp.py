@@ -690,7 +690,7 @@ class DonchianAtrStrategy:
             raise ValueError("mvp_trailing_stop_must_be_two_atr")
         self.lookback = lookback
         self.atr_period = atr_period
-        self.trailing_stop_multiplier = trailing_atr_multiplier
+        self.trailing_atr_multiplier = trailing_atr_multiplier
         self.history: list[Candle] = []
         self._true_ranges: list[float] = []
         self._atr: float | None = None
@@ -750,7 +750,7 @@ class DonchianAtrStrategy:
         if atr is None or self.high_water_mark is None or self.trailing_stop is None:
             return
         ratcheted = (
-            self.high_water_mark - self.trailing_stop_multiplier * atr
+            self.high_water_mark - self.trailing_atr_multiplier * atr
         )
         self.trailing_stop = max(self.trailing_stop, ratcheted)
 
@@ -763,7 +763,7 @@ class DonchianAtrStrategy:
             action="BUY",
             reference_price=candle.close,
             atr=atr,
-            stop_price=candle.close - self.trailing_stop_multiplier * atr,
+            stop_price=candle.close - self.trailing_atr_multiplier * atr,
             reason="DONCHIAN_20_CLOSE_BREAKOUT",
             bar_high=candle.high,
         )
