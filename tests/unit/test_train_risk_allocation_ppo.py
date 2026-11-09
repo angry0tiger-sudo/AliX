@@ -13,9 +13,7 @@ def validation_segment(
     close = np.full(count, 100.0, dtype=np.float64)
     return pd.DataFrame(
         {
-            "date": pd.date_range(
-                "2026-01-01T00:00:00Z", periods=count, freq="1h"
-            ),
+            "date": pd.date_range("2026-01-01T00:00:00Z", periods=count, freq="1h"),
             "open": close,
             "high": close * 1.01,
             "low": close * 0.99,
