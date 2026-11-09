@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Any, cast
+from typing import Any
 
 import pytest
 
@@ -43,7 +43,7 @@ def book_response(
 def make_adapter(
     response: dict[str, Any],
 ) -> tuple[NobitexMockOrderBookAdapter, MockOrderBookTransport]:
-    transport = MockOrderBookTransport({"BTCUSDT": cast(dict[str, Any], response)})
+    transport = MockOrderBookTransport({"BTCUSDT": response})
     return NobitexMockOrderBookAdapter(transport), transport
 
 

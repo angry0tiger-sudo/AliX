@@ -71,6 +71,8 @@ def _sha256(path: Path) -> str:
 
 
 def _utc_timestamp(value: object, field_name: str) -> pd.Timestamp:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"rl_dataset_timestamp_invalid:{field_name}")
     timestamp = pd.to_datetime(value, utc=True, errors="coerce")
     if pd.isna(timestamp):
         raise ValueError(f"rl_dataset_timestamp_invalid:{field_name}")

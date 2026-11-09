@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from numpy.typing import NDArray
+from typing import cast
 
 from services.rl_research.risk_allocation_environment import (
     ACTION_FRACTIONS,
@@ -45,7 +47,8 @@ def make_env(
 def test_action_space_is_only_target_exposure_and_observation_is_risk_state() -> None:
     env = make_env()
     observation, info = env.reset(seed=7)
-    assert env.action_space.n == 5
+    assert all(env.action_space.contains(action) for action in range(5))
+    assert not env.action_space.contains(5)
     assert ACTION_FRACTIONS == (0.0, 0.25, 0.5, 0.75, 1.0)
     assert observation.shape == (4,)
     assert observation.tolist() == pytest.approx([0.01, 0.0, 0.0, 1.0])
@@ -178,7 +181,10 @@ def test_invalid_auxiliary_arrays_and_configuration_fail_closed() -> None:
         )
     with pytest.raises(ValueError, match="primary_signal_must_be_boolean"):
         RiskAllocationEnv(
-            data, np.ones(6), np.asarray([0, 0, 0, 0, 0, 2]), bar_interval_ms=3_600_000
+            data,
+            np.ones(6),
+            cast(NDArray[np.bool_], np.asarray([0, 0, 0, 0, 0, 2])),
+            bar_interval_ms=3_600_000,
         )
     with pytest.raises(ValueError, match="primary_signal_length"):
         RiskAllocationEnv(
