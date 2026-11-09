@@ -188,6 +188,19 @@ jobs:
           assert report["temporal_split"]["final_holdout_fraction"] == 0.15
           assert report["temporal_split"]["final_holdout_status"].startswith("RESERVED")
           assert report["economic_acceptance"] == "NOT_EVALUATED"
+          model = report["model"]
+          assert model["fixed_position_baseline_policy"]["target_exposure_fraction"] == 1.0
+          assert model["fixed_position_baseline_policy"]["purpose"] == "COMPARISON_ONLY_NOT_TRADE_AUTHORIZATION"
+          assert set(model["validation_metrics"]) == {"BTCUSDT", "ETHUSDT"}
+          assert set(model["fixed_position_baseline_metrics"]) == {"BTCUSDT", "ETHUSDT"}
+          assert model["performance_metric_conventions"]["final_holdout_used"] is False
+          for metric_sets in (model["validation_metrics"], model["fixed_position_baseline_metrics"]):
+              for asset_metrics in metric_sets.values():
+                  for metrics in asset_metrics:
+                      assert "annualized_sharpe_ratio" in metrics
+                      assert "annualized_sortino_ratio_mar_zero" in metrics
+                      assert "total_trading_cost_quote" in metrics
+                      assert "turnover_fraction_of_initial_equity" in metrics
           assert report["Champion"] is None
           assert report["order_permission"] is False
           assert report["trading_authorization"] == "NO-GO"

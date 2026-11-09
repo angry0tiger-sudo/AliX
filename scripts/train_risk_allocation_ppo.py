@@ -10,6 +10,7 @@ import argparse
 import hashlib
 import importlib
 import json
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,7 @@ from scripts.run_ml_core_v4ap_diagnostic_sweep import (
 )
 from services.ml_core.adaptive_targets import calculate_atr
 from services.rl_research.risk_allocation_environment import (
+    ACTION_FRACTIONS,
     ROUND_TRIP_COST_BPS,
     RiskAllocationEnv,
 )
@@ -34,6 +36,7 @@ EXPECTED_SCHEMA = "alix.binance.public-ohlcv.v1"
 EXPECTED_PROVIDER = "Binance Spot public klines API"
 ASSETS = ("BTCUSDT", "ETHUSDT")
 TIMEFRAME_MINUTES = {"15m": 15, "30m": 30, "1h": 60, "4h": 240}
+FIXED_BASELINE_EXPOSURE_FRACTION = 1.0
 CSV_COLUMNS = ("date", "open", "high", "low", "close", "volume")
 KNOWN_GAP_START = "2023-03-24T12:40:00Z"
 KNOWN_GAP_END = "2023-03-24T13:59:00Z"
@@ -380,28 +383,86 @@ def _create_environment(segment: DataFrame, timeframe: str) -> RiskAllocationEnv
     )
 
 
+def _annualized_risk_ratios(
+    equity_curve: list[float], timeframe: str
+) -> tuple[float | None, float | None]:
+    values = np.asarray(equity_curve, dtype=np.float64)
+    if (
+        values.ndim != 1
+        or values.size < 3
+        or not np.isfinite(values).all()
+        or np.any(values <= 0.0)
+    ):
+        return None, None
+    period_returns = np.diff(values) / values[:-1]
+    periods_per_year = 365.0 * 24.0 * 60.0 / TIMEFRAME_MINUTES[timeframe]
+    annualization = math.sqrt(periods_per_year)
+    mean_return = float(np.mean(period_returns))
+    volatility = float(np.std(period_returns, ddof=1))
+    sharpe = annualization * mean_return / volatility if volatility > 0.0 else None
+    downside = np.minimum(period_returns, 0.0)
+    downside_deviation = math.sqrt(float(np.mean(np.square(downside))))
+    sortino = (
+        annualization * mean_return / downside_deviation
+        if downside_deviation > 0.0
+        else None
+    )
+    return sharpe, sortino
+
+
 def _evaluate_validation_segment(
-    model: Any, segment: DataFrame, timeframe: str, seed: int
-) -> dict[str, float | int]:
+    model: Any | None, segment: DataFrame, timeframe: str, seed: int
+) -> dict[str, Any]:
     env = _create_environment(segment, timeframe)
     observation, _ = env.reset(seed=seed)
     rewards = 0.0
     info: dict[str, Any] = {}
+    equity_curve = [env.initial_equity]
+    target_exposures: list[float] = []
     terminated = False
+    bar_index = 0
+    fixed_action = ACTION_FRACTIONS.index(FIXED_BASELINE_EXPOSURE_FRACTION)
     while not terminated:
-        action, _ = model.predict(observation, deterministic=True)
-        observation, reward, terminated, truncated, info = env.step(
-            int(np.asarray(action).item())
-        )
+        if model is None:
+            action_index = (
+                fixed_action
+                if bool(segment["primary_buy_signal"].iloc[bar_index])
+                else 0
+            )
+        else:
+            action, _ = model.predict(observation, deterministic=True)
+            action_index = int(np.asarray(action).item())
+        observation, reward, terminated, truncated, info = env.step(action_index)
         if truncated:
             raise RuntimeError("rl_validation_unexpected_truncation")
         rewards += reward
+        equity_curve.append(float(info["equity"]))
+        target_exposures.append(float(info["applied_target_fraction"]))
+        bar_index += 1
+
+    sharpe, sortino = _annualized_risk_ratios(equity_curve, timeframe)
+    exposure_values = np.asarray(target_exposures, dtype=np.float64)
+    exposure_distribution = {
+        f"{fraction:.2f}": float(np.mean(np.isclose(exposure_values, fraction)))
+        for fraction in ACTION_FRACTIONS
+    }
+    total_traded_quote = float(info["total_traded_quote"])
     return {
         "bars": len(segment),
+        "equity_observations": len(equity_curve) - 1,
         "final_equity": float(info["equity"]),
         "net_return_fraction": float(info["equity"]) / env.initial_equity - 1.0,
         "max_drawdown_fraction": float(info["max_drawdown"]),
+        "annualized_sharpe_ratio": sharpe,
+        "annualized_sortino_ratio_mar_zero": sortino,
+        "mean_target_exposure_fraction": float(np.mean(exposure_values)),
+        "max_target_exposure_fraction": float(np.max(exposure_values)),
+        "time_in_market_fraction": float(np.mean(exposure_values > 0.0)),
+        "target_exposure_distribution": exposure_distribution,
         "position_adjustments": int(info["position_adjustments"]),
+        "total_traded_quote": total_traded_quote,
+        "turnover_fraction_of_initial_equity": total_traded_quote / env.initial_equity,
+        "total_trading_cost_quote": float(info["total_cost_quote"]),
         "cumulative_reward": float(rewards),
     }
 
@@ -441,11 +502,21 @@ def _train_ppo(
         vector_environment.close()
     model.save(str(output_dir / "risk_allocation_ppo"))
 
-    metrics: dict[str, list[dict[str, float | int]]] = {}
+    metrics: dict[str, list[dict[str, Any]]] = {}
+    fixed_baseline_metrics: dict[str, list[dict[str, Any]]] = {}
     for asset_index, (symbol, segments) in enumerate(validation_segments.items()):
         metrics[symbol] = [
             _evaluate_validation_segment(
                 model,
+                segment,
+                timeframe,
+                seed + asset_index + segment_index,
+            )
+            for segment_index, segment in enumerate(segments)
+        ]
+        fixed_baseline_metrics[symbol] = [
+            _evaluate_validation_segment(
+                None,
                 segment,
                 timeframe,
                 seed + asset_index + segment_index,
@@ -459,6 +530,22 @@ def _train_ppo(
         "seed": seed,
         "model_file": "risk_allocation_ppo.zip",
         "validation_metrics": metrics,
+        "fixed_position_baseline_policy": {
+            "name": "PRIMARY_FULL_ALLOCATION",
+            "target_exposure_fraction": FIXED_BASELINE_EXPOSURE_FRACTION,
+            "primary_buy_behavior": "SET_TARGET_TO_100_PERCENT",
+            "no_primary_buy_behavior": "SET_TARGET_TO_0_PERCENT",
+            "purpose": "COMPARISON_ONLY_NOT_TRADE_AUTHORIZATION",
+        },
+        "fixed_position_baseline_metrics": fixed_baseline_metrics,
+        "performance_metric_conventions": {
+            "return_basis": "NET_EQUITY_PERIOD_RETURNS_AFTER_FEES_AND_SLIPPAGE",
+            "annualization_basis": "365_DAY_CRYPTO_YEAR",
+            "risk_free_rate_per_period": 0.0,
+            "sortino_minimum_acceptable_return_per_period": 0.0,
+            "sortino_downside_deviation": "RMS_OF_NEGATIVE_PERIOD_RETURNS_WITH_ZERO_FOR_NONNEGATIVE",
+            "final_holdout_used": False,
+        },
     }
 
 
