@@ -35,7 +35,7 @@ TRAILING_ATR_MULTIPLIER = 2.0
 DEFAULT_TIMEFRAME_MINUTES = 30
 LIVE_ORDER_SUBMISSION_SUPPORTED = False
 
-remove loggerclass MvpError(RuntimeError):
+class MvpError(RuntimeError):
     """Base exception for MVP execution failures."""
 
 
