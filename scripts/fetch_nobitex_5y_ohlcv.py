@@ -5,8 +5,8 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, timezone
 import json
-from pathlib import Path
 import os
+from pathlib import Path
 import time
 from typing import Any, Callable
 
@@ -80,6 +80,13 @@ def main() -> int:
     )
     manifest["windowing_policy"] = "FIVE_ADJACENT_365_DAY_WINDOWS"
     manifest["total_candles_expected"] = CANDLES_TOTAL
+    manifest_path = (
+        args.output_dir / f"nobitex-{args.symbol.lower()}-1h.manifest.json"
+    )
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True, allow_nan=False) + "\n",
+        encoding="utf-8",
+    )
     print(json.dumps(manifest, sort_keys=True, allow_nan=False))
     return 0
 

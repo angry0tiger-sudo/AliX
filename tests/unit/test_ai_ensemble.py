@@ -3,7 +3,10 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from pathlib import Path
+from typing import Any, Callable
 
+import joblib
 import numpy as np
 import pandas as pd
 import pytest
@@ -33,6 +36,9 @@ from research.ai_ensemble.validation import (
     create_purged_walk_forward_folds,
     deflated_sharpe_ratio,
 )
+from scripts import fetch_nobitex_public_ohlcv as ohlcv_source
+from scripts.fetch_nobitex_5y_ohlcv import fetch_five_year_candles
+from scripts.train_nobitex_ai_ensemble import run_training
 
 
 def market_frame(rows: int = 360) -> DataFrame:
@@ -358,3 +364,89 @@ def test_stacking_model_contract_and_training_smoke_when_dependencies_exist() ->
     output = model.predict_proba(features.iloc[-10:])
     assert output.shape == (10,)
     assert np.all((output >= 0.0) & (output <= 1.0))
+
+
+def test_five_year_fetcher_joins_five_contiguous_windows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    def fake_fetch(
+        *,
+        days: int,
+        now: datetime,
+        symbol: str,
+        interval: str,
+        request_json: Callable[[dict[str, str]], dict[str, Any]],
+        sleep_fn: Callable[[float], None],
+    ) -> list[ohlcv_source.CandleRecord]:
+        nonlocal calls
+        calls += 1
+        assert days == 365
+        assert symbol == "BTCUSDT"
+        assert interval == "1h"
+        end = (int(now.timestamp()) // 3600 * 3600) - 3600
+        start = end - ((365 * 24) - 1) * 3600
+        rows: list[ohlcv_source.CandleRecord] = []
+        for stamp in range(start, end + 1, 3600):
+            rows.append(
+                {
+                    "timestamp": stamp,
+                    "date": datetime.fromtimestamp(stamp, timezone.utc).isoformat(),
+                    "open": 100.0,
+                    "high": 101.0,
+                    "low": 99.0,
+                    "close": 100.0,
+                    "volume": 1.0,
+                }
+            )
+        return rows
+
+    monkeypatch.setattr(ohlcv_source, "fetch_historical_candles", fake_fetch)
+    rows = fetch_five_year_candles(now=datetime(2026, 11, 9, 12, tzinfo=timezone.utc))
+    assert calls == 5
+    assert len(rows) == 43_800
+    stamps = [row["timestamp"] for row in rows]
+    assert all(right - left == 3600 for left, right in zip(stamps, stamps[1:]))
+
+
+def test_end_to_end_training_writes_unpromoted_research_artifact(
+    tmp_path: Path,
+) -> None:
+    pytest.importorskip("lightgbm")
+    pytest.importorskip("xgboost")
+    market = market_frame(1200)
+    ohlcv_path = tmp_path / "ohlcv.csv"
+    microstructure_path = tmp_path / "microstructure.csv"
+    model_path = tmp_path / "ensemble.joblib"
+    report_path = tmp_path / "report.json"
+    market.loc[:, ["date", "open", "high", "low", "close", "volume"]].to_csv(
+        ohlcv_path, index=False
+    )
+    market.loc[
+        :,
+        [
+            "date",
+            "order_book_imbalance",
+            "taker_buy_volume",
+            "taker_sell_volume",
+            "funding_rate",
+            "microstructure_timestamp",
+            "funding_timestamp",
+        ],
+    ].to_csv(microstructure_path, index=False)
+    report = run_training(
+        ohlcv_path=ohlcv_path,
+        microstructure_path=microstructure_path,
+        model_path=model_path,
+        report_path=report_path,
+    )
+    artifact = joblib.load(model_path)
+    assert artifact["schema_version"] == "alix.nobitex.ai-ensemble.v1"
+    assert artifact["round_trip_cost_bps"] == 50
+    assert report["validation"]["fold_count"] == 3
+    assert report["safety"]["Champion"] is None
+    assert report["safety"]["order_permission"] is False
+    assert report["safety"]["private_api_calls"] == 0
+    assert report["safety"]["trading_authorization"] == "NO-GO"
+    assert report_path.is_file()
