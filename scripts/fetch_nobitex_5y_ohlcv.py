@@ -20,11 +20,55 @@ CANDLES_TOTAL = CANDLES_PER_WINDOW * WINDOW_COUNT
 INTERVAL_SECONDS = 3600
 
 
+def _fetch_complete_window(
+    *,
+    cutoff: datetime,
+    symbol: str,
+    request_json: Callable[[dict[str, str]], dict[str, Any]],
+    sleep_fn: Callable[[float], None],
+) -> list[source.CandleRecord]:
+    chunk = source.fetch_historical_candles(
+        days=DAYS_PER_WINDOW,
+        now=cutoff,
+        symbol=symbol,
+        interval="1h",
+        request_json=request_json,
+        sleep_fn=sleep_fn,
+    )
+    if len(chunk) != CANDLES_PER_WINDOW:
+        raise ValueError("five_year_window_row_count_mismatch")
+    return chunk
+
+
+def _validate_window_boundary(
+    older_chunk: list[source.CandleRecord],
+    newer_chunk: list[source.CandleRecord],
+) -> None:
+    older_end = int(older_chunk[-1]["timestamp"])
+    newer_start = int(newer_chunk[0]["timestamp"])
+    if older_end + INTERVAL_SECONDS != newer_start:
+        raise ValueError("five_year_window_boundary_gap_or_overlap")
+
+
+def _validate_five_year_rows(rows: list[source.CandleRecord]) -> None:
+    if len(rows) != CANDLES_TOTAL:
+        raise ValueError("five_year_total_row_count_mismatch")
+    timestamps = [int(row["timestamp"]) for row in rows]
+    has_gap = any(
+        current - previous != INTERVAL_SECONDS
+        for previous, current in zip(timestamps, timestamps[1:])
+    )
+    if has_gap:
+        raise ValueError("five_year_ohlcv_has_duplicate_or_missing_candles")
+
+
 def fetch_five_year_candles(
     *,
     now: datetime,
     symbol: str = "BTCUSDT",
-    request_json: Callable[[dict[str, str]], dict[str, Any]] = source.request_public_json,
+    request_json: Callable[
+        [dict[str, str]], dict[str, Any]
+    ] = source.request_public_json,
     sleep_fn: Callable[[float], None] = time.sleep,
 ) -> list[source.CandleRecord]:
     """Fetch five backward-adjacent 365-day windows; gaps fail the run."""
@@ -33,31 +77,18 @@ def fetch_five_year_candles(
     cutoff = now.astimezone(timezone.utc)
     chunks: list[list[source.CandleRecord]] = []
     for _ in range(WINDOW_COUNT):
-        chunk = source.fetch_historical_candles(
-            days=DAYS_PER_WINDOW,
-            now=cutoff,
+        chunk = _fetch_complete_window(
+            cutoff=cutoff,
             symbol=symbol,
-            interval="1h",
             request_json=request_json,
             sleep_fn=sleep_fn,
         )
-        if len(chunk) != CANDLES_PER_WINDOW:
-            raise ValueError("five_year_window_row_count_mismatch")
-        if chunks and int(chunk[-1]["timestamp"]) + INTERVAL_SECONDS != int(
-            chunks[0][0]["timestamp"]
-        ):
-            raise ValueError("five_year_window_boundary_gap_or_overlap")
+        if chunks:
+            _validate_window_boundary(chunk, chunks[0])
         chunks.insert(0, chunk)
         cutoff = datetime.fromtimestamp(int(chunk[0]["timestamp"]), timezone.utc)
     rows = [row for chunk in chunks for row in chunk]
-    if len(rows) != CANDLES_TOTAL:
-        raise ValueError("five_year_total_row_count_mismatch")
-    timestamps = [int(row["timestamp"]) for row in rows]
-    if any(
-        current - previous != INTERVAL_SECONDS
-        for previous, current in zip(timestamps, timestamps[1:])
-    ):
-        raise ValueError("five_year_ohlcv_has_duplicate_or_missing_candles")
+    _validate_five_year_rows(rows)
     return rows
 
 
@@ -80,9 +111,7 @@ def main() -> int:
     )
     manifest["windowing_policy"] = "FIVE_ADJACENT_365_DAY_WINDOWS"
     manifest["total_candles_expected"] = CANDLES_TOTAL
-    manifest_path = (
-        args.output_dir / f"nobitex-{args.symbol.lower()}-1h.manifest.json"
-    )
+    manifest_path = args.output_dir / f"nobitex-{args.symbol.lower()}-1h.manifest.json"
     manifest_path.write_text(
         json.dumps(manifest, indent=2, sort_keys=True, allow_nan=False) + "\n",
         encoding="utf-8",

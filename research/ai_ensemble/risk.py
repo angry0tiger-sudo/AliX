@@ -84,14 +84,21 @@ def fractional_kelly_size(
     net_loss = active.stop_loss_atr * atr_fraction + cost_fraction
     if net_win <= 0.0 or net_loss <= 0.0:
         return KellySizingResult(
-            False, "NET_REWARD_NOT_POSITIVE_AFTER_COST", probability_of_net_profit,
-            0.0, 0.0, 0.0, 0.0, Decimal("0"), Decimal("0"), net_loss
+            False,
+            "NET_REWARD_NOT_POSITIVE_AFTER_COST",
+            probability_of_net_profit,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            Decimal("0"),
+            Decimal("0"),
+            net_loss,
         )
     reward_to_risk = net_win / net_loss
     full_kelly = max(
         0.0,
-        probability_of_net_profit
-        - (1.0 - probability_of_net_profit) / reward_to_risk,
+        probability_of_net_profit - (1.0 - probability_of_net_profit) / reward_to_risk,
     )
     fractional = full_kelly * active.kelly_fraction
     volatility_scale = min(1.0, active.target_atr_fraction / atr_fraction)
@@ -103,13 +110,28 @@ def fractional_kelly_size(
     )
     if position_fraction <= 0.0:
         return KellySizingResult(
-            False, "KELLY_EDGE_NOT_POSITIVE", probability_of_net_profit,
-            full_kelly, fractional, volatility_scale, 0.0,
-            Decimal("0"), Decimal("0"), net_loss
+            False,
+            "KELLY_EDGE_NOT_POSITIVE",
+            probability_of_net_profit,
+            full_kelly,
+            fractional,
+            volatility_scale,
+            0.0,
+            Decimal("0"),
+            Decimal("0"),
+            net_loss,
         )
     notional = equity * Decimal(str(position_fraction))
     quantity = notional / reference_price
     return KellySizingResult(
-        True, "PASS", probability_of_net_profit, full_kelly, fractional,
-        volatility_scale, position_fraction, notional, quantity, net_loss
+        True,
+        "PASS",
+        probability_of_net_profit,
+        full_kelly,
+        fractional,
+        volatility_scale,
+        position_fraction,
+        notional,
+        quantity,
+        net_loss,
     )

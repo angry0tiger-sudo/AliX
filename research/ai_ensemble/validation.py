@@ -1,11 +1,9 @@
-"""Purged expanding-window validation and Deflated Sharpe diagnostics."""
+"""Purged expanding-window validation and mean-return Z-score diagnostics."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from math import isfinite, sqrt
-from numbers import Integral
-from statistics import NormalDist
 from typing import Sequence
 
 import numpy as np
@@ -35,17 +33,16 @@ def create_purged_walk_forward_folds(
     validation start and it is outside the configured pre-validation embargo.
     Validation blocks are disjoint and chronological.
     """
-    if isinstance(fold_count, bool) or not isinstance(fold_count, Integral) or fold_count < 2:
+    if isinstance(fold_count, bool) or fold_count < 2:
         raise ValueError("walk_forward_fold_count_invalid")
-    if isinstance(embargo_bars, bool) or not isinstance(embargo_bars, Integral) or embargo_bars < 1:
+    if isinstance(embargo_bars, bool) or embargo_bars < 1:
         raise ValueError("walk_forward_embargo_invalid")
-    if (
-        isinstance(minimum_train_samples, bool)
-        or not isinstance(minimum_train_samples, Integral)
-        or minimum_train_samples < 2
-    ):
+    if isinstance(minimum_train_samples, bool) or minimum_train_samples < 2:
         raise ValueError("walk_forward_minimum_train_samples_invalid")
-    if not isfinite(first_validation_fraction) or not 0.40 <= first_validation_fraction < 0.90:
+    if (
+        not isfinite(first_validation_fraction)
+        or not 0.40 <= first_validation_fraction < 0.90
+    ):
         raise ValueError("walk_forward_first_validation_fraction_invalid")
     if len(eligible_indices) == 0:
         raise ValueError("walk_forward_eligible_indices_empty")
@@ -58,7 +55,7 @@ def create_purged_walk_forward_folds(
         raise ValueError("walk_forward_indices_must_be_unique_and_increasing")
     ends: list[int] = []
     for index, raw_end in enumerate(label_end_indices):
-        if isinstance(raw_end, bool) or not isinstance(raw_end, Integral):
+        if isinstance(raw_end, bool):
             raise ValueError("walk_forward_label_end_index_invalid")
         end = int(raw_end)
         if end < -1 or end >= len(label_end_indices):
@@ -107,46 +104,24 @@ def create_purged_walk_forward_folds(
     return tuple(folds)
 
 
-def deflated_sharpe_ratio(
+def mean_return_z_score(
     trade_returns: Sequence[float],
-    *,
-    tested_strategies: int = 1,
 ) -> float | None:
-    """Estimate the probability Sharpe exceeds the expected multiple-test maximum.
+    """One-sample normal-approximation Z-score for mean net trade return.
 
-    Inputs are non-overlapping trade returns, not overlapping hourly bar returns.
-    The approximation uses finite-sample skewness and kurtosis adjustment.
+    This is not the Deflated Sharpe Ratio. It is undefined when fewer than two
+    observations are available or the observed sample variance is zero.
     """
-    if isinstance(tested_strategies, bool) or not isinstance(tested_strategies, Integral) or tested_strategies < 1:
-        raise ValueError("dsr_tested_strategies_invalid")
     values = np.asarray(trade_returns, dtype=float)
     if values.ndim != 1 or not bool(np.isfinite(values).all()):
-        raise ValueError("dsr_returns_must_be_finite_1d")
+        raise ValueError("z_score_returns_must_be_finite_1d")
     if len(values) < 2:
         return None
     deviation = float(values.std(ddof=1))
-    mean = float(values.mean())
     if deviation <= 0.0:
-        return 1.0 if mean > 0 else 0.0 if mean < 0 else 0.5
-    sharpe = mean / deviation
-    standardized = (values - mean) / deviation
-    skewness = float(np.mean(standardized**3))
-    kurtosis = float(np.mean(standardized**4))
-    variance = (
-        1.0 - skewness * sharpe + ((kurtosis - 1.0) / 4.0) * sharpe * sharpe
-    ) / (len(values) - 1)
-    standard_error = sqrt(max(variance, 1e-12))
-    benchmark = 0.0
-    if int(tested_strategies) > 1:
-        gamma = 0.5772156649015329
-        distribution = NormalDist()
-        trials = int(tested_strategies)
-        first_quantile = distribution.inv_cdf(1.0 - 1.0 / trials)
-        second_quantile = distribution.inv_cdf(1.0 - 1.0 / (trials * np.e))
-        benchmark = standard_error * (
-            (1.0 - gamma) * first_quantile + gamma * second_quantile
-        )
-    return float(NormalDist().cdf((sharpe - benchmark) / standard_error))
+        return None
+    standard_error = deviation / sqrt(len(values))
+    return float(values.mean() / standard_error)
 
 
 def non_overlapping_trade_returns(

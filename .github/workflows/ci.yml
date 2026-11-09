@@ -240,3 +240,210 @@ jobs:
     permissions:
       contents: read
     uses: ./.github/workflows/ml-core-real-data-baseline.yml
+
+  ensemble-real-data-research:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/research/ml-core-ai-ensemble'
+    needs:
+      - quality
+      - freqtrade-runtime-smoke
+      - postgres-integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      ALIX_DRY_RUN: "true"
+      ALIX_ALLOW_LIVE_TRADING: "false"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    steps:
+      - name: Checkout exact research commit without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Set up pinned Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install pinned OHLCV ensemble runtime and test dependencies
+        run: |
+          python -m pip install pip==25.2
+          python -m pip install numpy pandas==2.3.3 scikit-learn==1.9.0 joblib==1.5.3 lightgbm==4.7.0 xgboost-cpu==3.4.1 pytest==9.0.3
+      - name: Re-run AI ensemble mechanics before accessing real market data
+        run: pytest tests/unit/test_ai_ensemble.py -q
+      - name: Fetch exactly five years of public Nobitex Spot hourly OHLCV
+        run: |
+          set -euo pipefail
+          data_dir="$GITHUB_WORKSPACE/.artifacts/alix-ensemble-data"
+          mkdir -p "$data_dir"
+          python -m scripts.fetch_nobitex_5y_ohlcv \
+            --symbol BTCUSDT \
+            --output-dir "$data_dir" \
+            --commit-sha "$GITHUB_SHA"
+      - name: Verify five-year OHLCV provenance, completeness, and safety
+        run: |
+          python - <<'PY'
+          import csv
+          from datetime import datetime, timedelta
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          data_dir = Path(".artifacts/alix-ensemble-data")
+          csv_path = data_dir / "nobitex-btcusdt-1h.csv"
+          manifest_path = data_dir / "nobitex-btcusdt-1h.manifest.json"
+          manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+          assert manifest["provider"] == "Nobitex public UDF history API"
+          assert manifest["interval"] == "1h"
+          assert manifest["symbol"] == "BTCUSDT"
+          assert manifest["requested_days"] == 1825
+          assert manifest["row_count"] == 43800
+          assert manifest["total_candles_expected"] == 43800
+          assert manifest["windowing_policy"] == "FIVE_ADJACENT_365_DAY_WINDOWS"
+          assert manifest["missing_intervals"] == 0
+          assert manifest["csv_sha256"] == hashlib.sha256(csv_path.read_bytes()).hexdigest()
+          assert manifest["commit_sha"] == os.environ["GITHUB_SHA"]
+
+          # This is an unauthenticated public market-data endpoint.
+          # No API key, account credentials, or private endpoint is used.
+          assert manifest["public_api_only"] is True
+          assert manifest["credentials_used"] is False
+          assert manifest["private_api_calls"] == 0
+          assert manifest["exchange_calls"] == 0
+          assert manifest["real_order_attempts"] == 0
+          assert manifest["order_permission"] is False
+          assert manifest["Champion"] is None
+          assert manifest["trading_authorization"] == "NO-GO"
+
+          timestamps = []
+          with csv_path.open(newline="", encoding="utf-8") as stream:
+              reader = csv.DictReader(stream)
+              expected_columns = {"date", "open", "high", "low", "close", "volume"}
+              assert set(reader.fieldnames or ()) == expected_columns
+              for row in reader:
+                  timestamps.append(
+                      datetime.fromisoformat(row["date"].replace("Z", "+00:00"))
+                  )
+
+          assert len(timestamps) == 43800
+          assert all(
+              current - previous == timedelta(hours=1)
+              for previous, current in zip(timestamps, timestamps[1:])
+          )
+
+          print(json.dumps({
+              "provider": manifest["provider"],
+              "symbol": manifest["symbol"],
+              "interval": manifest["interval"],
+              "requested_days": manifest["requested_days"],
+              "row_count": len(timestamps),
+              "csv_sha256": manifest["csv_sha256"],
+              "public_api_only": True,
+              "credentials_used": False,
+              "private_api_calls": 0,
+              "real_order_attempts": 0,
+              "Champion": None,
+              "order_permission": False,
+              "trading_authorization": "NO-GO",
+          }, sort_keys=True))
+          PY
+      - name: Train LightGBM, XGBoost, HMM, and Logistic Regression on real OHLCV
+        run: |
+          set -euo pipefail
+          data_dir="$GITHUB_WORKSPACE/.artifacts/alix-ensemble-data"
+          output_dir="$GITHUB_WORKSPACE/.artifacts/alix-ensemble-artifacts"
+          mkdir -p "$output_dir"
+          python -m scripts.train_nobitex_ai_ensemble \
+            --ohlcv "$data_dir/nobitex-btcusdt-1h.csv" \
+            --manifest "$data_dir/nobitex-btcusdt-1h.manifest.json" \
+            --model "$output_dir/nobitex-ai-ensemble.joblib" \
+            --model-manifest "$output_dir/nobitex-ai-ensemble.manifest.json" \
+            --report "$output_dir/nobitex-ai-ensemble-report.json" \
+            --commit-sha "$GITHUB_SHA"
+      - name: Verify training report and write economic Step Summary
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          output_dir = Path(".artifacts/alix-ensemble-artifacts")
+          report_path = output_dir / "nobitex-ai-ensemble-report.json"
+          model_manifest_path = output_dir / "nobitex-ai-ensemble.manifest.json"
+          report = json.loads(report_path.read_text(encoding="utf-8"))
+          model_manifest = json.loads(model_manifest_path.read_text(encoding="utf-8"))
+
+          dataset = report["dataset"]
+          result = report["research_result"]
+          safety = report["safety"]
+
+          assert dataset["kind"] == "PUBLIC_MARKET_DATA"
+          assert dataset["row_count"] == 43800
+          assert dataset["requested_days"] == 1825
+          assert dataset["interval"] == "1h"
+          assert report["validation"]["fold_count"] == 3
+          assert model_manifest["code_commit_sha"] == os.environ["GITHUB_SHA"]
+          assert model_manifest["labeling"]["round_trip_cost_bps"] == 50
+          assert safety["Champion"] is None
+          assert safety["order_permission"] is False
+          assert safety["trading_authorization"] == "NO-GO"
+          assert safety["private_api_calls"] == 0
+          assert safety["real_order_attempts"] == 0
+          assert safety["orders_or_execution_api_used"] is False
+
+          def number(value, places=4):
+              return "N/A" if value is None else f"{float(value):.{places}f}"
+
+          def percent(value):
+              return "N/A" if value is None else f"{float(value) * 100:.2f}%"
+
+          summary = [
+              "# AliX AI Ensemble: Five-Year Real OHLCV Research",
+              "",
+              f"Commit: {os.environ['GITHUB_SHA']}",
+              f"Dataset: {dataset['provider']} / {dataset['symbol']} / {dataset['interval']}",
+              f"Coverage: {dataset['row_count']:,} contiguous hourly candles ({dataset['requested_days']} days)",
+              f"Dataset SHA-256: {dataset['csv_sha256']}",
+              f"Eligible labeled training rows: {dataset['eligible_labeled_rows']:,}",
+              f"Out-of-sample folds: {report['validation']['fold_count']}",
+              "",
+              "| Metric | Result |",
+              "|---|---:|",
+              f"| Net PF | {number(result['net_profit_factor'])} |",
+              f"| Win Rate | {percent(result['win_rate'])} |",
+              f"| Max Drawdown | {percent(result['max_drawdown'])} |",
+              f"| Statistical Z-Score | {number(result['statistical_z_score'])} |",
+              f"| Net compounded return | {percent(result['net_return'])} |",
+              f"| Non-overlapping trades | {result['trade_count']} |",
+              "",
+              "The Statistical Z-Score is the one-sample normal-approximation statistic for mean non-overlapping net trade return against a zero-mean null. It is not a Deflated Sharpe Ratio and does not apply a multiple-testing correction.",
+              "",
+              "## Safety and promotion state",
+              "",
+              "- Champion = null",
+              "- order_permission = false",
+              "- trading_authorization = NO-GO",
+              "- private_api_calls = 0",
+              "- real_order_attempts = 0",
+              "- Economic acceptance remains NO-GO. A successful training run does not authorize promotion or execution.",
+              "",
+          ]
+          with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a", encoding="utf-8") as stream:
+              stream.write("\n".join(summary))
+          print(json.dumps({
+              "training_rows": dataset["eligible_labeled_rows"],
+              "research_result": result,
+              "safety": safety,
+          }, sort_keys=True))
+          PY
+      - name: Upload real-data model, metrics, and dataset provenance
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alix-ai-ensemble-real-data
+          path: |
+            .artifacts/alix-ensemble-data/*
+            .artifacts/alix-ensemble-artifacts/*
+          if-no-files-found: warn
+          retention-days: 30
+

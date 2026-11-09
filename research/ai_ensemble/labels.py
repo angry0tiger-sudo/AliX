@@ -70,7 +70,11 @@ def build_net_profit_targets(
                 raise ValueError("triple_barrier_horizon_label_mismatch")
         else:
             raise ValueError("triple_barrier_exit_reason_unknown")
-        if not np.isfinite(entry_price) or not np.isfinite(exit_price) or entry_price <= 0:
+        if (
+            not np.isfinite(entry_price)
+            or not np.isfinite(exit_price)
+            or entry_price <= 0
+        ):
             raise ValueError("triple_barrier_exit_price_invalid")
         gross_return = exit_price / entry_price - 1.0
         net_return = gross_return - cost_fraction

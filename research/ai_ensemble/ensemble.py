@@ -7,15 +7,14 @@ from dataclasses import dataclass
 from typing import Any, Sequence
 
 import numpy as np
-import pandas as pd
 from pandas import DataFrame
-from sklearn.linear_model import LogisticRegression
+from sklearn.linear_model import LogisticRegression  # type: ignore[import-untyped]
 
 from research.ai_ensemble.features import REGIME_OBSERVATION_COLUMNS
 from research.ai_ensemble.hmm import CausalGaussianHMM
 from research.ai_ensemble.validation import (
     create_purged_walk_forward_folds,
-    deflated_sharpe_ratio,
+    mean_return_z_score,
     non_overlapping_trade_returns,
 )
 
@@ -31,11 +30,18 @@ class StackingConfig:
     probability_threshold: float = 0.50
 
     def validate(self) -> None:
-        if self.fold_count < 2 or self.embargo_bars < 1 or self.minimum_train_samples < 2:
+        if (
+            self.fold_count < 2
+            or self.embargo_bars < 1
+            or self.minimum_train_samples < 2
+        ):
             raise ValueError("stacking_split_configuration_invalid")
         if self.n_estimators < 10 or self.random_state < 0:
             raise ValueError("stacking_estimator_configuration_invalid")
-        if not np.isfinite(self.meta_regularization_c) or self.meta_regularization_c <= 0:
+        if (
+            not np.isfinite(self.meta_regularization_c)
+            or self.meta_regularization_c <= 0
+        ):
             raise ValueError("stacking_meta_regularization_invalid")
         if not 0.0 <= self.probability_threshold <= 1.0:
             raise ValueError("stacking_probability_threshold_invalid")
@@ -115,8 +121,7 @@ def _meta_features(
     regime_probabilities: np.ndarray,
 ) -> np.ndarray:
     base_probabilities = [
-        _model_probability(models[name], features)
-        for name in ("lightgbm", "xgboost")
+        _model_probability(models[name], features) for name in ("lightgbm", "xgboost")
     ]
     if regime_probabilities.shape != (len(features), 3):
         raise ValueError("hmm_regime_probability_shape_invalid")
@@ -163,7 +168,11 @@ class StackingEnsemble:
         if len(training_indices) == 0:
             raise ValueError("stacking_training_indices_empty")
         selected = tuple(int(index) for index in training_indices)
-        if selected != tuple(sorted(set(selected))) or selected[0] < 0 or selected[-1] >= len(data):
+        if (
+            selected != tuple(sorted(set(selected)))
+            or selected[0] < 0
+            or selected[-1] >= len(data)
+        ):
             raise ValueError("stacking_training_indices_invalid")
         self.feature_columns_ = tuple(data.columns)
         inner_folds = create_purged_walk_forward_folds(
@@ -187,10 +196,14 @@ class StackingEnsemble:
                 train_x.loc[:, list(REGIME_OBSERVATION_COLUMNS)].to_numpy(dtype=float)
             )
             regime_validation = regime_model.filter(
-                validation_x.loc[:, list(REGIME_OBSERVATION_COLUMNS)].to_numpy(dtype=float),
+                validation_x.loc[:, list(REGIME_OBSERVATION_COLUMNS)].to_numpy(
+                    dtype=float
+                ),
                 initial_state_probabilities=regime_model.next_prior_probabilities(),
             )
-            meta_rows.append(_meta_features(base_models, validation_x, regime_validation))
+            meta_rows.append(
+                _meta_features(base_models, validation_x, regime_validation)
+            )
             meta_targets.extend(target[validation_idx].tolist())
         oof_features = np.vstack(meta_rows)
         oof_labels = np.asarray(meta_targets, dtype=int)
@@ -241,6 +254,10 @@ class StackingEnsemble:
 
 def _fold_trade_metrics(returns: Sequence[float]) -> dict[str, object]:
     values = np.asarray(returns, dtype=float)
+    if values.ndim != 1 or not bool(np.isfinite(values).all()):
+        raise ValueError("trade_metric_returns_must_be_finite_1d")
+    if bool((values <= -1.0).any()):
+        raise ValueError("trade_metric_return_would_destroy_equity")
     if len(values) == 0:
         return {
             "trade_count": 0,
@@ -248,12 +265,18 @@ def _fold_trade_metrics(returns: Sequence[float]) -> dict[str, object]:
             "mean_net_return": None,
             "compounded_net_return": 0.0,
             "profit_factor": None,
-            "deflated_sharpe_ratio": None,
+            "max_drawdown": None,
+            "trade_sharpe": None,
+            "statistical_z_score": None,
         }
     positive = float(values[values > 0].sum())
     negative = float(-values[values < 0].sum())
     profit_factor = positive / negative if negative > 0 else None
-    compounded = float(np.prod(1.0 + values) - 1.0)
+    equity = np.cumprod(1.0 + values)
+    peaks = np.maximum.accumulate(np.concatenate(([1.0], equity)))[1:]
+    drawdowns = 1.0 - equity / peaks
+    max_drawdown = float(max(0.0, np.max(drawdowns)))
+    compounded = float(equity[-1] - 1.0)
     deviation = float(values.std(ddof=1)) if len(values) > 1 else 0.0
     sharpe = float(values.mean() / deviation) if deviation > 0 else None
     return {
@@ -262,8 +285,9 @@ def _fold_trade_metrics(returns: Sequence[float]) -> dict[str, object]:
         "mean_net_return": float(values.mean()),
         "compounded_net_return": compounded,
         "profit_factor": profit_factor,
+        "max_drawdown": max_drawdown,
         "trade_sharpe": sharpe,
-        "deflated_sharpe_ratio": deflated_sharpe_ratio(values.tolist()),
+        "statistical_z_score": mean_return_z_score(values.tolist()),
     }
 
 
@@ -275,7 +299,6 @@ def evaluate_walk_forward(
     eligible_indices: Sequence[int],
     *,
     config: StackingConfig | None = None,
-    tested_strategies: int = 1,
 ) -> dict[str, object]:
     """Nested purged walk-forward evaluation; each outer fold owns its stack."""
     active_config = config or StackingConfig()
@@ -300,7 +323,7 @@ def evaluate_walk_forward(
     for fold in folds:
         model = StackingEnsemble(active_config).fit(
             features,
-            target,
+            target.tolist(),
             label_end_indices,
             fold.train_indices,
         )
@@ -325,9 +348,6 @@ def evaluate_walk_forward(
         fold_report.update(_fold_trade_metrics(realized))
         fold_reports.append(fold_report)
     aggregate = _fold_trade_metrics(all_trade_returns)
-    aggregate["deflated_sharpe_ratio"] = deflated_sharpe_ratio(
-        all_trade_returns, tested_strategies=tested_strategies
-    )
     return {
         "fold_count": len(fold_reports),
         "out_of_sample_rows": oos_rows,

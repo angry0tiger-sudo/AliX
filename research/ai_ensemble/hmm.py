@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 import numpy as np
 
 
@@ -49,10 +51,15 @@ class CausalGaussianHMM:
 
     @staticmethod
     def _normalize(values: np.ndarray, *, axis: int | None = None) -> np.ndarray:
-        totals = values.sum(axis=axis, keepdims=axis is not None)
+        if axis is None:
+            total = float(values.sum())
+            if total <= 0.0:
+                raise ValueError("hmm_probability_normalization_failed")
+            return cast(np.ndarray, values / total)
+        totals = values.sum(axis=axis, keepdims=True)
         if bool((totals <= 0).any()):
             raise ValueError("hmm_probability_normalization_failed")
-        return values / totals
+        return cast(np.ndarray, values / totals)
 
     def _require_fitted(self) -> None:
         if (
@@ -76,9 +83,11 @@ class CausalGaussianHMM:
             + (delta * delta) / self.variances_[None, :, :]
         ).sum(axis=2)
         shifted = log_probability - log_probability.max(axis=1, keepdims=True)
-        return np.exp(shifted)
+        return cast(np.ndarray, np.exp(shifted))
 
-    def _forward_backward(self, observations: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    def _forward_backward(
+        self, observations: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray]:
         if self.initial_probabilities_ is None or self.transition_matrix_ is None:
             raise RuntimeError("hmm_parameters_not_initialized")
         emissions = self._emissions(observations)
@@ -182,7 +191,9 @@ class CausalGaussianHMM:
             prior = self.initial_probabilities_.copy()
         else:
             supplied = np.asarray(initial_state_probabilities, dtype=float)
-            if supplied.shape != (self.n_states,) or not bool(np.isfinite(supplied).all()):
+            if supplied.shape != (self.n_states,) or not bool(
+                np.isfinite(supplied).all()
+            ):
                 raise ValueError("hmm_initial_state_probabilities_invalid")
             if bool((supplied < 0).any()) or float(supplied.sum()) <= 0:
                 raise ValueError("hmm_initial_state_probabilities_invalid")

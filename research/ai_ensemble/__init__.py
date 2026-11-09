@@ -7,12 +7,15 @@ from research.ai_ensemble.ensemble import (
 )
 from research.ai_ensemble.features import (
     FEATURE_COLUMNS,
-    merge_market_archives,
     build_causal_features,
 )
 from research.ai_ensemble.hmm import CausalGaussianHMM
 from research.ai_ensemble.labels import build_net_profit_targets
-from research.ai_ensemble.risk import KellySizingConfig, KellySizingResult, fractional_kelly_size
+from research.ai_ensemble.risk import (
+    KellySizingConfig,
+    KellySizingResult,
+    fractional_kelly_size,
+)
 
 __all__ = [
     "CausalGaussianHMM",
@@ -25,5 +28,4 @@ __all__ = [
     "build_net_profit_targets",
     "evaluate_walk_forward",
     "fractional_kelly_size",
-    "merge_market_archives",
 ]
