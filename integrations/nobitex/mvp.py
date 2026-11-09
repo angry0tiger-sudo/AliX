@@ -537,9 +537,7 @@ def _passive_levels_and_opposite(
         )
         return levels, snapshot.asks[0].price
     levels = tuple(
-        level
-        for level in snapshot.asks
-        if level.price <= mid * (Decimal("1") + band)
+        level for level in snapshot.asks if level.price <= mid * (Decimal("1") + band)
     )
     return levels, snapshot.bids[0].price
 
@@ -547,9 +545,7 @@ def _passive_levels_and_opposite(
 def _validate_passive_limit(
     side: str, level: BookLevel, best_opposite: Decimal
 ) -> None:
-    would_cross = (
-        side == "buy" and level.price >= best_opposite
-    ) or (
+    would_cross = (side == "buy" and level.price >= best_opposite) or (
         side == "sell" and level.price <= best_opposite
     )
     if would_cross:
@@ -574,9 +570,7 @@ def _build_passive_slices(
     slices: list[MakerSlice] = []
     for level in levels:
         _validate_passive_limit(side, level, best_opposite)
-        child_notional = _maker_child_notional(
-            remaining, level, max_participation
-        )
+        child_notional = _maker_child_notional(remaining, level, max_participation)
         if child_notional <= 0:
             continue
         slices.append(
@@ -598,9 +592,7 @@ def _build_passive_slices(
 def _validate_slice_total(
     slices: tuple[MakerSlice, ...], intended_quote_notional: Decimal
 ) -> None:
-    total = sum(
-        (item.quote_notional for item in slices), Decimal("0")
-    )
+    total = sum((item.quote_notional for item in slices), Decimal("0"))
     if total != intended_quote_notional:
         raise LiquidityRejected("CHILD_SLICE_TOTAL_MISMATCH")
 
@@ -619,9 +611,7 @@ def plan_maker_slices(
     )
     if not gate.approved:
         raise LiquidityRejected(gate.reason)
-    passive_levels, best_opposite = _passive_levels_and_opposite(
-        snapshot, side, band
-    )
+    passive_levels, best_opposite = _passive_levels_and_opposite(snapshot, side, band)
     slices = _build_passive_slices(
         passive_levels,
         side=side,
@@ -716,6 +706,7 @@ class DonchianAtrStrategy:
                 self._atr * (self.atr_period - 1) + true_range
             ) / self.atr_period
         return self._atr
+
     def _validate_incoming_candle(self, candle: Candle) -> None:
         candle.validate()
         if self.history and candle.timestamp <= self.history[-1].timestamp:
@@ -748,9 +739,7 @@ class DonchianAtrStrategy:
     def _ratchet_trailing_stop(self, atr: float | None) -> None:
         if atr is None or self.high_water_mark is None or self.trailing_stop is None:
             return
-        ratcheted = (
-            self.high_water_mark - self.trailing_atr_multiplier * atr
-        )
+        ratcheted = self.high_water_mark - self.trailing_atr_multiplier * atr
         self.trailing_stop = max(self.trailing_stop, ratcheted)
 
     def _detect_breakout(
@@ -777,7 +766,6 @@ class DonchianAtrStrategy:
             decision = self._detect_breakout(candle, prior_high, atr)
         self.history.append(candle)
         return decision
-
 
     def register_entry_fill(self, price: float, atr: float, bar_high: float) -> None:
         if self.position_open or not all(
