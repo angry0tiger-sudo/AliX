@@ -194,9 +194,7 @@ def _validate_mvp_timeframe(timeframe_minutes: int) -> None:
         raise ValueError("timeframe_not_allowed")
 
 
-def _validate_mvp_paper_mode(
-    dry_run: bool, allow_live_trading: bool
-) -> None:
+def _validate_mvp_paper_mode(dry_run: bool, allow_live_trading: bool) -> None:
     if not dry_run:
         raise LiveExecutionBlocked(
             "live_mode_blocked_until_nobitex_post_only_is_officially_supported"
