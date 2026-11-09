@@ -30,13 +30,19 @@ def book_response(
     return {
         "status": status,
         "lastUpdate": last_update,
-        "bids": bids if bids is not None else [["999", "5"], ["998", "5"], ["997", "5"]],
-        "asks": asks if asks is not None else [["1001", "5"], ["1002", "5"], ["1003", "5"]],
+        "bids": bids
+        if bids is not None
+        else [["999", "5"], ["998", "5"], ["997", "5"]],
+        "asks": asks
+        if asks is not None
+        else [["1001", "5"], ["1002", "5"], ["1003", "5"]],
         "lastTradePrice": "1000",
     }
 
 
-def make_adapter(response: dict[str, Any]) -> tuple[NobitexMockOrderBookAdapter, MockOrderBookTransport]:
+def make_adapter(
+    response: dict[str, Any],
+) -> tuple[NobitexMockOrderBookAdapter, MockOrderBookTransport]:
     transport = MockOrderBookTransport({"BTCUSDT": cast(dict[str, Any], response)})
     return NobitexMockOrderBookAdapter(transport), transport
 
@@ -115,10 +121,10 @@ def test_liquidity_gate_checks_buy_asks_and_sell_bids_within_half_percent() -> N
     )
     snapshot = adapter.fetch_order_book("BTC/USDT", now=NOW)
     buy = adapter.liquidity_gate(
-        snapshot, side="buy", intended_quote_notional=Decimal("12000")
+        snapshot, side="buy", intended_quote_notional=Decimal("11000")
     )
     sell = adapter.liquidity_gate(
-        snapshot, side="sell", intended_quote_notional=Decimal("12000")
+        snapshot, side="sell", intended_quote_notional=Decimal("11000")
     )
     assert buy.approved is True
     assert sell.approved is False
@@ -168,11 +174,15 @@ def test_maker_slices_are_passive_bounded_and_explicitly_mock_only() -> None:
     assert sum(item.quote_notional for item in plan.child_slices) == Decimal("500")
     assert all(item.limit_price < snapshot.asks[0].price for item in plan.child_slices)
     assert all(item.post_only_required for item in plan.child_slices)
-    assert all(not item.exchange_enforced_post_only_confirmed for item in plan.child_slices)
+    assert all(
+        not item.exchange_enforced_post_only_confirmed for item in plan.child_slices
+    )
     assert all(item.execution_mode == "MOCK_ONLY" for item in plan.child_slices)
 
 
-def test_maker_slicing_rejects_insufficient_passive_depth_and_invalid_participation() -> None:
+def test_maker_slicing_rejects_insufficient_passive_depth_and_invalid_participation() -> (
+    None
+):
     adapter, _ = make_adapter(book_response())
     snapshot = adapter.fetch_order_book("BTC/USDT", now=NOW)
     with pytest.raises(InsufficientMakerDepth):

@@ -59,7 +59,9 @@ class AssetFeatures:
 
 
 def _validate_commit_sha(value: str) -> None:
-    if len(value) != 40 or any(character not in "0123456789abcdef" for character in value):
+    if len(value) != 40 or any(
+        character not in "0123456789abcdef" for character in value
+    ):
         raise ValueError("rl_commit_sha_invalid")
 
 
@@ -83,11 +85,13 @@ def _validate_manifest(
     missing = manifest.get("missing_minute_intervals")
     if isinstance(missing, bool) or not isinstance(missing, int):
         raise ValueError("rl_dataset_missing_minute_count_invalid")
-    expected_gap = [{
-        "start_utc": KNOWN_GAP_START,
-        "end_utc": KNOWN_GAP_END,
-        "missing_minute_intervals": 80,
-    }]
+    expected_gap = [
+        {
+            "start_utc": KNOWN_GAP_START,
+            "end_utc": KNOWN_GAP_END,
+            "missing_minute_intervals": 80,
+        }
+    ]
     expected_gap_ranges = [] if missing == 0 else expected_gap
     conditions = (
         manifest.get("schema_version") == EXPECTED_SCHEMA,
@@ -136,7 +140,10 @@ def _validate_candles(
         raise ValueError(f"rl_dataset_timestamps_not_monotonic:{symbol}")
     if len(data) != expected_rows or len(data) == 0:
         raise ValueError(f"rl_dataset_row_count_invalid:{symbol}")
-    if pd.Timestamp(data["date"].iloc[0]) != start or pd.Timestamp(data["date"].iloc[-1]) != end:
+    if (
+        pd.Timestamp(data["date"].iloc[0]) != start
+        or pd.Timestamp(data["date"].iloc[-1]) != end
+    ):
         raise ValueError(f"rl_dataset_window_bounds_invalid:{symbol}")
 
     differences = data["date"].diff().iloc[1:]
@@ -147,10 +154,9 @@ def _validate_candles(
         if len(irregular) != 1 or irregular.iloc[0] != pd.Timedelta(minutes=81):
             raise ValueError(f"rl_dataset_gap_geometry_invalid:{symbol}")
         gap_index = int(irregular.index[0])
-        if (
-            pd.Timestamp(data["date"].iloc[gap_index - 1]) != pd.Timestamp(KNOWN_GAP_PREVIOUS)
-            or pd.Timestamp(data["date"].iloc[gap_index]) != pd.Timestamp(KNOWN_GAP_NEXT)
-        ):
+        if pd.Timestamp(data["date"].iloc[gap_index - 1]) != pd.Timestamp(
+            KNOWN_GAP_PREVIOUS
+        ) or pd.Timestamp(data["date"].iloc[gap_index]) != pd.Timestamp(KNOWN_GAP_NEXT):
             raise ValueError(f"rl_dataset_gap_location_invalid:{symbol}")
 
     for column in ("open", "high", "low", "close", "volume"):
@@ -187,9 +193,7 @@ def load_asset_dataset(input_dir: Path, symbol: str) -> AssetDataset:
     if not isinstance(manifest, dict):
         raise ValueError(f"rl_dataset_manifest_invalid:{symbol}")
     digest = _sha256(csv_path)
-    start, end, missing = _validate_manifest(
-        manifest, symbol=symbol, csv_digest=digest
-    )
+    start, end, missing = _validate_manifest(manifest, symbol=symbol, csv_digest=digest)
     candles = pd.read_csv(csv_path)
     data = _validate_candles(
         candles,
@@ -226,15 +230,12 @@ def resample_complete_bars(candles: DataFrame, timeframe: str) -> DataFrame:
     return complete.loc[:, list(CSV_COLUMNS)]
 
 
-def _contiguous_segments(
-    candles: DataFrame, interval: pd.Timedelta
-) -> list[DataFrame]:
+def _contiguous_segments(candles: DataFrame, interval: pd.Timedelta) -> list[DataFrame]:
     if candles.empty:
         return []
     deltas = candles["date"].diff().iloc[1:]
     boundaries = [
-        int(index)
-        for index in np.flatnonzero(deltas.to_numpy() != interval) + 1
+        int(index) for index in np.flatnonzero(deltas.to_numpy() != interval) + 1
     ]
     starts = [0, *boundaries]
     ends = [*boundaries, len(candles)]
@@ -262,16 +263,15 @@ def _build_development_features(
         features["primary_buy_signal"] = signal.to_numpy(dtype=np.bool_)
         feature_frames.append(features.loc[features["atr_fraction"].notna()].copy())
     combined = pd.concat(feature_frames, ignore_index=True)
-    if combined.empty or not np.isfinite(
-        combined["atr_fraction"].to_numpy(dtype=np.float64)
-    ).all():
+    if (
+        combined.empty
+        or not np.isfinite(combined["atr_fraction"].to_numpy(dtype=np.float64)).all()
+    ):
         raise ValueError("rl_causal_feature_matrix_invalid")
     return combined
 
 
-def _split_asset_features(
-    dataset: AssetDataset, timeframe: str
-) -> AssetFeatures:
+def _split_asset_features(dataset: AssetDataset, timeframe: str) -> AssetFeatures:
     minutes = TIMEFRAME_MINUTES[timeframe]
     interval = pd.Timedelta(minutes=minutes)
     bars = resample_complete_bars(dataset.candles, timeframe)
@@ -285,15 +285,16 @@ def _split_asset_features(
     features = _build_development_features(development_bars, interval)
     train_rows = features.loc[features["date"] < train_cutoff].copy()
     validation_rows = features.loc[
-        (features["date"] >= train_cutoff)
-        & (features["date"] < validation_cutoff)
+        (features["date"] >= train_cutoff) & (features["date"] < validation_cutoff)
     ].copy()
     train_segments = tuple(
-        segment for segment in _contiguous_segments(train_rows, interval)
+        segment
+        for segment in _contiguous_segments(train_rows, interval)
         if len(segment) >= 128
     )
     validation_segments = tuple(
-        segment for segment in _contiguous_segments(validation_rows, interval)
+        segment
+        for segment in _contiguous_segments(validation_rows, interval)
         if len(segment) >= 2
     )
     if not train_segments or not validation_segments:
@@ -432,7 +433,11 @@ def run_training(
     _validate_commit_sha(commit_sha)
     if timeframe not in TIMEFRAME_MINUTES:
         raise ValueError("rl_entry_timeframe_not_allowed")
-    if isinstance(timesteps, bool) or not isinstance(timesteps, int) or timesteps < 10_000:
+    if (
+        isinstance(timesteps, bool)
+        or not isinstance(timesteps, int)
+        or timesteps < 10_000
+    ):
         raise ValueError("rl_training_timesteps_must_be_at_least_10000")
     if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
         raise ValueError("rl_seed_must_be_non_negative_integer")
@@ -450,9 +455,7 @@ def run_training(
         for symbol, dataset in datasets.items()
     }
     training_segments = [
-        segment
-        for feature in features.values()
-        for segment in feature.train_segments
+        segment for feature in features.values() for segment in feature.train_segments
     ]
     validation_segments = {
         symbol: list(feature.validation_segments)
@@ -550,16 +553,23 @@ def main() -> int:
         seed=args.seed,
         commit_sha=args.commit_sha,
     )
-    print(json.dumps({
-        "status": "RISK_ALLOCATION_RESEARCH_TRAINED",
-        "commit_sha": report["commit_sha"],
-        "timeframe": report["entry_timeframe"],
-        "round_trip_cost_bps": report["execution_assumptions"]["round_trip_cost_bps"],
-        "economic_acceptance": report["economic_acceptance"],
-        "Champion": report["Champion"],
-        "order_permission": report["order_permission"],
-        "trading_authorization": report["trading_authorization"],
-    }, sort_keys=True))
+    print(
+        json.dumps(
+            {
+                "status": "RISK_ALLOCATION_RESEARCH_TRAINED",
+                "commit_sha": report["commit_sha"],
+                "timeframe": report["entry_timeframe"],
+                "round_trip_cost_bps": report["execution_assumptions"][
+                    "round_trip_cost_bps"
+                ],
+                "economic_acceptance": report["economic_acceptance"],
+                "Champion": report["Champion"],
+                "order_permission": report["order_permission"],
+                "trading_authorization": report["trading_authorization"],
+            },
+            sort_keys=True,
+        )
+    )
     return 0
 
 

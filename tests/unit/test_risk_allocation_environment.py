@@ -118,51 +118,90 @@ def test_drawdown_is_observed_and_penalized_after_price_decline() -> None:
     assert reward < 0.0
 
 
-def test_invalid_market_shapes_timestamps_prices_geometry_and_volume_fail_closed() -> None:
+def test_invalid_market_shapes_timestamps_prices_geometry_and_volume_fail_closed() -> (
+    None
+):
     data = market_data()
     with pytest.raises(ValueError, match="six_columns"):
-        RiskAllocationEnv(data[:, :5], np.ones(6), np.ones(6, dtype=bool), bar_interval_ms=3_600_000)
+        RiskAllocationEnv(
+            data[:, :5], np.ones(6), np.ones(6, dtype=bool), bar_interval_ms=3_600_000
+        )
     with pytest.raises(ValueError, match="at_least_two"):
-        RiskAllocationEnv(data[:1], np.ones(1), np.ones(1, dtype=bool), bar_interval_ms=3_600_000)
+        RiskAllocationEnv(
+            data[:1], np.ones(1), np.ones(1, dtype=bool), bar_interval_ms=3_600_000
+        )
 
     bad = data.copy()
     bad[2, 0] += 1.0
     with pytest.raises(ValueError, match="contiguous"):
-        RiskAllocationEnv(bad, np.ones(6), np.ones(6, dtype=bool), bar_interval_ms=3_600_000)
+        RiskAllocationEnv(
+            bad, np.ones(6), np.ones(6, dtype=bool), bar_interval_ms=3_600_000
+        )
     bad = data.copy()
     bad[1, 1] = 0.0
     with pytest.raises(ValueError, match="prices_must_be_positive"):
-        RiskAllocationEnv(bad, np.ones(6), np.ones(6, dtype=bool), bar_interval_ms=3_600_000)
+        RiskAllocationEnv(
+            bad, np.ones(6), np.ones(6, dtype=bool), bar_interval_ms=3_600_000
+        )
     bad = data.copy()
     bad[1, 2] = bad[1, 3] - 1.0
     with pytest.raises(ValueError, match="geometry_invalid"):
-        RiskAllocationEnv(bad, np.ones(6), np.ones(6, dtype=bool), bar_interval_ms=3_600_000)
+        RiskAllocationEnv(
+            bad, np.ones(6), np.ones(6, dtype=bool), bar_interval_ms=3_600_000
+        )
     bad = data.copy()
     bad[1, 5] = -1.0
     with pytest.raises(ValueError, match="volume_must_be_non_negative"):
-        RiskAllocationEnv(bad, np.ones(6), np.ones(6, dtype=bool), bar_interval_ms=3_600_000)
+        RiskAllocationEnv(
+            bad, np.ones(6), np.ones(6, dtype=bool), bar_interval_ms=3_600_000
+        )
     bad = data.copy()
     bad[1, 4] = np.nan
     with pytest.raises(ValueError, match="contains_non_finite"):
-        RiskAllocationEnv(bad, np.ones(6), np.ones(6, dtype=bool), bar_interval_ms=3_600_000)
+        RiskAllocationEnv(
+            bad, np.ones(6), np.ones(6, dtype=bool), bar_interval_ms=3_600_000
+        )
 
 
 def test_invalid_auxiliary_arrays_and_configuration_fail_closed() -> None:
     data = market_data()
     with pytest.raises(ValueError, match="atr_fraction_length"):
-        RiskAllocationEnv(data, np.ones(5), np.ones(6, dtype=bool), bar_interval_ms=3_600_000)
+        RiskAllocationEnv(
+            data, np.ones(5), np.ones(6, dtype=bool), bar_interval_ms=3_600_000
+        )
     with pytest.raises(ValueError, match="atr_fraction_must"):
-        RiskAllocationEnv(data, np.asarray([0.01, 0.01, np.nan, 0.01, 0.01, 0.01]), np.ones(6, dtype=bool), bar_interval_ms=3_600_000)
+        RiskAllocationEnv(
+            data,
+            np.asarray([0.01, 0.01, np.nan, 0.01, 0.01, 0.01]),
+            np.ones(6, dtype=bool),
+            bar_interval_ms=3_600_000,
+        )
     with pytest.raises(ValueError, match="primary_signal_must_be_boolean"):
-        RiskAllocationEnv(data, np.ones(6), np.asarray([0, 0, 0, 0, 0, 2]), bar_interval_ms=3_600_000)
+        RiskAllocationEnv(
+            data, np.ones(6), np.asarray([0, 0, 0, 0, 0, 2]), bar_interval_ms=3_600_000
+        )
     with pytest.raises(ValueError, match="primary_signal_length"):
-        RiskAllocationEnv(data, np.ones(6), np.ones(5, dtype=bool), bar_interval_ms=3_600_000)
+        RiskAllocationEnv(
+            data, np.ones(6), np.ones(5, dtype=bool), bar_interval_ms=3_600_000
+        )
     with pytest.raises(ValueError, match="bar_interval_ms"):
         RiskAllocationEnv(data, np.ones(6), np.ones(6, dtype=bool), bar_interval_ms=0)
     with pytest.raises(ValueError, match="initial_equity"):
-        RiskAllocationEnv(data, np.ones(6), np.ones(6, dtype=bool), bar_interval_ms=3_600_000, initial_equity=0.0)
+        RiskAllocationEnv(
+            data,
+            np.ones(6),
+            np.ones(6, dtype=bool),
+            bar_interval_ms=3_600_000,
+            initial_equity=0.0,
+        )
     with pytest.raises(ValueError, match="reward_penalties"):
-        RiskAllocationEnv(data, np.ones(6), np.ones(6, dtype=bool), bar_interval_ms=3_600_000, drawdown_level_penalty=-1.0)
+        RiskAllocationEnv(
+            data,
+            np.ones(6),
+            np.ones(6, dtype=bool),
+            bar_interval_ms=3_600_000,
+            drawdown_level_penalty=-1.0,
+        )
 
 
 def test_action_validation_and_non_live_safety_metadata() -> None:

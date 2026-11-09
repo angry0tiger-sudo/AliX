@@ -69,7 +69,9 @@ def _validate_market_data(data: Float64Array, interval_ms: int) -> None:
     volume = data[:, VOLUME_COLUMN]
     if np.any(np.minimum.reduce((opened, high, low, close)) <= 0.0):
         raise ValueError("market_prices_must_be_positive")
-    if np.any(high < np.maximum(opened, close)) or np.any(low > np.minimum(opened, close)):
+    if np.any(high < np.maximum(opened, close)) or np.any(
+        low > np.minimum(opened, close)
+    ):
         raise ValueError("market_candle_geometry_invalid")
     if np.any(volume < 0.0):
         raise ValueError("market_volume_must_be_non_negative")
@@ -106,7 +108,11 @@ class RiskAllocationEnv(gym.Env[Float32Array, np.int64]):
         downside_return_penalty: float = 0.5,
     ) -> None:
         super().__init__()
-        if isinstance(bar_interval_ms, bool) or not isinstance(bar_interval_ms, int) or bar_interval_ms <= 0:
+        if (
+            isinstance(bar_interval_ms, bool)
+            or not isinstance(bar_interval_ms, int)
+            or bar_interval_ms <= 0
+        ):
             raise ValueError("bar_interval_ms_must_be_positive_integer")
         equity = _finite_positive(initial_equity, "initial_equity")
         penalties = (
@@ -115,8 +121,10 @@ class RiskAllocationEnv(gym.Env[Float32Array, np.int64]):
             downside_return_penalty,
         )
         if any(
-            isinstance(value, bool) or not isinstance(value, (int, float))
-            or not math.isfinite(float(value)) or value < 0.0
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+            or value < 0.0
             for value in penalties
         ):
             raise ValueError("reward_penalties_must_be_finite_and_non_negative")
@@ -238,7 +246,9 @@ class RiskAllocationEnv(gym.Env[Float32Array, np.int64]):
     ) -> tuple[Float32Array, float, bool, bool, dict[str, Any]]:
         if self._terminated or self._index >= len(self._market) - 1:
             raise RuntimeError("risk_environment_episode_already_terminated")
-        if isinstance(action, (bool, np.bool_)) or not isinstance(action, (int, np.integer)):
+        if isinstance(action, (bool, np.bool_)) or not isinstance(
+            action, (int, np.integer)
+        ):
             raise ValueError("risk_action_must_be_integer")
         action_index = int(action)
         if not self.action_space.contains(action_index):
@@ -248,7 +258,9 @@ class RiskAllocationEnv(gym.Env[Float32Array, np.int64]):
         proposed_target = ACTION_FRACTIONS[action_index]
         current_price = float(self._market[self._index, CLOSE_COLUMN])
         current_fraction = self._position_fraction(current_price)
-        applied_target = proposed_target if signal else min(proposed_target, current_fraction)
+        applied_target = (
+            proposed_target if signal else min(proposed_target, current_fraction)
+        )
 
         equity_before = self._equity(current_price)
         next_open = float(self._market[self._index + 1, OPEN_COLUMN])

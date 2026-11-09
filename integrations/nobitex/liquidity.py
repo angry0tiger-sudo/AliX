@@ -177,9 +177,7 @@ def _validate_side(side: str) -> str:
     return normalized
 
 
-def _depth_in_band(
-    snapshot: OrderBookSnapshot, side: str, band: Decimal
-) -> Decimal:
+def _depth_in_band(snapshot: OrderBookSnapshot, side: str, band: Decimal) -> Decimal:
     mid = snapshot.mid_price
     if side == "buy":
         limit = mid * (Decimal("1") + band)
@@ -210,9 +208,7 @@ class NobitexMockOrderBookAdapter:
         self._transport = transport
         self.max_book_age_seconds = float(max_book_age_seconds)
 
-    def fetch_order_book(
-        self, pair: str, *, now: datetime
-    ) -> OrderBookSnapshot:
+    def fetch_order_book(self, pair: str, *, now: datetime) -> OrderBookSnapshot:
         normalized = normalize_spot_pair(pair)
         symbol = normalized.replace("/", "")
         received_at = _utc_now(now)
@@ -296,7 +292,11 @@ class NobitexMockOrderBookAdapter:
         passive_levels = cls._passive_levels(
             snapshot, normalized_side, price_band_fraction
         )
-        best_opposite = snapshot.asks[0].price if normalized_side == "buy" else snapshot.bids[0].price
+        best_opposite = (
+            snapshot.asks[0].price
+            if normalized_side == "buy"
+            else snapshot.bids[0].price
+        )
         remaining = gate.intended_quote_notional
         slices: list[MockMakerSlice] = []
         for level in passive_levels:
