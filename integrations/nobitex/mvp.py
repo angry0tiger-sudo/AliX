@@ -167,6 +167,46 @@ class PaperFill:
     simulated: bool = True
 
 
+def _validate_mvp_symbol(symbol: str) -> None:
+    if not symbol or not re.fullmatch(r"[A-Z0-9]{5,20}", symbol):
+        raise ValueError("nobitex_symbol_invalid")
+
+
+def _validate_mvp_risk_limits(
+    quote_equity: Decimal,
+    risk_fraction: Decimal,
+    max_position_fraction: Decimal,
+) -> None:
+    if not quote_equity.is_finite() or quote_equity <= 0:
+        raise ValueError("paper_quote_equity_must_be_positive")
+    if not risk_fraction.is_finite() or not (
+        Decimal("0") < risk_fraction <= Decimal("0.02")
+    ):
+        raise ValueError("risk_per_trade_fraction_out_of_range")
+    if not max_position_fraction.is_finite() or not (
+        Decimal("0") < max_position_fraction <= Decimal("0.25")
+    ):
+        raise ValueError("max_position_fraction_out_of_range")
+
+
+def _validate_mvp_timeframe(timeframe_minutes: int) -> None:
+    if timeframe_minutes not in {15, 30, 60, 240}:
+        raise ValueError("timeframe_not_allowed")
+
+
+def _validate_mvp_paper_mode(
+    dry_run: bool, allow_live_trading: bool
+) -> None:
+    if not dry_run:
+        raise LiveExecutionBlocked(
+            "live_mode_blocked_until_nobitex_post_only_is_officially_supported"
+        )
+    if allow_live_trading:
+        raise LiveExecutionBlocked(
+            "ALIX_ALLOW_LIVE_TRADING_must_remain_false_for_this_release"
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class MvpConfig:
     dry_run: bool = True
@@ -178,28 +218,14 @@ class MvpConfig:
     timeframe_minutes: int = DEFAULT_TIMEFRAME_MINUTES
 
     def validate(self) -> None:
-        if not self.symbol or not re.fullmatch(r"[A-Z0-9]{5,20}", self.symbol):
-            raise ValueError("nobitex_symbol_invalid")
-        if not self.quote_equity.is_finite() or self.quote_equity <= 0:
-            raise ValueError("paper_quote_equity_must_be_positive")
-        if not self.risk_per_trade_fraction.is_finite() or not (
-            Decimal("0") < self.risk_per_trade_fraction <= Decimal("0.02")
-        ):
-            raise ValueError("risk_per_trade_fraction_out_of_range")
-        if not self.max_position_fraction.is_finite() or not (
-            Decimal("0") < self.max_position_fraction <= Decimal("0.25")
-        ):
-            raise ValueError("max_position_fraction_out_of_range")
-        if self.timeframe_minutes not in {15, 30, 60, 240}:
-            raise ValueError("timeframe_not_allowed")
-        if not self.dry_run:
-            raise LiveExecutionBlocked(
-                "live_mode_blocked_until_nobitex_post_only_is_officially_supported"
-            )
-        if self.allow_live_trading:
-            raise LiveExecutionBlocked(
-                "ALIX_ALLOW_LIVE_TRADING_must_remain_false_for_this_release"
-            )
+        _validate_mvp_symbol(self.symbol)
+        _validate_mvp_risk_limits(
+            self.quote_equity,
+            self.risk_per_trade_fraction,
+            self.max_position_fraction,
+        )
+        _validate_mvp_timeframe(self.timeframe_minutes)
+        _validate_mvp_paper_mode(self.dry_run, self.allow_live_trading)
 
     @classmethod
     def from_environment(cls, values: Mapping[str, str]) -> MvpConfig:
