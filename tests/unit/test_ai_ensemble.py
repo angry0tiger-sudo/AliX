@@ -140,6 +140,8 @@ def test_causal_hmm_returns_filtered_three_regime_posteriors() -> None:
     assert short.shape == (50, 3)
     assert np.allclose(short.sum(axis=1), 1.0)
     assert np.allclose(short, extended[:50])
+    assert model.means_ is not None
+    assert model.state_order_ is not None
     assert np.all(np.diff(model.means_[model.state_order_, 0]) >= 0)
 
 
@@ -151,7 +153,9 @@ def test_triple_barrier_targets_use_next_open_and_exact_50_bps_cost() -> None:
     valid = labels.dropna(subset=["target", "net_return", "label_end_idx"])
     assert len(valid) > 0
     assert set(valid["label"].unique()).issubset({"BUY", "SELL", "HOLD"})
-    assert (labels["label_end_idx"].dropna() >= labels["event_index"].dropna()).all()
+    valid_indices = valid.index.to_numpy(dtype=int)
+    valid_ends = valid["label_end_idx"].to_numpy(dtype=int)
+    assert np.all(valid_ends >= valid_indices)
     with pytest.raises(ValueError, match="must_be_50"):
         build_net_profit_targets(
             market.loc[:, ["date", "open", "high", "low", "close", "volume"]],
@@ -230,11 +234,11 @@ def test_nobitex_adapter_returns_only_a_liquidity_gated_paper_plan() -> None:
 
 
 def test_nobitex_adapter_fail_closed_branches() -> None:
+    book = synthetic_order_book(1000.0, "BTCUSDT")
     low_probability = NobitexEnsemblePaperAdapter(
         FixedProbabilityModel(0.4),
         EnsembleAdapterConfig(minimum_probability=0.6),
     )
-    book = synthetic_order_book(1000.0, "BTCUSDT")
     rejected = low_probability.plan_entry(
         DataFrame({"feature": [0.1]}),
         snapshot=book,
@@ -248,6 +252,12 @@ def test_nobitex_adapter_fail_closed_branches() -> None:
             FixedProbabilityModel(0.8),
             EnsembleAdapterConfig(dry_run=False),
         )
+    with pytest.raises(ValueError, match="symbol_invalid"):
+        EnsembleAdapterConfig(symbol="BTC/USDT").validate()
+    with pytest.raises(ValueError, match="50_bps"):
+        EnsembleAdapterConfig(round_trip_cost_bps=30).validate()
+    with pytest.raises(ValueError, match="fixed_by_owner"):
+        EnsembleAdapterConfig(band=Decimal("0.01")).validate()
     with pytest.raises(OrderBookError, match="symbol_mismatch"):
         NobitexEnsemblePaperAdapter(FixedProbabilityModel(0.8)).plan_entry(
             DataFrame({"feature": [0.1]}),
@@ -274,14 +284,32 @@ def test_nobitex_adapter_fail_closed_branches() -> None:
         bids=(BookLevel(Decimal("999"), Decimal("0.001")),),
         asks=(BookLevel(Decimal("1001"), Decimal("0.001")),),
     )
-    liquid_model = NobitexEnsemblePaperAdapter(FixedProbabilityModel(0.8))
-    liquidity_rejected = liquid_model.plan_entry(
+    liquidity_rejected = NobitexEnsemblePaperAdapter(
+        FixedProbabilityModel(0.8)
+    ).plan_entry(
         DataFrame({"feature": [0.1]}),
         snapshot=tiny_book,
         equity=Decimal("10000"),
         atr=Decimal("10"),
     )
     assert liquidity_rejected.status == "LIQUIDITY_REJECTED"
+    risk_rejected = NobitexEnsemblePaperAdapter(
+        FixedProbabilityModel(0.8)
+    ).plan_entry(
+        DataFrame({"feature": [0.1]}),
+        snapshot=book,
+        equity=Decimal("10000"),
+        atr=Decimal("0.1"),
+    )
+    assert risk_rejected.status == "RISK_REJECTED"
+    empty_features = NobitexEnsemblePaperAdapter(FixedProbabilityModel(0.8))
+    with pytest.raises(ValueError, match="features_empty"):
+        empty_features.plan_entry(
+            DataFrame(),
+            snapshot=book,
+            equity=Decimal("10000"),
+            atr=Decimal("10"),
+        )
     invalid_model = NobitexEnsemblePaperAdapter(FixedProbabilityModel(1.5))
     with pytest.raises(ValueError, match="probability_invalid"):
         invalid_model.plan_entry(
