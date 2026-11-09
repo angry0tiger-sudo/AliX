@@ -143,25 +143,39 @@ def _last_update(value: object) -> datetime:
         raise OrderBookError("orderbook_last_update_invalid") from None
 
 
+def _parse_book_level(item: object, side: str) -> BookLevel:
+    if not isinstance(item, (list, tuple)):
+        raise OrderBookError(f"orderbook_{side}_level_schema_invalid")
+    if len(item) != 2:
+        raise OrderBookError(f"orderbook_{side}_level_schema_invalid")
+    return BookLevel(
+        price=_positive_decimal(item[0], f"{side}_price"),
+        amount=_positive_decimal(item[1], f"{side}_amount"),
+    )
+
+
+def _validate_bid_price_order(prices: list[Decimal]) -> None:
+    if any(left <= right for left, right in zip(prices, prices[1:])):
+        raise OrderBookError("orderbook_bids_must_be_strictly_descending")
+
+
+def _validate_ask_price_order(prices: list[Decimal]) -> None:
+    if any(left >= right for left, right in zip(prices, prices[1:])):
+        raise OrderBookError("orderbook_asks_must_be_strictly_ascending")
+
+
 def _parse_levels(value: object, side: str) -> tuple[BookLevel, ...]:
+    if side not in {"bids", "asks"}:
+        raise OrderBookError("orderbook_side_invalid")
     if not isinstance(value, list) or not value:
         raise OrderBookError(f"orderbook_{side}_levels_missing")
-    parsed: list[BookLevel] = []
-    for item in value:
-        if not isinstance(item, (list, tuple)) or len(item) != 2:
-            raise OrderBookError(f"orderbook_{side}_level_schema_invalid")
-        parsed.append(
-            BookLevel(
-                price=_positive_decimal(item[0], f"{side}_price"),
-                amount=_positive_decimal(item[1], f"{side}_amount"),
-            )
-        )
+    parsed = tuple(_parse_book_level(item, side) for item in value)
     prices = [level.price for level in parsed]
-    if side == "bids" and any(left <= right for left, right in zip(prices, prices[1:])):
-        raise OrderBookError("orderbook_bids_must_be_strictly_descending")
-    if side == "asks" and any(left >= right for left, right in zip(prices, prices[1:])):
-        raise OrderBookError("orderbook_asks_must_be_strictly_ascending")
-    return tuple(parsed)
+    if side == "bids":
+        _validate_bid_price_order(prices)
+    else:
+        _validate_ask_price_order(prices)
+    return parsed
 
 
 def _validate_band(value: Decimal) -> Decimal:
@@ -186,6 +200,68 @@ def _depth_in_band(snapshot: OrderBookSnapshot, side: str, band: Decimal) -> Dec
         limit = mid * (Decimal("1") - band)
         levels = (level for level in snapshot.bids if level.price >= limit)
     return sum((level.quote_notional for level in levels), Decimal("0"))
+
+
+def _maker_price_would_cross(
+    side: str, price: Decimal, best_opposite: Decimal
+) -> bool:
+    if side == "buy":
+        return price >= best_opposite
+    return price <= best_opposite
+
+
+def _create_passive_slice(
+    level: BookLevel,
+    *,
+    side: str,
+    best_opposite: Decimal,
+    remaining: Decimal,
+    participation: Decimal,
+) -> tuple[MockMakerSlice | None, Decimal]:
+    child_notional = min(remaining, level.quote_notional * participation)
+    if child_notional <= 0:
+        return None, remaining
+    if _maker_price_would_cross(side, level.price, best_opposite):
+        reason = (
+            "maker_buy_price_would_cross"
+            if side == "buy"
+            else "maker_sell_price_would_cross"
+        )
+        raise OrderBookError(reason)
+    item = MockMakerSlice(
+        side=side,
+        limit_price=level.price,
+        base_quantity=child_notional / level.price,
+        quote_notional=child_notional,
+    )
+    return item, remaining - child_notional
+
+
+def _build_passive_slices(
+    levels: tuple[BookLevel, ...],
+    *,
+    side: str,
+    best_opposite: Decimal,
+    intended_quote_notional: Decimal,
+    participation: Decimal,
+) -> tuple[MockMakerSlice, ...]:
+    remaining = intended_quote_notional
+    slices: list[MockMakerSlice] = []
+    for level in levels:
+        item, remaining = _create_passive_slice(
+            level,
+            side=side,
+            best_opposite=best_opposite,
+            remaining=remaining,
+            participation=participation,
+        )
+        if item is not None:
+            slices.append(item)
+        if remaining <= Decimal("1e-18"):
+            break
+    if remaining > Decimal("1e-18"):
+        raise InsufficientMakerDepth("maker_side_depth_below_participation_cap")
+    return tuple(slices)
 
 
 class NobitexMockOrderBookAdapter:
@@ -268,6 +344,50 @@ class NobitexMockOrderBookAdapter:
 
     @classmethod
     def plan_maker_slices(
+        cls,
+        snapshot: OrderBookSnapshot,
+        *,
+        side: str,
+        intended_quote_notional: Decimal,
+        price_band_fraction: Decimal = DEFAULT_PRICE_BAND,
+        max_participation: Decimal = DEFAULT_MAX_PARTICIPATION,
+    ) -> MockMakerOrderPlan:
+        normalized_side = _validate_side(side)
+        participation = _validate_band(max_participation)
+        if participation <= 0:
+            raise ValueError("max_participation_must_be_positive")
+        gate = cls.liquidity_gate(
+            snapshot,
+            side=normalized_side,
+            intended_quote_notional=intended_quote_notional,
+            price_band_fraction=price_band_fraction,
+        )
+        if not gate.approved:
+            raise LiquidityGateRejected(gate.reason)
+
+        passive_levels = cls._passive_levels(
+            snapshot, normalized_side, price_band_fraction
+        )
+        best_opposite = (
+            snapshot.asks[0].price
+            if normalized_side == "buy"
+            else snapshot.bids[0].price
+        )
+        slices = _build_passive_slices(
+            passive_levels,
+            side=normalized_side,
+            best_opposite=best_opposite,
+            intended_quote_notional=gate.intended_quote_notional,
+            participation=participation,
+        )
+        return MockMakerOrderPlan(
+            pair=snapshot.pair,
+            side=normalized_side,
+            intended_quote_notional=gate.intended_quote_notional,
+            liquidity=gate,
+            child_slices=slices,
+        )
+
         cls,
         snapshot: OrderBookSnapshot,
         *,

@@ -53,6 +53,7 @@ def test_action_space_is_only_target_exposure_and_observation_is_risk_state() ->
     assert observation.shape == (4,)
     assert observation.tolist() == pytest.approx([0.01, 0.0, 0.0, 1.0])
     assert info["round_trip_cost_bps"] == 30.0
+    assert info["reward_method"] == "RUNNING_SORTINO_STYLE_LOG_RETURN_OVER_DOWNSIDE_RMS"
     assert info["order_permission"] is False
     assert info["Champion"] is None
 
@@ -101,6 +102,8 @@ def test_terminal_step_liquidates_remaining_position_and_closes_episode() -> Non
     assert truncated is False
     assert info["current_position_fraction"] == pytest.approx(0.0)
     assert info["terminal_liquidation_cost"] > 0
+    assert info["downside_deviation_fraction"] >= 0.0
+    env.close()
     with pytest.raises(RuntimeError, match="already_terminated"):
         env.step(0)
 
@@ -119,6 +122,8 @@ def test_drawdown_is_observed_and_penalized_after_price_decline() -> None:
     assert info["max_drawdown"] > 0.0
     assert observation[1] > 0.0
     assert reward < 0.0
+    assert info["risk_adjusted_return_component"] < 0.0
+    assert info["downside_deviation_fraction"] > 0.0
 
 
 def test_invalid_market_shapes_timestamps_prices_geometry_and_volume_fail_closed() -> (

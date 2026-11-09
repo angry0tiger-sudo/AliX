@@ -17,7 +17,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 from numpy.typing import NDArray
-from pandas import DataFrame
+from pandas import DataFrame, Series
 
 from scripts.run_ml_core_v4ap_diagnostic_sweep import (
     generate_donchian_breakout_signal,
@@ -123,6 +123,83 @@ def _validate_manifest(
     return start, end, missing
 
 
+def _validate_candle_timestamp_sequence(
+    data: DataFrame, *, symbol: str, expected_rows: int
+) -> None:
+    dates = data["date"]
+    if dates.isna().any() or dates.duplicated().any():
+        raise ValueError(f"rl_dataset_timestamps_invalid:{symbol}")
+    if not dates.is_monotonic_increasing:
+        raise ValueError(f"rl_dataset_timestamps_not_monotonic:{symbol}")
+    if len(data) != expected_rows or data.empty:
+        raise ValueError(f"rl_dataset_row_count_invalid:{symbol}")
+
+
+def _validate_candle_window(
+    data: DataFrame, *, symbol: str, start: pd.Timestamp, end: pd.Timestamp
+) -> None:
+    if (
+        pd.Timestamp(data["date"].iloc[0]) != start
+        or pd.Timestamp(data["date"].iloc[-1]) != end
+    ):
+        raise ValueError(f"rl_dataset_window_bounds_invalid:{symbol}")
+
+
+def _validate_known_gap_location(
+    data: DataFrame, *, symbol: str, irregular: Series
+) -> None:
+    if len(irregular) != 1 or irregular.iloc[0] != pd.Timedelta(minutes=81):
+        raise ValueError(f"rl_dataset_gap_geometry_invalid:{symbol}")
+    gap_index = int(irregular.index[0])
+    previous = pd.Timestamp(data["date"].iloc[gap_index - 1])
+    following = pd.Timestamp(data["date"].iloc[gap_index])
+    if previous != pd.Timestamp(KNOWN_GAP_PREVIOUS) or following != pd.Timestamp(
+        KNOWN_GAP_NEXT
+    ):
+        raise ValueError(f"rl_dataset_gap_location_invalid:{symbol}")
+
+
+def _validate_candle_gap_geometry(
+    data: DataFrame, *, symbol: str, missing_minutes: int
+) -> None:
+    differences = data["date"].diff().iloc[1:]
+    irregular = differences[differences != pd.Timedelta(minutes=1)]
+    if missing_minutes == 0:
+        if not irregular.empty:
+            raise ValueError(f"rl_dataset_unmanifested_gap:{symbol}")
+        return
+    if missing_minutes != 80:
+        raise ValueError(f"rl_dataset_gap_policy_invalid:{symbol}")
+    _validate_known_gap_location(data, symbol=symbol, irregular=irregular)
+
+
+def _validate_ohlcv_geometry(data: DataFrame, *, symbol: str) -> None:
+    opened = data["open"].to_numpy(dtype=np.float64)
+    high = data["high"].to_numpy(dtype=np.float64)
+    low = data["low"].to_numpy(dtype=np.float64)
+    close = data["close"].to_numpy(dtype=np.float64)
+    volume = data["volume"].to_numpy(dtype=np.float64)
+    if np.any(np.minimum.reduce((opened, high, low, close)) <= 0.0):
+        raise ValueError(f"rl_dataset_ohlcv_geometry_invalid:{symbol}")
+    if np.any(volume < 0.0):
+        raise ValueError(f"rl_dataset_ohlcv_geometry_invalid:{symbol}")
+    if np.any(high < np.maximum(opened, close)):
+        raise ValueError(f"rl_dataset_ohlcv_geometry_invalid:{symbol}")
+    if np.any(low > np.minimum(opened, close)):
+        raise ValueError(f"rl_dataset_ohlcv_geometry_invalid:{symbol}")
+
+
+def _validate_candle_numeric_values(data: DataFrame, *, symbol: str) -> None:
+    for column in ("open", "high", "low", "close", "volume"):
+        data[column] = pd.to_numeric(data[column], errors="coerce")
+    values = data.loc[:, ["open", "high", "low", "close", "volume"]].to_numpy(
+        dtype=np.float64
+    )
+    if not np.isfinite(values).all():
+        raise ValueError(f"rl_dataset_numeric_values_invalid:{symbol}")
+    _validate_ohlcv_geometry(data, symbol=symbol)
+
+
 def _validate_candles(
     candles: DataFrame,
     *,
@@ -136,50 +213,14 @@ def _validate_candles(
         raise ValueError(f"rl_dataset_csv_schema_invalid:{symbol}")
     data = candles.copy()
     data["date"] = pd.to_datetime(data["date"], utc=True, errors="coerce")
-    if data["date"].isna().any() or data["date"].duplicated().any():
-        raise ValueError(f"rl_dataset_timestamps_invalid:{symbol}")
-    if not data["date"].is_monotonic_increasing:
-        raise ValueError(f"rl_dataset_timestamps_not_monotonic:{symbol}")
-    if len(data) != expected_rows or len(data) == 0:
-        raise ValueError(f"rl_dataset_row_count_invalid:{symbol}")
-    if (
-        pd.Timestamp(data["date"].iloc[0]) != start
-        or pd.Timestamp(data["date"].iloc[-1]) != end
-    ):
-        raise ValueError(f"rl_dataset_window_bounds_invalid:{symbol}")
-
-    differences = data["date"].diff().iloc[1:]
-    irregular = differences[differences != pd.Timedelta(minutes=1)]
-    if missing_minutes == 0 and not irregular.empty:
-        raise ValueError(f"rl_dataset_unmanifested_gap:{symbol}")
-    if missing_minutes == 80:
-        if len(irregular) != 1 or irregular.iloc[0] != pd.Timedelta(minutes=81):
-            raise ValueError(f"rl_dataset_gap_geometry_invalid:{symbol}")
-        gap_index = int(irregular.index[0])
-        if pd.Timestamp(data["date"].iloc[gap_index - 1]) != pd.Timestamp(
-            KNOWN_GAP_PREVIOUS
-        ) or pd.Timestamp(data["date"].iloc[gap_index]) != pd.Timestamp(KNOWN_GAP_NEXT):
-            raise ValueError(f"rl_dataset_gap_location_invalid:{symbol}")
-
-    for column in ("open", "high", "low", "close", "volume"):
-        data[column] = pd.to_numeric(data[column], errors="coerce")
-    values = data.loc[:, ["open", "high", "low", "close", "volume"]].to_numpy(
-        dtype=np.float64
+    _validate_candle_timestamp_sequence(
+        data, symbol=symbol, expected_rows=expected_rows
     )
-    if not np.isfinite(values).all():
-        raise ValueError(f"rl_dataset_numeric_values_invalid:{symbol}")
-    opened = data["open"].to_numpy(dtype=np.float64)
-    high = data["high"].to_numpy(dtype=np.float64)
-    low = data["low"].to_numpy(dtype=np.float64)
-    close = data["close"].to_numpy(dtype=np.float64)
-    volume = data["volume"].to_numpy(dtype=np.float64)
-    if (
-        np.any(np.minimum.reduce((opened, high, low, close)) <= 0.0)
-        or np.any(volume < 0.0)
-        or np.any(high < np.maximum(opened, close))
-        or np.any(low > np.minimum(opened, close))
-    ):
-        raise ValueError(f"rl_dataset_ohlcv_geometry_invalid:{symbol}")
+    _validate_candle_window(data, symbol=symbol, start=start, end=end)
+    _validate_candle_gap_geometry(
+        data, symbol=symbol, missing_minutes=missing_minutes
+    )
+    _validate_candle_numeric_values(data, symbol=symbol)
     return data
 
 
@@ -423,28 +464,35 @@ def _train_ppo(
     }
 
 
-def run_training(
-    *,
-    input_dir: Path,
-    output_dir: Path,
-    timeframe: str,
-    timesteps: int,
-    seed: int,
-    commit_sha: str,
-) -> dict[str, Any]:
+def _validate_training_timesteps(timesteps: int) -> None:
+    if isinstance(timesteps, bool) or not isinstance(timesteps, int):
+        raise ValueError("rl_training_timesteps_must_be_at_least_10000")
+    if timesteps < 10_000:
+        raise ValueError("rl_training_timesteps_must_be_at_least_10000")
+
+
+def _validate_training_seed(seed: int) -> None:
+    if isinstance(seed, bool) or not isinstance(seed, int):
+        raise ValueError("rl_seed_must_be_non_negative_integer")
+    if seed < 0:
+        raise ValueError("rl_seed_must_be_non_negative_integer")
+
+
+def _validate_training_request(
+    timeframe: str, timesteps: int, seed: int, commit_sha: str
+) -> None:
     _validate_commit_sha(commit_sha)
     if timeframe not in TIMEFRAME_MINUTES:
         raise ValueError("rl_entry_timeframe_not_allowed")
-    if (
-        isinstance(timesteps, bool)
-        or not isinstance(timesteps, int)
-        or timesteps < 10_000
-    ):
-        raise ValueError("rl_training_timesteps_must_be_at_least_10000")
-    if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
-        raise ValueError("rl_seed_must_be_non_negative_integer")
+    _validate_training_timesteps(timesteps)
+    _validate_training_seed(seed)
 
-    datasets = {symbol: load_asset_dataset(input_dir, symbol) for symbol in ASSETS}
+
+def _load_training_datasets(input_dir: Path) -> dict[str, AssetDataset]:
+    return {symbol: load_asset_dataset(input_dir, symbol) for symbol in ASSETS}
+
+
+def _validate_common_dataset_window(datasets: dict[str, AssetDataset]) -> None:
     windows = {
         (dataset.manifest["start_utc"], dataset.manifest["end_utc"])
         for dataset in datasets.values()
@@ -452,6 +500,10 @@ def run_training(
     if len(windows) != 1:
         raise ValueError("rl_assets_must_share_identical_dataset_window")
 
+
+def _prepare_training_segments(
+    datasets: dict[str, AssetDataset], timeframe: str
+) -> tuple[list[DataFrame], dict[str, list[DataFrame]], dict[str, AssetFeatures]]:
     features = {
         symbol: _split_asset_features(dataset, timeframe)
         for symbol, dataset in datasets.items()
@@ -465,17 +517,17 @@ def run_training(
     }
     if len(training_segments) < 2:
         raise ValueError("rl_training_requires_multiple_contiguous_segments")
+    return training_segments, validation_segments, features
 
-    output_dir.mkdir(parents=True, exist_ok=True)
-    model_results = _train_ppo(
-        training_segments,
-        validation_segments,
-        timeframe=timeframe,
-        timesteps=timesteps,
-        seed=seed,
-        output_dir=output_dir,
-    )
-    report: dict[str, Any] = {
+
+def _build_training_report(
+    *,
+    commit_sha: str,
+    timeframe: str,
+    features: dict[str, AssetFeatures],
+    model_results: dict[str, Any],
+) -> dict[str, Any]:
+    return {
         "schema_version": "alix.rl-risk-allocation-ppo.v1",
         "commit_sha": commit_sha,
         "research_scope": "RISK_ALLOCATION_ONLY_NOT_PRIMARY_SIGNAL_GENERATION",
@@ -503,8 +555,12 @@ def run_training(
         "actions_target_exposure_fraction": [0.0, 0.25, 0.5, 0.75, 1.0],
         "no_primary_signal_policy": "MAY_MAINTAIN_OR_REDUCE_EXPOSURE; MAY_NOT_INCREASE",
         "reward": {
-            "type": "LOG_RETURN_MINUS_DRAWDOWN_AND_DOWNSIDE_PENALTIES",
-            "is_sortino_or_sharpe_estimate": False,
+            "type": "RUNNING_SORTINO_STYLE_RETURN_OVER_DOWNSIDE_RMS",
+            "downside_deviation": "RUNNING_RMS_OF_NEGATIVE_LOG_RETURNS",
+            "minimum_downside_deviation_fraction": 0.001,
+            "reward_component_clip": 5.0,
+            "drawdown_penalties_applied": True,
+            "is_full_period_sortino_metric": False,
         },
         "execution_assumptions": {
             "fee_bps_per_side": 10.0,
@@ -530,11 +586,47 @@ def run_training(
         "nobitex_api_calls": 0,
         "orders_or_execution_api_used": False,
     }
+
+
+def _write_training_report(report: dict[str, Any], output_dir: Path) -> None:
     report_path = output_dir / "risk-allocation-ppo-report.json"
     report_path.write_text(
         json.dumps(report, indent=2, sort_keys=True, allow_nan=False) + "\n",
         encoding="utf-8",
     )
+
+
+def run_training(
+    *,
+    input_dir: Path,
+    output_dir: Path,
+    timeframe: str,
+    timesteps: int,
+    seed: int,
+    commit_sha: str,
+) -> dict[str, Any]:
+    _validate_training_request(timeframe, timesteps, seed, commit_sha)
+    datasets = _load_training_datasets(input_dir)
+    _validate_common_dataset_window(datasets)
+    training_segments, validation_segments, features = _prepare_training_segments(
+        datasets, timeframe
+    )
+    output_dir.mkdir(parents=True, exist_ok=True)
+    model_results = _train_ppo(
+        training_segments,
+        validation_segments,
+        timeframe=timeframe,
+        timesteps=timesteps,
+        seed=seed,
+        output_dir=output_dir,
+    )
+    report = _build_training_report(
+        commit_sha=commit_sha,
+        timeframe=timeframe,
+        features=features,
+        model_results=model_results,
+    )
+    _write_training_report(report, output_dir)
     return report
 
 

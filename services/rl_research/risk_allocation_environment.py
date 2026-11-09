@@ -81,9 +81,9 @@ def _validate_market_geometry(data: Float64Array) -> None:
     if np.any(np.minimum.reduce((opened, high, low, close)) <= 0.0):
         raise ValueError("market_prices_must_be_positive")
     if np.any(high < np.maximum(opened, close)):
-        raise ValueError("market_candle_high_geometry_invalid")
+        raise ValueError("market_candle_geometry_invalid")
     if np.any(low > np.minimum(opened, close)):
-        raise ValueError("market_candle_low_geometry_invalid")
+        raise ValueError("market_candle_geometry_invalid")
     if np.any(volume < 0.0):
         raise ValueError("market_volume_must_be_non_negative")
 

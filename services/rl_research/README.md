@@ -6,6 +6,7 @@ The risk allocator is separate from the legacy RL trading environment because th
 - Without a Primary BUY signal, PPO may maintain or reduce exposure but cannot increase it.
 - Decisions are made after bar close and fills are simulated at the next bar open.
 - Cost contract: 10 bps fee plus 5 bps slippage per side, or 30 bps round trip.
+- Reward: running downside-RMS-normalized log return (Sortino-style, zero minimum acceptable return), clipped to [-5, 5], plus drawdown and downside penalties. This is not a full-period reported Sortino statistic.
 - Long Spot only; no shorting, leverage, exchange connection or order generation.
 
 The training script reuses the existing causal ATR implementation and V4-AP Donchian-20 Primary signal. Only 15m, 30m, 1h and 4h are accepted.
