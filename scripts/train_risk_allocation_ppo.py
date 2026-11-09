@@ -217,9 +217,7 @@ def _validate_candles(
         data, symbol=symbol, expected_rows=expected_rows
     )
     _validate_candle_window(data, symbol=symbol, start=start, end=end)
-    _validate_candle_gap_geometry(
-        data, symbol=symbol, missing_minutes=missing_minutes
-    )
+    _validate_candle_gap_geometry(data, symbol=symbol, missing_minutes=missing_minutes)
     _validate_candle_numeric_values(data, symbol=symbol)
     return data
 

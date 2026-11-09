@@ -202,9 +202,7 @@ def _depth_in_band(snapshot: OrderBookSnapshot, side: str, band: Decimal) -> Dec
     return sum((level.quote_notional for level in levels), Decimal("0"))
 
 
-def _maker_price_would_cross(
-    side: str, price: Decimal, best_opposite: Decimal
-) -> bool:
+def _maker_price_would_cross(side: str, price: Decimal, best_opposite: Decimal) -> bool:
     if side == "buy":
         return price >= best_opposite
     return price <= best_opposite
