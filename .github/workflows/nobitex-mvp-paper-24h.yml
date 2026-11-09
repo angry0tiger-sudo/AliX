@@ -1,0 +1,33 @@
+name: Nobitex MVP 24-hour simulated paper smoke
+
+on:
+  push:
+    branches:
+      - release/nobitex-mvp
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  paper-simulation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      ALIX_DRY_RUN: "true"
+      ALIX_ALLOW_LIVE_TRADING: "false"
+    steps:
+      - name: Checkout release branch
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run 24 simulated market-hours without network access
+        run: python -m scripts.run_nobitex_mvp --simulate-hours 24 --seed 17
+      - name: Run Nobitex MVP unit tests
+        run: |
+          python -m pip install pytest==9.0.3
+          pytest -q tests/unit/test_nobitex_mvp.py
