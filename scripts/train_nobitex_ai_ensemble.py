@@ -654,28 +654,46 @@ def main() -> int:
     )
     parser.add_argument("--commit-sha", default=os.environ.get("GITHUB_SHA", "UNKNOWN"))
     args = parser.parse_args()
-    report = run_training(
-        ohlcv_path=args.ohlcv,
-        manifest_path=args.manifest,
-        model_path=args.model,
-        model_manifest_path=args.model_manifest,
-        report_path=args.report,
-        commit_sha=args.commit_sha,
-    )
-    print(
-        json.dumps(
-            {
-                "status": "RESEARCH_COMPLETE_NOT_PROMOTED",
-                "model_path": report["artifact"]["path"],
-                "training_rows": report["dataset"]["eligible_labeled_rows"],
-                "validation": report["research_result"],
-                "safety": report["safety"],
-            },
-            sort_keys=True,
-            allow_nan=False,
+    try:
+        report = run_training(
+            ohlcv_path=args.ohlcv,
+            manifest_path=args.manifest,
+            model_path=args.model,
+            model_manifest_path=args.model_manifest,
+            report_path=args.report,
+            commit_sha=args.commit_sha,
         )
-    )
-    return 0
+        print(
+            json.dumps(
+                {
+                    "status": "RESEARCH_COMPLETE_NOT_PROMOTED",
+                    "model_path": report["artifact"]["path"],
+                    "training_rows": report["dataset"]["eligible_labeled_rows"],
+                    "validation": report["research_result"],
+                    "safety": report["safety"],
+                },
+                sort_keys=True,
+                allow_nan=False,
+            )
+        )
+        return 0
+    except Exception:
+        import sys
+        import traceback
+
+        traceback_text = traceback.format_exc()
+        traceback.print_exc()
+        traceback_path = args.report.parent / "training-traceback.txt"
+        try:
+            traceback_path.parent.mkdir(parents=True, exist_ok=True)
+            traceback_path.write_text(traceback_text, encoding="utf-8")
+        except OSError as artifact_error:
+            print(
+                f"Unable to persist training traceback artifact: {artifact_error}",
+                file=sys.stderr,
+                flush=True,
+            )
+        raise
 
 
 if __name__ == "__main__":
