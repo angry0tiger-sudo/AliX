@@ -318,6 +318,7 @@ def evaluate_walk_forward(
     if not bool(np.isfinite(net).all()):
         raise ValueError("walk_forward_net_returns_must_be_finite")
     all_trade_returns: list[float] = []
+    all_trade_returns_90_bps: list[float] = []
     fold_reports: list[dict[str, object]] = []
     oos_rows = 0
     for fold in folds:
@@ -336,7 +337,15 @@ def evaluate_walk_forward(
             label_end_indices,
             probability_threshold=active_config.probability_threshold,
         )
+        realized_90_bps = non_overlapping_trade_returns(
+            validation_indices,
+            probabilities.tolist(),
+            (net - 0.004).tolist(),
+            label_end_indices,
+            probability_threshold=active_config.probability_threshold,
+        )
         all_trade_returns.extend(realized)
+        all_trade_returns_90_bps.extend(realized_90_bps)
         oos_rows += len(validation_indices)
         fold_report: dict[str, object] = {
             "fold_index": fold.fold_index,
@@ -346,13 +355,16 @@ def evaluate_walk_forward(
             "embargo_bars": fold.embargo_bars,
         }
         fold_report.update(_fold_trade_metrics(realized))
+        fold_report["cost_sensitivity_90_bps"] = _fold_trade_metrics(realized_90_bps)
         fold_reports.append(fold_report)
     aggregate = _fold_trade_metrics(all_trade_returns)
+    sensitivity_90_bps = _fold_trade_metrics(all_trade_returns_90_bps)
     return {
         "fold_count": len(fold_reports),
         "out_of_sample_rows": oos_rows,
         "folds": fold_reports,
         "aggregate": aggregate,
+        "cost_sensitivity_90_bps": sensitivity_90_bps,
         "validation_method": "NESTED_PURGED_EXPANDING_WALK_FORWARD",
         "overlapping_trade_policy": "ONE_OPEN_POSITION; SKIP_UNTIL_LABEL_END",
         "probability_threshold": active_config.probability_threshold,

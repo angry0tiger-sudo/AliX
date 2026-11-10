@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 from hashlib import sha256
 import json
-import math
 import os
 from pathlib import Path
 from typing import Any, cast
@@ -21,9 +20,23 @@ from research.ai_ensemble.ensemble import (
     evaluate_walk_forward,
 )
 from research.ai_ensemble.features import (
-    FEATURE_COLUMNS,
     REQUIRED_OHLCV_COLUMNS,
     build_causal_features,
+)
+from research.ai_ensemble.chronos_features import (
+    CHRONOS_CONTEXT_LENGTH,
+    CHRONOS_FEATURE_COLUMN,
+    CHRONOS_MODEL_ID,
+    CHRONOS_MODEL_REVISION,
+    CHRONOS_PREDICTION_LENGTH,
+    CHRONOS_REFRESH_CANDLES,
+    build_chronos_features,
+    load_chronos_pipeline,
+)
+from scripts.fetch_nobitex_public_ohlcv import (
+    PREHACK_END_TIMESTAMP,
+    PREHACK_EXPECTED_CANDLES,
+    PREHACK_START_TIMESTAMP,
 )
 from research.ai_ensemble.labels import (
     LABEL_HORIZON_CANDLES,
@@ -31,13 +44,6 @@ from research.ai_ensemble.labels import (
     build_net_profit_targets,
 )
 from research.ai_ensemble.risk import KellySizingConfig
-from scripts.binance_nobitex_gap_backfill import (
-    BINANCE_BACKFILL_END_TIMESTAMP,
-    BINANCE_BACKFILL_SOURCE,
-    BINANCE_BACKFILL_START_TIMESTAMP,
-    BINANCE_BACKFILL_TIME_ZONE,
-    MAX_BOUNDARY_SCALE_SPREAD_BPS,
-)
 
 
 def _read_timestamped_csv(path: Path) -> DataFrame:
@@ -91,26 +97,51 @@ def _validate_manifest_fields(manifest: dict[str, Any]) -> None:
         raise ValueError(f"research_manifest_missing_fields:{','.join(missing)}")
 
 
+def _manifest_integer(
+    manifest: dict[str, Any],
+    field: str,
+    error_code: str,
+    *,
+    minimum: int | None = None,
+) -> int:
+    value = manifest[field]
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(error_code)
+    if minimum is not None and value < minimum:
+        raise ValueError(error_code)
+    return cast(int, value)
+
+
+def _validate_expected_candle_count(
+    manifest: dict[str, Any],
+    row_count: int,
+    requested_days: int,
+) -> None:
+    expected = manifest.get("expected_candles", requested_days * 24)
+    if isinstance(expected, bool) or not isinstance(expected, int):
+        raise ValueError("research_manifest_expected_candles_mismatch")
+    if expected != row_count:
+        raise ValueError("research_manifest_expected_candles_mismatch")
+
+
 def _validate_manifest_row_count(
     manifest: dict[str, Any],
     ohlcv: DataFrame,
 ) -> tuple[int, int]:
     if manifest["interval"] != "1h":
         raise ValueError("research_dataset_interval_must_be_1h")
-    row_count = manifest["row_count"]
-    if isinstance(row_count, bool) or not isinstance(row_count, int):
-        raise ValueError("research_manifest_row_count_invalid")
+    row_count = _manifest_integer(
+        manifest, "row_count", "research_manifest_row_count_invalid"
+    )
     if row_count != len(ohlcv):
         raise ValueError("research_manifest_row_count_mismatch")
-    requested_days = manifest["requested_days"]
-    if (
-        isinstance(requested_days, bool)
-        or not isinstance(requested_days, int)
-        or requested_days < 1
-    ):
-        raise ValueError("research_manifest_requested_window_mismatch")
-    if row_count != requested_days * 24:
-        raise ValueError("research_manifest_requested_window_mismatch")
+    requested_days = _manifest_integer(
+        manifest,
+        "requested_days",
+        "research_manifest_requested_window_mismatch",
+        minimum=1,
+    )
+    _validate_expected_candle_count(manifest, row_count, requested_days)
     if manifest["missing_intervals"] != 0:
         raise ValueError("research_manifest_contains_missing_intervals")
     return row_count, requested_days
@@ -174,90 +205,49 @@ def _validate_manifest_safety(manifest: dict[str, Any]) -> None:
         raise ValueError("research_manifest_trading_authorization_must_be_no_go")
 
 
-def _validate_source_override_fields(override: dict[str, Any]) -> None:
-    expected_fields = {
-        "source": BINANCE_BACKFILL_SOURCE,
-        "start_timestamp": BINANCE_BACKFILL_START_TIMESTAMP,
-        "end_timestamp": BINANCE_BACKFILL_END_TIMESTAMP,
-        "row_count": 24,
-        "symbol": "BTCUSDT",
-        "interval": "1h",
-        "time_zone": BINANCE_BACKFILL_TIME_ZONE,
-        "volume_adjusted": False,
-    }
-    for field, expected in expected_fields.items():
-        if override.get(field) != expected:
-            raise ValueError("research_manifest_binance_override_contract_invalid")
-
-
-def _manifest_finite_number(override: dict[str, Any], field: str) -> float:
-    value = override.get(field)
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ValueError("research_manifest_binance_override_calibration_invalid")
-    number = float(value)
-    if not math.isfinite(number):
-        raise ValueError("research_manifest_binance_override_calibration_invalid")
-    return number
-
-
-def _validate_source_override_digest(override: dict[str, Any]) -> None:
-    digest = override.get("raw_binance_klines_sha256")
-    if not isinstance(digest, str):
-        raise ValueError("research_manifest_binance_override_calibration_invalid")
-    if len(digest) != 64:
-        raise ValueError("research_manifest_binance_override_calibration_invalid")
-    if any(character not in "0123456789abcdef" for character in digest):
-        raise ValueError("research_manifest_binance_override_calibration_invalid")
-
-
-def _validate_source_override_calibration(override: dict[str, Any]) -> None:
-    factor = _manifest_finite_number(override, "price_adjustment_factor")
-    spread = _manifest_finite_number(override, "boundary_scale_spread_bps")
-    if factor <= 0.0 or spread < 0.0 or spread > MAX_BOUNDARY_SCALE_SPREAD_BPS:
-        raise ValueError("research_manifest_binance_override_calibration_invalid")
-    _validate_source_override_digest(override)
-
-
-def _validate_source_override(override: Any) -> None:
-    if not isinstance(override, dict):
-        raise ValueError("research_manifest_source_override_invalid")
-    _validate_source_override_fields(override)
-    _validate_source_override_calibration(override)
-
-
-def _validate_manifest_data_sources(manifest: dict[str, Any]) -> None:
-    expected_sources = [
-        "Nobitex public UDF history API",
-        "Binance Spot public market-data API",
-    ]
-    if manifest.get("data_sources") != expected_sources:
+def _validate_nobitex_source_identity(manifest: dict[str, Any]) -> None:
+    if manifest.get("source_policy") != "NOBITEX_ONLY_NO_BACKFILL":
+        raise ValueError("research_manifest_source_policy_must_be_nobitex_only")
+    if manifest.get("data_sources") != ["Nobitex public UDF history API"]:
         raise ValueError("research_manifest_data_sources_mismatch")
+    if manifest.get("source_overrides") not in (None, []):
+        raise ValueError("research_manifest_external_source_override_forbidden")
+    if manifest.get("dataset_window") != "PRE_HACK_NOBITEX_ONLY":
+        raise ValueError("research_manifest_window_policy_mismatch")
 
 
-def _validate_manifest_sources(manifest: dict[str, Any]) -> None:
-    overrides = manifest.get("source_overrides", [])
-    if not isinstance(overrides, list):
-        raise ValueError("research_manifest_source_overrides_invalid")
-    if len(overrides) > 1:
-        raise ValueError("research_manifest_too_many_source_overrides")
-    if not overrides:
-        return
-    for override in overrides:
-        _validate_source_override(override)
-    _validate_manifest_data_sources(manifest)
+def _validate_prehack_manifest_bounds(manifest: dict[str, Any]) -> None:
+    if manifest.get("start_timestamp") != PREHACK_START_TIMESTAMP:
+        raise ValueError("research_manifest_prehack_start_mismatch")
+    if manifest.get("end_timestamp") != PREHACK_END_TIMESTAMP:
+        raise ValueError("research_manifest_prehack_end_mismatch")
+    if manifest.get("expected_candles") != PREHACK_EXPECTED_CANDLES:
+        raise ValueError("research_manifest_prehack_count_mismatch")
+    if manifest.get("requested_days") != 1325:
+        raise ValueError("research_manifest_prehack_days_mismatch")
 
 
-def _validate_five_year_manifest(
+def _validate_prehack_timestamp_grid(ohlcv: DataFrame) -> None:
+    observed = ohlcv["date"].astype("int64").to_numpy(dtype=np.int64) // 1_000_000_000
+    expected = np.arange(
+        PREHACK_START_TIMESTAMP,
+        PREHACK_END_TIMESTAMP + 3600,
+        3600,
+        dtype=np.int64,
+    )
+    if not np.array_equal(observed, expected):
+        raise ValueError("research_manifest_prehack_timestamp_coverage_mismatch")
+
+
+def _validate_manifest_source_policy(
     manifest: dict[str, Any],
-    row_count: int,
-    requested_days: int,
+    ohlcv: DataFrame,
 ) -> None:
-    if manifest.get("windowing_policy") != "FIVE_ADJACENT_365_DAY_WINDOWS":
+    if manifest.get("public_api_only") is not True:
         return
-    if requested_days != 1825 or row_count != 43_800:
-        raise ValueError("research_five_year_manifest_window_mismatch")
-    if manifest.get("total_candles_expected") != 43_800:
-        raise ValueError("research_five_year_manifest_expected_count_mismatch")
+    _validate_nobitex_source_identity(manifest)
+    _validate_prehack_manifest_bounds(manifest)
+    _validate_prehack_timestamp_grid(ohlcv)
 
 
 def _validate_dataset_manifest(
@@ -274,8 +264,7 @@ def _validate_dataset_manifest(
     _validate_manifest_date_range(manifest, ohlcv)
     _validate_manifest_commit(manifest, expected_commit_sha)
     _validate_manifest_safety(manifest)
-    _validate_manifest_sources(manifest)
-    _validate_five_year_manifest(manifest, row_count, requested_days)
+    _validate_manifest_source_policy(manifest, ohlcv)
     return manifest
 
 
@@ -346,17 +335,41 @@ def _validate_training_labels(labels: np.ndarray, eligible: list[int]) -> None:
 
 def _build_aligned_training_set(
     ohlcv: DataFrame,
-) -> tuple[DataFrame, np.ndarray, np.ndarray, np.ndarray, list[int]]:
-    features = build_causal_features(ohlcv)
+    chronos_pipeline: Any,
+) -> tuple[DataFrame, DataFrame, np.ndarray, np.ndarray, np.ndarray, list[int]]:
+    baseline_features = build_causal_features(ohlcv)
+    chronos_features = build_chronos_features(ohlcv, pipeline=chronos_pipeline)
+    candidate_features = baseline_features.copy()
+    candidate_features[CHRONOS_FEATURE_COLUMN] = chronos_features[
+        CHRONOS_FEATURE_COLUMN
+    ]
+    # Exclude the Chronos context warm-up from both models so every row,
+    # target, purge, embargo and outer fold is identical.
+    positions = _finite_feature_positions(candidate_features)
+    position_map = _feature_position_map(positions)
+    baseline_matrix = baseline_features.iloc[positions].reset_index(drop=True)
+    candidate_matrix = candidate_features.iloc[positions].reset_index(drop=True)
     targets = build_net_profit_targets(ohlcv)
-    market_positions = _finite_feature_positions(features)
-    feature_position = _feature_position_map(market_positions)
-    model_features = features.iloc[market_positions].reset_index(drop=True)
     labels, label_ends, net_returns, eligible = _populate_target_arrays(
-        targets, market_positions, feature_position, len(model_features)
+        targets, positions, position_map, len(candidate_matrix)
     )
     _validate_training_labels(labels, eligible)
-    return model_features, labels, label_ends, net_returns, eligible
+    return (
+        baseline_matrix,
+        candidate_matrix,
+        labels,
+        label_ends,
+        net_returns,
+        eligible,
+    )
+
+
+def _metric_delta(candidate: object, baseline: object) -> float | None:
+    if not isinstance(candidate, (int, float)) or not isinstance(
+        baseline, (int, float)
+    ):
+        return None
+    return float(candidate) - float(baseline)
 
 
 def run_training(
@@ -367,6 +380,7 @@ def run_training(
     model_manifest_path: Path,
     report_path: Path,
     commit_sha: str | None = None,
+    chronos_pipeline: Any | None = None,
 ) -> dict[str, Any]:
     ohlcv = _read_timestamped_csv(ohlcv_path)
     expected_commit = commit_sha if commit_sha and commit_sha != "UNKNOWN" else None
@@ -376,23 +390,45 @@ def run_training(
         ohlcv=ohlcv,
         expected_commit_sha=expected_commit,
     )
-    features, labels, label_ends, net_returns, eligible = _build_aligned_training_set(
-        ohlcv
-    )
+    if chronos_pipeline is None:
+        active_pipeline, chronos_metadata = load_chronos_pipeline()
+    else:
+        active_pipeline = chronos_pipeline
+        chronos_metadata = {
+            "model_id": CHRONOS_MODEL_ID,
+            "model_revision": CHRONOS_MODEL_REVISION,
+            "model_license": "Apache-2.0",
+            "chronos_forecasting_version": "INJECTED_TEST_PIPELINE",
+            "weight_sha256": "INJECTED_TEST_PIPELINE",
+            "device": "test",
+            "context_length": CHRONOS_CONTEXT_LENGTH,
+            "prediction_length": CHRONOS_PREDICTION_LENGTH,
+            "forecast_refresh_candles": CHRONOS_REFRESH_CANDLES,
+            "forecast_type": "zero_shot",
+        }
+    (
+        baseline_features,
+        candidate_features,
+        labels,
+        label_ends,
+        net_returns,
+        eligible,
+    ) = _build_aligned_training_set(ohlcv, active_pipeline)
     config = StackingConfig()
-    validation = evaluate_walk_forward(
-        features,
+    validation_args = (
         labels.tolist(),
         label_ends.tolist(),
         net_returns.tolist(),
         eligible,
-        config=config,
+    )
+    baseline_validation = evaluate_walk_forward(
+        baseline_features, *validation_args, config=config
+    )
+    candidate_validation = evaluate_walk_forward(
+        candidate_features, *validation_args, config=config
     )
     model = StackingEnsemble(config).fit(
-        features,
-        labels.tolist(),
-        label_ends.tolist(),
-        eligible,
+        candidate_features, labels.tolist(), label_ends.tolist(), eligible
     )
     effective_commit = commit_sha or dataset_manifest["commit_sha"]
     if effective_commit == "UNKNOWN":
@@ -400,9 +436,11 @@ def run_training(
     model_path.parent.mkdir(parents=True, exist_ok=True)
     joblib.dump(
         {
-            "schema_version": "alix.nobitex.ai-ensemble.v1",
+            "schema_version": "alix.nobitex.ai-ensemble.v2",
             "model": model,
-            "feature_columns": list(features.columns),
+            "baseline_feature_columns": list(baseline_features.columns),
+            "feature_columns": list(candidate_features.columns),
+            "chronos": chronos_metadata,
             "round_trip_cost_bps": ROUND_TRIP_COST_BPS,
             "label_horizon_candles": LABEL_HORIZON_CANDLES,
             "training_rows": len(eligible),
@@ -412,9 +450,23 @@ def run_training(
         },
         model_path,
     )
-    aggregate = cast(dict[str, object], validation["aggregate"])
+    baseline_metrics = cast(dict[str, object], baseline_validation["aggregate"])
+    candidate_metrics = cast(dict[str, object], candidate_validation["aggregate"])
+    comparison = {
+        "net_profit_factor_delta": _metric_delta(
+            candidate_metrics["profit_factor"], baseline_metrics["profit_factor"]
+        ),
+        "win_rate_delta": _metric_delta(
+            candidate_metrics["win_rate"], baseline_metrics["win_rate"]
+        ),
+        "max_drawdown_delta": _metric_delta(
+            candidate_metrics["max_drawdown"], baseline_metrics["max_drawdown"]
+        ),
+        "trade_count_delta": cast(int, candidate_metrics["trade_count"])
+        - cast(int, baseline_metrics["trade_count"]),
+    }
     model_manifest: dict[str, Any] = {
-        "schema_version": "alix.nobitex.ai-ensemble-model-manifest.v1",
+        "schema_version": "alix.nobitex.ai-ensemble-model-manifest.v2",
         "artifact": {
             "path": str(model_path),
             "sha256": _file_sha256(model_path),
@@ -424,16 +476,23 @@ def run_training(
             "manifest_sha256": _file_sha256(manifest_path),
             "row_count": dataset_manifest["row_count"],
             "requested_days": dataset_manifest["requested_days"],
+            "expected_candles": dataset_manifest.get(
+                "expected_candles", dataset_manifest["row_count"]
+            ),
             "interval": dataset_manifest["interval"],
             "provider": dataset_manifest.get("provider", "UNSPECIFIED"),
             "symbol": dataset_manifest.get("symbol", "UNSPECIFIED"),
+            "start_timestamp": dataset_manifest.get("start_timestamp"),
+            "end_timestamp": dataset_manifest.get("end_timestamp"),
         },
         "model": {
             "base_models": ["LightGBM", "XGBoost"],
             "regime_model": "3-state diagonal Gaussian HMM (forward-filtered)",
             "meta_learner": "LogisticRegression trained on out-of-fold outputs",
-            "feature_columns": list(FEATURE_COLUMNS),
+            "baseline_feature_columns": list(baseline_features.columns),
+            "candidate_feature_columns": list(candidate_features.columns),
         },
+        "chronos": chronos_metadata,
         "labeling": {
             "method": "ATR_TRIPLE_BARRIER",
             "horizon_candles": LABEL_HORIZON_CANDLES,
@@ -444,9 +503,11 @@ def run_training(
             "round_trip_cost_bps": ROUND_TRIP_COST_BPS,
         },
         "validation": {
-            "method": validation["validation_method"],
-            "fold_count": validation["fold_count"],
-            "mean_return_z_score": aggregate["statistical_z_score"],
+            "method": candidate_validation["validation_method"],
+            "fold_count": candidate_validation["fold_count"],
+            "baseline_aggregate": baseline_metrics,
+            "candidate_aggregate": candidate_metrics,
+            "cost_sensitivity_90_bps": candidate_validation["cost_sensitivity_90_bps"],
         },
         "code_commit_sha": effective_commit,
         "promotion_status": "BLOCKED_NO_ECONOMIC_ACCEPTANCE",
@@ -458,7 +519,7 @@ def run_training(
         encoding="utf-8",
     )
     report: dict[str, Any] = {
-        "schema_version": "alix.nobitex.ai-ensemble-training-report.v2",
+        "schema_version": "alix.nobitex.ai-ensemble-training-report.v3",
         "dataset": {
             "kind": (
                 "PUBLIC_MARKET_DATA"
@@ -467,17 +528,22 @@ def run_training(
             ),
             "provider": dataset_manifest.get("provider", "UNSPECIFIED"),
             "data_sources": dataset_manifest.get(
-                "data_sources",
-                [dataset_manifest.get("provider", "UNSPECIFIED")],
+                "data_sources", [dataset_manifest.get("provider", "UNSPECIFIED")]
             ),
-            "source_overrides": dataset_manifest.get("source_overrides", []),
+            "source_policy": dataset_manifest.get("source_policy", "TEST_FIXTURE"),
+            "dataset_window": dataset_manifest.get("dataset_window", "TEST_FIXTURE"),
             "symbol": dataset_manifest.get("symbol", "UNSPECIFIED"),
             "pair": dataset_manifest.get("pair", "UNSPECIFIED"),
             "interval": dataset_manifest["interval"],
             "start_utc": dataset_manifest["start_utc"],
             "end_utc": dataset_manifest["end_utc"],
+            "start_timestamp": dataset_manifest.get("start_timestamp"),
+            "end_timestamp": dataset_manifest.get("end_timestamp"),
             "requested_days": dataset_manifest["requested_days"],
             "row_count": dataset_manifest["row_count"],
+            "expected_candles": dataset_manifest.get(
+                "expected_candles", dataset_manifest["row_count"]
+            ),
             "eligible_labeled_rows": len(eligible),
             "csv_sha256": dataset_manifest["csv_sha256"],
             "manifest_sha256": _file_sha256(manifest_path),
@@ -486,8 +552,10 @@ def run_training(
             "base_models": ["LightGBM", "XGBoost"],
             "regime_model": "3-state diagonal Gaussian HMM (forward-filtered)",
             "meta_learner": "LogisticRegression trained on out-of-fold outputs",
-            "feature_columns": list(FEATURE_COLUMNS),
+            "baseline_feature_columns": list(baseline_features.columns),
+            "candidate_feature_columns": list(candidate_features.columns),
         },
+        "chronos": chronos_metadata,
         "labeling": {
             "method": "ATR_TRIPLE_BARRIER",
             "horizon_candles": LABEL_HORIZON_CANDLES,
@@ -504,14 +572,36 @@ def run_training(
             "maximum_risk_fraction": KellySizingConfig().max_risk_fraction,
             "maximum_position_fraction": KellySizingConfig().max_position_fraction,
         },
-        "validation": validation,
+        "validation": {
+            "baseline": baseline_validation,
+            "candidate": candidate_validation,
+            "fold_count": candidate_validation["fold_count"],
+        },
+        "baseline_research_result": {
+            "trade_count": baseline_metrics["trade_count"],
+            "win_rate": baseline_metrics["win_rate"],
+            "net_profit_factor": baseline_metrics["profit_factor"],
+            "max_drawdown": baseline_metrics["max_drawdown"],
+            "net_return": baseline_metrics["compounded_net_return"],
+            "statistical_z_score": baseline_metrics["statistical_z_score"],
+        },
+        "candidate_research_result": {
+            "trade_count": candidate_metrics["trade_count"],
+            "win_rate": candidate_metrics["win_rate"],
+            "net_profit_factor": candidate_metrics["profit_factor"],
+            "max_drawdown": candidate_metrics["max_drawdown"],
+            "net_return": candidate_metrics["compounded_net_return"],
+            "statistical_z_score": candidate_metrics["statistical_z_score"],
+        },
+        "comparison": comparison,
+        "cost_sensitivity_90_bps": candidate_validation["cost_sensitivity_90_bps"],
         "research_result": {
-            "trade_count": aggregate["trade_count"],
-            "win_rate": aggregate["win_rate"],
-            "net_profit_factor": aggregate["profit_factor"],
-            "max_drawdown": aggregate["max_drawdown"],
-            "net_return": aggregate["compounded_net_return"],
-            "statistical_z_score": aggregate["statistical_z_score"],
+            "trade_count": candidate_metrics["trade_count"],
+            "win_rate": candidate_metrics["win_rate"],
+            "net_profit_factor": candidate_metrics["profit_factor"],
+            "max_drawdown": candidate_metrics["max_drawdown"],
+            "net_return": candidate_metrics["compounded_net_return"],
+            "statistical_z_score": candidate_metrics["statistical_z_score"],
             "z_score_definition": (
                 "one-sample normal-approximation Z-score of non-overlapping "
                 "net trade returns against a zero-mean null"

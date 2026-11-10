@@ -6,7 +6,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import joblib  # type: ignore[import-untyped]
 import numpy as np
@@ -38,14 +38,17 @@ from research.ai_ensemble.validation import (
     mean_return_z_score,
 )
 from scripts import fetch_nobitex_public_ohlcv as ohlcv_source
-from scripts.binance_nobitex_gap_backfill import (
-    BINANCE_BACKFILL_END_TIMESTAMP,
-    BINANCE_BACKFILL_SOURCE,
-    BINANCE_BACKFILL_START_TIMESTAMP,
-    fetch_binance_gap_backfill,
+from scripts.fetch_nobitex_prehack_ohlcv import (
+    EXPECTED_CANDLES as PREHACK_EXPECTED_CANDLES,
+    PREHACK_END_TIMESTAMP,
+    PREHACK_START_TIMESTAMP,
+    fetch_prehack_candles,
 )
-from scripts.fetch_nobitex_5y_ohlcv import fetch_five_year_candles
-from scripts.train_nobitex_ai_ensemble import run_training
+from scripts.train_nobitex_ai_ensemble import (
+    _validate_manifest_row_count,
+    _validate_manifest_source_policy,
+    run_training,
+)
 
 
 def market_frame(rows: int = 360) -> DataFrame:
@@ -329,50 +332,64 @@ def test_stacking_model_contract_and_training_smoke_when_dependencies_exist() ->
     assert np.all((output >= 0.0) & (output <= 1.0))
 
 
-def test_five_year_fetcher_joins_five_contiguous_windows(
+def test_prehack_fetcher_uses_exact_nobitex_window(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls = 0
+    captured: dict[str, Any] = {}
 
-    def fake_fetch(
+    def fake_fetch(**kwargs: Any) -> list[ohlcv_source.CandleRecord]:
+        captured.update(kwargs)
+        return [
+            {
+                "timestamp": stamp,
+                "date": datetime.fromtimestamp(stamp, timezone.utc).isoformat(),
+                "open": 100.0,
+                "high": 101.0,
+                "low": 99.0,
+                "close": 100.0,
+                "volume": 1.0,
+            }
+            for stamp in range(PREHACK_START_TIMESTAMP, PREHACK_END_TIMESTAMP + 1, 3600)
+        ]
+
+    monkeypatch.setattr(ohlcv_source, "fetch_candles_between", fake_fetch)
+    rows = fetch_prehack_candles(
+        request_json=lambda _: {},
+        sleep_fn=lambda _: None,
+    )
+    assert captured["start_timestamp"] == PREHACK_START_TIMESTAMP
+    assert captured["end_timestamp"] == PREHACK_END_TIMESTAMP
+    assert captured["interval"] == "1h"
+    assert captured["symbol"] == "BTCUSDT"
+    assert len(rows) == PREHACK_EXPECTED_CANDLES
+
+
+class FakeChronosPipeline:
+    """Deterministic Chronos API double for unit tests only."""
+
+    def predict_df(
+        self,
+        context: DataFrame,
         *,
-        days: int,
-        now: datetime,
-        symbol: str,
-        interval: str,
-        request_json: Callable[[dict[str, str]], dict[str, Any]],
-        sleep_fn: Callable[[float], None],
-        source_overrides: list[dict[str, object]] | None = None,
-        backfill_cache: dict[int, ohlcv_source.CandleRecord] | None = None,
-    ) -> list[ohlcv_source.CandleRecord]:
-        nonlocal calls
-        calls += 1
-        assert days == 365
-        assert symbol == "BTCUSDT"
-        assert interval == "1h"
-        end = (int(now.timestamp()) // 3600 * 3600) - 3600
-        start = end - ((365 * 24) - 1) * 3600
-        rows: list[ohlcv_source.CandleRecord] = []
-        for stamp in range(start, end + 1, 3600):
-            rows.append(
-                {
-                    "timestamp": stamp,
-                    "date": datetime.fromtimestamp(stamp, timezone.utc).isoformat(),
-                    "open": 100.0,
-                    "high": 101.0,
-                    "low": 99.0,
-                    "close": 100.0,
-                    "volume": 1.0,
-                }
-            )
-        return rows
-
-    monkeypatch.setattr(ohlcv_source, "fetch_historical_candles", fake_fetch)
-    rows = fetch_five_year_candles(now=datetime(2026, 11, 9, 12, tzinfo=timezone.utc))
-    assert calls == 5
-    assert len(rows) == 43_800
-    stamps = [row["timestamp"] for row in rows]
-    assert all(right - left == 3600 for left, right in zip(stamps, stamps[1:]))
+        prediction_length: int,
+        id_column: str,
+        timestamp_column: str,
+        target: str,
+        **kwargs: Any,
+    ) -> DataFrame:
+        predictions: list[dict[str, Any]] = []
+        for item_id, group in context.groupby(id_column, sort=False):
+            value = float(group[target].iloc[-1])
+            timestamp = pd.Timestamp(group[timestamp_column].iloc[-1])
+            for step in range(1, prediction_length + 1):
+                predictions.append(
+                    {
+                        id_column: item_id,
+                        timestamp_column: timestamp + pd.Timedelta(hours=step),
+                        "predictions": value + 0.0001 * step,
+                    }
+                )
+        return DataFrame.from_records(predictions)
 
 
 def test_end_to_end_training_writes_unpromoted_ohlcv_artifacts(
@@ -421,10 +438,12 @@ def test_end_to_end_training_writes_unpromoted_ohlcv_artifacts(
         model_manifest_path=model_manifest_path,
         report_path=report_path,
         commit_sha="test-commit",
+        chronos_pipeline=FakeChronosPipeline(),
     )
     artifact = joblib.load(model_path)
     model_manifest = json.loads(model_manifest_path.read_text(encoding="utf-8"))
-    assert artifact["schema_version"] == "alix.nobitex.ai-ensemble.v1"
+    assert artifact["schema_version"] == "alix.nobitex.ai-ensemble.v2"
+    assert "chronos_pred" in artifact["feature_columns"]
     assert artifact["round_trip_cost_bps"] == 50
     assert artifact["dataset_csv_sha256"] == data_manifest["csv_sha256"]
     assert report["dataset"]["row_count"] == 1200
@@ -432,6 +451,11 @@ def test_end_to_end_training_writes_unpromoted_ohlcv_artifacts(
     assert report["dataset"]["kind"] == "NON_PRODUCTION_TEST_FIXTURE"
     assert report["validation"]["fold_count"] == 3
     assert report["research_result"]["statistical_z_score"] is not None
+    assert "net_profit_factor" in report["baseline_research_result"]
+    assert "net_profit_factor" in report["candidate_research_result"]
+    assert report["chronos"]["forecast_type"] == "zero_shot"
+    assert "chronos_pred" in report["model"]["candidate_feature_columns"]
+    assert "cost_sensitivity_90_bps" in report
     assert report["artifact"]["sha256"] == model_manifest["artifact"]["sha256"]
     assert report["safety"]["Champion"] is None
     assert report["safety"]["order_permission"] is False
@@ -441,178 +465,75 @@ def test_end_to_end_training_writes_unpromoted_ohlcv_artifacts(
     assert report_path.is_file()
 
 
-def test_binance_backfill_uses_matching_nobitex_boundary_prices_and_provenance() -> (
-    None
-):
-    before = BINANCE_BACKFILL_START_TIMESTAMP - 3600
-    after = BINANCE_BACKFILL_END_TIMESTAMP + 3600
-    gap = list(
-        range(
-            BINANCE_BACKFILL_START_TIMESTAMP,
-            BINANCE_BACKFILL_END_TIMESTAMP + 1,
-            3600,
-        )
-    )
-    assert len(gap) == 24
-    expected = [before, *gap, after]
-    payload: list[list[Any]] = []
-    for stamp in expected:
-        payload.append(
-            [
-                stamp * 1000,
-                "100.0",
-                "102.0",
-                "98.0",
-                "100.0",
-                "4.0",
-                (stamp + 3599) * 1000 + 999,
-                "400.0",
-                100,
-                "2.0",
-                "200.0",
-                "0",
-            ]
-        )
-    anchors = {before: {"close": 101.0}, after: {"close": 101.0}}
-    captured: dict[str, str] = {}
-
-    def fake_request(params: dict[str, str]) -> list[list[Any]]:
-        captured.update(params)
-        return payload
-
-    rows, provenance = fetch_binance_gap_backfill(
-        missing_timestamps=gap,
-        nobitex_anchor_rows=anchors,
-        request_json=fake_request,
-    )
-    assert len(rows) == 24
-    assert rows[0]["timestamp"] == BINANCE_BACKFILL_START_TIMESTAMP
-    assert rows[-1]["timestamp"] == BINANCE_BACKFILL_END_TIMESTAMP
-    assert rows[0]["open"] == pytest.approx(101.0)
-    assert rows[0]["high"] == pytest.approx(103.02)
-    assert rows[0]["low"] == pytest.approx(98.98)
-    assert rows[0]["volume"] == pytest.approx(4.0)
-    assert provenance["source"] == BINANCE_BACKFILL_SOURCE
-    assert provenance["price_adjustment_factor"] == pytest.approx(1.01)
-    assert provenance["start_timestamp"] == BINANCE_BACKFILL_START_TIMESTAMP
-    assert provenance["end_timestamp"] == BINANCE_BACKFILL_END_TIMESTAMP
-    assert provenance["row_count"] == 24
-    assert captured["timeZone"] == "+03:30"
-    assert captured["startTime"] == str(before * 1000)
-    assert captured["endTime"] == str(after * 1000)
-
-
-def test_binance_backfill_fails_closed_on_unapproved_gap_or_scale_drift() -> None:
-    before = BINANCE_BACKFILL_START_TIMESTAMP - 3600
-    after = BINANCE_BACKFILL_END_TIMESTAMP + 3600
-    gap = list(
-        range(
-            BINANCE_BACKFILL_START_TIMESTAMP,
-            BINANCE_BACKFILL_END_TIMESTAMP + 1,
-            3600,
-        )
-    )
-    payload = [
-        [stamp * 1000, "100", "102", "98", "100", "1"]
-        for stamp in [before, *gap, after]
-    ]
-    with pytest.raises(ValueError, match="gap_not_approved"):
-        fetch_binance_gap_backfill(
-            missing_timestamps=gap[:-1],
-            nobitex_anchor_rows={before: {"close": 101.0}, after: {"close": 101.0}},
-            request_json=lambda _: payload,
-        )
-    with pytest.raises(ValueError, match="boundary_scale_drift"):
-        fetch_binance_gap_backfill(
-            missing_timestamps=gap,
-            nobitex_anchor_rows={before: {"close": 101.0}, after: {"close": 110.0}},
-            request_json=lambda _: payload,
-        )
-
-
-def test_nobitex_gap_fetcher_only_uses_approved_binance_backfill(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    start = BINANCE_BACKFILL_START_TIMESTAMP - 3600
-    end = BINANCE_BACKFILL_END_TIMESTAMP
-    expected = list(range(start, end + 3600, 3600))
-    missing = list(
-        range(
-            BINANCE_BACKFILL_START_TIMESTAMP,
-            BINANCE_BACKFILL_END_TIMESTAMP + 1,
-            3600,
-        )
-    )
-    before = BINANCE_BACKFILL_START_TIMESTAMP - 3600
-    after = BINANCE_BACKFILL_END_TIMESTAMP + 3600
-    native = {
-        stamp: {
-            "timestamp": stamp,
-            "date": datetime.fromtimestamp(stamp, timezone.utc).isoformat(),
-            "open": 100.0,
-            "high": 101.0,
-            "low": 99.0,
-            "close": 100.0,
-            "volume": 1.0,
-        }
-        for stamp in expected
-        if stamp not in missing
+def test_manifest_row_count_accepts_exact_inclusive_prehack_count() -> None:
+    manifest = {
+        "interval": "1h",
+        "row_count": 31_801,
+        "requested_days": 1_325,
+        "expected_candles": 31_801,
+        "missing_intervals": 0,
     }
-    anchors = {
-        before: {**native[before], "close": 100.0},
-        after: {
-            "timestamp": after,
-            "date": datetime.fromtimestamp(after, timezone.utc).isoformat(),
-            "open": 100.0,
-            "high": 101.0,
-            "low": 99.0,
-            "close": 100.0,
-            "volume": 1.0,
-        },
+    ohlcv = DataFrame(index=range(31_801))
+    assert _validate_manifest_row_count(manifest, ohlcv) == (31_801, 1_325)
+
+
+def test_manifest_row_count_rejects_off_by_one_expected_count() -> None:
+    manifest = {
+        "interval": "1h",
+        "row_count": 31_801,
+        "requested_days": 1_325,
+        "expected_candles": 31_800,
+        "missing_intervals": 0,
     }
-    backfill = [
-        {
-            "timestamp": stamp,
-            "date": datetime.fromtimestamp(stamp, timezone.utc).isoformat(),
-            "open": 100.0,
-            "high": 101.0,
-            "low": 99.0,
-            "close": 100.0,
-            "volume": 1.0,
-        }
-        for stamp in missing
-    ]
-    provenance = {"source": BINANCE_BACKFILL_SOURCE, "row_count": 24}
-    monkeypatch.setattr(
-        ohlcv_source,
-        "_fetch_page_with_retries",
-        lambda **_: (expected, native, missing),
+    with pytest.raises(
+        ValueError,
+        match="research_manifest_expected_candles_mismatch",
+    ):
+        _validate_manifest_row_count(manifest, DataFrame(index=range(31_801)))
+
+
+def test_public_dataset_manifest_must_be_nobitex_only_and_exact_window() -> None:
+    timestamps = np.arange(
+        PREHACK_START_TIMESTAMP,
+        PREHACK_END_TIMESTAMP + 3600,
+        3600,
+        dtype=np.int64,
     )
-    monkeypatch.setattr(
-        ohlcv_source,
-        "_recover_missing_timestamp_ranges",
-        lambda **_: {},
+    ohlcv = DataFrame({"date": pd.to_datetime(timestamps, unit="s", utc=True)})
+    manifest = {
+        "public_api_only": True,
+        "source_policy": "NOBITEX_ONLY_NO_BACKFILL",
+        "data_sources": ["Nobitex public UDF history API"],
+        "dataset_window": "PRE_HACK_NOBITEX_ONLY",
+        "start_timestamp": PREHACK_START_TIMESTAMP,
+        "end_timestamp": PREHACK_END_TIMESTAMP,
+        "expected_candles": PREHACK_EXPECTED_CANDLES,
+        "requested_days": 1325,
+    }
+    _validate_manifest_source_policy(manifest, ohlcv)
+
+
+def test_public_dataset_manifest_rejects_external_source_override() -> None:
+    timestamps = np.arange(
+        PREHACK_START_TIMESTAMP,
+        PREHACK_END_TIMESTAMP + 3600,
+        3600,
+        dtype=np.int64,
     )
-    monkeypatch.setattr(
-        ohlcv_source,
-        "_request_filtered_candle_window",
-        lambda *args, **kwargs: anchors,
-    )
-    monkeypatch.setattr(
-        ohlcv_source,
-        "fetch_binance_gap_backfill",
-        lambda **_: (backfill, provenance),
-    )
-    source_overrides: list[dict[str, object]] = []
-    rows = ohlcv_source._fetch_candle_pages(
-        start=start,
-        end=end,
-        symbol="BTCUSDT",
-        interval="1h",
-        request_json=lambda _: {},
-        sleep_fn=lambda _: None,
-        source_overrides=source_overrides,
-    )
-    assert [row["timestamp"] for row in rows] == expected
-    assert len(source_overrides) == 1
-    assert source_overrides[0]["source"] == BINANCE_BACKFILL_SOURCE
+    ohlcv = DataFrame({"date": pd.to_datetime(timestamps, unit="s", utc=True)})
+    manifest = {
+        "public_api_only": True,
+        "source_policy": "NOBITEX_ONLY_NO_BACKFILL",
+        "data_sources": ["Nobitex public UDF history API"],
+        "source_overrides": ["Binance"],
+        "dataset_window": "PRE_HACK_NOBITEX_ONLY",
+        "start_timestamp": PREHACK_START_TIMESTAMP,
+        "end_timestamp": PREHACK_END_TIMESTAMP,
+        "expected_candles": PREHACK_EXPECTED_CANDLES,
+        "requested_days": 1325,
+    }
+    with pytest.raises(
+        ValueError,
+        match="research_manifest_external_source_override_forbidden",
+    ):
+        _validate_manifest_source_policy(manifest, ohlcv)

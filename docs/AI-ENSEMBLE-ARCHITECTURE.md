@@ -1,83 +1,61 @@
 # AliX Nobitex AI Ensemble Research Architecture
 
-## Scope and data contract
+## Fixed data contract
 
-This branch is isolated from \`main\` and \`release/nobitex-mvp\`. The AI
-ensemble is research-only. Training uses one five-year hourly BTCUSDT Spot
-OHLCV dataset fetched from the public Nobitex UDF history endpoint. Model
-features use OHLCV and technical indicators only. Order-book, taker-flow,
-funding-rate, and other external microstructure archives are not required.
+Native Nobitex BTCUSDT Spot 1h candles only. The inclusive window is
+`1635712200` (2021-11-01 00:00 Asia/Tehran) through
+`1750192200` (2025-06-18 00:00 Asia/Tehran), exactly 31,801 contiguous
+candles. The logical window is inclusive; because TradingView UDF uses an exclusive right boundary, the request sends `from=start` and `to=end+1 second`, then retains only returned candles through the requested end.
+No Binance backfill, external-source substitution, interpolation, forward
+fill, synthetic replacement or silent gap repair is permitted. The same
+Nobitex request can be retried; a remaining gap fails the run.
 
-The 1h timeframe is the selected model timeframe. The fetch workflow combines
-five backward-adjacent 365-day windows and requires exactly 43,800 contiguous
-hourly candles. The CSV manifest records provider, symbol, date range, row
-count, missing intervals, content SHA-256, and source commit. Training verifies
-the manifest, CSV hash, first/last timestamps, 1h interval, and 24 rows per day.
+The dataset manifest pins the data source, timestamps, actual and expected
+row counts, missing intervals, content SHA-256 and safety state. The trainer
+validates the exact expected timestamp grid.
 
-No interpolation, forward-fill, synthetic replacement, or silent gap repair is
-permitted. Synthetic rows exist only in unit tests and are not economic evidence.
+## Chronos-2 feature
 
-## Causal OHLCV feature pipeline
+The frozen zero-shot checkpoint is `amazon/chronos-2`, pinned to revision
+`29ec3766d36d6f73f0696f85560a422f50e8498c`. Runtime:
+`chronos-forecasting==2.3.2`, CPU-only inference.
 
-The model uses completed OHLCV candles only:
-- RSI(14);
-- MACD(12/26/9), signal, and histogram;
-- ATR(14) and ATR fraction;
-- Bollinger %B and width (20, 2);
-- 24-candle realized volatility;
-- 24-candle Volume Z-Score;
-- one- and three-candle returns, log return, and high-low range fraction.
+Each forecast uses 512 completed hourly candles to predict 24 future log
+closes. Past-only covariates are log return, open gap, range fraction and log
+volume. Forecasts refresh every 24 candles. Differences in predicted log
+prices produce the hourly-return feature `chronos_pred`. Step one is aligned
+as-of to the forecast-origin decision row; the following 23 steps are aligned
+to the next 23 rows. The first 511 rows remain warm-up and are excluded from
+both Baseline and Candidate. Each inference is independent
+(`cross_learning=False`); future realized candles, labels, account state and
+execution information are not inputs.
 
-Indicator warm-up NaNs remain visible and are excluded explicitly.
+## Controlled evaluation
 
-## Ensemble and regime model
+Baseline uses the existing OHLCV features. Candidate adds only
+`chronos_pred`. Both use the same rows, targets, nested chronological Purged
+Walk-Forward folds, embargo, parameters, seeds, thresholds and trade
+simulation. LightGBM and XGBoost remain the base models, with the forward-
+filtered Gaussian HMM and out-of-fold Logistic Regression meta-learner.
 
-LightGBM and XGBoost are the base models. A three-state diagonal Gaussian HMM
-models DOWN/RANGE/UP regimes. HMM parameters are fit on each training segment;
-validation probabilities use forward filtering only.
+Triple Barrier remains 24 candles, 2 ATR take profit, 1 ATR stop loss,
+next-bar-open entry, stop-first collision, and 50 bps round-trip costs. The
+same decisions are also evaluated at 90 bps, with the additional 40 bps per
+trade deducted. Metrics include Net PF, win rate, maximum drawdown,
+compounded return, trade count and the one-sample normal-approximation
+Statistical Z-Score of non-overlapping net trade returns. This is not a
+Deflated Sharpe Ratio or multiple-testing correction.
 
-The Logistic Regression meta-learner is trained from out-of-fold base-model
-probabilities and forward-filtered HMM probabilities. Outer evaluation uses
-expanding chronological Purged Walk-Forward folds, purges overlapping labels,
-and applies a 24-candle embargo. Trade-return evaluation permits one open
-position and skips entries until the active label window ends.
+## Safety invariants
 
-## Labels, costs, and metrics
-
-The existing Triple-Barrier contract is retained:
-- horizon: 24 hourly candles;
-- take profit: 2 ATR;
-- stop loss: 1 ATR;
-- entry: next candle open;
-- collision: stop loss first;
-- round-trip cost: 50 bps (25 bps per side).
-
-Each fold reports trade count, win rate, net Profit Factor, compounded net
-return, maximum drawdown, trade Sharpe, and Statistical Z-Score. The Statistical
-Z-Score is the one-sample normal-approximation statistic for mean non-overlapping
-net trade return against a zero-mean null. It is not a Deflated Sharpe Ratio or
-a multiple-testing correction. It is null when the sample or its variance is
-insufficient.
-
-## Risk and paper-plan boundary
-
-Fractional Kelly sizing retains the existing risk, volatility, and position
-caps. The Nobitex adapter can produce only a bounded paper maker-slice plan
-after liquidity checks. It has no order-write method. Mock order-book adapter
-tests prove interface mechanics only; they do not create historical execution
-evidence. Model training does not consume historical microstructure.
-
-## Fixed safety state
-
-\`\`\`text
+```text
 Champion = null
 order_permission = false
 trading_authorization = NO-GO
 private_api_calls = 0
 real_order_attempts = 0
-orders_or_execution_api_used = false
 ALIX_DRY_RUN = true
 ALIX_ALLOW_LIVE_TRADING = false
-\`\`\`
+```
 
-Training artifacts and passing CI do not grant promotion or trading permission.
+Passing CI or achieving a metric threshold does not authorize trading.

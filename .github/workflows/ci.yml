@@ -248,237 +248,145 @@ jobs:
       - freqtrade-runtime-smoke
       - postgres-integration
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 240
+    permissions:
+      contents: read
     env:
       ALIX_DRY_RUN: "true"
       ALIX_ALLOW_LIVE_TRADING: "false"
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
     steps:
-      - name: Checkout exact research commit without persisted credentials
+      - name: Checkout exact commit
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
-      - name: Set up pinned Python
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
-      - name: Install pinned OHLCV ensemble runtime and test dependencies
+      - name: Install CPU-only Chronos-2 and ensemble dependencies
         run: |
           python -m pip install pip==25.2
+          python -m pip install torch==2.9.1 --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -r requirements-chronos-research.txt
           python -m pip install numpy pandas==2.3.3 scikit-learn==1.9.0 joblib==1.5.3 lightgbm==4.7.0 xgboost-cpu==3.4.1 pytest==9.0.3
-      - name: Re-run AI ensemble mechanics before accessing real market data
-        run: pytest tests/unit/test_ai_ensemble.py -q
-      - name: Fetch exactly five years of public Nobitex Spot hourly OHLCV
+      - name: Test Chronos and ensemble mechanics before fetching data
+        run: pytest tests/unit/test_ai_ensemble.py tests/unit/test_chronos_features.py -q
+      - name: Fetch exact pre-hack Nobitex hourly data
         run: |
           set -euo pipefail
-          data_dir="$GITHUB_WORKSPACE/.artifacts/alix-ensemble-data"
+          data_dir="$GITHUB_WORKSPACE/.artifacts/alix-prehack-data"
           mkdir -p "$data_dir"
-          python -m scripts.fetch_nobitex_5y_ohlcv \
-            --symbol BTCUSDT \
-            --output-dir "$data_dir" \
-            --commit-sha "$GITHUB_SHA"
-      - name: Verify five-year OHLCV provenance, completeness, and safety
+          python -m scripts.fetch_nobitex_prehack_ohlcv --output-dir "$data_dir" --commit-sha "$GITHUB_SHA"
+      - name: Verify source, exact inclusive boundaries and safety
         run: |
           python - <<'PY'
-          import csv
-          from datetime import datetime, timedelta
-          import hashlib
-          import json
-          import os
+          import csv, hashlib, json, os
+          from datetime import datetime, timedelta, timezone
           from pathlib import Path
-
-          data_dir = Path(".artifacts/alix-ensemble-data")
-          csv_path = data_dir / "nobitex-btcusdt-1h.csv"
-          manifest_path = data_dir / "nobitex-btcusdt-1h.manifest.json"
-          manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-
-          assert manifest["provider"] == "Nobitex public UDF history API"
-          assert manifest["interval"] == "1h"
-          assert manifest["symbol"] == "BTCUSDT"
-          assert manifest["requested_days"] == 1825
-          assert manifest["row_count"] == 43800
-          assert manifest["total_candles_expected"] == 43800
-          assert manifest["windowing_policy"] == "FIVE_ADJACENT_365_DAY_WINDOWS"
-          assert manifest["missing_intervals"] == 0
-          assert manifest["csv_sha256"] == hashlib.sha256(csv_path.read_bytes()).hexdigest()
-          assert manifest["source_policy"] == "NOBITEX_PRIMARY_WITH_EXPLICIT_BINANCE_RANGE_OVERRIDE"
-          source_overrides = manifest["source_overrides"]
-          assert isinstance(source_overrides, list)
-          assert len(source_overrides) <= 1
-          for override in source_overrides:
-              assert override["source"] == "BINANCE_BACKFILL_FOR_NOBITEX_OUTAGE"
-              assert override["start_timestamp"] == 1750224600
-              assert override["end_timestamp"] == 1750307400
-              assert override["row_count"] == 24
-              assert override["symbol"] == "BTCUSDT"
-              assert override["interval"] == "1h"
-              assert override["time_zone"] == "+03:30"
-              assert override["start_utc"] == "2025-06-18T05:30:00Z"
-              assert override["end_utc"] == "2025-06-19T04:30:00Z"
-              assert override["calibration_anchor_timestamps"] == {
-                  "pre_gap": 1750221000,
-                  "post_gap": 1750311000,
-              }
-              assert override["volume_adjusted"] is False
-              assert override["raw_binance_klines_sha256"]
-              assert 0 < override["price_adjustment_factor"] < 10
-              assert override["boundary_scale_spread_bps"] <= 100.0
-          expected_sources = ["Nobitex public UDF history API"]
-          if source_overrides:
-              expected_sources.append("Binance Spot public market-data API")
-          assert manifest["data_sources"] == expected_sources
-          assert manifest["commit_sha"] == os.environ["GITHUB_SHA"]
-
-          # This is an unauthenticated public market-data endpoint.
-          # No API key, account credentials, or private endpoint is used.
-          assert manifest["public_api_only"] is True
-          assert manifest["credentials_used"] is False
-          assert manifest["private_api_calls"] == 0
-          assert manifest["exchange_calls"] == 0
-          assert manifest["real_order_attempts"] == 0
-          assert manifest["order_permission"] is False
-          assert manifest["Champion"] is None
-          assert manifest["trading_authorization"] == "NO-GO"
-
-          timestamps = []
-          with csv_path.open(newline="", encoding="utf-8") as stream:
-              reader = csv.DictReader(stream)
-              expected_columns = {"date", "open", "high", "low", "close", "volume"}
-              assert set(reader.fieldnames or ()) == expected_columns
-              for row in reader:
-                  timestamps.append(
-                      datetime.fromisoformat(row["date"].replace("Z", "+00:00"))
-                  )
-
-          assert len(timestamps) == 43800
-          assert all(
-              current - previous == timedelta(hours=1)
-              for previous, current in zip(timestamps, timestamps[1:])
-          )
-
-          print(json.dumps({
-              "provider": manifest["provider"],
-              "symbol": manifest["symbol"],
-              "interval": manifest["interval"],
-              "requested_days": manifest["requested_days"],
-              "row_count": len(timestamps),
-              "csv_sha256": manifest["csv_sha256"],
-              "public_api_only": True,
-              "credentials_used": False,
-              "private_api_calls": 0,
-              "real_order_attempts": 0,
-              "Champion": None,
-              "order_permission": False,
-              "trading_authorization": "NO-GO",
-          }, sort_keys=True))
+          data_dir=Path(".artifacts/alix-prehack-data")
+          csv_path=data_dir/"nobitex-btcusdt-1h.csv"
+          manifest=json.loads((data_dir/"nobitex-btcusdt-1h.manifest.json").read_text())
+          cutoff=datetime.fromtimestamp(1750192200,timezone.utc)
+          assert manifest["source_policy"]=="NOBITEX_ONLY_NO_BACKFILL"
+          assert manifest["data_sources"]==["Nobitex public UDF history API"]
+          assert manifest["dataset_window"]=="PRE_HACK_NOBITEX_ONLY"
+          assert manifest["start_timestamp"]==1635712200 and manifest["end_timestamp"]==1750192200
+          assert manifest["requested_days"]==1325 and manifest["row_count"]==manifest["expected_candles"]==31801
+          assert manifest["missing_intervals"]==0
+          assert manifest["csv_sha256"]==hashlib.sha256(csv_path.read_bytes()).hexdigest()
+          assert manifest["commit_sha"]==os.environ["GITHUB_SHA"]
+          assert manifest["public_api_only"] is True and manifest["credentials_used"] is False
+          assert manifest["private_api_calls"]==manifest["exchange_calls"]==manifest["real_order_attempts"]==0
+          assert manifest["Champion"] is None and manifest["order_permission"] is False
+          assert manifest["trading_authorization"]=="NO-GO"
+          with csv_path.open(newline="",encoding="utf-8") as stream:
+              times=[datetime.fromisoformat(row["date"].replace("Z","+00:00")) for row in csv.DictReader(stream)]
+          assert len(times)==31801
+          assert times[0]==datetime.fromtimestamp(1635712200,timezone.utc) and times[-1]==cutoff
+          assert all(b-a==timedelta(hours=1) for a,b in zip(times,times[1:]))
+          assert all(t<=cutoff for t in times)
+          print(json.dumps({"row_count":len(times),"start":1635712200,"end":1750192200,
+                            "sha256":manifest["csv_sha256"],"Champion":None,"trading_authorization":"NO-GO"}))
           PY
-      - name: Train LightGBM, XGBoost, HMM, and Logistic Regression on real OHLCV
+      - name: Train baseline and Chronos-2 candidate
         run: |
           set -euo pipefail
-          data_dir="$GITHUB_WORKSPACE/.artifacts/alix-ensemble-data"
-          output_dir="$GITHUB_WORKSPACE/.artifacts/alix-ensemble-artifacts"
-          mkdir -p "$output_dir"
+          d="$GITHUB_WORKSPACE/.artifacts/alix-prehack-data"
+          o="$GITHUB_WORKSPACE/.artifacts/alix-ensemble-artifacts"
+          mkdir -p "$o"
           python -m scripts.train_nobitex_ai_ensemble \
-            --ohlcv "$data_dir/nobitex-btcusdt-1h.csv" \
-            --manifest "$data_dir/nobitex-btcusdt-1h.manifest.json" \
-            --model "$output_dir/nobitex-ai-ensemble.joblib" \
-            --model-manifest "$output_dir/nobitex-ai-ensemble.manifest.json" \
-            --report "$output_dir/nobitex-ai-ensemble-report.json" \
+            --ohlcv "$d/nobitex-btcusdt-1h.csv" \
+            --manifest "$d/nobitex-btcusdt-1h.manifest.json" \
+            --model "$o/nobitex-ai-ensemble.joblib" \
+            --model-manifest "$o/nobitex-ai-ensemble.manifest.json" \
+            --report "$o/nobitex-ai-ensemble-report.json" \
             --commit-sha "$GITHUB_SHA"
-      - name: Verify training report and write economic Step Summary
+      - name: Verify metrics and write economic Step Summary
         run: |
           python - <<'PY'
-          import json
-          import os
+          import json, os
           from pathlib import Path
-
-          output_dir = Path(".artifacts/alix-ensemble-artifacts")
-          report_path = output_dir / "nobitex-ai-ensemble-report.json"
-          model_manifest_path = output_dir / "nobitex-ai-ensemble.manifest.json"
-          report = json.loads(report_path.read_text(encoding="utf-8"))
-          model_manifest = json.loads(model_manifest_path.read_text(encoding="utf-8"))
-
-          data_dir = Path(".artifacts/alix-ensemble-data")
-          data_manifest = json.loads(
-              (data_dir / "nobitex-btcusdt-1h.manifest.json").read_text(encoding="utf-8")
-          )
-          dataset = report["dataset"]
-          result = report["research_result"]
-          safety = report["safety"]
-
-          assert dataset["kind"] == "PUBLIC_MARKET_DATA"
-          assert dataset["source_overrides"] == data_manifest["source_overrides"]
-          assert dataset["data_sources"] == data_manifest["data_sources"]
-          assert dataset["row_count"] == 43800
-          assert dataset["requested_days"] == 1825
-          assert dataset["interval"] == "1h"
-          assert report["validation"]["fold_count"] == 3
-          assert model_manifest["code_commit_sha"] == os.environ["GITHUB_SHA"]
-          assert model_manifest["labeling"]["round_trip_cost_bps"] == 50
-          assert safety["Champion"] is None
-          assert safety["order_permission"] is False
-          assert safety["trading_authorization"] == "NO-GO"
-          assert safety["private_api_calls"] == 0
-          assert safety["real_order_attempts"] == 0
-          assert safety["orders_or_execution_api_used"] is False
-
-          def number(value, places=4):
-              return "N/A" if value is None else f"{float(value):.{places}f}"
-
-          def percent(value):
-              return "N/A" if value is None else f"{float(value) * 100:.2f}%"
-
-          summary = [
-              "# AliX AI Ensemble: Five-Year Real OHLCV Research",
-              "",
-              f"Commit: {os.environ['GITHUB_SHA']}",
-              f"Dataset: {dataset['provider']} / {dataset['symbol']} / {dataset['interval']}",
-              f"Data sources: {', '.join(dataset['data_sources'])}",
-              f"Binance backfill candles: {sum(int(item['row_count']) for item in dataset['source_overrides'])}",
-              f"Coverage: {dataset['row_count']:,} contiguous hourly candles ({dataset['requested_days']} days)",
-              f"Dataset SHA-256: {dataset['csv_sha256']}",
-              f"Eligible labeled training rows: {dataset['eligible_labeled_rows']:,}",
-              f"Out-of-sample folds: {report['validation']['fold_count']}",
-              "",
-              "| Metric | Result |",
-              "|---|---:|",
-              f"| Net PF | {number(result['net_profit_factor'])} |",
-              f"| Win Rate | {percent(result['win_rate'])} |",
-              f"| Max Drawdown | {percent(result['max_drawdown'])} |",
-              f"| Statistical Z-Score | {number(result['statistical_z_score'])} |",
-              f"| Net compounded return | {percent(result['net_return'])} |",
-              f"| Non-overlapping trades | {result['trade_count']} |",
-              "",
-              "The Statistical Z-Score is the one-sample normal-approximation statistic for mean non-overlapping net trade return against a zero-mean null. It is not a Deflated Sharpe Ratio and does not apply a multiple-testing correction.",
-              "",
-              "## Safety and promotion state",
-              "",
-              "- Champion = null",
-              "- order_permission = false",
-              "- trading_authorization = NO-GO",
-              "- private_api_calls = 0",
-              "- real_order_attempts = 0",
-              "- Economic acceptance remains NO-GO. A successful training run does not authorize promotion or execution.",
-              "",
+          out=Path(".artifacts/alix-ensemble-artifacts")
+          report=json.loads((out/"nobitex-ai-ensemble-report.json").read_text())
+          model=json.loads((out/"nobitex-ai-ensemble.manifest.json").read_text())
+          dataset=report["dataset"]; baseline=report["baseline_research_result"]
+          candidate=report["candidate_research_result"]; delta=report["comparison"]
+          s90=report["cost_sensitivity_90_bps"]; safety=report["safety"]; chronos=report["chronos"]
+          assert dataset["row_count"]==dataset["expected_candles"]==31801
+          assert dataset["start_timestamp"]==1635712200 and dataset["end_timestamp"]==1750192200
+          assert dataset["source_policy"]=="NOBITEX_ONLY_NO_BACKFILL"
+          assert chronos["model_id"]=="amazon/chronos-2"
+          assert chronos["model_revision"]=="29ec3766d36d6f73f0696f85560a422f50e8498c"
+          assert chronos["weight_sha256"]
+          assert "chronos_pred" in model["model"]["candidate_feature_columns"]
+          assert model["code_commit_sha"]==os.environ["GITHUB_SHA"]
+          assert safety["Champion"] is None and safety["order_permission"] is False
+          assert safety["trading_authorization"]=="NO-GO"
+          assert safety["private_api_calls"]==0 and safety["real_order_attempts"]==0
+          def n(x): return "N/A" if x is None else f"{float(x):.4f}"
+          def p(x): return "N/A" if x is None else f"{float(x)*100:.2f}%"
+          accepted=candidate["net_profit_factor"] is not None and float(candidate["net_profit_factor"])>=1.1
+          lines=[
+            "# Chronos-2 Pre-Hack Nobitex Research",
+            f"Commit: {os.environ['GITHUB_SHA']}",
+            f"Dataset: {dataset['provider']} / {dataset['symbol']} / {dataset['interval']}",
+            f"Rows: {dataset['row_count']:,}; SHA-256: {dataset['csv_sha256']}",
+            f"Chronos: {chronos['model_id']} @ {chronos['model_revision']}",
+            "",
+            "| Metric | Baseline | Chronos-2 Candidate | Delta |",
+            "|---|---:|---:|---:|",
+            f"| Net PF | {n(baseline['net_profit_factor'])} | {n(candidate['net_profit_factor'])} | {n(delta['net_profit_factor_delta'])} |",
+            f"| Win Rate | {p(baseline['win_rate'])} | {p(candidate['win_rate'])} | {n(delta['win_rate_delta'])} |",
+            f"| Max Drawdown | {p(baseline['max_drawdown'])} | {p(candidate['max_drawdown'])} | {n(delta['max_drawdown_delta'])} |",
+            f"| Statistical Z-Score | {n(baseline['statistical_z_score'])} | {n(candidate['statistical_z_score'])} | N/A |",
+            f"| Trades | {baseline['trade_count']} | {candidate['trade_count']} | {delta['trade_count_delta']} |",
+            "",
+            "90 bps round-trip sensitivity:",
+            f"- Net PF: {n(s90['profit_factor'])}",
+            f"- Win Rate: {p(s90['win_rate'])}",
+            f"- Max Drawdown: {p(s90['max_drawdown'])}",
+            f"- Statistical Z-Score: {n(s90['statistical_z_score'])}",
+            "",
+            f"Candidate Net PF >= 1.1: {accepted}",
+            "- Champion = null",
+            "- order_permission = false",
+            "- trading_authorization = NO-GO",
+            "- No live or paper orders were submitted."
           ]
-          print("\n".join(summary))
-          with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a", encoding="utf-8") as stream:
-              stream.write("\n".join(summary) + "\n")
-          print(json.dumps({
-              "training_rows": dataset["eligible_labeled_rows"],
-              "research_result": result,
-              "safety": safety,
-          }, sort_keys=True))
+          summary="\n".join(lines)
+          print(summary)
+          with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a") as stream: stream.write(summary+"\n")
           PY
-      - name: Upload real-data model, metrics, and dataset provenance
+      - name: Upload training and data artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: alix-ai-ensemble-real-data
+          name: alix-chronos2-prehack-nobitex
           path: |
-            .artifacts/alix-ensemble-data/*
+            .artifacts/alix-prehack-data/*
             .artifacts/alix-ensemble-artifacts/*
           if-no-files-found: warn
           retention-days: 30
-
