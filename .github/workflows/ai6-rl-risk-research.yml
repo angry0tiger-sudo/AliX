@@ -1,0 +1,329 @@
+name: AliX AI-6 Risk-only PPO Research
+
+on:
+  push:
+    branches:
+      - research/ml-core-ai6-rl-risk
+    paths:
+      - .github/workflows/ai6-rl-risk-research.yml
+      - requirements-rl-research.txt
+      - research/ai_ensemble/**
+      - scripts/train_risk_allocation_ppo.py
+      - services/rl_research/risk_allocation_environment.py
+      - tests/unit/test_risk_allocation_environment.py
+      - tests/unit/test_train_risk_allocation_ppo.py
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: alix-ai6-rl-risk
+  cancel-in-progress: false
+
+jobs:
+  train-risk-manager:
+    if: github.ref == 'refs/heads/research/ml-core-ai6-rl-risk'
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      ALIX_DRY_RUN: "true"
+      ALIX_ALLOW_LIVE_TRADING: "false"
+      PYTHONUNBUFFERED: "1"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    steps:
+      - name: Wait for Standard CI success on this exact commit
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          TARGET_SHA: ${{ github.sha }}
+          TARGET_BRANCH: ${{ github.ref_name }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import time
+          from urllib.error import HTTPError, URLError
+          from urllib.request import Request, urlopen
+
+          repository = os.environ["GITHUB_REPOSITORY"]
+          target_sha = os.environ["TARGET_SHA"]
+          target_branch = os.environ["TARGET_BRANCH"]
+          if target_branch != "research/ml-core-ai6-rl-risk":
+              raise SystemExit("unsupported_ai6_rl_branch")
+          url = (
+              f"https://api.github.com/repos/{repository}/actions/workflows/ci.yml/runs"
+              f"?head_sha={target_sha}&per_page=100"
+          )
+          deadline = time.monotonic() + 90 * 60
+          while time.monotonic() < deadline:
+              request = Request(
+                  url,
+                  headers={
+                      "Accept": "application/vnd.github+json",
+                      "Authorization": f"Bearer {os.environ['GITHUB_TOKEN']}",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  },
+              )
+              try:
+                  with urlopen(request, timeout=30) as response:
+                      payload = json.load(response)
+              except (HTTPError, URLError, TimeoutError) as error:
+                  raise SystemExit(
+                      f"standard_ci_lookup_failed:{type(error).__name__}"
+                  ) from None
+              matching = [
+                  run for run in payload.get("workflow_runs", [])
+                  if run.get("head_sha") == target_sha
+                  and run.get("head_branch") == target_branch
+                  and run.get("event") == "push"
+              ]
+              if matching:
+                  latest = max(
+                      matching,
+                      key=lambda item: (
+                          item.get("run_number", 0),
+                          item.get("run_attempt", 0),
+                      ),
+                  )
+                  if latest.get("status") == "completed":
+                      if latest.get("conclusion") != "success":
+                          raise SystemExit(
+                              "standard_ci_not_green:"
+                              + str(latest.get("conclusion"))
+                              + ":"
+                              + target_sha
+                          )
+                      print(json.dumps({
+                          "gate": "PASS",
+                          "standard_ci_run_id": latest.get("id"),
+                          "standard_ci_url": latest.get("html_url"),
+                          "target_sha": target_sha,
+                      }, sort_keys=True))
+                      break
+              time.sleep(30)
+          else:
+              raise SystemExit("standard_ci_green_gate_timeout:" + target_sha)
+          PY
+
+      - name: Checkout the exact research commit without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install CPU-only PyTorch and pinned RL research dependencies
+        run: |
+          python -m pip install pip==25.2
+          python -m pip install torch==2.9.1 --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -r requirements-rl-research.txt
+          python -m pip install ruff==0.14.0 pytest==9.0.3 pytest-cov==7.0.0
+
+      - name: Run RL environment, temporal-gate and promotion-contract tests
+        run: |
+          ruff check services/rl_research/risk_allocation_environment.py scripts/train_risk_allocation_ppo.py tests/unit/test_risk_allocation_environment.py tests/unit/test_train_risk_allocation_ppo.py
+          ruff format --check services/rl_research/risk_allocation_environment.py scripts/train_risk_allocation_ppo.py tests/unit/test_risk_allocation_environment.py tests/unit/test_train_risk_allocation_ppo.py
+          pytest tests/unit/test_risk_allocation_environment.py tests/unit/test_train_risk_allocation_ppo.py -q
+
+      - name: Download the immutable Nobitex pre-hack data from Standard CI #2193
+        uses: actions/download-artifact@v4
+        with:
+          name: alix-chronos2-prehack-nobitex
+          repository: ${{ github.repository }}
+          run-id: 42871937160
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/alix-nobitex-prehack
+
+      - name: Normalize and verify the producer artifact files
+        env:
+          DATASET_DIR: ${{ runner.temp }}/alix-nobitex-prehack
+        run: |
+          set -euo pipefail
+          csv_source="$(find "$DATASET_DIR" -type f -name 'nobitex-btcusdt-1h.csv' -print -quit)"
+          manifest_source="$(find "$DATASET_DIR" -type f -name 'nobitex-btcusdt-1h.manifest.json' -print -quit)"
+          test -n "$csv_source"
+          test -n "$manifest_source"
+          csv_target="$DATASET_DIR/nobitex-btcusdt-1h.csv"
+          manifest_target="$DATASET_DIR/nobitex-btcusdt-1h.manifest.json"
+          if [ "$csv_source" != "$csv_target" ]; then cp "$csv_source" "$csv_target"; fi
+          if [ "$manifest_source" != "$manifest_target" ]; then cp "$manifest_source" "$manifest_target"; fi
+          test -s "$DATASET_DIR/nobitex-btcusdt-1h.csv"
+          test -s "$DATASET_DIR/nobitex-btcusdt-1h.manifest.json"
+          echo "Verified artifact files were downloaded from run 42871937160."
+
+      - name: Train PPO risk manager and evaluate untouched validation and holdout
+        env:
+          DATASET_DIR: ${{ runner.temp }}/alix-nobitex-prehack
+          OUTPUT_DIR: ${{ runner.temp }}/alix-ai6-ppo-risk-output
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          python -m scripts.train_risk_allocation_ppo \
+            --input-dir "$DATASET_DIR" \
+            --output-dir "$OUTPUT_DIR" \
+            --commit-sha "$TARGET_SHA" \
+            --timesteps 100000 \
+            --seed 42
+
+      - name: Validate report, economics, provenance and immutable safety invariants
+        env:
+          REPORT_PATH: ${{ runner.temp }}/alix-ai6-ppo-risk-output/ai6-ppo-risk-report.json
+          MODEL_PATH: ${{ runner.temp }}/alix-ai6-ppo-risk-output/ppo-risk-manager.zip
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          report = json.loads(
+              Path(os.environ["REPORT_PATH"]).read_text(encoding="utf-8")
+          )
+          assert report["commit_sha"] == os.environ["TARGET_SHA"]
+          assert report["schema_version"] == "alix.ai6.ppo-risk-research.v2"
+          assert report["source_dataset"]["producer_commit_sha"] == (
+              "e6c86b08da98ad28e479b45827fb8de6cd3cc8dd"
+          )
+          assert report["source_dataset"]["row_count"] == 31801
+          assert report["source_dataset"]["source_policy"] == "NOBITEX_ONLY_NO_BACKFILL"
+          assert report["source_dataset"]["external_backfill_used"] is False
+          assert report["source_dataset"]["nobitex_api_calls_during_rl_run"] == 0
+          assert report["execution_costs"]["round_trip_cost_bps"] == 50.0
+          assert report["execution_costs"]["maker_fee_bps_per_side"] == 25.0
+          assert report["execution_costs"]["slippage_bps_per_side"] == 0.0
+          assert report["minimum_oos_trades_required"] == 51
+          assert report["risk_environment"]["action_type"] == (
+              "DISCRETE_BASELINE_SIGNAL_EPISODE_FILTER"
+          )
+          assert report["risk_environment"]["actions_target_exposure_fraction"] == [0.0, 1.0]
+          assert report["risk_environment"]["one_decision_per_contiguous_signal_episode"] is True
+          assert report["risk_environment"]["force_flat_when_primary_signal_off"] is True
+          assert report["temporal_split"]["holdout_used_for_training_or_tuning"] is False
+          assert report["temporal_split"]["validation_used_for_training_or_tuning"] is False
+          assert report["risk_environment"]["directional_actions_available"] is False
+          assert report["risk_environment"]["short_or_leverage_allowed"] is False
+          assert report["safety"]["Champion"] is None
+          assert report["safety"]["order_permission"] is False
+          assert report["safety"]["trading_authorization"] == "NO-GO"
+          assert report["safety"]["ALIX_DRY_RUN"] is True
+          assert report["safety"]["ALIX_ALLOW_LIVE_TRADING"] is False
+          assert report["safety"]["private_api_calls"] == 0
+          assert report["safety"]["real_order_attempts"] == 0
+          assert report["safety"]["nobitex_api_calls"] == 0
+          model = Path(os.environ["MODEL_PATH"])
+          assert model.is_file() and model.stat().st_size > 0
+          validation = report["validation"]
+          holdout = report["final_holdout"]
+          print("AI-6 PPO risk-only report contracts: PASS")
+          print("Validation baseline:", json.dumps(validation["baseline"], sort_keys=True))
+          print("Validation PPO:", json.dumps(validation["ppo_risk_manager"], sort_keys=True))
+          print("Final holdout baseline:", json.dumps(holdout["baseline"], sort_keys=True))
+          print("Final holdout PPO:", json.dumps(holdout["ppo_risk_manager"], sort_keys=True))
+          print("Paper trading decision:", report["paper_trading_decision"])
+          PY
+
+      - name: Write baseline-versus-PPO GitHub Step Summary
+        if: always()
+        env:
+          REPORT_PATH: ${{ runner.temp }}/alix-ai6-ppo-risk-output/ai6-ppo-risk-report.json
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          path = Path(os.environ["REPORT_PATH"])
+          if not path.is_file():
+              print("## AI-6 PPO Risk Research\n\nNo completed report was produced.")
+              raise SystemExit(0)
+          report = json.loads(path.read_text(encoding="utf-8"))
+
+          def display(value, percentage=False):
+              if value is None:
+                  return "N/A"
+              if isinstance(value, float) and value == float("inf"):
+                  return "INF"
+              return f"{value * 100:.2f}%" if percentage else f"{value:.4f}"
+
+          lines = [
+              "# AI-6 PPO Risk Manager: Pre-Hack Nobitex OOS Evaluation",
+              "",
+              f"Commit: {report['commit_sha']}",
+              f"Dataset SHA-256: {report['source_dataset']['csv_sha256']}",
+              "Dataset: Nobitex BTC/USDT 1h, 31,801 pre-hack candles",
+              "Execution costs: 25 bps fee/side + 0 bps slippage = 50 bps round-trip",
+              f"Action model: {report['risk_environment']['action_type']}",
+              f"Minimum OOS completed signal episodes: {report['minimum_oos_trades_required']}",
+              "",
+          ]
+          for section_name, section in (
+              ("Validation (out of sample)", report.get("validation", {})),
+              ("Final holdout (untouched)", report.get("final_holdout", {})),
+          ):
+              lines.extend([
+                  f"## {section_name}",
+                  "",
+                  "| Metric | Fixed baseline | PPO risk manager |",
+                  "|---|---:|---:|",
+              ])
+              for label, key, percentage in (
+                  ("Net Profit Factor", "net_profit_factor", False),
+                  ("Win Rate", "win_rate", True),
+                  ("Maximum Drawdown", "max_drawdown", True),
+                  ("Statistical Z-Score", "statistical_z_score", False),
+                  ("Trade Count", "trade_count", False),
+                  ("Candidate Signal Episodes", "candidate_signal_episode_count", False),
+                  ("Accepted Signal Episodes", "accepted_signal_episode_count", False),
+                  ("Skipped Signal Episodes", "skipped_signal_episode_count", False),
+                  ("Signal Acceptance Rate", "signal_acceptance_rate", True),
+              ):
+                  left = section["baseline"].get(key)
+                  right = section["ppo_risk_manager"].get(key)
+                  lines.append(
+                      f"| {label} | {display(left, percentage)} | {display(right, percentage)} |"
+                  )
+              lines.append("")
+          lines.extend([
+              f"## Paper Trading Gate: {report.get('paper_trading_decision', 'NOT_EVALUATED')}",
+              "",
+              "Promotion checks:",
+          ])
+          lines.extend(
+              f"- {name}: {'PASS' if passed else 'FAIL'}"
+              for name, passed in report.get("promotion_checks", {}).items()
+          )
+          lines.extend([
+              "",
+              "Safety: Champion=null; order_permission=false; trading_authorization=NO-GO; "
+              "private_api_calls=0; real_order_attempts=0; Nobitex API calls during RL=0.",
+              "",
+              "No paper or real order was submitted. A positive research gate is not trading authorization.",
+          ])
+          summary = "\n".join(lines) + "\n"
+          print(summary)
+          with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a", encoding="utf-8") as stream:
+              stream.write(summary)
+          PY
+
+      - name: Upload PPO model, primary teacher, signal timeline and full audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alix-ai6-ppo-risk-research
+          path: |
+            ${{ runner.temp }}/alix-ai6-ppo-risk-output/ai6-ppo-risk-report.json
+            ${{ runner.temp }}/alix-ai6-ppo-risk-output/ppo-risk-manager.zip
+            ${{ runner.temp }}/alix-ai6-ppo-risk-output/frozen-primary-ensemble.pkl
+            ${{ runner.temp }}/alix-ai6-ppo-risk-output/primary-oos-signals.csv
+            ${{ runner.temp }}/alix-ai6-ppo-risk-output/validation-baseline-decisions.csv
+            ${{ runner.temp }}/alix-ai6-ppo-risk-output/validation-ppo-decisions.csv
+            ${{ runner.temp }}/alix-ai6-ppo-risk-output/holdout-baseline-decisions.csv
+            ${{ runner.temp }}/alix-ai6-ppo-risk-output/holdout-ppo-decisions.csv
+          if-no-files-found: warn
+          retention-days: 30
