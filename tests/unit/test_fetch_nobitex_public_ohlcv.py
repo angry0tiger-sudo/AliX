@@ -325,9 +325,7 @@ def test_backfill_retries_incomplete_nobitex_boundary_anchor_lookup(
     anchor_attempts: list[int] = []
     anchor_rows = {before: candle(before), after: candle(after)}
 
-    def request_anchors(
-        *_args: Any, **kwargs: Any
-    ) -> dict[int, CandleRecord]:
+    def request_anchors(*_args: Any, **kwargs: Any) -> dict[int, CandleRecord]:
         timestamp = kwargs["start"]
         anchor_attempts.append(timestamp)
         if timestamp == after and anchor_attempts.count(after) == 1:
