@@ -179,7 +179,7 @@ def _validate_source_override_fields(override: dict[str, Any]) -> None:
         "source": BINANCE_BACKFILL_SOURCE,
         "start_timestamp": BINANCE_BACKFILL_START_TIMESTAMP,
         "end_timestamp": BINANCE_BACKFILL_END_TIMESTAMP,
-        "row_count": 23,
+        "row_count": 24,
         "symbol": "BTCUSDT",
         "interval": "1h",
         "time_zone": BINANCE_BACKFILL_TIME_ZONE,

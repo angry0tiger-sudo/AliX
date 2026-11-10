@@ -140,7 +140,7 @@ def test_empty_outage_page_uses_approved_binance_backfill_and_post_anchor(
 
     anchors = {before: candle(before), after: candle(after)}
     backfill_rows = [candle(timestamp) for timestamp in gap]
-    provenance = {"source": BINANCE_BACKFILL_SOURCE, "row_count": 23}
+    provenance = {"source": BINANCE_BACKFILL_SOURCE, "row_count": 24}
     monkeypatch.setattr(
         fetcher,
         "_fetch_page_with_retries",
@@ -176,7 +176,7 @@ def test_empty_outage_page_uses_approved_binance_backfill_and_post_anchor(
     assert [row["timestamp"] for row in rows] == expected
     assert len(source_overrides) == 1
     assert source_overrides[0]["source"] == BINANCE_BACKFILL_SOURCE
-    assert source_overrides[0]["row_count"] == 23
+    assert source_overrides[0]["row_count"] == 24
 
 
 def test_split_daily_chunks_backfill_only_missing_outage_rows_once(
@@ -209,7 +209,7 @@ def test_split_daily_chunks_backfill_only_missing_outage_rows_once(
         "source": BINANCE_BACKFILL_SOURCE,
         "start_timestamp": BINANCE_BACKFILL_START_TIMESTAMP,
         "end_timestamp": BINANCE_BACKFILL_END_TIMESTAMP,
-        "row_count": 23,
+        "row_count": 24,
     }
     backfill_calls: list[list[int]] = []
     monkeypatch.setattr(
@@ -333,7 +333,7 @@ def test_backfill_retries_incomplete_nobitex_boundary_anchor_lookup(
         return {timestamp: anchor_rows[timestamp]}
 
     backfill_rows = [candle(timestamp) for timestamp in gap]
-    provenance = {"source": BINANCE_BACKFILL_SOURCE, "row_count": 23}
+    provenance = {"source": BINANCE_BACKFILL_SOURCE, "row_count": 24}
     backfill_calls: list[list[int]] = []
 
     def backfill(**kwargs: Any) -> tuple[list[CandleRecord], dict[str, object]]:
@@ -356,7 +356,7 @@ def test_backfill_retries_incomplete_nobitex_boundary_anchor_lookup(
     assert anchor_attempts == [before, after, after]
     assert delays == [1]
     assert backfill_calls == [gap]
-    assert len(recovered) == 23
+    assert len(recovered) == 24
     assert actual_provenance == provenance
 
 

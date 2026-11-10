@@ -453,7 +453,7 @@ def test_binance_backfill_uses_matching_nobitex_boundary_prices_and_provenance()
             3600,
         )
     )
-    assert len(gap) == 23
+    assert len(gap) == 24
     expected = [before, *gap, after]
     payload: list[list[Any]] = []
     for stamp in expected:
@@ -485,7 +485,7 @@ def test_binance_backfill_uses_matching_nobitex_boundary_prices_and_provenance()
         nobitex_anchor_rows=anchors,
         request_json=fake_request,
     )
-    assert len(rows) == 23
+    assert len(rows) == 24
     assert rows[0]["timestamp"] == BINANCE_BACKFILL_START_TIMESTAMP
     assert rows[-1]["timestamp"] == BINANCE_BACKFILL_END_TIMESTAMP
     assert rows[0]["open"] == pytest.approx(101.0)
@@ -496,7 +496,7 @@ def test_binance_backfill_uses_matching_nobitex_boundary_prices_and_provenance()
     assert provenance["price_adjustment_factor"] == pytest.approx(1.01)
     assert provenance["start_timestamp"] == BINANCE_BACKFILL_START_TIMESTAMP
     assert provenance["end_timestamp"] == BINANCE_BACKFILL_END_TIMESTAMP
-    assert provenance["row_count"] == 23
+    assert provenance["row_count"] == 24
     assert captured["timeZone"] == "+03:30"
     assert captured["startTime"] == str(before * 1000)
     assert captured["endTime"] == str(after * 1000)
@@ -582,7 +582,7 @@ def test_nobitex_gap_fetcher_only_uses_approved_binance_backfill(
         }
         for stamp in missing
     ]
-    provenance = {"source": BINANCE_BACKFILL_SOURCE, "row_count": 23}
+    provenance = {"source": BINANCE_BACKFILL_SOURCE, "row_count": 24}
     monkeypatch.setattr(
         ohlcv_source,
         "_fetch_page_with_retries",
