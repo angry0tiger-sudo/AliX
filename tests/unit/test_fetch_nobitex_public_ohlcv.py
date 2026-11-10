@@ -224,6 +224,7 @@ def test_split_daily_chunks_backfill_only_missing_outage_rows_once(
 
     monkeypatch.setattr(fetcher, "fetch_binance_gap_backfill", backfill)
     source_overrides: list[dict[str, object]] = []
+    backfill_cache: dict[int, CandleRecord] = {}
 
     first_expected = list(
         range(
@@ -246,6 +247,8 @@ def test_split_daily_chunks_backfill_only_missing_outage_rows_once(
         symbol="BTCUSDT",
         request_json=lambda _params: {},
         source_overrides=source_overrides,
+        backfill_cache=backfill_cache,
+        sleep_fn=lambda _seconds: None,
     )
 
     second_expected = list(range(gap[1], gap[1] + 24 * 3600, 3600))
@@ -263,6 +266,8 @@ def test_split_daily_chunks_backfill_only_missing_outage_rows_once(
         symbol="BTCUSDT",
         request_json=lambda _params: {},
         source_overrides=source_overrides,
+        backfill_cache=backfill_cache,
+        sleep_fn=lambda _seconds: None,
     )
 
     assert first_unresolved == []
@@ -271,8 +276,9 @@ def test_split_daily_chunks_backfill_only_missing_outage_rows_once(
     assert second_page[gap[1]]["close"] == 150.0
     assert first_page[before]["close"] == 200.0
     assert second_page[after]["close"] == 300.0
-    assert len(backfill_calls) == 2
-    assert backfill_calls == [gap, gap]
+    assert len(backfill_calls) == 1
+    assert backfill_calls == [gap]
+    assert set(backfill_cache) == set(gap) | {before, after}
     assert source_overrides == [provenance]
 
     unrelated_missing = [BINANCE_BACKFILL_START_TIMESTAMP, after + 3600]
@@ -284,10 +290,76 @@ def test_split_daily_chunks_backfill_only_missing_outage_rows_once(
         symbol="BTCUSDT",
         request_json=lambda _params: {},
         source_overrides=source_overrides,
+        backfill_cache=backfill_cache,
+        sleep_fn=lambda _seconds: None,
     )
     assert rejected == unrelated_missing
-    assert len(backfill_calls) == 2
+    assert len(backfill_calls) == 1
     assert source_overrides == [provenance]
+
+
+def test_backfill_retries_incomplete_nobitex_boundary_anchor_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gap = list(
+        range(
+            BINANCE_BACKFILL_START_TIMESTAMP,
+            BINANCE_BACKFILL_END_TIMESTAMP + 1,
+            3600,
+        )
+    )
+    before = BINANCE_BACKFILL_START_TIMESTAMP - 3600
+    after = BINANCE_BACKFILL_END_TIMESTAMP + 3600
+
+    def candle(timestamp: int) -> CandleRecord:
+        return {
+            "timestamp": timestamp,
+            "date": datetime.fromtimestamp(timestamp, timezone.utc).isoformat(),
+            "open": 100.0,
+            "high": 101.0,
+            "low": 99.0,
+            "close": 100.0,
+            "volume": 1.0,
+        }
+
+    anchor_attempts: list[int] = []
+    anchor_rows = {before: candle(before), after: candle(after)}
+
+    def request_anchors(
+        *_args: Any, **kwargs: Any
+    ) -> dict[int, CandleRecord]:
+        timestamp = kwargs["start"]
+        anchor_attempts.append(timestamp)
+        if timestamp == after and anchor_attempts.count(after) == 1:
+            return {}
+        return {timestamp: anchor_rows[timestamp]}
+
+    backfill_rows = [candle(timestamp) for timestamp in gap]
+    provenance = {"source": BINANCE_BACKFILL_SOURCE, "row_count": 23}
+    backfill_calls: list[list[int]] = []
+
+    def backfill(**kwargs: Any) -> tuple[list[CandleRecord], dict[str, object]]:
+        backfill_calls.append(kwargs["missing_timestamps"])
+        return backfill_rows, provenance
+
+    monkeypatch.setattr(fetcher, "_request_filtered_candle_window", request_anchors)
+    monkeypatch.setattr(fetcher, "fetch_binance_gap_backfill", backfill)
+    delays: list[float] = []
+    _, recovered, actual_provenance = fetcher._fetch_approved_binance_backfill_rows(
+        approved_gap=gap,
+        anchor_start=before,
+        anchor_end=after,
+        seconds=3600,
+        symbol="BTCUSDT",
+        request_json=lambda _params: {},
+        sleep_fn=delays.append,
+    )
+
+    assert anchor_attempts == [before, after, after]
+    assert delays == [1]
+    assert backfill_calls == [gap]
+    assert len(recovered) == 23
+    assert actual_provenance == provenance
 
 
 def test_request_public_json_retries_rate_limit_and_honors_retry_after(

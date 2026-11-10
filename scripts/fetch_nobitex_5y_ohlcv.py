@@ -27,6 +27,7 @@ def _fetch_complete_window(
     request_json: Callable[[dict[str, str]], dict[str, Any]],
     sleep_fn: Callable[[float], None],
     source_overrides: list[dict[str, object]],
+    backfill_cache: dict[int, source.CandleRecord],
 ) -> list[source.CandleRecord]:
     chunk = source.fetch_historical_candles(
         days=DAYS_PER_WINDOW,
@@ -36,6 +37,7 @@ def _fetch_complete_window(
         request_json=request_json,
         sleep_fn=sleep_fn,
         source_overrides=source_overrides,
+        backfill_cache=backfill_cache,
     )
     if len(chunk) != CANDLES_PER_WINDOW:
         raise ValueError("five_year_window_row_count_mismatch")
@@ -73,12 +75,14 @@ def fetch_five_year_candles(
     ] = source.request_public_json,
     sleep_fn: Callable[[float], None] = time.sleep,
     source_overrides: list[dict[str, object]] | None = None,
+    backfill_cache: dict[int, source.CandleRecord] | None = None,
 ) -> list[source.CandleRecord]:
     """Fetch five backward-adjacent 365-day windows; gaps fail the run."""
     if now.tzinfo is None or now.utcoffset() is None:
         raise ValueError("five_year_cutoff_timezone_required")
     cutoff = now.astimezone(timezone.utc)
     overrides = source_overrides if source_overrides is not None else []
+    cache = backfill_cache if backfill_cache is not None else {}
     chunks: list[list[source.CandleRecord]] = []
     for _ in range(WINDOW_COUNT):
         chunk = _fetch_complete_window(
@@ -87,6 +91,7 @@ def fetch_five_year_candles(
             request_json=request_json,
             sleep_fn=sleep_fn,
             source_overrides=overrides,
+            backfill_cache=cache,
         )
         if chunks:
             _validate_window_boundary(chunk, chunks[0])

@@ -343,6 +343,7 @@ def test_five_year_fetcher_joins_five_contiguous_windows(
         request_json: Callable[[dict[str, str]], dict[str, Any]],
         sleep_fn: Callable[[float], None],
         source_overrides: list[dict[str, object]] | None = None,
+        backfill_cache: dict[int, ohlcv_source.CandleRecord] | None = None,
     ) -> list[ohlcv_source.CandleRecord]:
         nonlocal calls
         calls += 1
