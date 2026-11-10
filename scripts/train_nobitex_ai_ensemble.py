@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from hashlib import sha256
 import json
+import math
 import os
 from pathlib import Path
 from typing import Any, cast
@@ -30,6 +31,13 @@ from research.ai_ensemble.labels import (
     build_net_profit_targets,
 )
 from research.ai_ensemble.risk import KellySizingConfig
+from scripts.binance_nobitex_gap_backfill import (
+    BINANCE_BACKFILL_END_TIMESTAMP,
+    BINANCE_BACKFILL_SOURCE,
+    BINANCE_BACKFILL_START_TIMESTAMP,
+    BINANCE_BACKFILL_TIME_ZONE,
+    MAX_BOUNDARY_SCALE_SPREAD_BPS,
+)
 
 
 def _read_timestamped_csv(path: Path) -> DataFrame:
@@ -166,6 +174,79 @@ def _validate_manifest_safety(manifest: dict[str, Any]) -> None:
         raise ValueError("research_manifest_trading_authorization_must_be_no_go")
 
 
+def _validate_source_override_fields(override: dict[str, Any]) -> None:
+    expected_fields = {
+        "source": BINANCE_BACKFILL_SOURCE,
+        "start_timestamp": BINANCE_BACKFILL_START_TIMESTAMP,
+        "end_timestamp": BINANCE_BACKFILL_END_TIMESTAMP,
+        "row_count": 23,
+        "symbol": "BTCUSDT",
+        "interval": "1h",
+        "time_zone": BINANCE_BACKFILL_TIME_ZONE,
+        "volume_adjusted": False,
+    }
+    for field, expected in expected_fields.items():
+        if override.get(field) != expected:
+            raise ValueError("research_manifest_binance_override_contract_invalid")
+
+
+def _manifest_finite_number(override: dict[str, Any], field: str) -> float:
+    value = override.get(field)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError("research_manifest_binance_override_calibration_invalid")
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError("research_manifest_binance_override_calibration_invalid")
+    return number
+
+
+def _validate_source_override_digest(override: dict[str, Any]) -> None:
+    digest = override.get("raw_binance_klines_sha256")
+    if not isinstance(digest, str):
+        raise ValueError("research_manifest_binance_override_calibration_invalid")
+    if len(digest) != 64:
+        raise ValueError("research_manifest_binance_override_calibration_invalid")
+    if any(character not in "0123456789abcdef" for character in digest):
+        raise ValueError("research_manifest_binance_override_calibration_invalid")
+
+
+def _validate_source_override_calibration(override: dict[str, Any]) -> None:
+    factor = _manifest_finite_number(override, "price_adjustment_factor")
+    spread = _manifest_finite_number(override, "boundary_scale_spread_bps")
+    if factor <= 0.0 or spread < 0.0 or spread > MAX_BOUNDARY_SCALE_SPREAD_BPS:
+        raise ValueError("research_manifest_binance_override_calibration_invalid")
+    _validate_source_override_digest(override)
+
+
+def _validate_source_override(override: Any) -> None:
+    if not isinstance(override, dict):
+        raise ValueError("research_manifest_source_override_invalid")
+    _validate_source_override_fields(override)
+    _validate_source_override_calibration(override)
+
+
+def _validate_manifest_data_sources(manifest: dict[str, Any]) -> None:
+    expected_sources = [
+        "Nobitex public UDF history API",
+        "Binance Spot public market-data API",
+    ]
+    if manifest.get("data_sources") != expected_sources:
+        raise ValueError("research_manifest_data_sources_mismatch")
+
+
+def _validate_manifest_sources(manifest: dict[str, Any]) -> None:
+    overrides = manifest.get("source_overrides", [])
+    if not isinstance(overrides, list):
+        raise ValueError("research_manifest_source_overrides_invalid")
+    if len(overrides) > 1:
+        raise ValueError("research_manifest_too_many_source_overrides")
+    if not overrides:
+        return
+    for override in overrides:
+        _validate_source_override(override)
+    _validate_manifest_data_sources(manifest)
+
+
 def _validate_five_year_manifest(
     manifest: dict[str, Any],
     row_count: int,
@@ -193,6 +274,7 @@ def _validate_dataset_manifest(
     _validate_manifest_date_range(manifest, ohlcv)
     _validate_manifest_commit(manifest, expected_commit_sha)
     _validate_manifest_safety(manifest)
+    _validate_manifest_sources(manifest)
     _validate_five_year_manifest(manifest, row_count, requested_days)
     return manifest
 
@@ -384,6 +466,11 @@ def run_training(
                 else "NON_PRODUCTION_TEST_FIXTURE"
             ),
             "provider": dataset_manifest.get("provider", "UNSPECIFIED"),
+            "data_sources": dataset_manifest.get(
+                "data_sources",
+                [dataset_manifest.get("provider", "UNSPECIFIED")],
+            ),
+            "source_overrides": dataset_manifest.get("source_overrides", []),
             "symbol": dataset_manifest.get("symbol", "UNSPECIFIED"),
             "pair": dataset_manifest.get("pair", "UNSPECIFIED"),
             "interval": dataset_manifest["interval"],

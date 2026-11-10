@@ -302,6 +302,32 @@ jobs:
           assert manifest["windowing_policy"] == "FIVE_ADJACENT_365_DAY_WINDOWS"
           assert manifest["missing_intervals"] == 0
           assert manifest["csv_sha256"] == hashlib.sha256(csv_path.read_bytes()).hexdigest()
+          assert manifest["source_policy"] == "NOBITEX_PRIMARY_WITH_EXPLICIT_BINANCE_RANGE_OVERRIDE"
+          source_overrides = manifest["source_overrides"]
+          assert isinstance(source_overrides, list)
+          assert len(source_overrides) <= 1
+          for override in source_overrides:
+              assert override["source"] == "BINANCE_BACKFILL_FOR_NOBITEX_OUTAGE"
+              assert override["start_timestamp"] == 1750224600
+              assert override["end_timestamp"] == 1750303800
+              assert override["row_count"] == 23
+              assert override["symbol"] == "BTCUSDT"
+              assert override["interval"] == "1h"
+              assert override["time_zone"] == "+03:30"
+              assert override["start_utc"] == "2025-06-18T05:30:00Z"
+              assert override["end_utc"] == "2025-06-19T03:30:00Z"
+              assert override["calibration_anchor_timestamps"] == {
+                  "pre_gap": 1750221000,
+                  "post_gap": 1750307400,
+              }
+              assert override["volume_adjusted"] is False
+              assert override["raw_binance_klines_sha256"]
+              assert 0 < override["price_adjustment_factor"] < 10
+              assert override["boundary_scale_spread_bps"] <= 100.0
+          expected_sources = ["Nobitex public UDF history API"]
+          if source_overrides:
+              expected_sources.append("Binance Spot public market-data API")
+          assert manifest["data_sources"] == expected_sources
           assert manifest["commit_sha"] == os.environ["GITHUB_SHA"]
 
           # This is an unauthenticated public market-data endpoint.
@@ -373,11 +399,17 @@ jobs:
           report = json.loads(report_path.read_text(encoding="utf-8"))
           model_manifest = json.loads(model_manifest_path.read_text(encoding="utf-8"))
 
+          data_dir = Path(".artifacts/alix-ensemble-data")
+          data_manifest = json.loads(
+              (data_dir / "nobitex-btcusdt-1h.manifest.json").read_text(encoding="utf-8")
+          )
           dataset = report["dataset"]
           result = report["research_result"]
           safety = report["safety"]
 
           assert dataset["kind"] == "PUBLIC_MARKET_DATA"
+          assert dataset["source_overrides"] == data_manifest["source_overrides"]
+          assert dataset["data_sources"] == data_manifest["data_sources"]
           assert dataset["row_count"] == 43800
           assert dataset["requested_days"] == 1825
           assert dataset["interval"] == "1h"
@@ -402,6 +434,8 @@ jobs:
               "",
               f"Commit: {os.environ['GITHUB_SHA']}",
               f"Dataset: {dataset['provider']} / {dataset['symbol']} / {dataset['interval']}",
+              f"Data sources: {', '.join(dataset['data_sources'])}",
+              f"Binance backfill candles: {sum(int(item['row_count']) for item in dataset['source_overrides'])}",
               f"Coverage: {dataset['row_count']:,} contiguous hourly candles ({dataset['requested_days']} days)",
               f"Dataset SHA-256: {dataset['csv_sha256']}",
               f"Eligible labeled training rows: {dataset['eligible_labeled_rows']:,}",
@@ -428,8 +462,9 @@ jobs:
               "- Economic acceptance remains NO-GO. A successful training run does not authorize promotion or execution.",
               "",
           ]
+          print("\n".join(summary))
           with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a", encoding="utf-8") as stream:
-              stream.write("\n".join(summary))
+              stream.write("\n".join(summary) + "\n")
           print(json.dumps({
               "training_rows": dataset["eligible_labeled_rows"],
               "research_result": result,

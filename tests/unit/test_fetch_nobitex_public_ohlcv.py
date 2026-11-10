@@ -7,7 +7,13 @@ import time
 import pytest
 
 from scripts import fetch_nobitex_public_ohlcv as fetcher
+from scripts.binance_nobitex_gap_backfill import (
+    BINANCE_BACKFILL_END_TIMESTAMP,
+    BINANCE_BACKFILL_SOURCE,
+    BINANCE_BACKFILL_START_TIMESTAMP,
+)
 from scripts.fetch_nobitex_public_ohlcv import (
+    CandleRecord,
     _fetch_candle_pages,
     fetch_historical_candles,
 )
@@ -105,6 +111,183 @@ def test_partial_page_recovers_missing_prefix_without_synthetic_rows() -> None:
     assert len(calls) == 4
     assert calls[-1]["from"] == str(start - 60)
     assert calls[-1]["to"] == str(start + 28 * 60)
+
+
+def test_empty_outage_page_uses_approved_binance_backfill_and_post_anchor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gap = list(
+        range(
+            BINANCE_BACKFILL_START_TIMESTAMP,
+            BINANCE_BACKFILL_END_TIMESTAMP + 1,
+            3600,
+        )
+    )
+    before = BINANCE_BACKFILL_START_TIMESTAMP - 3600
+    after = BINANCE_BACKFILL_END_TIMESTAMP + 3600
+    expected = [*gap, after]
+
+    def candle(timestamp: int) -> dict[str, Any]:
+        return {
+            "timestamp": timestamp,
+            "date": datetime.fromtimestamp(timestamp, timezone.utc).isoformat(),
+            "open": 100.0,
+            "high": 101.0,
+            "low": 99.0,
+            "close": 100.0,
+            "volume": 1.0,
+        }
+
+    anchors = {before: candle(before), after: candle(after)}
+    backfill_rows = [candle(timestamp) for timestamp in gap]
+    provenance = {"source": BINANCE_BACKFILL_SOURCE, "row_count": 23}
+    monkeypatch.setattr(
+        fetcher,
+        "_fetch_page_with_retries",
+        lambda **_: (expected, {}, expected),
+    )
+    monkeypatch.setattr(
+        fetcher,
+        "_recover_missing_timestamp_ranges",
+        lambda **_: {},
+    )
+    monkeypatch.setattr(
+        fetcher,
+        "_request_filtered_candle_window",
+        lambda *args, **kwargs: anchors,
+    )
+    monkeypatch.setattr(
+        fetcher,
+        "fetch_binance_gap_backfill",
+        lambda **_: (backfill_rows, provenance),
+    )
+
+    source_overrides: list[dict[str, object]] = []
+    rows = _fetch_candle_pages(
+        start=BINANCE_BACKFILL_START_TIMESTAMP,
+        end=after,
+        symbol="BTCUSDT",
+        interval="1h",
+        request_json=lambda _params: {},
+        sleep_fn=lambda _seconds: None,
+        source_overrides=source_overrides,
+    )
+
+    assert [row["timestamp"] for row in rows] == expected
+    assert len(source_overrides) == 1
+    assert source_overrides[0]["source"] == BINANCE_BACKFILL_SOURCE
+    assert source_overrides[0]["row_count"] == 23
+
+
+def test_split_daily_chunks_backfill_only_missing_outage_rows_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gap = list(
+        range(
+            BINANCE_BACKFILL_START_TIMESTAMP,
+            BINANCE_BACKFILL_END_TIMESTAMP + 1,
+            3600,
+        )
+    )
+    before = BINANCE_BACKFILL_START_TIMESTAMP - 3600
+    after = BINANCE_BACKFILL_END_TIMESTAMP + 3600
+
+    def candle(timestamp: int, close: float = 100.0) -> CandleRecord:
+        return {
+            "timestamp": timestamp,
+            "date": datetime.fromtimestamp(timestamp, timezone.utc).isoformat(),
+            "open": close,
+            "high": close + 1.0,
+            "low": close - 1.0,
+            "close": close,
+            "volume": 1.0,
+        }
+
+    anchors = {before: candle(before), after: candle(after)}
+    backfill_rows = [candle(timestamp, 150.0) for timestamp in gap]
+    provenance = {
+        "source": BINANCE_BACKFILL_SOURCE,
+        "start_timestamp": BINANCE_BACKFILL_START_TIMESTAMP,
+        "end_timestamp": BINANCE_BACKFILL_END_TIMESTAMP,
+        "row_count": 23,
+    }
+    backfill_calls: list[list[int]] = []
+    monkeypatch.setattr(
+        fetcher,
+        "_request_filtered_candle_window",
+        lambda *args, **kwargs: anchors,
+    )
+
+    def backfill(**kwargs: Any) -> tuple[list[CandleRecord], dict[str, object]]:
+        backfill_calls.append(kwargs["missing_timestamps"])
+        return backfill_rows, provenance
+
+    monkeypatch.setattr(fetcher, "fetch_binance_gap_backfill", backfill)
+    source_overrides: list[dict[str, object]] = []
+
+    first_expected = list(
+        range(
+            BINANCE_BACKFILL_START_TIMESTAMP - 23 * 3600,
+            BINANCE_BACKFILL_START_TIMESTAMP + 1,
+            3600,
+        )
+    )
+    first_missing = [BINANCE_BACKFILL_START_TIMESTAMP]
+    first_page = {
+        stamp: candle(stamp, 200.0)
+        for stamp in first_expected
+        if stamp not in first_missing
+    }
+    first_unresolved = fetcher._apply_approved_binance_backfill(
+        expected=first_expected,
+        unresolved=first_missing,
+        page_by_stamp=first_page,
+        seconds=3600,
+        symbol="BTCUSDT",
+        request_json=lambda _params: {},
+        source_overrides=source_overrides,
+    )
+
+    second_expected = list(range(gap[1], gap[1] + 24 * 3600, 3600))
+    second_missing = gap[1:]
+    second_page = {
+        stamp: candle(stamp, 300.0)
+        for stamp in second_expected
+        if stamp not in second_missing
+    }
+    second_unresolved = fetcher._apply_approved_binance_backfill(
+        expected=second_expected,
+        unresolved=second_missing,
+        page_by_stamp=second_page,
+        seconds=3600,
+        symbol="BTCUSDT",
+        request_json=lambda _params: {},
+        source_overrides=source_overrides,
+    )
+
+    assert first_unresolved == []
+    assert second_unresolved == []
+    assert first_page[BINANCE_BACKFILL_START_TIMESTAMP]["close"] == 150.0
+    assert second_page[gap[1]]["close"] == 150.0
+    assert first_page[before]["close"] == 200.0
+    assert second_page[after]["close"] == 300.0
+    assert len(backfill_calls) == 2
+    assert backfill_calls == [gap, gap]
+    assert source_overrides == [provenance]
+
+    unrelated_missing = [BINANCE_BACKFILL_START_TIMESTAMP, after + 3600]
+    rejected = fetcher._apply_approved_binance_backfill(
+        expected=first_expected,
+        unresolved=unrelated_missing,
+        page_by_stamp={},
+        seconds=3600,
+        symbol="BTCUSDT",
+        request_json=lambda _params: {},
+        source_overrides=source_overrides,
+    )
+    assert rejected == unrelated_missing
+    assert len(backfill_calls) == 2
+    assert source_overrides == [provenance]
 
 
 def test_request_public_json_retries_rate_limit_and_honors_retry_after(

@@ -38,6 +38,12 @@ from research.ai_ensemble.validation import (
     mean_return_z_score,
 )
 from scripts import fetch_nobitex_public_ohlcv as ohlcv_source
+from scripts.binance_nobitex_gap_backfill import (
+    BINANCE_BACKFILL_END_TIMESTAMP,
+    BINANCE_BACKFILL_SOURCE,
+    BINANCE_BACKFILL_START_TIMESTAMP,
+    fetch_binance_gap_backfill,
+)
 from scripts.fetch_nobitex_5y_ohlcv import fetch_five_year_candles
 from scripts.train_nobitex_ai_ensemble import run_training
 
@@ -336,6 +342,7 @@ def test_five_year_fetcher_joins_five_contiguous_windows(
         interval: str,
         request_json: Callable[[dict[str, str]], dict[str, Any]],
         sleep_fn: Callable[[float], None],
+        source_overrides: list[dict[str, object]] | None = None,
     ) -> list[ohlcv_source.CandleRecord]:
         nonlocal calls
         calls += 1
@@ -431,3 +438,180 @@ def test_end_to_end_training_writes_unpromoted_ohlcv_artifacts(
     assert report["safety"]["real_order_attempts"] == 0
     assert report["safety"]["trading_authorization"] == "NO-GO"
     assert report_path.is_file()
+
+
+def test_binance_backfill_uses_matching_nobitex_boundary_prices_and_provenance() -> (
+    None
+):
+    before = BINANCE_BACKFILL_START_TIMESTAMP - 3600
+    after = BINANCE_BACKFILL_END_TIMESTAMP + 3600
+    gap = list(
+        range(
+            BINANCE_BACKFILL_START_TIMESTAMP,
+            BINANCE_BACKFILL_END_TIMESTAMP + 1,
+            3600,
+        )
+    )
+    assert len(gap) == 23
+    expected = [before, *gap, after]
+    payload: list[list[Any]] = []
+    for stamp in expected:
+        payload.append(
+            [
+                stamp * 1000,
+                "100.0",
+                "102.0",
+                "98.0",
+                "100.0",
+                "4.0",
+                (stamp + 3599) * 1000 + 999,
+                "400.0",
+                100,
+                "2.0",
+                "200.0",
+                "0",
+            ]
+        )
+    anchors = {before: {"close": 101.0}, after: {"close": 101.0}}
+    captured: dict[str, str] = {}
+
+    def fake_request(params: dict[str, str]) -> list[list[Any]]:
+        captured.update(params)
+        return payload
+
+    rows, provenance = fetch_binance_gap_backfill(
+        missing_timestamps=gap,
+        nobitex_anchor_rows=anchors,
+        request_json=fake_request,
+    )
+    assert len(rows) == 23
+    assert rows[0]["timestamp"] == BINANCE_BACKFILL_START_TIMESTAMP
+    assert rows[-1]["timestamp"] == BINANCE_BACKFILL_END_TIMESTAMP
+    assert rows[0]["open"] == pytest.approx(101.0)
+    assert rows[0]["high"] == pytest.approx(103.02)
+    assert rows[0]["low"] == pytest.approx(98.98)
+    assert rows[0]["volume"] == pytest.approx(4.0)
+    assert provenance["source"] == BINANCE_BACKFILL_SOURCE
+    assert provenance["price_adjustment_factor"] == pytest.approx(1.01)
+    assert provenance["start_timestamp"] == BINANCE_BACKFILL_START_TIMESTAMP
+    assert provenance["end_timestamp"] == BINANCE_BACKFILL_END_TIMESTAMP
+    assert provenance["row_count"] == 23
+    assert captured["timeZone"] == "+03:30"
+    assert captured["startTime"] == str(before * 1000)
+    assert captured["endTime"] == str(after * 1000)
+
+
+def test_binance_backfill_fails_closed_on_unapproved_gap_or_scale_drift() -> None:
+    before = BINANCE_BACKFILL_START_TIMESTAMP - 3600
+    after = BINANCE_BACKFILL_END_TIMESTAMP + 3600
+    gap = list(
+        range(
+            BINANCE_BACKFILL_START_TIMESTAMP,
+            BINANCE_BACKFILL_END_TIMESTAMP + 1,
+            3600,
+        )
+    )
+    payload = [
+        [stamp * 1000, "100", "102", "98", "100", "1"]
+        for stamp in [before, *gap, after]
+    ]
+    with pytest.raises(ValueError, match="gap_not_approved"):
+        fetch_binance_gap_backfill(
+            missing_timestamps=gap[:-1],
+            nobitex_anchor_rows={before: {"close": 101.0}, after: {"close": 101.0}},
+            request_json=lambda _: payload,
+        )
+    with pytest.raises(ValueError, match="boundary_scale_drift"):
+        fetch_binance_gap_backfill(
+            missing_timestamps=gap,
+            nobitex_anchor_rows={before: {"close": 101.0}, after: {"close": 110.0}},
+            request_json=lambda _: payload,
+        )
+
+
+def test_nobitex_gap_fetcher_only_uses_approved_binance_backfill(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    start = BINANCE_BACKFILL_START_TIMESTAMP - 3600
+    end = BINANCE_BACKFILL_END_TIMESTAMP
+    expected = list(range(start, end + 3600, 3600))
+    missing = list(
+        range(
+            BINANCE_BACKFILL_START_TIMESTAMP,
+            BINANCE_BACKFILL_END_TIMESTAMP + 1,
+            3600,
+        )
+    )
+    before = BINANCE_BACKFILL_START_TIMESTAMP - 3600
+    after = BINANCE_BACKFILL_END_TIMESTAMP + 3600
+    native = {
+        stamp: {
+            "timestamp": stamp,
+            "date": datetime.fromtimestamp(stamp, timezone.utc).isoformat(),
+            "open": 100.0,
+            "high": 101.0,
+            "low": 99.0,
+            "close": 100.0,
+            "volume": 1.0,
+        }
+        for stamp in expected
+        if stamp not in missing
+    }
+    anchors = {
+        before: {**native[before], "close": 100.0},
+        after: {
+            "timestamp": after,
+            "date": datetime.fromtimestamp(after, timezone.utc).isoformat(),
+            "open": 100.0,
+            "high": 101.0,
+            "low": 99.0,
+            "close": 100.0,
+            "volume": 1.0,
+        },
+    }
+    backfill = [
+        {
+            "timestamp": stamp,
+            "date": datetime.fromtimestamp(stamp, timezone.utc).isoformat(),
+            "open": 100.0,
+            "high": 101.0,
+            "low": 99.0,
+            "close": 100.0,
+            "volume": 1.0,
+        }
+        for stamp in missing
+    ]
+    provenance = {"source": BINANCE_BACKFILL_SOURCE, "row_count": 23}
+    monkeypatch.setattr(
+        ohlcv_source,
+        "_fetch_page_with_retries",
+        lambda **_: (expected, native, missing),
+    )
+    monkeypatch.setattr(
+        ohlcv_source,
+        "_recover_missing_timestamp_ranges",
+        lambda **_: {},
+    )
+    monkeypatch.setattr(
+        ohlcv_source,
+        "_request_filtered_candle_window",
+        lambda *args, **kwargs: anchors,
+    )
+    monkeypatch.setattr(
+        ohlcv_source,
+        "fetch_binance_gap_backfill",
+        lambda **_: (backfill, provenance),
+    )
+    source_overrides: list[dict[str, object]] = []
+    rows = ohlcv_source._fetch_candle_pages(
+        start=start,
+        end=end,
+        symbol="BTCUSDT",
+        interval="1h",
+        request_json=lambda _: {},
+        sleep_fn=lambda _: None,
+        source_overrides=source_overrides,
+    )
+    assert [row["timestamp"] for row in rows] == expected
+    assert len(source_overrides) == 1
+    assert source_overrides[0]["source"] == BINANCE_BACKFILL_SOURCE

@@ -19,6 +19,12 @@ import time
 from typing import Any, Callable, TypedDict, cast
 from urllib.parse import urlencode
 
+from scripts.binance_nobitex_gap_backfill import (
+    BINANCE_BACKFILL_END_TIMESTAMP,
+    BINANCE_BACKFILL_START_TIMESTAMP,
+    fetch_binance_gap_backfill,
+)
+
 ENDPOINT = "https://apiv2.nobitex.ir/market/udf/history"
 SCHEMA_VERSION = "alix.nobitex.public-ohlcv.v2"
 ALLOWED_SYMBOLS = ("BTCUSDT", "ETHUSDT")
@@ -346,6 +352,256 @@ def _recover_missing_timestamp_ranges(
     return recovered
 
 
+def _approved_binance_backfill_window(
+    seconds: int,
+) -> tuple[list[int], int, int] | None:
+    if seconds != INTERVAL_SECONDS["1h"]:
+        return None
+    gap = list(
+        range(
+            BINANCE_BACKFILL_START_TIMESTAMP,
+            BINANCE_BACKFILL_END_TIMESTAMP + seconds,
+            seconds,
+        )
+    )
+    return (
+        gap,
+        BINANCE_BACKFILL_START_TIMESTAMP - seconds,
+        (BINANCE_BACKFILL_END_TIMESTAMP + seconds),
+    )
+
+
+def _is_approved_binance_backfill_subset(
+    unresolved: list[int],
+    approved_gap: list[int],
+    anchor_start: int,
+    anchor_end: int,
+) -> bool:
+    unresolved_set = set(unresolved)
+    allowed_missing = set(approved_gap) | {anchor_start, anchor_end}
+    return (
+        bool(unresolved)
+        and len(unresolved_set) == len(unresolved)
+        and bool(unresolved_set.intersection(approved_gap))
+        and unresolved_set.issubset(allowed_missing)
+    )
+
+
+def _fetch_approved_binance_backfill_rows(
+    *,
+    approved_gap: list[int],
+    anchor_start: int,
+    anchor_end: int,
+    seconds: int,
+    symbol: str,
+    request_json: Callable[[dict[str, str]], dict[str, Any]],
+) -> tuple[
+    dict[int, CandleRecord],
+    dict[int, CandleRecord],
+    dict[str, object],
+]:
+    anchor_rows = _request_filtered_candle_window(
+        _candle_window_params(
+            symbol=symbol,
+            seconds=seconds,
+            start=anchor_start,
+            end=anchor_end,
+        ),
+        start=anchor_start,
+        end=anchor_end,
+        request_json=request_json,
+    )
+    backfill_rows, provenance = fetch_binance_gap_backfill(
+        missing_timestamps=approved_gap,
+        nobitex_anchor_rows=anchor_rows,
+        symbol=symbol,
+    )
+    return (
+        anchor_rows,
+        {row["timestamp"]: row for row in backfill_rows},
+        provenance,
+    )
+
+
+def _merge_approved_binance_backfill_subset(
+    *,
+    unresolved: list[int],
+    approved_gap: list[int],
+    anchor_rows: dict[int, CandleRecord],
+    backfill_rows: dict[int, CandleRecord],
+    page_by_stamp: dict[int, CandleRecord],
+) -> None:
+    approved_gap_set = set(approved_gap)
+    for stamp in unresolved:
+        page_by_stamp[stamp] = (
+            backfill_rows[stamp] if stamp in approved_gap_set else anchor_rows[stamp]
+        )
+
+
+def _record_approved_binance_backfill_provenance(
+    source_overrides: list[dict[str, object]],
+    provenance: dict[str, object],
+) -> None:
+    if not source_overrides:
+        source_overrides.append(provenance)
+        return
+    if source_overrides != [provenance]:
+        raise ValueError("binance_backfill_provenance_conflict")
+
+
+def _apply_approved_binance_backfill(
+    *,
+    expected: list[int],
+    unresolved: list[int],
+    page_by_stamp: dict[int, CandleRecord],
+    seconds: int,
+    symbol: str,
+    request_json: Callable[[dict[str, str]], dict[str, Any]],
+    source_overrides: list[dict[str, object]] | None,
+) -> list[int]:
+    if source_overrides is None:
+        return unresolved
+    window = _approved_binance_backfill_window(seconds)
+    if window is None:
+        return unresolved
+    approved_gap, anchor_start, anchor_end = window
+    if not _is_approved_binance_backfill_subset(
+        unresolved, approved_gap, anchor_start, anchor_end
+    ):
+        return unresolved
+    anchor_rows, backfill_rows, provenance = _fetch_approved_binance_backfill_rows(
+        approved_gap=approved_gap,
+        anchor_start=anchor_start,
+        anchor_end=anchor_end,
+        seconds=seconds,
+        symbol=symbol,
+        request_json=request_json,
+    )
+    _merge_approved_binance_backfill_subset(
+        unresolved=unresolved,
+        approved_gap=approved_gap,
+        anchor_rows=anchor_rows,
+        backfill_rows=backfill_rows,
+        page_by_stamp=page_by_stamp,
+    )
+    _record_approved_binance_backfill_provenance(source_overrides, provenance)
+    return [stamp for stamp in expected if stamp not in page_by_stamp]
+
+
+def _resolve_candle_page_gaps(
+    *,
+    expected: list[int],
+    page_by_stamp: dict[int, CandleRecord],
+    missing: list[int],
+    seconds: int,
+    symbol: str,
+    request_json: Callable[[dict[str, str]], dict[str, Any]],
+    sleep_fn: Callable[[float], None],
+    source_overrides: list[dict[str, object]] | None,
+) -> list[int]:
+    if not page_by_stamp:
+        return _apply_approved_binance_backfill(
+            expected=expected,
+            unresolved=expected,
+            page_by_stamp=page_by_stamp,
+            seconds=seconds,
+            symbol=symbol,
+            request_json=request_json,
+            source_overrides=source_overrides,
+        )
+    page_by_stamp.update(
+        _recover_missing_timestamp_ranges(
+            missing=missing,
+            seconds=seconds,
+            symbol=symbol,
+            request_json=request_json,
+            sleep_fn=sleep_fn,
+        )
+    )
+    unresolved = [stamp for stamp in expected if stamp not in page_by_stamp]
+    return _apply_approved_binance_backfill(
+        expected=expected,
+        unresolved=unresolved,
+        page_by_stamp=page_by_stamp,
+        seconds=seconds,
+        symbol=symbol,
+        request_json=request_json,
+        source_overrides=source_overrides,
+    )
+
+
+def _validate_candle_page(
+    *,
+    expected: list[int],
+    page_by_stamp: dict[int, CandleRecord],
+    unresolved: list[int],
+    is_initial_page: bool,
+    page_start: int,
+    stop: int,
+    interval: str,
+) -> list[CandleRecord]:
+    if not page_by_stamp:
+        page_error = (
+            "nobitex_historical_empty_initial_page"
+            if is_initial_page
+            else "nobitex_historical_empty_page"
+        )
+        raise ValueError(f"{page_error}:{page_start}:{stop}")
+    if unresolved:
+        gap_name = (
+            "missing_minute_intervals"
+            if interval == "1m"
+            else "missing_candle_intervals"
+        )
+        raise ValueError(
+            f"nobitex_historical_gap_detected:{gap_name}={len(unresolved)}:"
+            f"start={page_start}:stop={stop}:"
+            f"first_missing={unresolved[0]}:last_missing={unresolved[-1]}"
+        )
+    return [page_by_stamp[stamp] for stamp in expected]
+
+
+def _fetch_one_candle_page(
+    *,
+    start: int,
+    end: int,
+    symbol: str,
+    interval: str,
+    seconds: int,
+    is_initial_page: bool,
+    request_json: Callable[[dict[str, str]], dict[str, Any]],
+    sleep_fn: Callable[[float], None],
+    source_overrides: list[dict[str, object]] | None,
+) -> list[CandleRecord]:
+    expected, page_by_stamp, missing = _fetch_page_with_retries(
+        start=start,
+        end=end,
+        seconds=seconds,
+        symbol=symbol,
+        request_json=request_json,
+        sleep_fn=sleep_fn,
+    )
+    unresolved = _resolve_candle_page_gaps(
+        expected=expected,
+        page_by_stamp=page_by_stamp,
+        missing=missing,
+        seconds=seconds,
+        symbol=symbol,
+        request_json=request_json,
+        sleep_fn=sleep_fn,
+        source_overrides=source_overrides,
+    )
+    return _validate_candle_page(
+        expected=expected,
+        page_by_stamp=page_by_stamp,
+        unresolved=unresolved,
+        is_initial_page=is_initial_page,
+        page_start=start,
+        stop=end,
+        interval=interval,
+    )
+
+
 def _fetch_candle_pages(
     *,
     start: int,
@@ -354,6 +610,7 @@ def _fetch_candle_pages(
     interval: str,
     request_json: Callable[[dict[str, str]], dict[str, Any]],
     sleep_fn: Callable[[float], None],
+    source_overrides: list[dict[str, object]] | None = None,
 ) -> list[CandleRecord]:
     seconds = interval_seconds(interval)
     cursor = start
@@ -362,45 +619,19 @@ def _fetch_candle_pages(
         stop = min(cursor + (MAX_CANDLES_PER_REQUEST - 1) * seconds, end)
         # The documented provider cap is 500 candles. Each slice is 400 candles,
         # plus one-candle boundary padding, so the request remains below that cap.
-        expected, page_by_stamp, missing = _fetch_page_with_retries(
-            start=cursor,
-            end=stop,
-            seconds=seconds,
-            symbol=symbol,
-            request_json=request_json,
-            sleep_fn=sleep_fn,
-        )
-        if not page_by_stamp:
-            page_error = (
-                "nobitex_historical_empty_initial_page"
-                if cursor == start
-                else "nobitex_historical_empty_page"
-            )
-            raise ValueError(f"{page_error}:{cursor}:{stop}")
-
-        page_by_stamp.update(
-            _recover_missing_timestamp_ranges(
-                missing=missing,
-                seconds=seconds,
+        rows.extend(
+            _fetch_one_candle_page(
+                start=cursor,
+                end=stop,
                 symbol=symbol,
+                interval=interval,
+                seconds=seconds,
+                is_initial_page=cursor == start,
                 request_json=request_json,
                 sleep_fn=sleep_fn,
+                source_overrides=source_overrides,
             )
         )
-        unresolved = [stamp for stamp in expected if stamp not in page_by_stamp]
-        if unresolved:
-            gap_name = (
-                "missing_minute_intervals"
-                if interval == "1m"
-                else "missing_candle_intervals"
-            )
-            raise ValueError(
-                f"nobitex_historical_gap_detected:{gap_name}={len(unresolved)}:"
-                f"start={cursor}:stop={stop}:"
-                f"first_missing={unresolved[0]}:last_missing={unresolved[-1]}"
-            )
-
-        rows.extend(page_by_stamp[stamp] for stamp in expected)
         cursor = stop + seconds
         if cursor <= end:
             sleep_fn(1.1)
@@ -471,6 +702,7 @@ def _fetch_one_daily_chunk(
     interval: str,
     request_json: Callable[[dict[str, str]], dict[str, Any]],
     sleep_fn: Callable[[float], None],
+    source_overrides: list[dict[str, object]] | None = None,
 ) -> list[CandleRecord]:
     """Fetch and fully validate one 24-hour chunk, retrying only that chunk."""
     last_error: ValueError | None = None
@@ -483,6 +715,7 @@ def _fetch_one_daily_chunk(
                 interval=interval,
                 request_json=request_json,
                 sleep_fn=sleep_fn,
+                source_overrides=source_overrides,
             )
             _validate_historical_rows(
                 chunk_rows,
@@ -513,6 +746,7 @@ def _fetch_daily_candle_chunks(
     interval: str,
     request_json: Callable[[dict[str, str]], dict[str, Any]],
     sleep_fn: Callable[[float], None],
+    source_overrides: list[dict[str, object]] | None = None,
 ) -> list[CandleRecord]:
     """Fetch one logical day at a time and aggregate only complete daily chunks."""
     seconds = interval_seconds(interval)
@@ -528,6 +762,7 @@ def _fetch_daily_candle_chunks(
             interval=interval,
             request_json=request_json,
             sleep_fn=sleep_fn,
+            source_overrides=source_overrides,
         )
         rows.extend(chunk_rows)
         cursor = chunk_end + seconds
@@ -580,6 +815,7 @@ def fetch_historical_candles(
     interval: str = "1m",
     request_json: Callable[[dict[str, str]], dict[str, Any]] = request_public_json,
     sleep_fn: Callable[[float], None] = time.sleep,
+    source_overrides: list[dict[str, object]] | None = None,
 ) -> list[CandleRecord]:
     if isinstance(days, bool) or days not in ALLOWED_DAYS:
         raise ValueError("historical_days_out_of_policy")
@@ -603,6 +839,7 @@ def fetch_historical_candles(
         interval=interval,
         request_json=request_json,
         sleep_fn=sleep_fn,
+        source_overrides=source_overrides,
     )
     _validate_historical_rows(
         rows,
@@ -620,6 +857,23 @@ def _artifact_stem(symbol: str, interval: str) -> str:
     return f"nobitex-{symbol.lower()}-{interval}"
 
 
+def _source_manifest_fields(
+    source_overrides: list[dict[str, object]] | None,
+) -> dict[str, object]:
+    data_sources = ["Nobitex public UDF history API"]
+    if source_overrides:
+        data_sources.append("Binance Spot public market-data API")
+    return {
+        "gap_policy": (
+            "reject_unapproved_gaps; exact approved Binance range backfill only; "
+            "no interpolation, resampling, or synthetic fill"
+        ),
+        "source_policy": "NOBITEX_PRIMARY_WITH_EXPLICIT_BINANCE_RANGE_OVERRIDE",
+        "data_sources": data_sources,
+        "source_overrides": source_overrides or [],
+    }
+
+
 def write_artifacts(
     rows: list[CandleRecord],
     *,
@@ -629,6 +883,7 @@ def write_artifacts(
     commit_sha: str,
     symbol: str = "BTCUSDT",
     interval: str = "1h",
+    source_overrides: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     if not rows:
         raise ValueError("nobitex_historical_candles_empty")
@@ -682,7 +937,7 @@ def write_artifacts(
         "retrieved_at": retrieved_at.astimezone(timezone.utc).isoformat(),
         "missing_intervals": missing,
         "missing_minute_intervals": missing if interval == "1m" else None,
-        "gap_policy": "reject; no interpolation, resampling, or synthetic fill",
+        **_source_manifest_fields(source_overrides),
         "csv_sha256": digest,
         "commit_sha": commit_sha,
         "data_authority": "PUBLIC_MARKET_DATA_ONLY_NOT_ACCOUNT_ORDER_OR_FILL_TRUTH",

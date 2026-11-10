@@ -26,6 +26,7 @@ def _fetch_complete_window(
     symbol: str,
     request_json: Callable[[dict[str, str]], dict[str, Any]],
     sleep_fn: Callable[[float], None],
+    source_overrides: list[dict[str, object]],
 ) -> list[source.CandleRecord]:
     chunk = source.fetch_historical_candles(
         days=DAYS_PER_WINDOW,
@@ -34,6 +35,7 @@ def _fetch_complete_window(
         interval="1h",
         request_json=request_json,
         sleep_fn=sleep_fn,
+        source_overrides=source_overrides,
     )
     if len(chunk) != CANDLES_PER_WINDOW:
         raise ValueError("five_year_window_row_count_mismatch")
@@ -70,11 +72,13 @@ def fetch_five_year_candles(
         [dict[str, str]], dict[str, Any]
     ] = source.request_public_json,
     sleep_fn: Callable[[float], None] = time.sleep,
+    source_overrides: list[dict[str, object]] | None = None,
 ) -> list[source.CandleRecord]:
     """Fetch five backward-adjacent 365-day windows; gaps fail the run."""
     if now.tzinfo is None or now.utcoffset() is None:
         raise ValueError("five_year_cutoff_timezone_required")
     cutoff = now.astimezone(timezone.utc)
+    overrides = source_overrides if source_overrides is not None else []
     chunks: list[list[source.CandleRecord]] = []
     for _ in range(WINDOW_COUNT):
         chunk = _fetch_complete_window(
@@ -82,6 +86,7 @@ def fetch_five_year_candles(
             symbol=symbol,
             request_json=request_json,
             sleep_fn=sleep_fn,
+            source_overrides=overrides,
         )
         if chunks:
             _validate_window_boundary(chunk, chunks[0])
@@ -99,7 +104,12 @@ def main() -> int:
     parser.add_argument("--commit-sha", default=os.environ.get("GITHUB_SHA", "UNKNOWN"))
     args = parser.parse_args()
     retrieved_at = datetime.now(timezone.utc)
-    rows = fetch_five_year_candles(now=retrieved_at, symbol=args.symbol)
+    source_overrides: list[dict[str, object]] = []
+    rows = fetch_five_year_candles(
+        now=retrieved_at,
+        symbol=args.symbol,
+        source_overrides=source_overrides,
+    )
     manifest = source.write_artifacts(
         rows,
         output_dir=args.output_dir,
@@ -108,6 +118,7 @@ def main() -> int:
         commit_sha=args.commit_sha,
         symbol=args.symbol,
         interval="1h",
+        source_overrides=source_overrides,
     )
     manifest["windowing_policy"] = "FIVE_ADJACENT_365_DAY_WINDOWS"
     manifest["total_candles_expected"] = CANDLES_TOTAL
