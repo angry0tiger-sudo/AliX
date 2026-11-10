@@ -117,6 +117,11 @@ def build_causal_features(
     atr = calculate_atr(data, period=14, expected_interval=interval)
     volume_mean = volume.rolling(24, min_periods=24).mean()
     volume_std = volume.rolling(24, min_periods=24).std(ddof=0)
+    # A flat volume series carries no relative-volume information. Encode it
+    # as a neutral z-score while retaining NaN during the rolling warm-up.
+    volume_zscore = ((volume - volume_mean) / volume_std.replace(0.0, np.nan)).mask(
+        volume_std.eq(0.0), 0.0
+    )
     features = DataFrame(
         {
             "return_1": close.pct_change(fill_method=None),
@@ -133,8 +138,7 @@ def build_causal_features(
             "atr_fraction": atr / close,
             "bollinger_percent_b": (close - lower) / band_width.replace(0.0, np.nan),
             "bollinger_width": band_width / middle.replace(0.0, np.nan),
-            "volume_zscore_24": (volume - volume_mean)
-            / volume_std.replace(0.0, np.nan),
+            "volume_zscore_24": volume_zscore,
             "range_fraction": (high - low) / close,
         },
         index=data.index,

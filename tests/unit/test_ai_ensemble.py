@@ -83,6 +83,27 @@ def test_ohlcv_features_are_causal_and_require_no_external_archives() -> None:
     )
 
 
+@pytest.mark.parametrize("constant_volume", [0.0, 25.0])
+def test_volume_zscore_is_neutral_for_constant_volume(
+    constant_volume: float,
+) -> None:
+    market = market_frame()
+    market["volume"] = constant_volume
+
+    features = build_causal_features(market)
+    volume_zscore = features["volume_zscore_24"]
+
+    # Keep the 24-candle warm-up, then represent absent/constant volume as
+    # neutral rather than dropping every otherwise-valid training row.
+    assert volume_zscore.iloc[:23].isna().all()
+    assert volume_zscore.iloc[23:].notna().all()
+    np.testing.assert_array_equal(
+        volume_zscore.iloc[23:].to_numpy(dtype=float),
+        np.zeros(len(volume_zscore) - 23, dtype=float),
+    )
+    assert features.iloc[40:].notna().all().all()
+
+
 def test_ohlcv_validation_rejects_gaps_duplicates_and_missing_columns() -> None:
     market = market_frame()
     gap = market.drop(index=120).reset_index(drop=True)
