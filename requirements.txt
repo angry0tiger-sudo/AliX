@@ -12,6 +12,9 @@ defusedxml==0.7.1
 joblib==1.5.3
 scikit-learn==1.9.0
 
+# Offline genetic-programming research dependency
+deap==1.4.4
+
 # Offline RL research environment dependency
 gymnasium==1.4.0
 

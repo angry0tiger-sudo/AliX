@@ -1,0 +1,323 @@
+name: AliX AI-2 Revisited DEAP Genetic Programming
+
+on:
+  push:
+    branches:
+      - "research/ml-core-deap-evolution"
+    paths:
+      - ".github/workflows/deap-genetic-programming.yml"
+      - ".github/workflows/ci.yml"
+      - "requirements.txt"
+      - "requirements.lock"
+      - "research/deap/**"
+      - "scripts/run_deap_nobitex_evolution.py"
+      - "tests/unit/test_deap_evolution.py"
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: alix-ai2-deap-evolution-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  deap-evolution:
+    if: github.ref == 'refs/heads/research/ml-core-deap-evolution'
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      ALIX_DRY_RUN: "true"
+      ALIX_ALLOW_LIVE_TRADING: "false"
+      PYTHONUNBUFFERED: "1"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    steps:
+      - name: Wait for Standard CI success on this exact commit
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          TARGET_SHA: ${{ github.sha }}
+          TARGET_BRANCH: ${{ github.ref_name }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import time
+          from urllib.error import HTTPError, URLError
+          from urllib.request import Request, urlopen
+
+          repository = os.environ["GITHUB_REPOSITORY"]
+          target_sha = os.environ["TARGET_SHA"]
+          target_branch = os.environ["TARGET_BRANCH"]
+          if target_branch != "research/ml-core-deap-evolution":
+              raise SystemExit("unsupported_ai2_deap_branch")
+          url = (
+              f"https://api.github.com/repos/{repository}/actions/workflows/ci.yml/runs"
+              f"?head_sha={target_sha}&per_page=100"
+          )
+          deadline = time.monotonic() + 90 * 60
+          while time.monotonic() < deadline:
+              request = Request(
+                  url,
+                  headers={
+                      "Accept": "application/vnd.github+json",
+                      "Authorization": f"Bearer {os.environ['GITHUB_TOKEN']}",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  },
+              )
+              try:
+                  with urlopen(request, timeout=30) as response:
+                      payload = json.load(response)
+              except (HTTPError, URLError, TimeoutError) as error:
+                  raise SystemExit(
+                      f"standard_ci_lookup_failed:{type(error).__name__}"
+                  ) from None
+              matching = [
+                  run for run in payload.get("workflow_runs", [])
+                  if run.get("head_sha") == target_sha
+                  and run.get("head_branch") == target_branch
+                  and run.get("event") == "push"
+              ]
+              if matching:
+                  latest = max(
+                      matching,
+                      key=lambda item: (
+                          item.get("run_number", 0),
+                          item.get("run_attempt", 0),
+                      ),
+                  )
+                  if latest.get("status") == "completed":
+                      if latest.get("conclusion") != "success":
+                          raise SystemExit(
+                              "standard_ci_not_green:"
+                              + str(latest.get("conclusion"))
+                              + ":"
+                              + target_sha
+                          )
+                      print(json.dumps({
+                          "gate": "PASS",
+                          "standard_ci_run_id": latest.get("id"),
+                          "standard_ci_url": latest.get("html_url"),
+                          "target_sha": target_sha,
+                      }, sort_keys=True))
+                      break
+              time.sleep(30)
+          else:
+              raise SystemExit("standard_ci_green_gate_timeout:" + target_sha)
+          PY
+
+      - name: Checkout the exact research commit without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install pinned DEAP research dependencies
+        run: |
+          python -m pip install pip==25.2
+          python -m pip install numpy==2.5.4 pandas==2.3.3 deap==1.4.4
+          python -m pip install pytest==9.0.3 ruff==0.14.0
+
+      - name: Compile DEAP research package
+        run: |
+          python -m compileall -q research/deap scripts/run_deap_nobitex_evolution.py tests/unit/test_deap_evolution.py
+
+      - name: Ruff lint and format checks
+        run: |
+          ruff check research/deap scripts/run_deap_nobitex_evolution.py tests/unit/test_deap_evolution.py
+          ruff format --check --diff research/deap scripts/run_deap_nobitex_evolution.py tests/unit/test_deap_evolution.py
+
+      - name: Run DEAP contracts, causality and simulator tests
+        run: pytest tests/unit/test_deap_evolution.py -q
+
+      - name: Security scan of DEAP research package
+        run: |
+          python -m pip install bandit==1.8.6
+          bandit -r research/deap scripts/run_deap_nobitex_evolution.py -ll
+
+      - name: Download immutable Nobitex pre-hack dataset from Standard CI #2193
+        uses: actions/download-artifact@v4
+        with:
+          name: alix-chronos2-prehack-nobitex
+          repository: ${{ github.repository }}
+          run-id: 42871937160
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/alix-nobitex-prehack
+
+      - name: Normalize and verify the producer artifact paths
+        env:
+          DATASET_DIR: ${{ runner.temp }}/alix-nobitex-prehack
+        run: |
+          set -euo pipefail
+          csv_source="$(find "$DATASET_DIR" -type f -name 'nobitex-btcusdt-1h.csv' -print -quit)"
+          manifest_source="$(find "$DATASET_DIR" -type f -name 'nobitex-btcusdt-1h.manifest.json' -print -quit)"
+          test -n "$csv_source"
+          test -n "$manifest_source"
+          csv_target="$DATASET_DIR/nobitex-btcusdt-1h.csv"
+          manifest_target="$DATASET_DIR/nobitex-btcusdt-1h.manifest.json"
+          if [ "$csv_source" != "$csv_target" ]; then cp "$csv_source" "$csv_target"; fi
+          if [ "$manifest_source" != "$manifest_target" ]; then cp "$manifest_source" "$manifest_target"; fi
+          test -s "$csv_target"
+          test -s "$manifest_target"
+          echo "Immutable Nobitex CSV and manifest staged."
+
+      - name: Run population-500 / generation-30 DEAP evolution
+        env:
+          DATASET_DIR: ${{ runner.temp }}/alix-nobitex-prehack
+          OUTPUT_DIR: ${{ runner.temp }}/alix-deap-evolution-output
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          python -m scripts.run_deap_nobitex_evolution \
+            --input-dir "$DATASET_DIR" \
+            --output-dir "$OUTPUT_DIR" \
+            --commit-sha "$TARGET_SHA" \
+            --population 500 \
+            --generations 30 \
+            --seed 20261111
+
+      - name: Validate report, strict OOS isolation and safety invariants
+        env:
+          REPORT_PATH: ${{ runner.temp }}/alix-deap-evolution-output/deap-evolution-report.json
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          report = json.loads(Path(os.environ["REPORT_PATH"]).read_text(encoding="utf-8"))
+          assert report["commit_sha"] == os.environ["TARGET_SHA"]
+          assert report["schema_version"] == "alix.ai2.deap-genetic-programming.v1"
+          assert report["configuration"]["population_size"] == 500
+          assert report["configuration"]["generations"] == 30
+          assert report["configuration"]["selection"] == "tournament"
+          assert report["configuration"]["crossover"] == "one-point"
+          assert report["configuration"]["mutation"] == "uniform subtree mutation"
+          assert report["configuration"]["timeframe"] == "1h"
+          assert report["configuration"]["timeframe_minutes"] == 60
+          assert set(report["configuration"]["allowed_timeframes_minutes"]) == {15, 30, 60, 240}
+          assert report["source_dataset"]["row_count"] == 31801
+          assert report["source_dataset"]["csv_sha256"] == (
+              "0aa13607d1da68c4720919f233635bb33d34048e5bd67d3ecc2ce9bb7c2b462e"
+          )
+          assert report["execution_costs"]["round_trip_cost_bps"] == 50.0
+          assert report["temporal_split"]["split_fraction"] == 0.70
+          assert report["temporal_split"]["purge_bars"] == 48
+          assert report["temporal_split"]["embargo_bars"] == 48
+          assert report["temporal_split"]["oos_used_in_fitness_or_selection"] is False
+          assert report["temporal_split"]["oos_used_for_parameter_or_checkpoint_selection"] is False
+          assert len(report["best_candidate"]["rule"]) > 0
+          assert report["out_of_sample"]["trade_count"] >= 0
+          assert "oos_net_profit_factor_at_least_1_1" in report["promotion_checks"]
+          assert "oos_max_drawdown_below_15_percent" in report["promotion_checks"]
+          assert "oos_trade_frequency_over_200_per_year" in report["promotion_checks"]
+          assert report["safety"]["Champion"] is None
+          assert report["safety"]["order_permission"] is False
+          assert report["safety"]["trading_authorization"] == "NO-GO"
+          assert report["safety"]["ALIX_DRY_RUN"] is True
+          assert report["safety"]["ALIX_ALLOW_LIVE_TRADING"] is False
+          assert report["safety"]["private_api_calls"] == 0
+          assert report["safety"]["real_order_attempts"] == 0
+          assert report["safety"]["orders_or_execution_api_used"] is False
+          assert report["safety"]["dataset_provider_calls_during_evolution"] == 0
+          print("DEAP artifact, OOS isolation and safety contract: PASS")
+          print("Economic research result:", report["research_result"])
+          PY
+
+      - name: Write best rule and OOS metrics to GitHub Step Summary
+        if: always()
+        env:
+          REPORT_PATH: ${{ runner.temp }}/alix-deap-evolution-output/deap-evolution-report.json
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          report_path = Path(os.environ["REPORT_PATH"])
+          summary_path = Path(os.environ["GITHUB_STEP_SUMMARY"])
+          if not report_path.is_file():
+              summary_path.write_text(
+                  "# AI-2 Revisited DEAP\n\nNo complete evolution report was produced.\n",
+                  encoding="utf-8",
+              )
+              raise SystemExit(0)
+          report = json.loads(report_path.read_text(encoding="utf-8"))
+          best = report["best_candidate"]
+          oos = report["out_of_sample"]
+
+          def metric(value, percent=False):
+              if value is None:
+                  return "N/A"
+              number = float(value)
+              return f"{number * 100:.2f}%" if percent else f"{number:.4f}"
+
+          lines = [
+              "# AI-2 Revisited — DEAP Genetic Programming",
+              "",
+              "Commit SHA: " + report["commit_sha"],
+              "Dataset SHA-256: " + report["source_dataset"]["csv_sha256"],
+              "Dataset: Nobitex BTC/USDT Spot, 1h, 31,801 pre-hack candles",
+              "Costs: 50 bps round trip (25 bps fee per side, 0 bps slippage)",
+              "Evolution: 500 population / 30 generations / tournament / one-point crossover / uniform mutation",
+              "Split: 70% training; final 30% untouched OOS; 48-bar purge and embargo",
+              "",
+              "## Best evolved rule",
+              "",
+              best["rule"],
+              "",
+              "Rule SHA-256: " + best["rule_sha256"],
+              "",
+              "## Untouched out-of-sample metrics",
+              "",
+              "| Metric | Result |",
+              "|---|---:|",
+              "| Net Profit Factor | " + metric(oos["net_profit_factor"]) + " |",
+              "| Win Rate | " + metric(oos["win_rate"], True) + " |",
+              "| Maximum Drawdown | " + metric(oos["max_drawdown"], True) + " |",
+              "| Net Return | " + metric(oos["net_return"], True) + " |",
+              "| Completed Trades | " + str(oos["trade_count"]) + " |",
+              "| Trades per Year | " + metric(oos["trades_per_year"]) + " |",
+              "| OOS duration | " + f"{oos['duration_years']:.3f}" + " years |",
+              "",
+              "Research Result: " + report["research_result"],
+              "",
+              "| Promotion check | Result |",
+              "|---|---|",
+          ]
+          lines.extend(
+              "| " + name.replace("_", " ") + " | " + ("PASS" if passed else "FAIL") + " |"
+              for name, passed in report["promotion_checks"].items()
+          )
+          lines.extend([
+              "",
+              "Safety: Champion=null; order_permission=false; trading_authorization=NO-GO; private_api_calls=0; real_order_attempts=0.",
+              "No paper or real order was submitted.",
+              "",
+          ])
+          summary = "\n".join(lines)
+          print(summary)
+          with summary_path.open("a", encoding="utf-8") as handle:
+              handle.write(summary)
+          PY
+
+      - name: Upload DEAP rule, OOS metrics and full audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alix-ai2-deap-evolution-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/alix-deap-evolution-output/deap-evolution-report.json
+            ${{ runner.temp }}/alix-deap-evolution-output/best-rule.txt
+            ${{ runner.temp }}/alix-deap-evolution-output/generation-log.json
+            ${{ runner.temp }}/alix-deap-evolution-output/step-summary.md
+          if-no-files-found: warn
+          retention-days: 30
