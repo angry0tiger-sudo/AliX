@@ -123,6 +123,7 @@ def verify_dataset(
         raise ValueError("CSV row count does not match the immutable manifest.")
     return ohlcv, manifest
 
+
 def _predict_context_only(trainer: Any, dataset: Any, origins: list[int]) -> np.ndarray:
     indices = forecast_dataset_indices(origins)
     prediction_dataset = ForecastContextOnlyDataset(dataset, indices)
