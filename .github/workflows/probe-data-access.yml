@@ -1,18 +1,19 @@
 name: AliX Alternative Data Provider Access Probe
 
 on:
-  # One-time bootstrap: GitHub requires workflow_dispatch workflows to exist
-  # on the default branch. This branch-only push trigger runs the first probe
-  # without modifying protected main.
+  # This branch-only push trigger is the safe bootstrap while main is frozen.
+  # The job waits for Standard CI to pass on this exact commit before probing.
   push:
     branches:
       - research/alternative-data-pivot
     paths:
       - .github/workflows/probe-data-access.yml
       - scripts/probe_alternative_data_access.py
+      - requirements.txt
   workflow_dispatch:
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
@@ -23,8 +24,78 @@ jobs:
   probe:
     if: github.ref == 'refs/heads/research/alternative-data-pivot'
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 95
     steps:
+      - name: Wait for Standard CI success on this exact commit
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          TARGET_SHA: ${{ github.sha }}
+          TARGET_BRANCH: ${{ github.ref_name }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import time
+          from urllib.request import Request, urlopen
+
+          repository = os.environ["GITHUB_REPOSITORY"]
+          target_sha = os.environ["TARGET_SHA"]
+          target_branch = os.environ["TARGET_BRANCH"]
+          if target_branch != "research/alternative-data-pivot":
+              raise SystemExit("unsupported_alternative_data_probe_branch")
+
+          url = (
+              f"https://api.github.com/repos/{repository}/actions/workflows/ci.yml/runs"
+              f"?head_sha={target_sha}&per_page=100"
+          )
+          deadline = time.monotonic() + 90 * 60
+          while time.monotonic() < deadline:
+              request = Request(
+                  url,
+                  headers={
+                      "Accept": "application/vnd.github+json",
+                      "Authorization": f"Bearer {os.environ['GITHUB_TOKEN']}",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  },
+              )
+              with urlopen(request, timeout=30) as response:
+                  payload = json.load(response)
+
+              matching = [
+                  run for run in payload.get("workflow_runs", [])
+                  if run.get("head_sha") == target_sha
+                  and run.get("head_branch") == target_branch
+                  and run.get("event") == "push"
+              ]
+              if matching:
+                  latest = max(
+                      matching,
+                      key=lambda item: (
+                          item.get("run_number", 0),
+                          item.get("run_attempt", 0),
+                      ),
+                  )
+                  if latest.get("status") == "completed":
+                      if latest.get("conclusion") != "success":
+                          raise SystemExit(
+                              "standard_ci_not_green:"
+                              + str(latest.get("conclusion"))
+                              + ":"
+                              + target_sha
+                          )
+                      print(json.dumps({
+                          "gate": "PASS",
+                          "standard_ci_run_id": latest.get("id"),
+                          "standard_ci_url": latest.get("html_url"),
+                          "target_sha": target_sha,
+                      }, sort_keys=True))
+                      break
+              time.sleep(15)
+          else:
+              raise SystemExit("standard_ci_green_gate_timeout:" + target_sha)
+          PY
+
       - name: Checkout exact research ref
         uses: actions/checkout@v4
         with:
@@ -36,5 +107,8 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Probe HTTP status codes (Binance, Bybit, OKX order)
+      - name: Install pinned HTTP client
+        run: python -m pip install httpx==0.28.1
+
+      - name: Probe Binance, Bybit, OKX current and OKX historical endpoints
         run: python scripts/probe_alternative_data_access.py

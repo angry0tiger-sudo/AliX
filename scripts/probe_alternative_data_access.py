@@ -1,45 +1,76 @@
-"""Read-only HTTP reachability probe for public alternative-data endpoints.
+"""Read-only HTTP reachability probe for alternative-data public endpoints.
 
-Output order is fixed: Binance Futures, Bybit, OKX.
-Each line is only the final HTTP status code. "000" means no HTTP response
-was received (for example, DNS, TLS, connection, or timeout failure).
+Output order:
+1. Binance Futures funding-rate HTTP status.
+2. Bybit funding-history HTTP status.
+3. OKX current funding-rate HTTP status.
+4. OKX historical funding-rate HTTP status and a bounded response snippet.
+
+"000" means that no HTTP response was received.
 """
 
 from __future__ import annotations
 
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+import json
+
+import httpx
 
 
-ENDPOINTS = (
+HEADERS = {
+    "Accept": "application/json",
+    "User-Agent": "AliX-Alternative-Data-Access-Probe/1.0",
+}
+TIMEOUT = httpx.Timeout(15.0, connect=5.0)
+
+STATUS_ENDPOINTS = (
     "https://fapi.binance.com/fapi/v1/fundingRate?symbol=BTCUSDT&limit=1",
     "https://api.bybit.com/v5/market/funding/history?category=linear&symbol=BTCUSDT&limit=1",
     "https://www.okx.com/api/v5/public/funding-rate?instId=BTC-USDT-SWAP",
 )
+OKX_HISTORICAL_ENDPOINT = (
+    "https://www.okx.com/api/v5/public/funding-rate-history"
+    "?instId=BTC-USDT-SWAP&limit=1"
+)
+RESPONSE_SNIPPET_LIMIT = 500
 
 
-def http_status(url: str) -> int:
-    request = Request(
-        url,
-        headers={
-            "Accept": "application/json",
-            "User-Agent": "AliX-Alternative-Data-Access-Probe/1.0",
-        },
-        method="GET",
-    )
+def get_response(url: str) -> httpx.Response | None:
+    """Return the HTTP response, or None when transport fails."""
     try:
-        with urlopen(request, timeout=15) as response:
-            return int(response.status)
-    except HTTPError as error:
-        return int(error.code)
-    except (URLError, TimeoutError, OSError):
-        return 0
+        return httpx.get(url, headers=HEADERS, timeout=TIMEOUT)
+    except httpx.HTTPError:
+        return None
+
+
+def response_snippet(response: httpx.Response) -> str:
+    """Render a bounded JSON response snippet without interpreting its fields."""
+    try:
+        payload = response.json()
+        rendered = json.dumps(
+            payload,
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+    except ValueError:
+        rendered = response.text.replace("\n", " ").replace("\r", " ")
+    return rendered[:RESPONSE_SNIPPET_LIMIT]
 
 
 def main() -> None:
-    for endpoint in ENDPOINTS:
-        status = http_status(endpoint)
+    for endpoint in STATUS_ENDPOINTS:
+        response = get_response(endpoint)
+        status = response.status_code if response is not None else 0
         print(f"{status:03d}")
+
+    historical_response = get_response(OKX_HISTORICAL_ENDPOINT)
+    if historical_response is None:
+        print("000 <no-http-response>")
+        return
+
+    print(
+        f"{historical_response.status_code:03d} {response_snippet(historical_response)}"
+    )
 
 
 if __name__ == "__main__":
