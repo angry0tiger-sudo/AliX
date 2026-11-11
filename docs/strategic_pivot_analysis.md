@@ -2,8 +2,8 @@
 
 **Date:** 2026-11-11  
 **Status:** Analysis only — no implementation or experiment authorized by this document  
-**Repository:** \`angry0tiger-sudo/AliX\`  
-**Reviewed references:** AliX Master Reference Document v0.8 (2026-11-11); \`AI6_RL_FINAL_VERDICT_2026-11-11.md\`; \`AI6-PPO-RISK-RESEARCH.md\`; \`external_data_pivot_aborted.md\`; historical AI-2 DEAP run and eligibility-gate report.
+**Repository:** `angry0tiger-sudo/AliX`  
+**Reviewed references:** AliX Master Reference Document v0.8 (2026-11-11); `AI6_RL_FINAL_VERDICT_2026-11-11.md`; `AI6-PPO-RISK-RESEARCH.md`; `external_data_pivot_aborted.md`; historical AI-2 DEAP run and eligibility-gate report.
 
 ---
 
@@ -36,9 +36,9 @@ The canonical final verdict is the later closure report, not the interim metrics
 
 Reproducibility anchors:
 
-- Training commit: \`7464e308d4e1efdb573a8225fb3a392ae7614199\`
+- Training commit: `7464e308d4e1efdb573a8225fb3a392ae7614199`
 - Dataset: Nobitex BTC/USDT Spot, 1h, 31,801 pre-event candles
-- Dataset SHA-256: \`0aa13607d1da68c4720919f233635bb33d34048e5bd67d3ecc2ce9bb7c2b462e\`
+- Dataset SHA-256: `0aa13607d1da68c4720919f233635bb33d34048e5bd67d3ecc2ce9bb7c2b462e`
 - Cost: 25 bps maker fee per side, 0 bps slippage, 50 bps round trip
 - [AI-6 final verdict](https://github.com/angry0tiger-sudo/AliX/blob/research/alternative-data-pivot/docs/phase-reports/AI6_RL_FINAL_VERDICT_2026-11-11.md)
 - [AI-6 workflow #22](https://github.com/angry0tiger-sudo/AliX/actions/runs/43000569350)
@@ -69,9 +69,9 @@ One correction to the historical premise is important: MRD v0.8 records the earl
 
 The only timeframe values eligible anywhere in the proposed entry-strategy search are:
 
-\`\`\`text
+```text
 15m, 30m, 1h, 4h
-\`\`\`
+```
 
 Daily and Weekly intervals are prohibited. This current Owner Directive supersedes the older offline-diagnostic exception present in MRD v0.8. They must not appear in a genome, model registry, timeframe coverage quota, meta-model input used to select entry cadence, fallback path or candidate ranking.
 
@@ -226,7 +226,7 @@ All options must be evaluated against the same non-negotiable criteria. Passing 
 
 ### 7.1 Timeframe and trade-activity gate
 
-- The only eligible timeframe set is \`15m\`, \`30m\`, \`1h\`, \`4h\`.
+- The only eligible timeframe set is `15m`, `30m`, `1h`, `4h`.
 - Each option must produce **more than 200 completed, unique trades per year, annualized separately on validation and final holdout**.
 - Count only realized, flat-to-flat trades after cost and overlap/deduplication rules. Do not count raw signals, partial fills as separate trades, simultaneous timeframe votes, reward bonuses or repeated entries within one position.
 - Report actual trade count, exact eligible date span, annualized trade rate, median holding time and turnover.
@@ -236,7 +236,7 @@ All options must be evaluated against the same non-negotiable criteria. Passing 
 
 - Primary cost contract: 50 bps round trip, with maker fee and slippage assumptions separately parameterized and reported.
 - Cost stress test: 90 bps round trip, preserving the historical 90 bps Opportunity Hunter sensitivity contract as a separate scenario.
-- Net PF target: greater than 1.5, consistent with the MRD Opportunity Hunter objective; report undefined PF as \`null\`, never fabricate a value.
+- Net PF target: greater than 1.5, consistent with the MRD Opportunity Hunter objective; report undefined PF as `null`, never fabricate a value.
 - Maximum drawdown: no more than 15% on validation and final holdout.
 - Positive net expectancy and positive statistical evidence on untouched out-of-sample trades; use uncertainty estimates appropriate to serially dependent trading returns and account for multiple candidate testing.
 - Compare with a simple, frozen baseline on the exact same dates, bars, fills and cost model. Report whether PF, return and drawdown improve, not merely whether they are positive.
@@ -268,10 +268,10 @@ This report requests a strategic choice only. It does not authorize implementati
 - AI-6 remains CLOSED. No further PPO tuning or training is proposed.
 - External Data Pivot remains ABORTED; Option C is a new, separately approved proposal, not a continuation of the aborted run.
 - Nobitex Spot remains the intended execution venue, but no execution integration or order flow is authorized.
-- \`main\` must remain untouched at \`44bcaeae7eefd358cf063394b0e7f4f0b83af8eb\`.
+- `main` must remain untouched at `44bcaeae7eefd358cf063394b0e7f4f0b83af8eb`.
 - Safety invariants remain:
 
-\`\`\`text
+```text
 Champion = null
 order_permission = false
 trading_authorization = NO-GO
@@ -279,9 +279,9 @@ ALIX_DRY_RUN = true
 ALIX_ALLOW_LIVE_TRADING = false
 private_api_calls = 0
 real_order_attempts = 0
-nobitex_api_calls_during_research = 0
+nobitex_private_api_calls = 0
 Paper Trading = NOT AUTHORIZED
 Real Trading = NOT AUTHORIZED
-\`\`\`
+```
 
 **Final recommendation:** Option B is the best first candidate to submit for owner approval because it rethinks the primary entry/exit logic, uses the existing bounded DEAP research direction and avoids paying for unproven external data. Its approval must remain conditional on proving the required Nobitex 15m/30m coverage and on a pre-registered anti-overfitting protocol. No option is presumed profitable, and no trading authorization follows from this report.
