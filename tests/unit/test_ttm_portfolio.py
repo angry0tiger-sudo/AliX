@@ -36,10 +36,22 @@ def test_risk_managed_portfolio_changes_exposure_not_trade_signals() -> None:
     managed = evaluate_sized_portfolio(trades, risk_managed=True)
     assert fixed["trade_count"] == managed["trade_count"] == 4
     assert fixed["win_rate"] == managed["win_rate"] == 0.5
-    assert managed["net_profit_factor"] > fixed["net_profit_factor"]
-    assert managed["max_drawdown"] < fixed["max_drawdown"]
-    assert managed["average_position_fraction"] <= fixed["average_position_fraction"]
-    assert managed["average_position_fraction"] <= 0.10
+    fixed_profit_factor = fixed["net_profit_factor"]
+    managed_profit_factor = managed["net_profit_factor"]
+    fixed_drawdown = fixed["max_drawdown"]
+    managed_drawdown = managed["max_drawdown"]
+    fixed_exposure = fixed["average_position_fraction"]
+    managed_exposure = managed["average_position_fraction"]
+    assert isinstance(fixed_profit_factor, float)
+    assert isinstance(managed_profit_factor, float)
+    assert isinstance(fixed_drawdown, float)
+    assert isinstance(managed_drawdown, float)
+    assert isinstance(fixed_exposure, float)
+    assert isinstance(managed_exposure, float)
+    assert managed_profit_factor > fixed_profit_factor
+    assert managed_drawdown < fixed_drawdown
+    assert managed_exposure <= fixed_exposure
+    assert managed_exposure <= 0.10
 
 
 def test_position_sizing_rejects_multiplier_above_one() -> None:
