@@ -42,9 +42,9 @@ jobs:
       - name: Compile source
         run: python -m compileall -q control_plane risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels research/deap research/ai_ensemble tests scripts
       - name: Ruff lint
-        run: ruff check control_plane risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels research/deap tests scripts
+        run: ruff check control_plane risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels research/deap research/ai_ensemble tests scripts
       - name: Ruff format check
-        run: ruff format --check --diff control_plane risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels research/deap tests scripts
+        run: ruff format --check --diff control_plane risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels research/deap research/ai_ensemble tests scripts
       - name: Strict type check
         run: mypy --config-file mypy.ini
       - name: Security scan
