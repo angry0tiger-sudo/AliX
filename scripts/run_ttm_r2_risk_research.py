@@ -29,7 +29,9 @@ from research.ai_ensemble.ttm_risk import (
 )
 
 MODEL_ID = "ibm-granite/granite-timeseries-ttm-r2"
-MODEL_BRANCH = "512-96-r2"
+MODEL_BRANCH = "main (512-96-r2)"
+MODEL_REVISION = "d6a79570cac0f33d526601cd3a0fc7c80a8f9a2f"
+MODEL_WEIGHTS_SHA256 = "a706726a7eb01bbcb42994b7dcb3c06ea9557898dbae8d480eb04fe8ccb89710"
 MODEL_CONTEXT_LENGTH = 512
 MODEL_NATIVE_PREDICTION_LENGTH = 96
 
@@ -191,18 +193,17 @@ def main() -> int:
     preprocessor.train(frame.iloc[:train_end].copy())
     processed_frame = preprocessor.preprocess(frame.copy())
 
-    model_info = hub.HfApi().model_info(MODEL_ID, revision=MODEL_BRANCH)
-    model_revision = str(model_info.sha)
-    if len(model_revision) != 40:
-        raise ValueError(
-            "Unable to resolve a full immutable Hugging Face model revision."
-        )
+    model_revision = MODEL_REVISION
     weights_path = Path(
         hub.hf_hub_download(
-            repo_id=MODEL_ID, filename="model.safetensors", revision=model_revision
+            repo_id=MODEL_ID,
+            filename="model.safetensors",
+            revision="d6a79570cac0f33d526601cd3a0fc7c80a8f9a2f",
         )
     )
     weights_sha256 = sha256_file(weights_path)
+    if weights_sha256 != MODEL_WEIGHTS_SHA256:
+        raise ValueError("TTM-R2 model weight SHA-256 does not match the pinned artifact.")
 
     model = get_model_module.get_model(
         model_path=MODEL_ID,

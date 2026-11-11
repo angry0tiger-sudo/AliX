@@ -55,7 +55,7 @@ At decision time \`t\`:
 
 All forecast origins are non-overlapping at 24-hour intervals. Each target window must remain wholly inside its chronological split. Missing/duplicate/irregular timestamps, non-finite values, invalid prices, incomplete contexts, or incomplete horizons fail closed. No interpolation, backfill, zero-padding, or future-derived scaler is permitted.
 
-The model uses IBM's supported hourly TTM-R2 512-context branch with a 24-step prediction filter. The runner resolves the model branch to an immutable Hub commit before loading and stores the weight SHA-256 in the report.
+The model uses IBM's hourly TTM-R2 512-96-r2 release (hosted on the repository's `main` branch) at immutable Hugging Face commit `d6a79570cac0f33d526601cd3a0fc7c80a8f9a2f`. The `model.safetensors` file is pinned to SHA-256 `a706726a7eb01bbcb42994b7dcb3c06ea9557898dbae8d480eb04fe8ccb89710`; the runner verifies this digest before loading. The model is loaded with a 24-step prediction filter.
 
 ## 5. Pre-registered acceptance criteria
 
