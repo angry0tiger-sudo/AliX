@@ -334,9 +334,7 @@ def evaluate_sized_portfolio(
         positive_pnl, negative_pnl, wins = _accumulate_profit_and_loss(
             pnl, positive_pnl, negative_pnl, wins
         )
-        equity, peak_equity, drawdown = _advance_equity(
-            equity, peak_equity, pnl
-        )
+        equity, peak_equity, drawdown = _advance_equity(equity, peak_equity, pnl)
         maximum_drawdown = max(maximum_drawdown, drawdown)
         exposures.append(exposure)
         multipliers.append(multiplier)

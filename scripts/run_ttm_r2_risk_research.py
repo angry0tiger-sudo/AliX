@@ -218,9 +218,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _prepare_experiment_inputs(args: argparse.Namespace) -> dict[str, Any]:
-    ohlcv, data_manifest = verify_dataset(
-        args.ohlcv, args.manifest, args.commit_sha
-    )
+    ohlcv, data_manifest = verify_dataset(args.ohlcv, args.manifest, args.commit_sha)
     frame = prepare_risk_target(ohlcv)
     split = make_evaluation_origins(len(frame))
     return {
@@ -262,9 +260,7 @@ def _validate_model_configuration(model: Any) -> None:
         )
 
 
-def _build_inference_runtime(
-    frame: pd.DataFrame, train_end: int
-) -> dict[str, Any]:
+def _build_inference_runtime(frame: pd.DataFrame, train_end: int) -> dict[str, Any]:
     tsfm_public = import_module("tsfm_public")
     get_model_module = import_module("tsfm_public.toolkit.get_model")
     transformers = import_module("transformers")
@@ -344,18 +340,14 @@ def _score_forecast_splits(
     validation_metrics = score_variance_forecasts(
         validation[1], validation[0], validation[2]
     )
-    holdout_metrics = score_variance_forecasts(
-        holdout[1], holdout[0], holdout[2]
-    )
+    holdout_metrics = score_variance_forecasts(holdout[1], holdout[0], holdout[2])
     accepted = risk_forecast_gate(holdout_metrics)
     return {
         "validation": validation,
         "holdout": holdout,
         "validation_metrics": validation_metrics,
         "holdout_metrics": holdout_metrics,
-        "verdict": (
-            "PASS_RISK_FORECAST_RESEARCH_ONLY" if accepted else "NO_GO"
-        ),
+        "verdict": ("PASS_RISK_FORECAST_RESEARCH_ONLY" if accepted else "NO_GO"),
     }
 
 
@@ -365,20 +357,14 @@ def _build_position_risk_inputs(
     forecast_market_indices = np.asarray(
         [
             origin + 1
-            for origin in (
-                split["validation_origins"] + split["holdout_origins"]
-            )
+            for origin in (split["validation_origins"] + split["holdout_origins"])
         ],
         dtype=np.int64,
     )
     validation_forecast = forecasts["validation"]
     holdout_forecast = forecasts["holdout"]
-    forecast_values = np.concatenate(
-        [validation_forecast[0], holdout_forecast[0]]
-    )
-    persistence_values = np.concatenate(
-        [validation_forecast[2], holdout_forecast[2]]
-    )
+    forecast_values = np.concatenate([validation_forecast[0], holdout_forecast[0]])
+    persistence_values = np.concatenate([validation_forecast[2], holdout_forecast[2]])
     risk_multipliers = np.minimum(
         1.0,
         np.sqrt(np.maximum(persistence_values, 1e-18) / forecast_values),
@@ -386,9 +372,7 @@ def _build_position_risk_inputs(
     return forecast_market_indices, risk_multipliers
 
 
-def _compare_sized_portfolio(
-    trades: list[dict[str, Any]]
-) -> dict[str, Any]:
+def _compare_sized_portfolio(trades: list[dict[str, Any]]) -> dict[str, Any]:
     fixed = evaluate_sized_portfolio(trades, risk_managed=False)
     managed = evaluate_sized_portfolio(trades, risk_managed=True)
     baseline_pf = fixed["net_profit_factor"]
@@ -416,7 +400,11 @@ def _compare_sized_portfolio(
         and comparison["max_drawdown_reduced"]
         and comparison["max_drawdown_below_15_percent"]
     )
-    return {"fixed_size_baseline": fixed, "ttm_risk_managed": managed, "comparison": comparison}
+    return {
+        "fixed_size_baseline": fixed,
+        "ttm_risk_managed": managed,
+        "comparison": comparison,
+    }
 
 
 def _evaluate_portfolio_splits(
@@ -429,9 +417,7 @@ def _evaluate_portfolio_splits(
         training_end_market_index=int(split["train_end"]) + 1,
         validation_end_market_index=int(split["validation_end"]) + 1,
     )
-    forecast_indices, risk_multipliers = _build_position_risk_inputs(
-        split, forecasts
-    )
+    forecast_indices, risk_multipliers = _build_position_risk_inputs(split, forecasts)
     validation_trades = attach_asof_risk_multipliers(
         teacher["validation_trades"], forecast_indices, risk_multipliers
     )
