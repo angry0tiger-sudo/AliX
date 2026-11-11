@@ -58,7 +58,9 @@ def _verify_manifest_source_policy(manifest: dict[str, Any]) -> None:
     if manifest.get("dataset_window") != "PRE_HACK_NOBITEX_ONLY":
         raise ValueError("Dataset is not the approved pre-hack Nobitex window.")
     if manifest.get("data_sources") != ["Nobitex public UDF history API"]:
-        raise ValueError("Unexpected data source or external exchange backfill detected.")
+        raise ValueError(
+            "Unexpected data source or external exchange backfill detected."
+        )
 
 
 def _verify_manifest_boundaries(manifest: dict[str, Any]) -> None:
@@ -121,9 +123,7 @@ def verify_dataset(
         raise ValueError("CSV row count does not match the immutable manifest.")
     return ohlcv, manifest
 
-def _predict_context_only(
-    trainer: Any, dataset: Any, origins: list[int]
-) -> np.ndarray:
+def _predict_context_only(trainer: Any, dataset: Any, origins: list[int]) -> np.ndarray:
     indices = forecast_dataset_indices(origins)
     prediction_dataset = ForecastContextOnlyDataset(dataset, indices)
     prediction_output = trainer.predict(prediction_dataset)
@@ -160,9 +160,8 @@ def _inverse_forecast_variance(
         .reshape(origin_count, PREDICTION_HORIZON)
     )
     predicted_hourly_variance = np.expm1(predicted_log_variance)
-    if (
-        not np.isfinite(predicted_hourly_variance).all()
-        or np.any(predicted_hourly_variance <= 0)
+    if not np.isfinite(predicted_hourly_variance).all() or np.any(
+        predicted_hourly_variance <= 0
     ):
         raise ValueError(
             "TTM-R2 produced a non-positive or non-finite variance forecast; reject."
@@ -204,6 +203,7 @@ def run_split(
     )
     actual, persistence = _realized_variance_windows(origins, return_variance)
     return forecast_variance, actual, persistence, predicted_log_variance[:, -1]
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -327,9 +327,7 @@ def main() -> int:
     forecast_market_indices = np.asarray(
         [
             origin + 1
-            for origin in (
-                split["validation_origins"] + split["holdout_origins"]
-            )
+            for origin in (split["validation_origins"] + split["holdout_origins"])
         ],
         dtype=np.int64,
     )
@@ -357,9 +355,7 @@ def main() -> int:
         "fixed_size_baseline": evaluate_sized_portfolio(
             holdout_trades, risk_managed=False
         ),
-        "ttm_risk_managed": evaluate_sized_portfolio(
-            holdout_trades, risk_managed=True
-        ),
+        "ttm_risk_managed": evaluate_sized_portfolio(holdout_trades, risk_managed=True),
     }
     baseline_holdout = portfolio_holdout["fixed_size_baseline"]
     managed_holdout = portfolio_holdout["ttm_risk_managed"]

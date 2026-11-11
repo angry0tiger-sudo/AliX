@@ -168,9 +168,7 @@ def build_oos_teacher_trade_events(
     oos_model_indices = np.flatnonzero(
         market_positions >= training_end_market_index
     ).tolist()
-    oos_probabilities = model.predict_proba(
-        data["features"].iloc[oos_model_indices]
-    )
+    oos_probabilities = model.predict_proba(data["features"].iloc[oos_model_indices])
     probability_by_index = {
         int(model_index): float(probability)
         for model_index, probability in zip(
@@ -228,9 +226,7 @@ def attach_asof_risk_multipliers(
         origin_index = int(np.searchsorted(origins, entry_index, side="right") - 1)
         if origin_index < 0:
             raise ValueError("ttm_portfolio_entry_has_no_prior_risk_forecast")
-        attached.append(
-            {**trade, "risk_multiplier": float(multipliers[origin_index])}
-        )
+        attached.append({**trade, "risk_multiplier": float(multipliers[origin_index])})
     return attached
 
 
@@ -290,7 +286,9 @@ def evaluate_sized_portfolio(
     return {
         "trade_count": len(trades),
         "win_rate": float(wins / len(trades)),
-        "net_profit_factor": float(profit_factor) if profit_factor is not None else None,
+        "net_profit_factor": float(profit_factor)
+        if profit_factor is not None
+        else None,
         "max_drawdown": float(maximum_drawdown),
         "net_return": float(equity - 1.0),
         "ending_equity": float(equity),
