@@ -37,10 +37,12 @@ jobs:
           python-version: "3.12"
       - name: Install pinned CPU-only TTM research dependencies
         run: |
-          python -m pip install pip==25.2
-          python -m pip install torch==2.9.1 --index-url https://download.pytorch.org/whl/cpu
-          python -m pip install granite-tsfm==0.3.12 transformers==5.20.2 accelerate==1.15.0 datasets==4.3.0 pandas==2.3.3 numpy scikit-learn==1.9.0 lightgbm==4.7.0 xgboost-cpu==3.4.1 pytest==9.0.3
-          python -m pip install pip-audit==2.9.0
+          python -m pip install pip==26.3 setuptools==84.2.1
+          python -m pip install torch==2.10.0 --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install granite-tsfm==0.3.12 transformers==5.20.2 accelerate==1.15.0 datasets==5.2.0 fsspec==2026.9.0 pandas==2.3.3 numpy scikit-learn==1.7.2 lightgbm==4.7.0 xgboost-cpu==3.4.1 pytest==9.0.3
+          python -m pip install pip-audit==2.10.1
+      - name: Verify pinned TTM dependency compatibility
+        run: python -m pip check
       - name: Audit TTM-only dependency environment
         run: pip-audit
       - name: Re-run TTM risk contract tests
@@ -104,6 +106,9 @@ jobs:
               f"| Log-variance MAE | {holdout['ttm_log_variance_mae']:.8f} | {holdout['persistence_log_variance_mae']:.8f} |",
               f"| Forecast samples | {holdout['sample_count']} | {holdout['sample_count']} |",
               f"| QLIKE improvement | {holdout['qlike_improvement_fraction']:.2%} | 5.00% required |",
+              f"| Forecast target floor applied | {holdout['target_floor_applied_fraction']:.2%} of hourly outputs | training-only 1st percentile |",
+              f"| Holdout origins touching floor | {holdout['target_floor_applied_origin_fraction']:.2%} |",
+              f"| Training-only log1p target floor | {report['risk_forecast_domain']['minimum_log1p_variance_target']:.10g} |",
               "",
               "## Final holdout: offline position-sizing replay",
               "| Metric | Fixed 10% size | TTM risk-sized |",

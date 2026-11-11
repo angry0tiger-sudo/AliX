@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import tempfile
 from importlib import import_module
 from pathlib import Path
 from typing import Any, cast
@@ -42,6 +41,8 @@ MODEL_WEIGHTS_SHA256 = (
 )
 MODEL_CONTEXT_LENGTH = 512
 MODEL_NATIVE_PREDICTION_LENGTH = 96
+TARGET_FLOOR_QUANTILE = 0.01
+INFERENCE_BATCH_SIZE = 16
 
 
 def sha256_file(path: Path) -> str:
@@ -124,15 +125,40 @@ def verify_dataset(
     return ohlcv, manifest
 
 
-def _predict_context_only(trainer: Any, dataset: Any, origins: list[int]) -> np.ndarray:
+def _predict_context_only(model: Any, dataset: Any, origins: list[int]) -> np.ndarray:
+    if not origins:
+        raise ValueError("TTM inference requires at least one forecast origin.")
+
+    torch = import_module("torch")
     indices = forecast_dataset_indices(origins)
     prediction_dataset = ForecastContextOnlyDataset(dataset, indices)
-    prediction_output = trainer.predict(prediction_dataset)
-    raw_predictions = prediction_output.predictions
-    predictions = (
-        raw_predictions[0] if isinstance(raw_predictions, tuple) else raw_predictions
+    prediction_loader = torch.utils.data.DataLoader(
+        prediction_dataset,
+        batch_size=INFERENCE_BATCH_SIZE,
+        shuffle=False,
+        num_workers=0,
+        pin_memory=False,
+        drop_last=False,
     )
-    prediction_array = np.asarray(predictions, dtype=np.float64)
+    model.eval()
+    prediction_batches: list[np.ndarray] = []
+    with torch.inference_mode():
+        for model_inputs in prediction_loader:
+            prediction_output = model(
+                **model_inputs,
+                return_loss=False,
+                return_dict=True,
+            )
+            raw_predictions = getattr(prediction_output, "prediction_outputs", None)
+            if raw_predictions is None:
+                raise ValueError("TTM inference output is missing prediction_outputs.")
+            prediction_batches.append(
+                raw_predictions.detach().to(dtype=torch.float32, device="cpu").numpy()
+            )
+
+    prediction_array = np.asarray(
+        np.concatenate(prediction_batches, axis=0), dtype=np.float64
+    )
     if (
         prediction_array.ndim != 3
         or prediction_array.shape[1] != PREDICTION_HORIZON
@@ -151,24 +177,38 @@ def _inverse_forecast_variance(
     prediction_array: np.ndarray,
     preprocessor: Any,
     origin_count: int,
-) -> tuple[np.ndarray, np.ndarray]:
+    minimum_log1p_variance_target: float,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     inverse_scaled = preprocessor.inverse_scale_targets(
         pd.DataFrame({TARGET_COLUMN: prediction_array.reshape(-1)})
     )
-    predicted_log_variance = (
+    predicted_log1p_variance = (
         inverse_scaled[TARGET_COLUMN]
         .to_numpy(dtype=np.float64)
         .reshape(origin_count, PREDICTION_HORIZON)
     )
-    predicted_hourly_variance = np.expm1(predicted_log_variance)
+    if not np.isfinite(predicted_log1p_variance).all():
+        raise ValueError("TTM-R2 produced a non-finite inverse-scaled risk forecast.")
+    if (
+        not np.isfinite(minimum_log1p_variance_target)
+        or minimum_log1p_variance_target <= 0
+    ):
+        raise ValueError(
+            "Training-only variance target floor must be finite and positive."
+        )
+
+    floor_mask = predicted_log1p_variance < minimum_log1p_variance_target
+    floor_fraction_per_origin = np.mean(floor_mask, axis=1)
+    bounded_log1p_variance = np.maximum(
+        predicted_log1p_variance, minimum_log1p_variance_target
+    )
+    predicted_hourly_variance = np.expm1(bounded_log1p_variance)
     if not np.isfinite(predicted_hourly_variance).all() or np.any(
         predicted_hourly_variance <= 0
     ):
-        raise ValueError(
-            "TTM-R2 produced a non-positive or non-finite variance forecast; reject."
-        )
+        raise ValueError("TTM-R2 variance domain projection produced invalid values.")
     forecast_variance = predicted_hourly_variance.sum(axis=1)
-    return forecast_variance, predicted_log_variance
+    return forecast_variance, bounded_log1p_variance, floor_fraction_per_origin
 
 
 def _realized_variance_windows(
@@ -192,18 +232,22 @@ def _realized_variance_windows(
 
 
 def run_split(
-    trainer: Any,
+    model: Any,
     dataset: Any,
     preprocessor: Any,
     origins: list[int],
     return_variance: np.ndarray,
+    minimum_log1p_variance_target: float,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    prediction_array = _predict_context_only(trainer, dataset, origins)
-    forecast_variance, predicted_log_variance = _inverse_forecast_variance(
-        prediction_array, preprocessor, len(origins)
+    prediction_array = _predict_context_only(model, dataset, origins)
+    forecast_variance, _, floor_fraction_per_origin = _inverse_forecast_variance(
+        prediction_array,
+        preprocessor,
+        len(origins),
+        minimum_log1p_variance_target,
     )
     actual, persistence = _realized_variance_windows(origins, return_variance)
-    return forecast_variance, actual, persistence, predicted_log_variance[:, -1]
+    return forecast_variance, actual, persistence, floor_fraction_per_origin
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -228,6 +272,21 @@ def _prepare_experiment_inputs(args: argparse.Namespace) -> dict[str, Any]:
         "return_variance": frame["return_variance"].to_numpy(dtype=np.float64),
         "split": split,
     }
+
+
+def _training_positive_target_floor(frame: pd.DataFrame, train_end: int) -> float:
+    training_targets = frame[TARGET_COLUMN].iloc[:train_end].to_numpy(dtype=np.float64)
+    positive_targets = training_targets[
+        np.isfinite(training_targets) & (training_targets > 0)
+    ]
+    if positive_targets.size < 30:
+        raise ValueError(
+            "Training prefix has too few positive risk targets for a floor."
+        )
+    floor = float(np.quantile(positive_targets, TARGET_FLOOR_QUANTILE))
+    if not np.isfinite(floor) or floor <= 0:
+        raise ValueError("Training-only positive target floor is invalid.")
+    return floor
 
 
 def _load_pinned_model_weights(hub: Any) -> tuple[str, str]:
@@ -263,7 +322,6 @@ def _validate_model_configuration(model: Any) -> None:
 def _build_inference_runtime(frame: pd.DataFrame, train_end: int) -> dict[str, Any]:
     tsfm_public = import_module("tsfm_public")
     get_model_module = import_module("tsfm_public.toolkit.get_model")
-    transformers = import_module("transformers")
     hub = import_module("huggingface_hub")
     preprocessor = tsfm_public.TimeSeriesPreprocessor(
         id_columns=[],
@@ -276,6 +334,7 @@ def _build_inference_runtime(frame: pd.DataFrame, train_end: int) -> dict[str, A
         encode_categorical=False,
         freq="h",
     )
+    minimum_log1p_variance_target = _training_positive_target_floor(frame, train_end)
     preprocessor.train(frame.iloc[:train_end].copy())
     processed_frame = preprocessor.preprocess(frame.copy())
     model_revision, weights_sha256 = _load_pinned_model_weights(hub)
@@ -300,18 +359,14 @@ def _build_inference_runtime(frame: pd.DataFrame, train_end: int) -> dict[str, A
         enable_padding=False,
         impute_method=None,
     )
-    training_args = transformers.TrainingArguments(
-        output_dir=tempfile.mkdtemp(prefix="alix-ttm-r2-"),
-        per_device_eval_batch_size=16,
-        report_to="none",
-        dataloader_num_workers=0,
-        dataloader_pin_memory=False,
-    )
-    trainer = transformers.Trainer(model=model, args=training_args)
+    torch = import_module("torch")
+    model.to(torch.device("cpu"))
+    model.eval()
     return {
-        "trainer": trainer,
+        "model": model,
         "dataset": dataset,
         "preprocessor": preprocessor,
+        "minimum_log1p_variance_target": minimum_log1p_variance_target,
         "model_revision": model_revision,
         "weights_sha256": weights_sha256,
         "tsfm_version": getattr(tsfm_public, "__version__", "unknown"),
@@ -324,23 +379,33 @@ def _score_forecast_splits(
     return_variance: np.ndarray,
 ) -> dict[str, Any]:
     validation = run_split(
-        runtime["trainer"],
+        runtime["model"],
         runtime["dataset"],
         runtime["preprocessor"],
         split["validation_origins"],
         return_variance,
+        runtime["minimum_log1p_variance_target"],
     )
     holdout = run_split(
-        runtime["trainer"],
+        runtime["model"],
         runtime["dataset"],
         runtime["preprocessor"],
         split["holdout_origins"],
         return_variance,
+        runtime["minimum_log1p_variance_target"],
     )
     validation_metrics = score_variance_forecasts(
         validation[1], validation[0], validation[2]
     )
     holdout_metrics = score_variance_forecasts(holdout[1], holdout[0], holdout[2])
+    validation_metrics["target_floor_applied_fraction"] = float(np.mean(validation[3]))
+    validation_metrics["target_floor_applied_origin_fraction"] = float(
+        np.mean(validation[3] > 0)
+    )
+    holdout_metrics["target_floor_applied_fraction"] = float(np.mean(holdout[3]))
+    holdout_metrics["target_floor_applied_origin_fraction"] = float(
+        np.mean(holdout[3] > 0)
+    )
     accepted = risk_forecast_gate(holdout_metrics)
     return {
         "validation": validation,
@@ -484,8 +549,8 @@ def _build_forecast_rows(
         ("validation", split["validation_origins"], validation),
         ("holdout", split["holdout_origins"], holdout),
     ):
-        for origin, forecast, actual, baseline in zip(
-            origins, result[0], result[1], result[2]
+        for origin, forecast, actual, baseline, floor_fraction in zip(
+            origins, result[0], result[1], result[2], result[3]
         ):
             rows.append(
                 {
@@ -497,6 +562,7 @@ def _build_forecast_rows(
                     "ttm_forecast_24h_variance": float(forecast),
                     "actual_24h_variance": float(actual),
                     "persistence_24h_variance": float(baseline),
+                    "target_floor_applied_fraction": float(floor_fraction),
                     "risk_only_position_multiplier": min(
                         1.0, float(np.sqrt(baseline / forecast))
                     ),
@@ -577,6 +643,11 @@ def _build_report(
         },
         "protocol": {
             "target": "hourly log1p(squared close-to-close log return)",
+            "forecast_domain_policy": (
+                "Inverse-scaled model outputs are lower-bounded at the 1st percentile "
+                "of positive training-prefix target values before expm1. The floor is "
+                "fit on the first 70% only; per-origin floor usage is recorded."
+            ),
             "risk_horizon_hours": PREDICTION_HORIZON,
             "chronological_split": "70% train-only scaler fit / 15% validation / final 15% holdout",
             "forecast_origins_are_non_overlapping": True,
@@ -588,6 +659,14 @@ def _build_report(
             "trading_cost_bps_round_trip": 50,
             "trading_costs_applied": False,
             "trading_costs_note": "Forecast metrics are cost-free; portfolio labels apply 50 bps round-trip. The two evaluations answer separate questions.",
+        },
+        "risk_forecast_domain": {
+            "training_positive_target_quantile": TARGET_FLOOR_QUANTILE,
+            "minimum_log1p_variance_target": runtime["minimum_log1p_variance_target"],
+            "minimum_hourly_variance_target": float(
+                np.expm1(runtime["minimum_log1p_variance_target"])
+            ),
+            "floor_fit_scope": "FIRST_70_PERCENT_TRAINING_PREFIX_ONLY",
         },
         "validation_metrics": forecasts["validation_metrics"],
         "final_holdout_metrics": forecasts["holdout_metrics"],

@@ -36,6 +36,7 @@ from research.ai_ensemble.risk import fractional_kelly_size
 from research.ai_ensemble.validation import (
     create_purged_walk_forward_folds,
     mean_return_z_score,
+    non_overlapping_trade_returns,
 )
 from scripts import fetch_nobitex_public_ohlcv as ohlcv_source
 from scripts.fetch_nobitex_prehack_ohlcv import (
@@ -182,6 +183,61 @@ def test_purged_walk_forward_and_dsr_use_non_overlapping_trade_samples() -> None
     assert mean_return_z_score([0.02, -0.01, 0.03, 0.01]) is not None
     assert mean_return_z_score([0.01]) is None
     assert mean_return_z_score([0.01, 0.01]) is None
+
+
+def test_purged_walk_forward_rejects_invalid_fold_configuration() -> None:
+    count = 600
+    eligible = list(range(count))
+    ends = [index + 24 if index + 24 < count else -1 for index in range(count)]
+
+    with pytest.raises(ValueError, match="walk_forward_fold_count_invalid"):
+        create_purged_walk_forward_folds(eligible, ends, fold_count=True)
+    with pytest.raises(ValueError, match="walk_forward_embargo_invalid"):
+        create_purged_walk_forward_folds(eligible, ends, embargo_bars=0)
+    with pytest.raises(ValueError, match="walk_forward_minimum_train_samples_invalid"):
+        create_purged_walk_forward_folds(eligible, ends, minimum_train_samples=1)
+    with pytest.raises(
+        ValueError, match="walk_forward_first_validation_fraction_invalid"
+    ):
+        create_purged_walk_forward_folds(eligible, ends, first_validation_fraction=0.9)
+
+
+def test_purged_walk_forward_rejects_boolean_and_overlapping_label_ends() -> None:
+    count = 600
+    eligible = list(range(count))
+    ends = [index + 24 if index + 24 < count else -1 for index in range(count)]
+    ends[10] = True
+    with pytest.raises(ValueError, match="walk_forward_label_end_index_invalid"):
+        create_purged_walk_forward_folds(eligible, ends)
+
+    ends[10] = 9
+    with pytest.raises(ValueError, match="walk_forward_label_end_before_event"):
+        create_purged_walk_forward_folds(eligible, ends)
+
+
+def test_non_overlapping_trade_returns_skip_until_label_window_expires() -> None:
+    net_returns = [0.0] * 140
+    net_returns[100] = 0.02
+    net_returns[125] = -0.01
+    label_end_indices = list(range(140))
+    label_end_indices[100] = 123
+    label_end_indices[125] = 130
+
+    selected = non_overlapping_trade_returns(
+        [100, 101, 124, 125],
+        [0.8, 0.9, 0.4, 0.7],
+        net_returns,
+        label_end_indices,
+    )
+
+    assert selected == (0.02, -0.01)
+
+
+def test_non_overlapping_trade_returns_reject_invalid_inputs() -> None:
+    with pytest.raises(ValueError, match="trade_probability_invalid"):
+        non_overlapping_trade_returns([5], [1.1], [0.0] * 10, list(range(10)))
+    with pytest.raises(ValueError, match="trade_label_window_or_return_invalid"):
+        non_overlapping_trade_returns([5], [0.9], [0.0] * 10, [0] * 10)
 
 
 def test_fractional_kelly_blocks_cost_negative_edge_and_caps_position() -> None:

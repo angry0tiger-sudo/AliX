@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import numpy as np
 import pandas as pd
 import pytest
 
 from research.ai_ensemble.ttm_risk import (
     CONTEXT_LENGTH,
+    TARGET_COLUMN,
     PREDICTION_HORIZON,
     ForecastContextOnlyDataset,
     forecast_dataset_indices,
@@ -101,6 +104,108 @@ def test_forecast_dataset_rejects_non_mapping_samples() -> None:
     dataset = ForecastContextOnlyDataset([np.asarray([1.0, 2.0])], [0])
     with pytest.raises(TypeError, match="mappings"):
         dataset[0]
+
+
+def test_predict_context_only_uses_loss_free_batched_model_inference() -> None:
+    torch = pytest.importorskip("torch")
+
+    from scripts.run_ttm_r2_risk_research import _predict_context_only
+
+    class ContextDataset:
+        def __len__(self) -> int:
+            return 35
+
+        def __getitem__(self, index: int) -> dict[str, object]:
+            return {
+                "past_values": torch.full((CONTEXT_LENGTH, 1), float(index)),
+                "past_observed_mask": torch.ones((CONTEXT_LENGTH, 1), dtype=torch.bool),
+                "future_values": torch.full((PREDICTION_HORIZON, 1), -999.0),
+            }
+
+    class ForecastModel:
+        def __init__(self) -> None:
+            self.eval_called = False
+            self.batch_sizes: list[int] = []
+
+        def eval(self) -> "ForecastModel":
+            self.eval_called = True
+            return self
+
+        def __call__(
+            self,
+            *,
+            past_values: object,
+            past_observed_mask: object,
+            return_loss: bool,
+            return_dict: bool,
+        ) -> SimpleNamespace:
+            assert return_loss is False
+            assert return_dict is True
+            assert isinstance(past_values, torch.Tensor)
+            assert isinstance(past_observed_mask, torch.Tensor)
+            self.batch_sizes.append(int(past_values.shape[0]))
+            forecast = past_values[:, -1:, :].expand(-1, PREDICTION_HORIZON, -1)
+            return SimpleNamespace(prediction_outputs=forecast)
+
+    model = ForecastModel()
+    origins = list(range(CONTEXT_LENGTH - 1, CONTEXT_LENGTH - 1 + 35))
+    predictions = _predict_context_only(model, ContextDataset(), origins)
+
+    assert model.eval_called is True
+    assert model.batch_sizes == [16, 16, 3]
+    assert predictions.shape == (35, PREDICTION_HORIZON, 1)
+    np.testing.assert_array_equal(predictions[:, 0, 0], np.arange(35, dtype=float))
+
+
+def test_predict_context_only_rejects_empty_origins() -> None:
+    from scripts.run_ttm_r2_risk_research import _predict_context_only
+
+    with pytest.raises(ValueError, match="at least one forecast origin"):
+        _predict_context_only(object(), object(), [])
+
+
+def test_inverse_forecast_variance_applies_training_only_positive_domain_floor() -> (
+    None
+):
+    from scripts.run_ttm_r2_risk_research import _inverse_forecast_variance
+
+    class IdentityPreprocessor:
+        def inverse_scale_targets(self, frame: pd.DataFrame) -> pd.DataFrame:
+            return frame
+
+    floor = 0.025
+    raw_predictions = np.full((2, PREDICTION_HORIZON, 1), -0.5, dtype=np.float64)
+    raw_predictions[1, :, 0] = 0.2
+
+    forecast, bounded_target, floor_fraction = _inverse_forecast_variance(
+        raw_predictions,
+        IdentityPreprocessor(),
+        origin_count=2,
+        minimum_log1p_variance_target=floor,
+    )
+
+    assert np.all(bounded_target[0] == floor)
+    assert np.all(bounded_target[1] == 0.2)
+    np.testing.assert_allclose(forecast[0], PREDICTION_HORIZON * np.expm1(floor))
+    np.testing.assert_allclose(forecast[1], PREDICTION_HORIZON * np.expm1(0.2))
+    np.testing.assert_array_equal(floor_fraction, np.asarray([1.0, 0.0]))
+
+
+def test_training_positive_target_floor_uses_only_training_prefix() -> None:
+    from scripts.run_ttm_r2_risk_research import _training_positive_target_floor
+
+    training_positive_targets = np.linspace(0.02, 0.08, 40, dtype=np.float64)
+    frame = pd.DataFrame(
+        {TARGET_COLUMN: [0.0, *training_positive_targets.tolist(), -999.0]}
+    )
+    train_end = len(training_positive_targets) + 1
+    floor = _training_positive_target_floor(frame, train_end=train_end)
+
+    assert 0.02 <= floor <= 0.08
+    assert floor < 0.08
+
+    frame.loc[len(frame) - 1, TARGET_COLUMN] = 1_000_000.0
+    assert _training_positive_target_floor(frame, train_end=train_end) == floor
 
 
 def test_qlike_rejects_non_positive_or_misaligned_values() -> None:
