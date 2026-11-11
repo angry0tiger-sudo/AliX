@@ -1,20 +1,52 @@
 name: TTM-R2 Risk-Only Research
 
 on:
-  workflow_run:
-    workflows: ["AliX Continuous Integration"]
-    types: [completed]
+  push:
     branches: [research/ml-core-ttm-r2-risk-eval]
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
+  standard-ci-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Wait for Standard CI success on this exact SHA
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 60); do
+            runs="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs" -f branch="$GITHUB_REF_NAME" -f per_page=100)"
+            run="$(jq -c --arg sha "$GITHUB_SHA" '[.workflow_runs[] | select(.head_sha == $sha)] | sort_by(.run_number) | last // empty' <<< "$runs")"
+            if [[ -z "$run" ]]; then
+              state="pending"
+            else
+              state="$(jq -r '.conclusion // .status' <<< "$run")"
+            fi
+            case "$state" in
+              success)
+                echo "Standard CI succeeded for exact SHA $GITHUB_SHA"
+                exit 0
+                ;;
+              failure|cancelled|timed_out|action_required)
+                echo "Standard CI ended with $state for exact SHA $GITHUB_SHA"
+                exit 1
+                ;;
+            esac
+            echo "Waiting for exact-SHA Standard CI result (attempt $attempt/60; state=$state)"
+            sleep 15
+          done
+          echo "Timed out waiting for Standard CI on exact SHA $GITHUB_SHA"
+          exit 1
+
   ttm-r2-risk-research:
-    if: >-
-      github.event.workflow_run.event == 'push' &&
-      github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.head_branch == 'research/ml-core-ttm-r2-risk-eval'
+    needs: standard-ci-gate
     runs-on: ubuntu-latest
     timeout-minutes: 120
     permissions:
