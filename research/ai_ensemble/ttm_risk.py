@@ -123,6 +123,27 @@ def forecast_dataset_indices(origins: list[int]) -> list[int]:
     return indices
 
 
+class ForecastContextOnlyDataset:
+    """Expose only historical context tensors to the forecasting model."""
+
+    def __init__(self, dataset: Any, indices: list[int]) -> None:
+        self._dataset = dataset
+        self._indices = indices
+
+    def __len__(self) -> int:
+        return len(self._indices)
+
+    def __getitem__(self, item: int) -> dict[str, Any]:
+        sample = self._dataset[self._indices[item]]
+        if not isinstance(sample, dict):
+            raise TypeError("Forecast dataset samples must be mappings.")
+        return {
+            key: value
+            for key, value in sample.items()
+            if key not in {"future_values", "future_observed_mask"}
+        }
+
+
 def qlike_loss(actual_variance: np.ndarray, forecast_variance: np.ndarray) -> float:
     """Scale-invariant QLIKE loss for strictly-positive variance forecasts."""
     actual = np.asarray(actual_variance, dtype=np.float64)

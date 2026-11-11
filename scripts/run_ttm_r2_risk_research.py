@@ -21,6 +21,7 @@ from research.ai_ensemble.ttm_risk import (
     EXPECTED_START_UNIX,
     PREDICTION_HORIZON,
     TARGET_COLUMN,
+    ForecastContextOnlyDataset,
     forecast_dataset_indices,
     make_evaluation_origins,
     prepare_risk_target,
@@ -104,9 +105,9 @@ def run_split(
     origins: list[int],
     return_variance: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    torch_data = import_module("torch.utils.data")
     indices = forecast_dataset_indices(origins)
-    prediction_output = trainer.predict(torch_data.Subset(dataset, indices))
+    prediction_dataset = ForecastContextOnlyDataset(dataset, indices)
+    prediction_output = trainer.predict(prediction_dataset)
     raw_predictions = prediction_output.predictions
     predictions = (
         raw_predictions[0] if isinstance(raw_predictions, tuple) else raw_predictions
@@ -132,7 +133,14 @@ def run_split(
         .to_numpy(dtype=np.float64)
         .reshape(len(origins), PREDICTION_HORIZON)
     )
-    predicted_hourly_variance = np.maximum(np.expm1(predicted_log_variance), 1e-12)
+    predicted_hourly_variance = np.expm1(predicted_log_variance)
+    if (
+        not np.isfinite(predicted_hourly_variance).all()
+        or np.any(predicted_hourly_variance <= 0)
+    ):
+        raise ValueError(
+            "TTM-R2 produced a non-positive or non-finite variance forecast; reject."
+        )
     ttm_forecast = np.maximum(predicted_hourly_variance.sum(axis=1), 1e-12)
     actual = np.asarray(
         [
@@ -221,7 +229,7 @@ def main() -> int:
         raise ValueError(
             f"Unexpected native TTM prediction length: {config.prediction_length}"
         )
-    if int(config.prediction_filter_length) != PREDICTION_HORIZON:
+    if int(model.prediction_filter_length) != PREDICTION_HORIZON:
         raise ValueError(
             "TTM prediction_filter_length does not match the registered 24h horizon."
         )

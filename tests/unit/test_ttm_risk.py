@@ -9,6 +9,7 @@ import pytest
 from research.ai_ensemble.ttm_risk import (
     CONTEXT_LENGTH,
     PREDICTION_HORIZON,
+    ForecastContextOnlyDataset,
     forecast_dataset_indices,
     make_evaluation_origins,
     prepare_risk_target,
@@ -71,6 +72,34 @@ def test_dataset_indices_end_context_at_the_registered_origin() -> None:
     assert all(
         index + CONTEXT_LENGTH - 1 == origin for index, origin in zip(indices, origins)
     )
+
+
+def test_forecast_dataset_hides_all_future_labels_from_model() -> None:
+    samples = [
+        {
+            "past_values": np.asarray([1.0, 2.0]),
+            "past_observed_mask": np.asarray([True, True]),
+            "future_values": np.asarray([999.0, 1000.0]),
+            "future_observed_mask": np.asarray([True, True]),
+        },
+        {
+            "past_values": np.asarray([3.0, 4.0]),
+            "future_values": np.asarray([888.0, 889.0]),
+        },
+    ]
+    dataset = ForecastContextOnlyDataset(samples, [1, 0])
+    first = dataset[0]
+    assert set(first) == {"past_values"}
+    assert np.array_equal(first["past_values"], np.asarray([3.0, 4.0]))
+    second = dataset[1]
+    assert set(second) == {"past_values", "past_observed_mask"}
+    assert "future_values" not in second and "future_observed_mask" not in second
+
+
+def test_forecast_dataset_rejects_non_mapping_samples() -> None:
+    dataset = ForecastContextOnlyDataset([np.asarray([1.0, 2.0])], [0])
+    with pytest.raises(TypeError, match="mappings"):
+        dataset[0]
 
 
 def test_qlike_rejects_non_positive_or_misaligned_values() -> None:
