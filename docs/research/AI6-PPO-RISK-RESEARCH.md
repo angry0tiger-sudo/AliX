@@ -86,3 +86,21 @@ Every run and report must retain:
 - `nobitex_api_calls = 0`
 
 No Paper Trading or live trading is performed by this workflow. A passing research gate requires a separate owner decision before any Paper Trading preparation or activity.
+
+## Final verdict — 2026-11-11 (closed)
+
+The final owner-authorized OHLCV-only experiment was completed on commit `7464e308d4e1efdb573a8225fb3a392ae7614199` with 200,000 PPO training timesteps. GitHub Actions run [#22](https://github.com/angry0tiger-sudo/AliX/actions/runs/43000569350) completed successfully, including environment/temporal tests, immutable Nobitex artifact verification, training, economic report validation, and safety assertions. Standard CI [#2220](https://github.com/angry0tiger-sudo/AliX/actions/runs/43000569772) was fully green.
+
+| Segment / model | Net PF | Win Rate | Max DD | Z-Score | Completed trades |
+|---|---:|---:|---:|---:|---:|
+| Validation baseline | 0.3743 | 32.48% | 66.56% | -4.8855 | 234 |
+| Validation PPO | N/A | N/A | 0.00%* | N/A | 0 |
+| Untouched holdout baseline | 0.4370 | 34.22% | 60.74% | -4.0982 | 225 |
+| Untouched holdout PPO | N/A | N/A | 0.00%* | N/A | 0 |
+
+PPO accepted 0/234 validation and 0/225 holdout signal episodes. The one-shot 0.25 reward-shaping bonus was recorded zero times in both segments. PF, Win Rate and Z-Score are undefined for PPO because it completed no trades. The reported 0.00% drawdown is due to remaining flat and is not a valid trading-risk improvement.
+
+The promotion decision was `NO-GO`. Minimum trade support, PF >= 1.10, PF improvement, and positive holdout Z-Score all failed. Drawdown-only checks passing while the model stayed in cash do not constitute edge.
+
+**Formal final status: `NO STATISTICAL EDGE FOUND IN RL`. Research phase CLOSED.** No further RL tuning/training, Champion promotion, Paper Trading preparation, or execution is authorized without a new Owner Directive. Safety invariants remain `Champion=null`, `order_permission=false`, and `trading_authorization=NO-GO`.
+
