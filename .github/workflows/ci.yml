@@ -40,7 +40,7 @@ jobs:
       - name: Validate Phase 9 test PostgreSQL Compose profile without starting services
         run: docker compose --file compose.phase9-test.yaml --profile phase9-test config --quiet
       - name: Compile source
-        run: python -m compileall -q control_plane risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels research/deap tests scripts
+        run: python -m compileall -q control_plane risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels research/deap research/ai_ensemble tests scripts
       - name: Ruff lint
         run: ruff check control_plane risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels research/deap tests scripts
       - name: Ruff format check
@@ -48,7 +48,7 @@ jobs:
       - name: Strict type check
         run: mypy --config-file mypy.ini
       - name: Security scan
-        run: bandit -r control_plane risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels research/deap scripts -ll
+        run: bandit -r control_plane risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels research/deap research/ai_ensemble scripts -ll
       - name: Runtime and tooling dependency resolution (dry run)
         run: python -m pip install --dry-run --report /tmp/alix-dependency-resolution.json -r requirements.txt
       - name: Verify transitive dependency lock
@@ -61,7 +61,7 @@ jobs:
       - name: Architecture contracts
         run: lint-imports
       - name: Complexity gate
-        run: xenon --max-absolute B --max-modules B --max-average A control_plane risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels research/deap scripts
+        run: xenon --max-absolute B --max-modules B --max-average A control_plane risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels research/deap research/ai_ensemble scripts
       - name: Unit tests and coverage (mock-only)
         run: pytest --cov=control_plane --cov=risk --cov=connectivity --cov=external_data --cov=services --cov=integrations.nobitex --cov=user_data/strategies --cov-report=term-missing --cov-fail-under=90 -q
       - name: Phase 9 end-to-end simulation (synthetic only)
