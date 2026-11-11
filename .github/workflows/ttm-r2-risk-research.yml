@@ -22,8 +22,8 @@ jobs:
         run: |
           set -euo pipefail
           for attempt in $(seq 1 60); do
-            runs="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs" -f branch="$GITHUB_REF_NAME" -f per_page=100)"
-            run="$(jq -c --arg sha "$GITHUB_SHA" '[.workflow_runs[] | select(.head_sha == $sha)] | sort_by(.run_number) | last // empty' <<< "$runs")"
+            runs="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs" -f head_sha="$GITHUB_SHA" -f per_page=100)"
+            run="$(jq -c --arg sha "$GITHUB_SHA" '[.workflow_runs[] | select(.name == "AliX Continuous Integration" and .head_sha == $sha)] | sort_by(.run_number) | last // empty' <<< "$runs")"
             if [[ -z "$run" ]]; then
               state="pending"
             else
