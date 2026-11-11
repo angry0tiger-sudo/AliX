@@ -33,6 +33,7 @@ from services.rl_research.risk_allocation_environment import (
     OBSERVATION_FIELDS,
     PRIMARY_SIGNAL_OBSERVATION_INDEX,
     ROUND_TRIP_COST_BPS,
+    TAKE_SIGNAL_REWARD_BONUS,
     RiskAllocationEnv,
 )
 
@@ -50,9 +51,10 @@ PRIMARY_PROBABILITY_THRESHOLD = 0.50
 TRAINING_EPISODE_STEPS = 512
 MINIMUM_OOS_TRADES = 51
 PPO_DEFAULT_TIMESTEPS = 200_000
+PPO_MINIMUM_TIMESTEPS = 200_000
 CSV_NAME = "nobitex-btcusdt-1h.csv"
 MANIFEST_NAME = "nobitex-btcusdt-1h.manifest.json"
-REPORT_SCHEMA = "alix.ai6.ppo-risk-research.v2"
+REPORT_SCHEMA = "alix.ai6.ppo-risk-research.v3"
 
 
 @dataclass(frozen=True, slots=True)
@@ -454,8 +456,8 @@ def _train_ppo(
     seed: int,
     output_dir: Path,
 ) -> tuple[Any, dict[str, Any]]:
-    if isinstance(timesteps, bool) or timesteps < 20_000:
-        raise ValueError("rl_training_timesteps_must_be_at_least_20000")
+    if isinstance(timesteps, bool) or timesteps < PPO_MINIMUM_TIMESTEPS:
+        raise ValueError("rl_training_timesteps_must_be_at_least_200000")
     sb3 = importlib.import_module("stable_baselines3")
     vec_module = importlib.import_module("stable_baselines3.common.vec_env")
     dummy_vec_env = getattr(vec_module, "DummyVecEnv")
@@ -495,6 +497,7 @@ def _train_ppo(
         "gae_lambda": 0.95,
         "clip_range": 0.2,
         "entropy_coefficient": 0.02,
+        "minimum_required_timesteps": PPO_MINIMUM_TIMESTEPS,
         "model_file": "ppo-risk-manager.zip",
     }
 
@@ -681,6 +684,7 @@ def run_training(
         "minimum_oos_trades_required": MINIMUM_OOS_TRADES,
         "risk_environment": {
             "action_type": "DISCRETE_BASELINE_SIGNAL_EPISODE_FILTER",
+            "action_space_size": 2,
             "actions": list(ACTION_NAMES),
             "actions_target_exposure_fraction": list(ACTION_FRACTIONS),
             "one_decision_per_contiguous_signal_episode": True,
@@ -697,9 +701,11 @@ def run_training(
                 "linear_excess_above_15_percent": DRAWDOWN_EXCESS_PENALTY,
                 "quadratic_excess_above_15_percent": DRAWDOWN_SEVERE_PENALTY,
             },
-            "participation_bonus": 0.0,
+            "participation_bonus": TAKE_SIGNAL_REWARD_BONUS,
+            "participation_bonus_semantics": "ONE_SHOT_PER_ACCEPTED_SIGNAL_EPISODE; REWARD_SHAPING_ONLY_EXCLUDED_FROM_EQUITY_AND_PNL",
+            "participation_bonus_count_validation": "AUDITED_IN_ENVIRONMENT_METRICS",
             "inactivity_penalty": 0.0,
-            "reward": "RUNNING_SORTINO_STYLE_NET_LOG_RETURN_WITH_SCALED_DRAWDOWN_PENALTIES",
+            "reward": "RUNNING_SORTINO_STYLE_NET_LOG_RETURN_PLUS_ONE_SHOT_TAKE_BONUS_MINUS_SCALED_DRAWDOWN_PENALTIES",
             "trade_count_definition": "COMPLETED_TAKEN_CONTIGUOUS_PRIMARY_SIGNAL_EPISODES",
         },
         "execution_costs": {

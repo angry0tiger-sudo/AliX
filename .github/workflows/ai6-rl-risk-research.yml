@@ -3,7 +3,7 @@ name: AliX AI-6 Risk-only PPO Research
 on:
   push:
     branches:
-      - research/ml-core-ai6-rl-risk
+      - research/alternative-data-pivot
     paths:
       - .github/workflows/ai6-rl-risk-research.yml
       - requirements-rl-research.txt
@@ -23,7 +23,7 @@ concurrency:
 
 jobs:
   train-risk-manager:
-    if: github.ref == 'refs/heads/research/ml-core-ai6-rl-risk'
+    if: github.ref == 'refs/heads/research/alternative-data-pivot'
     runs-on: ubuntu-latest
     timeout-minutes: 360
     env:
@@ -49,7 +49,7 @@ jobs:
           repository = os.environ["GITHUB_REPOSITORY"]
           target_sha = os.environ["TARGET_SHA"]
           target_branch = os.environ["TARGET_BRANCH"]
-          if target_branch != "research/ml-core-ai6-rl-risk":
+          if target_branch != "research/alternative-data-pivot":
               raise SystemExit("unsupported_ai6_rl_branch")
           url = (
               f"https://api.github.com/repos/{repository}/actions/workflows/ci.yml/runs"
@@ -168,7 +168,7 @@ jobs:
             --input-dir "$DATASET_DIR" \
             --output-dir "$OUTPUT_DIR" \
             --commit-sha "$TARGET_SHA" \
-            --timesteps 100000 \
+            --timesteps 200000 \
             --seed 42
 
       - name: Validate report, economics, provenance and immutable safety invariants
@@ -186,7 +186,9 @@ jobs:
               Path(os.environ["REPORT_PATH"]).read_text(encoding="utf-8")
           )
           assert report["commit_sha"] == os.environ["TARGET_SHA"]
-          assert report["schema_version"] == "alix.ai6.ppo-risk-research.v2"
+          assert report["schema_version"] == "alix.ai6.ppo-risk-research.v3"
+          assert report["ppo"]["total_timesteps"] >= 200000
+          assert report["ppo"]["minimum_required_timesteps"] == 200000
           assert report["source_dataset"]["producer_commit_sha"] == (
               "e6c86b08da98ad28e479b45827fb8de6cd3cc8dd"
           )
@@ -201,7 +203,10 @@ jobs:
           assert report["risk_environment"]["action_type"] == (
               "DISCRETE_BASELINE_SIGNAL_EPISODE_FILTER"
           )
+          assert report["risk_environment"]["action_space_size"] == 2
           assert report["risk_environment"]["actions_target_exposure_fraction"] == [0.0, 1.0]
+          assert report["risk_environment"]["participation_bonus"] == 0.25
+          assert report["risk_environment"]["participation_bonus_semantics"].startswith("ONE_SHOT_PER_ACCEPTED_SIGNAL_EPISODE")
           assert report["risk_environment"]["one_decision_per_contiguous_signal_episode"] is True
           assert report["risk_environment"]["force_flat_when_primary_signal_off"] is True
           assert report["temporal_split"]["holdout_used_for_training_or_tuning"] is False
@@ -258,7 +263,9 @@ jobs:
               f"Dataset SHA-256: {report['source_dataset']['csv_sha256']}",
               "Dataset: Nobitex BTC/USDT 1h, 31,801 pre-hack candles",
               "Execution costs: 25 bps fee/side + 0 bps slippage = 50 bps round-trip",
-              f"Action model: {report['risk_environment']['action_type']}",
+              f"Action model: {report['risk_environment']['action_type']} (Discrete(2))",
+              f"PPO training timesteps: {report['ppo']['total_timesteps']}",
+              f"Take exploration bonus: {report['risk_environment']['participation_bonus']} reward units per accepted signal episode (excluded from PnL)",
               f"Minimum OOS completed signal episodes: {report['minimum_oos_trades_required']}",
               "",
           ]

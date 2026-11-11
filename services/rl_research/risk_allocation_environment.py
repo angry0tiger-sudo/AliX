@@ -52,6 +52,7 @@ DRAWDOWN_LIMIT = 0.15
 DRAWDOWN_EXCESS_PENALTY = 2.0
 DRAWDOWN_INCREMENT_PENALTY = 0.5
 DRAWDOWN_SEVERE_PENALTY = 4.0
+TAKE_SIGNAL_REWARD_BONUS = 0.25
 POSITION_EPSILON = 1e-12
 
 Float64Array = NDArray[np.float64]
@@ -268,7 +269,7 @@ class RiskAllocationEnv(gym.Env[Float32Array, np.int64]):
         self.bar_interval_ms = bar_interval_ms
         self.random_start = random_start
         self.episode_steps = episode_steps
-        self.action_space = spaces.Discrete(len(ACTION_FRACTIONS))
+        self.action_space = spaces.Discrete(2)
         self.observation_space = _new_observation_space()
         self._reset_portfolio()
 
@@ -295,6 +296,8 @@ class RiskAllocationEnv(gym.Env[Float32Array, np.int64]):
         self._signal_episodes_seen = 0
         self._signal_episodes_taken = 0
         self._signal_episodes_skipped = 0
+        self._take_signal_reward_bonus_count = 0
+        self._take_signal_reward_bonus_total = 0.0
         self._ignored_actions = 0
         self._terminated = False
         self._last_info: dict[str, Any] = {}
@@ -418,7 +421,14 @@ class RiskAllocationEnv(gym.Env[Float32Array, np.int64]):
         score = log_return / denominator
         return max(-SORTINO_REWARD_CLIP, min(SORTINO_REWARD_CLIP, score))
 
-    def _reward(self, log_return: float, prior_drawdown: float) -> tuple[float, float]:
+    def _reward(
+        self,
+        log_return: float,
+        prior_drawdown: float,
+        participation_bonus: float = 0.0,
+    ) -> tuple[float, float]:
+        if not math.isfinite(participation_bonus) or participation_bonus < 0.0:
+            raise ValueError("take_signal_reward_bonus_invalid")
         sortino_component = self._sortino_reward(log_return)
         drawdown_increase = max(0.0, self._current_drawdown - prior_drawdown)
         excess = max(0.0, self._current_drawdown - DRAWDOWN_LIMIT)
@@ -427,7 +437,7 @@ class RiskAllocationEnv(gym.Env[Float32Array, np.int64]):
             + DRAWDOWN_EXCESS_PENALTY * excess
             + DRAWDOWN_SEVERE_PENALTY * excess * excess
         )
-        return sortino_component - penalty, penalty
+        return sortino_component + participation_bonus - penalty, penalty
 
     def _metrics(self, equity: float) -> dict[str, Any]:
         returns = np.asarray(self._closed_trade_returns, dtype=np.float64)
@@ -456,6 +466,10 @@ class RiskAllocationEnv(gym.Env[Float32Array, np.int64]):
             "candidate_signal_episode_count": int(self._signal_episodes_seen),
             "accepted_signal_episode_count": int(self._signal_episodes_taken),
             "skipped_signal_episode_count": int(self._signal_episodes_skipped),
+            "take_signal_reward_bonus_count": int(self._take_signal_reward_bonus_count),
+            "take_signal_reward_bonus_total": float(
+                self._take_signal_reward_bonus_total
+            ),
             "signal_acceptance_rate": (
                 float(self._signal_episodes_taken / self._signal_episodes_seen)
                 if self._signal_episodes_seen
@@ -491,6 +505,8 @@ class RiskAllocationEnv(gym.Env[Float32Array, np.int64]):
             "action_fractions": list(ACTION_FRACTIONS),
             "action_names": list(ACTION_NAMES),
             "signal_episode_policy": "ONE_DECISION_PER_SIGNAL_EPISODE; FORCE_FLAT_WHEN_SIGNAL_OFF",
+            "take_signal_reward_bonus": TAKE_SIGNAL_REWARD_BONUS,
+            "take_signal_reward_bonus_semantics": "REWARD_SHAPING_ONLY_NOT_PNL",
             "fee_bps_per_side": FEE_BPS_PER_SIDE,
             "slippage_bps_per_side": SLIPPAGE_BPS_PER_SIDE,
             "round_trip_cost_bps": ROUND_TRIP_COST_BPS,
@@ -554,12 +570,18 @@ class RiskAllocationEnv(gym.Env[Float32Array, np.int64]):
         return fee, notional, close_equity
 
     def _calculate_step_reward(
-        self, previous_equity: float, close_equity: float, prior_drawdown: float
+        self,
+        previous_equity: float,
+        close_equity: float,
+        prior_drawdown: float,
+        participation_bonus: float = 0.0,
     ) -> tuple[float, float, float]:
         if previous_equity <= 0.0 or close_equity <= 0.0:
             raise RuntimeError("portfolio_equity_non_positive")
         log_return = math.log(close_equity / previous_equity)
-        reward, drawdown_penalty = self._reward(log_return, prior_drawdown)
+        reward, drawdown_penalty = self._reward(
+            log_return, prior_drawdown, participation_bonus
+        )
         return log_return, reward, drawdown_penalty
 
     def _build_step_info(
@@ -574,6 +596,7 @@ class RiskAllocationEnv(gym.Env[Float32Array, np.int64]):
         fee: float,
         notional: float,
         drawdown_penalty: float,
+        participation_bonus: float,
         close_equity: float,
     ) -> dict[str, Any]:
         return {
@@ -599,6 +622,8 @@ class RiskAllocationEnv(gym.Env[Float32Array, np.int64]):
             "fill_fee_quote": float(fee),
             "fill_notional_quote": float(notional),
             "drawdown_penalty": float(drawdown_penalty),
+            "take_signal_reward_bonus": float(participation_bonus),
+            "take_signal_reward_bonus_applied": bool(participation_bonus > 0.0),
             "risk_only_action": True,
             "Champion": None,
             "order_permission": False,
@@ -622,6 +647,14 @@ class RiskAllocationEnv(gym.Env[Float32Array, np.int64]):
         signal_episode_started, applied_target = self._apply_signal_episode_decision(
             action_index, signal
         )
+        participation_bonus = (
+            TAKE_SIGNAL_REWARD_BONUS
+            if signal_episode_started and self._signal_episode_taken
+            else 0.0
+        )
+        if participation_bonus > 0.0:
+            self._take_signal_reward_bonus_count += 1
+            self._take_signal_reward_bonus_total += participation_bonus
         previous_equity = self._equity(current_price)
         prior_drawdown = self._current_drawdown
         fee, notional = self._rebalance(applied_target, execution_price)
@@ -631,7 +664,7 @@ class RiskAllocationEnv(gym.Env[Float32Array, np.int64]):
             next_bar, terminated, fee, notional, close_equity
         )
         log_return, reward, drawdown_penalty = self._calculate_step_reward(
-            previous_equity, close_equity, prior_drawdown
+            previous_equity, close_equity, prior_drawdown, participation_bonus
         )
         self._index = next_index
         self._terminated = terminated
@@ -646,6 +679,7 @@ class RiskAllocationEnv(gym.Env[Float32Array, np.int64]):
             fee,
             notional,
             drawdown_penalty,
+            participation_bonus,
             close_equity,
         )
         self._last_info = info

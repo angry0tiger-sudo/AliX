@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from gymnasium.spaces import Discrete
 import numpy as np
 import pytest
 from numpy.typing import NDArray
@@ -18,6 +19,7 @@ from services.rl_research.risk_allocation_environment import (
     OBSERVATION_FIELDS,
     ROUND_TRIP_COST_BPS,
     SLIPPAGE_BPS_PER_SIDE,
+    TAKE_SIGNAL_REWARD_BONUS,
     RiskAllocationEnv,
 )
 
@@ -65,6 +67,9 @@ def test_binary_signal_filter_observation_and_fixed_cost_contract() -> None:
     observation, info = env.reset(seed=7)
     assert env.action_space.contains(ACTION_SKIP)
     assert env.action_space.contains(ACTION_TAKE)
+    action_space = env.action_space
+    assert isinstance(action_space, Discrete)
+    assert action_space.n == 2
     assert tuple(ACTION_FRACTIONS) == (0.0, 1.0)
     assert tuple(ACTION_NAMES) == ("SKIP_SIGNAL", "TAKE_SIGNAL")
     assert observation.shape == (len(OBSERVATION_FIELDS),)
@@ -369,3 +374,53 @@ def test_metrics_handle_no_taken_signals_without_fabricating_profit_factor() -> 
     assert metrics["net_profit_factor"] is None
     assert metrics["win_rate"] is None
     assert metrics["statistical_z_score"] is None
+
+
+def test_take_reward_bonus_is_one_shot_per_accepted_signal_episode() -> None:
+    env = make_env(signals=(True, True, False, True, False, False))
+    env.reset(seed=23)
+
+    _, _, _, _, first_entry = env.step(ACTION_TAKE)
+    assert first_entry["signal_episode_started"] is True
+    assert first_entry["signal_episode_taken"] is True
+    assert first_entry["take_signal_reward_bonus"] == pytest.approx(
+        TAKE_SIGNAL_REWARD_BONUS
+    )
+    assert first_entry["take_signal_reward_bonus_applied"] is True
+
+    _, _, _, _, latched_step = env.step(ACTION_SKIP)
+    assert latched_step["signal_episode_started"] is False
+    assert latched_step["take_signal_reward_bonus"] == 0.0
+    assert latched_step["take_signal_reward_bonus_applied"] is False
+
+    _, _, _, _, signal_off = env.step(ACTION_TAKE)
+    assert signal_off["primary_buy_signal"] is False
+    assert signal_off["take_signal_reward_bonus"] == 0.0
+
+    _, _, _, _, second_entry = env.step(ACTION_TAKE)
+    assert second_entry["signal_episode_started"] is True
+    assert second_entry["signal_episode_taken"] is True
+    assert second_entry["take_signal_reward_bonus"] == pytest.approx(
+        TAKE_SIGNAL_REWARD_BONUS
+    )
+
+    metrics = env.get_metrics()
+    assert metrics["take_signal_reward_bonus_count"] == 2
+    assert metrics["take_signal_reward_bonus_total"] == pytest.approx(
+        2.0 * TAKE_SIGNAL_REWARD_BONUS
+    )
+
+
+def test_skipped_or_ignored_signal_actions_receive_no_participation_bonus() -> None:
+    env = make_env(signals=(True, True, False, False, False, False))
+    env.reset(seed=29)
+
+    _, _, _, _, skipped = env.step(ACTION_SKIP)
+    assert skipped["signal_episode_started"] is True
+    assert skipped["signal_episode_taken"] is False
+    assert skipped["take_signal_reward_bonus"] == 0.0
+
+    _, _, _, _, ignored = env.step(ACTION_TAKE)
+    assert ignored["signal_episode_started"] is False
+    assert ignored["take_signal_reward_bonus"] == 0.0
+    assert env.get_metrics()["take_signal_reward_bonus_count"] == 0

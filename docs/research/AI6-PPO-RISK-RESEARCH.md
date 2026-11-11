@@ -45,7 +45,7 @@ The action space is binary:
 
 PPO makes exactly one decision at the start of each contiguous Primary BUY signal episode. That choice is latched until the signal turns off; the first signal-off candle forces a full exit at the next hourly open. This makes each completed trade correspond to one accepted contiguous signal episode. Actions emitted during the middle of an already-decided signal episode are ignored and explicitly counted for audit.
 
-The previous model was not literally outputting 0% throughout: it generated 2,620 validation and 2,876 holdout position adjustments, but only one complete flat-to-flat inventory lifecycle. Its trade counter correctly saw one continuously open position, not 2,000+ completed trades. The one-trade PF/Win Rate were therefore not statistically meaningful. This revision aligns decision semantics, position lifecycle, and trade-count semantics.
+The prior AI-6 run on commit `1f78ef845ac1c6336b0ec94027c1467fe116f3c0` accepted zero signal episodes: validation skipped 228/228 and final holdout skipped 231/231. The environment already used a two-action discrete signal filter, so the observed paralysis was not caused by a continuous position-sizing action space. The revised reward adds a small, one-time participation-shaping bonus only when PPO actually accepts a new signal episode. Completed trade counts remain based on realized flat-to-flat trades, not the bonus or the number of policy timesteps.
 
 Decisions are made after an hourly candle closes and simulated fills occur at the next hourly open. OHLC intrabar highs/lows are used conservatively for drawdown tracking. Any remaining inventory is liquidated at segment end, including its exit fee.
 
@@ -57,9 +57,9 @@ The only execution cost used for the principal experiment is:
 - Slippage: 0 bps per side.
 - Round trip: exactly 50 bps.
 
-The reward remains a running Sortino-style net log-return signal, but the drawdown-shaping coefficients are reduced fivefold so the 15% threshold remains visible without dominating every training decision: incremental penalty 0.5, linear excess penalty 2.0, and quadratic excess penalty 4.0. The hard 15% drawdown promotion gate is unchanged. No artificial inactivity penalty or participation bonus is applied; such a bonus could force the policy to take losing baseline signals and manufacture activity without edge.
+The reward is a running Sortino-style net log-return signal with the existing drawdown shaping: incremental penalty 0.5, linear excess penalty 2.0, and quadratic excess penalty 4.0 above the 15% drawdown threshold. A one-time `0.25` reward-unit participation bonus is added only at the start of a signal episode that PPO chooses to TAKE. It is reward shaping only: it never changes cash, equity, realized trade returns, Profit Factor, Win Rate, Drawdown, or Z-Score. It is logged separately. The bonus encourages exploration but does not guarantee positive economics; all promotion metrics remain calculated from the 50 bps costed cash ledger. The hard 15% drawdown gate is unchanged.
 
-The fixed baseline takes every contiguous primary-signal episode and exits when the signal turns off. It uses the same market bars, next-open fill convention, cost model, episode boundaries, and evaluation segments as PPO.
+PPO training requires at least 200,000 timesteps. The fixed baseline takes every contiguous primary-signal episode and exits when the signal turns off. It uses the same market bars, next-open fill convention, cost model, episode boundaries, and evaluation segments as PPO.
 
 ## Promotion gate
 
