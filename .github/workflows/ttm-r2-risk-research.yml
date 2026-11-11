@@ -1,0 +1,114 @@
+name: TTM-R2 Risk-Only Research
+
+on:
+  workflow_run:
+    workflows: ["AliX Continuous Integration"]
+    types: [completed]
+    branches: [research/ml-core-ttm-r2-risk-eval]
+
+permissions:
+  contents: read
+
+jobs:
+  ttm-r2-risk-research:
+    if: >-
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'research/ml-core-ttm-r2-risk-eval'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    env:
+      ALIX_DRY_RUN: "true"
+      ALIX_ALLOW_LIVE_TRADING: "false"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      TOKENIZERS_PARALLELISM: "false"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    steps:
+      - name: Checkout exact Standard CI SHA
+        uses: actions/checkout@v4
+        with:
+          ref: \${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pinned CPU-only TTM research dependencies
+        run: |
+          python -m pip install pip==25.2
+          python -m pip install torch==2.9.1 --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install granite-tsfm==0.3.12 transformers==5.20.2 accelerate==1.15.0 datasets==4.3.0 pandas==2.3.3 numpy scikit-learn==1.9.0
+          python -m pip install pip-audit==2.9.0
+      - name: Audit TTM-only dependency environment
+        run: pip-audit
+      - name: Re-run TTM risk contract tests
+        run: pytest tests/unit/test_ttm_risk.py -q
+      - name: Fetch immutable pre-hack Nobitex data through the existing public-only fetcher
+        run: |
+          set -euo pipefail
+          data_dir="$GITHUB_WORKSPACE/.artifacts/alix-prehack-data"
+          mkdir -p "$data_dir"
+          python -m scripts.fetch_nobitex_prehack_ohlcv --output-dir "$data_dir" --commit-sha "$GITHUB_SHA"
+      - name: Run frozen zero-shot TTM-R2 risk forecast
+        run: |
+          set -euo pipefail
+          python -m scripts.run_ttm_r2_risk_research \
+            --ohlcv .artifacts/alix-prehack-data/nobitex-btcusdt-1h.csv \
+            --manifest .artifacts/alix-prehack-data/nobitex-btcusdt-1h.manifest.json \
+            --output-dir .artifacts/alix-ttm-r2-risk \
+            --commit-sha "$GITHUB_SHA"
+      - name: Validate report and write Step Summary
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          report = json.loads(Path(".artifacts/alix-ttm-r2-risk/ttm-r2-risk-report.json").read_text())
+          safety = report["safety"]
+          assert report["code_commit_sha"] == __import__("os").environ["GITHUB_SHA"]
+          assert report["dataset"]["row_count"] == 31801
+          assert report["dataset"]["csv_sha256"] == "0aa13607d1da68c4720919f233635bb33d34048e5bd67d3ecc2ce9bb7c2b462e"
+          assert report["model"]["mode"] == "ZERO_SHOT_FROZEN_WEIGHTS"
+          assert report["model"]["fine_tuned_on_nobitex"] is False
+          assert report["risk_forecast_acceptance"]["status"] in {"PASS_RISK_FORECAST_RESEARCH_ONLY", "NO_GO"}
+          assert safety["Champion"] is None and safety["order_permission"] is False
+          assert safety["trading_authorization"] == "NO-GO"
+          assert safety["private_api_calls"] == 0 and safety["real_order_attempts"] == 0
+          assert safety["paper_orders"] == 0
+          assert safety["position_multiplier_applied_to_runtime"] is False
+          holdout = report["final_holdout_metrics"]
+          lines = [
+              "# TTM-R2 Risk-Only Research",
+              f"Commit: {report['code_commit_sha']}",
+              f"Model: {report['model']['model_id']} @ {report['model']['resolved_immutable_revision']}",
+              f"Weight SHA-256: {report['model']['weights_sha256']}",
+              f"Dataset SHA-256: {report['dataset']['csv_sha256']}",
+              "",
+              "| Final holdout metric | TTM-R2 | Persistence baseline |",
+              "|---|---:|---:|",
+              f"| QLIKE | {holdout['ttm_qlike']:.8f} | {holdout['persistence_qlike']:.8f} |",
+              f"| Log-variance MAE | {holdout['ttm_log_variance_mae']:.8f} | {holdout['persistence_log_variance_mae']:.8f} |",
+              f"| Samples | {holdout['sample_count']} | {holdout['sample_count']} |",
+              f"| QLIKE improvement | {holdout['qlike_improvement_fraction']:.2%} | 5.00% required |",
+              "",
+              f"**Research verdict: {report['risk_forecast_acceptance']['status']}**",
+              "",
+              "This is forecast-only risk research. It does not evaluate entry alpha, run a trading backtest, apply position sizing to runtime, or authorize paper/live trading.",
+              "",
+              "Safety: Champion=null; order_permission=false; trading_authorization=NO-GO; private_api_calls=0; real_order_attempts=0; paper_orders=0.",
+          ]
+          Path(__import__("os").environ["GITHUB_STEP_SUMMARY"]).write_text("\n".join(lines) + "\n")
+          print("\n".join(lines))
+          PY
+      - name: Upload immutable dataset manifest and TTM research artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alix-ttm-r2-risk-only
+          path: |
+            .artifacts/alix-prehack-data/*
+            .artifacts/alix-ttm-r2-risk/*
+          if-no-files-found: warn
+          retention-days: 30
