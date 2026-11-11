@@ -102,10 +102,9 @@ def run_split(
     origins: list[int],
     return_variance: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    from torch.utils.data import Subset
-
+    torch_data = import_module("torch.utils.data")
     indices = forecast_dataset_indices(origins)
-    prediction_output = trainer.predict(Subset(dataset, indices))
+    prediction_output = trainer.predict(torch_data.Subset(dataset, indices))
     raw_predictions = prediction_output.predictions
     predictions = (
         raw_predictions[0] if isinstance(raw_predictions, tuple) else raw_predictions
