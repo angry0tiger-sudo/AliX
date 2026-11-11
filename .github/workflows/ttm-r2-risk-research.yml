@@ -6,47 +6,15 @@ on:
 
 permissions:
   contents: read
-  actions: read
 
 jobs:
-  standard-ci-gate:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+  standard-ci:
+    uses: ./.github/workflows/ci.yml
     permissions:
-      actions: read
       contents: read
-    steps:
-      - name: Wait for Standard CI success on this exact SHA
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          for attempt in $(seq 1 60); do
-            runs="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs" -f head_sha="$GITHUB_SHA" -f per_page=100)"
-            run="$(jq -c --arg sha "$GITHUB_SHA" '[.workflow_runs[] | select(.name == "AliX Continuous Integration" and .head_sha == $sha)] | sort_by(.run_number) | last // empty' <<< "$runs")"
-            if [[ -z "$run" ]]; then
-              state="pending"
-            else
-              state="$(jq -r '.conclusion // .status' <<< "$run")"
-            fi
-            case "$state" in
-              success)
-                echo "Standard CI succeeded for exact SHA $GITHUB_SHA"
-                exit 0
-                ;;
-              failure|cancelled|timed_out|action_required)
-                echo "Standard CI ended with $state for exact SHA $GITHUB_SHA"
-                exit 1
-                ;;
-            esac
-            echo "Waiting for exact-SHA Standard CI result (attempt $attempt/60; state=$state)"
-            sleep 15
-          done
-          echo "Timed out waiting for Standard CI on exact SHA $GITHUB_SHA"
-          exit 1
 
   ttm-r2-risk-research:
-    needs: standard-ci-gate
+    needs: standard-ci
     runs-on: ubuntu-latest
     timeout-minutes: 120
     permissions:
@@ -61,7 +29,7 @@ jobs:
       - name: Checkout exact Standard CI SHA
         uses: actions/checkout@v4
         with:
-          ref: \${{ github.event.workflow_run.head_sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
       - name: Set up Python
         uses: actions/setup-python@v5
