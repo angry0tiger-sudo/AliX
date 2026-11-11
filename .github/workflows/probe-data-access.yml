@@ -1,0 +1,40 @@
+name: AliX Alternative Data Provider Access Probe
+
+on:
+  # One-time bootstrap: GitHub requires workflow_dispatch workflows to exist
+  # on the default branch. This branch-only push trigger runs the first probe
+  # without modifying protected main.
+  push:
+    branches:
+      - research/alternative-data-pivot
+    paths:
+      - .github/workflows/probe-data-access.yml
+      - scripts/probe_alternative_data_access.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: alix-alternative-data-access-probe
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    if: github.ref == 'refs/heads/research/alternative-data-pivot'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Checkout exact research ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Probe HTTP status codes (Binance, Bybit, OKX order)
+        run: python scripts/probe_alternative_data_access.py
