@@ -230,58 +230,67 @@ def attach_asof_risk_multipliers(
     return attached
 
 
-def evaluate_sized_portfolio(
-    trades: list[dict[str, Any]],
-    *,
-    risk_managed: bool,
-    fixed_position_fraction: float = FIXED_POSITION_FRACTION,
-) -> dict[str, float | int | None]:
-    """Compound non-overlapping trades at fixed or TTM-scaled equity exposure."""
-    if (
-        not np.isfinite(fixed_position_fraction)
-        or not 0.0 < fixed_position_fraction <= 0.10
-    ):
+def _validate_fixed_position_fraction(fraction: float) -> None:
+    if not np.isfinite(fraction) or not 0.0 < fraction <= 0.10:
         raise ValueError("ttm_portfolio_fixed_position_fraction_out_of_range")
-    if not trades:
-        return {
-            "trade_count": 0,
-            "win_rate": None,
-            "net_profit_factor": None,
-            "max_drawdown": None,
-            "net_return": 0.0,
-            "ending_equity": 1.0,
-            "average_position_fraction": None,
-            "average_risk_multiplier": None,
-        }
-    equity = 1.0
-    peak_equity = 1.0
-    maximum_drawdown = 0.0
-    positive_pnl = 0.0
-    negative_pnl = 0.0
-    wins = 0
-    exposures: list[float] = []
-    multipliers: list[float] = []
-    for trade in trades:
-        net_return = float(trade["net_return"])
-        multiplier = float(trade["risk_multiplier"]) if risk_managed else 1.0
-        if not np.isfinite(net_return) or net_return <= -1.0:
-            raise ValueError("ttm_portfolio_trade_return_invalid")
-        if not np.isfinite(multiplier) or not 0.0 < multiplier <= 1.0:
-            raise ValueError("ttm_portfolio_trade_multiplier_invalid")
-        exposure = fixed_position_fraction * multiplier
-        pnl = equity * exposure * net_return
-        if pnl > 0.0:
-            positive_pnl += pnl
-            wins += 1
-        elif pnl < 0.0:
-            negative_pnl -= pnl
-        equity += pnl
-        if equity <= 0.0:
-            raise ValueError("ttm_portfolio_equity_depleted")
-        peak_equity = max(peak_equity, equity)
-        maximum_drawdown = max(maximum_drawdown, 1.0 - equity / peak_equity)
-        exposures.append(exposure)
-        multipliers.append(multiplier)
+
+
+def _empty_portfolio_metrics() -> dict[str, float | int | None]:
+    return {
+        "trade_count": 0,
+        "win_rate": None,
+        "net_profit_factor": None,
+        "max_drawdown": None,
+        "net_return": 0.0,
+        "ending_equity": 1.0,
+        "average_position_fraction": None,
+        "average_risk_multiplier": None,
+    }
+
+
+def _trade_exposure(
+    trade: dict[str, Any], risk_managed: bool, fixed_position_fraction: float
+) -> tuple[float, float]:
+    net_return = float(trade["net_return"])
+    multiplier = float(trade["risk_multiplier"]) if risk_managed else 1.0
+    if not np.isfinite(net_return) or net_return <= -1.0:
+        raise ValueError("ttm_portfolio_trade_return_invalid")
+    if not np.isfinite(multiplier) or not 0.0 < multiplier <= 1.0:
+        raise ValueError("ttm_portfolio_trade_multiplier_invalid")
+    return net_return, fixed_position_fraction * multiplier
+
+
+def _accumulate_profit_and_loss(
+    pnl: float, positive_pnl: float, negative_pnl: float, wins: int
+) -> tuple[float, float, int]:
+    if pnl > 0.0:
+        return positive_pnl + pnl, negative_pnl, wins + 1
+    if pnl < 0.0:
+        return positive_pnl, negative_pnl - pnl, wins
+    return positive_pnl, negative_pnl, wins
+
+
+def _advance_equity(
+    equity: float, peak_equity: float, pnl: float
+) -> tuple[float, float, float]:
+    next_equity = equity + pnl
+    if next_equity <= 0.0:
+        raise ValueError("ttm_portfolio_equity_depleted")
+    next_peak = max(peak_equity, next_equity)
+    drawdown = 1.0 - next_equity / next_peak
+    return next_equity, next_peak, drawdown
+
+
+def _portfolio_metrics(
+    trades: list[dict[str, Any]],
+    equity: float,
+    maximum_drawdown: float,
+    positive_pnl: float,
+    negative_pnl: float,
+    wins: int,
+    exposures: list[float],
+    multipliers: list[float],
+) -> dict[str, float | int | None]:
     profit_factor = positive_pnl / negative_pnl if negative_pnl > 0.0 else None
     return {
         "trade_count": len(trades),
@@ -295,3 +304,50 @@ def evaluate_sized_portfolio(
         "average_position_fraction": float(np.mean(exposures)),
         "average_risk_multiplier": float(np.mean(multipliers)),
     }
+
+
+def evaluate_sized_portfolio(
+    trades: list[dict[str, Any]],
+    *,
+    risk_managed: bool,
+    fixed_position_fraction: float = FIXED_POSITION_FRACTION,
+) -> dict[str, float | int | None]:
+    """Compound non-overlapping trades at fixed or TTM-scaled equity exposure."""
+    _validate_fixed_position_fraction(fixed_position_fraction)
+    if not trades:
+        return _empty_portfolio_metrics()
+
+    equity = 1.0
+    peak_equity = 1.0
+    maximum_drawdown = 0.0
+    positive_pnl = 0.0
+    negative_pnl = 0.0
+    wins = 0
+    exposures: list[float] = []
+    multipliers: list[float] = []
+    for trade in trades:
+        net_return, exposure = _trade_exposure(
+            trade, risk_managed, fixed_position_fraction
+        )
+        multiplier = float(trade["risk_multiplier"]) if risk_managed else 1.0
+        pnl = equity * exposure * net_return
+        positive_pnl, negative_pnl, wins = _accumulate_profit_and_loss(
+            pnl, positive_pnl, negative_pnl, wins
+        )
+        equity, peak_equity, drawdown = _advance_equity(
+            equity, peak_equity, pnl
+        )
+        maximum_drawdown = max(maximum_drawdown, drawdown)
+        exposures.append(exposure)
+        multipliers.append(multiplier)
+
+    return _portfolio_metrics(
+        trades,
+        equity,
+        maximum_drawdown,
+        positive_pnl,
+        negative_pnl,
+        wins,
+        exposures,
+        multipliers,
+    )

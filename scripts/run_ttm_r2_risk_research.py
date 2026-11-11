@@ -217,38 +217,22 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main() -> int:
-    args = build_parser().parse_args()
-    if len(args.commit_sha) != 40:
-        raise ValueError("--commit-sha must be a full 40-character Git SHA.")
-    args.output_dir.mkdir(parents=True, exist_ok=True)
-    ohlcv, data_manifest = verify_dataset(args.ohlcv, args.manifest, args.commit_sha)
-    frame = prepare_risk_target(ohlcv)
-    return_variance = frame["return_variance"].to_numpy(dtype=np.float64)
-    split = make_evaluation_origins(len(frame))
-    train_end = int(split["train_end"])
-
-    tsfm_public = import_module("tsfm_public")
-    get_model_module = import_module("tsfm_public.toolkit.get_model")
-    transformers = import_module("transformers")
-    hub = import_module("huggingface_hub")
-
-    preprocessor = tsfm_public.TimeSeriesPreprocessor(
-        id_columns=[],
-        timestamp_column="timestamp",
-        target_columns=[TARGET_COLUMN],
-        context_length=CONTEXT_LENGTH,
-        prediction_length=PREDICTION_HORIZON,
-        scaling=True,
-        scaler_type="standard",
-        encode_categorical=False,
-        freq="h",
+def _prepare_experiment_inputs(args: argparse.Namespace) -> dict[str, Any]:
+    ohlcv, data_manifest = verify_dataset(
+        args.ohlcv, args.manifest, args.commit_sha
     )
-    # Fit scaling statistics on the training prefix only; the model itself remains frozen.
-    preprocessor.train(frame.iloc[:train_end].copy())
-    processed_frame = preprocessor.preprocess(frame.copy())
+    frame = prepare_risk_target(ohlcv)
+    split = make_evaluation_origins(len(frame))
+    return {
+        "ohlcv": ohlcv,
+        "data_manifest": data_manifest,
+        "frame": frame,
+        "return_variance": frame["return_variance"].to_numpy(dtype=np.float64),
+        "split": split,
+    }
 
-    model_revision = MODEL_REVISION
+
+def _load_pinned_model_weights(hub: Any) -> tuple[str, str]:
     weights_path = Path(
         hub.hf_hub_download(
             repo_id=MODEL_ID,
@@ -261,16 +245,10 @@ def main() -> int:
         raise ValueError(
             "TTM-R2 model weight SHA-256 does not match the pinned artifact."
         )
+    return MODEL_REVISION, weights_sha256
 
-    model = get_model_module.get_model(
-        model_path=MODEL_ID,
-        context_length=MODEL_CONTEXT_LENGTH,
-        prediction_length=PREDICTION_HORIZON,
-        freq_prefix_tuning=False,
-        prefer_l1_loss=False,
-        prefer_longer_context=True,
-        model_revision=model_revision,
-    )
+
+def _validate_model_configuration(model: Any) -> None:
     config = model.config
     if int(config.context_length) != CONTEXT_LENGTH:
         raise ValueError(f"Unexpected TTM context length: {config.context_length}")
@@ -283,6 +261,38 @@ def main() -> int:
             "TTM prediction_filter_length does not match the registered 24h horizon."
         )
 
+
+def _build_inference_runtime(
+    frame: pd.DataFrame, train_end: int
+) -> dict[str, Any]:
+    tsfm_public = import_module("tsfm_public")
+    get_model_module = import_module("tsfm_public.toolkit.get_model")
+    transformers = import_module("transformers")
+    hub = import_module("huggingface_hub")
+    preprocessor = tsfm_public.TimeSeriesPreprocessor(
+        id_columns=[],
+        timestamp_column="timestamp",
+        target_columns=[TARGET_COLUMN],
+        context_length=CONTEXT_LENGTH,
+        prediction_length=PREDICTION_HORIZON,
+        scaling=True,
+        scaler_type="standard",
+        encode_categorical=False,
+        freq="h",
+    )
+    preprocessor.train(frame.iloc[:train_end].copy())
+    processed_frame = preprocessor.preprocess(frame.copy())
+    model_revision, weights_sha256 = _load_pinned_model_weights(hub)
+    model = get_model_module.get_model(
+        model_path=MODEL_ID,
+        context_length=MODEL_CONTEXT_LENGTH,
+        prediction_length=PREDICTION_HORIZON,
+        freq_prefix_tuning=False,
+        prefer_l1_loss=False,
+        prefer_longer_context=True,
+        model_revision=model_revision,
+    )
+    _validate_model_configuration(model)
     dataset = tsfm_public.ForecastDFDataset(
         data=processed_frame,
         id_columns=[],
@@ -302,69 +312,90 @@ def main() -> int:
         dataloader_pin_memory=False,
     )
     trainer = transformers.Trainer(model=model, args=training_args)
+    return {
+        "trainer": trainer,
+        "dataset": dataset,
+        "preprocessor": preprocessor,
+        "model_revision": model_revision,
+        "weights_sha256": weights_sha256,
+        "tsfm_version": getattr(tsfm_public, "__version__", "unknown"),
+    }
 
-    validation_forecast, validation_actual, validation_baseline, _ = run_split(
-        trainer, dataset, preprocessor, split["validation_origins"], return_variance
+
+def _score_forecast_splits(
+    runtime: dict[str, Any],
+    split: dict[str, Any],
+    return_variance: np.ndarray,
+) -> dict[str, Any]:
+    validation = run_split(
+        runtime["trainer"],
+        runtime["dataset"],
+        runtime["preprocessor"],
+        split["validation_origins"],
+        return_variance,
     )
-    holdout_forecast, holdout_actual, holdout_baseline, _ = run_split(
-        trainer, dataset, preprocessor, split["holdout_origins"], return_variance
+    holdout = run_split(
+        runtime["trainer"],
+        runtime["dataset"],
+        runtime["preprocessor"],
+        split["holdout_origins"],
+        return_variance,
     )
     validation_metrics = score_variance_forecasts(
-        validation_actual, validation_forecast, validation_baseline
+        validation[1], validation[0], validation[2]
     )
     holdout_metrics = score_variance_forecasts(
-        holdout_actual, holdout_forecast, holdout_baseline
+        holdout[1], holdout[0], holdout[2]
     )
     accepted = risk_forecast_gate(holdout_metrics)
-    verdict = "PASS_RISK_FORECAST_RESEARCH_ONLY" if accepted else "NO_GO"
+    return {
+        "validation": validation,
+        "holdout": holdout,
+        "validation_metrics": validation_metrics,
+        "holdout_metrics": holdout_metrics,
+        "verdict": (
+            "PASS_RISK_FORECAST_RESEARCH_ONLY" if accepted else "NO_GO"
+        ),
+    }
 
-    teacher_end_market_index = int(split["train_end"]) + 1
-    validation_end_market_index = int(split["validation_end"]) + 1
-    teacher = build_oos_teacher_trade_events(
-        ohlcv,
-        training_end_market_index=teacher_end_market_index,
-        validation_end_market_index=validation_end_market_index,
-    )
+
+def _build_position_risk_inputs(
+    split: dict[str, Any], forecasts: dict[str, Any]
+) -> tuple[np.ndarray, np.ndarray]:
     forecast_market_indices = np.asarray(
         [
             origin + 1
-            for origin in (split["validation_origins"] + split["holdout_origins"])
+            for origin in (
+                split["validation_origins"] + split["holdout_origins"]
+            )
         ],
         dtype=np.int64,
     )
-    forecast_values = np.concatenate([validation_forecast, holdout_forecast])
-    persistence_values = np.concatenate([validation_baseline, holdout_baseline])
+    validation_forecast = forecasts["validation"]
+    holdout_forecast = forecasts["holdout"]
+    forecast_values = np.concatenate(
+        [validation_forecast[0], holdout_forecast[0]]
+    )
+    persistence_values = np.concatenate(
+        [validation_forecast[2], holdout_forecast[2]]
+    )
     risk_multipliers = np.minimum(
         1.0,
         np.sqrt(np.maximum(persistence_values, 1e-18) / forecast_values),
     )
-    validation_trades = attach_asof_risk_multipliers(
-        teacher["validation_trades"], forecast_market_indices, risk_multipliers
-    )
-    holdout_trades = attach_asof_risk_multipliers(
-        teacher["holdout_trades"], forecast_market_indices, risk_multipliers
-    )
-    portfolio_validation = {
-        "fixed_size_baseline": evaluate_sized_portfolio(
-            validation_trades, risk_managed=False
-        ),
-        "ttm_risk_managed": evaluate_sized_portfolio(
-            validation_trades, risk_managed=True
-        ),
-    }
-    portfolio_holdout = {
-        "fixed_size_baseline": evaluate_sized_portfolio(
-            holdout_trades, risk_managed=False
-        ),
-        "ttm_risk_managed": evaluate_sized_portfolio(holdout_trades, risk_managed=True),
-    }
-    baseline_holdout = portfolio_holdout["fixed_size_baseline"]
-    managed_holdout = portfolio_holdout["ttm_risk_managed"]
-    baseline_pf = baseline_holdout["net_profit_factor"]
-    managed_pf = managed_holdout["net_profit_factor"]
-    baseline_drawdown = baseline_holdout["max_drawdown"]
-    managed_drawdown = managed_holdout["max_drawdown"]
-    portfolio_comparison = {
+    return forecast_market_indices, risk_multipliers
+
+
+def _compare_sized_portfolio(
+    trades: list[dict[str, Any]]
+) -> dict[str, Any]:
+    fixed = evaluate_sized_portfolio(trades, risk_managed=False)
+    managed = evaluate_sized_portfolio(trades, risk_managed=True)
+    baseline_pf = fixed["net_profit_factor"]
+    managed_pf = managed["net_profit_factor"]
+    baseline_drawdown = fixed["max_drawdown"]
+    managed_drawdown = managed["max_drawdown"]
+    comparison = {
         "net_profit_factor_improved": (
             baseline_pf is not None
             and managed_pf is not None
@@ -378,16 +409,38 @@ def main() -> int:
         "max_drawdown_below_15_percent": (
             managed_drawdown is not None and float(managed_drawdown) < 0.15
         ),
-        "same_trade_count": (
-            baseline_holdout["trade_count"] == managed_holdout["trade_count"]
-        ),
+        "same_trade_count": fixed["trade_count"] == managed["trade_count"],
     }
-    portfolio_comparison["both_objectives_met"] = bool(
-        portfolio_comparison["net_profit_factor_improved"]
-        and portfolio_comparison["max_drawdown_reduced"]
-        and portfolio_comparison["max_drawdown_below_15_percent"]
+    comparison["both_objectives_met"] = bool(
+        comparison["net_profit_factor_improved"]
+        and comparison["max_drawdown_reduced"]
+        and comparison["max_drawdown_below_15_percent"]
     )
-    portfolio_evaluation = {
+    return {"fixed_size_baseline": fixed, "ttm_risk_managed": managed, "comparison": comparison}
+
+
+def _evaluate_portfolio_splits(
+    ohlcv: pd.DataFrame,
+    split: dict[str, Any],
+    forecasts: dict[str, Any],
+) -> dict[str, Any]:
+    teacher = build_oos_teacher_trade_events(
+        ohlcv,
+        training_end_market_index=int(split["train_end"]) + 1,
+        validation_end_market_index=int(split["validation_end"]) + 1,
+    )
+    forecast_indices, risk_multipliers = _build_position_risk_inputs(
+        split, forecasts
+    )
+    validation_trades = attach_asof_risk_multipliers(
+        teacher["validation_trades"], forecast_indices, risk_multipliers
+    )
+    holdout_trades = attach_asof_risk_multipliers(
+        teacher["holdout_trades"], forecast_indices, risk_multipliers
+    )
+    validation_results = _compare_sized_portfolio(validation_trades)
+    holdout_results = _compare_sized_portfolio(holdout_trades)
+    evaluation = {
         "entry_teacher": {
             "model": "OHLCV-only LightGBM/XGBoost + causal HMM + logistic stack",
             "training_rows": teacher["training_rows"],
@@ -410,9 +463,15 @@ def main() -> int:
             "trading_costs_bps_round_trip": 50,
             "applied_to_runtime": False,
         },
-        "validation": portfolio_validation,
-        "final_holdout": portfolio_holdout,
-        "final_holdout_comparison": portfolio_comparison,
+        "validation": {
+            "fixed_size_baseline": validation_results["fixed_size_baseline"],
+            "ttm_risk_managed": validation_results["ttm_risk_managed"],
+        },
+        "final_holdout": {
+            "fixed_size_baseline": holdout_results["fixed_size_baseline"],
+            "ttm_risk_managed": holdout_results["ttm_risk_managed"],
+        },
+        "final_holdout_comparison": holdout_results["comparison"],
         "trade_counts": {
             "validation": len(validation_trades),
             "final_holdout": len(holdout_trades),
@@ -422,28 +481,26 @@ def main() -> int:
             "is measured on the trade-exit equity curve. Positions do not overlap."
         ),
     }
+    return {
+        "evaluation": evaluation,
+        "validation_trades": validation_trades,
+        "holdout_trades": holdout_trades,
+    }
 
+
+def _build_forecast_rows(
+    frame: pd.DataFrame, split: dict[str, Any], forecasts: dict[str, Any]
+) -> list[dict[str, Any]]:
+    validation = forecasts["validation"]
+    holdout = forecasts["holdout"]
     rows: list[dict[str, Any]] = []
-    for split_name, origins, forecasts, actuals, baselines in (
-        (
-            "validation",
-            split["validation_origins"],
-            validation_forecast,
-            validation_actual,
-            validation_baseline,
-        ),
-        (
-            "holdout",
-            split["holdout_origins"],
-            holdout_forecast,
-            holdout_actual,
-            holdout_baseline,
-        ),
+    for split_name, origins, result in (
+        ("validation", split["validation_origins"], validation),
+        ("holdout", split["holdout_origins"], holdout),
     ):
         for origin, forecast, actual, baseline in zip(
-            origins, forecasts, actuals, baselines
+            origins, result[0], result[1], result[2]
         ):
-            multiplier = min(1.0, float(np.sqrt(baseline / forecast)))
             rows.append(
                 {
                     "split": split_name,
@@ -454,13 +511,19 @@ def main() -> int:
                     "ttm_forecast_24h_variance": float(forecast),
                     "actual_24h_variance": float(actual),
                     "persistence_24h_variance": float(baseline),
-                    "risk_only_position_multiplier": multiplier,
+                    "risk_only_position_multiplier": min(
+                        1.0, float(np.sqrt(baseline / forecast))
+                    ),
                 }
             )
-    pd.DataFrame(rows).to_csv(
-        args.output_dir / "ttm-r2-risk-forecasts.csv", index=False
-    )
-    portfolio_rows = [
+    return rows
+
+
+def _build_portfolio_rows(
+    ohlcv: pd.DataFrame, portfolio: dict[str, Any]
+) -> list[dict[str, Any]]:
+    trades = portfolio["validation_trades"] + portfolio["holdout_trades"]
+    return [
         {
             "split": trade["split"],
             "entry_market_index": trade["entry_market_index"],
@@ -473,13 +536,22 @@ def main() -> int:
             "fixed_position_fraction": 0.10,
             "ttm_position_fraction": 0.10 * trade["risk_multiplier"],
         }
-        for trade in validation_trades + holdout_trades
+        for trade in trades
     ]
-    pd.DataFrame(portfolio_rows).to_csv(
-        args.output_dir / "ttm-r2-risk-portfolio-trades.csv", index=False
-    )
 
-    report: dict[str, Any] = {
+
+def _build_report(
+    args: argparse.Namespace,
+    inputs: dict[str, Any],
+    runtime: dict[str, Any],
+    forecasts: dict[str, Any],
+    portfolio: dict[str, Any],
+) -> dict[str, Any]:
+    ohlcv = inputs["ohlcv"]
+    data_manifest = inputs["data_manifest"]
+    frame = inputs["frame"]
+    evaluation = portfolio["evaluation"]
+    return {
         "experiment": "TTM-R2 zero-shot 24h realized-variance forecast",
         "code_commit_sha": args.commit_sha,
         "dataset": {
@@ -495,9 +567,9 @@ def main() -> int:
         "model": {
             "model_id": MODEL_ID,
             "model_branch": MODEL_BRANCH,
-            "resolved_immutable_revision": model_revision,
-            "weights_sha256": weights_sha256,
-            "granite_tsfm_version": getattr(tsfm_public, "__version__", "unknown"),
+            "resolved_immutable_revision": runtime["model_revision"],
+            "weights_sha256": runtime["weights_sha256"],
+            "granite_tsfm_version": runtime["tsfm_version"],
             "context_length": CONTEXT_LENGTH,
             "native_prediction_length": MODEL_NATIVE_PREDICTION_LENGTH,
             "prediction_filter_length": PREDICTION_HORIZON,
@@ -529,13 +601,13 @@ def main() -> int:
             "baseline": "trailing 24h realized variance persistence",
             "trading_cost_bps_round_trip": 50,
             "trading_costs_applied": False,
-            "trading_costs_note": "This is a pure forecast evaluation, not a trading/backtest experiment; any later economic test must apply 50 bps round-trip.",
+            "trading_costs_note": "Forecast metrics are cost-free; portfolio labels apply 50 bps round-trip. The two evaluations answer separate questions.",
         },
-        "validation_metrics": validation_metrics,
-        "final_holdout_metrics": holdout_metrics,
-        "portfolio_evaluation": portfolio_evaluation,
+        "validation_metrics": forecasts["validation_metrics"],
+        "final_holdout_metrics": forecasts["holdout_metrics"],
+        "portfolio_evaluation": evaluation,
         "risk_forecast_acceptance": {
-            "status": verdict,
+            "status": forecasts["verdict"],
             "minimum_qlike_improvement_fraction": 0.05,
             "log_variance_mae_must_not_worsen": True,
             "position_multiplier_must_never_exceed": 1.0,
@@ -556,22 +628,66 @@ def main() -> int:
             "offline_position_sizing_simulated": True,
         },
     }
-    report_path = args.output_dir / "ttm-r2-risk-report.json"
+
+
+def _write_artifacts(
+    output_dir: Path,
+    frame: pd.DataFrame,
+    split: dict[str, Any],
+    inputs: dict[str, Any],
+    runtime: dict[str, Any],
+    forecasts: dict[str, Any],
+    portfolio: dict[str, Any],
+    args: argparse.Namespace,
+) -> dict[str, Any]:
+    forecast_rows = _build_forecast_rows(frame, split, forecasts)
+    portfolio_rows = _build_portfolio_rows(inputs["ohlcv"], portfolio)
+    pd.DataFrame(forecast_rows).to_csv(
+        output_dir / "ttm-r2-risk-forecasts.csv", index=False
+    )
+    pd.DataFrame(portfolio_rows).to_csv(
+        output_dir / "ttm-r2-risk-portfolio-trades.csv", index=False
+    )
+    report = _build_report(args, inputs, runtime, forecasts, portfolio)
+    report_path = output_dir / "ttm-r2-risk-report.json"
     report_path.write_text(
         json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
     print(
         json.dumps(
             {
-                "verdict": verdict,
-                "holdout": holdout_metrics,
+                "verdict": forecasts["verdict"],
+                "holdout": forecasts["holdout_metrics"],
+                "portfolio_holdout": report["portfolio_evaluation"]["final_holdout"],
                 "report": str(report_path),
             },
             indent=2,
         )
     )
-    return 0
+    return report
 
+
+def main() -> int:
+    args = build_parser().parse_args()
+    if len(args.commit_sha) != 40:
+        raise ValueError("--commit-sha must be a full 40-character Git SHA.")
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    inputs = _prepare_experiment_inputs(args)
+    split = inputs["split"]
+    runtime = _build_inference_runtime(inputs["frame"], int(split["train_end"]))
+    forecasts = _score_forecast_splits(runtime, split, inputs["return_variance"])
+    portfolio = _evaluate_portfolio_splits(inputs["ohlcv"], split, forecasts)
+    _write_artifacts(
+        args.output_dir,
+        inputs["frame"],
+        split,
+        inputs,
+        runtime,
+        forecasts,
+        portfolio,
+        args,
+    )
+    return 0
 
 if __name__ == "__main__":
     raise SystemExit(main())
