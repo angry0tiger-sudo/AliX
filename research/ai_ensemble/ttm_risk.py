@@ -137,10 +137,16 @@ class ForecastContextOnlyDataset:
         sample = self._dataset[self._indices[item]]
         if not isinstance(sample, dict):
             raise TypeError("Forecast dataset samples must be mappings.")
+        model_input_keys = {
+            "past_values",
+            "past_observed_mask",
+            "freq_token",
+            "static_categorical_values",
+        }
         return {
             key: value
             for key, value in sample.items()
-            if key not in {"future_values", "future_observed_mask"}
+            if key in model_input_keys
         }
 
 

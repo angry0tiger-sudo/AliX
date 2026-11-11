@@ -81,6 +81,7 @@ def test_forecast_dataset_hides_all_future_labels_from_model() -> None:
             "past_observed_mask": np.asarray([True, True]),
             "future_values": np.asarray([999.0, 1000.0]),
             "future_observed_mask": np.asarray([True, True]),
+            "pad_mask": np.asarray([False, False]),
         },
         {
             "past_values": np.asarray([3.0, 4.0]),
