@@ -15,6 +15,7 @@ from research.ai_ensemble.features import REQUIRED_OHLCV_COLUMNS, build_causal_f
 
 CHRONOS_MODEL_ID = "amazon/chronos-2"
 CHRONOS_MODEL_REVISION = "29ec3766d36d6f73f0696f85560a422f50e8498c"
+CHRONOS_MODEL_WEIGHTS_SHA256 = "ddcda3c7508bf2528087723e98a20707cc04b7f370ae275a9fd88078ddba4f42"
 CHRONOS_FORECASTING_VERSION = "2.3.2"
 CHRONOS_CONTEXT_LENGTH = 512
 CHRONOS_PREDICTION_LENGTH = 24
@@ -50,12 +51,15 @@ def load_chronos_pipeline() -> tuple[Any, dict[str, object]]:
         hf_hub_download(
             repo_id=CHRONOS_MODEL_ID,
             filename="model.safetensors",
-            revision=CHRONOS_MODEL_REVISION,
+            revision="29ec3766d36d6f73f0696f85560a422f50e8498c",
         )
     )
+    weights_sha256 = _sha256_file(weights)
+    if weights_sha256 != CHRONOS_MODEL_WEIGHTS_SHA256:
+        raise RuntimeError("chronos_model_weight_sha256_mismatch")
     pipeline = BaseChronosPipeline.from_pretrained(
         CHRONOS_MODEL_ID,
-        revision=CHRONOS_MODEL_REVISION,
+        revision="29ec3766d36d6f73f0696f85560a422f50e8498c",
         device_map="cpu",
     )
     return pipeline, {
@@ -65,7 +69,7 @@ def load_chronos_pipeline() -> tuple[Any, dict[str, object]]:
         "chronos_forecasting_version": installed,
         "torch_version": str(torch.__version__),
         "weight_file": "model.safetensors",
-        "weight_sha256": _sha256_file(weights),
+        "weight_sha256": weights_sha256,
         "device": "cpu",
         "context_length": CHRONOS_CONTEXT_LENGTH,
         "prediction_length": CHRONOS_PREDICTION_LENGTH,
