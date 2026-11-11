@@ -143,11 +143,7 @@ class ForecastContextOnlyDataset:
             "freq_token",
             "static_categorical_values",
         }
-        return {
-            key: value
-            for key, value in sample.items()
-            if key in model_input_keys
-        }
+        return {key: value for key, value in sample.items() if key in model_input_keys}
 
 
 def qlike_loss(actual_variance: np.ndarray, forecast_variance: np.ndarray) -> float:

@@ -32,7 +32,9 @@ from research.ai_ensemble.ttm_risk import (
 MODEL_ID = "ibm-granite/granite-timeseries-ttm-r2"
 MODEL_BRANCH = "main (512-96-r2)"
 MODEL_REVISION = "d6a79570cac0f33d526601cd3a0fc7c80a8f9a2f"
-MODEL_WEIGHTS_SHA256 = "a706726a7eb01bbcb42994b7dcb3c06ea9557898dbae8d480eb04fe8ccb89710"
+MODEL_WEIGHTS_SHA256 = (
+    "a706726a7eb01bbcb42994b7dcb3c06ea9557898dbae8d480eb04fe8ccb89710"
+)
 MODEL_CONTEXT_LENGTH = 512
 MODEL_NATIVE_PREDICTION_LENGTH = 96
 
@@ -134,9 +136,8 @@ def run_split(
         .reshape(len(origins), PREDICTION_HORIZON)
     )
     predicted_hourly_variance = np.expm1(predicted_log_variance)
-    if (
-        not np.isfinite(predicted_hourly_variance).all()
-        or np.any(predicted_hourly_variance <= 0)
+    if not np.isfinite(predicted_hourly_variance).all() or np.any(
+        predicted_hourly_variance <= 0
     ):
         raise ValueError(
             "TTM-R2 produced a non-positive or non-finite variance forecast; reject."
@@ -211,7 +212,9 @@ def main() -> int:
     )
     weights_sha256 = sha256_file(weights_path)
     if weights_sha256 != MODEL_WEIGHTS_SHA256:
-        raise ValueError("TTM-R2 model weight SHA-256 does not match the pinned artifact.")
+        raise ValueError(
+            "TTM-R2 model weight SHA-256 does not match the pinned artifact."
+        )
 
     model = get_model_module.get_model(
         model_path=MODEL_ID,
