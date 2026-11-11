@@ -1,4 +1,5 @@
 """Run the pre-registered TTM-R2 zero-shot risk-forecast experiment in GitHub Actions."""
+
 from __future__ import annotations
 
 import argparse
@@ -41,15 +42,21 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def verify_dataset(csv_path: Path, manifest_path: Path, commit_sha: str) -> tuple[pd.DataFrame, dict[str, Any]]:
-    manifest = cast(dict[str, Any], json.loads(manifest_path.read_text(encoding="utf-8")))
+def verify_dataset(
+    csv_path: Path, manifest_path: Path, commit_sha: str
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    manifest = cast(
+        dict[str, Any], json.loads(manifest_path.read_text(encoding="utf-8"))
+    )
     actual_sha = sha256_file(csv_path)
     if manifest.get("source_policy") != "NOBITEX_ONLY_NO_BACKFILL":
         raise ValueError("Dataset source policy is not NOBITEX_ONLY_NO_BACKFILL.")
     if manifest.get("dataset_window") != "PRE_HACK_NOBITEX_ONLY":
         raise ValueError("Dataset is not the approved pre-hack Nobitex window.")
     if manifest.get("data_sources") != ["Nobitex public UDF history API"]:
-        raise ValueError("Unexpected data source or external exchange backfill detected.")
+        raise ValueError(
+            "Unexpected data source or external exchange backfill detected."
+        )
     if int(manifest.get("row_count", -1)) != EXPECTED_ROWS:
         raise ValueError("Unexpected Nobitex row count.")
     if int(manifest.get("expected_candles", -1)) != EXPECTED_ROWS:
@@ -64,11 +71,20 @@ def verify_dataset(csv_path: Path, manifest_path: Path, commit_sha: str) -> tupl
         raise ValueError("Immutable Nobitex dataset SHA-256 verification failed.")
     if manifest.get("commit_sha") != commit_sha:
         raise ValueError("Dataset manifest commit SHA does not match this Actions run.")
-    if manifest.get("public_api_only") is not True or manifest.get("credentials_used") is not False:
+    if (
+        manifest.get("public_api_only") is not True
+        or manifest.get("credentials_used") is not False
+    ):
         raise ValueError("Public unauthenticated market data is required.")
-    if any(int(manifest.get(key, -1)) != 0 for key in ("private_api_calls", "exchange_calls", "real_order_attempts")):
+    if any(
+        int(manifest.get(key, -1)) != 0
+        for key in ("private_api_calls", "exchange_calls", "real_order_attempts")
+    ):
         raise ValueError("Safety invariant violated in data manifest.")
-    if manifest.get("Champion") is not None or manifest.get("order_permission") is not False:
+    if (
+        manifest.get("Champion") is not None
+        or manifest.get("order_permission") is not False
+    ):
         raise ValueError("Champion/order permission invariant violated.")
     if manifest.get("trading_authorization") != "NO-GO":
         raise ValueError("Trading authorization must remain NO-GO.")
@@ -91,34 +107,53 @@ def run_split(
     indices = forecast_dataset_indices(origins)
     prediction_output = trainer.predict(Subset(dataset, indices))
     raw_predictions = prediction_output.predictions
-    predictions = raw_predictions[0] if isinstance(raw_predictions, tuple) else raw_predictions
+    predictions = (
+        raw_predictions[0] if isinstance(raw_predictions, tuple) else raw_predictions
+    )
     prediction_array = np.asarray(predictions, dtype=np.float64)
-    if prediction_array.ndim != 3 or prediction_array.shape[1] != PREDICTION_HORIZON or prediction_array.shape[2] != 1:
+    if (
+        prediction_array.ndim != 3
+        or prediction_array.shape[1] != PREDICTION_HORIZON
+        or prediction_array.shape[2] != 1
+    ):
         raise ValueError(f"Unexpected TTM prediction shape: {prediction_array.shape}")
-    if prediction_array.shape[0] != len(origins) or not np.isfinite(prediction_array).all():
+    if (
+        prediction_array.shape[0] != len(origins)
+        or not np.isfinite(prediction_array).all()
+    ):
         raise ValueError("TTM prediction count or numeric validation failed.")
 
     inverse_scaled = preprocessor.inverse_scale_targets(
         pd.DataFrame({TARGET_COLUMN: prediction_array.reshape(-1)})
     )
-    predicted_log_variance = inverse_scaled[TARGET_COLUMN].to_numpy(dtype=np.float64).reshape(
-        len(origins), PREDICTION_HORIZON
+    predicted_log_variance = (
+        inverse_scaled[TARGET_COLUMN]
+        .to_numpy(dtype=np.float64)
+        .reshape(len(origins), PREDICTION_HORIZON)
     )
     predicted_hourly_variance = np.maximum(np.expm1(predicted_log_variance), 1e-12)
     ttm_forecast = np.maximum(predicted_hourly_variance.sum(axis=1), 1e-12)
     actual = np.asarray(
-        [return_variance[origin + 1 : origin + PREDICTION_HORIZON + 1].sum() for origin in origins],
+        [
+            return_variance[origin + 1 : origin + PREDICTION_HORIZON + 1].sum()
+            for origin in origins
+        ],
         dtype=np.float64,
     )
     persistence = np.asarray(
-        [return_variance[origin - PREDICTION_HORIZON + 1 : origin + 1].sum() for origin in origins],
+        [
+            return_variance[origin - PREDICTION_HORIZON + 1 : origin + 1].sum()
+            for origin in origins
+        ],
         dtype=np.float64,
     )
     return ttm_forecast, actual, persistence, predicted_log_variance[:, -1]
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="TTM-R2 risk-only zero-shot research on pre-hack Nobitex.")
+    parser = argparse.ArgumentParser(
+        description="TTM-R2 risk-only zero-shot research on pre-hack Nobitex."
+    )
     parser.add_argument("--ohlcv", type=Path, required=True)
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
@@ -160,9 +195,13 @@ def main() -> int:
     model_info = hub.HfApi().model_info(MODEL_ID, revision=MODEL_BRANCH)
     model_revision = str(model_info.sha)
     if len(model_revision) != 40:
-        raise ValueError("Unable to resolve a full immutable Hugging Face model revision.")
+        raise ValueError(
+            "Unable to resolve a full immutable Hugging Face model revision."
+        )
     weights_path = Path(
-        hub.hf_hub_download(repo_id=MODEL_ID, filename="model.safetensors", revision=model_revision)
+        hub.hf_hub_download(
+            repo_id=MODEL_ID, filename="model.safetensors", revision=model_revision
+        )
     )
     weights_sha256 = sha256_file(weights_path)
 
@@ -179,9 +218,13 @@ def main() -> int:
     if int(config.context_length) != CONTEXT_LENGTH:
         raise ValueError(f"Unexpected TTM context length: {config.context_length}")
     if int(config.prediction_length) != MODEL_NATIVE_PREDICTION_LENGTH:
-        raise ValueError(f"Unexpected native TTM prediction length: {config.prediction_length}")
+        raise ValueError(
+            f"Unexpected native TTM prediction length: {config.prediction_length}"
+        )
     if int(config.prediction_filter_length) != PREDICTION_HORIZON:
-        raise ValueError("TTM prediction_filter_length does not match the registered 24h horizon.")
+        raise ValueError(
+            "TTM prediction_filter_length does not match the registered 24h horizon."
+        )
 
     dataset = tsfm_public.ForecastDFDataset(
         data=processed_frame,
@@ -212,29 +255,49 @@ def main() -> int:
     validation_metrics = score_variance_forecasts(
         validation_actual, validation_forecast, validation_baseline
     )
-    holdout_metrics = score_variance_forecasts(holdout_actual, holdout_forecast, holdout_baseline)
+    holdout_metrics = score_variance_forecasts(
+        holdout_actual, holdout_forecast, holdout_baseline
+    )
     accepted = risk_forecast_gate(holdout_metrics)
     verdict = "PASS_RISK_FORECAST_RESEARCH_ONLY" if accepted else "NO_GO"
 
     rows: list[dict[str, Any]] = []
     for split_name, origins, forecasts, actuals, baselines in (
-        ("validation", split["validation_origins"], validation_forecast, validation_actual, validation_baseline),
-        ("holdout", split["holdout_origins"], holdout_forecast, holdout_actual, holdout_baseline),
+        (
+            "validation",
+            split["validation_origins"],
+            validation_forecast,
+            validation_actual,
+            validation_baseline,
+        ),
+        (
+            "holdout",
+            split["holdout_origins"],
+            holdout_forecast,
+            holdout_actual,
+            holdout_baseline,
+        ),
     ):
-        for origin, forecast, actual, baseline in zip(origins, forecasts, actuals, baselines):
+        for origin, forecast, actual, baseline in zip(
+            origins, forecasts, actuals, baselines
+        ):
             multiplier = min(1.0, float(np.sqrt(baseline / forecast)))
             rows.append(
                 {
                     "split": split_name,
                     "decision_time": frame.iloc[origin]["timestamp"].isoformat(),
-                    "horizon_end": frame.iloc[origin + PREDICTION_HORIZON]["timestamp"].isoformat(),
+                    "horizon_end": frame.iloc[origin + PREDICTION_HORIZON][
+                        "timestamp"
+                    ].isoformat(),
                     "ttm_forecast_24h_variance": float(forecast),
                     "actual_24h_variance": float(actual),
                     "persistence_24h_variance": float(baseline),
                     "risk_only_position_multiplier": multiplier,
                 }
             )
-    pd.DataFrame(rows).to_csv(args.output_dir / "ttm-r2-risk-forecasts.csv", index=False)
+    pd.DataFrame(rows).to_csv(
+        args.output_dir / "ttm-r2-risk-forecasts.csv", index=False
+    )
 
     report: dict[str, Any] = {
         "experiment": "TTM-R2 zero-shot 24h realized-variance forecast",
@@ -312,8 +375,19 @@ def main() -> int:
         },
     }
     report_path = args.output_dir / "ttm-r2-risk-report.json"
-    report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    print(json.dumps({"verdict": verdict, "holdout": holdout_metrics, "report": str(report_path)}, indent=2))
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    print(
+        json.dumps(
+            {
+                "verdict": verdict,
+                "holdout": holdout_metrics,
+                "report": str(report_path),
+            },
+            indent=2,
+        )
+    )
     return 0
 
 

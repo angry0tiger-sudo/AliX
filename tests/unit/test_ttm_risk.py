@@ -1,4 +1,5 @@
 """Contract tests for TTM-R2 risk-only evaluation."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -67,7 +68,9 @@ def test_dataset_indices_end_context_at_the_registered_origin() -> None:
     origins = [511, 535, 559]
     indices = forecast_dataset_indices(origins)
     assert indices == [0, 24, 48]
-    assert all(index + CONTEXT_LENGTH - 1 == origin for index, origin in zip(indices, origins))
+    assert all(
+        index + CONTEXT_LENGTH - 1 == origin for index, origin in zip(indices, origins)
+    )
 
 
 def test_qlike_rejects_non_positive_or_misaligned_values() -> None:
