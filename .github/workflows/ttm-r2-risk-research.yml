@@ -39,7 +39,7 @@ jobs:
         run: |
           python -m pip install pip==25.2
           python -m pip install torch==2.9.1 --index-url https://download.pytorch.org/whl/cpu
-          python -m pip install granite-tsfm==0.3.12 transformers==5.20.2 accelerate==1.15.0 datasets==4.3.0 pandas==2.3.3 numpy scikit-learn==1.9.0 pytest==9.0.3
+          python -m pip install granite-tsfm==0.3.12 transformers==5.20.2 accelerate==1.15.0 datasets==4.3.0 pandas==2.3.3 numpy scikit-learn==1.9.0 lightgbm==4.7.0 xgboost-cpu==3.4.1 pytest==9.0.3
           python -m pip install pip-audit==2.9.0
       - name: Audit TTM-only dependency environment
         run: pip-audit
@@ -78,7 +78,18 @@ jobs:
           assert safety["private_api_calls"] == 0 and safety["real_order_attempts"] == 0
           assert safety["paper_orders"] == 0
           assert safety["position_multiplier_applied_to_runtime"] is False
+          assert safety["offline_position_sizing_simulated"] is True
+          assert report["portfolio_evaluation"]["final_holdout"]["fixed_size_baseline"]["trade_count"] == report["portfolio_evaluation"]["final_holdout"]["ttm_risk_managed"]["trade_count"]
+          assert report["portfolio_evaluation"]["final_holdout_comparison"]["same_trade_count"] is True
           holdout = report["final_holdout_metrics"]
+          portfolio = report["portfolio_evaluation"]["final_holdout"]
+          baseline = portfolio["fixed_size_baseline"]
+          managed = portfolio["ttm_risk_managed"]
+          comparison = report["portfolio_evaluation"]["final_holdout_comparison"]
+          def metric(value, digits=4):
+              return "N/A" if value is None else f"{float(value):.{digits}f}"
+          def percent(value):
+              return "N/A" if value is None else f"{float(value):.2%}"
           lines = [
               "# TTM-R2 Risk-Only Research",
               f"Commit: {report['code_commit_sha']}",
@@ -86,16 +97,31 @@ jobs:
               f"Weight SHA-256: {report['model']['weights_sha256']}",
               f"Dataset SHA-256: {report['dataset']['csv_sha256']}",
               "",
-              "| Final holdout metric | TTM-R2 | Persistence baseline |",
+              "## Final holdout: volatility forecast",
+              "| Metric | TTM-R2 | 24h persistence baseline |",
               "|---|---:|---:|",
               f"| QLIKE | {holdout['ttm_qlike']:.8f} | {holdout['persistence_qlike']:.8f} |",
               f"| Log-variance MAE | {holdout['ttm_log_variance_mae']:.8f} | {holdout['persistence_log_variance_mae']:.8f} |",
-              f"| Samples | {holdout['sample_count']} | {holdout['sample_count']} |",
+              f"| Forecast samples | {holdout['sample_count']} | {holdout['sample_count']} |",
               f"| QLIKE improvement | {holdout['qlike_improvement_fraction']:.2%} | 5.00% required |",
               "",
-              f"**Research verdict: {report['risk_forecast_acceptance']['status']}**",
+              "## Final holdout: offline position-sizing replay",
+              "| Metric | Fixed 10% size | TTM risk-sized |",
+              "|---|---:|---:|",
+              f"| Net PF | {metric(baseline['net_profit_factor'])} | {metric(managed['net_profit_factor'])} |",
+              f"| Max drawdown | {percent(baseline['max_drawdown'])} | {percent(managed['max_drawdown'])} |",
+              f"| Win rate | {percent(baseline['win_rate'])} | {percent(managed['win_rate'])} |",
+              f"| Trade count | {baseline['trade_count']} | {managed['trade_count']} |",
+              f"| Net return | {percent(baseline['net_return'])} | {percent(managed['net_return'])} |",
               "",
-              "This is forecast-only risk research. It does not evaluate entry alpha, run a trading backtest, apply position sizing to runtime, or authorize paper/live trading.",
+              f"Net PF improved: {comparison['net_profit_factor_improved']}",
+              f"Max drawdown reduced: {comparison['max_drawdown_reduced']}",
+              f"Max drawdown below 15%: {comparison['max_drawdown_below_15_percent']}",
+              f"Both portfolio objectives met: {comparison['both_objectives_met']}",
+              "",
+              f"**Forecast verdict: {report['risk_forecast_acceptance']['status']}**",
+              "",
+              "The entry teacher is the same frozen OHLCV-only model for both portfolios. TTM only changes position size; it does not generate or filter entry signals. Both use 1h candles, a 24-bar forecast horizon, 50 bps round-trip costs and a 10% maximum equity position. This is an offline trade-exit equity replay, not runtime wiring.",
               "",
               "Safety: Champion=null; order_permission=false; trading_authorization=NO-GO; private_api_calls=0; real_order_attempts=0; paper_orders=0.",
           ]

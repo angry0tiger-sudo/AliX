@@ -28,6 +28,11 @@ from research.ai_ensemble.ttm_risk import (
     risk_forecast_gate,
     score_variance_forecasts,
 )
+from research.ai_ensemble.ttm_portfolio import (
+    attach_asof_risk_multipliers,
+    build_oos_teacher_trade_events,
+    evaluate_sized_portfolio,
+)
 
 MODEL_ID = "ibm-granite/granite-timeseries-ttm-r2"
 MODEL_BRANCH = "main (512-96-r2)"
@@ -47,31 +52,31 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def verify_dataset(
-    csv_path: Path, manifest_path: Path, commit_sha: str
-) -> tuple[pd.DataFrame, dict[str, Any]]:
-    manifest = cast(
-        dict[str, Any], json.loads(manifest_path.read_text(encoding="utf-8"))
-    )
-    actual_sha = sha256_file(csv_path)
+def _verify_manifest_source_policy(manifest: dict[str, Any]) -> None:
     if manifest.get("source_policy") != "NOBITEX_ONLY_NO_BACKFILL":
         raise ValueError("Dataset source policy is not NOBITEX_ONLY_NO_BACKFILL.")
     if manifest.get("dataset_window") != "PRE_HACK_NOBITEX_ONLY":
         raise ValueError("Dataset is not the approved pre-hack Nobitex window.")
     if manifest.get("data_sources") != ["Nobitex public UDF history API"]:
-        raise ValueError(
-            "Unexpected data source or external exchange backfill detected."
-        )
-    if int(manifest.get("row_count", -1)) != EXPECTED_ROWS:
-        raise ValueError("Unexpected Nobitex row count.")
-    if int(manifest.get("expected_candles", -1)) != EXPECTED_ROWS:
-        raise ValueError("Expected candle count mismatch.")
-    if int(manifest.get("start_timestamp", -1)) != EXPECTED_START_UNIX:
-        raise ValueError("Unexpected dataset start boundary.")
-    if int(manifest.get("end_timestamp", -1)) != EXPECTED_END_UNIX:
-        raise ValueError("Unexpected dataset end boundary.")
-    if int(manifest.get("missing_intervals", -1)) != 0:
-        raise ValueError("Missing intervals are not allowed.")
+        raise ValueError("Unexpected data source or external exchange backfill detected.")
+
+
+def _verify_manifest_boundaries(manifest: dict[str, Any]) -> None:
+    expected_values = {
+        "row_count": EXPECTED_ROWS,
+        "expected_candles": EXPECTED_ROWS,
+        "start_timestamp": EXPECTED_START_UNIX,
+        "end_timestamp": EXPECTED_END_UNIX,
+        "missing_intervals": 0,
+    }
+    for key, expected in expected_values.items():
+        if int(manifest.get(key, -1)) != expected:
+            raise ValueError(f"Unexpected immutable dataset boundary: {key}.")
+
+
+def _verify_manifest_integrity(
+    manifest: dict[str, Any], actual_sha: str, commit_sha: str
+) -> None:
     if manifest.get("csv_sha256") != DATASET_SHA256 or actual_sha != DATASET_SHA256:
         raise ValueError("Immutable Nobitex dataset SHA-256 verification failed.")
     if manifest.get("commit_sha") != commit_sha:
@@ -81,10 +86,15 @@ def verify_dataset(
         or manifest.get("credentials_used") is not False
     ):
         raise ValueError("Public unauthenticated market data is required.")
-    if any(
-        int(manifest.get(key, -1)) != 0
-        for key in ("private_api_calls", "exchange_calls", "real_order_attempts")
-    ):
+
+
+def _verify_manifest_safety(manifest: dict[str, Any]) -> None:
+    safety_counters = (
+        "private_api_calls",
+        "exchange_calls",
+        "real_order_attempts",
+    )
+    if any(int(manifest.get(key, -1)) != 0 for key in safety_counters):
         raise ValueError("Safety invariant violated in data manifest.")
     if (
         manifest.get("Champion") is not None
@@ -94,19 +104,26 @@ def verify_dataset(
     if manifest.get("trading_authorization") != "NO-GO":
         raise ValueError("Trading authorization must remain NO-GO.")
 
+
+def verify_dataset(
+    csv_path: Path, manifest_path: Path, commit_sha: str
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    manifest = cast(
+        dict[str, Any], json.loads(manifest_path.read_text(encoding="utf-8"))
+    )
+    actual_sha = sha256_file(csv_path)
+    _verify_manifest_source_policy(manifest)
+    _verify_manifest_boundaries(manifest)
+    _verify_manifest_integrity(manifest, actual_sha, commit_sha)
+    _verify_manifest_safety(manifest)
     ohlcv = pd.read_csv(csv_path)
     if len(ohlcv) != EXPECTED_ROWS:
         raise ValueError("CSV row count does not match the immutable manifest.")
     return ohlcv, manifest
 
-
-def run_split(
-    trainer: Any,
-    dataset: Any,
-    preprocessor: Any,
-    origins: list[int],
-    return_variance: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+def _predict_context_only(
+    trainer: Any, dataset: Any, origins: list[int]
+) -> np.ndarray:
     indices = forecast_dataset_indices(origins)
     prediction_dataset = ForecastContextOnlyDataset(dataset, indices)
     prediction_output = trainer.predict(prediction_dataset)
@@ -126,23 +143,37 @@ def run_split(
         or not np.isfinite(prediction_array).all()
     ):
         raise ValueError("TTM prediction count or numeric validation failed.")
+    return prediction_array
 
+
+def _inverse_forecast_variance(
+    prediction_array: np.ndarray,
+    preprocessor: Any,
+    origin_count: int,
+) -> tuple[np.ndarray, np.ndarray]:
     inverse_scaled = preprocessor.inverse_scale_targets(
         pd.DataFrame({TARGET_COLUMN: prediction_array.reshape(-1)})
     )
     predicted_log_variance = (
         inverse_scaled[TARGET_COLUMN]
         .to_numpy(dtype=np.float64)
-        .reshape(len(origins), PREDICTION_HORIZON)
+        .reshape(origin_count, PREDICTION_HORIZON)
     )
     predicted_hourly_variance = np.expm1(predicted_log_variance)
-    if not np.isfinite(predicted_hourly_variance).all() or np.any(
-        predicted_hourly_variance <= 0
+    if (
+        not np.isfinite(predicted_hourly_variance).all()
+        or np.any(predicted_hourly_variance <= 0)
     ):
         raise ValueError(
             "TTM-R2 produced a non-positive or non-finite variance forecast; reject."
         )
-    ttm_forecast = np.maximum(predicted_hourly_variance.sum(axis=1), 1e-12)
+    forecast_variance = predicted_hourly_variance.sum(axis=1)
+    return forecast_variance, predicted_log_variance
+
+
+def _realized_variance_windows(
+    origins: list[int], return_variance: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
     actual = np.asarray(
         [
             return_variance[origin + 1 : origin + PREDICTION_HORIZON + 1].sum()
@@ -157,8 +188,22 @@ def run_split(
         ],
         dtype=np.float64,
     )
-    return ttm_forecast, actual, persistence, predicted_log_variance[:, -1]
+    return actual, persistence
 
+
+def run_split(
+    trainer: Any,
+    dataset: Any,
+    preprocessor: Any,
+    origins: list[int],
+    return_variance: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    prediction_array = _predict_context_only(trainer, dataset, origins)
+    forecast_variance, predicted_log_variance = _inverse_forecast_variance(
+        prediction_array, preprocessor, len(origins)
+    )
+    actual, persistence = _realized_variance_windows(origins, return_variance)
+    return forecast_variance, actual, persistence, predicted_log_variance[:, -1]
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -272,6 +317,115 @@ def main() -> int:
     accepted = risk_forecast_gate(holdout_metrics)
     verdict = "PASS_RISK_FORECAST_RESEARCH_ONLY" if accepted else "NO_GO"
 
+    teacher_end_market_index = int(split["train_end"]) + 1
+    validation_end_market_index = int(split["validation_end"]) + 1
+    teacher = build_oos_teacher_trade_events(
+        ohlcv,
+        training_end_market_index=teacher_end_market_index,
+        validation_end_market_index=validation_end_market_index,
+    )
+    forecast_market_indices = np.asarray(
+        [
+            origin + 1
+            for origin in (
+                split["validation_origins"] + split["holdout_origins"]
+            )
+        ],
+        dtype=np.int64,
+    )
+    forecast_values = np.concatenate([validation_forecast, holdout_forecast])
+    persistence_values = np.concatenate([validation_baseline, holdout_baseline])
+    risk_multipliers = np.minimum(
+        1.0,
+        np.sqrt(np.maximum(persistence_values, 1e-18) / forecast_values),
+    )
+    validation_trades = attach_asof_risk_multipliers(
+        teacher["validation_trades"], forecast_market_indices, risk_multipliers
+    )
+    holdout_trades = attach_asof_risk_multipliers(
+        teacher["holdout_trades"], forecast_market_indices, risk_multipliers
+    )
+    portfolio_validation = {
+        "fixed_size_baseline": evaluate_sized_portfolio(
+            validation_trades, risk_managed=False
+        ),
+        "ttm_risk_managed": evaluate_sized_portfolio(
+            validation_trades, risk_managed=True
+        ),
+    }
+    portfolio_holdout = {
+        "fixed_size_baseline": evaluate_sized_portfolio(
+            holdout_trades, risk_managed=False
+        ),
+        "ttm_risk_managed": evaluate_sized_portfolio(
+            holdout_trades, risk_managed=True
+        ),
+    }
+    baseline_holdout = portfolio_holdout["fixed_size_baseline"]
+    managed_holdout = portfolio_holdout["ttm_risk_managed"]
+    baseline_pf = baseline_holdout["net_profit_factor"]
+    managed_pf = managed_holdout["net_profit_factor"]
+    baseline_drawdown = baseline_holdout["max_drawdown"]
+    managed_drawdown = managed_holdout["max_drawdown"]
+    portfolio_comparison = {
+        "net_profit_factor_improved": (
+            baseline_pf is not None
+            and managed_pf is not None
+            and float(managed_pf) > float(baseline_pf)
+        ),
+        "max_drawdown_reduced": (
+            baseline_drawdown is not None
+            and managed_drawdown is not None
+            and float(managed_drawdown) < float(baseline_drawdown)
+        ),
+        "max_drawdown_below_15_percent": (
+            managed_drawdown is not None and float(managed_drawdown) < 0.15
+        ),
+        "same_trade_count": (
+            baseline_holdout["trade_count"] == managed_holdout["trade_count"]
+        ),
+    }
+    portfolio_comparison["both_objectives_met"] = bool(
+        portfolio_comparison["net_profit_factor_improved"]
+        and portfolio_comparison["max_drawdown_reduced"]
+        and portfolio_comparison["max_drawdown_below_15_percent"]
+    )
+    portfolio_evaluation = {
+        "entry_teacher": {
+            "model": "OHLCV-only LightGBM/XGBoost + causal HMM + logistic stack",
+            "training_rows": teacher["training_rows"],
+            "validation_rows": teacher["validation_rows"],
+            "holdout_rows": teacher["holdout_rows"],
+            "probability_threshold": teacher["probability_threshold"],
+            "round_trip_cost_bps": teacher["round_trip_cost_bps"],
+            "uses_chronos_features": False,
+            "ttm_generates_entry_signals": False,
+        },
+        "position_sizing": {
+            "fixed_size_baseline_fraction_of_equity": 0.10,
+            "ttm_position_fraction": (
+                "0.10 * min(1, sqrt(trailing_24h_realized_variance / "
+                "TTM_forecast_24h_variance))"
+            ),
+            "forecast_refresh_bars": 24,
+            "input_interval": "1h",
+            "leverage": False,
+            "trading_costs_bps_round_trip": 50,
+            "applied_to_runtime": False,
+        },
+        "validation": portfolio_validation,
+        "final_holdout": portfolio_holdout,
+        "final_holdout_comparison": portfolio_comparison,
+        "trade_counts": {
+            "validation": len(validation_trades),
+            "final_holdout": len(holdout_trades),
+        },
+        "equity_curve_method": (
+            "Sequential compounded equity at realized trade exits; max drawdown "
+            "is measured on the trade-exit equity curve. Positions do not overlap."
+        ),
+    }
+
     rows: list[dict[str, Any]] = []
     for split_name, origins, forecasts, actuals, baselines in (
         (
@@ -308,6 +462,24 @@ def main() -> int:
             )
     pd.DataFrame(rows).to_csv(
         args.output_dir / "ttm-r2-risk-forecasts.csv", index=False
+    )
+    portfolio_rows = [
+        {
+            "split": trade["split"],
+            "entry_market_index": trade["entry_market_index"],
+            "exit_market_index": trade["exit_market_index"],
+            "entry_time": str(ohlcv.iloc[int(trade["entry_market_index"])]["date"]),
+            "exit_time": str(ohlcv.iloc[int(trade["exit_market_index"])]["date"]),
+            "net_trade_return_after_50bps": trade["net_return"],
+            "entry_probability": trade["entry_probability"],
+            "ttm_risk_multiplier": trade["risk_multiplier"],
+            "fixed_position_fraction": 0.10,
+            "ttm_position_fraction": 0.10 * trade["risk_multiplier"],
+        }
+        for trade in validation_trades + holdout_trades
+    ]
+    pd.DataFrame(portfolio_rows).to_csv(
+        args.output_dir / "ttm-r2-risk-portfolio-trades.csv", index=False
     )
 
     report: dict[str, Any] = {
@@ -364,6 +536,7 @@ def main() -> int:
         },
         "validation_metrics": validation_metrics,
         "final_holdout_metrics": holdout_metrics,
+        "portfolio_evaluation": portfolio_evaluation,
         "risk_forecast_acceptance": {
             "status": verdict,
             "minimum_qlike_improvement_fraction": 0.05,
@@ -383,6 +556,7 @@ def main() -> int:
             "model_generates_entry_signals": False,
             "model_writes_risk_policy": False,
             "position_multiplier_applied_to_runtime": False,
+            "offline_position_sizing_simulated": True,
         },
     }
     report_path = args.output_dir / "ttm-r2-risk-report.json"
