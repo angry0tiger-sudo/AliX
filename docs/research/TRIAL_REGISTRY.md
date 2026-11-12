@@ -70,7 +70,7 @@
 ### V4-T — 32 outer variants
 
 - Workflow: `.github/workflows/ml-core-v4t-economic-score.yml`
-- Workflow blob SHA: `fab1a50d5e6ab174446ab38e68e1f0e2?not-used`
+- Workflow blob SHA: `fab1a50d5e6ab174446ab38e68afa46516af4e`
 - Run #20 / ID: [41625662854](https://github.com/angry0tiger-sudo/AliX/actions/runs/41625662854)
 - Commit: `d5fe33c5cf32bb41cc083acc11a9935d30324173`
 - Artifact: ID `13229820663`; ZIP SHA-256 `7fddda74100eb554506c7a8716688eb528a7aa88bac5f1c549169c63f85a8997`.
