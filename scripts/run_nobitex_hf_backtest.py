@@ -114,7 +114,8 @@ def _load_intraday_dataset(
     required = {
         "interval": interval,
         "dataset_window": "PRE_HACK_NATIVE_INTRADAY_NO_BACKFILL",
-        "availability_boundary": "BACKWARD_NATIVE_UDF_CHUNK_SCAN",
+        "availability_boundary": "BACKWARD_NATIVE_UDF_CHUNK_SCAN_WITH_SMALL_WINDOW_FALLBACK",
+        "request_chunk_fallback_candles": 96,
         "request_direction": "BACKWARD_EXPLICIT_FROM_TO",
         "request_chunk_candles": 390,
         "availability_search_lower_bound_timestamp": INTRADAY_SEARCH_START_TIMESTAMP,

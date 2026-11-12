@@ -294,7 +294,7 @@ def test_native_intraday_fetch_fails_when_all_chunks_are_empty() -> None:
     start = 1_700_000_000 // 900 * 900
     end = start + 10 * 900
 
-    with pytest.raises(ValueError, match="hf_intraday_no_native_candles"):
+    with pytest.raises(ValueError, match="hf_intraday_no_native_candles_at_cutoff"):
         hf_fetcher.fetch_native_intraday(
             "15m",
             start_timestamp=start,
@@ -324,3 +324,43 @@ def test_native_intraday_fetch_rejects_unsupported_or_unaligned_ranges() -> None
             request_json=lambda _params: {"s": "no_data"},
             sleep_fn=lambda _delay: None,
         )
+
+
+def test_native_intraday_fetch_falls_back_to_smaller_native_chunks() -> None:
+    interval = "15m"
+    seconds = 900
+    start = 1_700_000_000 // seconds * seconds
+    end = start + 199 * seconds
+    requests: list[dict[str, str]] = []
+    sleeps: list[float] = []
+
+    def provider(params: dict[str, str]) -> dict[str, Any]:
+        requests.append(params.copy())
+        chunk_start = int(params["from"])
+        chunk_end = int(params["to"]) - 1
+        count = (chunk_end - chunk_start) // seconds + 1
+        if count > hf_fetcher.INTRADAY_FALLBACK_CHUNK_CANDLES:
+            return {"s": "no_data"}
+        return payload(list(range(chunk_start, chunk_end + 1, seconds)))
+
+    actual_start, rows = hf_fetcher.fetch_native_intraday(
+        interval,
+        start_timestamp=start,
+        end_timestamp=end,
+        request_json=provider,
+        sleep_fn=sleeps.append,
+    )
+
+    assert actual_start == start
+    assert len(rows) == 200
+    assert rows[0]["timestamp"] == start
+    assert rows[-1]["timestamp"] == end
+    assert len(requests) == 4
+    assert (int(requests[0]["to"]) - 1 - int(requests[0]["from"])) // seconds + 1 == 200
+    assert (int(requests[1]["to"]) - 1 - int(requests[1]["from"])) // seconds + 1 == 96
+    assert all(
+        (int(request["to"]) - 1 - int(request["from"])) // seconds + 1 <= 96
+        for request in requests[1:]
+    )
+    assert len(sleeps) == 2
+    assert all(delay == hf_fetcher.INTRADAY_CHUNK_SLEEP_SECONDS for delay in sleeps)

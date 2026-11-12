@@ -16,6 +16,7 @@ INTRADAY_SEARCH_START_TIMESTAMP = source.PREHACK_START_TIMESTAMP
 INTRADAY_END_TIMESTAMP = source.PREHACK_END_TIMESTAMP
 INTRADAY_INTERVALS = ("15m", "30m")
 INTRADAY_CHUNK_CANDLES = 390
+INTRADAY_FALLBACK_CHUNK_CANDLES = 96
 INTRADAY_CHUNK_SLEEP_SECONDS = 1.1
 
 
@@ -116,15 +117,33 @@ def fetch_native_intraday(
     seconds = _validate_intraday_search_bounds(interval, start_timestamp, end_timestamp)
     rows_by_timestamp: dict[int, source.CandleRecord] = {}
     cursor = end_timestamp
+    chunk_candles = INTRADAY_CHUNK_CANDLES
+    first_chunk = True
     while cursor >= start_timestamp:
         chunk_start = max(
             start_timestamp,
-            cursor - (INTRADAY_CHUNK_CANDLES - 1) * seconds,
+            cursor - (chunk_candles - 1) * seconds,
         )
         page_rows = _fetch_intraday_chunk(
             interval, seconds, chunk_start, cursor, request_json
         )
+        if first_chunk and not page_rows:
+            chunk_candles = INTRADAY_FALLBACK_CHUNK_CANDLES
+            chunk_start = max(
+                start_timestamp,
+                cursor - (chunk_candles - 1) * seconds,
+            )
+            page_rows = _fetch_intraday_chunk(
+                interval, seconds, chunk_start, cursor, request_json
+            )
+            if not page_rows:
+                raise ValueError(
+                    f"hf_intraday_no_native_candles_at_cutoff:{interval}:"
+                    f"chunk_sizes={INTRADAY_CHUNK_CANDLES},"
+                    f"{INTRADAY_FALLBACK_CHUNK_CANDLES}"
+                )
         _merge_intraday_chunk(rows_by_timestamp, page_rows, cursor, interval)
+        first_chunk = False
         cursor = chunk_start - seconds
         if cursor >= start_timestamp:
             sleep_fn(INTRADAY_CHUNK_SLEEP_SECONDS)
@@ -162,12 +181,13 @@ def main() -> int:
     manifest.update(
         {
             "dataset_window": "PRE_HACK_NATIVE_INTRADAY_NO_BACKFILL",
-            "availability_boundary": "BACKWARD_NATIVE_UDF_CHUNK_SCAN",
+            "availability_boundary": "BACKWARD_NATIVE_UDF_CHUNK_SCAN_WITH_SMALL_WINDOW_FALLBACK",
             "availability_search_lower_bound_timestamp": (
                 INTRADAY_SEARCH_START_TIMESTAMP
             ),
             "request_direction": "BACKWARD_EXPLICIT_FROM_TO",
             "request_chunk_candles": INTRADAY_CHUNK_CANDLES,
+            "request_chunk_fallback_candles": INTRADAY_FALLBACK_CHUNK_CANDLES,
             "start_timestamp": start_timestamp,
             "end_timestamp": INTRADAY_END_TIMESTAMP,
             "expected_candles": expected_rows,
