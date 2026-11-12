@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 from scripts import fetch_nobitex_public_ohlcv as fetcher
+from scripts import fetch_nobitex_hf_ohlcv as hf_fetcher
 from scripts.fetch_nobitex_public_ohlcv import CandleRecord
 
 
@@ -185,57 +186,141 @@ def test_native_intraday_resolution_is_requested_without_resampling(
     ("interval", "seconds"),
     [("15m", 900), ("30m", 1800)],
 )
-def test_native_start_boundary_uses_countback_binary_search(
+def test_native_intraday_fetch_uses_backward_explicit_chunks(
     interval: str, seconds: int
 ) -> None:
-    from scripts.fetch_nobitex_hf_ohlcv import (
-        find_first_native_candle_timestamp,
-    )
-
     start = 1_700_000_000 // seconds * seconds
-    first_available = start + 37 * seconds
-    end = start + 256 * seconds
+    end = start + 392 * seconds
     requests: list[dict[str, str]] = []
     sleeps: list[float] = []
 
     def provider(params: dict[str, str]) -> dict[str, Any]:
         requests.append(params.copy())
-        requested_to = int(params["to"]) - 1
-        if requested_to < first_available:
-            return {"s": "no_data"}
-        latest = (
-            first_available + ((requested_to - first_available) // seconds) * seconds
-        )
-        return payload([latest])
+        chunk_start = int(params["from"])
+        chunk_end = int(params["to"]) - 1
+        return payload(list(range(chunk_start, chunk_end + 1, seconds)))
 
-    actual = find_first_native_candle_timestamp(
+    actual_start, rows = hf_fetcher.fetch_native_intraday(
         interval,
         start_timestamp=start,
         end_timestamp=end,
         request_json=provider,
         sleep_fn=sleeps.append,
     )
-    assert actual == first_available
-    assert len(requests) <= 12
-    assert all(request["countback"] == "1" for request in requests)
-    assert all("from" not in request for request in requests)
-    assert all(request["resolution"] == str(seconds // 60) for request in requests)
-    assert len(sleeps) == len(requests) - 1
-    assert all(delay == 1.1 for delay in sleeps)
+
+    assert actual_start == start
+    assert len(rows) == 393
+    assert rows[0]["timestamp"] == start
+    assert rows[-1]["timestamp"] == end
+    assert len(requests) == 2
+    assert requests[0] == {
+        "symbol": "BTCUSDT",
+        "resolution": str(seconds // 60),
+        "from": str(start + 3 * seconds),
+        "to": str(end + 1),
+    }
+    assert requests[1] == {
+        "symbol": "BTCUSDT",
+        "resolution": str(seconds // 60),
+        "from": str(start),
+        "to": str(start + 2 * seconds + 1),
+    }
+    assert all("countback" not in request for request in requests)
+    assert sleeps == [hf_fetcher.INTRADAY_CHUNK_SLEEP_SECONDS]
 
 
-def test_native_start_boundary_fails_when_provider_has_no_candles() -> None:
-    from scripts.fetch_nobitex_hf_ohlcv import (
-        find_first_native_candle_timestamp,
+@pytest.mark.parametrize(
+    ("interval", "seconds"),
+    [("15m", 900), ("30m", 1800)],
+)
+def test_native_intraday_fetch_accepts_only_leading_empty_chunks(
+    interval: str, seconds: int
+) -> None:
+    start = 1_700_000_000 // seconds * seconds
+    end = start + 392 * seconds
+    first_available = start + 3 * seconds
+
+    def provider(params: dict[str, str]) -> dict[str, Any]:
+        chunk_start = int(params["from"])
+        chunk_end = int(params["to"]) - 1
+        if chunk_end < first_available:
+            return {"s": "no_data"}
+        return payload(
+            list(range(max(chunk_start, first_available), chunk_end + 1, seconds))
+        )
+
+    actual_start, rows = hf_fetcher.fetch_native_intraday(
+        interval,
+        start_timestamp=start,
+        end_timestamp=end,
+        request_json=provider,
+        sleep_fn=lambda _delay: None,
     )
 
+    assert actual_start == first_available
+    assert len(rows) == 390
+    assert rows[0]["timestamp"] == first_available
+    assert rows[-1]["timestamp"] == end
+
+
+def test_native_intraday_fetch_rejects_internal_missing_candle() -> None:
+    interval = "15m"
+    seconds = 900
+    start = 1_700_000_000 // seconds * seconds
+    end = start + 392 * seconds
+    missing = start + 100 * seconds
+
+    def provider(params: dict[str, str]) -> dict[str, Any]:
+        chunk_start = int(params["from"])
+        chunk_end = int(params["to"]) - 1
+        stamps = [
+            stamp
+            for stamp in range(chunk_start, chunk_end + 1, seconds)
+            if stamp != missing
+        ]
+        return payload(stamps) if stamps else {"s": "no_data"}
+
+    with pytest.raises(ValueError, match="hf_intraday_gap_detected"):
+        hf_fetcher.fetch_native_intraday(
+            interval,
+            start_timestamp=start,
+            end_timestamp=end,
+            request_json=provider,
+            sleep_fn=lambda _delay: None,
+        )
+
+
+def test_native_intraday_fetch_fails_when_all_chunks_are_empty() -> None:
     start = 1_700_000_000 // 900 * 900
-    end = start + 100 * 900
+    end = start + 10 * 900
+
     with pytest.raises(ValueError, match="hf_intraday_no_native_candles"):
-        find_first_native_candle_timestamp(
+        hf_fetcher.fetch_native_intraday(
             "15m",
             start_timestamp=start,
             end_timestamp=end,
+            request_json=lambda _params: {"s": "no_data"},
+            sleep_fn=lambda _delay: None,
+        )
+
+
+def test_native_intraday_fetch_rejects_unsupported_or_unaligned_ranges() -> None:
+    start = 1_700_000_000 // 900 * 900
+
+    with pytest.raises(ValueError, match="interval_out_of_policy"):
+        hf_fetcher.fetch_native_intraday(
+            "1h",
+            start_timestamp=start,
+            end_timestamp=start + 10 * 3600,
+            request_json=lambda _params: {"s": "no_data"},
+            sleep_fn=lambda _delay: None,
+        )
+
+    with pytest.raises(ValueError, match="not_interval_aligned"):
+        hf_fetcher.fetch_native_intraday(
+            "15m",
+            start_timestamp=start + 1,
+            end_timestamp=start + 10 * 900,
             request_json=lambda _params: {"s": "no_data"},
             sleep_fn=lambda _delay: None,
         )

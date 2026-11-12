@@ -42,7 +42,7 @@ TTM_REFRESH_HOURS = 4
 TTM_RISK_HORIZON_HOURS = 24
 TRAIN_FRACTION = 0.70
 VALIDATION_END_FRACTION = 0.85
-DATASET_MINIMUM_UTC = "2022-03-21T00:00:00Z"
+DATASET_MINIMUM_UTC = "2021-10-31T20:30:00Z"
 
 
 def _intraday_manifest_range(
@@ -114,7 +114,9 @@ def _load_intraday_dataset(
     required = {
         "interval": interval,
         "dataset_window": "PRE_HACK_NATIVE_INTRADAY_NO_BACKFILL",
-        "availability_boundary": "FIRST_NATIVE_CANDLE_DISCOVERED_BY_UDF_COUNTBACK",
+        "availability_boundary": "BACKWARD_NATIVE_UDF_CHUNK_SCAN",
+        "request_direction": "BACKWARD_EXPLICIT_FROM_TO",
+        "request_chunk_candles": 390,
         "availability_search_lower_bound_timestamp": INTRADAY_SEARCH_START_TIMESTAMP,
         "start_timestamp": start_timestamp,
         "end_timestamp": end_timestamp,

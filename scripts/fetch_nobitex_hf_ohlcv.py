@@ -1,4 +1,4 @@
-"""Fetch native 15m/30m Nobitex candles using the provider's actual start boundary."""
+"""Fetch native 15m/30m Nobitex candles with backward UDF chunk scans."""
 
 from __future__ import annotations
 
@@ -12,37 +12,11 @@ from typing import Any, Callable
 
 from scripts import fetch_nobitex_public_ohlcv as source
 
-INTRADAY_SEARCH_START_TIMESTAMP = 1_647_820_800  # 2022-03-21T00:00:00Z
-INTRADAY_END_TIMESTAMP = 1_750_192_200  # 2025-06-17T20:30:00Z
+INTRADAY_SEARCH_START_TIMESTAMP = source.PREHACK_START_TIMESTAMP
+INTRADAY_END_TIMESTAMP = source.PREHACK_END_TIMESTAMP
 INTRADAY_INTERVALS = ("15m", "30m")
-COUNTBACK_PROBE_SLEEP_SECONDS = 1.1
-
-
-def _probe_last_native_candle(
-    *,
-    interval: str,
-    to_timestamp: int,
-    request_json: Callable[[dict[str, str]], dict[str, Any]],
-    minimum_timestamp: int,
-) -> int | None:
-    """Return the last provider candle at or before a timestamp, if any."""
-    seconds = source.interval_seconds(interval)
-    params = {
-        "symbol": "BTCUSDT",
-        "resolution": str(seconds // 60),
-        "to": str(to_timestamp + 1),
-        "countback": "1",
-    }
-    payload = request_json(params)
-    rows = source.parse_udf_payload(
-        payload,
-        requested_from=0,
-        requested_to=to_timestamp + 1,
-    )
-    eligible = [
-        int(row["timestamp"]) for row in rows if row["timestamp"] >= minimum_timestamp
-    ]
-    return eligible[-1] if eligible else None
+INTRADAY_CHUNK_CANDLES = 390
+INTRADAY_CHUNK_SLEEP_SECONDS = 1.1
 
 
 def _validate_intraday_search_bounds(
@@ -58,26 +32,72 @@ def _validate_intraday_search_bounds(
     return seconds
 
 
-def _probe_with_rate_limit(
-    *,
+def _fetch_intraday_chunk(
     interval: str,
-    timestamp: int,
-    minimum_timestamp: int,
-    probe_number: int,
+    seconds: int,
+    chunk_start: int,
+    chunk_end: int,
     request_json: Callable[[dict[str, str]], dict[str, Any]],
-    sleep_fn: Callable[[float], None],
-) -> int | None:
-    if probe_number:
-        sleep_fn(COUNTBACK_PROBE_SLEEP_SECONDS)
-    return _probe_last_native_candle(
-        interval=interval,
-        to_timestamp=timestamp,
-        request_json=request_json,
-        minimum_timestamp=minimum_timestamp,
+) -> list[source.CandleRecord]:
+    params = {
+        "symbol": "BTCUSDT",
+        "resolution": str(seconds // 60),
+        "from": str(chunk_start),
+        "to": str(chunk_end + 1),
+    }
+    payload = request_json(params)
+    return source.parse_udf_payload(
+        payload,
+        requested_from=chunk_start,
+        requested_to=chunk_end + 1,
     )
 
 
-def find_first_native_candle_timestamp(
+def _merge_intraday_chunk(
+    rows_by_timestamp: dict[int, source.CandleRecord],
+    page_rows: list[source.CandleRecord],
+    chunk_end: int,
+    interval: str,
+) -> None:
+    for row in page_rows:
+        stamp = int(row["timestamp"])
+        if stamp > chunk_end:
+            continue
+        if stamp in rows_by_timestamp:
+            raise ValueError(f"hf_intraday_duplicate_candle:{interval}:{stamp}")
+        rows_by_timestamp[stamp] = row
+
+
+def _validate_intraday_spacing(stamps: list[int], interval: str, seconds: int) -> None:
+    if (stamps[-1] - stamps[0]) % seconds:
+        raise ValueError(f"hf_intraday_gap_or_irregular_grid:{interval}")
+    for previous, current in zip(stamps, stamps[1:], strict=False):
+        if current - previous != seconds:
+            raise ValueError(
+                f"hf_intraday_gap_detected:{interval}:"
+                f"previous={previous}:current={current}"
+            )
+
+
+def _validated_native_intraday_rows(
+    rows_by_timestamp: dict[int, source.CandleRecord],
+    interval: str,
+    seconds: int,
+    end_timestamp: int,
+) -> tuple[int, list[source.CandleRecord]]:
+    if not rows_by_timestamp:
+        raise ValueError(f"hf_intraday_no_native_candles:{interval}")
+    stamps = sorted(rows_by_timestamp)
+    if stamps[-1] != end_timestamp:
+        raise ValueError(f"hf_intraday_end_mismatch:{interval}")
+    _validate_intraday_spacing(stamps, interval, seconds)
+    expected_rows = ((end_timestamp - stamps[0]) // seconds) + 1
+    if len(stamps) != expected_rows:
+        raise ValueError(f"hf_intraday_row_count_mismatch:{interval}")
+    return stamps[0], [rows_by_timestamp[stamp] for stamp in stamps]
+
+
+def fetch_native_intraday(
     interval: str,
     *,
     start_timestamp: int = INTRADAY_SEARCH_START_TIMESTAMP,
@@ -86,83 +106,32 @@ def find_first_native_candle_timestamp(
         [dict[str, str]], dict[str, Any]
     ] = source.request_public_json,
     sleep_fn: Callable[[float], None] = time.sleep,
-) -> int:
-    """Binary-search the earliest real candle using UDF countback=1 probes.
+) -> tuple[int, list[source.CandleRecord]]:
+    """Fetch a native interval backwards in explicit UDF from/to windows.
 
-    A final exact-range fetch still validates every candle and fails closed on
-    any gap. The probe only discovers the boundary; it never fills missing data.
+    Empty windows before the first available native candle are permitted. Any
+    missing or irregular candle between returned observations is rejected after
+    all chunks have been collected. The final cutoff must be present exactly.
     """
     seconds = _validate_intraday_search_bounds(interval, start_timestamp, end_timestamp)
-    probe_number = 0
-    lower_candle = _probe_with_rate_limit(
-        interval=interval,
-        timestamp=start_timestamp,
-        minimum_timestamp=start_timestamp,
-        probe_number=probe_number,
-        request_json=request_json,
-        sleep_fn=sleep_fn,
-    )
-    probe_number += 1
-    if lower_candle is not None:
-        return lower_candle
-
-    upper_candle = _probe_with_rate_limit(
-        interval=interval,
-        timestamp=end_timestamp,
-        minimum_timestamp=start_timestamp,
-        probe_number=probe_number,
-        request_json=request_json,
-        sleep_fn=sleep_fn,
-    )
-    probe_number += 1
-    if upper_candle is None:
-        raise ValueError(f"hf_intraday_no_native_candles:{interval}")
-
-    low_index = 0
-    high_index = (end_timestamp - start_timestamp) // seconds
-    while low_index < high_index:
-        midpoint_index = (low_index + high_index) // 2
-        midpoint = start_timestamp + midpoint_index * seconds
-        midpoint_candle = _probe_with_rate_limit(
-            interval=interval,
-            timestamp=midpoint,
-            minimum_timestamp=start_timestamp,
-            probe_number=probe_number,
-            request_json=request_json,
-            sleep_fn=sleep_fn,
+    rows_by_timestamp: dict[int, source.CandleRecord] = {}
+    cursor = end_timestamp
+    while cursor >= start_timestamp:
+        chunk_start = max(
+            start_timestamp,
+            cursor - (INTRADAY_CHUNK_CANDLES - 1) * seconds,
         )
-        probe_number += 1
-        if midpoint_candle is None:
-            low_index = midpoint_index + 1
-        else:
-            high_index = midpoint_index
+        page_rows = _fetch_intraday_chunk(
+            interval, seconds, chunk_start, cursor, request_json
+        )
+        _merge_intraday_chunk(rows_by_timestamp, page_rows, cursor, interval)
+        cursor = chunk_start - seconds
+        if cursor >= start_timestamp:
+            sleep_fn(INTRADAY_CHUNK_SLEEP_SECONDS)
 
-    first_timestamp = start_timestamp + low_index * seconds
-    first_candle = _probe_with_rate_limit(
-        interval=interval,
-        timestamp=first_timestamp,
-        minimum_timestamp=start_timestamp,
-        probe_number=probe_number,
-        request_json=request_json,
-        sleep_fn=sleep_fn,
+    return _validated_native_intraday_rows(
+        rows_by_timestamp, interval, seconds, end_timestamp
     )
-    if first_candle is None or first_candle != first_timestamp:
-        raise ValueError(f"hf_intraday_first_native_candle_not_resolved:{interval}")
-    return first_candle
-
-
-def fetch_native_intraday(
-    interval: str,
-) -> tuple[int, list[source.CandleRecord]]:
-    """Discover and then fetch the exact native interval without resampling."""
-    start_timestamp = find_first_native_candle_timestamp(interval)
-    rows = source.fetch_candles_between(
-        start_timestamp=start_timestamp,
-        end_timestamp=INTRADAY_END_TIMESTAMP,
-        symbol="BTCUSDT",
-        interval=interval,
-    )
-    return start_timestamp, rows
 
 
 def main() -> int:
@@ -193,10 +162,12 @@ def main() -> int:
     manifest.update(
         {
             "dataset_window": "PRE_HACK_NATIVE_INTRADAY_NO_BACKFILL",
-            "availability_boundary": "FIRST_NATIVE_CANDLE_DISCOVERED_BY_UDF_COUNTBACK",
+            "availability_boundary": "BACKWARD_NATIVE_UDF_CHUNK_SCAN",
             "availability_search_lower_bound_timestamp": (
                 INTRADAY_SEARCH_START_TIMESTAMP
             ),
+            "request_direction": "BACKWARD_EXPLICIT_FROM_TO",
+            "request_chunk_candles": INTRADAY_CHUNK_CANDLES,
             "start_timestamp": start_timestamp,
             "end_timestamp": INTRADAY_END_TIMESTAMP,
             "expected_candles": expected_rows,
