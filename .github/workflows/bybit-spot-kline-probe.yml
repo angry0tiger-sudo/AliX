@@ -1,0 +1,207 @@
+name: AliX Bybit Spot Kline Availability Probe
+
+on:
+  push:
+    branches:
+      - research/nobitex-hf-strategy
+    paths:
+      - .github/workflows/bybit-spot-kline-probe.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: alix-bybit-spot-kline-probe
+  cancel-in-progress: false
+
+jobs:
+  bybit-spot-kline-probe:
+    name: Bounded public Spot Kline probe (no credentials)
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    env:
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - name: Probe recent candles and the exact historical gap window
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from __future__ import annotations
+
+          import datetime as dt
+          import json
+          import socket
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+          from pathlib import Path
+          from typing import Any
+
+          BASE_URL = "https://api.bybit.com/v5/market/kline"
+          INTERVAL_MS = 15 * 60 * 1000
+          WINDOW_START_MS = 1679661000000  # 2023-03-24 12:30:00 UTC
+          WINDOW_END_MS = 1679666400000    # 2023-03-24 14:00:00 UTC
+          EXPECTED_WINDOW = list(
+              range(WINDOW_START_MS, WINDOW_END_MS + 1, INTERVAL_MS)
+          )
+          REPORT_PATH = Path("bybit-spot-kline-probe.json")
+
+          def iso_utc(timestamp_ms: int | None) -> str | None:
+              if timestamp_ms is None:
+                  return None
+              return (
+                  dt.datetime.fromtimestamp(timestamp_ms / 1000, tz=dt.timezone.utc)
+                  .isoformat()
+                  .replace("+00:00", "Z")
+              )
+
+          def fetch(label: str, params: dict[str, str]) -> dict[str, Any]:
+              query = urllib.parse.urlencode(params)
+              request = urllib.request.Request(
+                  f"{BASE_URL}?{query}",
+                  headers={"User-Agent": "AliX-public-spot-kline-probe/1.0"},
+                  method="GET",
+              )
+              status: int | None = None
+              body = b""
+              error_type: str | None = None
+              try:
+                  with urllib.request.urlopen(request, timeout=12) as response:
+                      status = response.status
+                      body = response.read(2_000_000)
+              except urllib.error.HTTPError as exc:
+                  status = exc.code
+                  body = exc.read(4096)
+                  error_type = "HTTP_ERROR"
+              except (urllib.error.URLError, TimeoutError, socket.timeout) as exc:
+                  error_type = type(exc).__name__
+                  body = str(getattr(exc, "reason", exc)).encode("utf-8", errors="replace")
+
+              result: dict[str, Any] = {
+                  "label": label,
+                  "request": params,
+                  "http_status": status,
+                  "records_returned": 0,
+                  "api_ret_code": None,
+                  "api_ret_msg": None,
+                  "first_timestamp_returned_utc": None,
+                  "last_timestamp_returned_utc": None,
+                  "earliest_timestamp_utc": None,
+                  "latest_timestamp_utc": None,
+                  "accessible": False,
+                  "error_type": error_type,
+                  "response_excerpt": body[:300].decode("utf-8", errors="replace"),
+              }
+              if status != 200 or error_type is not None:
+                  result["state"] = "HTTP_BLOCKED_OR_UNAVAILABLE"
+                  return result
+
+              try:
+                  payload = json.loads(body)
+                  result["api_ret_code"] = payload.get("retCode")
+                  result["api_ret_msg"] = payload.get("retMsg")
+                  rows = payload["result"]["list"]
+                  if payload.get("retCode") != 0 or not isinstance(rows, list):
+                      result["state"] = "API_ERROR_OR_INVALID_SCHEMA"
+                      return result
+                  timestamps = [int(row[0]) for row in rows]
+              except (ValueError, TypeError, KeyError, IndexError, json.JSONDecodeError) as exc:
+                  result["state"] = "API_ERROR_OR_INVALID_SCHEMA"
+                  result["error_type"] = type(exc).__name__
+                  return result
+
+              result["records_returned"] = len(timestamps)
+              result["first_timestamp_returned_utc"] = iso_utc(
+                  timestamps[0] if timestamps else None
+              )
+              result["last_timestamp_returned_utc"] = iso_utc(
+                  timestamps[-1] if timestamps else None
+              )
+              ordered = sorted(timestamps)
+              result["earliest_timestamp_utc"] = iso_utc(ordered[0] if ordered else None)
+              result["latest_timestamp_utc"] = iso_utc(ordered[-1] if ordered else None)
+              result["duplicate_timestamp_count"] = len(ordered) - len(set(ordered))
+              result["accessible"] = len(ordered) > 0
+              result["state"] = "ACCESSIBLE" if result["accessible"] else "EMPTY_RESPONSE"
+              # Bybit documents its kline list in reverse startTime order.
+              # Sorting is performed here before any grid/continuity validation.
+              result["sorted_timestamps_ms"] = ordered
+              return result
+
+          recent = fetch(
+              "recent_limit_5",
+              {"category": "spot", "symbol": "BTCUSDT", "interval": "15", "limit": "5"},
+          )
+          historical = fetch(
+              "historical_2023-03-24_1230_to_1400_utc",
+              {
+                  "category": "spot",
+                  "symbol": "BTCUSDT",
+                  "interval": "15",
+                  "start": str(WINDOW_START_MS),
+                  "end": str(WINDOW_END_MS),
+                  "limit": "1000",
+              },
+          )
+
+          actual = historical.get("sorted_timestamps_ms", [])
+          expected_set = set(EXPECTED_WINDOW)
+          actual_set = set(actual)
+          missing = sorted(expected_set - actual_set)
+          unexpected = sorted(actual_set - expected_set)
+          historical["expected_records"] = len(EXPECTED_WINDOW)
+          historical["expected_first_timestamp_utc"] = iso_utc(EXPECTED_WINDOW[0])
+          historical["expected_last_timestamp_utc"] = iso_utc(EXPECTED_WINDOW[-1])
+          historical["missing_timestamps_utc"] = [iso_utc(x) for x in missing]
+          historical["unexpected_timestamps_utc"] = [iso_utc(x) for x in unexpected]
+          historical["grid_complete"] = (
+              historical.get("accessible") is True
+              and actual == EXPECTED_WINDOW
+              and historical.get("duplicate_timestamp_count") == 0
+          )
+
+          if not recent.get("accessible") or not historical.get("accessible"):
+              decision = "DATA_BLOCKED"
+              reason = "At least one public Spot Kline request did not return a usable successful response."
+          elif historical["grid_complete"]:
+              decision = "ACCESSIBLE_NO_GAP"
+              reason = "Both requests succeeded and the exact seven-candle historical 15m grid is complete."
+          else:
+              decision = "DATA_GAP"
+              reason = "Spot Kline is reachable, but the exact historical window is incomplete or malformed."
+
+          report = {
+              "schema_version": "alix.bybit.spot-kline-probe.v1",
+              "probe_commit_sha": __import__("os").environ.get("GITHUB_SHA"),
+              "venue": "Bybit",
+              "market_category": "spot",
+              "symbol": "BTCUSDT",
+              "interval": "15m",
+              "authentication": "NONE_PUBLIC_GET_ONLY",
+              "private_api_calls": 0,
+              "real_order_attempts": 0,
+              "request_count": 2,
+              "request_timeout_seconds_each": 12,
+              "job_timeout_minutes": 3,
+              "recent_request": recent,
+              "historical_window_request": historical,
+              "decision": decision,
+              "decision_reason": reason,
+          }
+          REPORT_PATH.write_text(
+              json.dumps(report, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          print("BYBIT_PROBE_REPORT=" + json.dumps(report, sort_keys=True))
+          with open(__import__("os").environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write("# Bybit Spot Kline availability probe\n\n")
+              summary.write(f"- Decision: **{decision}**\n")
+              summary.write(f"- Recent request HTTP: **{recent.get('http_status')}**; records: **{recent.get('records_returned')}**\n")
+              summary.write(f"- Recent response first/last: **{recent.get('first_timestamp_returned_utc')} / {recent.get('last_timestamp_returned_utc')}**\n")
+              summary.write(f"- Historical request HTTP: **{historical.get('http_status')}**; records: **{historical.get('records_returned')} / 7**\n")
+              summary.write(f"- Historical earliest/latest: **{historical.get('earliest_timestamp_utc')} / {historical.get('latest_timestamp_utc')}**\n")
+              summary.write(f"- Exact grid complete: **{historical.get('grid_complete')}**\n")
+              summary.write(f"- Missing timestamps: **{historical.get('missing_timestamps_utc')}**\n")
+              summary.write(f"- Report file: `bybit-spot-kline-probe.json` (workspace only)\n")
+          PY
