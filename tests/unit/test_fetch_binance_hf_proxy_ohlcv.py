@@ -74,11 +74,14 @@ def test_fetch_proxy_intraday_uses_public_klines_and_paginates(
     requests: list[dict[str, str]] = []
     sleeps: list[float] = []
 
+    provider_page_limit = 995
+
     def provider(params: dict[str, str]) -> list[list[Any]]:
         requests.append(params.copy())
         cursor = int(params["startTime"]) // 1000
         limit = int(params["limit"])
-        page_end = min(end, cursor + (limit - 1) * seconds)
+        returned_limit = min(limit, provider_page_limit)
+        page_end = min(end, cursor + (returned_limit - 1) * seconds)
         return [
             _kline(timestamp, seconds)
             for timestamp in range(cursor, page_end + 1, seconds)
@@ -96,20 +99,23 @@ def test_fetch_proxy_intraday_uses_public_klines_and_paginates(
     assert request_count == 2
     assert rows[0]["timestamp"] == start
     assert rows[-1]["timestamp"] == end
-    first_page_end = start + (1000 - 1) * seconds
+    first_page_request_end = (
+        start + (fetcher.BINANCE_MAX_CANDLES_PER_REQUEST - 1) * seconds
+    )
+    second_page_start = start + provider_page_limit * seconds
     assert requests[0] == {
         "symbol": "BTCUSDT",
         "interval": interval,
         "startTime": str(start * 1000),
-        "endTime": str(first_page_end * 1000),
-        "limit": "1000",
+        "endTime": str(first_page_request_end * 1000),
+        "limit": str(fetcher.BINANCE_MAX_CANDLES_PER_REQUEST),
     }
     assert requests[1] == {
         "symbol": "BTCUSDT",
         "interval": interval,
-        "startTime": str((first_page_end + seconds) * 1000),
+        "startTime": str(second_page_start * 1000),
         "endTime": str(end * 1000),
-        "limit": "1000",
+        "limit": str(fetcher.BINANCE_MAX_CANDLES_PER_REQUEST),
     }
     assert len(sleeps) == 1
     assert sleeps == [fetcher.BINANCE_PAGE_SLEEP_SECONDS]
@@ -128,7 +134,7 @@ def test_fetch_proxy_rejects_incomplete_page_instead_of_accepting_a_gap() -> Non
             if index != 20
         ]
 
-    with pytest.raises(ValueError, match="page_row_count_mismatch"):
+    with pytest.raises(ValueError, match="page_gap_detected"):
         fetcher.fetch_proxy_intraday(
             "15m",
             start_timestamp=start,
@@ -136,6 +142,31 @@ def test_fetch_proxy_rejects_incomplete_page_instead_of_accepting_a_gap() -> Non
             request_json=provider,
             sleep_fn=lambda _delay: None,
         )
+
+
+def test_fetch_proxy_rejects_short_page_when_continuation_is_empty() -> None:
+    seconds = 900
+    start = (1_700_000_000 // seconds) * seconds
+    end = start + 1001 * seconds
+    requests: list[dict[str, str]] = []
+
+    def provider(params: dict[str, str]) -> list[list[Any]]:
+        requests.append(params.copy())
+        if len(requests) == 1:
+            return [_kline(start + index * seconds, seconds) for index in range(995)]
+        return []
+
+    with pytest.raises(ValueError, match="empty_page"):
+        fetcher.fetch_proxy_intraday(
+            "15m",
+            start_timestamp=start,
+            end_timestamp=end,
+            request_json=provider,
+            sleep_fn=lambda _delay: None,
+        )
+
+    assert len(requests) == 2
+    assert int(requests[1]["startTime"]) // 1000 == start + 995 * seconds
 
 
 def test_fetch_proxy_rejects_empty_api_page() -> None:

@@ -251,10 +251,10 @@ def _parse_page_rows(
 def _validate_page_row_count(
     rows: list[ProxyCandle], expected_count: int, interval: str
 ) -> None:
-    if len(rows) != expected_count:
+    if not rows or len(rows) > expected_count:
         raise ValueError(
-            f"binance_proxy_page_row_count_mismatch:{interval}:"
-            f"expected={expected_count}:actual={len(rows)}"
+            f"binance_proxy_page_row_count_invalid:{interval}:"
+            f"maximum={expected_count}:actual={len(rows)}"
         )
 
 
@@ -265,19 +265,24 @@ def _validate_page_boundaries(
     expected_end: int,
     interval: str,
 ) -> None:
-    if stamps[0] != start_timestamp or stamps[-1] != expected_end:
+    if stamps[0] != start_timestamp or stamps[-1] > expected_end:
         raise ValueError(
             f"binance_proxy_page_boundary_mismatch:{interval}:"
             f"expected_first={start_timestamp}:actual_first={stamps[0]}:"
-            f"expected_last={expected_end}:actual_last={stamps[-1]}:"
+            f"maximum_last={expected_end}:actual_last={stamps[-1]}:"
             f"rows={len(stamps)}"
         )
 
 
 def _validate_page_grid(stamps: list[int], seconds: int, interval: str) -> None:
     for previous, current in zip(stamps, stamps[1:], strict=False):
-        if current - previous != seconds:
-            raise ValueError(f"binance_proxy_page_gap_detected:{interval}")
+        delta = current - previous
+        if delta != seconds:
+            raise ValueError(
+                f"binance_proxy_page_gap_detected:{interval}:"
+                f"previous={previous}:current={current}:delta={delta}:"
+                f"expected_step={seconds}"
+            )
 
 
 def _fetch_page(
@@ -408,7 +413,12 @@ def fetch_proxy_intraday(
     request_json: Callable[[dict[str, str]], Any] = request_binance_public_json,
     sleep_fn: Callable[[float], None] = time.sleep,
 ) -> tuple[list[ProxyCandle], int]:
-    """Fetch complete, native Binance BTCUSDT candles in chronological 1000-row pages."""
+    """Fetch complete native Binance BTCUSDT candles across bounded pages.
+
+    Binance may return fewer rows than the requested page limit. Short pages are
+    continued from their final timestamp; exact full-window coverage and a
+    gap-free interval grid remain mandatory before returning.
+    """
     seconds = _validate_range(interval, start_timestamp, end_timestamp)
     rows: list[ProxyCandle] = []
     cursor = start_timestamp
