@@ -19,7 +19,9 @@ concurrency:
 
 jobs:
   model-shadow-validation:
-    if: inputs.confirm_shadow_only == true
+    # Option B: shadow-validation modules and model IO are sourced from staging.
+    # A manual dispatch from main or another branch must never execute this job.
+    if: github.ref == 'refs/heads/staging' && inputs.confirm_shadow_only == true
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:

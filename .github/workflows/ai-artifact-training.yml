@@ -18,7 +18,9 @@ concurrency:
 
 jobs:
   train-public-artifacts:
-    if: inputs.confirm_public_read_only == true
+    # Option B: training code and approval files are maintained on staging, not main or this research branch.
+    # Fail closed unless the selected ref contains the dependency-complete staging tree.
+    if: github.ref == 'refs/heads/staging' && inputs.confirm_public_read_only == true
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
