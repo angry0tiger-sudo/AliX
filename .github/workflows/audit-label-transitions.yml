@@ -17,7 +17,7 @@ concurrency:
 jobs:
   audit-label-transitions:
     # Option B: this audit is pinned to its dependency-complete V4-D research branch.
-    # Dispatches from main or any unrelated branch are intentionally skipped.
+    # The same V4-D allowlist is present on main; do not infer it guards the other main workflows.
     if: github.ref == 'refs/heads/research/ml-core-v4d-label-semantics'
     runs-on: ubuntu-latest
     timeout-minutes: 120

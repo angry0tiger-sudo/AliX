@@ -1,16 +1,16 @@
 # ADR-0011: Main Workflow Integrity — Option B
 
-- Status: Accepted (owner-directed; active-branch implementation only).
+- Status: Accepted for branch-local containment; main-side limitation remains unresolved.
 - Date: 2026-11-12.
 - Active branch: `research/nobitex-hf-strategy`.
-- Active-branch starting SHA: `0e5e09d1b6cf6cbc36268b5cd0883fd3710cf821`.
+- Previous active-branch SHA: `877b0c5f31d2a2ef9f5a08697a94e1fcf416d7a6`.
 - Frozen main SHA: `44bcaeae7eefd358cf063394b0e7f4f0b83af8eb` (must remain untouched).
 - Tracking issue: https://github.com/angry0tiger-sudo/AliX/issues/42.
 - Related PR: https://github.com/angry0tiger-sudo/AliX/pull/1 (closed/merged; not an Issue).
 
 ## Context
 
-The three workflows exist in the frozen `main` tree, but the main tree does not contain all modules referenced by them:
+The workflow files reference code that is not present in the frozen `main` tree:
 
 - `ai-artifact-training.yml` references `scripts/train_ai_artifacts.py`,
   `services/strategy_selection/model_io.py`, and
@@ -19,39 +19,60 @@ The three workflows exist in the frozen `main` tree, but the main tree does not 
 - `audit-label-transitions.yml` references `scripts/fetch_binance_public_ohlcv.py`
   and `scripts/audit_ml_core_label_transitions`.
 
-At the active-branch starting SHA, the training and shadow-validation modules are also absent
-from `research/nobitex-hf-strategy`; the training/shadow implementation dependencies are
-available on `staging`. The label-transition audit remains tied to its V4-D source branch.
+At the verified active-branch starting point, the training and shadow-validation modules were
+absent from both `main` and `research/nobitex-hf-strategy`, and present on `staging`.
+The V4-D label-audit source is on `research/ml-core-v4d-label-semantics`.
 
-The standing owner directive freezes `main`. Repairing the workflow/module mismatch on `main`
-or merging unrelated branches wholesale is therefore out of scope.
+The three workflow definitions on `main` were inspected directly:
+- Training: blob `2630c999ab6bb8af3a942736f69e371f6ff2143f`; job condition only checks the confirmation input.
+- Shadow validation: blob `808546955b159e8d1e40ad6dff395fe3a3becf4f`; job condition only checks the confirmation input.
+- Label audit: blob `1399daca7a028c51ee77d62074fece08c54fb6b4`; job is already restricted to the V4-D branch.
+
+**Important GitHub Actions execution semantics:** each workflow run uses the workflow version present in the event's associated commit/ref. For `workflow_dispatch`, the selected branch is the `GITHUB_REF`; the workflow file must also exist on the default branch. Therefore, a guard committed only to this research branch does not change the YAML used by a run dispatched against `main`. See:
+- https://docs.github.com/en/actions/concepts/workflows-and-actions/workflows
+- https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows
+
+The standing owner directive freezes `main`. It cannot be repaired in this workstream.
 
 ## Decision — Option B
 
-Apply guards and explanatory comments only on `research/nobitex-hf-strategy`:
+Apply explicit, fail-closed branch guards and explanatory comments only on
+`research/nobitex-hf-strategy`:
 
-1. Public AI artifact training may execute only when manually dispatched against
-   `refs/heads/staging` and `confirm_public_read_only == true`. The selected ref must contain
-   the training script, model IO, and approval record.
-2. AI shadow validation may execute only when manually dispatched against
-   `refs/heads/staging` and `confirm_shadow_only == true`. Its existing staging checkout
+1. Public AI artifact training executes from this branch's workflow definition only when the
+   selected ref is `refs/heads/staging` and `confirm_public_read_only == true`.
+2. AI shadow validation executes from this branch's workflow definition only when the selected
+   ref is `refs/heads/staging` and `confirm_shadow_only == true`. Its existing staging checkout
    remains unchanged.
-3. Label-transition audit remains restricted to
-   `refs/heads/research/ml-core-v4d-label-semantics`; its exact branch allowlist is documented
-   as a fail-closed guard. Dispatches from `main` or unrelated refs skip the job.
+3. Label-transition audit remains pinned to
+   `refs/heads/research/ml-core-v4d-label-semantics`; its existing branch allowlist is
+   documented. The same V4-D restriction is already present in the frozen main copy.
 
-No workflow, source file, or commit on `main` is changed by this decision. No referenced
-workflow is treated as proof that the missing modules have been ported to `main`.
+These are branch-local containment guards. They prevent the active branch's workflow versions
+from executing against refs that do not contain their dependencies.
+
+## Explicit limitation — main is not protected by this branch-only change
+
+The frozen `main` copies of training and shadow validation remain unchanged and still have no
+branch-ref condition. A manual dispatch whose selected ref is `main` uses those unchanged main
+workflow definitions; those two jobs may therefore still execute on main. The active-branch
+guards do **not** block that case.
+
+This limitation is intentionally not hidden or described as fixed. Under the current owner
+directive, no change to `main` is authorized. Issue #42 remains open to track this residual
+risk and the owner decision required to resolve it.
 
 ## Consequences and trade-offs
 
-- Manual dispatches from `main` or the active Nobitex HF branch cannot execute training/shadow
-  jobs whose dependencies are absent there.
-- Training/shadow jobs remain available only on the branch that contains their dependencies.
-- The V4-D label audit remains available only on its own source branch.
-- This is a containment measure, not a repair of `main` and not authorization to merge.
-- A future owner directive must explicitly authorize unfreezing `main`; a separate reviewed PR
-  must then port the complete dependency set and tests before any guard is removed.
+- The active Nobitex HF branch cannot accidentally execute training/shadow jobs whose dependencies
+  are absent from that branch.
+- Training/shadow jobs remain available from the dependency-complete `staging` ref through the
+  active-branch workflow definition.
+- The V4-D label audit remains constrained to its source branch.
+- Main-side training/shadow dispatch remains a known, unresolved risk until owner-authorized
+  action can be taken on `main` or the repository-level workflow enablement is changed by an
+  authorized owner.
+- No merge to main and no removal of main-side workflows is authorized by this ADR.
 
 ## Acceptance and safety
 

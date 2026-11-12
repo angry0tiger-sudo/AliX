@@ -51,3 +51,5 @@ ruff, mypy strict, pytest cov>=90%, import-linter, xenon, bandit, pip-audit. PR-
 
 Invent/label "guaranteed profit"; relax gates/disable tests/bypass fail-closed; touch secrets;
 enable live; auto-promote; silently overwrite docs (record ADRs); touch frozen main.
+- Do not claim a guard committed only on a research branch protects a workflow run dispatched against
+  `main`; each GitHub Actions run uses the workflow version associated with its event ref/commit.

@@ -19,8 +19,8 @@ concurrency:
 
 jobs:
   model-shadow-validation:
-    # Option B: shadow-validation modules and model IO are sourced from staging.
-    # A manual dispatch from main or another branch must never execute this job.
+    # Option B (branch-local containment): shadow-validation modules and model IO are sourced from staging.
+    # This guard applies only to this branch's workflow version; main's frozen copy is unchanged.
     if: github.ref == 'refs/heads/staging' && inputs.confirm_shadow_only == true
     runs-on: ubuntu-latest
     timeout-minutes: 20

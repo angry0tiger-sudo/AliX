@@ -18,8 +18,8 @@ concurrency:
 
 jobs:
   train-public-artifacts:
-    # Option B: training code and approval files are maintained on staging, not main or this research branch.
-    # Fail closed unless the selected ref contains the dependency-complete staging tree.
+    # Option B (branch-local containment): training code and approval files are maintained on staging.
+    # This guard applies only to this branch's workflow version; main's frozen copy is unchanged.
     if: github.ref == 'refs/heads/staging' && inputs.confirm_public_read_only == true
     runs-on: ubuntu-latest
     timeout-minutes: 20
