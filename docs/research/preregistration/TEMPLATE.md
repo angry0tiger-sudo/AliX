@@ -1,159 +1,131 @@
-# Research Preregistration Template — AliX
+# AliX — Research Preregistration Template
 
-Status: REQUIRED BEFORE ANY NEW TRAINING, TUNING, SWEEP, OR ECONOMIC EVALUATION.
+**قانون:** این فرم باید پیش از اولین fit، tuning، انتخاب variant یا ارزیابی اقتصادی تکمیل و امضای مالک شود. پس از شروع trial، این سند immutable است؛ تغییر hypothesis یا معیارها نیازمند شناسه و ثبت‌نام جدید است.
 
-A preregistration is immutable once the first trial starts. Corrections require a new
-preregistration revision and a linked ADR; never silently edit a hypothesis after seeing outcomes.
+## A. شناسه و ثبت
+- شناسه فرضیه (Hypothesis ID):
+- شناسه Trial / Trial Family:
+- نسخه ثبت‌نام:
+- تاریخ و ساعت ثبت (UTC):
+- شاخه و SHA کد:
+- مسیر Workflow و SHA فایل Workflow:
+- دستور مالک / ADR:
+- مسئول اجرا:
+- امضای مالک (نام، شناسه/تاریخ امضا، UTC): **اجباری**
 
-## 1. Trial identity and authority
+## B. فرضیه و هدف
+- فرضیه قابل ابطال (یک جمله):
+- فرض صفر:
+- فرض جایگزین:
+- سازوکار اقتصادی مورد انتظار:
+- Target:
+- Target semantics (دقیقاً مقدار/رویدادی که برچسب می‌زند، زمان قابل‌دسترس‌شدن، جهت/class، نحوه برخورد با tie/expiry):
+- افق پیش‌بینی (horizon، به تعداد کندل و مدت زمانی):
+- زمان تصمیم:
+- زمان/قیمت فرضی اجرا:
+- تعریف خروج و حداکثر مدت نگهداری:
+- شرط ابطال فرضیه و تغییرات پس از مشاهده نتایج که ممنوع‌اند:
 
-- Trial ID:
-- Trial family / parent registry ID:
-- Preregistration version:
-- Preregistered at (UTC):
-- Owner directive / ADR:
-- Responsible reviewer:
-- Candidate code commit SHA:
-- Execution workflow path + blob SHA:
-- Intended outcome: edge discovery / falsification / diagnostic only:
-
-## 2. Falsifiable hypothesis
-
-- Hypothesis (one sentence, falsifiable):
-- Null hypothesis:
-- Alternative hypothesis:
-- Economic mechanism:
-- What observation would falsify the hypothesis?
-- Explicitly forbidden post-result changes:
-
-## 3. Target and timing
-
-- Target / label definition:
-- Target direction / class:
-- Prediction horizon:
-- Label window:
-- Entry decision timestamp:
-- Assumed fill timestamp / price:
-- Exit definition:
-- Maximum holding horizon:
-- Target construction commit + SHA:
-
-## 4. Market, timeframe and immutable data
-
-- Venue:
-- Market type / direction:
-- Symbol:
-- Timeframe:
-- Exact UTC start (inclusive):
-- Exact UTC end (inclusive/exclusive, state which):
-- Provider / endpoint:
-- Dataset artifact path:
-- Dataset CSV SHA-256:
+## C. بازار و داده
+- Venue / Market / Symbol:
+- جهت مجاز: Spot long-only:
+- تایم‌فریم: **فقط یکی از 15m / 30m / 1h / 4h**:
+- Provider و endpoint:
+- بازه UTC شروع (inclusive):
+- بازه UTC پایان (inclusive یا exclusive؛ صریح مشخص شود):
+- نام فایل و مسیر artifact:
+- تعداد ردیف مورد انتظار / واقعی:
+- CSV SHA-256:
 - Manifest SHA-256:
-- Expected row count:
-- Actual row count:
-- Timestamp grid / timezone:
-- Missing intervals / duplicate rows:
-- Gap policy: FAIL-CLOSED; no interpolation, backfill, forward-fill, synthetic bars, masking or splice.
-- Data authority: public market data only / not account, order or fill truth:
-- Data retrieval workflow run ID:
+- شبکه timestamp و timezone:
+- تعداد gap و duplicate:
+- سیاست gap: FAIL-CLOSED؛ هیچ backfill، interpolation، forward-fill، synthetic bar، masking یا splice مجاز نیست:
+- منبع داده و محدودیت authority (public market data، نه account/order/fill truth):
+- Run ID تولید داده:
 
-## 5. Split and leakage controls
+## D. تقسیم زمانی و ضد نشت
+- نوع split:
+- مرز دقیق train (UTC و row):
+- مرز دقیق validation (UTC و row):
+- مرز final holdout (UTC و row):
+- تعداد foldهای زمانی (حداقل ۳):
+- طول purge:
+- طول embargo:
+- افق label مورد استفاده برای purge/embargo:
+- scaler فقط روی train: YES/NO:
+- ویژگی‌ها strictly past-only: YES/NO:
+- as-of alignment rule:
+- final holdout CSV/slice SHA-256:
+- تاریخ commitment (UTC):
+- سابقه exposure به holdout (YES/NO/UNKNOWN + شواهد):
+- هر نوع exposure قبلی یا UNKNOWN => holdout برای ادعای untouched OOS نامعتبر است.
 
-- Split method and exact row/time boundaries:
-- Train fraction / rows:
-- Validation fraction / rows:
-- Final holdout fraction / rows:
-- Fold count (minimum 3 chronological folds):
-- Purge length:
-- Embargo length:
-- Label horizon used for purge:
-- Scaler fit scope (train-only):
-- Point-in-time feature rule:
-- As-of alignment rule:
-- Final holdout SHA-256:
-- Holdout commitment date (UTC):
-- Has any researcher/model previously seen this holdout? YES/NO, with evidence:
-- If YES or UNKNOWN: HOLDOUT INVALID; do not claim untouched OOS evidence.
+## E. مدل و وزن‌ها
+برای هر بازو:
+- مدل و variant دقیق:
+- revision / immutable model revision:
+- مسیر weight و SHA-256 وزن‌ها:
+- نسخه runtime/library:
+- context length:
+- تعداد warm-up کندل حذف‌شده:
+- earliest feature timestamp:
+- as-of availability timestamp:
+- corpus پیش‌آموزش و منبع provenance:
+- همپوشانی corpus پیش‌آموزش با پنجره بک‌تست (مقدار/درصد/بازه):
+- شاهد و عدم‌قطعیت overlap:
+- نبود/خرابی artifact => FAIL-CLOSED.
 
-## 6. Models, weights and feature timing
+## F. طراحی آزمایش و variantها
+- Baseline:
+- بازوهای درمان:
+- تنها تفاوت مجاز بین بازوها:
+- row set مشترک:
+- fold boundaries مشترک:
+- seed یا seedهای دقیق:
+- نسخه و SHA شبیه‌ساز:
+- سیاست fill/stop/collision مشترک:
+- سیاست risk/position مشترک:
+- تعداد variantهای برنامه‌ریزی‌شده (عدد صحیح):
+- فهرست شناسه تمام variantها:
+- inner-CV / random search / hyperparameter variants و شمارش آن‌ها:
+- Trial Registry IDs مربوط به multiple testing:
 
-For each model/arm:
-- Model name and exact variant:
-- Model revision / immutable revision identifier:
-- Weights file or artifact path:
-- Weights SHA-256:
-- Runtime/library version:
-- Context length:
-- Warm-up rows removed:
-- Earliest permissible feature timestamp:
-- Feature availability / as-of timestamp:
-- Pretraining corpus / provenance source:
-- Known overlap of pretraining corpus with backtest window:
-- Overlap evidence and uncertainty:
-- Missing/unavailable model artifact behavior: FAIL-CLOSED.
-
-## 7. Experimental controls
-
-- Baseline definition:
-- Treatment arms:
-- Single intended difference between arms:
-- Identical row set:
-- Identical fold boundaries:
-- Identical seed(s):
-- Identical simulator version + SHA:
-- Identical fill/stop/collision policy:
-- Identical position/risk policy:
-- Random seed(s):
-- Number of variants planned (exact integer):
-- Full list of planned variant IDs:
-- Any nested tuning/random search iterations:
-- Multiple-testing cohort / Trial Registry IDs:
-
-## 8. Cost scenarios (both mandatory)
-
-| Scenario | Round-trip cost | Per-side fee/slippage decomposition | Required |
+## G. قرارداد هزینه (هر دو اجباری)
+| سناریو | هزینه round-trip | decomposition maker/taker و slippage به ازای هر سمت | الزام |
 |---|---:|---|---|
-| Cost-50 | 50 bps | State maker/taker + slippage assumptions explicitly | YES |
-| Cost-90 | 90 bps | State maker/taker + slippage assumptions explicitly | YES |
+| Cost-50 | 50 bps | دقیقاً ثبت شود | اجباری |
+| Cost-90 | 90 bps | دقیقاً ثبت شود | اجباری |
 
-No silent fee substitution. Do not assume Nobitex provides a post-only guarantee.
-Report both scenarios independently; never average them into one headline metric.
+نتایج دو سناریو جداگانه گزارش شوند؛ هیچ میانگین‌گیری یا جایگزینی خاموش مجاز نیست. فرض post-only guarantee برای Nobitex ممنوع است.
 
-## 9. Acceptance gates (absolute, not relative to a losing baseline)
+## H. دروازه‌های پذیرش مطلق
+- Net Profit Factor پس از هزینه >= 1.10:
+- completed trades >= 100:
+- Max Drawdown <= 15%:
+- DSR Z > 0 با N کامل همه trialهای مرتبط:
+- پایداری در حداقل ۳ fold زمانی:
+- هزینه‌های 50 و 90 bps هر دو گزارش شده باشند:
+- بهبود نسبت به baseline زیان‌ده، به‌تنهایی pass نیست:
+- fold ناقص، sample ناکافی، metric تعریف‌نشده یا provenance نامعتبر => NO-GO / INSUFFICIENT_EVIDENCE.
 
-Every required fold and the aggregate report must show:
-- Net Profit Factor >= 1.10 after costs.
-- Completed trades >= 100.
-- Maximum drawdown <= 15%.
-- Deflated Sharpe Ratio Z > 0, using the full preregistered trial count.
-- Stability in at least 3 chronological folds.
-- No acceptance merely for improving a losing baseline.
-- Insufficient data, a missing fold, or an undefined metric => NO-GO / INSUFFICIENT_EVIDENCE.
-
-Record any additional owner-approved gates here without weakening the gates above:
-
-## 10. Statistical plan
-
+## I. طرح آماری و توقف
 - Primary metric:
 - Secondary metrics:
-- DSR method and assumptions:
-- PBO method and assumptions:
-- Exact trial count N used:
-- Source of every included trial:
-- Dependence/correlation among trials:
-- Anytime-valid procedure, if sequential decisions are made:
-- Stopping rule:
-- Multiple comparisons correction:
-- Handling of failed/cancelled/partial trials:
+- روش DSR و assumptions:
+- روش PBO و assumptions:
+- N دقیق و فهرست source trialهای شمارش‌شده:
+- وابستگی/همبستگی trialها:
+- confidence sequence / e-value در ارزیابی sequential:
+- stopping rule:
+- multiple-comparison correction:
+- شیوه شمارش failed/cancelled/partial/skipped trials:
 
-## 11. Reproducibility and safety
-
-- Environment lockfile SHA:
-- Freqtrade version (pinned 2026.7):
-- Python version (3.12):
-- CI workflow run ID:
-- Output artifact IDs + SHA-256:
+## J. بازتولید و ایمنی
+- Lockfile SHA:
+- Freqtrade: 2026.7 pinned:
+- Python: 3.12:
+- GitHub Actions run ID:
+- artifact IDs و SHA-256 خروجی‌ها:
 - Champion=null:
 - order_permission=false:
 - trading_authorization=NO-GO:
@@ -161,13 +133,13 @@ Record any additional owner-approved gates here without weakening the gates abov
 - ALIX_ALLOW_LIVE_TRADING=false:
 - private_api_calls=0:
 - real_order_attempts=0:
-- No secrets in source, logs or artifacts: CONFIRMED
+- بدون secret در source/log/artifact: CONFIRMED
 
-## 12. Review and freeze
-
-- Preregistration reviewed by:
-- Review date (UTC):
-- Approval / rejection:
-- Preregistration file SHA-256:
-- First execution run ID:
-- Deviations (must be NONE, otherwise new preregistration):
+## K. تأیید و قفل
+- مالک/بازبین:
+- تاریخ بازبینی UTC:
+- وضعیت approval/rejection:
+- SHA-256 فایل preregistration:
+- اولین Run ID:
+- deviations (باید NONE باشد؛ هر deviation نیازمند preregistration revision جدید است):
+- امضای نهایی مالک:
