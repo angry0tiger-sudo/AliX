@@ -22,7 +22,7 @@ from urllib.parse import urlencode
 ENDPOINT = "https://apiv2.nobitex.ir/market/udf/history"
 SCHEMA_VERSION = "alix.nobitex.public-ohlcv.v3"
 ALLOWED_SYMBOLS = ("BTCUSDT", "ETHUSDT")
-INTERVAL_SECONDS = {"1m": 60, "1h": 3600}
+INTERVAL_SECONDS = {"1m": 60, "15m": 900, "30m": 1800, "1h": 3600}
 ALLOWED_DAYS = (1, 7, 30, 90, 180, 365)
 MAX_CANDLES_PER_REQUEST = 400
 

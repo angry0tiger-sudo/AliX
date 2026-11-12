@@ -146,3 +146,96 @@ def test_public_http_client_honors_retry_after(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr(time, "sleep", delays.append)
     assert fetcher.request_public_json({"symbol": "BTCUSDT"}) == {"s": "ok"}
     assert delays == [3.0]
+
+
+@pytest.mark.parametrize(
+    ("interval", "seconds", "resolution"),
+    [("15m", 900, "15"), ("30m", 1800, "30")],
+)
+def test_native_intraday_resolution_is_requested_without_resampling(
+    interval: str, seconds: int, resolution: str
+) -> None:
+    start = 1_700_000_000 // seconds * seconds
+    end = start + 2 * seconds
+    requests: list[dict[str, str]] = []
+
+    def provider(params: dict[str, str]) -> dict[str, Any]:
+        requests.append(params.copy())
+        return payload(list(range(start, end + 1, seconds)))
+
+    rows = fetcher.fetch_candles_between(
+        start_timestamp=start,
+        end_timestamp=end,
+        interval=interval,
+        request_json=provider,
+        sleep_fn=lambda _: None,
+    )
+    assert len(rows) == 3
+    assert requests == [
+        {
+            "symbol": "BTCUSDT",
+            "resolution": resolution,
+            "from": str(start),
+            "to": str(end + 1),
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("interval", "seconds"),
+    [("15m", 900), ("30m", 1800)],
+)
+def test_native_start_boundary_uses_countback_binary_search(
+    interval: str, seconds: int
+) -> None:
+    from scripts.fetch_nobitex_hf_ohlcv import (
+        find_first_native_candle_timestamp,
+    )
+
+    start = 1_700_000_000 // seconds * seconds
+    first_available = start + 37 * seconds
+    end = start + 256 * seconds
+    requests: list[dict[str, str]] = []
+    sleeps: list[float] = []
+
+    def provider(params: dict[str, str]) -> dict[str, Any]:
+        requests.append(params.copy())
+        requested_to = int(params["to"]) - 1
+        if requested_to < first_available:
+            return {"s": "no_data"}
+        latest = (
+            first_available + ((requested_to - first_available) // seconds) * seconds
+        )
+        return payload([latest])
+
+    actual = find_first_native_candle_timestamp(
+        interval,
+        start_timestamp=start,
+        end_timestamp=end,
+        request_json=provider,
+        sleep_fn=sleeps.append,
+    )
+    assert actual == first_available
+    assert len(requests) <= 12
+    assert all(request["countback"] == "1" for request in requests)
+    assert all("from" not in request for request in requests)
+    assert all(request["resolution"] == str(seconds // 60) for request in requests)
+    assert len(sleeps) == len(requests) - 1
+    assert all(delay == 1.1 for delay in sleeps)
+
+
+def test_native_start_boundary_fails_when_provider_has_no_candles() -> None:
+    from scripts.fetch_nobitex_hf_ohlcv import (
+        find_first_native_candle_timestamp,
+    )
+
+    start = 1_700_000_000 // 900 * 900
+    end = start + 100 * 900
+    with pytest.raises(ValueError, match="hf_intraday_no_native_candles"):
+        find_first_native_candle_timestamp(
+            "15m",
+            start_timestamp=start,
+            end_timestamp=end,
+            request_json=lambda _params: {"s": "no_data"},
+            sleep_fn=lambda _delay: None,
+        )

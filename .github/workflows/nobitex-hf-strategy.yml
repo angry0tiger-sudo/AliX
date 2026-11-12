@@ -1,0 +1,104 @@
+name: Nobitex High-Frequency Donchian + TTM-R2 Research
+
+on:
+  push:
+    branches: [research/nobitex-hf-strategy]
+
+permissions:
+  contents: read
+
+jobs:
+  standard-ci:
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  high-frequency-research:
+    needs: standard-ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    permissions:
+      contents: read
+    env:
+      ALIX_DRY_RUN: "true"
+      ALIX_ALLOW_LIVE_TRADING: "false"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      TOKENIZERS_PARALLELISM: "false"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    steps:
+      - name: Checkout exact CI SHA
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pinned CPU-only TTM research dependencies
+        run: |
+          python -m pip install pip==26.3 setuptools==84.2.1
+          python -m pip install torch==2.10.0 --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install granite-tsfm==0.3.12 transformers==5.20.2 accelerate==1.15.0 datasets==5.2.0 fsspec==2026.9.0 pandas==2.3.3 numpy scikit-learn==1.7.2 lightgbm==4.7.0 xgboost-cpu==3.4.1 pytest==9.0.3
+          python -m pip install pip-audit==2.10.1
+      - name: Verify pinned TTM dependency compatibility
+        run: python -m pip check
+      - name: Audit TTM-only dependency environment
+        run: pip-audit
+      - name: Run HF strategy and native fetcher contract tests
+        run: pytest tests/unit/test_hf_donchian.py tests/unit/test_ttm_risk.py tests/unit/test_fetch_nobitex_public_ohlcv.py -q
+      - name: Fetch exact pre-hack hourly Nobitex context for TTM-R2
+        run: |
+          set -euo pipefail
+          out="$GITHUB_WORKSPACE/.artifacts/alix-hf-data"
+          mkdir -p "$out"
+          python -m scripts.fetch_nobitex_prehack_ohlcv --output-dir "$out" --commit-sha "$GITHUB_SHA"
+      - name: Fetch native 15m Nobitex candles
+        run: |
+          python -m scripts.fetch_nobitex_hf_ohlcv --interval 15m --output-dir .artifacts/alix-hf-data --commit-sha "$GITHUB_SHA"
+      - name: Fetch native 30m Nobitex candles
+        run: |
+          python -m scripts.fetch_nobitex_hf_ohlcv --interval 30m --output-dir .artifacts/alix-hf-data --commit-sha "$GITHUB_SHA"
+      - name: Run frozen TTM-R2 risk-only Donchian backtests
+        run: |
+          python -m scripts.run_nobitex_hf_backtest \
+            --ohlcv-15m .artifacts/alix-hf-data/nobitex-btcusdt-15m.csv \
+            --manifest-15m .artifacts/alix-hf-data/nobitex-btcusdt-15m.manifest.json \
+            --ohlcv-30m .artifacts/alix-hf-data/nobitex-btcusdt-30m.csv \
+            --manifest-30m .artifacts/alix-hf-data/nobitex-btcusdt-30m.manifest.json \
+            --hourly-ohlcv .artifacts/alix-hf-data/nobitex-btcusdt-1h.csv \
+            --hourly-manifest .artifacts/alix-hf-data/nobitex-btcusdt-1h.manifest.json \
+            --output-dir .artifacts/alix-hf-results \
+            --commit-sha "$GITHUB_SHA"
+      - name: Enforce final report safety and artifact contracts
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          report = json.loads(Path(".artifacts/alix-hf-results/nobitex-hf-report.json").read_text())
+          safety = report["safety"]
+          assert report["code_commit_sha"] == __import__("os").environ["GITHUB_SHA"]
+          assert report["strategy"]["timeframes"] == ["15m", "30m"]
+          assert report["strategy"]["round_trip_cost_bps"] == 50
+          assert report["strategy"]["stop_loss_atr"] == 2.0
+          assert report["strategy"]["take_profit_atr"] == 4.0
+          assert safety["Champion"] is None
+          assert safety["order_permission"] is False
+          assert safety["trading_authorization"] == "NO-GO"
+          assert safety["private_api_calls"] == 0
+          assert safety["real_order_attempts"] == 0
+          assert safety["paper_orders"] == 0
+          assert safety["position_multiplier_applied_to_runtime"] is False
+          assert set(report["timeframes"]) == {"15m", "30m"}
+          print("HF research report verified; no trading authorization or runtime wiring.")
+          PY
+      - name: Upload native market data, TTM forecasts, trades and report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alix-nobitex-hf-strategy
+          path: |
+            .artifacts/alix-hf-data/*
+            .artifacts/alix-hf-results/*
+          if-no-files-found: warn
+          retention-days: 30
