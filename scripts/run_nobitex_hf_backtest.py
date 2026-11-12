@@ -16,6 +16,7 @@ from research.ai_ensemble.hf_donchian import (
     TTM_MULTIPLIER_MAX,
     TTM_MULTIPLIER_MIN,
     backtest_donchian_split,
+    validate_intraday_ohlcv,
 )
 from research.ai_ensemble.ttm_risk import (
     CONTEXT_LENGTH,
@@ -23,9 +24,10 @@ from research.ai_ensemble.ttm_risk import (
     prepare_risk_target,
 )
 from scripts.fetch_nobitex_hf_ohlcv import (
-    INTRADAY_END_TIMESTAMP,
+    BINANCE_KLINES_ENDPOINT,
     INTRADAY_INTERVALS,
-    INTRADAY_SEARCH_START_TIMESTAMP,
+    PROXY_END_TIMESTAMP,
+    PROXY_START_TIMESTAMP,
 )
 from scripts.run_ttm_r2_risk_research import (
     MODEL_ID,
@@ -42,7 +44,8 @@ TTM_REFRESH_HOURS = 4
 TTM_RISK_HORIZON_HOURS = 24
 TRAIN_FRACTION = 0.70
 VALIDATION_END_FRACTION = 0.85
-DATASET_MINIMUM_UTC = "2021-10-31T20:30:00Z"
+PROXY_WINDOW_START_UTC = "2021-10-31T20:30:00Z"
+PROXY_WINDOW_END_UTC = "2025-06-17T20:30:00Z"
 
 
 def _intraday_manifest_range(
@@ -51,16 +54,12 @@ def _intraday_manifest_range(
     seconds = {"15m": 900, "30m": 1800}[interval]
     start_timestamp = manifest.get("start_timestamp")
     end_timestamp = manifest.get("end_timestamp")
-    if (
-        isinstance(start_timestamp, bool)
-        or not isinstance(start_timestamp, int)
-        or start_timestamp < INTRADAY_SEARCH_START_TIMESTAMP
-    ):
+    if isinstance(start_timestamp, bool) or not isinstance(start_timestamp, int):
         raise ValueError(f"hf_intraday_manifest_start_invalid:{interval}")
     if isinstance(end_timestamp, bool) or not isinstance(end_timestamp, int):
         raise ValueError(f"hf_intraday_manifest_end_invalid:{interval}")
-    if end_timestamp != INTRADAY_END_TIMESTAMP or end_timestamp <= start_timestamp:
-        raise ValueError(f"hf_intraday_manifest_range_invalid:{interval}")
+    if start_timestamp != PROXY_START_TIMESTAMP or end_timestamp != PROXY_END_TIMESTAMP:
+        raise ValueError(f"hf_proxy_manifest_range_invalid:{interval}")
     if (end_timestamp - start_timestamp) % seconds:
         raise ValueError(f"hf_intraday_manifest_interval_alignment_invalid:{interval}")
     expected_rows = ((end_timestamp - start_timestamp) // seconds) + 1
@@ -87,9 +86,10 @@ def _read_intraday_frame(
     expected_rows: int,
 ) -> pd.DataFrame:
     frame = pd.read_csv(csv_path)
-    timestamps = pd.to_datetime(frame["date"], utc=True, errors="raise")
     if len(frame) != expected_rows:
         raise ValueError(f"hf_intraday_row_count_mismatch:{interval}")
+    frame = validate_intraday_ohlcv(frame, interval)
+    timestamps = frame["date"]
     if int(timestamps.iloc[0].timestamp()) != start_timestamp:
         raise ValueError(f"hf_intraday_start_mismatch:{interval}")
     if int(timestamps.iloc[-1].timestamp()) != end_timestamp:
@@ -112,32 +112,48 @@ def _load_intraday_dataset(
         manifest, interval
     )
     required = {
+        "dataset_id": f"PROXY_BINANCE_{interval.upper()}",
+        "dataset_role": "RESEARCH_PROXY_ONLY",
+        "provider": "Binance Spot public market-data REST API",
+        "endpoint": BINANCE_KLINES_ENDPOINT,
+        "venue": "BINANCE_SPOT",
+        "market_type": "SPOT",
+        "symbol": "BTCUSDT",
+        "execution_venue": "NOBITEX",
         "interval": interval,
-        "dataset_window": "PRE_HACK_NATIVE_INTRADAY_NO_BACKFILL",
-        "availability_boundary": "BACKWARD_NATIVE_UDF_CHUNK_SCAN_WITH_SMALL_WINDOW_FALLBACK",
-        "request_chunk_fallback_candles": 96,
-        "request_direction": "BACKWARD_EXPLICIT_FROM_TO",
-        "request_chunk_candles": 390,
-        "availability_search_lower_bound_timestamp": INTRADAY_SEARCH_START_TIMESTAMP,
+        "native_interval": True,
+        "dataset_window": "2021_11_TO_2025_06_17_PROXY",
+        "source_policy": "BINANCE_PROXY_RESEARCH_ONLY",
+        "proxy_not_execution_truth": True,
         "start_timestamp": start_timestamp,
         "end_timestamp": end_timestamp,
+        "requested_start_timestamp": start_timestamp,
+        "requested_end_timestamp": end_timestamp,
         "row_count": expected_rows,
         "expected_candles": expected_rows,
         "missing_intervals": 0,
         "csv_sha256": digest,
         "commit_sha": commit_sha,
         "public_api_only": True,
+        "market_data_only_endpoint": True,
         "credentials_used": False,
         "private_api_calls": 0,
-        "exchange_calls": 0,
         "real_order_attempts": 0,
         "Champion": None,
         "order_permission": False,
         "trading_authorization": "NO-GO",
         "no_resampling": True,
         "no_interpolation": True,
-        "no_external_backfill": True,
+        "not_nobitex_backfill": True,
+        "data_authority": "THIRD_PARTY_PUBLIC_MARKET_DATA_NOT_NOBITEX_EXECUTION_TRUTH",
     }
+    public_api_requests = manifest.get("public_api_requests")
+    if (
+        isinstance(public_api_requests, bool)
+        or not isinstance(public_api_requests, int)
+        or public_api_requests < 1
+    ):
+        raise ValueError(f"hf_proxy_manifest_public_api_requests_invalid:{interval}")
     _validate_intraday_manifest(manifest, required, interval)
     if digest != manifest["csv_sha256"]:
         raise ValueError(f"hf_intraday_sha256_mismatch:{interval}")
@@ -324,10 +340,13 @@ def _timeframe_result(
 
 def _write_step_summary(report: dict[str, Any]) -> None:
     lines = [
-        "# Nobitex High-Frequency Donchian + TTM-R2 Research",
+        "# High-Frequency Donchian + TTM-R2 Binance Proxy Research",
         f"Commit: {report['code_commit_sha']}",
-        f"Dataset window: {report['dataset_window']['start_utc']} to {report['dataset_window']['end_utc']}",
-        "Native 15m/30m candles only; no resampling, interpolation, or external backfill.",
+        f"Requested proxy window: {report['dataset_window']['requested_start_utc']} to {report['dataset_window']['requested_end_utc']}",
+        f"Loaded proxy window: {report['dataset_window']['start_utc']} to {report['dataset_window']['end_utc']}",
+        "15m/30m OHLCV is Binance Spot proxy data, not Nobitex quotes or fills.",
+        "Hourly TTM-R2 risk context remains Nobitex 1h; this mixed-venue analysis is research-only.",
+        "No resampling or interpolation is used; live execution remains disabled on Nobitex.",
         "",
         "## Strategy protocol",
         "| Parameter | Value |",
@@ -342,7 +361,7 @@ def _write_step_summary(report: dict[str, Any]) -> None:
         "| Round-trip cost | 50 bps, deducted once per completed trade |",
         f"| Fixed notional baseline | {FIXED_POSITION_FRACTION:.2%} |",
         f"| TTM multiplier bounds | {TTM_MULTIPLIER_MIN:.2f}x to {TTM_MULTIPLIER_MAX:.2f}x |",
-        "| TTM input | Native 1h data; next-24h variance forecast |",
+        "| TTM input | Nobitex 1h data; next-24h variance forecast |",
         f"| TTM refresh | Every {TTM_REFRESH_HOURS} hours; latest forecast available as-of entry |",
         "",
         "## Final holdout metrics",
@@ -480,9 +499,9 @@ def _assemble_report(
         for result in timeframe_results.values()
     )
     verdict = (
-        "RESEARCH_EDGE_FOUND_PAPER_TRADING_PREPARATION_ONLY"
+        "PROXY_EDGE_FOUND_REQUIRES_NOBITEX_PAPER_VALIDATION"
         if passed
-        else "NO_STATISTICAL_EDGE_FOUND_IN_HIGH_FREQUENCY_OHLCV"
+        else "NO_STATISTICAL_EDGE_FOUND_IN_HIGH_FREQUENCY_PROXY_DATA"
     )
     safety = {
         "Champion": None,
@@ -490,8 +509,11 @@ def _assemble_report(
         "trading_authorization": "NO-GO",
         "ALIX_DRY_RUN": True,
         "ALIX_ALLOW_LIVE_TRADING": False,
+        "public_market_data_calls": sum(
+            int(manifests[interval]["public_api_requests"])
+            for interval in INTRADAY_INTERVALS
+        ),
         "private_api_calls": 0,
-        "exchange_calls": 0,
         "real_order_attempts": 0,
         "paper_orders": 0,
         "position_multiplier_applied_to_runtime": False,
@@ -502,7 +524,7 @@ def _assemble_report(
         raise ValueError("hf_safety_invariant_violated")
 
     return {
-        "experiment": "Nobitex 15m/30m Donchian-20 ATR(14) breakout with TTM-R2 risk-only sizing",
+        "experiment": "Binance Spot 15m/30m proxy Donchian-20 ATR(14) with Nobitex 1h TTM-R2 risk-only sizing",
         "code_commit_sha": args.commit_sha,
         "dataset_window": {
             "start_utc": max(
@@ -511,15 +533,26 @@ def _assemble_report(
             "end_utc": min(
                 manifests[interval]["end_utc"] for interval in INTRADAY_INTERVALS
             ),
-            "first_native_intraday_date_utc": min(
-                manifests[interval]["start_utc"] for interval in INTRADAY_INTERVALS
+            "requested_start_utc": PROXY_WINDOW_START_UTC,
+            "requested_end_utc": PROXY_WINDOW_END_UTC,
+            "intraday_data_role": "BINANCE_SPOT_PROXY_RESEARCH_ONLY",
+            "intraday_source_policy": "BINANCE_PROXY_RESEARCH_ONLY",
+            "execution_venue": "NOBITEX",
+            "hourly_risk_context_venue": "NOBITEX_1H",
+            "note": (
+                "15m/30m inputs are Binance Spot proxy candles, not Nobitex prices or fills. "
+                "The TTM-R2 risk context is Nobitex 1h history. This mixed-venue setup is "
+                "research-only and does not establish execution equivalence."
             ),
-            "availability_search_lower_bound_utc": DATASET_MINIMUM_UTC,
-            "note": "Each interval starts at the first native Nobitex candle found by UDF countback; the evaluation uses the shared overlap. No resampling, interpolation, or backfill is used.",
-            "source_policy": "NOBITEX_ONLY_NO_BACKFILL",
+            "source_policy": "BINANCE_PROXY_RESEARCH_ONLY",
             "hourly_context_sha256": hourly_manifest["csv_sha256"],
             "datasets": {
                 interval: {
+                    "dataset_id": manifests[interval]["dataset_id"],
+                    "provider": manifests[interval]["provider"],
+                    "venue": manifests[interval]["venue"],
+                    "interval": manifests[interval]["interval"],
+                    "public_api_requests": manifests[interval]["public_api_requests"],
                     "row_count": manifests[interval]["row_count"],
                     "csv_sha256": manifests[interval]["csv_sha256"],
                     "start_utc": manifests[interval]["start_utc"],
@@ -544,6 +577,10 @@ def _assemble_report(
             "ttm_multiplier_bounds": [TTM_MULTIPLIER_MIN, TTM_MULTIPLIER_MAX],
             "no_leverage": True,
             "risk_only_overlay": True,
+            "intraday_research_venue": "BINANCE_SPOT_PROXY",
+            "ttm_risk_context_venue": "NOBITEX_1H",
+            "intended_execution_venue": "NOBITEX",
+            "proxy_execution_equivalence_assumed": False,
         },
         "chronological_protocol": {
             "training_fraction": TRAIN_FRACTION,
@@ -561,6 +598,8 @@ def _assemble_report(
             "max_drawdown_strictly_below": 0.15,
             "minimum_trades_per_year_strictly_above": 200.0,
             "any_timeframe_passed": passed,
+            "dataset_scope": "BINANCE_SPOT_PROXY_RESEARCH_ONLY",
+            "nobitex_paper_validation_required_before_promotion": True,
         },
         "safety": safety,
     }

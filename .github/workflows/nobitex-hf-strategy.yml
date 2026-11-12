@@ -45,27 +45,27 @@ jobs:
         run: python -m pip check
       - name: Audit TTM-only dependency environment
         run: pip-audit
-      - name: Run HF strategy and native fetcher contract tests
-        run: pytest tests/unit/test_hf_donchian.py tests/unit/test_ttm_risk.py tests/unit/test_fetch_nobitex_public_ohlcv.py -q
+      - name: Run HF strategy, Nobitex hourly and Binance proxy fetcher contract tests
+        run: pytest tests/unit/test_hf_donchian.py tests/unit/test_ttm_risk.py tests/unit/test_fetch_nobitex_public_ohlcv.py tests/unit/test_fetch_binance_hf_proxy_ohlcv.py tests/unit/test_run_nobitex_hf_backtest.py -q
       - name: Fetch exact pre-hack hourly Nobitex context for TTM-R2
         run: |
           set -euo pipefail
           out="$GITHUB_WORKSPACE/.artifacts/alix-hf-data"
           mkdir -p "$out"
           python -m scripts.fetch_nobitex_prehack_ohlcv --output-dir "$out" --commit-sha "$GITHUB_SHA"
-      - name: Fetch native 15m Nobitex candles
+      - name: Fetch Binance Spot proxy 15m candles
         run: |
           python -m scripts.fetch_nobitex_hf_ohlcv --interval 15m --output-dir .artifacts/alix-hf-data --commit-sha "$GITHUB_SHA"
-      - name: Fetch native 30m Nobitex candles
+      - name: Fetch Binance Spot proxy 30m candles
         run: |
           python -m scripts.fetch_nobitex_hf_ohlcv --interval 30m --output-dir .artifacts/alix-hf-data --commit-sha "$GITHUB_SHA"
       - name: Run frozen TTM-R2 risk-only Donchian backtests
         run: |
           python -m scripts.run_nobitex_hf_backtest \
-            --ohlcv-15m .artifacts/alix-hf-data/nobitex-btcusdt-15m.csv \
-            --manifest-15m .artifacts/alix-hf-data/nobitex-btcusdt-15m.manifest.json \
-            --ohlcv-30m .artifacts/alix-hf-data/nobitex-btcusdt-30m.csv \
-            --manifest-30m .artifacts/alix-hf-data/nobitex-btcusdt-30m.manifest.json \
+            --ohlcv-15m .artifacts/alix-hf-data/PROXY_BINANCE_15M.csv \
+            --manifest-15m .artifacts/alix-hf-data/PROXY_BINANCE_15M.manifest.json \
+            --ohlcv-30m .artifacts/alix-hf-data/PROXY_BINANCE_30M.csv \
+            --manifest-30m .artifacts/alix-hf-data/PROXY_BINANCE_30M.manifest.json \
             --hourly-ohlcv .artifacts/alix-hf-data/nobitex-btcusdt-1h.csv \
             --hourly-manifest .artifacts/alix-hf-data/nobitex-btcusdt-1h.manifest.json \
             --output-dir .artifacts/alix-hf-results \
@@ -79,12 +79,18 @@ jobs:
           safety = report["safety"]
           assert report["code_commit_sha"] == __import__("os").environ["GITHUB_SHA"]
           assert report["strategy"]["timeframes"] == ["15m", "30m"]
+          assert report["dataset_window"]["source_policy"] == "BINANCE_PROXY_RESEARCH_ONLY"
+          assert report["dataset_window"]["intraday_data_role"] == "BINANCE_SPOT_PROXY_RESEARCH_ONLY"
+          assert report["strategy"]["intraday_research_venue"] == "BINANCE_SPOT_PROXY"
+          assert report["strategy"]["intended_execution_venue"] == "NOBITEX"
+          assert report["strategy"]["proxy_execution_equivalence_assumed"] is False
           assert report["strategy"]["round_trip_cost_bps"] == 50
           assert report["strategy"]["stop_loss_atr"] == 2.0
           assert report["strategy"]["take_profit_atr"] == 4.0
           assert safety["Champion"] is None
           assert safety["order_permission"] is False
           assert safety["trading_authorization"] == "NO-GO"
+          assert safety["public_market_data_calls"] > 0
           assert safety["private_api_calls"] == 0
           assert safety["real_order_attempts"] == 0
           assert safety["paper_orders"] == 0
@@ -96,7 +102,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: alix-nobitex-hf-strategy
+          name: alix-binance-hf-proxy-research
           path: |
             .artifacts/alix-hf-data/*
             .artifacts/alix-hf-results/*
