@@ -294,10 +294,7 @@ def test_mock_report_contains_only_synthetic_metadata(
 def test_committed_execution_lock_template_is_not_authorized() -> None:
     repository_root = Path(__file__).resolve().parents[2]
     lock_path = (
-        repository_root
-        / "config"
-        / "experiment"
-        / "four_arm_execution_lock.json"
+        repository_root / "config" / "experiment" / "four_arm_execution_lock.json"
     )
     lock = json.loads(lock_path.read_text(encoding="utf-8"))
     assert lock["authorization_status"] == "NOT_AUTHORIZED"

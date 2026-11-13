@@ -114,9 +114,7 @@ def _run_gate_contract_checks() -> dict[str, bool]:
     failing = _sample_evidence(TRIAL_IDS[2], 0.30, eligible=False)
     fourth = _sample_evidence(TRIAL_IDS[3], 0.15)
     return {
-        "four_registered_trial_ids": (
-            len(TRIAL_IDS) == 4 and len(set(TRIAL_IDS)) == 4
-        ),
+        "four_registered_trial_ids": (len(TRIAL_IDS) == 4 and len(set(TRIAL_IDS)) == 4),
         "fold_stability_pass_boundary": fold_stability_passes((True, True, True)),
         "fold_stability_fail_boundary": not fold_stability_passes((True, True, False)),
         "dsr_sensitivity_pass_boundary": dsr_sensitivity_passes((0.01, 0.02, 0.03)),
