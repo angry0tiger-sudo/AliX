@@ -1,128 +1,115 @@
 # Owner Execution Checklist — Four-Arm Kronos/Chronos Experiment
 
 **Registration:** NOBITEX-FOUR-ARM-KC-20261113  
-**Related decisions:** ADR-032, ADR-033  
+**Related decisions:** ADR-032, ADR-033, ADR-034  
 **Blocker register:** FOUR_ARM_BLOCKERS.md  
-**Current state:** NOT AUTHORIZED — all four trial IDs remain PREREGISTERED / NOT_STARTED.
+**Current state:** OWNER-APPROVED DEFAULTS RECORDED; REAL EXECUTION BLOCKED BY INCOMPLETE IMMUTABLE LOCK AND MISSING REAL RUNNER.
 
-> This checklist is an approval record template. Filling it in does not by itself authorize execution. The Owner must issue a separate, explicit run directive after the immutable execution lock and the real-research workflow have been reviewed.
+> This checklist distinguishes Owner-approved design defaults from technical authorization to execute. The Owner has authorized the pre-hack research scope and the defaults below. That approval does not waive immutable artifact, fail-closed, or reproducibility requirements.
 
-## Stage 1 — Owner decisions for intrinsic blockers
+## Stage 1 — Owner defaults recorded in ADR-034
 
-Complete every field and attach the referenced immutable evidence before signing.
+The following defaults were selected by the explicit Owner directive received on 2026-11-13:
 
-- [ ] **Kronos-Small weight SHA-256:** ______________________________________
-- [ ] **Chronos-2 weight SHA-256:** _________________________________________
-- [ ] **Immutable model revisions** (full Hugging Face commit or local artifact SHA; include runtime/version manifest):  
-  __________________________________________________________________________
-- [ ] **Forecast-to-decision mapping for arm B (Kronos-Small):**  
-  __________________________________________________________________________
-- [ ] **Forecast-to-decision mapping for arm C (Chronos-2):**  
-  __________________________________________________________________________
-- [ ] **Arm D prediction-combination rule** (average / fixed weighted average / consensus / stacking; exact formula and invalid-input behavior):  
-  __________________________________________________________________________
-- [ ] **Exact chronological Fold boundaries** (UTC timestamps and dataset row indices; train / validation / OOS per fold):  
-  __________________________________________________________________________
-- [ ] **Fixed deterministic seed** (and controlled random sources): ___________________
-- [ ] **Triple-Barrier contract confirmed** (TP=2×ATR(14), SL=2×ATR(14), max holding=24h; executable-price anchor, dual-touch collision/tie, gap and fill semantics):  
-  __________________________________________________________________________
-- [ ] **Final DSR method approved** (formula/version, parameters, implementation SHA-256, trial-count sensitivity):  
-  __________________________________________________________________________
-- [ ] **GLOBAL_N decision** (candidate-level reconciliation plan; keep UNKNOWN if unproven; define the INSUFFICIENT_EVIDENCE/NO-GO condition):  
-  __________________________________________________________________________
-- [ ] **Historical final-12.5% exposure decision** (confirm that 24h purge + 24h embargo are only temporal-overlap controls, and specify whether the known-exposed segment remains non-independent or is excluded from confirmatory scoring):  
-  __________________________________________________________________________
+- [x] **Kronos-Small repository/default revision:** `Salesforce/chronos-small`, requested revision `main`.
+- [x] **Chronos-2 repository/default revision:** `amazon/chronos-2-small`, requested revision `main`.
+- [x] **Arm D forecast combination:** simple arithmetic average (equal-weight mean).
+- [x] **Fold design default:** three-fold chronological split; target allocation 70% train / 15% validation / 15% test.
+- [x] **Deterministic seed:** `42`.
+- [x] **Triple-Barrier parameters:** TP=2×ATR(14), SL=2×ATR(14), maximum holding=24h.
+- [x] **Purge and embargo:** 24h each.
+- [x] **DSR trial-count disclosure:** `GLOBAL_N=UNKNOWN`; no guessed global count is permitted.
+- [x] **Historical exposure decision:** accept the known final-12.5% pre-hack exposure as a disclosed risk; results from this segment are not independent evidence and cannot support an untouched-holdout claim.
+- [x] **Owner instruction:** pre-hack-only research scope is approved; post-hack holdout remains excluded.
 
-**Owner decision record / evidence links:**  
-____________________________________________________________________________
+### Stage 1 — Evidence still required before execution
 
-**Stage 1 approval:**  
-Owner: ______________________________  Date (UTC): _________________________  
-Decision: APPROVED / REJECTED / RETURN FOR REVISION  
-Signature or immutable approval reference: __________________________________
+The choices above do not supply the content-addressed evidence required by the execution-lock validator:
 
-## Stage 2 — Complete and approve the immutable execution lock
+- [ ] Kronos-Small exact immutable model revision (40-hex Hugging Face commit), distinct from the mutable alias `main`.
+- [ ] Chronos-2 exact immutable model revision (40-hex Hugging Face commit), distinct from the mutable alias `main`.
+- [ ] Exact Kronos-Small model-weight artifact manifest and SHA-256 (64 hex).
+- [ ] Exact Chronos-2 model-weight artifact manifest and SHA-256 (64 hex).
+- [ ] Runtime/library lock, model license/provenance, and pretraining-corpus overlap disclosure.
+- [ ] B and C forecast-to-decision adapters; arm D common scale/units, horizon/as-of semantics, and invalid/missing forecast behavior.
+- [ ] Exact fold-plan artifact with UTC timestamps, row-index ranges, common eligible rows, and purge/embargo boundaries. The 70/15/15 allocation alone is not three immutable fold definitions.
+- [ ] Executable triple-barrier contract: decision-price anchor, ATR as-of semantics, dual-touch rule, gap-through behavior, fill price, and vertical-barrier expiry.
+- [ ] Exact reproducible DSR method/formula, parameters, implementation SHA, and conservative sensitivity under `GLOBAL_N=UNKNOWN`. If evidence cannot support DSR>0, record `INSUFFICIENT_EVIDENCE / NO-GO`.
+- [ ] Frozen cost/fill simulator for the separate 50 bps and 90 bps scenarios.
 
-All intrinsic decisions must be resolved and all technical blockers in FOUR_ARM_BLOCKERS.md must have verified evidence before this stage.
+**Important model identity rule:** `main` is recorded as the Owner's requested default label, but the lock validator requires a 40-character immutable revision and a separate 64-character weight SHA-256 for each model. A repository identifier or branch name must never be substituted for a weight digest.
 
-- [ ] Execution-lock validator is connected to every real training/evaluation entrypoint.
-- [ ] Integration tests prove fail-closed behavior and prove no dataset/model I/O occurs before authorization.
-- [ ] Cost/fill simulator is frozen for separate 50 bps and 90 bps scenarios and has deterministic synthetic tests.
-- [ ] Complete execution-lock JSON is committed with immutable model revisions, weight SHA-256 values, fixed seed, data identity, and every required contract fingerprint.
-- [ ] Owner reviews and signs the exact execution-lock commit.
-- [ ] Owner-controlled authorization is issued for this specific pre-hack research run. The required flag is ALIX_FOUR_ARM_EXECUTION_AUTHORIZED=true; the flag alone is not sufficient authorization.
-- [ ] Safety flags remain ALIX_DRY_RUN=true and ALIX_ALLOW_LIVE_TRADING=false.
-- [ ] Exact pre-hack dataset SHA-256 is confirmed:  
-  0aa13607d1da68c4720919f233635bb33d34048e5bd67d3ecc2ce9bb7c2b462e
+**Owner directive record:** received 2026-11-13. The directive requested a confirmation date of 2026-11-14; that date is future relative to this record and is not falsely recorded as an already completed signature.
 
-Execution-lock commit SHA: _________________________________________________  
-Owner approval reference: __________________________________________________  
-Approval date (UTC): _______________________________________________________
+## Stage 2 — Execution lock and authorization
 
-## Stage 3 — Workflow dispatch authorization
+Owner authorization for the bounded pre-hack research scope is recorded. The operational lock remains fail-closed until every required field below is present and verified.
 
-**Important current-state warning:** the committed .github/workflows/four-arm-experiment.yml is currently a mock-only structural-validation workflow. It runs synthetic fixtures only and has ALIX_FOUR_ARM_EXECUTION_AUTHORIZED=false. Dispatching the current file does not train/evaluate models and does not produce an economic result. Do not dispatch it expecting a real four-arm run.
+- [x] Owner explicitly requested the four-arm pre-hack experiment and authorized the intended value `ALIX_FOUR_ARM_EXECUTION_AUTHORIZED=true` for that scope.
+- [x] Required safety environment values are specified: `ALIX_DRY_RUN=true` and `ALIX_ALLOW_LIVE_TRADING=false`.
+- [x] Exact permitted dataset identity is recorded:  
+  `0aa13607d1da68c4720919f233635bb33d34048e5bd67d3ecc2ce9bb7c2b462e`.
+- [ ] Do not set the runtime authorization environment flag until the complete immutable lock validates. Current lock file status is `NOT_AUTHORIZED`; all model identity/weight digests and contract fingerprints must be populated first.
+- [ ] Immutable Owner authorization commit SHA (40 hex) is recorded in the lock after the decision/lock commit exists.
+- [ ] Lock validator is the first action before any dataset/model/artifact I/O on every real entrypoint.
+- [ ] Integration tests prove the real entrypoint cannot read data or load models when any authorization flag, dataset hash, model revision, weight digest, or contract fingerprint is absent/invalid.
+- [ ] Cost/fill simulator is frozen for both 50 bps and 90 bps and covered by deterministic synthetic tests.
+- [ ] Complete execution-lock JSON is committed and independently reviewed.
+- [ ] Owner approval is bound to the exact lock/workflow commit SHA.
 
-- [ ] Owner reviews the exact workflow commit and confirms it is a separately authorized **pre-hack research** workflow, not the current mock-only workflow.
-- [ ] The workflow proves it validates the complete execution lock before any pre-hack data/model I/O.
-- [ ] The workflow has no post-hack holdout fetch, no private API access, no live trading, and no real-order path.
-- [ ] Owner explicitly authorizes dispatch of that reviewed workflow.
-- [ ] Owner dispatches the authorized workflow.
-- [ ] Run ID recorded: ______________________________
-- [ ] Dispatched commit SHA recorded: ______________________________
-- [ ] Workflow URL / evidence: ______________________________________
+**Current execution-lock file:** `config/experiment/four_arm_execution_lock.json`  
+**Current lock status:** `NOT_AUTHORIZED`  
+**Reason:** model repository revisions, weight SHA-256 values, and required contract fingerprints are null. The existing validator requires a 40-hex revision and 64-hex artifact digest for each model, plus all contract fingerprints.
 
-Optional infrastructure check only (not an economic experiment):
-- [ ] Owner dispatches the currently committed mock-only workflow for synthetic structural validation.
-- [ ] Mock-only Run ID: ______________________________
-- [ ] Confirm report says MOCK_ONLY and trial_evaluation_performed=false.
+Execution-lock commit SHA: PENDING  
+Owner authorization reference: this directive, 2026-11-13  
+Runtime authorization flag: NOT ENABLED
 
-## Stage 4 — Record results and issue the economic decision
+## Stage 3 — Real workflow and dispatch
 
-Complete only after an authorized pre-hack research run has finished and its artifacts have been independently reviewed.
+- [ ] Implement and review an actual pre-hack four-arm execution entrypoint. `scripts/run_four_arm_experiment.py` is absent at the current HEAD.
+- [ ] Create a separate `workflow_dispatch`-only real-experiment workflow with `contents: read`, an 480-minute timeout, immutable lock validation before I/O, and no post-hack, private-API, or order path.
+- [ ] Confirm the real workflow uses only the pre-hack dataset SHA recorded above and all four registered trial IDs under identical eligible rows and execution assumptions.
+- [ ] Confirm artifact output includes all four arm manifests and structured logs, without raw holdout values or secret material.
+- [ ] Owner reviews the exact workflow/runner/lock commit and confirms the runtime authorization scope.
+- [ ] Dispatch the real workflow only after every Stage 1 evidence item and Stage 2 technical requirement passes.
+- [ ] Workflow Run ID: PENDING
+- [ ] Dispatched commit SHA: PENDING
+- [ ] Artifact IDs / evidence: PENDING
 
-- [ ] Append run evidence and all four arm outcomes to TRIAL_REGISTRY.md; preserve append-only history.
-- [ ] Retain all four trial IDs in multiple-testing / DSR accounting if evaluated:
-  - NOBITEX-KC26-A
-  - NOBITEX-KC26-B
-  - NOBITEX-KC26-C
-  - NOBITEX-KC26-D
-- [ ] Report Cost-50 and Cost-90 separately for every arm.
-- [ ] Report fold-level and pooled OOS metrics; retain failed, partial, rejected, and incomplete evidence.
-- [ ] Record the reconciled DSR trial count or keep GLOBAL_N=UNKNOWN with the required conservative sensitivity and explain any INSUFFICIENT_EVIDENCE outcome.
-- [ ] Issue and record the economic verdict: PASS / NO-GO / INSUFFICIENT_EVIDENCE.
-- [ ] If no arm passes every preregistered gate: record NO-GO and keep the post-hack holdout sealed.
-- [ ] If an arm passes: request separate Owner Release Authorization before any holdout access. A PASS does not automatically open the holdout.
-- [ ] If and only if separate Release Authorization is granted, use a fresh one-time nonce under the approved protocol. Never reuse a consumed or rotated nonce.
-- [ ] Record the separate Release Authorization reference and the holdout acquisition run ID; do not expose holdout values in stdout or reports.
+**Current workflow warning:** `.github/workflows/four-arm-experiment.yml` is mock-only. It runs synthetic fixtures, hard-codes `ALIX_FOUR_ARM_EXECUTION_AUTHORIZED=false`, and cannot produce an economic result. It must not be treated as the real experiment. No real four-arm workflow has been committed or dispatched.
 
-Economic verdict: ______________________________  
-Review / evidence reference: ____________________  
-Owner: _______________________________________  
-Date (UTC): ___________________________________
+## Stage 4 — Results, Trial Registry, and verdict
 
-## Final authorization statement
+This stage is authorized as the required reporting procedure, but it must remain uncompleted until a genuine, authorized pre-hack run has finished and its artifacts have been reviewed.
 
-- [ ] I confirm all Stage 1 intrinsic decisions are explicit and versioned.
-- [ ] I confirm all Stage 2 technical and execution-lock requirements are verified.
-- [ ] I confirm the dispatched workflow commit matches the approved execution-lock contract.
-- [ ] I authorize only the specific pre-hack research action recorded above.
-- [ ] I understand that this checklist does not authorize post-hack holdout access, Paper Trading, Real Trading, private API calls, or real orders.
+- [ ] Append the actual run evidence to `docs/research/TRIAL_REGISTRY.md`; preserve its append-only history.
+- [ ] For each arm A/B/C/D, record `arm_id`, `netPF_50bps`, `netPF_90bps`, `trades`, `maxDD`, DSR status/value, fold-level evidence, and winner flag.
+- [ ] Retain all four trial IDs in multiple-testing accounting if evaluated: NOBITEX-KC26-A/B/C/D.
+- [ ] Report Cost-50 and Cost-90 separately; no gross/net substitution or scenario averaging.
+- [ ] If `GLOBAL_N=UNKNOWN` prevents a defensible DSR result, record `INSUFFICIENT_EVIDENCE / NO-GO`; do not invent a numeric DSR.
+- [ ] Issue PASS only if NetPF≥1.10 at both costs, trades≥100, MaxDD≤15%, DSR>0 on defensible evidence, and at least three chronological folds pass.
+- [ ] If an arm passes, it becomes eligible for a separately authorized paper phase only. Keep holdout sealed until the Owner issues distinct Release Authorization.
+- [ ] If no arm passes, record documented NO-GO and the redesign/stop decision.
+- [ ] Comment on Issue #43 only after the measured outcome is known; do not pre-announce a winner or NO-GO before a valid experiment result.
+- [ ] Disable `ALIX_FOUR_ARM_EXECUTION_AUTHORIZED` after the run, including failure/abort paths; retain dry-run true and live-trading false.
 
-Owner signature / immutable approval reference: ______________________________  
-Approved scope: ___________________________________________________________  
-Approved commit SHA: _____________________________________________________  
-Date (UTC): ______________________________________________________________
+Economic verdict: PENDING  
+Issue #43 comment: NOT POSTED (no economic result exists)  
+Execution-lock disablement: NOT APPLICABLE — authorization flag has not been enabled
 
-## Non-negotiable safety invariants
+## Holdout and safety invariants
 
+- Post-hack V2 status: `FETCHED_LOCKED`.
+- `config/holdout/DISPATCH_TRIGGER`: `PROBE`.
+- No post-hack holdout data may be read, copied, materialized, or supplied to any model/run in this task.
 - Champion = null
 - order_permission = false
-- trading_authorization = NO-GO until a separate authorization changes the permitted scope
+- trading_authorization = NO-GO
 - private_api_calls = 0
 - real_order_attempts = 0
 - ALIX_DRY_RUN = true
 - ALIX_ALLOW_LIVE_TRADING = false
 - main = FROZEN
 
-**Do not execute any real training, fit, inference, backtest, economic evaluation, holdout access, or trading action merely because this checklist exists or has been partially completed.**
+**This checklist records Owner-approved defaults and execution boundaries. It does not convert missing model artifacts, missing contract hashes, or the mock-only workflow into a real experiment.**
