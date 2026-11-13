@@ -90,6 +90,67 @@ def _utc_iso(timestamp: int) -> str:
     )
 
 
+def _merge_page_records(
+    records_by_timestamp: dict[int, source.CandleRecord],
+    page_records: dict[int, source.CandleRecord],
+) -> int:
+    duplicate_count = 0
+    for timestamp, row in page_records.items():
+        if timestamp in records_by_timestamp:
+            duplicate_count += 1
+        else:
+            records_by_timestamp[timestamp] = row
+    return duplicate_count
+
+
+def _fetch_all_pages(
+    *,
+    start_timestamp: int,
+    end_timestamp: int,
+    symbol: str,
+    request_json: JsonProvider,
+    sleep_fn: Callable[[float], None],
+) -> tuple[dict[int, source.CandleRecord], int]:
+    seconds = source.interval_seconds("1h")
+    records_by_timestamp: dict[int, source.CandleRecord] = {}
+    duplicate_count = 0
+    cursor = start_timestamp
+
+    while cursor <= end_timestamp:
+        page_end = min(
+            cursor + (source.MAX_CANDLES_PER_REQUEST - 1) * seconds,
+            end_timestamp,
+        )
+        _page_expected, page_records, _page_missing = source._fetch_page_with_retries(
+            start=cursor,
+            end=page_end,
+            seconds=seconds,
+            symbol=symbol,
+            request_json=request_json,
+            sleep_fn=sleep_fn,
+        )
+        duplicate_count += _merge_page_records(records_by_timestamp, page_records)
+        cursor = page_end + seconds
+        if cursor <= end_timestamp:
+            sleep_fn(1.1)
+
+    return records_by_timestamp, duplicate_count
+
+
+def _validate_record_timestamps(
+    records_by_timestamp: dict[int, source.CandleRecord],
+    *,
+    start_timestamp: int,
+    end_timestamp: int,
+    seconds: int,
+) -> None:
+    for timestamp in records_by_timestamp:
+        if timestamp < start_timestamp or timestamp > end_timestamp:
+            raise ValueError("posthack_unexpected_or_off_grid_timestamp")
+        if (timestamp - start_timestamp) % seconds != 0:
+            raise ValueError("posthack_unexpected_or_off_grid_timestamp")
+
+
 def fetch_window(
     *,
     start_timestamp: int,
@@ -101,44 +162,20 @@ def fetch_window(
     validate_window(start_timestamp, end_timestamp)
     source._validate_symbol(symbol)
     seconds = source.interval_seconds("1h")
-    records_by_timestamp: dict[int, source.CandleRecord] = {}
-    duplicate_count = 0
-    cursor = start_timestamp
-
-    while cursor <= end_timestamp:
-        page_end = min(
-            cursor + (source.MAX_CANDLES_PER_REQUEST - 1) * seconds,
-            end_timestamp,
-        )
-        page_expected, page_records, _page_missing = source._fetch_page_with_retries(
-            start=cursor,
-            end=page_end,
-            seconds=seconds,
-            symbol=symbol,
-            request_json=request_json,
-            sleep_fn=sleep_fn,
-        )
-        if not page_expected:
-            raise ValueError("posthack_empty_expected_page")
-        for timestamp, row in page_records.items():
-            if timestamp in records_by_timestamp:
-                duplicate_count += 1
-            else:
-                records_by_timestamp[timestamp] = row
-        cursor = page_end + seconds
-        if cursor <= end_timestamp:
-            sleep_fn(1.1)
-
-    expected_timestamps = list(range(start_timestamp, end_timestamp + 1, seconds))
-    unexpected = [
-        timestamp
-        for timestamp in records_by_timestamp
-        if timestamp < start_timestamp
-        or timestamp > end_timestamp
-        or (timestamp - start_timestamp) % seconds != 0
-    ]
-    if unexpected:
-        raise ValueError("posthack_unexpected_or_off_grid_timestamp")
+    records_by_timestamp, duplicate_count = _fetch_all_pages(
+        start_timestamp=start_timestamp,
+        end_timestamp=end_timestamp,
+        symbol=symbol,
+        request_json=request_json,
+        sleep_fn=sleep_fn,
+    )
+    _validate_record_timestamps(
+        records_by_timestamp,
+        start_timestamp=start_timestamp,
+        end_timestamp=end_timestamp,
+        seconds=seconds,
+    )
+    expected_timestamps = range(start_timestamp, end_timestamp + 1, seconds)
     missing = [
         timestamp
         for timestamp in expected_timestamps
@@ -148,7 +185,6 @@ def fetch_window(
         records_by_timestamp[timestamp] for timestamp in sorted(records_by_timestamp)
     ]
     return rows, missing, duplicate_count
-
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(
