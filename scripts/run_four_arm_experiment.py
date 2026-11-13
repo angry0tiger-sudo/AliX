@@ -416,6 +416,15 @@ def _validate_arm_identity_and_metrics(arm_id: str, item: dict[str, Any]) -> Non
             raise ExperimentError(f"arm_metric_missing_or_nonfinite:{arm_id}:{key}")
 
 
+def _finite_at_least_one(value: Any) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and value >= 1.0
+    )
+
+
 def _stable_fold_count(folds: list[Any]) -> int:
     stable_count = 0
     for fold in folds:
@@ -423,12 +432,7 @@ def _stable_fold_count(folds: list[Any]) -> int:
             continue
         net_50 = fold.get("netPF_50bps")
         net_90 = fold.get("netPF_90bps")
-        if (
-            _finite_number(net_50)
-            and _finite_number(net_90)
-            and net_50 >= 1.0
-            and net_90 >= 1.0
-        ):
+        if _finite_at_least_one(net_50) and _finite_at_least_one(net_90):
             stable_count += 1
     return stable_count
 
@@ -503,7 +507,8 @@ def _select_winner(evaluated: list[dict[str, Any]]) -> str | None:
     passing = [item for item in evaluated if item["winner"]]
     if not passing:
         return None
-    return max(passing, key=lambda item: item["DSR"])["arm_id"]
+    selected = max(passing, key=lambda item: item["DSR"])
+    return cast(str, selected["arm_id"])
 
 
 def _write_research_summary(
