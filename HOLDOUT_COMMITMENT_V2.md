@@ -72,3 +72,4 @@ do not erase the initial commitment or prior execution entries.
 - The second nonce `d86c6da4e1df4e7b4b042a5be940df24` was rejected because it was recorded inside a descriptive bullet rather than as a standalone parser-compatible `dispatch_nonce:` key. The workflow therefore retained the previous parsed nonce and rejected the mismatched trigger with `STALE_OR_REPLAYED_NONCE`.
 - The third nonce below replaces the second nonce for this one-time acquisition dispatch. Both earlier nonces are permanently retired.
 dispatch_nonce: c1c9297040cc4bfcb28ac1f414c4ad07
+dispatch_nonce: e3fb1601e654341a21fa13f00cd6271b
