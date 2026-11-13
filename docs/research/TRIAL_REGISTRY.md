@@ -302,3 +302,26 @@ for later pre-registration. All economic decisions remain subject to the absolut
 - #45: Run ID 43306747175, SHA e6af8b168a0fc49c981dfb79689e34fc2f8e9c61
 ### V4-T Workflow SHA Correction
 - Corrected workflow blob SHA: fab1a50d5e6ab174446ab38e68afa46516af4e
+
+---
+
+## [APPEND] Data operation — non-holdout grid diagnosis (2026-11-13)
+
+### DIAGNOSE #7 — Nobitex BTCUSDT 1h structural grid check
+
+- Operation class: non-economic, non-holdout structural data diagnosis.
+- Workflow run ID: `43398908810` (run #7), conclusion: `success`.
+- Diagnostic commit SHA: `e3ed17137a1b01dbf68b1e19174837282ea66dce`.
+- Diagnostic window: `2026-11-02T00:00:00Z` through `2026-11-12T00:00:00Z` (inclusive UTC hourly grid).
+- HTTP status: `200`.
+- Returned candle count: `240`.
+- Off-grid count: `240`.
+- Distinct offsets from the expected UTC hourly grid: `[1800]` seconds.
+- Missing expected hourly grid timestamps: `241`.
+- First returned timestamp (Unix seconds): `1793579400`.
+- Last returned timestamp (Unix seconds): `1794439800`.
+- Artifact: `nobitex-grid-diagnose-43398908810`, artifact ID `14024246276`.
+- Structural interpretation: all returned timestamps were offset by 1,800 seconds; none aligned to the expected hourly grid. The non-holdout diagnosis therefore indicates a systematic 30-minute grid offset in this sampled interval.
+- OHLCV values were transiently parsed in memory only to collect timestamp metadata; no prices or OHLCV fields were printed or persisted.
+- The committed holdout window was not fetched or opened. No nonce was read, generated, or consumed by the DIAGNOSE mode.
+- V2 commitment remained `PENDING_DISPATCH`; no spec, gap policy, pre-hack fetcher, or economic gate was changed.
