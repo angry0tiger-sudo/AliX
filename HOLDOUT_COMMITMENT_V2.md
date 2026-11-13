@@ -66,3 +66,9 @@ do not erase the initial commitment or prior execution entries.
 - The previous nonce `3764030460fa5cbdaebf522c97453b3b` was not used for data acquisition because the wrapper failed before fetching with `ModuleNotFoundError: No module named 'scripts'`.
 - The previous nonce is permanently retired and must never be reused.
 - Replacement `dispatch_nonce:` (active): d86c6da4e1df4e7b4b042a5be940df24
+
+## Nonce Rotation #2 (2026-11-13)
+
+- The second nonce `d86c6da4e1df4e7b4b042a5be940df24` was rejected because it was recorded inside a descriptive bullet rather than as a standalone parser-compatible `dispatch_nonce:` key. The workflow therefore retained the previous parsed nonce and rejected the mismatched trigger with `STALE_OR_REPLAYED_NONCE`.
+- The third nonce below replaces the second nonce for this one-time acquisition dispatch. Both earlier nonces are permanently retired.
+dispatch_nonce: c1c9297040cc4bfcb28ac1f414c4ad07
