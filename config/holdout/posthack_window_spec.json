@@ -1,0 +1,60 @@
+{
+  "schema_version": "alix.nobitex.posthack-holdout.v1",
+  "venue": "Nobitex Spot",
+  "symbol": "BTCUSDT",
+  "timeframe": "1h",
+  "endpoint": {
+    "provider": "Nobitex public UDF history API",
+    "url": "https://apiv2.nobitex.ir/market/udf/history",
+    "path": "/market/udf/history",
+    "source_contract": "Same public UDF history endpoint used by scripts/fetch_nobitex_public_ohlcv.py"
+  },
+  "window": {
+    "start_utc": "2025-07-01T00:00:00Z",
+    "end_utc": "2026-11-01T00:00:00Z",
+    "start_timestamp": 1751328000,
+    "end_timestamp": 1793491200,
+    "timezone": "UTC",
+    "timestamp_unit": "unix_seconds",
+    "timestamp_semantics": "Inclusive candle-open timestamps; both start and end grid points are required."
+  },
+  "expected_candle_count": 11713,
+  "pagination": {
+    "max_candles_per_request": 400,
+    "udf_to_semantics": "exclusive",
+    "inclusive_page_request_rule": "request_to = page_end_timestamp + 1",
+    "ordering": "Sort collected candles by timestamp ascending before exact-grid validation.",
+    "duplicates": "Deduplicate exact timestamp keys; report duplicate count in structural metadata."
+  },
+  "prehack_reference": {
+    "dataset_sha256": "0aa13607d1da68c4720919f233635bb33d34048e5bd67d3ecc2ce9bb7c2b462e",
+    "start_timestamp": 1635712200,
+    "end_timestamp": 1750192200,
+    "minimum_separation_seconds": 1135800,
+    "minimum_separation_hours": 315.5,
+    "minimum_separation_days": 13.145833333333334,
+    "policy": "Post-hack start must be strictly greater than the final pre-hack candle-open timestamp; no timestamp overlap is permitted."
+  },
+  "gap_policy": {
+    "name": "ZERO_TOLERANCE",
+    "backfill": "FORBIDDEN",
+    "interpolation": "FORBIDDEN",
+    "masking": "FORBIDDEN",
+    "synthetic_fill": "FORBIDDEN",
+    "fail_closed": true,
+    "gap_artifact": "Full list of missing UTC timestamps and Unix timestamps; no candle values."
+  },
+  "cost_scenarios_bps": [50, 90],
+  "economic_gates": {
+    "net_profit_factor_min": 1.10,
+    "trades_min": 100,
+    "max_drawdown_max": 0.15,
+    "dsr_min_exclusive": 0,
+    "minimum_stable_folds": 3
+  },
+  "data_use_lock": {
+    "status": "LOCKED",
+    "training_or_evaluation_before_owner_release": false,
+    "no_cross_venue_backfill": true
+  }
+}

@@ -1,0 +1,198 @@
+name: Nobitex Post-Hack Holdout Probe and One-Time Acquisition
+
+on:
+  push:
+    branches:
+      - research/nobitex-hf-strategy
+    paths:
+      - config/holdout/DISPATCH_TRIGGER
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nobitex-posthack-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  posthack-holdout:
+    if: github.ref == 'refs/heads/research/nobitex-hf-strategy'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact event commit with history for replay guard
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Compute canonical spec SHA-256 in CI
+        id: spec
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/posthack
+          spec_sha="$(python scripts/compute_spec_hash.py)"
+          printf '%s\n' "$spec_sha" > artifacts/posthack/spec_sha256.txt
+          echo "spec_sha256=$spec_sha" >> "$GITHUB_OUTPUT"
+          echo "Canonical holdout spec SHA-256 computed in GitHub Actions."
+
+      - name: Validate trigger nonce, one-time history and commitment state
+        id: gate
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          trigger_value="$(tr -d '\r\n' < config/holdout/DISPATCH_TRIGGER)"
+          nonce="$(python - <<'PY'
+          from pathlib import Path
+          lines = Path("HOLDOUT_COMMITMENT_V2.md").read_text(encoding="utf-8").splitlines()
+          values = [line.split(":", 1)[1].strip() for line in lines if line.startswith("dispatch_nonce:")]
+          if len(values) != 1:
+              raise SystemExit("DISPATCH_NONCE_MISSING_OR_AMBIGUOUS")
+          value = values[0]
+          if len(value) != 32 or any(ch not in "0123456789abcdef" for ch in value):
+              raise SystemExit("DISPATCH_NONCE_FORMAT_INVALID")
+          print(value)
+          PY
+          )"
+          if [[ "$trigger_value" == "PROBE" ]]; then
+            if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+              echo "mode=PROBE" >> "$GITHUB_OUTPUT"
+            else
+              echo "mode=PROBE" >> "$GITHUB_OUTPUT"
+            fi
+            exit 0
+          fi
+          if [[ "$trigger_value" != "$nonce" ]]; then
+            echo "::error::STALE_OR_REPLAYED_NONCE"
+            exit 1
+          fi
+          if [[ "$EVENT_NAME" != "push" ]]; then
+            echo "::error::ACQUISITION_REQUIRES_NONCE_PUSH"
+            exit 1
+          fi
+          if [[ -z "$EVENT_BEFORE" || "$EVENT_BEFORE" =~ ^0+$ ]]; then
+            echo "::error::NONCE_PUSH_PARENT_MISSING"
+            exit 1
+          fi
+          if git log "$EVENT_BEFORE" -S"$nonce" --format='%H' -- config/holdout/DISPATCH_TRIGGER | grep -q .; then
+            echo "::error::STALE_OR_REPLAYED_NONCE"
+            exit 1
+          fi
+          python - <<'PY'
+          from pathlib import Path
+          lines = Path("HOLDOUT_COMMITMENT_V2.md").read_text(encoding="utf-8").splitlines()
+          statuses = [line.split(":", 1)[1].strip() for line in lines if line.startswith("status:")]
+          if statuses != ["PENDING_DISPATCH"]:
+              raise SystemExit("WINDOW_CONSUMED")
+          PY
+          echo "mode=ACQUISITION" >> "$GITHUB_OUTPUT"
+
+      - name: Probe Nobitex public UDF endpoint with one small GET
+        if: steps.gate.outputs.mode == 'PROBE'
+        shell: bash
+        env:
+          SPEC_SHA256: ${{ steps.spec.outputs.spec_sha256 }}
+          RUN_ID: ${{ github.run_id }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+          import json
+          import os
+          from pathlib import Path
+          import time
+          from urllib.error import HTTPError, URLError
+          from urllib.parse import urlencode
+          from urllib.request import HTTPRedirectHandler, Request, build_opener
+
+          endpoint = "https://apiv2.nobitex.ir/market/udf/history"
+          params = {
+              "symbol": "BTCUSDT",
+              "resolution": "60",
+              "from": "1751328000",
+              "to": "1751331601",
+          }
+          url = endpoint + "?" + urlencode(params)
+
+          class NoRedirect(HTTPRedirectHandler):
+              def redirect_request(self, req, fp, code, msg, headers, newurl):
+                  return None
+
+          status = 0
+          started = time.perf_counter()
+          try:
+              opener = build_opener(NoRedirect)
+              response = opener.open(
+                  Request(
+                      url,
+                      headers={
+                          "Accept": "application/json",
+                          "User-Agent": "AliX-Posthack-Probe/1",
+                      },
+                      method="GET",
+                  ),
+                  timeout=15,
+              )
+              status = int(response.status)
+              response.close()
+          except HTTPError as exc:
+              status = int(exc.code)
+              exc.close()
+          except (URLError, TimeoutError, OSError):
+              status = 0
+          latency_ms = round((time.perf_counter() - started) * 1000.0, 1)
+
+          record = {
+              "mode": "PROBE",
+              "http_status": status,
+              "endpoint": endpoint,
+              "latency_ms": latency_ms,
+              "run_id": os.environ["RUN_ID"],
+              "commit_sha": os.environ["COMMIT_SHA"],
+              "spec_sha256": os.environ["SPEC_SHA256"],
+          }
+          Path("artifacts/posthack/probe_manifest.json").write_text(
+              json.dumps(record, sort_keys=True, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          print(
+              f"PROBE http_status={status} endpoint={endpoint} "
+              f"latency_ms={latency_ms} run_id={os.environ['RUN_ID']}"
+          )
+          if status in (403, 451):
+              raise SystemExit("GEOBLOCKED")
+          if status != 200:
+              raise SystemExit("PROBE_HTTP_STATUS_NOT_200")
+          PY
+
+      - name: Acquire fixed post-hack window after owner nonce push
+        if: steps.gate.outputs.mode == 'ACQUISITION'
+        shell: bash
+        env:
+          SPEC_SHA256: ${{ steps.spec.outputs.spec_sha256 }}
+          ALIX_DRY_RUN: "true"
+          ALIX_ALLOW_LIVE_TRADING: "false"
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/posthack
+          python scripts/fetch_nobitex_posthack_ohlcv.py \
+            --output-dir artifacts/posthack \
+            --commit-sha "$GITHUB_SHA" \
+            --run-id "$GITHUB_RUN_ID"
+
+      - name: Upload structural probe or acquisition evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: nobitex-posthack-${{ github.run_id }}
+          path: artifacts/posthack/
+          if-no-files-found: warn
+          retention-days: 30

@@ -1,8 +1,7 @@
 name: Nobitex High-Frequency Donchian + TTM-R2 Research
 
 on:
-  push:
-    branches: [research/nobitex-hf-strategy]
+  workflow_dispatch:
 
 permissions:
   contents: read

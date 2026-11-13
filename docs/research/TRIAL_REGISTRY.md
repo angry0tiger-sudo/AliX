@@ -281,3 +281,24 @@ for later pre-registration. All economic decisions remain subject to the absolut
 | DEAP | `.github/workflows/deap-genetic-programming.yml` `9c21ec86c04268cc094d62b25dd1da65f65bf44d` | 43022191014 | 13855652715 | `e29926ca66e88d01ff61d211a3d9dc45d49c8acd3f31399d0b50ccfde8f1ab9b` |
 | V4-T | `.github/workflows/ml-core-v4t-economic-score.yml` `fab1a50d5e6ab174446ab38e8e68afa46516af4e` | 41625662854 | 13229820663 | `7fddda74100eb554506c7a8716688eb528a7aa88bac5f1c549169c63f85a8997` |
 | V4-AP | `.github/workflows/ml-core-v4ap-diagnostic-sweep.yml` `5436ff5cb177817bddf82f7c0b9f7c8f3ba94007` | 42493418590 | 13624018702 | `24d040a7bf3ddf2ef6ee4667bafe0c042e7267e6f866ddd7cf0967c7efb97666` |
+
+
+---
+## [APPEND] Historical Trials & Holdout Commitment (Restored)
+### V4-T (Triple-Barrier)
+- 32 variants total: 4 TRAINED, 24 rejected (insufficient samples), 4 rejected (inner-CV failure).
+- 36 nested configurations, 108 fold fits logged.
+### V4-AP (Grid Sweep)
+- 36 cells registered in statistical cohort.
+### AI-6 (PPO)
+- 2 records: final experiment and predecessor.
+### DEAP (Genetic Programming)
+- 1 verified record: 7,842 genomes.
+- 1 owner-reported record: 828 genomes.
+### DSR/PBO
+- Non-HF subtotal: N >= 7,912. GLOBAL_N = UNKNOWN (pending full consolidation).
+### HF Research Ledger (Updated with actual Run IDs)
+- #44: Run ID 43306419521, SHA 5f3fae315c84149f15380c6fb5092915e4af2868
+- #45: Run ID 43306747175, SHA e6af8b168a0fc49c981dfb79689e34fc2f8e9c61
+### V4-T Workflow SHA Correction
+- Corrected workflow blob SHA: fab1a50d5e6ab174446ab38e68afa46516af4e
