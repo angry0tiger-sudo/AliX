@@ -408,9 +408,7 @@ def _arm_result_map(result: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return by_id
 
 
-def _validate_arm_identity_and_metrics(
-    arm_id: str, item: dict[str, Any]
-) -> None:
+def _validate_arm_identity_and_metrics(arm_id: str, item: dict[str, Any]) -> None:
     if item.get("trial_id") != f"NOBITEX-KC26-{arm_id}":
         raise ExperimentError(f"trial_id_mismatch:{arm_id}")
     for key in ("netPF_50bps", "netPF_90bps", "maxDD", "DSR"):
@@ -485,9 +483,7 @@ def _evaluate_arm(
     return item
 
 
-def _write_arm_manifest(
-    output_dir: Path, item: dict[str, Any]
-) -> None:
+def _write_arm_manifest(output_dir: Path, item: dict[str, Any]) -> None:
     arm_id = item["arm_id"]
     path = output_dir / f"arm-{arm_id}.manifest.json"
     path.write_text(
@@ -545,8 +541,7 @@ def validate_research_result(
 ) -> dict[str, Any]:
     by_id = _arm_result_map(result)
     evaluated = [
-        _evaluate_arm(arm_id, by_id[arm_id], config, dataset)
-        for arm_id in ARM_IDS
+        _evaluate_arm(arm_id, by_id[arm_id], config, dataset) for arm_id in ARM_IDS
     ]
     for item in evaluated:
         _write_arm_manifest(output_dir, item)
