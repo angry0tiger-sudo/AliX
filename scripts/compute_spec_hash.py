@@ -13,7 +13,9 @@ from typing import Any, cast
 
 from scripts import fetch_nobitex_public_ohlcv as public_fetcher
 
-GRID_CONVENTION = "hourly candles timestamped at :30 UTC (Iran UTC+3:30 local hour boundaries)"
+GRID_CONVENTION = (
+    "hourly candles timestamped at :30 UTC (Iran UTC+3:30 local hour boundaries)"
+)
 EXPECTED_CANDLE_COUNT = 11_713
 SPEC_PATH = (
     Path(__file__).resolve().parents[1]
@@ -68,7 +70,10 @@ def compute_spec_hash(path: Path = SPEC_PATH) -> str:
     if start % seconds != 1800 or end % seconds != 1800:
         raise ValueError("holdout_spec_not_on_venue_grid")
     expected = (end - start) // seconds + 1
-    if expected != EXPECTED_CANDLE_COUNT or spec.get("expected_candle_count") != expected:
+    if (
+        expected != EXPECTED_CANDLE_COUNT
+        or spec.get("expected_candle_count") != expected
+    ):
         raise ValueError("holdout_spec_expected_candle_count_mismatch")
     prehack = spec.get("prehack_reference")
     if not isinstance(prehack, dict):

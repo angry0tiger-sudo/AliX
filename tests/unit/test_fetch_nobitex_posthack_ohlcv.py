@@ -287,9 +287,7 @@ def test_wrong_minute_offset_is_reported_as_grid_anomaly_and_fails_closed(
     start = 1_751_329_800
     end = start + 2 * 3600
     wrong_grid = [
-        stamp + 1800
-        for stamp in range(start, end + 1, 3600)
-        if stamp + 1800 <= end
+        stamp + 1800 for stamp in range(start, end + 1, 3600) if stamp + 1800 <= end
     ]
 
     def provider(params: dict[str, str]) -> dict[str, Any]:

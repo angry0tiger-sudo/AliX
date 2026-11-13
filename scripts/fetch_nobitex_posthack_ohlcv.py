@@ -478,7 +478,7 @@ def main() -> int:
         symbol=str(spec["symbol"]),
     )
     print(json.dumps(summary, sort_keys=True, allow_nan=False))
-    return 2 if summary["gap_count"] or summary["off_grid_count"] else 0
+    return _summary_exit_code(summary)
 
 
 if __name__ == "__main__":
