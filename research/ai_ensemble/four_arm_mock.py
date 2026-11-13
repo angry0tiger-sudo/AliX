@@ -113,18 +113,10 @@ def _run_gate_contract_checks() -> dict[str, bool]:
     second = _sample_evidence(TRIAL_IDS[1], 0.20)
     failing = _sample_evidence(TRIAL_IDS[2], 0.30, eligible=False)
     return {
-        "fold_stability_pass_boundary": fold_stability_passes(
-            (True, True, True)
-        ),
-        "fold_stability_fail_boundary": not fold_stability_passes(
-            (True, True, False)
-        ),
-        "dsr_sensitivity_pass_boundary": dsr_sensitivity_passes(
-            (0.01, 0.02, 0.03)
-        ),
-        "dsr_sensitivity_fail_boundary": not dsr_sensitivity_passes(
-            (0.01, 0.0, 0.03)
-        ),
+        "fold_stability_pass_boundary": fold_stability_passes((True, True, True)),
+        "fold_stability_fail_boundary": not fold_stability_passes((True, True, False)),
+        "dsr_sensitivity_pass_boundary": dsr_sensitivity_passes((0.01, 0.02, 0.03)),
+        "dsr_sensitivity_fail_boundary": not dsr_sensitivity_passes((0.01, 0.0, 0.03)),
         "arm_gate_pass_boundary": arm_passes(first),
         "arm_gate_fail_boundary": not arm_passes(failing),
         "winner_selection_highest_dsr": (
