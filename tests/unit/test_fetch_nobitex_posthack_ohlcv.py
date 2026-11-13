@@ -100,9 +100,7 @@ def test_gap_artifact_is_structural_and_contains_every_missing_timestamp(
     def provider(params: dict[str, str]) -> dict[str, Any]:
         stamps = [
             stamp
-            for stamp in range(
-                int(params["from"]), int(params["to"]), 3600
-            )
+            for stamp in range(int(params["from"]), int(params["to"]), 3600)
             if stamp not in missing
         ]
         return payload(stamps)
