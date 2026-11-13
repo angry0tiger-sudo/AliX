@@ -1,14 +1,14 @@
 # HOLDOUT COMMITMENT V2 — Nobitex BTC/USDT Spot 1h
 
 status: PENDING_DISPATCH
-spec_sha256: PENDING_CI_COMPUTATION
+spec_sha256: 3fbe8d145241bf51dad73eb4606ae8e461f87368b63e734758afdfbf6e55c124
 dataset_sha256: PENDING_DISPATCH
 row_count: PENDING_DISPATCH
 run_id: PENDING_DISPATCH
 dispatch_nonce: 3764030460fa5cbdaebf522c97453b3b
-probe_run_id: PENDING_PROBE
-probe_http_status: PENDING_PROBE
-probe_artifact_id: PENDING_PROBE
+probe_run_id: 43360654817
+probe_http_status: 200
+probe_artifact_id: 14007598627
 
 ## Immutable preregistration
 
@@ -31,6 +31,17 @@ probe_artifact_id: PENDING_PROBE
 این پنجره فقط یک‌بار و با nonce ثبت‌شده باز می‌شود.
 The nonce is a one-time dispatch identifier, not an API credential or secret.
 The acquisition workflow must reject a replay by checking prior trigger-file history.
+
+## Probe evidence
+
+- Probe run ID: `43360654817` (workflow run #1).
+- HTTP status: `200`.
+- Endpoint: `https://apiv2.nobitex.ir/market/udf/history`.
+- Latency: `1290.7 ms`.
+- Structural artifact ID: `14007598627`.
+- Commit SHA tested: `d2b2672955118291491afd64a731abc70522bd70`.
+- Exactly one small GET was issued; the response body was not read, printed, or stored.
+- This establishes endpoint reachability from the GitHub Actions runner for the probe request only. It does not establish complete historical-window coverage.
 
 ## Data-use lock and safety
 

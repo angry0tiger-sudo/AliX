@@ -73,3 +73,16 @@ The end is fixed at `2026-11-01T00:00:00Z`, not dynamically computed from `now`.
 - `real_order_attempts=0`
 - No secrets, no private API calls, no paper orders, no real orders, and no model promotion.
 - `main` remains frozen and untouched.
+
+
+## Addendum — PROBE evidence (2026-11-13)
+
+- Dedicated workflow run #1: Run ID `43360654817`.
+- Conclusion: `success`.
+- Probe HTTP status: `200`.
+- Endpoint: `https://apiv2.nobitex.ir/market/udf/history`.
+- Measured request latency: `1290.7 ms`.
+- Structural artifact ID: `14007598627`.
+- Tested commit: `d2b2672955118291491afd64a731abc70522bd70`.
+- The acquisition step was skipped because the trigger remained `PROBE`; no post-hack OHLCV data was fetched.
+- This removes the observed runner geo-block concern for the public endpoint probe, but does not prove the full fixed window has complete data.

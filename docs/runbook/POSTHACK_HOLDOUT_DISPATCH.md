@@ -35,6 +35,18 @@ The initial `PROBE` value causes exactly one small public GET. The workflow does
 - HTTP 403 or 451: `GEOBLOCKED`; stop. No proxy, VPN, alternate runner geography, or bypass is allowed.
 - Other status/network errors: stop and inspect the probe metadata artifact.
 
+## Latest PROBE evidence
+
+The initial PROBE completed successfully on 2026-11-13:
+
+- Run ID: `43360654817`.
+- Conclusion: `success`.
+- HTTP status: `200`.
+- Latency: `1290.7 ms`.
+- Artifact ID: `14007598627`.
+- The body was not read or retained. The acquisition step was skipped.
+- This confirms endpoint reachability for the bounded probe only; full-window coverage remains unverified.
+
 ## Owner dispatch: one-time nonce push
 
 Do not use the Actions **Run workflow** button for acquisition. The dedicated workflow also declares `workflow_dispatch` for future availability, but on this frozen-main configuration the reliable acquisition mechanism is the branch-scoped trigger-file push.
