@@ -72,9 +72,7 @@ def test_wrapper_collects_full_gap_list_across_all_pages(
         calls.append(params.copy())
         stamps = [
             stamp
-            for stamp in range(
-                int(params["from"]), int(params["to"]), 3600
-            )
+            for stamp in range(int(params["from"]), int(params["to"]), 3600)
             if stamp not in missing
         ]
         return payload(stamps)
@@ -139,9 +137,7 @@ def test_complete_mock_window_writes_hash_and_price_data_only_to_csv(
     end = start + 2 * 3600
 
     def provider(params: dict[str, str]) -> dict[str, Any]:
-        return payload(
-            list(range(int(params["from"]), int(params["to"]), 3600))
-        )
+        return payload(list(range(int(params["from"]), int(params["to"]), 3600)))
 
     summary = posthack.fetch_and_write_artifacts(
         output_dir=tmp_path,
@@ -166,9 +162,7 @@ def test_complete_mock_window_writes_hash_and_price_data_only_to_csv(
 
 
 def test_prehack_public_fetcher_contract_remains_importable_and_fixed() -> None:
-    assert public_fetcher.ENDPOINT == (
-        "https://apiv2.nobitex.ir/market/udf/history"
-    )
+    assert public_fetcher.ENDPOINT == ("https://apiv2.nobitex.ir/market/udf/history")
     assert public_fetcher.PREHACK_START_TIMESTAMP == 1_635_712_200
     assert public_fetcher.PREHACK_END_TIMESTAMP == 1_750_192_200
     assert public_fetcher.PREHACK_EXPECTED_CANDLES == 31_801
