@@ -33,7 +33,7 @@ def test_diagnose_window_is_fixed_and_strictly_after_holdout() -> None:
     )
     assert diagnose.DIAGNOSE_START_TIMESTAMP > diagnose.HOLDOUT_END_TIMESTAMP
     with pytest.raises(ValueError, match="not_owner_approved"):
-        diagnose.validate_diagnose_window(1_762_041_600, 1_762_905_600)
+        diagnose.validate_diagnose_window(1_762_043_400, 1_762_907_400)
 
 
 def test_diagnose_artifact_contains_only_structural_metadata(

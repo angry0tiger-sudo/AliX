@@ -20,9 +20,9 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 from scripts import fetch_nobitex_posthack_ohlcv as wrapper
 from scripts import fetch_nobitex_public_ohlcv as source
 
-DIAGNOSE_START_TIMESTAMP = 1_793_577_600
-DIAGNOSE_END_TIMESTAMP = 1_794_441_600
-HOLDOUT_END_TIMESTAMP = 1_793_491_200
+DIAGNOSE_START_TIMESTAMP = 1_793_579_400
+DIAGNOSE_END_TIMESTAMP = 1_794_443_400
+HOLDOUT_END_TIMESTAMP = 1_793_493_000
 ARTIFACT_NAME = "nobitex-grid-diagnose.json"
 REQUEST_TIMEOUT_SECONDS = 15.0
 JsonProvider = Callable[[dict[str, str]], dict[str, Any]]
