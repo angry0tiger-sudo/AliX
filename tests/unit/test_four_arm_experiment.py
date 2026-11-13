@@ -47,8 +47,7 @@ def test_mock_run_writes_four_synthetic_manifests(tmp_path: Path) -> None:
         rows = list(csv.DictReader(handle))
     assert len(rows) == 1200
     assert all(
-        set(row) == {"date", "open", "high", "low", "close", "volume"}
-        for row in rows
+        set(row) == {"date", "open", "high", "low", "close", "volume"} for row in rows
     )
     first_manifest = json.loads(
         (tmp_path / "arm-A.manifest.json").read_text(encoding="utf-8")

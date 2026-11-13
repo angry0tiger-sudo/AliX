@@ -3,6 +3,8 @@
 Mock mode is deterministic and synthetic-only. Research mode requires an immutable
 execution lock and pinned executor adapter; no experimental choices are guessed.
 """
+
+
 from __future__ import annotations
 
 import argparse
@@ -52,9 +54,7 @@ def _read_json(path: Path) -> dict[str, Any]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        raise ExperimentError(
-            f"json_read_failed:{path}:{type(exc).__name__}"
-        ) from None
+        raise ExperimentError(f"json_read_failed:{path}:{type(exc).__name__}") from None
     if not isinstance(payload, dict):
         raise ExperimentError(f"json_root_must_be_object:{path}")
     return payload
@@ -76,9 +76,7 @@ def _sha256_file(path: Path) -> str:
             for block in iter(lambda: handle.read(1024 * 1024), b""):
                 digest.update(block)
     except OSError as exc:
-        raise ExperimentError(
-            f"file_read_failed:{path}:{type(exc).__name__}"
-        ) from None
+        raise ExperimentError(f"file_read_failed:{path}:{type(exc).__name__}") from None
     return digest.hexdigest()
 
 
@@ -158,9 +156,7 @@ def _metrics(gross_returns: list[float]) -> dict[str, float | None]:
     }
 
 
-def _write_synthetic_ohlcv(
-    output_dir: Path, row_count: int = 1200
-) -> dict[str, Any]:
+def _write_synthetic_ohlcv(output_dir: Path, row_count: int = 1200) -> dict[str, Any]:
     """Write a deterministic synthetic OHLCV fixture, never downloaded market data."""
     path = output_dir / "synthetic-nobitex-btcusdt-1h.csv"
     with path.open("w", encoding="utf-8", newline="") as handle:
@@ -175,9 +171,9 @@ def _write_synthetic_ohlcv(
             opened = previous_close
             writer.writerow(
                 {
-                    "date": datetime.fromtimestamp(
-                        timestamp, timezone.utc
-                    ).isoformat().replace("+00:00", "Z"),
+                    "date": datetime.fromtimestamp(timestamp, timezone.utc)
+                    .isoformat()
+                    .replace("+00:00", "Z"),
                     "open": f"{opened:.8f}",
                     "high": f"{max(opened, close) + 0.2:.8f}",
                     "low": f"{min(opened, close) - 0.2:.8f}",
@@ -381,7 +377,8 @@ def validate_research_result(
         if not isinstance(folds, list) or len(folds) != 3:
             raise ExperimentError(f"exactly_three_fold_results_required:{arm_id}")
         stable_folds = [
-            fold for fold in folds
+            fold
+            for fold in folds
             if isinstance(fold, dict)
             and _finite_number(fold.get("netPF_50bps"))
             and _finite_number(fold.get("netPF_90bps"))
