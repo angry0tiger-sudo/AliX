@@ -396,6 +396,7 @@ def validate_research_result(
             "trades": item.get("trades", 0) >= config["gates"]["trades_min"],
             "maxDD": item["maxDD"] <= config["gates"]["maxDD_max"],
             "dsr": item["DSR"] > config["gates"]["dsr_min"]
+            and sensitivity is not None
             and _finite_number(sensitivity)
             and sensitivity > 0,
             "stability": len(stable_folds) >= config["gates"]["min_stable_folds"],
