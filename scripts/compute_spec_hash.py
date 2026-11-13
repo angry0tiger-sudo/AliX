@@ -16,7 +16,7 @@ from scripts import fetch_nobitex_public_ohlcv as public_fetcher
 GRID_CONVENTION = (
     "hourly candles timestamped at :30 UTC (Iran UTC+3:30 local hour boundaries)"
 )
-EXPECTED_CANDLE_COUNT = 11_713
+EXPECTED_CANDLE_COUNT = 11_700
 SPEC_PATH = (
     Path(__file__).resolve().parents[1]
     / "config"
@@ -55,8 +55,8 @@ def _load_spec(path: Path) -> dict[str, Any]:
 
 
 def _validate_spec_identity(spec: dict[str, Any]) -> None:
-    if spec.get("spec_version") != 2:
-        raise ValueError("holdout_spec_version_not_v2")
+    if spec.get("spec_version") != 3:
+        raise ValueError("holdout_spec_version_not_v3")
     if spec.get("grid_convention") != GRID_CONVENTION:
         raise ValueError("holdout_spec_grid_convention_invalid")
     if spec.get("timeframe") != "1h":
@@ -94,7 +94,7 @@ def _validate_prehack_separation(spec: dict[str, Any], start: int) -> None:
     if prehack.get("end_timestamp") != public_fetcher.PREHACK_END_TIMESTAMP:
         raise ValueError("holdout_spec_prehack_boundary_mismatch")
     minimum_separation = start - public_fetcher.PREHACK_END_TIMESTAMP
-    if minimum_separation != 1_137_600:
+    if minimum_separation != 1_184_400:
         raise ValueError("holdout_spec_minimum_separation_mismatch")
     if prehack.get("minimum_separation_seconds") != minimum_separation:
         raise ValueError("holdout_spec_minimum_separation_mismatch")

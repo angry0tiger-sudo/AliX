@@ -10,15 +10,15 @@
     "source_contract": "Same public UDF history endpoint used by scripts/fetch_nobitex_public_ohlcv.py"
   },
   "window": {
-    "start_utc": "2025-07-01T00:30:00Z",
+    "start_utc": "2025-07-01T13:30:00Z",
     "end_utc": "2026-11-01T00:30:00Z",
-    "start_timestamp": 1751329800,
+    "start_timestamp": 1751376600,
     "end_timestamp": 1793493000,
     "timezone": "UTC",
     "timestamp_unit": "unix_seconds",
     "timestamp_semantics": "Inclusive candle-open timestamps; both start and end grid points are required."
   },
-  "expected_candle_count": 11713,
+  "expected_candle_count": 11700,
   "pagination": {
     "max_candles_per_request": 400,
     "udf_to_semantics": "exclusive",
@@ -30,9 +30,9 @@
     "dataset_sha256": "0aa13607d1da68c4720919f233635bb33d34048e5bd67d3ecc2ce9bb7c2b462e",
     "start_timestamp": 1635712200,
     "end_timestamp": 1750192200,
-    "minimum_separation_seconds": 1137600,
-    "minimum_separation_hours": 316,
-    "minimum_separation_days": 13.166666666666666,
+    "minimum_separation_seconds": 1184400,
+    "minimum_separation_hours": 329,
+    "minimum_separation_days": 13.708333333333334,
     "policy": "Post-hack start must be strictly greater than the final pre-hack candle-open timestamp; no timestamp overlap is permitted."
   },
   "gap_policy": {
@@ -60,7 +60,7 @@
     "training_or_evaluation_before_owner_release": false,
     "no_cross_venue_backfill": true
   },
-  "spec_version": 2,
+  "spec_version": 3,
   "grid_convention": "hourly candles timestamped at :30 UTC (Iran UTC+3:30 local hour boundaries)",
-  "revision_reason": "structural: prehack dataset and adjacent-window DIAGNOSE both on :30 grid; nominal window unchanged; not a window shift"
+  "revision_reason": "boundary adjustment: skip 13 missing candles at window start (2025-07-01 00:30-12:30 UTC); not window shopping — gap at boundary documented in Run #12"
 }

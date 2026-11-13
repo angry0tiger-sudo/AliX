@@ -71,8 +71,8 @@ def validate_window(start_timestamp: int, end_timestamp: int) -> int:
 
 
 def _validate_spec_identity(spec: dict[str, Any]) -> None:
-    if spec.get("spec_version") != 2:
-        raise ValueError("posthack_spec_version_not_v2")
+    if spec.get("spec_version") != 3:
+        raise ValueError("posthack_spec_version_not_v3")
     if (
         spec.get("grid_convention")
         != "hourly candles timestamped at :30 UTC (Iran UTC+3:30 local hour boundaries)"
@@ -90,7 +90,7 @@ def _spec_window_timestamps(spec: dict[str, Any]) -> tuple[int, int]:
 
 
 def _validate_spec_expected_count(spec: dict[str, Any], expected: int) -> None:
-    if expected != 11_713:
+    if expected != 11_700:
         raise ValueError("posthack_spec_expected_count_mismatch")
     if spec.get("expected_candle_count") != expected:
         raise ValueError("posthack_spec_expected_count_mismatch")
@@ -112,7 +112,7 @@ def _validate_spec_prehack_reference(spec: dict[str, Any], start: int) -> None:
     if prehack.get("end_timestamp") != source.PREHACK_END_TIMESTAMP:
         raise ValueError("posthack_prehack_boundary_changed")
     minimum_separation = start - source.PREHACK_END_TIMESTAMP
-    if minimum_separation != 1_137_600:
+    if minimum_separation != 1_184_400:
         raise ValueError("posthack_minimum_separation_changed")
     if prehack.get("minimum_separation_seconds") != minimum_separation:
         raise ValueError("posthack_spec_minimum_separation_mismatch")

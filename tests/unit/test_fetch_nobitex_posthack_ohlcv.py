@@ -29,16 +29,17 @@ def payload(timestamps: list[int]) -> dict[str, Any]:
 def test_posthack_start_is_strictly_after_prehack_end() -> None:
     spec = posthack.load_spec()
     start, end, expected = posthack.window_from_spec(spec)
-    assert start == 1_751_329_800
+    assert start == 1_751_376_600
     assert end == 1_793_493_000
-    assert expected == 11_713
-    assert spec["spec_version"] == 2
+    assert expected == 11_700
+    assert spec["spec_version"] == 3
     assert spec["grid_convention"] == (
         "hourly candles timestamped at :30 UTC (Iran UTC+3:30 local hour boundaries)"
     )
     assert start % 3600 == end % 3600 == 1800
-    assert spec["prehack_reference"]["minimum_separation_seconds"] == 1_137_600
-    assert start - public_fetcher.PREHACK_END_TIMESTAMP == 1_137_600
+    assert spec["prehack_reference"]["minimum_separation_seconds"] == 1_184_400
+    assert spec["prehack_reference"]["minimum_separation_hours"] == 329
+    assert start - public_fetcher.PREHACK_END_TIMESTAMP == 1_184_400
     assert start > public_fetcher.PREHACK_END_TIMESTAMP
 
 
@@ -177,6 +178,41 @@ def test_complete_mock_window_uses_30_minute_grid_and_persists_metadata_only(
     for forbidden in ('"open"', '"high"', '"low"', '"close"', '"volume"', "100.0"):
         assert forbidden not in manifest_text
     assert posthack._summary_exit_code(summary) == 0
+
+
+def test_v3_start_on_minute_30_grid_has_complete_mock_success_path(
+    tmp_path: Path,
+) -> None:
+    start = 1_751_376_600
+    end = start + 2 * 3600
+
+    def provider(params: dict[str, str]) -> dict[str, Any]:
+        return payload(list(range(int(params["from"]), int(params["to"]), 3600)))
+
+    summary = posthack.fetch_and_write_artifacts(
+        output_dir=tmp_path,
+        start_timestamp=start,
+        end_timestamp=end,
+        expected_count=3,
+        retrieved_at=datetime(2026, 11, 13, tzinfo=timezone.utc),
+        commit_sha="mock-v3-sha",
+        run_id="mock-v3-run",
+        request_json=provider,
+        sleep_fn=lambda _: None,
+    )
+    manifest_text = (tmp_path / posthack.MANIFEST_NAME).read_text()
+    manifest = json.loads(manifest_text)
+
+    assert start % 3600 == 1800
+    assert summary["status"] == "COMPLETE"
+    assert summary["expected_row_count"] == summary["actual_row_count"] == 3
+    assert manifest["gap_count"] == 0
+    assert manifest["off_grid_count"] == 0
+    assert manifest["dataset_sha256"]
+    assert manifest["dataset_persisted"] is False
+    assert not (tmp_path / posthack.CSV_NAME).exists()
+    for forbidden in ('"open"', '"high"', '"low"', '"close"', '"volume"', "100.0"):
+        assert forbidden not in manifest_text
 
 
 def test_prehack_public_fetcher_contract_remains_importable_and_fixed() -> None:
