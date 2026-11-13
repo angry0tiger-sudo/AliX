@@ -89,3 +89,61 @@ Champion=null; order_permission=false;
 trading_authorization=NO-GO; private_api_calls=0;
 real_order_attempts=0; ALIX_DRY_RUN=true;
 ALIX_ALLOW_LIVE_TRADING=false; main=FROZEN.
+
+
+## Appendix — Remaining blockers for real four-arm execution (2026-11-13)
+
+This appendix is additive. The existing ADR-033 decision and its prior text remain unchanged.
+
+### Verified mock-only infrastructure state
+
+The mock-only infrastructure is complete for its documented scope:
+
+- deterministic in-memory synthetic fixture generation;
+- pure fold-stability, DSR-sensitivity, gate, and winner-selection contract helpers;
+- independent fail-closed execution-lock validation contract;
+- tests for positive and negative boundaries and authorization-before-lock-read behavior;
+- a workflow_dispatch-only structural workflow that runs only the mock validator and keeps ALIX_FOUR_ARM_EXECUTION_AUTHORIZED=false.
+
+Standard CI #2371, Run ID 43467235675, passed on commit 2346f027fd6bd8149f78b00d8e3b0c86030b6d93. Quality, PostgreSQL integration, and Freqtrade runtime jobs all succeeded. The quality job reported 965 passed, 5 skipped, and 90.26% coverage (required minimum 90%). The two real-data research jobs were skipped under their existing conditions. The mock workflow itself was not dispatched.
+
+This CI result validates the committed mock-only infrastructure and repository quality gates. It does not validate any economic hypothesis, model forecast, real-data execution path, or holdout operation.
+
+### Remaining intrinsic Owner decisions
+
+The following are still OPEN/BLOCKED and require explicit Owner decisions or immutable Owner-approved evidence:
+
+1. Kronos-Small and Chronos-2 exact model-weight SHA-256 values.
+2. Immutable source revisions / local artifact identities and pinned runtime versions for both models.
+3. Forecast-to-decision mapping for arms B/C and the exact combination method for arm D.
+4. Exact chronological three-fold (or greater) cut points, represented by UTC timestamps and immutable row indices.
+5. Fixed deterministic seed and controlled random sources.
+6. Triple-barrier executable-price anchor and final dual-touch collision, gap, fill, and vertical-expiry semantics; preregistered TP=2×ATR(14), SL=2×ATR(14), and 24h maximum holding remain the baseline parameters.
+7. Exact DSR formula, parameters, implementation revision, and historical trial-count inputs.
+8. Owner decision on the historically exposed final 12.5% of pre-hack data. The preregistered 24h purge and 24h embargo are temporal boundary controls; they do not erase prior AI-6 / DEAP exposure or make that segment an untouched holdout.
+9. GLOBAL_N remains UNKNOWN pending candidate-level reconciliation. Heterogeneous historical counts must not be blindly summed.
+
+The detailed status, options, recommendations, and resolution evidence are recorded in docs/research/preregistration/FOUR_ARM_BLOCKERS.md.
+
+### Remaining technical blockers requiring separate Owner approval
+
+1. Connect the execution-lock validator to every actual training/evaluation entrypoint and prove authorization occurs before any dataset/model/artifact I/O.
+2. Add integration tests that prove fail-closed behavior across every real entrypoint and invalid/missing authorization condition.
+3. Freeze and implement the shared deterministic fill/cost simulator for separate 50 bps and 90 bps round-trip scenarios.
+
+These tasks may be implemented by the agent only after the Owner approves the engineering scope. No real-data or economic operation is included in resolving them.
+
+### Owner checklist
+
+The fillable approval and execution sequence is recorded in docs/research/preregistration/OWNER_EXECUTION_CHECKLIST.md. It separates intrinsic decisions, execution-lock approval, workflow authorization, and post-run result registration.
+
+Important workflow clarification: the current four-arm workflow is mock-only. Its manual dispatch runs synthetic contract validation only. It must not be treated as an economic run. A real pre-hack research workflow requires a separately reviewed and explicitly Owner-authorized change after all blockers and execution-lock evidence are complete.
+
+### Execution and safety boundary
+
+All four trial IDs remain PREREGISTERED / NOT_STARTED. The post-hack holdout remains sealed. No training, fit, inference, backtest, economic evaluation, post-hack holdout access, private API call, or real-order attempt is authorized by this appendix.
+
+Champion=null; order_permission=false; trading_authorization=NO-GO; private_api_calls=0; real_order_attempts=0; ALIX_DRY_RUN=true; ALIX_ALLOW_LIVE_TRADING=false; main=FROZEN.
+
+This appendix is documentation and governance only. Real execution remains in wait state pending all blocker resolutions and a separate explicit Owner directive.
+
