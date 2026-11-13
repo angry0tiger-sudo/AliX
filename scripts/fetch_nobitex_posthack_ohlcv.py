@@ -129,9 +129,7 @@ def fetch_window(
         if cursor <= end_timestamp:
             sleep_fn(1.1)
 
-    expected_timestamps = list(
-        range(start_timestamp, end_timestamp + 1, seconds)
-    )
+    expected_timestamps = list(range(start_timestamp, end_timestamp + 1, seconds))
     unexpected = [
         timestamp
         for timestamp in records_by_timestamp
@@ -147,8 +145,7 @@ def fetch_window(
         if timestamp not in records_by_timestamp
     ]
     rows = [
-        records_by_timestamp[timestamp]
-        for timestamp in sorted(records_by_timestamp)
+        records_by_timestamp[timestamp] for timestamp in sorted(records_by_timestamp)
     ]
     return rows, missing, duplicate_count
 
@@ -275,9 +272,7 @@ def fetch_and_write_artifacts(
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument(
-        "--commit-sha", default=os.environ.get("GITHUB_SHA", "UNKNOWN")
-    )
+    parser.add_argument("--commit-sha", default=os.environ.get("GITHUB_SHA", "UNKNOWN"))
     parser.add_argument("--run-id", default=os.environ.get("GITHUB_RUN_ID", "UNKNOWN"))
     args = parser.parse_args()
 
