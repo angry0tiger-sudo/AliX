@@ -1,0 +1,76 @@
+name: AliX Four-Arm Kronos Chronos Experiment
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: alix-four-arm-kronos-chronos
+  cancel-in-progress: false
+
+jobs:
+  four-arm-experiment:
+    runs-on: ubuntu-latest
+    timeout-minutes: 480
+    env:
+      ALIX_DRY_RUN: "true"
+      ALIX_ALLOW_LIVE_TRADING: "false"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      TOKENIZERS_PARALLELISM: "false"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    steps:
+      - name: Checkout dispatched commit without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Require locked execution contract before touching market data
+        run: |
+          set -euo pipefail
+          python -m scripts.run_four_arm_experiment \
+            --mode preflight \
+            --config config/experiment/four_arm_kronos_chronos.json \
+            --preregistration docs/research/preregistration/FOUR_ARM_KRONOS_CHRONOS.md \
+            --execution-lock config/experiment/four_arm_execution_lock.json \
+            --output-dir "$RUNNER_TEMP/four-arm-preflight" \
+            --commit-sha "$GITHUB_SHA"
+
+      - name: Fetch the fixed pre-hack Nobitex dataset only
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/four-arm-prehack"
+          python -m scripts.fetch_nobitex_prehack_ohlcv \
+            --output-dir "$RUNNER_TEMP/four-arm-prehack" \
+            --commit-sha "$GITHUB_SHA"
+
+      - name: Execute the four-arm pre-hack research adapter
+        run: |
+          set -euo pipefail
+          python -m scripts.run_four_arm_experiment \
+            --mode research \
+            --config config/experiment/four_arm_kronos_chronos.json \
+            --preregistration docs/research/preregistration/FOUR_ARM_KRONOS_CHRONOS.md \
+            --execution-lock config/experiment/four_arm_execution_lock.json \
+            --ohlcv "$RUNNER_TEMP/four-arm-prehack/nobitex-btcusdt-1h.csv" \
+            --manifest "$RUNNER_TEMP/four-arm-prehack/nobitex-btcusdt-1h.manifest.json" \
+            --output-dir "$RUNNER_TEMP/four-arm-results" \
+            --commit-sha "$GITHUB_SHA"
+
+      - name: Upload arm manifests and structured run logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: four-arm-kronos-chronos-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/four-arm-results/*.json
+            ${{ runner.temp }}/four-arm-results/*.jsonl
+            ${{ runner.temp }}/four-arm-prehack/nobitex-btcusdt-1h.manifest.json
+          if-no-files-found: warn
+          retention-days: 30
