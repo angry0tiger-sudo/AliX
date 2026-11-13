@@ -42,6 +42,33 @@ jobs:
         run: docker compose --file compose.phase9-test.yaml --profile phase9-test config --quiet
       - name: Compile source
         run: python -m compileall -q control_plane risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels research/deap research/ai_ensemble tests scripts
+      - name: Verify Nobitex :30 venue grid and canonical spec fingerprint
+        run: |
+          python - <<'PY'
+          from scripts.compute_spec_hash import compute_spec_hash
+          from scripts.fetch_nobitex_public_ohlcv import (
+              PREHACK_END_TIMESTAMP,
+              PREHACK_START_TIMESTAMP,
+          )
+          from scripts.fetch_nobitex_posthack_ohlcv import load_spec, window_from_spec
+
+          for name, timestamp in (
+              ("PREHACK_START_TIMESTAMP", PREHACK_START_TIMESTAMP),
+              ("PREHACK_END_TIMESTAMP", PREHACK_END_TIMESTAMP),
+          ):
+              remainder = timestamp % 3600
+              print(f"{name}={timestamp} mod_3600={remainder}")
+              if remainder != 1800:
+                  raise SystemExit(f"{name}_NOT_ON_MINUTE_30_GRID")
+
+          spec = load_spec()
+          start, end, expected = window_from_spec(spec)
+          if expected != 11_713 or start % 3600 != 1800 or end % 3600 != 1800:
+              raise SystemExit("POSTHACK_SPEC_V2_GRID_OR_COUNT_INVALID")
+          print(f"POSTHACK_SPEC_V2_START={start} END={end} EXPECTED={expected}")
+          print(f"POSTHACK_SPEC_SHA256={compute_spec_hash()}")
+          PY
+
       - name: Ruff lint
         run: ruff check control_plane risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels research/deap research/ai_ensemble tests scripts
       - name: Ruff format check

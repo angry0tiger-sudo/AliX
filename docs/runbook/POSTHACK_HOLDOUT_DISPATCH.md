@@ -2,95 +2,93 @@
 
 ## Purpose and current state
 
-This runbook controls a one-time, owner-authorized acquisition of the fixed Nobitex BTC/USDT Spot 1h window.
+This runbook governs the one-time, owner-authorized acquisition of the Nobitex BTC/USDT Spot hourly holdout. It is specific to spec v2 and the observed venue candle-open convention.
 
 - Branch: `research/nobitex-hf-strategy`
 - Workflow: `.github/workflows/nobitex-posthack.yml`
 - Trigger file: `config/holdout/DISPATCH_TRIGGER`
-- Current trigger value: `PROBE`
+- Safe trigger after every run: `PROBE`
 - Commitment: `HOLDOUT_COMMITMENT_V2.md`
-- Commitment status: `PENDING_DISPATCH`
+- Commitment status before acquisition: `PENDING_DISPATCH`
 - Tracking: [Issue #43](https://github.com/angry0tiger-sudo/AliX/issues/43)
-- Decision: [ADR-0014](../architecture/decisions/ADR-0014-nobitex-posthack-holdout-push-nonce.md)
+- Decision: [ADR-0016](../architecture/decisions/ADR-0016-nobitex-venue-grid-convention.md)
 
-The first deployment push runs PROBE only. It does not acquire the historical window.
+`main` is frozen at `44bcaeae7eefd358cf063394b0e7f4f0b83af8eb`. No pull request may be merged to it.
 
-## Fixed window and integrity rules
+## Spec v2: fixed window and venue grid
 
-- Start: `2025-07-01T00:00:00Z` inclusive.
-- End: `2026-11-01T00:00:00Z` inclusive.
+- Spec: `config/holdout/posthack_window_spec.json`
+- Version: `2`
+- Venue convention: hourly candle-open timestamps at `:30 UTC`, corresponding to Iran's UTC+3:30 local hour boundaries.
+- Start: `2025-07-01T00:30:00Z` inclusive / `1751329800`.
+- End: `2026-11-01T00:30:00Z` inclusive / `1793493000`.
 - Expected rows: `11,713`.
+- Minimum separation after the pre-hack end: `1,137,600` seconds / 316 hours.
 - Endpoint: `https://apiv2.nobitex.ir/market/udf/history`.
-- Timezone: UTC; timestamps represent candle-open Unix seconds.
+- Timeframe: 1h; timestamps are inclusive candle-open Unix seconds.
 - Pagination: maximum 400 candles; provider `to` boundary is exclusive.
-- Sort ascending and deduplicate exact timestamps before coverage validation.
-- Gap policy: zero tolerance. No backfill, interpolation, masking, synthetic fill, or automatic window change.
-- Costs/gates are preregistered in `config/holdout/posthack_window_spec.json`.
+- Exact timestamp coverage is checked relative to the spec's :30 start; sort ascending and deduplicate exact timestamp keys before coverage validation.
+- Gap policy is zero tolerance. No backfill, interpolation, masking, synthetic fill, resampling, or automatic window change.
+- Cost scenarios, economic gates, purge/embargo controls and data-use lock are unchanged from the prior preregistration.
+
+The v2 convention is based on the pre-hack source timestamps and adjacent non-holdout DIAGNOSE Run #7. It is a structural convention correction: both timestamps move by the same 30 minutes, while the nominal date span, total duration and 11,713 row count remain the same. It is not window-shopping.
+
+## CI verification and spec fingerprint
+
+Standard CI logs the pre-hack start/end values and their modulo 3600, asserts both are 1800, validates the v2 boundaries/count/separation, and prints the canonical sorted-key JSON SHA-256. The dedicated posthack workflow independently writes the same canonical spec SHA to its structural artifact.
+
+Before dispatch, the latest top-level `spec_sha256:` line in V2 must match the hash computed by the exact commit's GitHub Actions run. Do not calculate or substitute the hash manually.
 
 ## PROBE behavior
 
-The initial `PROBE` value causes exactly one small public GET. The workflow does not read, print, or save the response body. It records only HTTP status, endpoint, latency, run ID, commit SHA, and spec SHA.
+The exact trigger value `PROBE` performs one small public GET. It records only HTTP status, endpoint, latency, run ID, commit SHA, and spec SHA. It does not acquire the window.
 
-- HTTP 200: endpoint reachable for the probe request. This is not proof of complete window coverage.
-- HTTP 403 or 451: `GEOBLOCKED`; stop. No proxy, VPN, alternate runner geography, or bypass is allowed.
-- Other status/network errors: stop and inspect the probe metadata artifact.
+- HTTP 200: the endpoint answered the bounded probe. This does not prove full-window coverage.
+- HTTP 403 or 451: `GEOBLOCKED`; stop. No proxy, VPN, runner geography workaround, or bypass is allowed.
+- Other status/network errors: stop and inspect structural probe metadata.
 
-## Latest PROBE evidence
+## Fourth nonce: CI-only rotation and commitment
 
-The initial PROBE completed successfully on 2026-11-13:
+Nonces #1, #2 and #3 are retired permanently and must never be reused:
 
-- Run ID: `43360654817`.
-- Conclusion: `success`.
-- HTTP status: `200`.
-- Latency: `1290.7 ms`.
-- Artifact ID: `14007598627`.
-- The body was not read or retained. The acquisition step was skipped.
-- This confirms endpoint reachability for the bounded probe only; full-window coverage remains unverified.
+- #1: `3764030460fa5cbdaebf522c97453b3b`
+- #2: `d86c6da4e1df4e7b4b042a5be940df24`
+- #3: `c1c9297040cc4bfcb28ac1f414c4ad07`
 
-## Owner dispatch: one-time nonce push
+The fourth nonce is generated only in GitHub Actions:
 
-Do not use the Actions **Run workflow** button for acquisition. The dedicated workflow also declares `workflow_dispatch` for future availability, but on this frozen-main configuration the reliable acquisition mechanism is the branch-scoped trigger-file push.
+1. Set the trigger to the exact literal `NONCE_ROTATION` in a one-file trigger commit. This mode runs no PROBE or acquisition.
+2. The dedicated workflow uses `secrets.token_hex(16)`, rejects any collision with the retired set, and writes the candidate to `artifacts/posthack/nonce_candidate.txt`. The value is not printed in CI logs.
+3. Download the CI artifact and verify the candidate is exactly 32 lowercase hexadecimal characters, differs from all three retired values, and is the candidate emitted by the exact run.
+4. Append a section `Spec Revision v2 (2026-11-13)` to V2 containing the CI-computed `spec_sha256:`, ADR-0016 reference, pre-hack modulo evidence, DIAGNOSE Run #7 reference, and an independent parser-compatible line `dispatch_nonce: <fourth nonce>`.
+5. Do not edit or remove any older V2 history. Keep `status: PENDING_DISPATCH`, `dataset_sha256: PENDING_DISPATCH`, `row_count: PENDING_DISPATCH`, and `run_id: PENDING_DISPATCH`.
+6. After Standard CI is green on the V2 append commit, replace `NONCE_ROTATION` with that fourth nonce in a separate one-file trigger commit. That push is the sole authorization event for the one-time acquisition.
 
-1. Open the repository on branch `research/nobitex-hf-strategy`.
-2. Navigate to `config/holdout/DISPATCH_TRIGGER` and choose Edit.
-3. Replace the exact text `PROBE` with the exact `dispatch_nonce` recorded in `HOLDOUT_COMMITMENT_V2.md`.
-4. Commit directly to `research/nobitex-hf-strategy`. That commit changes only the dispatch trigger and starts the dedicated workflow.
-5. Do not edit the window boundaries, spec, nonce, or commitment status during this action.
+The acquisition gate requires a push event, a fresh 32-hex nonce matching the latest V2 key, no use of that nonce in trigger-file history, V2 still pending, and the latest committed spec SHA matching the workflow-computed hash. Do not use the Actions Run workflow button for acquisition. Do not retry a failed acquisition or reuse its nonce.
 
-Equivalent Git CLI procedure:
+## Acquisition result handling
 
-```bash
-git checkout research/nobitex-hf-strategy
-printf '%s\n' '<dispatch_nonce from HOLDOUT_COMMITMENT_V2.md>' > config/holdout/DISPATCH_TRIGGER
-git add config/holdout/DISPATCH_TRIGGER
-git commit -m "chore(holdout): dispatch owner-authorized post-hack acquisition"
-git push origin research/nobitex-hf-strategy
-```
+The wrapper validates the exact 11,713-point :30 grid. It has zero tolerance for missing or off-grid timestamps.
 
-The trigger is accepted only if it matches the committed nonce, V2 remains `PENDING_DISPATCH`, and no earlier commit in trigger-file history used that nonce. A stale or replayed nonce fails closed. Do not retry by reusing it.
+- If gaps or grid anomalies exist, the workflow writes a structural artifact with complete missing/off-grid timestamps, UTC representations, offset metadata and counts; it exits non-zero. There is no backfill, interpolation, masking, or window adjustment.
+- If the data is complete, it computes the canonical dataset digest in memory and writes a structural manifest including actual row count and SHA-256.
+- Per the owner directive, raw OHLCV and price values are never printed or persisted. The successful manifest records `dataset_persisted=false`; no CSV is written to the artifact.
+- Any gap or technical failure leaves V2 unchanged at `PENDING_DISPATCH`. Reset the trigger to `PROBE` in a separate one-file commit and stop.
+- Only a fully successful acquisition with inspected artifact/manifest permits an append-only V2 transition to `FETCHED_LOCKED` with the actual dataset SHA, row count and acquisition run ID. Then reset the trigger to `PROBE` and append the final manifest reference to Issue #43.
+- No training, fitting, tuning, backtest, or economic evaluation is permitted. The holdout remains sealed pending separate owner Release Authorization.
 
-## Evidence to return to the owner
+## After success: download the artifact before expiry
 
-After the run, return all of the following:
+GitHub Actions artifacts have a 30-day retention period for this workflow.
 
-- GitHub Actions run ID and conclusion.
-- Artifact ID and artifact URL.
-- Workflow commit SHA.
-- Manifest fields: start/end UTC, expected row count, actual row count, gap count, dataset SHA-256, endpoint, run ID, and commit SHA.
-- If a gap occurs, the full missing timestamp list from the structural gap artifact.
+Immediately after a successful acquisition:
 
-A gap causes failure. The workflow never changes the requested window automatically. Any replacement window requires a new written owner decision, new immutable spec, new hash, and a new commitment before exposure.
+1. Download the complete artifact ZIP from the exact acquisition run before its expiry.
+2. Preserve the original ZIP, artifact ID, workflow run ID, commit SHA, and manifest alongside the project evidence.
+3. Verify only structural metadata and the manifest digest/count. Do not print or extract OHLCV/price values into reports, logs, issue comments, or documentation.
+4. Record the artifact download/preservation and manifest verification in the append-only V2 execution ledger and Issue #43.
 
-## After successful acquisition
-
-On a later owner-authorized turn, append exact evidence to the V2 execution ledger. The status transition is recorded as `PENDING_VERIFICATION` and then `FINAL` only after artifact/hash/row-grid verification. Preserve earlier commitment and evidence entries; never erase or silently rewrite the original record.
-
-The CSV remains a sealed artifact. No model, researcher, fit, tuning job, backtest, or economic evaluation may read it until a separate owner Release Authorization is explicitly recorded.
-
-## Retention and main-branch alternative
-
-- The workflow artifact retention is 30 days. The owner must download/preserve the original artifact, artifact ID, and manifest before expiry.
-- A future one-file disclosure of the workflow in `main` could enable default-branch `workflow_dispatch` discovery in GitHub UI. This is not authorized in this runbook and requires a separate explicit written owner directive. `main` remains frozen.
+The artifact is metadata-only under the no-OHLCV-persistence directive; the dataset SHA is computed from the canonical serialization in memory.
 
 ## Safety invariants
 
@@ -101,4 +99,4 @@ The CSV remains a sealed artifact. No model, researcher, fit, tuning job, backte
 - `real_order_attempts=0`
 - `ALIX_DRY_RUN=true`
 - `ALIX_ALLOW_LIVE_TRADING=false`
-- No credentials, private API calls, paper orders, real orders, or model promotion.
+- No credentials, private APIs, paper orders, real orders, or promotion.
