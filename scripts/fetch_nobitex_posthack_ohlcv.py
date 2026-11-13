@@ -143,12 +143,17 @@ def _validate_record_timestamps(
     start_timestamp: int,
     end_timestamp: int,
     seconds: int,
-) -> None:
+) -> list[dict[str, int]]:
+    off_grid: list[dict[str, int]] = []
     for timestamp in records_by_timestamp:
         if timestamp < start_timestamp or timestamp > end_timestamp:
-            raise ValueError("posthack_unexpected_or_off_grid_timestamp")
-        if (timestamp - start_timestamp) % seconds != 0:
-            raise ValueError("posthack_unexpected_or_off_grid_timestamp")
+            raise ValueError("posthack_timestamp_out_of_bounds")
+        offset = (timestamp - start_timestamp) % seconds
+        if offset:
+            off_grid.append(
+                {"timestamp_epoch": timestamp, "offset_seconds": offset}
+            )
+    return sorted(off_grid, key=lambda item: item["timestamp_epoch"])
 
 
 def fetch_window(
@@ -158,7 +163,7 @@ def fetch_window(
     symbol: str = "BTCUSDT",
     request_json: JsonProvider = source.request_public_json,
     sleep_fn: Callable[[float], None] = time.sleep,
-) -> tuple[list[source.CandleRecord], list[int], int]:
+) -> tuple[list[source.CandleRecord], list[int], list[dict[str, int]], int]:
     validate_window(start_timestamp, end_timestamp)
     source._validate_symbol(symbol)
     seconds = source.interval_seconds("1h")
@@ -169,7 +174,7 @@ def fetch_window(
         request_json=request_json,
         sleep_fn=sleep_fn,
     )
-    _validate_record_timestamps(
+    off_grid = _validate_record_timestamps(
         records_by_timestamp,
         start_timestamp=start_timestamp,
         end_timestamp=end_timestamp,
@@ -184,7 +189,7 @@ def fetch_window(
     rows = [
         records_by_timestamp[timestamp] for timestamp in sorted(records_by_timestamp)
     ]
-    return rows, missing, duplicate_count
+    return rows, missing, off_grid, duplicate_count
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -212,7 +217,7 @@ def fetch_and_write_artifacts(
     calculated_count = validate_window(start_timestamp, end_timestamp)
     if expected_count != calculated_count:
         raise ValueError("posthack_expected_count_argument_mismatch")
-    rows, missing, duplicate_count = fetch_window(
+    rows, missing, off_grid, duplicate_count = fetch_window(
         start_timestamp=start_timestamp,
         end_timestamp=end_timestamp,
         symbol=symbol,
@@ -221,9 +226,20 @@ def fetch_and_write_artifacts(
     )
     output_dir.mkdir(parents=True, exist_ok=True)
     gap_count = len(missing)
+    off_grid_count = len(off_grid)
+    distinct_offsets = sorted({item["offset_seconds"] for item in off_grid})
+    grid_anomaly = off_grid_count > 0
+    if gap_count and grid_anomaly:
+        status = "GAP_AND_GRID_ANOMALY"
+    elif grid_anomaly:
+        status = "GRID_ANOMALY"
+    elif gap_count:
+        status = "GAP_DETECTED"
+    else:
+        status = "COMPLETE"
     manifest: dict[str, Any] = {
-        "schema_version": "alix.nobitex.posthack-structural-manifest.v1",
-        "status": "GAP_DETECTED" if gap_count else "COMPLETE",
+        "schema_version": "alix.nobitex.posthack-structural-manifest.v2",
+        "status": status,
         "venue": "Nobitex Spot",
         "symbol": symbol,
         "timeframe": "1h",
@@ -234,6 +250,9 @@ def fetch_and_write_artifacts(
         "actual_row_count": len(rows),
         "row_count": len(rows),
         "gap_count": gap_count,
+        "off_grid_count": off_grid_count,
+        "grid_anomaly": grid_anomaly,
+        "distinct_off_grid_offsets_seconds": distinct_offsets,
         "duplicate_timestamp_count": duplicate_count,
         "dataset_sha256": None,
         "retrieved_at_utc": retrieved_at.astimezone(timezone.utc).isoformat(),
@@ -247,11 +266,11 @@ def fetch_and_write_artifacts(
         "trading_authorization": "NO-GO",
     }
 
-    if gap_count:
+    if gap_count or grid_anomaly:
         _write_json(
             output_dir / GAP_NAME,
             {
-                "schema_version": "alix.nobitex.posthack-gap-report.v1",
+                "schema_version": "alix.nobitex.posthack-grid-integrity-report.v2",
                 "start_utc": _utc_iso(start_timestamp),
                 "end_utc": _utc_iso(end_timestamp),
                 "expected_row_count": expected_count,
@@ -259,6 +278,17 @@ def fetch_and_write_artifacts(
                 "gap_count": gap_count,
                 "missing_timestamps_epoch": missing,
                 "missing_timestamps_utc": [_utc_iso(stamp) for stamp in missing],
+                "off_grid_count": off_grid_count,
+                "grid_anomaly": grid_anomaly,
+                "distinct_off_grid_offsets_seconds": distinct_offsets,
+                "off_grid_timestamps": [
+                    {
+                        "timestamp_epoch": item["timestamp_epoch"],
+                        "timestamp_utc": _utc_iso(item["timestamp_epoch"]),
+                        "offset_seconds": item["offset_seconds"],
+                    }
+                    for item in off_grid
+                ],
                 "endpoint": source.ENDPOINT,
                 "run_id": run_id,
                 "commit_sha": commit_sha,
@@ -300,9 +330,14 @@ def fetch_and_write_artifacts(
         "expected_row_count": expected_count,
         "actual_row_count": len(rows),
         "gap_count": gap_count,
+        "off_grid_count": off_grid_count,
+        "grid_anomaly": grid_anomaly,
+        "distinct_off_grid_offsets_seconds": distinct_offsets,
         "dataset_sha256": manifest["dataset_sha256"],
         "manifest_path": str(output_dir / MANIFEST_NAME),
-        "gap_report_path": str(output_dir / GAP_NAME) if gap_count else None,
+        "gap_report_path": str(output_dir / GAP_NAME)
+        if gap_count or grid_anomaly
+        else None,
     }
 
 
@@ -326,7 +361,7 @@ def main() -> int:
         symbol=str(spec["symbol"]),
     )
     print(json.dumps(summary, sort_keys=True, allow_nan=False))
-    return 2 if summary["gap_count"] else 0
+    return 2 if summary["gap_count"] or summary["off_grid_count"] else 0
 
 
 if __name__ == "__main__":
