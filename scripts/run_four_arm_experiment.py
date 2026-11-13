@@ -275,10 +275,7 @@ def run_mock(
     return summary
 
 
-def validate_execution_lock(lock_path: Path) -> tuple[dict[str, Any], Path, str]:
-    if not lock_path.is_file():
-        raise ExperimentError("execution_lock_missing:research_execution_blocked")
-    lock = _read_json(lock_path)
+def _validate_lock_fields(lock: dict[str, Any]) -> None:
     missing = [
         ".".join(path)
         for path in REQUIRED_LOCK_PATHS
@@ -288,6 +285,13 @@ def validate_execution_lock(lock_path: Path) -> tuple[dict[str, Any], Path, str]
         raise ExperimentError("execution_lock_incomplete:" + ",".join(missing))
     if lock.get("status") != "LOCKED":
         raise ExperimentError("execution_lock_status_must_be_LOCKED")
+    if _nested_value(lock, ("stability_rule",)) != (
+        "all_three_folds_pass_both_cost_scenarios"
+    ):
+        raise ExperimentError("unsupported_fold_stability_rule")
+
+
+def _validate_locked_executor(lock: dict[str, Any]) -> tuple[Path, str]:
     module_name = cast(str, _nested_value(lock, ("executor", "module")))
     callable_name = cast(str, _nested_value(lock, ("executor", "callable")))
     if (
@@ -302,11 +306,67 @@ def validate_execution_lock(lock_path: Path) -> tuple[dict[str, Any], Path, str]
         raise ExperimentError("executor_source_sha256_invalid")
     if not module_path.is_file() or _sha256_file(module_path) != expected_sha:
         raise ExperimentError("executor_source_missing_or_sha256_mismatch")
-    if _nested_value(lock, ("stability_rule",)) != (
-        "all_three_folds_pass_both_cost_scenarios"
-    ):
-        raise ExperimentError("unsupported_fold_stability_rule")
+    return module_path, module_name
+
+
+def validate_execution_lock(lock_path: Path) -> tuple[dict[str, Any], Path, str]:
+    if not lock_path.is_file():
+        raise ExperimentError("execution_lock_missing:research_execution_blocked")
+    lock = _read_json(lock_path)
+    _validate_lock_fields(lock)
+    module_path, module_name = _validate_locked_executor(lock)
     return lock, module_path, module_name
+
+
+def _require_manifest_value(
+    manifest: dict[str, Any], key: str, expected: Any, error_code: str
+) -> None:
+    if manifest.get(key) != expected:
+        raise ExperimentError(error_code)
+
+
+def _verify_prehack_manifest(
+    manifest: dict[str, Any], digest: str, config: dict[str, Any]
+) -> None:
+    if digest != config["pre_hack_sha"] or digest != PREHACK_SHA256:
+        raise ExperimentError("pre_hack_dataset_sha256_mismatch")
+    _require_manifest_value(
+        manifest, "csv_sha256", digest, "pre_hack_manifest_sha256_mismatch"
+    )
+    _require_manifest_value(
+        manifest,
+        "row_count",
+        EXPECTED_ROWS,
+        "pre_hack_manifest_row_count_mismatch",
+    )
+    _require_manifest_value(
+        manifest,
+        "dataset_window",
+        "PRE_HACK_NOBITEX_ONLY",
+        "dataset_window_must_be_PRE_HACK_NOBITEX_ONLY",
+    )
+    _require_manifest_value(
+        manifest,
+        "source_policy",
+        "NOBITEX_ONLY_NO_BACKFILL",
+        "pre_hack_source_policy_invalid",
+    )
+
+
+def _count_prehack_csv_rows(ohlcv_path: Path) -> int:
+    required = {"date", "open", "high", "low", "close", "volume"}
+    with ohlcv_path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        if reader.fieldnames is None or not required.issubset(reader.fieldnames):
+            raise ExperimentError("pre_hack_csv_schema_invalid")
+        return sum(1 for _ in reader)
+
+
+def _verify_prehack_csv(ohlcv_path: Path) -> int:
+    row_count = _count_prehack_csv_rows(ohlcv_path)
+    if row_count != EXPECTED_ROWS:
+        raise ExperimentError("pre_hack_csv_row_count_mismatch")
+    return row_count
 
 
 def _verify_prehack_dataset(
@@ -314,24 +374,8 @@ def _verify_prehack_dataset(
 ) -> dict[str, Any]:
     manifest = _read_json(manifest_path)
     digest = _sha256_file(ohlcv_path)
-    if digest != config["pre_hack_sha"] or digest != PREHACK_SHA256:
-        raise ExperimentError("pre_hack_dataset_sha256_mismatch")
-    if manifest.get("csv_sha256") != digest:
-        raise ExperimentError("pre_hack_manifest_sha256_mismatch")
-    if manifest.get("row_count") != EXPECTED_ROWS:
-        raise ExperimentError("pre_hack_manifest_row_count_mismatch")
-    if manifest.get("dataset_window") != "PRE_HACK_NOBITEX_ONLY":
-        raise ExperimentError("dataset_window_must_be_PRE_HACK_NOBITEX_ONLY")
-    if manifest.get("source_policy") != "NOBITEX_ONLY_NO_BACKFILL":
-        raise ExperimentError("pre_hack_source_policy_invalid")
-    with ohlcv_path.open("r", encoding="utf-8", newline="") as handle:
-        reader = csv.DictReader(handle)
-        required = {"date", "open", "high", "low", "close", "volume"}
-        if reader.fieldnames is None or not required.issubset(reader.fieldnames):
-            raise ExperimentError("pre_hack_csv_schema_invalid")
-        row_count = sum(1 for _ in reader)
-    if row_count != EXPECTED_ROWS:
-        raise ExperimentError("pre_hack_csv_row_count_mismatch")
+    _verify_prehack_manifest(manifest, digest, config)
+    row_count = _verify_prehack_csv(ohlcv_path)
     return {
         "kind": "PRE_HACK_NOBITEX_ONLY",
         "sha256": digest,
@@ -348,79 +392,127 @@ def _finite_number(value: Any) -> bool:
     )
 
 
-def validate_research_result(
-    result: dict[str, Any],
-    config: dict[str, Any],
-    dataset: dict[str, Any],
-    output_dir: Path,
-) -> dict[str, Any]:
+def _arm_result_map(result: dict[str, Any]) -> dict[str, dict[str, Any]]:
     raw_arms = result.get("arms")
     if not isinstance(raw_arms, list):
         raise ExperimentError("executor_result_arms_missing")
-    by_id = {
-        item.get("arm_id"): item
-        for item in raw_arms
-        if isinstance(item, dict) and isinstance(item.get("arm_id"), str)
-    }
+    by_id: dict[str, dict[str, Any]] = {}
+    for raw_item in raw_arms:
+        if not isinstance(raw_item, dict):
+            continue
+        arm_id = raw_item.get("arm_id")
+        if isinstance(arm_id, str):
+            by_id[arm_id] = raw_item
     if set(by_id) != set(ARM_IDS) or len(raw_arms) != 4:
         raise ExperimentError("executor_must_return_exactly_four_unique_arms")
-    evaluated: list[dict[str, Any]] = []
-    for arm_id in ARM_IDS:
-        item = dict(by_id[arm_id])
-        if item.get("trial_id") != f"NOBITEX-KC26-{arm_id}":
-            raise ExperimentError(f"trial_id_mismatch:{arm_id}")
-        for key in ("netPF_50bps", "netPF_90bps", "maxDD", "DSR"):
-            if not _finite_number(item.get(key)):
-                raise ExperimentError(f"arm_metric_missing_or_nonfinite:{arm_id}:{key}")
-        folds = item.get("fold_results")
-        if not isinstance(folds, list) or len(folds) != 3:
-            raise ExperimentError(f"exactly_three_fold_results_required:{arm_id}")
-        stable_folds = [
-            fold
-            for fold in folds
-            if isinstance(fold, dict)
-            and _finite_number(fold.get("netPF_50bps"))
-            and _finite_number(fold.get("netPF_90bps"))
-            and fold["netPF_50bps"] >= 1.0
-            and fold["netPF_90bps"] >= 1.0
-        ]
-        dsr_evidence = item.get("dsr_evidence")
-        sensitivity = (
-            dsr_evidence.get("unresolved_remainder_worst_case_dsr")
-            if isinstance(dsr_evidence, dict)
-            else None
-        )
-        gates = {
-            "netPF_50bps": item["netPF_50bps"] >= config["gates"]["netPF_min"],
-            "netPF_90bps": item["netPF_90bps"] >= config["gates"]["netPF_min"],
-            "trades": item.get("trades", 0) >= config["gates"]["trades_min"],
-            "maxDD": item["maxDD"] <= config["gates"]["maxDD_max"],
-            "dsr": item["DSR"] > config["gates"]["dsr_min"]
-            and sensitivity is not None
-            and _finite_number(sensitivity)
-            and sensitivity > 0,
-            "stability": len(stable_folds) >= config["gates"]["min_stable_folds"],
-        }
-        item["gate_results"] = gates
-        item["stable_folds"] = len(stable_folds)
-        item["winner"] = all(gates.values())
-        item["pre_hack_sha"] = dataset["sha256"]
-        item["dataset"] = dataset
-        evaluated.append(item)
-        path = output_dir / f"arm-{arm_id}.manifest.json"
-        path.write_text(
-            json.dumps(item, indent=2, sort_keys=True, allow_nan=False) + "\n",
-            encoding="utf-8",
-        )
-        _append_log(
-            output_dir,
-            "research_arm_evaluated",
-            arm_id=arm_id,
-            winner=item["winner"],
-            gate_results=gates,
-        )
+    return by_id
+
+
+def _validate_arm_identity_and_metrics(
+    arm_id: str, item: dict[str, Any]
+) -> None:
+    if item.get("trial_id") != f"NOBITEX-KC26-{arm_id}":
+        raise ExperimentError(f"trial_id_mismatch:{arm_id}")
+    for key in ("netPF_50bps", "netPF_90bps", "maxDD", "DSR"):
+        if not _finite_number(item.get(key)):
+            raise ExperimentError(f"arm_metric_missing_or_nonfinite:{arm_id}:{key}")
+
+
+def _stable_fold_count(folds: list[Any]) -> int:
+    stable_count = 0
+    for fold in folds:
+        if not isinstance(fold, dict):
+            continue
+        net_50 = fold.get("netPF_50bps")
+        net_90 = fold.get("netPF_90bps")
+        if (
+            _finite_number(net_50)
+            and _finite_number(net_90)
+            and net_50 >= 1.0
+            and net_90 >= 1.0
+        ):
+            stable_count += 1
+    return stable_count
+
+
+def _dsr_sensitivity_passes(item: dict[str, Any], dsr_min: float) -> bool:
+    evidence = item.get("dsr_evidence")
+    sensitivity = (
+        evidence.get("unresolved_remainder_worst_case_dsr")
+        if isinstance(evidence, dict)
+        else None
+    )
+    return (
+        item["DSR"] > dsr_min
+        and sensitivity is not None
+        and _finite_number(sensitivity)
+        and sensitivity > 0
+    )
+
+
+def _arm_gate_results(
+    item: dict[str, Any], config: dict[str, Any], stable_folds: int
+) -> dict[str, bool]:
+    gates = config["gates"]
+    return {
+        "netPF_50bps": item["netPF_50bps"] >= gates["netPF_min"],
+        "netPF_90bps": item["netPF_90bps"] >= gates["netPF_min"],
+        "trades": item.get("trades", 0) >= gates["trades_min"],
+        "maxDD": item["maxDD"] <= gates["maxDD_max"],
+        "dsr": _dsr_sensitivity_passes(item, gates["dsr_min"]),
+        "stability": stable_folds >= gates["min_stable_folds"],
+    }
+
+
+def _evaluate_arm(
+    arm_id: str,
+    raw_item: dict[str, Any],
+    config: dict[str, Any],
+    dataset: dict[str, Any],
+) -> dict[str, Any]:
+    item = dict(raw_item)
+    _validate_arm_identity_and_metrics(arm_id, item)
+    folds = item.get("fold_results")
+    if not isinstance(folds, list) or len(folds) != 3:
+        raise ExperimentError(f"exactly_three_fold_results_required:{arm_id}")
+    stable_folds = _stable_fold_count(folds)
+    gates = _arm_gate_results(item, config, stable_folds)
+    item["gate_results"] = gates
+    item["stable_folds"] = stable_folds
+    item["winner"] = all(gates.values())
+    item["pre_hack_sha"] = dataset["sha256"]
+    item["dataset"] = dataset
+    return item
+
+
+def _write_arm_manifest(
+    output_dir: Path, item: dict[str, Any]
+) -> None:
+    arm_id = item["arm_id"]
+    path = output_dir / f"arm-{arm_id}.manifest.json"
+    path.write_text(
+        json.dumps(item, indent=2, sort_keys=True, allow_nan=False) + "\n",
+        encoding="utf-8",
+    )
+    _append_log(
+        output_dir,
+        "research_arm_evaluated",
+        arm_id=arm_id,
+        winner=item["winner"],
+        gate_results=item["gate_results"],
+    )
+
+
+def _select_winner(evaluated: list[dict[str, Any]]) -> str | None:
     passing = [item for item in evaluated if item["winner"]]
-    winner = max(passing, key=lambda item: item["DSR"])["arm_id"] if passing else None
+    if not passing:
+        return None
+    return max(passing, key=lambda item: item["DSR"])["arm_id"]
+
+
+def _write_research_summary(
+    output_dir: Path, evaluated: list[dict[str, Any]], winner: str | None
+) -> dict[str, Any]:
     summary = {
         "schema_version": "alix.four-arm-experiment.run.v1",
         "mode": "RESEARCH",
@@ -443,6 +535,23 @@ def validate_research_result(
     )
     _append_log(output_dir, "research_run_completed", winner=winner)
     return summary
+
+
+def validate_research_result(
+    result: dict[str, Any],
+    config: dict[str, Any],
+    dataset: dict[str, Any],
+    output_dir: Path,
+) -> dict[str, Any]:
+    by_id = _arm_result_map(result)
+    evaluated = [
+        _evaluate_arm(arm_id, by_id[arm_id], config, dataset)
+        for arm_id in ARM_IDS
+    ]
+    for item in evaluated:
+        _write_arm_manifest(output_dir, item)
+    winner = _select_winner(evaluated)
+    return _write_research_summary(output_dir, evaluated, winner)
 
 
 def run_research(
