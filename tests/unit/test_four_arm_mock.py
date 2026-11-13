@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 import json
 from pathlib import Path
+from typing import Callable
 
 import pytest
 
@@ -136,23 +137,22 @@ def test_arm_gate_accepts_exact_preregistered_numeric_boundaries() -> None:
 
 
 @pytest.mark.parametrize(
-    "modified",
+    "mutator",
     [
-        {"net_profit_factor_50bps": 1.0999},
-        {"net_profit_factor_90bps": 1.0999},
-        {"completed_trades": 99},
-        {"max_drawdown": 0.150001},
-        {"dsr": 0.0},
-        {"dsr_sensitivity": (0.01, 0.0)},
-        {"fold_passes": (True, True, False)},
-        {"completed_trades": True},
+        lambda item: replace(item, net_profit_factor_50bps=1.0999),
+        lambda item: replace(item, net_profit_factor_90bps=1.0999),
+        lambda item: replace(item, completed_trades=99),
+        lambda item: replace(item, max_drawdown=0.150001),
+        lambda item: replace(item, dsr=0.0),
+        lambda item: replace(item, dsr_sensitivity=(0.01, 0.0)),
+        lambda item: replace(item, fold_passes=(True, True, False)),
+        lambda item: replace(item, completed_trades=True),
     ],
 )
 def test_arm_gate_rejects_each_failed_boundary(
-    modified: dict[str, object],
+    mutator: Callable[[ArmGateEvidence], ArmGateEvidence],
 ) -> None:
-    evidence = replace(_passing_evidence(), **modified)
-    assert not arm_passes(evidence)
+    assert not arm_passes(mutator(_passing_evidence()))
 
 
 def test_winner_selection_uses_highest_dsr_among_passing_arms() -> None:
