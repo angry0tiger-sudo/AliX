@@ -150,9 +150,7 @@ def _validate_record_timestamps(
             raise ValueError("posthack_timestamp_out_of_bounds")
         offset = (timestamp - start_timestamp) % seconds
         if offset:
-            off_grid.append(
-                {"timestamp_epoch": timestamp, "offset_seconds": offset}
-            )
+            off_grid.append({"timestamp_epoch": timestamp, "offset_seconds": offset})
     return sorted(off_grid, key=lambda item: item["timestamp_epoch"])
 
 
