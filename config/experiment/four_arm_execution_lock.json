@@ -1,0 +1,31 @@
+{
+  "schema_version": "alix.four-arm.execution-lock.v1",
+  "authorization_status": "NOT_AUTHORIZED",
+  "execution_scope": "PREHACK_RESEARCH_ONLY",
+  "owner_authorization_commit_sha": null,
+  "dataset_sha256": "0aa13607d1da68c4720919f233635bb33d34048e5bd67d3ecc2ce9bb7c2b462e",
+  "deterministic_seed": null,
+  "models": {
+    "kronos_small": {
+      "repository": null,
+      "revision": null,
+      "weights_sha256": null
+    },
+    "chronos_2": {
+      "repository": null,
+      "revision": null,
+      "weights_sha256": null
+    }
+  },
+  "contracts": {
+    "kronos_adapter_sha256": null,
+    "chronos_adapter_sha256": null,
+    "combined_rule_sha256": null,
+    "fold_plan_sha256": null,
+    "triple_barrier_sha256": null,
+    "cost_fill_simulator_sha256": null,
+    "dsr_method_sha256": null,
+    "license_and_corpus_disclosure_sha256": null,
+    "runtime_lock_sha256": null
+  }
+}

@@ -1,0 +1,45 @@
+name: AliX Four-Arm Mock-Only Contract Validation
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: alix-four-arm-mock-only
+  cancel-in-progress: false
+
+jobs:
+  mock-only-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      ALIX_DRY_RUN: "true"
+      ALIX_ALLOW_LIVE_TRADING: "false"
+      ALIX_FOUR_ARM_EXECUTION_AUTHORIZED: "false"
+    steps:
+      - name: Checkout without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Validate deterministic synthetic-only contracts
+        run: |
+          set -euo pipefail
+          python -m research.ai_ensemble.four_arm_mock \
+            --output-dir "$RUNNER_TEMP/four-arm-mock"
+
+      - name: Upload mock-only structural report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: four-arm-mock-only-${{ github.sha }}
+          path: ${{ runner.temp }}/four-arm-mock/four-arm-mock-report.json
+          if-no-files-found: error
+          retention-days: 30

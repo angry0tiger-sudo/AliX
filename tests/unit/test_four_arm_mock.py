@@ -136,6 +136,13 @@ def test_arm_gate_accepts_exact_preregistered_numeric_boundaries() -> None:
     assert arm_passes(_passing_evidence())
 
 
+@pytest.mark.parametrize("arm_id", TRIAL_IDS)
+def test_every_preregistered_arm_uses_the_same_gate_contract(
+    arm_id: str,
+) -> None:
+    assert arm_passes(_passing_evidence(arm_id))
+
+
 @pytest.mark.parametrize(
     "mutator",
     [
@@ -281,3 +288,47 @@ def test_mock_report_contains_only_synthetic_metadata(
     assert "low" not in stored
     assert "close" not in stored
     assert "volume" not in stored
+
+
+
+def test_committed_execution_lock_template_is_not_authorized() -> None:
+    repository_root = Path(__file__).resolve().parents[2]
+    lock_path = (
+        repository_root
+        / "config"
+        / "experiment"
+        / "four_arm_execution_lock.json"
+    )
+    lock = json.loads(lock_path.read_text(encoding="utf-8"))
+    assert lock["authorization_status"] == "NOT_AUTHORIZED"
+    assert lock["owner_authorization_commit_sha"] is None
+
+    environment = {
+        EXECUTION_AUTHORIZATION_ENV: "true",
+        "ALIX_DRY_RUN": "true",
+        "ALIX_ALLOW_LIVE_TRADING": "false",
+    }
+    with pytest.raises(
+        ExecutionAuthorizationError,
+        match="execution_lock_incomplete_or_unauthorized",
+    ):
+        load_owner_authorized_execution_lock(lock_path, environment)
+
+
+def test_four_arm_workflow_is_dispatch_only_and_mock_only() -> None:
+    repository_root = Path(__file__).resolve().parents[2]
+    workflow_path = (
+        repository_root / ".github" / "workflows" / "four-arm-experiment.yml"
+    )
+    workflow = workflow_path.read_text(encoding="utf-8")
+
+    assert "workflow_dispatch:" in workflow
+    assert "\n  push:" not in workflow
+    assert "\n  pull_request:" not in workflow
+    assert 'ALIX_FOUR_ARM_EXECUTION_AUTHORIZED: "false"' in workflow
+    assert 'ALIX_DRY_RUN: "true"' in workflow
+    assert 'ALIX_ALLOW_LIVE_TRADING: "false"' in workflow
+    assert "python -m research.ai_ensemble.four_arm_mock" in workflow
+    assert "fetch_nobitex" not in workflow
+    assert "four_arm_execution_lock.json" not in workflow
+    assert "--mode research" not in workflow
