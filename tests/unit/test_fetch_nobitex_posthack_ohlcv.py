@@ -60,10 +60,10 @@ def test_fixed_window_has_zero_timestamp_overlap() -> None:
 
 
 def test_wrapper_collects_full_gap_list_across_all_pages(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(public_fetcher, "MAX_CANDLES_PER_REQUEST", 3)
-    start = 1_700_000_000
+    start = 1_751_328_000
     end = start + 6 * 3600
     missing = {start + 3600, start + 5 * 3600}
     calls: list[dict[str, str]] = []
@@ -88,14 +88,14 @@ def test_wrapper_collects_full_gap_list_across_all_pages(
     assert len(rows) == 5
     assert gaps == sorted(missing)
     assert duplicates == 0
-    assert len(calls) == 9
+    assert len(calls) == 7
 
 
 def test_gap_artifact_is_structural_and_contains_every_missing_timestamp(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(public_fetcher, "MAX_CANDLES_PER_REQUEST", 3)
-    start = 1_700_000_000
+    start = 1_751_328_000
     end = start + 6 * 3600
     missing = {start + 3600, start + 5 * 3600}
 
@@ -135,7 +135,7 @@ def test_gap_artifact_is_structural_and_contains_every_missing_timestamp(
 def test_complete_mock_window_writes_hash_and_price_data_only_to_csv(
     tmp_path: Path,
 ) -> None:
-    start = 1_700_000_000
+    start = 1_751_328_000
     end = start + 2 * 3600
 
     def provider(params: dict[str, str]) -> dict[str, Any]:
