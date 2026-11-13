@@ -48,7 +48,15 @@ def validate_diagnose_window(start_timestamp: int, end_timestamp: int) -> int:
 
 
 class _NoRedirect(HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
+    def redirect_request(
+        self,
+        req: Any,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> Any | None:
         return None
 
 
