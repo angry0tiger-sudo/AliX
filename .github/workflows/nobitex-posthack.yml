@@ -36,7 +36,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p artifacts/posthack
-          spec_sha="$(python scripts/compute_spec_hash.py)"
+          spec_sha="$(python -m scripts.compute_spec_hash)"
           printf '%s\n' "$spec_sha" > artifacts/posthack/spec_sha256.txt
           echo "spec_sha256=$spec_sha" >> "$GITHUB_OUTPUT"
           echo "Canonical holdout spec SHA-256 computed in GitHub Actions."
