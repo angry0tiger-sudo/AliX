@@ -60,3 +60,9 @@ The acquisition workflow must reject a replay by checking prior trigger-file his
 
 No acquisition or holdout consumption event is recorded yet. Future evidence must be appended below;
 do not erase the initial commitment or prior execution entries.
+
+## Nonce Rotation (2026-11-13)
+
+- The previous nonce `3764030460fa5cbdaebf522c97453b3b` was not used for data acquisition because the wrapper failed before fetching with `ModuleNotFoundError: No module named 'scripts'`.
+- The previous nonce is permanently retired and must never be reused.
+- Replacement `dispatch_nonce:` (active): d86c6da4e1df4e7b4b042a5be940df24

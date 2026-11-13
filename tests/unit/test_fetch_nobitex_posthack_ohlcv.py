@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+import subprocess
+import sys
 from typing import Any
 
 import pytest
@@ -164,3 +166,27 @@ def test_prehack_public_fetcher_contract_remains_importable_and_fixed() -> None:
     assert public_fetcher.PREHACK_START_TIMESTAMP == 1_635_712_200
     assert public_fetcher.PREHACK_END_TIMESTAMP == 1_750_192_200
     assert public_fetcher.PREHACK_EXPECTED_CANDLES == 31_801
+
+def test_wrapper_package_entrypoint_is_importable_without_network() -> None:
+    root = Path(__file__).resolve().parents[2]
+    workflow = (root / ".github" / "workflows" / "nobitex-posthack.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "python -m scripts.fetch_nobitex_posthack_ohlcv" in workflow
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "scripts.fetch_nobitex_posthack_ohlcv",
+            "--help",
+        ],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=15,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "--output-dir" in result.stdout
+
