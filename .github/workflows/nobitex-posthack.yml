@@ -126,7 +126,7 @@ jobs:
           if candidate in retired or len(candidate) != 32:
               raise SystemExit("NONCE_COLLISION_OR_FORMAT_FAILURE")
           Path("artifacts/posthack/nonce_candidate.txt").write_text(
-              candidate + "\\n", encoding="utf-8"
+              candidate + chr(10), encoding="utf-8"
           )
           print("Created one 32-hex nonce candidate; value omitted from CI logs.")
           PY
