@@ -167,6 +167,7 @@ def test_prehack_public_fetcher_contract_remains_importable_and_fixed() -> None:
     assert public_fetcher.PREHACK_END_TIMESTAMP == 1_750_192_200
     assert public_fetcher.PREHACK_EXPECTED_CANDLES == 31_801
 
+
 def test_wrapper_package_entrypoint_is_importable_without_network() -> None:
     root = Path(__file__).resolve().parents[2]
     workflow = (root / ".github" / "workflows" / "nobitex-posthack.yml").read_text(
@@ -189,4 +190,3 @@ def test_wrapper_package_entrypoint_is_importable_without_network() -> None:
     )
     assert result.returncode == 0, result.stderr
     assert "--output-dir" in result.stdout
-
