@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
+import time
 from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -117,6 +118,7 @@ def run_diagnosis(
     commit_sha: str,
     run_id: str,
     request_json: JsonProvider | None = None,
+    sleep_fn: Callable[[float], None] = time.sleep,
 ) -> tuple[dict[str, Any], bool]:
     validate_diagnose_window(start_timestamp, end_timestamp)
     status = {"http_status": 0}
@@ -134,6 +136,7 @@ def run_diagnosis(
             end_timestamp=end_timestamp,
             symbol="BTCUSDT",
             request_json=tracked_provider,
+            sleep_fn=sleep_fn,
         )
         metrics = _metadata(
             http_status=status["http_status"],

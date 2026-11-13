@@ -11,15 +11,16 @@ from scripts import diagnose_nobitex_grid as diagnose
 from scripts import fetch_nobitex_posthack_ohlcv as wrapper
 
 
-def _row(timestamp: int) -> dict[str, Any]:
+def _payload(timestamps: list[int]) -> dict[str, Any]:
+    size = len(timestamps)
     return {
-        "timestamp": timestamp,
-        "date": "2026-11-02T00:00:00Z",
-        "open": 123.0,
-        "high": 124.0,
-        "low": 122.0,
-        "close": 123.5,
-        "volume": 9.0,
+        "s": "ok",
+        "t": timestamps,
+        "o": [123.0] * size,
+        "h": [124.0] * size,
+        "l": [122.0] * size,
+        "c": [123.5] * size,
+        "v": [9.0] * size,
     }
 
 
@@ -37,27 +38,30 @@ def test_diagnose_window_is_fixed_and_strictly_after_holdout() -> None:
 
 
 def test_diagnose_artifact_contains_only_structural_metadata(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
 ) -> None:
     start = diagnose.DIAGNOSE_START_TIMESTAMP
     end = diagnose.DIAGNOSE_END_TIMESTAMP
-    rows = [_row(start), _row(start + 1801), _row(end)]
-    missing = [start + 3600]
-    off_grid = [{"timestamp_epoch": start + 1801, "offset_seconds": 1801}]
+    missing_timestamp = start + 3600
+    off_grid_timestamp = start + 1801
 
-    def fake_fetch_window(**kwargs: Any):
-        assert kwargs["start_timestamp"] == start
-        assert kwargs["end_timestamp"] == end
-        return rows, missing, off_grid, 0
+    def provider(params: dict[str, str]) -> dict[str, Any]:
+        timestamps = [
+            stamp
+            for stamp in range(int(params["from"]), int(params["to"]), 3600)
+            if stamp != missing_timestamp
+        ]
+        timestamps.append(off_grid_timestamp)
+        return _payload(sorted(timestamps))
 
-    monkeypatch.setattr(wrapper, "fetch_window", fake_fetch_window)
     metrics, succeeded = diagnose.run_diagnosis(
         start_timestamp=start,
         end_timestamp=end,
         output_dir=tmp_path,
         commit_sha="mock-sha",
         run_id="mock-run",
-        request_json=lambda _: {"s": "ok"},
+        request_json=provider,
+        sleep_fn=lambda _: None,
     )
 
     artifact_text = (tmp_path / diagnose.ARTIFACT_NAME).read_text(encoding="utf-8")
@@ -65,7 +69,7 @@ def test_diagnose_artifact_contains_only_structural_metadata(
     assert succeeded is True
     assert metrics == {
         "http_status": 200,
-        "candle_count": 3,
+        "candle_count": 241,
         "off_grid_count": 1,
         "distinct_offsets": [1801],
         "first_ts": start,
