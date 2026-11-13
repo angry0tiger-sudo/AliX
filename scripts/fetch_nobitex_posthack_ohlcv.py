@@ -197,6 +197,143 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
     )
 
 
+def _grid_integrity_status(gap_count: int, off_grid_count: int) -> str:
+    if gap_count and off_grid_count:
+        return "GAP_AND_GRID_ANOMALY"
+    if off_grid_count:
+        return "GRID_ANOMALY"
+    if gap_count:
+        return "GAP_DETECTED"
+    return "COMPLETE"
+
+
+def _build_structural_manifest(
+    *,
+    status: str,
+    symbol: str,
+    start_timestamp: int,
+    end_timestamp: int,
+    expected_count: int,
+    actual_count: int,
+    gap_count: int,
+    off_grid_count: int,
+    grid_anomaly: bool,
+    distinct_offsets: list[int],
+    duplicate_count: int,
+    retrieved_at: datetime,
+    run_id: str,
+    commit_sha: str,
+) -> dict[str, Any]:
+    return {
+        "schema_version": "alix.nobitex.posthack-structural-manifest.v2",
+        "status": status,
+        "venue": "Nobitex Spot",
+        "symbol": symbol,
+        "timeframe": "1h",
+        "endpoint": source.ENDPOINT,
+        "start_utc": _utc_iso(start_timestamp),
+        "end_utc": _utc_iso(end_timestamp),
+        "expected_row_count": expected_count,
+        "actual_row_count": actual_count,
+        "row_count": actual_count,
+        "gap_count": gap_count,
+        "off_grid_count": off_grid_count,
+        "grid_anomaly": grid_anomaly,
+        "distinct_off_grid_offsets_seconds": distinct_offsets,
+        "duplicate_timestamp_count": duplicate_count,
+        "dataset_sha256": None,
+        "retrieved_at_utc": retrieved_at.astimezone(timezone.utc).isoformat(),
+        "run_id": run_id,
+        "commit_sha": commit_sha,
+        "gap_policy": "ZERO_TOLERANCE_NO_BACKFILL_NO_INTERPOLATION_NO_MASK",
+        "private_api_calls": 0,
+        "real_order_attempts": 0,
+        "Champion": None,
+        "order_permission": False,
+        "trading_authorization": "NO-GO",
+    }
+
+
+def _write_grid_integrity_report(
+    *,
+    output_dir: Path,
+    start_timestamp: int,
+    end_timestamp: int,
+    expected_count: int,
+    actual_count: int,
+    missing: list[int],
+    off_grid: list[dict[str, int]],
+    distinct_offsets: list[int],
+    run_id: str,
+    commit_sha: str,
+) -> None:
+    _write_json(
+        output_dir / GAP_NAME,
+        {
+            "schema_version": "alix.nobitex.posthack-grid-integrity-report.v2",
+            "start_utc": _utc_iso(start_timestamp),
+            "end_utc": _utc_iso(end_timestamp),
+            "expected_row_count": expected_count,
+            "actual_row_count": actual_count,
+            "gap_count": len(missing),
+            "missing_timestamps_epoch": missing,
+            "missing_timestamps_utc": [_utc_iso(stamp) for stamp in missing],
+            "off_grid_count": len(off_grid),
+            "grid_anomaly": bool(off_grid),
+            "distinct_off_grid_offsets_seconds": distinct_offsets,
+            "off_grid_timestamps": [
+                {
+                    "timestamp_epoch": item["timestamp_epoch"],
+                    "timestamp_utc": _utc_iso(item["timestamp_epoch"]),
+                    "offset_seconds": item["offset_seconds"],
+                }
+                for item in off_grid
+            ],
+            "endpoint": source.ENDPOINT,
+            "run_id": run_id,
+            "commit_sha": commit_sha,
+            "backfill": False,
+            "interpolation": False,
+            "masking": False,
+        },
+    )
+
+
+def _write_complete_dataset(
+    *,
+    output_dir: Path,
+    rows: list[source.CandleRecord],
+    start_timestamp: int,
+    end_timestamp: int,
+    expected_count: int,
+) -> str:
+    source._validate_exact_candle_coverage(
+        rows,
+        start_timestamp=start_timestamp,
+        end_timestamp=end_timestamp,
+        seconds=SECONDS_PER_HOUR,
+    )
+    csv_path = output_dir / CSV_NAME
+    with csv_path.open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.DictWriter(
+            stream,
+            fieldnames=("date", "open", "high", "low", "close", "volume"),
+        )
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(
+                {
+                    "date": row["date"],
+                    "open": row["open"],
+                    "high": row["high"],
+                    "low": row["low"],
+                    "close": row["close"],
+                    "volume": row["volume"],
+                }
+            )
+    return hashlib.sha256(csv_path.read_bytes()).hexdigest()
+
+
 def fetch_and_write_artifacts(
     *,
     output_dir: Path,
@@ -215,6 +352,7 @@ def fetch_and_write_artifacts(
     calculated_count = validate_window(start_timestamp, end_timestamp)
     if expected_count != calculated_count:
         raise ValueError("posthack_expected_count_argument_mismatch")
+
     rows, missing, off_grid, duplicate_count = fetch_window(
         start_timestamp=start_timestamp,
         end_timestamp=end_timestamp,
@@ -227,100 +365,44 @@ def fetch_and_write_artifacts(
     off_grid_count = len(off_grid)
     distinct_offsets = sorted({item["offset_seconds"] for item in off_grid})
     grid_anomaly = off_grid_count > 0
-    if gap_count and grid_anomaly:
-        status = "GAP_AND_GRID_ANOMALY"
-    elif grid_anomaly:
-        status = "GRID_ANOMALY"
-    elif gap_count:
-        status = "GAP_DETECTED"
-    else:
-        status = "COMPLETE"
-    manifest: dict[str, Any] = {
-        "schema_version": "alix.nobitex.posthack-structural-manifest.v2",
-        "status": status,
-        "venue": "Nobitex Spot",
-        "symbol": symbol,
-        "timeframe": "1h",
-        "endpoint": source.ENDPOINT,
-        "start_utc": _utc_iso(start_timestamp),
-        "end_utc": _utc_iso(end_timestamp),
-        "expected_row_count": expected_count,
-        "actual_row_count": len(rows),
-        "row_count": len(rows),
-        "gap_count": gap_count,
-        "off_grid_count": off_grid_count,
-        "grid_anomaly": grid_anomaly,
-        "distinct_off_grid_offsets_seconds": distinct_offsets,
-        "duplicate_timestamp_count": duplicate_count,
-        "dataset_sha256": None,
-        "retrieved_at_utc": retrieved_at.astimezone(timezone.utc).isoformat(),
-        "run_id": run_id,
-        "commit_sha": commit_sha,
-        "gap_policy": "ZERO_TOLERANCE_NO_BACKFILL_NO_INTERPOLATION_NO_MASK",
-        "private_api_calls": 0,
-        "real_order_attempts": 0,
-        "Champion": None,
-        "order_permission": False,
-        "trading_authorization": "NO-GO",
-    }
+    manifest = _build_structural_manifest(
+        status=_grid_integrity_status(gap_count, off_grid_count),
+        symbol=symbol,
+        start_timestamp=start_timestamp,
+        end_timestamp=end_timestamp,
+        expected_count=expected_count,
+        actual_count=len(rows),
+        gap_count=gap_count,
+        off_grid_count=off_grid_count,
+        grid_anomaly=grid_anomaly,
+        distinct_offsets=distinct_offsets,
+        duplicate_count=duplicate_count,
+        retrieved_at=retrieved_at,
+        run_id=run_id,
+        commit_sha=commit_sha,
+    )
 
     if gap_count or grid_anomaly:
-        _write_json(
-            output_dir / GAP_NAME,
-            {
-                "schema_version": "alix.nobitex.posthack-grid-integrity-report.v2",
-                "start_utc": _utc_iso(start_timestamp),
-                "end_utc": _utc_iso(end_timestamp),
-                "expected_row_count": expected_count,
-                "actual_row_count": len(rows),
-                "gap_count": gap_count,
-                "missing_timestamps_epoch": missing,
-                "missing_timestamps_utc": [_utc_iso(stamp) for stamp in missing],
-                "off_grid_count": off_grid_count,
-                "grid_anomaly": grid_anomaly,
-                "distinct_off_grid_offsets_seconds": distinct_offsets,
-                "off_grid_timestamps": [
-                    {
-                        "timestamp_epoch": item["timestamp_epoch"],
-                        "timestamp_utc": _utc_iso(item["timestamp_epoch"]),
-                        "offset_seconds": item["offset_seconds"],
-                    }
-                    for item in off_grid
-                ],
-                "endpoint": source.ENDPOINT,
-                "run_id": run_id,
-                "commit_sha": commit_sha,
-                "backfill": False,
-                "interpolation": False,
-                "masking": False,
-            },
-        )
-    else:
-        source._validate_exact_candle_coverage(
-            rows,
+        _write_grid_integrity_report(
+            output_dir=output_dir,
             start_timestamp=start_timestamp,
             end_timestamp=end_timestamp,
-            seconds=SECONDS_PER_HOUR,
+            expected_count=expected_count,
+            actual_count=len(rows),
+            missing=missing,
+            off_grid=off_grid,
+            distinct_offsets=distinct_offsets,
+            run_id=run_id,
+            commit_sha=commit_sha,
         )
-        csv_path = output_dir / CSV_NAME
-        with csv_path.open("w", encoding="utf-8", newline="") as stream:
-            writer = csv.DictWriter(
-                stream,
-                fieldnames=("date", "open", "high", "low", "close", "volume"),
-            )
-            writer.writeheader()
-            for row in rows:
-                writer.writerow(
-                    {
-                        "date": row["date"],
-                        "open": row["open"],
-                        "high": row["high"],
-                        "low": row["low"],
-                        "close": row["close"],
-                        "volume": row["volume"],
-                    }
-                )
-        manifest["dataset_sha256"] = hashlib.sha256(csv_path.read_bytes()).hexdigest()
+    else:
+        manifest["dataset_sha256"] = _write_complete_dataset(
+            output_dir=output_dir,
+            rows=rows,
+            start_timestamp=start_timestamp,
+            end_timestamp=end_timestamp,
+            expected_count=expected_count,
+        )
 
     _write_json(output_dir / MANIFEST_NAME, manifest)
     return {
