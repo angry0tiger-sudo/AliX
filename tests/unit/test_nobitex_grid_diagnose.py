@@ -8,7 +8,6 @@ from typing import Any
 import pytest
 
 from scripts import diagnose_nobitex_grid as diagnose
-from scripts import fetch_nobitex_posthack_ohlcv as wrapper
 
 
 def _payload(timestamps: list[int]) -> dict[str, Any]:
