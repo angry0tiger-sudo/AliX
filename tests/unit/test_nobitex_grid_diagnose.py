@@ -24,10 +24,13 @@ def _row(timestamp: int) -> dict[str, Any]:
 
 
 def test_diagnose_window_is_fixed_and_strictly_after_holdout() -> None:
-    assert diagnose.validate_diagnose_window(
-        diagnose.DIAGNOSE_START_TIMESTAMP,
-        diagnose.DIAGNOSE_END_TIMESTAMP,
-    ) == 241
+    assert (
+        diagnose.validate_diagnose_window(
+            diagnose.DIAGNOSE_START_TIMESTAMP,
+            diagnose.DIAGNOSE_END_TIMESTAMP,
+        )
+        == 241
+    )
     assert diagnose.DIAGNOSE_START_TIMESTAMP > diagnose.HOLDOUT_END_TIMESTAMP
     with pytest.raises(ValueError, match="not_owner_approved"):
         diagnose.validate_diagnose_window(1_762_041_600, 1_762_905_600)

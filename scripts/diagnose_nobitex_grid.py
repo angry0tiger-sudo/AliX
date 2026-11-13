@@ -28,8 +28,10 @@ JsonProvider = Callable[[dict[str, str]], dict[str, Any]]
 
 
 def _utc_iso(timestamp: int) -> str:
-    return datetime.fromtimestamp(timestamp, timezone.utc).isoformat().replace(
-        "+00:00", "Z"
+    return (
+        datetime.fromtimestamp(timestamp, timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z")
     )
 
 
@@ -92,9 +94,7 @@ def _metadata(
         "http_status": http_status,
         "candle_count": len(rows),
         "off_grid_count": len(off_grid),
-        "distinct_offsets": sorted(
-            {item["offset_seconds"] for item in off_grid}
-        ),
+        "distinct_offsets": sorted({item["offset_seconds"] for item in off_grid}),
         "first_ts": min(timestamps) if timestamps else None,
         "last_ts": max(timestamps) if timestamps else None,
         "gap_count": len(missing),
@@ -181,9 +181,7 @@ def main() -> int:
     parser.add_argument("--start", type=int, required=True)
     parser.add_argument("--end", type=int, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument(
-        "--commit-sha", default=os.environ.get("GITHUB_SHA", "UNKNOWN")
-    )
+    parser.add_argument("--commit-sha", default=os.environ.get("GITHUB_SHA", "UNKNOWN"))
     parser.add_argument("--run-id", default=os.environ.get("GITHUB_RUN_ID", "UNKNOWN"))
     args = parser.parse_args()
 
