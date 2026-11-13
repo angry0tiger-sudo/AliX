@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import json
 from pathlib import Path
 
@@ -41,6 +42,21 @@ def test_mock_run_writes_four_synthetic_manifests(tmp_path: Path) -> None:
         assert manifest["economic_evaluation_performed"] is False
     assert (tmp_path / "run-log.jsonl").is_file()
     assert (tmp_path / "run-summary.json").is_file()
+    synthetic_path = tmp_path / "synthetic-nobitex-btcusdt-1h.csv"
+    with synthetic_path.open(encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    assert len(rows) == 1200
+    assert all(
+        set(row) == {"date", "open", "high", "low", "close", "volume"}
+        for row in rows
+    )
+    first_manifest = json.loads(
+        (tmp_path / "arm-A.manifest.json").read_text(encoding="utf-8")
+    )
+    assert first_manifest["dataset"]["sha256"] == experiment._sha256_file(
+        synthetic_path
+    )
+    assert first_manifest["dataset"]["market_data_read"] is False
 
 
 def test_mock_metrics_are_deterministic_and_separate_costs() -> None:

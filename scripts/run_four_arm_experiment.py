@@ -7,13 +7,13 @@ from __future__ import annotations
 
 import argparse
 import csv
+from datetime import datetime, timezone
 import hashlib
 import importlib
 import json
 import math
 from pathlib import Path
 import re
-import sys
 from typing import Any, cast
 
 PREHACK_SHA256 = "0aa13607d1da68c4720919f233635bb33d34048e5bd67d3ecc2ce9bb7c2b462e"
@@ -158,8 +158,48 @@ def _metrics(gross_returns: list[float]) -> dict[str, float | None]:
     }
 
 
-def run_mock(config: dict[str, Any], output_dir: Path, commit_sha: str) -> dict[str, Any]:
+def _write_synthetic_ohlcv(
+    output_dir: Path, row_count: int = 1200
+) -> dict[str, Any]:
+    """Write a deterministic synthetic OHLCV fixture, never downloaded market data."""
+    path = output_dir / "synthetic-nobitex-btcusdt-1h.csv"
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(
+            handle, fieldnames=("date", "open", "high", "low", "close", "volume")
+        )
+        writer.writeheader()
+        previous_close = 100.0
+        for index in range(row_count):
+            timestamp = 1_600_000_000 + index * 3600
+            close = 100.0 + (0.005 * index) + (0.75 * math.sin(index / 17.0))
+            opened = previous_close
+            writer.writerow(
+                {
+                    "date": datetime.fromtimestamp(
+                        timestamp, timezone.utc
+                    ).isoformat().replace("+00:00", "Z"),
+                    "open": f"{opened:.8f}",
+                    "high": f"{max(opened, close) + 0.2:.8f}",
+                    "low": f"{min(opened, close) - 0.2:.8f}",
+                    "close": f"{close:.8f}",
+                    "volume": f"{1.0 + (index % 10) / 10.0:.8f}",
+                }
+            )
+            previous_close = close
+    return {
+        "kind": "synthetic",
+        "row_count": row_count,
+        "sha256": _sha256_file(path),
+        "file": path.name,
+        "market_data_read": False,
+    }
+
+
+def run_mock(
+    config: dict[str, Any], output_dir: Path, commit_sha: str
+) -> dict[str, Any]:
     output_dir.mkdir(parents=True, exist_ok=True)
+    synthetic_dataset = _write_synthetic_ohlcv(output_dir)
     arm_manifests: list[dict[str, Any]] = []
     for arm_index, arm_id in enumerate(ARM_IDS):
         folds: list[dict[str, Any]] = []
@@ -184,12 +224,7 @@ def run_mock(config: dict[str, Any], output_dir: Path, commit_sha: str) -> dict[
             "arm_id": arm_id,
             "trial_id": f"NOBITEX-KC26-{arm_id}",
             "pre_hack_sha": config["pre_hack_sha"],
-            "dataset": {
-                "kind": "synthetic",
-                "row_count": 1200,
-                "sha256": None,
-                "market_data_read": False,
-            },
+            "dataset": synthetic_dataset,
             **_metrics(pooled),
             "trades": len(pooled),
             "DSR": None,
@@ -453,13 +488,29 @@ def run_research(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--mode", choices=("mock", "research", "preflight"), required=True)
-    parser.add_argument("--config", type=Path, default=Path("config/experiment/four_arm_kronos_chronos.json"))
-    parser.add_argument("--preregistration", type=Path, default=Path("docs/research/preregistration/FOUR_ARM_KRONOS_CHRONOS.md"))
-    parser.add_argument("--execution-lock", type=Path, default=Path("config/experiment/four_arm_execution_lock.json"))
+    parser.add_argument(
+        "--mode", choices=("mock", "research", "preflight"), required=True
+    )
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=Path("config/experiment/four_arm_kronos_chronos.json"),
+    )
+    parser.add_argument(
+        "--preregistration",
+        type=Path,
+        default=Path("docs/research/preregistration/FOUR_ARM_KRONOS_CHRONOS.md"),
+    )
+    parser.add_argument(
+        "--execution-lock",
+        type=Path,
+        default=Path("config/experiment/four_arm_execution_lock.json"),
+    )
     parser.add_argument("--ohlcv", type=Path)
     parser.add_argument("--manifest", type=Path)
-    parser.add_argument("--output-dir", type=Path, default=Path("artifacts/four-arm-experiment"))
+    parser.add_argument(
+        "--output-dir", type=Path, default=Path("artifacts/four-arm-experiment")
+    )
     parser.add_argument("--commit-sha", default="UNKNOWN")
     args = parser.parse_args()
     try:
@@ -467,7 +518,9 @@ def main() -> int:
         if args.mode == "mock":
             summary = run_mock(config, args.output_dir, args.commit_sha)
         elif args.mode == "preflight":
-            lock, module_path, module_name = validate_execution_lock(args.execution_lock)
+            lock, module_path, module_name = validate_execution_lock(
+                args.execution_lock
+            )
             summary = {
                 "mode": "PREFLIGHT",
                 "status": "READY",
