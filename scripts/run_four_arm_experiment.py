@@ -4,7 +4,6 @@ Mock mode is deterministic and synthetic-only. Research mode requires an immutab
 execution lock and pinned executor adapter; no experimental choices are guessed.
 """
 
-
 from __future__ import annotations
 
 import argparse
