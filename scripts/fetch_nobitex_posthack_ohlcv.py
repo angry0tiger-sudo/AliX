@@ -70,10 +70,7 @@ def validate_window(start_timestamp: int, end_timestamp: int) -> int:
     return (end_timestamp - start_timestamp) // SECONDS_PER_HOUR + 1
 
 
-def window_from_spec(spec: dict[str, Any]) -> tuple[int, int, int]:
-    window = spec.get("window")
-    if not isinstance(window, dict):
-        raise ValueError("posthack_spec_window_missing")
+def _validate_spec_identity(spec: dict[str, Any]) -> None:
     if spec.get("spec_version") != 2:
         raise ValueError("posthack_spec_version_not_v2")
     if (
@@ -81,28 +78,53 @@ def window_from_spec(spec: dict[str, Any]) -> tuple[int, int, int]:
         != "hourly candles timestamped at :30 UTC (Iran UTC+3:30 local hour boundaries)"
     ):
         raise ValueError("posthack_spec_grid_convention_invalid")
+
+
+def _spec_window_timestamps(spec: dict[str, Any]) -> tuple[int, int]:
+    window = spec.get("window")
+    if not isinstance(window, dict):
+        raise ValueError("posthack_spec_window_missing")
     start = _timestamp(window.get("start_utc"), "start_utc")
     end = _timestamp(window.get("end_utc"), "end_utc")
-    expected = validate_window(start, end)
-    if expected != 11_713 or spec.get("expected_candle_count") != expected:
+    return start, end
+
+
+def _validate_spec_expected_count(spec: dict[str, Any], expected: int) -> None:
+    if expected != 11_713:
         raise ValueError("posthack_spec_expected_count_mismatch")
+    if spec.get("expected_candle_count") != expected:
+        raise ValueError("posthack_spec_expected_count_mismatch")
+
+
+def _validate_spec_symbol_timeframe(spec: dict[str, Any]) -> None:
     symbol = spec.get("symbol")
     timeframe = spec.get("timeframe")
     if symbol not in source.ALLOWED_SYMBOLS or timeframe != "1h":
         raise ValueError("posthack_spec_symbol_or_timeframe_out_of_policy")
+
+
+def _validate_spec_prehack_reference(spec: dict[str, Any], start: int) -> None:
     prehack = spec.get("prehack_reference")
     if not isinstance(prehack, dict):
         raise ValueError("posthack_spec_prehack_reference_missing")
-    if (
-        source.PREHACK_END_TIMESTAMP != 1750192200
-        or prehack.get("end_timestamp") != source.PREHACK_END_TIMESTAMP
-    ):
+    if source.PREHACK_END_TIMESTAMP != 1750192200:
+        raise ValueError("posthack_prehack_boundary_changed")
+    if prehack.get("end_timestamp") != source.PREHACK_END_TIMESTAMP:
         raise ValueError("posthack_prehack_boundary_changed")
     minimum_separation = start - source.PREHACK_END_TIMESTAMP
     if minimum_separation != 1_137_600:
         raise ValueError("posthack_minimum_separation_changed")
     if prehack.get("minimum_separation_seconds") != minimum_separation:
         raise ValueError("posthack_spec_minimum_separation_mismatch")
+
+
+def window_from_spec(spec: dict[str, Any]) -> tuple[int, int, int]:
+    _validate_spec_identity(spec)
+    start, end = _spec_window_timestamps(spec)
+    expected = validate_window(start, end)
+    _validate_spec_expected_count(spec, expected)
+    _validate_spec_symbol_timeframe(spec)
+    _validate_spec_prehack_reference(spec, start)
     return start, end, expected
 
 

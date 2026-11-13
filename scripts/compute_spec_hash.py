@@ -47,45 +47,66 @@ def canonical_spec_bytes(spec: dict[str, Any]) -> bytes:
     ).encode("utf-8")
 
 
-def compute_spec_hash(path: Path = SPEC_PATH) -> str:
+def _load_spec(path: Path) -> dict[str, Any]:
     parsed = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(parsed, dict):
         raise ValueError("holdout_spec_must_be_json_object")
-    spec = cast(dict[str, Any], parsed)
-    window = spec.get("window")
-    if not isinstance(window, dict):
-        raise ValueError("holdout_spec_window_missing")
+    return cast(dict[str, Any], parsed)
+
+
+def _validate_spec_identity(spec: dict[str, Any]) -> None:
     if spec.get("spec_version") != 2:
         raise ValueError("holdout_spec_version_not_v2")
     if spec.get("grid_convention") != GRID_CONVENTION:
         raise ValueError("holdout_spec_grid_convention_invalid")
+    if spec.get("timeframe") != "1h":
+        raise ValueError("holdout_spec_timeframe_not_1h")
+
+
+def _parse_spec_window(spec: dict[str, Any]) -> tuple[int, int]:
+    window = spec.get("window")
+    if not isinstance(window, dict):
+        raise ValueError("holdout_spec_window_missing")
     start = _timestamp(window.get("start_utc"), "start_utc")
     end = _timestamp(window.get("end_utc"), "end_utc")
-    timeframe = spec.get("timeframe")
-    if timeframe != "1h":
-        raise ValueError("holdout_spec_timeframe_not_1h")
-    seconds = 3600
-    if end < start or (end - start) % seconds:
+    return start, end
+
+
+def _validate_spec_grid(start: int, end: int) -> None:
+    if end < start or (end - start) % 3600:
         raise ValueError("holdout_spec_window_not_hourly_aligned")
-    if start % seconds != 1800 or end % seconds != 1800:
+    if start % 3600 != 1800 or end % 3600 != 1800:
         raise ValueError("holdout_spec_not_on_venue_grid")
-    expected = (end - start) // seconds + 1
-    if (
-        expected != EXPECTED_CANDLE_COUNT
-        or spec.get("expected_candle_count") != expected
-    ):
+
+
+def _validate_expected_count(spec: dict[str, Any], start: int, end: int) -> None:
+    expected = (end - start) // 3600 + 1
+    if expected != EXPECTED_CANDLE_COUNT:
         raise ValueError("holdout_spec_expected_candle_count_mismatch")
+    if spec.get("expected_candle_count") != expected:
+        raise ValueError("holdout_spec_expected_candle_count_mismatch")
+
+
+def _validate_prehack_separation(spec: dict[str, Any], start: int) -> None:
     prehack = spec.get("prehack_reference")
     if not isinstance(prehack, dict):
         raise ValueError("holdout_spec_prehack_reference_missing")
     if prehack.get("end_timestamp") != public_fetcher.PREHACK_END_TIMESTAMP:
         raise ValueError("holdout_spec_prehack_boundary_mismatch")
     minimum_separation = start - public_fetcher.PREHACK_END_TIMESTAMP
-    if (
-        minimum_separation != 1_137_600
-        or prehack.get("minimum_separation_seconds") != minimum_separation
-    ):
+    if minimum_separation != 1_137_600:
         raise ValueError("holdout_spec_minimum_separation_mismatch")
+    if prehack.get("minimum_separation_seconds") != minimum_separation:
+        raise ValueError("holdout_spec_minimum_separation_mismatch")
+
+
+def compute_spec_hash(path: Path = SPEC_PATH) -> str:
+    spec = _load_spec(path)
+    _validate_spec_identity(spec)
+    start, end = _parse_spec_window(spec)
+    _validate_spec_grid(start, end)
+    _validate_expected_count(spec, start, end)
+    _validate_prehack_separation(spec, start)
     return hashlib.sha256(canonical_spec_bytes(spec)).hexdigest()
 
 
