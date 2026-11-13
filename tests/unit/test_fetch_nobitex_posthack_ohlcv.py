@@ -262,6 +262,9 @@ def test_prehack_hourly_grid_distance_validation_contract_is_unchanged() -> None
     last = public_fetcher.PREHACK_END_TIMESTAMP
     stamps = list(range(first, last + 1, public_fetcher.PREHACK_INTERVAL_SECONDS))
     assert len(stamps) == public_fetcher.PREHACK_EXPECTED_CANDLES
-    assert public_fetcher._missing_intervals(
-        stamps, public_fetcher.PREHACK_INTERVAL_SECONDS
-    ) == 0
+    assert (
+        public_fetcher._missing_intervals(
+            stamps, public_fetcher.PREHACK_INTERVAL_SECONDS
+        )
+        == 0
+    )
