@@ -47,11 +47,16 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           EVENT_BEFORE: ${{ github.event.before }}
+          SPEC_SHA256: ${{ steps.spec.outputs.spec_sha256 }}
         run: |
           set -euo pipefail
           trigger_value="$(tr -d '\r\n' < config/holdout/DISPATCH_TRIGGER)"
           if [[ "$trigger_value" == "DIAGNOSE" ]]; then
             echo "mode=DIAGNOSE" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ "$trigger_value" == "NONCE_ROTATION" ]]; then
+            echo "mode=NONCE_ROTATION" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           nonce="$(python - <<'PY'
@@ -92,12 +97,39 @@ jobs:
           fi
           python - <<'PY'
           from pathlib import Path
+          import os
           lines = Path("HOLDOUT_COMMITMENT_V2.md").read_text(encoding="utf-8").splitlines()
           statuses = [line.split(":", 1)[1].strip() for line in lines if line.startswith("status:")]
+          spec_hashes = [line.split(":", 1)[1].strip() for line in lines if line.startswith("spec_sha256:")]
           if statuses != ["PENDING_DISPATCH"]:
               raise SystemExit("WINDOW_CONSUMED")
+          if not spec_hashes or spec_hashes[-1] != os.environ["SPEC_SHA256"]:
+              raise SystemExit("SPEC_SHA256_MISMATCH")
           PY
           echo "mode=ACQUISITION" >> "$GITHUB_OUTPUT"
+
+      - name: Generate one-time nonce candidate in CI
+        if: steps.gate.outputs.mode == 'NONCE_ROTATION'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import secrets
+
+          retired = {
+              "3764030460fa5cbdaebf522c97453b3b",
+              "d86c6da4e1df4e7b4b042a5be940df24",
+              "c1c9297040cc4bfcb28ac1f414c4ad07",
+          }
+          candidate = secrets.token_hex(16)
+          if candidate in retired or len(candidate) != 32:
+              raise SystemExit("NONCE_COLLISION_OR_FORMAT_FAILURE")
+          Path("artifacts/posthack/nonce_candidate.txt").write_text(
+              candidate + "\\n", encoding="utf-8"
+          )
+          print("Created one 32-hex nonce candidate; value omitted from CI logs.")
+          PY
 
       - name: Probe Nobitex public UDF endpoint with one small GET
         if: steps.gate.outputs.mode == 'PROBE'
@@ -121,8 +153,8 @@ jobs:
           params = {
               "symbol": "BTCUSDT",
               "resolution": "60",
-              "from": "1751328000",
-              "to": "1751331601",
+              "from": "1751329800",
+              "to": "1751333401",
           }
           url = endpoint + "?" + urlencode(params)
 

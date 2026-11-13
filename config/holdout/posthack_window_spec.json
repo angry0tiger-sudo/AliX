@@ -10,10 +10,10 @@
     "source_contract": "Same public UDF history endpoint used by scripts/fetch_nobitex_public_ohlcv.py"
   },
   "window": {
-    "start_utc": "2025-07-01T00:00:00Z",
-    "end_utc": "2026-11-01T00:00:00Z",
-    "start_timestamp": 1751328000,
-    "end_timestamp": 1793491200,
+    "start_utc": "2025-07-01T00:30:00Z",
+    "end_utc": "2026-11-01T00:30:00Z",
+    "start_timestamp": 1751329800,
+    "end_timestamp": 1793493000,
     "timezone": "UTC",
     "timestamp_unit": "unix_seconds",
     "timestamp_semantics": "Inclusive candle-open timestamps; both start and end grid points are required."
@@ -30,9 +30,9 @@
     "dataset_sha256": "0aa13607d1da68c4720919f233635bb33d34048e5bd67d3ecc2ce9bb7c2b462e",
     "start_timestamp": 1635712200,
     "end_timestamp": 1750192200,
-    "minimum_separation_seconds": 1135800,
-    "minimum_separation_hours": 315.5,
-    "minimum_separation_days": 13.145833333333334,
+    "minimum_separation_seconds": 1137600,
+    "minimum_separation_hours": 316,
+    "minimum_separation_days": 13.166666666666666,
     "policy": "Post-hack start must be strictly greater than the final pre-hack candle-open timestamp; no timestamp overlap is permitted."
   },
   "gap_policy": {
@@ -44,9 +44,12 @@
     "fail_closed": true,
     "gap_artifact": "Full list of missing UTC timestamps and Unix timestamps; no candle values."
   },
-  "cost_scenarios_bps": [50, 90],
+  "cost_scenarios_bps": [
+    50,
+    90
+  ],
   "economic_gates": {
-    "net_profit_factor_min": 1.10,
+    "net_profit_factor_min": 1.1,
     "trades_min": 100,
     "max_drawdown_max": 0.15,
     "dsr_min_exclusive": 0,
@@ -56,5 +59,8 @@
     "status": "LOCKED",
     "training_or_evaluation_before_owner_release": false,
     "no_cross_venue_backfill": true
-  }
+  },
+  "spec_version": 2,
+  "grid_convention": "hourly candles timestamped at :30 UTC (Iran UTC+3:30 local hour boundaries)",
+  "revision_reason": "structural: prehack dataset and adjacent-window DIAGNOSE both on :30 grid; nominal window unchanged; not a window shift"
 }

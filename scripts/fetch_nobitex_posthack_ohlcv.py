@@ -10,6 +10,7 @@ import argparse
 import csv
 from datetime import datetime, timezone
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -57,6 +58,11 @@ def validate_window(start_timestamp: int, end_timestamp: int) -> int:
         raise ValueError("posthack_start_must_be_strictly_after_prehack_end")
     if end_timestamp < start_timestamp:
         raise ValueError("posthack_window_reversed")
+    if (
+        start_timestamp % SECONDS_PER_HOUR != 1800
+        or end_timestamp % SECONDS_PER_HOUR != 1800
+    ):
+        raise ValueError("posthack_window_not_on_venue_grid")
     if (end_timestamp - start_timestamp) % SECONDS_PER_HOUR:
         raise ValueError("posthack_window_not_hourly_aligned")
     if start_timestamp <= source.PREHACK_END_TIMESTAMP <= end_timestamp:
@@ -68,17 +74,35 @@ def window_from_spec(spec: dict[str, Any]) -> tuple[int, int, int]:
     window = spec.get("window")
     if not isinstance(window, dict):
         raise ValueError("posthack_spec_window_missing")
+    if spec.get("spec_version") != 2:
+        raise ValueError("posthack_spec_version_not_v2")
+    if (
+        spec.get("grid_convention")
+        != "hourly candles timestamped at :30 UTC (Iran UTC+3:30 local hour boundaries)"
+    ):
+        raise ValueError("posthack_spec_grid_convention_invalid")
     start = _timestamp(window.get("start_utc"), "start_utc")
     end = _timestamp(window.get("end_utc"), "end_utc")
     expected = validate_window(start, end)
-    if spec.get("expected_candle_count") != expected:
+    if expected != 11_713 or spec.get("expected_candle_count") != expected:
         raise ValueError("posthack_spec_expected_count_mismatch")
     symbol = spec.get("symbol")
     timeframe = spec.get("timeframe")
     if symbol not in source.ALLOWED_SYMBOLS or timeframe != "1h":
         raise ValueError("posthack_spec_symbol_or_timeframe_out_of_policy")
-    if source.PREHACK_END_TIMESTAMP != 1750192200:
+    prehack = spec.get("prehack_reference")
+    if not isinstance(prehack, dict):
+        raise ValueError("posthack_spec_prehack_reference_missing")
+    if (
+        source.PREHACK_END_TIMESTAMP != 1750192200
+        or prehack.get("end_timestamp") != source.PREHACK_END_TIMESTAMP
+    ):
         raise ValueError("posthack_prehack_boundary_changed")
+    minimum_separation = start - source.PREHACK_END_TIMESTAMP
+    if minimum_separation != 1_137_600:
+        raise ValueError("posthack_minimum_separation_changed")
+    if prehack.get("minimum_separation_seconds") != minimum_separation:
+        raise ValueError("posthack_spec_minimum_separation_mismatch")
     return start, end, expected
 
 
@@ -242,6 +266,7 @@ def _build_structural_manifest(
         "distinct_off_grid_offsets_seconds": distinct_offsets,
         "duplicate_timestamp_count": duplicate_count,
         "dataset_sha256": None,
+        "dataset_persisted": False,
         "retrieved_at_utc": retrieved_at.astimezone(timezone.utc).isoformat(),
         "run_id": run_id,
         "commit_sha": commit_sha,
@@ -299,13 +324,24 @@ def _write_grid_integrity_report(
     )
 
 
-def _write_complete_dataset(
+class _HashingTextSink(io.TextIOBase):
+    def __init__(self) -> None:
+        super().__init__()
+        self._digest = hashlib.sha256()
+
+    def write(self, value: str) -> int:
+        self._digest.update(value.encode("utf-8"))
+        return len(value)
+
+    def hexdigest(self) -> str:
+        return self._digest.hexdigest()
+
+
+def _hash_complete_dataset(
     *,
-    output_dir: Path,
     rows: list[source.CandleRecord],
     start_timestamp: int,
     end_timestamp: int,
-    expected_count: int,
 ) -> str:
     source._validate_exact_candle_coverage(
         rows,
@@ -313,25 +349,24 @@ def _write_complete_dataset(
         end_timestamp=end_timestamp,
         seconds=SECONDS_PER_HOUR,
     )
-    csv_path = output_dir / CSV_NAME
-    with csv_path.open("w", encoding="utf-8", newline="") as stream:
-        writer = csv.DictWriter(
-            stream,
-            fieldnames=("date", "open", "high", "low", "close", "volume"),
+    sink = _HashingTextSink()
+    writer = csv.DictWriter(
+        sink,
+        fieldnames=("date", "open", "high", "low", "close", "volume"),
+    )
+    writer.writeheader()
+    for row in rows:
+        writer.writerow(
+            {
+                "date": row["date"],
+                "open": row["open"],
+                "high": row["high"],
+                "low": row["low"],
+                "close": row["close"],
+                "volume": row["volume"],
+            }
         )
-        writer.writeheader()
-        for row in rows:
-            writer.writerow(
-                {
-                    "date": row["date"],
-                    "open": row["open"],
-                    "high": row["high"],
-                    "low": row["low"],
-                    "close": row["close"],
-                    "volume": row["volume"],
-                }
-            )
-    return hashlib.sha256(csv_path.read_bytes()).hexdigest()
+    return sink.hexdigest()
 
 
 def fetch_and_write_artifacts(
@@ -396,12 +431,10 @@ def fetch_and_write_artifacts(
             commit_sha=commit_sha,
         )
     else:
-        manifest["dataset_sha256"] = _write_complete_dataset(
-            output_dir=output_dir,
+        manifest["dataset_sha256"] = _hash_complete_dataset(
             rows=rows,
             start_timestamp=start_timestamp,
             end_timestamp=end_timestamp,
-            expected_count=expected_count,
         )
 
     _write_json(output_dir / MANIFEST_NAME, manifest)
@@ -419,6 +452,10 @@ def fetch_and_write_artifacts(
         if gap_count or grid_anomaly
         else None,
     }
+
+
+def _summary_exit_code(summary: dict[str, Any]) -> int:
+    return 2 if summary["gap_count"] or summary["off_grid_count"] else 0
 
 
 def main() -> int:
