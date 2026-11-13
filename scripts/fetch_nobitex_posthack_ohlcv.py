@@ -186,6 +186,7 @@ def fetch_window(
     ]
     return rows, missing, duplicate_count
 
+
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(
         json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
