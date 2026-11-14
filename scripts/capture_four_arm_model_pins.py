@@ -48,7 +48,13 @@ def _request_model_info(repository: str) -> dict[str, Any]:
     try:
         with urlopen(request, timeout=30) as response:
             payload = json.loads(response.read().decode("utf-8"))
-    except (HTTPError, URLError, TimeoutError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except (
+        HTTPError,
+        URLError,
+        TimeoutError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+    ) as exc:
         raise ModelPinError(
             f"hub_api_request_failed:{repository}:{type(exc).__name__}"
         ) from exc
