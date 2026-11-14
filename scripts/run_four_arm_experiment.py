@@ -448,7 +448,7 @@ def _forecast_at(
     kronos_close = float(kronos_frame["close"].iloc[-1])
     kronos_return = kronos_close / current_close - 1.0
 
-    import torch  # type: ignore[import-not-found]
+    import torch
 
     close_context = (
         frame["close"].iloc[start : decision_index + 1].to_numpy(dtype=np.float32)
