@@ -41,7 +41,7 @@ jobs:
       - name: Validate Phase 9 test PostgreSQL Compose profile without starting services
         run: docker compose --file compose.phase9-test.yaml --profile phase9-test config --quiet
       - name: Compile source
-        run: python -m compileall -q control_plane risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels research/deap research/ai_ensemble tests scripts
+        run: python -m compileall -q control_plane risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels research/deap research/ai_ensemble research/four_arm_core tests scripts
       - name: Verify Nobitex :30 venue grid and canonical spec fingerprint
         run: |
           python - <<'PY'
@@ -70,13 +70,13 @@ jobs:
           PY
 
       - name: Ruff lint
-        run: ruff check control_plane risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels research/deap research/ai_ensemble tests scripts
+        run: ruff check control_plane risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels research/deap research/ai_ensemble research/four_arm_core tests scripts
       - name: Ruff format check
-        run: ruff format --check --diff control_plane risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels research/deap research/ai_ensemble tests scripts
+        run: ruff format --check --diff control_plane risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels research/deap research/ai_ensemble research/four_arm_core tests scripts
       - name: Strict type check
         run: mypy --config-file mypy.ini
       - name: Security scan
-        run: bandit -r control_plane risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels research/deap research/ai_ensemble scripts -ll
+        run: bandit -r control_plane risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels research/deap research/ai_ensemble research/four_arm_core scripts -ll
       - name: Runtime and tooling dependency resolution (dry run)
         run: python -m pip install --dry-run --report /tmp/alix-dependency-resolution.json -r requirements.txt
       - name: Verify transitive dependency lock
@@ -89,7 +89,7 @@ jobs:
       - name: Architecture contracts
         run: lint-imports
       - name: Complexity gate
-        run: xenon --max-absolute B --max-modules B --max-average A control_plane risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels research/deap research/ai_ensemble/validation.py research/ai_ensemble/ttm_risk.py research/ai_ensemble/ttm_portfolio.py scripts
+        run: xenon --max-absolute B --max-modules B --max-average A control_plane risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels research/deap research/four_arm_core research/ai_ensemble/validation.py research/ai_ensemble/ttm_risk.py research/ai_ensemble/ttm_portfolio.py scripts
       - name: Unit tests and coverage (mock-only)
         run: pytest --cov=control_plane --cov=risk --cov=connectivity --cov=external_data --cov=services --cov=integrations.nobitex --cov=user_data/strategies --cov-report=term-missing --cov-fail-under=90 -q
       - name: Phase 9 end-to-end simulation (synthetic only)
@@ -114,6 +114,68 @@ jobs:
         run: pytest tests/unit/test_phase1_contracts.py -q
       - name: Starter Kit integrity and documentation validation
         run: python scripts/validate_project_docs.py
+
+  four-arm-lock-bare-env:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    env:
+      ALIX_FOUR_ARM_EXECUTION_AUTHORIZED: "true"
+      ALIX_DRY_RUN: "true"
+      ALIX_ALLOW_LIVE_TRADING: "false"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Set up Python without installing third-party packages
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Validate a complete sample owner lock using stdlib only
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -S - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path.cwd()
+          pins = json.loads((root / "config/four_arm/model_pins.json").read_text(encoding="utf-8"))
+          models = pins["models"]
+          contract_paths = {
+              "kronos_adapter_sha256": "docs/research/preregistration/contracts/kronos_adapter.md",
+              "chronos_adapter_sha256": "docs/research/preregistration/contracts/chronos_adapter.md",
+              "combined_rule_sha256": "docs/research/preregistration/contracts/combined_rule.md",
+              "fold_plan_sha256": "docs/research/preregistration/contracts/fold_plan.md",
+              "triple_barrier_sha256": "docs/research/preregistration/contracts/triple_barrier.md",
+              "cost_fill_simulator_sha256": "docs/research/preregistration/contracts/cost_fill_simulator.md",
+              "dsr_method_sha256": "docs/research/preregistration/contracts/dsr_method.md",
+              "license_and_corpus_disclosure_sha256": "docs/research/preregistration/contracts/model_provenance.md",
+              "runtime_lock_sha256": "docs/research/preregistration/contracts/runtime_lock.md",
+          }
+          def model_record(model):
+              return {"repository": model["repository"], "revision": model["revision"], "weights_sha256": model["weights_sha256"]}
+          kronos = model_record(models["kronos_small"])
+          kronos["tokenizer"] = model_record(models["kronos_small"]["tokenizer"])
+          lock = {
+              "schema_version": "alix.four-arm.execution-lock.v1",
+              "authorization_status": "OWNER_AUTHORIZED_PREHACK_RESEARCH_ONLY",
+              "execution_scope": "PREHACK_RESEARCH_ONLY",
+              "owner_authorization_id": "OWNER-2026-11-14-FOURARM",
+              "owner_authorization_commit_sha": "3cce108c7082d8a417f58cb2fd50eb43aaf9ea18",
+              "dataset_sha256": "0aa13607d1da68c4720919f233635bb33d34048e5bd67d3ecc2ce9bb7c2b462e",
+              "deterministic_seed": 42,
+              "models": {"kronos_small": kronos, "chronos_2": model_record(models["chronos_2"])},
+              "contracts": {key: hashlib.sha256((root / path).read_bytes()).hexdigest() for key, path in contract_paths.items()},
+          }
+          lock_path = Path(os.environ["RUNNER_TEMP"]) / "four-arm-bare-env-lock.json"
+          lock_path.write_text(json.dumps(lock, sort_keys=True) + "\\n", encoding="utf-8")
+          PY
+          python -S -m scripts.run_four_arm_experiment --mode real --validate-lock-only --lock "$RUNNER_TEMP/four-arm-bare-env-lock.json" --model-pins config/four_arm/model_pins.json --output-dir "$RUNNER_TEMP/four-arm-bare-env-output" --repository-root "$GITHUB_WORKSPACE"
 
   freqtrade-runtime-smoke:
     runs-on: ubuntu-latest

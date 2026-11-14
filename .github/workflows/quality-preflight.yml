@@ -48,7 +48,7 @@ jobs:
         continue-on-error: true
         run: |
           set +e
-          ruff check control_plane risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels research/deap research/ai_ensemble tests scripts > preflight-output/ruff-check.log 2>&1
+          ruff check control_plane risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels research/deap research/ai_ensemble research/four_arm_core tests scripts > preflight-output/ruff-check.log 2>&1
           code=$?
           printf '%s\n' "$code" > preflight-output/ruff-check.exit
           cat preflight-output/ruff-check.log
@@ -59,7 +59,7 @@ jobs:
         continue-on-error: true
         run: |
           set +e
-          ruff format --check --diff control_plane risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels research/deap research/ai_ensemble tests scripts > preflight-output/ruff-format.log 2>&1
+          ruff format --check --diff control_plane risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels research/deap research/ai_ensemble research/four_arm_core tests scripts > preflight-output/ruff-format.log 2>&1
           code=$?
           printf '%s\n' "$code" > preflight-output/ruff-format.exit
           cat preflight-output/ruff-format.log
@@ -81,7 +81,7 @@ jobs:
         continue-on-error: true
         run: |
           set +e
-          bandit -r control_plane risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels research/deap research/ai_ensemble scripts -ll > preflight-output/bandit.log 2>&1
+          bandit -r control_plane risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels research/deap research/ai_ensemble research/four_arm_core scripts -ll > preflight-output/bandit.log 2>&1
           code=$?
           printf '%s\n' "$code" > preflight-output/bandit.exit
           cat preflight-output/bandit.log
@@ -92,7 +92,7 @@ jobs:
         continue-on-error: true
         run: |
           set +e
-          xenon --max-absolute B --max-modules B --max-average A control_plane risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels research/deap research/ai_ensemble/validation.py research/ai_ensemble/ttm_risk.py research/ai_ensemble/ttm_portfolio.py scripts > preflight-output/xenon.log 2>&1
+          xenon --max-absolute B --max-modules B --max-average A control_plane risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels research/deap research/four_arm_core research/ai_ensemble/validation.py research/ai_ensemble/ttm_risk.py research/ai_ensemble/ttm_portfolio.py scripts > preflight-output/xenon.log 2>&1
           code=$?
           printf '%s\n' "$code" > preflight-output/xenon.exit
           cat preflight-output/xenon.log
