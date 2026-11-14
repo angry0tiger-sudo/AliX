@@ -42,7 +42,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          trigger_value="$(tr -d '\\r\\n' < config/four_arm/EXECUTION_TRIGGER)"
+          trigger_value="$(< config/four_arm/EXECUTION_TRIGGER)"
           if [[ "$trigger_value" != "EXECUTE" ]]; then
             echo "::error::FOUR_ARM_EXECUTION_TRIGGER_NOT_ARMED"
             exit 1
@@ -123,8 +123,8 @@ jobs:
           if name != f"four-arm-model-weights-{run_id}":
               raise SystemExit("WEIGHT_ARTIFACT_NAME_RUN_ID_MISMATCH")
           with open(Path(os.environ["GITHUB_OUTPUT"]), "a", encoding="utf-8") as output:
-              output.write(f"run_id={run_id}\\n")
-              output.write(f"name={name}\\n")
+              output.write("run_id=" + str(run_id) + chr(10))
+              output.write("name=" + name + chr(10))
           PY
 
       - name: Download pinned weights from acquisition run
