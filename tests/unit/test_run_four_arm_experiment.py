@@ -82,7 +82,6 @@ def test_contract_mapping_is_fixed_to_repository_relative_files() -> None:
     }
 
 
-
 def test_real_runner_checks_authorization_before_dataset_or_model_io(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -91,7 +90,9 @@ def test_real_runner_checks_authorization_before_dataset_or_model_io(
     monkeypatch.setenv("ALIX_DRY_RUN", "true")
     monkeypatch.setenv("ALIX_ALLOW_LIVE_TRADING", "false")
 
-    with pytest.raises(ExecutionAuthorizationError, match="execution_authorization_missing"):
+    with pytest.raises(
+        ExecutionAuthorizationError, match="execution_authorization_missing"
+    ):
         run_real_experiment(
             csv_path=tmp_path / "must-not-be-read.csv",
             data_manifest_path=tmp_path / "must-not-be-read.json",
