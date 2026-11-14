@@ -12,3 +12,5 @@ the remaining diagnostics from running.
 Pytest uses `--maxfail=0` to collect all failures. The requested spelling
 `-x=false` is not a valid pytest option: `-x` is a boolean stop-after-first-failure
 switch, so `--maxfail=0` is the correct explicit no-early-abort equivalent.
+
+The workflow writes diagnostics to `preflight-output/`, a visible directory so GitHub Actions uploads every log and the JSON inventory. This path marker also keeps the branch push trigger active for preflight maintenance.
