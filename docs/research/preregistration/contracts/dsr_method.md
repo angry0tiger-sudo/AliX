@@ -1,20 +1,12 @@
-# Four-Arm DSR Evidence Contract
+# Four-Arm DSR Evidence Contract — ADR-038
 
-**Registration:** NOBITEX-FOUR-ARM-KC-20261113  
-**Date:** 2026-11-14
-
-## Required disclosure
-
-- The historical trial registry explicitly records `GLOBAL_N=UNKNOWN`.
-- Historical families contain heterogeneous units (workflow executions, candidate variants, trained candidates, genomes and strategy/policy experiments). They cannot be blindly summed into a numeric global trial count.
-- A numerical Deflated Sharpe Ratio requires a defensible trial-count input and a fixed reproducible estimator. A guessed or convenient `N` is forbidden.
-
-## Four-arm result rule
-
-- Report descriptive raw Sharpe only if computed from the actual, recorded OOS trade-return series; do not label it DSR.
-- Set `dsr=null` and `dsr_status=INSUFFICIENT_EVIDENCE_GLOBAL_N_UNKNOWN` unless a candidate-level reconciliation establishes a defensible DSR cohort and the frozen DSR implementation can be run.
-- This status cannot satisfy the registered `DSR > 0` acceptance gate.
-- No model can be declared PASS, Paper-eligible, or a winner solely from PF/trades/MaxDD while DSR remains unavailable.
-- The final verdict in that condition is `NO_GO_INSUFFICIENT_DSR_EVIDENCE`, not a numeric DSR estimate.
-
-This contract deliberately fails closed. It preserves the registry's UNKNOWN instead of fabricating multiple-testing precision.
+- GLOBAL_N = UNKNOWN; it must not be replaced by a guessed value.
+- The audited historical lower bound carried into this experiment is at least 7,912 historical trials. Unresolved candidate identities and overlap remain disclosed.
+- The twelve registered threshold × arm cells are retained in candidate accounting. The three Arm A cells are the same signal rule, computed once and disclosed as three preregistered matched-control cells.
+- Report raw descriptive Sharpe only when computed from the actual recorded OOS trade-return series; never label it DSR.
+- Numeric DSR is unavailable until candidate-level reconciliation establishes a defensible global trial count and the frozen estimator can be applied.
+- Every trial manifest reports dsr=null, dsr_status=INSUFFICIENT_EVIDENCE_GLOBAL_N_UNKNOWN, the audited lower bound, unresolved remainder, and sensitivity multipliers 1×, 2×, 5× and 10×.
+- The sensitivity table is explicitly marked NOT_COMPUTED while GLOBAL_N is UNKNOWN. No numeric DSR estimate may be invented.
+- No candidate can PASS, become a winner, or become Paper-eligible while DSR is unavailable.
+- A trial with fewer than 100 completed trades is INSUFFICIENT_SAMPLE, never PASS.
+- Final acceptance requires NetPF >= 1.10 at both 50 and 90 bps, at least 100 trades, MaxDD <= 15%, all three fold gates, and a defensible DSR > 0.

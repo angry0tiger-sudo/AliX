@@ -54,11 +54,24 @@ CONTRACT_PATHS = {
     ),
 }
 TRIALS = {
-    "A": "NOBITEX-KC26-A",
-    "B": "NOBITEX-KC26-B",
-    "C": "NOBITEX-KC26-C",
-    "D": "NOBITEX-KC26-D",
+    "A": "FOUR-ARM-MOCK-A",
+    "B": "FOUR-ARM-MOCK-B",
+    "C": "FOUR-ARM-MOCK-C",
+    "D": "FOUR-ARM-MOCK-D",
 }
+THRESHOLDS_BPS = (120, 180, 240)
+TRIAL_ID_MATRIX = {
+    threshold: {
+        arm_id: f"NOBITEX-KC26-FD-{threshold}-{arm_id}"
+        for arm_id in ("A", "B", "C", "D")
+    }
+    for threshold in THRESHOLDS_BPS
+}
+CONFIRMATORY_ROW_COUNT = 27_825
+EXCLUDED_TAIL_ROWS = PREHACK_ROW_COUNT - CONFIRMATORY_ROW_COUNT
+HISTORICAL_TRIAL_LOWER_BOUND = 7_912
+
+
 DONCHIAN_PERIOD = 20
 ATR_PERIOD = 14
 ATR_MULTIPLIER = 2.0
@@ -100,6 +113,18 @@ class Trade:
 class Forecast:
     kronos_return: float
     chronos_return: float
+
+
+@dataclass(frozen=True, slots=True)
+class ForecastCache:
+    """Immutable full-prefix forecast values shared by all folds and trials."""
+
+    anchors: tuple[int, ...]
+    forecasts: tuple[Forecast, ...]
+    identity_sha256: str
+    cache_sha256: str
+    entries_json: str
+
 
 
 def _sha256_file(path: Path) -> str:
@@ -651,26 +676,109 @@ def _forecast_at(
     return Forecast(kronos_return=kronos_return, chronos_return=chronos_return)
 
 
-def _build_model_filter_signals(
+def _build_forecast_cache(
     frame: pd.DataFrame,
-    test_start: int,
-    test_end: int,
-    kronos_predictor: Any,
-    chronos_pipeline: Any,
-) -> dict[str, np.ndarray]:
-    result = {
-        "B": np.zeros(len(frame), dtype=bool),
-        "C": np.zeros(len(frame), dtype=bool),
-        "D": np.zeros(len(frame), dtype=bool),
+    models: tuple[Any, Any],
+    pins: Mapping[str, Any],
+    lock: Mapping[str, Any],
+    dataset_sha256: str,
+) -> ForecastCache:
+    """Infer each pinned model once per anchor over the eligible prefix."""
+    model_groups = _model_pin_groups(pins)
+    model_identity = {
+        group: {
+            "repository": record["repository"],
+            "revision": record["revision"],
+            "weights_sha256": record["weights_sha256"],
+        }
+        for group, record in model_groups.items()
     }
-    for anchor in range(test_start, test_end, FORECAST_REFRESH_BARS):
-        forecast = _forecast_at(frame, anchor, kronos_predictor, chronos_pipeline)
-        mean_return = (forecast.kronos_return + forecast.chronos_return) / 2.0
-        stop = min(anchor + FORECAST_REFRESH_BARS, test_end)
-        result["B"][anchor:stop] = forecast.kronos_return > 0.0
-        result["C"][anchor:stop] = forecast.chronos_return > 0.0
-        result["D"][anchor:stop] = mean_return > 0.0
-    return result
+    identity = {
+        "schema_version": "alix.four-arm.forecast-cache-identity.v1",
+        "dataset_sha256": dataset_sha256,
+        "confirmatory_rows": len(frame),
+        "models": model_identity,
+        "forecast_horizon_bars": MAX_HOLDING_BARS,
+        "context_bars": MODEL_CONTEXT_BARS,
+        "refresh_bars": FORECAST_REFRESH_BARS,
+        "adapter_contract_fingerprints": lock["contracts"],
+        "deterministic_seed": SEED,
+        "runtime": {
+            "device": "cpu",
+            "torch_threads": 2,
+            "deterministic_algorithms": True,
+            "fine_tuning": False,
+        },
+    }
+    identity_bytes = json.dumps(
+        identity, sort_keys=True, separators=(",", ":"), allow_nan=False
+    ).encode("utf-8")
+    identity_sha256 = sha256(identity_bytes).hexdigest()
+
+    anchors: list[int] = []
+    forecasts: list[Forecast] = []
+    for anchor in range(
+        MODEL_CONTEXT_BARS - 1,
+        len(frame) - MAX_HOLDING_BARS,
+        FORECAST_REFRESH_BARS,
+    ):
+        forecast = _forecast_at(frame, anchor, models[0], models[1])
+        if not (
+            math.isfinite(forecast.kronos_return)
+            and math.isfinite(forecast.chronos_return)
+        ):
+            raise FourArmExecutionError("forecast_cache_non_finite_value")
+        anchors.append(anchor)
+        forecasts.append(forecast)
+
+    if not anchors or len(anchors) != len(set(anchors)):
+        raise FourArmExecutionError("forecast_cache_anchor_inventory_invalid")
+
+    entries = [
+        {
+            "anchor_index": anchor,
+            "kronos_return": forecast.kronos_return,
+            "chronos_return": forecast.chronos_return,
+        }
+        for anchor, forecast in zip(anchors, forecasts, strict=True)
+    ]
+    entries_json = json.dumps(
+        entries, sort_keys=True, separators=(",", ":"), allow_nan=False
+    )
+    cache_sha256 = sha256(entries_json.encode("utf-8")).hexdigest()
+    return ForecastCache(
+        anchors=tuple(anchors),
+        forecasts=tuple(forecasts),
+        identity_sha256=identity_sha256,
+        cache_sha256=cache_sha256,
+        entries_json=entries_json,
+    )
+
+
+def _signals_from_forecast_cache(
+    cache: ForecastCache,
+    row_count: int,
+    arm_id: str,
+    threshold_bps: int,
+) -> np.ndarray:
+    """Build an independent forecast-entry stream; never intersect Donchian."""
+    if threshold_bps not in THRESHOLDS_BPS or arm_id not in {"B", "C", "D"}:
+        raise FourArmExecutionError("forecast_signal_cell_invalid")
+    threshold = threshold_bps / 10_000.0
+    signals = np.zeros(row_count, dtype=bool)
+    for anchor, forecast in zip(cache.anchors, cache.forecasts, strict=True):
+        if arm_id == "B":
+            signal = forecast.kronos_return > threshold
+        elif arm_id == "C":
+            signal = forecast.chronos_return > threshold
+        else:
+            combined_return = (
+                forecast.kronos_return + forecast.chronos_return
+            ) / 2.0
+            signal = combined_return > threshold
+        stop = min(anchor + FORECAST_REFRESH_BARS, row_count)
+        signals[anchor:stop] = signal
+    return signals
 
 
 def _entry_signals(
@@ -853,27 +961,14 @@ def _gate_summary(
     return aggregate_drawdown, economics_pass
 
 
-def _manifest_header(
-    arm_id: str,
-    trial_id: str,
-    dataset_sha256: str,
-) -> dict[str, Any]:
-    return {
-        "schema_version": "alix.four-arm-arm-manifest.v1",
-        "arm_id": arm_id,
-        "trial_id": trial_id,
-        "dataset_sha256": dataset_sha256,
-        "dataset_rows": PREHACK_ROW_COUNT,
-        "cost_scenarios_bps": list(COST_SCENARIOS_BPS),
-    }
-
-
 def _arm_manifest(
     arm_id: str,
     trial_id: str,
+    threshold_bps: int,
     fold_trades: Mapping[int, Sequence[Trade]],
     dataset_sha256: str,
     folds: Sequence[Fold],
+    forecast_cache: ForecastCache,
 ) -> dict[str, Any]:
     all_trades = _aggregate_trades(
         [trade for trades in fold_trades.values() for trade in trades]
@@ -888,9 +983,30 @@ def _arm_manifest(
         aggregate_trades,
         fold_passes,
     )
-    header = _manifest_header(arm_id, trial_id, dataset_sha256)
+    sample_status = (
+        "INSUFFICIENT_SAMPLE" if aggregate_trades < 100 else "SAMPLE_GATE_MET"
+    )
+    decision = (
+        "INSUFFICIENT_SAMPLE"
+        if sample_status == "INSUFFICIENT_SAMPLE"
+        else (
+            "NO_GO_INSUFFICIENT_DSR_EVIDENCE"
+            if economics_pass
+            else "NO_GO_ECONOMIC_GATES"
+        )
+    )
     return {
-        **header,
+        "schema_version": "alix.four-arm-arm-manifest.v2",
+        "arm_id": arm_id,
+        "trial_id": trial_id,
+        "threshold_bps": threshold_bps,
+        "threshold_applies_to_arm": arm_id != "A",
+        "arm_a_control_is_threshold_invariant": arm_id == "A",
+        "dataset_sha256": dataset_sha256,
+        "dataset_rows": CONFIRMATORY_ROW_COUNT,
+        "source_dataset_rows": PREHACK_ROW_COUNT,
+        "excluded_tail_rows": EXCLUDED_TAIL_ROWS,
+        "cost_scenarios_bps": list(COST_SCENARIOS_BPS),
         "metrics": {
             "50": aggregate["50"],
             "90": aggregate["90"],
@@ -899,12 +1015,31 @@ def _arm_manifest(
         },
         "folds": fold_results,
         "folds_passed": sum(fold_passes),
+        "sample_status": sample_status,
         "dsr": None,
         "dsr_status": "INSUFFICIENT_EVIDENCE_GLOBAL_N_UNKNOWN",
+        "dsr_sensitivity": {
+            "global_n": "UNKNOWN",
+            "audited_historical_lower_bound": HISTORICAL_TRIAL_LOWER_BOUND,
+            "multipliers": [1, 2, 5, 10],
+            "numeric_dsr_computed": False,
+            "reason": "GLOBAL_N_UNKNOWN; no defensible candidate-level reconciliation",
+        },
+        "dsr_registered_cell_count": 12,
+        "dsr_repeated_control_disclosure": (
+            "Arm A is the identical Donchian control in all three threshold cells; "
+            "all three preregistered cell IDs remain in the registered candidate count."
+        ),
         "economic_gates_except_dsr_pass": economics_pass,
         "pass": False,
         "winner": False,
-        "decision": "NO_GO_INSUFFICIENT_DSR_EVIDENCE",
+        "decision": decision,
+        "forecast_cache_identity_sha256": forecast_cache.identity_sha256,
+        "forecast_cache_sha256": forecast_cache.cache_sha256,
+        "forecast_anchors": len(forecast_cache.anchors),
+        "model_inference_calls_per_model": len(forecast_cache.anchors),
+        "model_inference_calls_total": 2 * len(forecast_cache.anchors),
+        "forecast_cache_computed_for_this_trial": False,
         "trade_exit_reasons": {
             reason: sum(1 for trade in all_trades if trade.exit_reason == reason)
             for reason in sorted({trade.exit_reason for trade in all_trades})
@@ -915,8 +1050,11 @@ def _arm_manifest(
             "trading_authorization": "NO-GO",
             "private_api_calls": 0,
             "real_order_attempts": 0,
+            "posthack_holdout_access": False,
         },
     }
+
+
 
 
 def run_synthetic_mode(output_dir: Path) -> dict[str, Any]:
@@ -991,16 +1129,25 @@ def run_real_experiment(
     model_artifacts_dir: Path = Path("artifacts/four-arm-models"),
     validate_lock_only: bool = False,
 ) -> dict[str, Any] | None:
-    """Validate authorization and all immutable contracts before any research I/O."""
+    """Run the locked ADR-038 12-cell research design on the pre-hack prefix."""
     lock = load_owner_authorized_execution_lock(lock_path)
     _validate_lock_contract_fingerprints(lock, repository_root)
     pins = _load_model_pin_manifest(model_pin_path, lock)
     if validate_lock_only:
         return None
 
-    frame, dataset_sha = _load_verified_prehack_data(csv_path, data_manifest_path)
+    full_frame, dataset_sha = _load_verified_prehack_data(
+        csv_path, data_manifest_path
+    )
+    if len(full_frame) != PREHACK_ROW_COUNT:
+        raise FourArmExecutionError("prehack_source_row_count_invalid")
+    frame = full_frame.iloc[:CONFIRMATORY_ROW_COUNT].copy().reset_index(drop=True)
+    if len(frame) != CONFIRMATORY_ROW_COUNT:
+        raise FourArmExecutionError("confirmatory_prefix_row_count_invalid")
+
     atr = _calculate_atr(frame)
-    baseline = _baseline_signals(frame, atr)
+    # The repeated A control is computed once and referenced by all three cells.
+    baseline_control = _baseline_signals(frame, atr)
     folds = build_walk_forward_folds(len(frame))
     models = _load_cpu_models(
         pins,
@@ -1009,77 +1156,160 @@ def run_real_experiment(
         model_artifacts_dir,
     )
 
-    fold_trades: dict[str, dict[int, Sequence[Trade]]] = {
-        arm_id: {} for arm_id in TRIALS
-    }
-    for fold in folds:
-        filters = _build_model_filter_signals(
-            frame,
-            fold.test_start,
-            fold.test_end,
-            models[0],
-            models[1],
-        )
-        arm_signals = {
-            "A": baseline.copy(),
-            "B": baseline & filters["B"],
-            "C": baseline & filters["C"],
-            "D": baseline & filters["D"],
-        }
-        for arm_id, signals in arm_signals.items():
-            fold_trades[arm_id][fold.fold_id] = _simulate_fold_trades(
-                frame,
-                fold,
-                signals,
-                atr,
-            )
+    # One global immutable cache. No model inference occurs inside fold or trial loops.
+    forecast_cache = _build_forecast_cache(
+        frame, models, pins, lock, dataset_sha
+    )
+    output_dir.mkdir(parents=True, exist_ok=True)
+    _write_json(
+        output_dir / "forecast-cache.json",
+        {
+            "schema_version": "alix.four-arm.forecast-cache.v1",
+            "identity_sha256": forecast_cache.identity_sha256,
+            "cache_sha256": forecast_cache.cache_sha256,
+            "confirmatory_rows": CONFIRMATORY_ROW_COUNT,
+            "anchor_count": len(forecast_cache.anchors),
+            "model_inference_calls_per_model": len(forecast_cache.anchors),
+            "model_inference_calls_total": 2 * len(forecast_cache.anchors),
+            "entries": json.loads(forecast_cache.entries_json),
+        },
+    )
 
-    arm_manifests = []
-    for arm_id, trial_id in TRIALS.items():
-        manifest = _arm_manifest(
-            arm_id,
-            trial_id,
-            fold_trades[arm_id],
-            dataset_sha,
-            folds,
-        )
-        manifest["mode"] = "REAL_PREHACK_ZERO_SHOT"
-        manifest["model_pins_captured_at_utc"] = pins["captured_at_utc"]
-        manifest["forecast_refresh_bars"] = FORECAST_REFRESH_BARS
-        manifest["context_bars"] = MODEL_CONTEXT_BARS
-        _write_json(output_dir / f"arm-{arm_id}.json", manifest)
-        arm_manifests.append(manifest)
+    trial_manifests: list[dict[str, Any]] = []
+    for threshold_bps in THRESHOLDS_BPS:
+        for arm_id in ("A", "B", "C", "D"):
+            trial_id = TRIAL_ID_MATRIX[threshold_bps][arm_id]
+            signals = (
+                baseline_control
+                if arm_id == "A"
+                else _signals_from_forecast_cache(
+                    forecast_cache,
+                    len(frame),
+                    arm_id,
+                    threshold_bps,
+                )
+            )
+            fold_trades: dict[int, Sequence[Trade]] = {}
+            for fold in folds:
+                fold_trades[fold.fold_id] = _simulate_fold_trades(
+                    frame,
+                    fold,
+                    signals,
+                    atr,
+                )
+
+            manifest = _arm_manifest(
+                arm_id,
+                trial_id,
+                threshold_bps,
+                fold_trades,
+                dataset_sha,
+                folds,
+                forecast_cache,
+            )
+            manifest["mode"] = "REAL_PREHACK_ADR038_FORECAST_DRIVEN"
+            manifest["model_pins_captured_at_utc"] = pins["captured_at_utc"]
+            manifest["model_pins_path"] = str(model_pin_path)
+            manifest["forecast_refresh_bars"] = FORECAST_REFRESH_BARS
+            manifest["context_bars"] = MODEL_CONTEXT_BARS
+            manifest["common_risk_contract"] = {
+                "atr_period": ATR_PERIOD,
+                "trailing_stop_atr_multiple": ATR_MULTIPLIER,
+                "maximum_holding_bars": MAX_HOLDING_BARS,
+                "maximum_drawdown": 0.15,
+            }
+            manifest["signal_definition"] = (
+                "Donchian-20 close breakout control"
+                if arm_id == "A"
+                else (
+                    "Kronos-Small forecast return > fixed threshold"
+                    if arm_id == "B"
+                    else (
+                        "Chronos-2 forecast return > fixed threshold"
+                        if arm_id == "C"
+                        else "arithmetic mean of Kronos and Chronos returns > fixed threshold"
+                    )
+                )
+            )
+            filename = f"trial-{threshold_bps}-{arm_id}.json"
+            _write_json(output_dir / filename, manifest)
+            trial_manifests.append(manifest)
+
+    if len(trial_manifests) != 12:
+        raise FourArmExecutionError("registered_trial_inventory_mismatch")
+    observed_ids = {item["trial_id"] for item in trial_manifests}
+    expected_ids = {
+        trial_id
+        for threshold_map in TRIAL_ID_MATRIX.values()
+        for trial_id in threshold_map.values()
+    }
+    if observed_ids != expected_ids:
+        raise FourArmExecutionError("registered_trial_ids_mismatch")
 
     report = {
-        "schema_version": "alix.four-arm-run-report.v1",
-        "mode": "REAL_PREHACK_ZERO_SHOT",
+        "schema_version": "alix.four-arm-run-report.v2",
+        "mode": "REAL_PREHACK_ADR038_FORECAST_DRIVEN",
         "dataset_sha256": dataset_sha,
-        "dataset_rows": len(frame),
+        "source_dataset_rows": PREHACK_ROW_COUNT,
+        "confirmatory_dataset_rows": len(frame),
+        "excluded_tail_rows": EXCLUDED_TAIL_ROWS,
+        "confirmatory_boundary": "first_27825_rows_only",
         "folds": [asdict(fold) for fold in folds],
+        "thresholds_bps": list(THRESHOLDS_BPS),
+        "trial_count": len(trial_manifests),
+        "registered_trial_ids": sorted(observed_ids),
+        "dsr_cohort": {
+            "registered_candidate_cells": 12,
+            "unique_signal_rules": 10,
+            "threshold_invariant_arm_a_control_cells": 3,
+            "arm_a_control_computed_once_and_referenced_three_times": True,
+            "global_n": "UNKNOWN",
+            "audited_historical_lower_bound": HISTORICAL_TRIAL_LOWER_BOUND,
+            "sensitivity_multipliers": [1, 2, 5, 10],
+            "numeric_dsr_computed": False,
+        },
+        "forecast_cache": {
+            "identity_sha256": forecast_cache.identity_sha256,
+            "cache_sha256": forecast_cache.cache_sha256,
+            "anchors": len(forecast_cache.anchors),
+            "inference_calls_per_model": len(forecast_cache.anchors),
+            "inference_calls_total": 2 * len(forecast_cache.anchors),
+            "immutable_in_memory": True,
+        },
         "arms": [
             {
                 "arm_id": item["arm_id"],
                 "trial_id": item["trial_id"],
+                "threshold_bps": item["threshold_bps"],
                 "netPF_50bps": item["metrics"]["50"]["net_profit_factor"],
                 "netPF_90bps": item["metrics"]["90"]["net_profit_factor"],
                 "trades": item["metrics"]["trades"],
+                "sample_status": item["sample_status"],
                 "maxDD": item["metrics"]["max_drawdown"],
                 "DSR": None,
                 "DSR_status": item["dsr_status"],
+                "DSR_sensitivity": item["dsr_sensitivity"],
+                "folds_passed": item["folds_passed"],
+                "per_fold": item["folds"],
                 "winner": False,
                 "pass": False,
+                "decision": item["decision"],
             }
-            for item in arm_manifests
+            for item in trial_manifests
         ],
         "economic_verdict": "NO_GO_INSUFFICIENT_DSR_EVIDENCE",
+        "directional_family_verdict": "NO_GO_UNDER_GLOBAL_N_UNKNOWN",
         "Champion": None,
         "order_permission": False,
         "trading_authorization": "NO-GO",
         "private_api_calls": 0,
         "real_order_attempts": 0,
+        "posthack_holdout_access": False,
     }
     _write_json(output_dir / "four-arm-run-report.json", report)
     return report
+
+
 
 
 def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:

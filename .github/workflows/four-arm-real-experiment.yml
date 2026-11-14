@@ -1,7 +1,11 @@
 name: AliX Four-Arm Real Pre-Hack Experiment
 
 on:
-  workflow_dispatch:
+  push:
+    branches:
+      - research/nobitex-hf-strategy
+    paths:
+      - config/four_arm/EXECUTION_TRIGGER
 
 permissions:
   contents: read
@@ -13,6 +17,7 @@ concurrency:
 
 jobs:
   four-arm-real-prehack:
+    if: github.ref == 'refs/heads/research/nobitex-hf-strategy'
     runs-on: ubuntu-latest
     timeout-minutes: 480
     env:
@@ -24,27 +29,110 @@ jobs:
       CUDA_VISIBLE_DEVICES: ""
       OMP_NUM_THREADS: "2"
       MKL_NUM_THREADS: "2"
+      EVENT_BEFORE: ${{ github.event.before }}
     steps:
-      - name: Checkout research branch without persisted credentials
+      - name: Checkout exact research commit with trigger history
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
           persist-credentials: false
 
-      - name: Check the immutable execution lock before data or model I/O
+      - name: Validate one-time execution trigger
+        shell: bash
+        run: |
+          set -euo pipefail
+          trigger_value="$(tr -d '\\r\\n' < config/four_arm/EXECUTION_TRIGGER)"
+          if [[ "$trigger_value" != "EXECUTE" ]]; then
+            echo "::error::FOUR_ARM_EXECUTION_TRIGGER_NOT_ARMED"
+            exit 1
+          fi
+          if [[ -z "$EVENT_BEFORE" || "$EVENT_BEFORE" =~ ^0+$ ]]; then
+            echo "::error::FOUR_ARM_EXECUTION_TRIGGER_PARENT_MISSING"
+            exit 1
+          fi
+          if git log "$EVENT_BEFORE" -S"EXECUTE" --format='%H' -- config/four_arm/EXECUTION_TRIGGER | grep -q .; then
+            echo "::error::FOUR_ARM_EXECUTION_TRIGGER_REPLAYED"
+            exit 1
+          fi
+          echo "One-time four-arm execution trigger accepted."
+
+      - name: Wait for Standard CI and all seven quality checks on this exact commit
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const required = [
+              { path: ".github/workflows/ci.yml", label: "Standard CI" },
+              { path: ".github/workflows/quality-preflight.yml", label: "Seven-tool preflight" },
+            ];
+            const deadline = Date.now() + 30 * 60 * 1000;
+            while (Date.now() < deadline) {
+              const response = await github.rest.actions.listWorkflowRunsForRepo({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                head_sha: context.sha,
+                per_page: 100,
+              });
+              let pending = [];
+              for (const item of required) {
+                const run = response.data.workflow_runs.find(
+                  candidate => candidate.path === item.path &&
+                    candidate.head_sha === context.sha
+                );
+                if (!run) {
+                  pending.push(item.label + ":not-found");
+                } else if (run.status !== "completed") {
+                  pending.push(item.label + ":" + run.status);
+                } else if (run.conclusion !== "success") {
+                  core.setFailed(item.label + " did not pass on the execution SHA");
+                  return;
+                }
+              }
+              if (pending.length === 0) {
+                core.info("Standard CI and seven-tool preflight passed on the exact execution SHA.");
+                return;
+              }
+              core.info("Waiting for required checks: " + pending.join(", "));
+              await new Promise(resolve => setTimeout(resolve, 30000));
+            }
+            core.setFailed("Required CI/preflight did not complete successfully within 30 minutes.");
+
+      - name: Check the complete immutable execution lock before data or model I/O
         run: |
           set -euo pipefail
           python scripts/run_four_arm_experiment.py \
             --mode real \
             --validate-lock-only \
+            --lock config/experiment/four_arm_execution_lock.json \
+            --model-pins config/four_arm/model_pins.json \
             --output-dir "$RUNNER_TEMP/four-arm-lock-check" \
             --repository-root "$GITHUB_WORKSPACE"
 
-      - name: Download the previously retained pre-hack artifact only
+      - name: Resolve immutable model artifact run and name
+        id: weights
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          manifest = json.loads(Path("config/four_arm/weight_artifacts.json").read_text(encoding="utf-8"))
+          run_id = manifest.get("run_id")
+          name = manifest.get("name")
+          if not isinstance(run_id, int) or not isinstance(name, str):
+              raise SystemExit("WEIGHT_ARTIFACT_REFERENCE_INVALID")
+          if name != f"four-arm-model-weights-{run_id}":
+              raise SystemExit("WEIGHT_ARTIFACT_NAME_RUN_ID_MISMATCH")
+          with open(Path(os.environ["GITHUB_OUTPUT"]), "a", encoding="utf-8") as output:
+              output.write(f"run_id={run_id}\\n")
+              output.write(f"name={name}\\n")
+          PY
+
+      - name: Download pinned weights from acquisition run
         uses: actions/download-artifact@v4
         with:
-          name: alix-binance-hf-proxy-research
-          path: ${{ runner.temp }}/four-arm-prehack
-          run-id: 43274590426
+          name: ${{ steps.weights.outputs.name }}
+          path: ${{ runner.temp }}/four-arm-models
+          run-id: ${{ steps.weights.outputs.run_id }}
           github-token: ${{ github.token }}
 
       - name: Check out the pinned Kronos inference source
@@ -70,24 +158,25 @@ jobs:
             accelerate==1.11.0 \
             tqdm==4.67.1
 
-      - name: Run the four preregistered arms on verified pre-hack data
+      - name: Run all twelve preregistered trials on the verified pre-hack prefix
         run: |
           set -euo pipefail
           python scripts/run_four_arm_experiment.py \
             --mode real \
-            --csv "$RUNNER_TEMP/four-arm-prehack/alix-hf-data/nobitex-btcusdt-1h.csv" \
-            --data-manifest "$RUNNER_TEMP/four-arm-prehack/alix-hf-data/nobitex-btcusdt-1h.manifest.json" \
+            --csv data/nobitex/prehack/nobitex-btcusdt-1h.csv \
+            --data-manifest data/nobitex/prehack/nobitex-btcusdt-1h.manifest.json \
             --lock config/experiment/four_arm_execution_lock.json \
-            --model-pins config/experiment/four_arm_model_pins.json \
+            --model-pins config/four_arm/model_pins.json \
+            --model-artifacts-dir "$RUNNER_TEMP/four-arm-models" \
             --kronos-code-dir "$RUNNER_TEMP/kronos-source" \
             --output-dir "$RUNNER_TEMP/four-arm-results" \
             --repository-root "$GITHUB_WORKSPACE"
 
-      - name: Upload four-arm manifests and structural run report
+      - name: Upload twelve trial manifests and forecast-cache evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: four-arm-real-prehack-${{ github.sha }}
+          name: four-arm-real-prehack-${{ github.run_id }}
           path: ${{ runner.temp }}/four-arm-results/*.json
           if-no-files-found: warn
           retention-days: 90

@@ -6,6 +6,8 @@ on:
       - research/nobitex-hf-strategy
     paths:
       - scripts/capture_four_arm_contract_hashes.py
+      - scripts/run_four_arm_experiment.py
+      - research/ai_ensemble/four_arm_execution_lock.py
       - .github/workflows/four-arm-contract-fingerprints.yml
       - docs/research/preregistration/contracts/**
 

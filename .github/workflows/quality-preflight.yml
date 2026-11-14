@@ -7,6 +7,9 @@ on:
       - "scripts/**"
       - "tests/**"
       - "four_arm*/**"
+      - "config/four_arm/**"
+      - "config/experiment/four_arm_execution_lock.json"
+      - "docs/research/preregistration/contracts/**"
 
 permissions:
   contents: read

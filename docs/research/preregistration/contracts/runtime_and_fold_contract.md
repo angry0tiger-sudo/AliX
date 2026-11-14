@@ -1,69 +1,64 @@
-# Four-Arm Runtime, Fold, Signal and Execution Contract
+# Four-Arm Runtime, Fold, Signal and Execution Contract — ADR-038
 
-**Registration:** NOBITEX-FOUR-ARM-KC-20261113  
-**Date:** 2026-11-14  
-**Scope:** Pre-hack BTCUSDT 1h dataset only; no post-hack inputs.
+**Registration:** NOBITEX-FOUR-ARM-KC-20261113 / ADR-038 amendment  
+**Scope:** Nobitex BTCUSDT Spot 1h pre-hack research only; no post-hack inputs.
 
 ## 1. Model inputs and fixed adapters
 
-- Kronos-Small is `NeoQuasar/Kronos-small` with its separately pinned `NeoQuasar/Kronos-Tokenizer-base` tokenizer.
-- Chronos-2 is the actual small Chronos-2 checkpoint `autogluon/chronos-2-small`; Chronos-T5 is not substituted.
-- All models run zero-shot, on CPU, with no fine-tuning, parameter updates, or learned combiner.
-- Common context: exactly the latest 512 completed hourly candles through decision close (t).
-- Forecast horizon: next 24 1h candles.
-- Refresh cadence: every 24 bars, anchored at the start of each test fold. The latest forecast is held constant for the next 24 decision bars.
-- Kronos adapter: input OHLCV and UTC timestamps; use the predicted 24th-step close; `kronos_return = forecast_close_24 / close_t - 1`.
-- Chronos adapter: input univariate closes only; use the median (0.5 quantile) at step 24; `chronos_return = median_close_24 / close_t - 1`.
-- B/C/D retain the same baseline entry predicate. Arm B additionally requires `kronos_return > 0`; arm C requires `chronos_return > 0`; arm D requires the arithmetic mean of the two percentage returns to be strictly positive.
-- No extra tuned thresholds or per-arm normalization parameters are introduced. Percent return is the common forecast scale for the D arithmetic mean.
+- Kronos-Small: NeoQuasar/Kronos-small with separately pinned NeoQuasar/Kronos-Tokenizer-base nested at models.kronos_small.tokenizer.
+- Chronos-2: autogluon/chronos-2-small; Chronos-T5 is not substituted.
+- Zero-shot CPU inference only; no fine-tuning or parameter updates.
+- Common context: latest 512 completed hourly candles through decision close (t).
+- Forecast horizon: next 24 hourly bars; refresh cadence: every 24 bars.
+- Kronos output: predicted 24th-step close divided by decision close minus one.
+- Chronos output: median (0.5 quantile) at step 24 divided by decision close minus one.
+- Arm B: Kronos return strictly greater than the candidate threshold.
+- Arm C: Chronos-2 return strictly greater than the candidate threshold.
+- Arm D: arithmetic mean of the two percentage returns strictly greater than the candidate threshold.
+- Arm A: Donchian-20 close breakout control, independent of forecast threshold.
+- B/C/D are independent forecast-entry rules. No baseline-and-filter combination is permitted.
 
-## 2. Deterministic three-fold chronological split
+## 2. Registered candidate cells
 
-For dataset length (N=31,801), define prefix endpoints:
+The only thresholds are 120, 180 and 240 bps. The twelve IDs are:
+- NOBITEX-KC26-FD-120-A/B/C/D
+- NOBITEX-KC26-FD-180-A/B/C/D
+- NOBITEX-KC26-FD-240-A/B/C/D
 
-- Fold 1 prefix end: (lfloor 0.70N floor = 22,260)
-- Fold 2 prefix end: (lfloor 0.85N floor = 27,030)
-- Fold 3 prefix end: (N = 31,801)
+Each cell is counted in the registered trial cohort. Arm A's repeated signal is computed once and referenced in its three cells; this repetition is explicitly disclosed. Earlier NOBITEX-KC26-A/B/C/D IDs remain preserved as superseded before evaluation.
 
-For each prefix endpoint (P):
-- `train_end = floor(0.70 * P)`
-- `validation_end = floor(0.85 * P)`
-- Train rows: `[0, train_end - 24)`
-- Validation rows: `[train_end + 24, validation_end - 24)`
-- Test rows: `[validation_end + 24, P - 24)`
+## 3. Confirmatory data and forecast cache
 
-The 24-bar gap on each side of both boundaries is the declared 24h purge/embargo separation. Train/validation/test ranges are chronological; each later fold expands its prefix and may include earlier fold observations only after they are historical. No shuffle is used. The 512-bar model context is past-only and is not scored as an observation. The final 24 rows of each prefix are not test decisions, preserving a full 24h outcome horizon.
+- Source CSV: 31,801 rows, exact SHA-256 0aa13607d1da68c4720919f233635bb33d34048e5bd67d3ecc2ce9bb7c2b462e.
+- Confirmatory prefix: first 27,825 rows only.
+- Exclude the final 3,976 rows from every confirmatory purpose, including ATR, features, model context, inference, folds, thresholds, trades, and metrics.
+- Build one immutable forecast cache across the entire eligible prefix after 512 context bars are available.
+- Each model is invoked once per forecast anchor on the 24-bar refresh cadence. All folds and all threshold cells reuse the same cache.
+- Cache identity binds source SHA, confirmatory row count, model revisions, weight digests, forecast horizon, context, refresh cadence, adapter/contract fingerprints and deterministic runtime.
+- Missing/duplicate anchors, non-finite forecasts, cache digest mismatch or incomplete cache fail closed. Partial cache reuse is forbidden.
 
-This is a deterministic rolling-origin interpretation of the Owner's 70/15/15, three-fold chronological default. The exact integer boundaries are also emitted in every experiment manifest.
+## 4. Deterministic chronological folds
 
-## 3. Baseline signal and trade mechanics
+For N=27,825, prefix endpoints are 19,477; 23,651; 27,825. Each prefix uses expanding 70/15/15 chronological train/validation/test segments with 24-bar purge/embargo on both sides of each boundary. The exact integer ranges are emitted in every manifest. No shuffle is used.
 
-- Donchian entry decision at candle close (t): `close_t > max(high[t-20:t])`, using the prior 20 completed candles only.
-- Entry: next candle open.
-- ATR: Wilder ATR(14), computed only from current and prior candles.
-- Initial stop: entry price minus (2 	imes ATR_t).
-- Profit target: entry price plus (2 	imes ATR_t).
-- Trailing stop: after a completed candle with no exit, ratchet to the maximum of the prior stop and highest completed high since entry minus (2 	imes ATR) as-of that completed candle. The updated stop is active from the next candle.
-- Maximum holding: 24 hourly candles after entry; time exit at the final candle close.
-- Only one position per arm may be open at a time. No pyramiding, leverage, short positions, or overlapping trades.
-- Gap handling: if the next candle opens beyond a stop, fill at the open; if it opens beyond the target, fill at the open.
-- Intrabar ambiguity: if both stop and target are touched in one 1h candle, apply the conservative stop-first convention. If only one barrier is touched, fill at that barrier.
-- Model signals are decided at close (t) and can enter no earlier than the next candle open.
+## 5. Common risk and execution mechanics
 
-## 4. Costs and metrics
+- Shared risk for all arms and thresholds: Wilder ATR(14), 2×ATR initial stop and trailing distance, 24-bar maximum holding, MaxDD gate <=15%.
+- Entries occur at the next candle open after the signal close.
+- Trailing stop ratchets only after a completed bar and is active from the next bar.
+- Gap-through stops/targets fill at the open; same-candle dual touches use conservative stop-first handling.
+- One open long position per arm, no pyramiding, leverage or short selling.
+- Round-trip costs are exactly 50 and 90 bps, reported separately and applied once.
 
-- Round-trip cost scenarios: exactly 50 bps and 90 bps.
-- Net trade return = gross price return minus the specified all-in round-trip cost. The cost is not doubled again.
-- Net profit factor = sum of positive net trade returns divided by the absolute sum of negative net trade returns. If the loss denominator is zero or no trades exist, report the metric as unavailable rather than infinity.
-- MaxDD is measured on sequential compounded net trade returns, starting from equity 1.0.
-- Fold stability uses the conservative rule that each of the three test folds must individually meet NetPF >= 1.10 at both costs and MaxDD <= 15%. Aggregate acceptance also requires NetPF >= 1.10 at both costs, at least 100 completed trades, and aggregate MaxDD <= 15%.
-- DSR is not assigned a numeric value while `GLOBAL_N=UNKNOWN`. The manifest reports `dsr=null` and `dsr_status=INSUFFICIENT_EVIDENCE_GLOBAL_N_UNKNOWN`; such an arm cannot pass the DSR gate. No guessed trial count or synthetic DSR is permitted.
-- An arm is PASS only when every aggregate gate, all three fold-stability gates, and a defensible DSR > 0 are established. Otherwise it is NO-GO / INSUFFICIENT_EVIDENCE, with the exact failed/unknown gates recorded.
+## 6. Statistical and economic decision
 
-## 5. Data provenance and safety
+- Aggregate and every one of three OOS folds must meet NetPF >=1.10 at both costs and MaxDD <=15%; aggregate trades >=100.
+- GLOBAL_N=UNKNOWN; DSR remains null and no PASS/winner is possible without defensible DSR >0.
+- Report the audited historical lower bound, unresolved remainder, and 1×/2×/5×/10× sensitivity without inventing a numeric DSR.
+- Fewer than 100 trades is INSUFFICIENT_SAMPLE.
 
-- Input file must be `nobitex-btcusdt-1h.csv` from the previously retained GitHub Actions pre-hack artifact, with CSV SHA-256 `0aa13607d1da68c4720919f233635bb33d34048e5bd67d3ecc2ce9bb7c2b462e`, 31,801 rows, regular 1h grid at :30 UTC.
-- The real runner does not call the public fetcher or any Nobitex endpoint. It verifies the source artifact manifest and file digest before parsing.
-- The post-hack dataset, V2 artifact, spec v3 and trigger file are not runner inputs.
-- The real runner validates the independent execution lock and the safety environment before opening the data manifest, dataset CSV, model snapshots, or any model runtime.
-- `Champion=null`, `order_permission=false`, `trading_authorization=NO-GO`, `private_api_calls=0`, `real_order_attempts=0`, `ALIX_DRY_RUN=true`, `ALIX_ALLOW_LIVE_TRADING=false`.
+## 7. Safety
+
+- The runner validates the owner execution lock and safety environment before reading the source CSV, models or weight artifacts.
+- Dataset source is pre-hack Git path only. Holdout files, V2 and Spec v3 are not inputs.
+- Champion=null, order_permission=false, trading_authorization=NO-GO, private_api_calls=0, real_order_attempts=0, ALIX_DRY_RUN=true, ALIX_ALLOW_LIVE_TRADING=false.

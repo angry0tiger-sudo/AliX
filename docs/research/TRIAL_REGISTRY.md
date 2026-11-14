@@ -442,3 +442,20 @@ Status of all 12 cells: **REGISTERED_NOT_EVALUATED**. Earlier NOBITEX-KC26-A/B/C
 If all four arms fail at every threshold, close the directional method family with NO-GO. One volatility-focused pivot is permitted based on the recorded TTM-R2 QLIKE 0.27786 versus 0.39348 (29.38% improvement). If that single pivot also fails, close the project with a documented NO-GO. No further directional tuning or additional pivot is authorized without a new owner directive and preregistration.
 
 No experiment has been run for this amendment. The execution lock remains NOT_AUTHORIZED; Champion remains null; order_permission remains false; trading_authorization remains NO-GO; the post-hack holdout remains sealed.
+
+
+---
+
+## [APPEND] ADR-038 forecast-driven four-arm implementation registration (2026-11-14)
+
+- Owner directive: OWNER-2026-11-14-FOURARM; scope is pre-hack Nobitex-only research.
+- The following twelve cells are the complete preregistered candidate family; initial status is REGISTERED_NOT_EVALUATED:
+  - 120 bps: NOBITEX-KC26-FD-120-A, NOBITEX-KC26-FD-120-B, NOBITEX-KC26-FD-120-C, NOBITEX-KC26-FD-120-D.
+  - 180 bps: NOBITEX-KC26-FD-180-A, NOBITEX-KC26-FD-180-B, NOBITEX-KC26-FD-180-C, NOBITEX-KC26-FD-180-D.
+  - 240 bps: NOBITEX-KC26-FD-240-A, NOBITEX-KC26-FD-240-B, NOBITEX-KC26-FD-240-C, NOBITEX-KC26-FD-240-D.
+- Earlier NOBITEX-KC26-A/B/C/D records remain preserved and are superseded before evaluation; no registry entry is deleted.
+- B/C/D are direct forecast-entry strategies at the fixed candidate threshold, not baseline filters. Arm A is the identical Donchian-20 control across three threshold cells.
+- Arm A is computed once and referenced in all three cells; all three registered candidate IDs remain visible in DSR trial accounting.
+- The immutable full-prefix forecast cache is computed once for 27,825 eligible rows; all folds and threshold cells reuse it.
+- All economic records must include NetPF at 50/90 bps, completed trades, MaxDD, all per-fold metrics, DSR status, and 1×/2×/5×/10× sensitivity disclosure.
+- GLOBAL_N remains UNKNOWN; numeric DSR is prohibited until the global candidate cohort is reconciled.

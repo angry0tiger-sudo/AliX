@@ -1,7 +1,11 @@
 name: AliX Four-Arm Pinned Model Artifact Acquisition
 
 on:
-  workflow_dispatch:
+  push:
+    branches:
+      - research/nobitex-hf-strategy
+    paths:
+      - config/four_arm/ACQUISITION_TRIGGER
 
 permissions:
   contents: read
@@ -12,37 +16,60 @@ concurrency:
 
 jobs:
   acquire-pinned-models:
+    if: github.ref == 'refs/heads/research/nobitex-hf-strategy'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
       HF_HUB_DISABLE_TELEMETRY: "1"
       ALIX_DRY_RUN: "true"
       ALIX_ALLOW_LIVE_TRADING: "false"
+      EVENT_BEFORE: ${{ github.event.before }}
     steps:
-      - name: Checkout without persisted credentials
+      - name: Checkout branch with history for one-time trigger guard
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
           persist-credentials: false
+
+      - name: Validate one-time acquisition trigger
+        shell: bash
+        run: |
+          set -euo pipefail
+          trigger_value="$(tr -d '\\r\\n' < config/four_arm/ACQUISITION_TRIGGER)"
+          if [[ "$trigger_value" != "ACQUIRE" ]]; then
+            echo "::error::ACQUISITION_TRIGGER_NOT_ARMED"
+            exit 1
+          fi
+          if [[ -z "$EVENT_BEFORE" || "$EVENT_BEFORE" =~ ^0+$ ]]; then
+            echo "::error::ACQUISITION_TRIGGER_PARENT_MISSING"
+            exit 1
+          fi
+          if git log "$EVENT_BEFORE" -S"ACQUIRE" --format='%H' -- config/four_arm/ACQUISITION_TRIGGER | grep -q .; then
+            echo "::error::ACQUISITION_TRIGGER_REPLAYED"
+            exit 1
+          fi
+          echo "One-time acquisition trigger accepted."
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Install the already-locked HTTP client
+      - name: Install the pinned HTTP client
         run: python -m pip install httpx==0.28.1
 
-      - name: Download immutable revisions and verify every artifact file
+      - name: Download immutable revisions and verify every pinned weight digest
         run: |
           set -euo pipefail
           python scripts/acquire_four_arm_models.py \
             --model-pins config/four_arm/model_pins.json \
             --output-dir "$RUNNER_TEMP/four-arm-models"
 
-      - name: Upload verified model artifact
+      - name: Upload verified model artifact under immutable run identity
         uses: actions/upload-artifact@v4
         with:
-          name: four-arm-model-artifacts-${{ github.sha }}
-          path: $RUNNER_TEMP/four-arm-models/
+          name: four-arm-model-weights-${{ github.run_id }}
+          path: ${{ runner.temp }}/four-arm-models/
           if-no-files-found: error
           retention-days: 30

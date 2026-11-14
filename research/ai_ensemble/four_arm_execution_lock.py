@@ -62,24 +62,32 @@ def _lock_is_complete(payload: dict[str, object]) -> bool:
         return False
     if payload.get("execution_scope") != "PREHACK_RESEARCH_ONLY":
         return False
+    if payload.get("owner_authorization_id") != "OWNER-2026-11-14-FOURARM":
+        return False
     if not _is_hex_digest(payload.get("owner_authorization_commit_sha"), 40):
         return False
     if payload.get("dataset_sha256") != PREHACK_DATASET_SHA256:
         return False
 
     seed = payload.get("deterministic_seed")
-    if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
+    if isinstance(seed, bool) or not isinstance(seed, int) or seed != 42:
         return False
 
     models = payload.get("models")
     if not isinstance(models, dict):
         return False
-    if not _model_lock_is_complete(models.get("kronos_small")):
+    kronos = models.get("kronos_small")
+    if not _model_lock_is_complete(kronos):
+        return False
+    if not isinstance(kronos, dict):
+        return False
+    if not _model_lock_is_complete(kronos.get("tokenizer")):
         return False
     if not _model_lock_is_complete(models.get("chronos_2")):
         return False
 
     return _contracts_are_complete(payload.get("contracts"))
+
 
 
 def load_owner_authorized_execution_lock(
