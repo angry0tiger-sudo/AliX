@@ -1,0 +1,45 @@
+name: AliX Four-Arm Contract Fingerprint Capture
+
+on:
+  push:
+    branches:
+      - research/nobitex-hf-strategy
+    paths:
+      - scripts/capture_four_arm_contract_hashes.py
+      - .github/workflows/four-arm-contract-fingerprints.yml
+      - docs/research/preregistration/contracts/**
+
+permissions:
+  contents: read
+
+concurrency:
+  group: alix-four-arm-contract-fingerprints
+  cancel-in-progress: false
+
+jobs:
+  capture-contract-fingerprints:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Compute exact contract SHA-256 values
+        run: |
+          set -euo pipefail
+          python scripts/capture_four_arm_contract_hashes.py
+
+      - name: Upload immutable contract fingerprint manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: four-arm-contract-fingerprints-${{ github.sha }}
+          path: ${{ runner.temp }}/four-arm-contract-fingerprints.json
+          if-no-files-found: error
+          retention-days: 90
