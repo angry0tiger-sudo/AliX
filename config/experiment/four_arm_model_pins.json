@@ -1,0 +1,44 @@
+{
+  "schema_version": "alix.four-arm.model-pins.v1",
+  "captured_at_utc": "2026-11-14T03:32:39.099615+00:00",
+  "source": "Hugging Face Hub model revision API (?blobs=true)",
+  "capture_run_id": 43552152363,
+  "models": {
+    "kronos_small": {
+      "repository": "NeoQuasar/Kronos-small",
+      "requested_ref": "main",
+      "revision": "901c26c1332695a2a8f243eb2f37243a37bea320",
+      "weight_file": "model.safetensors",
+      "weights_sha256": "b082dfcbd8e8c142a725c8bbb99781802f38fec81210e13479effb32b3c3e020",
+      "weight_size_bytes": 98980656,
+      "license": "mit"
+    },
+    "kronos_tokenizer": {
+      "repository": "NeoQuasar/Kronos-Tokenizer-base",
+      "requested_ref": "main",
+      "revision": "0e0117387f39004a9016484a186a908917e22426",
+      "weight_file": "model.safetensors",
+      "weights_sha256": "59d85f6af76a2c3b8240ea06cb21db4213b4eeca053f246b23e29cf832fc6bee",
+      "weight_size_bytes": 15842368,
+      "license": "mit"
+    },
+    "chronos_2": {
+      "repository": "autogluon/chronos-2-small",
+      "requested_ref": "main",
+      "revision": "ddec01313e50b6bc58ebaa92ede81bc24a3d9f9a",
+      "weight_file": "model.safetensors",
+      "weights_sha256": "492290ae82bb89f9769e3479ce90b3179de1f33e600c34daa0352531538b23cd",
+      "weight_size_bytes": 111749048,
+      "license": "apache-2.0"
+    }
+  },
+  "implementation": {
+    "kronos_repository": "https://github.com/shiyu-coder/Kronos",
+    "kronos_revision": "67b630e67f6a18c9e9be918d9b4337c960db1e9a",
+    "chronos_package": "chronos-forecasting",
+    "chronos_version": "2.3.1",
+    "chronos_source_revision": "7dc4435706a4454feb79df44ca9f33631f3027bf",
+    "pytorch_version": "2.15.0",
+    "compute": "CPU-only"
+  }
+}

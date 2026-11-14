@@ -1,0 +1,93 @@
+name: AliX Four-Arm Real Pre-Hack Experiment
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: alix-four-arm-real-prehack
+  cancel-in-progress: false
+
+jobs:
+  four-arm-real-prehack:
+    runs-on: ubuntu-latest
+    timeout-minutes: 480
+    env:
+      ALIX_FOUR_ARM_EXECUTION_AUTHORIZED: "true"
+      ALIX_DRY_RUN: "true"
+      ALIX_ALLOW_LIVE_TRADING: "false"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      TOKENIZERS_PARALLELISM: "false"
+      CUDA_VISIBLE_DEVICES: ""
+      OMP_NUM_THREADS: "2"
+      MKL_NUM_THREADS: "2"
+    steps:
+      - name: Checkout research branch without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Check the immutable execution lock before data or model I/O
+        run: |
+          set -euo pipefail
+          python scripts/run_four_arm_experiment.py \
+            --mode real \
+            --validate-lock-only \
+            --output-dir "$RUNNER_TEMP/four-arm-lock-check" \
+            --repository-root "$GITHUB_WORKSPACE"
+
+      - name: Download the previously retained pre-hack artifact only
+        uses: actions/download-artifact@v4
+        with:
+          name: alix-binance-hf-proxy-research
+          path: ${{ runner.temp }}/four-arm-prehack
+          run-id: 43274590426
+          github-token: ${{ github.token }}
+
+      - name: Check out the pinned Kronos inference source
+        uses: actions/checkout@v4
+        with:
+          repository: shiyu-coder/Kronos
+          ref: 67b630e67f6a18c9e9be918d9b4337c960db1e9a
+          path: ${{ runner.temp }}/kronos-source
+          persist-credentials: false
+
+      - name: Install pinned CPU-only inference runtime
+        run: |
+          set -euo pipefail
+          python -m pip install --index-url https://download.pytorch.org/whl/cpu torch==2.15.0
+          python -m pip install \
+            chronos-forecasting==2.3.1 \
+            transformers==5.20.2 \
+            pandas==2.3.3 \
+            numpy==2.5.4 \
+            safetensors==0.8.0 \
+            huggingface-hub==2.2.0 \
+            einops==0.8.1 \
+            accelerate==1.11.0 \
+            tqdm==4.67.4
+
+      - name: Run the four preregistered arms on verified pre-hack data
+        run: |
+          set -euo pipefail
+          python scripts/run_four_arm_experiment.py \
+            --mode real \
+            --csv "$RUNNER_TEMP/four-arm-prehack/alix-hf-data/nobitex-btcusdt-1h.csv" \
+            --data-manifest "$RUNNER_TEMP/four-arm-prehack/alix-hf-data/nobitex-btcusdt-1h.manifest.json" \
+            --lock config/experiment/four_arm_execution_lock.json \
+            --model-pins config/experiment/four_arm_model_pins.json \
+            --kronos-code-dir "$RUNNER_TEMP/kronos-source" \
+            --output-dir "$RUNNER_TEMP/four-arm-results" \
+            --repository-root "$GITHUB_WORKSPACE"
+
+      - name: Upload four-arm manifests and structural run report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: four-arm-real-prehack-${{ github.sha }}
+          path: ${{ runner.temp }}/four-arm-results/*.json
+          if-no-files-found: warn
+          retention-days: 90
