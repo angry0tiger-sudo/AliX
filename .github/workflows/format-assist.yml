@@ -1,0 +1,72 @@
+name: Ruff Format Assist
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "**/*.py"
+
+permissions:
+  contents: read
+
+jobs:
+  format-assist:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact triggering commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install project-pinned Ruff
+        run: python -m pip install --disable-pip-version-check ruff==0.14.0
+
+      - name: Format Python files across the workspace
+        run: ruff format .
+
+      - name: Collect only files changed by Ruff
+        id: collect
+        shell: bash
+        run: |
+          set -euo pipefail
+          output_dir="$RUNNER_TEMP/ruff-formatted"
+          mkdir -p "$output_dir"
+          mapfile -t changed < <(git diff --name-only --diff-filter=ACMR -- '*.py')
+          if (( ${#changed[@]} == 0 )); then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "RUFF_FORMAT_CHANGED_FILES=0"
+            exit 0
+          fi
+          for path in "${changed[@]}"; do
+            case "$path" in
+              /*|../*|*/../*)
+                echo "::error::Unsafe changed path: $path"
+                exit 1
+                ;;
+            esac
+            if [[ ! -f "$path" ]]; then
+              echo "::error::Changed Python file is missing: $path"
+              exit 1
+            fi
+            mkdir -p "$output_dir/$(dirname "$path")"
+            cp -- "$path" "$output_dir/$path"
+          done
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          echo "RUFF_FORMAT_CHANGED_FILES=${#changed[@]}"
+          printf '%s\n' "${changed[@]}"
+
+      - name: Upload formatter output without committing
+        if: steps.collect.outputs.changed == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ruff-formatted-${{ github.run_id }}
+          path: ${{ runner.temp }}/ruff-formatted/
+          if-no-files-found: error
+          retention-days: 14

@@ -66,7 +66,7 @@ def _authorization_metadata_is_valid(payload: dict[str, object]) -> bool:
         ("owner_authorization_id", "OWNER-2026-11-14-FOURARM"),
     )
     return all(
-        payload.get(field) == expected
+        payload.get(field) == expected   
         for field, expected in expected_fields
     ) and _is_hex_digest(payload.get("owner_authorization_commit_sha"), 40)
 
