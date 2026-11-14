@@ -1,0 +1,190 @@
+name: Four-Arm Quality Preflight
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "scripts/**"
+      - "tests/**"
+      - "four_arm*/**"
+
+permissions:
+  contents: read
+
+jobs:
+  quality-preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      ALIX_DRY_RUN: "true"
+      ALIX_ALLOW_LIVE_TRADING: "false"
+    steps:
+      - name: Checkout exact commit
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Prepare artifact directory
+        run: mkdir -p .preflight
+
+      - name: Install pinned quality and test tools
+        continue-on-error: true
+        run: |
+          python -m pip install pip==25.2
+          python -m pip install ruff==0.14.0 mypy==1.18.2 gymnasium==1.4.0 farama-notifications==0.0.6 pandas==2.3.3 pandas-stubs==2.3.2.250926 bandit==1.8.6 pip-audit==2.9.0 deap==1.4.4 pytest==9.0.3 pytest-cov==7.0.0 import-linter==2.3 xenon==0.9.3 pre-commit==4.3.0 jsonschema==4.25.1 pip-tools==7.5.0 scikit-learn==1.9.0 httpx==0.28.1 fastapi==0.158.1 httpx2==2.16.0 sqlalchemy==2.1.6 'psycopg[binary]==3.3.2' uvicorn==0.54.0 pyyaml==6.0.3
+
+      - name: Ruff lint
+        id: ruff_check
+        continue-on-error: true
+        run: |
+          set +e
+          ruff check control_plane risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels research/deap research/ai_ensemble tests scripts > .preflight/ruff-check.log 2>&1
+          code=$?
+          printf '%s\n' "$code" > .preflight/ruff-check.exit
+          cat .preflight/ruff-check.log
+          exit "$code"
+
+      - name: Ruff format check
+        id: ruff_format
+        continue-on-error: true
+        run: |
+          set +e
+          ruff format --check --diff control_plane risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels research/deap research/ai_ensemble tests scripts > .preflight/ruff-format.log 2>&1
+          code=$?
+          printf '%s\n' "$code" > .preflight/ruff-format.exit
+          cat .preflight/ruff-format.log
+          exit "$code"
+
+      - name: Strict mypy
+        id: mypy_strict
+        continue-on-error: true
+        run: |
+          set +e
+          mypy --config-file mypy.ini > .preflight/mypy.log 2>&1
+          code=$?
+          printf '%s\n' "$code" > .preflight/mypy.exit
+          cat .preflight/mypy.log
+          exit "$code"
+
+      - name: Bandit security scan
+        id: bandit
+        continue-on-error: true
+        run: |
+          set +e
+          bandit -r control_plane risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels research/deap research/ai_ensemble scripts -ll > .preflight/bandit.log 2>&1
+          code=$?
+          printf '%s\n' "$code" > .preflight/bandit.exit
+          cat .preflight/bandit.log
+          exit "$code"
+
+      - name: Xenon complexity gate
+        id: xenon
+        continue-on-error: true
+        run: |
+          set +e
+          xenon --max-absolute B --max-modules B --max-average A control_plane risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels research/deap research/ai_ensemble/validation.py research/ai_ensemble/ttm_risk.py research/ai_ensemble/ttm_portfolio.py scripts > .preflight/xenon.log 2>&1
+          code=$?
+          printf '%s\n' "$code" > .preflight/xenon.exit
+          cat .preflight/xenon.log
+          exit "$code"
+
+      - name: pip-audit dependency scan
+        id: pip_audit
+        continue-on-error: true
+        run: |
+          set +e
+          pip-audit -r requirements.lock > .preflight/pip-audit.log 2>&1
+          code=$?
+          printf '%s\n' "$code" > .preflight/pip-audit.exit
+          cat .preflight/pip-audit.log
+          exit "$code"
+
+      - name: Pytest without coverage, collecting all failures
+        id: pytest
+        continue-on-error: true
+        run: |
+          set +e
+          pytest --no-cov --maxfail=0 -q > .preflight/pytest.log 2>&1
+          code=$?
+          printf '%s\n' "$code" > .preflight/pytest.exit
+          cat .preflight/pytest.log
+          exit "$code"
+
+      - name: Build complete JSON violation inventory
+        if: always()
+        continue-on-error: true
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path(".preflight")
+          names = (
+              "ruff-check",
+              "ruff-format",
+              "mypy",
+              "bandit",
+              "xenon",
+              "pip-audit",
+              "pytest",
+          )
+          checks = []
+          violations = []
+          for name in names:
+              log_path = root / f"{name}.log"
+              exit_path = root / f"{name}.exit"
+              output = log_path.read_text(encoding="utf-8", errors="replace") if log_path.exists() else ""
+              exit_code = int(exit_path.read_text(encoding="utf-8").strip()) if exit_path.exists() else None
+              record = {
+                  "name": name,
+                  "exit_code": exit_code,
+                  "status": "PASS" if exit_code == 0 else ("FAIL" if exit_code is not None else "NOT_RUN"),
+                  "log_file": str(log_path),
+                  "raw_output": output,
+              }
+              checks.append(record)
+              if exit_code not in (0, None):
+                  violations.append({
+                      "check": name,
+                      "exit_code": exit_code,
+                      "complete_diagnostic_output": output,
+                  })
+
+          report = {
+              "schema_version": "alix.four-arm-quality-preflight.v1",
+              "commit_sha": "${{ github.sha }}",
+              "workflow_run_id": "${{ github.run_id }}",
+              "workflow_run_attempt": "${{ github.run_attempt }}",
+              "pytest_no_early_abort_flag": "--maxfail=0",
+              "note": "pytest -x=false is not a valid pytest flag; --maxfail=0 expresses the intended collect-all-failures behavior.",
+              "checks": checks,
+              "violations": violations,
+              "all_checks_passed": bool(checks) and all(item["status"] == "PASS" for item in checks),
+          }
+          (root / "quality-preflight-report.json").write_text(
+              json.dumps(report, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps({
+              "report": str(root / "quality-preflight-report.json"),
+              "checks": {item["name"]: item["status"] for item in checks},
+              "violation_count": len(violations),
+          }, indent=2))
+          PY
+
+      - name: Upload complete preflight findings
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: quality-preflight-${{ github.sha }}
+          path: .preflight/
+          if-no-files-found: error
+          retention-days: 30
