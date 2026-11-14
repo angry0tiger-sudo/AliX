@@ -72,3 +72,27 @@ The current documentation operation did not fetch, parse, or expose any post-hac
 - `real_order_attempts=0`.
 
 This ADR records durability risks and the future integrity protocol only. It is not a release, execution, or data-access authorization.
+
+## 4. Pre-hack dataset persistence completion (Owner directive, 2026-11-14)
+
+The exact pre-hack CSV from the previously identified GitHub Actions artifact was downloaded and verified before persistence:
+
+- Source workflow Run ID: 43274590426.
+- Source branch commit: bc493e24b9e3f849b6d9fbd0b776d15b39b8061f.
+- Source artifact ID: 13971011148 (alix-binance-hf-proxy-research).
+- Actual artifact expiry: 2026-12-12T18:05:52Z.
+- Artifact ZIP SHA-256: ae7a4d00fe2ec753b28868e4849fea4d45c88f1fd25b366b64298d7fec809b21.
+- CSV SHA-256 verified before persistence: 0aa13607d1da68c4720919f233635bb33d34048e5bd67d3ecc2ce9bb7c2b462e.
+- CSV size: 1,897,551 bytes.
+- Rows: 31,801; inclusive candle-open range: 2021-10-31T20:30:00Z through 2025-06-17T20:30:00Z.
+- Repository path: data/nobitex/prehack/nobitex-btcusdt-1h.csv, with an adjacent provenance manifest.
+
+The CSV was copied from the retained artifact. No new Nobitex request, refetch, reconstruction, interpolation, or serialization change was used. The persistence workflow independently re-verifies the file SHA, row count, exact one-hour timestamp grid, boundary timestamps, OHLC invariants, source manifest and public-only safety metadata before committing.
+
+The Phase-10 no-market-data-in-Git convention is superseded only for this exact fixed public pre-hack Nobitex dataset by ADR-037. No general permission to commit other market datasets is implied.
+
+### Holdout status reaffirmed
+
+The post-hack holdout remains NOT PERSISTED. V2 remains FETCHED_LOCKED with dataset_persisted=false, SHA-256 435b313086b78ba8d3caa2e97834c6fabebbbd12eeddcb2865d65982279f33ee, 11,700 rows, and acquisition Run ID 43443886254. No holdout OHLCV bytes were included in this commit or opened.
+
+The existing exact Spec v3 re-fetch plus canonical SHA-256 match protocol remains in force. Any row-count, grid, gap, serialization or digest mismatch remains fail-closed and STOP. A future opening still requires a separate Owner Release Authorization; this pre-hack retention decision does not authorize holdout access.
