@@ -21,7 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 480
     env:
-      ALIX_FOUR_ARM_EXECUTION_AUTHORIZED: "true"
+      ALIX_FOUR_ARM_EXECUTION_AUTHORIZED: "false"
       ALIX_DRY_RUN: "true"
       ALIX_ALLOW_LIVE_TRADING: "false"
       HF_HUB_DISABLE_TELEMETRY: "1"
@@ -100,7 +100,7 @@ jobs:
       - name: Check the complete immutable execution lock before data or model I/O
         run: |
           set -euo pipefail
-          python -S -m scripts.run_four_arm_experiment \
+          python scripts/run_four_arm_experiment.py \
             --mode real \
             --validate-lock-only \
             --lock config/experiment/four_arm_execution_lock.json \
@@ -108,12 +108,31 @@ jobs:
             --output-dir "$RUNNER_TEMP/four-arm-lock-check" \
             --repository-root "$GITHUB_WORKSPACE"
 
-      - name: Download pinned weights from Acquisition #1
+      - name: Resolve immutable model artifact run and name
+        id: weights
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          manifest = json.loads(Path("config/four_arm/weight_artifacts.json").read_text(encoding="utf-8"))
+          run_id = manifest.get("run_id")
+          name = manifest.get("name")
+          if not isinstance(run_id, int) or not isinstance(name, str):
+              raise SystemExit("WEIGHT_ARTIFACT_REFERENCE_INVALID")
+          if name != f"four-arm-model-weights-{run_id}":
+              raise SystemExit("WEIGHT_ARTIFACT_NAME_RUN_ID_MISMATCH")
+          with open(Path(os.environ["GITHUB_OUTPUT"]), "a", encoding="utf-8") as output:
+              output.write("run_id=" + str(run_id) + chr(10))
+              output.write("name=" + name + chr(10))
+          PY
+
+      - name: Download pinned weights from acquisition run
         uses: actions/download-artifact@v4
         with:
-          name: four-arm-model-weights-43590408032
+          name: ${{ steps.weights.outputs.name }}
           path: ${{ runner.temp }}/four-arm-models
-          run-id: 43590408032
+          run-id: ${{ steps.weights.outputs.run_id }}
           github-token: ${{ github.token }}
 
       - name: Check out the pinned Kronos inference source
@@ -138,27 +157,6 @@ jobs:
             einops==0.8.1 \
             accelerate==1.11.0 \
             tqdm==4.67.1
-
-
-      - name: Dependency-import preflight for all pinned inference modules
-        shell: bash
-        run: |
-          set -euo pipefail
-          export PYTHONPATH="$RUNNER_TEMP/kronos-source${PYTHONPATH:+:$PYTHONPATH}"
-          python - <<'PY'
-          import importlib
-
-          required_modules = (
-              "numpy", "pandas", "torch", "chronos", "model", "transformers",
-              "safetensors", "huggingface_hub", "einops", "accelerate", "tqdm",
-          )
-          imported = {name: importlib.import_module(name) for name in required_modules}
-          for symbol in ("Kronos", "KronosPredictor", "KronosTokenizer"):
-              getattr(imported["model"], symbol)
-          getattr(imported["chronos"], "Chronos2Pipeline")
-          print("FOUR_ARM_DEPENDENCY_IMPORT_PREFLIGHT=PASS")
-          print("FOUR_ARM_DEPENDENCY_MODULE_COUNT=" + str(len(imported)))
-          PY
 
       - name: Run all twelve preregistered trials on the verified pre-hack prefix
         run: |

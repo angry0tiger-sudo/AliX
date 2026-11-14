@@ -9,7 +9,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from research.four_arm_core.lock_validator import ExecutionAuthorizationError
+from research.ai_ensemble.four_arm_execution_lock import ExecutionAuthorizationError
 from scripts import run_four_arm_experiment as four_arm
 
 

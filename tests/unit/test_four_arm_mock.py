@@ -9,7 +9,7 @@ from typing import Callable
 
 import pytest
 
-from research.four_arm_core.lock_validator import (
+from research.ai_ensemble.four_arm_execution_lock import (
     EXECUTION_AUTHORIZATION_ENV,
     LOCK_SCHEMA_VERSION,
     PREHACK_DATASET_SHA256,
