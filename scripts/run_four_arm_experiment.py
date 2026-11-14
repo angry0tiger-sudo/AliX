@@ -324,7 +324,7 @@ def _snapshot_model(
     expected_sha: str,
     cache_dir: Path,
 ) -> Path:
-    from huggingface_hub import snapshot_download
+    from huggingface_hub import snapshot_download  # type: ignore[import-not-found]
 
     snapshot_path = Path(
         snapshot_download(
@@ -353,7 +353,7 @@ def _load_cpu_models(
     kronos_code_dir: Path,
     cache_dir: Path,
 ) -> tuple[Any, Any]:
-    import torch
+    import torch  # type: ignore[import-not-found]
 
     torch.set_num_threads(2)
     torch.manual_seed(SEED)
@@ -364,8 +364,8 @@ def _load_cpu_models(
         raise FourArmExecutionError("pinned_kronos_source_tree_missing")
     if kronos_code not in sys.path:
         sys.path.insert(0, kronos_code)
-    from model import Kronos, KronosPredictor, KronosTokenizer
-    from chronos import Chronos2Pipeline
+    from model import Kronos, KronosPredictor, KronosTokenizer  # type: ignore[import-not-found]
+    from chronos import Chronos2Pipeline  # type: ignore[import-not-found]
 
     models = pins["models"]
     kronos_pin = models["kronos_small"]
@@ -448,7 +448,7 @@ def _forecast_at(
     kronos_close = float(kronos_frame["close"].iloc[-1])
     kronos_return = kronos_close / current_close - 1.0
 
-    import torch
+    import torch  # type: ignore[import-not-found]
 
     close_context = (
         frame["close"].iloc[start : decision_index + 1].to_numpy(dtype=np.float32)
@@ -873,8 +873,8 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = _parse_args(argv)
     if arguments.mode == "synthetic":
-        report = run_synthetic_mode(arguments.output_dir)
-        print(f"FOUR_ARM_SYNTHETIC_VALIDATION=PASS:{report['arm_count']}")
+        synthetic_report = run_synthetic_mode(arguments.output_dir)
+        print(f"FOUR_ARM_SYNTHETIC_VALIDATION=PASS:{synthetic_report['arm_count']}")
         return 0
     if not arguments.validate_lock_only and (
         arguments.csv is None
@@ -883,7 +883,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     ):
         raise SystemExit("real_mode_requires_csv_manifest_and_pinned_kronos_source")
     try:
-        report = run_real_experiment(
+        real_report = run_real_experiment(
             csv_path=arguments.csv,
             data_manifest_path=arguments.data_manifest,
             lock_path=arguments.lock,
@@ -902,13 +902,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     if arguments.validate_lock_only:
         print("FOUR_ARM_EXECUTION_LOCK=PASS")
         return 0
-    if report is None:
+    if real_report is None:
         print("FOUR_ARM_REPORT_MISSING")
         return 4
     print(
         "FOUR_ARM_REAL_EXECUTION_COMPLETE:"
-        f"dataset_sha256={report['dataset_sha256']}:"
-        f"rows={report['dataset_rows']}:"
+        f"dataset_sha256={real_report['dataset_sha256']}:"
+        f"rows={real_report['dataset_rows']}:"
         "economic_verdict=NO_GO_INSUFFICIENT_DSR_EVIDENCE"
     )
     return 0
