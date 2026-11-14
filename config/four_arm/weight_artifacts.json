@@ -1,0 +1,58 @@
+{
+  "schema_version": "alix.four-arm.weight-artifacts.v1",
+  "run_id": 43590408032,
+  "artifact_id": 14111134121,
+  "name": "four-arm-model-weights-43590408032",
+  "artifact_size_bytes": 210818689,
+  "pins_manifest_sha256": "d95758a0d1961b4b5cfe19f3336dddc73bab14c887e1a167e6fa0b8e8b097caa",
+  "acquisition_conclusion": "success",
+  "files": [
+    {
+      "group": "kronos_small",
+      "path": "kronos_small/config.json",
+      "sha256": "5e0f6a605d5f81b5c9b559fe5cf716a1acb041c744e6f41bd05b097b7a685396",
+      "size_bytes": 228,
+      "pinned_weight": false
+    },
+    {
+      "group": "kronos_small",
+      "path": "kronos_small/model.safetensors",
+      "sha256": "b082dfcbd8e8c142a725c8bbb99781802f38fec81210e13479effb32b3c3e020",
+      "size_bytes": 98980656,
+      "pinned_weight": true
+    },
+    {
+      "group": "kronos_tokenizer",
+      "path": "kronos_tokenizer/config.json",
+      "sha256": "2366e7ccfec76cbc19cf3c4c1b9c5d901be336ca1e83f2d2292c9bff381b77a2",
+      "size_bytes": 301,
+      "pinned_weight": false
+    },
+    {
+      "group": "kronos_tokenizer",
+      "path": "kronos_tokenizer/model.safetensors",
+      "sha256": "59d85f6af76a2c3b8240ea06cb21db4213b4eeca053f246b23e29cf832fc6bee",
+      "size_bytes": 15842368,
+      "pinned_weight": true
+    },
+    {
+      "group": "chronos_2",
+      "path": "chronos_2/config.json",
+      "sha256": "f2780468adc8b16322aa0b6e28b26476c9401ecf64ab53292b6d2b0d3f423722",
+      "size_bytes": 969,
+      "pinned_weight": false
+    },
+    {
+      "group": "chronos_2",
+      "path": "chronos_2/model.safetensors",
+      "sha256": "492290ae82bb89f9769e3479ce90b3179de1f33e600c34daa0352531538b23cd",
+      "size_bytes": 111749048,
+      "pinned_weight": true
+    }
+  ],
+  "safety": {
+    "private_api_calls": 0,
+    "real_order_attempts": 0,
+    "posthack_holdout_access": false
+  }
+}

@@ -89,7 +89,6 @@ def _lock_is_complete(payload: dict[str, object]) -> bool:
     return _contracts_are_complete(payload.get("contracts"))
 
 
-
 def load_owner_authorized_execution_lock(
     lock_path: Path,
     environ: Mapping[str, str] | None = None,

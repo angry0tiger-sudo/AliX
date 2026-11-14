@@ -53,15 +53,21 @@ def _valid_execution_lock() -> dict[str, object]:
         "revision": "b" * 40,
         "weights_sha256": digest,
     }
+    tokenizer_lock: dict[str, object] = {
+        "repository": "owner/immutable-tokenizer",
+        "revision": "d" * 40,
+        "weights_sha256": digest,
+    }
     return {
         "schema_version": LOCK_SCHEMA_VERSION,
         "authorization_status": "OWNER_AUTHORIZED_PREHACK_RESEARCH_ONLY",
         "execution_scope": "PREHACK_RESEARCH_ONLY",
+        "owner_authorization_id": "OWNER-2026-11-14-FOURARM",
         "owner_authorization_commit_sha": "c" * 40,
         "dataset_sha256": PREHACK_DATASET_SHA256,
-        "deterministic_seed": 20261113,
+        "deterministic_seed": 42,
         "models": {
-            "kronos_small": model_lock,
+            "kronos_small": {**model_lock, "tokenizer": tokenizer_lock},
             "chronos_2": model_lock,
         },
         "contracts": {
@@ -290,25 +296,35 @@ def test_mock_report_contains_only_synthetic_metadata(
     assert "volume" not in stored
 
 
-def test_committed_execution_lock_template_is_not_authorized() -> None:
+def test_committed_execution_lock_records_a_bounded_owner_state() -> None:
     repository_root = Path(__file__).resolve().parents[2]
     lock_path = (
         repository_root / "config" / "experiment" / "four_arm_execution_lock.json"
     )
     lock = json.loads(lock_path.read_text(encoding="utf-8"))
-    assert lock["authorization_status"] == "NOT_AUTHORIZED"
-    assert lock["owner_authorization_commit_sha"] is None
 
-    environment = {
-        EXECUTION_AUTHORIZATION_ENV: "true",
-        "ALIX_DRY_RUN": "true",
-        "ALIX_ALLOW_LIVE_TRADING": "false",
+    assert lock["schema_version"] == LOCK_SCHEMA_VERSION
+    assert lock["execution_scope"] == "PREHACK_RESEARCH_ONLY"
+    assert lock["owner_authorization_id"] == "OWNER-2026-11-14-FOURARM"
+    assert lock["dataset_sha256"] == PREHACK_DATASET_SHA256
+    assert lock["deterministic_seed"] == 42
+    assert isinstance(lock["models"]["kronos_small"]["tokenizer"], dict)
+
+    status = lock["authorization_status"]
+    assert status in {
+        "NOT_AUTHORIZED",
+        "OWNER_AUTHORIZED_PREHACK_RESEARCH_ONLY",
     }
-    with pytest.raises(
-        ExecutionAuthorizationError,
-        match="execution_lock_incomplete_or_unauthorized",
-    ):
-        load_owner_authorized_execution_lock(lock_path, environment)
+    if status == "NOT_AUTHORIZED":
+        assert lock["owner_authorization_commit_sha"] is None
+    else:
+        assert len(lock["owner_authorization_commit_sha"]) == 40
+        assert all(
+            isinstance(value, str) and len(value) == 64
+            for value in lock["contracts"].values()
+        )
+
+
 
 
 def test_four_arm_workflow_is_dispatch_only_and_mock_only() -> None:

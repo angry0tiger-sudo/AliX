@@ -223,7 +223,9 @@ def test_real_entrypoint_accepts_complete_lock_and_rejects_tampering(
     tampered = json.loads(json.dumps(payload))
     tampered["contracts"]["chronos_adapter_sha256"] = "0" * 64
     lock_path.write_text(json.dumps(tampered), encoding="utf-8")
-    with pytest.raises(four_arm.FourArmExecutionError, match="execution_lock_contract_hash_mismatch"):
+    with pytest.raises(
+        four_arm.FourArmExecutionError, match="execution_contract_hash_mismatch"
+    ):
         four_arm.run_real_experiment(
             csv_path=tmp_path / "must-not-be-read.csv",
             data_manifest_path=tmp_path / "must-not-be-read.json",
