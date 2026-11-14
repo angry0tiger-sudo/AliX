@@ -200,3 +200,50 @@ This commit registers documentation only. No dataset was read, no model was load
 - execution status = NOT_STARTED
 
 **Owner approval:** this owner directive authorizes preregistration documentation only. Experiment execution requires a later explicit Owner directive.
+
+
+---
+
+# Pre-execution Amendment (2026-11-14): Forecast-Driven Arms
+
+**Authority:** ADR-038  
+**Status:** Prospective amendment only; no amended-arm result has been accessed and execution is NOT_AUTHORIZED.  
+**Supersedes before evaluation:** the original signal treatment and threshold interpretation in ADR-032. Historical registration and IDs are retained.
+
+This amendment responds to baseline PF observations of 0.3743 / 0.4370, AI-6's zero trades, TTM PF 0.3731→0.3748, and meta-labeling performing worse than the teacher. Under MRD v0.9 §13.8, a filter over a negative-expectancy teacher cannot create positive expectancy. No amended-arm or amended-threshold outcome was viewed before registration; this is a prospective redesign, not p-hacking.
+
+## A. Revised arms
+
+- **A:** Donchian-20 close breakout control.
+- **B:** Kronos-Small 24-hour forecast drives entry.
+- **C:** Chronos-2 24-hour forecast drives entry.
+- **D:** arithmetic mean of the Kronos and Chronos forecast returns drives entry.
+
+Common constraints: ATR(14), 2×ATR trailing stop, maximum holding 24 hourly bars, maximum drawdown ≤15%, and the existing 50/90 bps round-trip cost scenarios. Pinned repositories, commit revisions and weight digests remain mandatory.
+
+## B. Fixed threshold sensitivity
+
+The prior \`max(2 × 90 bps, ATR(14)/close)\` rule is superseded: with the owner-stated BTC 1h ATR/close range of roughly 30–80 bps, it is effectively 180 bps most of the time and may leave fewer than 100 trades. Sensitivity is fixed prospectively at **120, 180 and 240 bps**. Every threshold × arm cell is an independent registered trial, including a clearly disclosed repeated Donchian control.
+
+Trial IDs:
+- 120 bps: \`NOBITEX-KC26-FD-120-A/B/C/D\`
+- 180 bps: \`NOBITEX-KC26-FD-180-A/B/C/D\`
+- 240 bps: \`NOBITEX-KC26-FD-240-A/B/C/D\`
+
+The old \`NOBITEX-KC26-A/B/C/D\` entries are superseded before evaluation, not deleted.
+
+## C. Forecast cache is mandatory
+
+For the eligible confirmatory prefix, compute each model's forecast once per 24-bar anchor after the 512-bar context is available. Cache identity must bind dataset SHA, prefix length, model revisions and weight hashes, context/horizon/refresh parameters, code/adapter fingerprints and runtime configuration. All folds and all threshold variants read the same cache. No per-fold or per-threshold model re-inference is allowed. Expected load is approximately 1,140 forecast anchors, one inference per model per anchor, not approximately 10,000 repeated calls. Any cache mismatch or incomplete anchor set is fail-closed. The current repair refactor does not assert that this cache or revised signal logic has already been implemented; both remain hard execution-lock prerequisites.
+
+## D. Confirmatory row boundary and DSR
+
+The source remains the immutable 31,801-row dataset with SHA-256 \`0aa13607d1da68c4720919f233635bb33d34048e5bd67d3ecc2ce9bb7c2b462e\`. The confirmatory sample is the first **27,825 rows**. The final **3,976 rows** are excluded from features, context, scaling, forecasts, fold assignment, threshold selection, trades and metrics. The separate post-hack holdout remains sealed.
+
+\`GLOBAL_N = UNKNOWN\` remains. DSR is mandatory and must report the conservative audited lower bound, unresolved remainder and sensitivity at 1×, 2×, 5× and 10× the lower bound. If a defensible \`DSR > 0\` cannot be established, the conclusion is INSUFFICIENT_EVIDENCE / NO-GO.
+
+## E. One alternative pivot and terminal stop
+
+If all four directional arms fail at all three thresholds, declare NO-GO for the directional family and do not tune it further. One volatility-oriented pivot is permitted because the recorded TTM-R2 QLIKE was 0.27786 versus 0.39348 (29.38% lower). If that one volatility pivot fails its own prospective gates, close the project with a documented NO-GO. No second pivot is authorized.
+
+Execution remains blocked pending the corresponding code/cache implementation, immutable fingerprints, an authorized execution lock, and a separate Owner run directive. No model was loaded and no experiment was run in this repair turn.

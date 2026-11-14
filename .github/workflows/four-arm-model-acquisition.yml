@@ -1,0 +1,48 @@
+name: AliX Four-Arm Pinned Model Artifact Acquisition
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: alix-four-arm-model-acquisition
+  cancel-in-progress: false
+
+jobs:
+  acquire-pinned-models:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      ALIX_DRY_RUN: "true"
+      ALIX_ALLOW_LIVE_TRADING: "false"
+    steps:
+      - name: Checkout without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the already-locked HTTP client
+        run: python -m pip install httpx==0.28.1
+
+      - name: Download immutable revisions and verify every artifact file
+        run: |
+          set -euo pipefail
+          python scripts/acquire_four_arm_models.py \
+            --model-pins config/four_arm/model_pins.json \
+            --output-dir "$RUNNER_TEMP/four-arm-models"
+
+      - name: Upload verified model artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: four-arm-model-artifacts-${{ github.sha }}
+          path: $RUNNER_TEMP/four-arm-models/
+          if-no-files-found: error
+          retention-days: 30

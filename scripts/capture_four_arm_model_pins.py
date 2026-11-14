@@ -8,8 +8,7 @@ import json
 from pathlib import Path
 import re
 from typing import Any
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+import httpx
 
 MODEL_SPECS: tuple[dict[str, str], ...] = (
     {
@@ -36,25 +35,34 @@ class ModelPinError(RuntimeError):
     """Raised when the Hub does not return a verifiable immutable model pin."""
 
 
-def _request_model_info(repository: str) -> dict[str, Any]:
+def _verify_secure_response(response: httpx.Response, repository: str) -> None:
+    for hop in (*response.history, response):
+        if hop.url.scheme != "https":
+            raise ModelPinError(f"hub_api_non_https_redirect:{repository}")
+        host = hop.url.host or ""
+        if host != "huggingface.co" and not host.endswith(".huggingface.co"):
+            raise ModelPinError(f"hub_api_redirect_host_rejected:{repository}")
+
+
+def _fetch_repo_metadata(repository: str) -> dict[str, Any]:
     url = f"https://huggingface.co/api/models/{repository}/revision/main?blobs=true"
-    request = Request(
-        url,
-        headers={
-            "Accept": "application/json",
-            "User-Agent": "AliX-FourArm-ModelPinCapture/1.0",
-        },
-    )
     try:
-        with urlopen(request, timeout=30) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-    except (
-        HTTPError,
-        URLError,
-        TimeoutError,
-        UnicodeDecodeError,
-        json.JSONDecodeError,
-    ) as exc:
+        with httpx.Client(
+            timeout=httpx.Timeout(30.0, connect=10.0),
+            follow_redirects=True,
+            max_redirects=3,
+        ) as client:
+            response = client.get(
+                url,
+                headers={
+                    "Accept": "application/json",
+                    "User-Agent": "AliX-FourArm-ModelPinCapture/1.0",
+                },
+            )
+            _verify_secure_response(response, repository)
+            response.raise_for_status()
+            payload = response.json()
+    except (httpx.HTTPError, ValueError) as exc:
         raise ModelPinError(
             f"hub_api_request_failed:{repository}:{type(exc).__name__}"
         ) from exc
@@ -63,19 +71,13 @@ def _request_model_info(repository: str) -> dict[str, Any]:
     return payload
 
 
-def capture_pin(spec: dict[str, str]) -> dict[str, Any]:
-    repository = spec["repository"]
-    weight_file = spec["weight_file"]
-    info = _request_model_info(repository)
-
-    revision = info.get("sha")
-    if not isinstance(revision, str) or not _SHA40.fullmatch(revision):
-        raise ModelPinError(f"immutable_revision_missing:{repository}")
-
-    siblings = info.get("siblings")
+def _verify_weight_digest(
+    repository: str,
+    weight_file: str,
+    siblings: Any,
+) -> tuple[str, int]:
     if not isinstance(siblings, list):
         raise ModelPinError(f"model_files_missing:{repository}")
-
     weight_entry = next(
         (
             entry
@@ -86,11 +88,9 @@ def capture_pin(spec: dict[str, str]) -> dict[str, Any]:
     )
     if not isinstance(weight_entry, dict):
         raise ModelPinError(f"weight_file_missing:{repository}:{weight_file}")
-
     lfs_info = weight_entry.get("lfs")
     if not isinstance(lfs_info, dict):
         raise ModelPinError(f"weight_lfs_digest_missing:{repository}:{weight_file}")
-
     raw_digest = lfs_info.get("oid", lfs_info.get("sha256"))
     if not isinstance(raw_digest, str):
         raise ModelPinError(
@@ -103,11 +103,26 @@ def capture_pin(spec: dict[str, str]) -> dict[str, Any]:
             f"weight_sha256_invalid:{repository}:{weight_file}:"
             f"lfs_oid_format={raw_digest[:24]}"
         )
-
     size = lfs_info.get("size", weight_entry.get("size"))
     if isinstance(size, bool) or not isinstance(size, int) or size <= 0:
         raise ModelPinError(f"weight_size_invalid:{repository}:{weight_file}")
+    return weight_sha256, size
 
+
+def _build_pin_record(
+    spec: dict[str, str],
+    info: dict[str, Any],
+) -> dict[str, Any]:
+    repository = spec["repository"]
+    weight_file = spec["weight_file"]
+    revision = info.get("sha")
+    if not isinstance(revision, str) or not _SHA40.fullmatch(revision):
+        raise ModelPinError(f"immutable_revision_missing:{repository}")
+    weight_sha256, size = _verify_weight_digest(
+        repository,
+        weight_file,
+        info.get("siblings"),
+    )
     card_data = info.get("cardData")
     license_name = card_data.get("license") if isinstance(card_data, dict) else None
     return {
@@ -123,6 +138,10 @@ def capture_pin(spec: dict[str, str]) -> dict[str, Any]:
             f"https://huggingface.co/api/models/{repository}/revision/main?blobs=true"
         ),
     }
+
+
+def capture_pin(spec: dict[str, str]) -> dict[str, Any]:
+    return _build_pin_record(spec, _fetch_repo_metadata(spec["repository"]))
 
 
 def capture_all() -> dict[str, Any]:

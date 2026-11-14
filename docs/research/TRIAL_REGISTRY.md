@@ -408,3 +408,37 @@ for later pre-registration. All economic decisions remain subject to the absolut
 - Outstanding ADR-032 blockers before any real run: immutable Kronos-Small/Chronos-2 revisions and weight SHA-256 plus license/provenance/corpus-overlap disclosure; B/C forecast-to-decision adapters and D combination rule; exact fold boundaries and seed; executable triple-barrier anchor/fill/collision/expiry semantics; frozen fill/cost simulator for 50/90 bps; exact DSR method and historical trial cohort reconciliation (GLOBAL_N remains UNKNOWN); complete owner-approved execution lock and a separate explicit Owner directive.
 - Safety invariant at registration: Champion=null; order_permission=false; trading_authorization=NO-GO; private_api_calls=0; real_order_attempts=0; ALIX_DRY_RUN=true; ALIX_ALLOW_LIVE_TRADING=false; main=FROZEN.
 
+
+
+## 8. Four-arm forecast-driven amendment (2026-11-14; preregistered, not evaluated)
+
+Authority: ADR-038. This amendment is prospective; no amended-arm or threshold result was viewed before registration.
+
+Owner-supplied historical rationale: baseline PF 0.3743 / 0.4370; AI-6 produced zero trades; TTM PF 0.3731→0.3748; meta-labeling was worse than its teacher. MRD v0.9 §13.8 motivates replacing the teacher-filter path rather than trying to filter a negative-expectancy teacher into positive expectancy.
+
+### Registered trial cells
+
+Each arm × threshold cell is a distinct registered trial. Arm A is the same Donchian-20 control repeated as the matched control; the repetition is disclosed.
+
+| Threshold | Registered trial IDs |
+|---:|---|
+| 120 bps | NOBITEX-KC26-FD-120-A, NOBITEX-KC26-FD-120-B, NOBITEX-KC26-FD-120-C, NOBITEX-KC26-FD-120-D |
+| 180 bps | NOBITEX-KC26-FD-180-A, NOBITEX-KC26-FD-180-B, NOBITEX-KC26-FD-180-C, NOBITEX-KC26-FD-180-D |
+| 240 bps | NOBITEX-KC26-FD-240-A, NOBITEX-KC26-FD-240-B, NOBITEX-KC26-FD-240-C, NOBITEX-KC26-FD-240-D |
+
+Status of all 12 cells: **REGISTERED_NOT_EVALUATED**. Earlier NOBITEX-KC26-A/B/C/D entries are retained as **SUPERSEDED_BEFORE_EVALUATION**.
+
+### Shared controls and cache
+
+- Arms: A Donchian-20; B Kronos-Small forecast entry; C Chronos-2 forecast entry; D arithmetic-mean ensemble forecast entry.
+- Shared risk: ATR(14), 2×ATR trailing stop, maximum holding 24 hours, maximum drawdown ≤15%.
+- Forecast cache: one forecast per model per 24-bar anchor over the eligible confirmatory prefix; all folds and thresholds reuse it. Target about 1,140 forecast anchors rather than about 10,000 repeated model calls. Cache identity binds dataset/model/code/runtime fingerprints and mismatch fails closed.
+- Thresholds: fixed 120 / 180 / 240 bps. The prior dynamic max(2×90 bps, ATR/close) rule is superseded because it is expected to collapse near 180 bps for owner-stated typical BTC 1h ATR/close values of 30–80 bps.
+- Confirmatory data: first 27,825 rows only; final 3,976 source rows are excluded from all confirmatory analysis stages.
+- DSR: GLOBAL_N remains UNKNOWN. Report lower bound, unresolved remainder and 1×/2×/5×/10× sensitivity.
+
+### Terminal decision rule
+
+If all four arms fail at every threshold, close the directional method family with NO-GO. One volatility-focused pivot is permitted based on the recorded TTM-R2 QLIKE 0.27786 versus 0.39348 (29.38% improvement). If that single pivot also fails, close the project with a documented NO-GO. No further directional tuning or additional pivot is authorized without a new owner directive and preregistration.
+
+No experiment has been run for this amendment. The execution lock remains NOT_AUTHORIZED; Champion remains null; order_permission remains false; trading_authorization remains NO-GO; the post-hack holdout remains sealed.
