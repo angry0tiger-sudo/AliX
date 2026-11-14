@@ -173,7 +173,7 @@ jobs:
               "contracts": {key: hashlib.sha256((root / path).read_bytes()).hexdigest() for key, path in contract_paths.items()},
           }
           lock_path = Path(os.environ["RUNNER_TEMP"]) / "four-arm-bare-env-lock.json"
-          lock_path.write_text(json.dumps(lock, sort_keys=True) + "\\n", encoding="utf-8")
+          lock_path.write_text(json.dumps(lock, sort_keys=True), encoding="utf-8")
           PY
           python -S -m scripts.run_four_arm_experiment --mode real --validate-lock-only --lock "$RUNNER_TEMP/four-arm-bare-env-lock.json" --model-pins config/four_arm/model_pins.json --output-dir "$RUNNER_TEMP/four-arm-bare-env-output" --repository-root "$GITHUB_WORKSPACE"
 
