@@ -84,9 +84,8 @@ def _verify_https_redirect_chain(response: httpx.Response) -> None:
             raise ModelAcquisitionError("model_download_redirect_host_rejected")
 
 
-def _read_pins(
-    path: Path,
-) -> tuple[dict[str, Any], list[tuple[str, Mapping[str, Any]]]]:
+
+def _load_pin_manifest(path: Path) -> dict[str, Any]:
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
@@ -96,6 +95,12 @@ def _read_pins(
         or raw.get("schema_version") != "alix.four-arm.model-pins.v1"
     ):
         raise ModelAcquisitionError("model_pin_manifest_schema_invalid")
+    return raw
+
+
+def _require_model_groups(
+    raw: Mapping[str, Any],
+) -> list[tuple[str, Mapping[str, Any]]]:
     models = raw.get("models")
     if not isinstance(models, Mapping):
         raise ModelAcquisitionError("model_pin_manifest_models_invalid")
@@ -106,35 +111,43 @@ def _read_pins(
     tokenizer = kronos.get("tokenizer")
     if not isinstance(tokenizer, Mapping):
         raise ModelAcquisitionError("model_pin_tokenizer_missing")
-    groups = [
+    return [
         ("kronos_small", kronos),
         ("kronos_tokenizer", tokenizer),
         ("chronos_2", chronos),
     ]
+
+
+def _validate_pin_record(group: str, record: Mapping[str, Any]) -> None:
+    repository = record.get("repository")
+    revision = record.get("revision")
+    weight_file = record.get("weight_file")
+    expected_sha = record.get("weights_sha256")
+    if not all(
+        isinstance(value, str)
+        for value in (repository, revision, weight_file, expected_sha)
+    ):
+        raise ModelAcquisitionError(f"model_pin_fields_invalid:{group}")
+    _build_download_url(str(repository), str(revision), str(weight_file))
+    if not _SHA64.fullmatch(str(expected_sha)):
+        raise ModelAcquisitionError(f"model_pin_sha256_invalid:{group}")
+
+
+def _read_pins(
+    path: Path,
+) -> tuple[dict[str, Any], list[tuple[str, Mapping[str, Any]]]]:
+    raw = _load_pin_manifest(path)
+    groups = _require_model_groups(raw)
     for group, record in groups:
-        repository = record.get("repository")
-        revision = record.get("revision")
-        weight_file = record.get("weight_file")
-        expected_sha = record.get("weights_sha256")
-        if (
-            not isinstance(repository, str)
-            or not isinstance(revision, str)
-            or not isinstance(weight_file, str)
-            or not isinstance(expected_sha, str)
-        ):
-            raise ModelAcquisitionError(f"model_pin_fields_invalid:{group}")
-        _build_download_url(repository, revision, weight_file)
-        if not _SHA64.fullmatch(expected_sha):
-            raise ModelAcquisitionError(f"model_pin_sha256_invalid:{group}")
+        _validate_pin_record(group, record)
     return raw, groups
 
 
-def _fetch_repo_files(
+def _fetch_revision_payload(
     client: httpx.Client,
     repository: str,
     revision: str,
-    weight_file: str,
-) -> list[str]:
+) -> dict[str, Any]:
     url = (
         f"https://huggingface.co/api/models/{repository}/revision/{revision}?blobs=true"
     )
@@ -149,23 +162,39 @@ def _fetch_repo_files(
         ) from exc
     if not isinstance(payload, dict) or payload.get("sha") != revision:
         raise ModelAcquisitionError(f"model_revision_mismatch:{repository}")
+    return payload
+
+
+def _select_pinned_repo_files(
+    payload: Mapping[str, Any],
+    repository: str,
+    weight_file: str,
+) -> list[str]:
     siblings = payload.get("siblings")
     if not isinstance(siblings, list):
         raise ModelAcquisitionError(f"model_revision_files_invalid:{repository}")
-    filenames = [
-        entry["rfilename"]
-        for entry in siblings
-        if isinstance(entry, dict)
-        and isinstance(entry.get("rfilename"), str)
-        and (
-            entry.get("rfilename") in _METADATA_FILES
-            or entry.get("rfilename") == weight_file
-        )
-    ]
+    filenames: list[str] = []
+    for entry in siblings:
+        if not isinstance(entry, dict):
+            continue
+        filename = entry.get("rfilename")
+        if not isinstance(filename, str):
+            continue
+        if filename in _METADATA_FILES or filename == weight_file:
+            filenames.append(filename)
     if weight_file not in filenames:
         raise ModelAcquisitionError(f"pinned_weight_file_missing:{repository}")
     return sorted(set(_safe_filename(name) for name in filenames))
 
+
+def _fetch_repo_files(
+    client: httpx.Client,
+    repository: str,
+    revision: str,
+    weight_file: str,
+) -> list[str]:
+    payload = _fetch_revision_payload(client, repository, revision)
+    return _select_pinned_repo_files(payload, repository, weight_file)
 
 def _download_asset(
     client: httpx.Client,

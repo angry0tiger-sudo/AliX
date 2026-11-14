@@ -71,43 +71,77 @@ def _fetch_repo_metadata(repository: str) -> dict[str, Any]:
     return payload
 
 
-def _verify_weight_digest(
+
+def _find_weight_entry(
     repository: str,
     weight_file: str,
     siblings: Any,
-) -> tuple[str, int]:
+) -> dict[str, Any]:
     if not isinstance(siblings, list):
         raise ModelPinError(f"model_files_missing:{repository}")
-    weight_entry = next(
-        (
-            entry
-            for entry in siblings
-            if isinstance(entry, dict) and entry.get("rfilename") == weight_file
-        ),
-        None,
-    )
-    if not isinstance(weight_entry, dict):
+    matches = [
+        entry
+        for entry in siblings
+        if isinstance(entry, dict) and entry.get("rfilename") == weight_file
+    ]
+    if not matches:
         raise ModelPinError(f"weight_file_missing:{repository}:{weight_file}")
+    return matches[0]
+
+
+def _require_lfs_info(
+    repository: str,
+    weight_file: str,
+    weight_entry: dict[str, Any],
+) -> dict[str, Any]:
     lfs_info = weight_entry.get("lfs")
     if not isinstance(lfs_info, dict):
         raise ModelPinError(f"weight_lfs_digest_missing:{repository}:{weight_file}")
+    return lfs_info
+
+
+def _normalize_weight_digest(
+    repository: str,
+    weight_file: str,
+    lfs_info: dict[str, Any],
+) -> str:
     raw_digest = lfs_info.get("oid", lfs_info.get("sha256"))
     if not isinstance(raw_digest, str):
         raise ModelPinError(
             f"weight_sha256_missing:{repository}:{weight_file}:"
             f"lfs_keys={sorted(lfs_info.keys())}"
         )
-    weight_sha256 = raw_digest.removeprefix("sha256:")
-    if not _SHA64.fullmatch(weight_sha256):
+    digest = raw_digest.removeprefix("sha256:")
+    if not _SHA64.fullmatch(digest):
         raise ModelPinError(
             f"weight_sha256_invalid:{repository}:{weight_file}:"
             f"lfs_oid_format={raw_digest[:24]}"
         )
+    return digest
+
+
+def _require_weight_size(
+    repository: str,
+    weight_file: str,
+    lfs_info: dict[str, Any],
+    weight_entry: dict[str, Any],
+) -> int:
     size = lfs_info.get("size", weight_entry.get("size"))
     if isinstance(size, bool) or not isinstance(size, int) or size <= 0:
         raise ModelPinError(f"weight_size_invalid:{repository}:{weight_file}")
-    return weight_sha256, size
+    return size
 
+
+def _verify_weight_digest(
+    repository: str,
+    weight_file: str,
+    siblings: Any,
+) -> tuple[str, int]:
+    entry = _find_weight_entry(repository, weight_file, siblings)
+    lfs_info = _require_lfs_info(repository, weight_file, entry)
+    digest = _normalize_weight_digest(repository, weight_file, lfs_info)
+    size = _require_weight_size(repository, weight_file, lfs_info, entry)
+    return digest, size
 
 def _build_pin_record(
     spec: dict[str, str],

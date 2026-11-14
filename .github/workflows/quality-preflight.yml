@@ -179,6 +179,53 @@ jobs:
           }, indent=2))
           PY
 
+
+      - name: Enforce complete preflight verdict
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          report_path = Path("preflight-output/quality-preflight-report.json")
+          if not report_path.is_file():
+              raise SystemExit("preflight_report_missing")
+          report = json.loads(report_path.read_text(encoding="utf-8"))
+          expected = {
+              "ruff-check",
+              "ruff-format",
+              "mypy",
+              "bandit",
+              "xenon",
+              "pip-audit",
+              "pytest",
+          }
+          checks = report.get("checks")
+          if not isinstance(checks, list):
+              raise SystemExit("preflight_checks_missing")
+          names = [item.get("name") for item in checks if isinstance(item, dict)]
+          if len(names) != len(checks) or len(set(names)) != len(names):
+              raise SystemExit("preflight_check_inventory_invalid")
+          if set(names) != expected:
+              raise SystemExit("preflight_check_set_mismatch")
+          failed = [
+              {
+                  "name": item["name"],
+                  "exit_code": item.get("exit_code"),
+                  "status": item.get("status"),
+              }
+              for item in checks
+              if item.get("exit_code") != 0 or item.get("status") != "PASS"
+          ]
+          if report.get("commit_sha") != os.environ["GITHUB_SHA"]:
+              raise SystemExit("preflight_commit_sha_mismatch")
+          if failed or report.get("all_checks_passed") is not True:
+              print(json.dumps({"failed_checks": failed}, indent=2, sort_keys=True))
+              raise SystemExit(1)
+          print("QUALITY_PREFLIGHT_VERDICT=PASS")
+          PY
+
       - name: Upload complete preflight findings
         if: always()
         continue-on-error: true

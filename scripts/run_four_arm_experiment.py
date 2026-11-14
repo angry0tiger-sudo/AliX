@@ -402,6 +402,51 @@ def _model_pin_groups(
     }
 
 
+
+def _artifact_record_values(
+    record: Any,
+) -> tuple[str, str, int]:
+    if not isinstance(record, Mapping):
+        raise FourArmExecutionError("model_artifact_record_invalid")
+    relative = record.get("path")
+    expected_sha = record.get("sha256")
+    expected_size = record.get("size_bytes")
+    if not isinstance(relative, str) or not isinstance(expected_sha, str):
+        raise FourArmExecutionError("model_artifact_record_invalid")
+    if isinstance(expected_size, bool) or not isinstance(expected_size, int):
+        raise FourArmExecutionError("model_artifact_size_invalid")
+    return relative, expected_sha, expected_size
+
+
+def _resolve_artifact_path(
+    artifact_dir: Path,
+    root: Path,
+    relative: str,
+) -> Path:
+    relative_path = Path(relative)
+    if relative_path.is_absolute() or ".." in relative_path.parts:
+        raise FourArmExecutionError("model_artifact_path_invalid")
+    path = artifact_dir / relative_path
+    resolved = path.resolve()
+    if root not in resolved.parents or path.is_symlink() or not path.is_file():
+        raise FourArmExecutionError("model_artifact_file_missing")
+    return path
+
+
+def _verify_artifact_record(
+    artifact_dir: Path,
+    root: Path,
+    record: Any,
+) -> tuple[str, Mapping[str, Any]]:
+    relative, expected_sha, expected_size = _artifact_record_values(record)
+    path = _resolve_artifact_path(artifact_dir, root, relative)
+    if path.stat().st_size != expected_size or _sha256_file(path) != expected_sha:
+        raise FourArmExecutionError("model_artifact_sha256_mismatch")
+    if not isinstance(record, Mapping):
+        raise FourArmExecutionError("model_artifact_record_invalid")
+    return relative, record
+
+
 def _verify_artifact_files(
     artifact_dir: Path,
     records: Any,
@@ -411,35 +456,18 @@ def _verify_artifact_files(
     verified: dict[str, Mapping[str, Any]] = {}
     root = artifact_dir.resolve()
     for record in records:
-        if not isinstance(record, Mapping):
-            raise FourArmExecutionError("model_artifact_record_invalid")
-        relative = record.get("path")
-        expected_sha = record.get("sha256")
-        expected_size = record.get("size_bytes")
-        if not isinstance(relative, str) or not isinstance(expected_sha, str):
-            raise FourArmExecutionError("model_artifact_record_invalid")
-        relative_path = Path(relative)
-        if relative_path.is_absolute() or ".." in relative_path.parts:
-            raise FourArmExecutionError("model_artifact_path_invalid")
-        path = artifact_dir / relative_path
-        resolved = path.resolve()
-        if root not in resolved.parents or path.is_symlink() or not path.is_file():
-            raise FourArmExecutionError("model_artifact_file_missing")
-        if isinstance(expected_size, bool) or not isinstance(expected_size, int):
-            raise FourArmExecutionError("model_artifact_size_invalid")
-        if path.stat().st_size != expected_size or _sha256_file(path) != expected_sha:
-            raise FourArmExecutionError("model_artifact_sha256_mismatch")
+        relative, validated = _verify_artifact_record(artifact_dir, root, record)
         if relative in verified:
             raise FourArmExecutionError("model_artifact_duplicate_path")
-        verified[relative] = record
+        verified[relative] = validated
     return verified
 
 
-def _verify_model_artifacts(
+def _load_artifact_manifest(
     pins: Mapping[str, Any],
     pin_manifest_path: Path,
     artifact_dir: Path,
-) -> dict[str, Path]:
+) -> Mapping[str, Any]:
     manifest = _read_json(
         artifact_dir / "manifest.json",
         "model_artifact_manifest_unreadable",
@@ -450,31 +478,77 @@ def _verify_model_artifacts(
         raise FourArmExecutionError("model_artifact_manifest_schema_invalid")
     if manifest.get("pins_manifest_sha256") != _sha256_file(pin_manifest_path):
         raise FourArmExecutionError("model_artifact_pin_fingerprint_mismatch")
-    verified = _verify_artifact_files(artifact_dir, manifest.get("files"))
-    model_dirs: dict[str, Path] = {}
-    for group, pin in _model_pin_groups(pins).items():
-        weight_file = pin.get("weight_file")
-        expected_sha = pin.get("weights_sha256")
-        expected_size = pin.get("weight_size_bytes")
-        if not all(isinstance(value, str) for value in (weight_file, expected_sha)):
-            raise FourArmExecutionError(f"model_pin_fields_invalid:{group}")
-        relative = f"{group}/{weight_file}"
-        record = verified.get(relative)
-        if not isinstance(record, Mapping):
-            raise FourArmExecutionError(f"model_artifact_weight_missing:{group}")
-        if record.get("sha256") != expected_sha:
-            raise FourArmExecutionError(
-                f"model_artifact_weight_sha256_mismatch:{group}"
-            )
-        if record.get("repository") != pin.get("repository"):
-            raise FourArmExecutionError(f"model_artifact_repository_mismatch:{group}")
-        if record.get("revision") != pin.get("revision"):
-            raise FourArmExecutionError(f"model_artifact_revision_mismatch:{group}")
-        if expected_size is not None and record.get("size_bytes") != expected_size:
-            raise FourArmExecutionError(f"model_artifact_weight_size_mismatch:{group}")
-        model_dirs[group] = artifact_dir / group
-    return model_dirs
+    return manifest
 
+
+def _require_verified_weight_record(
+    group: str,
+    pin: Mapping[str, Any],
+    verified: Mapping[str, Mapping[str, Any]],
+) -> tuple[str, str, Any, Mapping[str, Any]]:
+    weight_file = pin.get("weight_file")
+    expected_sha = pin.get("weights_sha256")
+    expected_size = pin.get("weight_size_bytes")
+    if not isinstance(weight_file, str) or not isinstance(expected_sha, str):
+        raise FourArmExecutionError(f"model_pin_fields_invalid:{group}")
+    relative = f"{group}/{weight_file}"
+    record = verified.get(relative)
+    if not isinstance(record, Mapping):
+        raise FourArmExecutionError(f"model_artifact_weight_missing:{group}")
+    return relative, expected_sha, expected_size, record
+
+
+def _assert_model_artifact_identity(
+    group: str,
+    pin: Mapping[str, Any],
+    record: Mapping[str, Any],
+    expected_sha: str,
+    expected_size: Any,
+) -> None:
+    if record.get("sha256") != expected_sha:
+        raise FourArmExecutionError(
+            f"model_artifact_weight_sha256_mismatch:{group}"
+        )
+    if record.get("repository") != pin.get("repository"):
+        raise FourArmExecutionError(f"model_artifact_repository_mismatch:{group}")
+    if record.get("revision") != pin.get("revision"):
+        raise FourArmExecutionError(f"model_artifact_revision_mismatch:{group}")
+    if expected_size is not None and record.get("size_bytes") != expected_size:
+        raise FourArmExecutionError(f"model_artifact_weight_size_mismatch:{group}")
+
+
+def _verify_model_weight(
+    group: str,
+    pin: Mapping[str, Any],
+    verified: Mapping[str, Mapping[str, Any]],
+    artifact_dir: Path,
+) -> Path:
+    _, expected_sha, expected_size, record = _require_verified_weight_record(
+        group,
+        pin,
+        verified,
+    )
+    _assert_model_artifact_identity(
+        group,
+        pin,
+        record,
+        expected_sha,
+        expected_size,
+    )
+    return artifact_dir / group
+
+
+def _verify_model_artifacts(
+    pins: Mapping[str, Any],
+    pin_manifest_path: Path,
+    artifact_dir: Path,
+) -> dict[str, Path]:
+    manifest = _load_artifact_manifest(pins, pin_manifest_path, artifact_dir)
+    verified = _verify_artifact_files(artifact_dir, manifest.get("files"))
+    return {
+        group: _verify_model_weight(group, pin, verified, artifact_dir)
+        for group, pin in _model_pin_groups(pins).items()
+    }
 
 def _load_cpu_models(
     pins: Mapping[str, Any],
