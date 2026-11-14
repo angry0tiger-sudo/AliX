@@ -10,6 +10,7 @@ on:
       - "config/four_arm/**"
       - "config/experiment/four_arm_execution_lock.json"
       - "docs/research/preregistration/contracts/**"
+      - ".github/workflows/ci.yml"
 
 permissions:
   contents: read

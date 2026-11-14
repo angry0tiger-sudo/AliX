@@ -55,38 +55,54 @@ def _contracts_are_complete(value: object) -> bool:
     return all(_is_hex_digest(value.get(name), 64) for name in required_digests)
 
 
-def _lock_is_complete(payload: dict[str, object]) -> bool:
-    if payload.get("schema_version") != LOCK_SCHEMA_VERSION:
-        return False
-    if payload.get("authorization_status") != "OWNER_AUTHORIZED_PREHACK_RESEARCH_ONLY":
-        return False
-    if payload.get("execution_scope") != "PREHACK_RESEARCH_ONLY":
-        return False
-    if payload.get("owner_authorization_id") != "OWNER-2026-11-14-FOURARM":
-        return False
-    if not _is_hex_digest(payload.get("owner_authorization_commit_sha"), 40):
-        return False
-    if payload.get("dataset_sha256") != PREHACK_DATASET_SHA256:
-        return False
+def _authorization_metadata_is_valid(payload: dict[str, object]) -> bool:
+    expected_fields = (
+        ("schema_version", LOCK_SCHEMA_VERSION),
+        (
+            "authorization_status",
+            "OWNER_AUTHORIZED_PREHACK_RESEARCH_ONLY",
+        ),
+        ("execution_scope", "PREHACK_RESEARCH_ONLY"),
+        ("owner_authorization_id", "OWNER-2026-11-14-FOURARM"),
+    )
+    return all(
+        payload.get(field) == expected
+        for field, expected in expected_fields
+    ) and _is_hex_digest(payload.get("owner_authorization_commit_sha"), 40)
 
+
+def _dataset_contract_is_valid(payload: dict[str, object]) -> bool:
+    return payload.get("dataset_sha256") == PREHACK_DATASET_SHA256
+
+
+def _deterministic_seed_is_valid(payload: dict[str, object]) -> bool:
     seed = payload.get("deterministic_seed")
-    if isinstance(seed, bool) or not isinstance(seed, int) or seed != 42:
-        return False
+    return type(seed) is int and seed == 42
 
+
+def _model_set_is_complete(payload: dict[str, object]) -> bool:
     models = payload.get("models")
     if not isinstance(models, dict):
         return False
     kronos = models.get("kronos_small")
-    if not _model_lock_is_complete(kronos):
-        return False
-    if not isinstance(kronos, dict):
-        return False
-    if not _model_lock_is_complete(kronos.get("tokenizer")):
-        return False
-    if not _model_lock_is_complete(models.get("chronos_2")):
-        return False
+    return (
+        _model_lock_is_complete(kronos)
+        and isinstance(kronos, dict)
+        and _model_lock_is_complete(kronos.get("tokenizer"))
+        and _model_lock_is_complete(models.get("chronos_2"))
+    )
 
-    return _contracts_are_complete(payload.get("contracts"))
+
+def _lock_is_complete(payload: dict[str, object]) -> bool:
+    return all(
+        (
+            _authorization_metadata_is_valid(payload),
+            _dataset_contract_is_valid(payload),
+            _deterministic_seed_is_valid(payload),
+            _model_set_is_complete(payload),
+            _contracts_are_complete(payload.get("contracts")),
+        )
+    )
 
 
 def load_owner_authorized_execution_lock(
