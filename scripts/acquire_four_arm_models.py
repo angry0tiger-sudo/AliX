@@ -60,10 +60,9 @@ def _safe_filename(filename: str) -> str:
 
 
 def _build_download_url(repository: str, revision: str, filename: str) -> str:
-    if (
-        not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository)
-        or not _SHA40.fullmatch(revision)
-    ):
+    if not re.fullmatch(
+        r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository
+    ) or not _SHA40.fullmatch(revision):
         raise ModelAcquisitionError("model_repository_or_revision_invalid")
     safe_name = _safe_filename(filename)
     return (
@@ -92,7 +91,10 @@ def _read_pins(
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         raise ModelAcquisitionError("model_pin_manifest_unreadable") from None
-    if not isinstance(raw, dict) or raw.get("schema_version") != "alix.four-arm.model-pins.v1":
+    if (
+        not isinstance(raw, dict)
+        or raw.get("schema_version") != "alix.four-arm.model-pins.v1"
+    ):
         raise ModelAcquisitionError("model_pin_manifest_schema_invalid")
     models = raw.get("models")
     if not isinstance(models, Mapping):
@@ -133,7 +135,9 @@ def _fetch_repo_files(
     revision: str,
     weight_file: str,
 ) -> list[str]:
-    url = f"https://huggingface.co/api/models/{repository}/revision/{revision}?blobs=true"
+    url = (
+        f"https://huggingface.co/api/models/{repository}/revision/{revision}?blobs=true"
+    )
     try:
         response = client.get(url, headers={"Accept": "application/json"})
         _verify_https_redirect_chain(response)
@@ -223,13 +227,18 @@ def acquire_models(pin_path: Path, output_dir: Path) -> dict[str, Any]:
     output_dir.mkdir(parents=True, exist_ok=True)
     records: list[dict[str, Any]] = []
     timeout = httpx.Timeout(connect=10.0, read=120.0, write=30.0, pool=10.0)
-    with httpx.Client(timeout=timeout, follow_redirects=True, max_redirects=3) as client:
+    with httpx.Client(
+        timeout=timeout, follow_redirects=True, max_redirects=3
+    ) as client:
         for group, pin in groups:
             repository = str(pin["repository"])
             revision = str(pin["revision"])
             weight_file = str(pin["weight_file"])
             filenames = _fetch_repo_files(client, repository, revision, weight_file)
-            if group in {"kronos_small", "chronos_2"} and "config.json" not in filenames:
+            if (
+                group in {"kronos_small", "chronos_2"}
+                and "config.json" not in filenames
+            ):
                 raise ModelAcquisitionError(f"model_config_missing:{group}")
             for filename in filenames:
                 is_weight = filename == weight_file
@@ -241,10 +250,13 @@ def acquire_models(pin_path: Path, output_dir: Path) -> dict[str, Any]:
                         revision=revision,
                         filename=filename,
                         destination_root=output_dir,
-                        expected_sha256=str(pin["weights_sha256"]) if is_weight else None,
+                        expected_sha256=str(pin["weights_sha256"])
+                        if is_weight
+                        else None,
                         expected_size=(
                             int(pin["weight_size_bytes"])
-                            if is_weight and isinstance(pin.get("weight_size_bytes"), int)
+                            if is_weight
+                            and isinstance(pin.get("weight_size_bytes"), int)
                             else None
                         ),
                     )

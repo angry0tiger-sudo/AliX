@@ -26,7 +26,9 @@ def test_download_url_uses_immutable_commit_revision() -> None:
     )
 
 
-@pytest.mark.parametrize("filename", ["../model.safetensors", "/tmp/model", "a/b", "x..y"])
+@pytest.mark.parametrize(
+    "filename", ["../model.safetensors", "/tmp/model", "a/b", "x..y"]
+)
 def test_asset_filename_path_traversal_is_rejected(filename: str) -> None:
     with pytest.raises(ModelAcquisitionError, match="model_asset_filename_invalid"):
         _safe_filename(filename)

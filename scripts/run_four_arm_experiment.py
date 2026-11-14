@@ -204,9 +204,7 @@ def _assert_pin_lock_match(pin_key: str, pin: Any, locked: Any) -> None:
         raise FourArmExecutionError(f"model_lock_missing:{pin_key}")
     for field in ("repository", "revision", "weights_sha256"):
         if pin.get(field) != locked.get(field):
-            raise FourArmExecutionError(
-                f"model_pin_lock_mismatch:{pin_key}:{field}"
-            )
+            raise FourArmExecutionError(f"model_pin_lock_mismatch:{pin_key}:{field}")
 
 
 def _coerce_pins(raw_pins: Any, lock: Mapping[str, Any]) -> dict[str, Any]:
@@ -231,7 +229,9 @@ def _coerce_pins(raw_pins: Any, lock: Mapping[str, Any]) -> dict[str, Any]:
     )
     _assert_pin_lock_match("kronos_small", kronos_pin, kronos_lock)
     _assert_pin_lock_match("kronos_tokenizer", tokenizer_pin, locked_tokenizer)
-    _assert_pin_lock_match("chronos_2", models.get("chronos_2"), locked_models.get("chronos_2"))
+    _assert_pin_lock_match(
+        "chronos_2", models.get("chronos_2"), locked_models.get("chronos_2")
+    )
     return dict(pins)
 
 
@@ -272,7 +272,13 @@ def _validate_data_manifest(manifest_path: Path) -> None:
     manifest = _read_json(manifest_path, "prehack_manifest_unreadable")
     _require_fields(
         manifest,
-        ("csv_sha256", "dataset_window", "row_count", "private_api_calls", "real_order_attempts"),
+        (
+            "csv_sha256",
+            "dataset_window",
+            "row_count",
+            "private_api_calls",
+            "real_order_attempts",
+        ),
         "prehack_manifest_schema_invalid",
     )
     if manifest.get("csv_sha256") != PREHACK_DATASET_SHA256:
@@ -281,7 +287,10 @@ def _validate_data_manifest(manifest_path: Path) -> None:
         raise FourArmExecutionError("prehack_manifest_window_mismatch")
     if manifest.get("row_count") != PREHACK_ROW_COUNT:
         raise FourArmExecutionError("prehack_manifest_row_count_mismatch")
-    if manifest.get("private_api_calls") != 0 or manifest.get("real_order_attempts") != 0:
+    if (
+        manifest.get("private_api_calls") != 0
+        or manifest.get("real_order_attempts") != 0
+    ):
         raise FourArmExecutionError("prehack_manifest_safety_invariant_violation")
 
 
@@ -454,7 +463,9 @@ def _verify_model_artifacts(
         if not isinstance(record, Mapping):
             raise FourArmExecutionError(f"model_artifact_weight_missing:{group}")
         if record.get("sha256") != expected_sha:
-            raise FourArmExecutionError(f"model_artifact_weight_sha256_mismatch:{group}")
+            raise FourArmExecutionError(
+                f"model_artifact_weight_sha256_mismatch:{group}"
+            )
         if record.get("repository") != pin.get("repository"):
             raise FourArmExecutionError(f"model_artifact_repository_mismatch:{group}")
         if record.get("revision") != pin.get("revision"):
@@ -640,7 +651,11 @@ def _apply_barriers(
             exit_index, exit_price, exit_reason = bar_index, target_price, "take_profit"
             break
         if bar_index == last_bar:
-            exit_index, exit_price, exit_reason = bar_index, bar_close, "maximum_holding_time"
+            exit_index, exit_price, exit_reason = (
+                bar_index,
+                bar_close,
+                "maximum_holding_time",
+            )
             break
         high_water = max(high_water, bar_high)
         current_atr = float(atr[bar_index])
@@ -1006,7 +1021,9 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default=Path("config/experiment/four_arm_execution_lock.json"),
     )
     parser.add_argument("--model-pins", type=Path, default=MODEL_PIN_PATH)
-    parser.add_argument("--model-artifacts-dir", type=Path, default=Path("artifacts/four-arm-models"))
+    parser.add_argument(
+        "--model-artifacts-dir", type=Path, default=Path("artifacts/four-arm-models")
+    )
     parser.add_argument("--kronos-code-dir", type=Path)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--repository-root", type=Path, default=Path("."))
