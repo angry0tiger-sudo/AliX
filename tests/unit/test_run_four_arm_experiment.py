@@ -21,8 +21,11 @@ def test_walk_forward_folds_are_three_expanding_chronological_windows() -> None:
     assert [fold.fold_id for fold in folds] == [1, 2, 3]
     assert all(fold.train_start == 0 for fold in folds)
     assert all(
-        fold.train_end < fold.validation_start
-        < fold.validation_end < fold.test_start < fold.test_end
+        fold.train_end
+        < fold.validation_start
+        < fold.validation_end
+        < fold.test_start
+        < fold.test_end
         for fold in folds
     )
     assert folds[0].test_end < folds[1].test_end < folds[2].test_end

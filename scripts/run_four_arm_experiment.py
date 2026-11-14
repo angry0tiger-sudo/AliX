@@ -27,15 +27,29 @@ PREHACK_ROW_COUNT = 31_801
 PREHACK_FILENAME = "nobitex-btcusdt-1h.csv"
 MODEL_PIN_PATH = Path("config/experiment/four_arm_model_pins.json")
 CONTRACT_PATHS = {
-    "kronos_adapter_sha256": Path("docs/research/preregistration/contracts/kronos_adapter.md"),
-    "chronos_adapter_sha256": Path("docs/research/preregistration/contracts/chronos_adapter.md"),
-    "combined_rule_sha256": Path("docs/research/preregistration/contracts/combined_rule.md"),
+    "kronos_adapter_sha256": Path(
+        "docs/research/preregistration/contracts/kronos_adapter.md"
+    ),
+    "chronos_adapter_sha256": Path(
+        "docs/research/preregistration/contracts/chronos_adapter.md"
+    ),
+    "combined_rule_sha256": Path(
+        "docs/research/preregistration/contracts/combined_rule.md"
+    ),
     "fold_plan_sha256": Path("docs/research/preregistration/contracts/fold_plan.md"),
-    "triple_barrier_sha256": Path("docs/research/preregistration/contracts/triple_barrier.md"),
-    "cost_fill_simulator_sha256": Path("docs/research/preregistration/contracts/cost_fill_simulator.md"),
+    "triple_barrier_sha256": Path(
+        "docs/research/preregistration/contracts/triple_barrier.md"
+    ),
+    "cost_fill_simulator_sha256": Path(
+        "docs/research/preregistration/contracts/cost_fill_simulator.md"
+    ),
     "dsr_method_sha256": Path("docs/research/preregistration/contracts/dsr_method.md"),
-    "license_and_corpus_disclosure_sha256": Path("docs/research/preregistration/contracts/model_provenance.md"),
-    "runtime_lock_sha256": Path("docs/research/preregistration/contracts/runtime_lock.md"),
+    "license_and_corpus_disclosure_sha256": Path(
+        "docs/research/preregistration/contracts/model_provenance.md"
+    ),
+    "runtime_lock_sha256": Path(
+        "docs/research/preregistration/contracts/runtime_lock.md"
+    ),
 }
 TRIALS = {
     "A": "NOBITEX-KC26-A",
@@ -106,7 +120,11 @@ def build_walk_forward_folds(row_count: int) -> tuple[Fold, ...]:
     """Build three expanding-prefix 70/15/15 chronological folds."""
     if isinstance(row_count, bool) or row_count < 1_000:
         raise ValueError("walk_forward_row_count_invalid")
-    prefix_ends = (math.floor(0.70 * row_count), math.floor(0.85 * row_count), row_count)
+    prefix_ends = (
+        math.floor(0.70 * row_count),
+        math.floor(0.85 * row_count),
+        row_count,
+    )
     folds: list[Fold] = []
     previous_test_end = -1
     for fold_number, prefix_end in enumerate(prefix_ends, start=1):
@@ -123,9 +141,14 @@ def build_walk_forward_folds(row_count: int) -> tuple[Fold, ...]:
             test_end=prefix_end - MAX_HOLDING_BARS,
         )
         if not (
-            0 <= fold.train_start < fold.train_end
-            < fold.validation_start < fold.validation_end
-            < fold.test_start < fold.test_end <= row_count
+            0
+            <= fold.train_start
+            < fold.train_end
+            < fold.validation_start
+            < fold.validation_end
+            < fold.test_start
+            < fold.test_end
+            <= row_count
         ):
             raise FourArmExecutionError("walk_forward_fold_boundaries_invalid")
         if fold.test_start <= previous_test_end:
@@ -158,7 +181,10 @@ def _load_model_pin_manifest(path: Path, lock: Mapping[str, Any]) -> dict[str, A
         pins = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         raise FourArmExecutionError("model_pin_manifest_unreadable") from None
-    if not isinstance(pins, dict) or pins.get("schema_version") != "alix.four-arm.model-pins.v1":
+    if (
+        not isinstance(pins, dict)
+        or pins.get("schema_version") != "alix.four-arm.model-pins.v1"
+    ):
         raise FourArmExecutionError("model_pin_manifest_schema_invalid")
     models = pins.get("models")
     locked_models = lock.get("models")
@@ -175,7 +201,9 @@ def _load_model_pin_manifest(path: Path, lock: Mapping[str, Any]) -> dict[str, A
             raise FourArmExecutionError(f"model_pin_missing:{pin_key}")
         if lock_key == "kronos_small.tokenizer":
             lock_model = locked_models.get("kronos_small")
-            locked = lock_model.get("tokenizer") if isinstance(lock_model, Mapping) else None
+            locked = (
+                lock_model.get("tokenizer") if isinstance(lock_model, Mapping) else None
+            )
         else:
             locked = locked_models.get(lock_key)
         if not isinstance(locked, Mapping):
@@ -187,7 +215,9 @@ def _load_model_pin_manifest(path: Path, lock: Mapping[str, Any]) -> dict[str, A
         )
         for pin_field, lock_field in comparisons:
             if pin.get(pin_field) != locked.get(lock_field):
-                raise FourArmExecutionError(f"model_pin_lock_mismatch:{pin_key}:{pin_field}")
+                raise FourArmExecutionError(
+                    f"model_pin_lock_mismatch:{pin_key}:{pin_field}"
+                )
     return pins
 
 
@@ -214,13 +244,18 @@ def _load_verified_prehack_data(
         raise FourArmExecutionError("prehack_manifest_window_mismatch")
     if manifest.get("row_count") != PREHACK_ROW_COUNT:
         raise FourArmExecutionError("prehack_manifest_row_count_mismatch")
-    if manifest.get("private_api_calls") != 0 or manifest.get("real_order_attempts") != 0:
+    if (
+        manifest.get("private_api_calls") != 0
+        or manifest.get("real_order_attempts") != 0
+    ):
         raise FourArmExecutionError("prehack_manifest_safety_invariant_violation")
 
     try:
         frame = pd.read_csv(csv_path)
     except (OSError, UnicodeDecodeError, pd.errors.ParserError) as exc:
-        raise FourArmExecutionError(f"prehack_csv_parse_failed:{type(exc).__name__}") from exc
+        raise FourArmExecutionError(
+            f"prehack_csv_parse_failed:{type(exc).__name__}"
+        ) from exc
     required = {"date", "open", "high", "low", "close", "volume"}
     if not required.issubset(frame.columns):
         raise FourArmExecutionError("prehack_csv_schema_invalid")
@@ -238,7 +273,9 @@ def _load_verified_prehack_data(
         raise FourArmExecutionError("prehack_hourly_grid_invalid")
     if not bool((seconds % 3600 == 1800).all()):
         raise FourArmExecutionError("prehack_utc_offset_grid_invalid")
-    numeric_values = frame[["open", "high", "low", "close", "volume"]].to_numpy(dtype=np.float64)
+    numeric_values = frame[["open", "high", "low", "close", "volume"]].to_numpy(
+        dtype=np.float64
+    )
     if not np.isfinite(numeric_values).all():
         raise FourArmExecutionError("prehack_non_finite_ohlcv")
     if (numeric_values[:, :4] <= 0).any() or (numeric_values[:, 4] < 0).any():
@@ -276,7 +313,9 @@ def _baseline_signals(frame: pd.DataFrame, atr: np.ndarray) -> np.ndarray:
         .to_numpy(dtype=np.float64)
     )
     close = frame["close"].to_numpy(dtype=np.float64)
-    return np.isfinite(prior_high) & np.isfinite(atr) & (close > prior_high) & (atr > 0.0)
+    return (
+        np.isfinite(prior_high) & np.isfinite(atr) & (close > prior_high) & (atr > 0.0)
+    )
 
 
 def _snapshot_model(
@@ -292,12 +331,20 @@ def _snapshot_model(
             repo_id=repository,
             revision=revision,
             cache_dir=str(cache_dir),
-            allow_patterns=["config.json", "model.safetensors", "*.json", "*.txt", "*.model"],
+            allow_patterns=[
+                "config.json",
+                "model.safetensors",
+                "*.json",
+                "*.txt",
+                "*.model",
+            ],
         )
     )
     weight_path = snapshot_path / "model.safetensors"
     if not weight_path.is_file() or _sha256_file(weight_path) != expected_sha:
-        raise FourArmExecutionError(f"downloaded_model_weight_hash_mismatch:{repository}")
+        raise FourArmExecutionError(
+            f"downloaded_model_weight_hash_mismatch:{repository}"
+        )
     return snapshot_path
 
 
@@ -372,11 +419,17 @@ def _forecast_at(
     if start < 0 or decision_index + MAX_HOLDING_BARS >= len(frame):
         raise FourArmExecutionError("model_forecast_context_or_horizon_unavailable")
     context = frame.iloc[start : decision_index + 1]
-    context_df = context[["open", "high", "low", "close", "volume"]].copy().reset_index(drop=True)
+    context_df = (
+        context[["open", "high", "low", "close", "volume"]]
+        .copy()
+        .reset_index(drop=True)
+    )
     x_timestamps = context["timestamp"].reset_index(drop=True)
-    y_timestamps = frame["timestamp"].iloc[
-        decision_index + 1 : decision_index + 1 + MAX_HOLDING_BARS
-    ].reset_index(drop=True)
+    y_timestamps = (
+        frame["timestamp"]
+        .iloc[decision_index + 1 : decision_index + 1 + MAX_HOLDING_BARS]
+        .reset_index(drop=True)
+    )
     if len(context_df) != MODEL_CONTEXT_BARS or len(y_timestamps) != MAX_HOLDING_BARS:
         raise FourArmExecutionError("model_forecast_input_length_invalid")
     current_close = float(frame["close"].iloc[decision_index])
@@ -397,7 +450,9 @@ def _forecast_at(
 
     import torch
 
-    close_context = frame["close"].iloc[start : decision_index + 1].to_numpy(dtype=np.float32)
+    close_context = (
+        frame["close"].iloc[start : decision_index + 1].to_numpy(dtype=np.float32)
+    )
     chronos_forecasts = chronos_pipeline.predict(
         [torch.tensor(close_context, dtype=torch.float32)],
         prediction_length=MAX_HOLDING_BARS,
@@ -407,7 +462,9 @@ def _forecast_at(
     )
     quantiles = list(chronos_pipeline.quantiles)
     median_index = quantiles.index(0.5)
-    chronos_close = float(chronos_forecasts[0][0, median_index, -1].detach().cpu().item())
+    chronos_close = float(
+        chronos_forecasts[0][0, median_index, -1].detach().cpu().item()
+    )
     chronos_return = chronos_close / current_close - 1.0
     if not math.isfinite(kronos_return) or not math.isfinite(chronos_return):
         raise FourArmExecutionError("non_finite_model_forecast")
@@ -562,20 +619,17 @@ def _arm_manifest(
         key=lambda trade: (trade.exit_index, trade.entry_index),
     )
     aggregate = {
-        str(cost): _calculate_metrics(all_trades, cost)
-        for cost in COST_SCENARIOS_BPS
+        str(cost): _calculate_metrics(all_trades, cost) for cost in COST_SCENARIOS_BPS
     }
     fold_results: list[dict[str, Any]] = []
     fold_passes: list[bool] = []
     for fold in folds:
         trades = fold_trades.get(fold.fold_id, [])
         metrics = {
-            str(cost): _calculate_metrics(trades, cost)
-            for cost in COST_SCENARIOS_BPS
+            str(cost): _calculate_metrics(trades, cost) for cost in COST_SCENARIOS_BPS
         }
         fold_drawdown = max(
-            float(metrics[str(cost)]["max_drawdown"])
-            for cost in COST_SCENARIOS_BPS
+            float(metrics[str(cost)]["max_drawdown"]) for cost in COST_SCENARIOS_BPS
         )
         combined = {"max_drawdown": fold_drawdown, **metrics}
         passed = _fold_stability_pass(combined)
@@ -590,8 +644,7 @@ def _arm_manifest(
         )
     aggregate_trades = len(all_trades)
     aggregate_drawdown = max(
-        float(aggregate[str(cost)]["max_drawdown"])
-        for cost in COST_SCENARIOS_BPS
+        float(aggregate[str(cost)]["max_drawdown"]) for cost in COST_SCENARIOS_BPS
     )
     economics_pass = (
         aggregate_trades >= 100
@@ -647,7 +700,9 @@ def run_synthetic_mode(output_dir: Path) -> dict[str, Any]:
     low = close * (1.0 - generator.uniform(0.0, 0.001, steps))
     open_values = close.copy()
     volume = generator.uniform(1.0, 100.0, steps)
-    fixture = np.column_stack((open_values, high, low, close, volume)).astype(np.float64)
+    fixture = np.column_stack((open_values, high, low, close, volume)).astype(
+        np.float64
+    )
     fixture_sha = sha256(fixture.tobytes()).hexdigest()
     folds = build_walk_forward_folds(steps)
     manifests = []
@@ -802,7 +857,11 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--mode", choices=("real", "synthetic"), default="real")
     parser.add_argument("--csv", type=Path)
     parser.add_argument("--data-manifest", type=Path)
-    parser.add_argument("--lock", type=Path, default=Path("config/experiment/four_arm_execution_lock.json"))
+    parser.add_argument(
+        "--lock",
+        type=Path,
+        default=Path("config/experiment/four_arm_execution_lock.json"),
+    )
     parser.add_argument("--model-pins", type=Path, default=MODEL_PIN_PATH)
     parser.add_argument("--kronos-code-dir", type=Path)
     parser.add_argument("--output-dir", type=Path, required=True)
@@ -817,7 +876,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         report = run_synthetic_mode(arguments.output_dir)
         print(f"FOUR_ARM_SYNTHETIC_VALIDATION=PASS:{report['arm_count']}")
         return 0
-    if arguments.csv is None or arguments.data_manifest is None or arguments.kronos_code_dir is None:
+    if (
+        arguments.csv is None
+        or arguments.data_manifest is None
+        or arguments.kronos_code_dir is None
+    ):
         raise SystemExit("real_mode_requires_csv_manifest_and_pinned_kronos_source")
     try:
         report = run_real_experiment(
