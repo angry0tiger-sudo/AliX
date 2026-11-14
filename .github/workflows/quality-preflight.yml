@@ -32,7 +32,7 @@ jobs:
           cache: pip
 
       - name: Prepare artifact directory
-        run: mkdir -p .preflight
+        run: mkdir -p preflight-output
 
       - name: Install pinned quality and test tools
         continue-on-error: true
@@ -45,10 +45,10 @@ jobs:
         continue-on-error: true
         run: |
           set +e
-          ruff check control_plane risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels research/deap research/ai_ensemble tests scripts > .preflight/ruff-check.log 2>&1
+          ruff check control_plane risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels research/deap research/ai_ensemble tests scripts > preflight-output/ruff-check.log 2>&1
           code=$?
-          printf '%s\n' "$code" > .preflight/ruff-check.exit
-          cat .preflight/ruff-check.log
+          printf '%s\n' "$code" > preflight-output/ruff-check.exit
+          cat preflight-output/ruff-check.log
           exit "$code"
 
       - name: Ruff format check
@@ -56,10 +56,10 @@ jobs:
         continue-on-error: true
         run: |
           set +e
-          ruff format --check --diff control_plane risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels research/deap research/ai_ensemble tests scripts > .preflight/ruff-format.log 2>&1
+          ruff format --check --diff control_plane risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels research/deap research/ai_ensemble tests scripts > preflight-output/ruff-format.log 2>&1
           code=$?
-          printf '%s\n' "$code" > .preflight/ruff-format.exit
-          cat .preflight/ruff-format.log
+          printf '%s\n' "$code" > preflight-output/ruff-format.exit
+          cat preflight-output/ruff-format.log
           exit "$code"
 
       - name: Strict mypy
@@ -67,10 +67,10 @@ jobs:
         continue-on-error: true
         run: |
           set +e
-          mypy --config-file mypy.ini > .preflight/mypy.log 2>&1
+          mypy --config-file mypy.ini > preflight-output/mypy.log 2>&1
           code=$?
-          printf '%s\n' "$code" > .preflight/mypy.exit
-          cat .preflight/mypy.log
+          printf '%s\n' "$code" > preflight-output/mypy.exit
+          cat preflight-output/mypy.log
           exit "$code"
 
       - name: Bandit security scan
@@ -78,10 +78,10 @@ jobs:
         continue-on-error: true
         run: |
           set +e
-          bandit -r control_plane risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels research/deap research/ai_ensemble scripts -ll > .preflight/bandit.log 2>&1
+          bandit -r control_plane risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels research/deap research/ai_ensemble scripts -ll > preflight-output/bandit.log 2>&1
           code=$?
-          printf '%s\n' "$code" > .preflight/bandit.exit
-          cat .preflight/bandit.log
+          printf '%s\n' "$code" > preflight-output/bandit.exit
+          cat preflight-output/bandit.log
           exit "$code"
 
       - name: Xenon complexity gate
@@ -89,10 +89,10 @@ jobs:
         continue-on-error: true
         run: |
           set +e
-          xenon --max-absolute B --max-modules B --max-average A control_plane risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels research/deap research/ai_ensemble/validation.py research/ai_ensemble/ttm_risk.py research/ai_ensemble/ttm_portfolio.py scripts > .preflight/xenon.log 2>&1
+          xenon --max-absolute B --max-modules B --max-average A control_plane risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels research/deap research/ai_ensemble/validation.py research/ai_ensemble/ttm_risk.py research/ai_ensemble/ttm_portfolio.py scripts > preflight-output/xenon.log 2>&1
           code=$?
-          printf '%s\n' "$code" > .preflight/xenon.exit
-          cat .preflight/xenon.log
+          printf '%s\n' "$code" > preflight-output/xenon.exit
+          cat preflight-output/xenon.log
           exit "$code"
 
       - name: pip-audit dependency scan
@@ -100,10 +100,10 @@ jobs:
         continue-on-error: true
         run: |
           set +e
-          pip-audit -r requirements.lock > .preflight/pip-audit.log 2>&1
+          pip-audit -r requirements.lock > preflight-output/pip-audit.log 2>&1
           code=$?
-          printf '%s\n' "$code" > .preflight/pip-audit.exit
-          cat .preflight/pip-audit.log
+          printf '%s\n' "$code" > preflight-output/pip-audit.exit
+          cat preflight-output/pip-audit.log
           exit "$code"
 
       - name: Pytest without coverage, collecting all failures
@@ -111,10 +111,10 @@ jobs:
         continue-on-error: true
         run: |
           set +e
-          pytest --no-cov --maxfail=0 -q > .preflight/pytest.log 2>&1
+          pytest --no-cov --maxfail=0 -q > preflight-output/pytest.log 2>&1
           code=$?
-          printf '%s\n' "$code" > .preflight/pytest.exit
-          cat .preflight/pytest.log
+          printf '%s\n' "$code" > preflight-output/pytest.exit
+          cat preflight-output/pytest.log
           exit "$code"
 
       - name: Build complete JSON violation inventory
@@ -125,7 +125,7 @@ jobs:
           import json
           from pathlib import Path
 
-          root = Path(".preflight")
+          root = Path("preflight-output")
           names = (
               "ruff-check",
               "ruff-format",
@@ -185,6 +185,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: quality-preflight-${{ github.sha }}
-          path: .preflight/
+          path: preflight-output/
           if-no-files-found: error
           retention-days: 30
