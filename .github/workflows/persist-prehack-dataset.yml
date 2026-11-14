@@ -271,7 +271,7 @@ jobs:
             data/nobitex/prehack/nobitex-btcusdt-1h.manifest.json \
             docs/architecture/decisions/ADR-036-data-durability-risks.md \
             docs/architecture/decisions/ADR-037-persistent-prehack-dataset.md
-          git diff --cached --check
+          git -c core.whitespace=cr-at-eol diff --cached --check
           git diff --cached --stat
           git commit -m "data(research): persist exact prehack Nobitex dataset"
           commit_sha="$(git rev-parse HEAD)"
