@@ -1,0 +1,47 @@
+name: AliX Four-Arm Hugging Face Model Pin Capture
+
+on:
+  push:
+    branches:
+      - research/nobitex-hf-strategy
+    paths:
+      - scripts/capture_four_arm_model_pins.py
+      - .github/workflows/four-arm-model-pin-capture.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: alix-four-arm-model-pin-capture
+  cancel-in-progress: false
+
+jobs:
+  capture-public-model-pins:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      HF_HUB_DISABLE_TELEMETRY: "1"
+    steps:
+      - name: Checkout without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Query Hugging Face Hub API for immutable revisions and weight SHA-256
+        run: |
+          set -euo pipefail
+          python scripts/capture_four_arm_model_pins.py \
+            --output "$RUNNER_TEMP/four-arm-model-pins.json"
+
+      - name: Upload immutable model pin evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: four-arm-model-pins-${{ github.sha }}
+          path: ${{ runner.temp }}/four-arm-model-pins.json
+          if-no-files-found: error
+          retention-days: 90
