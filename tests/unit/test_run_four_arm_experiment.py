@@ -7,8 +7,10 @@ from pathlib import Path
 
 import pytest
 
+from research.ai_ensemble.four_arm_execution_lock import ExecutionAuthorizationError
 from scripts.run_four_arm_experiment import (
     build_walk_forward_folds,
+    run_real_experiment,
     run_synthetic_mode,
 )
 
@@ -78,3 +80,25 @@ def test_contract_mapping_is_fixed_to_repository_relative_files() -> None:
         "license_and_corpus_disclosure_sha256",
         "runtime_lock_sha256",
     }
+
+
+
+def test_real_runner_checks_authorization_before_dataset_or_model_io(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ALIX_FOUR_ARM_EXECUTION_AUTHORIZED", "false")
+    monkeypatch.setenv("ALIX_DRY_RUN", "true")
+    monkeypatch.setenv("ALIX_ALLOW_LIVE_TRADING", "false")
+
+    with pytest.raises(ExecutionAuthorizationError, match="execution_authorization_missing"):
+        run_real_experiment(
+            csv_path=tmp_path / "must-not-be-read.csv",
+            data_manifest_path=tmp_path / "must-not-be-read.json",
+            lock_path=tmp_path / "must-not-be-read-lock.json",
+            model_pin_path=tmp_path / "must-not-be-read-pins.json",
+            kronos_code_dir=tmp_path / "must-not-be-loaded",
+            output_dir=tmp_path / "output",
+            repository_root=tmp_path,
+            validate_lock_only=False,
+        )

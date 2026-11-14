@@ -68,7 +68,7 @@ jobs:
             huggingface-hub==2.2.0 \
             einops==0.8.1 \
             accelerate==1.11.0 \
-            tqdm==4.67.4
+            tqdm==4.67.1
 
       - name: Run the four preregistered arms on verified pre-hack data
         run: |

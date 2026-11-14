@@ -876,7 +876,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         report = run_synthetic_mode(arguments.output_dir)
         print(f"FOUR_ARM_SYNTHETIC_VALIDATION=PASS:{report['arm_count']}")
         return 0
-    if (
+    if not arguments.validate_lock_only and (
         arguments.csv is None
         or arguments.data_manifest is None
         or arguments.kronos_code_dir is None
