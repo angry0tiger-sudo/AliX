@@ -1,0 +1,43 @@
+{
+  "schema_version": "alix.four-arm.execution-contract-fingerprints.v1",
+  "captured_at_utc": "2026-11-14T03:57:23Z",
+  "contract_count": 9,
+  "current_capture": {
+    "workflow_run_number": 2,
+    "workflow_run_id": 43554204478,
+    "artifact_id": 14096939228,
+    "artifact_name": "four-arm-contract-fingerprints-c432c44c2e42d274394da5f094e04358f13e60e5",
+    "workflow_head_sha": "c432c44c2e42d274394da5f094e04358f13e60e5"
+  },
+  "previous_capture": {
+    "workflow_run_number": 1,
+    "workflow_run_id": 43553975977,
+    "artifact_id": 14097730906,
+    "artifact_name": "four-arm-contract-fingerprints-9eb2db9655884c93af7655f1983a9588bfa57794",
+    "workflow_head_sha": "9eb2db9655884c93af7655f1983a9588bfa57794",
+    "only_changed_fingerprint": "kronos_adapter_sha256",
+    "reason": "Kronos adapter contract disclosed the fixed amount-input derivation before capture #2."
+  },
+  "contracts": {
+    "chronos_adapter_sha256": "0baf2fd9e39f531b4965bcfd192d75d32f1a7cef6025fb42e74559c38e479ac8",
+    "combined_rule_sha256": "3c7af19d3537cc68de1fc041ea25685eed67e6a421f1cf5447fcd241566d3631",
+    "cost_fill_simulator_sha256": "26bb7c325426820308c355f7f5ae12d5e6b8a7c0c81c5d1266e9c53080525078",
+    "dsr_method_sha256": "4496eddd105ca075663aec18856ccbdbe86dbcab3dbab32e8f1d427271d036d4",
+    "fold_plan_sha256": "8f67cb6d1ae3392033fa905a7f988f0faff6c50cac5712e90ff857d5c9e5a2bb",
+    "kronos_adapter_sha256": "e2e4cc6a79a4a3d9f103d06a3055f228f72cabb07e4928790ee5023049326388",
+    "license_and_corpus_disclosure_sha256": "57548c31a6c84d9e7e05265df4f02221c64cfc52fac9004863b92e8d16c1d3c0",
+    "runtime_lock_sha256": "3b200eed94dadcc1ece7fe9fd6321b787c1c9d2815ab41e95082ae675f302918",
+    "triple_barrier_sha256": "fe5aa6ce520ced77e692684bd9880ad22b384b46d5b46cae6ec7239c08b0bd44"
+  },
+  "superseded_capture_1_contracts": {
+    "chronos_adapter_sha256": "0baf2fd9e39f531b4965bcfd192d75d32f1a7cef6025fb42e74559c38e479ac8",
+    "combined_rule_sha256": "3c7af19d3537cc68de1fc041ea25685eed67e6a421f1cf5447fcd241566d3631",
+    "cost_fill_simulator_sha256": "26bb7c325426820308c355f7f5ae12d5e6b8a7c0c81c5d1266e9c53080525078",
+    "dsr_method_sha256": "4496eddd105ca075663aec18856ccbdbe86dbcab3dbab32e8f1d427271d036d4",
+    "fold_plan_sha256": "8f67cb6d1ae3392033fa905a7f988f0faff6c50cac5712e90ff857d5c9e5a2bb",
+    "kronos_adapter_sha256": "51867f95fddfca281d693844a2c4fde5de63534310d8190358f2363e27c03a93",
+    "license_and_corpus_disclosure_sha256": "57548c31a6c84d9e7e05265df4f02221c64cfc52fac9004863b92e8d16c1d3c0",
+    "runtime_lock_sha256": "3b200eed94dadcc1ece7fe9fd6321b787c1c9d2815ab41e95082ae675f302918",
+    "triple_barrier_sha256": "fe5aa6ce520ced77e692684bd9880ad22b384b46d5b46cae6ec7239c08b0bd44"
+  }
+}

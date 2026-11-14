@@ -1,0 +1,55 @@
+{
+  "schema_version": "alix.four-arm.model-pins.v1",
+  "captured_at_utc": "2026-11-14T03:35:31.106972+00:00",
+  "source": "Hugging Face Hub model revision API (?blobs=true), invoked from GitHub Actions",
+  "current_capture": {
+    "workflow_run_number": 3,
+    "workflow_run_id": 43552413845,
+    "artifact_id": 14096931828,
+    "artifact_name": "four-arm-model-pins-04897f6bf9a7340346a6807c3bffdb0771278a7d",
+    "captured_at_utc": "2026-11-14T03:35:31.106972+00:00",
+    "workflow_head_sha": "04897f6bf9a7340346a6807c3bffdb0771278a7d"
+  },
+  "corroborating_capture": {
+    "workflow_run_number": 2,
+    "workflow_run_id": 43552152363,
+    "artifact_id": 14096433464,
+    "artifact_name": "four-arm-model-pins-64a40e15e06f4ba8c9b54e83164e795884fac96f",
+    "captured_at_utc": "2026-11-14T03:32:39.099615+00:00",
+    "workflow_head_sha": "64a40e15e06f4ba8c9b54e83164e795884fac96f",
+    "exact_model_pin_match": true
+  },
+  "models": {
+    "kronos_small": {
+      "repository": "NeoQuasar/Kronos-small",
+      "requested_ref": "main",
+      "revision": "901c26c1332695a2a8f243eb2f37243a37bea320",
+      "weight_file": "model.safetensors",
+      "weights_sha256": "b082dfcbd8e8c142a725c8bbb99781802f38fec81210e13479effb32b3c3e020",
+      "weight_size_bytes": 98980656,
+      "declared_license": "mit",
+      "tokenizer": {
+        "repository": "NeoQuasar/Kronos-Tokenizer-base",
+        "requested_ref": "main",
+        "revision": "0e0117387f39004a9016484a186a908917e22426",
+        "weight_file": "model.safetensors",
+        "weights_sha256": "59d85f6af76a2c3b8240ea06cb21db4213b4eeca053f246b23e29cf832fc6bee",
+        "weight_size_bytes": 15842368,
+        "declared_license": "mit"
+      }
+    },
+    "chronos_2": {
+      "repository": "autogluon/chronos-2-small",
+      "requested_ref": "main",
+      "revision": "ddec01313e50b6bc58ebaa92ede81bc24a3d9f9a",
+      "weight_file": "model.safetensors",
+      "weights_sha256": "492290ae82bb89f9769e3479ce90b3179de1f33e600c34daa0352531538b23cd",
+      "weight_size_bytes": 111749048,
+      "declared_license": "apache-2.0"
+    }
+  },
+  "excluded_aliases": {
+    "amazon/chronos-t5-small": "Older Chronos-T5 family; not Chronos-2 and not used.",
+    "Salesforce/chronos-small": "Not the public Kronos-Small repository; not used."
+  }
+}

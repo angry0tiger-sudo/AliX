@@ -76,3 +76,39 @@ The existing post-hack holdout remains sealed. No holdout row or value was acces
 - `main=FROZEN`
 
 A successful model-pin capture is metadata evidence only. It is not a training run, economic evaluation, PASS, Paper Trading authorization, or Release Authorization.
+
+
+## Repository evidence preservation (2026-11-14)
+
+### Owner-request identity correction
+
+The initial Owner directive incorrectly mapped the model identifiers to model families:
+
+- `amazon/chronos-t5-small` is an older Chronos-T5 Small checkpoint, not Chronos-2. It is rejected for Arm C.
+- Chronos-2 is pinned to `autogluon/chronos-2-small`, the actual small Chronos-2 model family.
+- Kronos is a separate model family, pinned to `NeoQuasar/Kronos-small`, with its independent tokenizer `NeoQuasar/Kronos-Tokenizer-base`.
+- The initial directive also named `Salesforce/chronos-small` as the Kronos-Small identifier; that is not the public Kronos checkpoint and is not used.
+
+This correction is a model-identity correction only. It does not change the registered four arms or authorize any experiment.
+
+### Artifact corroboration and retained repository evidence
+
+The model pins were independently captured twice by GitHub Actions:
+
+| Capture | Run ID | Artifact ID | Artifact name | Captured at (UTC) | Result |
+|---|---:|---:|---|---|---|
+| #2 | `43552152363` | `14096433464` | `four-arm-model-pins-64a40e15e06f4ba8c9b54e83164e795884fac96f` | `2026-11-14T03:32:39.099615+00:00` | All three repositories/revisions/weight SHA-256 values match capture #3 |
+| #3 | `43552413845` | `14096931828` | `four-arm-model-pins-04897f6bf9a7340346a6807c3bffdb0771278a7d` | `2026-11-14T03:35:31.106972+00:00` | Selected canonical evidence for repository copy |
+
+The two JSON payloads were downloaded and compared. The model revisions, model weight SHA-256 values, and tokenizer revision and SHA-256 are identical. The evidence has been copied into `config/four_arm/model_pins.json`; the repository copy is now the durable reference rather than the expiring CI artifacts.
+
+The contract fingerprints were also captured twice:
+
+| Capture | Run ID | Artifact ID | Artifact name | Captured at (UTC) |
+|---|---:|---:|---|---|
+| #1 | `43553975977` | `14097730906` | `four-arm-contract-fingerprints-9eb2db9655884c93af7655f1983a9588bfa57794` | `2026-11-14T03:54:28Z` |
+| #2 | `43554204478` | `14096939228` | `four-arm-contract-fingerprints-c432c44c2e42d274394da5f094e04358f13e60e5` | `2026-11-14T03:57:23Z` |
+
+Eight contract hashes are unchanged. Only `kronos_adapter_sha256` changed because the contract was amended to disclose the fixed, deterministic derivation of Kronos' required `amount` input from the available OHLCV fields. Capture #2 is the current fingerprint set and is retained in `config/four_arm/contract_fingerprints.json`; Capture #1 remains historical evidence and must not be substituted for the current Kronos adapter hash.
+
+These repository copies preserve metadata and hashes only. They do not contain OHLCV data, holdout rows, model outputs, or experiment results.
