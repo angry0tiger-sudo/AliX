@@ -14,13 +14,30 @@ from pathlib import Path
 import sys
 from typing import Any, Mapping, Sequence
 
-import numpy as np
-import pandas as pd
-
-from research.ai_ensemble.four_arm_execution_lock import (
+from research.four_arm_core.lock_validator import (
     ExecutionAuthorizationError,
     load_owner_authorized_execution_lock,
 )
+
+
+class _LazyThirdPartyModule:
+    """Resolve heavy inference dependencies only when runtime code uses them."""
+
+    def __init__(self, module_name: str) -> None:
+        self._module_name = module_name
+        self._module: Any | None = None
+
+    def __getattr__(self, attribute: str) -> Any:
+        module = self._module
+        if module is None:
+            module = importlib.import_module(self._module_name)
+            self._module = module
+        return getattr(module, attribute)
+
+
+np: Any = _LazyThirdPartyModule("numpy")
+pd: Any = _LazyThirdPartyModule("pandas")
+
 
 PREHACK_DATASET_SHA256 = (
     "0aa13607d1da68c4720919f233635bb33d34048e5bd67d3ecc2ce9bb7c2b462e"
