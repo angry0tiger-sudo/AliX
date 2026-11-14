@@ -325,8 +325,6 @@ def test_committed_execution_lock_records_a_bounded_owner_state() -> None:
         )
 
 
-
-
 def test_four_arm_workflow_is_dispatch_only_and_mock_only() -> None:
     repository_root = Path(__file__).resolve().parents[2]
     workflow_path = (

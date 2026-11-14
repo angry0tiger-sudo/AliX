@@ -40,7 +40,9 @@ def _authorized_lock_payload(repository_root: Path) -> dict[str, object]:
                 "tokenizer": {
                     "repository": models["kronos_small"]["tokenizer"]["repository"],
                     "revision": models["kronos_small"]["tokenizer"]["revision"],
-                    "weights_sha256": models["kronos_small"]["tokenizer"]["weights_sha256"],
+                    "weights_sha256": models["kronos_small"]["tokenizer"][
+                        "weights_sha256"
+                    ],
                 },
             },
             "chronos_2": {

@@ -126,7 +126,6 @@ class ForecastCache:
     entries_json: str
 
 
-
 def _sha256_file(path: Path) -> str:
     digest = sha256()
     with path.open("rb") as stream:
@@ -780,9 +779,7 @@ def _signals_from_forecast_cache(
         elif arm_id == "C":
             signal = forecast.chronos_return > threshold
         else:
-            combined_return = (
-                forecast.kronos_return + forecast.chronos_return
-            ) / 2.0
+            combined_return = (forecast.kronos_return + forecast.chronos_return) / 2.0
             signal = combined_return > threshold
         stop = min(anchor + FORECAST_REFRESH_BARS, row_count)
         signals[anchor:stop] = signal
@@ -1078,8 +1075,7 @@ def _simulate_all_folds(
     atr: np.ndarray,
 ) -> dict[int, Sequence[Trade]]:
     return {
-        fold.fold_id: _simulate_fold_trades(frame, fold, signals, atr)
-        for fold in folds
+        fold.fold_id: _simulate_fold_trades(frame, fold, signals, atr) for fold in folds
     }
 
 
@@ -1168,7 +1164,13 @@ def _build_trial_cell(
         )
         fold_trades = _simulate_all_folds(frame, folds, signals, atr)
     manifest = _arm_manifest(
-        arm_id, trial_id, threshold_bps, fold_trades, dataset_sha256, folds, forecast_cache
+        arm_id,
+        trial_id,
+        threshold_bps,
+        fold_trades,
+        dataset_sha256,
+        folds,
+        forecast_cache,
     )
     _decorate_trial_manifest(
         manifest,
@@ -1192,9 +1194,7 @@ def _build_twelve_trial_manifests(
 ) -> list[dict[str, Any]]:
     baseline_signals = _baseline_signals(frame, atr)
     # Compute the control trade series once; the three matched-control cells reuse it.
-    baseline_fold_trades = _simulate_all_folds(
-        frame, folds, baseline_signals, atr
-    )
+    baseline_fold_trades = _simulate_all_folds(frame, folds, baseline_signals, atr)
     manifests: list[dict[str, Any]] = []
     for threshold_bps in THRESHOLDS_BPS:
         for arm_id in ("A", "B", "C", "D"):
@@ -1210,9 +1210,7 @@ def _build_twelve_trial_manifests(
                 pins=pins,
                 model_pin_path=model_pin_path,
             )
-            _write_json(
-                output_dir / f"trial-{threshold_bps}-{arm_id}.json", manifest
-            )
+            _write_json(output_dir / f"trial-{threshold_bps}-{arm_id}.json", manifest)
             manifests.append(manifest)
 
     expected_ids = {
@@ -1296,8 +1294,6 @@ def _build_run_report(
     }
 
 
-
-
 def run_synthetic_mode(output_dir: Path) -> dict[str, Any]:
     """Write structural four-arm manifests from a deterministic synthetic fixture."""
     generator = np.random.default_rng(SEED)
@@ -1377,9 +1373,7 @@ def run_real_experiment(
     if validate_lock_only:
         return None
 
-    full_frame, dataset_sha = _load_verified_prehack_data(
-        csv_path, data_manifest_path
-    )
+    full_frame, dataset_sha = _load_verified_prehack_data(csv_path, data_manifest_path)
     if len(full_frame) != PREHACK_ROW_COUNT:
         raise FourArmExecutionError("prehack_source_row_count_invalid")
     frame = full_frame.iloc[:CONFIRMATORY_ROW_COUNT].copy().reset_index(drop=True)
@@ -1391,9 +1385,7 @@ def run_real_experiment(
     models = _load_cpu_models(
         pins, model_pin_path, kronos_code_dir, model_artifacts_dir
     )
-    forecast_cache = _build_forecast_cache(
-        frame, models, pins, lock, dataset_sha
-    )
+    forecast_cache = _build_forecast_cache(frame, models, pins, lock, dataset_sha)
 
     output_dir.mkdir(parents=True, exist_ok=True)
     _write_forecast_cache_artifact(output_dir, forecast_cache)
@@ -1415,8 +1407,6 @@ def run_real_experiment(
     )
     _write_json(output_dir / "four-arm-run-report.json", report)
     return report
-
-
 
 
 def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
