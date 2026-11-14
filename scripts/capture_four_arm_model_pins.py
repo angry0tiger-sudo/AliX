@@ -83,17 +83,25 @@ def capture_pin(spec: dict[str, str]) -> dict[str, Any]:
     if not isinstance(lfs_info, dict):
         raise ModelPinError(f"weight_lfs_digest_missing:{repository}:{weight_file}")
 
-    oid = lfs_info.get("oid")
-    size = lfs_info.get("size")
-    if not isinstance(oid, str) or not oid.startswith("sha256:"):
-        raise ModelPinError(f"weight_sha256_missing:{repository}:{weight_file}")
-    weight_sha256 = oid.removeprefix("sha256:")
+    raw_digest = lfs_info.get("oid", lfs_info.get("sha256"))
+    if not isinstance(raw_digest, str):
+        raise ModelPinError(
+            f"weight_sha256_missing:{repository}:{weight_file}:"
+            f"lfs_keys={sorted(lfs_info.keys())}"
+        )
+    weight_sha256 = raw_digest.removeprefix("sha256:")
     if not _SHA64.fullmatch(weight_sha256):
-        raise ModelPinError(f"weight_sha256_invalid:{repository}:{weight_file}")
+        raise ModelPinError(
+            f"weight_sha256_invalid:{repository}:{weight_file}:"
+            f"lfs_oid_format={raw_digest[:24]}"
+        )
+
+    size = lfs_info.get("size", weight_entry.get("size"))
     if isinstance(size, bool) or not isinstance(size, int) or size <= 0:
         raise ModelPinError(f"weight_size_invalid:{repository}:{weight_file}")
 
-    license_name = info.get("cardData", {}).get("license")
+    card_data = info.get("cardData")
+    license_name = card_data.get("license") if isinstance(card_data, dict) else None
     return {
         "role": spec["role"],
         "repository": repository,
