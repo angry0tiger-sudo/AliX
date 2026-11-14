@@ -21,7 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 480
     env:
-      ALIX_FOUR_ARM_EXECUTION_AUTHORIZED: "true"
+      ALIX_FOUR_ARM_EXECUTION_AUTHORIZED: "false"
       ALIX_DRY_RUN: "true"
       ALIX_ALLOW_LIVE_TRADING: "false"
       HF_HUB_DISABLE_TELEMETRY: "1"

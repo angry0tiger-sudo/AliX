@@ -459,3 +459,17 @@ No experiment has been run for this amendment. The execution lock remains NOT_AU
 - The immutable full-prefix forecast cache is computed once for 27,825 eligible rows; all folds and threshold cells reuse it.
 - All economic records must include NetPF at 50/90 bps, completed trades, MaxDD, all per-fold metrics, DSR status, and 1×/2×/5×/10× sensitivity disclosure.
 - GLOBAL_N remains UNKNOWN; numeric DSR is prohibited until the global candidate cohort is reconciled.
+
+
+---
+
+## [APPEND] Four-arm run #2 — fail-closed bootstrap stop before research I/O (2026-11-14)
+
+- Execution workflow Run ID: \`43593275732\`; trigger commit: \`a540589da0db617d2cd0f3ffa24ba78a7245feb8\`.
+- One-time trigger validation: PASS. Exact-SHA Standard CI #2402 / Run ID \`43593275721\`: SUCCESS. Preflight #10 / Run ID \`43593275720\`, artifact \`14113491751\`: seven tools all exit code 0; pytest \`980 passed, 5 skipped\`.
+- Execution stopped at the lock-only preflight step before the lock validator or any research I/O. The exact bootstrap failure was \`ModuleNotFoundError: No module named 'numpy'\` at module-level import in \`scripts/run_four_arm_experiment.py:17\`.
+- Dataset CSV and manifest were not opened; the pinned weights artifact was not downloaded by this execution run; no model source was checked out, no model was loaded, no inference or backtest occurred, and no post-hack holdout was accessed.
+- Evaluated candidate count: **0**. All twelve ADR-038 cells remain \`REGISTERED_NOT_EVALUATED\`; no NetPF, trade count, MaxDD, fold metric or DSR result exists for this attempt. No candidate trial record is fabricated.
+- Stop rule: **STOP — no automatic retry or second execution dispatch**. The earlier Experiment #1 was separately stopped at its PROBE guard and also performed no research I/O.
+- Safety closeout: execution lock reverted to \`NOT_AUTHORIZED\`; \`owner_authorization_commit_sha=null\`; workflow authorization environment reverted to false; \`EXECUTION_TRIGGER=PROBE\`. \`ALIX_DRY_RUN=true\` and \`ALIX_ALLOW_LIVE_TRADING=false\` remain enforced.
+- V2, Spec v3, persisted pre-hack CSV/manifest, public fetcher and frozen main were not modified. Holdout remains sealed under ADR-039; \`GLOBAL_N=UNKNOWN\` remains.
