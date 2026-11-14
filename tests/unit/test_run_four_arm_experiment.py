@@ -8,7 +8,6 @@ from pathlib import Path
 import pytest
 
 from scripts.run_four_arm_experiment import (
-    FourArmExecutionError,
     build_walk_forward_folds,
     run_synthetic_mode,
 )
