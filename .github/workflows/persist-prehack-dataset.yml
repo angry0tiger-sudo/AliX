@@ -1,0 +1,297 @@
+name: Persist Verified Pre-Hack Nobitex Dataset
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - research/nobitex-hf-strategy
+    paths:
+      - ".github/workflows/persist-prehack-dataset.yml"
+      - "data/nobitex/prehack/README.md"
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: alix-prehack-dataset-persistence
+  cancel-in-progress: false
+
+jobs:
+  persist-prehack-dataset:
+    if: github.ref == 'refs/heads/research/nobitex-hf-strategy'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TARGET_BRANCH: research/nobitex-hf-strategy
+      GH_API_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout exact triggering branch
+        uses: actions/checkout@v4
+        with:
+          ref: research/nobitex-hf-strategy
+          persist-credentials: true
+
+      - name: Download the exact retained source artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: alix-binance-hf-proxy-research
+          path: .source-artifact
+          repository: ${{ github.repository }}
+          run-id: "43274590426"
+          github-token: ${{ github.token }}
+
+      - name: Verify CSV bytes, manifest, row count and exact hourly grid
+        id: verify
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import csv
+          import hashlib
+          import json
+          from datetime import datetime, timedelta, timezone
+          from pathlib import Path
+          import shutil
+
+          expected_sha = "0aa13607d1da68c4720919f233635bb33d34048e5bd67d3ecc2ce9bb7c2b462e"
+          expected_rows = 31801
+          expected_start = datetime.fromtimestamp(1635712200, timezone.utc)
+          expected_end = datetime.fromtimestamp(1750192200, timezone.utc)
+
+          root = Path(".source-artifact")
+          csv_candidates = list(root.rglob("nobitex-btcusdt-1h.csv"))
+          manifest_candidates = list(root.rglob("nobitex-btcusdt-1h.manifest.json"))
+          if len(csv_candidates) != 1 or len(manifest_candidates) != 1:
+              raise SystemExit("SOURCE_ARTIFACT_LAYOUT_INVALID")
+          source_csv, source_manifest = csv_candidates[0], manifest_candidates[0]
+
+          raw = source_csv.read_bytes()
+          digest = hashlib.sha256(raw).hexdigest()
+          if digest != expected_sha:
+              raise SystemExit(f"PREHACK_SHA256_MISMATCH:{digest}")
+          if len(raw) != 1897551:
+              raise SystemExit(f"PREHACK_BYTE_LENGTH_MISMATCH:{len(raw)}")
+
+          manifest = json.loads(source_manifest.read_text(encoding="utf-8"))
+          required = {
+              "csv_sha256": expected_sha,
+              "row_count": expected_rows,
+              "expected_candles": expected_rows,
+              "start_timestamp": 1635712200,
+              "end_timestamp": 1750192200,
+              "missing_intervals": 0,
+              "public_api_only": True,
+              "credentials_used": False,
+              "private_api_calls": 0,
+              "exchange_calls": 0,
+              "real_order_attempts": 0,
+              "Champion": None,
+              "order_permission": False,
+              "trading_authorization": "NO-GO",
+              "source_policy": "NOBITEX_ONLY_NO_BACKFILL",
+              "dataset_window": "PRE_HACK_NOBITEX_ONLY",
+          }
+          for key, expected in required.items():
+              if manifest.get(key) != expected:
+                  raise SystemExit(f"MANIFEST_MISMATCH:{key}:{manifest.get(key)!r}")
+
+          timestamps = []
+          with source_csv.open("r", encoding="utf-8", newline="") as stream:
+              reader = csv.DictReader(stream)
+              expected_columns = ["date", "open", "high", "low", "close", "volume"]
+              if reader.fieldnames != expected_columns:
+                  raise SystemExit(f"CSV_SCHEMA_MISMATCH:{reader.fieldnames!r}")
+              for index, row in enumerate(reader, start=1):
+                  stamp = datetime.fromisoformat(row["date"].replace("Z", "+00:00"))
+                  if stamp.tzinfo is None or stamp.utcoffset() != timedelta(0):
+                      raise SystemExit(f"NON_UTC_TIMESTAMP:{index}")
+                  opened = float(row["open"])
+                  high = float(row["high"])
+                  low = float(row["low"])
+                  close = float(row["close"])
+                  volume = float(row["volume"])
+                  if not (low <= min(opened, close) <= max(opened, close) <= high):
+                      raise SystemExit(f"INVALID_OHLC:{index}")
+                  if volume < 0:
+                      raise SystemExit(f"NEGATIVE_VOLUME:{index}")
+                  timestamps.append(stamp)
+
+          if len(timestamps) != expected_rows:
+              raise SystemExit(f"ROW_COUNT_MISMATCH:{len(timestamps)}")
+          if timestamps[0] != expected_start or timestamps[-1] != expected_end:
+              raise SystemExit("BOUNDARY_MISMATCH")
+          if any(right - left != timedelta(hours=1) for left, right in zip(timestamps, timestamps[1:])):
+              raise SystemExit("HOURLY_GRID_GAP_OR_DUPLICATE")
+
+          target = Path("data/nobitex/prehack")
+          target.mkdir(parents=True, exist_ok=True)
+          target_csv = target / "nobitex-btcusdt-1h.csv"
+          target_manifest = target / "nobitex-btcusdt-1h.manifest.json"
+          if target_csv.exists() or target_manifest.exists():
+              raise SystemExit("TARGET_ALREADY_EXISTS_FAIL_CLOSED")
+
+          shutil.copyfile(source_csv, target_csv)
+          manifest["retention_provenance"] = {
+              "retained_at_utc": datetime.now(timezone.utc).isoformat(),
+              "retention_reason": "Owner-authorized preservation of the exact public pre-hack dataset before source artifact expiry",
+              "source_workflow_run_id": 43274590426,
+              "source_workflow_head_sha": "bc493e24b9e3f849b6d9fbd0b776d15b39b8061f",
+              "source_artifact_id": 13971011148,
+              "source_artifact_name": "alix-binance-hf-proxy-research",
+              "source_artifact_created_at_utc": "2026-11-12T18:05:52Z",
+              "source_artifact_expires_at_utc": "2026-12-12T18:05:52Z",
+              "source_artifact_zip_sha256": "ae7a4d00fe2ec753b28868e4849fea4d45c88f1fd25b366b64298d7fec809b21",
+              "csv_sha256_verified_before_persistence": digest,
+              "csv_bytes": len(raw),
+              "download_method": "GitHub Actions cross-run artifact download; no market-data re-fetch",
+          }
+          target_manifest.write_text(
+              json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps({
+              "status": "PREHACK_DATA_VERIFIED",
+              "csv_sha256": digest,
+              "row_count": len(timestamps),
+              "csv_bytes": len(raw),
+              "start_utc": timestamps[0].isoformat(),
+              "end_utc": timestamps[-1].isoformat(),
+              "target_csv": str(target_csv),
+              "target_manifest": str(target_manifest),
+          }, indent=2))
+          PY
+
+      - name: Append data durability evidence and create ADR-037
+        run: |
+          set -euo pipefail
+          grep -q "## 4. Pre-hack dataset persistence completion" docs/architecture/decisions/ADR-036-data-durability-risks.md && {
+            echo "ADR-036 persistence section already exists; refusing duplicate append"
+            exit 1
+          } || true
+          cat >> docs/architecture/decisions/ADR-036-data-durability-risks.md <<'EOF'
+
+          ## 4. Pre-hack dataset persistence completion (Owner directive, 2026-11-14)
+
+          The exact pre-hack CSV from the previously identified GitHub Actions artifact was downloaded and verified before persistence:
+
+          - Source workflow Run ID: 43274590426.
+          - Source branch commit: bc493e24b9e3f849b6d9fbd0b776d15b39b8061f.
+          - Source artifact ID: 13971011148 (alix-binance-hf-proxy-research).
+          - Actual artifact expiry: 2026-12-12T18:05:52Z.
+          - Artifact ZIP SHA-256: ae7a4d00fe2ec753b28868e4849fea4d45c88f1fd25b366b64298d7fec809b21.
+          - CSV SHA-256 verified before persistence: 0aa13607d1da68c4720919f233635bb33d34048e5bd67d3ecc2ce9bb7c2b462e.
+          - CSV size: 1,897,551 bytes.
+          - Rows: 31,801; inclusive candle-open range: 2021-10-31T20:30:00Z through 2025-06-17T20:30:00Z.
+          - Repository path: data/nobitex/prehack/nobitex-btcusdt-1h.csv, with an adjacent provenance manifest.
+
+          The CSV was copied from the retained artifact. No new Nobitex request, refetch, reconstruction, interpolation, or serialization change was used. The persistence workflow independently re-verifies the file SHA, row count, exact one-hour timestamp grid, boundary timestamps, OHLC invariants, source manifest and public-only safety metadata before committing.
+
+          The Phase-10 no-market-data-in-Git convention is superseded only for this exact fixed public pre-hack Nobitex dataset by ADR-037. No general permission to commit other market datasets is implied.
+
+          ### Holdout status reaffirmed
+
+          The post-hack holdout remains NOT PERSISTED. V2 remains FETCHED_LOCKED with dataset_persisted=false, SHA-256 435b313086b78ba8d3caa2e97834c6fabebbbd12eeddcb2865d65982279f33ee, 11,700 rows, and acquisition Run ID 43443886254. No holdout OHLCV bytes were included in this commit or opened.
+
+          The existing exact Spec v3 re-fetch plus canonical SHA-256 match protocol remains in force. Any row-count, grid, gap, serialization or digest mismatch remains fail-closed and STOP. A future opening still requires a separate Owner Release Authorization; this pre-hack retention decision does not authorize holdout access.
+          EOF
+          cat > docs/architecture/decisions/ADR-037-persistent-prehack-dataset.md <<'EOF'
+          # ADR-037: Persist the Exact Public Pre-Hack Nobitex Dataset
+
+          - Status: Accepted under the explicit Owner directive dated 2026-11-14.
+          - Date: 2026-11-14.
+          - Governance: MRD v0.9, QWEN.md, ADR-0010, ADR-0012, ADR-032, ADR-036.
+          - Scope: One exact, already-acquired public Nobitex BTC/USDT Spot 1h pre-hack dataset. This ADR does not authorize new market-data acquisition, holdout access, model evaluation, or trading.
+
+          ## Context and expiring source
+
+          The exact 31,801-row pre-hack CSV was retained only in GitHub Actions artifact 13971011148, from workflow Run ID 43274590426. GitHub's artifact metadata reported the actual expiry as 2026-12-12T18:05:52Z. Expiration would remove the only currently identified retrievable copy and undermine reproducibility of the registered four-arm research dataset.
+
+          The artifact was downloaded and its ZIP digest verified as ae7a4d00fe2ec753b28868e4849fea4d45c88f1fd25b366b64298d7fec809b21. The CSV bytes were independently hashed before persistence; the exact registered digest matched.
+
+          ## Dataset identity and durable path
+
+          - Venue/source: Nobitex public UDF history API; public market OHLCV only.
+          - Instrument/timeframe: BTCUSDT Spot, 1h.
+          - Inclusive candle-open range: 2021-10-31T20:30:00Z through 2025-06-17T20:30:00Z.
+          - Rows: 31,801.
+          - CSV bytes: 1,897,551.
+          - CSV SHA-256: 0aa13607d1da68c4720919f233635bb33d34048e5bd67d3ecc2ce9bb7c2b462e.
+          - Source artifact ID: 13971011148; source run ID: 43274590426.
+          - Artifact expiry: 2026-12-12T18:05:52Z.
+          - Artifact ZIP SHA-256: ae7a4d00fe2ec753b28868e4849fea4d45c88f1fd25b366b64298d7fec809b21.
+          - Durable CSV path: data/nobitex/prehack/nobitex-btcusdt-1h.csv.
+          - Adjacent manifest: data/nobitex/prehack/nobitex-btcusdt-1h.manifest.json.
+
+          The repository copy is the byte-for-byte CSV from the source artifact, not a re-fetch or regenerated serialization. The manifest preserves the source acquisition metadata and adds the GitHub artifact provenance, original expiry and pre-persistence verification evidence.
+
+          ## Narrow supersession of Phase-10 data-storage convention
+
+          ADR-0010, Decision 7, established the Phase-10 convention to upload market-data CSVs as Actions artifacts and not commit market data. That convention is expressly superseded only for the exact dataset identified in this ADR.
+
+          Reasons for this narrow exception:
+
+          1. The data is public exchange OHLCV, not personal data, account data, credentials, private API output, order/fill truth, or secrets.
+          2. The current source artifact has a fixed, near-term expiry (2026-12-12T18:05:52Z); losing it would destroy the only identified retrievable copy of the exact byte sequence.
+          3. Re-fetching later cannot guarantee byte-identical serialization or an identical historical source response. The registered SHA-256 must remain reproducible.
+          4. The dataset is the fixed, already-registered input to research; retaining exact bytes is necessary for auditability, controlled reruns and future evidence comparison.
+
+          This exception does not change the default Phase-10 rule for other market data, other exchanges, new datasets, or future acquisitions. Those require their own Owner authorization and governance record.
+
+          ## Integrity and usage limits
+
+          - The CSV SHA-256 must remain exactly 0aa13607d1da68c4720919f233635bb33d34048e5bd67d3ecc2ce9bb7c2b462e; any mismatch is a hard failure.
+          - Row count, exact hourly grid, first/last timestamps, and OHLC invariants are validated before commit.
+          - No cross-venue substitution, backfill, interpolation, masking, synthetic fill or timestamp adjustment is permitted.
+          - The known contaminated final 12.5% segment remains excluded from confirmatory scoring under the forecast-driven amendment; persistence does not make it pristine.
+          - This ADR does not resolve GLOBAL_N=UNKNOWN or prove a positive economic edge.
+          - No post-hack holdout bytes are stored here. V2 remains FETCHED_LOCKED, dataset_persisted=false; future access remains subject to exact Spec v3 re-fetch and SHA-256 match and a separate Owner Release Authorization.
+
+          ## Safety boundary
+
+          - Champion=null
+          - order_permission=false
+          - trading_authorization=NO-GO
+          - private_api_calls=0
+          - real_order_attempts=0
+          - ALIX_DRY_RUN=true
+          - ALIX_ALLOW_LIVE_TRADING=false
+          - main=FROZEN
+
+          This is a data-retention decision only. It does not execute the four-arm experiment, authorize Paper Trading, or release the post-hack holdout.
+          EOF
+
+      - name: Commit exact dataset and append-only ADR evidence
+        id: commit
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- \
+            data/nobitex/prehack/nobitex-btcusdt-1h.csv \
+            data/nobitex/prehack/nobitex-btcusdt-1h.manifest.json \
+            docs/architecture/decisions/ADR-036-data-durability-risks.md \
+            docs/architecture/decisions/ADR-037-persistent-prehack-dataset.md
+          git diff --cached --check
+          git diff --cached --stat
+          git commit -m "data(research): persist exact prehack Nobitex dataset"
+          commit_sha="$(git rev-parse HEAD)"
+          git push origin "HEAD:refs/heads/${TARGET_BRANCH}"
+          echo "commit_sha=${commit_sha}" >> "$GITHUB_OUTPUT"
+          echo "DATA_COMMIT_SHA=${commit_sha}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Dispatch Standard CI on the data commit
+        run: |
+          set -euo pipefail
+          payload="$(python - <<'PY'
+          import json, os
+          print(json.dumps({"ref": os.environ["TARGET_BRANCH"]}))
+          PY
+          )"
+          curl --fail-with-body --silent --show-error \
+            --request POST \
+            --header "Authorization: Bearer ${GH_API_TOKEN}" \
+            --header "Accept: application/vnd.github+json" \
+            --header "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/dispatches" \
+            --data "${payload}"
+          echo "Standard CI workflow_dispatch requested for ${TARGET_BRANCH}; expected commit: ${{ steps.commit.outputs.commit_sha }}" >> "$GITHUB_STEP_SUMMARY"
