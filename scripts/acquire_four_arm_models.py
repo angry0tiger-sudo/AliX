@@ -84,7 +84,6 @@ def _verify_https_redirect_chain(response: httpx.Response) -> None:
             raise ModelAcquisitionError("model_download_redirect_host_rejected")
 
 
-
 def _load_pin_manifest(path: Path) -> dict[str, Any]:
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
@@ -195,6 +194,7 @@ def _fetch_repo_files(
 ) -> list[str]:
     payload = _fetch_revision_payload(client, repository, revision)
     return _select_pinned_repo_files(payload, repository, weight_file)
+
 
 def _download_asset(
     client: httpx.Client,

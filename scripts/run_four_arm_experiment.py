@@ -402,7 +402,6 @@ def _model_pin_groups(
     }
 
 
-
 def _artifact_record_values(
     record: Any,
 ) -> tuple[str, str, int]:
@@ -506,9 +505,7 @@ def _assert_model_artifact_identity(
     expected_size: Any,
 ) -> None:
     if record.get("sha256") != expected_sha:
-        raise FourArmExecutionError(
-            f"model_artifact_weight_sha256_mismatch:{group}"
-        )
+        raise FourArmExecutionError(f"model_artifact_weight_sha256_mismatch:{group}")
     if record.get("repository") != pin.get("repository"):
         raise FourArmExecutionError(f"model_artifact_repository_mismatch:{group}")
     if record.get("revision") != pin.get("revision"):
@@ -549,6 +546,7 @@ def _verify_model_artifacts(
         group: _verify_model_weight(group, pin, verified, artifact_dir)
         for group, pin in _model_pin_groups(pins).items()
     }
+
 
 def _load_cpu_models(
     pins: Mapping[str, Any],

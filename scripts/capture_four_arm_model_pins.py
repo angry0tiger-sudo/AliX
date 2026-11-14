@@ -71,7 +71,6 @@ def _fetch_repo_metadata(repository: str) -> dict[str, Any]:
     return payload
 
 
-
 def _find_weight_entry(
     repository: str,
     weight_file: str,
@@ -142,6 +141,7 @@ def _verify_weight_digest(
     digest = _normalize_weight_digest(repository, weight_file, lfs_info)
     size = _require_weight_size(repository, weight_file, lfs_info, entry)
     return digest, size
+
 
 def _build_pin_record(
     spec: dict[str, str],
