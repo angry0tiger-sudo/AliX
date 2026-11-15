@@ -503,3 +503,18 @@ No experiment has been run for this amendment. The execution lock remains NOT_AU
 - Stop rule: **STOP — no retry or second dispatch** under this directive. Any future attempt requires a new owner directive and a corrected workspace-contained Kronos checkout path, followed by fresh exact-SHA CI/Preflight and a fresh one-time nonce.
 - Safety closeout: execution lock `NOT_AUTHORIZED`; `owner_authorization_commit_sha=null`; workflow env `ALIX_FOUR_ARM_EXECUTION_AUTHORIZED=false`; `EXECUTION_TRIGGER=PROBE`; `ACQUISITION_TRIGGER=PROBE`; `ALIX_DRY_RUN=true`; `ALIX_ALLOW_LIVE_TRADING=false`.
 - V2, Spec v3, frozen main, public fetcher, and pre-hack data files were not changed. No price/OHLCV values were printed or logged. The holdout remained sealed.
+
+
+---
+
+## [APPEND] Four-arm run #8 — runtime stop before trial evaluation (2026-11-15)
+
+- Fresh one-time nonce: `2b7b1d3ede8204e2cf3d5f7b02c879c5`; arming commit: `130d32fecc37e9515eddb784527a02cd25cc1e5e`; execution workflow Run ID: `43696399884` (run #8), conclusion **failure**.
+- Exact-SHA gates: Standard CI #2426 / Run ID `43696399859` — **SUCCESS**; Seven-tool Preflight #30 / Run ID `43696399832`, artifact `14154681106` — **SUCCESS**. The seven tools each exited 0. One-time nonce guard, complete immutable lock-only validation and bare-env stdlib lock job all passed.
+- Runtime sequence: pinned CPU-only inference dependencies installed successfully; Acquisition #1 weights artifact `four-arm-model-weights-43590408032` (run `43590408032`, artifact `14111134121`) downloaded with SHA-256 `752df2962cf2bb6aac1e10ebbb66652f722cf6176519fdc0ad631a592a8eaf06`; pinned Kronos checkout succeeded inside the GitHub workspace; dependency-import preflight passed for 11 modules.
+- **Failing step 10:** `Run all twelve preregistered trials on the verified pre-hack prefix`. Exact traceback terminus: `ModuleNotFoundError: No module named 'research'` at `scripts/run_four_arm_experiment.py:17`, exit code `1`, while importing `research.four_arm_core.lock_validator`.
+- The failure occurred during module import before the runner entered trial execution or opened the pre-hack CSV/manifest. No forecast cache, inference, trade simulation, fold evaluation or economic metric was produced. The upload step found no `four-arm-results/*.json`; no manifest artifact was created.
+- Evaluated economic candidates: **0**. All twelve ADR-038 cells remain **REGISTERED_NOT_EVALUATED**. No NetPF@50/90, trades, MaxDD, per-fold metrics or DSR result exists; no placeholder result records are fabricated. `GLOBAL_N=UNKNOWN` remains unchanged. This is an **engineering/runtime STOP**, not an economic NO-GO for the directional family. No family-level closeout or volatility pivot is justified by this run.
+- Stop rule: **STOP — no retry or second execution dispatch** under this directive. Any future attempt requires a new owner directive and a separately verified launcher/import-path correction, followed by fresh exact-SHA CI/Preflight and a fresh one-time nonce.
+- Safety closeout: lock `NOT_AUTHORIZED`; `owner_authorization_commit_sha=null`; workflow env `ALIX_FOUR_ARM_EXECUTION_AUTHORIZED=false`; `EXECUTION_TRIGGER=PROBE`; `ACQUISITION_TRIGGER=PROBE`; `ALIX_DRY_RUN=true`; `ALIX_ALLOW_LIVE_TRADING=false`.
+- V2, Spec v3, frozen main, public fetcher and `data/nobitex/prehack/*` were not modified. No post-hack holdout access, private API call or real-order attempt occurred. No price/OHLCV values were printed or logged.
