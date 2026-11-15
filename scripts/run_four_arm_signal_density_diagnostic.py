@@ -140,16 +140,25 @@ def _build_forecast_cache(
         anchor = item.get("anchor_index")
         kronos = item.get("kronos_return")
         chronos = item.get("chronos_return")
-        numeric = isinstance(kronos, (int, float)) and isinstance(chronos, (int, float))
-        if type(anchor) is not int or not numeric:
+        if (
+            not isinstance(anchor, int)
+            or isinstance(anchor, bool)
+            or not isinstance(kronos, (int, float))
+            or isinstance(kronos, bool)
+            or not isinstance(chronos, (int, float))
+            or isinstance(chronos, bool)
+        ):
             raise DiagnosticError("diagnostic_cache_entry_fields_invalid")
-        if not math.isfinite(float(kronos)) or not math.isfinite(float(chronos)):
+        anchor_value = int(anchor)
+        kronos_value = float(kronos)
+        chronos_value = float(chronos)
+        if not math.isfinite(kronos_value) or not math.isfinite(chronos_value):
             raise DiagnosticError("diagnostic_cache_non_finite_forecast")
-        anchors.append(anchor)
+        anchors.append(anchor_value)
         forecasts.append(
             four_arm.Forecast(
-                kronos_return=float(kronos),
-                chronos_return=float(chronos),
+                kronos_return=kronos_value,
+                chronos_return=chronos_value,
             )
         )
     if tuple(anchors) != expected_anchors:
@@ -581,12 +590,12 @@ def _render_markdown(report: dict[str, Any]) -> str:
     )
     for cell in report["cells"]:
         histogram = cell["aggregate"]["forecast_margin_histogram"]
-        values = [histogram[label] for label in HISTOGRAM_LABELS]
+        histogram_values = [histogram[label] for label in HISTOGRAM_LABELS]
         lines.append(
             "| "
             + " | ".join([cell["arm_id"], str(cell["threshold_bps"])])
             + " | "
-            + " | ".join(str(v) for v in values)
+            + " | ".join(str(v) for v in histogram_values)
             + " |"
         )
     lines.extend(
