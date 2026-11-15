@@ -74,3 +74,13 @@ INSUFFICIENT_SAMPLE. All twelve original manifest records and all registry
 entries remain unchanged. `GLOBAL_N=UNKNOWN`; numeric DSR and all numeric
 sensitivity values remain MISSING. This correction repairs report semantics
 only; it does not recompute, relabel, or reinterpret Run #10.
+
+### Report schema versioning addendum (2026-11-15)
+
+Because the corrected report replaces the former constant verdict keys with
+decision-derived cohort and promotion fields, the run-report schema identifier
+is explicitly advanced from `alix.four-arm-run-report.v2` to
+`alix.four-arm-run-report.v3`. The verdict contract test asserts the v3
+identifier. This is an output-contract version change only; Run #10 data,
+trial classifications, registry history, `GLOBAL_N`, and all DSR disclosures
+remain unchanged.

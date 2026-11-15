@@ -285,6 +285,9 @@ def test_run_report_verdicts_are_derived_from_trial_decisions() -> None:
     under_sampled = build_report(["INSUFFICIENT_SAMPLE", "INSUFFICIENT_SAMPLE"])
     all_failed = build_report(["NO_GO_ECONOMIC_GATES", "NO_GO_ECONOMIC_GATES"])
 
+    assert mixed["schema_version"] == "alix.four-arm-run-report.v3"
+    assert under_sampled["schema_version"] == "alix.four-arm-run-report.v3"
+    assert all_failed["schema_version"] == "alix.four-arm-run-report.v3"
     assert mixed["cohort_verdict"] == "MIXED_COHORT"
     assert mixed["promotion_gate_status"] == (
         "BLOCKED_BY_SAMPLE_GATE_AND_ECONOMIC_GATES"

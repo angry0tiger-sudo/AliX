@@ -1320,7 +1320,7 @@ def _build_run_report(
     forecast_cache: ForecastCache,
 ) -> dict[str, Any]:
     return {
-        "schema_version": "alix.four-arm-run-report.v2",
+        "schema_version": "alix.four-arm-run-report.v3",
         "mode": "REAL_PREHACK_ADR038_FORECAST_DRIVEN",
         "dataset_sha256": dataset_sha256,
         "source_dataset_rows": PREHACK_ROW_COUNT,
