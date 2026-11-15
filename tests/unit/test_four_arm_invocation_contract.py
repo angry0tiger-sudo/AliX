@@ -248,9 +248,7 @@ def test_real_smoke_report_is_explicitly_non_registry_and_non_economic(
     )
     cache = runner.ForecastCache(
         anchors=(511, 535, 559),
-        forecasts=tuple(
-            runner.Forecast(0.02, 0.03) for _ in range(3)
-        ),
+        forecasts=tuple(runner.Forecast(0.02, 0.03) for _ in range(3)),
         identity_sha256="a" * 64,
         cache_sha256="b" * 64,
         entries_json="[]",

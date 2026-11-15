@@ -1388,9 +1388,10 @@ def run_dependency_import_preflight(
 
     runner_module = importlib.import_module("scripts.run_four_arm_experiment")
     runner_path = getattr(runner_module, "__file__", None)
-    if not isinstance(runner_path, str) or Path(runner_path).resolve() != Path(
-        __file__
-    ).resolve():
+    if (
+        not isinstance(runner_path, str)
+        or Path(runner_path).resolve() != Path(__file__).resolve()
+    ):
         raise FourArmExecutionError("four_arm_runner_module_identity_mismatch")
 
     kronos_root = kronos_code_dir.resolve()
@@ -1461,13 +1462,8 @@ def run_real_smoke(
     _validate_lock_contract_fingerprints(lock, repository_root)
     pins = _load_model_pin_manifest(model_pin_path, lock)
 
-    full_frame, dataset_sha = _load_verified_prehack_data(
-        csv_path, data_manifest_path
-    )
-    if (
-        len(full_frame) != PREHACK_ROW_COUNT
-        or dataset_sha != PREHACK_DATASET_SHA256
-    ):
+    full_frame, dataset_sha = _load_verified_prehack_data(csv_path, data_manifest_path)
+    if len(full_frame) != PREHACK_ROW_COUNT or dataset_sha != PREHACK_DATASET_SHA256:
         raise FourArmExecutionError("prehack_source_identity_invalid")
     if SMOKE_ROW_COUNT > CONFIRMATORY_ROW_COUNT:
         raise FourArmExecutionError("smoke_prefix_exceeds_confirmatory_boundary")
@@ -1490,9 +1486,7 @@ def run_real_smoke(
     models = _load_cpu_models(
         pins, model_pin_path, kronos_code_dir, model_artifacts_dir
     )
-    forecast_cache = _build_forecast_cache(
-        frame, models, pins, lock, dataset_sha
-    )
+    forecast_cache = _build_forecast_cache(frame, models, pins, lock, dataset_sha)
     signals = _signals_from_forecast_cache(
         forecast_cache,
         len(frame),
@@ -1667,10 +1661,7 @@ def _run_dependency_import_preflight_cli(arguments: argparse.Namespace) -> int:
         print(f"FOUR_ARM_EXECUTION_REJECTED={exc}")
         return 3
     except (ImportError, AttributeError) as exc:
-        print(
-            "FOUR_ARM_DEPENDENCY_IMPORT_PREFLIGHT=FAIL:"
-            f"{type(exc).__name__}:{exc}"
-        )
+        print(f"FOUR_ARM_DEPENDENCY_IMPORT_PREFLIGHT=FAIL:{type(exc).__name__}:{exc}")
         return 5
     arguments.output_dir.mkdir(parents=True, exist_ok=True)
     _write_json(
@@ -1688,9 +1679,7 @@ def _run_real_smoke_cli(arguments: argparse.Namespace) -> int:
         or arguments.data_manifest is None
         or arguments.kronos_code_dir is None
     ):
-        raise SystemExit(
-            "real_smoke_requires_csv_manifest_and_pinned_kronos_source"
-        )
+        raise SystemExit("real_smoke_requires_csv_manifest_and_pinned_kronos_source")
     try:
         report = run_real_smoke(
             csv_path=arguments.csv,
@@ -1725,9 +1714,7 @@ def _run_full_real_experiment_cli(arguments: argparse.Namespace) -> int:
         or arguments.data_manifest is None
         or arguments.kronos_code_dir is None
     ):
-        raise SystemExit(
-            "real_mode_requires_csv_manifest_and_pinned_kronos_source"
-        )
+        raise SystemExit("real_mode_requires_csv_manifest_and_pinned_kronos_source")
     try:
         real_report = run_real_experiment(
             csv_path=arguments.csv,
@@ -1746,10 +1733,7 @@ def _run_full_real_experiment_cli(arguments: argparse.Namespace) -> int:
         print(f"FOUR_ARM_EXECUTION_REJECTED={exc}")
         return 3
     except (ImportError, AttributeError) as exc:
-        print(
-            "FOUR_ARM_REAL_EXECUTION_IMPORT_FAILED:"
-            f"{type(exc).__name__}:{exc}"
-        )
+        print(f"FOUR_ARM_REAL_EXECUTION_IMPORT_FAILED:{type(exc).__name__}:{exc}")
         return 5
     if real_report is None:
         print("FOUR_ARM_REPORT_MISSING")
@@ -1785,6 +1769,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if arguments.smoke:
         return _run_real_smoke_cli(arguments)
     return _run_full_real_experiment_cli(arguments)
+
 
 if __name__ == "__main__":
     raise SystemExit(main())
