@@ -473,3 +473,17 @@ No experiment has been run for this amendment. The execution lock remains NOT_AU
 - Stop rule: **STOP — no automatic retry or second execution dispatch**. The earlier Experiment #1 was separately stopped at its PROBE guard and also performed no research I/O.
 - Safety closeout: execution lock reverted to \`NOT_AUTHORIZED\`; \`owner_authorization_commit_sha=null\`; workflow authorization environment reverted to false; \`EXECUTION_TRIGGER=PROBE\`. \`ALIX_DRY_RUN=true\` and \`ALIX_ALLOW_LIVE_TRADING=false\` remain enforced.
 - V2, Spec v3, persisted pre-hack CSV/manifest, public fetcher and frozen main were not modified. Holdout remains sealed under ADR-039; \`GLOBAL_N=UNKNOWN\` remains.
+ 
+---
+
+## [APPEND] Four-arm run #4 — one-time trigger replay guard rejection (2026-11-15)
+
+- Trigger commit: `5eb9f26e3d7162a54a4140058d5d070fcc9eb77a`; execution workflow Run ID: `43681763697` (run #4).
+- The workflow failed at Step 3, **Validate one-time execution trigger**, with the exact guard error `FOUR_ARM_EXECUTION_TRIGGER_REPLAYED`.
+- The event parent was `fcf3fe4958f9fa95051afeb5a8000a84893a157a`. The guard's history scan correctly found a prior `EXECUTE` transition in commit `a540589da0db617d2cd0f3ffa24ba78a7245feb8` (2026-11-14); that earlier one-time authorization was subsequently revoked by `c1e4239bb3db60a1e070cd8c2326936fd575bf72`.
+- This one-time trigger is therefore **consumed**. It is not safe to re-arm or retry using the same trigger contract. The failure occurred before lock-only validation, dependency installation, model-artifact download, Kronos checkout, inference or data access.
+- The workflow's upload step found no result JSON files; no trial-manifest artifact was produced. The pre-hack CSV and manifest were not opened. No forecast cache, trade simulation, fold evaluation, economic metric or candidate result was produced. Post-hack holdout access remained forbidden and did not occur.
+- Evaluated economic candidates: **0**. All twelve ADR-038 cells remain **REGISTERED_NOT_EVALUATED**. Do not append placeholder trial metrics or count this guard rejection as a candidate evaluation.
+- This is an **engineering/authorization STOP before research I/O**, not an economic NO-GO for the directional family. `GLOBAL_N = UNKNOWN` remains unchanged; there is no basis for a family-level economic verdict or a volatility pivot execution.
+- Safety closeout in the same append operation: execution lock `NOT_AUTHORIZED`; `owner_authorization_commit_sha=null`; workflow authorization environment `false`; `EXECUTION_TRIGGER=PROBE`; `ACQUISITION_TRIGGER=PROBE`; `ALIX_DRY_RUN=true`; `ALIX_ALLOW_LIVE_TRADING=false`.
+- V2, Spec v3, the public fetcher, immutable pre-hack data, and frozen main were not modified. No price/OHLCV values or holdout bytes were accessed or logged.
