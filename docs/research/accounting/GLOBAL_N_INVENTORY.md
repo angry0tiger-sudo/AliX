@@ -182,3 +182,16 @@ DSR علاوه بر N به Sharpe مشاهده‌شدهٔ candidate و پراک�
 - Holdout remains sealed.
 
 Architecture First. Evidence Always. Fail Closed.
+
+
+---
+
+## اصلاحیهٔ حسابداری — شرح ابعاد V4-R (2026-11-15)
+
+در جدول per-workflow، عبارت ابعاد V4-R نیاز به دقت بیشتر داشت. در script مرجع، V4R_EXPECTED_CONTEXTS=4 حاصل دو timeframe در دو feature profile است؛ این چهار context برای هر یک از دو symbol اجرا می‌شوند. بنابراین ابعاد کامل چنین‌اند:
+
+- ۲ symbol × (۲ timeframe ×۲ feature profile =۴ context به‌ازای هر symbol) ×۴ arm = **۳۲ experiment**؛
+- دو weighting policy برای هر experiment => **۶۴ candidate/model config**؛
+- random-search iterations=9 گزارش شده، اما تعداد unique nested configهای مشاهده‌شده و overlap آن‌ها با candidateهای سطح بالا در artifactهای retained این ممیزی به‌صورت مستقل تثبیت نشده است: **شاهد کافی نیست**.
+
+این اصلاحیه، عبارت cardinality ردیف V4-R در بخش ۲ را supersede می‌کند. تعدادهای ۳۲ experiment و۶۴ candidate از constantهای صریح V4-R گرفته شده‌اند؛ این correction مجوز جمع‌زدن آن‌ها با subtotalهای تاریخی یا اعلام GLOBAL_N نیست.
