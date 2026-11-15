@@ -1486,7 +1486,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(
         "FOUR_ARM_REAL_EXECUTION_COMPLETE:"
         f"dataset_sha256={real_report['dataset_sha256']}:"
-        f"rows={real_report['dataset_rows']}:"
+        f"rows={real_report['confirmatory_dataset_rows']}:"
         "economic_verdict=NO_GO_INSUFFICIENT_DSR_EVIDENCE"
     )
     return 0
