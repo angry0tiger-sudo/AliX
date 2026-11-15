@@ -518,3 +518,110 @@ No experiment has been run for this amendment. The execution lock remains NOT_AU
 - Stop rule: **STOP — no retry or second execution dispatch** under this directive. Any future attempt requires a new owner directive and a separately verified launcher/import-path correction, followed by fresh exact-SHA CI/Preflight and a fresh one-time nonce.
 - Safety closeout: lock `NOT_AUTHORIZED`; `owner_authorization_commit_sha=null`; workflow env `ALIX_FOUR_ARM_EXECUTION_AUTHORIZED=false`; `EXECUTION_TRIGGER=PROBE`; `ACQUISITION_TRIGGER=PROBE`; `ALIX_DRY_RUN=true`; `ALIX_ALLOW_LIVE_TRADING=false`.
 - V2, Spec v3, frozen main, public fetcher and `data/nobitex/prehack/*` were not modified. No post-hack holdout access, private API call or real-order attempt occurred. No price/OHLCV values were printed or logged.
+
+
+---
+
+## [APPEND] Four-arm run #10 — first economic evaluation and authorization closeout (2026-11-15)
+
+### Execution evidence
+
+- Branch at execution: `research/nobitex-hf-strategy`; exact execution HEAD: `71bf644dc0dd0437cd577f1f2df515e9db95c5e1`; frozen main: `44bcaeae7eefd358cf063394b0e7f4f0b83af8eb`.
+- Experiment workflow Run #10: [43712086361](https://github.com/angry0tiger-sudo/AliX/actions/runs/43712086361); Job `132805651365`; conclusion **SUCCESS**.
+- Step 12, `Run all twelve preregistered trials on the verified pre-hack prefix`: **SUCCESS**, 2026-11-15 12:15:20Z–13:23:27Z, elapsed **1:08:07**.
+- Step 13, `Upload twelve trial manifests and forecast-cache evidence`: **SUCCESS**, 13:23:27Z–13:23:28Z.
+- Results artifact: ID `14163527266`, `four-arm-real-prehack-43712086361`, 55,340 bytes, SHA-256 `b12c3a807316ab52829e6b0b1aa450057133d76afc0aeb54f0ac259f38300679`, expires 2027-02-13T12:05:39Z.
+- Separate technical smoke artifact: ID `14160749121`, `four-arm-real-smoke-43712086361`, 989 bytes, expires 2026-12-15T12:15:19Z. **SMOKE is not a trial and is not included in the registry records below.**
+- The results ZIP contains exactly the twelve expected `trial-*.json` files, `four-arm-run-report.json`, and `forecast-cache.json`. All twelve IDs are unique and match the complete ADR-038 matrix; no required trial or fold field is missing.
+
+### Data, cache and execution integrity
+
+- Source dataset rows: **31,801**; confirmatory rows used: **27,825**; excluded tail: **3,976**.
+- Dataset SHA-256 in every manifest: `0aa13607d1da68c4720919f233635bb33d34048e5bd67d3ecc2ce9bb7c2b462e`.
+- Forecast cache: **1,138** anchors/entries; cache SHA-256 `aea6c537f3ca79a28e75faf1a118bd57d5dea4fb58b45e477eb401df03d01868`; identity SHA-256 `f879e5c179cf6451485ef1ce432c7d921f5f4344146d80f08026f7f8cfcf2427`. Re-serialization SHA verification passed.
+- Inference calls: **1,138 per model**; **2,276 total** (Kronos + Chronos). The shared cache was built once. All twelve manifests state `forecast_cache_computed_for_this_trial=false`; the nine forecast-driven B/C/D cells reference the same cache. No per-trial inference was repeated.
+- Arm A is one threshold-invariant Donchian control: `arm_a_control_is_threshold_invariant=true` for the 120/180/240 A cells; their trade series and all fold metrics are byte-for-byte identical and computed once, then referenced three times. The run report records 12 registered cells, 10 unique signal rules, and 3 repeated Arm-A cells.
+- Every one of the twelve manifests and the run report record `posthack_holdout_access=false`; `private_api_calls=0`; `real_order_attempts=0`. No holdout was opened.
+
+### Trial results
+
+`NetPF` is net of the listed round-trip cost. MaxDD is the maximum of the 50/90 bps drawdowns. DSR is JSON null in all twelve manifests. Numeric sensitivity values for multipliers 1×/2×/5×/10× are **MISSING**, not zero: `numeric_dsr_computed=false`, reason `GLOBAL_N_UNKNOWN`. The audited historical lower bound is 7,912; the global trial count remains **UNKNOWN**.
+
+| Trial ID | NetPF@50 | NetPF@90 | Trades | MaxDD | DSR sensitivity | Per-fold (trades / PF50 / PF90 / MaxDD) | Classification |
+|---|---:|---:|---:|---:|---|---|---|
+| NOBITEX-KC26-FD-120-A | 0.340813 | 0.144630 | 291 | 94.32% | MISSING (×1/×2/×5/×10) | F1: 82/0.368/0.126/51.29%; F2: 86/0.411/0.182/53.98%; F3: 123/0.286/0.132/75.11% | **FAIL** |
+| NOBITEX-KC26-FD-120-B | 0.476530 | 0.301477 | 28 | 26.58% | MISSING (×1/×2/×5/×10) | F1: 0/MISSING/MISSING/0.00%; F2: 20/0.257/0.145/24.02%; F3: 8/1.162/0.808/8.84% | **INSUFFICIENT_SAMPLE** |
+| NOBITEX-KC26-FD-120-C | 0.401930 | 0.239210 | 70 | 52.64% | MISSING (×1/×2/×5/×10) | F1: 14/0.297/0.172/13.84%; F2: 34/0.492/0.328/31.97%; F3: 22/0.235/0.081/19.53% | **INSUFFICIENT_SAMPLE** |
+| NOBITEX-KC26-FD-120-D | 0.398077 | 0.269117 | 41 | 42.18% | MISSING (×1/×2/×5/×10) | F1: 5/0.987/0.598/3.08%; F2: 30/0.325/0.229/40.57%; F3: 6/0.879/0.437/4.37% | **INSUFFICIENT_SAMPLE** |
+| NOBITEX-KC26-FD-180-A | 0.340813 | 0.144630 | 291 | 94.32% | MISSING (×1/×2/×5/×10) | F1: 82/0.368/0.126/51.29%; F2: 86/0.411/0.182/53.98%; F3: 123/0.286/0.132/75.11% | **FAIL** |
+| NOBITEX-KC26-FD-180-B | 0.632403 | 0.393601 | 11 | 9.70% | MISSING (×1/×2/×5/×10) | F1: 0/MISSING/MISSING/0.00%; F2: 6/0.484/0.260/5.92%; F3: 5/0.770/0.527/6.32% | **INSUFFICIENT_SAMPLE** |
+| NOBITEX-KC26-FD-180-C | 0.523971 | 0.350488 | 35 | 30.76% | MISSING (×1/×2/×5/×10) | F1: 5/0.987/0.598/3.08%; F2: 21/0.512/0.370/24.86%; F3: 9/0.304/0.123/7.76% | **INSUFFICIENT_SAMPLE** |
+| NOBITEX-KC26-FD-180-D | 0.397253 | 0.319292 | 7 | 17.42% | MISSING (×1/×2/×5/×10) | F1: 0/MISSING/MISSING/0.00%; F2: 7/0.397/0.319/17.42%; F3: 0/MISSING/MISSING/0.00% | **INSUFFICIENT_SAMPLE** |
+| NOBITEX-KC26-FD-240-A | 0.340813 | 0.144630 | 291 | 94.32% | MISSING (×1/×2/×5/×10) | F1: 82/0.368/0.126/51.29%; F2: 86/0.411/0.182/53.98%; F3: 123/0.286/0.132/75.11% | **FAIL** |
+| NOBITEX-KC26-FD-240-B | MISSING | MISSING | 1 | 0.00% | MISSING (×1/×2/×5/×10) | F1: 0/MISSING/MISSING/0.00%; F2: 0/MISSING/MISSING/0.00%; F3: 1/MISSING/MISSING/0.00% | **INSUFFICIENT_SAMPLE** |
+| NOBITEX-KC26-FD-240-C | 0.572389 | 0.393050 | 24 | 21.88% | MISSING (×1/×2/×5/×10) | F1: 5/0.987/0.598/3.08%; F2: 14/0.548/0.405/18.42%; F3: 5/0.284/0.113/4.37% | **INSUFFICIENT_SAMPLE** |
+| NOBITEX-KC26-FD-240-D | MISSING | MISSING | 0 | 0.00% | MISSING (×1/×2/×5/×10) | F1: 0/MISSING/MISSING/0.00%; F2: 0/MISSING/MISSING/0.00%; F3: 0/MISSING/MISSING/0.00% | **INSUFFICIENT_SAMPLE** |
+
+All twelve trials have **0/3 folds passing** the registered per-fold stability gate.
+
+### Per-fold detail
+
+| Trial ID | Fold | Trades | NetPF@50 | NetPF@90 | MaxDD | Stability |
+|---|---:|---:|---:|---:|---:|---|
+| NOBITEX-KC26-FD-120-A | F1 | 82 | 0.368 | 0.126 | 51.29% | FAIL |
+| NOBITEX-KC26-FD-120-A | F2 | 86 | 0.411 | 0.182 | 53.98% | FAIL |
+| NOBITEX-KC26-FD-120-A | F3 | 123 | 0.286 | 0.132 | 75.11% | FAIL |
+| NOBITEX-KC26-FD-120-B | F1 | 0 | MISSING | MISSING | 0.00% | FAIL |
+| NOBITEX-KC26-FD-120-B | F2 | 20 | 0.257 | 0.145 | 24.02% | FAIL |
+| NOBITEX-KC26-FD-120-B | F3 | 8 | 1.162 | 0.808 | 8.84% | FAIL |
+| NOBITEX-KC26-FD-120-C | F1 | 14 | 0.297 | 0.172 | 13.84% | FAIL |
+| NOBITEX-KC26-FD-120-C | F2 | 34 | 0.492 | 0.328 | 31.97% | FAIL |
+| NOBITEX-KC26-FD-120-C | F3 | 22 | 0.235 | 0.081 | 19.53% | FAIL |
+| NOBITEX-KC26-FD-120-D | F1 | 5 | 0.987 | 0.598 | 3.08% | FAIL |
+| NOBITEX-KC26-FD-120-D | F2 | 30 | 0.325 | 0.229 | 40.57% | FAIL |
+| NOBITEX-KC26-FD-120-D | F3 | 6 | 0.879 | 0.437 | 4.37% | FAIL |
+| NOBITEX-KC26-FD-180-A | F1 | 82 | 0.368 | 0.126 | 51.29% | FAIL |
+| NOBITEX-KC26-FD-180-A | F2 | 86 | 0.411 | 0.182 | 53.98% | FAIL |
+| NOBITEX-KC26-FD-180-A | F3 | 123 | 0.286 | 0.132 | 75.11% | FAIL |
+| NOBITEX-KC26-FD-180-B | F1 | 0 | MISSING | MISSING | 0.00% | FAIL |
+| NOBITEX-KC26-FD-180-B | F2 | 6 | 0.484 | 0.260 | 5.92% | FAIL |
+| NOBITEX-KC26-FD-180-B | F3 | 5 | 0.770 | 0.527 | 6.32% | FAIL |
+| NOBITEX-KC26-FD-180-C | F1 | 5 | 0.987 | 0.598 | 3.08% | FAIL |
+| NOBITEX-KC26-FD-180-C | F2 | 21 | 0.512 | 0.370 | 24.86% | FAIL |
+| NOBITEX-KC26-FD-180-C | F3 | 9 | 0.304 | 0.123 | 7.76% | FAIL |
+| NOBITEX-KC26-FD-180-D | F1 | 0 | MISSING | MISSING | 0.00% | FAIL |
+| NOBITEX-KC26-FD-180-D | F2 | 7 | 0.397 | 0.319 | 17.42% | FAIL |
+| NOBITEX-KC26-FD-180-D | F3 | 0 | MISSING | MISSING | 0.00% | FAIL |
+| NOBITEX-KC26-FD-240-A | F1 | 82 | 0.368 | 0.126 | 51.29% | FAIL |
+| NOBITEX-KC26-FD-240-A | F2 | 86 | 0.411 | 0.182 | 53.98% | FAIL |
+| NOBITEX-KC26-FD-240-A | F3 | 123 | 0.286 | 0.132 | 75.11% | FAIL |
+| NOBITEX-KC26-FD-240-B | F1 | 0 | MISSING | MISSING | 0.00% | FAIL |
+| NOBITEX-KC26-FD-240-B | F2 | 0 | MISSING | MISSING | 0.00% | FAIL |
+| NOBITEX-KC26-FD-240-B | F3 | 1 | MISSING | MISSING | 0.00% | FAIL |
+| NOBITEX-KC26-FD-240-C | F1 | 5 | 0.987 | 0.598 | 3.08% | FAIL |
+| NOBITEX-KC26-FD-240-C | F2 | 14 | 0.548 | 0.405 | 18.42% | FAIL |
+| NOBITEX-KC26-FD-240-C | F3 | 5 | 0.284 | 0.113 | 4.37% | FAIL |
+| NOBITEX-KC26-FD-240-D | F1 | 0 | MISSING | MISSING | 0.00% | FAIL |
+| NOBITEX-KC26-FD-240-D | F2 | 0 | MISSING | MISSING | 0.00% | FAIL |
+| NOBITEX-KC26-FD-240-D | F3 | 0 | MISSING | MISSING | 0.00% | FAIL |
+
+### Adjudication and cohort verdict
+
+- **3 FAIL:** the three registered Arm-A cells are the same Donchian control repeated across thresholds. Aggregate trades are 291, but NetPF is 0.340813/0.144630, MaxDD 94.32%, and fold stability 0/3. The failure is economic and repeated-control identity must not be mistaken for three independent strategies.
+- **9 INSUFFICIENT_SAMPLE:** all forecast-driven B/C/D cells have fewer than 100 aggregate trades. Their numerical DSR values are also MISSING.
+- **0 PASS.**
+- Cohort is **MIXED: 3 FAIL + 9 INSUFFICIENT_SAMPLE**. It is not accurate to claim either “all twelve FAIL” or “all twelve INSUFFICIENT_SAMPLE”. The first cohort-level verdict is **INSUFFICIENT_SAMPLE / MIXED_COHORT — no candidate qualifies for progression**. The nine forecast-driven cells did not reach the minimum sample; therefore this run does **not** establish a family-level NO-GO for all directional methods. The conditional ADR-038 rule for an all-FAIL directional-family closure is not triggered.
+- `GLOBAL_N=UNKNOWN` remains unchanged. No estimated N or numeric DSR was manufactured. TTM-R2 volatility pivot is **not initiated or recommended as an automatic next phase** under this mixed result; any separate pivot still requires the relevant owner directive and preregistration.
+
+### Append-only status update
+
+The twelve ADR-038 IDs are now recorded as evaluated by this appended event; the original `REGISTERED_NOT_EVALUATED` preregistration lines and all prior registry history remain intact. No record was deleted. Arm-A duplication is disclosed above and remains counted as three registered cells in the DSR accounting. The smoke artifact is technical evidence only and is not a thirteenth trial.
+
+### Safety closeout
+
+- Execution lock: `NOT_AUTHORIZED`; `owner_authorization_commit_sha=null`.
+- `ALIX_FOUR_ARM_EXECUTION_AUTHORIZED=false`; `ALIX_DRY_RUN=true`; `ALIX_ALLOW_LIVE_TRADING=false`.
+- `EXECUTION_TRIGGER=PROBE`; `ACQUISITION_TRIGGER=PROBE`.
+- `Champion=null`; `order_permission=false`; `trading_authorization=NO-GO`; `private_api_calls=0`; `real_order_attempts=0`.
+- V2, Spec v3, public fetcher, `data/nobitex/prehack/*`, and frozen main remain unchanged. No holdout access occurred.
+
