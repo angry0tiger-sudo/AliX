@@ -1664,9 +1664,7 @@ def _run_dependency_import_preflight_cli(arguments: argparse.Namespace) -> int:
         print(f"FOUR_ARM_DEPENDENCY_IMPORT_PREFLIGHT=FAIL:{type(exc).__name__}:{exc}")
         return 5
     arguments.output_dir.mkdir(parents=True, exist_ok=True)
-    _write_json(
-        arguments.output_dir / "dependency-import-preflight.json", report
-    )
+    _write_json(arguments.output_dir / "dependency-import-preflight.json", report)
     print("FOUR_ARM_DEPENDENCY_IMPORT_PREFLIGHT=PASS")
     print(f"FOUR_ARM_DEPENDENCY_MODULE_COUNT={report['module_count']}")
     print("FOUR_ARM_RUNNER_MODULE_IMPORT=PASS")
