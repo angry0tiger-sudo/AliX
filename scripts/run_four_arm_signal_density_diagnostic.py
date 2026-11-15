@@ -222,7 +222,9 @@ def _forecast_series(
     return ForecastSeries(returns=returns, valid=valid, signals=signals)
 
 
-def _execution_arrays(frame: pd.DataFrame) -> tuple[ExecutionArrays, npt.NDArray[np.float64]]:
+def _execution_arrays(
+    frame: pd.DataFrame,
+) -> tuple[ExecutionArrays, npt.NDArray[np.float64]]:
     data = ExecutionArrays(
         open_values=frame["open"].to_numpy(dtype=np.float64),
         high_values=frame["high"].to_numpy(dtype=np.float64),
@@ -323,9 +325,7 @@ def _entry_rejections(
     is_open = active[window]
     invalid_atr = int(np.count_nonzero(signal & ~is_open & ~finite_atr))
     suppressed = int(np.count_nonzero(signal & is_open))
-    no_next = int(
-        bool(signal[-1]) and bool(finite_atr[-1]) and not bool(is_open[-1])
-    )
+    no_next = int(bool(signal[-1]) and bool(finite_atr[-1]) and not bool(is_open[-1]))
     return {
         "non_finite_atr": invalid_atr,
         "no_valid_next_bar_inside_fold": no_next,
@@ -344,9 +344,7 @@ def _forecast_counts(
     valid_bars = int(np.count_nonzero(covered))
     eligible = int(np.count_nonzero(signal))
     below = valid_bars - eligible
-    episodes = int(bool(signal[0])) + int(
-        np.count_nonzero(signal[1:] & ~signal[:-1])
-    )
+    episodes = int(bool(signal[0])) + int(np.count_nonzero(signal[1:] & ~signal[:-1]))
     margins = (
         series.returns[window][covered] * 10_000.0 - threshold_bps
     ) / threshold_bps
@@ -364,9 +362,7 @@ def _forecast_counts(
     }
 
 
-def _forecast_anchor_count(
-    cache: four_arm.ForecastCache, fold: four_arm.Fold
-) -> int:
+def _forecast_anchor_count(cache: four_arm.ForecastCache, fold: four_arm.Fold) -> int:
     return sum(
         1
         for anchor in cache.anchors
@@ -384,9 +380,7 @@ def _evaluate_fold(
     threshold_bps: int,
 ) -> dict[str, Any]:
     active, exit_reasons = _count_trade_events(data, fold, atr, series.signals)
-    entry_rejections = _entry_rejections(
-        series.signals, atr, active, fold
-    )
+    entry_rejections = _entry_rejections(series.signals, atr, active, fold)
     forecast_counts = _forecast_counts(series, fold, threshold_bps)
     completed = int(sum(exit_reasons.values()))
     accounted = sum(entry_rejections.values()) + completed
@@ -418,7 +412,8 @@ def _manifest_trade_count(manifest: dict[str, Any], fold_id: int) -> int:
     if not isinstance(fold_items, list):
         raise DiagnosticError("diagnostic_manifest_folds_missing")
     matches = [
-        item for item in fold_items
+        item
+        for item in fold_items
         if isinstance(item, dict) and item.get("fold_id") == fold_id
     ]
     if len(matches) != 1:
@@ -462,15 +457,18 @@ def _aggregate_cell(
     fold_results: list[dict[str, Any]], threshold_bps: int
 ) -> dict[str, Any]:
     scalar_keys = (
-        "valid_forecast_anchors", "valid_forecast_bars", "below_threshold_bars",
-        "eligible_signal_bars", "eligible_signal_episodes", "entry_attempts",
+        "valid_forecast_anchors",
+        "valid_forecast_bars",
+        "below_threshold_bars",
+        "eligible_signal_bars",
+        "eligible_signal_episodes",
+        "entry_attempts",
         "completed_trades",
     )
-    totals = {
-        key: sum(int(item[key]) for item in fold_results) for key in scalar_keys
-    }
+    totals = {key: sum(int(item[key]) for item in fold_results) for key in scalar_keys}
     rejection_keys = (
-        "non_finite_atr", "no_valid_next_bar_inside_fold",
+        "non_finite_atr",
+        "no_valid_next_bar_inside_fold",
         "suppressed_while_position_open",
     )
     rejections = {
@@ -523,8 +521,7 @@ def _diagnose_cell(
     manifest = manifests[(arm_id, threshold_bps)]
     series = _forecast_series(cache, len(frame), arm_id, threshold_bps)
     fold_results = [
-        _evaluate_fold(data, fold, atr, series, cache, threshold_bps)
-        for fold in folds
+        _evaluate_fold(data, fold, atr, series, cache, threshold_bps) for fold in folds
     ]
     _reconcile_manifest(manifest, fold_results)
     return {
@@ -557,10 +554,15 @@ def _render_markdown(report: dict[str, Any]) -> str:
         for fold in cell["folds"]:
             rejects = fold["entry_gate_rejections"]
             values = (
-                cell["arm_id"], cell["threshold_bps"], fold["fold_id"],
-                fold["valid_forecast_anchors"], fold["valid_forecast_bars"],
-                fold["eligible_signal_bars"], fold["below_threshold_bars"],
-                fold["eligible_signal_episodes"], rejects["non_finite_atr"],
+                cell["arm_id"],
+                cell["threshold_bps"],
+                fold["fold_id"],
+                fold["valid_forecast_anchors"],
+                fold["valid_forecast_bars"],
+                fold["eligible_signal_bars"],
+                fold["below_threshold_bars"],
+                fold["eligible_signal_episodes"],
+                rejects["non_finite_atr"],
                 rejects["no_valid_next_bar_inside_fold"],
                 rejects["suppressed_while_position_open"],
                 fold["completed_trades"],
