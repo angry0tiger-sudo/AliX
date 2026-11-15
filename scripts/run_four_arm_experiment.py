@@ -1244,6 +1244,43 @@ def _build_twelve_trial_manifests(
     return manifests
 
 
+def _collect_trial_decision_counts(
+    trial_manifests: Sequence[Mapping[str, Any]],
+) -> dict[str, int] | None:
+    """Collect per-trial decisions; return None for incomplete decision data."""
+    counts: dict[str, int] = {}
+    for manifest in trial_manifests:
+        decision = manifest.get("decision")
+        if not isinstance(decision, str) or not decision:
+            return None
+        counts[decision] = counts.get(decision, 0) + 1
+    return dict(sorted(counts.items())) if counts else None
+
+
+def _cohort_verdict_from_decisions(decisions: set[str]) -> str:
+    verdicts = {
+        frozenset({"PASS"}): "PASS",
+        frozenset({"INSUFFICIENT_SAMPLE"}): "INSUFFICIENT_SAMPLE",
+        frozenset({"NO_GO_ECONOMIC_GATES"}): "NO_GO_ALL_CELLS_ECONOMIC_GATES",
+        frozenset({"NO_GO_INSUFFICIENT_DSR_EVIDENCE"}): "BLOCKED_DSR_EVIDENCE",
+    }
+    return verdicts.get(frozenset(decisions), "MIXED_COHORT")
+
+
+def _promotion_gate_status_from_decisions(decisions: set[str]) -> str:
+    if decisions == {"PASS"}:
+        return "ELIGIBLE_PENDING_OWNER_REVIEW"
+    blocker_labels = (
+        ("INSUFFICIENT_SAMPLE", "SAMPLE_GATE"),
+        ("NO_GO_ECONOMIC_GATES", "ECONOMIC_GATES"),
+        ("NO_GO_INSUFFICIENT_DSR_EVIDENCE", "DSR_EVIDENCE"),
+    )
+    blockers = [label for decision, label in blocker_labels if decision in decisions]
+    if blockers:
+        return "BLOCKED_BY_" + "_AND_".join(blockers)
+    return "BLOCKED_BY_INCOMPLETE_DECISION_DATA"
+
+
 def _derive_run_verdict_fields(
     trial_manifests: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
@@ -1254,56 +1291,24 @@ def _derive_run_verdict_fields(
         "NO_GO_ECONOMIC_GATES",
         "NO_GO_INSUFFICIENT_DSR_EVIDENCE",
     }
-    decision_counts: dict[str, int] = {}
-    decisions: list[str] = []
-    for manifest in trial_manifests:
-        decision = manifest.get("decision")
-        if not isinstance(decision, str) or not decision:
-            return {
-                "cohort_verdict": "INCOMPLETE_DECISION_DATA",
-                "promotion_gate_status": "BLOCKED_BY_INCOMPLETE_DECISION_DATA",
-                "cohort_decision_counts": decision_counts,
-            }
-        decisions.append(decision)
-        decision_counts[decision] = decision_counts.get(decision, 0) + 1
-
-    if not decisions or any(item not in recognized_decisions for item in decisions):
+    decision_counts = _collect_trial_decision_counts(trial_manifests)
+    if decision_counts is None:
         return {
             "cohort_verdict": "INCOMPLETE_DECISION_DATA",
             "promotion_gate_status": "BLOCKED_BY_INCOMPLETE_DECISION_DATA",
-            "cohort_decision_counts": dict(sorted(decision_counts.items())),
+            "cohort_decision_counts": {},
         }
-
-    decision_set = set(decisions)
-    if decision_set == {"PASS"}:
-        cohort_verdict = "PASS"
-    elif decision_set == {"INSUFFICIENT_SAMPLE"}:
-        cohort_verdict = "INSUFFICIENT_SAMPLE"
-    elif decision_set == {"NO_GO_ECONOMIC_GATES"}:
-        cohort_verdict = "NO_GO_ALL_CELLS_ECONOMIC_GATES"
-    elif decision_set == {"NO_GO_INSUFFICIENT_DSR_EVIDENCE"}:
-        cohort_verdict = "BLOCKED_DSR_EVIDENCE"
-    else:
-        cohort_verdict = "MIXED_COHORT"
-
-    blockers: list[str] = []
-    if "INSUFFICIENT_SAMPLE" in decision_set:
-        blockers.append("SAMPLE_GATE")
-    if "NO_GO_ECONOMIC_GATES" in decision_set:
-        blockers.append("ECONOMIC_GATES")
-    if "NO_GO_INSUFFICIENT_DSR_EVIDENCE" in decision_set:
-        blockers.append("DSR_EVIDENCE")
-    promotion_gate_status = (
-        "ELIGIBLE_PENDING_OWNER_REVIEW"
-        if decision_set == {"PASS"}
-        else "BLOCKED_BY_" + "_AND_".join(blockers)
-        if blockers
-        else "BLOCKED_BY_INCOMPLETE_DECISION_DATA"
-    )
+    decisions = set(decision_counts)
+    if decisions - recognized_decisions:
+        return {
+            "cohort_verdict": "INCOMPLETE_DECISION_DATA",
+            "promotion_gate_status": "BLOCKED_BY_INCOMPLETE_DECISION_DATA",
+            "cohort_decision_counts": decision_counts,
+        }
     return {
-        "cohort_verdict": cohort_verdict,
-        "promotion_gate_status": promotion_gate_status,
-        "cohort_decision_counts": dict(sorted(decision_counts.items())),
+        "cohort_verdict": _cohort_verdict_from_decisions(decisions),
+        "promotion_gate_status": _promotion_gate_status_from_decisions(decisions),
+        "cohort_decision_counts": decision_counts,
     }
 
 
