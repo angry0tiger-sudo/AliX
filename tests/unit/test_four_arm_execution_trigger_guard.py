@@ -21,7 +21,9 @@ def _git(repository: Path, *arguments: str) -> str:
 
 
 def _commit_trigger(repository: Path, value: str, message: str) -> None:
-    (repository / TRIGGER_PATH).write_text(f"{value}\n", encoding="utf-8")
+    trigger_path = repository / TRIGGER_PATH
+    trigger_path.parent.mkdir(parents=True, exist_ok=True)
+    trigger_path.write_text(f"{value}\n", encoding="utf-8")
     _git(repository, "add", TRIGGER_PATH)
     _git(repository, "commit", "-m", message)
 
