@@ -98,6 +98,8 @@ jobs:
             core.setFailed("Required CI/preflight did not complete successfully within 30 minutes.");
 
       - name: Check the complete immutable execution lock before data or model I/O
+        env:
+          PYTHONPATH: ${{ github.workspace }}
         run: |
           set -euo pipefail
           python -S -m scripts.run_four_arm_experiment \
@@ -140,30 +142,53 @@ jobs:
           path: kronos-source
           persist-credentials: false
 
-      - name: Dependency-import preflight for all pinned inference modules
-        shell: bash
+      - name: Dependency-import preflight through the real runner module
+        env:
+          PYTHONPATH: ${{ github.workspace }}
         run: |
           set -euo pipefail
-          export PYTHONPATH="$GITHUB_WORKSPACE/kronos-source${PYTHONPATH:+:$PYTHONPATH}"
-          python - <<'PY'
-          import importlib
+          python -m scripts.run_four_arm_experiment \
+            --mode real \
+            --dependency-import-preflight \
+            --lock config/experiment/four_arm_execution_lock.json \
+            --model-pins config/four_arm/model_pins.json \
+            --kronos-code-dir "$GITHUB_WORKSPACE/kronos-source" \
+            --output-dir "$RUNNER_TEMP/four-arm-import-preflight" \
+            --repository-root "$GITHUB_WORKSPACE"
 
-          required_modules = (
-              "numpy", "pandas", "torch", "chronos", "model", "transformers",
-              "safetensors", "huggingface_hub", "einops", "accelerate", "tqdm",
-          )
-          imported = {name: importlib.import_module(name) for name in required_modules}
-          for symbol in ("Kronos", "KronosPredictor", "KronosTokenizer"):
-              getattr(imported["model"], symbol)
-          getattr(imported["chronos"], "Chronos2Pipeline")
-          print("FOUR_ARM_DEPENDENCY_IMPORT_PREFLIGHT=PASS")
-          print("FOUR_ARM_DEPENDENCY_MODULE_COUNT=" + str(len(imported)))
-          PY
+      - name: Real-model smoke on 600 verified pre-hack rows
+        timeout-minutes: 20
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          python -m scripts.run_four_arm_experiment \
+            --mode real \
+            --smoke \
+            --csv data/nobitex/prehack/nobitex-btcusdt-1h.csv \
+            --data-manifest data/nobitex/prehack/nobitex-btcusdt-1h.manifest.json \
+            --lock config/experiment/four_arm_execution_lock.json \
+            --model-pins config/four_arm/model_pins.json \
+            --model-artifacts-dir "$RUNNER_TEMP/four-arm-models" \
+            --kronos-code-dir "$GITHUB_WORKSPACE/kronos-source" \
+            --output-dir "$RUNNER_TEMP/four-arm-smoke" \
+            --repository-root "$GITHUB_WORKSPACE"
+
+      - name: Upload real-model smoke report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: four-arm-real-smoke-${{ github.run_id }}
+          path: ${{ runner.temp }}/four-arm-smoke/smoke-report.json
+          if-no-files-found: warn
+          retention-days: 30
 
       - name: Run all twelve preregistered trials on the verified pre-hack prefix
+        env:
+          PYTHONPATH: ${{ github.workspace }}
         run: |
           set -euo pipefail
-          python scripts/run_four_arm_experiment.py \
+          python -m scripts.run_four_arm_experiment \
             --mode real \
             --csv data/nobitex/prehack/nobitex-btcusdt-1h.csv \
             --data-manifest data/nobitex/prehack/nobitex-btcusdt-1h.manifest.json \

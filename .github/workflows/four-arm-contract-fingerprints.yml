@@ -34,9 +34,11 @@ jobs:
           python-version: "3.12"
 
       - name: Compute exact contract SHA-256 values
+        env:
+          PYTHONPATH: ${{ github.workspace }}
         run: |
           set -euo pipefail
-          python scripts/capture_four_arm_contract_hashes.py
+          python -m scripts.capture_four_arm_contract_hashes
 
       - name: Upload immutable contract fingerprint manifest
         uses: actions/upload-artifact@v4

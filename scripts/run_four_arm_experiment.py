@@ -87,6 +87,9 @@ TRIAL_ID_MATRIX = {
 CONFIRMATORY_ROW_COUNT = 27_825
 EXCLUDED_TAIL_ROWS = PREHACK_ROW_COUNT - CONFIRMATORY_ROW_COUNT
 HISTORICAL_TRIAL_LOWER_BOUND = 7_912
+SMOKE_ROW_COUNT = 600
+SMOKE_ARM_ID = "D"
+SMOKE_THRESHOLD_BPS = 180
 
 
 DONCHIAN_PERIOD = 20
@@ -1371,6 +1374,181 @@ def run_synthetic_mode(output_dir: Path) -> dict[str, Any]:
     return report
 
 
+def run_dependency_import_preflight(
+    *,
+    lock_path: Path,
+    model_pin_path: Path,
+    kronos_code_dir: Path,
+    repository_root: Path,
+) -> dict[str, Any]:
+    """Import this runner and every pinned inference dependency in workflow context."""
+    lock = load_owner_authorized_execution_lock(lock_path)
+    _validate_lock_contract_fingerprints(lock, repository_root)
+    pins = _load_model_pin_manifest(model_pin_path, lock)
+
+    runner_module = importlib.import_module("scripts.run_four_arm_experiment")
+    runner_path = getattr(runner_module, "__file__", None)
+    if not isinstance(runner_path, str) or Path(runner_path).resolve() != Path(
+        __file__
+    ).resolve():
+        raise FourArmExecutionError("four_arm_runner_module_identity_mismatch")
+
+    kronos_root = kronos_code_dir.resolve()
+    if not (kronos_root / "model" / "__init__.py").is_file():
+        raise FourArmExecutionError("pinned_kronos_source_tree_missing")
+    kronos_source = str(kronos_root)
+    if kronos_source not in sys.path:
+        sys.path.insert(0, kronos_source)
+
+    required_modules = (
+        "numpy",
+        "pandas",
+        "torch",
+        "chronos",
+        "model",
+        "transformers",
+        "safetensors",
+        "huggingface_hub",
+        "einops",
+        "accelerate",
+        "tqdm",
+    )
+    imported = {
+        module_name: importlib.import_module(module_name)
+        for module_name in required_modules
+    }
+    for symbol in ("Kronos", "KronosPredictor", "KronosTokenizer"):
+        getattr(imported["model"], symbol)
+    getattr(imported["chronos"], "Chronos2Pipeline")
+
+    model_groups = _model_pin_groups(pins)
+    return {
+        "schema_version": "alix.four-arm-dependency-import-preflight.v1",
+        "result": "PASS",
+        "mode": "REAL_PREHACK_IMPORT_PREFLIGHT",
+        "runner_module_imported": True,
+        "runner_module_name": runner_module.__name__,
+        "runner_module_sha256": _sha256_file(Path(runner_path)),
+        "module_count": len(imported),
+        "modules": list(required_modules),
+        "model_pin_manifest_sha256": _sha256_file(model_pin_path),
+        "model_revisions": {
+            "kronos_small": model_groups["kronos_small"]["revision"],
+            "kronos_tokenizer": model_groups["kronos_tokenizer"]["revision"],
+            "chronos_2": model_groups["chronos_2"]["revision"],
+        },
+        "kronos_source_commit": "67b630e67f6a18c9e9be918d9b4337c960db1e9a",
+        "data_accessed": False,
+        "model_weights_loaded": False,
+        "private_api_calls": 0,
+        "real_order_attempts": 0,
+    }
+
+
+def run_real_smoke(
+    *,
+    csv_path: Path,
+    data_manifest_path: Path,
+    lock_path: Path,
+    model_pin_path: Path,
+    kronos_code_dir: Path,
+    output_dir: Path,
+    repository_root: Path,
+    model_artifacts_dir: Path,
+) -> dict[str, Any]:
+    """Exercise real pinned CPU models and one forecast-driven simulation cell."""
+    lock = load_owner_authorized_execution_lock(lock_path)
+    _validate_lock_contract_fingerprints(lock, repository_root)
+    pins = _load_model_pin_manifest(model_pin_path, lock)
+
+    full_frame, dataset_sha = _load_verified_prehack_data(
+        csv_path, data_manifest_path
+    )
+    if (
+        len(full_frame) != PREHACK_ROW_COUNT
+        or dataset_sha != PREHACK_DATASET_SHA256
+    ):
+        raise FourArmExecutionError("prehack_source_identity_invalid")
+    if SMOKE_ROW_COUNT > CONFIRMATORY_ROW_COUNT:
+        raise FourArmExecutionError("smoke_prefix_exceeds_confirmatory_boundary")
+
+    frame = full_frame.iloc[:SMOKE_ROW_COUNT].copy().reset_index(drop=True)
+    if len(frame) != SMOKE_ROW_COUNT:
+        raise FourArmExecutionError("smoke_prefix_row_count_invalid")
+
+    smoke_fold = Fold(
+        fold_id=1,
+        prefix_end=SMOKE_ROW_COUNT,
+        train_start=0,
+        train_end=350,
+        validation_start=374,
+        validation_end=487,
+        test_start=MODEL_CONTEXT_BARS - 1,
+        test_end=SMOKE_ROW_COUNT - MAX_HOLDING_BARS,
+    )
+    atr = _calculate_atr(frame)
+    models = _load_cpu_models(
+        pins, model_pin_path, kronos_code_dir, model_artifacts_dir
+    )
+    forecast_cache = _build_forecast_cache(
+        frame, models, pins, lock, dataset_sha
+    )
+    signals = _signals_from_forecast_cache(
+        forecast_cache,
+        len(frame),
+        SMOKE_ARM_ID,
+        SMOKE_THRESHOLD_BPS,
+    )
+    trades = _simulate_fold_trades(frame, smoke_fold, signals, atr)
+    model_groups = _model_pin_groups(pins)
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    report = {
+        "schema_version": "alix.four-arm-real-smoke.v1",
+        "result": "SMOKE_PASS",
+        "mode": "REAL_PREHACK_SMOKE",
+        "smoke_label": "SMOKE_NOT_A_REGISTERED_TRIAL",
+        "trial_registry_eligible": False,
+        "trial_count": 0,
+        "economic_evaluation_performed": False,
+        "dataset_sha256": dataset_sha,
+        "source_dataset_rows": PREHACK_ROW_COUNT,
+        "smoke_rows": SMOKE_ROW_COUNT,
+        "smoke_prefix": "first_600_rows_of_verified_prehack_dataset",
+        "arm_id": SMOKE_ARM_ID,
+        "threshold_bps": SMOKE_THRESHOLD_BPS,
+        "fold_count": 1,
+        "folds": [asdict(smoke_fold)],
+        "models": {
+            "kronos_small_revision": model_groups["kronos_small"]["revision"],
+            "kronos_tokenizer_revision": model_groups["kronos_tokenizer"]["revision"],
+            "chronos_2_revision": model_groups["chronos_2"]["revision"],
+            "real_cpu_models_loaded": True,
+        },
+        "forecast_cache": {
+            "identity_sha256": forecast_cache.identity_sha256,
+            "cache_sha256": forecast_cache.cache_sha256,
+            "anchors": len(forecast_cache.anchors),
+            "inference_calls_per_model": len(forecast_cache.anchors),
+            "inference_calls_total": 2 * len(forecast_cache.anchors),
+            "finite_forecasts_verified": True,
+        },
+        "signal_bars": int(np.count_nonzero(signals)),
+        "simulation_completed": True,
+        "simulated_trade_count": len(trades),
+        "safety": {
+            "Champion": None,
+            "order_permission": False,
+            "trading_authorization": "NO-GO",
+            "private_api_calls": 0,
+            "real_order_attempts": 0,
+            "posthack_holdout_access": False,
+        },
+    }
+    _write_json(output_dir / "smoke-report.json", report)
+    return report
+
+
 def run_real_experiment(
     *,
     csv_path: Path,
@@ -1444,21 +1622,112 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--repository-root", type=Path, default=Path("."))
     parser.add_argument("--validate-lock-only", action="store_true")
+    parser.add_argument("--dependency-import-preflight", action="store_true")
+    parser.add_argument("--smoke", action="store_true")
     return parser.parse_args(argv)
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    arguments = _parse_args(argv)
-    if arguments.mode == "synthetic":
-        synthetic_report = run_synthetic_mode(arguments.output_dir)
-        print(f"FOUR_ARM_SYNTHETIC_VALIDATION=PASS:{synthetic_report['arm_count']}")
-        return 0
-    if not arguments.validate_lock_only and (
+def _run_lock_validation(arguments: argparse.Namespace) -> int:
+    try:
+        run_real_experiment(
+            csv_path=arguments.csv,
+            data_manifest_path=arguments.data_manifest,
+            lock_path=arguments.lock,
+            model_pin_path=arguments.model_pins,
+            kronos_code_dir=arguments.kronos_code_dir,
+            output_dir=arguments.output_dir,
+            repository_root=arguments.repository_root,
+            model_artifacts_dir=arguments.model_artifacts_dir,
+            validate_lock_only=True,
+        )
+    except ExecutionAuthorizationError as exc:
+        print(f"Execution not authorized: {exc}")
+        return 2
+    except FourArmExecutionError as exc:
+        print(f"FOUR_ARM_EXECUTION_REJECTED={exc}")
+        return 3
+    print("FOUR_ARM_EXECUTION_LOCK=PASS")
+    return 0
+
+
+def _run_dependency_import_preflight_cli(arguments: argparse.Namespace) -> int:
+    if arguments.kronos_code_dir is None:
+        raise SystemExit("dependency_import_preflight_requires_kronos_source")
+    try:
+        report = run_dependency_import_preflight(
+            lock_path=arguments.lock,
+            model_pin_path=arguments.model_pins,
+            kronos_code_dir=arguments.kronos_code_dir,
+            repository_root=arguments.repository_root,
+        )
+    except ExecutionAuthorizationError as exc:
+        print(f"Execution not authorized: {exc}")
+        return 2
+    except FourArmExecutionError as exc:
+        print(f"FOUR_ARM_EXECUTION_REJECTED={exc}")
+        return 3
+    except (ImportError, AttributeError) as exc:
+        print(
+            "FOUR_ARM_DEPENDENCY_IMPORT_PREFLIGHT=FAIL:"
+            f"{type(exc).__name__}:{exc}"
+        )
+        return 5
+    arguments.output_dir.mkdir(parents=True, exist_ok=True)
+    _write_json(
+        arguments.output_dir / "dependency-import-preflight.json", report
+    )
+    print("FOUR_ARM_DEPENDENCY_IMPORT_PREFLIGHT=PASS")
+    print(f"FOUR_ARM_DEPENDENCY_MODULE_COUNT={report['module_count']}")
+    print("FOUR_ARM_RUNNER_MODULE_IMPORT=PASS")
+    return 0
+
+
+def _run_real_smoke_cli(arguments: argparse.Namespace) -> int:
+    if (
         arguments.csv is None
         or arguments.data_manifest is None
         or arguments.kronos_code_dir is None
     ):
-        raise SystemExit("real_mode_requires_csv_manifest_and_pinned_kronos_source")
+        raise SystemExit(
+            "real_smoke_requires_csv_manifest_and_pinned_kronos_source"
+        )
+    try:
+        report = run_real_smoke(
+            csv_path=arguments.csv,
+            data_manifest_path=arguments.data_manifest,
+            lock_path=arguments.lock,
+            model_pin_path=arguments.model_pins,
+            kronos_code_dir=arguments.kronos_code_dir,
+            output_dir=arguments.output_dir,
+            repository_root=arguments.repository_root,
+            model_artifacts_dir=arguments.model_artifacts_dir,
+        )
+    except ExecutionAuthorizationError as exc:
+        print(f"Execution not authorized: {exc}")
+        return 2
+    except FourArmExecutionError as exc:
+        print(f"FOUR_ARM_EXECUTION_REJECTED={exc}")
+        return 3
+    except (ImportError, AttributeError) as exc:
+        print(f"FOUR_ARM_REAL_SMOKE=FAIL:{type(exc).__name__}:{exc}")
+        return 5
+    print(
+        "FOUR_ARM_REAL_SMOKE=PASS:"
+        f"rows={report['smoke_rows']}:"
+        f"anchors={report['forecast_cache']['anchors']}"
+    )
+    return 0
+
+
+def _run_full_real_experiment_cli(arguments: argparse.Namespace) -> int:
+    if (
+        arguments.csv is None
+        or arguments.data_manifest is None
+        or arguments.kronos_code_dir is None
+    ):
+        raise SystemExit(
+            "real_mode_requires_csv_manifest_and_pinned_kronos_source"
+        )
     try:
         real_report = run_real_experiment(
             csv_path=arguments.csv,
@@ -1469,7 +1738,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             output_dir=arguments.output_dir,
             repository_root=arguments.repository_root,
             model_artifacts_dir=arguments.model_artifacts_dir,
-            validate_lock_only=arguments.validate_lock_only,
         )
     except ExecutionAuthorizationError as exc:
         print(f"Execution not authorized: {exc}")
@@ -1477,9 +1745,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     except FourArmExecutionError as exc:
         print(f"FOUR_ARM_EXECUTION_REJECTED={exc}")
         return 3
-    if arguments.validate_lock_only:
-        print("FOUR_ARM_EXECUTION_LOCK=PASS")
-        return 0
+    except (ImportError, AttributeError) as exc:
+        print(
+            "FOUR_ARM_REAL_EXECUTION_IMPORT_FAILED:"
+            f"{type(exc).__name__}:{exc}"
+        )
+        return 5
     if real_report is None:
         print("FOUR_ARM_REPORT_MISSING")
         return 4
@@ -1491,6 +1762,29 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     return 0
 
+
+def main(argv: Sequence[str] | None = None) -> int:
+    arguments = _parse_args(argv)
+    selected_modes = (
+        arguments.validate_lock_only,
+        arguments.dependency_import_preflight,
+        arguments.smoke,
+    )
+    if sum(selected_modes) > 1:
+        raise SystemExit("real_execution_modes_are_mutually_exclusive")
+    if arguments.mode == "synthetic":
+        if any(selected_modes):
+            raise SystemExit("synthetic_mode_cannot_use_real_execution_flags")
+        synthetic_report = run_synthetic_mode(arguments.output_dir)
+        print(f"FOUR_ARM_SYNTHETIC_VALIDATION=PASS:{synthetic_report['arm_count']}")
+        return 0
+    if arguments.validate_lock_only:
+        return _run_lock_validation(arguments)
+    if arguments.dependency_import_preflight:
+        return _run_dependency_import_preflight_cli(arguments)
+    if arguments.smoke:
+        return _run_real_smoke_cli(arguments)
+    return _run_full_real_experiment_cli(arguments)
 
 if __name__ == "__main__":
     raise SystemExit(main())
