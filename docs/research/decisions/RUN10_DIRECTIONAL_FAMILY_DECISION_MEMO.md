@@ -128,3 +128,35 @@ use of research budget given the observed PF trend.
   authorized by this memo.
 - No holdout access, release, trading permission, or authorization change.
 - Frozen `main` remains `44bcaeae7eefd358cf063394b0e7f4f0b83af8eb`.
+
+---
+
+## Append-only addendum — TTM-R2 provenance reconstruction (2026-11-15)
+
+The prior QLIKE comparison is now traceable to primary project records rather than an unsupported summary:
+
+- Decision/closure documents: docs/ttm_r2_closure.md and docs/ttm-r2-risk-evaluation.md.
+- Exact GitHub execution: [TTM-R2 Risk-Only Research #25, attempt 2 / Run ID 43094730462](https://github.com/angry0tiger-sudo/AliX/actions/runs/43094730462), code commit ad75f44800d3024bc50e7654b1762f49298ef0d9.
+- Immutable report artifact: 13916547485, name alix-ttm-r2-risk-only, 510,786 bytes, artifact ZIP SHA-256 15718b3b763ffe8d28d2ee3dd049ba00c2aa71897c6d147fa5d2cf31a58110a8.
+
+### Forecast protocol and exact sample
+
+- Dataset: 31,801 native Nobitex BTCUSDT 1h rows, SHA-256 0aa13607d1da68c4720919f233635bb33d34048e5bd67d3ecc2ce9bb7c2b462e, window 2021-10-31 20:30 UTC through 2025-06-17 20:30 UTC.
+- Target: hourly log1p((log(close_t / close_(t-1)))^2); 512 closed hourly context observations; 24 hourly forecast steps. The 24 hourly inverse-scaled variance predictions are summed to form the 24h variance forecast.
+- Model: ibm-granite/granite-timeseries-ttm-r2, zero-shot frozen weights, immutable revision d6a79570cac0f33d526601cd3a0fc7c80a8f9a2f, weights SHA-256 a706726a7eb01bbcb42994b7dcb3c06ea9557898dbae8d480eb04fe8ccb89710.
+- Chronological split: 70% training-only scaler fit, 15% validation, final 15% holdout. Forecast origins are 24h apart. The 198 final-holdout decisions run from 2024-12-01 02:30 UTC through 2025-06-16 02:30 UTC; their target horizons end from 2024-12-02 02:30 UTC through 2025-06-17 02:30 UTC. The artifact also contains 198 separate validation forecasts.
+- Actual 24h realized variance is the sum of the next 24 squared close-to-close log returns. The baseline is trailing-24h realized-variance persistence: sum of the preceding 24 squared log returns through the forecast origin.
+- QLIKE is the mean of actual_variance / forecast_variance - log(actual_variance / forecast_variance) - 1, lower being better. Final holdout: 198 forecasts; TTM QLIKE 0.27785936698219454; persistence QLIKE 0.3934795684925382; improvement 29.3840%. Log-variance MAE also improved (0.63270646 vs 0.69222535).
+- The QLIKE forecast comparison is cost-free by protocol; 50 bps round-trip costs were applied only to the separate portfolio replay.
+
+### Purge / embargo clarification
+
+The code creates 24h non-overlapping forecast origins and explicitly checks that every 24h target window lies wholly inside its assigned chronological split. The first validation target begins at the training boundary; the first holdout target begins at the validation boundary. This prevents target windows crossing split boundaries, and the 24h stride prevents overlapping target windows. However, the implementation does not reserve a separate additional 24-bar embargo gap beyond those split-contained target-window constraints. Therefore the accurate description is split-contained, non-overlapping targets; no separately encoded embargo buffer, not an unqualified claim that a conventional purge/embargo gap was applied.
+
+### Economic interpretation and prerequisite for any future pivot
+
+QLIKE improvement is evidence of variance-forecast quality, not proof of trading profitability. The same Run #25 artifact shows the offline 50bps portfolio replay still had 480 holdout trades, NetPF 0.3748 under TTM sizing (0.3731 fixed-size), max drawdown 18.26% (21.63% fixed-size), win rate 31.67%, and net return -18.17% (-21.56% fixed-size). Runtime sizing was not enabled.
+
+Before any TTM-R2 volatility pivot can be preregistered, a new hypothesis must define the forecast-to-position translation (risk multiplier and exposure caps), causal entry/exit and stop behavior, fee/slippage/fill assumptions with the registered 50bps baseline and cost sensitivity, non-overlapping chronological validation with explicit boundary policy, fold-stability and sample-frequency gates, and independent economic acceptance criteria. No pivot, trial, threshold, holdout access, or execution is authorized by this provenance reconstruction.
+
+This provenance is sufficient to cite the QLIKE observation, but it does not authorize a strategy pivot. The owner retains all three project options.
