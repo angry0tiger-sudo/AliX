@@ -137,14 +137,14 @@ jobs:
         with:
           repository: shiyu-coder/Kronos
           ref: 67b630e67f6a18c9e9be918d9b4337c960db1e9a
-          path: ${{ runner.temp }}/kronos-source
+          path: kronos-source
           persist-credentials: false
 
       - name: Dependency-import preflight for all pinned inference modules
         shell: bash
         run: |
           set -euo pipefail
-          export PYTHONPATH="$RUNNER_TEMP/kronos-source${PYTHONPATH:+:$PYTHONPATH}"
+          export PYTHONPATH="$GITHUB_WORKSPACE/kronos-source${PYTHONPATH:+:$PYTHONPATH}"
           python - <<'PY'
           import importlib
 
@@ -170,7 +170,7 @@ jobs:
             --lock config/experiment/four_arm_execution_lock.json \
             --model-pins config/four_arm/model_pins.json \
             --model-artifacts-dir "$RUNNER_TEMP/four-arm-models" \
-            --kronos-code-dir "$RUNNER_TEMP/kronos-source" \
+            --kronos-code-dir "$GITHUB_WORKSPACE/kronos-source" \
             --output-dir "$RUNNER_TEMP/four-arm-results" \
             --repository-root "$GITHUB_WORKSPACE"
 
