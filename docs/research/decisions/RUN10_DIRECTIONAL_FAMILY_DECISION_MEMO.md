@@ -200,3 +200,30 @@ Option 3 remains the owner's alternative if project closure is preferred. The ow
 - GLOBAL_N=UNKNOWN; DSR numeric values remain MISSING.
 - The diagnostic executable and workflow are not restored; only report data, provenance and decision records are added.
 - Lock NOT_AUTHORIZED; both triggers PROBE; Champion=null; order_permission=false; trading_authorization=NO-GO.
+
+
+---
+
+## Append-only addendum — historical multiplicity and DSR input sensitivity (2026-11-15)
+
+### Revised accounting scope
+
+The GitHub tree audit now identifies 27 ml-core-v4 workflow files and 39 research/research-adjacent workflows in the reviewed scope after adding the real Four-Arm experiment workflow to the previously inventoried list. This is a workflow inventory, not 39 independent strategies. The family inventory shows explicit candidate surfaces including V4-AP (36 cells), V4-H (48 experiment rows / 96 weighted model candidates / 864 nested parameter candidates), V4-AD (40 candidate rows), V4-AE (54 trailing configs), V4-P/Q (32 candidate rows each plus nested searches), V4-R (64 candidate rows), V4-V (16 candidate rows plus nested search), and multiple replay workflows over inherited V4-H candidates. Exact lineage and overlap still need reconciliation before any of these counts can be consolidated into a global N.
+
+The previously cited “eight directional research paths” is not a complete workflow/search-surface inventory. It should be described as an earlier bounded grouping, not as the complete number of research workflows or candidate alternatives. The 27 V4 workflow files alone exceed that description; the 39-workflow inventory also includes validation, diagnostic, replay and data-gap workflows that do not all create new strategy trials.
+
+### How a larger true N changes Option 2
+
+If the reconciled historical N is materially larger than the current recorded non-HF subtotal of at least 7,912, the expected maximum Sharpe used by DSR rises and the deflation hurdle becomes harder. This makes a TTM-R2 pivot less defensible as a shortcut around the current directional evidence: TTM-R2's QLIKE improvement is a forecast-quality statistic, not a candidate Sharpe distribution, and its prior costed portfolio replay remained economically negative (NetPF 0.3748 at 50 bps, MaxDD 18.26%, 480 trades, return -18.17%). No retained global per-trial Sharpe series or finite global N exists to quantify its DSR hurdle.
+
+Option 2 remains possible only as a separate owner-authorized research hypothesis with a new preregistration, explicit forecast-to-position translation, execution/cost protocol, candidate-level Sharpe capture and its own DSR cohort. It must not inherit a presumed positive DSR from QLIKE, nor bypass the multiplicity burden by relabeling the same directional search.
+
+### How a larger true N changes Option 3
+
+A substantially larger N, coupled with missing historical Sharpe distributions, increases the archival and statistical burden required to justify further model selection. This strengthens Option 3 as a portfolio/resource-allocation choice if the owner does not wish to fund a complete historical reconstruction and a new, independently justified hypothesis.
+
+That does **not** turn Option 3 into a statistically established family-wide economic NO-GO. Run #10 remains 0 PASS / 3 FAIL / 9 INSUFFICIENT_SAMPLE, the three FAIL rows remain one repeated control, and ADR-043 remains prospective only. A project-level closure may be chosen by the owner, but it must not be represented as a computed DSR failure or a retrospective FUTILE verdict.
+
+### Owner boundary
+
+The engineering recommendation is to freeze further candidate selection until the historical trial/Sharpe crosswalk is either completed or the owner explicitly elects to close the workstream. Option 2 and Option 3 remain owner choices; neither is executed or authorized by this appendix. GLOBAL_N=UNKNOWN and DSR NOT_COMPUTABLE remain unchanged.
