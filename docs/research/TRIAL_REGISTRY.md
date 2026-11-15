@@ -487,3 +487,19 @@ No experiment has been run for this amendment. The execution lock remains NOT_AU
 - This is an **engineering/authorization STOP before research I/O**, not an economic NO-GO for the directional family. `GLOBAL_N = UNKNOWN` remains unchanged; there is no basis for a family-level economic verdict or a volatility pivot execution.
 - Safety closeout in the same append operation: execution lock `NOT_AUTHORIZED`; `owner_authorization_commit_sha=null`; workflow authorization environment `false`; `EXECUTION_TRIGGER=PROBE`; `ACQUISITION_TRIGGER=PROBE`; `ALIX_DRY_RUN=true`; `ALIX_ALLOW_LIVE_TRADING=false`.
 - V2, Spec v3, the public fetcher, immutable pre-hack data, and frozen main were not modified. No price/OHLCV values or holdout bytes were accessed or logged.
+
+---
+
+## [APPEND] Four-arm run #6 — runtime stop at Kronos checkout (2026-11-15)
+
+- Fresh trigger nonce: `7255cfe75d5d3a463cd305dcf10ec075`; trigger commit: `c30d137b279c5201c488297b27dd67893cc1af1e`.
+- Execution workflow run #6: Run ID `43693421298`; conclusion **failure**.
+- Exact-SHA gates before execution: Standard CI #2423 / Run ID `43693421306` — **SUCCESS**; Seven-tool Preflight #27 / Run ID `43693421279`, artifact `14153039640` — **SUCCESS**. The workflow's one-time nonce guard and immutable lock-only validation both passed.
+- Runtime sequence: pinned CPU inference dependencies installed successfully; Acquisition #1 artifact `four-arm-model-weights-43590408032` (run `43590408032`, artifact `14111134121`) downloaded successfully. GitHub Actions reported archive SHA-256 `752df2962cf2bb6aac1e10ebbb66652f722cf6176519fdc0ad631a592a8eaf06`.
+- **Failing step 8:** `Check out the pinned Kronos inference source`. Exact error: `Repository path '/home/runner/work/_temp/kronos-source' is not under '/home/runner/work/AliX/AliX'`. The external checkout action rejected a destination outside the GitHub workspace. This is a runner/workspace-path runtime failure, not a model or economic result.
+- Steps 9 `Dependency-import preflight for all pinned inference modules` and 10 `Run all twelve preregistered trials on the verified pre-hack prefix` were **SKIPPED**. The pre-hack CSV/manifest were not opened; no forecast cache, model inference, trade simulation, fold evaluation or economic metrics were produced. No post-hack holdout access occurred.
+- Upload step found no JSON result files. No trial-manifest artifact was produced; no result artifact ID exists for run #6.
+- Evaluated economic candidates: **0**. All 12 ADR-038 cells remain `REGISTERED_NOT_EVALUATED`. No placeholder records or metrics were created; `GLOBAL_N=UNKNOWN` remains unchanged. This is an **engineering runtime STOP**, not economic NO-GO for the directional family. No volatility pivot is executed.
+- Stop rule: **STOP — no retry or second dispatch** under this directive. Any future attempt requires a new owner directive and a corrected workspace-contained Kronos checkout path, followed by fresh exact-SHA CI/Preflight and a fresh one-time nonce.
+- Safety closeout: execution lock `NOT_AUTHORIZED`; `owner_authorization_commit_sha=null`; workflow env `ALIX_FOUR_ARM_EXECUTION_AUTHORIZED=false`; `EXECUTION_TRIGGER=PROBE`; `ACQUISITION_TRIGGER=PROBE`; `ALIX_DRY_RUN=true`; `ALIX_ALLOW_LIVE_TRADING=false`.
+- V2, Spec v3, frozen main, public fetcher, and pre-hack data files were not changed. No price/OHLCV values were printed or logged. The holdout remained sealed.
