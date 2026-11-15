@@ -9,6 +9,7 @@ on:
       - "four_arm*/**"
       - "research/four_arm_core/**"
       - ".github/workflows/quality-preflight.yml"
+      - ".github/workflows/four-arm-real-experiment.yml"
       - "config/four_arm/**"
       - "config/experiment/four_arm_execution_lock.json"
       - "docs/research/preregistration/contracts/**"

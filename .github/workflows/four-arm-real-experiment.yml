@@ -108,22 +108,6 @@ jobs:
             --output-dir "$RUNNER_TEMP/four-arm-lock-check" \
             --repository-root "$GITHUB_WORKSPACE"
 
-      - name: Download pinned weights from Acquisition #1
-        uses: actions/download-artifact@v4
-        with:
-          name: four-arm-model-weights-43590408032
-          path: ${{ runner.temp }}/four-arm-models
-          run-id: 43590408032
-          github-token: ${{ github.token }}
-
-      - name: Check out the pinned Kronos inference source
-        uses: actions/checkout@v4
-        with:
-          repository: shiyu-coder/Kronos
-          ref: 67b630e67f6a18c9e9be918d9b4337c960db1e9a
-          path: ${{ runner.temp }}/kronos-source
-          persist-credentials: false
-
       - name: Install pinned CPU-only inference runtime
         run: |
           set -euo pipefail
@@ -139,6 +123,22 @@ jobs:
             accelerate==1.11.0 \
             tqdm==4.67.1
 
+
+      - name: Download pinned weights from Acquisition #1
+        uses: actions/download-artifact@v4
+        with:
+          name: four-arm-model-weights-43590408032
+          path: ${{ runner.temp }}/four-arm-models
+          run-id: 43590408032
+          github-token: ${{ github.token }}
+
+      - name: Check out the pinned Kronos inference source
+        uses: actions/checkout@v4
+        with:
+          repository: shiyu-coder/Kronos
+          ref: 67b630e67f6a18c9e9be918d9b4337c960db1e9a
+          path: ${{ runner.temp }}/kronos-source
+          persist-credentials: false
 
       - name: Dependency-import preflight for all pinned inference modules
         shell: bash
