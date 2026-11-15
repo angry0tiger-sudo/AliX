@@ -43,7 +43,7 @@ jobs:
         run: |
           set -euo pipefail
           trigger_value="$(< config/four_arm/EXECUTION_TRIGGER)"
-          if [[ "$trigger_value" != "EXECUTE" ]]; then
+          if [[ ! "$trigger_value" =~ ^[0-9a-f]{32}$ ]]; then
             echo "::error::FOUR_ARM_EXECUTION_TRIGGER_NOT_ARMED"
             exit 1
           fi
@@ -51,7 +51,7 @@ jobs:
             echo "::error::FOUR_ARM_EXECUTION_TRIGGER_PARENT_MISSING"
             exit 1
           fi
-          if git log "$EVENT_BEFORE" -S"EXECUTE" --format='%H' -- config/four_arm/EXECUTION_TRIGGER | grep -q .; then
+          if git log "$EVENT_BEFORE" -S"$trigger_value" --format='%H' -- config/four_arm/EXECUTION_TRIGGER | grep -q .; then
             echo "::error::FOUR_ARM_EXECUTION_TRIGGER_REPLAYED"
             exit 1
           fi
