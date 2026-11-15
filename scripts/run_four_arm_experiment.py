@@ -1244,6 +1244,69 @@ def _build_twelve_trial_manifests(
     return manifests
 
 
+def _derive_run_verdict_fields(
+    trial_manifests: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Derive cohort and promotion status from recorded per-trial decisions."""
+    recognized_decisions = {
+        "PASS",
+        "INSUFFICIENT_SAMPLE",
+        "NO_GO_ECONOMIC_GATES",
+        "NO_GO_INSUFFICIENT_DSR_EVIDENCE",
+    }
+    decision_counts: dict[str, int] = {}
+    decisions: list[str] = []
+    for manifest in trial_manifests:
+        decision = manifest.get("decision")
+        if not isinstance(decision, str) or not decision:
+            return {
+                "cohort_verdict": "INCOMPLETE_DECISION_DATA",
+                "promotion_gate_status": "BLOCKED_BY_INCOMPLETE_DECISION_DATA",
+                "cohort_decision_counts": decision_counts,
+            }
+        decisions.append(decision)
+        decision_counts[decision] = decision_counts.get(decision, 0) + 1
+
+    if not decisions or any(item not in recognized_decisions for item in decisions):
+        return {
+            "cohort_verdict": "INCOMPLETE_DECISION_DATA",
+            "promotion_gate_status": "BLOCKED_BY_INCOMPLETE_DECISION_DATA",
+            "cohort_decision_counts": dict(sorted(decision_counts.items())),
+        }
+
+    decision_set = set(decisions)
+    if decision_set == {"PASS"}:
+        cohort_verdict = "PASS"
+    elif decision_set == {"INSUFFICIENT_SAMPLE"}:
+        cohort_verdict = "INSUFFICIENT_SAMPLE"
+    elif decision_set == {"NO_GO_ECONOMIC_GATES"}:
+        cohort_verdict = "NO_GO_ALL_CELLS_ECONOMIC_GATES"
+    elif decision_set == {"NO_GO_INSUFFICIENT_DSR_EVIDENCE"}:
+        cohort_verdict = "BLOCKED_DSR_EVIDENCE"
+    else:
+        cohort_verdict = "MIXED_COHORT"
+
+    blockers: list[str] = []
+    if "INSUFFICIENT_SAMPLE" in decision_set:
+        blockers.append("SAMPLE_GATE")
+    if "NO_GO_ECONOMIC_GATES" in decision_set:
+        blockers.append("ECONOMIC_GATES")
+    if "NO_GO_INSUFFICIENT_DSR_EVIDENCE" in decision_set:
+        blockers.append("DSR_EVIDENCE")
+    promotion_gate_status = (
+        "ELIGIBLE_PENDING_OWNER_REVIEW"
+        if decision_set == {"PASS"}
+        else "BLOCKED_BY_" + "_AND_".join(blockers)
+        if blockers
+        else "BLOCKED_BY_INCOMPLETE_DECISION_DATA"
+    )
+    return {
+        "cohort_verdict": cohort_verdict,
+        "promotion_gate_status": promotion_gate_status,
+        "cohort_decision_counts": dict(sorted(decision_counts.items())),
+    }
+
+
 def _build_run_report(
     *,
     trial_manifests: Sequence[Mapping[str, Any]],
@@ -1303,8 +1366,7 @@ def _build_run_report(
             }
             for item in trial_manifests
         ],
-        "economic_verdict": "NO_GO_INSUFFICIENT_DSR_EVIDENCE",
-        "directional_family_verdict": "NO_GO_UNDER_GLOBAL_N_UNKNOWN",
+        **_derive_run_verdict_fields(trial_manifests),
         "Champion": None,
         "order_permission": False,
         "trading_authorization": "NO-GO",

@@ -50,3 +50,27 @@ The twelve actual manifest records are appended to `docs/research/TRIAL_REGISTRY
 - Frozen main remains `44bcaeae7eefd358cf063394b0e7f4f0b83af8eb`. V2, Spec v3, public fetcher, and `data/nobitex/prehack/*` are not changed.
 
 This ADR records an evaluation and safety closeout only. It authorizes no additional trials, tuning, pivot execution, holdout access, or trading.
+
+---
+
+## Append-only correction — run-report verdict integrity (2026-11-15)
+
+A code review identified that the original `economic_verdict` and
+`directional_family_verdict` fields in `four-arm-run-report.json` were assigned
+constant strings by `_build_run_report()`. They were not derived from the
+twelve per-trial decisions and therefore overstated the semantic authority of
+those field names.
+
+The runner now emits `cohort_verdict`, `promotion_gate_status`, and
+`cohort_decision_counts`, all derived from the actual `trial_manifests`
+decision values. The misleading constant fields have been removed. A unit
+contract test varies the input decision mix and asserts that both verdict
+fields change accordingly, including mixed, all-insufficient, and all-economic-
+failure fixtures.
+
+**Run #10's registered economic adjudication is unchanged:** 0 PASS, 3 FAIL
+(the same threshold-invariant Arm-A control referenced three times), and 9
+INSUFFICIENT_SAMPLE. All twelve original manifest records and all registry
+entries remain unchanged. `GLOBAL_N=UNKNOWN`; numeric DSR and all numeric
+sensitivity values remain MISSING. This correction repairs report semantics
+only; it does not recompute, relabel, or reinterpret Run #10.

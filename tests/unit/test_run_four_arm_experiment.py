@@ -238,3 +238,62 @@ def test_real_entrypoint_accepts_complete_lock_and_rejects_tampering(
             repository_root=root,
             validate_lock_only=True,
         )
+
+
+def test_run_report_verdicts_are_derived_from_trial_decisions() -> None:
+    def build_report(decisions: list[str]) -> dict[str, object]:
+        manifests = []
+        for index, decision in enumerate(decisions):
+            manifests.append(
+                {
+                    "arm_id": "B",
+                    "trial_id": f"TEST-{index}",
+                    "threshold_bps": 120,
+                    "metrics": {
+                        "50": {"net_profit_factor": 0.5},
+                        "90": {"net_profit_factor": 0.4},
+                        "trades": 20,
+                        "max_drawdown": 0.1,
+                    },
+                    "sample_status": (
+                        "INSUFFICIENT_SAMPLE"
+                        if decision == "INSUFFICIENT_SAMPLE"
+                        else "SAMPLE_GATE_MET"
+                    ),
+                    "dsr_status": "INSUFFICIENT_EVIDENCE_GLOBAL_N_UNKNOWN",
+                    "dsr_sensitivity": {"numeric_dsr_computed": False},
+                    "folds_passed": 0,
+                    "folds": [],
+                    "decision": decision,
+                }
+            )
+        cache = four_arm.ForecastCache(
+            anchors=(),
+            forecasts=(),
+            identity_sha256="a" * 64,
+            cache_sha256="b" * 64,
+            entries_json="[]",
+        )
+        return four_arm._build_run_report(
+            trial_manifests=manifests,
+            dataset_sha256=four_arm.PREHACK_DATASET_SHA256,
+            folds=(),
+            forecast_cache=cache,
+        )
+
+    mixed = build_report(["NO_GO_ECONOMIC_GATES", "INSUFFICIENT_SAMPLE"])
+    under_sampled = build_report(["INSUFFICIENT_SAMPLE", "INSUFFICIENT_SAMPLE"])
+    all_failed = build_report(["NO_GO_ECONOMIC_GATES", "NO_GO_ECONOMIC_GATES"])
+
+    assert mixed["cohort_verdict"] == "MIXED_COHORT"
+    assert mixed["promotion_gate_status"] == (
+        "BLOCKED_BY_SAMPLE_GATE_AND_ECONOMIC_GATES"
+    )
+    assert under_sampled["cohort_verdict"] == "INSUFFICIENT_SAMPLE"
+    assert under_sampled["promotion_gate_status"] == "BLOCKED_BY_SAMPLE_GATE"
+    assert all_failed["cohort_verdict"] == "NO_GO_ALL_CELLS_ECONOMIC_GATES"
+    assert all_failed["promotion_gate_status"] == "BLOCKED_BY_ECONOMIC_GATES"
+    assert mixed["cohort_verdict"] != under_sampled["cohort_verdict"]
+    assert mixed["promotion_gate_status"] != under_sampled["promotion_gate_status"]
+    assert "economic_verdict" not in mixed
+    assert "directional_family_verdict" not in mixed
