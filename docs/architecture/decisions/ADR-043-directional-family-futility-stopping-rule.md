@@ -125,3 +125,29 @@ Run #10 has 7/9 evaluable directional cells: B=2/3, C=3/3, D=2/3. The two non-ev
 B and C have negative slopes at both costs. D has a small positive NetPF@50 slope: PF@50 improves slightly from 0.397253 at 7 trades to 0.398077 at 41 trades; its NetPF@90 slope is negative. Thus even the descriptive Run #10 values do not satisfy the all-arm/all-cost gradient condition. More importantly, ADR-043 was not preregistered for Run #10. These slopes are motivation and method calibration only, not a formal retrospective FUTILE application.
 
 The best observed NetPF@50 remains 0.6324 and best observed NetPF@90 remains 0.3936. No numeric aggregate PF reached 1.0. GLOBAL_N=UNKNOWN and uncomputed DSR remain unchanged.
+
+---
+
+## Append-only addendum — harvested signal-density evidence (2026-11-15)
+
+The three isolated diagnostic artifacts have been downloaded and their contents verified. Each archive contains exactly diagnostic-report.json and diagnostic-report.md; both internal files are byte-identical across the three runs (JSON SHA-256 2d759005f54e4008bf504e046f4ba9b2cad397f2092de9887b12110751f4ce2c; Markdown SHA-256 8e89419737f8f6fea6222bdae09930f07a66cacd623c7c9ace77db3c6c81841e). ZIP digests differ. Full provenance and the complete 27-fold data are preserved in docs/research/diagnostics/FOUR_ARM_SIGNAL_DENSITY_DIAGNOSTIC_RESULTS.json and FOUR_ARM_SIGNAL_DENSITY_DIAGNOSTIC_HARVEST_REPORT.md.
+
+### Density and attrition result
+
+All nine B/C/D cells have 10,500 forecast-covered decision bars. At the registered thresholds, eligible bar counts are:
+
+| Arm | 120bps | 180bps | 240bps |
+|---|---:|---:|---:|
+| B | 216 | 96 | 24 |
+| C | 552 | 288 | 168 |
+| D | 288 | 24 | 0 |
+
+The qualifying rate is only 0.00%–5.26% of covered bars. Position-open suppression among eligible bars is 70.8%–95.8%. ATR-invalid entry rejects and no-next-bar rejects are zero in every fold. There is no independent pre-entry risk gate in the Run #10 implementation; risk-gate rejection counts remain MISSING, not zero. ATR barriers are post-entry exits.
+
+The relative-margin histogram shows a threshold reduction to 75% of each listed threshold would expose the following additional eligible bars (forecast-only counts, not new trades): B +356/+48/+72 at 120/180/240; C +360/+144/+120; D +72/+144/+24. These values do not include position-occupancy simulation or any economic scoring.
+
+### PF evaluability remains unchanged
+
+The diagnostic computes no PF or other economic metric. Run #10 manifest evaluability remains 7/9 directional cells: B=2/3, C=3/3, D=2/3. B/240 (one completed trade) and D/240 (zero trades) remain not evaluable because NetPF@50 and NetPF@90 are null. The density data clarifies signal supply and entry attrition, but it does not create another evaluable PF cell or alter the prior ADR-043 prospective-only boundary.
+
+The 6/9 evaluability minimum and two-cells-per-arm coverage in the earlier clarification are met numerically (7/9; B=2, C=3, D=2). However, the all-arm/all-cost OLS condition is not satisfied: D's descriptive NetPF@50 slope is slightly positive. The rule remains prospective and cannot be retrospectively applied to Run #10. GLOBAL_N=UNKNOWN; DSR remains uncomputed.

@@ -160,3 +160,43 @@ QLIKE improvement is evidence of variance-forecast quality, not proof of trading
 Before any TTM-R2 volatility pivot can be preregistered, a new hypothesis must define the forecast-to-position translation (risk multiplier and exposure caps), causal entry/exit and stop behavior, fee/slippage/fill assumptions with the registered 50bps baseline and cost sensitivity, non-overlapping chronological validation with explicit boundary policy, fold-stability and sample-frequency gates, and independent economic acceptance criteria. No pivot, trial, threshold, holdout access, or execution is authorized by this provenance reconstruction.
 
 This provenance is sufficient to cite the QLIKE observation, but it does not authorize a strategy pivot. The owner retains all three project options.
+
+---
+
+## Append-only addendum — harvested signal-density evidence and option reassessment (2026-11-15)
+
+### Evidence harvested
+
+Three separate diagnostic runs (43739166184 / artifact 14171940837; 43739941516 / 14172285941; 43740274764 / 14171877977) each produced the same extracted JSON and Markdown bytes. The ZIP wrappers have distinct SHA-256 values; the internal report file hashes are identical. The complete durable source, 27-fold table and nine histograms are now recorded in:
+- docs/research/diagnostics/FOUR_ARM_SIGNAL_DENSITY_DIAGNOSTIC_RESULTS.json
+- docs/research/diagnostics/FOUR_ARM_SIGNAL_DENSITY_DIAGNOSTIC_HARVEST_REPORT.md
+
+The audit used only the 27,825-row confirmatory prefix (source SHA-256 0aa13607d1da68c4720919f233635bb33d34048e5bd67d3ecc2ce9bb7c2b462e) and the Run #10 forecast cache (1,138 anchors; cache SHA-256 aea6c537f3ca79a28e75faf1a118bd57d5dea4fb58b45e477eb401df03d01868). It made zero inference calls, computed no PF/PnL/equity/drawdown metric, registered zero trials, and did not access holdout.
+
+### Bottleneck
+
+Each B/C/D × threshold cell has 10,500 forecast-covered bars. Only 0–552 bars (0.00%–5.26%) clear the registered threshold. This is the first attrition point. Among qualified bars, 70.8%–95.8% are suppressed while a position is open. ATR-invalid and no-next-bar rejects are zero. There is no separately instrumented pre-entry risk gate, so risk rejects are MISSING, not zero.
+
+The histogram shows a 25%-relative threshold reduction would add forecast-qualified bars: B +356/+48/+72, C +360/+144/+120, D +72/+144/+24 for the current 120/180/240 thresholds. These are bar counts only. They are not new trade counts, do not account for occupied positions, and have no PF attached.
+
+### Reassessment of the three options
+
+**Option 1 — Lower the thresholds.** The density evidence confirms more forecast bars would qualify at lower thresholds, but not that a 100-trade sample or profitable edge would result. Existing Run #10 economics move against lowering for B and C: NetPF@50 declines from 0.6324 at 180bps / 11 trades to 0.4765 at 120bps / 28 trades for B, and from 0.5240 / 35 trades to 0.4019 / 70 trades for C. D is nearly flat (0.3973 / 7 versus 0.3981 / 41). All numeric PF values remain below 1.0. Do not lower thresholds on this evidence. A lower cutoff would be a new hypothesis requiring separate owner approval and preregistration, with economic gates intact.
+
+**Option 2 — Declare FUTILE and pivot to TTM-R2.** A retrospective FUTILE declaration is not supported. Run #10 is outside ADR-043's prospective scope; the prior evaluability definition yields 7/9 numeric PF cells, but D's NetPF@50 descriptive slope is positive rather than strictly negative. The 25%-lower signal counts add no economic proof. Separately, TTM-R2's 198-holdout QLIKE improvement (0.27785937 vs 0.39347957) establishes variance-forecast quality only; its 50bps holdout sizing replay still had NetPF 0.3748, MaxDD 18.26%, 480 trades, and -18.17% net return. Option 2 remains a permissible portfolio/governance choice to stop directional threshold iteration and prioritize a separately designed volatility-risk hypothesis, but it is not an ADR-043 verdict and does not authorize execution or runtime sizing.
+
+**Option 3 — Close the project with a documented NO-GO.** This remains a valid owner-level resource-allocation choice given 0 PASS, 0/36 stable Run #10 folds, repeated-control FAIL records and nine under-sampled forecast cells. It must not be represented as a statistically proven family-wide failure: two PF pairs are null, and the nine forecast-driven cells did not meet the sample gate.
+
+### Engineering recommendation
+
+Recommend Option 2 as a governance priority only, with a hard boundary: retire casual directional threshold iteration, do not lower the current thresholds, retain TTM-R2 as an offline risk-forecasting result only, and require a new owner-approved preregistration translating volatility forecasts into capped positions, costs/slippage/fills, chronological fold stability and independent economic acceptance. Do not declare Run #10 FUTILE, open holdout, change runtime sizing, dispatch a trial, or arm any execution path.
+
+Option 3 remains the owner's alternative if project closure is preferred. The owner retains the final decision. No option is executed by this memo.
+
+### Accounting and governance boundaries
+
+- Run #10's 12 trial registry records and ADR-042 verdict are unchanged; no new trial record was added.
+- Run #10 PF evaluability remains B=2/3, C=3/3, D=2/3; B/240 and D/240 remain PF=null / not evaluable.
+- GLOBAL_N=UNKNOWN; DSR numeric values remain MISSING.
+- The diagnostic executable and workflow are not restored; only report data, provenance and decision records are added.
+- Lock NOT_AUTHORIZED; both triggers PROBE; Champion=null; order_permission=false; trading_authorization=NO-GO.

@@ -1,0 +1,972 @@
+{
+  "schema_version": "alix.four-arm.signal-density-harvest.v1",
+  "classification": "DIAGNOSTIC_ONLY_NOT_A_TRIAL",
+  "record_date_utc": "2026-11-15",
+  "branch": "research/nobitex-hf-strategy",
+  "harvested_at_head": "7bf32a174e42ea8dee66726593229ed8e79af654",
+  "main_frozen": "44bcaeae7eefd358cf063394b0e7f4f0b83af8eb",
+  "source_artifacts": [
+    {
+      "artifact_id": 14171940837,
+      "run_id": 43739166184,
+      "run_name": "Four-Arm Signal-Density Diagnostic #1",
+      "head_sha": "89ce923338ba977392539c6896d6f138cad36151",
+      "size_bytes": 4843,
+      "archive_sha256": "f12ce09667fa2768114f99e0fe21b95c4f5b792f16fce9393f3838635dfdf86a",
+      "expires_at": "2027-02-13T17:05:55Z"
+    },
+    {
+      "artifact_id": 14172285941,
+      "run_id": 43739941516,
+      "run_name": "Four-Arm Signal-Density Diagnostic #2",
+      "head_sha": "719b96dfffac265c4cf384236703d998a97d1326",
+      "size_bytes": 4843,
+      "archive_sha256": "4cfbd156c2d9f02f4e87448b682459b4c521dcab7a4dac1033933824a5b1decd",
+      "expires_at": "2027-02-13T17:14:04Z"
+    },
+    {
+      "artifact_id": 14171877977,
+      "run_id": 43740274764,
+      "run_name": "Four-Arm Signal-Density Diagnostic #3",
+      "head_sha": "0ca123db055b2ae28e2f9418982cd875f49d14a5",
+      "size_bytes": 4843,
+      "archive_sha256": "b094f2f4643a9eed8d3e4770d241e17a39df10fe8cd9e53f4db3f5a6b26f8d28",
+      "expires_at": "2027-02-13T17:17:35Z"
+    }
+  ],
+  "artifact_member_inventory": {
+    "files": [
+      "diagnostic-report.json",
+      "diagnostic-report.md"
+    ],
+    "members": {
+      "diagnostic-report.json": {
+        "size_bytes": 47323,
+        "sha256": "2d759005f54e4008bf504e046f4ba9b2cad397f2092de9887b12110751f4ce2c"
+      },
+      "diagnostic-report.md": {
+        "size_bytes": 3404,
+        "sha256": "8e89419737f8f6fea6222bdae09930f07a66cacd623c7c9ace77db3c6c81841e"
+      }
+    },
+    "members_identical_across_all_three_artifacts": true,
+    "archive_sha256s_differ": true,
+    "archive_byte_identity": false
+  },
+  "dataset": {
+    "source": "data/nobitex/prehack/nobitex-btcusdt-1h.csv",
+    "source_rows": 31801,
+    "confirmatory_prefix_rows": 27825,
+    "excluded_tail_rows": 3976,
+    "csv_sha256": "0aa13607d1da68c4720919f233635bb33d34048e5bd67d3ecc2ce9bb7c2b462e"
+  },
+  "forecast_cache": {
+    "source_run_id": 43712086361,
+    "source_artifact_id": 14163527266,
+    "source_artifact_sha256": "b12c3a807316ab52829e6b0b1aa450057133d76afc0aeb54f0ac259f38300679",
+    "anchors": 1138,
+    "cache_sha256": "aea6c537f3ca79a28e75faf1a118bd57d5dea4fb58b45e477eb401df03d01868",
+    "identity_sha256": "f879e5c179cf6451485ef1ce432c7d921f5f4344146d80f08026f7f8cfcf2427",
+    "inference_reused": true,
+    "new_inference_calls": 0
+  },
+  "histogram_definition": {
+    "formula": "(forecast_return_bps - threshold_bps) / threshold_bps",
+    "bins": [
+      "<= -100%",
+      "(-100%, -50%]",
+      "(-50%, -25%]",
+      "(-25%, 0%]",
+      "(0%, 25%]",
+      "(25%, 50%]",
+      "(50%, 100%]",
+      "> 100%"
+    ],
+    "units": "dimensionless relative margin",
+    "raw_prices_or_ohlcv_included": false
+  },
+  "accounting_invariants": {
+    "cells": 9,
+    "folds": 27,
+    "covered_bars_per_cell": 10500,
+    "fold_covered_bars": [
+      2874,
+      3500,
+      4126
+    ],
+    "fold_anchor_counts": [
+      121,
+      147,
+      173
+    ],
+    "all_forecast_bars_reconciled": true,
+    "all_histograms_sum_to_covered_bars": true,
+    "entry_flow_reconciled": true,
+    "trade_counts_and_exit_reasons_reconciled_to_run10_trial_manifests": true,
+    "atr_invalid_rejections_total": 0,
+    "no_next_bar_rejections_total": 0,
+    "pre_entry_risk_gate_rejections": "MISSING_NOT_ZERO"
+  },
+  "safety": {
+    "economic_metrics_computed": false,
+    "trial_records_created": 0,
+    "model_inference_calls": 0,
+    "model_weights_downloaded": false,
+    "holdout_access": false,
+    "private_api_calls": 0,
+    "real_order_attempts": 0,
+    "Champion": null,
+    "order_permission": false,
+    "trading_authorization": "NO-GO",
+    "GLOBAL_N": "UNKNOWN",
+    "DSR_computed": false
+  },
+  "cells": [
+    {
+      "arm_id": "B",
+      "threshold_bps": 120,
+      "valid_forecast_bars": 10500,
+      "valid_forecast_anchors": 441,
+      "eligible_signal_bars": 216,
+      "below_threshold_bars": 10284,
+      "eligible_signal_episodes": 9,
+      "entry_gate_rejections": {
+        "non_finite_atr": 0,
+        "no_valid_next_bar_inside_fold": 0,
+        "suppressed_while_position_open": 188
+      },
+      "completed_trades": 28,
+      "risk_gate_rejections": {
+        "status": "MISSING_NO_SEPARATE_PRE_ENTRY_RISK_GATE",
+        "count": null,
+        "reason": "Run #10 has no independent pre-entry risk gate; ATR barriers occur after entry and are exit outcomes."
+      },
+      "threshold_qualified_percent": 2.057142857142857,
+      "eligible_bars_if_cutoff_reduced_to_75pct_of_this_threshold": 572,
+      "extra_eligible_bars_at_75pct_cutoff": 356,
+      "position_open_suppression_percent": 87.03703703703704,
+      "forecast_return_relative_margin_histogram": {
+        "<= -100%": 5938,
+        "(-100%, -50%]": 3412,
+        "(-50%, -25%]": 578,
+        "(-25%, 0%]": 356,
+        "(0%, 25%]": 96,
+        "(25%, 50%]": 24,
+        "(50%, 100%]": 72,
+        "> 100%": 24
+      },
+      "folds": [
+        {
+          "fold_id": 1,
+          "valid_forecast_anchors": 121,
+          "valid_forecast_bars": 2874,
+          "eligible_signal_bars": 0,
+          "below_threshold_bars": 2874,
+          "eligible_signal_episodes": 0,
+          "entry_gate_rejections": {
+            "non_finite_atr": 0,
+            "no_valid_next_bar_inside_fold": 0,
+            "suppressed_while_position_open": 0
+          },
+          "completed_trades": 0,
+          "risk_gate_rejections": {
+            "status": "MISSING_NO_SEPARATE_PRE_ENTRY_RISK_GATE",
+            "count": null,
+            "reason": "Run #10 has no independent pre-entry risk gate; ATR barriers occur after entry and are exits, not rejects."
+          }
+        },
+        {
+          "fold_id": 2,
+          "valid_forecast_anchors": 147,
+          "valid_forecast_bars": 3500,
+          "eligible_signal_bars": 144,
+          "below_threshold_bars": 3356,
+          "eligible_signal_episodes": 6,
+          "entry_gate_rejections": {
+            "non_finite_atr": 0,
+            "no_valid_next_bar_inside_fold": 0,
+            "suppressed_while_position_open": 124
+          },
+          "completed_trades": 20,
+          "risk_gate_rejections": {
+            "status": "MISSING_NO_SEPARATE_PRE_ENTRY_RISK_GATE",
+            "count": null,
+            "reason": "Run #10 has no independent pre-entry risk gate; ATR barriers occur after entry and are exits, not rejects."
+          }
+        },
+        {
+          "fold_id": 3,
+          "valid_forecast_anchors": 173,
+          "valid_forecast_bars": 4126,
+          "eligible_signal_bars": 72,
+          "below_threshold_bars": 4054,
+          "eligible_signal_episodes": 3,
+          "entry_gate_rejections": {
+            "non_finite_atr": 0,
+            "no_valid_next_bar_inside_fold": 0,
+            "suppressed_while_position_open": 64
+          },
+          "completed_trades": 8,
+          "risk_gate_rejections": {
+            "status": "MISSING_NO_SEPARATE_PRE_ENTRY_RISK_GATE",
+            "count": null,
+            "reason": "Run #10 has no independent pre-entry risk gate; ATR barriers occur after entry and are exits, not rejects."
+          }
+        }
+      ],
+      "reconciles_to_run10_trial_manifest": true
+    },
+    {
+      "arm_id": "B",
+      "threshold_bps": 180,
+      "valid_forecast_bars": 10500,
+      "valid_forecast_anchors": 441,
+      "eligible_signal_bars": 96,
+      "below_threshold_bars": 10404,
+      "eligible_signal_episodes": 4,
+      "entry_gate_rejections": {
+        "non_finite_atr": 0,
+        "no_valid_next_bar_inside_fold": 0,
+        "suppressed_while_position_open": 85
+      },
+      "completed_trades": 11,
+      "risk_gate_rejections": {
+        "status": "MISSING_NO_SEPARATE_PRE_ENTRY_RISK_GATE",
+        "count": null,
+        "reason": "Run #10 has no independent pre-entry risk gate; ATR barriers occur after entry and are exit outcomes."
+      },
+      "threshold_qualified_percent": 0.9142857142857144,
+      "eligible_bars_if_cutoff_reduced_to_75pct_of_this_threshold": 144,
+      "extra_eligible_bars_at_75pct_cutoff": 48,
+      "position_open_suppression_percent": 88.54166666666666,
+      "forecast_return_relative_margin_histogram": {
+        "<= -100%": 5938,
+        "(-100%, -50%]": 3990,
+        "(-50%, -25%]": 428,
+        "(-25%, 0%]": 48,
+        "(0%, 25%]": 72,
+        "(25%, 50%]": 0,
+        "(50%, 100%]": 24,
+        "> 100%": 0
+      },
+      "folds": [
+        {
+          "fold_id": 1,
+          "valid_forecast_anchors": 121,
+          "valid_forecast_bars": 2874,
+          "eligible_signal_bars": 0,
+          "below_threshold_bars": 2874,
+          "eligible_signal_episodes": 0,
+          "entry_gate_rejections": {
+            "non_finite_atr": 0,
+            "no_valid_next_bar_inside_fold": 0,
+            "suppressed_while_position_open": 0
+          },
+          "completed_trades": 0,
+          "risk_gate_rejections": {
+            "status": "MISSING_NO_SEPARATE_PRE_ENTRY_RISK_GATE",
+            "count": null,
+            "reason": "Run #10 has no independent pre-entry risk gate; ATR barriers occur after entry and are exits, not rejects."
+          }
+        },
+        {
+          "fold_id": 2,
+          "valid_forecast_anchors": 147,
+          "valid_forecast_bars": 3500,
+          "eligible_signal_bars": 48,
+          "below_threshold_bars": 3452,
+          "eligible_signal_episodes": 2,
+          "entry_gate_rejections": {
+            "non_finite_atr": 0,
+            "no_valid_next_bar_inside_fold": 0,
+            "suppressed_while_position_open": 42
+          },
+          "completed_trades": 6,
+          "risk_gate_rejections": {
+            "status": "MISSING_NO_SEPARATE_PRE_ENTRY_RISK_GATE",
+            "count": null,
+            "reason": "Run #10 has no independent pre-entry risk gate; ATR barriers occur after entry and are exits, not rejects."
+          }
+        },
+        {
+          "fold_id": 3,
+          "valid_forecast_anchors": 173,
+          "valid_forecast_bars": 4126,
+          "eligible_signal_bars": 48,
+          "below_threshold_bars": 4078,
+          "eligible_signal_episodes": 2,
+          "entry_gate_rejections": {
+            "non_finite_atr": 0,
+            "no_valid_next_bar_inside_fold": 0,
+            "suppressed_while_position_open": 43
+          },
+          "completed_trades": 5,
+          "risk_gate_rejections": {
+            "status": "MISSING_NO_SEPARATE_PRE_ENTRY_RISK_GATE",
+            "count": null,
+            "reason": "Run #10 has no independent pre-entry risk gate; ATR barriers occur after entry and are exits, not rejects."
+          }
+        }
+      ],
+      "reconciles_to_run10_trial_manifest": true
+    },
+    {
+      "arm_id": "B",
+      "threshold_bps": 240,
+      "valid_forecast_bars": 10500,
+      "valid_forecast_anchors": 441,
+      "eligible_signal_bars": 24,
+      "below_threshold_bars": 10476,
+      "eligible_signal_episodes": 1,
+      "entry_gate_rejections": {
+        "non_finite_atr": 0,
+        "no_valid_next_bar_inside_fold": 0,
+        "suppressed_while_position_open": 23
+      },
+      "completed_trades": 1,
+      "risk_gate_rejections": {
+        "status": "MISSING_NO_SEPARATE_PRE_ENTRY_RISK_GATE",
+        "count": null,
+        "reason": "Run #10 has no independent pre-entry risk gate; ATR barriers occur after entry and are exit outcomes."
+      },
+      "threshold_qualified_percent": 0.2285714285714286,
+      "eligible_bars_if_cutoff_reduced_to_75pct_of_this_threshold": 96,
+      "extra_eligible_bars_at_75pct_cutoff": 72,
+      "position_open_suppression_percent": 95.83333333333334,
+      "forecast_return_relative_margin_histogram": {
+        "<= -100%": 5938,
+        "(-100%, -50%]": 4346,
+        "(-50%, -25%]": 120,
+        "(-25%, 0%]": 72,
+        "(0%, 25%]": 0,
+        "(25%, 50%]": 24,
+        "(50%, 100%]": 0,
+        "> 100%": 0
+      },
+      "folds": [
+        {
+          "fold_id": 1,
+          "valid_forecast_anchors": 121,
+          "valid_forecast_bars": 2874,
+          "eligible_signal_bars": 0,
+          "below_threshold_bars": 2874,
+          "eligible_signal_episodes": 0,
+          "entry_gate_rejections": {
+            "non_finite_atr": 0,
+            "no_valid_next_bar_inside_fold": 0,
+            "suppressed_while_position_open": 0
+          },
+          "completed_trades": 0,
+          "risk_gate_rejections": {
+            "status": "MISSING_NO_SEPARATE_PRE_ENTRY_RISK_GATE",
+            "count": null,
+            "reason": "Run #10 has no independent pre-entry risk gate; ATR barriers occur after entry and are exits, not rejects."
+          }
+        },
+        {
+          "fold_id": 2,
+          "valid_forecast_anchors": 147,
+          "valid_forecast_bars": 3500,
+          "eligible_signal_bars": 0,
+          "below_threshold_bars": 3500,
+          "eligible_signal_episodes": 0,
+          "entry_gate_rejections": {
+            "non_finite_atr": 0,
+            "no_valid_next_bar_inside_fold": 0,
+            "suppressed_while_position_open": 0
+          },
+          "completed_trades": 0,
+          "risk_gate_rejections": {
+            "status": "MISSING_NO_SEPARATE_PRE_ENTRY_RISK_GATE",
+            "count": null,
+            "reason": "Run #10 has no independent pre-entry risk gate; ATR barriers occur after entry and are exits, not rejects."
+          }
+        },
+        {
+          "fold_id": 3,
+          "valid_forecast_anchors": 173,
+          "valid_forecast_bars": 4126,
+          "eligible_signal_bars": 24,
+          "below_threshold_bars": 4102,
+          "eligible_signal_episodes": 1,
+          "entry_gate_rejections": {
+            "non_finite_atr": 0,
+            "no_valid_next_bar_inside_fold": 0,
+            "suppressed_while_position_open": 23
+          },
+          "completed_trades": 1,
+          "risk_gate_rejections": {
+            "status": "MISSING_NO_SEPARATE_PRE_ENTRY_RISK_GATE",
+            "count": null,
+            "reason": "Run #10 has no independent pre-entry risk gate; ATR barriers occur after entry and are exits, not rejects."
+          }
+        }
+      ],
+      "reconciles_to_run10_trial_manifest": true
+    },
+    {
+      "arm_id": "C",
+      "threshold_bps": 120,
+      "valid_forecast_bars": 10500,
+      "valid_forecast_anchors": 441,
+      "eligible_signal_bars": 552,
+      "below_threshold_bars": 9948,
+      "eligible_signal_episodes": 20,
+      "entry_gate_rejections": {
+        "non_finite_atr": 0,
+        "no_valid_next_bar_inside_fold": 0,
+        "suppressed_while_position_open": 482
+      },
+      "completed_trades": 70,
+      "risk_gate_rejections": {
+        "status": "MISSING_NO_SEPARATE_PRE_ENTRY_RISK_GATE",
+        "count": null,
+        "reason": "Run #10 has no independent pre-entry risk gate; ATR barriers occur after entry and are exit outcomes."
+      },
+      "threshold_qualified_percent": 5.257142857142857,
+      "eligible_bars_if_cutoff_reduced_to_75pct_of_this_threshold": 912,
+      "extra_eligible_bars_at_75pct_cutoff": 360,
+      "position_open_suppression_percent": 87.31884057971014,
+      "forecast_return_relative_margin_histogram": {
+        "<= -100%": 3816,
+        "(-100%, -50%]": 5190,
+        "(-50%, -25%]": 582,
+        "(-25%, 0%]": 360,
+        "(0%, 25%]": 168,
+        "(25%, 50%]": 96,
+        "(50%, 100%]": 120,
+        "> 100%": 168
+      },
+      "folds": [
+        {
+          "fold_id": 1,
+          "valid_forecast_anchors": 121,
+          "valid_forecast_bars": 2874,
+          "eligible_signal_bars": 96,
+          "below_threshold_bars": 2778,
+          "eligible_signal_episodes": 4,
+          "entry_gate_rejections": {
+            "non_finite_atr": 0,
+            "no_valid_next_bar_inside_fold": 0,
+            "suppressed_while_position_open": 82
+          },
+          "completed_trades": 14,
+          "risk_gate_rejections": {
+            "status": "MISSING_NO_SEPARATE_PRE_ENTRY_RISK_GATE",
+            "count": null,
+            "reason": "Run #10 has no independent pre-entry risk gate; ATR barriers occur after entry and are exits, not rejects."
+          }
+        },
+        {
+          "fold_id": 2,
+          "valid_forecast_anchors": 147,
+          "valid_forecast_bars": 3500,
+          "eligible_signal_bars": 240,
+          "below_threshold_bars": 3260,
+          "eligible_signal_episodes": 9,
+          "entry_gate_rejections": {
+            "non_finite_atr": 0,
+            "no_valid_next_bar_inside_fold": 0,
+            "suppressed_while_position_open": 206
+          },
+          "completed_trades": 34,
+          "risk_gate_rejections": {
+            "status": "MISSING_NO_SEPARATE_PRE_ENTRY_RISK_GATE",
+            "count": null,
+            "reason": "Run #10 has no independent pre-entry risk gate; ATR barriers occur after entry and are exits, not rejects."
+          }
+        },
+        {
+          "fold_id": 3,
+          "valid_forecast_anchors": 173,
+          "valid_forecast_bars": 4126,
+          "eligible_signal_bars": 216,
+          "below_threshold_bars": 3910,
+          "eligible_signal_episodes": 7,
+          "entry_gate_rejections": {
+            "non_finite_atr": 0,
+            "no_valid_next_bar_inside_fold": 0,
+            "suppressed_while_position_open": 194
+          },
+          "completed_trades": 22,
+          "risk_gate_rejections": {
+            "status": "MISSING_NO_SEPARATE_PRE_ENTRY_RISK_GATE",
+            "count": null,
+            "reason": "Run #10 has no independent pre-entry risk gate; ATR barriers occur after entry and are exits, not rejects."
+          }
+        }
+      ],
+      "reconciles_to_run10_trial_manifest": true
+    },
+    {
+      "arm_id": "C",
+      "threshold_bps": 180,
+      "valid_forecast_bars": 10500,
+      "valid_forecast_anchors": 441,
+      "eligible_signal_bars": 288,
+      "below_threshold_bars": 10212,
+      "eligible_signal_episodes": 10,
+      "entry_gate_rejections": {
+        "non_finite_atr": 0,
+        "no_valid_next_bar_inside_fold": 0,
+        "suppressed_while_position_open": 253
+      },
+      "completed_trades": 35,
+      "risk_gate_rejections": {
+        "status": "MISSING_NO_SEPARATE_PRE_ENTRY_RISK_GATE",
+        "count": null,
+        "reason": "Run #10 has no independent pre-entry risk gate; ATR barriers occur after entry and are exit outcomes."
+      },
+      "threshold_qualified_percent": 2.742857142857143,
+      "eligible_bars_if_cutoff_reduced_to_75pct_of_this_threshold": 432,
+      "extra_eligible_bars_at_75pct_cutoff": 144,
+      "position_open_suppression_percent": 87.84722222222221,
+      "forecast_return_relative_margin_histogram": {
+        "<= -100%": 3816,
+        "(-100%, -50%]": 5772,
+        "(-50%, -25%]": 480,
+        "(-25%, 0%]": 144,
+        "(0%, 25%]": 120,
+        "(25%, 50%]": 72,
+        "(50%, 100%]": 72,
+        "> 100%": 24
+      },
+      "folds": [
+        {
+          "fold_id": 1,
+          "valid_forecast_anchors": 121,
+          "valid_forecast_bars": 2874,
+          "eligible_signal_bars": 48,
+          "below_threshold_bars": 2826,
+          "eligible_signal_episodes": 2,
+          "entry_gate_rejections": {
+            "non_finite_atr": 0,
+            "no_valid_next_bar_inside_fold": 0,
+            "suppressed_while_position_open": 43
+          },
+          "completed_trades": 5,
+          "risk_gate_rejections": {
+            "status": "MISSING_NO_SEPARATE_PRE_ENTRY_RISK_GATE",
+            "count": null,
+            "reason": "Run #10 has no independent pre-entry risk gate; ATR barriers occur after entry and are exits, not rejects."
+          }
+        },
+        {
+          "fold_id": 2,
+          "valid_forecast_anchors": 147,
+          "valid_forecast_bars": 3500,
+          "eligible_signal_bars": 144,
+          "below_threshold_bars": 3356,
+          "eligible_signal_episodes": 5,
+          "entry_gate_rejections": {
+            "non_finite_atr": 0,
+            "no_valid_next_bar_inside_fold": 0,
+            "suppressed_while_position_open": 123
+          },
+          "completed_trades": 21,
+          "risk_gate_rejections": {
+            "status": "MISSING_NO_SEPARATE_PRE_ENTRY_RISK_GATE",
+            "count": null,
+            "reason": "Run #10 has no independent pre-entry risk gate; ATR barriers occur after entry and are exits, not rejects."
+          }
+        },
+        {
+          "fold_id": 3,
+          "valid_forecast_anchors": 173,
+          "valid_forecast_bars": 4126,
+          "eligible_signal_bars": 96,
+          "below_threshold_bars": 4030,
+          "eligible_signal_episodes": 3,
+          "entry_gate_rejections": {
+            "non_finite_atr": 0,
+            "no_valid_next_bar_inside_fold": 0,
+            "suppressed_while_position_open": 87
+          },
+          "completed_trades": 9,
+          "risk_gate_rejections": {
+            "status": "MISSING_NO_SEPARATE_PRE_ENTRY_RISK_GATE",
+            "count": null,
+            "reason": "Run #10 has no independent pre-entry risk gate; ATR barriers occur after entry and are exits, not rejects."
+          }
+        }
+      ],
+      "reconciles_to_run10_trial_manifest": true
+    },
+    {
+      "arm_id": "C",
+      "threshold_bps": 240,
+      "valid_forecast_bars": 10500,
+      "valid_forecast_anchors": 441,
+      "eligible_signal_bars": 168,
+      "below_threshold_bars": 10332,
+      "eligible_signal_episodes": 7,
+      "entry_gate_rejections": {
+        "non_finite_atr": 0,
+        "no_valid_next_bar_inside_fold": 0,
+        "suppressed_while_position_open": 144
+      },
+      "completed_trades": 24,
+      "risk_gate_rejections": {
+        "status": "MISSING_NO_SEPARATE_PRE_ENTRY_RISK_GATE",
+        "count": null,
+        "reason": "Run #10 has no independent pre-entry risk gate; ATR barriers occur after entry and are exit outcomes."
+      },
+      "threshold_qualified_percent": 1.6,
+      "eligible_bars_if_cutoff_reduced_to_75pct_of_this_threshold": 288,
+      "extra_eligible_bars_at_75pct_cutoff": 120,
+      "position_open_suppression_percent": 85.71428571428571,
+      "forecast_return_relative_margin_histogram": {
+        "<= -100%": 3816,
+        "(-100%, -50%]": 6132,
+        "(-50%, -25%]": 264,
+        "(-25%, 0%]": 120,
+        "(0%, 25%]": 96,
+        "(25%, 50%]": 48,
+        "(50%, 100%]": 24,
+        "> 100%": 0
+      },
+      "folds": [
+        {
+          "fold_id": 1,
+          "valid_forecast_anchors": 121,
+          "valid_forecast_bars": 2874,
+          "eligible_signal_bars": 48,
+          "below_threshold_bars": 2826,
+          "eligible_signal_episodes": 2,
+          "entry_gate_rejections": {
+            "non_finite_atr": 0,
+            "no_valid_next_bar_inside_fold": 0,
+            "suppressed_while_position_open": 43
+          },
+          "completed_trades": 5,
+          "risk_gate_rejections": {
+            "status": "MISSING_NO_SEPARATE_PRE_ENTRY_RISK_GATE",
+            "count": null,
+            "reason": "Run #10 has no independent pre-entry risk gate; ATR barriers occur after entry and are exits, not rejects."
+          }
+        },
+        {
+          "fold_id": 2,
+          "valid_forecast_anchors": 147,
+          "valid_forecast_bars": 3500,
+          "eligible_signal_bars": 72,
+          "below_threshold_bars": 3428,
+          "eligible_signal_episodes": 3,
+          "entry_gate_rejections": {
+            "non_finite_atr": 0,
+            "no_valid_next_bar_inside_fold": 0,
+            "suppressed_while_position_open": 58
+          },
+          "completed_trades": 14,
+          "risk_gate_rejections": {
+            "status": "MISSING_NO_SEPARATE_PRE_ENTRY_RISK_GATE",
+            "count": null,
+            "reason": "Run #10 has no independent pre-entry risk gate; ATR barriers occur after entry and are exits, not rejects."
+          }
+        },
+        {
+          "fold_id": 3,
+          "valid_forecast_anchors": 173,
+          "valid_forecast_bars": 4126,
+          "eligible_signal_bars": 48,
+          "below_threshold_bars": 4078,
+          "eligible_signal_episodes": 2,
+          "entry_gate_rejections": {
+            "non_finite_atr": 0,
+            "no_valid_next_bar_inside_fold": 0,
+            "suppressed_while_position_open": 43
+          },
+          "completed_trades": 5,
+          "risk_gate_rejections": {
+            "status": "MISSING_NO_SEPARATE_PRE_ENTRY_RISK_GATE",
+            "count": null,
+            "reason": "Run #10 has no independent pre-entry risk gate; ATR barriers occur after entry and are exits, not rejects."
+          }
+        }
+      ],
+      "reconciles_to_run10_trial_manifest": true
+    },
+    {
+      "arm_id": "D",
+      "threshold_bps": 120,
+      "valid_forecast_bars": 10500,
+      "valid_forecast_anchors": 441,
+      "eligible_signal_bars": 288,
+      "below_threshold_bars": 10212,
+      "eligible_signal_episodes": 12,
+      "entry_gate_rejections": {
+        "non_finite_atr": 0,
+        "no_valid_next_bar_inside_fold": 0,
+        "suppressed_while_position_open": 247
+      },
+      "completed_trades": 41,
+      "risk_gate_rejections": {
+        "status": "MISSING_NO_SEPARATE_PRE_ENTRY_RISK_GATE",
+        "count": null,
+        "reason": "Run #10 has no independent pre-entry risk gate; ATR barriers occur after entry and are exit outcomes."
+      },
+      "threshold_qualified_percent": 2.742857142857143,
+      "eligible_bars_if_cutoff_reduced_to_75pct_of_this_threshold": 360,
+      "extra_eligible_bars_at_75pct_cutoff": 72,
+      "position_open_suppression_percent": 85.76388888888889,
+      "forecast_return_relative_margin_histogram": {
+        "<= -100%": 5020,
+        "(-100%, -50%]": 4596,
+        "(-50%, -25%]": 524,
+        "(-25%, 0%]": 72,
+        "(0%, 25%]": 168,
+        "(25%, 50%]": 96,
+        "(50%, 100%]": 24,
+        "> 100%": 0
+      },
+      "folds": [
+        {
+          "fold_id": 1,
+          "valid_forecast_anchors": 121,
+          "valid_forecast_bars": 2874,
+          "eligible_signal_bars": 48,
+          "below_threshold_bars": 2826,
+          "eligible_signal_episodes": 2,
+          "entry_gate_rejections": {
+            "non_finite_atr": 0,
+            "no_valid_next_bar_inside_fold": 0,
+            "suppressed_while_position_open": 43
+          },
+          "completed_trades": 5,
+          "risk_gate_rejections": {
+            "status": "MISSING_NO_SEPARATE_PRE_ENTRY_RISK_GATE",
+            "count": null,
+            "reason": "Run #10 has no independent pre-entry risk gate; ATR barriers occur after entry and are exits, not rejects."
+          }
+        },
+        {
+          "fold_id": 2,
+          "valid_forecast_anchors": 147,
+          "valid_forecast_bars": 3500,
+          "eligible_signal_bars": 168,
+          "below_threshold_bars": 3332,
+          "eligible_signal_episodes": 7,
+          "entry_gate_rejections": {
+            "non_finite_atr": 0,
+            "no_valid_next_bar_inside_fold": 0,
+            "suppressed_while_position_open": 138
+          },
+          "completed_trades": 30,
+          "risk_gate_rejections": {
+            "status": "MISSING_NO_SEPARATE_PRE_ENTRY_RISK_GATE",
+            "count": null,
+            "reason": "Run #10 has no independent pre-entry risk gate; ATR barriers occur after entry and are exits, not rejects."
+          }
+        },
+        {
+          "fold_id": 3,
+          "valid_forecast_anchors": 173,
+          "valid_forecast_bars": 4126,
+          "eligible_signal_bars": 72,
+          "below_threshold_bars": 4054,
+          "eligible_signal_episodes": 3,
+          "entry_gate_rejections": {
+            "non_finite_atr": 0,
+            "no_valid_next_bar_inside_fold": 0,
+            "suppressed_while_position_open": 66
+          },
+          "completed_trades": 6,
+          "risk_gate_rejections": {
+            "status": "MISSING_NO_SEPARATE_PRE_ENTRY_RISK_GATE",
+            "count": null,
+            "reason": "Run #10 has no independent pre-entry risk gate; ATR barriers occur after entry and are exits, not rejects."
+          }
+        }
+      ],
+      "reconciles_to_run10_trial_manifest": true
+    },
+    {
+      "arm_id": "D",
+      "threshold_bps": 180,
+      "valid_forecast_bars": 10500,
+      "valid_forecast_anchors": 441,
+      "eligible_signal_bars": 24,
+      "below_threshold_bars": 10476,
+      "eligible_signal_episodes": 1,
+      "entry_gate_rejections": {
+        "non_finite_atr": 0,
+        "no_valid_next_bar_inside_fold": 0,
+        "suppressed_while_position_open": 17
+      },
+      "completed_trades": 7,
+      "risk_gate_rejections": {
+        "status": "MISSING_NO_SEPARATE_PRE_ENTRY_RISK_GATE",
+        "count": null,
+        "reason": "Run #10 has no independent pre-entry risk gate; ATR barriers occur after entry and are exit outcomes."
+      },
+      "threshold_qualified_percent": 0.2285714285714286,
+      "eligible_bars_if_cutoff_reduced_to_75pct_of_this_threshold": 168,
+      "extra_eligible_bars_at_75pct_cutoff": 144,
+      "position_open_suppression_percent": 70.83333333333334,
+      "forecast_return_relative_margin_histogram": {
+        "<= -100%": 5020,
+        "(-100%, -50%]": 5120,
+        "(-50%, -25%]": 192,
+        "(-25%, 0%]": 144,
+        "(0%, 25%]": 24,
+        "(25%, 50%]": 0,
+        "(50%, 100%]": 0,
+        "> 100%": 0
+      },
+      "folds": [
+        {
+          "fold_id": 1,
+          "valid_forecast_anchors": 121,
+          "valid_forecast_bars": 2874,
+          "eligible_signal_bars": 0,
+          "below_threshold_bars": 2874,
+          "eligible_signal_episodes": 0,
+          "entry_gate_rejections": {
+            "non_finite_atr": 0,
+            "no_valid_next_bar_inside_fold": 0,
+            "suppressed_while_position_open": 0
+          },
+          "completed_trades": 0,
+          "risk_gate_rejections": {
+            "status": "MISSING_NO_SEPARATE_PRE_ENTRY_RISK_GATE",
+            "count": null,
+            "reason": "Run #10 has no independent pre-entry risk gate; ATR barriers occur after entry and are exits, not rejects."
+          }
+        },
+        {
+          "fold_id": 2,
+          "valid_forecast_anchors": 147,
+          "valid_forecast_bars": 3500,
+          "eligible_signal_bars": 24,
+          "below_threshold_bars": 3476,
+          "eligible_signal_episodes": 1,
+          "entry_gate_rejections": {
+            "non_finite_atr": 0,
+            "no_valid_next_bar_inside_fold": 0,
+            "suppressed_while_position_open": 17
+          },
+          "completed_trades": 7,
+          "risk_gate_rejections": {
+            "status": "MISSING_NO_SEPARATE_PRE_ENTRY_RISK_GATE",
+            "count": null,
+            "reason": "Run #10 has no independent pre-entry risk gate; ATR barriers occur after entry and are exits, not rejects."
+          }
+        },
+        {
+          "fold_id": 3,
+          "valid_forecast_anchors": 173,
+          "valid_forecast_bars": 4126,
+          "eligible_signal_bars": 0,
+          "below_threshold_bars": 4126,
+          "eligible_signal_episodes": 0,
+          "entry_gate_rejections": {
+            "non_finite_atr": 0,
+            "no_valid_next_bar_inside_fold": 0,
+            "suppressed_while_position_open": 0
+          },
+          "completed_trades": 0,
+          "risk_gate_rejections": {
+            "status": "MISSING_NO_SEPARATE_PRE_ENTRY_RISK_GATE",
+            "count": null,
+            "reason": "Run #10 has no independent pre-entry risk gate; ATR barriers occur after entry and are exits, not rejects."
+          }
+        }
+      ],
+      "reconciles_to_run10_trial_manifest": true
+    },
+    {
+      "arm_id": "D",
+      "threshold_bps": 240,
+      "valid_forecast_bars": 10500,
+      "valid_forecast_anchors": 441,
+      "eligible_signal_bars": 0,
+      "below_threshold_bars": 10500,
+      "eligible_signal_episodes": 0,
+      "entry_gate_rejections": {
+        "non_finite_atr": 0,
+        "no_valid_next_bar_inside_fold": 0,
+        "suppressed_while_position_open": 0
+      },
+      "completed_trades": 0,
+      "risk_gate_rejections": {
+        "status": "MISSING_NO_SEPARATE_PRE_ENTRY_RISK_GATE",
+        "count": null,
+        "reason": "Run #10 has no independent pre-entry risk gate; ATR barriers occur after entry and are exit outcomes."
+      },
+      "threshold_qualified_percent": 0,
+      "eligible_bars_if_cutoff_reduced_to_75pct_of_this_threshold": 24,
+      "extra_eligible_bars_at_75pct_cutoff": 24,
+      "position_open_suppression_percent": null,
+      "forecast_return_relative_margin_histogram": {
+        "<= -100%": 5020,
+        "(-100%, -50%]": 5192,
+        "(-50%, -25%]": 264,
+        "(-25%, 0%]": 24,
+        "(0%, 25%]": 0,
+        "(25%, 50%]": 0,
+        "(50%, 100%]": 0,
+        "> 100%": 0
+      },
+      "folds": [
+        {
+          "fold_id": 1,
+          "valid_forecast_anchors": 121,
+          "valid_forecast_bars": 2874,
+          "eligible_signal_bars": 0,
+          "below_threshold_bars": 2874,
+          "eligible_signal_episodes": 0,
+          "entry_gate_rejections": {
+            "non_finite_atr": 0,
+            "no_valid_next_bar_inside_fold": 0,
+            "suppressed_while_position_open": 0
+          },
+          "completed_trades": 0,
+          "risk_gate_rejections": {
+            "status": "MISSING_NO_SEPARATE_PRE_ENTRY_RISK_GATE",
+            "count": null,
+            "reason": "Run #10 has no independent pre-entry risk gate; ATR barriers occur after entry and are exits, not rejects."
+          }
+        },
+        {
+          "fold_id": 2,
+          "valid_forecast_anchors": 147,
+          "valid_forecast_bars": 3500,
+          "eligible_signal_bars": 0,
+          "below_threshold_bars": 3500,
+          "eligible_signal_episodes": 0,
+          "entry_gate_rejections": {
+            "non_finite_atr": 0,
+            "no_valid_next_bar_inside_fold": 0,
+            "suppressed_while_position_open": 0
+          },
+          "completed_trades": 0,
+          "risk_gate_rejections": {
+            "status": "MISSING_NO_SEPARATE_PRE_ENTRY_RISK_GATE",
+            "count": null,
+            "reason": "Run #10 has no independent pre-entry risk gate; ATR barriers occur after entry and are exits, not rejects."
+          }
+        },
+        {
+          "fold_id": 3,
+          "valid_forecast_anchors": 173,
+          "valid_forecast_bars": 4126,
+          "eligible_signal_bars": 0,
+          "below_threshold_bars": 4126,
+          "eligible_signal_episodes": 0,
+          "entry_gate_rejections": {
+            "non_finite_atr": 0,
+            "no_valid_next_bar_inside_fold": 0,
+            "suppressed_while_position_open": 0
+          },
+          "completed_trades": 0,
+          "risk_gate_rejections": {
+            "status": "MISSING_NO_SEPARATE_PRE_ENTRY_RISK_GATE",
+            "count": null,
+            "reason": "Run #10 has no independent pre-entry risk gate; ATR barriers occur after entry and are exits, not rejects."
+          }
+        }
+      ],
+      "reconciles_to_run10_trial_manifest": true
+    }
+  ]
+}
