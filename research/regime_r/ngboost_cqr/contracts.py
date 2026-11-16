@@ -144,16 +144,32 @@ def validate_feature_snapshot(snapshot: FeatureSnapshot) -> None:
             raise ContractViolation("feature_lookahead_detected")
 
 
-def validate_distribution_forecast(forecast: DistributionForecast) -> None:
-    """Require finite positive dispersion and monotonic conditional quantiles."""
+def _validate_forecast_horizon(forecast: DistributionForecast) -> None:
+    """Require a supported forecast horizon."""
     if forecast.horizon not in HORIZON_BARS:
         raise ContractViolation("forecast_horizon_unsupported")
+
+
+def _validate_forecast_mean(forecast: DistributionForecast) -> None:
+    """Require a finite forecast location estimate."""
     if not _is_finite_number(forecast.mean):
         raise ContractViolation("forecast_mean_must_be_finite")
+
+
+def _validate_forecast_dispersion(forecast: DistributionForecast) -> None:
+    """Require a finite, strictly positive forecast scale."""
     if not _is_finite_number(forecast.dispersion) or forecast.dispersion <= 0:
         raise ContractViolation("forecast_dispersion_must_be_positive")
+
+
+def _validate_forecast_quantile_shape(forecast: DistributionForecast) -> None:
+    """Require exactly three quantile levels and values."""
     if len(forecast.quantile_levels) != 3 or len(forecast.quantile_values) != 3:
         raise ContractViolation("forecast_requires_three_quantiles")
+
+
+def _validate_forecast_quantile_levels(forecast: DistributionForecast) -> None:
+    """Require finite, ordered quantile levels with a median at one half."""
     lower_level, median_level, upper_level = forecast.quantile_levels
     if not all(_is_finite_number(level) for level in forecast.quantile_levels):
         raise ContractViolation("forecast_quantile_levels_must_be_finite")
@@ -161,12 +177,25 @@ def validate_distribution_forecast(forecast: DistributionForecast) -> None:
         raise ContractViolation("forecast_quantile_levels_not_ordered")
     if median_level != 0.5:
         raise ContractViolation("forecast_median_quantile_must_be_half")
+
+
+def _validate_forecast_quantile_values(forecast: DistributionForecast) -> None:
+    """Require finite and monotonically increasing quantile predictions."""
     if not all(_is_finite_number(value) for value in forecast.quantile_values):
         raise ContractViolation("forecast_quantiles_must_be_finite")
     lower_value, median_value, upper_value = forecast.quantile_values
     if not lower_value <= median_value <= upper_value:
         raise ContractViolation("forecast_quantile_values_not_monotonic")
 
+
+def validate_distribution_forecast(forecast: DistributionForecast) -> None:
+    """Require finite positive dispersion and monotonic conditional quantiles."""
+    _validate_forecast_horizon(forecast)
+    _validate_forecast_mean(forecast)
+    _validate_forecast_dispersion(forecast)
+    _validate_forecast_quantile_shape(forecast)
+    _validate_forecast_quantile_levels(forecast)
+    _validate_forecast_quantile_values(forecast)
 
 def make_cqr_interval(
     lower_quantile: float,
