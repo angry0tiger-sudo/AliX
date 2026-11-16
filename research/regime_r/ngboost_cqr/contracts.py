@@ -197,6 +197,7 @@ def validate_distribution_forecast(forecast: DistributionForecast) -> None:
     _validate_forecast_quantile_levels(forecast)
     _validate_forecast_quantile_values(forecast)
 
+
 def make_cqr_interval(
     lower_quantile: float,
     upper_quantile: float,
