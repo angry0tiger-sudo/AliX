@@ -227,3 +227,84 @@ That does **not** turn Option 3 into a statistically established family-wide eco
 ### Owner boundary
 
 The engineering recommendation is to freeze further candidate selection until the historical trial/Sharpe crosswalk is either completed or the owner explicitly elects to close the workstream. Option 2 and Option 3 remain owner choices; neither is executed or authorized by this appendix. GLOBAL_N=UNKNOWN and DSR NOT_COMPUTABLE remain unchanged.
+
+
+---
+
+## Final owner decision addendum — provenance, independence and three governance regimes (2026-11-16)
+
+### Findings that govern all three regimes
+
+This decision addendum incorporates ADR-046. The three independent barriers are:
+
+1. **Multiplicity and Sharpe:** historical \`GLOBAL_N=UNKNOWN\` and global historical \`DSR=NOT_COMPUTABLE\`. The non-HF \`N >= 7,912\` registry subtotal is not a complete global N, and most historical families lack a complete retained Sharpe-per-trial distribution.
+2. **Previously consumed data:** AI-6 used the pre-hack data for teacher fitting, PPO training, validation and its terminal 12.5% evaluation. DEAP's OOS began at row 22,308 and ran through the last row, including the entire AI-6 terminal slice. The 27,825-row Run #10 confirmatory prefix is from that same historically used dataset; it is not a fresh untouched holdout.
+3. **Pretraining exposure:** Kronos pretraining contains Binance Crypto/Swap observations, but its exact symbol inventory is not public; the technical report gives a June 2024 cutoff, earlier than the post-hack holdout start. Chronos-2-Small lists Chronos/GIFT-Eval datasets and synthetic data, but a complete symbol/date inventory and corpus cutoff are not publicly established. Therefore the clean-pretraining status of the current two-model family is not proven.
+
+The new post-hack window is not in retained evidence as having been consumed by prior AliX trials, but it remains \`FETCHED_LOCKED\`, \`dataset_persisted=false\`, and is only represented by a structural commitment. It is not an already accessible/persisted clean dataset. The exact ADR-036 re-fetch and canonical digest protocol is mandatory after a separate Owner Release Authorization.
+
+### Regime A — one new isolated family on the post-hack holdout
+
+**Evidence for:** a separate Nobitex post-hack window was structurally acquired with 11,700 expected rows and a canonical digest; no retained AliX historical trial record shows it was previously used for model evaluation. The fixed Spec v3 boundary is distinct from the pre-hack data.
+
+**Evidence against / unresolved:** raw OHLCV bytes were not persisted; the holdout can only be re-fetched once under the exact ADR-036 protocol. Kronos has known crypto-class pretraining but no public per-symbol ledger; Chronos-2 lacks a complete symbol/date inventory and a comparable corpus cutoff. Thus the data can be new relative to AliX trials while model pretraining independence remains unproven.
+
+**Mandatory prerequisites:**
+
+- Separate Owner Release Authorization and exact ADR-036 re-fetch: same Nobitex source, Spec v3 timestamps/grid, exactly 11,700 rows, no gaps/off-grid/duplicates, canonical SHA match \`435b313086b78ba8d3caa2e97834c6fabebbbd12eeddcb2865d65982279f33ee\`; any mismatch = STOP.
+- A pre-execution corpus decision for every selected model. Require a defensible symbol/date inventory, or explicitly exclude a model from any clean-pretraining claim. The existing provenance file alone does not satisfy this prerequisite.
+- New immutable preregistration and canonical trial IDs; a declared integer \`N_budget\`; all arms, models, thresholds, features, labels, seeds, exits, costs and selection rules declared before seeing outcomes.
+- Per-candidate net Sharpe and required return-distribution inputs retained from the first candidate onward under one identical protocol.
+- Predeclared return-series dependence/correlation treatment and conservative DSR sensitivity. DSR is advisory for this new family only; it does not solve historic global DSR.
+- No tuning/retry/second candidate search on the same opened holdout. First outcome inspection consumes its one-time status.
+
+**Cycle cost:** **Very high** engineering/governance cost: complete preregistration, corpus resolution or model exclusion, Owner release, exact one-time data re-fetch/integrity verification, candidate-level ledger/Sharpe capture, and final statistical review. Exact monetary cost and calendar duration: **شاهد کافی نیست**.
+
+**Failure risk:** very high and irreversible for the holdout. A re-fetch/hash mismatch stops the process. Any model-provenance gap, exceeded N budget, missing Sharpe, unhandled dependence, or economic gate failure blocks validation. Once outcome data are examined, the window cannot be recycled as an untouched test for a second selection cycle.
+
+**Weight-artifact deadline:** the retained bundle \`14111134121\` expires at **2026-12-14T11:31:29Z**. At the 2026-11-16T07:41:23+03:30 verification snapshot, approximately **28 days, 7 hours, 20 minutes** remained. If Regime A depends on this exact Actions bundle, its preservation/retrievability decision must be made before expiry; any retained/re-fetched file must match the pinned SHA-256 values. Expiry of this artifact is not an execution authorization and does not alter the holdout lock.
+
+### Regime B — archival reconstruction of historical accounting
+
+**Evidence for:** existing run histories, immutable commits, candidate manifests and retained artifacts may allow partial reconciliation without consuming the post-hack holdout. It could improve the audited lower bound and identify recoverable historical Sharpe outputs.
+
+**Evidence against / unresolved:** there is no complete finite upper bound for historical N, many failed/partial attempts have incomplete candidate progress, and a complete Sharpe-per-trial distribution is absent for most families. Some results may never have been persisted. Exact full recovery: **شاهد کافی نیست**.
+
+**Critical limitation — re-running is not historical reconstruction:** an exact replay of the same candidate on the same data/protocol does not automatically become a new independent candidate under ADR-045; it is a new execution/attempt attached to the existing candidate identity. However, such a replay produces a retrospective metric, not a contemporaneous record of the original selection process, and cannot recreate omitted historical alternatives or what information was available when choices were made. Any changed model, parameter, data, label, threshold, decision rule, or new candidate-selection round is a distinct child trial and must increase the relevant N. Therefore, executing new sweeps or variants to fill missing historical Sharpe values is self-defeating: it expands the selection family while failing to recover the original historical Sharpe distribution. This regime must be archival-only; no rerun, refit, inference, or new candidate selection is authorized by this memo.
+
+**Prerequisites:** all retained workflow-run and artifact manifests; candidate/parent/duplicate crosswalk; genome/config IDs; partial-failure progress evidence; available per-candidate returns/Sharpe; common return-frequency/cost protocol mapping; and reviewer sign-off on unresolved remainders. Missing outputs remain \`UNKNOWN\`, never zero or imputed.
+
+**Cycle cost:** **High to very high** archival/reconciliation cost across 39 research/research-adjacent workflows, nested searches, inherited-candidate replays, DEAP genomes and HF attempts. Exact time/money estimate: **شاهد کافی نیست**.
+
+**Failure risk:** high likelihood of an irreducible unknown remainder; no finite upper N may be established. Even a better N may not make global DSR computable if historical Sharpe series are absent. Weight artifact expiry may remove a convenient immutable copy of the models but does not repair historical Sharpe omissions; expiry is **2026-12-14T11:31:29Z**.
+
+### Regime P — close the project with a documented governance NO-GO
+
+**Evidence for:** the historical family cannot currently satisfy the N/Sharpe evidence contract; the pre-hack data is historically consumed; the new holdout is non-persisted, locked and one-time; and pretraining cleanliness for the current two-model family cannot be proven. This regime avoids turning incomplete evidence into an unsupported profitability claim or consuming the only committed untouched-by-trials window without a defensible protocol.
+
+**Evidence against:** this does not establish that every strategy/model is economically unprofitable. A future, genuinely new dataset and a newly governed family could be studied separately if the Owner chooses to reopen the workstream.
+
+**Required closure wording:**
+
+\`PROJECT_STATUS = NO_GO_DOCUMENTED\`
+
+\`VALIDATION_STATUS = NOT_VALIDATABLE_UNDER_CURRENT_GOVERNANCE / INSUFFICIENT_EVIDENCE\`
+
+\`GLOBAL_N = UNKNOWN\`
+
+\`GLOBAL_DSR = NOT_COMPUTABLE\`
+
+The closure must explicitly say **“non-validatable under current governance”**, not “statistically proven economic failure”. It must not retroactively alter ADR-042/043/045, rewrite the Run #10 mixed cohort, label the directional family statistically FUTILE, or assert a family-wide economic loss not actually established.
+
+**Prerequisites:** Owner approval to close; preserve the immutable historical reports/ADRs and current inventory; retain safety invariants and explicit holdout non-consumption. No new trial or data access is needed.
+
+**Cycle cost:** **Low** relative to Regimes A/B: a final archival closeout/owner decision and preservation of evidence. Exact calendar time or money: **شاهد کافی نیست**.
+
+**Failure risk:** low implementation risk; principal downside is foreclosing further research on this branch and allowing the retained model-weight artifact to expire. If closure is selected, the owner may elect not to preserve artifact \`14111134121\`; it expires on **2026-12-14T11:31:29Z**. This does not affect the already pinned public revision identifiers, but no re-download/reacquisition is implied or performed.
+
+### Engineering recommendation and Owner boundary
+
+**Engineering recommendation: Regime P is the safest and most defensible current choice** if the Owner does not intend to fund the full prerequisites for Regime A. Regime B is worth pursuing only as archival, non-executing reconciliation if the Owner specifically values a better historical lower bound; it cannot manufacture missing contemporaneous Sharpe evidence. Regime A is the only route that could create a new family-scoped validation record, but it has the highest cost, unresolved Chronos-2 pretraining uncertainty, an explicit one-time holdout risk and an expiring retained model bundle. It must not begin before the full prerequisite list and a separate Owner release.
+
+This is an engineering recommendation, **not an Owner decision**. No regime is selected, authorized or executed by this addendum. \`GLOBAL_N=UNKNOWN\` and historical global \`DSR=NOT_COMPUTABLE\` remain unchanged.
+
