@@ -200,23 +200,25 @@ def test_distribution_forecast_rejects_invalid_dispersion_and_quantile_shapes() 
 
 def test_distribution_forecast_rejects_invalid_quantile_levels_and_values() -> None:
     valid = _forecast()
-    with pytest.raises(ContractViolation, match="forecast_quantile_levels_must_be_finite"):
+    with pytest.raises(
+        ContractViolation, match="forecast_quantile_levels_must_be_finite"
+    ):
         validate_distribution_forecast(
             replace(valid, quantile_levels=(math.nan, 0.5, 0.9))
         )
     with pytest.raises(ContractViolation, match="forecast_quantile_levels_not_ordered"):
-        validate_distribution_forecast(
-            replace(valid, quantile_levels=(0.9, 0.5, 0.1))
-        )
-    with pytest.raises(ContractViolation, match="forecast_median_quantile_must_be_half"):
-        validate_distribution_forecast(
-            replace(valid, quantile_levels=(0.1, 0.4, 0.9))
-        )
+        validate_distribution_forecast(replace(valid, quantile_levels=(0.9, 0.5, 0.1)))
+    with pytest.raises(
+        ContractViolation, match="forecast_median_quantile_must_be_half"
+    ):
+        validate_distribution_forecast(replace(valid, quantile_levels=(0.1, 0.4, 0.9)))
     with pytest.raises(ContractViolation, match="forecast_quantiles_must_be_finite"):
         validate_distribution_forecast(
             replace(valid, quantile_values=(math.nan, 0.0, 0.1))
         )
-    with pytest.raises(ContractViolation, match="forecast_quantile_values_not_monotonic"):
+    with pytest.raises(
+        ContractViolation, match="forecast_quantile_values_not_monotonic"
+    ):
         validate_distribution_forecast(
             replace(valid, quantile_values=(0.01, 0.0, -0.01))
         )
@@ -249,7 +251,7 @@ def test_cqr_interval_rejects_invalid_inputs_and_coverage() -> None:
 
 def test_cqr_interval_rejects_inverted_calibrated_interval() -> None:
     with pytest.raises(ContractViolation, match="cqr_calibrated_interval_inverted"):
-        make_cqr_interval(-0.001, 0.001, 0.01, 0.0, 0.9, 50)
+        make_cqr_interval(-0.001, 0.001, -0.01, 0.0, 0.9, 50)
 
 
 @pytest.mark.parametrize(
