@@ -6,10 +6,14 @@ Callers supply separate in-memory training and conformalization arrays.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
+import os
 from dataclasses import dataclass
 from enum import Enum
 from importlib import import_module
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -37,6 +41,134 @@ HistGradientBoostingRegressor: Any = getattr(
 FloatArray = NDArray[np.float64]
 
 
+OWNER_EXECUTION_ENV = "ALIX_REGIME_R_EXECUTION_AUTHORIZED"
+PREREGISTRATION_SHA256 = (
+    "92cdcf19a02f5cf9659f327704ed4d6c5cf0d85687aff2ba35b9542fec5cfdaa"
+)
+PREREGISTRATION_CONFIG_PATH = (
+    Path(__file__).resolve().parents[3]
+    / "config"
+    / "regime_r"
+    / "hgbq_cqr_preregistration.json"
+)
+
+
+class ExecutionAuthorizationError(PermissionError):
+    """Raised when an Owner authorization is absent for any model fit."""
+
+
+def _require_owner_execution_authorization() -> None:
+    """Require the exact Owner-set environment flag before every fit attempt."""
+    if os.environ.get(OWNER_EXECUTION_ENV) != "true":
+        raise ExecutionAuthorizationError("regime_r_fit_requires_owner_authorization")
+
+
+def _config_section(config: dict[str, Any], key: str) -> dict[str, Any]:
+    """Return one required object section from the frozen JSON configuration."""
+    value = config.get(key)
+    if not isinstance(value, dict):
+        raise ContractViolation("hgbq_preregistration_config_incompatible")
+    return value
+
+
+def _validate_model_config(model: dict[str, Any]) -> dict[str, Any]:
+    """Validate every HGB setting and quantile against the committed contract."""
+    if model.get("estimator") != "sklearn.ensemble.HistGradientBoostingRegressor":
+        raise ContractViolation("hgbq_preregistration_model_incompatible")
+    common = model.get("common_parameters")
+    if not isinstance(common, dict):
+        raise ContractViolation("hgbq_preregistration_model_incompatible")
+    expected: dict[str, Any] = {
+        "loss": "quantile",
+        "max_iter": 100,
+        "learning_rate": 0.1,
+        "max_depth": 3,
+        "max_leaf_nodes": 8,
+        "min_samples_leaf": 20,
+        "l2_regularization": 1,
+        "max_bins": 255,
+        "early_stopping": False,
+        "random_state": 42,
+    }
+    if any(
+        type(common.get(name)) is not type(value) or common.get(name) != value
+        for name, value in expected.items()
+    ):
+        raise ContractViolation("hgbq_preregistration_model_parameters_incompatible")
+    quantiles = model.get("quantile_estimators")
+    expected_quantiles = [
+        {"name": "lower", "quantile": 0.05},
+        {"name": "median", "quantile": 0.5},
+        {"name": "upper", "quantile": 0.95},
+    ]
+    if quantiles != expected_quantiles:
+        raise ContractViolation("hgbq_preregistration_quantiles_incompatible")
+    return common
+
+
+def _validate_conformalization_config(
+    conformalization: dict[str, Any],
+) -> float:
+    """Validate the pinned MAPIE API, order, and nominal coverage."""
+    if (
+        conformalization.get("library") != "MAPIE"
+        or conformalization.get("version") != "1.6.0"
+        or conformalization.get("estimator")
+        != "mapie.regression.ConformalizedQuantileRegressor"
+        or conformalization.get("confidence_level") != 0.9
+        or type(conformalization.get("confidence_level")) is not float
+        or conformalization.get("prefit") is not True
+        or conformalization.get("estimator_order") != ["lower", "upper", "median"]
+        or conformalization.get(
+            "calibration_data_must_be_disjoint_from_training_and_test"
+        )
+        is not True
+        or conformalization.get("test_data_must_never_be_used_for_conformalization")
+        is not True
+    ):
+        raise ContractViolation("hgbq_preregistration_conformalization_incompatible")
+    return float(conformalization["confidence_level"])
+
+
+def _validate_preregistration_config(config: dict[str, Any]) -> None:
+    """Reject a correctly hashed but structurally incompatible configuration."""
+    preregistration = _config_section(config, "preregistration")
+    if (
+        preregistration.get("status") != "PREREGISTERED_LOCKED"
+        or preregistration.get("real_data_fit_authorized") is not False
+        or preregistration.get("fit_authorized_in_g3") is not False
+        or preregistration.get("holdout_access_authorized") is not False
+        or preregistration.get("economic_backtest_authorized") is not False
+    ):
+        raise ContractViolation("hgbq_preregistration_authorization_contract_invalid")
+    model = _config_section(config, "model")
+    _validate_model_config(model)
+    conformalization = _config_section(config, "conformalization")
+    _validate_conformalization_config(conformalization)
+    horizons = _config_section(config, "prediction_horizons")
+    if horizons.get("unit") != "hours" or horizons.get("values") != [1, 4, 24]:
+        raise ContractViolation("hgbq_preregistration_horizons_incompatible")
+
+
+def _load_preregistered_config() -> tuple[dict[str, Any], str]:
+    """Load only the byte-committed G3 configuration; there is no fallback."""
+    try:
+        raw_config = PREREGISTRATION_CONFIG_PATH.read_bytes()
+    except OSError as error:
+        raise ContractViolation("hgbq_preregistration_config_unavailable") from error
+    config_sha256 = hashlib.sha256(raw_config).hexdigest()
+    if config_sha256 != PREREGISTRATION_SHA256:
+        raise ContractViolation("hgbq_preregistration_config_sha256_mismatch")
+    try:
+        config = json.loads(raw_config.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ContractViolation("hgbq_preregistration_config_invalid_json") from error
+    if not isinstance(config, dict):
+        raise ContractViolation("hgbq_preregistration_config_incompatible")
+    _validate_preregistration_config(config)
+    return config, config_sha256
+
+
 def _validate_horizon(horizon: str) -> str:
     """Require one of the horizons defined by the existing Regime R contract."""
     if horizon not in HORIZON_BARS:
@@ -56,40 +188,6 @@ def _finite_numeric_value(value: object, error_code: str) -> float:
     return numeric_value
 
 
-def _validate_confidence_level(value: float) -> float:
-    """Require a finite confidence level strictly between zero and one."""
-    confidence = _finite_numeric_value(value, "hgbq_confidence_level_invalid")
-    if not 0.0 < confidence < 1.0:
-        raise ContractViolation("hgbq_confidence_level_invalid")
-    return confidence
-
-
-def _validate_non_negative_float(value: float, error_code: str) -> float:
-    """Require a finite non-negative floating-point configuration."""
-    numeric_value = _finite_numeric_value(value, error_code)
-    if numeric_value < 0.0:
-        raise ContractViolation(error_code)
-    return numeric_value
-
-
-def _validate_positive_integer(value: int, error_code: str) -> int:
-    """Require a positive integer, explicitly excluding bool values."""
-    if isinstance(value, bool):
-        raise ContractViolation(error_code)
-    if not isinstance(value, int):
-        raise ContractViolation(error_code)
-    if value < 1:
-        raise ContractViolation(error_code)
-    return value
-
-
-def _validate_random_state(value: int) -> int:
-    """Require a deterministic integer seed, excluding bool values."""
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise ContractViolation("hgbq_random_state_invalid")
-    return value
-
-
 class HGBQCQRAdapter:
     """Fit three HGB quantile learners and conformalize them with MAPIE CQR.
 
@@ -99,33 +197,27 @@ class HGBQCQRAdapter:
     [lower, median, upper].
     """
 
-    def __init__(
-        self,
-        *,
-        horizon: str = "1h",
-        confidence_level: float = 0.90,
-        l2_regularization: float = 0.0,
-        max_iter: int = 80,
-        min_samples_leaf: int = 12,
-        random_state: int = 42,
-    ) -> None:
+    def __init__(self, *, horizon: str = "1h") -> None:
+        config, config_sha256 = _load_preregistered_config()
+        model_config = _config_section(config, "model")
+        common_parameters = _validate_model_config(model_config)
+        conformalization = _config_section(config, "conformalization")
+
         self.horizon = _validate_horizon(horizon)
-        self.confidence_level = _validate_confidence_level(confidence_level)
-        self.l2_regularization = _validate_non_negative_float(
-            l2_regularization,
-            "hgbq_l2_regularization_invalid",
+        self.config_sha256 = config_sha256
+        self.confidence_level = _validate_conformalization_config(conformalization)
+        self._common_model_parameters = dict(common_parameters)
+        self.quantile_levels: tuple[float, float, float] = (
+            float(model_config["quantile_estimators"][0]["quantile"]),
+            float(model_config["quantile_estimators"][1]["quantile"]),
+            float(model_config["quantile_estimators"][2]["quantile"]),
         )
-        self.max_iter = _validate_positive_integer(max_iter, "hgbq_max_iter_invalid")
-        self.min_samples_leaf = _validate_positive_integer(
-            min_samples_leaf,
-            "hgbq_min_samples_leaf_invalid",
-        )
-        self.random_state = _validate_random_state(random_state)
-        self.quantile_levels = (
-            (1.0 - self.confidence_level) / 2.0,
-            0.5,
-            (1.0 + self.confidence_level) / 2.0,
-        )
+        self.learning_rate = float(common_parameters["learning_rate"])
+        self.max_depth = int(common_parameters["max_depth"])
+        self.max_iter = int(common_parameters["max_iter"])
+        self.l2_regularization = float(common_parameters["l2_regularization"])
+        self.min_samples_leaf = int(common_parameters["min_samples_leaf"])
+        self.random_state = int(common_parameters["random_state"])
         self._models: (
             tuple[
                 HistGradientBoostingRegressor,
@@ -168,6 +260,12 @@ class HGBQCQRAdapter:
             raise ContractViolation(f"{name}_must_be_finite")
         return target
 
+    def _new_quantile_model(self, quantile: float) -> Any:
+        """Build one learner using only the frozen common settings."""
+        parameters = dict(self._common_model_parameters)
+        parameters["quantile"] = quantile
+        return HistGradientBoostingRegressor(**parameters)
+
     def fit(
         self,
         X_train: ArrayLike,
@@ -181,6 +279,7 @@ class HGBQCQRAdapter:
         Training and conformalization inputs are explicit and are never fetched
         from Nobitex, Binance, Bybit, a file path, or any external service.
         """
+        _require_owner_execution_authorization()
         self._models = None
         self._conformalizer = None
         self._calibration_size = 0
@@ -211,33 +310,9 @@ class HGBQCQRAdapter:
                 "calibration_sample_size_below_finite_quantile_minimum"
             )
 
-        lower_model = HistGradientBoostingRegressor(
-            loss="quantile",
-            quantile=self.quantile_levels[0],
-            l2_regularization=self.l2_regularization,
-            max_iter=self.max_iter,
-            min_samples_leaf=self.min_samples_leaf,
-            early_stopping=False,
-            random_state=self.random_state,
-        )
-        median_model = HistGradientBoostingRegressor(
-            loss="quantile",
-            quantile=self.quantile_levels[1],
-            l2_regularization=self.l2_regularization,
-            max_iter=self.max_iter,
-            min_samples_leaf=self.min_samples_leaf,
-            early_stopping=False,
-            random_state=self.random_state,
-        )
-        upper_model = HistGradientBoostingRegressor(
-            loss="quantile",
-            quantile=self.quantile_levels[2],
-            l2_regularization=self.l2_regularization,
-            max_iter=self.max_iter,
-            min_samples_leaf=self.min_samples_leaf,
-            early_stopping=False,
-            random_state=self.random_state,
-        )
+        lower_model = self._new_quantile_model(self.quantile_levels[0])
+        median_model = self._new_quantile_model(self.quantile_levels[1])
+        upper_model = self._new_quantile_model(self.quantile_levels[2])
 
         lower_model.fit(train_features, train_target)
         median_model.fit(train_features, train_target)

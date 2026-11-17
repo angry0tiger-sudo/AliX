@@ -2,8 +2,10 @@
 
 from research.regime_r.ngboost_cqr.adapters import (
     CostGateDecision,
+    ExecutionAuthorizationError,
     GateAction,
     HGBQCQRAdapter,
+    OWNER_EXECUTION_ENV,
     evaluate_cost_gate,
     evaluate_cost_scenarios,
 )
@@ -39,8 +41,10 @@ __all__ = (
     "CostGateDecision",
     "DistributionForecast",
     "FeatureSnapshot",
+    "ExecutionAuthorizationError",
     "GateAction",
     "HGBQCQRAdapter",
+    "OWNER_EXECUTION_ENV",
     "TargetWindow",
     "evaluate_cost_gate",
     "evaluate_cost_scenarios",
