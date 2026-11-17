@@ -1,0 +1,88 @@
+name: Regime R HGBQ-CQR pre-hack G4/G5 evaluation
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - research/nobitex-hf-strategy
+    paths:
+      - ".github/workflows/regime-r-evaluation.yml"
+      - "scripts/run_regime_r_trials.py"
+      - "research/regime_r/ngboost_cqr/**"
+      - "config/regime_r/hgbq_cqr_preregistration.json"
+      - "data/nobitex/prehack/nobitex-btcusdt-1h.csv"
+      - "data/nobitex/prehack/nobitex-btcusdt-1h.manifest.json"
+
+permissions:
+  contents: read
+
+jobs:
+  prehack-evaluation:
+    if: github.ref == 'refs/heads/research/nobitex-hf-strategy'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    permissions:
+      contents: read
+    env:
+      ALIX_DRY_RUN: "true"
+      ALIX_ALLOW_LIVE_TRADING: "false"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    steps:
+      - name: Checkout exact authorized branch commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install pinned HGBQ-CQR runtime
+        run: |
+          python -m pip install --upgrade pip==25.2
+          python -m pip install numpy==2.5.4 pandas==2.3.3 scikit-learn==1.9.0 mapie==1.6.0
+          python -m pip check
+
+      - name: Verify exact pre-hack data and frozen G3 configuration
+        run: |
+          python - <<'PY'
+          import hashlib, json
+          from pathlib import Path
+          csv_path = Path("data/nobitex/prehack/nobitex-btcusdt-1h.csv")
+          manifest_path = Path("data/nobitex/prehack/nobitex-btcusdt-1h.manifest.json")
+          config_path = Path("config/regime_r/hgbq_cqr_preregistration.json")
+          expected_data = "0aa13607d1da68c4720919f233635bb33d34048e5bd67d3ecc2ce9bb7c2b462e"
+          expected_config = "92cdcf19a02b0bd8768fdbb5e8a0331bb7a9da12cd33a0e22679c320731364e8"
+          assert hashlib.sha256(csv_path.read_bytes()).hexdigest() == expected_data
+          assert hashlib.sha256(config_path.read_bytes()).hexdigest() == expected_config
+          manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+          assert manifest["csv_sha256"] == expected_data
+          assert manifest["dataset_window"] == "PRE_HACK_NOBITEX_ONLY"
+          assert manifest["row_count"] == 31801
+          assert manifest["missing_intervals"] == 0
+          print("PREHACK_AND_PREREGISTRATION_SHA256_VERIFIED")
+          PY
+
+      - name: Run authorized pre-hack-only HGBQ-CQR evaluation
+        env:
+          ALIX_REGIME_R_EXECUTION_AUTHORIZED: "true"
+        run: |
+          set -euo pipefail
+          python scripts/run_regime_r_trials.py \
+            --commit-sha "$GITHUB_SHA" \
+            --output-dir ".artifacts/regime-r-g4-g5"
+
+      - name: Upload economic report and hypothetical trade ledgers
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: regime-r-g4-g5-prehack-${{ github.sha }}
+          path: |
+            .artifacts/regime-r-g4-g5/
+            docs/research/results/G4_G5_evaluation_results.md
+            docs/adr/ADR-053-regime-r-prehack-g4-g5-results.md
+          if-no-files-found: warn
+          retention-days: 90

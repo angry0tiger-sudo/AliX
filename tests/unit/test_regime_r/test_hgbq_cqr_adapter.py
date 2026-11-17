@@ -376,3 +376,36 @@ def test_cost_gate_is_strict_and_fails_closed_for_invalid_inputs() -> None:
     assert invalid_cost.action is GateAction.ABSTAIN
     assert missing_interval.action is GateAction.ABSTAIN
     assert inverted_interval.action is GateAction.ABSTAIN
+
+
+def test_batch_prediction_returns_valid_forecasts_and_intervals() -> None:
+    adapter = _fitted_adapter()
+    features = np.asarray([[0.15], [0.25]], dtype=np.float64)
+
+    forecasts, intervals = adapter.predict_batch_intervals(features)
+
+    assert len(forecasts) == 2
+    assert len(intervals) == 2
+    for index in range(2):
+        validate_distribution_forecast(forecasts[index])
+        validate_conformal_interval(intervals[index])
+        single_forecast = adapter.predict_forecast(features[index : index + 1])
+        single_interval = adapter.predict_interval(features[index : index + 1])
+        assert forecasts[index].quantile_values == pytest.approx(
+            single_forecast.quantile_values
+        )
+        assert intervals[index].lower_bound == pytest.approx(
+            single_interval.lower_bound
+        )
+        assert intervals[index].upper_bound == pytest.approx(
+            single_interval.upper_bound
+        )
+
+
+def test_batch_prediction_rejects_feature_width_mismatch() -> None:
+    adapter = _fitted_adapter()
+    with pytest.raises(
+        ContractViolation,
+        match="prediction_feature_width_mismatch",
+    ):
+        adapter.predict_batch_intervals(np.zeros((2, 2), dtype=np.float64))

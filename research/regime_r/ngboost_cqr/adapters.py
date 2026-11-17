@@ -376,6 +376,86 @@ class HGBQCQRAdapter:
         validate_distribution_forecast(forecast)
         return forecast
 
+
+    def predict_batch_intervals(
+        self,
+        X_synthetic: ArrayLike,
+    ) -> tuple[tuple[DistributionForecast, ...], tuple[ConformalInterval, ...]]:
+        """Predict quantile summaries and CQR intervals for a finite feature batch."""
+        models, conformalizer, calibration_size = self._fitted_components()
+        features = self._feature_matrix(X_synthetic, "prediction_features")
+        if features.shape[1] != models[0].n_features_in_:
+            raise ContractViolation("prediction_feature_width_mismatch")
+
+        lower_values = np.asarray(models[0].predict(features), dtype=np.float64)
+        median_values = np.asarray(models[1].predict(features), dtype=np.float64)
+        upper_values = np.asarray(models[2].predict(features), dtype=np.float64)
+        row_count = features.shape[0]
+        if any(
+            values.shape != (row_count,)
+            for values in (lower_values, median_values, upper_values)
+        ):
+            raise ContractViolation("hgbq_batch_prediction_shape_invalid")
+
+        point_predictions, raw_intervals = conformalizer.predict_interval(
+            features,
+            allow_infinite_bounds=False,
+            symmetric_correction=False,
+        )
+        point_values = np.asarray(point_predictions, dtype=np.float64)
+        intervals = np.asarray(raw_intervals, dtype=np.float64)
+        if point_values.shape != (row_count,) or intervals.shape != (row_count, 2, 1):
+            raise ContractViolation("mapie_cqr_prediction_shape_invalid")
+        if not (
+            np.isfinite(lower_values).all()
+            and np.isfinite(median_values).all()
+            and np.isfinite(upper_values).all()
+            and np.isfinite(point_values).all()
+            and np.isfinite(intervals).all()
+        ):
+            raise ContractViolation("mapie_cqr_prediction_must_be_finite")
+
+        forecasts: list[DistributionForecast] = []
+        calibrated_intervals: list[ConformalInterval] = []
+        for index in range(row_count):
+            forecast = DistributionForecast(
+                horizon=self.horizon,
+                mean=None,
+                dispersion=None,
+                quantile_levels=self.quantile_levels,
+                quantile_values=(
+                    float(lower_values[index]),
+                    float(median_values[index]),
+                    float(upper_values[index]),
+                ),
+                output_semantics="quantile_summary",
+            )
+            validate_distribution_forecast(forecast)
+            if not np.isclose(
+                float(point_values[index]),
+                forecast.quantile_values[1],
+                rtol=1e-10,
+                atol=1e-12,
+            ):
+                raise ContractViolation("mapie_cqr_median_prediction_mismatch")
+
+            raw_lower, _, raw_upper = forecast.quantile_values
+            calibrated_lower = float(intervals[index, 0, 0])
+            calibrated_upper = float(intervals[index, 1, 0])
+            interval = make_cqr_interval(
+                lower_quantile=raw_lower,
+                upper_quantile=raw_upper,
+                lower_correction=raw_lower - calibrated_lower,
+                upper_correction=calibrated_upper - raw_upper,
+                nominal_coverage=self.confidence_level,
+                calibration_size=calibration_size,
+            )
+            validate_conformal_interval(interval)
+            forecasts.append(forecast)
+            calibrated_intervals.append(interval)
+
+        return tuple(forecasts), tuple(calibrated_intervals)
+
     def predict_interval(self, X_synthetic: ArrayLike) -> ConformalInterval:
         """Return MAPIE's calibrated interval for one feature row."""
         _, conformalizer, calibration_size = self._fitted_components()
