@@ -855,7 +855,6 @@ def _fit_fold_and_predict(
     return samples, lower_bounds, diagnostics
 
 
-
 def _evaluate_fold_cost_scenario(
     trial_id: str,
     horizon: str,
