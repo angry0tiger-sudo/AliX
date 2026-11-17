@@ -471,7 +471,11 @@ class HGBQCQRAdapter:
                 mean=None,
                 dispersion=None,
                 quantile_levels=self.quantile_levels,
-                quantile_values=tuple(float(value) for value in ordered_values[index]),
+                quantile_values=(
+                    float(ordered_values[index, 0]),
+                    float(ordered_values[index, 1]),
+                    float(ordered_values[index, 2]),
+                ),
                 output_semantics="quantile_summary",
             )
             validate_distribution_forecast(forecast)

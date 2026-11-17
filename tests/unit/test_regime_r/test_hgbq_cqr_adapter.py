@@ -227,7 +227,7 @@ def test_fit_rejects_conformalization_target_length_mismatch() -> None:
         _fit_synthetic(adapter, X_train, y_train, X_cal, y_cal[:-1])
 
 
-def test_forecast_fails_closed_when_hgb_quantiles_cross(
+def test_forecast_rearranges_crossing_hgb_quantiles_in_monotonic_order(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     adapter = _fitted_adapter()
@@ -249,11 +249,11 @@ def test_forecast_fails_closed_when_hgb_quantiles_cross(
         lambda _: np.asarray([0.03], dtype=np.float64),
     )
 
-    with pytest.raises(
-        ContractViolation,
-        match="forecast_quantile_values_not_monotonic",
-    ):
-        adapter.predict_forecast(np.asarray([[0.15]], dtype=np.float64))
+    forecast = adapter.predict_forecast(np.asarray([[0.15]], dtype=np.float64))
+
+    assert forecast.quantile_values == pytest.approx((0.01, 0.02, 0.03))
+    assert forecast.quantile_values[0] <= forecast.quantile_values[1]
+    assert forecast.quantile_values[1] <= forecast.quantile_values[2]
 
 
 @pytest.mark.parametrize(

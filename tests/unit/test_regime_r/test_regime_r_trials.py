@@ -40,17 +40,17 @@ def test_feature_schema_and_causality() -> None:
     changed = frame.copy()
     changed.loc[70:, "close"] *= 1.5
     changed_features = build_features(changed)
-    pd.testing.assert_series_equal(
-        features.loc[60],
-        changed_features.loc[60],
-        check_names=False,
+    np.testing.assert_array_equal(
+        features.loc[60].to_numpy(),
+        changed_features.loc[60].to_numpy(),
     )
 
 
 def test_target_uses_next_open_and_horizon_close() -> None:
     frame = synthetic_frame(10)
     target = build_target(frame, 4)
-    assert target[0] == frame.loc[4, "close"] / frame.loc[1, "open"] - 1.0
+    expected = float(frame["close"].iloc[4]) / float(frame["open"].iloc[1]) - 1.0
+    assert target[0] == expected
     assert np.isnan(target[-4:]).all()
 
 

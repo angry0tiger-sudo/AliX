@@ -9,7 +9,7 @@ import math
 import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -75,6 +75,7 @@ TARGET_CONTRACT = (
 
 IntArray = NDArray[np.int64]
 FloatArray = NDArray[np.float64]
+Position = dict[str, float | int]
 
 
 @dataclass(frozen=True)
@@ -118,76 +119,100 @@ def require_owner_authorization() -> None:
         raise PermissionError("regime_r_evaluation_requires_live_trading_false")
 
 
-def load_and_verify_inputs() -> tuple[pd.DataFrame, dict[str, Any], dict[str, Any]]:
-    expected_csv = ROOT / "data/nobitex/prehack/nobitex-btcusdt-1h.csv"
-    if CSV_PATH != expected_csv or "holdout" in str(CSV_PATH).lower():
-        raise RuntimeError("regime_r_dataset_path_contract_invalid")
+def _manifest_dataset_identity_valid(manifest: dict[str, Any]) -> bool:
+    return all(
+        (
+            manifest.get("csv_sha256") == EXPECTED_DATA_SHA256,
+            manifest.get("dataset_window") == "PRE_HACK_NOBITEX_ONLY",
+            manifest.get("source_policy") == "NOBITEX_ONLY_NO_BACKFILL",
+            manifest.get("row_count") == EXPECTED_ROWS,
+            manifest.get("expected_candles") == EXPECTED_ROWS,
+            manifest.get("missing_intervals") == 0,
+        )
+    )
 
-    actual_data_sha = sha256_bytes(CSV_PATH.read_bytes())
-    if actual_data_sha != EXPECTED_DATA_SHA256:
-        raise RuntimeError("regime_r_prehack_csv_sha256_mismatch")
 
+def _manifest_safety_metadata_valid(manifest: dict[str, Any]) -> bool:
+    return all(
+        (
+            manifest.get("public_api_only") is True,
+            manifest.get("credentials_used") is False,
+            manifest.get("private_api_calls") == 0,
+            manifest.get("real_order_attempts") == 0,
+            manifest.get("trading_authorization") == "NO-GO",
+        )
+    )
+
+
+def _load_verified_manifest() -> dict[str, Any]:
     manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
     if not isinstance(manifest, dict):
         raise RuntimeError("regime_r_prehack_manifest_invalid")
-    manifest_contract = (
-        manifest.get("csv_sha256") == EXPECTED_DATA_SHA256
-        and manifest.get("dataset_window") == "PRE_HACK_NOBITEX_ONLY"
-        and manifest.get("source_policy") == "NOBITEX_ONLY_NO_BACKFILL"
-        and manifest.get("row_count") == EXPECTED_ROWS
-        and manifest.get("expected_candles") == EXPECTED_ROWS
-        and manifest.get("missing_intervals") == 0
-        and manifest.get("public_api_only") is True
-        and manifest.get("credentials_used") is False
-        and manifest.get("private_api_calls") == 0
-        and manifest.get("real_order_attempts") == 0
-        and manifest.get("trading_authorization") == "NO-GO"
-    )
-    if not manifest_contract:
+    if not _manifest_dataset_identity_valid(manifest):
         raise RuntimeError("regime_r_prehack_manifest_contract_invalid")
+    if not _manifest_safety_metadata_valid(manifest):
+        raise RuntimeError("regime_r_prehack_manifest_contract_invalid")
+    return manifest
 
+
+def _load_verified_preregistration_config() -> dict[str, Any]:
     actual_config_sha = sha256_bytes(CONFIG_PATH.read_bytes())
     if actual_config_sha != EXPECTED_CONFIG_SHA256:
         raise RuntimeError("hgbq_preregistration_config_sha256_mismatch")
     config = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
     if not isinstance(config, dict):
         raise RuntimeError("hgbq_preregistration_config_invalid")
+    return config
 
-    frame = pd.read_csv(CSV_PATH)
-    expected_columns = ["date", "open", "high", "low", "close", "volume"]
-    if list(frame.columns) != expected_columns or len(frame) != EXPECTED_ROWS:
-        raise RuntimeError("regime_r_prehack_csv_schema_or_row_count_invalid")
 
+def _validate_prehack_timestamp_grid(frame: pd.DataFrame) -> pd.Series:
     timestamps = pd.to_datetime(frame["date"], utc=True, errors="raise")
     timestamp_ns = timestamps.astype("int64").to_numpy(dtype=np.int64)
     if timestamps.isna().any() or timestamps.duplicated().any():
         raise RuntimeError("regime_r_prehack_timestamps_invalid")
     if not np.all(np.diff(timestamp_ns) == 3_600_000_000_000):
         raise RuntimeError("regime_r_prehack_hourly_grid_invalid")
+    return timestamps
 
+
+def _validate_prehack_ohlcv(frame: pd.DataFrame) -> None:
     ohlcv = frame[["open", "high", "low", "close", "volume"]].to_numpy(dtype=np.float64)
     if not np.isfinite(ohlcv).all():
         raise RuntimeError("regime_r_prehack_ohlcv_non_finite")
-    open_values = ohlcv[:, 0]
-    high_values = ohlcv[:, 1]
-    low_values = ohlcv[:, 2]
-    close_values = ohlcv[:, 3]
-    volume_values = ohlcv[:, 4]
-    if (
+    open_values, high_values, low_values, close_values, volume_values = ohlcv.T
+    invalid_prices = (
         np.any(open_values <= 0)
         or np.any(high_values <= 0)
         or np.any(low_values <= 0)
         or np.any(close_values <= 0)
         or np.any(volume_values < 0)
-        or np.any(
-            high_values < np.maximum.reduce((open_values, low_values, close_values))
-        )
-        or np.any(
-            low_values > np.minimum.reduce((open_values, high_values, close_values))
-        )
-    ):
+    )
+    invalid_ranges = np.any(
+        high_values < np.maximum.reduce((open_values, low_values, close_values))
+    ) or np.any(
+        low_values > np.minimum.reduce((open_values, high_values, close_values))
+    )
+    if invalid_prices or invalid_ranges:
         raise RuntimeError("regime_r_prehack_ohlc_invariants_invalid")
 
+
+def load_and_verify_inputs() -> tuple[pd.DataFrame, dict[str, Any], dict[str, Any]]:
+    expected_csv = ROOT / "data/nobitex/prehack/nobitex-btcusdt-1h.csv"
+    if CSV_PATH != expected_csv or "holdout" in str(CSV_PATH).lower():
+        raise RuntimeError("regime_r_dataset_path_contract_invalid")
+    actual_data_sha = sha256_bytes(CSV_PATH.read_bytes())
+    if actual_data_sha != EXPECTED_DATA_SHA256:
+        raise RuntimeError("regime_r_prehack_csv_sha256_mismatch")
+
+    manifest = _load_verified_manifest()
+    config = _load_verified_preregistration_config()
+    frame = pd.read_csv(CSV_PATH)
+    expected_columns = ["date", "open", "high", "low", "close", "volume"]
+    if list(frame.columns) != expected_columns or len(frame) != EXPECTED_ROWS:
+        raise RuntimeError("regime_r_prehack_csv_schema_or_row_count_invalid")
+
+    timestamps = _validate_prehack_timestamp_grid(frame)
+    _validate_prehack_ohlcv(frame)
     frame = frame.drop(columns=["date"]).copy()
     frame["timestamp"] = timestamps
     return frame, manifest, config
@@ -221,7 +246,11 @@ def build_features(frame: pd.DataFrame) -> pd.DataFrame:
     high = frame["high"].astype("float64")
     low = frame["low"].astype("float64")
     volume = frame["volume"].astype("float64")
-    log_close = np.log(close)
+    log_close = pd.Series(
+        np.log(close.to_numpy(dtype=np.float64)),
+        index=close.index,
+        dtype="float64",
+    )
     log_return_1 = log_close.diff(1)
 
     volume_mean = volume.rolling(window=24, min_periods=24).mean()
@@ -247,7 +276,11 @@ def build_features(frame: pd.DataFrame) -> pd.DataFrame:
         ),
         "range_fraction_1": (high - low) / close,
         "atr_fraction_14": _wilder_atr_fraction(frame),
-        "log_volume_change_1": np.log1p(volume).diff(1),
+        "log_volume_change_1": pd.Series(
+            np.log1p(volume.to_numpy(dtype=np.float64)),
+            index=volume.index,
+            dtype="float64",
+        ).diff(1),
         "volume_zscore_24": volume_zscore,
         "hour_sin": np.sin(2.0 * np.pi * time_of_day / 24.0),
         "hour_cos": np.cos(2.0 * np.pi * time_of_day / 24.0),
@@ -269,12 +302,8 @@ def _month_timestamp(anchor: pd.Timestamp, offset: int) -> pd.Timestamp:
     return anchor + pd.DateOffset(months=offset)
 
 
-def build_folds(
-    frame: pd.DataFrame,
-    manifest: dict[str, Any],
-    config: dict[str, Any],
-) -> tuple[Fold, ...]:
-    protocol = config["walk_forward_protocol"]
+def _validate_walk_forward_protocol(config: dict[str, Any]) -> dict[str, Any]:
+    protocol = cast(dict[str, Any], config["walk_forward_protocol"])
     expected = (
         protocol.get("fold_count") == 3
         and protocol.get("training_window_months") == 6
@@ -286,71 +315,109 @@ def build_folds(
     )
     if not expected:
         raise RuntimeError("regime_r_walk_forward_contract_incompatible")
+    return protocol
 
+
+def _fold_boundaries(
+    anchor: pd.Timestamp,
+    item: dict[str, Any],
+) -> tuple[pd.Timestamp, ...]:
+    offsets = (
+        item["training_month_offsets"],
+        item["calibration_month_offsets"],
+        item["embargo_month_offsets"],
+        item["test_month_offsets"],
+    )
+    return (
+        _month_timestamp(anchor, int(offsets[0][0])),
+        _month_timestamp(anchor, int(offsets[0][1])),
+        _month_timestamp(anchor, int(offsets[1][0])),
+        _month_timestamp(anchor, int(offsets[1][1])),
+        _month_timestamp(anchor, int(offsets[2][0])),
+        _month_timestamp(anchor, int(offsets[2][1])),
+        _month_timestamp(anchor, int(offsets[3][0])),
+        _month_timestamp(anchor, int(offsets[3][1])),
+    )
+
+
+def _fold_indices(
+    timestamp_ns: IntArray,
+    boundaries: tuple[pd.Timestamp, ...],
+) -> tuple[int, ...]:
+    return tuple(
+        int(np.searchsorted(timestamp_ns, boundary.value, side="left"))
+        for boundary in boundaries
+    )
+
+
+def _fold_intervals_nonempty(indices: tuple[int, ...]) -> bool:
+    interval_pairs = ((0, 1), (2, 3), (4, 5), (6, 7))
+    return all(indices[start] < indices[end] for start, end in interval_pairs)
+
+
+def _fold_intervals_contiguous(indices: tuple[int, ...]) -> bool:
+    return (
+        indices[1] == indices[2]
+        and indices[3] == indices[4]
+        and indices[5] == indices[6]
+    )
+
+
+def _validate_fold_indices(indices: tuple[int, ...], row_count: int) -> None:
+    if not all(0 <= index < row_count for index in indices[:-1]):
+        raise RuntimeError("regime_r_fold_boundary_outside_dataset")
+    if indices[-1] > row_count:
+        raise RuntimeError("regime_r_fold_test_end_outside_dataset")
+    if not _fold_intervals_nonempty(indices):
+        raise RuntimeError("regime_r_fold_interval_empty")
+    if not _fold_intervals_contiguous(indices):
+        raise RuntimeError("regime_r_fold_intervals_not_contiguous")
+
+
+def _make_fold(
+    item: dict[str, Any],
+    boundaries: tuple[pd.Timestamp, ...],
+    indices: tuple[int, ...],
+) -> Fold:
+    return Fold(
+        fold_id=str(item["fold_id"]),
+        train_start=indices[0],
+        train_end=indices[1],
+        calibration_start=indices[2],
+        calibration_end=indices[3],
+        embargo_start=indices[4],
+        embargo_end=indices[5],
+        test_start=indices[6],
+        test_end=indices[7],
+        train_start_utc=boundaries[0].isoformat(),
+        train_end_utc=boundaries[1].isoformat(),
+        calibration_start_utc=boundaries[2].isoformat(),
+        calibration_end_utc=boundaries[3].isoformat(),
+        embargo_start_utc=boundaries[4].isoformat(),
+        embargo_end_utc=boundaries[5].isoformat(),
+        test_start_utc=boundaries[6].isoformat(),
+        test_end_utc=boundaries[7].isoformat(),
+    )
+
+
+def build_folds(
+    frame: pd.DataFrame,
+    manifest: dict[str, Any],
+    config: dict[str, Any],
+) -> tuple[Fold, ...]:
+    protocol = _validate_walk_forward_protocol(config)
     anchor = pd.Timestamp(manifest["start_utc"])
     if anchor.tzinfo is None:
         raise RuntimeError("regime_r_t0_must_be_timezone_aware")
     timestamps = pd.DatetimeIndex(frame["timestamp"])
-    timestamp_ns = timestamps.asi8
+    timestamp_ns = timestamps.astype("int64").to_numpy(dtype=np.int64)
     folds: list[Fold] = []
 
     for item in protocol["folds"]:
-        offsets = (
-            item["training_month_offsets"],
-            item["calibration_month_offsets"],
-            item["embargo_month_offsets"],
-            item["test_month_offsets"],
-        )
-        boundaries = (
-            _month_timestamp(anchor, int(offsets[0][0])),
-            _month_timestamp(anchor, int(offsets[0][1])),
-            _month_timestamp(anchor, int(offsets[1][0])),
-            _month_timestamp(anchor, int(offsets[1][1])),
-            _month_timestamp(anchor, int(offsets[2][0])),
-            _month_timestamp(anchor, int(offsets[2][1])),
-            _month_timestamp(anchor, int(offsets[3][0])),
-            _month_timestamp(anchor, int(offsets[3][1])),
-        )
-        indices = tuple(
-            int(np.searchsorted(timestamp_ns, boundary.value, side="left"))
-            for boundary in boundaries
-        )
-        if not all(0 <= index < len(frame) for index in indices[:-1]):
-            raise RuntimeError("regime_r_fold_boundary_outside_dataset")
-        if indices[-1] > len(frame):
-            raise RuntimeError("regime_r_fold_test_end_outside_dataset")
-        interval_pairs = ((0, 1), (2, 3), (4, 5), (6, 7))
-        for start_index, end_index in interval_pairs:
-            if indices[start_index] >= indices[end_index]:
-                raise RuntimeError("regime_r_fold_interval_empty")
-        if not (
-            indices[1] == indices[2]
-            and indices[3] == indices[4]
-            and indices[5] == indices[6]
-        ):
-            raise RuntimeError("regime_r_fold_intervals_not_contiguous")
-
-        folds.append(
-            Fold(
-                fold_id=str(item["fold_id"]),
-                train_start=indices[0],
-                train_end=indices[1],
-                calibration_start=indices[2],
-                calibration_end=indices[3],
-                embargo_start=indices[4],
-                embargo_end=indices[5],
-                test_start=indices[6],
-                test_end=indices[7],
-                train_start_utc=boundaries[0].isoformat(),
-                train_end_utc=boundaries[1].isoformat(),
-                calibration_start_utc=boundaries[2].isoformat(),
-                calibration_end_utc=boundaries[3].isoformat(),
-                embargo_start_utc=boundaries[4].isoformat(),
-                embargo_end_utc=boundaries[5].isoformat(),
-                test_start_utc=boundaries[6].isoformat(),
-                test_end_utc=boundaries[7].isoformat(),
-            )
-        )
+        boundaries = _fold_boundaries(anchor, item)
+        indices = _fold_indices(timestamp_ns, boundaries)
+        _validate_fold_indices(indices, len(frame))
+        folds.append(_make_fold(item, boundaries, indices))
     return tuple(folds)
 
 
@@ -431,6 +498,87 @@ def profit_factor(trades: list[dict[str, Any]]) -> float | None:
     return gross_profit / gross_loss
 
 
+def _advance_hypothetical_position(
+    position: Position | None,
+    index: int,
+    closes: FloatArray,
+    timestamps: pd.DatetimeIndex,
+    cost_bps: int,
+    equity: float,
+    trades: list[dict[str, Any]],
+) -> tuple[Position | None, float]:
+    if position is None:
+        return None, equity
+
+    entry_index = int(position["entry_index"])
+    exit_index = int(position["exit_index"])
+    entry_price = float(position["entry_price"])
+    base_equity = float(position["base_equity"])
+    if index < entry_index:
+        return position, equity
+    if index < exit_index:
+        return position, base_equity * closes[index] / entry_price
+    if index == exit_index:
+        gross = closes[index] / entry_price - 1.0
+        net = gross - cost_bps / 10_000.0
+        equity = base_equity * (1.0 + net)
+        trades.append(
+            {
+                "entry_index": entry_index,
+                "exit_index": exit_index,
+                "entry_time": timestamps[entry_index].isoformat(),
+                "exit_time": timestamps[exit_index].isoformat(),
+                "entry_price": entry_price,
+                "exit_price": float(closes[index]),
+                "gross_return": float(gross),
+                "round_trip_cost_bps": cost_bps,
+                "net_return": float(net),
+                "equity_after": float(equity),
+            }
+        )
+        return None, equity
+    raise RuntimeError("regime_r_position_exit_index_skipped")
+
+
+def _process_lower_bound_signal(
+    lower: float | None,
+    position: Position | None,
+    index: int,
+    test_end: int,
+    horizon_bars: int,
+    opens: FloatArray,
+    equity: float,
+    cost_fraction: float,
+) -> tuple[Position | None, bool, bool, bool, bool]:
+    if lower is None:
+        return position, False, False, False, False
+    if not lower > cost_fraction:
+        return position, False, True, False, False
+    if position is not None:
+        return position, True, False, True, False
+
+    entry_index = index + 1
+    exit_index = index + horizon_bars
+    if entry_index >= test_end or exit_index >= test_end:
+        return position, True, False, False, True
+
+    entry_price = float(opens[entry_index])
+    if not math.isfinite(entry_price) or entry_price <= 0.0:
+        raise RuntimeError("regime_r_invalid_hypothetical_entry_price")
+    return (
+        {
+            "entry_index": entry_index,
+            "exit_index": exit_index,
+            "entry_price": entry_price,
+            "base_equity": equity,
+        },
+        True,
+        False,
+        False,
+        False,
+    )
+
+
 def simulate_costed_ledger(
     frame: pd.DataFrame,
     test_start: int,
@@ -456,7 +604,7 @@ def simulate_costed_ledger(
 
     equity = 1.0
     curve = [equity]
-    position: dict[str, float | int] | None = None
+    position: Position | None = None
     trades: list[dict[str, Any]] = []
     above = 0
     abstain = 0
@@ -464,61 +612,30 @@ def simulate_costed_ledger(
     unexecutable = 0
 
     for index in range(test_start, test_end):
-        if position is not None:
-            entry_index = int(position["entry_index"])
-            exit_index = int(position["exit_index"])
-            entry_price = float(position["entry_price"])
-            base_equity = float(position["base_equity"])
-            if index >= entry_index:
-                if index < exit_index:
-                    equity = base_equity * closes[index] / entry_price
-                elif index == exit_index:
-                    gross = closes[index] / entry_price - 1.0
-                    net = gross - cost_fraction
-                    equity = base_equity * (1.0 + net)
-                    trades.append(
-                        {
-                            "entry_index": entry_index,
-                            "exit_index": exit_index,
-                            "entry_time": timestamps[entry_index].isoformat(),
-                            "exit_time": timestamps[exit_index].isoformat(),
-                            "entry_price": entry_price,
-                            "exit_price": float(closes[index]),
-                            "gross_return": float(gross),
-                            "round_trip_cost_bps": cost_bps,
-                            "net_return": float(net),
-                            "equity_after": float(equity),
-                        }
-                    )
-                    position = None
-                else:
-                    raise RuntimeError("regime_r_position_exit_index_skipped")
-
+        position, equity = _advance_hypothetical_position(
+            position, index, closes, timestamps, cost_bps, equity, trades
+        )
         lower = lower_by_index.get(index)
-        if lower is not None:
-            if lower > cost_fraction:
-                above += 1
-                if position is not None:
-                    skipped += 1
-                else:
-                    entry_index = index + 1
-                    exit_index = index + horizon_bars
-                    if entry_index >= test_end or exit_index >= test_end:
-                        unexecutable += 1
-                    else:
-                        entry_price = float(opens[entry_index])
-                        if not math.isfinite(entry_price) or entry_price <= 0.0:
-                            raise RuntimeError(
-                                "regime_r_invalid_hypothetical_entry_price"
-                            )
-                        position = {
-                            "entry_index": entry_index,
-                            "exit_index": exit_index,
-                            "entry_price": entry_price,
-                            "base_equity": equity,
-                        }
-            else:
-                abstain += 1
+        (
+            position,
+            is_above,
+            is_abstention,
+            is_skipped,
+            is_unexecutable,
+        ) = _process_lower_bound_signal(
+            lower,
+            position,
+            index,
+            test_end,
+            horizon_bars,
+            opens,
+            equity,
+            cost_fraction,
+        )
+        above += int(is_above)
+        abstain += int(is_abstention)
+        skipped += int(is_skipped)
+        unexecutable += int(is_unexecutable)
         curve.append(float(equity))
 
     if position is not None:
@@ -604,81 +721,87 @@ def trial_identity(trial_id: str) -> tuple[str, int]:
     return horizon, candidate
 
 
-def run_trial(
-    trial_id: str,
-    frame: pd.DataFrame,
+def _fit_fold_and_predict(
     features: pd.DataFrame,
-    folds: tuple[Fold, ...],
-    run_id: str,
-) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    horizon, slot = trial_identity(trial_id)
-    horizon_bars = int(horizon[:-1])
-    target = build_target(frame, horizon_bars)
-    values = features.to_numpy(dtype=np.float64)
+    values: FloatArray,
+    target: FloatArray,
+    horizon: str,
+    horizon_bars: int,
+    fold: Fold,
+) -> tuple[FoldSamples, FloatArray]:
+    samples = build_fold_samples(features, target, horizon_bars, fold)
+    adapter = HGBQCQRAdapter(horizon=horizon)
+    adapter.fit(
+        values[samples.train_indices],
+        target[samples.train_indices],
+        values[samples.calibration_indices],
+        target[samples.calibration_indices],
+    )
+    _, intervals = adapter.predict_batch_intervals(values[samples.test_indices])
+    lower_bounds = np.asarray(
+        [interval.lower_bound for interval in intervals],
+        dtype=np.float64,
+    )
+    return samples, lower_bounds
 
-    fold_results: dict[str, list[dict[str, Any]]] = {"50": [], "90": []}
-    fold_ledgers: dict[str, list[dict[str, Any]]] = {"50": [], "90": []}
-    trade_rows: list[dict[str, Any]] = []
 
-    for fold in folds:
-        samples = build_fold_samples(features, target, horizon_bars, fold)
-        adapter = HGBQCQRAdapter(horizon=horizon)
-        adapter.fit(
-            values[samples.train_indices],
-            target[samples.train_indices],
-            values[samples.calibration_indices],
-            target[samples.calibration_indices],
-        )
-        _, intervals = adapter.predict_batch_intervals(values[samples.test_indices])
-        lower_bounds = np.asarray(
-            [interval.lower_bound for interval in intervals],
-            dtype=np.float64,
-        )
+def _evaluate_fold_cost_scenario(
+    trial_id: str,
+    horizon: str,
+    slot: int,
+    frame: pd.DataFrame,
+    fold: Fold,
+    samples: FoldSamples,
+    horizon_bars: int,
+    lower_bounds: FloatArray,
+    cost: int,
+) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
+    ledger = simulate_costed_ledger(
+        frame,
+        fold.test_start,
+        fold.test_end,
+        horizon_bars,
+        samples.test_indices,
+        lower_bounds,
+        cost,
+    )
+    fold_result = {
+        "fold_id": fold.fold_id,
+        "train_start_utc": fold.train_start_utc,
+        "train_end_utc": fold.train_end_utc,
+        "calibration_start_utc": fold.calibration_start_utc,
+        "calibration_end_utc": fold.calibration_end_utc,
+        "embargo_start_utc": fold.embargo_start_utc,
+        "embargo_end_utc": fold.embargo_end_utc,
+        "test_start_utc": fold.test_start_utc,
+        "test_end_utc": fold.test_end_utc,
+        "training_rows": int(samples.train_indices.size),
+        "calibration_rows": int(samples.calibration_indices.size),
+        "test_rows": int(samples.test_indices.size),
+        "metrics": {
+            key: value
+            for key, value in ledger.items()
+            if key not in ("trades", "equity_curve")
+        },
+    }
+    trade_rows = [
+        {
+            "trial_id": trial_id,
+            "horizon": horizon,
+            "candidate_slot": slot,
+            "fold_id": fold.fold_id,
+            "cost_bps": cost,
+            **trade,
+        }
+        for trade in ledger["trades"]
+    ]
+    return ledger, fold_result, trade_rows
 
-        for cost in COSTS_BPS:
-            ledger = simulate_costed_ledger(
-                frame,
-                fold.test_start,
-                fold.test_end,
-                horizon_bars,
-                samples.test_indices,
-                lower_bounds,
-                cost,
-            )
-            fold_ledgers[str(cost)].append(ledger)
-            fold_results[str(cost)].append(
-                {
-                    "fold_id": fold.fold_id,
-                    "train_start_utc": fold.train_start_utc,
-                    "train_end_utc": fold.train_end_utc,
-                    "calibration_start_utc": fold.calibration_start_utc,
-                    "calibration_end_utc": fold.calibration_end_utc,
-                    "embargo_start_utc": fold.embargo_start_utc,
-                    "embargo_end_utc": fold.embargo_end_utc,
-                    "test_start_utc": fold.test_start_utc,
-                    "test_end_utc": fold.test_end_utc,
-                    "training_rows": int(samples.train_indices.size),
-                    "calibration_rows": int(samples.calibration_indices.size),
-                    "test_rows": int(samples.test_indices.size),
-                    "metrics": {
-                        key: value
-                        for key, value in ledger.items()
-                        if key not in ("trades", "equity_curve")
-                    },
-                }
-            )
-            for trade in ledger["trades"]:
-                trade_rows.append(
-                    {
-                        "trial_id": trial_id,
-                        "horizon": horizon,
-                        "candidate_slot": slot,
-                        "fold_id": fold.fold_id,
-                        "cost_bps": cost,
-                        **trade,
-                    }
-                )
 
+def _build_trial_cost_scenarios(
+    fold_results: dict[str, list[dict[str, Any]]],
+    fold_ledgers: dict[str, list[dict[str, Any]]],
+) -> dict[str, Any]:
     scenarios: dict[str, Any] = {}
     for cost in COSTS_BPS:
         cost_key = str(cost)
@@ -696,7 +819,46 @@ def run_trial(
             "folds": fold_results[cost_key],
             "acceptance": scenario_acceptance(pooled_metrics, stability),
         }
+    return scenarios
 
+
+def run_trial(
+    trial_id: str,
+    frame: pd.DataFrame,
+    features: pd.DataFrame,
+    folds: tuple[Fold, ...],
+    run_id: str,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    horizon, slot = trial_identity(trial_id)
+    horizon_bars = int(horizon[:-1])
+    target = build_target(frame, horizon_bars)
+    values = features.to_numpy(dtype=np.float64)
+    fold_results: dict[str, list[dict[str, Any]]] = {"50": [], "90": []}
+    fold_ledgers: dict[str, list[dict[str, Any]]] = {"50": [], "90": []}
+    trade_rows: list[dict[str, Any]] = []
+
+    for fold in folds:
+        samples, lower_bounds = _fit_fold_and_predict(
+            features, values, target, horizon, horizon_bars, fold
+        )
+        for cost in COSTS_BPS:
+            ledger, fold_result, cost_trade_rows = _evaluate_fold_cost_scenario(
+                trial_id,
+                horizon,
+                slot,
+                frame,
+                fold,
+                samples,
+                horizon_bars,
+                lower_bounds,
+                cost,
+            )
+            cost_key = str(cost)
+            fold_ledgers[cost_key].append(ledger)
+            fold_results[cost_key].append(fold_result)
+            trade_rows.extend(cost_trade_rows)
+
+    scenarios = _build_trial_cost_scenarios(fold_results, fold_ledgers)
     duplicate_of = f"NOBITEX-R1-NGBOOST-{horizon}-01" if slot > 1 else None
     result = {
         "trial_id": trial_id,
@@ -796,6 +958,7 @@ def write_report(report: dict[str, Any], trials: list[dict[str, Any]]) -> None:
                     f"{metrics['abstention_count']} | "
                     f"{metrics['skipped_signal_position_open']} |"
                 )
+    duplicate_slots = int(report["trial_counts"]["duplicate_slots"])
     lines.extend(
         [
             "",
@@ -803,7 +966,7 @@ def write_report(report: dict[str, Any], trials: list[dict[str, Any]]) -> None:
             "",
             f"- Registered IDs: {report['trial_counts']['registered_slots']}.",
             f"- Unique model configurations: {report['trial_counts']['unique_candidate_configurations']}.",
-            f"- Exact duplicate slots: {report["trial_counts"]["duplicate_slots"]}.",
+            f"- Exact duplicate slots: {duplicate_slots}.",
             f"- Fit calls: {report['trial_counts']['fit_calls']}.",
             "- GLOBAL_N: UNKNOWN.",
             "- DSR: NOT_COMPUTABLE_GLOBAL_N_UNKNOWN.",
@@ -831,6 +994,7 @@ def write_report(report: dict[str, Any], trials: list[dict[str, Any]]) -> None:
 
 
 def write_adr(report: dict[str, Any]) -> None:
+    duplicate_slots = int(report["trial_counts"]["duplicate_slots"])
     content = f"""# ADR-053 — Regime R HGBQ-CQR Pre-hack G4/G5 Evaluation
 
 - Status: {report["verdict"]} — exploratory pre-hack evidence only.
@@ -861,7 +1025,7 @@ Feature formulas were operationalized from the names/descriptions in ADR-048 and
 
 - Registered slots: {report["trial_counts"]["registered_slots"]}.
 - Unique configurations: {report["trial_counts"]["unique_candidate_configurations"]}.
-- Exact duplicate slots: {report['trial_counts']['duplicate_slots']}.
+- Exact duplicate slots: {duplicate_slots}.
 
 The ten IDs within each horizon have identical frozen model settings, seed, features, fold plan and cost policy. Slots 02-10 are therefore duplicate evaluations of slot 01, not ten independent configurations. The registry identities are retained, but no extra statistical independence is claimed.
 
@@ -897,30 +1061,21 @@ Architecture First. Evidence Always. Fail Closed.
     ADR_PATH.write_text(content, encoding="utf-8")
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--commit-sha", required=True)
-    parser.add_argument(
-        "--output-dir",
-        type=Path,
-        default=ROOT / ".artifacts/regime-r-g4-g5",
-    )
-    args = parser.parse_args()
-    require_owner_authorization()
-    if len(args.commit_sha) != 40:
+def _validate_requested_commit_sha(commit_sha: str) -> None:
+    if len(commit_sha) != 40:
         raise ValueError("regime_r_commit_sha_must_be_full_git_sha")
     github_sha = os.environ.get("GITHUB_SHA")
-    if github_sha is not None and github_sha != args.commit_sha:
+    if github_sha is not None and github_sha != commit_sha:
         raise RuntimeError("regime_r_workflow_commit_sha_mismatch")
 
-    frame, manifest, config = load_and_verify_inputs()
-    features = build_features(frame)
-    folds = build_folds(frame, manifest, config)
-    trial_ids = tuple(config["trial_family"]["trial_ids"])
-    if len(trial_ids) != 30 or set(trial_ids) != set(TRIAL_IDS):
-        raise RuntimeError("regime_r_trial_registry_mismatch")
 
-    run_id = os.environ.get("GITHUB_RUN_ID", "local-run")
+def _run_registered_trials(
+    trial_ids: tuple[str, ...],
+    frame: pd.DataFrame,
+    features: pd.DataFrame,
+    folds: tuple[Fold, ...],
+    run_id: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     trials: list[dict[str, Any]] = []
     all_trades: list[dict[str, Any]] = []
     for trial_id in trial_ids:
@@ -933,25 +1088,38 @@ def main() -> int:
         )
         trials.append(result)
         all_trades.extend(trade_rows)
+    return trials, all_trades
 
-    full_pass_count = 0
-    for trial in trials:
-        both_costs_pass = all(
-            trial["cost_scenarios"][str(cost)]["acceptance"]["all_gates_passed"]
-            for cost in COSTS_BPS
+
+def _count_full_gate_passes(trials: list[dict[str, Any]]) -> int:
+    return sum(
+        int(
+            all(
+                trial["cost_scenarios"][str(cost)]["acceptance"]["all_gates_passed"]
+                for cost in COSTS_BPS
+            )
         )
-        if both_costs_pass:
-            full_pass_count += 1
+        for trial in trials
+    )
 
+
+def _build_evaluation_report(
+    commit_sha: str,
+    run_id: str,
+    frame: pd.DataFrame,
+    folds: tuple[Fold, ...],
+    trials: list[dict[str, Any]],
+) -> dict[str, Any]:
+    full_pass_count = _count_full_gate_passes(trials)
     unique_configs = 3
     duplicates = len(trials) - unique_configs
     verdict = "PASS" if full_pass_count > 0 else "NO-GO"
     frame_start = frame["timestamp"].iloc[0].isoformat()
     frame_end = frame["timestamp"].iloc[-1].isoformat()
-    report: dict[str, Any] = {
+    return {
         "schema_version": "alix.regime-r.g4-g5.v1",
         "status": "COMPLETED",
-        "code_commit_sha": args.commit_sha,
+        "code_commit_sha": commit_sha,
         "workflow_run_id": run_id,
         "workflow_run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT", "1"),
         "dataset": {
@@ -1013,25 +1181,61 @@ def main() -> int:
         },
     }
 
-    args.output_dir.mkdir(parents=True, exist_ok=True)
-    (args.output_dir / "regime-r-g4-g5-results.json").write_text(
+
+def _write_evaluation_outputs(
+    report: dict[str, Any],
+    trials: list[dict[str, Any]],
+    all_trades: list[dict[str, Any]],
+    output_dir: Path,
+) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "regime-r-g4-g5-results.json").write_text(
         json.dumps(report, indent=2, sort_keys=True, allow_nan=False) + "\n",
         encoding="utf-8",
     )
     pd.DataFrame(all_trades).to_csv(
-        args.output_dir / "regime-r-g4-g5-trades.csv",
+        output_dir / "regime-r-g4-g5-trades.csv",
         index=False,
     )
     write_report(report, trials)
     write_adr(report)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--commit-sha", required=True)
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=ROOT / ".artifacts/regime-r-g4-g5",
+    )
+    args = parser.parse_args()
+    require_owner_authorization()
+    _validate_requested_commit_sha(args.commit_sha)
+
+    frame, manifest, config = load_and_verify_inputs()
+    features = build_features(frame)
+    folds = build_folds(frame, manifest, config)
+    trial_ids = tuple(config["trial_family"]["trial_ids"])
+    if len(trial_ids) != 30 or set(trial_ids) != set(TRIAL_IDS):
+        raise RuntimeError("regime_r_trial_registry_mismatch")
+
+    run_id = os.environ.get("GITHUB_RUN_ID", "local-run")
+    trials, all_trades = _run_registered_trials(
+        trial_ids, frame, features, folds, run_id
+    )
+    report = _build_evaluation_report(args.commit_sha, run_id, frame, folds, trials)
+    _write_evaluation_outputs(report, trials, all_trades, args.output_dir)
     print(
         json.dumps(
             {
                 "status": report["status"],
                 "verdict": report["verdict"],
                 "registered_slots": len(trials),
-                "unique_candidate_configurations": unique_configs,
-                "full_gate_pass_count": full_pass_count,
+                "unique_candidate_configurations": report["trial_counts"][
+                    "unique_candidate_configurations"
+                ],
+                "full_gate_pass_count": report["acceptance"]["full_gate_pass_count"],
                 "global_dsr": report["global_dsr"],
                 "dsr_status": report["dsr_status"],
                 "report": str(REPORT_PATH),
