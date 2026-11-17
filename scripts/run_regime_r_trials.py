@@ -846,9 +846,7 @@ def _fit_fold_and_predict(
         values[samples.calibration_indices],
         target[samples.calibration_indices],
     )
-    forecasts, intervals = adapter.predict_batch_intervals(
-        values[samples.test_indices]
-    )
+    forecasts, intervals = adapter.predict_batch_intervals(values[samples.test_indices])
     lower_bounds = np.asarray(
         [interval.lower_bound for interval in intervals],
         dtype=np.float64,
@@ -1327,9 +1325,7 @@ def _collect_registered_diagnostics(
         horizon, slot = trial_identity(trial_id)
         horizon_bars = int(horizon[:-1])
         target = build_target(frame, horizon_bars)
-        duplicate_of = (
-            f"NOBITEX-R1-NGBOOST-{horizon}-01" if slot > 1 else None
-        )
+        duplicate_of = f"NOBITEX-R1-NGBOOST-{horizon}-01" if slot > 1 else None
         for fold in folds:
             samples, _, statistics = _fit_fold_and_predict(
                 features, values, target, horizon, horizon_bars, fold

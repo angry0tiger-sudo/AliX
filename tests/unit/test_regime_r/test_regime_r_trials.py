@@ -85,12 +85,8 @@ def test_forecast_diagnostics_summarize_quantiles_intervals_and_cost_distance() 
     assert np.isclose(result["conformal_interval_width"]["mean"], 0.0625)
     assert result["median_positive"]["count"] == 1
     assert result["median_positive"]["percentage"] == 50.0
-    assert np.isclose(
-        result["lower_bound_to_cost"]["50"]["mean_distance_bps"], -275.0
-    )
-    assert np.isclose(
-        result["lower_bound_to_cost"]["90"]["mean_distance_bps"], -315.0
-    )
+    assert np.isclose(result["lower_bound_to_cost"]["50"]["mean_distance_bps"], -275.0)
+    assert np.isclose(result["lower_bound_to_cost"]["90"]["mean_distance_bps"], -315.0)
 
 
 def test_feature_schema_and_causality() -> None:
