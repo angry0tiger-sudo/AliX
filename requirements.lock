@@ -64,6 +64,7 @@ license-expression==30.4.4
 lightgbm==4.7.0
 magic-filter==1.0.12
 mando==0.7.1
+mapie==1.6.0
 markdown-it-py==4.2.0
 markupsafe==3.0.4
 mdurl==0.1.2
