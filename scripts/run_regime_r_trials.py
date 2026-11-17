@@ -28,8 +28,12 @@ CONFIG_PATH = ROOT / "config/regime_r/hgbq_cqr_preregistration.json"
 REPORT_PATH = ROOT / "docs/research/results/G4_G5_evaluation_results.md"
 ADR_PATH = ROOT / "docs/adr/ADR-053-regime-r-g4-g5-evaluation-results.md"
 
-EXPECTED_DATA_SHA256 = "0aa13607d1da68c4720919f233635bb33d34048e5bd67d3ecc2ce9bb7c2b462e"
-EXPECTED_CONFIG_SHA256 = "92cdcf19a02f5cf9659f327704ed4d6c5cf0d85687aff2ba35b9542fec5cfdaa"
+EXPECTED_DATA_SHA256 = (
+    "0aa13607d1da68c4720919f233635bb33d34048e5bd67d3ecc2ce9bb7c2b462e"
+)
+EXPECTED_CONFIG_SHA256 = (
+    "92cdcf19a02f5cf9659f327704ed4d6c5cf0d85687aff2ba35b9542fec5cfdaa"
+)
 EXPECTED_ROWS = 31801
 COSTS_BPS = (50, 90)
 MAX_PURGE_BARS = 24
@@ -722,12 +726,12 @@ def write_report(report: dict[str, Any], trials: list[dict[str, Any]]) -> None:
         "# AliX Regime R — G4/G5 HGBQ-CQR Pre-hack Evaluation",
         "",
         "Status: COMPLETED — EXPLORATORY PRE-HACK ONLY; NOT CONFIRMATORY",
-        f"Code commit: {report["code_commit_sha"]}",
-        f"Workflow run: {report["workflow_run_id"]}",
-        f"Dataset SHA-256: {report["dataset"]["csv_sha256"]}",
-        f"G3 configuration SHA-256: {report["configuration_sha256"]}",
-        f"Feature contract SHA-256: {report["feature_contract_sha256"]}",
-        f"Target contract SHA-256: {report["target_contract_sha256"]}",
+        f"Code commit: {report['code_commit_sha']}",
+        f"Workflow run: {report['workflow_run_id']}",
+        f"Dataset SHA-256: {report['dataset']['csv_sha256']}",
+        f"G3 configuration SHA-256: {report['configuration_sha256']}",
+        f"Feature contract SHA-256: {report['feature_contract_sha256']}",
+        f"Target contract SHA-256: {report['target_contract_sha256']}",
         "",
         "## Scope and interpretation",
         "",
@@ -739,7 +743,7 @@ def write_report(report: dict[str, Any], trials: list[dict[str, Any]]) -> None:
         "",
         "## Frozen protocol",
         "",
-        f"- Dataset: {report["dataset"]["row_count"]} rows; {report["dataset"]["start_utc"]} through {report["dataset"]["end_utc"]}.",
+        f"- Dataset: {report['dataset']['row_count']} rows; {report['dataset']['start_utc']} through {report['dataset']['end_utc']}.",
         "- T0 is the manifest start timestamp; no outcome-dependent anchor was selected.",
         "- Each fold uses six months training, one month calibration, one month embargo and one month test.",
         "- Full 24-bar purge applies before the calibration and embargo boundaries.",
@@ -799,13 +803,13 @@ def write_report(report: dict[str, Any], trials: list[dict[str, Any]]) -> None:
             "",
             f"- Registered IDs: {report['trial_counts']['registered_slots']}.",
             f"- Unique model configurations: {report['trial_counts']['unique_candidate_configurations']}.",
-            f"- Exact duplicate slots: {report['trial_counts']['duplicate_slots']}.",
+            f"- Exact duplicate slots: {report["trial_counts"]["duplicate_slots"]}.",
             f"- Fit calls: {report['trial_counts']['fit_calls']}.",
             "- GLOBAL_N: UNKNOWN.",
             "- DSR: NOT_COMPUTABLE_GLOBAL_N_UNKNOWN.",
             "- DSR > 0: FAIL_CLOSED for every trial.",
             f"- Candidates passing every gate at both costs: {report['acceptance']['full_gate_pass_count']}.",
-            f"- Verdict: **{report["verdict"]}**.",
+            f"- Verdict: **{report['verdict']}**.",
             f"- Verdict reason: {report['verdict_reason']}.",
             "",
             "## Safety invariants",
@@ -855,8 +859,8 @@ Feature formulas were operationalized from the names/descriptions in ADR-048 and
 
 ## 3. Trial identity and multiplicity
 
-- Registered slots: {report['trial_counts']['registered_slots']}.
-- Unique configurations: {report['trial_counts']['unique_candidate_configurations']}.
+- Registered slots: {report["trial_counts"]["registered_slots"]}.
+- Unique configurations: {report["trial_counts"]["unique_candidate_configurations"]}.
 - Exact duplicate slots: {report['trial_counts']['duplicate_slots']}.
 
 The ten IDs within each horizon have identical frozen model settings, seed, features, fold plan and cost policy. Slots 02-10 are therefore duplicate evaluations of slot 01, not ten independent configurations. The registry identities are retained, but no extra statistical independence is claimed.
@@ -954,6 +958,8 @@ def main() -> int:
             "path": "data/nobitex/prehack/nobitex-btcusdt-1h.csv",
             "csv_sha256": EXPECTED_DATA_SHA256,
             "row_count": len(frame),
+            "volume_zero_rows": int(np.count_nonzero(frame["volume"].to_numpy(dtype=np.float64) == 0.0)),
+            "volume_positive_rows": int(np.count_nonzero(frame["volume"].to_numpy(dtype=np.float64) > 0.0)),
             "start_utc": frame_start,
             "end_utc": frame_end,
             "scope": "PRE_HACK_NOBITEX_ONLY_EXPLORATORY",

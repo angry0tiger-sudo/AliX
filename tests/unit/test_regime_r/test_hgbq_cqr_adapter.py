@@ -411,7 +411,6 @@ def test_batch_prediction_rejects_feature_width_mismatch() -> None:
         adapter.predict_batch_intervals(np.zeros((2, 2), dtype=np.float64))
 
 
-
 def test_ordered_quantile_views_rearrange_crossing_predictions() -> None:
     from research.regime_r.ngboost_cqr.adapters import _OrderedQuantileView
 

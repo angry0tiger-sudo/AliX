@@ -188,7 +188,6 @@ def _finite_numeric_value(value: object, error_code: str) -> float:
     return numeric_value
 
 
-
 class _OrderedQuantileView:
     """Expose one column of a row-wise monotone rearrangement to MAPIE."""
 
@@ -213,7 +212,9 @@ class _OrderedQuantileView:
         try:
             features = np.asarray(X, dtype=np.float64)
         except (TypeError, ValueError) as error:
-            raise ContractViolation("ordered_quantile_features_must_be_numeric") from error
+            raise ContractViolation(
+                "ordered_quantile_features_must_be_numeric"
+            ) from error
         if (
             features.ndim != 2
             or features.shape[0] < 1
@@ -232,8 +233,7 @@ def _ordered_quantile_predictions(
 ) -> FloatArray:
     """Rearrange independently fitted quantile predictions into monotone order."""
     predictions = [
-        np.asarray(model.predict(features), dtype=np.float64)
-        for model in models
+        np.asarray(model.predict(features), dtype=np.float64) for model in models
     ]
     expected_shape = (features.shape[0],)
     if any(values.shape != expected_shape for values in predictions):
@@ -471,9 +471,7 @@ class HGBQCQRAdapter:
                 mean=None,
                 dispersion=None,
                 quantile_levels=self.quantile_levels,
-                quantile_values=tuple(
-                    float(value) for value in ordered_values[index]
-                ),
+                quantile_values=tuple(float(value) for value in ordered_values[index]),
                 output_semantics="quantile_summary",
             )
             validate_distribution_forecast(forecast)
