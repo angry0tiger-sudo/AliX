@@ -1,0 +1,208 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "schema_version": "1.0.0",
+  "preregistration": {
+    "phase": "G3",
+    "status": "PREREGISTERED_LOCKED",
+    "preregistered_utc_date": "2026-11-17",
+    "scope": "Freeze model hyperparameters, quantiles, prediction horizons, conformal calibration, temporal folds, and cost scenarios only.",
+    "real_data_fit_authorized": false,
+    "fit_authorized_in_g3": false,
+    "holdout_access_authorized": false,
+    "economic_backtest_authorized": false,
+    "network_access_authorized": false,
+    "post_lock_tuning_allowed": false,
+    "p_hacking_guard": "All 30 logical trial slots and the complete evaluation protocol are registered before empirical evaluation. No candidate may be added, removed, retuned, or selectively rerun after outcomes are observed.",
+    "change_control": "Any byte-level change requires explicit written Owner approval and a new superseding preregistration commitment. This file and its SHA-256 must not be silently overwritten."
+  },
+  "model": {
+    "estimator": "sklearn.ensemble.HistGradientBoostingRegressor",
+    "scikit_learn_version": "1.9.0",
+    "common_parameters": {
+      "loss": "quantile",
+      "max_iter": 100,
+      "learning_rate": 0.1,
+      "max_depth": 3,
+      "max_leaf_nodes": 8,
+      "min_samples_leaf": 20,
+      "l2_regularization": 1,
+      "max_bins": 255,
+      "early_stopping": false,
+      "random_state": 42
+    },
+    "quantile_estimators": [
+      {
+        "name": "lower",
+        "quantile": 0.05
+      },
+      {
+        "name": "median",
+        "quantile": 0.5
+      },
+      {
+        "name": "upper",
+        "quantile": 0.95
+      }
+    ],
+    "parameter_rationale": {
+      "max_depth_and_leaf_count": "A shallow depth-3 tree with at most 8 leaves constrains interaction complexity and reduces variance.",
+      "min_samples_leaf": "A 20-row minimum leaf size discourages fitting isolated observations and complements shallow trees.",
+      "l2_regularization": "A fixed positive value of 1.0 regularizes leaf values; it is not a post-hoc tuned value.",
+      "early_stopping": "Disabled to avoid an implicit random validation split and keep temporal partitioning explicit.",
+      "random_state": "Fixed at 42 for deterministic implementation behavior."
+    }
+  },
+  "conformalization": {
+    "library": "MAPIE",
+    "version": "1.6.0",
+    "estimator": "mapie.regression.ConformalizedQuantileRegressor",
+    "confidence_level": 0.9,
+    "prefit": true,
+    "estimator_order": [
+      "lower",
+      "upper",
+      "median"
+    ],
+    "calibration_data_must_be_disjoint_from_training_and_test": true,
+    "test_data_must_never_be_used_for_conformalization": true
+  },
+  "prediction_horizons": {
+    "unit": "hours",
+    "values": [
+      1,
+      4,
+      24
+    ]
+  },
+  "walk_forward_protocol": {
+    "scheme": "rolling_fixed_width_purged_walk_forward",
+    "fold_count": 3,
+    "time_unit": "calendar_month",
+    "training_window_months": 6,
+    "calibration_window_months": 1,
+    "embargo_window_months": 1,
+    "test_window_months": 1,
+    "fold_shift_months": 3,
+    "interval_convention": "UTC; every interval is start-inclusive and end-exclusive.",
+    "maximum_target_horizon_hours": 24,
+    "purge_policy": {
+      "enabled": true,
+      "purge_hours_before_training_to_calibration_boundary": 24,
+      "purge_hours_before_calibration_to_embargo_boundary": 24,
+      "rule": "Drop any training or calibration decision row whose target interval would extend beyond its own partition boundary. The 24-hour purge equals the maximum registered target horizon."
+    },
+    "embargo_policy": "The full one-calendar-month embargo interval is excluded from fitting, conformal calibration, and test scoring.",
+    "anchor_policy": "Relative month offsets are fixed here. The absolute UTC anchor T0 must be owner-approved and frozen in a separate data-window authorization before any empirical data is opened; it must not be selected after inspecting outcomes.",
+    "folds": [
+      {
+        "fold_id": "WF-01",
+        "training_month_offsets": [
+          0,
+          6
+        ],
+        "calibration_month_offsets": [
+          6,
+          7
+        ],
+        "embargo_month_offsets": [
+          7,
+          8
+        ],
+        "test_month_offsets": [
+          8,
+          9
+        ]
+      },
+      {
+        "fold_id": "WF-02",
+        "training_month_offsets": [
+          3,
+          9
+        ],
+        "calibration_month_offsets": [
+          9,
+          10
+        ],
+        "embargo_month_offsets": [
+          10,
+          11
+        ],
+        "test_month_offsets": [
+          11,
+          12
+        ]
+      },
+      {
+        "fold_id": "WF-03",
+        "training_month_offsets": [
+          6,
+          12
+        ],
+        "calibration_month_offsets": [
+          12,
+          13
+        ],
+        "embargo_month_offsets": [
+          13,
+          14
+        ],
+        "test_month_offsets": [
+          14,
+          15
+        ]
+      }
+    ]
+  },
+  "cost_scenarios": {
+    "cost_50bps": {
+      "round_trip_bps": 50,
+      "return_fraction": 0.005
+    },
+    "cost_90bps": {
+      "round_trip_bps": 90,
+      "return_fraction": 0.009
+    },
+    "decision_rule": "ENTER only when the valid conformal lower bound is strictly greater than the applicable return_fraction; equality, missing, malformed, or non-finite values produce ABSTAIN.",
+    "scenarios_are_independent": true
+  },
+  "trial_family": {
+    "logical_slot_count": 30,
+    "status": "PREREGISTERED_LOCKED",
+    "legacy_identifier_prefix": "NOBITEX-R1-NGBOOST",
+    "identifier_semantics": "Stable legacy logical-slot identifiers are retained for lineage and multiple-testing accounting; the preregistered implementation revision is HGBQ-CQR.",
+    "implementation_revision": "HGBQ-CQR-G3",
+    "evaluated_candidate_count_at_registration": 0,
+    "trial_ids": [
+      "NOBITEX-R1-NGBOOST-1h-01",
+      "NOBITEX-R1-NGBOOST-1h-02",
+      "NOBITEX-R1-NGBOOST-1h-03",
+      "NOBITEX-R1-NGBOOST-1h-04",
+      "NOBITEX-R1-NGBOOST-1h-05",
+      "NOBITEX-R1-NGBOOST-1h-06",
+      "NOBITEX-R1-NGBOOST-1h-07",
+      "NOBITEX-R1-NGBOOST-1h-08",
+      "NOBITEX-R1-NGBOOST-1h-09",
+      "NOBITEX-R1-NGBOOST-1h-10",
+      "NOBITEX-R1-NGBOOST-4h-01",
+      "NOBITEX-R1-NGBOOST-4h-02",
+      "NOBITEX-R1-NGBOOST-4h-03",
+      "NOBITEX-R1-NGBOOST-4h-04",
+      "NOBITEX-R1-NGBOOST-4h-05",
+      "NOBITEX-R1-NGBOOST-4h-06",
+      "NOBITEX-R1-NGBOOST-4h-07",
+      "NOBITEX-R1-NGBOOST-4h-08",
+      "NOBITEX-R1-NGBOOST-4h-09",
+      "NOBITEX-R1-NGBOOST-4h-10",
+      "NOBITEX-R1-NGBOOST-24h-01",
+      "NOBITEX-R1-NGBOOST-24h-02",
+      "NOBITEX-R1-NGBOOST-24h-03",
+      "NOBITEX-R1-NGBOOST-24h-04",
+      "NOBITEX-R1-NGBOOST-24h-05",
+      "NOBITEX-R1-NGBOOST-24h-06",
+      "NOBITEX-R1-NGBOOST-24h-07",
+      "NOBITEX-R1-NGBOOST-24h-08",
+      "NOBITEX-R1-NGBOOST-24h-09",
+      "NOBITEX-R1-NGBOOST-24h-10"
+    ]
+  }
+}

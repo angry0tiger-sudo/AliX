@@ -625,3 +625,46 @@ The twelve ADR-038 IDs are now recorded as evaluated by this appended event; the
 - `Champion=null`; `order_permission=false`; `trading_authorization=NO-GO`; `private_api_calls=0`; `real_order_attempts=0`.
 - V2, Spec v3, public fetcher, `data/nobitex/prehack/*`, and frozen main remain unchanged. No holdout access occurred.
 
+
+## [APPEND] Regime R HGBQ-CQR G3 — Preregistration Lock (2026-11-17)
+
+- Preregistration: `config/regime_r/hgbq_cqr_preregistration.json`.
+- SHA-256 commitment: `92cdcf19a02f5cf9659f327704ed4d6c5cf0d85687aff2ba35b9542fec5cfdaa`.
+- Status of all 30 logical slots: **PREREGISTERED_LOCKED**; evaluated candidates at registration: **0**.
+- The identifiers retain the legacy `NOBITEX-R1-NGBOOST` prefix because they are stable logical-slot identifiers established by the Regime R contract. The frozen implementation revision for these slots is `HGBQ-CQR-G3`; this does not create 30 additional slots.
+- This append registers the 30 pre-existing logical slots as row-level entries. All historical registry sections above remain unchanged and append-only.
+- No real-data fitting, Holdout access, economic backtest, network access, result generation, or candidate evaluation is authorized by this registration.
+
+| Trial ID | Horizon | Slot | Implementation revision | Status | Evaluated |
+|---|---:|---:|---|---|---|
+| `NOBITEX-R1-NGBOOST-1h-01` | 1h | 1 | `HGBQ-CQR-G3` | `PREREGISTERED_LOCKED` | No |
+| `NOBITEX-R1-NGBOOST-1h-02` | 1h | 2 | `HGBQ-CQR-G3` | `PREREGISTERED_LOCKED` | No |
+| `NOBITEX-R1-NGBOOST-1h-03` | 1h | 3 | `HGBQ-CQR-G3` | `PREREGISTERED_LOCKED` | No |
+| `NOBITEX-R1-NGBOOST-1h-04` | 1h | 4 | `HGBQ-CQR-G3` | `PREREGISTERED_LOCKED` | No |
+| `NOBITEX-R1-NGBOOST-1h-05` | 1h | 5 | `HGBQ-CQR-G3` | `PREREGISTERED_LOCKED` | No |
+| `NOBITEX-R1-NGBOOST-1h-06` | 1h | 6 | `HGBQ-CQR-G3` | `PREREGISTERED_LOCKED` | No |
+| `NOBITEX-R1-NGBOOST-1h-07` | 1h | 7 | `HGBQ-CQR-G3` | `PREREGISTERED_LOCKED` | No |
+| `NOBITEX-R1-NGBOOST-1h-08` | 1h | 8 | `HGBQ-CQR-G3` | `PREREGISTERED_LOCKED` | No |
+| `NOBITEX-R1-NGBOOST-1h-09` | 1h | 9 | `HGBQ-CQR-G3` | `PREREGISTERED_LOCKED` | No |
+| `NOBITEX-R1-NGBOOST-1h-10` | 1h | 10 | `HGBQ-CQR-G3` | `PREREGISTERED_LOCKED` | No |
+| `NOBITEX-R1-NGBOOST-4h-01` | 4h | 1 | `HGBQ-CQR-G3` | `PREREGISTERED_LOCKED` | No |
+| `NOBITEX-R1-NGBOOST-4h-02` | 4h | 2 | `HGBQ-CQR-G3` | `PREREGISTERED_LOCKED` | No |
+| `NOBITEX-R1-NGBOOST-4h-03` | 4h | 3 | `HGBQ-CQR-G3` | `PREREGISTERED_LOCKED` | No |
+| `NOBITEX-R1-NGBOOST-4h-04` | 4h | 4 | `HGBQ-CQR-G3` | `PREREGISTERED_LOCKED` | No |
+| `NOBITEX-R1-NGBOOST-4h-05` | 4h | 5 | `HGBQ-CQR-G3` | `PREREGISTERED_LOCKED` | No |
+| `NOBITEX-R1-NGBOOST-4h-06` | 4h | 6 | `HGBQ-CQR-G3` | `PREREGISTERED_LOCKED` | No |
+| `NOBITEX-R1-NGBOOST-4h-07` | 4h | 7 | `HGBQ-CQR-G3` | `PREREGISTERED_LOCKED` | No |
+| `NOBITEX-R1-NGBOOST-4h-08` | 4h | 8 | `HGBQ-CQR-G3` | `PREREGISTERED_LOCKED` | No |
+| `NOBITEX-R1-NGBOOST-4h-09` | 4h | 9 | `HGBQ-CQR-G3` | `PREREGISTERED_LOCKED` | No |
+| `NOBITEX-R1-NGBOOST-4h-10` | 4h | 10 | `HGBQ-CQR-G3` | `PREREGISTERED_LOCKED` | No |
+| `NOBITEX-R1-NGBOOST-24h-01` | 24h | 1 | `HGBQ-CQR-G3` | `PREREGISTERED_LOCKED` | No |
+| `NOBITEX-R1-NGBOOST-24h-02` | 24h | 2 | `HGBQ-CQR-G3` | `PREREGISTERED_LOCKED` | No |
+| `NOBITEX-R1-NGBOOST-24h-03` | 24h | 3 | `HGBQ-CQR-G3` | `PREREGISTERED_LOCKED` | No |
+| `NOBITEX-R1-NGBOOST-24h-04` | 24h | 4 | `HGBQ-CQR-G3` | `PREREGISTERED_LOCKED` | No |
+| `NOBITEX-R1-NGBOOST-24h-05` | 24h | 5 | `HGBQ-CQR-G3` | `PREREGISTERED_LOCKED` | No |
+| `NOBITEX-R1-NGBOOST-24h-06` | 24h | 6 | `HGBQ-CQR-G3` | `PREREGISTERED_LOCKED` | No |
+| `NOBITEX-R1-NGBOOST-24h-07` | 24h | 7 | `HGBQ-CQR-G3` | `PREREGISTERED_LOCKED` | No |
+| `NOBITEX-R1-NGBOOST-24h-08` | 24h | 8 | `HGBQ-CQR-G3` | `PREREGISTERED_LOCKED` | No |
+| `NOBITEX-R1-NGBOOST-24h-09` | 24h | 9 | `HGBQ-CQR-G3` | `PREREGISTERED_LOCKED` | No |
+| `NOBITEX-R1-NGBOOST-24h-10` | 24h | 10 | `HGBQ-CQR-G3` | `PREREGISTERED_LOCKED` | No |
+
