@@ -83,3 +83,13 @@ def test_cost_equality_abstains() -> None:
     assert ledger["signal_count_above_lower_bound"] == 0
     assert ledger["abstention_count"] == 2
     assert ledger["trade_count"] == 0
+
+
+def test_constant_zero_volume_uses_neutral_zscore_without_backfilling_warmup() -> None:
+    frame = synthetic_frame(64)
+    frame["volume"] = 0.0
+    features = build_features(frame)
+
+    assert features["volume_zscore_24"].iloc[:23].isna().all()
+    assert features["volume_zscore_24"].iloc[23:].eq(0.0).all()
+    assert features["log_volume_change_1"].iloc[1:].eq(0.0).all()

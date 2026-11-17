@@ -57,7 +57,7 @@ FEATURE_CONTRACT = "\n".join(
         "true_range=max(high-low,abs(high-prev_close),abs(low-prev_close))",
         "atr_fraction_14=Wilder_RMA(true_range,14)/close",
         "log_volume_change_1=log1p(volume[t])-log1p(volume[t-1])",
-        "volume_zscore_24=trailing_zscore(volume,24,ddof=0); zero_std=missing",
+        "volume_zscore_24=trailing_zscore(volume,24,ddof=0); constant_window=0; warmup=missing",
         "hour_sin_cos=2pi*(UTC_hour+UTC_minute/60)/24",
         "weekday_sin_cos=2pi*UTC_dayofweek/7; Monday=0",
         "all rolling features are right-aligned and use closed bars through t only",
@@ -220,7 +220,8 @@ def build_features(frame: pd.DataFrame) -> pd.DataFrame:
 
     volume_mean = volume.rolling(window=24, min_periods=24).mean()
     volume_std = volume.rolling(window=24, min_periods=24).std(ddof=0)
-    volume_std = volume_std.where(volume_std > 0.0)
+    volume_zscore = (volume - volume_mean) / volume_std
+    volume_zscore = volume_zscore.mask(volume_std.eq(0.0), 0.0)
 
     timestamp = pd.DatetimeIndex(frame["timestamp"])
     time_of_day = timestamp.hour.to_numpy(dtype=np.float64) + (
@@ -241,7 +242,7 @@ def build_features(frame: pd.DataFrame) -> pd.DataFrame:
         "range_fraction_1": (high - low) / close,
         "atr_fraction_14": _wilder_atr_fraction(frame),
         "log_volume_change_1": np.log1p(volume).diff(1),
-        "volume_zscore_24": (volume - volume_mean) / volume_std,
+        "volume_zscore_24": volume_zscore,
         "hour_sin": np.sin(2.0 * np.pi * time_of_day / 24.0),
         "hour_cos": np.cos(2.0 * np.pi * time_of_day / 24.0),
         "weekday_sin": np.sin(2.0 * np.pi * weekday / 7.0),
