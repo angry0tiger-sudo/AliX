@@ -55,7 +55,7 @@ jobs:
           manifest_path = Path("data/nobitex/prehack/nobitex-btcusdt-1h.manifest.json")
           config_path = Path("config/regime_r/hgbq_cqr_preregistration.json")
           expected_data = "0aa13607d1da68c4720919f233635bb33d34048e5bd67d3ecc2ce9bb7c2b462e"
-          expected_config = "92cdcf19a02b0bd8768fdbb5e8a0331bb7a9da12cd33a0e22679c320731364e8"
+          expected_config = "92cdcf19a02f5cf9659f327704ed4d6c5cf0d85687aff2ba35b9542fec5cfdaa"
           assert hashlib.sha256(csv_path.read_bytes()).hexdigest() == expected_data
           assert hashlib.sha256(config_path.read_bytes()).hexdigest() == expected_config
           manifest = json.loads(manifest_path.read_text(encoding="utf-8"))

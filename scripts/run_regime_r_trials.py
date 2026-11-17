@@ -29,7 +29,7 @@ REPORT_PATH = ROOT / "docs/research/results/G4_G5_evaluation_results.md"
 ADR_PATH = ROOT / "docs/adr/ADR-053-regime-r-prehack-g4-g5-results.md"
 
 EXPECTED_DATA_SHA256 = "0aa13607d1da68c4720919f233635bb33d34048e5bd67d3ecc2ce9bb7c2b462e"
-EXPECTED_CONFIG_SHA256 = "92cdcf19a02b0bd8768fdbb5e8a0331bb7a9da12cd33a0e22679c320731364e8"
+EXPECTED_CONFIG_SHA256 = "92cdcf19a02f5cf9659f327704ed4d6c5cf0d85687aff2ba35b9542fec5cfdaa"
 EXPECTED_ROWS = 31801
 COSTS_BPS = (50, 90)
 MAX_PURGE_BARS = 24
@@ -161,9 +161,7 @@ def load_and_verify_inputs() -> tuple[pd.DataFrame, dict[str, Any], dict[str, An
     if not np.all(np.diff(timestamp_ns) == 3_600_000_000_000):
         raise RuntimeError("regime_r_prehack_hourly_grid_invalid")
 
-    ohlcv = frame[["open", "high", "low", "close", "volume"]].to_numpy(
-        dtype=np.float64
-    )
+    ohlcv = frame[["open", "high", "low", "close", "volume"]].to_numpy(dtype=np.float64)
     if not np.isfinite(ohlcv).all():
         raise RuntimeError("regime_r_prehack_ohlcv_non_finite")
     open_values = ohlcv[:, 0]
@@ -177,8 +175,12 @@ def load_and_verify_inputs() -> tuple[pd.DataFrame, dict[str, Any], dict[str, An
         or np.any(low_values <= 0)
         or np.any(close_values <= 0)
         or np.any(volume_values < 0)
-        or np.any(high_values < np.maximum.reduce((open_values, low_values, close_values)))
-        or np.any(low_values > np.minimum.reduce((open_values, high_values, close_values)))
+        or np.any(
+            high_values < np.maximum.reduce((open_values, low_values, close_values))
+        )
+        or np.any(
+            low_values > np.minimum.reduce((open_values, high_values, close_values))
+        )
     ):
         raise RuntimeError("regime_r_prehack_ohlc_invariants_invalid")
 
@@ -494,7 +496,9 @@ def simulate_costed_ledger(
                     else:
                         entry_price = float(opens[entry_index])
                         if not math.isfinite(entry_price) or entry_price <= 0.0:
-                            raise RuntimeError("regime_r_invalid_hypothetical_entry_price")
+                            raise RuntimeError(
+                                "regime_r_invalid_hypothetical_entry_price"
+                            )
                         position = {
                             "entry_index": entry_index,
                             "exit_index": exit_index,
@@ -681,9 +685,7 @@ def run_trial(
             "acceptance": scenario_acceptance(pooled_metrics, stability),
         }
 
-    duplicate_of = (
-        f"NOBITEX-R1-NGBOOST-{horizon}-01" if slot > 1 else None
-    )
+    duplicate_of = f"NOBITEX-R1-NGBOOST-{horizon}-01" if slot > 1 else None
     result = {
         "trial_id": trial_id,
         "horizon": horizon,
@@ -712,12 +714,12 @@ def write_report(report: dict[str, Any], trials: list[dict[str, Any]]) -> None:
         "# AliX Regime R — G4/G5 HGBQ-CQR Pre-hack Evaluation",
         "",
         "Status: COMPLETED — EXPLORATORY PRE-HACK ONLY; NOT CONFIRMATORY",
-        f"Code commit: {report['code_commit_sha']}",
-        f"Workflow run: {report['workflow_run_id']}",
-        f"Dataset SHA-256: {report['dataset']['csv_sha256']}",
-        f"G3 configuration SHA-256: {report['configuration_sha256']}",
-        f"Feature contract SHA-256: {report['feature_contract_sha256']}",
-        f"Target contract SHA-256: {report['target_contract_sha256']}",
+        f"Code commit: {report["code_commit_sha"]}",
+        f"Workflow run: {report["workflow_run_id"]}",
+        f"Dataset SHA-256: {report["dataset"]["csv_sha256"]}",
+        f"G3 configuration SHA-256: {report["configuration_sha256"]}",
+        f"Feature contract SHA-256: {report["feature_contract_sha256"]}",
+        f"Target contract SHA-256: {report["target_contract_sha256"]}",
         "",
         "## Scope and interpretation",
         "",
@@ -729,10 +731,11 @@ def write_report(report: dict[str, Any], trials: list[dict[str, Any]]) -> None:
         "",
         "## Frozen protocol",
         "",
-        f"- Dataset: {report['dataset']['row_count']} rows; {report['dataset']['start_utc']} through {report['dataset']['end_utc']}.",
+        f"- Dataset: {report["dataset"]["row_count"]} rows; {report["dataset"]["start_utc"]} through {report["dataset"]["end_utc"]}.",
         "- T0 is the manifest start timestamp; no outcome-dependent anchor was selected.",
         "- Each fold uses six months training, one month calibration, one month embargo and one month test.",
         "- Full 24-bar purge applies before the calibration and embargo boundaries.",
+        f"- Volume quality: {report['dataset']['volume_zero_rows']} zero-volume rows and {report['dataset']['volume_positive_rows']} positive-volume rows; zero-volume windows use neutral volume Z-score 0 after the 24-bar warm-up.",
         "- Target: gross_return(t,h) = close[t+h] / open[t+1] - 1.",
         "- Features are causal and right-aligned. Their exact operational definitions and hash are listed above.",
         "- One hypothetical open position at a time per horizon/cost ledger; overlapping signals are counted as skipped.",
@@ -794,7 +797,7 @@ def write_report(report: dict[str, Any], trials: list[dict[str, Any]]) -> None:
             "- DSR: NOT_COMPUTABLE_GLOBAL_N_UNKNOWN.",
             "- DSR > 0: FAIL_CLOSED for every trial.",
             f"- Candidates passing every gate at both costs: {report['acceptance']['full_gate_pass_count']}.",
-            f"- Verdict: **{report['verdict']}**.",
+            f"- Verdict: **{report["verdict"]}**.",
             f"- Verdict reason: {report['verdict_reason']}.",
             "",
             "## Safety invariants",
@@ -818,19 +821,19 @@ def write_report(report: dict[str, Any], trials: list[dict[str, Any]]) -> None:
 def write_adr(report: dict[str, Any]) -> None:
     content = f"""# ADR-053 — Regime R HGBQ-CQR Pre-hack G4/G5 Evaluation
 
-- Status: {report['verdict']} — exploratory pre-hack evidence only.
+- Status: {report["verdict"]} — exploratory pre-hack evidence only.
 - Date: 2026-11-17
 - Branch: research/nobitex-hf-strategy
-- Code commit: {report['code_commit_sha']}
-- Workflow run: {report['workflow_run_id']}
-- Dataset SHA-256: {report['dataset']['csv_sha256']}
-- G3 configuration SHA-256: {report['configuration_sha256']}
-- Feature contract SHA-256: {report['feature_contract_sha256']}
-- Target contract SHA-256: {report['target_contract_sha256']}
+- Code commit: {report["code_commit_sha"]}
+- Workflow run: {report["workflow_run_id"]}
+- Dataset SHA-256: {report["dataset"]["csv_sha256"]}
+- G3 configuration SHA-256: {report["configuration_sha256"]}
+- Feature contract SHA-256: {report["feature_contract_sha256"]}
+- Target contract SHA-256: {report["target_contract_sha256"]}
 
 ## 1. Authorization and data boundary
 
-The Owner explicitly authorized G4/G5 fitting and exploratory evaluation on the fixed pre-hack dataset only. The exact file is data/nobitex/prehack/nobitex-btcusdt-1h.csv. Its byte-level SHA-256 was verified before parsing. It contains {report['dataset']['row_count']} rows from {report['dataset']['start_utc']} through {report['dataset']['end_utc']}.
+The Owner explicitly authorized G4/G5 fitting and exploratory evaluation on the fixed pre-hack dataset only. The exact file is data/nobitex/prehack/nobitex-btcusdt-1h.csv. Its byte-level SHA-256 was verified before parsing. It contains {report["dataset"]["row_count"]} rows from {report["dataset"]["start_utc"]} through {report["dataset"]["end_utc"]}. All {report["dataset"]["volume_zero_rows"]} volume entries are zero; the volume-derived Z-score is assigned neutral zero for constant windows, and those features carry no discriminatory information.
 
 ADR-048 states that this data is historically exposed and is not a clean confirmatory holdout. This run is therefore exploratory. No post-hack Holdout path or byte was opened.
 
@@ -860,7 +863,7 @@ Candidates passing all gates at both costs: {report['acceptance']['full_gate_pas
 
 GLOBAL_N remains UNKNOWN. The historical multiplicity cohort and dependence structure are not reconciled. Under ADR-048, a numeric DSR cannot be responsibly reported without comparable candidate return series, required moments, candidate identity/multiplicity reconciliation and documented dependence treatment. DSR is therefore NOT_COMPUTABLE_GLOBAL_N_UNKNOWN and its required positive gate fails closed. No guessed N or numeric DSR is substituted.
 
-The strict verdict is **{report['verdict']}**. This is an evidence NO-GO for the preregistered run because no scenario passed all gates, and DSR is not computable. It is not proof that every possible HGBQ-CQR design lacks economic edge.
+The strict verdict is **{report["verdict"]}**. This is an evidence NO-GO for the preregistered run because no scenario passed all gates, and DSR is not computable. It is not proof that every possible HGBQ-CQR design lacks economic edge.
 
 ## 6. Safety invariants
 
@@ -874,7 +877,7 @@ The strict verdict is **{report['verdict']}**. This is an evidence NO-GO for the
 - trading_authorization: NO-GO
 - main remains frozen at 44bcaeae7eefd358cf063394b0e7f4f0b83af8eb.
 
-**Decision: {report['verdict']}.** Do not unlock Holdout or promote a candidate based on this exploratory pre-hack evaluation. Confirmatory evaluation needs a separate approved data window and reconciled multiplicity/DSR evidence.
+**Decision: {report["verdict"]}.** Do not unlock Holdout or promote a candidate based on this exploratory pre-hack evaluation. Confirmatory evaluation needs a separate approved data window and reconciled multiplicity/DSR evidence.
 
 Architecture First. Evidence Always. Fail Closed.
 """

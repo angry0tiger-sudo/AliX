@@ -376,7 +376,6 @@ class HGBQCQRAdapter:
         validate_distribution_forecast(forecast)
         return forecast
 
-
     def predict_batch_intervals(
         self,
         X_synthetic: ArrayLike,
