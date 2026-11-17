@@ -315,8 +315,16 @@ def build_folds(
             raise RuntimeError("regime_r_fold_boundary_outside_dataset")
         if indices[-1] > len(frame):
             raise RuntimeError("regime_r_fold_test_end_outside_dataset")
-        if not all(left < right for left, right in zip(indices, indices[1:])):
-            raise RuntimeError("regime_r_fold_boundaries_not_strictly_ordered")
+        interval_pairs = ((0, 1), (2, 3), (4, 5), (6, 7))
+        for start_index, end_index in interval_pairs:
+            if indices[start_index] >= indices[end_index]:
+                raise RuntimeError("regime_r_fold_interval_empty")
+        if not (
+            indices[1] == indices[2]
+            and indices[3] == indices[4]
+            and indices[5] == indices[6]
+        ):
+            raise RuntimeError("regime_r_fold_intervals_not_contiguous")
 
         folds.append(
             Fold(

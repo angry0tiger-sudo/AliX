@@ -93,3 +93,30 @@ def test_constant_zero_volume_uses_neutral_zscore_without_backfilling_warmup() -
     assert features["volume_zscore_24"].iloc[:23].isna().all()
     assert features["volume_zscore_24"].iloc[23:].eq(0.0).all()
     assert features["log_volume_change_1"].iloc[1:].eq(0.0).all()
+
+
+def test_registered_fold_boundaries_allow_contiguous_shared_edges() -> None:
+    import json
+
+    from scripts.run_regime_r_trials import build_folds
+
+    config_path = (
+        Path(__file__).resolve().parents[3]
+        / "config"
+        / "regime_r"
+        / "hgbq_cqr_preregistration.json"
+    )
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    anchor = pd.Timestamp("2021-10-31T20:30:00Z")
+    end = anchor + pd.DateOffset(months=16)
+    timestamps = pd.date_range(anchor, end=end, freq="h")
+    frame = pd.DataFrame({"timestamp": timestamps})
+
+    folds = build_folds(frame, {"start_utc": anchor.isoformat()}, config)
+
+    assert len(folds) == 3
+    for fold in folds:
+        assert fold.train_start < fold.train_end == fold.calibration_start
+        assert fold.calibration_start < fold.calibration_end == fold.embargo_start
+        assert fold.embargo_start < fold.embargo_end == fold.test_start
+        assert fold.test_start < fold.test_end
