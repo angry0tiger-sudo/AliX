@@ -869,7 +869,7 @@ The ten IDs within each horizon have identical frozen model settings, seed, feat
 
 Per-trial, per-cost and per-fold NetPF, MaxDD, completed trades, signal attrition and fold stability are recorded in docs/research/results/G4_G5_evaluation_results.md and the run artifact.
 
-Candidates passing all gates at both costs: {report['acceptance']['full_gate_pass_count']}.
+Candidates passing all gates at both costs: {report["acceptance"]["full_gate_pass_count"]}.
 
 ## 5. DSR and verdict
 
