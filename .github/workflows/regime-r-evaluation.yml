@@ -1,17 +1,9 @@
 name: Regime R HGBQ-CQR pre-hack G4/G5 evaluation
 
 on:
+  # Economic fitting is manual-only after the completed exploratory NO-GO run.
+  # Ordinary engineering pushes must never retrigger the pre-hack evaluation.
   workflow_dispatch:
-  push:
-    branches:
-      - research/nobitex-hf-strategy
-    paths:
-      - ".github/workflows/regime-r-evaluation.yml"
-      - "scripts/run_regime_r_trials.py"
-      - "research/regime_r/ngboost_cqr/**"
-      - "config/regime_r/hgbq_cqr_preregistration.json"
-      - "data/nobitex/prehack/nobitex-btcusdt-1h.csv"
-      - "data/nobitex/prehack/nobitex-btcusdt-1h.manifest.json"
 
 permissions:
   contents: read
