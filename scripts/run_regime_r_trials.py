@@ -742,7 +742,9 @@ def _summarize_numeric_values(values: FloatArray) -> dict[str, int | float]:
 def _extract_forecast_diagnostic_arrays(
     forecasts: tuple[DistributionForecast, ...],
     intervals: tuple[ConformalInterval, ...],
-) -> tuple[FloatArray, FloatArray, FloatArray, FloatArray, FloatArray, FloatArray, FloatArray]:
+) -> tuple[
+    FloatArray, FloatArray, FloatArray, FloatArray, FloatArray, FloatArray, FloatArray
+]:
     """Validate and extract raw quantiles plus calibrated interval components."""
     if not forecasts or len(forecasts) != len(intervals):
         raise RuntimeError("regime_r_diagnostic_forecast_interval_count_mismatch")
