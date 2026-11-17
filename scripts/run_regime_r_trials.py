@@ -739,28 +739,56 @@ def _summarize_numeric_values(values: FloatArray) -> dict[str, int | float]:
     }
 
 
+def _extract_quantile_diagnostic_arrays(
+    forecasts: tuple[DistributionForecast, ...],
+) -> tuple[FloatArray, FloatArray, FloatArray]:
+    """Extract and validate the raw lower, median and upper quantile vectors."""
+    if not forecasts:
+        raise RuntimeError("regime_r_diagnostic_forecasts_empty")
+    lower = np.asarray([item.quantile_values[0] for item in forecasts], dtype=np.float64)
+    median = np.asarray([item.quantile_values[1] for item in forecasts], dtype=np.float64)
+    upper = np.asarray([item.quantile_values[2] for item in forecasts], dtype=np.float64)
+    if any(not np.isfinite(values).all() for values in (lower, median, upper)):
+        raise RuntimeError("regime_r_diagnostic_quantiles_non_finite")
+    return lower, median, upper
+
+
+def _extract_interval_diagnostic_arrays(
+    intervals: tuple[ConformalInterval, ...],
+) -> tuple[FloatArray, FloatArray, FloatArray, FloatArray]:
+    """Extract and validate calibrated bounds and conformity corrections."""
+    if not intervals:
+        raise RuntimeError("regime_r_diagnostic_intervals_empty")
+    lower_bounds = np.asarray(
+        [item.lower_bound for item in intervals], dtype=np.float64
+    )
+    upper_bounds = np.asarray(
+        [item.upper_bound for item in intervals], dtype=np.float64
+    )
+    lower_corrections = np.asarray(
+        [item.lower_correction for item in intervals], dtype=np.float64
+    )
+    upper_corrections = np.asarray(
+        [item.upper_correction for item in intervals], dtype=np.float64
+    )
+    arrays = (lower_bounds, upper_bounds, lower_corrections, upper_corrections)
+    if any(not np.isfinite(values).all() for values in arrays):
+        raise RuntimeError("regime_r_diagnostic_interval_components_non_finite")
+    return lower_bounds, upper_bounds, lower_corrections, upper_corrections
+
+
 def _extract_forecast_diagnostic_arrays(
     forecasts: tuple[DistributionForecast, ...],
     intervals: tuple[ConformalInterval, ...],
 ) -> tuple[
     FloatArray, FloatArray, FloatArray, FloatArray, FloatArray, FloatArray, FloatArray
 ]:
-    """Validate and extract raw quantiles plus calibrated interval components."""
-    if not forecasts or len(forecasts) != len(intervals):
+    """Validate batch sizes and return every forecast/interval diagnostic vector."""
+    if len(forecasts) != len(intervals):
         raise RuntimeError("regime_r_diagnostic_forecast_interval_count_mismatch")
-
-    arrays = (
-        np.asarray([item.quantile_values[0] for item in forecasts], dtype=np.float64),
-        np.asarray([item.quantile_values[1] for item in forecasts], dtype=np.float64),
-        np.asarray([item.quantile_values[2] for item in forecasts], dtype=np.float64),
-        np.asarray([item.lower_bound for item in intervals], dtype=np.float64),
-        np.asarray([item.upper_bound for item in intervals], dtype=np.float64),
-        np.asarray([item.lower_correction for item in intervals], dtype=np.float64),
-        np.asarray([item.upper_correction for item in intervals], dtype=np.float64),
-    )
-    if any(values.ndim != 1 or not np.isfinite(values).all() for values in arrays):
-        raise RuntimeError("regime_r_diagnostic_values_non_finite")
-    return arrays
+    quantiles = _extract_quantile_diagnostic_arrays(forecasts)
+    calibrated = _extract_interval_diagnostic_arrays(intervals)
+    return (*quantiles, *calibrated)
 
 
 def _summarize_lower_bound_cost_distances(
