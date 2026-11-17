@@ -803,7 +803,7 @@ def write_report(report: dict[str, Any], trials: list[dict[str, Any]]) -> None:
             "",
             f"- Registered IDs: {report['trial_counts']['registered_slots']}.",
             f"- Unique model configurations: {report['trial_counts']['unique_candidate_configurations']}.",
-            f"- Exact duplicate slots: {report['trial_counts']['duplicate_slots']}.",
+            f"- Exact duplicate slots: {report["trial_counts"]["duplicate_slots"]}.",
             f"- Fit calls: {report['trial_counts']['fit_calls']}.",
             "- GLOBAL_N: UNKNOWN.",
             "- DSR: NOT_COMPUTABLE_GLOBAL_N_UNKNOWN.",
@@ -958,8 +958,12 @@ def main() -> int:
             "path": "data/nobitex/prehack/nobitex-btcusdt-1h.csv",
             "csv_sha256": EXPECTED_DATA_SHA256,
             "row_count": len(frame),
-            "volume_zero_rows": int(np.count_nonzero(frame["volume"].to_numpy(dtype=np.float64) == 0.0)),
-            "volume_positive_rows": int(np.count_nonzero(frame["volume"].to_numpy(dtype=np.float64) > 0.0)),
+            "volume_zero_rows": int(
+                np.count_nonzero(frame["volume"].to_numpy(dtype=np.float64) == 0.0)
+            ),
+            "volume_positive_rows": int(
+                np.count_nonzero(frame["volume"].to_numpy(dtype=np.float64) > 0.0)
+            ),
             "start_utc": frame_start,
             "end_utc": frame_end,
             "scope": "PRE_HACK_NOBITEX_ONLY_EXPLORATORY",
