@@ -2,6 +2,12 @@ name: Four-Arm Quality Preflight
 
 on:
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      target_sha:
+        description: "Exact commit SHA to validate when called by dependency lock automation."
+        required: true
+        type: string
   push:
     paths:
       - "scripts/**"
@@ -14,6 +20,8 @@ on:
       - "config/experiment/four_arm_execution_lock.json"
       - "docs/research/preregistration/contracts/**"
       - ".github/workflows/ci.yml"
+      - "requirements.txt"
+      - "requirements.lock"
 
 permissions:
   contents: read
@@ -30,6 +38,7 @@ jobs:
       - name: Checkout exact commit
         uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.target_sha || github.sha }}
           persist-credentials: false
 
       - name: Set up Python 3.12
@@ -166,7 +175,7 @@ jobs:
 
           report = {
               "schema_version": "alix.four-arm-quality-preflight.v1",
-              "commit_sha": "${{ github.sha }}",
+              "commit_sha": "${{ inputs.target_sha || github.sha }}",
               "workflow_run_id": "${{ github.run_id }}",
               "workflow_run_attempt": "${{ github.run_attempt }}",
               "pytest_no_early_abort_flag": "--maxfail=0",
@@ -189,7 +198,10 @@ jobs:
 
       - name: Enforce complete preflight verdict
         if: always()
+        env:
+          EXPECTED_COMMIT_SHA: ${{ inputs.target_sha || github.sha }}
         run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT_SHA"
           python - <<'PY'
           import json
           import os
@@ -225,7 +237,7 @@ jobs:
               for item in checks
               if item.get("exit_code") != 0 or item.get("status") != "PASS"
           ]
-          if report.get("commit_sha") != os.environ["GITHUB_SHA"]:
+          if report.get("commit_sha") != os.environ["EXPECTED_COMMIT_SHA"]:
               raise SystemExit("preflight_commit_sha_mismatch")
           if failed or report.get("all_checks_passed") is not True:
               print(json.dumps({"failed_checks": failed}, indent=2, sort_keys=True))
@@ -238,7 +250,7 @@ jobs:
         continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
-          name: quality-preflight-${{ github.sha }}
+          name: quality-preflight-${{ inputs.target_sha || github.sha }}
           path: preflight-output/
           if-no-files-found: error
           retention-days: 30
