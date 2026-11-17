@@ -24,6 +24,7 @@ jobs:
     permissions:
       contents: read
     env:
+      PYTHONPATH: ${{ github.workspace }}
       ALIX_DRY_RUN: "true"
       ALIX_ALLOW_LIVE_TRADING: "false"
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
