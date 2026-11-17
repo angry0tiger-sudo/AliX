@@ -739,67 +739,37 @@ def _summarize_numeric_values(values: FloatArray) -> dict[str, int | float]:
     }
 
 
-def summarize_forecast_diagnostics(
+def _extract_forecast_diagnostic_arrays(
     forecasts: tuple[DistributionForecast, ...],
     intervals: tuple[ConformalInterval, ...],
-) -> dict[str, Any]:
-    """Summarize raw quantiles and calibrated CQR bounds without trading."""
+) -> tuple[FloatArray, FloatArray, FloatArray, FloatArray, FloatArray, FloatArray, FloatArray]:
+    """Validate and extract raw quantiles plus calibrated interval components."""
     if not forecasts or len(forecasts) != len(intervals):
         raise RuntimeError("regime_r_diagnostic_forecast_interval_count_mismatch")
 
-    lower = np.asarray(
-        [forecast.quantile_values[0] for forecast in forecasts],
-        dtype=np.float64,
+    arrays = (
+        np.asarray([item.quantile_values[0] for item in forecasts], dtype=np.float64),
+        np.asarray([item.quantile_values[1] for item in forecasts], dtype=np.float64),
+        np.asarray([item.quantile_values[2] for item in forecasts], dtype=np.float64),
+        np.asarray([item.lower_bound for item in intervals], dtype=np.float64),
+        np.asarray([item.upper_bound for item in intervals], dtype=np.float64),
+        np.asarray([item.lower_correction for item in intervals], dtype=np.float64),
+        np.asarray([item.upper_correction for item in intervals], dtype=np.float64),
     )
-    median = np.asarray(
-        [forecast.quantile_values[1] for forecast in forecasts],
-        dtype=np.float64,
-    )
-    upper = np.asarray(
-        [forecast.quantile_values[2] for forecast in forecasts],
-        dtype=np.float64,
-    )
-    lower_bounds = np.asarray(
-        [interval.lower_bound for interval in intervals],
-        dtype=np.float64,
-    )
-    upper_bounds = np.asarray(
-        [interval.upper_bound for interval in intervals],
-        dtype=np.float64,
-    )
-    lower_corrections = np.asarray(
-        [interval.lower_correction for interval in intervals],
-        dtype=np.float64,
-    )
-    upper_corrections = np.asarray(
-        [interval.upper_correction for interval in intervals],
-        dtype=np.float64,
-    )
-    conformal_widths = upper_bounds - lower_bounds
-    quantile_widths = upper - lower
-
-    summaries = (
-        lower,
-        median,
-        upper,
-        lower_bounds,
-        upper_bounds,
-        lower_corrections,
-        upper_corrections,
-        conformal_widths,
-        quantile_widths,
-    )
-    if any(not np.isfinite(values).all() for values in summaries):
+    if any(values.ndim != 1 or not np.isfinite(values).all() for values in arrays):
         raise RuntimeError("regime_r_diagnostic_values_non_finite")
-    if np.any(conformal_widths < 0.0) or np.any(quantile_widths < 0.0):
-        raise RuntimeError("regime_r_diagnostic_interval_width_negative")
+    return arrays
 
-    positive_medians = int(np.count_nonzero(median > 0.0))
-    lower_bound_to_cost: dict[str, dict[str, int | float]] = {}
+
+def _summarize_lower_bound_cost_distances(
+    lower_bounds: FloatArray,
+) -> dict[str, dict[str, int | float]]:
+    """Summarize signed calibrated-lower-bound distance from each frozen cost."""
+    result: dict[str, dict[str, int | float]] = {}
     for cost_bps in COSTS_BPS:
-        cost_fraction = cost_bps / 10_000.0
-        distances = lower_bounds - cost_fraction
-        lower_bound_to_cost[str(cost_bps)] = {
+        distances = lower_bounds - cost_bps / 10_000.0
+        count_above = int(np.count_nonzero(distances > 0.0))
+        result[str(cost_bps)] = {
             "cost_bps": int(cost_bps),
             "mean_distance_fraction": float(np.mean(distances)),
             "std_distance_fraction": float(np.std(distances, ddof=0)),
@@ -807,12 +777,37 @@ def summarize_forecast_diagnostics(
             "std_distance_bps": float(np.std(distances, ddof=0) * 10_000.0),
             "min_distance_bps": float(np.min(distances) * 10_000.0),
             "max_distance_bps": float(np.max(distances) * 10_000.0),
-            "count_above_cost": int(np.count_nonzero(distances > 0.0)),
-            "percent_above_cost": float(
-                np.count_nonzero(distances > 0.0) / distances.size * 100.0
-            ),
+            "count_above_cost": count_above,
+            "percent_above_cost": float(count_above / distances.size * 100.0),
         }
+    return result
 
+
+def summarize_forecast_diagnostics(
+    forecasts: tuple[DistributionForecast, ...],
+    intervals: tuple[ConformalInterval, ...],
+) -> dict[str, Any]:
+    """Summarize raw quantiles and calibrated CQR bounds without trading."""
+    (
+        lower,
+        median,
+        upper,
+        lower_bounds,
+        upper_bounds,
+        lower_corrections,
+        upper_corrections,
+    ) = _extract_forecast_diagnostic_arrays(forecasts, intervals)
+    conformal_widths = upper_bounds - lower_bounds
+    quantile_widths = upper - lower
+    if (
+        np.any(conformal_widths < 0.0)
+        or np.any(quantile_widths < 0.0)
+        or not np.isfinite(conformal_widths).all()
+        or not np.isfinite(quantile_widths).all()
+    ):
+        raise RuntimeError("regime_r_diagnostic_interval_width_invalid")
+
+    positive_medians = int(np.count_nonzero(median > 0.0))
     return {
         "prediction_count": int(median.size),
         "lower_quantile": _summarize_numeric_values(lower),
@@ -826,7 +821,7 @@ def summarize_forecast_diagnostics(
             "count": positive_medians,
             "percentage": float(positive_medians / median.size * 100.0),
         },
-        "lower_bound_to_cost": lower_bound_to_cost,
+        "lower_bound_to_cost": _summarize_lower_bound_cost_distances(lower_bounds),
     }
 
 
