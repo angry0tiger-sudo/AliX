@@ -95,4 +95,5 @@ jobs:
           name: regime-r-g4-g5-diagnostics-prehack-${{ github.sha }}
           path: .artifacts/regime-r-g4-g5/regime-r-g4-g5-diagnostics.json
           if-no-files-found: error
+          include-hidden-files: true
           retention-days: 90
