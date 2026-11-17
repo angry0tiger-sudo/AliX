@@ -84,6 +84,6 @@ jobs:
           path: |
             .artifacts/regime-r-g4-g5/
             docs/research/results/G4_G5_evaluation_results.md
-            docs/adr/ADR-053-regime-r-prehack-g4-g5-results.md
+            ADR_PATH = ROOT / "ADR-053-regime-r-g4-g5-evaluation-results.md"
           if-no-files-found: warn
           retention-days: 90

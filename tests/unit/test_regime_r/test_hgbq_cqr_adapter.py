@@ -409,3 +409,27 @@ def test_batch_prediction_rejects_feature_width_mismatch() -> None:
         match="prediction_feature_width_mismatch",
     ):
         adapter.predict_batch_intervals(np.zeros((2, 2), dtype=np.float64))
+
+
+
+def test_ordered_quantile_views_rearrange_crossing_predictions() -> None:
+    from research.regime_r.ngboost_cqr.adapters import _OrderedQuantileView
+
+    class FixedModel:
+        n_features_in_ = 1
+
+        def __init__(self, value: float) -> None:
+            self.value = value
+
+        def predict(self, features: FloatArray) -> FloatArray:
+            return np.full(features.shape[0], self.value, dtype=np.float64)
+
+    models = (FixedModel(0.03), FixedModel(0.01), FixedModel(0.02))
+    features = np.zeros((3, 1), dtype=np.float64)
+    lower_view = _OrderedQuantileView(models, 0)
+    upper_view = _OrderedQuantileView(models, 2)
+    median_view = _OrderedQuantileView(models, 1)
+
+    assert np.all(lower_view.predict(features) == pytest.approx(0.01))
+    assert np.all(median_view.predict(features) == pytest.approx(0.02))
+    assert np.all(upper_view.predict(features) == pytest.approx(0.03))

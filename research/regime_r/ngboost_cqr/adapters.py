@@ -188,6 +188,62 @@ def _finite_numeric_value(value: object, error_code: str) -> float:
     return numeric_value
 
 
+
+class _OrderedQuantileView:
+    """Expose one column of a row-wise monotone rearrangement to MAPIE."""
+
+    def __init__(
+        self,
+        models: tuple[Any, Any, Any],
+        quantile_index: int,
+    ) -> None:
+        if quantile_index not in (0, 1, 2):
+            raise ContractViolation("ordered_quantile_view_index_invalid")
+        self._models = models
+        self._quantile_index = quantile_index
+        self.n_features_in_ = int(models[0].n_features_in_)
+
+    def fit(self, X: ArrayLike, y: ArrayLike) -> _OrderedQuantileView:
+        """Reject accidental fitting; the view is always used in MAPIE prefit mode."""
+        del X, y
+        raise ContractViolation("ordered_quantile_view_is_prefit_only")
+
+    def predict(self, X: ArrayLike) -> FloatArray:
+        """Return the selected ordered quantile after deterministic rearrangement."""
+        try:
+            features = np.asarray(X, dtype=np.float64)
+        except (TypeError, ValueError) as error:
+            raise ContractViolation("ordered_quantile_features_must_be_numeric") from error
+        if (
+            features.ndim != 2
+            or features.shape[0] < 1
+            or features.shape[1] != self.n_features_in_
+            or not np.isfinite(features).all()
+        ):
+            raise ContractViolation("ordered_quantile_features_invalid")
+        return _ordered_quantile_predictions(self._models, features)[
+            :, self._quantile_index
+        ]
+
+
+def _ordered_quantile_predictions(
+    models: tuple[Any, Any, Any],
+    features: FloatArray,
+) -> FloatArray:
+    """Rearrange independently fitted quantile predictions into monotone order."""
+    predictions = [
+        np.asarray(model.predict(features), dtype=np.float64)
+        for model in models
+    ]
+    expected_shape = (features.shape[0],)
+    if any(values.shape != expected_shape for values in predictions):
+        raise ContractViolation("hgbq_prediction_shape_invalid")
+    raw_values = np.column_stack(predictions)
+    if not np.isfinite(raw_values).all():
+        raise ContractViolation("hgbq_predictions_must_be_finite")
+    return np.asarray(np.sort(raw_values, axis=1), dtype=np.float64)
+
+
 class HGBQCQRAdapter:
     """Fit three HGB quantile learners and conformalize them with MAPIE CQR.
 
@@ -318,14 +374,20 @@ class HGBQCQRAdapter:
         median_model.fit(train_features, train_target)
         upper_model.fit(train_features, train_target)
 
+        fitted_models = (lower_model, median_model, upper_model)
+        ordered_estimators = (
+            _OrderedQuantileView(fitted_models, 0),
+            _OrderedQuantileView(fitted_models, 2),
+            _OrderedQuantileView(fitted_models, 1),
+        )
         conformalizer = ConformalizedQuantileRegressor(
-            estimator=[lower_model, upper_model, median_model],
+            estimator=ordered_estimators,
             confidence_level=self.confidence_level,
             prefit=True,
         )
         conformalizer.conformalize(calibration_features, calibration_target)
 
-        self._models = (lower_model, median_model, upper_model)
+        self._models = fitted_models
         self._conformalizer = conformalizer
         self._calibration_size = int(calibration_target.shape[0])
         return self
@@ -360,10 +422,10 @@ class HGBQCQRAdapter:
         """Return one ordered quantile-only forecast for a single feature row."""
         models, _, _ = self._fitted_components()
         features = self._single_feature_row(X_synthetic)
-        lower_model, median_model, upper_model = models
-        lower_value = float(lower_model.predict(features)[0])
-        median_value = float(median_model.predict(features)[0])
-        upper_value = float(upper_model.predict(features)[0])
+        ordered_values = _ordered_quantile_predictions(models, features)
+        lower_value, median_value, upper_value = (
+            float(value) for value in ordered_values[0]
+        )
 
         forecast = DistributionForecast(
             horizon=self.horizon,
@@ -386,15 +448,8 @@ class HGBQCQRAdapter:
         if features.shape[1] != models[0].n_features_in_:
             raise ContractViolation("prediction_feature_width_mismatch")
 
-        lower_values = np.asarray(models[0].predict(features), dtype=np.float64)
-        median_values = np.asarray(models[1].predict(features), dtype=np.float64)
-        upper_values = np.asarray(models[2].predict(features), dtype=np.float64)
+        ordered_values = _ordered_quantile_predictions(models, features)
         row_count = features.shape[0]
-        if any(
-            values.shape != (row_count,)
-            for values in (lower_values, median_values, upper_values)
-        ):
-            raise ContractViolation("hgbq_batch_prediction_shape_invalid")
 
         point_predictions, raw_intervals = conformalizer.predict_interval(
             features,
@@ -405,13 +460,7 @@ class HGBQCQRAdapter:
         intervals = np.asarray(raw_intervals, dtype=np.float64)
         if point_values.shape != (row_count,) or intervals.shape != (row_count, 2, 1):
             raise ContractViolation("mapie_cqr_prediction_shape_invalid")
-        if not (
-            np.isfinite(lower_values).all()
-            and np.isfinite(median_values).all()
-            and np.isfinite(upper_values).all()
-            and np.isfinite(point_values).all()
-            and np.isfinite(intervals).all()
-        ):
+        if not np.isfinite(point_values).all() or not np.isfinite(intervals).all():
             raise ContractViolation("mapie_cqr_prediction_must_be_finite")
 
         forecasts: list[DistributionForecast] = []
@@ -422,10 +471,8 @@ class HGBQCQRAdapter:
                 mean=None,
                 dispersion=None,
                 quantile_levels=self.quantile_levels,
-                quantile_values=(
-                    float(lower_values[index]),
-                    float(median_values[index]),
-                    float(upper_values[index]),
+                quantile_values=tuple(
+                    float(value) for value in ordered_values[index]
                 ),
                 output_semantics="quantile_summary",
             )

@@ -26,7 +26,7 @@ CSV_PATH = ROOT / "data/nobitex/prehack/nobitex-btcusdt-1h.csv"
 MANIFEST_PATH = ROOT / "data/nobitex/prehack/nobitex-btcusdt-1h.manifest.json"
 CONFIG_PATH = ROOT / "config/regime_r/hgbq_cqr_preregistration.json"
 REPORT_PATH = ROOT / "docs/research/results/G4_G5_evaluation_results.md"
-ADR_PATH = ROOT / "docs/adr/ADR-053-regime-r-prehack-g4-g5-results.md"
+ADR_PATH = ROOT / "docs/adr/ADR-053-regime-r-g4-g5-evaluation-results.md"
 
 EXPECTED_DATA_SHA256 = "0aa13607d1da68c4720919f233635bb33d34048e5bd67d3ecc2ce9bb7c2b462e"
 EXPECTED_CONFIG_SHA256 = "92cdcf19a02f5cf9659f327704ed4d6c5cf0d85687aff2ba35b9542fec5cfdaa"
