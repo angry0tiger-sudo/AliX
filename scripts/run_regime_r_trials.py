@@ -745,9 +745,15 @@ def _extract_quantile_diagnostic_arrays(
     """Extract and validate the raw lower, median and upper quantile vectors."""
     if not forecasts:
         raise RuntimeError("regime_r_diagnostic_forecasts_empty")
-    lower = np.asarray([item.quantile_values[0] for item in forecasts], dtype=np.float64)
-    median = np.asarray([item.quantile_values[1] for item in forecasts], dtype=np.float64)
-    upper = np.asarray([item.quantile_values[2] for item in forecasts], dtype=np.float64)
+    lower = np.asarray(
+        [item.quantile_values[0] for item in forecasts], dtype=np.float64
+    )
+    median = np.asarray(
+        [item.quantile_values[1] for item in forecasts], dtype=np.float64
+    )
+    upper = np.asarray(
+        [item.quantile_values[2] for item in forecasts], dtype=np.float64
+    )
     if any(not np.isfinite(values).all() for values in (lower, median, upper)):
         raise RuntimeError("regime_r_diagnostic_quantiles_non_finite")
     return lower, median, upper
