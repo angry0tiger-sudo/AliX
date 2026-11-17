@@ -1,5 +1,12 @@
-"""Regime R NGBoost + CQR research contracts (mock-only scaffolding)."""
+"""Regime R HGBQ-CQR adapter and pure forecast/decision contracts."""
 
+from research.regime_r.ngboost_cqr.adapters import (
+    CostGateDecision,
+    GateAction,
+    HGBQCQRAdapter,
+    evaluate_cost_gate,
+    evaluate_cost_scenarios,
+)
 from research.regime_r.ngboost_cqr.contracts import (
     COST_SCENARIOS_BPS,
     FEATURE_NAMES,
@@ -7,12 +14,14 @@ from research.regime_r.ngboost_cqr.contracts import (
     N_BUDGET,
     TRIAL_IDS,
     ConformalInterval,
+    ContractViolation,
     DistributionForecast,
     FeatureSnapshot,
     TargetWindow,
     make_cqr_interval,
     passes_cost_gate,
     target_gross_return,
+    validate_conformal_interval,
     validate_distribution_forecast,
     validate_feature_snapshot,
     validate_target_window,
@@ -26,12 +35,19 @@ __all__ = (
     "N_BUDGET",
     "TRIAL_IDS",
     "ConformalInterval",
+    "ContractViolation",
+    "CostGateDecision",
     "DistributionForecast",
     "FeatureSnapshot",
+    "GateAction",
+    "HGBQCQRAdapter",
     "TargetWindow",
+    "evaluate_cost_gate",
+    "evaluate_cost_scenarios",
     "make_cqr_interval",
     "passes_cost_gate",
     "target_gross_return",
+    "validate_conformal_interval",
     "validate_distribution_forecast",
     "validate_feature_snapshot",
     "validate_target_window",

@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from math import isfinite
-from typing import Final, Mapping
+from typing import Final, Literal, Mapping
 
 HORIZON_BARS: Final[dict[str, int]] = {"1h": 1, "4h": 4, "24h": 24}
 SUPPORTED_HORIZONS: Final[tuple[str, ...]] = ("1h", "4h", "24h")
 COST_SCENARIOS_BPS: Final[tuple[int, int]] = (50, 90)
+ForecastOutputSemantics = Literal["distributional", "quantile_summary"]
 CANDIDATES_PER_HORIZON: Final[int] = 10
 N_BUDGET: Final[int] = len(SUPPORTED_HORIZONS) * CANDIDATES_PER_HORIZON
 FEATURE_NAMES: Final[tuple[str, ...]] = (
@@ -60,13 +61,18 @@ class FeatureSnapshot:
 
 @dataclass(frozen=True, slots=True)
 class DistributionForecast:
-    """NGBoost-like distribution summary and its ordered quantile predictions."""
+    """Generic forecast envelope with explicit distributional/quantile-only semantics.
+
+    Quantile-only models must leave mean and dispersion unset. They must not
+    relabel a median as a mean or a quantile spread as a standard deviation.
+    """
 
     horizon: str
-    mean: float
-    dispersion: float
+    mean: float | None
+    dispersion: float | None
     quantile_levels: tuple[float, float, float]
     quantile_values: tuple[float, float, float]
+    output_semantics: ForecastOutputSemantics = "distributional"
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,7 +164,11 @@ def _validate_forecast_mean(forecast: DistributionForecast) -> None:
 
 def _validate_forecast_dispersion(forecast: DistributionForecast) -> None:
     """Require a finite, strictly positive forecast scale."""
-    if not _is_finite_number(forecast.dispersion) or forecast.dispersion <= 0:
+    if (
+        forecast.dispersion is None
+        or not _is_finite_number(forecast.dispersion)
+        or forecast.dispersion <= 0
+    ):
         raise ContractViolation("forecast_dispersion_must_be_positive")
 
 
@@ -188,11 +198,24 @@ def _validate_forecast_quantile_values(forecast: DistributionForecast) -> None:
         raise ContractViolation("forecast_quantile_values_not_monotonic")
 
 
+def _validate_forecast_output_semantics(forecast: DistributionForecast) -> None:
+    """Validate the statistical meaning carried by the generic forecast envelope."""
+    if forecast.output_semantics == "distributional":
+        _validate_forecast_mean(forecast)
+        _validate_forecast_dispersion(forecast)
+    elif forecast.output_semantics == "quantile_summary":
+        if forecast.mean is not None or forecast.dispersion is not None:
+            raise ContractViolation(
+                "quantile_summary_must_not_claim_mean_or_dispersion"
+            )
+    else:
+        raise ContractViolation("forecast_output_semantics_unsupported")
+
+
 def validate_distribution_forecast(forecast: DistributionForecast) -> None:
-    """Require finite positive dispersion and monotonic conditional quantiles."""
+    """Validate forecast semantics, finite quantiles and their monotonic order."""
     _validate_forecast_horizon(forecast)
-    _validate_forecast_mean(forecast)
-    _validate_forecast_dispersion(forecast)
+    _validate_forecast_output_semantics(forecast)
     _validate_forecast_quantile_shape(forecast)
     _validate_forecast_quantile_levels(forecast)
     _validate_forecast_quantile_values(forecast)
@@ -234,6 +257,28 @@ def make_cqr_interval(
         upper_correction=upper_correction,
         calibration_size=calibration_size,
     )
+
+
+def validate_conformal_interval(interval: ConformalInterval) -> None:
+    """Reject an invalid conformal interval before it reaches a cost decision."""
+    values = (
+        interval.lower_bound,
+        interval.upper_bound,
+        interval.nominal_coverage,
+        interval.lower_correction,
+        interval.upper_correction,
+    )
+    if not all(_is_finite_number(value) for value in values):
+        raise ContractViolation("conformal_interval_values_must_be_finite")
+    if interval.lower_bound > interval.upper_bound:
+        raise ContractViolation("conformal_interval_bounds_inverted")
+    if not 0 < interval.nominal_coverage < 1:
+        raise ContractViolation("conformal_interval_coverage_invalid")
+    if (
+        not _is_non_negative_integer(interval.calibration_size)
+        or interval.calibration_size < 1
+    ):
+        raise ContractViolation("conformal_interval_calibration_size_invalid")
 
 
 def passes_cost_gate(calibrated_lower_bound: float, cost_bps: int) -> bool:

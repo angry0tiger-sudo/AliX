@@ -22,6 +22,7 @@ on:
       - ".github/workflows/ci.yml"
       - "requirements.txt"
       - "requirements.lock"
+      - "research/regime_r/**"
 
 permissions:
   contents: read
@@ -54,14 +55,14 @@ jobs:
         continue-on-error: true
         run: |
           python -m pip install pip==25.2
-          python -m pip install ruff==0.14.0 mypy==1.18.2 gymnasium==1.4.0 farama-notifications==0.0.6 pandas==2.3.3 pandas-stubs==2.3.2.250926 bandit==1.8.6 pip-audit==2.9.0 deap==1.4.4 pytest==9.0.3 pytest-cov==7.0.0 import-linter==2.3 xenon==0.9.3 pre-commit==4.3.0 jsonschema==4.25.1 pip-tools==7.5.0 scikit-learn==1.9.0 httpx==0.28.1 fastapi==0.158.1 httpx2==2.16.0 sqlalchemy==2.1.6 'psycopg[binary]==3.3.2' uvicorn==0.54.0 pyyaml==6.0.3
+          python -m pip install ruff==0.14.0 mypy==1.18.2 gymnasium==1.4.0 farama-notifications==0.0.6 pandas==2.3.3 pandas-stubs==2.3.2.250926 bandit==1.8.6 pip-audit==2.9.0 deap==1.4.4 pytest==9.0.3 pytest-cov==7.0.0 import-linter==2.3 xenon==0.9.3 pre-commit==4.3.0 jsonschema==4.25.1 pip-tools==7.5.0 scikit-learn==1.9.0 mapie==1.6.0 httpx==0.28.1 fastapi==0.158.1 httpx2==2.16.0 sqlalchemy==2.1.6 'psycopg[binary]==3.3.2' uvicorn==0.54.0 pyyaml==6.0.3
 
       - name: Ruff lint
         id: ruff_check
         continue-on-error: true
         run: |
           set +e
-          ruff check control_plane risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels research/deap research/ai_ensemble research/four_arm_core tests scripts > preflight-output/ruff-check.log 2>&1
+          ruff check control_plane risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels research/deap research/ai_ensemble research/four_arm_core research/regime_r tests scripts > preflight-output/ruff-check.log 2>&1
           code=$?
           printf '%s\n' "$code" > preflight-output/ruff-check.exit
           cat preflight-output/ruff-check.log
@@ -72,7 +73,7 @@ jobs:
         continue-on-error: true
         run: |
           set +e
-          ruff format --check --diff control_plane risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels research/deap research/ai_ensemble research/four_arm_core tests scripts > preflight-output/ruff-format.log 2>&1
+          ruff format --check --diff control_plane risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels research/deap research/ai_ensemble research/four_arm_core research/regime_r tests scripts > preflight-output/ruff-format.log 2>&1
           code=$?
           printf '%s\n' "$code" > preflight-output/ruff-format.exit
           cat preflight-output/ruff-format.log
@@ -94,7 +95,7 @@ jobs:
         continue-on-error: true
         run: |
           set +e
-          bandit -r control_plane risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels research/deap research/ai_ensemble research/four_arm_core scripts -ll > preflight-output/bandit.log 2>&1
+          bandit -r control_plane risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels research/deap research/ai_ensemble research/four_arm_core research/regime_r scripts -ll > preflight-output/bandit.log 2>&1
           code=$?
           printf '%s\n' "$code" > preflight-output/bandit.exit
           cat preflight-output/bandit.log
@@ -105,7 +106,7 @@ jobs:
         continue-on-error: true
         run: |
           set +e
-          xenon --max-absolute B --max-modules B --max-average A control_plane risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels research/deap research/four_arm_core research/ai_ensemble/validation.py research/ai_ensemble/ttm_risk.py research/ai_ensemble/ttm_portfolio.py scripts > preflight-output/xenon.log 2>&1
+          xenon --max-absolute B --max-modules B --max-average A control_plane risk connectivity external_data services integrations user_data/strategies user_data/freqaimodels research/deap research/four_arm_core research/regime_r research/ai_ensemble/validation.py research/ai_ensemble/ttm_risk.py research/ai_ensemble/ttm_portfolio.py scripts > preflight-output/xenon.log 2>&1
           code=$?
           printf '%s\n' "$code" > preflight-output/xenon.exit
           cat preflight-output/xenon.log
