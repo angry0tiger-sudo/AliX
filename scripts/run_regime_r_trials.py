@@ -19,7 +19,11 @@ from research.regime_r.ngboost_cqr.adapters import (
     OWNER_EXECUTION_ENV,
     HGBQCQRAdapter,
 )
-from research.regime_r.ngboost_cqr.contracts import TRIAL_IDS
+from research.regime_r.ngboost_cqr.contracts import (
+    ConformalInterval,
+    DistributionForecast,
+    TRIAL_IDS,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 CSV_PATH = ROOT / "data/nobitex/prehack/nobitex-btcusdt-1h.csv"
@@ -721,6 +725,111 @@ def trial_identity(trial_id: str) -> tuple[str, int]:
     return horizon, candidate
 
 
+def _summarize_numeric_values(values: FloatArray) -> dict[str, int | float]:
+    """Summarize finite returns/quantiles with population standard deviation."""
+    array = np.asarray(values, dtype=np.float64)
+    if array.ndim != 1 or array.size < 1 or not np.isfinite(array).all():
+        raise RuntimeError("regime_r_diagnostic_values_invalid")
+    return {
+        "count": int(array.size),
+        "mean": float(np.mean(array)),
+        "std": float(np.std(array, ddof=0)),
+        "min": float(np.min(array)),
+        "max": float(np.max(array)),
+    }
+
+
+def summarize_forecast_diagnostics(
+    forecasts: tuple[DistributionForecast, ...],
+    intervals: tuple[ConformalInterval, ...],
+) -> dict[str, Any]:
+    """Summarize raw quantiles and calibrated CQR bounds without trading."""
+    if not forecasts or len(forecasts) != len(intervals):
+        raise RuntimeError("regime_r_diagnostic_forecast_interval_count_mismatch")
+
+    lower = np.asarray(
+        [forecast.quantile_values[0] for forecast in forecasts],
+        dtype=np.float64,
+    )
+    median = np.asarray(
+        [forecast.quantile_values[1] for forecast in forecasts],
+        dtype=np.float64,
+    )
+    upper = np.asarray(
+        [forecast.quantile_values[2] for forecast in forecasts],
+        dtype=np.float64,
+    )
+    lower_bounds = np.asarray(
+        [interval.lower_bound for interval in intervals],
+        dtype=np.float64,
+    )
+    upper_bounds = np.asarray(
+        [interval.upper_bound for interval in intervals],
+        dtype=np.float64,
+    )
+    lower_corrections = np.asarray(
+        [interval.lower_correction for interval in intervals],
+        dtype=np.float64,
+    )
+    upper_corrections = np.asarray(
+        [interval.upper_correction for interval in intervals],
+        dtype=np.float64,
+    )
+    conformal_widths = upper_bounds - lower_bounds
+    quantile_widths = upper - lower
+
+    summaries = (
+        lower,
+        median,
+        upper,
+        lower_bounds,
+        upper_bounds,
+        lower_corrections,
+        upper_corrections,
+        conformal_widths,
+        quantile_widths,
+    )
+    if any(not np.isfinite(values).all() for values in summaries):
+        raise RuntimeError("regime_r_diagnostic_values_non_finite")
+    if np.any(conformal_widths < 0.0) or np.any(quantile_widths < 0.0):
+        raise RuntimeError("regime_r_diagnostic_interval_width_negative")
+
+    positive_medians = int(np.count_nonzero(median > 0.0))
+    lower_bound_to_cost: dict[str, dict[str, int | float]] = {}
+    for cost_bps in COSTS_BPS:
+        cost_fraction = cost_bps / 10_000.0
+        distances = lower_bounds - cost_fraction
+        lower_bound_to_cost[str(cost_bps)] = {
+            "cost_bps": int(cost_bps),
+            "mean_distance_fraction": float(np.mean(distances)),
+            "std_distance_fraction": float(np.std(distances, ddof=0)),
+            "mean_distance_bps": float(np.mean(distances) * 10_000.0),
+            "std_distance_bps": float(np.std(distances, ddof=0) * 10_000.0),
+            "min_distance_bps": float(np.min(distances) * 10_000.0),
+            "max_distance_bps": float(np.max(distances) * 10_000.0),
+            "count_above_cost": int(np.count_nonzero(distances > 0.0)),
+            "percent_above_cost": float(
+                np.count_nonzero(distances > 0.0) / distances.size * 100.0
+            ),
+        }
+
+    return {
+        "prediction_count": int(median.size),
+        "lower_quantile": _summarize_numeric_values(lower),
+        "median": _summarize_numeric_values(median),
+        "upper_quantile": _summarize_numeric_values(upper),
+        "base_quantile_interval_width": _summarize_numeric_values(quantile_widths),
+        "conformal_interval_width": _summarize_numeric_values(conformal_widths),
+        "lower_correction": _summarize_numeric_values(lower_corrections),
+        "upper_correction": _summarize_numeric_values(upper_corrections),
+        "median_positive": {
+            "count": positive_medians,
+            "percentage": float(positive_medians / median.size * 100.0),
+        },
+        "lower_bound_to_cost": lower_bound_to_cost,
+    }
+
+
 def _fit_fold_and_predict(
     features: pd.DataFrame,
     values: FloatArray,
@@ -728,7 +837,7 @@ def _fit_fold_and_predict(
     horizon: str,
     horizon_bars: int,
     fold: Fold,
-) -> tuple[FoldSamples, FloatArray]:
+) -> tuple[FoldSamples, FloatArray, dict[str, Any]]:
     samples = build_fold_samples(features, target, horizon_bars, fold)
     adapter = HGBQCQRAdapter(horizon=horizon)
     adapter.fit(
@@ -737,12 +846,16 @@ def _fit_fold_and_predict(
         values[samples.calibration_indices],
         target[samples.calibration_indices],
     )
-    _, intervals = adapter.predict_batch_intervals(values[samples.test_indices])
+    forecasts, intervals = adapter.predict_batch_intervals(
+        values[samples.test_indices]
+    )
     lower_bounds = np.asarray(
         [interval.lower_bound for interval in intervals],
         dtype=np.float64,
     )
-    return samples, lower_bounds
+    diagnostics = summarize_forecast_diagnostics(forecasts, intervals)
+    return samples, lower_bounds, diagnostics
+
 
 
 def _evaluate_fold_cost_scenario(
@@ -838,7 +951,7 @@ def run_trial(
     trade_rows: list[dict[str, Any]] = []
 
     for fold in folds:
-        samples, lower_bounds = _fit_fold_and_predict(
+        samples, lower_bounds, _ = _fit_fold_and_predict(
             features, values, target, horizon, horizon_bars, fold
         )
         for cost in COSTS_BPS:
@@ -1201,6 +1314,44 @@ def _write_evaluation_outputs(
     write_adr(report)
 
 
+def _collect_registered_diagnostics(
+    trial_ids: tuple[str, ...],
+    frame: pd.DataFrame,
+    features: pd.DataFrame,
+    folds: tuple[Fold, ...],
+) -> list[dict[str, Any]]:
+    """Fit only the preregistered HGBQ-CQR models and collect fold diagnostics."""
+    values = features.to_numpy(dtype=np.float64)
+    records: list[dict[str, Any]] = []
+    for trial_id in trial_ids:
+        horizon, slot = trial_identity(trial_id)
+        horizon_bars = int(horizon[:-1])
+        target = build_target(frame, horizon_bars)
+        duplicate_of = (
+            f"NOBITEX-R1-NGBOOST-{horizon}-01" if slot > 1 else None
+        )
+        for fold in folds:
+            samples, _, statistics = _fit_fold_and_predict(
+                features, values, target, horizon, horizon_bars, fold
+            )
+            records.append(
+                {
+                    "trial_id": trial_id,
+                    "horizon": horizon,
+                    "candidate_slot": slot,
+                    "duplicate_of": duplicate_of,
+                    "fold_id": fold.fold_id,
+                    "train_rows": int(samples.train_indices.size),
+                    "calibration_rows": int(samples.calibration_indices.size),
+                    "test_rows": int(samples.test_indices.size),
+                    "test_start_utc": fold.test_start_utc,
+                    "test_end_utc": fold.test_end_utc,
+                    "statistics": statistics,
+                }
+            )
+    return records
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--commit-sha", required=True)
@@ -1209,7 +1360,18 @@ def main() -> int:
         type=Path,
         default=ROOT / ".artifacts/regime-r-g4-g5",
     )
+    parser.add_argument(
+        "--diagnostics-only",
+        action="store_true",
+        help="Run HGBQ-CQR statistical diagnostics only; never simulate a trade ledger.",
+    )
     args = parser.parse_args()
+    if not args.diagnostics_only:
+        parser.error(
+            "G4.5 is diagnostics-only; --diagnostics-only is required and "
+            "economic ledger execution is disabled for this phase"
+        )
+
     require_owner_authorization()
     _validate_requested_commit_sha(args.commit_sha)
 
@@ -1220,27 +1382,78 @@ def main() -> int:
     if len(trial_ids) != 30 or set(trial_ids) != set(TRIAL_IDS):
         raise RuntimeError("regime_r_trial_registry_mismatch")
 
-    run_id = os.environ.get("GITHUB_RUN_ID", "local-run")
-    trials, all_trades = _run_registered_trials(
-        trial_ids, frame, features, folds, run_id
+    diagnostic_records = _collect_registered_diagnostics(
+        trial_ids, frame, features, folds
     )
-    report = _build_evaluation_report(args.commit_sha, run_id, frame, folds, trials)
-    _write_evaluation_outputs(report, trials, all_trades, args.output_dir)
+    expected_fit_calls = len(trial_ids) * len(folds)
+    if len(diagnostic_records) != expected_fit_calls or expected_fit_calls != 90:
+        raise RuntimeError("regime_r_diagnostic_fit_accounting_mismatch")
+
+    run_id = os.environ.get("GITHUB_RUN_ID", "local-run")
+    payload = {
+        "schema_version": "alix.regime-r.g4-g5-diagnostics.v1",
+        "status": "COMPLETED",
+        "mode": "HGBQ_CQR_STATISTICAL_DIAGNOSTICS_ONLY",
+        "code_commit_sha": args.commit_sha,
+        "workflow_run_id": run_id,
+        "workflow_run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT", "1"),
+        "dataset": {
+            "path": "data/nobitex/prehack/nobitex-btcusdt-1h.csv",
+            "csv_sha256": EXPECTED_DATA_SHA256,
+            "row_count": len(frame),
+            "scope": "PRE_HACK_NOBITEX_ONLY_EXPLORATORY",
+            "historically_exposed": True,
+            "confirmatory_holdout": False,
+        },
+        "configuration_sha256": EXPECTED_CONFIG_SHA256,
+        "feature_contract_sha256": sha256_bytes(FEATURE_CONTRACT.encode("utf-8")),
+        "trial_accounting": {
+            "registered_slots": len(trial_ids),
+            "unique_candidate_configurations": 3,
+            "duplicate_slots": len(trial_ids) - 3,
+            "fit_calls": expected_fit_calls,
+            "diagnostic_records": len(diagnostic_records),
+        },
+        "statistics_contract": {
+            "quantile_units": "simple_return_fraction",
+            "interval_width_units": "simple_return_fraction",
+            "cost_distance_units": "basis_points_and_simple_return_fraction",
+            "standard_deviation": "population_ddof_0",
+            "lower_bound": "MAPIE_CQR_calibrated_interval_lower_bound",
+            "cost_gate_reference": "lower_bound_minus_round_trip_cost",
+            "cost_scenarios_bps": list(COSTS_BPS),
+            "median_positive_definition": "median_quantile_strictly_greater_than_zero",
+        },
+        "diagnostics": diagnostic_records,
+        "safety": {
+            "real_data_scope": "PRE_HACK_ONLY",
+            "holdout_bytes_read": False,
+            "private_api_calls": 0,
+            "real_order_attempts": 0,
+            "paper_orders": 0,
+            "hypothetical_trades_simulated": False,
+            "trade_ledger_execution": False,
+            "Champion": None,
+            "order_permission": False,
+            "trading_authorization": "NO-GO",
+        },
+    }
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    diagnostics_path = args.output_dir / "regime-r-g4-g5-diagnostics.json"
+    diagnostics_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n",
+        encoding="utf-8",
+    )
     print(
         json.dumps(
             {
-                "status": report["status"],
-                "verdict": report["verdict"],
-                "registered_slots": len(trials),
-                "unique_candidate_configurations": report["trial_counts"][
-                    "unique_candidate_configurations"
-                ],
-                "full_gate_pass_count": report["acceptance"]["full_gate_pass_count"],
-                "global_dsr": report["global_dsr"],
-                "dsr_status": report["dsr_status"],
-                "report": str(REPORT_PATH),
-                "adr": str(ADR_PATH),
-                "trades_artifact": str(args.output_dir / "regime-r-g4-g5-trades.csv"),
+                "status": payload["status"],
+                "mode": payload["mode"],
+                "fit_calls": expected_fit_calls,
+                "diagnostic_records": len(diagnostic_records),
+                "diagnostics_artifact": str(diagnostics_path),
+                "hypothetical_trades_simulated": False,
+                "trading_authorization": payload["safety"]["trading_authorization"],
             },
             indent=2,
         )

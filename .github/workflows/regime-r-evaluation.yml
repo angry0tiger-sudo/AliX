@@ -59,23 +59,40 @@ jobs:
           print("PREHACK_AND_PREREGISTRATION_SHA256_VERIFIED")
           PY
 
-      - name: Run authorized pre-hack-only HGBQ-CQR evaluation
+      - name: Run authorized pre-hack-only HGBQ-CQR statistical diagnostics
         env:
           ALIX_REGIME_R_EXECUTION_AUTHORIZED: "true"
         run: |
           set -euo pipefail
           python scripts/run_regime_r_trials.py \
             --commit-sha "$GITHUB_SHA" \
-            --output-dir ".artifacts/regime-r-g4-g5"
+            --output-dir ".artifacts/regime-r-g4-g5" \
+            --diagnostics-only
 
-      - name: Upload economic report and hypothetical trade ledgers
-        if: always()
+      - name: Validate diagnostics-only output and safety invariants
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          path = Path(".artifacts/regime-r-g4-g5/regime-r-g4-g5-diagnostics.json")
+          payload = json.loads(path.read_text(encoding="utf-8"))
+          assert payload["status"] == "COMPLETED"
+          assert payload["mode"] == "HGBQ_CQR_STATISTICAL_DIAGNOSTICS_ONLY"
+          assert payload["trial_accounting"]["fit_calls"] == 90
+          assert payload["trial_accounting"]["diagnostic_records"] == 90
+          assert payload["safety"]["holdout_bytes_read"] is False
+          assert payload["safety"]["hypothetical_trades_simulated"] is False
+          assert payload["safety"]["trade_ledger_execution"] is False
+          assert payload["safety"]["real_order_attempts"] == 0
+          assert not Path(".artifacts/regime-r-g4-g5/regime-r-g4-g5-trades.csv").exists()
+          print("G4_5_DIAGNOSTICS_ONLY_OUTPUT_AND_SAFETY_VALIDATED")
+          PY
+
+      - name: Upload pre-hack statistical diagnostics
+        if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: regime-r-g4-g5-prehack-${{ github.sha }}
-          path: |
-            .artifacts/regime-r-g4-g5/
-            docs/research/results/G4_G5_evaluation_results.md
-            docs/adr/ADR-053-regime-r-g4-g5-evaluation-results.md
-          if-no-files-found: warn
+          name: regime-r-g4-g5-diagnostics-prehack-${{ github.sha }}
+          path: .artifacts/regime-r-g4-g5/regime-r-g4-g5-diagnostics.json
+          if-no-files-found: error
           retention-days: 90

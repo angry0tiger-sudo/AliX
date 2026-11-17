@@ -7,12 +7,17 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from research.regime_r.ngboost_cqr.contracts import (
+    ConformalInterval,
+    DistributionForecast,
+)
 from scripts.run_regime_r_trials import (
     FEATURE_COLUMNS,
     build_features,
     build_target,
     profit_factor,
     simulate_costed_ledger,
+    summarize_forecast_diagnostics,
 )
 
 
@@ -29,6 +34,62 @@ def synthetic_frame(rows: int = 80) -> pd.DataFrame:
             "close": close,
             "volume": 10.0 + np.arange(rows, dtype=np.float64) % 7,
         }
+    )
+
+
+def test_forecast_diagnostics_summarize_quantiles_intervals_and_cost_distance() -> None:
+    forecasts = (
+        DistributionForecast(
+            horizon="1h",
+            mean=None,
+            dispersion=None,
+            quantile_levels=(0.05, 0.5, 0.95),
+            quantile_values=(-0.02, 0.01, 0.04),
+            output_semantics="quantile_summary",
+        ),
+        DistributionForecast(
+            horizon="1h",
+            mean=None,
+            dispersion=None,
+            quantile_levels=(0.05, 0.5, 0.95),
+            quantile_values=(-0.01, -0.005, 0.005),
+            output_semantics="quantile_summary",
+        ),
+    )
+    intervals = (
+        ConformalInterval(
+            lower_bound=-0.03,
+            upper_bound=0.06,
+            nominal_coverage=0.9,
+            lower_correction=0.01,
+            upper_correction=0.02,
+            calibration_size=20,
+        ),
+        ConformalInterval(
+            lower_bound=-0.015,
+            upper_bound=0.02,
+            nominal_coverage=0.9,
+            lower_correction=0.005,
+            upper_correction=0.015,
+            calibration_size=20,
+        ),
+    )
+
+    result = summarize_forecast_diagnostics(forecasts, intervals)
+
+    assert result["prediction_count"] == 2
+    assert np.isclose(result["lower_quantile"]["mean"], -0.015)
+    assert np.isclose(result["lower_quantile"]["std"], 0.005)
+    assert np.isclose(result["median"]["mean"], 0.0025)
+    assert np.isclose(result["upper_quantile"]["mean"], 0.0225)
+    assert np.isclose(result["conformal_interval_width"]["mean"], 0.0625)
+    assert result["median_positive"]["count"] == 1
+    assert result["median_positive"]["percentage"] == 50.0
+    assert np.isclose(
+        result["lower_bound_to_cost"]["50"]["mean_distance_bps"], -275.0
+    )
+    assert np.isclose(
+        result["lower_bound_to_cost"]["90"]["mean_distance_bps"], -315.0
     )
 
 
