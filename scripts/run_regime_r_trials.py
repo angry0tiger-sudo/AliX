@@ -803,7 +803,7 @@ def write_report(report: dict[str, Any], trials: list[dict[str, Any]]) -> None:
             "",
             f"- Registered IDs: {report['trial_counts']['registered_slots']}.",
             f"- Unique model configurations: {report['trial_counts']['unique_candidate_configurations']}.",
-            f"- Exact duplicate slots: {report["trial_counts"]["duplicate_slots"]}.",
+            f"- Exact duplicate slots: {report['trial_counts']['duplicate_slots']}.",
             f"- Fit calls: {report['trial_counts']['fit_calls']}.",
             "- GLOBAL_N: UNKNOWN.",
             "- DSR: NOT_COMPUTABLE_GLOBAL_N_UNKNOWN.",
