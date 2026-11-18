@@ -7,14 +7,18 @@ import hashlib
 import json
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
-from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import accuracy_score, balanced_accuracy_score, confusion_matrix
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import LogisticRegression  # type: ignore[import-untyped]
+from sklearn.metrics import (  # type: ignore[import-untyped]
+    accuracy_score,
+    balanced_accuracy_score,
+    confusion_matrix,
+)
+from sklearn.pipeline import Pipeline  # type: ignore[import-untyped]
+from sklearn.preprocessing import StandardScaler  # type: ignore[import-untyped]
 
 from scripts.label_regime_t_triple_barrier import (
     EXPECTED_DATA_SHA256,
@@ -48,13 +52,83 @@ def _sha(path: Path) -> str:
 
 
 def _fold_boundaries(
-    anchor: pd.Timestamp, offsets: list[list[int]]
+    anchor: pd.Timestamp, item: dict[str, Any]
 ) -> tuple[pd.Timestamp, ...]:
-    return tuple(
-        anchor + pd.DateOffset(months=int(item))
-        for pair in offsets
-        for item in pair
+    offsets = (
+        item["training_month_offsets"],
+        item["calibration_month_offsets"],
+        item["embargo_month_offsets"],
+        item["test_month_offsets"],
     )
+    return (
+        anchor + pd.DateOffset(months=int(offsets[0][0])),
+        anchor + pd.DateOffset(months=int(offsets[0][1])),
+        anchor + pd.DateOffset(months=int(offsets[1][0])),
+        anchor + pd.DateOffset(months=int(offsets[1][1])),
+        anchor + pd.DateOffset(months=int(offsets[2][0])),
+        anchor + pd.DateOffset(months=int(offsets[2][1])),
+        anchor + pd.DateOffset(months=int(offsets[3][0])),
+        anchor + pd.DateOffset(months=int(offsets[3][1])),
+    )
+
+
+def _validate_walk_forward_contract(protocol: dict[str, Any]) -> None:
+    expected = {
+        "fold_count": 3,
+        "training_window_months": 6,
+        "calibration_window_months": 1,
+        "embargo_window_months": 1,
+        "test_window_months": 1,
+        "maximum_target_horizon_hours": 24,
+    }
+    actual = {key: protocol.get(key) for key in expected}
+    if actual != expected or protocol.get("purge_policy", {}).get("enabled") is not True:
+        raise RuntimeError("regime_t_g3_walk_forward_contract_mismatch")
+
+
+def _validate_fold_indices(indices: list[int], row_count: int) -> None:
+    if not all(0 <= index < row_count for index in indices[:-1]):
+        raise RuntimeError("regime_t_fold_boundary_outside_dataset")
+    if indices[-1] > row_count:
+        raise RuntimeError("regime_t_fold_test_end_outside_dataset")
+    interval_pairs = ((0, 1), (2, 3), (4, 5), (6, 7))
+    if not all(indices[start] < indices[finish] for start, finish in interval_pairs):
+        raise RuntimeError("regime_t_fold_interval_empty")
+    if not (
+        indices[1] == indices[2]
+        and indices[3] == indices[4]
+        and indices[5] == indices[6]
+    ):
+        raise RuntimeError("regime_t_fold_intervals_not_contiguous")
+
+
+def _build_fold(
+    item: dict[str, Any],
+    anchor: pd.Timestamp,
+    timestamp_ns: np.ndarray,
+    row_count: int,
+) -> dict[str, Any]:
+    boundaries = _fold_boundaries(anchor, item)
+    indexes = [
+        int(np.searchsorted(timestamp_ns, boundary.value, side="left"))
+        for boundary in boundaries
+    ]
+    _validate_fold_indices(indexes, row_count)
+    return {
+        "fold_id": str(item["fold_id"]),
+        "train_start": indexes[0],
+        "train_end": indexes[1],
+        "test_start": indexes[6],
+        "test_end": indexes[7],
+        "train_start_utc": boundaries[0].isoformat(),
+        "train_end_utc": boundaries[1].isoformat(),
+        "calibration_start_utc": boundaries[2].isoformat(),
+        "calibration_end_utc": boundaries[3].isoformat(),
+        "embargo_start_utc": boundaries[4].isoformat(),
+        "embargo_end_utc": boundaries[5].isoformat(),
+        "test_start_utc": boundaries[6].isoformat(),
+        "test_end_utc": boundaries[7].isoformat(),
+    }
 
 
 def build_folds(
@@ -62,51 +136,15 @@ def build_folds(
 ) -> list[dict[str, Any]]:
     """Recreate the exact three registered UTC folds without importing Regime R code."""
     protocol = g3["walk_forward_protocol"]
-    if (
-        protocol.get("fold_count") != 3
-        or protocol.get("training_window_months") != 6
-        or protocol.get("calibration_window_months") != 1
-        or protocol.get("embargo_window_months") != 1
-        or protocol.get("test_window_months") != 1
-        or protocol.get("fold_shift_months") != 3
-        or protocol.get("maximum_target_horizon_hours") != 24
-        or protocol.get("purge_policy", {}).get("enabled") is not True
-    ):
-        raise RuntimeError("regime_t_g3_walk_forward_contract_mismatch")
+    _validate_walk_forward_contract(protocol)
     anchor = pd.Timestamp(manifest["start_utc"])
+    if anchor.tzinfo is None:
+        raise RuntimeError("regime_t_fold_anchor_must_be_timezone_aware")
     timestamp_ns = pd.DatetimeIndex(frame["timestamp"]).astype("int64").to_numpy()
-    folds: list[dict[str, Any]] = []
-    for item in protocol["folds"]:
-        groups = (
-            item["training_month_offsets"],
-            item["calibration_month_offsets"],
-            item["embargo_month_offsets"],
-            item["test_month_offsets"],
-        )
-        boundaries = _fold_boundaries(anchor, [list(pair) for pair in groups])
-        indexes = [
-            int(np.searchsorted(timestamp_ns, boundary.value, side="left"))
-            for boundary in boundaries
-        ]
-        if any(indexes[i] >= indexes[i + 1] for i in (0, 2, 4, 6)):
-            raise RuntimeError("regime_t_empty_fold_partition")
-        folds.append(
-            {
-                "fold_id": str(item["fold_id"]),
-                "train_start": indexes[0],
-                "train_end": indexes[1],
-                "test_start": indexes[6],
-                "test_end": indexes[7],
-                "train_start_utc": boundaries[0].isoformat(),
-                "train_end_utc": boundaries[1].isoformat(),
-                "calibration_start_utc": boundaries[2].isoformat(),
-                "calibration_end_utc": boundaries[3].isoformat(),
-                "embargo_start_utc": boundaries[4].isoformat(),
-                "embargo_end_utc": boundaries[5].isoformat(),
-                "test_start_utc": boundaries[6].isoformat(),
-                "test_end_utc": boundaries[7].isoformat(),
-            }
-        )
+    fold_items = protocol["folds"]
+    folds = [
+        _build_fold(item, anchor, timestamp_ns, len(frame)) for item in fold_items
+    ]
     if len(folds) != 3:
         raise RuntimeError("regime_t_expected_three_walk_forward_folds")
     return folds
@@ -133,7 +171,104 @@ def build_model() -> Pipeline:
 
 
 def _confusion(y_true: np.ndarray, y_pred: np.ndarray) -> list[list[int]]:
-    return confusion_matrix(y_true, y_pred, labels=list(LABELS)).astype(int).tolist()
+    matrix = confusion_matrix(y_true, y_pred, labels=list(LABELS)).astype(int)
+    return cast(list[list[int]], matrix.tolist())
+
+
+def _build_fold_masks(
+    index: np.ndarray,
+    fold: dict[str, Any],
+    finite_features: np.ndarray,
+    valid_labels: np.ndarray,
+    barrier_end: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    full_horizon_ends = index + 24
+    common = finite_features & valid_labels
+    train_mask = (
+        (index >= fold["train_start"])
+        & (index < fold["train_end"])
+        & (full_horizon_ends < fold["train_end"])
+        & common
+        & (barrier_end < fold["train_end"])
+    )
+    test_mask = (
+        (index >= fold["test_start"])
+        & (index < fold["test_end"])
+        & (full_horizon_ends < fold["test_end"])
+        & common
+        & (barrier_end < fold["test_end"])
+    )
+    return train_mask, test_mask
+
+
+def _evaluate_one_fold(
+    fold: dict[str, Any],
+    x: np.ndarray,
+    y: np.ndarray,
+    barrier_end: np.ndarray,
+    finite_features: np.ndarray,
+    valid_labels: np.ndarray,
+    index: np.ndarray,
+) -> tuple[dict[str, Any], pd.DataFrame]:
+    train_mask, test_mask = _build_fold_masks(
+        index, fold, finite_features, valid_labels, barrier_end
+    )
+    train_index = index[train_mask]
+    test_index = index[test_mask]
+    y_train = y[train_index].astype(np.int64)
+    y_test = y[test_index].astype(np.int64)
+    if train_index.size < 100 or test_index.size < 20:
+        raise RuntimeError(
+            f"regime_t_fold_support_insufficient:{fold['fold_id']}:"
+            f"train={train_index.size}:test={test_index.size}"
+        )
+    if np.unique(y_train).size != 2:
+        raise RuntimeError(
+            f"regime_t_training_fold_missing_binary_class:{fold['fold_id']}"
+        )
+
+    model = build_model()
+    model.fit(x[train_index], y_train)
+    y_pred = model.predict(x[test_index]).astype(np.int64)
+    majority_label = int(np.bincount(y_train, minlength=2).argmax())
+    majority_pred = np.full(y_test.shape, majority_label, dtype=np.int64)
+    report = {
+        "fold_id": fold["fold_id"],
+        "boundaries": {
+            key: value for key, value in fold.items() if key.endswith("_utc")
+        },
+        "train_rows": int(train_index.size),
+        "test_rows": int(test_index.size),
+        "train_class_counts": {
+            "lower_first_0": int(np.count_nonzero(y_train == 0)),
+            "upper_first_1": int(np.count_nonzero(y_train == 1)),
+        },
+        "test_class_counts": {
+            "lower_first_0": int(np.count_nonzero(y_test == 0)),
+            "upper_first_1": int(np.count_nonzero(y_test == 1)),
+        },
+        "accuracy": float(accuracy_score(y_test, y_pred)),
+        "balanced_accuracy": float(balanced_accuracy_score(y_test, y_pred)),
+        "uniform_random_expected_accuracy": 0.5,
+        "training_majority_label": majority_label,
+        "training_majority_baseline_accuracy": float(
+            accuracy_score(y_test, majority_pred)
+        ),
+        "confusion_matrix_labels_0_1": _confusion(y_test, y_pred),
+    }
+    prediction = pd.DataFrame(
+        {
+            "fold_id": fold["fold_id"],
+            "decision_index": test_index,
+            "true_label": y_test,
+            "predicted_label": y_pred,
+            "prediction_probability_upper_first": model.predict_proba(
+                x[test_index]
+            )[:, 1],
+            "training_majority_label": majority_label,
+        }
+    )
+    return report, prediction
 
 
 def evaluate_walk_forward(
@@ -153,88 +288,15 @@ def evaluate_walk_forward(
         raise RuntimeError("regime_t_feature_label_length_mismatch")
     finite_features = np.isfinite(x).all(axis=1)
     valid_labels = np.isin(y, [0.0, 1.0])
-    predictions: list[pd.DataFrame] = []
-    fold_reports: list[dict[str, Any]] = []
-
-    for fold in folds:
-        index = np.arange(len(frame), dtype=np.int64)
-        train_mask = (
-            (index >= fold["train_start"])
-            & (index < fold["train_end"])
-            & (index + 24 < fold["train_end"])
-            & finite_features
-            & valid_labels
-            & (barrier_end < fold["train_end"])
+    index = np.arange(len(frame), dtype=np.int64)
+    evaluated = [
+        _evaluate_one_fold(
+            fold, x, y, barrier_end, finite_features, valid_labels, index
         )
-        test_mask = (
-            (index >= fold["test_start"])
-            & (index < fold["test_end"])
-            & (index + 24 < fold["test_end"])
-            & finite_features
-            & valid_labels
-            & (barrier_end < fold["test_end"])
-        )
-        train_index = index[train_mask]
-        test_index = index[test_mask]
-        y_train = y[train_index].astype(np.int64)
-        y_test = y[test_index].astype(np.int64)
-        if train_index.size < 100 or test_index.size < 20:
-            raise RuntimeError(
-                f"regime_t_fold_support_insufficient:{fold['fold_id']}:"
-                f"train={train_index.size}:test={test_index.size}"
-            )
-        if np.unique(y_train).size != 2:
-            raise RuntimeError(
-                f"regime_t_training_fold_missing_binary_class:{fold['fold_id']}"
-            )
-
-        model = build_model()
-        model.fit(x[train_index], y_train)
-        y_pred = model.predict(x[test_index]).astype(np.int64)
-        majority_label = int(np.bincount(y_train, minlength=2).argmax())
-        majority_pred = np.full(y_test.shape, majority_label, dtype=np.int64)
-        accuracy = float(accuracy_score(y_test, y_pred))
-        majority_accuracy = float(accuracy_score(y_test, majority_pred))
-        fold_reports.append(
-            {
-                "fold_id": fold["fold_id"],
-                "boundaries": {
-                    key: value for key, value in fold.items() if key.endswith("_utc")
-                },
-                "train_rows": int(train_index.size),
-                "test_rows": int(test_index.size),
-                "train_class_counts": {
-                    "lower_first_0": int(np.count_nonzero(y_train == 0)),
-                    "upper_first_1": int(np.count_nonzero(y_train == 1)),
-                },
-                "test_class_counts": {
-                    "lower_first_0": int(np.count_nonzero(y_test == 0)),
-                    "upper_first_1": int(np.count_nonzero(y_test == 1)),
-                },
-                "accuracy": accuracy,
-                "balanced_accuracy": float(balanced_accuracy_score(y_test, y_pred)),
-                "uniform_random_expected_accuracy": 0.5,
-                "training_majority_label": majority_label,
-                "training_majority_baseline_accuracy": majority_accuracy,
-                "confusion_matrix_labels_0_1": _confusion(y_test, y_pred),
-            }
-        )
-        predictions.append(
-            pd.DataFrame(
-                {
-                    "fold_id": fold["fold_id"],
-                    "decision_index": test_index,
-                    "true_label": y_test,
-                    "predicted_label": y_pred,
-                    "prediction_probability_upper_first": (
-                        model.predict_proba(x[test_index])[:, 1]
-                    ),
-                    "training_majority_label": majority_label,
-                }
-            )
-        )
-
-    prediction_frame = pd.concat(predictions, ignore_index=True)
+        for fold in folds
+    ]
+    fold_reports = [item[0] for item in evaluated]
+    prediction_frame = pd.concat([item[1] for item in evaluated], ignore_index=True)
     pooled_true = prediction_frame["true_label"].to_numpy(dtype=np.int64)
     pooled_pred = prediction_frame["predicted_label"].to_numpy(dtype=np.int64)
     pooled_majority = prediction_frame["training_majority_label"].to_numpy(
@@ -242,7 +304,6 @@ def evaluate_walk_forward(
     )
     pooled_accuracy = float(accuracy_score(pooled_true, pooled_pred))
     pooled_majority_accuracy = float(accuracy_score(pooled_true, pooled_majority))
-    matrix = _confusion(pooled_true, pooled_pred)
     label_counts = labels["outcome"].value_counts().to_dict()
     result = {
         "schema_version": "alix.regime-t.triple-barrier-logistic-evaluation.v1",
@@ -290,7 +351,9 @@ def evaluate_walk_forward(
             ),
             "uniform_random_expected_accuracy": 0.5,
             "pooled_training_majority_baseline_accuracy": pooled_majority_accuracy,
-            "pooled_confusion_matrix_labels_0_1": matrix,
+            "pooled_confusion_matrix_labels_0_1": _confusion(
+                pooled_true, pooled_pred
+            ),
             "confusion_matrix_axis_semantics": (
                 "rows=true [0,1], columns=predicted [0,1]"
             ),

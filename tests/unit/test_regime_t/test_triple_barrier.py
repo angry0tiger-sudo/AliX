@@ -38,10 +38,7 @@ def _synthetic_frame(rows: int = 90) -> pd.DataFrame:
 
 def test_preregistration_is_locked_and_parameters_are_fixed() -> None:
     payload = json.loads(PREREG_PATH.read_text(encoding="utf-8"))
-    assert (
-        hashlib.sha256(PREREG_PATH.read_bytes()).hexdigest()
-        == EXPECTED_PREREG_SHA256
-    )
+    assert hashlib.sha256(PREREG_PATH.read_bytes()).hexdigest() == EXPECTED_PREREG_SHA256
     assert payload["preregistration"]["status"] == "PREREGISTERED_LOCKED"
     assert payload["target"]["barriers"]["k"] == 2.0
     assert payload["target"]["time_barrier"]["max_holding_hours"] == 24
@@ -61,9 +58,9 @@ def test_upper_and_lower_first_touch_labels_are_binary() -> None:
 
     labels = build_triple_barrier_labels(frame, volatility_fraction=vol)
 
-    assert int(labels.loc[5, "label"]) == 1
+    assert labels["label"].iloc[5] == 1
     assert labels.loc[5, "outcome"] == "UPPER_FIRST"
-    assert int(labels.loc[15, "label"]) == 0
+    assert labels["label"].iloc[15] == 0
     assert labels.loc[15, "outcome"] == "LOWER_FIRST"
 
 
@@ -117,7 +114,7 @@ def test_price_features_do_not_depend_on_future_bars() -> None:
     changed.loc[70:, ["open", "high", "low", "close"]] *= 1.1
     updated = build_price_features(changed)
 
-    pd.testing.assert_series_equal(baseline.loc[60], updated.loc[60])
+    pd.testing.assert_series_equal(baseline.iloc[60, :], updated.iloc[60, :])
 
 
 def test_model_pipeline_is_scaled_logistic_regression() -> None:

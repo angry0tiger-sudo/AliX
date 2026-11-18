@@ -77,8 +77,12 @@ Safety invariants:
 
 No G3 file/parameter, G4.6 file, HGBQ-CQR code, or Regime P result is modified. main remains frozen. Any temporary workflow exposure for the first dispatch must be deleted and the original main tree SHA 5761c6c34143f8e6924f53a4e745c48932a5f791 restored exactly.
 
-## 7. Initial execution status
+## 7. Initial execution status and infrastructure recovery
 
-At preregistration time this experiment has not run; no accuracy, confusion matrix, or label-distribution outcome is claimed. Final run provenance, metrics, artifacts and interpretation will be added only after GitHub Actions completes against the exact Research commit.
+The first manual dispatch was correctly bound to Research commit `e1d478556386404dde4b15c94af4ce21d8a353ba`, Run #1 / ID `44340086418`. GitHub cancelled the job during the `setup-python` pip-cache restore, before dependency installation, source-hash verification, synthetic unit tests, PRE-HACK loading, label generation, or model fitting. All experiment steps were skipped. No target labels, model outputs, metrics, or test-fold outcomes were produced by that attempt.
+
+**Owner Directive — infrastructure-only recovery:** complete the already registered experiment without changing its target, features, folds, model, threshold, or evaluation rules. The workflow's optional setup-python cache restore has been removed to avoid the interrupted cache transfer. The preregistration JSON remains byte-identical. This recovery does not add a candidate, tune a parameter, inspect an outcome, or access additional data. Only a successful Actions run can establish the experiment result.
+
+Final run provenance, metrics, artifacts and interpretation will be added here only after GitHub Actions completes against the exact Research commit.
 
 Architecture First. Evidence Always. Fail Closed.

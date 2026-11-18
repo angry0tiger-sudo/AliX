@@ -35,34 +35,37 @@ def sha256_file(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def load_verified_prehack_frame() -> tuple[pd.DataFrame, dict[str, Any]]:
-    """Load only the immutable pre-hack CSV and verify all source commitments."""
-    if sha256_file(DATA_PATH) != EXPECTED_DATA_SHA256:
-        raise RuntimeError("regime_t_dataset_sha256_mismatch")
-    if sha256_file(MANIFEST_PATH) != EXPECTED_MANIFEST_SHA256:
-        raise RuntimeError("regime_t_manifest_sha256_mismatch")
-    if sha256_file(G3_PATH) != EXPECTED_G3_SHA256:
-        raise RuntimeError("regime_t_frozen_g3_sha256_mismatch")
-    if sha256_file(PREREG_PATH) != EXPECTED_PREREG_SHA256:
-        raise RuntimeError("regime_t_preregistration_sha256_mismatch")
+def _verify_source_commitments() -> None:
+    commitments = (
+        (DATA_PATH, EXPECTED_DATA_SHA256),
+        (MANIFEST_PATH, EXPECTED_MANIFEST_SHA256),
+        (G3_PATH, EXPECTED_G3_SHA256),
+        (PREREG_PATH, EXPECTED_PREREG_SHA256),
+    )
+    if any(sha256_file(path) != expected for path, expected in commitments):
+        raise RuntimeError("regime_t_source_sha256_mismatch")
 
+
+def _load_and_validate_manifest() -> dict[str, Any]:
     manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
-    if (
-        manifest.get("dataset_window") != "PRE_HACK_NOBITEX_ONLY"
-        or manifest.get("csv_sha256") != EXPECTED_DATA_SHA256
-        or manifest.get("row_count") != 31801
-        or manifest.get("missing_intervals") != 0
-        or manifest.get("public_api_only") is not True
-        or manifest.get("private_api_calls") != 0
-        or manifest.get("real_order_attempts") != 0
-    ):
+    required_values = (
+        manifest.get("dataset_window") == "PRE_HACK_NOBITEX_ONLY",
+        manifest.get("csv_sha256") == EXPECTED_DATA_SHA256,
+        manifest.get("row_count") == 31801,
+        manifest.get("missing_intervals") == 0,
+        manifest.get("public_api_only") is True,
+        manifest.get("private_api_calls") == 0,
+        manifest.get("real_order_attempts") == 0,
+    )
+    if not all(required_values):
         raise RuntimeError("regime_t_manifest_contract_invalid")
+    return manifest
 
-    frame = pd.read_csv(DATA_PATH)
-    if list(frame.columns) != ["date", "open", "high", "low", "close", "volume"]:
-        raise RuntimeError("regime_t_dataset_schema_invalid")
-    if len(frame) != 31801:
-        raise RuntimeError("regime_t_dataset_row_count_invalid")
+
+def _validate_ohlc_frame(frame: pd.DataFrame) -> pd.Series:
+    expected_columns = ["date", "open", "high", "low", "close", "volume"]
+    if list(frame.columns) != expected_columns or len(frame) != 31801:
+        raise RuntimeError("regime_t_dataset_schema_or_row_count_invalid")
     timestamps = pd.to_datetime(frame["date"], utc=True, errors="raise")
     timestamp_ns = timestamps.astype("int64").to_numpy(dtype=np.int64)
     if timestamps.isna().any() or timestamps.duplicated().any():
@@ -73,10 +76,19 @@ def load_verified_prehack_frame() -> tuple[pd.DataFrame, dict[str, Any]]:
     if not np.isfinite(ohlc).all() or np.any(ohlc <= 0.0):
         raise RuntimeError("regime_t_ohlc_non_finite_or_non_positive")
     opened, high, low, close = ohlc.T
-    if np.any(high < np.maximum.reduce((opened, low, close))):
-        raise RuntimeError("regime_t_invalid_high_range")
-    if np.any(low > np.minimum.reduce((opened, high, close))):
-        raise RuntimeError("regime_t_invalid_low_range")
+    invalid_high = high < np.maximum.reduce((opened, low, close))
+    invalid_low = low > np.minimum.reduce((opened, high, close))
+    if invalid_high.any() or invalid_low.any():
+        raise RuntimeError("regime_t_ohlc_range_invalid")
+    return timestamps
+
+
+def load_verified_prehack_frame() -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Load only the immutable pre-hack CSV and verify all source commitments."""
+    _verify_source_commitments()
+    manifest = _load_and_validate_manifest()
+    frame = pd.read_csv(DATA_PATH)
+    timestamps = _validate_ohlc_frame(frame)
     frame = frame.drop(columns=["date"]).copy()
     frame["timestamp"] = timestamps
     return frame, manifest
@@ -108,7 +120,9 @@ def build_price_features(frame: pd.DataFrame) -> pd.DataFrame:
     close = frame["close"].astype("float64")
     high = frame["high"].astype("float64")
     low = frame["low"].astype("float64")
-    log_close = np.log(close)
+    log_close = pd.Series(
+        np.log(close.to_numpy(dtype=np.float64)), index=frame.index, dtype="float64"
+    )
     return_1 = log_close.diff(1)
     timestamp = pd.DatetimeIndex(frame["timestamp"])
     hour = timestamp.hour.to_numpy(dtype=np.float64) + (
@@ -132,9 +146,79 @@ def build_price_features(frame: pd.DataFrame) -> pd.DataFrame:
         "weekday_sin": np.sin(2.0 * np.pi * weekday / 7.0),
         "weekday_cos": np.cos(2.0 * np.pi * weekday / 7.0),
     }
-    return pd.DataFrame(values, index=frame.index).replace(
-        [np.inf, -np.inf], np.nan
+    return pd.DataFrame(values, index=frame.index).replace([np.inf, -np.inf], np.nan)
+
+
+def _resolve_bar_touch(upper_hit: bool, lower_hit: bool) -> str | None:
+    """Resolve one OHLC bar without guessing intrabar order."""
+    if upper_hit == lower_hit:
+        return "AMBIGUOUS" if upper_hit else None
+    return "UPPER_FIRST" if upper_hit else "LOWER_FIRST"
+
+
+def _find_first_touch(
+    high: np.ndarray,
+    low: np.ndarray,
+    start: int,
+    end: int,
+    upper: float,
+    lower: float,
+) -> tuple[str, int]:
+    for future_index in range(start, end + 1):
+        outcome = _resolve_bar_touch(
+            bool(high[future_index] >= upper), bool(low[future_index] <= lower)
+        )
+        if outcome is not None:
+            return outcome, future_index
+    return "TIMEOUT", end
+
+
+def _label_one_decision(
+    decision_index: int,
+    opened: np.ndarray,
+    high: np.ndarray,
+    low: np.ndarray,
+    volatility: np.ndarray,
+    size: int,
+    k: float,
+    horizon_bars: int,
+) -> dict[str, Any]:
+    entry_index = decision_index + 1
+    end_index = entry_index + horizon_bars - 1
+    if end_index >= size or not np.isfinite(volatility[decision_index]):
+        return {
+            "label": None,
+            "outcome": "UNAVAILABLE",
+            "entry_index": entry_index,
+            "barrier_end_index": None,
+        }
+    vol_value = float(volatility[decision_index])
+    if vol_value <= 0.0:
+        return {
+            "label": None,
+            "outcome": "UNAVAILABLE",
+            "entry_index": entry_index,
+            "barrier_end_index": None,
+        }
+    entry = float(opened[entry_index])
+    upper = entry * (1.0 + k * vol_value)
+    lower = entry * (1.0 - k * vol_value)
+    if lower <= 0.0:
+        raise RuntimeError("regime_t_lower_barrier_non_positive")
+    outcome, barrier_end = _find_first_touch(
+        high, low, entry_index, end_index, upper, lower
     )
+    label = 1 if outcome == "UPPER_FIRST" else 0 if outcome == "LOWER_FIRST" else None
+    return {
+        "label": label,
+        "outcome": outcome,
+        "entry_index": entry_index,
+        "barrier_end_index": barrier_end,
+        "entry_price": entry,
+        "volatility_fraction": vol_value,
+        "upper_barrier": upper,
+        "lower_barrier": lower,
+    }
 
 
 def build_triple_barrier_labels(
@@ -151,66 +235,20 @@ def build_triple_barrier_labels(
         if volatility_fraction is not None
         else wilder_atr_fraction(frame)
     )
-    size = len(frame)
-    if len(vol) != size or not vol.index.equals(frame.index):
+    if len(vol) != len(frame) or not vol.index.equals(frame.index):
         raise ValueError("regime_t_volatility_series_alignment_invalid")
     opened = frame["open"].to_numpy(dtype=np.float64)
     high = frame["high"].to_numpy(dtype=np.float64)
     low = frame["low"].to_numpy(dtype=np.float64)
-    labels: list[dict[str, Any]] = []
-
-    for decision_index in range(size):
-        entry_index = decision_index + 1
-        if entry_index + horizon_bars - 1 >= size:
-            labels.append(
-                {"label": None, "outcome": "UNAVAILABLE", "barrier_end_index": None}
-            )
-            continue
-        vol_value = float(vol.iloc[decision_index])
-        if not np.isfinite(vol_value) or vol_value <= 0.0:
-            labels.append(
-                {"label": None, "outcome": "UNAVAILABLE", "barrier_end_index": None}
-            )
-            continue
-        entry = float(opened[entry_index])
-        upper = entry * (1.0 + k * vol_value)
-        lower = entry * (1.0 - k * vol_value)
-        if lower <= 0.0:
-            raise RuntimeError("regime_t_lower_barrier_non_positive")
-        outcome = "TIMEOUT"
-        label: int | None = None
-        end_index = entry_index + horizon_bars - 1
-        for future_index in range(entry_index, end_index + 1):
-            upper_hit = high[future_index] >= upper
-            lower_hit = low[future_index] <= lower
-            if upper_hit and lower_hit:
-                outcome = "AMBIGUOUS"
-                end_index = future_index
-                break
-            if upper_hit:
-                outcome = "UPPER_FIRST"
-                label = 1
-                end_index = future_index
-                break
-            if lower_hit:
-                outcome = "LOWER_FIRST"
-                label = 0
-                end_index = future_index
-                break
-        labels.append(
-            {
-                "label": label,
-                "outcome": outcome,
-                "entry_index": entry_index,
-                "barrier_end_index": end_index,
-                "entry_price": entry,
-                "volatility_fraction": vol_value,
-                "upper_barrier": upper,
-                "lower_barrier": lower,
-            }
+    volatility = vol.to_numpy(dtype=np.float64)
+    records = [
+        _label_one_decision(
+            index, opened, high, low, volatility, len(frame), k, horizon_bars
         )
-    result = pd.DataFrame(labels)
-    result.insert(0, "decision_index", np.arange(size, dtype=np.int64))
+        for index in range(len(frame))
+    ]
+    result = pd.DataFrame(records)
+    result.insert(0, "decision_index", np.arange(len(frame), dtype=np.int64))
     result["label"] = result["label"].astype("Int64")
     result["outcome"] = result["outcome"].astype("string")
     return result
