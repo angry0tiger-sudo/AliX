@@ -1,5 +1,7 @@
 name: Regime M Public Microstructure Capture
 
+# This file is intentionally updated on the current default branch so GitHub Actions re-indexes it.
+
 on:
   # Start away from the top of the hour to reduce scheduler contention.
   schedule:
