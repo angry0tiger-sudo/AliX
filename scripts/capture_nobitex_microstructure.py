@@ -498,6 +498,48 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _coverage_segment_metadata(
+    started_at: str,
+    finished_at: str,
+    duration_minutes: int,
+) -> dict[str, object]:
+    event_name = os.environ.get("GITHUB_EVENT_NAME", "workflow_dispatch")
+    if event_name == "schedule":
+        schedule_interval_minutes = int(
+            os.environ.get("ALIX_SCHEDULE_INTERVAL_MINUTES", "0")
+        )
+        if duration_minutes > 55 or schedule_interval_minutes <= duration_minutes:
+            raise ValueError("SCHEDULED_CAPTURE_CADENCE_OR_DURATION_INVALID")
+        return {
+            "kind": "SCHEDULED_SOAK_SEGMENT",
+            "trigger": event_name,
+            "capture_start_utc": started_at,
+            "capture_end_utc": finished_at,
+            "capture_duration_minutes_requested": duration_minutes,
+            "capture_segments_must_not_be_joined_as_continuous": True,
+            "inter_segment_coverage_status": "MISSING_COVERAGE",
+            "schedule_interval_minutes": schedule_interval_minutes,
+            "nominal_inter_segment_missing_minutes": (
+                schedule_interval_minutes - duration_minutes
+            ),
+            "exact_inter_segment_gap_boundaries": (
+                "DERIVE_FROM_PREVIOUS_FINISHED_AT_AND_NEXT_STARTED_AT_DURING_FINAL_MERGE"
+            ),
+        }
+    return {
+        "kind": "MANUAL_CAPTURE_SEGMENT",
+        "trigger": event_name,
+        "capture_start_utc": started_at,
+        "capture_end_utc": finished_at,
+        "capture_duration_minutes_requested": duration_minutes,
+        "capture_segments_must_not_be_joined_as_continuous": True,
+        "inter_segment_coverage_status": "NOT_APPLICABLE",
+        "schedule_interval_minutes": None,
+        "nominal_inter_segment_missing_minutes": None,
+        "exact_inter_segment_gap_boundaries": "NOT_APPLICABLE",
+    }
+
+
 def write_capture_artifacts(
     output_dir: Path,
     book_rows: list[dict[str, object]],
@@ -544,37 +586,9 @@ def write_capture_artifacts(
     rest_trade_seed_count = sum(
         row["source"] == "rest_recent_seed" for row in trade_rows
     )
-    event_name = os.environ.get("GITHUB_EVENT_NAME", "workflow_dispatch")
-    schedule_interval_minutes = int(
-        os.environ.get("ALIX_SCHEDULE_INTERVAL_MINUTES", "0")
+    coverage_segment = _coverage_segment_metadata(
+        started_at, finished_at, duration_minutes
     )
-    is_scheduled = event_name == "schedule"
-    if is_scheduled and (
-        duration_minutes > 55 or schedule_interval_minutes <= duration_minutes
-    ):
-        raise ValueError("SCHEDULED_CAPTURE_CADENCE_OR_DURATION_INVALID")
-    coverage_segment: dict[str, object] = {
-        "kind": "SCHEDULED_SOAK_SEGMENT" if is_scheduled else "MANUAL_CAPTURE_SEGMENT",
-        "trigger": event_name,
-        "capture_start_utc": started_at,
-        "capture_end_utc": finished_at,
-        "capture_duration_minutes_requested": duration_minutes,
-        "capture_segments_must_not_be_joined_as_continuous": True,
-        "inter_segment_coverage_status": (
-            "MISSING_COVERAGE" if is_scheduled else "NOT_APPLICABLE"
-        ),
-        "schedule_interval_minutes": (
-            schedule_interval_minutes if is_scheduled else None
-        ),
-        "nominal_inter_segment_missing_minutes": (
-            schedule_interval_minutes - duration_minutes if is_scheduled else None
-        ),
-        "exact_inter_segment_gap_boundaries": (
-            "DERIVE_FROM_PREVIOUS_FINISHED_AT_AND_NEXT_STARTED_AT_DURING_FINAL_MERGE"
-            if is_scheduled
-            else "NOT_APPLICABLE"
-        ),
-    }
     manifest: dict[str, object] = {
         "schema_version": "alix.regime-m.capture.v1",
         "code_commit_sha": os.environ.get("GITHUB_SHA", "LOCAL_UNSET"),
