@@ -10,12 +10,13 @@ import csv
 import hashlib
 import importlib
 import json
+import os
 import ssl
 import time
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Any, Callable, Protocol, cast
+from typing import Callable, Protocol, cast
 from urllib.request import Request, urlopen
 
 REST_BASE = "https://apiv2.nobitex.ir"
@@ -111,7 +112,7 @@ def make_trade_row(
     side = payload.get("type")
     if isinstance(timestamp, bool) or not isinstance(timestamp, int) or timestamp <= 0:
         raise ValueError("TRADE_TIMESTAMP_INVALID")
-    if side not in {"buy", "sell"}:
+    if not isinstance(side, str) or side not in {"buy", "sell"}:
         raise ValueError("TRADE_SIDE_INVALID")
     price = decimal_value(payload.get("price"), "trade_price")
     volume = decimal_value(payload.get("volume"), "trade_volume", allow_zero=True)
@@ -331,12 +332,15 @@ def _process_pushes(
             if not isinstance(timestamp, int):
                 gaps.append(gap_row("orderbook", captured_at, captured_at, "invalid_or_missing_book_timestamp"))
                 continue
+            gap: dict[str, object] | None = None
             if offset is None:
                 gaps.append(gap_row("orderbook", captured_at, captured_at, "publisher_offset_missing", end_ms=timestamp))
             else:
                 gap = offsets.observe("orderbook", offset, timestamp)
                 if gap is not None:
                     gaps.append(gap)
+            if gap is not None and gap["reason"] == "non_monotonic_publisher_offset":
+                continue
             if timestamp > snapshot_cutoff_ms:
                 book_rows.append(make_book_row(payload, captured_at, "websocket", offset))
         elif channel_value == "public:trades-BTCIRT":
@@ -350,6 +354,8 @@ def _process_pushes(
                 gap = offsets.observe("trades", offset, timestamp)
                 if gap is not None:
                     gaps.append(gap)
+                    if gap["reason"] == "non_monotonic_publisher_offset":
+                        continue
             row = make_trade_row(payload, captured_at, "websocket", offset)
             key = _trade_key(row)
             if key in seen_trades:
@@ -404,8 +410,22 @@ def write_capture_artifacts(
             "bytes": path.stat().st_size,
             "records": count,
         }
+    def time_range(rows: list[dict[str, object]]) -> dict[str, str | None]:
+        timestamps = [int(str(row["exchange_timestamp_ms"])) for row in rows]
+        if not timestamps:
+            return {"first_exchange_timestamp_ms": None, "last_exchange_timestamp_ms": None}
+        return {
+            "first_exchange_timestamp_ms": str(min(timestamps)),
+            "last_exchange_timestamp_ms": str(max(timestamps)),
+        }
+
+    websocket_book_count = sum(row["source"] == "websocket" for row in book_rows)
+    websocket_trade_count = sum(row["source"] == "websocket" for row in trade_rows)
+    rest_trade_seed_count = sum(row["source"] == "rest_recent_seed" for row in trade_rows)
     manifest: dict[str, object] = {
         "schema_version": "alix.regime-m.capture.v1",
+        "code_commit_sha": os.environ.get("GITHUB_SHA", "LOCAL_UNSET"),
+        "workflow_run_id": os.environ.get("GITHUB_RUN_ID", "LOCAL_UNSET"),
         "market": "BTCIRT",
         "source": "NOBITEX_PUBLIC_REST_AND_WEBSOCKET",
         "authorization_header_sent": False,
@@ -421,6 +441,13 @@ def write_capture_artifacts(
         "started_at_utc": started_at,
         "finished_at_utc": finished_at,
         "requested_duration_minutes": duration_minutes,
+        "time_ranges": {
+            "orderbook": time_range(book_rows),
+            "trades": time_range(trade_rows),
+        },
+        "websocket_orderbook_records": websocket_book_count,
+        "websocket_trade_records": websocket_trade_count,
+        "rest_trade_seed_records": rest_trade_seed_count,
         "record_counts": {
             "orderbook": len(book_rows),
             "trades": len(trade_rows),
@@ -428,7 +455,7 @@ def write_capture_artifacts(
             "duplicate_trades_dropped": duplicate_trade_count,
         },
         "gap_count": len(gaps),
-        "capture_status": "GAPPED" if gaps else "NO_GAPS_OBSERVED",
+        "capture_status": "GAPPED" if gaps else ("DEGRADED" if errors else "NO_GAPS_OBSERVED"),
         "errors": errors,
         "files": files,
     }
@@ -527,6 +554,15 @@ def run_capture(duration_minutes: int, output_dir: Path) -> dict[str, object]:
                         if socket is not None:
                             socket.close()
                             socket = None
+                if socket is None:
+                    reconnect_end = utc_now()
+                    for stream in ("orderbook", "trades"):
+                        gaps.append(
+                            gap_row(
+                                stream, disconnect_start, reconnect_end,
+                                "reconnect_unavailable_no_replay",
+                            )
+                        )
                 disconnect_start = None
     except Exception as exc:
         errors.append(f"capture_failed:{type(exc).__name__}:{exc}")
