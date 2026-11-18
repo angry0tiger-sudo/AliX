@@ -1,0 +1,200 @@
+name: Regime M Public Market Data Feasibility Smoke
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  public-feed-smoke:
+    if: github.ref == 'refs/heads/research/nobitex-hf-strategy'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact authorized Research commit
+        uses: actions/checkout@v4
+        with:
+          ref: \${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Node.js with built-in WebSocket
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Probe public REST and WebSocket feeds without credentials
+        run: |
+          node --input-type=module <<'JS'
+          import { writeFileSync, mkdirSync } from "node:fs";
+          import { execFileSync } from "node:child_process";
+
+          const base = "https://apiv2.nobitex.ir";
+          const report = {
+            schema_version: "alix.regime-m.public-feed-smoke.v1",
+            execution: "GITHUB_ACTIONS_HOSTED_RUNNER",
+            research_commit: execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim(),
+            credentials: {
+              authorization_header_sent: false,
+              private_api_calls: 0,
+              websocket_connection_token_sent: false
+            },
+            safety: {
+              holdout_bytes_read: false,
+              posthack_data_read: false,
+              private_api_calls: 0,
+              real_order_attempts: 0,
+              paper_orders: 0,
+              exchange_network_access: "PUBLIC_MARKET_DATA_ONLY",
+              Champion: null,
+              order_permission: false,
+              trading_authorization: "NO-GO"
+            },
+            rest: {},
+            websocket: {}
+          };
+
+          async function getPublic(path) {
+            const response = await fetch(base + path, {
+              headers: { Accept: "application/json", "User-Agent": "AliX-Regime-M-public-data-feasibility/1.0" },
+              signal: AbortSignal.timeout(15000)
+            });
+            const body = await response.json();
+            if (!response.ok || body.status !== "ok") {
+              throw new Error("HTTP " + response.status + " / API status " + body.status);
+            }
+            return body;
+          }
+
+          for (const [name, path] of [
+            ["orderbook_v3", "/v3/orderbook/BTCIRT"],
+            ["depth_v2_experimental", "/v2/depth/BTCIRT"],
+            ["public_trades_v2", "/v2/trades/BTCIRT"]
+          ]) {
+            try {
+              const body = await getPublic(path);
+              const item = { reachable: true, api_status: body.status };
+              if (name !== "public_trades_v2") {
+                if (!Array.isArray(body.bids) || !Array.isArray(body.asks)) throw new Error("book_schema_invalid");
+                Object.assign(item, {
+                  bid_level_count: body.bids.length,
+                  ask_level_count: body.asks.length,
+                  last_update: body.lastUpdate,
+                  sample_level_shape: "price_quantity_pairs"
+                });
+              } else {
+                if (!Array.isArray(body.trades)) throw new Error("trades_schema_invalid");
+                const times = body.trades.map(x => x.time).filter(Number.isFinite);
+                Object.assign(item, {
+                  returned_trade_count: body.trades.length,
+                  earliest_returned_timestamp: times.length ? Math.min(...times) : null,
+                  latest_returned_timestamp: times.length ? Math.max(...times) : null,
+                  sample_fields: body.trades[0] ? Object.keys(body.trades[0]).sort() : []
+                });
+              }
+              report.rest[name] = item;
+            } catch (error) {
+              report.rest[name] = { reachable: false, error: String(error).slice(0, 250) };
+            }
+          }
+
+          async function probeWebSocket() {
+            const url = "wss://ws.nobitex.ir/connection/websocket";
+            const ws = new WebSocket(url);
+            const result = {
+              endpoint: url,
+              connection_token_sent: false,
+              connected: false,
+              subscriptions_accepted: {},
+              publication_counts: {
+                "public:orderbook-BTCIRT": 0,
+                "public:trades-BTCIRT": 0
+              },
+              first_publication_shapes: {}
+            };
+            await new Promise((resolve, reject) => {
+              const timer = setTimeout(() => reject(new Error("websocket_open_timeout")), 15000);
+              ws.addEventListener("open", () => { clearTimeout(timer); resolve(); }, { once: true });
+              ws.addEventListener("error", () => { clearTimeout(timer); reject(new Error("websocket_open_error")); }, { once: true });
+            });
+            result.connected = true;
+            const pending = new Map([[1, "connect"], [2, "public:orderbook-BTCIRT"], [3, "public:trades-BTCIRT"]]);
+            const complete = new Set();
+            ws.send(JSON.stringify({ connect: {}, id: 1 }));
+            const started = Date.now();
+            try {
+              while (Date.now() - started < 30000) {
+                const message = await new Promise((resolve, reject) => {
+                  const timer = setTimeout(() => reject(new Error("websocket_message_timeout")), 6000);
+                  const onMessage = event => { clearTimeout(timer); ws.removeEventListener("message", onMessage); resolve(JSON.parse(String(event.data))); };
+                  ws.addEventListener("message", onMessage);
+                }).catch(error => {
+                  if (String(error).includes("message_timeout")) return null;
+                  throw error;
+                });
+                if (!message || typeof message !== "object") continue;
+                if (message.id === 1 && message.connect) {
+                  complete.add(1);
+                  ws.send(JSON.stringify({ id: 2, subscribe: { channel: "public:orderbook-BTCIRT" } }));
+                  ws.send(JSON.stringify({ id: 3, subscribe: { channel: "public:trades-BTCIRT" } }));
+                  continue;
+                }
+                if (message.id === 1 && message.error) throw new Error("websocket_connect_rejected");
+                if (message.id === 2 || message.id === 3) {
+                  const channel = pending.get(message.id);
+                  result.subscriptions_accepted[channel] = Boolean(message.subscribe) && !message.error;
+                  complete.add(message.id);
+                  continue;
+                }
+                const push = message.push;
+                const channel = push?.channel;
+                if (Object.hasOwn(result.publication_counts, channel)) {
+                  result.publication_counts[channel] += 1;
+                  if (!Object.hasOwn(result.first_publication_shapes, channel)) {
+                    let data = push.pub?.data;
+                    if (typeof data === "string") { try { data = JSON.parse(data); } catch {} }
+                    result.first_publication_shapes[channel] = data && typeof data === "object" ? Object.keys(data).sort() : typeof data;
+                  }
+                }
+                if (complete.has(2) && complete.has(3)
+                    && Object.values(result.publication_counts).every(count => count > 0)) break;
+              }
+            } finally {
+              ws.close();
+            }
+            result.subscriptions_fully_acknowledged =
+              result.subscriptions_accepted["public:orderbook-BTCIRT"] === true
+              && result.subscriptions_accepted["public:trades-BTCIRT"] === true;
+            return result;
+          }
+
+          try {
+            report.websocket = await probeWebSocket();
+          } catch (error) {
+            report.websocket = { connected_and_subscribed: false, error: String(error).slice(0, 300) };
+          }
+
+          const restReachable = Object.values(report.rest).filter(x => x.reachable).length;
+          report.summary = {
+            public_rest_endpoints_reachable: restReachable,
+            websocket_connected: Boolean(report.websocket.connected),
+            websocket_subscriptions_acknowledged: Boolean(report.websocket.subscriptions_fully_acknowledged),
+            orderbook_publications: report.websocket.publication_counts?.["public:orderbook-BTCIRT"] ?? 0,
+            trade_publications: report.websocket.publication_counts?.["public:trades-BTCIRT"] ?? 0,
+            completed_utc: new Date().toISOString()
+          };
+          mkdirSync(".artifacts/regime-m", { recursive: true });
+          writeFileSync(".artifacts/regime-m/public-feed-smoke.json", JSON.stringify(report, null, 2) + "\n");
+          console.log(JSON.stringify(report, null, 2));
+          JS
+
+      - name: Upload public market-data feasibility report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: regime-m-public-feed-smoke-\${{ github.sha }}
+          path: .artifacts/regime-m/public-feed-smoke.json
+          if-no-files-found: error
+          retention-days: 30
