@@ -128,7 +128,9 @@ def test_manifest_contains_sha256_record_counts_and_safety(tmp_path: Path) -> No
     assert counts["orderbook"] == 1
     assert counts["trades"] == 1
     assert counts["duplicate_trades_dropped"] == 0
-    assert manifest["trade_deduplication_policy"].startswith("none; preserve")
+    policy = manifest["trade_deduplication_policy"]
+    assert isinstance(policy, str)
+    assert policy.startswith("none; preserve")
     files = manifest["files"]
     assert isinstance(files, dict)
     assert files["orderbook.csv"]["records"] == 1
