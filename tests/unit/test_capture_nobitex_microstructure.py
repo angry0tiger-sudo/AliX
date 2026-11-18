@@ -153,6 +153,53 @@ def test_manifest_contains_sha256_record_counts_and_safety(tmp_path: Path) -> No
     assert manifest["trading_authorization"] == "NO-GO"
 
 
+def test_scheduled_segment_declares_missing_inter_run_coverage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "schedule")
+    monkeypatch.setenv("ALIX_SCHEDULE_INTERVAL_MINUTES", "60")
+
+    manifest = write_capture_artifacts(
+        tmp_path,
+        [],
+        [],
+        [],
+        "2026-11-18T00:00:00Z",
+        "2026-11-18T00:55:00Z",
+        55,
+        [],
+    )
+
+    coverage = manifest["coverage_segment"]
+    assert isinstance(coverage, dict)
+    assert coverage["inter_segment_coverage_status"] == "MISSING_COVERAGE"
+    assert coverage["schedule_interval_minutes"] == 60
+    assert coverage["nominal_inter_segment_missing_minutes"] == 5
+    assert coverage["exact_inter_segment_gap_boundaries"].startswith("DERIVE_FROM_")
+    assert coverage["capture_segments_must_not_be_joined_as_continuous"] is True
+
+
+def test_scheduled_segment_rejects_a_window_without_missing_coverage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "schedule")
+    monkeypatch.setenv("ALIX_SCHEDULE_INTERVAL_MINUTES", "55")
+
+    with pytest.raises(
+        ValueError, match="SCHEDULED_CAPTURE_CADENCE_OR_DURATION_INVALID"
+    ):
+        write_capture_artifacts(
+            tmp_path,
+            [],
+            [],
+            [],
+            "2026-11-18T00:00:00Z",
+            "2026-11-18T00:55:00Z",
+            55,
+            [],
+        )
+
+
 def test_push_processor_marks_offset_gap_and_drops_non_monotonic_event() -> None:
     tracker = OffsetTracker()
     book_rows: list[dict[str, object]] = []

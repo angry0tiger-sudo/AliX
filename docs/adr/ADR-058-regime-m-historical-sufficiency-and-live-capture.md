@@ -62,7 +62,9 @@ No private credentials, private account endpoints, Holdout bytes, or Post-Hack b
 - `tests/unit/test_capture_nobitex_microstructure.py`
 - `.github/workflows/capture-microstructure.yml`
 
-The workflow is `workflow_dispatch` only. Its bounded capture duration is selectable from 1, 5, 15, 30, or 60 minutes. It has no automatic schedule, so no unbounded or unattended collection is started. It reuses the Standard CI workflow and runs capture only after that CI job succeeds.
+The workflow supports both a bounded `workflow_dispatch` and an hourly `schedule` trigger (`cron: 37 * * * *`, UTC). Scheduled runs capture for 55 minutes in each 60-minute cadence. Manual durations are bounded to 1, 5, 15, 30, or 55 minutes. The capture job timeout is 65 minutes; Standard CI remains a separate prerequisite job, and capture starts only after Standard CI succeeds. The cron minute is intentionally offset from the top of the hour to reduce scheduler contention.
+
+GitHub Actions executes scheduled workflows only when the workflow file exists on the repository's default branch, and the run uses that branch. The repository's default branch is `main`; therefore, this Research-branch-only schedule cannot activate while `main` remains the default. The M1.5 activation procedure must use a temporary repository default-branch setting pointing to `research/nobitex-hf-strategy` while preserving the `main` ref and its frozen tree. Restore the default-branch setting to `main` after the bounded soak. No commit or tree mutation on `main` is authorized.
 
 ### 4.2 Public data acquisition
 
@@ -79,7 +81,7 @@ The artifact contains:
 - `orderbook.csv`: capture timestamp, exchange book timestamp, publisher offset, best bid/ask and sizes, spread, mid-price, and top-ten aggregated L2 levels.
 - `trades.csv`: capture timestamp, exchange trade timestamp, publisher offset, side, price, volume, and source (recent REST seed or live WebSocket). Potential overlap between the REST seed and WebSocket window is preserved rather than silently deduplicated; consumers must use source/time provenance and must not assume rows equal unique exchange executions.
 - `gaps.csv`: stream, capture interval, exchange timestamps/offsets when available, reason, and explicit `replay_attempted=false` / `replay_available=false`.
-- `manifest.json`: code SHA, workflow run ID, market, source, start/end UTC, requested duration, exchange-time ranges, record counts by stream/source, gap count/status, file byte sizes, SHA-256 digests, error list, and safety invariants.
+- `manifest.json`: code SHA, workflow run ID, market, source, start/end UTC, requested duration, exchange-time ranges, record counts by stream/source, gap count/status, file byte sizes, SHA-256 digests, error list, and safety invariants. Scheduled segments additionally declare `inter_segment_coverage_status=MISSING_COVERAGE`, the 60-minute cadence, 55-minute capture window, nominal five-minute uncovered interval, and the rule that exact adjacent-segment gap boundaries are calculated from the previous manifest's `finished_at_utc` and the next manifest's `started_at_utc` during final merge.
 - `manifest.sha256`: SHA-256 digest of the manifest.
 
 CSV is used for transparent first-pilot inspection and does not require introducing a new Parquet dependency. The manifest has a schema version so a later format migration can be explicit.
@@ -106,7 +108,17 @@ The mock suite validates:
 - Rejection of a non-monotonic book publication.
 - CSV record counts, SHA-256 manifests, and no-auth/no-trading invariants.
 
-No unit test opens a network connection. All real-data interaction is isolated in the explicitly dispatched GitHub Actions capture job.
+No unit test opens a network connection. All real-data interaction is isolated in the explicitly dispatched or scheduled GitHub Actions capture job.
+
+### 4.6 M1.5 scheduled soak and missing-coverage semantics
+
+- Schedule: once per hour at minute 37 UTC (`37 * * * *`); scheduled capture duration: exactly 55 minutes; expected nominal uncovered time per cadence: five minutes.
+- Every run uploads a distinct artifact named with a UTC timestamp and GitHub run ID. Artifacts are retained for 30 days.
+- Each run is an independent segment. No run attempts to stitch, replay, interpolate, forward-fill, or synthesize observations across segment boundaries.
+- Each scheduled manifest records `inter_segment_coverage_status=MISSING_COVERAGE`, `schedule_interval_minutes=60`, `capture_duration_minutes_requested=55`, and `nominal_inter_segment_missing_minutes=5`. This is an explicit coverage classification, not a claim that the actual gap is exactly five minutes.
+- The final audit sorts manifests by `started_at_utc` and computes each actual inter-segment uncovered interval as `[previous.finished_at_utc, next.started_at_utc)`. Delays, missed/overwritten scheduler events, failed segments, and runner queue time therefore remain visible as actual missing coverage. Segments are never labelled as continuous.
+- Publisher-offset and socket-disconnect gaps remain separate observed-feed defects in `gaps.csv`; planned inter-segment missing coverage is not counted as a live WebSocket disconnect.
+- This ADR does not yet grant M1 full acceptance or authorize M3. At least 24 hours of elapsed collection coverage is required; 72 hours across several market sessions remains preferred. Actual captured minutes, missing coverage, and observed-feed gaps must be reported separately.
 
 ## 5. Pilot execution and acceptance
 
@@ -182,7 +194,9 @@ The pilot **passes** the bounded M1 ingestion/integrity smoke criteria:
 
 This five-minute sample does **not** establish day/night coverage, behaviour across changing liquidity/volatility regimes, long-run reconnection resilience, or adequate statistical sample size for OFI design. Accordingly, M1 is a pilot-level pass only; full data-quality acceptance remains conditional on an extended soak and review of the resulting corpus.
 
-Before M3, collect at least 24 hours of cumulative live L2 and trade-flow data; 72 hours across multiple market sessions is preferred. The current workflow is manually dispatched and each run is capped at 60 minutes, so multiple bounded artifacts will be required. Their exact start/end boundaries must be retained and any inter-run downtime must be represented as missing coverage; do not describe segmented runs as one uninterrupted 24-hour stream. Re-run the same manifest/hash/offset/timestamp audit across the combined artifacts before seeking M1 full acceptance.
+M1.5 is the scheduled collection phase: hourly UTC triggers at minute 37, with a 55-minute bounded capture per run and a nominal five-minute uncovered interval. Multiple timestamped, independently verifiable artifacts are expected. Their exact start/end boundaries must be retained and actual inter-run downtime must be derived from adjacent manifests as `MISSING_COVERAGE`; do not describe segmented runs as one uninterrupted 24-hour stream. Re-run the manifest/hash/offset/timestamp audit across the complete combined corpus before seeking M1 full acceptance.
+
+M1.5 has been approved by the owner, but approval is not evidence that the schedule is active or that any soak data has been collected. Actual activation time, default-branch setting, first scheduled run, elapsed interval, artifact inventory, and final audit evidence must be appended only after they are independently verified.
 
 The main branch was restored after temporary dispatch exposure and independently verified at the frozen Tree SHA:
 
@@ -194,7 +208,8 @@ No other main-branch paths were changed.
 
 - M0: public REST and WebSocket reachability — confirmed in ADR-057.
 - M2: historical six-month public L2/tick history — not documented or established; the historical-data feasibility decision is complete and prospective Live collection is required.
-- M1: five-minute pilot — PASS for ingestion, manifest integrity, timestamps, and observed offset continuity; full data-quality acceptance awaits at least 24 hours of cumulative capture (72 hours preferred) and review of all segment gaps.
+- M1: five-minute pilot — PASS for ingestion, manifest integrity, timestamps, and observed offset continuity; full data-quality acceptance awaits the M1.5 corpus audit.
+- M1.5: OWNER-APPROVED SCHEDULED SOAK DESIGN — hourly 55-minute segments, with explicit `MISSING_COVERAGE` between segments; operational activation and accumulated evidence remain pending until recorded from GitHub.
 - M3: OFI pre-registration/design implementation — NOT AUTHORIZED until the extended capture corpus passes M1 review and the owner explicitly opens M3. This ADR authorizes no OFI or DeepLOB code.
 - M4: DeepLOB — not authorized by this ADR.
 

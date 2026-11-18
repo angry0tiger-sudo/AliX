@@ -544,6 +544,37 @@ def write_capture_artifacts(
     rest_trade_seed_count = sum(
         row["source"] == "rest_recent_seed" for row in trade_rows
     )
+    event_name = os.environ.get("GITHUB_EVENT_NAME", "workflow_dispatch")
+    schedule_interval_minutes = int(
+        os.environ.get("ALIX_SCHEDULE_INTERVAL_MINUTES", "0")
+    )
+    is_scheduled = event_name == "schedule"
+    if is_scheduled and (
+        duration_minutes > 55 or schedule_interval_minutes <= duration_minutes
+    ):
+        raise ValueError("SCHEDULED_CAPTURE_CADENCE_OR_DURATION_INVALID")
+    coverage_segment: dict[str, object] = {
+        "kind": "SCHEDULED_SOAK_SEGMENT" if is_scheduled else "MANUAL_CAPTURE_SEGMENT",
+        "trigger": event_name,
+        "capture_start_utc": started_at,
+        "capture_end_utc": finished_at,
+        "capture_duration_minutes_requested": duration_minutes,
+        "capture_segments_must_not_be_joined_as_continuous": True,
+        "inter_segment_coverage_status": (
+            "MISSING_COVERAGE" if is_scheduled else "NOT_APPLICABLE"
+        ),
+        "schedule_interval_minutes": (
+            schedule_interval_minutes if is_scheduled else None
+        ),
+        "nominal_inter_segment_missing_minutes": (
+            schedule_interval_minutes - duration_minutes if is_scheduled else None
+        ),
+        "exact_inter_segment_gap_boundaries": (
+            "DERIVE_FROM_PREVIOUS_FINISHED_AT_AND_NEXT_STARTED_AT_DURING_FINAL_MERGE"
+            if is_scheduled
+            else "NOT_APPLICABLE"
+        ),
+    }
     manifest: dict[str, object] = {
         "schema_version": "alix.regime-m.capture.v1",
         "code_commit_sha": os.environ.get("GITHUB_SHA", "LOCAL_UNSET"),
@@ -563,6 +594,7 @@ def write_capture_artifacts(
         "started_at_utc": started_at,
         "finished_at_utc": finished_at,
         "requested_duration_minutes": duration_minutes,
+        "coverage_segment": coverage_segment,
         "time_ranges": {
             "orderbook": time_range(book_rows),
             "trades": time_range(trade_rows),
@@ -716,8 +748,12 @@ def _capture_until_deadline(
 
 
 def run_capture(duration_minutes: int, output_dir: Path) -> dict[str, object]:
-    if duration_minutes < 1 or duration_minutes > 60:
-        raise ValueError("DURATION_MINUTES_MUST_BE_BETWEEN_1_AND_60")
+    if duration_minutes < 1 or duration_minutes > 55:
+        raise ValueError("DURATION_MINUTES_MUST_BE_BETWEEN_1_AND_55")
+    if os.environ.get("GITHUB_EVENT_NAME") == "schedule":
+        interval = int(os.environ.get("ALIX_SCHEDULE_INTERVAL_MINUTES", "0"))
+        if interval <= duration_minutes:
+            raise ValueError("SCHEDULED_CAPTURE_REQUIRES_A_POSITIVE_COVERAGE_GAP")
     started_at = utc_now()
     state = CaptureState()
     socket: SocketLike | None = None

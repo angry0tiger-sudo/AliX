@@ -1,19 +1,22 @@
 name: Regime M Public Microstructure Capture
 
 on:
+  # Start away from the top of the hour to reduce scheduler contention.
+  schedule:
+    - cron: "37 * * * *"
   workflow_dispatch:
     inputs:
       duration_minutes:
-        description: "Bounded live capture window (minutes)"
+        description: "Bounded live capture window (minutes; maximum 55)"
         required: true
         type: choice
-        default: "60"
+        default: "55"
         options:
           - "1"
           - "5"
           - "15"
           - "30"
-          - "60"
+          - "55"
 
 permissions:
   contents: read
@@ -27,10 +30,12 @@ jobs:
   capture:
     needs: standard-ci
     runs-on: ubuntu-latest
-    timeout-minutes: 75
+    timeout-minutes: 65
     permissions:
       contents: read
     env:
+      ALIX_SCHEDULE_INTERVAL_MINUTES: ${{ github.event_name == 'schedule' && '60' || '0' }}
+      CAPTURE_DURATION_MINUTES: ${{ github.event_name == 'schedule' && '55' || inputs.duration_minutes || '55' }}
       ALIX_DRY_RUN: "true"
       ALIX_ALLOW_LIVE_TRADING: "false"
       PYTHONUNBUFFERED: "1"
@@ -55,10 +60,14 @@ jobs:
       - name: Run mock-only data-contract and gap-detection tests
         run: pytest tests/unit/test_capture_nobitex_microstructure.py -q
 
+      - name: Resolve a unique UTC segment identifier
+        id: segment
+        run: echo "timestamp=$(date -u +'%Y%m%dT%H%M%SZ')" >> "$GITHUB_OUTPUT"
+
       - name: Capture public BTCIRT L2 snapshots and market-wide trades
         run: |
           python -m scripts.capture_nobitex_microstructure \
-            --duration-minutes "${{ inputs.duration_minutes }}" \
+            --duration-minutes "$CAPTURE_DURATION_MINUTES" \
             --output-dir .artifacts/regime-m-capture
 
       - name: Validate manifest hashes, record counts, and fail-closed invariants
@@ -71,6 +80,47 @@ jobs:
           root = Path(".artifacts/regime-m-capture")
           manifest_path = root / "manifest.json"
           manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+          scheduled = os.environ["GITHUB_EVENT_NAME"] == "schedule"
+          duration = int(os.environ["CAPTURE_DURATION_MINUTES"])
+          interval = int(os.environ["ALIX_SCHEDULE_INTERVAL_MINUTES"])
+          if scheduled:
+              assert duration == 55
+              assert interval == 60
+              manifest["coverage_segment"] = {
+                  "kind": "SCHEDULED_SOAK_SEGMENT",
+                  "trigger": "schedule",
+                  "capture_start_utc": manifest["started_at_utc"],
+                  "capture_end_utc": manifest["finished_at_utc"],
+                  "capture_duration_minutes_requested": duration,
+                  "schedule_interval_minutes": interval,
+                  "inter_segment_coverage_status": "MISSING_COVERAGE",
+                  "nominal_inter_segment_missing_minutes": interval - duration,
+                  "exact_inter_segment_gap_boundaries": (
+                      "DERIVE_FROM_PREVIOUS_FINISHED_AT_AND_NEXT_STARTED_AT_DURING_FINAL_MERGE"
+                  ),
+                  "capture_segments_must_not_be_joined_as_continuous": True,
+              }
+          else:
+              manifest["coverage_segment"] = {
+                  "kind": "MANUAL_CAPTURE_SEGMENT",
+                  "trigger": os.environ["GITHUB_EVENT_NAME"],
+                  "capture_start_utc": manifest["started_at_utc"],
+                  "capture_end_utc": manifest["finished_at_utc"],
+                  "capture_duration_minutes_requested": duration,
+                  "schedule_interval_minutes": None,
+                  "inter_segment_coverage_status": "NOT_APPLICABLE",
+                  "nominal_inter_segment_missing_minutes": None,
+                  "exact_inter_segment_gap_boundaries": "NOT_APPLICABLE",
+                  "capture_segments_must_not_be_joined_as_continuous": True,
+              }
+          manifest_path.write_text(
+              json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          manifest_digest = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+          (root / "manifest.sha256").write_text(
+              f"{manifest_digest}  manifest.json\n", encoding="utf-8"
+          )
           counts = manifest["record_counts"]
           assert manifest["code_commit_sha"] == "${{ github.sha }}"
           assert manifest["workflow_run_id"] == "${{ github.run_id }}"
@@ -84,6 +134,15 @@ jobs:
           assert manifest["Champion"] is None
           assert manifest["order_permission"] is False
           assert manifest["trading_authorization"] == "NO-GO"
+          coverage = manifest["coverage_segment"]
+          if scheduled:
+              assert coverage["inter_segment_coverage_status"] == "MISSING_COVERAGE"
+              assert coverage["schedule_interval_minutes"] == 60
+              assert coverage["capture_duration_minutes_requested"] == 55
+              assert coverage["nominal_inter_segment_missing_minutes"] == 5
+              assert coverage["capture_segments_must_not_be_joined_as_continuous"] is True
+          else:
+              assert coverage["inter_segment_coverage_status"] == "NOT_APPLICABLE"
           assert counts["orderbook"] > 0
           assert counts["trades"] > 0
           assert manifest["websocket_orderbook_records"] > 0
@@ -106,6 +165,8 @@ jobs:
               f"- WebSocket book publications: {manifest['websocket_orderbook_records']}",
               f"- WebSocket trade publications: {manifest['websocket_trade_records']}",
               f"- Capture status: {manifest['capture_status']}",
+              f"- Coverage status: {coverage['inter_segment_coverage_status']}",
+              f"- Nominal inter-segment missing minutes: {coverage['nominal_inter_segment_missing_minutes']}",
           ]
           import os
           total_bytes = sum(item["bytes"] for item in manifest["files"].values())
@@ -117,7 +178,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: regime-m-microstructure-${{ github.run_id }}
+          name: regime-m-microstructure-${{ steps.segment.outputs.timestamp }}-${{ github.run_id }}
           path: .artifacts/regime-m-capture/*
           if-no-files-found: warn
           retention-days: 30
