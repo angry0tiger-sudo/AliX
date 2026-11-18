@@ -409,15 +409,9 @@ def _g46_verdict(
             "PASS",
             "At least one unique horizon candidate cleared all four gates at both frozen costs.",
         )
-    unique_records = [
-        item for item in diagnostics if int(item["candidate_slot"]) == 1
-    ]
+    unique_records = [item for item in diagnostics if int(item["candidate_slot"]) == 1]
     qualifying = sum(
-        int(
-            item["statistics"]["lower_bound_to_cost"][str(cost)][
-                "count_above_cost"
-            ]
-        )
+        int(item["statistics"]["lower_bound_to_cost"][str(cost)]["count_above_cost"])
         for item in unique_records
         for cost in COSTS_BPS
     )
