@@ -20,9 +20,7 @@ from scripts.run_regime_r_trials import FEATURE_COLUMNS, build_features
 
 def _frame(volume: np.ndarray) -> pd.DataFrame:
     rows = int(volume.size)
-    timestamps = pd.date_range(
-        "2022-01-01T00:30:00Z", periods=rows, freq="h"
-    )
+    timestamps = pd.date_range("2022-01-01T00:30:00Z", periods=rows, freq="h")
     close = 100.0 + np.arange(rows, dtype=np.float64) * 0.1
     opened = close - 0.02
     return pd.DataFrame(
