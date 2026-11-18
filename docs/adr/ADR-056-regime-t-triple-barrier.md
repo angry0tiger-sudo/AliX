@@ -1,6 +1,6 @@
 # ADR-056 — Regime T Triple-Barrier Target and Logistic Baseline
 
-- **Status:** PREREGISTERED_LOCKED — EXECUTION PENDING
+- **Status:** EXECUTED — NO-GO (55% owner screening threshold not met)
 - **Date:** 2026-11-18
 - **Branch:** research/nobitex-hf-strategy
 - **Experiment:** REGIME-T-TB-LOGISTIC-01
@@ -75,14 +75,78 @@ Safety invariants:
 - order_permission = false
 - trading_authorization = NO-GO
 
-No G3 file/parameter, G4.6 file, HGBQ-CQR code, or Regime P result is modified. main remains frozen. Any temporary workflow exposure for the first dispatch must be deleted and the original main tree SHA 5761c6c34143f8e6924f53a4e745c48932a5f791 restored exactly.
+No G3 file/parameter, G4.6 file, HGBQ-CQR code, or Regime P result is modified. main remains frozen. The temporary dispatch workflow was exposed on main only during completed dispatch windows and was removed after each run. The main branch tree was verified restored to the original SHA 5761c6c34143f8e6924f53a4e745c48932a5f791.
 
-## 7. Initial execution status and infrastructure recovery
+## 7. Execution history, results, and decision
 
-The first manual dispatch was correctly bound to Research commit `e1d478556386404dde4b15c94af4ce21d8a353ba`, Run #1 / ID `44340086418`. GitHub cancelled the job during the `setup-python` pip-cache restore, before dependency installation, source-hash verification, synthetic unit tests, PRE-HACK loading, label generation, or model fitting. All experiment steps were skipped. No target labels, model outputs, metrics, or test-fold outcomes were produced by that attempt.
+### 7.1 Infrastructure attempts (no model outcome)
 
-**Owner Directive — infrastructure-only recovery:** complete the already registered experiment without changing its target, features, folds, model, threshold, or evaluation rules. The workflow's optional setup-python cache restore has been removed to avoid the interrupted cache transfer. The preregistration JSON remains byte-identical. This recovery does not add a candidate, tune a parameter, inspect an outcome, or access additional data. Only a successful Actions run can establish the experiment result.
+- **Run #1 / `44340086418`**, Research SHA `e1d478556386404dde4b15c94af4ce21d8a353ba`: GitHub cancelled during the `setup-python` pip-cache restore. Dependency installation, hash verification, synthetic tests, label generation, and model fitting did not run. No experiment output was produced.
+- **Run #2 / `44348023980`**, Research SHA `5df5cd0be6364b186e6d7242a24f61294170ce32`: PRE-HACK data, manifest, G3, and preregistration commitments verified successfully. The synthetic test command `pytest --no-cov -q tests/unit/test_regime_t` then failed because the isolated workflow environment had not installed `pytest-cov`, which provides the `--no-cov` option. The label-generation and model-fit steps were skipped. No labels, predictions, accuracy, or fold outcomes were produced.
+- Infrastructure-only correction: pin `pytest-cov==7.0.0` in the workflow dependency installation. The target, features, fold boundaries, learner, model parameters, threshold, dataset, G3 file, and preregistration JSON remained unchanged. The preregistration SHA-256 remained `b6118f4e7420b26c8caf471ef7281b7b452c031ed7a68b6d8eb5a7d210d103ad`. As neither prior run reached labeling or fitting, no model outcome had been observed before the successful experiment below.
 
-Final run provenance, metrics, artifacts and interpretation will be added here only after GitHub Actions completes against the exact Research commit.
+### 7.2 Completed experiment provenance
+
+- **Experiment:** `REGIME-T-TB-LOGISTIC-01`
+- **Successful workflow:** [Run #3 / `44349379156`](https://github.com/angry0tiger-sudo/AliX/actions/runs/44349379156)
+- **Conclusion:** `success`
+- **Research ref / commit:** `research/nobitex-hf-strategy` / `5767c0c7e473f7932e4f6392b9684526d205040c`
+- **Standard CI:** [Run #2512 / `44348338969`](https://github.com/angry0tiger-sudo/AliX/actions/runs/44348338969), `success` on the same commit
+- **Dataset:** PRE-HACK only, 31,801 rows, SHA-256 `0aa13607d1da68c4720919f233635bb33d34048e5bd67d3ecc2ce9bb7c2b462e`
+- **Manifest SHA-256:** `b50fea25f30d282c2eafcb262751367e11d6490eda0d463de5926b660eaf1a26`
+- **Frozen G3 SHA-256:** `92cdcf19a02f5cf9659f327704ed4d6c5cf0d85687aff2ba35b9542fec5cfdaa`
+- **Preregistration SHA-256:** `b6118f4e7420b26c8caf471ef7281b7b452c031ed7a68b6d8eb5a7d210d103ad`
+- **Artifact:** `regime-t-triple-barrier-prehack-5767c0c7e473f7932e4f6392b9684526d205040c`, artifact ID `14448360682`, archive digest `sha256:cd5fb3d91b75922df19d41d62e1821145b281519caa6c9fc6d95f95878b6d10b`
+- Artifact files: `triple-barrier-labels.csv`, `labeling-summary.json`, `logistic-evaluation.json`, and `out-of-fold-predictions.csv`.
+
+### 7.3 Target outcome counts
+
+The 31,801 input rows resolved into:
+
+| Outcome | Count | Treatment |
+|---|---:|---|
+| `LOWER_FIRST` (class 0) | 12,405 | Included in binary fitting/scoring |
+| `UPPER_FIRST` (class 1) | 12,335 | Included in binary fitting/scoring |
+| `TIMEOUT` | 6,970 | Censored; excluded |
+| `AMBIGUOUS` | 54 | Censored; excluded |
+| `UNAVAILABLE` | 37 | Censored; excluded |
+
+Binary events totalled 24,740. The 7,061 timeout, ambiguous, and unavailable rows were not assigned a binary class for model scoring.
+
+### 7.4 Walk-forward model results
+
+One fixed `StandardScaler + LogisticRegression` pipeline was fit once per registered fold. No tuning or threshold sweep was performed. Calibration and embargo partitions remained unused.
+
+| Fold | Train rows | Test rows | Accuracy | Balanced accuracy | Training-majority baseline |
+|---|---:|---:|---:|---:|---:|
+| WF-01 | 3,555 | 598 | 49.33% | 48.79% | 45.82% |
+| WF-02 | 3,557 | 525 | 60.57% | 59.43% | 55.24% |
+| WF-03 | 3,543 | 529 | 43.67% | 46.58% | 34.22% |
+| **Pooled OOF** | — | **1,652** | **51.09%** | **51.57%** | **45.10%** |
+
+Pooled confusion matrix, with rows=true `[0,1]` and columns=predicted `[0,1]`: `[[421, 324], [484, 423]]`.
+
+Relative to the 50% uniform-random expected accuracy, pooled accuracy lifted by only **1.09 percentage points**. It exceeded the pooled fold-specific training-majority baseline by **5.99 percentage points**. However, two of the three folds were below 50%, and fold accuracy ranged from 43.67% to 60.57%, showing material temporal instability. Pooled balanced accuracy was only 51.57%.
+
+### 7.5 Decision
+
+- **Owner screening threshold:** pooled accuracy strictly greater than 55%.
+- **Observed pooled accuracy:** 51.09%.
+- **Threshold result:** `owner_threshold_passed = false`.
+- **Research decision:** `NO-GO`; the registered screening criterion was not met.
+
+The baseline is numerically above 50% pooled accuracy, but the lift is small (+1.09 pp), balanced accuracy is near chance, and performance is not stable across the three temporal folds. The observed advantage over the majority comparator does not override the preregistered 55% screen. No statistical-significance claim is made, and this classification result is not an economic backtest: barrier labels do not incorporate fees/slippage and do not establish positive net trading returns. No next-stage model study, additional candidate, tuning, threshold change, or rerun is authorized by this ADR after observing this outcome.
+
+### 7.6 Safety and restoration attestation
+
+The successful report and labeling summary independently recorded and the workflow's final validation asserted:
+
+- `real_data_scope = PRE_HACK_ONLY`
+- `holdout_bytes_read = false` and `posthack_data_read = false`
+- `private_api_calls = 0`, `real_order_attempts = 0`, `paper_orders = 0`
+- `exchange_network_access = false`
+- `Champion = null`, `order_permission = false`, `trading_authorization = NO-GO`
+
+The POST-HACK Holdout was not accessed. No market/exchange network or private API was used. The temporary workflow was deleted from `main` after Run #3 completed; the current `main` tree SHA was verified as exactly `5761c6c34143f8e6924f53a4e745c48932a5f791`.
 
 Architecture First. Evidence Always. Fail Closed.
