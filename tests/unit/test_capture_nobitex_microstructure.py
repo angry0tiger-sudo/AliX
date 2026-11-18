@@ -204,7 +204,6 @@ def test_push_processor_marks_offset_gap_and_drops_non_monotonic_event() -> None
     ]
 
 
-
 def test_trade_stream_preserves_identical_public_observations() -> None:
     tracker = OffsetTracker()
     book_rows: list[dict[str, object]] = []
@@ -234,5 +233,7 @@ def test_trade_stream_preserves_identical_public_observations() -> None:
 
     assert len(trade_rows) == 2
     assert trade_rows[0]["price"] == trade_rows[1]["price"]
-    assert trade_rows[0]["exchange_timestamp_ms"] == trade_rows[1]["exchange_timestamp_ms"]
+    assert (
+        trade_rows[0]["exchange_timestamp_ms"] == trade_rows[1]["exchange_timestamp_ms"]
+    )
     assert gaps == []
