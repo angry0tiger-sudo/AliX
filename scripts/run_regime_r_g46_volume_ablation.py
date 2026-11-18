@@ -57,21 +57,10 @@ RETAINED_FEATURE_COLUMNS = (
 OUTPUT_SCHEMA = "alix.regime-r.g4.6-volume-ablation.v1"
 
 
-def load_g46_preregistration(
-    path: Path = PREREGISTRATION_PATH,
-) -> dict[str, Any]:
-    """Load the byte-locked G4.6 registration and fail closed on drift."""
-    raw = path.read_bytes()
-    actual_sha = hashlib.sha256(raw).hexdigest()
-    if actual_sha != EXPECTED_PREREGISTRATION_SHA256:
-        raise RuntimeError("regime_r_g46_preregistration_sha256_mismatch")
-    payload = json.loads(raw)
-    if not isinstance(payload, dict):
-        raise RuntimeError("regime_r_g46_preregistration_invalid")
-    feature = cast(dict[str, Any], payload.get("feature_ablation", {}))
-    dataset = cast(dict[str, Any], payload.get("dataset", {}))
-    g3 = cast(dict[str, Any], payload.get("frozen_g3", {}))
+def _validate_g46_registration_identity(payload: dict[str, Any]) -> None:
     prereg = cast(dict[str, Any], payload.get("preregistration", {}))
+    dataset = cast(dict[str, Any], payload.get("dataset", {}))
+    frozen_g3 = cast(dict[str, Any], payload.get("frozen_g3", {}))
     if prereg.get("experiment_id") != "G4.6":
         raise RuntimeError("regime_r_g46_preregistration_identity_invalid")
     if prereg.get("status") != "PREREGISTERED_LOCKED":
@@ -80,10 +69,13 @@ def load_g46_preregistration(
         raise RuntimeError("regime_r_g46_dataset_commitment_mismatch")
     if dataset.get("confirmatory_holdout") is not False:
         raise RuntimeError("regime_r_g46_must_be_exploratory_prehack_only")
-    if g3.get("sha256") != EXPECTED_CONFIG_SHA256:
+    if frozen_g3.get("sha256") != EXPECTED_CONFIG_SHA256:
         raise RuntimeError("regime_r_g46_frozen_g3_commitment_mismatch")
-    if g3.get("must_remain_byte_identical") is not True:
+    if frozen_g3.get("must_remain_byte_identical") is not True:
         raise RuntimeError("regime_r_g46_g3_must_remain_locked")
+
+
+def _validate_g46_feature_registration(feature: dict[str, Any]) -> None:
     if feature.get("profile") != "VOLUME_DERIVED_FEATURES_EXCLUDED":
         raise RuntimeError("regime_r_g46_feature_profile_invalid")
     if tuple(feature.get("removed_predictors", ())) != VOLUME_FEATURE_COLUMNS:
@@ -96,12 +88,14 @@ def load_g46_preregistration(
     ):
         raise RuntimeError("regime_r_g46_feature_contract_invalid")
     contract_sha = hashlib.sha256("\n".join(contract).encode("utf-8")).hexdigest()
-    if (
-        contract_sha != EXPECTED_FEATURE_CONTRACT_SHA256
-        or feature.get("feature_contract_sha256") != EXPECTED_FEATURE_CONTRACT_SHA256
-    ):
+    committed_sha = feature.get("feature_contract_sha256")
+    if contract_sha != EXPECTED_FEATURE_CONTRACT_SHA256:
         raise RuntimeError("regime_r_g46_feature_contract_sha256_mismatch")
-    acceptance = cast(dict[str, Any], payload.get("acceptance", {}))
+    if committed_sha != EXPECTED_FEATURE_CONTRACT_SHA256:
+        raise RuntimeError("regime_r_g46_feature_contract_sha256_mismatch")
+
+
+def _validate_g46_acceptance_registration(acceptance: dict[str, Any]) -> None:
     gates = cast(dict[str, Any], acceptance.get("per_cost_gates", {}))
     expected_gates = (
         gates.get("net_profit_factor_min") == 1.10
@@ -112,8 +106,24 @@ def load_g46_preregistration(
     )
     if not expected_gates:
         raise RuntimeError("regime_r_g46_acceptance_contract_invalid")
-    return payload
 
+
+def load_g46_preregistration(
+    path: Path = PREREGISTRATION_PATH,
+) -> dict[str, Any]:
+    """Load the byte-locked G4.6 registration and fail closed on drift."""
+    raw = path.read_bytes()
+    if hashlib.sha256(raw).hexdigest() != EXPECTED_PREREGISTRATION_SHA256:
+        raise RuntimeError("regime_r_g46_preregistration_sha256_mismatch")
+    payload = json.loads(raw)
+    if not isinstance(payload, dict):
+        raise RuntimeError("regime_r_g46_preregistration_invalid")
+    _validate_g46_registration_identity(payload)
+    feature = cast(dict[str, Any], payload.get("feature_ablation", {}))
+    acceptance = cast(dict[str, Any], payload.get("acceptance", {}))
+    _validate_g46_feature_registration(feature)
+    _validate_g46_acceptance_registration(acceptance)
+    return payload
 
 def build_volume_ablation_features(frame: pd.DataFrame) -> pd.DataFrame:
     """Build the frozen baseline feature matrix, then exclude exactly two volume predictors."""
@@ -368,6 +378,114 @@ def build_diagnostic_rollup(
     }
 
 
+def _candidate_acceptance(
+    trials: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], int]:
+    unique_trials = [item for item in trials if item["unique_candidate_configuration"]]
+    candidates = []
+    for trial in unique_trials:
+        passed = all(
+            bool(trial["cost_scenarios"][str(cost)]["acceptance"]["all_gates_passed"])
+            for cost in COSTS_BPS
+        )
+        candidates.append(
+            {
+                "horizon": trial["horizon"],
+                "trial_id": trial["trial_id"],
+                "candidate_passed_both_costs": passed,
+                "cost_scenarios": trial["cost_scenarios"],
+            }
+        )
+    pass_count = sum(int(item["candidate_passed_both_costs"]) for item in candidates)
+    return candidates, pass_count
+
+
+def _g46_verdict(
+    candidates: list[dict[str, Any]],
+    diagnostics: list[dict[str, Any]],
+) -> tuple[str, str]:
+    if any(item["candidate_passed_both_costs"] for item in candidates):
+        return (
+            "PASS",
+            "At least one unique horizon candidate cleared all four gates at both frozen costs.",
+        )
+    unique_records = [
+        item for item in diagnostics if int(item["candidate_slot"]) == 1
+    ]
+    qualifying = sum(
+        int(
+            item["statistics"]["lower_bound_to_cost"][str(cost)][
+                "count_above_cost"
+            ]
+        )
+        for item in unique_records
+        for cost in COSTS_BPS
+    )
+    if qualifying == 0:
+        return (
+            "COMPLETE_ABSTENTION_REPEATED",
+            "No calibrated lower bound exceeded either frozen cost in any unique horizon/fold slice.",
+        )
+    return (
+        "NO_GO_PARTIAL_SIGNALING",
+        "Some lower bounds exceeded cost, but no unique horizon candidate cleared every registered gate at both costs.",
+    )
+
+
+def _g46_dataset_summary(frame: pd.DataFrame) -> dict[str, Any]:
+    volume = frame["volume"].to_numpy(dtype=np.float64)
+    return {
+        "path": "data/nobitex/prehack/nobitex-btcusdt-1h.csv",
+        "csv_sha256": EXPECTED_DATA_SHA256,
+        "row_count": len(frame),
+        "volume_zero_rows": int(np.count_nonzero(volume == 0.0)),
+        "volume_positive_rows": int(np.count_nonzero(volume > 0.0)),
+        "start_utc": frame["timestamp"].iloc[0].isoformat(),
+        "end_utc": frame["timestamp"].iloc[-1].isoformat(),
+        "scope": "PRE_HACK_NOBITEX_ONLY_EXPLORATORY",
+        "historically_exposed": True,
+        "confirmatory_holdout": False,
+    }
+
+
+def _g46_baseline_comparison(
+    rollup: dict[str, Any],
+    prereg: dict[str, Any],
+) -> dict[str, Any]:
+    baseline = cast(dict[str, Any], prereg["baseline"])
+    overall = rollup["overall"]
+    return {
+        "baseline_run_id": baseline["g4_5_run_id"],
+        "median_positive_rate_pct_delta": (
+            overall["median_positive"]["percentage"]
+            - float(baseline["median_positive_rate_pct"])
+        ),
+        "conformal_width_fraction_delta": (
+            overall["mean_conformal_interval_width_fraction"]
+            - float(baseline["mean_conformal_interval_width_fraction"])
+        ),
+        "lower_bound_minus_cost_bps_delta": {
+            str(cost): (
+                overall["lower_bound_minus_cost"][str(cost)]["mean_distance_bps"]
+                - float(baseline["mean_lower_bound_minus_cost_bps"][str(cost)])
+            )
+            for cost in COSTS_BPS
+        },
+    }
+
+
+def _g46_feature_summary(prereg: dict[str, Any]) -> dict[str, Any]:
+    feature = cast(dict[str, Any], prereg["feature_ablation"])
+    return {
+        "profile": feature["profile"],
+        "removed_predictors": list(VOLUME_FEATURE_COLUMNS),
+        "retained_predictors": list(RETAINED_FEATURE_COLUMNS),
+        "retained_feature_count": len(RETAINED_FEATURE_COLUMNS),
+        "feature_contract_sha256": EXPECTED_FEATURE_CONTRACT_SHA256,
+        "raw_volume_column_is_predictor": False,
+    }
+
+
 def build_report(
     commit_sha: str,
     run_id: str,
@@ -379,78 +497,12 @@ def build_report(
     diagnostics: list[dict[str, Any]],
     trade_rows: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    unique_trials = [item for item in trials if item["unique_candidate_configuration"]]
-    candidates = []
-    for trial in unique_trials:
-        candidate_passed = all(
-            bool(trial["cost_scenarios"][str(cost)]["acceptance"]["all_gates_passed"])
-            for cost in COSTS_BPS
-        )
-        candidates.append(
-            {
-                "horizon": trial["horizon"],
-                "trial_id": trial["trial_id"],
-                "candidate_passed_both_costs": candidate_passed,
-                "cost_scenarios": trial["cost_scenarios"],
-            }
-        )
-    pass_count = sum(int(item["candidate_passed_both_costs"]) for item in candidates)
+    """Build the auditable G4.6 report from completed trial evidence."""
+    candidates, pass_count = _candidate_acceptance(trials)
     rollup = build_diagnostic_rollup(diagnostics)
-    qualifying_total = sum(
-        int(item["statistics"]["lower_bound_to_cost"][str(cost)]["count_above_cost"])
-        for item in diagnostics
-        if int(item["candidate_slot"]) == 1
-        for cost in COSTS_BPS
-    )
-    if pass_count:
-        verdict = "PASS"
-        reason = "At least one unique horizon candidate cleared all four gates at both frozen costs."
-    elif qualifying_total == 0:
-        verdict = "COMPLETE_ABSTENTION_REPEATED"
-        reason = "No calibrated lower bound exceeded either frozen cost in any unique horizon/fold slice."
-    else:
-        verdict = "NO_GO_PARTIAL_SIGNALING"
-        reason = "Some lower bounds exceeded cost, but no unique horizon candidate cleared every registered gate at both costs."
-
+    verdict, reason = _g46_verdict(candidates, diagnostics)
     trial_ids = tuple(config["trial_family"]["trial_ids"])
-    dataset = {
-        "path": "data/nobitex/prehack/nobitex-btcusdt-1h.csv",
-        "csv_sha256": EXPECTED_DATA_SHA256,
-        "row_count": len(frame),
-        "volume_zero_rows": int(
-            np.count_nonzero(frame["volume"].to_numpy(dtype=np.float64) == 0.0)
-        ),
-        "volume_positive_rows": int(
-            np.count_nonzero(frame["volume"].to_numpy(dtype=np.float64) > 0.0)
-        ),
-        "start_utc": frame["timestamp"].iloc[0].isoformat(),
-        "end_utc": frame["timestamp"].iloc[-1].isoformat(),
-        "scope": "PRE_HACK_NOBITEX_ONLY_EXPLORATORY",
-        "historically_exposed": True,
-        "confirmatory_holdout": False,
-    }
-    feature_config = cast(dict[str, Any], prereg["feature_ablation"])
-    baseline = cast(dict[str, Any], prereg["baseline"])
-    baseline_comparison = {
-        "baseline_run_id": baseline["g4_5_run_id"],
-        "median_positive_rate_pct_delta": (
-            rollup["overall"]["median_positive"]["percentage"]
-            - float(baseline["median_positive_rate_pct"])
-        ),
-        "conformal_width_fraction_delta": (
-            rollup["overall"]["mean_conformal_interval_width_fraction"]
-            - float(baseline["mean_conformal_interval_width_fraction"])
-        ),
-        "lower_bound_minus_cost_bps_delta": {
-            str(cost): (
-                rollup["overall"]["lower_bound_minus_cost"][str(cost)][
-                    "mean_distance_bps"
-                ]
-                - float(baseline["mean_lower_bound_minus_cost_bps"][str(cost)])
-            )
-            for cost in COSTS_BPS
-        },
-    }
+    acceptance = cast(dict[str, Any], prereg["acceptance"])
     return {
         "schema_version": OUTPUT_SCHEMA,
         "status": "COMPLETED",
@@ -459,28 +511,21 @@ def build_report(
         "workflow_run_id": run_id,
         "workflow_run_attempt": os.environ.get("GITHUB_RUN_ATTEMPT", "1"),
         "preregistration_sha256": EXPECTED_PREREGISTRATION_SHA256,
-        "dataset": dataset,
+        "dataset": _g46_dataset_summary(frame),
         "g3_configuration_sha256": EXPECTED_CONFIG_SHA256,
         "target_contract": prereg["frozen_g3"]["target_contract"],
-        "feature_ablation": {
-            "profile": feature_config["profile"],
-            "removed_predictors": list(VOLUME_FEATURE_COLUMNS),
-            "retained_predictors": list(RETAINED_FEATURE_COLUMNS),
-            "retained_feature_count": len(RETAINED_FEATURE_COLUMNS),
-            "feature_contract_sha256": EXPECTED_FEATURE_CONTRACT_SHA256,
-            "raw_volume_column_is_predictor": False,
-        },
+        "feature_ablation": _g46_feature_summary(prereg),
         "trial_accounting": {
             "registered_slots": len(trial_ids),
-            "unique_candidate_configurations": len(unique_trials),
-            "duplicate_slots": len(trial_ids) - len(unique_trials),
+            "unique_candidate_configurations": len(candidates),
+            "duplicate_slots": len(trial_ids) - len(candidates),
             "fit_calls": sum(int(item["fit_calls"]) for item in trials),
             "diagnostic_records": len(diagnostics),
         },
         "diagnostics": rollup,
-        "baseline_comparison": baseline_comparison,
+        "baseline_comparison": _g46_baseline_comparison(rollup, prereg),
         "acceptance": {
-            "criteria": prereg["acceptance"]["per_cost_gates"],
+            "criteria": acceptance["per_cost_gates"],
             "unique_candidates_passing_both_costs": pass_count,
             "candidate_count": len(candidates),
             "candidates": candidates,
