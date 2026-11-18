@@ -236,6 +236,7 @@ class OffsetTracker:
             )
         return None
 
+
 @dataclass
 class CaptureState:
     book_rows: list[dict[str, object]] = field(default_factory=list)
