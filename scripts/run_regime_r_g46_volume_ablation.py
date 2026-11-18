@@ -125,6 +125,7 @@ def load_g46_preregistration(
     _validate_g46_acceptance_registration(acceptance)
     return payload
 
+
 def build_volume_ablation_features(frame: pd.DataFrame) -> pd.DataFrame:
     """Build the frozen baseline feature matrix, then exclude exactly two volume predictors."""
     baseline = build_features(frame)
