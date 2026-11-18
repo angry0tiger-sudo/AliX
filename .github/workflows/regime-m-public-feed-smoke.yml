@@ -17,7 +17,7 @@ jobs:
       - name: Checkout exact authorized Research commit
         uses: actions/checkout@v4
         with:
-          ref: \${{ github.sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Set up Node.js with built-in WebSocket
@@ -194,7 +194,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: regime-m-public-feed-smoke-\${{ github.sha }}
+          name: regime-m-public-feed-smoke-${{ github.sha }}
           path: .artifacts/regime-m/public-feed-smoke.json
           if-no-files-found: error
           retention-days: 30
