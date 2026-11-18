@@ -219,6 +219,15 @@ No other main-branch paths were changed.
 - Independently rechecked `main`: HEAD `cd9b13d42ac0cf0edd2df066ff81580e028146d6`; Tree SHA remains exactly `5761c6c34143f8e6924f53a4e745c48932a5f791`.
 - The next cron tick after activation is scheduled for minute 37 UTC. At this record's verification time, no scheduled run has yet been observed. Workflow activation is not considered operationally proven until GitHub Actions reports an `event=schedule` run and its capture job succeeds.
 - The default-branch setting must be restored to `main` after the M1.5 collection window and final artifact audit. No commit or tree mutation on `main` is authorized.
+
+### 6.2 Workflow registration and first scheduled-run verification setup
+
+- On the current default branch, GitHub's uncached Actions workflow index initially omitted `capture-microstructure.yml`, even though the file was present in the branch tree. After a comment-only refresh push on the workflow file at commit `cacf035b836102d0d70114469614b1d2f713fb13`, GitHub's Actions API listed it again as workflow ID `422952435`, name `Regime M Public Microstructure Capture`, state `active`. The underlying cause of the stale index was not established; do not infer a parser defect.
+- The exact same Standard CI commit `cacf035b836102d0d70114469614b1d2f713fb13` passed in run `44383522423` (quality, four-arm lock, Freqtrade runtime, and PostgreSQL integration all successful).
+- Capture job timeout is now bounded at 60 minutes; scheduled collection remains exactly 55 minutes. The schedule cron is `37 * * * *` UTC.
+- At verification time `2026-11-18T19:53Z`, no `event=schedule` run had yet been observed. The first eligible trigger is `2026-11-18T20:37:00Z`, equivalent to `2026-11-19 00:37` in `Asia/Baku`. The collector itself begins only after Standard CI and capture-job bootstrap; exact data start/end are defined by each manifest, not by cron trigger time.
+- Two one-time follow-up automations were created: first-run evidence check `Automation_8c414a2a09a881919874501cc6f25817` for `2026-11-19 01:53:21 Asia/Baku`; final 32-hour soak audit `Automation_81946c6e81008191823373744329ed13` for `2026-11-20 07:49:15 Asia/Baku`. They are operational reminders/checks, not evidence that any capture has already run.
+- M1.5 operational activation is therefore **REGISTERED / ACTIVE, FIRST SCHEDULED CAPTURE PENDING**. M1 full acceptance and M3 authorization remain pending on actual artifact evidence.
 - M3: OFI pre-registration/design implementation — NOT AUTHORIZED until the extended capture corpus passes M1 review and the owner explicitly opens M3. This ADR authorizes no OFI or DeepLOB code.
 - M4: DeepLOB — not authorized by this ADR.
 
