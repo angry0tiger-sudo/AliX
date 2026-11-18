@@ -1,0 +1,154 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "schema_version": "alix.regime-t.triple-barrier-preregistration.v1",
+  "preregistration": {
+    "experiment_id": "REGIME-T-TB-LOGISTIC-01",
+    "status": "PREREGISTERED_LOCKED",
+    "preregistered_utc_date": "2026-11-18",
+    "owner_directive": "Regime T — Triple-Barrier target redesign with a linear classification baseline",
+    "decision_class": "Exploratory PRE-HACK-only temporal walk-forward classification; no trading or order authorization",
+    "hypothesis": "A volatility-scaled first-touch event target may be more learnable than a fixed-horizon gross-return regression target on the same price-only OHLC features.",
+    "null_hypothesis": "A fixed LogisticRegression baseline does not exceed 55 percent pooled out-of-fold accuracy and does not show meaningful lift over a training-majority baseline.",
+    "p_hacking_guard": "One fixed target definition, one fixed feature set, one fixed model, one fixed walk-forward protocol, and one execution. No threshold sweep, model tuning, fold change, cost change, or selective rerun is authorized by this registration.",
+    "change_control": "This new Regime T experiment is independent of Regime P. G3 and G4.6 files, model definitions, target contracts, and outcomes remain byte-identical and are not edited."
+  },
+  "dataset": {
+    "path": "data/nobitex/prehack/nobitex-btcusdt-1h.csv",
+    "sha256": "0aa13607d1da68c4720919f233635bb33d34048e5bd67d3ecc2ce9bb7c2b462e",
+    "row_count": 31801,
+    "manifest_path": "data/nobitex/prehack/nobitex-btcusdt-1h.manifest.json",
+    "manifest_sha256": "b50fea25f30d282c2eafcb262751367e11d6490eda0d463de5926b660eaf1a26",
+    "scope": "PRE_HACK_NOBITEX_ONLY",
+    "historically_exposed": true,
+    "confirmatory_holdout": false
+  },
+  "frozen_g3_reference": {
+    "path": "config/regime_r/hgbq_cqr_preregistration.json",
+    "sha256": "92cdcf19a02f5cf9659f327704ed4d6c5cf0d85687aff2ba35b9542fec5cfdaa",
+    "must_remain_byte_identical": true,
+    "walk_forward_protocol_source": "frozen G3 preregistration; same three fold UTC boundaries and partition spans"
+  },
+  "target": {
+    "type": "binary_long_first_touch_classification",
+    "decision_timing": "Decision after the close of bar t; features use closed bars through t only.",
+    "entry": "Open of bar t+1; entry price is fixed before inspecting the t+1 high/low range.",
+    "volatility_estimator": {
+      "name": "Wilder_ATR_14_fraction",
+      "formula": "ATR14(t) / close(t)",
+      "true_range": "max(high-low, abs(high-prev_close), abs(low-prev_close)); first row uses high-low because prev_close is unavailable",
+      "initialization": "Arithmetic mean of the first 14 true-range observations",
+      "update": "ATR(t) = (13 * ATR(t-1) + TR(t)) / 14",
+      "availability": "Uses OHLC data through t only; no centered windows, backfill, or future observations"
+    },
+    "barriers": {
+      "k": 2.0,
+      "upper_price": "entry_open(t+1) * (1 + k * ATR14_fraction(t))",
+      "lower_price": "entry_open(t+1) * (1 - k * ATR14_fraction(t))",
+      "symmetry": "Equal positive/negative fractional distance from next-bar open entry",
+      "direction": "Long-only event classification: upper-first versus lower-first"
+    },
+    "time_barrier": {
+      "max_holding_hours": 24,
+      "max_future_bars": 24,
+      "observation_window": "Bars t+1 through t+24 inclusive",
+      "expiry_policy": "If neither horizontal barrier is touched within 24 bars, label TIMEOUT and exclude it from binary model fitting and accuracy scoring"
+    },
+    "touch_resolution": {
+      "upper_first_label": 1,
+      "lower_first_label": 0,
+      "same_bar_both_barriers": "AMBIGUOUS; exclude from binary model fitting and scoring because OHLC cannot reveal intrabar order",
+      "first_touched_bar_wins": true,
+      "gap_policy": "Evaluate the first eligible future bar high/low against barriers defined from the next-bar open; no synthetic intrabar path is assumed",
+      "tail_policy": "Rows without the complete 24-bar future observation window are UNAVAILABLE and excluded"
+    },
+    "labeling_costs": "No fee/slippage adjustment is applied to barrier placement or labels; this is a statistical target diagnostic, not an economic trade simulation."
+  },
+  "features": {
+    "profile": "PRICE_AND_TIME_ONLY_NO_VOLUME",
+    "columns": [
+      "log_return_1",
+      "log_return_4",
+      "log_return_24",
+      "realized_volatility_6",
+      "realized_volatility_24",
+      "range_fraction_1",
+      "atr_fraction_14",
+      "hour_sin",
+      "hour_cos",
+      "weekday_sin",
+      "weekday_cos"
+    ],
+    "contract": [
+      "log_return_k=ln(close[t]/close[t-k]); k=1,4,24",
+      "realized_volatility_n=sqrt(sum(trailing log_return_1 squared)); n=6,24",
+      "range_fraction_1=(high[t]-low[t])/close[t]",
+      "true_range=max(high-low,abs(high-prev_close),abs(low-prev_close))",
+      "atr_fraction_14=Wilder_RMA(true_range,14)/close",
+      "hour_sin_cos=2pi*(UTC_hour+UTC_minute/60)/24",
+      "weekday_sin_cos=2pi*UTC_dayofweek/7; Monday=0",
+      "all rolling features are right-aligned and use closed bars through t only",
+      "volume is never read as a feature or passed to the estimator"
+    ],
+    "feature_count": 11,
+    "scaling": "StandardScaler fit independently on each fold's training samples only"
+  },
+  "model": {
+    "pipeline": ["sklearn.preprocessing.StandardScaler", "sklearn.linear_model.LogisticRegression"],
+    "solver": "lbfgs",
+    "C": 1.0,
+    "penalty": "l2",
+    "class_weight": null,
+    "max_iter": 2000,
+    "random_state": 42,
+    "probability_threshold": 0.5,
+    "parameter_tuning": false,
+    "model_count": 1
+  },
+  "walk_forward": {
+    "scheme": "rolling_fixed_width_purged_walk_forward",
+    "fold_count": 3,
+    "training_months": 6,
+    "calibration_months_reserved_unused": 1,
+    "embargo_months_reserved_unused": 1,
+    "test_months": 1,
+    "fold_shift_months": 3,
+    "interval_convention": "UTC; start-inclusive and end-exclusive",
+    "fold_offsets_source": "config/regime_r/hgbq_cqr_preregistration.json, unchanged",
+    "purge_hours": 24,
+    "purge_rule": "A training decision row is eligible only when its full 24-hour target window ends strictly before train_end. A test decision row is eligible only when its full 24-hour target window ends strictly before test_end.",
+    "calibration_and_embargo": "Preserve original G3 calendar partitions and boundaries; both intervals remain unused by model fitting and test scoring."
+  },
+  "evaluation": {
+    "primary_metric": "pooled_out_of_fold_accuracy",
+    "owner_threshold_pct": 55.0,
+    "comparators": [
+      "uniform_random_guess_expected_accuracy_50_percent",
+      "per_fold_training_majority_class_baseline"
+    ],
+    "required_reports": [
+      "per_fold_accuracy",
+      "pooled_accuracy",
+      "balanced_accuracy",
+      "confusion_matrix_labels_0_1",
+      "per_fold_confusion_matrix",
+      "pooled_confusion_matrix",
+      "train_and_test_class_counts",
+      "timeout_ambiguous_and_unavailable_label_counts",
+      "majority_baseline_accuracy"
+    ],
+    "interpretation_rule": "Pooled accuracy strictly greater than 55 percent meets the owner's initial screening threshold, but is exploratory only. Report class imbalance, balanced accuracy, fold dispersion, and majority baseline; accuracy alone is not proof of tradable edge or statistical significance.",
+    "no_tuning_after_observation": true
+  },
+  "safety": {
+    "real_data_scope": "PRE_HACK_ONLY",
+    "holdout_bytes_read": false,
+    "posthack_data_read": false,
+    "private_api_calls": 0,
+    "real_order_attempts": 0,
+    "paper_orders": 0,
+    "exchange_network_access": false,
+    "Champion": null,
+    "order_permission": false,
+    "trading_authorization": "NO-GO"
+  }
+}

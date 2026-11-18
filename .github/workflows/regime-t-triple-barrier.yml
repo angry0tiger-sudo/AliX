@@ -1,0 +1,160 @@
+name: Regime T Triple-Barrier Logistic Baseline
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  prehack-triple-barrier-baseline:
+    if: github.ref == 'refs/heads/research/nobitex-hf-strategy'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+      ALIX_DRY_RUN: "true"
+      ALIX_ALLOW_LIVE_TRADING: "false"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    steps:
+      - name: Checkout exact authorized Research commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install pinned offline research dependencies
+        run: |
+          python -m pip install --upgrade pip==25.2
+          python -m pip install numpy==2.5.4 pandas==2.3.3 scikit-learn==1.9.0 pytest==9.0.3
+          python -m pip check
+
+      - name: Verify PRE-HACK dataset, manifest, G3, and locked Regime T preregistration
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+
+          expected_data = "0aa13607d1da68c4720919f233635bb33d34048e5bd67d3ecc2ce9bb7c2b462e"
+          expected_manifest = "b50fea25f30d282c2eafcb262751367e11d6490eda0d463de5926b660eaf1a26"
+          expected_g3 = "92cdcf19a02f5cf9659f327704ed4d6c5cf0d85687aff2ba35b9542fec5cfdaa"
+          expected_regime_t = "b6118f4e7420b26c8caf471ef7281b7b452c031ed7a68b6d8eb5a7d210d103ad"
+          files = {
+              "data": Path("data/nobitex/prehack/nobitex-btcusdt-1h.csv"),
+              "manifest": Path("data/nobitex/prehack/nobitex-btcusdt-1h.manifest.json"),
+              "g3": Path("config/regime_r/hgbq_cqr_preregistration.json"),
+              "regime_t": Path("config/regime_t/triple_barrier_preregistration.json"),
+          }
+          expected = {
+              "data": expected_data,
+              "manifest": expected_manifest,
+              "g3": expected_g3,
+              "regime_t": expected_regime_t,
+          }
+          for key, path in files.items():
+              assert hashlib.sha256(path.read_bytes()).hexdigest() == expected[key], key
+          manifest = json.loads(files["manifest"].read_text(encoding="utf-8"))
+          prereg = json.loads(files["regime_t"].read_text(encoding="utf-8"))
+          assert manifest["dataset_window"] == "PRE_HACK_NOBITEX_ONLY"
+          assert manifest["row_count"] == 31801
+          assert manifest["missing_intervals"] == 0
+          assert prereg["preregistration"]["status"] == "PREREGISTERED_LOCKED"
+          assert prereg["dataset"]["confirmatory_holdout"] is False
+          assert prereg["target"]["barriers"]["k"] == 2.0
+          assert prereg["target"]["time_barrier"]["max_holding_hours"] == 24
+          assert prereg["safety"]["holdout_bytes_read"] is False
+          assert prereg["safety"]["trading_authorization"] == "NO-GO"
+          print("REGIME_T_INPUT_COMMITMENTS_VERIFIED")
+          PY
+
+      - name: Run synthetic-only Regime T unit tests
+        run: pytest --no-cov -q tests/unit/test_regime_t
+
+      - name: Generate triple-barrier labels from PRE-HACK OHLC only
+        env:
+          ALIX_REGIME_T_EXECUTION_AUTHORIZED: "true"
+        run: |
+          python scripts/label_regime_t_triple_barrier.py \
+            --labels-out ".artifacts/regime-t/triple-barrier-labels.csv" \
+            --summary-out ".artifacts/regime-t/labeling-summary.json"
+
+      - name: Fit and evaluate the single locked LogisticRegression baseline
+        env:
+          ALIX_REGIME_T_EXECUTION_AUTHORIZED: "true"
+        run: |
+          python scripts/evaluate_regime_t_logistic.py \
+            --labels ".artifacts/regime-t/triple-barrier-labels.csv" \
+            --report-out ".artifacts/regime-t/logistic-evaluation.json" \
+            --predictions-out ".artifacts/regime-t/out-of-fold-predictions.csv"
+
+      - name: Validate metrics, fold coverage, and fail-closed safety
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path(".artifacts/regime-t")
+          labels = json.loads((root / "labeling-summary.json").read_text(encoding="utf-8"))
+          report = json.loads((root / "logistic-evaluation.json").read_text(encoding="utf-8"))
+          assert labels["schema_version"] == "alix.regime-t.triple-barrier-labels.v1"
+          assert labels["status"] == "COMPLETED"
+          assert labels["row_count"] == 31801
+          assert report["schema_version"] == "alix.regime-t.triple-barrier-logistic-evaluation.v1"
+          assert report["status"] == "COMPLETED"
+          assert report["dataset"]["sha256"] == "0aa13607d1da68c4720919f233635bb33d34048e5bd67d3ecc2ce9bb7c2b462e"
+          assert report["preregistration_sha256"] == "b6118f4e7420b26c8caf471ef7281b7b452c031ed7a68b6d8eb5a7d210d103ad"
+          assert report["frozen_g3_sha256"] == "92cdcf19a02f5cf9659f327704ed4d6c5cf0d85687aff2ba35b9542fec5cfdaa"
+          assert report["model"]["fit_count"] == 3
+          assert len(report["model"]["feature_columns"]) == 11
+          assert all("volume" not in name for name in report["model"]["feature_columns"])
+          assert len(report["walk_forward"]["folds"]) == 3
+          assert report["metrics"]["pooled_out_of_fold_rows"] > 0
+          assert len(report["metrics"]["pooled_confusion_matrix_labels_0_1"]) == 2
+          for fold in report["walk_forward"]["folds"]:
+              assert fold["train_rows"] >= 100
+              assert fold["test_rows"] >= 20
+              assert len(fold["confusion_matrix_labels_0_1"]) == 2
+          for source in (labels, report):
+              safety = source["safety"]
+              assert safety["real_data_scope"] == "PRE_HACK_ONLY"
+              assert safety["holdout_bytes_read"] is False
+              assert safety["posthack_data_read"] is False
+              assert safety["private_api_calls"] == 0
+              assert safety["real_order_attempts"] == 0
+              assert safety["paper_orders"] == 0
+              assert safety["exchange_network_access"] is False
+              assert safety["Champion"] is None
+              assert safety["order_permission"] is False
+              assert safety["trading_authorization"] == "NO-GO"
+          print(json.dumps({
+              "pooled_accuracy_pct": report["metrics"]["pooled_accuracy_pct"],
+              "balanced_accuracy": report["metrics"]["pooled_balanced_accuracy"],
+              "majority_baseline_accuracy": report["metrics"]["pooled_training_majority_baseline_accuracy"],
+              "owner_threshold_passed": report["metrics"]["owner_threshold_passed"],
+              "confusion_matrix": report["metrics"]["pooled_confusion_matrix_labels_0_1"],
+              "labels": labels["class_counts"],
+              "censored": labels["censored_counts"],
+          }, sort_keys=True))
+          PY
+
+      - name: Upload Regime T labeling and walk-forward artifacts
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: regime-t-triple-barrier-prehack-${{ github.sha }}
+          path: |
+            .artifacts/regime-t/triple-barrier-labels.csv
+            .artifacts/regime-t/labeling-summary.json
+            .artifacts/regime-t/logistic-evaluation.json
+            .artifacts/regime-t/out-of-fold-predictions.csv
+          if-no-files-found: error
+          retention-days: 90
