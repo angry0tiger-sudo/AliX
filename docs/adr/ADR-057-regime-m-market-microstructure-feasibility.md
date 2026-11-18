@@ -1,6 +1,6 @@
 # ADR-057 — Regime M: Market Microstructure Feasibility
 
-- **Status:** API FEASIBILITY CONFIRMED — GITHUB ACTIONS PUBLIC-FEED PROBE PENDING
+- **Status:** PUBLIC L2/TICK ACCESS CONFIRMED — HISTORICAL DEPTH UNPROVEN
 - **Date:** 2026-11-18
 - **Branch:** research/nobitex-hf-strategy
 - **Scope:** Nobitex public Spot market data only; no account or trading operations
@@ -104,7 +104,26 @@ At the API-contract level, Nobitex documents the REST order-book, depth, and pub
 
 This makes a bounded GitHub Actions probe technically compatible with the public API without repository secrets or private API credentials. It does **not** by itself prove that Nobitex accepts egress from GitHub-hosted runner IP ranges. IP reputation, regional/network filtering, service availability, TLS/WebSocket behavior, and shared-IP rate limiting require a live public-only probe from the actual runner.
 
-A temporary read-only Actions smoke workflow is included in this branch for that purpose. It requests one public snapshot from each documented REST endpoint and attempts to connect/subscribe to the two public WebSocket channels without an Authorization header or connection token. It makes no order, account, wallet, or private-channel calls. The smoke report will be appended after the run completes.
+A temporary read-only Actions smoke workflow was used for a bounded probe and was removed from both Research and main after completion.
+
+**Successful GitHub Actions probe:** [Run 44356239046](https://github.com/angry0tiger-sudo/AliX/actions/runs/44356239046), conclusion `success`, Research commit `e7021a5055ca23452c7ad5164d414ff4bb334404`. This is direct evidence from a GitHub-hosted runner, not an inference from the API documentation.
+
+Observed REST results for `BTCIRT`, with no Authorization header:
+- `GET /v3/orderbook/BTCIRT`: reachable, API status `ok`; 24 bid levels and 24 ask levels, each represented as price-quantity pairs.
+- `GET /v2/depth/BTCIRT` (documented experimental endpoint): reachable, API status `ok`; 75 bid levels and 75 ask levels, also aggregated price-quantity pairs.
+- `GET /v2/trades/BTCIRT`: reachable, API status `ok`; 20 trade records with `price`, `time`, `type`, and `volume`. In this one response, the oldest and newest returned timestamps spanned approximately 26.676 seconds. This is an observation of one response, not a guarantee that the endpoint's retention is only 26.676 seconds.
+
+Observed WebSocket results, with no connection token:
+- Connected to `wss://ws.nobitex.ir/connection/websocket`.
+- Both `public:orderbook-BTCIRT` and `public:trades-BTCIRT` subscriptions were accepted.
+- At least one publication was received from each channel during the smoke window.
+- The first order-book publication exposed `asks`, `bids`, `lastTradePrice`, and `lastUpdate`; the trade publication exposed `price`, `time`, `type`, and `volume`.
+
+The artifact is `regime-m-public-feed-smoke`, ID `14451811167`, SHA-256 `2ddc228ecd8a827d1ff433551d5a6f07552ec14c08c57b8361181f8345e626b2`. The JSON report records `authorization_header_sent=false`, `websocket_connection_token_sent=false`, and `private_api_calls=0`.
+
+Earlier setup attempts are retained for audit: the first manual dispatch was blocked because the workflow was absent from the selected Research ref; runs `44354401295` and `44354849726` failed during checkout before market-data requests; run `44355289468` made the three REST attempts and opened WebSocket but failed in the test parser before a report was written. Those runs are not treated as data-source failures. The successful Run `44356239046` resolves the GitHub Actions connectivity question.
+
+The temporary smoke workflow was removed from the Research branch and main after the successful run. main's tree SHA was verified restored exactly to `5761c6c34143f8e6924f53a4e745c48932a5f791`.
 
 Execution history: the first manual dispatch attempt was blocked because the workflow file was not yet present on the selected Research ref; no job started. The first push-triggered attempt ([Run 44354401295](https://github.com/angry0tiger-sudo/AliX/actions/runs/44354401295)) then failed at checkout because the temporary workflow contained an escaped SHA expression. The REST and WebSocket probe steps were skipped, so no Nobitex requests were made in that attempt. The checkout interpolation was still escaped in the first push-triggered smoke configuration, so [Run 44354849726](https://github.com/angry0tiger-sudo/AliX/actions/runs/44354849726) also failed at checkout; its REST and WebSocket probe steps were skipped and no Nobitex requests were made. The workflow was corrected to rely on the Actions event's default checkout ref and a static artifact name. [Run 44355289468](https://github.com/angry0tiger-sudo/AliX/actions/runs/44355289468) then passed checkout and executed the three public REST GET attempts. It subsequently established a WebSocket connection and received a server frame, but the test parser treated a newline-delimited multi-message frame as one JSON object and terminated before writing the report. REST response summaries were not persisted, and no public-channel subscription acknowledgement was recorded; those results are therefore not claimed as confirmed. The WebSocket parser now splits newline-delimited messages (commit `6c711f46abb7126bd18ad01790cb429a636d9d43`) and emits each REST probe result to the job log. A final read-only probe is pending.
 
@@ -136,13 +155,13 @@ No DeepLOB or OFI implementation, model training, parameter tuning, or trading e
 
 | Gate | Required evidence | Decision |
 |---|---|---|
-| M0 — Public endpoint access | Unauthenticated REST responses and public WebSocket connect/subscription from GitHub Actions | Pending smoke run |
+| M0 — Public endpoint access | Unauthenticated REST responses and public WebSocket connect/subscription from GitHub Actions | **PASS** — Run 44356239046 |
 | M1 — Capture integrity | Stable timestamps, no unexplained sequence gaps, deterministic snapshot-to-stream initialization, reconnect handling | Not started |
-| M2 — Historical sufficiency | Measured public trade lookback plus adequate prospective L2/trade capture | Not established |
+| M2 — Historical sufficiency | Measured public trade lookback plus adequate prospective L2/trade capture | Not established; public API documents no historical L2 archive or retention guarantee |
 | M3 — OFI preregistration | Frozen labels, horizons, features, event filters, temporal split, cost treatment, and baselines | Not authorized |
 | M4 — DeepLOB consideration | Dense, complete multi-level sequence and enough prospective data | Deferred |
 
-Passing M0 would establish connectivity only; it would not establish historical sufficiency, predictive edge, profitability, or trading permission.
+M0 proves that a GitHub-hosted runner can reach the documented public REST and WebSocket feeds without private credentials. It does not establish historical sufficiency, capture continuity, predictive edge, profitability, or trading permission.
 
 ## 8. Fallback paths if public capture is blocked or history is insufficient
 
@@ -162,8 +181,10 @@ Passing M0 would establish connectivity only; it would not establish historical 
 
 ## 10. Current conclusion
 
-Nobitex documents public L2-style order-book snapshots, public live L2 order-book updates, public recent trade records, and a public live trade stream without requiring private API credentials. The reviewed documentation does not establish L3 per-order data or a historical L2 archive. Public trade-history retention is unspecified.
+Nobitex public L2-style snapshots, the experimental aggregate depth endpoint, public recent trades, and both live public WebSocket channels were reachable from GitHub Actions without an Authorization header or WebSocket connection token. The runtime probe confirmed 24/24 price levels from v3 orderbook, 75/75 from experimental v2 depth, 20 recent trade records, and successful subscriptions/publications on both public channels.
 
-The API design is promising enough to justify a narrowly scoped connectivity/data-quality qualification. Whether GitHub-hosted runners can actually reach the public endpoints, and whether the public REST trade endpoint returns useful historical depth, remain empirical questions. No model work is authorized until M0–M2 are evidenced.
+The evidence confirms L2-style market data and live market-wide trade flow, but not L3 per-order events. The reviewed API documentation does not define a historical L2 archive or a guaranteed retention horizon for the public trade-list endpoint. The 20-record response observed in the smoke run is not sufficient to claim a useful long-term history.
+
+**Decision:** proceed only to a separately authorized M1 data-quality/observability capture using public L2 and trade streams, with OFI as the preferred first statistical baseline. DeepLOB remains conditional on proving dense, complete multi-level sequence quality. No model implementation, training, parameter search, OHLCV strategy, or trading evaluation is authorized by this ADR. If compliant prospective collection or adequate history cannot be established, pursue the two fallback paths in Section 8.
 
 Architecture First. Evidence Always. Fail Closed.
