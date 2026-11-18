@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Callable, Protocol, cast
+
 import httpx
 
 REST_BASE = "https://apiv2.nobitex.ir"

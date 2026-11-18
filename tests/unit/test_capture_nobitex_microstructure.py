@@ -118,7 +118,6 @@ def test_manifest_contains_sha256_record_counts_and_safety(tmp_path: Path) -> No
         "2026-11-18T00:00:00Z",
         "2026-11-18T00:01:00Z",
         1,
-        0,
         [],
     )
 
@@ -203,3 +202,37 @@ def test_push_processor_marks_offset_gap_and_drops_non_monotonic_event() -> None
         "publisher_offset_gap",
         "non_monotonic_publisher_offset",
     ]
+
+
+
+def test_trade_stream_preserves_identical_public_observations() -> None:
+    tracker = OffsetTracker()
+    book_rows: list[dict[str, object]] = []
+    trade_rows: list[dict[str, object]] = []
+    gaps: list[dict[str, object]] = []
+    first: dict[str, object] = {
+        "push": {
+            "channel": "public:trades-BTCIRT",
+            "pub": {"offset": 31, "data": valid_trade()},
+        }
+    }
+    second: dict[str, object] = {
+        "push": {
+            "channel": "public:trades-BTCIRT",
+            "pub": {"offset": 32, "data": valid_trade()},
+        }
+    }
+
+    _process_pushes(
+        [first, second],
+        book_rows,
+        trade_rows,
+        gaps,
+        tracker,
+        0,
+    )
+
+    assert len(trade_rows) == 2
+    assert trade_rows[0]["price"] == trade_rows[1]["price"]
+    assert trade_rows[0]["exchange_timestamp_ms"] == trade_rows[1]["exchange_timestamp_ms"]
+    assert gaps == []
