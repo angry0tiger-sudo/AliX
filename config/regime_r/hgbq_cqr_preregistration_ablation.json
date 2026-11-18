@@ -1,0 +1,179 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "schema_version": "alix.regime-r.g4.6-volume-ablation-preregistration.v1",
+  "preregistration": {
+    "experiment_id": "G4.6",
+    "status": "PREREGISTERED_LOCKED",
+    "preregistered_utc_date": "2026-11-18",
+    "owner_directive": "G4.6 — Volume-derived feature ablation",
+    "decision_class": "Exploratory pre-hack feature ablation with offline hypothetical costed ledger; no order authorization",
+    "hypothesis": "Removing the volume-derived features (which are constant or zero on the fixed pre-hack dataset) improves calibrated lower-bound returns and reduces conformal interval width versus the frozen G4.5 baseline.",
+    "null_hypothesis": "Removing the volume-derived features does not improve both lower-bound economics and calibrated conformal interval width versus the frozen baseline.",
+    "p_hacking_guard": "This is one pre-registered binary feature ablation. No additional feature variants, hyperparameter changes, target changes, cost changes, or selective reruns may be added after outcomes are observed.",
+    "change_control": "The immutable G3 JSON is not modified. This separate G4.6 record authorizes only removal of the exact listed volume-derived predictor columns for one pre-hack-only run."
+  },
+  "baseline": {
+    "g4_5_run_id": 44283184884,
+    "g4_5_run_number": 11,
+    "g4_5_head_sha": "ccc50024cc97dd1cbd09238fb5ce091d1e4bfbb9",
+    "g4_5_artifact_id": 14416704508,
+    "median_positive_rate_pct": 46.6788,
+    "mean_conformal_interval_width_fraction": 0.053333,
+    "mean_lower_bound_minus_cost_bps": {
+      "50": -358.75,
+      "90": -398.75
+    }
+  },
+  "dataset": {
+    "path": "data/nobitex/prehack/nobitex-btcusdt-1h.csv",
+    "sha256": "0aa13607d1da68c4720919f233635bb33d34048e5bd67d3ecc2ce9bb7c2b462e",
+    "row_count": 31801,
+    "scope": "PRE_HACK_NOBITEX_ONLY_EXPLORATORY",
+    "historically_exposed": true,
+    "confirmatory_holdout": false
+  },
+  "frozen_g3": {
+    "path": "config/regime_r/hgbq_cqr_preregistration.json",
+    "sha256": "92cdcf19a02f5cf9659f327704ed4d6c5cf0d85687aff2ba35b9542fec5cfdaa",
+    "must_remain_byte_identical": true,
+    "model": "sklearn.ensemble.HistGradientBoostingRegressor",
+    "hyperparameters_unchanged": true,
+    "quantiles": [
+      0.05,
+      0.5,
+      0.95
+    ],
+    "mapie_version": "1.6.0",
+    "conformal_confidence_level": 0.9,
+    "prediction_horizons_hours": [
+      1,
+      4,
+      24
+    ],
+    "walk_forward": {
+      "fold_count": 3,
+      "training_months": 6,
+      "calibration_months": 1,
+      "embargo_months": 1,
+      "test_months": 1,
+      "max_purge_hours": 24,
+      "fold_offsets_source": "frozen G3 preregistration"
+    },
+    "target_contract": "gross_return(t,h)=close[t+h]/open[t+1]-1; decision after close[t]; label_end_index=t+h",
+    "cost_scenarios_bps": [
+      50,
+      90
+    ],
+    "trial_registry": {
+      "logical_slots": 30,
+      "unique_horizon_configurations": 3,
+      "duplicate_slots": 27,
+      "fit_calls_expected": 90,
+      "duplicates_must_not_be_counted_as_independent_candidates": true
+    }
+  },
+  "feature_ablation": {
+    "profile": "VOLUME_DERIVED_FEATURES_EXCLUDED",
+    "baseline_feature_count": 13,
+    "removed_predictors": [
+      "log_volume_change_1",
+      "volume_zscore_24"
+    ],
+    "retained_predictors": [
+      "log_return_1",
+      "log_return_4",
+      "log_return_24",
+      "realized_volatility_6",
+      "realized_volatility_24",
+      "range_fraction_1",
+      "atr_fraction_14",
+      "hour_sin",
+      "hour_cos",
+      "weekday_sin",
+      "weekday_cos"
+    ],
+    "retained_feature_count": 11,
+    "feature_contract": [
+      "log_return_k=ln(close[t]/close[t-k]); k=1,4,24",
+      "realized_volatility_n=sqrt(sum(trailing log_return_1 squared)); n=6,24",
+      "range_fraction_1=(high[t]-low[t])/close[t]",
+      "true_range=max(high-low,abs(high-prev_close),abs(low-prev_close))",
+      "atr_fraction_14=Wilder_RMA(true_range,14)/close",
+      "hour_sin_cos=2pi*(UTC_hour+UTC_minute/60)/24",
+      "weekday_sin_cos=2pi*UTC_dayofweek/7; Monday=0",
+      "volume-derived predictors excluded: log_volume_change_1, volume_zscore_24",
+      "raw volume remains in the verified source schema for provenance only and is not passed to the estimator",
+      "all rolling features are right-aligned and use closed bars through t only",
+      "no backfill, centering, future normalization, or future-derived feature"
+    ],
+    "feature_contract_sha256": "6bcd91dcfdd3e48cfbe64adb714f432ae8dc610f136ed2731967c9aed5282250",
+    "raw_volume_column_policy": "The raw volume column remains in the input file and in schema/hash validation only; it is not an estimator predictor.",
+    "only_change_from_baseline": "Drop exactly log_volume_change_1 and volume_zscore_24; preserve every other feature formula and column order."
+  },
+  "execution": {
+    "command_mode": "PREHACK_ONLY_VOLUME_ABLATION_WITH_OFFLINE_HYPOTHETICAL_COSTED_LEDGER",
+    "fit_calls_expected": 90,
+    "diagnostic_records_expected": 90,
+    "hypothetical_ledger": "Existing deterministic next-open entry / horizon-close exit ledger; one open position at a time per horizon/fold/cost scenario; round-trip cost deducted once per completed trade.",
+    "network_access": false,
+    "exchange_api_access": false,
+    "real_orders": false,
+    "paper_orders": false,
+    "holdout_access": false,
+    "model_family_change": false,
+    "g3_parameter_change": false,
+    "target_change": false,
+    "fold_change": false,
+    "cost_change": false
+  },
+  "acceptance": {
+    "evaluation_unit": "Each unique horizon candidate (slot 01 for 1h, 4h, 24h), evaluated independently at each frozen cost, with its three walk-forward folds.",
+    "per_cost_gates": {
+      "net_profit_factor_min": 1.1,
+      "trade_count_min": 100,
+      "max_drawdown_max": 0.15,
+      "qualifying_lower_bound_folds_min": 3,
+      "qualifying_lower_bound_predicate": "At least one test observation in each of the three folds must have calibrated Lower Bound strictly greater than the applicable round-trip cost."
+    },
+    "cost_scenarios_bps": [
+      50,
+      90
+    ],
+    "candidate_pass_rule": "A horizon candidate passes only if all four gates pass independently at BOTH 50 bps and 90 bps.",
+    "experiment_pass_rule": "G4.6 passes if at least one of the three unique horizon candidates passes the candidate rule. Duplicate trial slots never increase the number of unique candidates.",
+    "complete_abstention_rule": "If no calibrated Lower Bound exceeds cost in any horizon, fold, or cost scenario, classify COMPLETE_ABSTENTION_REPEATED and close the current HGBQ-CQR economic path (Regime P).",
+    "partial_signal_failure_rule": "If qualifying signals exist but no candidate passes all gates, classify NO_GO_PARTIAL_SIGNALING; no promotion or Holdout access is allowed."
+  },
+  "diagnostics": {
+    "required": [
+      "median_positive_rate",
+      "mean_conformal_interval_width",
+      "mean_lower_bound_minus_cost_bps_50",
+      "mean_lower_bound_minus_cost_bps_90",
+      "qualifying_lower_bound_count_by_fold_and_cost",
+      "net_profit_factor",
+      "trade_count",
+      "max_drawdown"
+    ],
+    "aggregate_policy": "Aggregate statistics use unique candidate slot 01 records only, weighted by prediction count across folds; duplicates are for run accounting and deterministic reproduction only.",
+    "comparison": "Compare G4.6 outputs to the G4.5 diagnostic baseline above. Report absolute deltas; do not characterize a change as improvement unless direction and units support it."
+  },
+  "dsr": {
+    "global_n": "UNKNOWN",
+    "numeric_dsr": null,
+    "status": "NOT_COMPUTABLE",
+    "interpretation": "DSR is not fabricated. The owner-defined four gates above are the G4.6 experiment decision criteria; this exploratory preregistration does not claim multiplicity-adjusted statistical confirmation."
+  },
+  "safety": {
+    "real_data_scope": "PRE_HACK_ONLY",
+    "holdout_bytes_read": false,
+    "private_api_calls": 0,
+    "real_order_attempts": 0,
+    "paper_orders": 0,
+    "hypothetical_trades_simulated": true,
+    "trade_ledger_execution": "OFFLINE_LOCAL_CODE_ONLY",
+    "Champion": null,
+    "order_permission": false,
+    "trading_authorization": "NO-GO"
+  }
+}
