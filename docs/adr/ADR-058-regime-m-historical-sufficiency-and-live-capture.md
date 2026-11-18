@@ -1,6 +1,6 @@
 # ADR-058 — Regime M Historical Microstructure Sufficiency and Live Capture
 
-- **Status:** M2: PUBLIC HISTORICAL MICROSTRUCTURE NOT ESTABLISHED — LIVE CAPTURE REQUIRED; M1: IMPLEMENTED — PILOT PENDING
+- **Status:** M2: NO DOCUMENTED PUBLIC HISTORICAL L2/TICK ARCHIVE — LIVE COLLECTION REQUIRED; M1: 5-MINUTE PILOT PASS — EXTENDED SOAK REQUIRED FOR FULL ACCEPTANCE
 - **Date:** 2026-11-18
 - **Branch:** research/nobitex-hf-strategy
 - **Predecessor:** ADR-057 (M0 public-feed feasibility)
@@ -110,31 +110,92 @@ No unit test opens a network connection. All real-data interaction is isolated i
 
 ## 5. Pilot execution and acceptance
 
-**Pilot status at ADR creation:** PENDING CI PASS AND MANUAL DISPATCH.
+**Pilot status: 5-MINUTE PILOT COMPLETED — PASS FOR INGESTION AND DATA-INTEGRITY SMOKE; EXTENDED SOAK REQUIRED BEFORE RESEARCH-DATASET ACCEPTANCE OR M3.**
 
-The intended pilot is a single 60-minute run from GitHub Actions against the Research branch. If workflow-dispatch visibility requires temporary exposure of the workflow definition on `main`, that copy is permitted only to trigger the selected Research ref, and must be deleted immediately after dispatch. The main branch Tree SHA must be rechecked against the frozen baseline:
+### 5.1 Run and artifact identity
+
+- **Workflow:** Regime M Public Microstructure Capture
+- **Event / input:** `workflow_dispatch`, `duration_minutes=5`
+- **Run ID:** `44369213808`
+- **Run URL:** https://github.com/angry0tiger-sudo/AliX/actions/runs/44369213808
+- **Selected branch:** `research/nobitex-hf-strategy`
+- **Code commit SHA:** `770342e0ffa8466ec4e509b9e4188eff016f3727`
+- **Started UTC:** `2026-11-18T18:29:03.963+00:00`
+- **Finished UTC:** `2026-11-18T18:34:08.730+00:00`
+- **Observed duration:** 304.767 seconds (5 minutes, 4.767 seconds)
+- **Artifact ID:** `14458723722`
+- **Artifact name:** `regime-m-microstructure-44369213808`
+- **ZIP size:** 19,585 bytes
+- **Artifact ZIP SHA-256:** `4aa8d41e14d3083158442eeee4aa730738920e44067b1e9aba3f7f7b2af8c472`
+- **Uncompressed artifact contents:** 384,644 bytes
+- **Manifest SHA-256:** `3b76365ab3301bd1d92b643df3f04bef9e90aea517e6ae2df07a278f50bab219`
+
+GitHub reported the workflow run as **SUCCESS**. All four Standard CI jobs succeeded: `quality`, `four-arm-lock-bare-env`, `freqtrade-runtime-smoke`, and `postgres-integration`. The `real-data-diagnostic` and `ensemble-real-data-research` jobs were skipped by their existing gates; no real-data model/research job was run.
+
+The artifact was downloaded and independently inspected. ZIP CRC validation passed. Each CSV byte count, record count, and SHA-256 matched the manifest; the manifest hash matched `manifest.sha256`. The GitHub artifact digest matched the SHA-256 of the downloaded ZIP.
+
+### 5.2 Observed records
+
+| File / source | Records | Bytes | SHA-256 |
+|---|---:|---:|---|
+| `orderbook.csv` | 488 total: 1 REST initial snapshot + 487 WebSocket publications | 375,534 | `fd8513c37ce54d3064a325459c68274163a47a1a4c466a5414ba04d0ad913fcf` |
+| `trades.csv` | 79 total: 20 REST recent-trade seed + 59 WebSocket trades | 7,066 | `d524f90c140aaa034426d3028611c3cc31a29b3fab5c0588f34c16fceab8b50b` |
+| `gaps.csv` | 0 gap records (header only) | 127 | `bbaaea6d0b1a672e8814745f2f0f9c20ca7411e7d41fde18b1d43311f5d604fa` |
+
+The 487 live Order Book publications each carried a full aggregated book payload; the stored schema retained the best bid/ask and first ten levels per side. All 488 rows had valid top-ten structures, correctly ordered bid/ask levels, and no crossed books. The observed median spread was approximately 18.446 bps and the 95th percentile approximately 18.545 bps; one interval legitimately observed a one-tick 10-IRR spread.
+
+The 59 WebSocket trade records preserved all observed buy/sell publications. The collector dropped no trades (`duplicate_trades_dropped=0`), because the documented public schema does not supply a stable unique trade ID. Consumers must not equate rows with unique executions without applying a separately specified identity policy.
+
+### 5.3 Gap and publisher-offset evidence
+
+- `capture_status=NO_GAPS_OBSERVED`; `gap_count=0`; `errors=[]`.
+- `gaps.csv` contains its header and no data rows.
+- Order Book publisher offsets were `2361136` through `2361622` across 487 publications: strictly increasing and contiguous, with no observed skip or repeat.
+- Trade publisher offsets were `298805` through `298863` across 59 publications: strictly increasing and contiguous, with no observed skip or repeat.
+- No WebSocket disconnect/reconnect was recorded during this run.
+- Mock CI tests independently exercised publisher-offset skips and non-monotonic offsets, including recording the gap and rejecting a non-monotonic book publication.
+
+Therefore, Gap Detection was active and evaluated the observed offsets, but no live gap event occurred in this five-minute window. This is evidence of no locally observable gap during this run, not proof of zero upstream loss or proof of reconnect recovery under fault. No missing observations were interpolated or forward-filled.
+
+### 5.4 Timestamp and ordering audit
+
+All timestamps parsed as valid Unix epoch milliseconds and all `captured_at_utc` values parsed as UTC. The event-to-capture delay below is the observed difference between the runner capture timestamp and the exchange event timestamp; it includes local scheduling/network effects and is not a calibrated clock-synchronization measurement.
+
+- **Order Book exchange range:** `2026-11-18T18:29:06.365Z` to `2026-11-18T18:34:08.365Z`.
+- **Order Book WebSocket capture lag:** minimum 118 ms, median 123 ms, p95 165 ms, maximum 1,178 ms. The initial REST snapshot's capture lag was 781 ms.
+- **Trade WebSocket exchange range:** `2026-11-18T18:29:22.709Z` to `2026-11-18T18:33:54.180Z`.
+- **Trade WebSocket capture lag:** minimum 146 ms, median 158 ms, maximum 371 ms.
+- WebSocket event timestamps were monotonic within each stream during the observed run.
+
+**REST seed ordering caveat:** the 20 `rest_recent_seed` trade rows were returned newest-first (descending exchange timestamp), spanning `2026-11-18T18:26:52.434Z` to `2026-11-18T18:27:26.811Z`. At their common capture timestamp (`18:29:08.042Z`), they were approximately 101.231–135.608 seconds old. This is consistent with a recent-history seed, not a live-event latency measure. Consequently, `trades.csv` is append/source order, not a globally ascending exchange-time series; downstream processing must sort by exchange timestamp and retain the source marker. The REST seed must not be treated as five-minute live coverage.
+
+### 5.5 Pilot decision and remaining acceptance
+
+The pilot **passes** the bounded M1 ingestion/integrity smoke criteria:
+- non-empty public L2 and live trade-flow data were received;
+- Mock tests and the complete Standard CI dependency gate succeeded;
+- file counts, sizes, SHA-256 values, and manifest checksum matched independently;
+- WebSocket offsets were contiguous for both streams;
+- no locally observable gap, malformed book, crossed book, or invalid trade side was found;
+- event timestamps and runner capture timestamps were parseable and their observed WebSocket lags were bounded as recorded above;
+- all safety invariants held.
+
+This five-minute sample does **not** establish day/night coverage, behaviour across changing liquidity/volatility regimes, long-run reconnection resilience, or adequate statistical sample size for OFI design. Accordingly, M1 is a pilot-level pass only; full data-quality acceptance remains conditional on an extended soak and review of the resulting corpus.
+
+Before M3, collect at least 24 hours of cumulative live L2 and trade-flow data; 72 hours across multiple market sessions is preferred. The current workflow is manually dispatched and each run is capped at 60 minutes, so multiple bounded artifacts will be required. Their exact start/end boundaries must be retained and any inter-run downtime must be represented as missing coverage; do not describe segmented runs as one uninterrupted 24-hour stream. Re-run the same manifest/hash/offset/timestamp audit across the combined artifacts before seeking M1 full acceptance.
+
+The main branch was restored after temporary dispatch exposure and independently verified at the frozen Tree SHA:
 
 `5761c6c34143f8e6924f53a4e745c48932a5f791`
 
-No other main-branch paths may change.
-
-Pilot acceptance requires:
-- Standard CI succeeds without relaxing Ruff, strict Mypy, Xenon, security, dependency, or coverage gates.
-- The live capture produces non-empty L2 and live-trade records.
-- All artifact file SHA-256 values independently match the manifest.
-- Start/end UTC and exchange-time ranges are present.
-- Any disconnection or offset gap is represented in `gaps.csv`; no imputed values appear.
-- The artifact is downloadable and its exact size, row counts, gap count, and digest are recorded in this ADR.
-- Safety invariants remain: no Authorization header, no WebSocket token, no private API calls, no Holdout/Post-Hack reads, no real/paper orders, `Champion=null`, `order_permission=false`, `trading_authorization=NO-GO`.
-
-This section must be updated with the actual run ID, commit SHA, artifact ID/digest, counts, byte size, gap details, and CI result after pilot completion. No pilot result is assumed in advance.
+No other main-branch paths were changed.
 
 ## 6. Decision gates and prohibited work
 
 - M0: public REST and WebSocket reachability — confirmed in ADR-057.
-- M2: six-month public L2/tick history — not established; prospective live capture is required.
-- M1: capture integrity — implementation and Mock tests are committed; pilot evidence remains pending.
-- M3: OFI pre-registration — not authorized by this ADR.
+- M2: historical six-month public L2/tick history — not documented or established; the historical-data feasibility decision is complete and prospective Live collection is required.
+- M1: five-minute pilot — PASS for ingestion, manifest integrity, timestamps, and observed offset continuity; full data-quality acceptance awaits at least 24 hours of cumulative capture (72 hours preferred) and review of all segment gaps.
+- M3: OFI pre-registration/design implementation — NOT AUTHORIZED until the extended capture corpus passes M1 review and the owner explicitly opens M3. This ADR authorizes no OFI or DeepLOB code.
 - M4: DeepLOB — not authorized by this ADR.
 
 No OFI, DeepLOB, feature engineering, model training, model evaluation, or strategy implementation is included. No model code may be started until M1 and M2 are separately reviewed and accepted by the owner.
