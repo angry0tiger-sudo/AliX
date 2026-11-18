@@ -106,6 +106,8 @@ This makes a bounded GitHub Actions probe technically compatible with the public
 
 A temporary read-only Actions smoke workflow is included in this branch for that purpose. It requests one public snapshot from each documented REST endpoint and attempts to connect/subscribe to the two public WebSocket channels without an Authorization header or connection token. It makes no order, account, wallet, or private-channel calls. The smoke report will be appended after the run completes.
 
+Execution history: the first manual dispatch attempt was blocked because the workflow file was not yet present on the selected Research ref; no job started. The first push-triggered attempt ([Run 44354401295](https://github.com/angry0tiger-sudo/AliX/actions/runs/44354401295)) then failed at checkout because the temporary workflow contained an escaped SHA expression. The REST and WebSocket probe steps were skipped, so no Nobitex requests were made in that attempt. The checkout interpolation has been corrected; the public-feed probe remains pending.
+
 GitHub Actions is suitable for a short connectivity qualification and bounded research capture windows, but should not be treated as a low-latency, continuously available market-data collector. Production-grade event capture would require a persistent collector with explicit reconnect, gap detection, durable storage, and clock/latency monitoring.
 
 ## 6. Regime M model direction, conditional on data qualification
