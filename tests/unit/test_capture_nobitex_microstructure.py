@@ -97,7 +97,7 @@ def test_offset_tracker_records_skips_and_non_monotonic_offsets() -> None:
 def test_manifest_contains_sha256_record_counts_and_safety(tmp_path: Path) -> None:
     book = make_book_row(valid_book(), "2026-11-18T00:00:00Z", "mock", None)
     trade = make_trade_row(valid_trade(), "2026-11-18T00:00:01Z", "mock", None)
-    gap = {
+    gap: dict[str, object] = {
         "stream": "trades",
         "gap_start_utc": "2026-11-18T00:00:02Z",
         "gap_end_utc": "2026-11-18T00:00:03Z",
@@ -155,13 +155,13 @@ def test_push_processor_marks_offset_gap_and_drops_non_monotonic_event() -> None
     book_rows: list[dict[str, object]] = []
     trade_rows: list[dict[str, object]] = []
     gaps: list[dict[str, object]] = []
-    first = {
+    first: dict[str, object] = {
         "push": {
             "channel": "public:orderbook-BTCIRT",
             "pub": {"offset": 10, "data": valid_book()},
         }
     }
-    skipped = {
+    skipped: dict[str, object] = {
         "push": {
             "channel": "public:orderbook-BTCIRT",
             "pub": {
@@ -173,7 +173,7 @@ def test_push_processor_marks_offset_gap_and_drops_non_monotonic_event() -> None
             },
         }
     }
-    repeated = {
+    repeated: dict[str, object] = {
         "push": {
             "channel": "public:orderbook-BTCIRT",
             "pub": {

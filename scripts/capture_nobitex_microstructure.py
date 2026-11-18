@@ -616,6 +616,8 @@ def run_capture(duration_minutes: int, output_dir: Path) -> dict[str, object]:
             snapshot_cutoff_ms,
         )
         while time.monotonic() < deadline:
+            if socket is None:
+                raise RuntimeError("WEBSOCKET_SOCKET_UNAVAILABLE")
             try:
                 messages = _receive(socket, timeout_type)
                 for message in messages:
