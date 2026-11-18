@@ -7,7 +7,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -47,7 +47,10 @@ def _verify_source_commitments() -> None:
 
 
 def _load_and_validate_manifest() -> dict[str, Any]:
-    manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+    raw_manifest: object = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+    if not isinstance(raw_manifest, dict):
+        raise RuntimeError("regime_t_manifest_object_invalid")
+    manifest = cast(dict[str, Any], raw_manifest)
     required_values = (
         manifest.get("dataset_window") == "PRE_HACK_NOBITEX_ONLY",
         manifest.get("csv_sha256") == EXPECTED_DATA_SHA256,
