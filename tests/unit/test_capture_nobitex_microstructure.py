@@ -128,6 +128,8 @@ def test_manifest_contains_sha256_record_counts_and_safety(tmp_path: Path) -> No
     assert isinstance(counts, dict)
     assert counts["orderbook"] == 1
     assert counts["trades"] == 1
+    assert counts["duplicate_trades_dropped"] == 0
+    assert manifest["trade_deduplication_policy"].startswith("none; preserve")
     files = manifest["files"]
     assert isinstance(files, dict)
     assert files["orderbook.csv"]["records"] == 1
@@ -192,7 +194,6 @@ def test_push_processor_marks_offset_gap_and_drops_non_monotonic_event() -> None
         trade_rows,
         gaps,
         tracker,
-        set(),
         0,
     )
 

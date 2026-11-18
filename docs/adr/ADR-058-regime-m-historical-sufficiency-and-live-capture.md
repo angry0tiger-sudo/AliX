@@ -70,14 +70,14 @@ The collector:
 1. Connects to the documented public Centrifugo WebSocket endpoint without sending a connection token.
 2. Subscribes only to `public:orderbook-BTCIRT` and `public:trades-BTCIRT`.
 3. Takes an initial public REST L2 snapshot and records the best bid/ask, spread, mid-price, and first ten levels on each side.
-4. Seeds the trade file with records returned by the public recent-trades endpoint, then appends observed live WebSocket trades with deterministic duplicate removal.
+4. Seeds the trade file with records returned by the public recent-trades endpoint, then appends observed live WebSocket trades. Every observation is preserved and source-tagged; no trades are deduplicated because the public schema does not document a stable unique trade identifier, and seemingly identical trades can be distinct executions.
 5. Uses ordinary non-Fossil publications. It does not request private feeds or authenticated data.
 
 ### 4.3 Output contract
 
 The artifact contains:
 - `orderbook.csv`: capture timestamp, exchange book timestamp, publisher offset, best bid/ask and sizes, spread, mid-price, and top-ten aggregated L2 levels.
-- `trades.csv`: capture timestamp, exchange trade timestamp, publisher offset, side, price, volume, and source (recent REST seed or live WebSocket).
+- `trades.csv`: capture timestamp, exchange trade timestamp, publisher offset, side, price, volume, and source (recent REST seed or live WebSocket). Potential overlap between the REST seed and WebSocket window is preserved rather than silently deduplicated; consumers must use source/time provenance and must not assume rows equal unique exchange executions.
 - `gaps.csv`: stream, capture interval, exchange timestamps/offsets when available, reason, and explicit `replay_attempted=false` / `replay_available=false`.
 - `manifest.json`: code SHA, workflow run ID, market, source, start/end UTC, requested duration, exchange-time ranges, record counts by stream/source, gap count/status, file byte sizes, SHA-256 digests, error list, and safety invariants.
 - `manifest.sha256`: SHA-256 digest of the manifest.

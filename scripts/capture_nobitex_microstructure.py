@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Callable, Protocol, cast
-from urllib.request import Request, urlopen
+import httpx
 
 REST_BASE = "https://apiv2.nobitex.ir"
 WS_URL = "wss://ws.nobitex.ir/connection/websocket"
@@ -236,23 +236,22 @@ class OffsetTracker:
 
 
 def fetch_public_json(path: str, timeout: float = 10.0) -> dict[str, object]:
-    request = Request(
-        f"{REST_BASE}{path}",
-        headers={
-            "Accept": "application/json",
-            "User-Agent": "AliX-Regime-M-Capture/1.0",
-        },
-        method="GET",
-    )
-    if (
-        "Authorization" in request.headers
-        or "Authorization" in request.unredirected_hdrs
-    ):
+    headers = {
+        "Accept": "application/json",
+        "User-Agent": "AliX-Regime-M-Capture/1.0",
+    }
+    if "Authorization" in headers:
         raise RuntimeError("PRIVATE_AUTH_HEADER_FORBIDDEN")
-    with urlopen(request, timeout=timeout) as response:
-        if response.status != 200:
-            raise RuntimeError(f"PUBLIC_API_HTTP_{response.status}")
-        value = json.loads(response.read().decode("utf-8"))
+    response = httpx.get(
+        f"{REST_BASE}{path}",
+        headers=headers,
+        timeout=timeout,
+        follow_redirects=False,
+        verify=True,
+    )
+    if response.status_code != 200:
+        raise RuntimeError(f"PUBLIC_API_HTTP_{response.status_code}")
+    value = response.json()
     if not isinstance(value, dict) or value.get("status") != "ok":
         raise RuntimeError("PUBLIC_API_RESPONSE_INVALID")
     return cast(dict[str, object], value)
@@ -332,25 +331,14 @@ def connect_and_subscribe() -> tuple[
     return socket, timeout_type, pending
 
 
-def _trade_key(row: dict[str, object]) -> tuple[str, str, str, str]:
-    return (
-        str(row["exchange_timestamp_ms"]),
-        str(row["price"]),
-        str(row["volume"]),
-        str(row["side"]),
-    )
-
-
 def _process_pushes(
     messages: list[dict[str, object]],
     book_rows: list[dict[str, object]],
     trade_rows: list[dict[str, object]],
     gaps: list[dict[str, object]],
     offsets: OffsetTracker,
-    seen_trades: set[tuple[str, str, str, str]],
     snapshot_cutoff_ms: int,
-) -> int:
-    duplicates = 0
+) -> None:
     for message in messages:
         if message == {}:
             continue
@@ -442,13 +430,7 @@ def _process_pushes(
                     if gap["reason"] == "non_monotonic_publisher_offset":
                         continue
             row = make_trade_row(payload, captured_at, "websocket", offset)
-            key = _trade_key(row)
-            if key in seen_trades:
-                duplicates += 1
-            else:
-                seen_trades.add(key)
-                trade_rows.append(row)
-    return duplicates
+            trade_rows.append(row)
 
 
 def _write_csv(
@@ -476,7 +458,6 @@ def write_capture_artifacts(
     started_at: str,
     finished_at: str,
     duration_minutes: int,
-    duplicate_trade_count: int,
     errors: list[str],
 ) -> dict[str, object]:
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -541,11 +522,15 @@ def write_capture_artifacts(
         "websocket_orderbook_records": websocket_book_count,
         "websocket_trade_records": websocket_trade_count,
         "rest_trade_seed_records": rest_trade_seed_count,
+        "trade_deduplication_policy": (
+            "none; preserve every observation because no unique public trade ID "
+            "is documented"
+        ),
         "record_counts": {
             "orderbook": len(book_rows),
             "trades": len(trade_rows),
             "gaps": len(gaps),
-            "duplicate_trades_dropped": duplicate_trade_count,
+            "duplicate_trades_dropped": 0,
         },
         "gap_count": len(gaps),
         "capture_status": "GAPPED"
@@ -574,9 +559,7 @@ def run_capture(duration_minutes: int, output_dir: Path) -> dict[str, object]:
     trade_rows: list[dict[str, object]] = []
     gaps: list[dict[str, object]] = []
     errors: list[str] = []
-    seen_trades: set[tuple[str, str, str, str]] = set()
     offsets = OffsetTracker()
-    duplicate_count = 0
     socket: SocketLike | None = None
     deadline = 0.0
     disconnect_start: str | None = None
@@ -600,19 +583,15 @@ def run_capture(duration_minutes: int, output_dir: Path) -> dict[str, object]:
                             "rest_recent_seed",
                             None,
                         )
-                        key = _trade_key(row)
-                        if key not in seen_trades:
-                            seen_trades.add(key)
-                            trade_rows.append(row)
+                        trade_rows.append(row)
         except Exception as exc:
             errors.append(f"recent_trade_seed:{type(exc).__name__}")
-        duplicate_count += _process_pushes(
+        _process_pushes(
             pending,
             book_rows,
             trade_rows,
             gaps,
             offsets,
-            seen_trades,
             snapshot_cutoff_ms,
         )
         while time.monotonic() < deadline:
@@ -623,13 +602,12 @@ def run_capture(duration_minutes: int, output_dir: Path) -> dict[str, object]:
                 for message in messages:
                     if message == {}:
                         socket.send("{}")
-                duplicate_count += _process_pushes(
+                _process_pushes(
                     messages,
                     book_rows,
                     trade_rows,
                     gaps,
                     offsets,
-                    seen_trades,
                     snapshot_cutoff_ms,
                 )
             except Exception as exc:
@@ -661,13 +639,12 @@ def run_capture(duration_minutes: int, output_dir: Path) -> dict[str, object]:
                             str(snapshot_row["exchange_timestamp_ms"])
                         )
                         book_rows.append(snapshot_row)
-                        duplicate_count += _process_pushes(
+                        _process_pushes(
                             pending,
                             book_rows,
                             trade_rows,
                             gaps,
                             offsets,
-                            seen_trades,
                             snapshot_cutoff_ms,
                         )
                     except Exception as reconnect_exc:
@@ -710,7 +687,6 @@ def run_capture(duration_minutes: int, output_dir: Path) -> dict[str, object]:
         started_at,
         finished_at,
         duration_minutes,
-        duplicate_count,
         errors,
     )
     return manifest

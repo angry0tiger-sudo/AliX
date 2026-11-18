@@ -50,7 +50,7 @@ jobs:
       - name: Install pinned capture and mock-test dependencies
         run: |
           python -m pip install pip==25.2
-          python -m pip install websocket-client==1.9.2 pytest==9.0.3
+          python -m pip install websocket-client==1.9.2 httpx==0.28.1 pytest==9.0.3
 
       - name: Run mock-only data-contract and gap-detection tests
         run: pytest tests/unit/test_capture_nobitex_microstructure.py -q
