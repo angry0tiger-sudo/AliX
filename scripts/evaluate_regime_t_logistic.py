@@ -82,7 +82,10 @@ def _validate_walk_forward_contract(protocol: dict[str, Any]) -> None:
         "maximum_target_horizon_hours": 24,
     }
     actual = {key: protocol.get(key) for key in expected}
-    if actual != expected or protocol.get("purge_policy", {}).get("enabled") is not True:
+    if (
+        actual != expected
+        or protocol.get("purge_policy", {}).get("enabled") is not True
+    ):
         raise RuntimeError("regime_t_g3_walk_forward_contract_mismatch")
 
 
@@ -142,9 +145,7 @@ def build_folds(
         raise RuntimeError("regime_t_fold_anchor_must_be_timezone_aware")
     timestamp_ns = pd.DatetimeIndex(frame["timestamp"]).astype("int64").to_numpy()
     fold_items = protocol["folds"]
-    folds = [
-        _build_fold(item, anchor, timestamp_ns, len(frame)) for item in fold_items
-    ]
+    folds = [_build_fold(item, anchor, timestamp_ns, len(frame)) for item in fold_items]
     if len(folds) != 3:
         raise RuntimeError("regime_t_expected_three_walk_forward_folds")
     return folds
@@ -262,9 +263,9 @@ def _evaluate_one_fold(
             "decision_index": test_index,
             "true_label": y_test,
             "predicted_label": y_pred,
-            "prediction_probability_upper_first": model.predict_proba(
-                x[test_index]
-            )[:, 1],
+            "prediction_probability_upper_first": model.predict_proba(x[test_index])[
+                :, 1
+            ],
             "training_majority_label": majority_label,
         }
     )
@@ -351,9 +352,7 @@ def evaluate_walk_forward(
             ),
             "uniform_random_expected_accuracy": 0.5,
             "pooled_training_majority_baseline_accuracy": pooled_majority_accuracy,
-            "pooled_confusion_matrix_labels_0_1": _confusion(
-                pooled_true, pooled_pred
-            ),
+            "pooled_confusion_matrix_labels_0_1": _confusion(pooled_true, pooled_pred),
             "confusion_matrix_axis_semantics": (
                 "rows=true [0,1], columns=predicted [0,1]"
             ),

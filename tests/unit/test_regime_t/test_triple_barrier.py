@@ -38,7 +38,9 @@ def _synthetic_frame(rows: int = 90) -> pd.DataFrame:
 
 def test_preregistration_is_locked_and_parameters_are_fixed() -> None:
     payload = json.loads(PREREG_PATH.read_text(encoding="utf-8"))
-    assert hashlib.sha256(PREREG_PATH.read_bytes()).hexdigest() == EXPECTED_PREREG_SHA256
+    assert (
+        hashlib.sha256(PREREG_PATH.read_bytes()).hexdigest() == EXPECTED_PREREG_SHA256
+    )
     assert payload["preregistration"]["status"] == "PREREGISTERED_LOCKED"
     assert payload["target"]["barriers"]["k"] == 2.0
     assert payload["target"]["time_barrier"]["max_holding_hours"] == 24
