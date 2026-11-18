@@ -210,6 +210,15 @@ No other main-branch paths were changed.
 - M2: historical six-month public L2/tick history — not documented or established; the historical-data feasibility decision is complete and prospective Live collection is required.
 - M1: five-minute pilot — PASS for ingestion, manifest integrity, timestamps, and observed offset continuity; full data-quality acceptance awaits the M1.5 corpus audit.
 - M1.5: OWNER-APPROVED SCHEDULED SOAK DESIGN — hourly 55-minute segments, with explicit `MISSING_COVERAGE` between segments; operational activation and accumulated evidence remain pending until recorded from GitHub.
+
+### 6.1 M1.5 activation record (2026-11-18)
+
+- Research-branch implementation commit: `c830dae15adc3bbabd7d8e74e09fbf662dce1311`.
+- Standard CI for that exact commit: PASS; run `44379295099`.
+- The repository default-branch setting has been temporarily switched from `main` to `research/nobitex-hf-strategy` so GitHub can discover and schedule the workflow on the Research branch. This is repository metadata only; no change was made to the `main` ref or its contents.
+- Independently rechecked `main`: HEAD `cd9b13d42ac0cf0edd2df066ff81580e028146d6`; Tree SHA remains exactly `5761c6c34143f8e6924f53a4e745c48932a5f791`.
+- The next cron tick after activation is scheduled for minute 37 UTC. At this record's verification time, no scheduled run has yet been observed. Workflow activation is not considered operationally proven until GitHub Actions reports an `event=schedule` run and its capture job succeeds.
+- The default-branch setting must be restored to `main` after the M1.5 collection window and final artifact audit. No commit or tree mutation on `main` is authorized.
 - M3: OFI pre-registration/design implementation — NOT AUTHORIZED until the extended capture corpus passes M1 review and the owner explicitly opens M3. This ADR authorizes no OFI or DeepLOB code.
 - M4: DeepLOB — not authorized by this ADR.
 
