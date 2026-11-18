@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -35,7 +37,7 @@ def _frame(volume: np.ndarray) -> pd.DataFrame:
     )
 
 
-def _passing_fold_records() -> list[dict[str, object]]:
+def _passing_fold_records() -> list[dict[str, Any]]:
     return [
         {"metrics": {"signal_count_above_lower_bound": 1}},
         {"metrics": {"signal_count_above_lower_bound": 2}},
@@ -130,8 +132,8 @@ def test_all_four_g46_gates_pass_at_each_cost_when_every_condition_is_met(
     ],
 )
 def test_g46_acceptance_fails_closed_when_any_registered_gate_fails(
-    metrics: dict[str, float | int],
-    fold_records: list[dict[str, object]],
+    metrics: dict[str, Any],
+    fold_records: list[dict[str, Any]],
     failed_gate: str,
 ) -> None:
     result = evaluate_cost_acceptance(metrics, fold_records, 50)
