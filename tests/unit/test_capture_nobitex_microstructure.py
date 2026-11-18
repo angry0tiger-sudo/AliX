@@ -11,6 +11,7 @@ from scripts.capture_nobitex_microstructure import (
     decode_messages,
     make_book_row,
     make_trade_row,
+    _process_pushes,
     write_capture_artifacts,
 )
 
@@ -143,3 +144,58 @@ def test_manifest_contains_sha256_record_counts_and_safety(tmp_path: Path) -> No
     assert manifest["Champion"] is None
     assert manifest["order_permission"] is False
     assert manifest["trading_authorization"] == "NO-GO"
+
+
+
+def test_push_processor_marks_offset_gap_and_drops_non_monotonic_event() -> None:
+    tracker = OffsetTracker()
+    book_rows: list[dict[str, object]] = []
+    trade_rows: list[dict[str, object]] = []
+    gaps: list[dict[str, object]] = []
+    first = {
+        "push": {
+            "channel": "public:orderbook-BTCIRT",
+            "pub": {"offset": 10, "data": valid_book()},
+        }
+    }
+    skipped = {
+        "push": {
+            "channel": "public:orderbook-BTCIRT",
+            "pub": {
+                "offset": 12,
+                "data": {
+                    **valid_book(),
+                    "lastUpdate": 1_700_000_000_200,
+                },
+            },
+        }
+    }
+    repeated = {
+        "push": {
+            "channel": "public:orderbook-BTCIRT",
+            "pub": {
+                "offset": 12,
+                "data": {
+                    **valid_book(),
+                    "lastUpdate": 1_700_000_000_300,
+                },
+            },
+        }
+    }
+
+    _process_pushes(
+        [first, skipped, repeated],
+        book_rows,
+        trade_rows,
+        gaps,
+        tracker,
+        set(),
+        0,
+    )
+
+    assert len(book_rows) == 2
+    assert len(gaps) == 2
+    assert [gap["reason"] for gap in gaps] == [
+        "publisher_offset_gap",
+        "non_monotonic_publisher_offset",
+    ]
