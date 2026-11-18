@@ -133,9 +133,13 @@ def test_manifest_contains_sha256_record_counts_and_safety(tmp_path: Path) -> No
     assert files["orderbook.csv"]["records"] == 1
     digest = hashlib.sha256((tmp_path / "trades.csv").read_bytes()).hexdigest()
     assert files["trades.csv"]["sha256"] == digest
-    manifest_digest = hashlib.sha256((tmp_path / "manifest.json").read_bytes()).hexdigest()
-    assert (tmp_path / "manifest.sha256").read_text(encoding="utf-8").startswith(
-        manifest_digest
+    manifest_digest = hashlib.sha256(
+        (tmp_path / "manifest.json").read_bytes()
+    ).hexdigest()
+    assert (
+        (tmp_path / "manifest.sha256")
+        .read_text(encoding="utf-8")
+        .startswith(manifest_digest)
     )
     assert manifest["authorization_header_sent"] is False
     assert manifest["private_api_calls"] == 0
@@ -144,7 +148,6 @@ def test_manifest_contains_sha256_record_counts_and_safety(tmp_path: Path) -> No
     assert manifest["Champion"] is None
     assert manifest["order_permission"] is False
     assert manifest["trading_authorization"] == "NO-GO"
-
 
 
 def test_push_processor_marks_offset_gap_and_drops_non_monotonic_event() -> None:

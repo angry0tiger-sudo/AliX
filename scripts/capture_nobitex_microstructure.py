@@ -3,6 +3,7 @@
 This collector records only observed messages. It never interpolates, forward-fills,
 or otherwise fabricates events across disconnects or publisher-offset gaps.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -22,18 +23,39 @@ from urllib.request import Request, urlopen
 REST_BASE = "https://apiv2.nobitex.ir"
 WS_URL = "wss://ws.nobitex.ir/connection/websocket"
 BOOK_FIELDS = (
-    "captured_at_utc", "source", "exchange_timestamp_ms", "offset",
-    "best_bid_price", "best_bid_size", "best_ask_price", "best_ask_size",
-    "spread", "mid_price", "bids_top_json", "asks_top_json",
+    "captured_at_utc",
+    "source",
+    "exchange_timestamp_ms",
+    "offset",
+    "best_bid_price",
+    "best_bid_size",
+    "best_ask_price",
+    "best_ask_size",
+    "spread",
+    "mid_price",
+    "bids_top_json",
+    "asks_top_json",
 )
 TRADE_FIELDS = (
-    "captured_at_utc", "source", "exchange_timestamp_ms", "side",
-    "price", "volume", "offset",
+    "captured_at_utc",
+    "source",
+    "exchange_timestamp_ms",
+    "side",
+    "price",
+    "volume",
+    "offset",
 )
 GAP_FIELDS = (
-    "stream", "gap_start_utc", "gap_end_utc", "gap_start_ms",
-    "gap_end_ms", "reason", "previous_offset", "next_offset",
-    "replay_attempted", "replay_available",
+    "stream",
+    "gap_start_utc",
+    "gap_end_utc",
+    "gap_start_ms",
+    "gap_end_ms",
+    "reason",
+    "previous_offset",
+    "next_offset",
+    "replay_attempted",
+    "replay_available",
 )
 
 
@@ -138,7 +160,9 @@ def decode_messages(raw: str | bytes) -> list[dict[str, object]]:
             messages.append(cast(dict[str, object], value))
         elif isinstance(value, list):
             messages.extend(
-                cast(dict[str, object], item) for item in value if isinstance(item, dict)
+                cast(dict[str, object], item)
+                for item in value
+                if isinstance(item, dict)
             )
         else:
             raise ValueError("WEBSOCKET_MESSAGE_NOT_OBJECT")
@@ -175,7 +199,9 @@ class OffsetTracker:
     def __init__(self) -> None:
         self._last: dict[str, tuple[int, int]] = {}
 
-    def observe(self, stream: str, offset: int, event_ms: int) -> dict[str, object] | None:
+    def observe(
+        self, stream: str, offset: int, event_ms: int
+    ) -> dict[str, object] | None:
         if offset < 0 or event_ms <= 0:
             raise ValueError("PUBLISHER_OFFSET_OR_TIMESTAMP_INVALID")
         previous = self._last.get(stream)
@@ -185,14 +211,26 @@ class OffsetTracker:
         previous_offset, previous_ms = previous
         if offset <= previous_offset:
             return gap_row(
-                stream, utc_now(), utc_now(), "non_monotonic_publisher_offset",
-                previous_ms, event_ms, previous_offset, offset,
+                stream,
+                utc_now(),
+                utc_now(),
+                "non_monotonic_publisher_offset",
+                previous_ms,
+                event_ms,
+                previous_offset,
+                offset,
             )
         self._last[stream] = (offset, event_ms)
         if offset > previous_offset + 1:
             return gap_row(
-                stream, utc_now(), utc_now(), "publisher_offset_gap",
-                previous_ms, event_ms, previous_offset, offset,
+                stream,
+                utc_now(),
+                utc_now(),
+                "publisher_offset_gap",
+                previous_ms,
+                event_ms,
+                previous_offset,
+                offset,
             )
         return None
 
@@ -206,7 +244,10 @@ def fetch_public_json(path: str, timeout: float = 10.0) -> dict[str, object]:
         },
         method="GET",
     )
-    if "Authorization" in request.headers or "Authorization" in request.unredirected_hdrs:
+    if (
+        "Authorization" in request.headers
+        or "Authorization" in request.unredirected_hdrs
+    ):
         raise RuntimeError("PRIVATE_AUTH_HEADER_FORBIDDEN")
     with urlopen(request, timeout=timeout) as response:
         if response.status != 200:
@@ -219,8 +260,12 @@ def fetch_public_json(path: str, timeout: float = 10.0) -> dict[str, object]:
 
 def _create_socket() -> tuple[SocketLike, type[BaseException]]:
     module = importlib.import_module("websocket")
-    create_connection = cast(Callable[..., SocketLike], getattr(module, "create_connection"))
-    timeout_type = cast(type[BaseException], getattr(module, "WebSocketTimeoutException"))
+    create_connection = cast(
+        Callable[..., SocketLike], getattr(module, "create_connection")
+    )
+    timeout_type = cast(
+        type[BaseException], getattr(module, "WebSocketTimeoutException")
+    )
     socket = create_connection(
         WS_URL,
         timeout=5,
@@ -266,7 +311,9 @@ def _await_ack(
     raise TimeoutError(f"WEBSOCKET_{response_key.upper()}_ACK_TIMEOUT")
 
 
-def connect_and_subscribe() -> tuple[SocketLike, type[BaseException], list[dict[str, object]]]:
+def connect_and_subscribe() -> tuple[
+    SocketLike, type[BaseException], list[dict[str, object]]
+]:
     socket, timeout_type = _create_socket()
     pending: list[dict[str, object]] = []
     socket.send(json.dumps({"connect": {}, "id": 1}, separators=(",", ":")))
@@ -313,7 +360,9 @@ def _process_pushes(
         push = cast(dict[str, object], push_value)
         channel_value = push.get("channel")
         publication_value = push.get("pub")
-        if not isinstance(channel_value, str) or not isinstance(publication_value, dict):
+        if not isinstance(channel_value, str) or not isinstance(
+            publication_value, dict
+        ):
             continue
         publication = cast(dict[str, object], publication_value)
         raw_data = publication.get("data")
@@ -325,16 +374,35 @@ def _process_pushes(
             raise ValueError("PUBLICATION_DATA_INVALID")
         payload = cast(dict[str, object], payload_value)
         offset_value = publication.get("offset")
-        offset = offset_value if isinstance(offset_value, int) and not isinstance(offset_value, bool) else None
+        offset = (
+            offset_value
+            if isinstance(offset_value, int) and not isinstance(offset_value, bool)
+            else None
+        )
         captured_at = utc_now()
         if channel_value == "public:orderbook-BTCIRT":
             timestamp = payload.get("lastUpdate")
             if not isinstance(timestamp, int):
-                gaps.append(gap_row("orderbook", captured_at, captured_at, "invalid_or_missing_book_timestamp"))
+                gaps.append(
+                    gap_row(
+                        "orderbook",
+                        captured_at,
+                        captured_at,
+                        "invalid_or_missing_book_timestamp",
+                    )
+                )
                 continue
             gap: dict[str, object] | None = None
             if offset is None:
-                gaps.append(gap_row("orderbook", captured_at, captured_at, "publisher_offset_missing", end_ms=timestamp))
+                gaps.append(
+                    gap_row(
+                        "orderbook",
+                        captured_at,
+                        captured_at,
+                        "publisher_offset_missing",
+                        end_ms=timestamp,
+                    )
+                )
             else:
                 gap = offsets.observe("orderbook", offset, timestamp)
                 if gap is not None:
@@ -342,14 +410,31 @@ def _process_pushes(
             if gap is not None and gap["reason"] == "non_monotonic_publisher_offset":
                 continue
             if timestamp > snapshot_cutoff_ms:
-                book_rows.append(make_book_row(payload, captured_at, "websocket", offset))
+                book_rows.append(
+                    make_book_row(payload, captured_at, "websocket", offset)
+                )
         elif channel_value == "public:trades-BTCIRT":
             timestamp = payload.get("time")
             if not isinstance(timestamp, int):
-                gaps.append(gap_row("trades", captured_at, captured_at, "invalid_or_missing_trade_timestamp"))
+                gaps.append(
+                    gap_row(
+                        "trades",
+                        captured_at,
+                        captured_at,
+                        "invalid_or_missing_trade_timestamp",
+                    )
+                )
                 continue
             if offset is None:
-                gaps.append(gap_row("trades", captured_at, captured_at, "publisher_offset_missing", end_ms=timestamp))
+                gaps.append(
+                    gap_row(
+                        "trades",
+                        captured_at,
+                        captured_at,
+                        "publisher_offset_missing",
+                        end_ms=timestamp,
+                    )
+                )
             else:
                 gap = offsets.observe("trades", offset, timestamp)
                 if gap is not None:
@@ -366,7 +451,9 @@ def _process_pushes(
     return duplicates
 
 
-def _write_csv(path: Path, fields: tuple[str, ...], rows: list[dict[str, object]]) -> None:
+def _write_csv(
+    path: Path, fields: tuple[str, ...], rows: list[dict[str, object]]
+) -> None:
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields, extrasaction="raise")
         writer.writeheader()
@@ -410,10 +497,14 @@ def write_capture_artifacts(
             "bytes": path.stat().st_size,
             "records": count,
         }
+
     def time_range(rows: list[dict[str, object]]) -> dict[str, str | None]:
         timestamps = [int(str(row["exchange_timestamp_ms"])) for row in rows]
         if not timestamps:
-            return {"first_exchange_timestamp_ms": None, "last_exchange_timestamp_ms": None}
+            return {
+                "first_exchange_timestamp_ms": None,
+                "last_exchange_timestamp_ms": None,
+            }
         return {
             "first_exchange_timestamp_ms": str(min(timestamps)),
             "last_exchange_timestamp_ms": str(max(timestamps)),
@@ -421,7 +512,9 @@ def write_capture_artifacts(
 
     websocket_book_count = sum(row["source"] == "websocket" for row in book_rows)
     websocket_trade_count = sum(row["source"] == "websocket" for row in trade_rows)
-    rest_trade_seed_count = sum(row["source"] == "rest_recent_seed" for row in trade_rows)
+    rest_trade_seed_count = sum(
+        row["source"] == "rest_recent_seed" for row in trade_rows
+    )
     manifest: dict[str, object] = {
         "schema_version": "alix.regime-m.capture.v1",
         "code_commit_sha": os.environ.get("GITHUB_SHA", "LOCAL_UNSET"),
@@ -455,7 +548,9 @@ def write_capture_artifacts(
             "duplicate_trades_dropped": duplicate_trade_count,
         },
         "gap_count": len(gaps),
-        "capture_status": "GAPPED" if gaps else ("DEGRADED" if errors else "NO_GAPS_OBSERVED"),
+        "capture_status": "GAPPED"
+        if gaps
+        else ("DEGRADED" if errors else "NO_GAPS_OBSERVED"),
         "errors": errors,
         "files": files,
     }
@@ -499,7 +594,12 @@ def run_capture(duration_minutes: int, output_dir: Path) -> dict[str, object]:
             if isinstance(trades_value, list):
                 for item in trades_value:
                     if isinstance(item, dict):
-                        row = make_trade_row(cast(dict[str, object], item), utc_now(), "rest_recent_seed", None)
+                        row = make_trade_row(
+                            cast(dict[str, object], item),
+                            utc_now(),
+                            "rest_recent_seed",
+                            None,
+                        )
                         key = _trade_key(row)
                         if key not in seen_trades:
                             seen_trades.add(key)
@@ -507,8 +607,13 @@ def run_capture(duration_minutes: int, output_dir: Path) -> dict[str, object]:
         except Exception as exc:
             errors.append(f"recent_trade_seed:{type(exc).__name__}")
         duplicate_count += _process_pushes(
-            pending, book_rows, trade_rows, gaps, offsets,
-            seen_trades, snapshot_cutoff_ms,
+            pending,
+            book_rows,
+            trade_rows,
+            gaps,
+            offsets,
+            seen_trades,
+            snapshot_cutoff_ms,
         )
         while time.monotonic() < deadline:
             try:
@@ -517,8 +622,13 @@ def run_capture(duration_minutes: int, output_dir: Path) -> dict[str, object]:
                     if message == {}:
                         socket.send("{}")
                 duplicate_count += _process_pushes(
-                    messages, book_rows, trade_rows, gaps, offsets,
-                    seen_trades, snapshot_cutoff_ms,
+                    messages,
+                    book_rows,
+                    trade_rows,
+                    gaps,
+                    offsets,
+                    seen_trades,
+                    snapshot_cutoff_ms,
                 )
             except Exception as exc:
                 disconnect_start = utc_now()
@@ -535,7 +645,9 @@ def run_capture(duration_minutes: int, output_dir: Path) -> dict[str, object]:
                         for stream in ("orderbook", "trades"):
                             gaps.append(
                                 gap_row(
-                                    stream, disconnect_start, reconnect_at,
+                                    stream,
+                                    disconnect_start,
+                                    reconnect_at,
                                     "websocket_disconnect_no_replay",
                                 )
                             )
@@ -543,14 +655,23 @@ def run_capture(duration_minutes: int, output_dir: Path) -> dict[str, object]:
                         snapshot_row = make_book_row(
                             snapshot, reconnect_at, "rest_reconnect_snapshot", None
                         )
-                        snapshot_cutoff_ms = int(str(snapshot_row["exchange_timestamp_ms"]))
+                        snapshot_cutoff_ms = int(
+                            str(snapshot_row["exchange_timestamp_ms"])
+                        )
                         book_rows.append(snapshot_row)
                         duplicate_count += _process_pushes(
-                            pending, book_rows, trade_rows, gaps, offsets,
-                            seen_trades, snapshot_cutoff_ms,
+                            pending,
+                            book_rows,
+                            trade_rows,
+                            gaps,
+                            offsets,
+                            seen_trades,
+                            snapshot_cutoff_ms,
                         )
                     except Exception as reconnect_exc:
-                        errors.append(f"reconnect_failed:{type(reconnect_exc).__name__}")
+                        errors.append(
+                            f"reconnect_failed:{type(reconnect_exc).__name__}"
+                        )
                         if socket is not None:
                             socket.close()
                             socket = None
@@ -559,7 +680,9 @@ def run_capture(duration_minutes: int, output_dir: Path) -> dict[str, object]:
                     for stream in ("orderbook", "trades"):
                         gaps.append(
                             gap_row(
-                                stream, disconnect_start, reconnect_end,
+                                stream,
+                                disconnect_start,
+                                reconnect_end,
                                 "reconnect_unavailable_no_replay",
                             )
                         )
@@ -569,27 +692,45 @@ def run_capture(duration_minutes: int, output_dir: Path) -> dict[str, object]:
         if disconnect_start is not None:
             for stream in ("orderbook", "trades"):
                 gaps.append(
-                    gap_row(stream, disconnect_start, utc_now(), "reconnect_unavailable")
+                    gap_row(
+                        stream, disconnect_start, utc_now(), "reconnect_unavailable"
+                    )
                 )
     finally:
         if socket is not None:
             socket.close()
     finished_at = utc_now()
     manifest = write_capture_artifacts(
-        output_dir, book_rows, trade_rows, gaps, started_at, finished_at,
-        duration_minutes, duplicate_count, errors,
+        output_dir,
+        book_rows,
+        trade_rows,
+        gaps,
+        started_at,
+        finished_at,
+        duration_minutes,
+        duplicate_count,
+        errors,
     )
     return manifest
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Capture public Nobitex L2 and trade flow.")
+    parser = argparse.ArgumentParser(
+        description="Capture public Nobitex L2 and trade flow."
+    )
     parser.add_argument("--duration-minutes", type=int, default=60)
-    parser.add_argument("--output-dir", type=Path, default=Path("microstructure-capture"))
+    parser.add_argument(
+        "--output-dir", type=Path, default=Path("microstructure-capture")
+    )
     args = parser.parse_args()
     manifest = run_capture(args.duration_minutes, args.output_dir)
     counts = cast(dict[str, object], manifest["record_counts"])
-    print(json.dumps({"capture_status": manifest["capture_status"], "record_counts": counts}, sort_keys=True))
+    print(
+        json.dumps(
+            {"capture_status": manifest["capture_status"], "record_counts": counts},
+            sort_keys=True,
+        )
+    )
     return 0 if counts["orderbook"] and counts["trades"] else 1
 
 
