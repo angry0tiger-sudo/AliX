@@ -1,6 +1,6 @@
 # ADR-056 — Regime T Triple-Barrier Target and Logistic Baseline
 
-- **Status:** EXECUTED — NO-GO (55% owner screening threshold not met)
+- **Status:** CLOSED — NO-GO
 - **Date:** 2026-11-18
 - **Branch:** research/nobitex-hf-strategy
 - **Experiment:** REGIME-T-TB-LOGISTIC-01
