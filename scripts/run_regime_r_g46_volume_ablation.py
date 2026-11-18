@@ -33,9 +33,7 @@ from scripts.run_regime_r_trials import (
 from research.regime_r.ngboost_cqr.contracts import TRIAL_IDS
 
 ROOT = Path(__file__).resolve().parents[1]
-PREREGISTRATION_PATH = (
-    ROOT / "config/regime_r/hgbq_cqr_preregistration_ablation.json"
-)
+PREREGISTRATION_PATH = ROOT / "config/regime_r/hgbq_cqr_preregistration_ablation.json"
 EXPECTED_PREREGISTRATION_SHA256 = (
     "83d9dffc0e3332eaddd5ee35bf846b13b049039eda6df087b9ccb734ce9f9de1"
 )
@@ -269,9 +267,7 @@ def run_ablation_trial(
             "acceptance": acceptance,
         }
 
-    duplicate_of = (
-        f"NOBITEX-R1-NGBOOST-{horizon}-01" if slot > 1 else None
-    )
+    duplicate_of = f"NOBITEX-R1-NGBOOST-{horizon}-01" if slot > 1 else None
     result = {
         "trial_id": trial_id,
         "horizon": horizon,
@@ -286,26 +282,6 @@ def run_ablation_trial(
     return result, diagnostics, trade_rows
 
 
-def _weighted_mean(
-    records: list[dict[str, Any]],
-    statistic_path: tuple[str, ...],
-) -> float:
-    numerator = 0.0
-    denominator = 0
-    for record in records:
-        statistic: Any = record["statistics"]
-        for key in statistic_path:
-            statistic = statistic[key]
-        count = int(statistic["count"]) if "count" in statistic else int(
-            record["statistics"]["prediction_count"]
-        )
-        numerator += float(statistic["mean"]) * count
-        denominator += count
-    if denominator <= 0:
-        raise RuntimeError("regime_r_g46_weighted_diagnostic_empty")
-    return numerator / denominator
-
-
 def aggregate_diagnostics(records: list[dict[str, Any]]) -> dict[str, Any]:
     """Aggregate only unique slot-01 diagnostics, weighted by forecast count."""
     if not records:
@@ -314,29 +290,43 @@ def aggregate_diagnostics(records: list[dict[str, Any]]) -> dict[str, Any]:
     positive_count = sum(
         int(item["statistics"]["median_positive"]["count"]) for item in records
     )
-    median_mean = sum(
-        float(item["statistics"]["median"]["mean"])
-        * int(item["statistics"]["prediction_count"])
-        for item in records
-    ) / count
-    raw_width = sum(
-        float(item["statistics"]["base_quantile_interval_width"]["mean"])
-        * int(item["statistics"]["prediction_count"])
-        for item in records
-    ) / count
-    conformal_width = sum(
-        float(item["statistics"]["conformal_interval_width"]["mean"])
-        * int(item["statistics"]["prediction_count"])
-        for item in records
-    ) / count
+    median_mean = (
+        sum(
+            float(item["statistics"]["median"]["mean"])
+            * int(item["statistics"]["prediction_count"])
+            for item in records
+        )
+        / count
+    )
+    raw_width = (
+        sum(
+            float(item["statistics"]["base_quantile_interval_width"]["mean"])
+            * int(item["statistics"]["prediction_count"])
+            for item in records
+        )
+        / count
+    )
+    conformal_width = (
+        sum(
+            float(item["statistics"]["conformal_interval_width"]["mean"])
+            * int(item["statistics"]["prediction_count"])
+            for item in records
+        )
+        / count
+    )
     lower_cost: dict[str, Any] = {}
     for cost in COSTS_BPS:
         key = str(cost)
-        mean_distance = sum(
-            float(item["statistics"]["lower_bound_to_cost"][key]["mean_distance_bps"])
-            * int(item["statistics"]["prediction_count"])
-            for item in records
-        ) / count
+        mean_distance = (
+            sum(
+                float(
+                    item["statistics"]["lower_bound_to_cost"][key]["mean_distance_bps"]
+                )
+                * int(item["statistics"]["prediction_count"])
+                for item in records
+            )
+            / count
+        )
         above = sum(
             int(item["statistics"]["lower_bound_to_cost"][key]["count_above_cost"])
             for item in records
@@ -363,9 +353,7 @@ def aggregate_diagnostics(records: list[dict[str, Any]]) -> dict[str, Any]:
 def build_diagnostic_rollup(
     records: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    unique_records = [
-        item for item in records if int(item["candidate_slot"]) == 1
-    ]
+    unique_records = [item for item in records if int(item["candidate_slot"]) == 1]
     horizons = ("1h", "4h", "24h")
     by_horizon = {
         horizon: aggregate_diagnostics(
@@ -391,9 +379,7 @@ def build_report(
     diagnostics: list[dict[str, Any]],
     trade_rows: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    unique_trials = [
-        item for item in trials if item["unique_candidate_configuration"]
-    ]
+    unique_trials = [item for item in trials if item["unique_candidate_configuration"]]
     candidates = []
     for trial in unique_trials:
         candidate_passed = all(
@@ -457,7 +443,9 @@ def build_report(
         ),
         "lower_bound_minus_cost_bps_delta": {
             str(cost): (
-                rollup["overall"]["lower_bound_minus_cost"][str(cost)]["mean_distance_bps"]
+                rollup["overall"]["lower_bound_minus_cost"][str(cost)][
+                    "mean_distance_bps"
+                ]
                 - float(baseline["mean_lower_bound_minus_cost_bps"][str(cost)])
             )
             for cost in COSTS_BPS
