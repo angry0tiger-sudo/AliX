@@ -1,6 +1,6 @@
 # ADR-055 — Regime R G4.6 Volume-Derived Feature Ablation
 
-- **Status:** PREREGISTERED_LOCKED — NOT YET EXECUTED
+- **Status:** ACCEPTED — COMPLETE_ABSTENTION_REPEATED; HGBQ-CQR ECONOMIC PATH CLOSED (REGIME P)
 - **Date:** 2026-11-18
 - **Branch:** `research/nobitex-hf-strategy`
 - **Experiment:** G4.6 — one controlled volume-derived feature ablation
@@ -9,6 +9,12 @@
 - **Feature-contract SHA-256:** `6bcd91dcfdd3e48cfbe64adb714f432ae8dc610f136ed2731967c9aed5282250`
 - **G3 frozen configuration SHA-256:** `92cdcf19a02f5cf9659f327704ed4d6c5cf0d85687aff2ba35b9542fec5cfdaa`
 - **Baseline:** G4.5 Run #11 / artifact 14416704508
+- **Execution:** [G4.6 Run #1](https://github.com/angry0tiger-sudo/AliX/actions/runs/44307631442) — SUCCESS
+- **Artifact:** [Artifact 14428742548](https://github.com/angry0tiger-sudo/AliX/actions/runs/44307631442/artifacts/14428742548)
+- **Artifact name:** `regime-r-g4-g6-volume-ablation-prehack-0ca5402b208524d20d3a482227a63214551f945c`
+- **Artifact ZIP SHA-256:** `e63a05c2b05886e42616d69b3e46ab4dfc59ecdcd2e3646690644ea39d80d6b6`
+- **Evaluated Research commit:** `0ca5402b208524d20d3a482227a63214551f945c`
+- **Standard CI for evaluated code:** [Run #2501](https://github.com/angry0tiger-sudo/AliX/actions/runs/44305925205) — SUCCESS
 
 ## 1. Hypothesis
 
@@ -85,5 +91,132 @@ Aggregate diagnostic values use only the three unique horizon configurations and
 A successful G4.6 result means only that a unique horizon candidate passed the preregistered exploratory pre-hack gates and may be proposed for a separately authorized confirmatory evaluation. It does not authorize reading Holdout, candidate promotion, paper orders, or live trading.
 
 A repeated complete abstention closes this HGBQ-CQR economic path under the Owner's explicit directive.
+
+Architecture First. Evidence Always. Fail Closed.
+
+
+## 8. Final execution record and provenance
+
+The single pre-registered G4.6 experiment completed successfully on GitHub Actions:
+
+| Field | Observed |
+|---|---|
+| Workflow Run ID | `44307631442` |
+| Run number | `#1` |
+| Event | `workflow_dispatch` |
+| Branch | `research/nobitex-hf-strategy` |
+| Head SHA | `0ca5402b208524d20d3a482227a63214551f945c` |
+| Conclusion | `success` |
+| Artifact ID | `14428742548` |
+| Artifact ZIP SHA-256 | `e63a05c2b05886e42616d69b3e46ab4dfc59ecdcd2e3646690644ea39d80d6b6` |
+
+The run executed the locked registration and exact data/G3 hash verification. The run validator passed and the artifact was uploaded. The JSON has schema `alix.regime-r.g4.6-volume-ablation.v1`.
+
+Observed accounting:
+
+| Item | Value |
+|---|---:|
+| Registered logical slots | 30 |
+| Unique horizon configurations | 3 |
+| Duplicate slots | 27 |
+| Fit calls | 90 |
+| Diagnostic records | 90 |
+| Unique horizon/fold slices | 9 |
+| Forecast rows in the unique slices | 6,609 |
+| Hypothetical trade rows | 0 |
+
+The input dataset remained the committed PRE-HACK file, SHA-256 `0aa13607d1da68c4720919f233635bb33d34048e5bd67d3ecc2ce9bb7c2b462e`, 31,801 rows. The artifact records 31,801 zero-volume rows and zero positive-volume rows. The frozen G3 commitment remained `92cdcf19a02f5cf9659f327704ed4d6c5cf0d85687aff2ba35b9542fec5cfdaa`; the G4.6 registration commitment remained `83d9dffc0e3332eaddd5ee35bf846b13b049039eda6df087b9ccb734ce9f9de1`.
+
+## 9. G4.6 measured diagnostic results
+
+All aggregate statistics below use only unique candidate slot 01 records, weighted by prediction count. The 27 duplicate slots are retained for accounting and reproduction only.
+
+### 9.1 Aggregate
+
+| Metric | G4.6 observed |
+|---|---:|
+| Forecast rows | 6,609 |
+| Positive median forecasts | 3,085 / 6,609 |
+| Median-positive rate | 46.678771% |
+| Weighted mean forecast median | +10.2522 bps |
+| Raw quantile interval width | 4.524927% (452.4927 bps) |
+| Calibrated conformal interval width | 5.333342% (533.3342 bps) |
+| Mean `Lower Bound - Cost`, 50 bps | -358.7484 bps |
+| Mean `Lower Bound - Cost`, 90 bps | -398.7484 bps |
+| Forecasts strictly above 50 bps cost | 0 / 6,609 (0%) |
+| Forecasts strictly above 90 bps cost | 0 / 6,609 (0%) |
+
+The 46.678771% figure is the percentage of model median forecasts greater than zero. It is **not** directional accuracy, realized hit rate, or win rate.
+
+### 9.2 Horizon breakdown
+
+| Horizon | Forecasts | Median positive | Mean median | Conformal width | LB − Cost at 50 bps | LB − Cost at 90 bps |
+|---|---:|---:|---:|---:|---:|---:|
+| 1h | 2,229 | 45.266936% | -0.8204 bps | 1.974032% (197.4032 bps) | -154.7903 bps | -194.7903 bps |
+| 4h | 2,220 | 44.729730% | -0.0322 bps | 3.851546% (385.1546 bps) | -257.5849 bps | -297.5849 bps |
+| 24h | 2,160 | 50.138889% | +32.2484 bps | 10.322920% (1,032.2920 bps) | -673.1954 bps | -713.1954 bps |
+
+Every horizon/fold slice has zero forecasts with calibrated Lower Bound strictly above either cost threshold.
+
+### 9.3 Direct comparison against G4.5
+
+The G4.5 reference is Run #11 / artifact 14416704508. The raw G4.5 JSON and G4.6 JSON were compared record-by-record using the same `(trial_id, fold_id)` identity. **All 90 of 90 complete diagnostic statistics objects are exactly equal**, not merely close after rounding. This includes the median distribution, positive-median count, raw and calibrated interval widths, quantile summaries, conformal corrections, and lower-bound-to-cost distance summaries for every registered trial/fold record.
+
+The unique-candidate weighted aggregate is consequently identical to G4.5:
+
+| Metric | G4.5 | G4.6 | Change |
+|---|---:|---:|---:|
+| Median-positive rate | 46.678771% | 46.678771% | 0 |
+| Mean conformal width | 533.3342 bps | 533.3342 bps | 0 |
+| Mean LB − Cost, 50 bps | -358.7484 bps | -358.7484 bps | 0 |
+| Mean LB − Cost, 90 bps | -398.7484 bps | -398.7484 bps | 0 |
+| Forecasts above either cost | 0 | 0 | 0 |
+
+The two volume-derived predictors had no measurable effect on the fitted forecast/calibration statistics on this fixed dataset. Removing them did **not** improve lower bounds and did **not** reduce conformal widths. This is consistent with their zero/constant values in the source data; it does not establish a general causal claim about volume features on other datasets or instruments.
+
+## 10. Economic acceptance and final verdict
+
+All three unique horizon candidates were tested under both frozen costs. The pooled offline hypothetical ledger results were:
+
+| Horizon | Cost | NetPF | Trades | MaxDD | Qualifying LB folds | Candidate result |
+|---|---:|---:|---:|---:|---:|---|
+| 1h | 50 bps | N/A | 0 | 0.00% | 0 / 3 | FAIL |
+| 1h | 90 bps | N/A | 0 | 0.00% | 0 / 3 | FAIL |
+| 4h | 50 bps | N/A | 0 | 0.00% | 0 / 3 | FAIL |
+| 4h | 90 bps | N/A | 0 | 0.00% | 0 / 3 | FAIL |
+| 24h | 50 bps | N/A | 0 | 0.00% | 0 / 3 | FAIL |
+| 24h | 90 bps | N/A | 0 | 0.00% | 0 / 3 | FAIL |
+
+NetPF is N/A, not zero, because there were no completed trades. MaxDD of 0.00% is also not evidence of safety or profitability; no position was opened. The PF and trade-count gates failed, the lower-bound gate failed in every fold, and only the drawdown inequality was vacuously satisfied. No candidate passed all four gates at both costs.
+
+The final machine verdict is:
+
+`COMPLETE_ABSTENTION_REPEATED`
+
+**Owner-directed decision: close the HGBQ-CQR economic path under Regime P.** The single authorized volume-feature ablation did not revive the path. No further HGBQ-CQR feature variants, parameter searches, cost relaxations, or selective reruns are authorized under this decision. The G4.6 evidence is exploratory PRE-HACK evidence only; there is no Holdout authorization.
+
+## 11. Regime P closure, alternative paths, and safety
+
+The HGBQ-CQR research code and artifacts remain in repository history for auditability, but this economic strategy is closed and must not be promoted or treated as a candidate Champion.
+
+Two alternative research paths are recommended. Neither is authorized or executed by this ADR:
+
+1. **Low-capacity quantile baseline:** evaluate a regularized linear quantile model (for example, scikit-learn `QuantileRegressor`) as an explicit low-complexity benchmark on the same target, data boundary, folds, and cost thresholds. It should be independently preregistered and held to the same economic gates. This tests whether any stable gross edge is present without the current HGBQ-CQR complexity.
+2. **Target redesign:** separately preregister a volatility-scaled event/first-touch target, such as a leakage-safe triple-barrier formulation with explicit entry timing, barrier rules, costs, purging, and embargo. This tests whether fixed-horizon gross-return regression is the wrong decision target. It is not a parameter adjustment to G3 and must not reuse the current G4.6 outcomes as if they were confirmatory evidence.
+
+The G4.6 run safety record is:
+
+- `real_data_scope = PRE_HACK_ONLY`
+- `holdout_bytes_read = false`
+- `private_api_calls = 0`
+- `real_order_attempts = 0`
+- `paper_orders = 0`
+- `hypothetical_trades_simulated = true` (offline deterministic costed ledger only)
+- `exchange_network_access = false`
+- `Champion = null`
+- `order_permission = false`
+- `trading_authorization = NO-GO`
+
+No Holdout or post-hack bytes were read. No private exchange API was called. The zero-trade CSV is an empty offline ledger result, not a trading simulation that placed orders.
 
 Architecture First. Evidence Always. Fail Closed.

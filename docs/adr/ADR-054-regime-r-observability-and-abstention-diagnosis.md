@@ -163,7 +163,19 @@ The cleanup is an additive deletion commit; it will leave the original commit in
 - **G4.5 observability:** ACCEPTED; complete and artifact-verified.
 - **Abstention diagnosis:** CONFIRMED; zero lower bounds cleared either cost gate.
 - **HGBQ-CQR economic strategy:** NO-GO; no Champion and no promotion.
-- **Next research recommendation:** one separately preregistered volume-feature ablation at most; close the economic path if it fails the lower-bound stability/cost criteria.
+- **G4.6 follow-up:** completed and documented in [ADR-055](https://github.com/angry0tiger-sudo/AliX/blob/research/nobitex-hf-strategy/docs/adr/ADR-055-regime-r-g4-6-volume-ablation.md); the volume-feature ablation produced `COMPLETE_ABSTENTION_REPEATED` and exactly matched G4.5 diagnostic statistics across all 90 trial/fold records.
+- **Final HGBQ-CQR economic disposition:** CLOSED under Regime P per the Owner's directive. No further feature ablation, tuning, cost relaxation, Holdout access, or strategy promotion is authorized.
 - **Trading authorization:** NO-GO.
+
+Architecture First. Evidence Always. Fail Closed.
+
+
+## 9. G4.6 follow-up and closure
+
+The Owner-authorized G4.6 volume-feature ablation is complete. Its exact run provenance, artifact, metrics, and gate results are recorded in ADR-055. The G4.6 JSON was compared against the G4.5 Run #11 diagnostic JSON: all 90 matching trial/fold statistics objects were identical. The positive-median rate, calibrated conformal widths, and lower-bound-to-cost distributions did not improve after removing the two volume-derived predictors.
+
+G4.6 returned `COMPLETE_ABSTENTION_REPEATED`: zero lower bounds cleared either 50 bps or 90 bps cost in all horizons/folds, with zero hypothetical trades. Under the explicit Owner rule, **the HGBQ-CQR economic path is closed as Regime P**. ADR-054 remains accepted for its G4.5 observability diagnosis; ADR-055 is the controlling decision for the subsequent G4.6 outcome and strategy closure.
+
+No Holdout bytes were accessed, no G3 configuration or parameters were changed, no private API was called, and no real or paper orders were placed. Any alternative model or target requires a new independent preregistration and owner authorization.
 
 Architecture First. Evidence Always. Fail Closed.
