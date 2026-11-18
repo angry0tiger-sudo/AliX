@@ -75,6 +75,7 @@ jobs:
           python - <<'PY'
           import hashlib
           import json
+          import os
           from pathlib import Path
 
           root = Path(".artifacts/regime-m-capture")
@@ -168,7 +169,6 @@ jobs:
               f"- Coverage status: {coverage['inter_segment_coverage_status']}",
               f"- Nominal inter-segment missing minutes: {coverage['nominal_inter_segment_missing_minutes']}",
           ]
-          import os
           total_bytes = sum(item["bytes"] for item in manifest["files"].values())
           summary.extend([f"- Total CSV bytes: {total_bytes}", f"- Run: {manifest['workflow_run_id']}"])
           Path(os.environ["GITHUB_STEP_SUMMARY"]).write_text("\n".join(summary) + "\n", encoding="utf-8")
