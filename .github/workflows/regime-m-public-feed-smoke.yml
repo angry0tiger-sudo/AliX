@@ -133,7 +133,7 @@ jobs:
               const messageQueue = [];
               let pendingResolver = null;
               ws.addEventListener("message", event => {
-                const frames = String(event.data).split(/\\r?\\n/).map(value => value.trim()).filter(Boolean);
+                const frames = String(event.data).split(/\r?\n/).map(value => value.trim()).filter(Boolean);
                 for (const frame of frames) {
                   try {
                     const parsed = JSON.parse(frame);
