@@ -94,7 +94,10 @@ def test_offset_tracker_records_skips_and_non_monotonic_offsets() -> None:
     assert repeated["reason"] == "non_monotonic_publisher_offset"
 
 
-def test_manifest_contains_sha256_record_counts_and_safety(tmp_path: Path) -> None:
+def test_manifest_contains_sha256_record_counts_and_safety(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ALIX_SCHEDULE_INTERVAL_MINUTES", "60")
     book = make_book_row(valid_book(), "2026-11-18T00:00:00Z", "mock", None)
     trade = make_trade_row(valid_trade(), "2026-11-18T00:00:01Z", "mock", None)
     gap: dict[str, object] = {
