@@ -1,7 +1,7 @@
 # ADR-058 — Regime M Historical Microstructure Sufficiency and Live Capture
 
-- **Status:** M2: NO DOCUMENTED PUBLIC HISTORICAL L2/TICK ARCHIVE — LIVE COLLECTION REQUIRED; M1: NOT ACCEPTED — ONLY A 5.08-MINUTE MANUAL PILOT; M1.5 SCHEDULED CAPTURE FAILED BEFORE DATA ACQUISITION; M3: NOT AUTHORIZED
-- **Date:** 2026-11-18
+- **Status:** M2: NO DOCUMENTED PUBLIC HISTORICAL L2/TICK ARCHIVE — LIVE COLLECTION REQUIRED; M1: NOT ACCEPTED — SEVEN SCHEDULED SEGMENTS, LESS THAN 24 HOURS MAXIMUM CAPTURE BOUND; M1.5: INSUFFICIENT / FINAL ARTIFACT CONTENT AUDIT PARTIAL; M3: NOT AUTHORIZED
+- **Date:** 2026-11-23
 - **Branch:** research/nobitex-hf-strategy
 - **Predecessor:** ADR-057 (M0 public-feed feasibility)
 - **Market scope:** BTCIRT
@@ -358,3 +358,110 @@ No pair of adjacent capture-segment manifests exists: the manual pilot is the on
 - Safety invariants remain: `Champion=null`, `order_permission=false`, `trading_authorization=NO-GO`, zero private API calls, zero real/paper orders, `holdout_bytes_read=false`, and `posthack_data_read=false`. No Holdout/Post-Hack data, private endpoints, or orders were used.
 
 After the collection window and artifact audit, the repository default-branch setting was restored in **Settings > General** from `research/nobitex-hf-strategy` to `main`. GitHub displayed the confirmation “Default branch changed to main”. A fresh repository/API check then reported `default_branch=main`; `refs/heads/main` remained exactly `cd9b13d42ac0cf0edd2df066ff81580e028146d6`, and its Tree SHA remained exactly `5761c6c34143f8e6924f53a4e745c48932a5f791`. The Research ref was unchanged at `b764a1cdd28b8b5c01f6a10a1be29a908b4d4e86` at the time of that restoration check. No main-branch commit, ref, or tree mutation occurred.
+
+---
+
+## 9. Owner-directed M1.5 final audit addendum — 2026-11-23
+
+This addendum supersedes the earlier pre-soak statements in Sections 8.4–8.6 where they state that no scheduled live segments existed or that the scheduled capture failed before acquisition. The historical pilot record remains unchanged. This addendum records only the seven successful scheduled runs discovered after the 2026-11-21 audit.
+
+### 9.1 Scope and GitHub run selection
+
+Repository: `angry0tiger-sudo/AliX`  
+Workflow: `Regime M Public Microstructure Capture`  
+Workflow ID: `422952435`  
+Selected event/branch: `event=schedule`, `research/nobitex-hf-strategy`  
+Selected code SHA for all seven runs: `b88d30cf2b1c0ebba74cff1a60c5fe453f936711`
+
+The GitHub Actions run collection was queried through all returned pages. Exactly seven matching scheduled runs were found after the prior audit cutoff; each completed successfully. No matching queued, in-progress, or failed run was present at the 2026-11-23 13:31 UTC audit cutoff. Earlier failed schedule runs on `b764a1c...` and the prior manual pilot are excluded from the seven-segment M1.5 totals.
+
+| Run | Capture command start UTC (runner log) | Collector summary UTC (runner log) | Invocation span (s) | Order-book rows | Trade rows | Gap rows | Collector status | Artifact ID |
+|---|---|---|---:|---:|---:|---:|---|---:|
+| [44924041271](https://github.com/angry0tiger-sudo/AliX/actions/runs/44924041271) | 2026-11-21T16:26:01.449Z | 2026-11-21T17:21:07.736Z | 3306.287 | 6054 | 803 | 0 | NO_GAPS_OBSERVED | 14717007003 |
+| [44953574592](https://github.com/angry0tiger-sudo/AliX/actions/runs/44953574592) | 2026-11-21T21:56:41.550Z | 2026-11-21T22:51:45.254Z | 3303.704 | 3647 | 197 | 10 | GAPPED | 14728866173 |
+| [44976676483](https://github.com/angry0tiger-sudo/AliX/actions/runs/44976676483) | 2026-11-22T02:40:46.361Z | 2026-11-22T03:35:50.760Z | 3304.399 | 5572 | 167 | 0 | NO_GAPS_OBSERVED | 14737653497 |
+| [45011199208](https://github.com/angry0tiger-sudo/AliX/actions/runs/45011199208) | 2026-11-22T10:16:48.256Z | 2026-11-22T11:11:58.560Z | 3310.304 | 5742 | 666 | 4 | GAPPED | 14751767157 |
+| [45052497891](https://github.com/angry0tiger-sudo/AliX/actions/runs/45052497891) | 2026-11-22T18:06:06.468Z | 2026-11-22T19:01:12.294Z | 3305.826 | 4624 | 514 | 0 | NO_GAPS_OBSERVED | 14767894020 |
+| [45084920861](https://github.com/angry0tiger-sudo/AliX/actions/runs/45084920861) | 2026-11-22T23:53:26.467Z | 2026-11-23T00:48:30.375Z | 3303.908 | 6161 | 108 | 0 | NO_GAPS_OBSERVED | 14781128292 |
+| [45135587335](https://github.com/angry0tiger-sudo/AliX/actions/runs/45135587335) | 2026-11-23T08:12:17.553Z | 2026-11-23T09:07:21.232Z | 3303.679 | 5055 | 1270 | 0 | NO_GAPS_OBSERVED | 14802554477 |
+
+All seven `standard-ci` prerequisite jobs and all seven `capture` jobs completed successfully. Within each capture job, the mock-only contract/gap tests, public BTCIRT capture, manifest/hash/record-count/safety validation step, and artifact upload step all completed successfully. The Standard CI sub-jobs `quality`, `four-arm-lock-bare-env`, `freqtrade-runtime-smoke`, and `postgres-integration` were successful; the real-data diagnostic and ensemble research jobs remained skipped.
+
+### 9.2 Artifact inventory and GitHub-reported ZIP integrity metadata
+
+Only the seven artifacts beginning `regime-m-microstructure-` are included below. Synthetic Phase 4/5/7/9 artifacts are excluded.
+
+| Run | Artifact name | Artifact bytes | Upload Action SHA-256 / GitHub artifact API digest |
+|---|---|---:|---|
+| 44924041271 | `regime-m-microstructure-20261121T162601Z-44924041271` | 220704 | `e7b3bb905814de2e9373d29998c0c6862073aa09abff5858bbcbd570b7741636` |
+| 44953574592 | `regime-m-microstructure-20261121T215641Z-44953574592` | 94228 | `f2792953e63431331c92d97ace8fcec8cc37da5980a32436a248a2d5be67e7e4` |
+| 44976676483 | `regime-m-microstructure-20261122T024046Z-44976676483` | 164027 | `2fc752295eddb105a0e52b0cfb36b0b352ba7402335a8bfaddf2ce9ea4f88093` |
+| 45011199208 | `regime-m-microstructure-20261122T101648Z-45011199208` | 180165 | `402c9ebd7e4f300ce6ef6350aca97d54f93d9b01d9ef1b36fe2a10047616d5fd` |
+| 45052497891 | `regime-m-microstructure-20261122T180606Z-45052497891` | 134770 | `369d72f9e25ee4c359d70001d90a3e517448af33dfa173311b98455b2f9bb43c` |
+| 45084920861 | `regime-m-microstructure-20261122T235326Z-45084920861` | 226449 | `a0cd641866eb780b105a0b9461e8b168c79de4db5ecb55504c7f1cbbddcc24f6` |
+| 45135587335 | `regime-m-microstructure-20261123T081217Z-45135587335` | 166440 | `2675c142d876f4131162ecac122fa14900c3691ffa0fdf1b554c104173602b86` |
+
+All seven ZIPs were retrieved using the GitHub artifact-download operation. The SHA-256 printed by `actions/upload-artifact@v4` in each capture log equals the digest returned by GitHub's artifact metadata API; the artifact sizes also agree. These are GitHub-side upload/API cross-checks, not an independent recomputation over the downloaded ZIP bytes.
+
+**Artifact-content audit limitation:** no existing dedicated cloud workflow in this branch accepts these seven historical artifact IDs and reopens their ZIP contents for a second independent audit. The project handoff prohibits local test/research/data-analysis execution. Therefore, this audit did not run a local ZIP extraction or claim independent byte-for-byte recomputation of the seven manifests and CSVs. Each capture workflow's own `Validate manifest hashes, record counts, and fail-closed invariants` step did complete successfully, meaning the in-run assertions for manifest/file SHA-256, byte counts, record counts, and safety flags passed. This internal validation is preserved as evidence but is not relabelled as an independent post-download recomputation.
+
+The downloadable ZIP SHA-256 values above must not be represented as independently recomputed by this addendum. The per-CSV digests, exact `manifest.sha256` values, REST/WS split, reconnect counts, and exact Manifest start/end timestamps remain pending independent artifact-content inspection in an authorized GitHub Actions audit environment.
+
+### 9.3 Runner-emitted observations
+
+The capture command emitted the following record totals:
+
+- Order-book observations: **36,855**.
+- Trade observations: **3,725**.
+- Gap records: **14**.
+- Duplicate trades dropped: **0** (per each collector summary).
+- Segment status: five `NO_GAPS_OBSERVED`; two `GAPPED` (Runs 44953574592 and 45011199208).
+
+These totals are sourced from the collector JSON summaries in the GitHub Actions capture logs. They are runner-emitted counts, not a second-pass recount of the downloaded CSV files. The two GAPPED segments must not be described as gap-free. The exact gap reasons and reconnect count are not exposed in the concise runner summaries; without reading `gaps.csv` and the Manifest `errors` array, reconnect count is **UNKNOWN / NOT INDEPENDENTLY VERIFIED**, not zero.
+
+### 9.4 Capture-time bound and 24-hour acceptance
+
+The timestamps in the table above delimit the full runner-side collector command invocation, from the GitHub log line launching `python -m scripts.capture_nobitex_microstructure` to the collector's final JSON summary. They include any command-entry/exit overhead and therefore form an upper bound on the Manifest's actual capture interval, not a substitute for `manifest.started_at_utc` and `manifest.finished_at_utc`.
+
+- Sum of all seven runner command invocation spans: **23,138.107 seconds = 385.635 minutes = 6.4273 hours**.
+- This is an upper bound for actual captured seconds. The Manifest capture intervals must lie within their respective command invocations.
+- Even this upper bound is far below the mandatory 24-hour actual-capture threshold.
+- No 24-hour or 48-hour continuous stream is inferred. Seven bounded segments are not concatenated.
+- Exact inter-segment uncovered boundaries `[previous.finished_at_utc, next.started_at_utc)` are **NOT COMPUTED** in this addendum because those exact Manifest timestamps were not independently read. Run/command timestamps are not substituted for Manifest boundaries.
+
+The earliest verified scheduled capture command began at `2026-11-21T16:26:01.449Z`. Its Manifest start can only be at or after that command start. Consequently, the earliest possible 48-hour point is no earlier than `2026-11-23T16:26:01.449Z`. At the audit cutoff `2026-11-23T13:31:00Z`, 48 elapsed hours from the first actual capture had **not** yet been established. This timing fact does not change the M1 verdict because the seven segments' total capture-time upper bound is already below 24 hours.
+
+### 9.5 Safety invariants
+
+All seven capture jobs passed their explicit workflow validation step. That step asserts:
+- `authorization_header_sent == false`;
+- `websocket_connection_token_sent == false`;
+- `private_api_calls == 0`;
+- `holdout_bytes_read == false`;
+- `posthack_data_read == false`;
+- `real_order_attempts == 0`;
+- `paper_orders == 0`;
+- `Champion == null`;
+- `order_permission == false`;
+- `trading_authorization == "NO-GO"`.
+
+The passing validation steps support the safety invariants for these seven runs. No model, OFI/DeepLOB pipeline, Holdout/Post-Hack access, private endpoint, or paper/real order was authorized or invoked by this audit.
+
+### 9.6 Updated decision
+
+- **M1: NOT ACCEPTED.** Seven successful scheduled segments exist, but the upper bound from all collector command invocation windows is only 6.4273 hours; actual Manifest capture time is lower. This is below the required 24 hours. The runner-reported 14 gap rows and two GAPPED segments also require further data-quality investigation.
+- **M1.5: INSUFFICIENT / NOT COMPLETE.** The scheduled collector runs and produced seven artifacts, but the required 24-hour actual-capture Data Gate was not met; 48 elapsed hours from the first successful segment had not yet elapsed at this audit cutoff.
+- **M2: UNCHANGED.** No documented public historical L2/tick archive was established; historical OHLCV is not a substitute.
+- **M3: NOT AUTHORIZED.** No owner-review request for OFI pre-registration is justified by this incomplete Data Gate. Do not build or train OFI/DeepLOB or any other model.
+- **No M1 acceptance, model authorization, paper authorization, or trading authorization is created by successful Workflow runs or by this ADR update.**
+
+### 9.7 Repository state at audit cutoff
+
+- Research HEAD before this ADR addendum: `b88d30cf2b1c0ebba74cff1a60c5fe453f936711`.
+- `main` HEAD: `cd9b13d42ac0cf0edd2df066ff81580e028146d6`.
+- `main` Tree SHA: `5761c6c34143f8e6924f53a4e745c48932a5f791`.
+- Repository `default_branch` remained `research/nobitex-hf-strategy` at the time this addendum was prepared.
+- No main ref, commit, or tree mutation is part of this addendum.
+
+The only intended file change for this final-audit commit is this ADR-058 document. Standard CI must pass on the resulting Research commit before the repository default-branch setting is restored to `main`. After restoration, verify `default_branch=main` and re-check the exact frozen main HEAD and Tree SHA listed above.
+
