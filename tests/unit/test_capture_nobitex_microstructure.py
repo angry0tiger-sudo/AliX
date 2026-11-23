@@ -207,7 +207,6 @@ def test_scheduled_segment_rejects_a_window_without_missing_coverage(
         )
 
 
-
 def test_manual_long_soak_segment_declares_ten_minute_coverage_gap(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -245,10 +244,18 @@ def test_manual_long_soak_segment_rejects_interval_not_longer_than_capture(
     monkeypatch.setenv("GITHUB_EVENT_NAME", "workflow_dispatch")
     monkeypatch.setenv("ALIX_CAPTURE_SEGMENT_INTERVAL_MINUTES", "350")
 
-    with pytest.raises(ValueError, match="MANUAL_SOAK_SEGMENT_INTERVAL_MUST_EXCEED_DURATION"):
+    with pytest.raises(
+        ValueError, match="MANUAL_SOAK_SEGMENT_INTERVAL_MUST_EXCEED_DURATION"
+    ):
         write_capture_artifacts(
-            tmp_path, [], [], [], "2026-11-23T00:00:00Z",
-            "2026-11-23T05:50:00Z", 350, []
+            tmp_path,
+            [],
+            [],
+            [],
+            "2026-11-23T00:00:00Z",
+            "2026-11-23T05:50:00Z",
+            350,
+            [],
         )
 
 

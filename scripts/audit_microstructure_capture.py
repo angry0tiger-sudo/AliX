@@ -17,17 +17,38 @@ from typing import Any
 
 CSV_FIELDS: dict[str, tuple[str, ...]] = {
     "orderbook.csv": (
-        "captured_at_utc", "source", "exchange_timestamp_ms", "offset",
-        "best_bid_price", "best_bid_size", "best_ask_price", "best_ask_size",
-        "spread", "mid_price", "bids_top_json", "asks_top_json",
+        "captured_at_utc",
+        "source",
+        "exchange_timestamp_ms",
+        "offset",
+        "best_bid_price",
+        "best_bid_size",
+        "best_ask_price",
+        "best_ask_size",
+        "spread",
+        "mid_price",
+        "bids_top_json",
+        "asks_top_json",
     ),
     "trades.csv": (
-        "captured_at_utc", "source", "exchange_timestamp_ms", "side",
-        "price", "volume", "offset",
+        "captured_at_utc",
+        "source",
+        "exchange_timestamp_ms",
+        "side",
+        "price",
+        "volume",
+        "offset",
     ),
     "gaps.csv": (
-        "stream", "gap_start_utc", "gap_end_utc", "gap_start_ms", "gap_end_ms",
-        "reason", "previous_offset", "next_offset", "replay_attempted",
+        "stream",
+        "gap_start_utc",
+        "gap_end_utc",
+        "gap_start_ms",
+        "gap_end_ms",
+        "reason",
+        "previous_offset",
+        "next_offset",
+        "replay_attempted",
         "replay_available",
     ),
 }
@@ -108,7 +129,10 @@ def audit_capture(root: Path) -> dict[str, Any]:
             )
             count = sum(1 for _ in reader)
 
-        _require(metadata.get("records") == count, f"{label}_CSV_MANIFEST_RECORD_COUNT_MISMATCH")
+        _require(
+            metadata.get("records") == count,
+            f"{label}_CSV_MANIFEST_RECORD_COUNT_MISMATCH",
+        )
         actual_counts[filename] = count
         file_audit[filename] = {
             "records": count,
@@ -195,13 +219,15 @@ def _summary(result: dict[str, Any]) -> str:
             f"| {filename} | {item['records']} | {item['bytes']} | {item['sha256']} |"
         )
     reconnects = result["reconnects"]
-    lines.extend([
-        "",
-        f"- Gap records: **{result['gaps']}**",
-        f"- Reconnect attempts / successes / failures: **{reconnects['reconnect_attempts']} / {reconnects['reconnect_successes']} / {reconnects['reconnect_failures']}**",
-        f"- Manifest SHA-256: {result['manifest_sha256']}",
-        "- Safety invariants: **PASS**",
-    ])
+    lines.extend(
+        [
+            "",
+            f"- Gap records: **{result['gaps']}**",
+            f"- Reconnect attempts / successes / failures: **{reconnects['reconnect_attempts']} / {reconnects['reconnect_successes']} / {reconnects['reconnect_failures']}**",
+            f"- Manifest SHA-256: {result['manifest_sha256']}",
+            "- Safety invariants: **PASS**",
+        ]
+    )
     return "\n".join(lines) + "\n"
 
 

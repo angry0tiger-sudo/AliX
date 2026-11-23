@@ -12,17 +12,38 @@ from scripts.audit_microstructure_capture import audit_capture
 
 HEADERS = {
     "orderbook.csv": [
-        "captured_at_utc", "source", "exchange_timestamp_ms", "offset",
-        "best_bid_price", "best_bid_size", "best_ask_price", "best_ask_size",
-        "spread", "mid_price", "bids_top_json", "asks_top_json",
+        "captured_at_utc",
+        "source",
+        "exchange_timestamp_ms",
+        "offset",
+        "best_bid_price",
+        "best_bid_size",
+        "best_ask_price",
+        "best_ask_size",
+        "spread",
+        "mid_price",
+        "bids_top_json",
+        "asks_top_json",
     ],
     "trades.csv": [
-        "captured_at_utc", "source", "exchange_timestamp_ms", "side",
-        "price", "volume", "offset",
+        "captured_at_utc",
+        "source",
+        "exchange_timestamp_ms",
+        "side",
+        "price",
+        "volume",
+        "offset",
     ],
     "gaps.csv": [
-        "stream", "gap_start_utc", "gap_end_utc", "gap_start_ms", "gap_end_ms",
-        "reason", "previous_offset", "next_offset", "replay_attempted",
+        "stream",
+        "gap_start_utc",
+        "gap_end_utc",
+        "gap_start_ms",
+        "gap_end_ms",
+        "reason",
+        "previous_offset",
+        "next_offset",
+        "replay_attempted",
         "replay_available",
     ],
 }
@@ -38,15 +59,33 @@ def _write_csv(path: Path, header: list[str], rows: list[list[str]]) -> None:
 def _fixture(root: Path) -> Path:
     root.mkdir()
     rows = {
-        "orderbook.csv": [[
-            "2026-11-23T00:00:00Z", "websocket", "1795392000000", "10",
-            "100", "1", "101", "2", "1", "100.5", '[["100","1"]]',
-            '[["101","2"]]',
-        ]],
-        "trades.csv": [[
-            "2026-11-23T00:00:01Z", "websocket", "1795392001000", "buy",
-            "100", "0.1", "20",
-        ]],
+        "orderbook.csv": [
+            [
+                "2026-11-23T00:00:00Z",
+                "websocket",
+                "1795392000000",
+                "10",
+                "100",
+                "1",
+                "101",
+                "2",
+                "1",
+                "100.5",
+                '[["100","1"]]',
+                '[["101","2"]]',
+            ]
+        ],
+        "trades.csv": [
+            [
+                "2026-11-23T00:00:01Z",
+                "websocket",
+                "1795392001000",
+                "buy",
+                "100",
+                "0.1",
+                "20",
+            ]
+        ],
         "gaps.csv": [],
     }
     files = {}
