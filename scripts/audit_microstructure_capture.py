@@ -195,7 +195,7 @@ def _validate_reconnects(manifest: dict[str, Any]) -> dict[str, int]:
             isinstance(value, int) and not isinstance(value, bool) and value >= 0,
             f"{field.upper()}_INVALID",
         )
-        reconnects[field] = value
+        reconnects[field] = cast(int, value)
     attempts = reconnects["reconnect_attempts"]
     outcomes = reconnects["reconnect_successes"] + reconnects["reconnect_failures"]
     _require(attempts == outcomes, "RECONNECT_COUNTERS_INCONSISTENT")
