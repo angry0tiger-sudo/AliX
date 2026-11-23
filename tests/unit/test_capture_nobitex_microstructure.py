@@ -11,6 +11,7 @@ from scripts.capture_nobitex_microstructure import (
     decode_messages,
     make_book_row,
     make_trade_row,
+    run_capture,
     _process_pushes,
     write_capture_artifacts,
 )
