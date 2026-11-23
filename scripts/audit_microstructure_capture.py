@@ -13,7 +13,7 @@ import json
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 CSV_FIELDS: dict[str, tuple[str, ...]] = {
     "orderbook.csv": (
@@ -85,29 +85,41 @@ def _manifest_timestamp(value: object, field: str) -> datetime:
     return parsed
 
 
-def audit_capture(root: Path) -> dict[str, Any]:
+def _load_manifest(
+    root: Path,
+) -> tuple[dict[str, Any], dict[str, Any], str]:
     manifest_path = root / "manifest.json"
-    manifest_checksum_path = root / "manifest.sha256"
+    checksum_path = root / "manifest.sha256"
     _require(manifest_path.is_file(), "manifest.json_MISSING")
-    _require(manifest_checksum_path.is_file(), "manifest.sha256_MISSING")
+    _require(checksum_path.is_file(), "manifest.sha256_MISSING")
 
     manifest_bytes = manifest_path.read_bytes()
-    manifest = json.loads(manifest_bytes.decode("utf-8"))
-    _require(isinstance(manifest, dict), "MANIFEST_NOT_OBJECT")
+    manifest_value: Any = json.loads(manifest_bytes.decode("utf-8"))
+    _require(isinstance(manifest_value, dict), "MANIFEST_NOT_OBJECT")
+    manifest = cast(dict[str, Any], manifest_value)
 
-    manifest_digest = _sha256(manifest_bytes)
-    checksum_parts = manifest_checksum_path.read_text(encoding="utf-8").strip().split()
+    digest = _sha256(manifest_bytes)
+    checksum_parts = checksum_path.read_text(encoding="utf-8").strip().split()
     _require(
         len(checksum_parts) == 2
-        and checksum_parts[0] == manifest_digest
+        and checksum_parts[0] == digest
         and checksum_parts[1] == "manifest.json",
         "MANIFEST_SHA256_MISMATCH",
     )
 
-    file_metadata = manifest.get("files")
-    _require(isinstance(file_metadata, dict), "MANIFEST_FILES_MISSING")
-    _require(set(file_metadata) == set(CSV_FIELDS), "MANIFEST_CSV_FILE_SET_MISMATCH")
+    file_metadata_value = manifest.get("files")
+    _require(isinstance(file_metadata_value, dict), "MANIFEST_FILES_MISSING")
+    file_metadata = cast(dict[str, Any], file_metadata_value)
+    _require(
+        set(file_metadata) == set(CSV_FIELDS),
+        "MANIFEST_CSV_FILE_SET_MISMATCH",
+    )
+    return manifest, file_metadata, digest
 
+
+def _audit_csv_files(
+    root: Path, file_metadata: dict[str, Any]
+) -> tuple[dict[str, int], dict[str, dict[str, Any]]]:
     actual_counts: dict[str, int] = {}
     file_audit: dict[str, dict[str, Any]] = {}
     for filename, expected_fields in CSV_FIELDS.items():
@@ -115,11 +127,15 @@ def audit_capture(root: Path) -> dict[str, Any]:
         _require(path.is_file(), f"{filename}_MISSING")
         raw = path.read_bytes()
         digest = _sha256(raw)
-        metadata = file_metadata[filename]
-        _require(isinstance(metadata, dict), f"{filename}_METADATA_INVALID")
+        metadata_value = file_metadata[filename]
+        _require(isinstance(metadata_value, dict), f"{filename}_METADATA_INVALID")
+        metadata = cast(dict[str, Any], metadata_value)
         label = filename.removesuffix(".csv").upper()
         _require(metadata.get("sha256") == digest, f"{label}_CSV_SHA256_MISMATCH")
-        _require(metadata.get("bytes") == len(raw), f"{label}_CSV_BYTE_COUNT_MISMATCH")
+        _require(
+            metadata.get("bytes") == len(raw),
+            f"{label}_CSV_BYTE_COUNT_MISMATCH",
+        )
 
         with path.open("r", encoding="utf-8", newline="") as stream:
             reader = csv.DictReader(stream)
@@ -139,9 +155,15 @@ def audit_capture(root: Path) -> dict[str, Any]:
             "bytes": len(raw),
             "sha256": digest,
         }
+    return actual_counts, file_audit
 
-    record_counts = manifest.get("record_counts")
-    _require(isinstance(record_counts, dict), "RECORD_COUNTS_MISSING")
+
+def _validate_record_counts(
+    manifest: dict[str, Any], actual_counts: dict[str, int]
+) -> int:
+    record_counts_value = manifest.get("record_counts")
+    _require(isinstance(record_counts_value, dict), "RECORD_COUNTS_MISSING")
+    record_counts = cast(dict[str, Any], record_counts_value)
     count_keys = {
         "orderbook.csv": "orderbook",
         "trades.csv": "trades",
@@ -155,41 +177,59 @@ def audit_capture(root: Path) -> dict[str, Any]:
 
     gap_count = actual_counts["gaps.csv"]
     _require(manifest.get("gap_count") == gap_count, "GAP_COUNT_MISMATCH")
+    _require(actual_counts["orderbook.csv"] > 0, "ORDERBOOK_EMPTY")
+    _require(actual_counts["trades.csv"] > 0, "TRADES_EMPTY")
+    return gap_count
 
-    reconnect_fields = (
+
+def _validate_reconnects(manifest: dict[str, Any]) -> dict[str, int]:
+    fields = (
         "reconnect_attempts",
         "reconnect_successes",
         "reconnect_failures",
     )
     reconnects: dict[str, int] = {}
-    for field in reconnect_fields:
+    for field in fields:
         value = manifest.get(field)
         _require(
             isinstance(value, int) and not isinstance(value, bool) and value >= 0,
             f"{field.upper()}_INVALID",
         )
         reconnects[field] = value
-    _require(
-        reconnects["reconnect_attempts"]
-        == reconnects["reconnect_successes"] + reconnects["reconnect_failures"],
-        "RECONNECT_COUNTERS_INCONSISTENT",
-    )
+    attempts = reconnects["reconnect_attempts"]
+    outcomes = reconnects["reconnect_successes"] + reconnects["reconnect_failures"]
+    _require(attempts == outcomes, "RECONNECT_COUNTERS_INCONSISTENT")
+    return reconnects
 
+
+def _validate_safety(manifest: dict[str, Any]) -> None:
     for key, expected in SAFETY_INVARIANTS.items():
         _require(manifest.get(key) == expected, f"SAFETY_INVARIANT_{key}_VIOLATION")
 
+
+def _capture_timestamps(
+    manifest: dict[str, Any],
+) -> tuple[datetime, datetime, float]:
     started = _manifest_timestamp(manifest.get("started_at_utc"), "started_at_utc")
     finished = _manifest_timestamp(manifest.get("finished_at_utc"), "finished_at_utc")
     actual_seconds = (finished - started).total_seconds()
     _require(actual_seconds > 0, "CAPTURE_DURATION_NOT_POSITIVE")
-    _require(actual_counts["orderbook.csv"] > 0, "ORDERBOOK_EMPTY")
-    _require(actual_counts["trades.csv"] > 0, "TRADES_EMPTY")
+    return started, finished, actual_seconds
+
+
+def audit_capture(root: Path) -> dict[str, Any]:
+    manifest, file_metadata, manifest_digest = _load_manifest(root)
+    actual_counts, file_audit = _audit_csv_files(root, file_metadata)
+    gap_count = _validate_record_counts(manifest, actual_counts)
+    reconnects = _validate_reconnects(manifest)
+    _validate_safety(manifest)
+    started, finished, actual_seconds = _capture_timestamps(manifest)
 
     return {
         "run_id": manifest.get("workflow_run_id"),
         "market": manifest.get("market"),
-        "started_at_utc": manifest["started_at_utc"],
-        "finished_at_utc": manifest["finished_at_utc"],
+        "started_at_utc": started.isoformat(),
+        "finished_at_utc": finished.isoformat(),
         "actual_capture_seconds": round(actual_seconds, 3),
         "actual_capture_minutes": round(actual_seconds / 60, 3),
         "capture_status": manifest.get("capture_status"),
