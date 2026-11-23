@@ -151,7 +151,7 @@ jobs:
     steps:
       - name: Stop after the fifth successful segment
         if: ${{ inputs.run_number == 5 }}
-        run: echo "Chained soak complete: run_number=5. No further dispatch will be issued."
+        run: echo "Chained soak completed. No further dispatch will be issued."
 
       - name: Preserve the ten-minute inter-segment coverage gap
         if: ${{ inputs.run_number < 5 }}
@@ -171,7 +171,7 @@ jobs:
               return;
             }
 
-            const ref = context.ref.replace(/^refs\/heads\//, "");
+            const ref = context.ref.startsWith("refs/heads/") ? context.ref.slice(11) : "";
             if (!ref || ref === context.ref) {
               core.setFailed(`Expected a branch ref, received ${context.ref}`);
               return;
