@@ -228,6 +228,7 @@ def test_manual_long_soak_segment_declares_ten_minute_coverage_gap(
     )
 
     coverage = manifest["coverage_segment"]
+    assert isinstance(coverage, dict)
     assert coverage["kind"] == "MANUAL_SOAK_SEGMENT"
     assert coverage["inter_segment_coverage_status"] == "MISSING_COVERAGE"
     assert coverage["segment_interval_minutes"] == 360
