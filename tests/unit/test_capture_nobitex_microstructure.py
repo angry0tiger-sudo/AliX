@@ -154,6 +154,9 @@ def test_manifest_contains_sha256_record_counts_and_safety(
     assert manifest["Champion"] is None
     assert manifest["order_permission"] is False
     assert manifest["trading_authorization"] == "NO-GO"
+    assert manifest["reconnect_attempts"] == 0
+    assert manifest["reconnect_successes"] == 0
+    assert manifest["reconnect_failures"] == 0
 
 
 def test_scheduled_segment_declares_missing_inter_run_coverage(
@@ -201,6 +204,58 @@ def test_scheduled_segment_rejects_a_window_without_missing_coverage(
             55,
             [],
         )
+
+
+
+def test_manual_long_soak_segment_declares_ten_minute_coverage_gap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "workflow_dispatch")
+    monkeypatch.setenv("ALIX_CAPTURE_SEGMENT_INTERVAL_MINUTES", "360")
+
+    manifest = write_capture_artifacts(
+        tmp_path,
+        [],
+        [],
+        [],
+        "2026-11-23T00:00:00Z",
+        "2026-11-23T05:50:00Z",
+        350,
+        [],
+        reconnect_attempts=2,
+        reconnect_successes=1,
+        reconnect_failures=1,
+    )
+
+    coverage = manifest["coverage_segment"]
+    assert coverage["kind"] == "MANUAL_SOAK_SEGMENT"
+    assert coverage["inter_segment_coverage_status"] == "MISSING_COVERAGE"
+    assert coverage["segment_interval_minutes"] == 360
+    assert coverage["nominal_inter_segment_missing_minutes"] == 10
+    assert coverage["capture_segments_must_not_be_joined_as_continuous"] is True
+    assert manifest["reconnect_attempts"] == 2
+    assert manifest["reconnect_successes"] == 1
+    assert manifest["reconnect_failures"] == 1
+
+
+def test_manual_long_soak_segment_rejects_interval_not_longer_than_capture(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "workflow_dispatch")
+    monkeypatch.setenv("ALIX_CAPTURE_SEGMENT_INTERVAL_MINUTES", "350")
+
+    with pytest.raises(ValueError, match="MANUAL_SOAK_SEGMENT_INTERVAL_MUST_EXCEED_DURATION"):
+        write_capture_artifacts(
+            tmp_path, [], [], [], "2026-11-23T00:00:00Z",
+            "2026-11-23T05:50:00Z", 350, []
+        )
+
+
+def test_run_capture_rejects_duration_above_long_soak_limit(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(ValueError, match="DURATION_MINUTES_MUST_BE_BETWEEN_1_AND_350"):
+        run_capture(351, tmp_path)
 
 
 def test_push_processor_marks_offset_gap_and_drops_non_monotonic_event() -> None:

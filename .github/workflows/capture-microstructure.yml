@@ -1,24 +1,17 @@
 name: Regime M Public Microstructure Capture
 
-# This file is intentionally updated on the current default branch so GitHub Actions re-indexes it.
+# Manual, bounded long-form segments only. No scheduled capture.
 
 on:
-  # Start away from the top of the hour to reduce scheduler contention.
-  schedule:
-    - cron: "37 * * * *"
   workflow_dispatch:
     inputs:
       duration_minutes:
-        description: "Bounded live capture window (minutes; maximum 55)"
+        description: "Long-form public microstructure segment (fixed at 350 minutes)"
         required: true
         type: choice
-        default: "55"
+        default: "350"
         options:
-          - "1"
-          - "5"
-          - "15"
-          - "30"
-          - "55"
+          - "350"
 
 permissions:
   contents: read
@@ -32,12 +25,12 @@ jobs:
   capture:
     needs: standard-ci
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 360
     permissions:
       contents: read
     env:
-      ALIX_SCHEDULE_INTERVAL_MINUTES: ${{ github.event_name == 'schedule' && '60' || '0' }}
-      CAPTURE_DURATION_MINUTES: ${{ github.event_name == 'schedule' && '55' || inputs.duration_minutes || '55' }}
+      ALIX_CAPTURE_SEGMENT_INTERVAL_MINUTES: "360"
+      CAPTURE_DURATION_MINUTES: ${{ inputs.duration_minutes || '350' }}
       ALIX_DRY_RUN: "true"
       ALIX_ALLOW_LIVE_TRADING: "false"
       PYTHONUNBUFFERED: "1"
@@ -59,8 +52,10 @@ jobs:
           python -m pip install pip==25.2
           python -m pip install websocket-client==1.9.2 httpx==0.28.1 pytest==9.0.3
 
-      - name: Run mock-only data-contract and gap-detection tests
-        run: pytest tests/unit/test_capture_nobitex_microstructure.py -q
+      - name: Run mock-only capture and auto-audit tests
+        run: |
+          pytest tests/unit/test_capture_nobitex_microstructure.py \
+            tests/unit/test_audit_microstructure_capture.py -q
 
       - name: Resolve a unique UTC segment identifier
         id: segment
@@ -72,61 +67,39 @@ jobs:
             --duration-minutes "$CAPTURE_DURATION_MINUTES" \
             --output-dir .artifacts/regime-m-capture
 
-      - name: Validate manifest hashes, record counts, and fail-closed invariants
+      - name: Validate long-form segment and fail-closed invariants
         run: |
           python - <<'PY'
-          import hashlib
           import json
           import os
+          from datetime import datetime
           from pathlib import Path
 
           root = Path(".artifacts/regime-m-capture")
-          manifest_path = root / "manifest.json"
-          manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-          scheduled = os.environ["GITHUB_EVENT_NAME"] == "schedule"
+          manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
           duration = int(os.environ["CAPTURE_DURATION_MINUTES"])
-          interval = int(os.environ["ALIX_SCHEDULE_INTERVAL_MINUTES"])
-          if scheduled:
-              assert duration == 55
-              assert interval == 60
-              manifest["coverage_segment"] = {
-                  "kind": "SCHEDULED_SOAK_SEGMENT",
-                  "trigger": "schedule",
-                  "capture_start_utc": manifest["started_at_utc"],
-                  "capture_end_utc": manifest["finished_at_utc"],
-                  "capture_duration_minutes_requested": duration,
-                  "schedule_interval_minutes": interval,
-                  "inter_segment_coverage_status": "MISSING_COVERAGE",
-                  "nominal_inter_segment_missing_minutes": interval - duration,
-                  "exact_inter_segment_gap_boundaries": (
-                      "DERIVE_FROM_PREVIOUS_FINISHED_AT_AND_NEXT_STARTED_AT_DURING_FINAL_MERGE"
-                  ),
-                  "capture_segments_must_not_be_joined_as_continuous": True,
-              }
-          else:
-              manifest["coverage_segment"] = {
-                  "kind": "MANUAL_CAPTURE_SEGMENT",
-                  "trigger": os.environ["GITHUB_EVENT_NAME"],
-                  "capture_start_utc": manifest["started_at_utc"],
-                  "capture_end_utc": manifest["finished_at_utc"],
-                  "capture_duration_minutes_requested": duration,
-                  "schedule_interval_minutes": None,
-                  "inter_segment_coverage_status": "NOT_APPLICABLE",
-                  "nominal_inter_segment_missing_minutes": None,
-                  "exact_inter_segment_gap_boundaries": "NOT_APPLICABLE",
-                  "capture_segments_must_not_be_joined_as_continuous": True,
-              }
-          manifest_path.write_text(
-              json.dumps(manifest, indent=2, sort_keys=True) + "\n",
-              encoding="utf-8",
-          )
-          manifest_digest = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
-          (root / "manifest.sha256").write_text(
-              f"{manifest_digest}  manifest.json\n", encoding="utf-8"
-          )
-          counts = manifest["record_counts"]
+          interval = int(os.environ["ALIX_CAPTURE_SEGMENT_INTERVAL_MINUTES"])
+
+          assert os.environ["GITHUB_EVENT_NAME"] == "workflow_dispatch"
+          assert duration == 350
+          assert interval == 360
           assert manifest["code_commit_sha"] == "${{ github.sha }}"
           assert manifest["workflow_run_id"] == "${{ github.run_id }}"
+          assert manifest["requested_duration_minutes"] == 350
+
+          coverage = manifest["coverage_segment"]
+          assert coverage["kind"] == "MANUAL_SOAK_SEGMENT"
+          assert coverage["inter_segment_coverage_status"] == "MISSING_COVERAGE"
+          assert coverage["segment_interval_minutes"] == 360
+          assert coverage["nominal_inter_segment_missing_minutes"] == 10
+          assert coverage["capture_segments_must_not_be_joined_as_continuous"] is True
+
+          start = datetime.fromisoformat(manifest["started_at_utc"].replace("Z", "+00:00"))
+          end = datetime.fromisoformat(manifest["finished_at_utc"].replace("Z", "+00:00"))
+          captured_seconds = (end - start).total_seconds()
+          assert captured_seconds >= 350 * 60, captured_seconds
+          assert captured_seconds < 360 * 60, captured_seconds
+
           assert manifest["authorization_header_sent"] is False
           assert manifest["websocket_connection_token_sent"] is False
           assert manifest["private_api_calls"] == 0
@@ -137,44 +110,12 @@ jobs:
           assert manifest["Champion"] is None
           assert manifest["order_permission"] is False
           assert manifest["trading_authorization"] == "NO-GO"
-          coverage = manifest["coverage_segment"]
-          if scheduled:
-              assert coverage["inter_segment_coverage_status"] == "MISSING_COVERAGE"
-              assert coverage["schedule_interval_minutes"] == 60
-              assert coverage["capture_duration_minutes_requested"] == 55
-              assert coverage["nominal_inter_segment_missing_minutes"] == 5
-              assert coverage["capture_segments_must_not_be_joined_as_continuous"] is True
-          else:
-              assert coverage["inter_segment_coverage_status"] == "NOT_APPLICABLE"
-          assert counts["orderbook"] > 0
-          assert counts["trades"] > 0
-          assert manifest["websocket_orderbook_records"] > 0
-          assert manifest["websocket_trade_records"] > 0
-
-          for name, metadata in manifest["files"].items():
-              data = (root / name).read_bytes()
-              assert hashlib.sha256(data).hexdigest() == metadata["sha256"], name
-              assert len(data) == metadata["bytes"], name
-
-          expected_manifest_hash = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
-          assert (root / "manifest.sha256").read_text(encoding="utf-8").startswith(
-              expected_manifest_hash
-          )
-          summary = [
-              "## Regime M capture summary",
-              f"- Order-book rows: {counts['orderbook']}",
-              f"- Trade rows: {counts['trades']}",
-              f"- Gaps: {manifest['gap_count']}",
-              f"- WebSocket book publications: {manifest['websocket_orderbook_records']}",
-              f"- WebSocket trade publications: {manifest['websocket_trade_records']}",
-              f"- Capture status: {manifest['capture_status']}",
-              f"- Coverage status: {coverage['inter_segment_coverage_status']}",
-              f"- Nominal inter-segment missing minutes: {coverage['nominal_inter_segment_missing_minutes']}",
-          ]
-          total_bytes = sum(item["bytes"] for item in manifest["files"].values())
-          summary.extend([f"- Total CSV bytes: {total_bytes}", f"- Run: {manifest['workflow_run_id']}"])
-          Path(os.environ["GITHUB_STEP_SUMMARY"]).write_text("\n".join(summary) + "\n", encoding="utf-8")
           PY
+
+      - name: Auto-audit CSV counts, SHA-256, gaps, and reconnects
+        run: |
+          python -m scripts.audit_microstructure_capture \
+            --artifact-dir .artifacts/regime-m-capture
 
       - name: Upload raw capture and integrity manifest
         if: always()

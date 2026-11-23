@@ -61,6 +61,9 @@ GAP_FIELDS = (
 )
 
 
+MAX_CAPTURE_DURATION_MINUTES = 350
+
+
 class SocketLike(Protocol):
     def send(self, payload: str) -> None: ...
     def recv(self) -> str | bytes: ...
@@ -245,6 +248,9 @@ class CaptureState:
     errors: list[str] = field(default_factory=list)
     offsets: OffsetTracker = field(default_factory=OffsetTracker)
     snapshot_cutoff_ms: int = 0
+    reconnect_attempts: int = 0
+    reconnect_successes: int = 0
+    reconnect_failures: int = 0
 
 
 def _record_disconnect_gaps(
@@ -526,6 +532,28 @@ def _coverage_segment_metadata(
                 "DERIVE_FROM_PREVIOUS_FINISHED_AT_AND_NEXT_STARTED_AT_DURING_FINAL_MERGE"
             ),
         }
+    segment_interval_minutes = int(
+        os.environ.get("ALIX_CAPTURE_SEGMENT_INTERVAL_MINUTES", "0")
+    )
+    if segment_interval_minutes:
+        if segment_interval_minutes <= duration_minutes:
+            raise ValueError("MANUAL_SOAK_SEGMENT_INTERVAL_MUST_EXCEED_DURATION")
+        return {
+            "kind": "MANUAL_SOAK_SEGMENT",
+            "trigger": event_name,
+            "capture_start_utc": started_at,
+            "capture_end_utc": finished_at,
+            "capture_duration_minutes_requested": duration_minutes,
+            "capture_segments_must_not_be_joined_as_continuous": True,
+            "inter_segment_coverage_status": "MISSING_COVERAGE",
+            "segment_interval_minutes": segment_interval_minutes,
+            "nominal_inter_segment_missing_minutes": (
+                segment_interval_minutes - duration_minutes
+            ),
+            "exact_inter_segment_gap_boundaries": (
+                "DERIVE_FROM_PREVIOUS_FINISHED_AT_AND_NEXT_STARTED_AT_DURING_FINAL_MERGE"
+            ),
+        }
     return {
         "kind": "MANUAL_CAPTURE_SEGMENT",
         "trigger": event_name,
@@ -549,6 +577,9 @@ def write_capture_artifacts(
     finished_at: str,
     duration_minutes: int,
     errors: list[str],
+    reconnect_attempts: int = 0,
+    reconnect_successes: int = 0,
+    reconnect_failures: int = 0,
 ) -> dict[str, object]:
     output_dir.mkdir(parents=True, exist_ok=True)
     book_path = output_dir / "orderbook.csv"
@@ -627,6 +658,9 @@ def write_capture_artifacts(
             "duplicate_trades_dropped": 0,
         },
         "gap_count": len(gaps),
+        "reconnect_attempts": reconnect_attempts,
+        "reconnect_successes": reconnect_successes,
+        "reconnect_failures": reconnect_failures,
         "capture_status": "GAPPED"
         if gaps
         else ("DEGRADED" if errors else "NO_GAPS_OBSERVED"),
@@ -702,6 +736,7 @@ def _reconnect(
         if time.monotonic() >= deadline:
             break
         try:
+            state.reconnect_attempts += 1
             replacement, current_timeout, pending = connect_and_subscribe()
             reconnect_at = utc_now()
             _record_disconnect_gaps(
@@ -719,7 +754,9 @@ def _reconnect(
                 state.offsets,
                 state.snapshot_cutoff_ms,
             )
+            state.reconnect_successes += 1
         except Exception as exc:
+            state.reconnect_failures += 1
             state.errors.append(f"reconnect_failed:{type(exc).__name__}")
             if replacement is not None:
                 replacement.close()
@@ -762,12 +799,16 @@ def _capture_until_deadline(
 
 
 def run_capture(duration_minutes: int, output_dir: Path) -> dict[str, object]:
-    if duration_minutes < 1 or duration_minutes > 55:
-        raise ValueError("DURATION_MINUTES_MUST_BE_BETWEEN_1_AND_55")
+    if duration_minutes < 1 or duration_minutes > MAX_CAPTURE_DURATION_MINUTES:
+        raise ValueError("DURATION_MINUTES_MUST_BE_BETWEEN_1_AND_350")
     if os.environ.get("GITHUB_EVENT_NAME") == "schedule":
         interval = int(os.environ.get("ALIX_SCHEDULE_INTERVAL_MINUTES", "0"))
         if interval <= duration_minutes:
             raise ValueError("SCHEDULED_CAPTURE_REQUIRES_A_POSITIVE_COVERAGE_GAP")
+    elif int(os.environ.get("ALIX_CAPTURE_SEGMENT_INTERVAL_MINUTES", "0")):
+        segment_interval = int(os.environ["ALIX_CAPTURE_SEGMENT_INTERVAL_MINUTES"])
+        if segment_interval <= duration_minutes:
+            raise ValueError("MANUAL_SOAK_SEGMENT_INTERVAL_MUST_EXCEED_DURATION")
     started_at = utc_now()
     state = CaptureState()
     socket: SocketLike | None = None
@@ -797,6 +838,9 @@ def run_capture(duration_minutes: int, output_dir: Path) -> dict[str, object]:
         utc_now(),
         duration_minutes,
         state.errors,
+        reconnect_attempts=state.reconnect_attempts,
+        reconnect_successes=state.reconnect_successes,
+        reconnect_failures=state.reconnect_failures,
     )
 
 
