@@ -12,6 +12,11 @@ on:
         default: "350"
         options:
           - "350"
+      run_number:
+        description: "1-based chained soak segment number (1 through 5)"
+        required: true
+        type: number
+        default: 1
 
 permissions:
   contents: read
@@ -31,6 +36,7 @@ jobs:
     env:
       ALIX_CAPTURE_SEGMENT_INTERVAL_MINUTES: "360"
       CAPTURE_DURATION_MINUTES: ${{ inputs.duration_minutes || '350' }}
+      RUN_NUMBER: ${{ inputs.run_number }}
       ALIX_DRY_RUN: "true"
       ALIX_ALLOW_LIVE_TRADING: "false"
       PYTHONUNBUFFERED: "1"
@@ -51,6 +57,16 @@ jobs:
         run: |
           python -m pip install pip==25.2
           python -m pip install websocket-client==1.9.2 httpx==0.28.1 pytest==9.0.3
+
+      - name: Validate bounded chained-soak input
+        run: |
+          python - <<'PY'
+          import os
+
+          run_number = int(os.environ["RUN_NUMBER"])
+          assert 1 <= run_number <= 5, f"run_number must be in [1, 5], got {run_number}"
+          assert os.environ["CAPTURE_DURATION_MINUTES"] == "350"
+          PY
 
       - name: Run mock-only capture and auto-audit tests
         run: |
@@ -123,5 +139,54 @@ jobs:
         with:
           name: regime-m-microstructure-${{ steps.segment.outputs.timestamp }}-${{ github.run_id }}
           path: .artifacts/regime-m-capture/*
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 30
+
+  chain-next-segment:
+    needs: capture
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      actions: write
+    steps:
+      - name: Stop after the fifth successful segment
+        if: ${{ inputs.run_number == 5 }}
+        run: echo "Chained soak complete: run_number=5. No further dispatch will be issued."
+
+      - name: Preserve the ten-minute inter-segment coverage gap
+        if: ${{ inputs.run_number < 5 }}
+        run: sleep 600
+
+      - name: Dispatch the next segment only after capture and artifact upload succeeded
+        if: ${{ inputs.run_number < 5 }}
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const runNumber = Number("${{ inputs.run_number }}");
+            const durationMinutes = String("${{ inputs.duration_minutes }}");
+
+            if (!Number.isInteger(runNumber) || runNumber < 1 || runNumber >= 5) {
+              core.setFailed(`Refusing invalid next-segment dispatch from run_number=${runNumber}`);
+              return;
+            }
+
+            const ref = context.ref.replace(/^refs\/heads\//, "");
+            if (!ref || ref === context.ref) {
+              core.setFailed(`Expected a branch ref, received ${context.ref}`);
+              return;
+            }
+
+            const nextRunNumber = runNumber + 1;
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: "capture-microstructure.yml",
+              ref,
+              inputs: {
+                duration_minutes: durationMinutes,
+                run_number: String(nextRunNumber),
+              },
+            });
+
+            core.notice(`Successfully dispatched chained soak segment ${nextRunNumber}/5 on ${ref}`);
