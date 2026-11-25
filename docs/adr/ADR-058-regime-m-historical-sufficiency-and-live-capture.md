@@ -465,3 +465,201 @@ The passing validation steps support the safety invariants for these seven runs.
 
 The only intended file change for this final-audit commit is this ADR-058 document. Standard CI must pass on the resulting Research commit before the repository default-branch setting is restored to `main`. After restoration, verify `default_branch=main` and re-check the exact frozen main HEAD and Tree SHA listed above.
 
+
+
+---
+
+## 10. Owner-directed five-run manual Regime M soak final audit — 2026-11-25
+
+### 10.1 Scope, evidence boundary, and decision
+
+Repository: angry0tiger-sudo/AliX  
+Workflow: Regime M Public Microstructure Capture  
+Workflow ID: 422952435  
+Workflow path: .github/workflows/capture-microstructure.yml  
+Selected branch: research/nobitex-hf-strategy  
+Selected workflow code SHA: cad729d0aa68eca65eddd67b39eaedc604b63cf6  
+Market: BTCIRT  
+Audit method: GitHub Actions run/job/step/log and artifact metadata inspection, followed by independent download and byte-level ZIP/CSV/manifest verification in the audit environment.
+
+The GitHub Actions API returned exactly five repository workflow_dispatch runs created from 2026-11-23 through 2026-11-25. All five belonged to workflow 422952435, path .github/workflows/capture-microstructure.yml, branch research/nobitex-hf-strategy, and code SHA cad729d0aa68eca65eddd67b39eaedc604b63cf6. All five completed with conclusion success and run_attempt=1. The GitHub workflow-level run_number values 14–18 are repository workflow counters, not the chained input run_number values; the latter were independently read from each capture job's RUN_NUMBER environment in its logs.
+
+The single owner/manual seed dispatch was run 45198041920, created 2026-11-23T14:47:50Z, with RUN_NUMBER=1 and CAPTURE_DURATION_MINUTES=350. Runs 2–5 were dispatched by the preceding workflow chain step. No manual dispatch, rerun, or retry was issued during this audit.
+
+**Decision: M1 remains NOT ACCEPTED.** The sum of the five independently verified Manifest capture intervals is 105,018.751 seconds (29 hours, 10 minutes, 18.751 seconds), which exceeds the 24-hour minimum by 18,618.751 seconds. It does not meet the preferred 72-hour target. However, the mandatory data-integrity/reconnect-recovery gate fails: segment 4 records 28,978 non-monotonic publisher-offset events after reconnect, with the accepted WebSocket streams effectively ceasing to advance after publisher offsets reset. Those events are explicitly rejected and preserved as gap rows, not silently repaired. The five-run time threshold therefore does not establish an acceptable 24-hour microstructure corpus.
+
+### 10.2 Exact five-run chain and workflow outcomes
+
+| Chain input | GitHub run ID | API workflow run number | Created UTC | Capture RUN_NUMBER / duration | Head SHA | Overall |
+|---:|---:|---:|---|---|---|---|
+| 1 (manual seed) | [45198041920](https://github.com/angry0tiger-sudo/AliX/actions/runs/45198041920) | 14 | 2026-11-23T14:47:50Z | 1 / 350 minutes | cad729d0aa68eca65eddd67b39eaedc604b63cf6 | success |
+| 2 (chained) | [45264275546](https://github.com/angry0tiger-sudo/AliX/actions/runs/45264275546) | 15 | 2026-11-23T20:55:06Z | 2 / 350 minutes | cad729d0aa68eca65eddd67b39eaedc604b63cf6 | success |
+| 3 (chained) | [45316779276](https://github.com/angry0tiger-sudo/AliX/actions/runs/45316779276) | 16 | 2026-11-24T03:03:24Z | 3 / 350 minutes | cad729d0aa68eca65eddd67b39eaedc604b63cf6 | success |
+| 4 (chained) | [45362430692](https://github.com/angry0tiger-sudo/AliX/actions/runs/45362430692) | 17 | 2026-11-24T09:09:00Z | 4 / 350 minutes | cad729d0aa68eca65eddd67b39eaedc604b63cf6 | success |
+| 5 (chained final) | [45423741331](https://github.com/angry0tiger-sudo/AliX/actions/runs/45423741331) | 18 | 2026-11-24T15:17:16Z | 5 / 350 minutes | cad729d0aa68eca65eddd67b39eaedc604b63cf6 | success |
+
+For every run:
+- Standard CI prerequisite: all four jobs succeeded — quality, four-arm-lock-bare-env, freqtrade-runtime-smoke, and postgres-integration.
+- Capture job: succeeded.
+- Bounded-input validation: succeeded.
+- Mock-only capture and auto-audit tests: succeeded.
+- Public BTCIRT capture: completed.
+- Long-form manifest and safety validation: succeeded.
+- Auto-audit CSV counts, SHA-256, gaps, reconnect counters, and safety invariants: succeeded.
+- Raw artifact upload: succeeded.
+- real-data-diagnostic and ensemble-real-data-research remained skipped by their existing branch/event gates; no real-data model workflow ran.
+
+The chain-step job succeeded in all five runs. Runs 1–4 each completed the 600-second sleep and logged the successful dispatch notice for exactly the next input segment:
+- Run 1 dispatched segment 2/5 at 2026-11-23T20:55:06.412Z.
+- Run 2 dispatched segment 3/5 at 2026-11-24T03:03:25.241Z.
+- Run 3 dispatched segment 4/5 at 2026-11-24T09:09:00.838Z.
+- Run 4 dispatched segment 5/5 at 2026-11-24T15:17:17.181Z.
+- Run 5 completed “Stop after the fifth successful segment”; both the sleep and dispatch steps were skipped. No sixth dispatch was issued.
+
+The run API and capture logs agree on the exact five run IDs, input values 1–5, duration 350, selected branch, and selected code SHA. The capture logs expose CAPTURE_DURATION_MINUTES=350 and RUN_NUMBER=1,2,3,4,5 respectively. Each Manifest independently records requested_duration_minutes=350 and the matching workflow_run_id.
+
+### 10.3 Artifact inventory and independent ZIP verification
+
+Only the matching regime-m-microstructure artifacts are listed. Synthetic Phase 4/5/7/9 artifacts uploaded by Standard CI are not capture evidence and are excluded.
+
+| Run ID | Artifact ID | Artifact name | GitHub size / downloaded bytes | GitHub digest / independently computed ZIP SHA-256 |
+|---|---:|---|---:|---|
+| 45198041920 | 14861162379 | regime-m-microstructure-20261123T145451Z-45198041920 | 1,047,871 | 6d072cb56df8e0fc00129dfb171558630f84659197055d5fb91861a401d25674 |
+| 45264275546 | 14884828194 | regime-m-microstructure-20261123T210308Z-45264275546 | 1,110,846 | b87d26a8a4b41347e36c5bd7b66a43630b9c34d40d8bdc725fb3749e6bedc0cc |
+| 45316779276 | 14904127543 | regime-m-microstructure-20261124T030844Z-45316779276 | 963,631 | a45bf0d9d49bcf4ddfc5c3e86cba015a59ec87c60f9a28aec2b832d06595155c |
+| 45362430692 | 14933304229 | regime-m-microstructure-20261124T091658Z-45362430692 | 802,826 | f7ec6fd5cab07d147aa0968ac17ff1abf5228910ec5a43896d6a7d694610f3c5 |
+| 45423741331 | 14966045300 | regime-m-microstructure-20261124T152549Z-45423741331 | 1,226,509 | 1c297ed33aee97d9c77572f7ae9c41fa90c5dfb4ec1291053ee347dc0bca800e |
+
+All five artifacts were downloaded by their exact GitHub artifact IDs. For every ZIP:
+- Independently computed byte count equals GitHub artifact size_in_bytes.
+- Independently computed SHA-256 equals the GitHub artifact API digest and the upload-action digest in the capture log.
+- ZIP CRC test passed.
+- The ZIP contains exactly gaps.csv, manifest.json, manifest.sha256, orderbook.csv, and trades.csv.
+- Manifest workflow_run_id and code_commit_sha match the enclosing run and selected commit.
+- manifest.sha256 contains the exact SHA-256 of the downloaded manifest.json followed by two spaces and manifest.json.
+
+| Run ID | manifest.json SHA-256 |
+|---|---|
+| 45198041920 | 1e5999252e979b1dea3f512fcd5019766b8a3658c9aea33c44260ab41276df40 |
+| 45264275546 | 2e0e554e3fee1d5148eb04f3054aa28c079a4ef184d41e379b5bd2f124209b06 |
+| 45316779276 | 99ea61613b464b45b289a74dedd62bc482fbc489fc257e438602b40c2ce3a9a1 |
+| 45362430692 | 6b86e214aaf1cacf4b9733ae0fe47a107bf0d7c50575da39a9d28d98da227f5c |
+| 45423741331 | e8af624bcb9b81e530c1d3a9e0aef5fbdcdedbbce63e9c546ebbb319a89a2bd5 |
+
+### 10.4 CSV contract, byte counts, row counts, and checksums
+
+The exact CSV headers were identical in all five artifacts:
+
+- orderbook.csv: captured_at_utc,source,exchange_timestamp_ms,offset,best_bid_price,best_bid_size,best_ask_price,best_ask_size,spread,mid_price,bids_top_json,asks_top_json
+- trades.csv: captured_at_utc,source,exchange_timestamp_ms,side,price,volume,offset
+- gaps.csv: stream,gap_start_utc,gap_end_utc,gap_start_ms,gap_end_ms,reason,previous_offset,next_offset,replay_attempted,replay_available
+
+For every CSV in every artifact, independent byte count, parsed data-row count excluding the header, and SHA-256 equal the corresponding manifest.json files metadata and records values. The independent audit also confirmed record_counts and gap_count agree with the actual CSV rows.
+
+| Run ID | File | Data rows | Bytes | SHA-256 |
+|---|---|---:|---:|---|
+| 45198041920 | orderbook.csv | 31,796 | 24,530,356 | e831ae32cc0bef497d7a20b135ac942257a42d987888734e8d5d9c0a15e38660 |
+| 45198041920 | trades.csv | 5,186 | 458,130 | 06d56c17140d7672520ca07e731e822730f61053ca1efce242662e2360bb00cc |
+| 45198041920 | gaps.csv | 4 | 651 | 86e605e57f00e858d1e938b1ac85959d2740950e36cde6f8914924638f7e2c00 |
+| 45264275546 | orderbook.csv | 34,163 | 26,340,068 | 88de2566e09f0eb1819a6cf96b77305c8ed0e7610d143301d66d241a833a0629 |
+| 45264275546 | trades.csv | 4,839 | 429,382 | 924302082a3f3f65fe70f242d2b2009e916c5f8c00e51e1f11cae8e551535779 |
+| 45264275546 | gaps.csv | 7 | 1,032 | d00e2e6746e7d61f0d7eedbd45b5984baea8081c20b45947ea35a0f7f4cf4a73 |
+| 45316779276 | orderbook.csv | 31,125 | 24,031,252 | fe541695d1dd065e8ca190f5e98b427252ca23efae20fef343e86c6a004bfaec |
+| 45316779276 | trades.csv | 6,223 | 550,961 | 06be6b1375863b0e77690ea363df45b05576434264085cb141e3d0f6e80d55a5 |
+| 45316779276 | gaps.csv | 4 | 651 | ae5d503e6dd7c03e2f9ec2ecc423ca82b2c9bb0812d1dbc843e7b4839884c2b3 |
+| 45362430692 | orderbook.csv | 11,363 | 8,763,525 | f0e3796af0184759082c0fe497e4ba80cc6ed8e93c752bc4db81f5fa10ecd865 |
+| 45362430692 | trades.csv | 1,700 | 150,025 | 3b2014f02cee068a35eb2308c45c95615308d8d670c4f3814670b52fb2dc8bce |
+| 45362430692 | gaps.csv | 28,982 | 4,486,516 | cac705981f44cea1aba5e0b1002560c04e9edb76c406f0d0c0c31d20cea10efe |
+| 45423741331 | orderbook.csv | 36,348 | 27,904,654 | b8ecaf25f53fb24d16da38e8f129e3485e5e1ceb4306a5daa1df1d9bd77c84b8 |
+| 45423741331 | trades.csv | 3,493 | 301,168 | adf983c6cc030d2d14a076853427bd08ed0c10e97433a5187db84ee4b841fc2e |
+| 45423741331 | gaps.csv | 0 | 127 | bbaaea6d0b1a672e8814745f2f0f9c20ca7411e7d41fde18b1d43311f5d604fa |
+
+Aggregate independently recounted rows: 144,795 order-book observations, 21,441 trade observations, and 28,997 gap rows. The trade files contain 100 REST recent-trade seed rows in total and 21,341 WebSocket trade observations. The order-book files contain 5 initial REST snapshots, 6 REST reconnect snapshots, and 144,784 WebSocket order-book observations. No trade deduplication was performed; duplicate_trades_dropped is zero in every manifest.
+
+### 10.5 Actual capture intervals and separate uncovered intervals
+
+Capture duration below is calculated only as Manifest finished_at_utc minus Manifest started_at_utc. No wall-clock span or inter-segment downtime is added to capture time.
+
+| Run ID | Manifest started_at_utc | Manifest finished_at_utc | Actual interval seconds | Actual interval |
+|---|---|---|---:|---|
+| 45198041920 | 2026-11-23T14:54:51.433+00:00 | 2026-11-23T20:44:54.611+00:00 | 21,003.178 | 350.053 minutes |
+| 45264275546 | 2026-11-23T21:03:08.461+00:00 | 2026-11-24T02:53:12.689+00:00 | 21,004.228 | 350.070 minutes |
+| 45316779276 | 2026-11-24T03:08:44.606+00:00 | 2026-11-24T08:58:49.190+00:00 | 21,004.584 | 350.076 minutes |
+| 45362430692 | 2026-11-24T09:16:58.846+00:00 | 2026-11-24T15:07:01.654+00:00 | 21,002.808 | 350.047 minutes |
+| 45423741331 | 2026-11-24T15:25:49.265+00:00 | 2026-11-24T21:15:53.218+00:00 | 21,003.953 | 350.066 minutes |
+
+**Total actual Manifest capture interval: 105,018.751 seconds = 1,750.3125167 minutes = 29 hours, 10 minutes, 18.751 seconds.** This exceeds the 24-hour minimum by 18,618.751 seconds (5 hours, 10 minutes, 18.751 seconds). The preferred 72-hour target is short by 154,181.249 seconds (42 hours, 49 minutes, 41.249 seconds).
+
+The exact uncovered intervals are computed separately as [previous Manifest finished_at_utc, next Manifest started_at_utc):
+
+| Previous run → next run | Previous finish UTC | Next start UTC | Uncovered seconds | Uncovered interval |
+|---|---|---|---:|---|
+| 45198041920 → 45264275546 | 2026-11-23T20:44:54.611+00:00 | 2026-11-23T21:03:08.461+00:00 | 1,093.850 | 18m 13.850s |
+| 45264275546 → 45316779276 | 2026-11-24T02:53:12.689+00:00 | 2026-11-24T03:08:44.606+00:00 | 931.917 | 15m 31.917s |
+| 45316779276 → 45362430692 | 2026-11-24T08:58:49.190+00:00 | 2026-11-24T09:16:58.846+00:00 | 1,089.656 | 18m 09.656s |
+| 45362430692 → 45423741331 | 2026-11-24T15:07:01.654+00:00 | 2026-11-24T15:25:49.265+00:00 | 1,127.611 | 18m 47.611s |
+
+Total uncovered inter-segment time: **4,243.034 seconds = 1 hour, 10 minutes, 43.034 seconds**. Each workflow deliberately slept for 600 seconds, but the actual Manifest boundaries also include subsequent workflow dispatch, Standard CI, and capture bootstrap latency. The uncovered intervals are not capture time and were not counted toward the 24-hour threshold. The five segments are not continuous.
+
+### 10.6 Gap-row and reconnect reconciliation
+
+All gap rows independently parsed from gaps.csv have replay_attempted=false and replay_available=false. The exact reason totals across all five segments are:
+- websocket_disconnect_no_replay: 12 rows.
+- publisher_offset_gap: 7 rows.
+- non_monotonic_publisher_offset: 28,978 rows.
+- Total: 28,997 rows (24,491 orderbook-stream rows and 4,506 trade-stream rows).
+
+| Run ID | Capture status | Gap rows | Gap-row detail | Reconnect attempts / successes / failures |
+|---|---|---:|---|---|
+| 45198041920 | GAPPED | 4 | 2 websocket_disconnect_no_replay; 2 publisher_offset_gap | 1 / 1 / 0 |
+| 45264275546 | GAPPED | 7 | 4 websocket_disconnect_no_replay; 3 publisher_offset_gap | 2 / 2 / 0 |
+| 45316779276 | GAPPED | 4 | 2 websocket_disconnect_no_replay; 2 publisher_offset_gap | 2 / 1 / 1 |
+| 45362430692 | GAPPED | 28,982 | 4 websocket_disconnect_no_replay; 28,978 non_monotonic_publisher_offset | 5 / 2 / 3 |
+| 45423741331 | NO_GAPS_OBSERVED | 0 | No gap data rows | 0 / 0 / 0 |
+| **Total** | **4 GAPPED; 1 NO_GAPS_OBSERVED** | **28,997** | **12 disconnect; 7 offset-gap; 28,978 non-monotonic** | **10 / 6 / 4** |
+
+The 12 disconnect rows are stream-specific records for disconnect windows, not 12 independent socket disconnects. The reconnect counters are separately sourced from each Manifest and satisfy attempts = successes + failures for every run. Run 3 recorded reconnect_failed:TimeoutError. Run 4 recorded three reconnect_failed:WebSocketBadStatusException entries and two websocket_disconnect events.
+
+### 10.7 Segment 4 data-integrity failure and reconnect-baseline finding
+
+Run 45362430692 is the decisive data-quality failure:
+- It has 28,982 gap rows, of which 28,978 are non_monotonic_publisher_offset: 24,481 orderbook and 4,497 trade events.
+- The first rejected order-book publication had previous_offset=3151961 and next_offset=12; subsequent rejected offsets increased only to 24500. The first rejected trade publication had previous_offset=396001 and next_offset=1; subsequent rejected offsets increased only to 4500.
+- The non-monotonic gap rows span gap_start_utc 2026-11-24T11:10:26.759+00:00 through 2026-11-24T15:07:01.453+00:00, approximately 3 hours, 56 minutes, 34.694 seconds of runner UTC time. Their exchange-time span is 14,235.270 seconds.
+- The accepted orderbook.csv ends at captured_at_utc=2026-11-24T11:38:34.719+00:00 and contains 11,360 WebSocket rows plus two REST reconnect snapshots and one initial REST snapshot. The accepted trades.csv ends at captured_at_utc=2026-11-24T11:09:46.226+00:00 and contains 1,680 WebSocket trades plus 20 REST seed rows. The post-reset publications were rejected, not appended as valid observations.
+- Manifest counters show five reconnect attempts, two successes, and three failures. The Manifest also records websocket_disconnect and three reconnect_failed:WebSocketBadStatusException errors.
+
+The source-level mechanism is consistent with the observed failure. CaptureState retains one OffsetTracker instance. _reconnect reuses state.offsets when processing publications from a replacement socket; it does not establish a new publisher-offset baseline for either stream. OffsetTracker.observe returns a non_monotonic_publisher_offset gap for any offset less than or equal to the last accepted offset and does not advance its stored baseline in that case. After the observed publisher reset from 3151961 to 12 for orderbook and from 396001 to 1 for trades, the incrementing post-reset offsets therefore remained below the retained previous values and were rejected. This is not a ZIP/CSV hash failure; it is a collector reconnect-state/data-continuity failure.
+
+The in-run auto-audit passed because its implemented gates validate exact CSV headers, byte counts, hashes, record counts, manifest checksum, reconnect-counter arithmetic, positive capture interval, and safety invariants. It does not impose a maximum gap count, require zero non-monotonic events, or prove that the offset tracker recovers after a publisher reset. Consequently, a successful Auto-Audit job is not sufficient to pass the broader M1 data-quality gate.
+
+This failure must not be hidden by the 29.17-hour sum of Manifest intervals. The capture-time interval calculation and the observed feed-integrity result are separate evidence dimensions.
+
+### 10.8 Safety invariants and prohibited work
+
+All five independently inspected manifests and all five successful workflow validation steps report the required fail-closed values:
+
+| Safety field | Required value | All five runs |
+|---|---|---|
+| authorization_header_sent | false | PASS |
+| websocket_connection_token_sent | false | PASS |
+| private_api_calls | 0 | PASS |
+| holdout_bytes_read | false | PASS |
+| posthack_data_read | false | PASS |
+| real_order_attempts | 0 | PASS |
+| paper_orders | 0 | PASS |
+| Champion | null | PASS |
+| order_permission | false | PASS |
+| trading_authorization | NO-GO | PASS |
+
+The workflow also set ALIX_DRY_RUN=true and ALIX_ALLOW_LIVE_TRADING=false. This audit read only the five public-feed capture artifacts and repository workflow/collector/ADR source. No Holdout or Post-Hack bytes were accessed. No private endpoint or credential was used. No real or paper order was attempted. No OFI, DeepLOB, or any other model was built or trained.
+
+### 10.9 Final M1/M2/M3 decision and required remediation
+
+- **M1: NOT ACCEPTED.** The five Manifest intervals sum to 29 hours, 10 minutes, 18.751 seconds and pass the 24-hour interval threshold. The 72-hour preferred target was not met. More importantly, the mandatory feed-integrity/reconnect-recovery gate fails because Run 4 rejected 28,978 non-monotonic publications after the publisher offsets reset, with no replay and no effective recovery of the accepted WebSocket streams. The corpus must not be represented as an accepted 24-hour microstructure dataset.
+- **M2: UNCHANGED.** No documented dependable six-month public historical L2 or market-wide tick archive has been established. Historical OHLCV is not a substitute.
+- **M3: NOT AUTHORIZED.** Do not begin OFI, DeepLOB, feature engineering, model fitting, model evaluation, or strategy implementation. No model authorization follows from this five-run chain.
+- Required remediation before another owner-reviewed M1 attempt: fix the reconnect offset-baseline lifecycle for both streams; add deterministic tests for publisher-offset reset after reconnect, including independent per-stream baselines and proof that valid post-reconnect publications resume; retain all rejected observations as explicit gaps; then obtain owner approval for a new bounded soak and independently audit its complete artifacts. Do not silently reinterpret or stitch this corpus into continuous coverage.
+
+At the time of this addendum, repository default_branch was research/nobitex-hf-strategy. The frozen main ref was independently checked at HEAD cd9b13d42ac0cf0edd2df066ff81580e028146d6 and Tree SHA 5761c6c34143f8e6924f53a4e745c48932a5f791. No main-branch commit, ref, or tree mutation is authorized. The default-branch setting must be restored to main after Standard CI for this ADR-only audit commit, and the exact main HEAD and Tree SHA must be rechecked after restoration.
+
