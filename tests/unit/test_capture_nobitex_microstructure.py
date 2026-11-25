@@ -17,7 +17,6 @@ from scripts.capture_nobitex_microstructure import (
     make_book_row,
     make_trade_row,
     run_capture,
-    _process_pushes,
     write_capture_artifacts,
 )
 
@@ -325,7 +324,7 @@ def test_push_processor_marks_offset_gap_and_drops_non_monotonic_event() -> None
     ]
 
 
-class _FakeSocket:
+class _FakeSocket(SocketLike):
     def send(self, payload: str) -> None:
         return None
 
