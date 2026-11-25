@@ -204,6 +204,13 @@ class OffsetTracker:
     def __init__(self) -> None:
         self._last: dict[str, tuple[int, int]] = {}
 
+    def reset_baseline(self, stream: str | None = None) -> None:
+        """Forget offsets from the prior socket session after a successful reconnect."""
+        if stream is None:
+            self._last.clear()
+        else:
+            self._last.pop(stream, None)
+
     def observe(
         self, stream: str, offset: int, event_ms: int
     ) -> dict[str, object] | None:
@@ -705,10 +712,19 @@ def _seed_recent_trades(state: CaptureState) -> None:
         state.errors.append(f"recent_trade_seed:{type(exc).__name__}")
 
 
+def _connect_with_fresh_offset_baseline(
+    state: CaptureState,
+) -> tuple[SocketLike, type[BaseException], list[dict[str, object]]]:
+    """Establish a subscribed socket before resetting per-session publisher offsets."""
+    connection = connect_and_subscribe()
+    state.offsets.reset_baseline()
+    return connection
+
+
 def _start_capture(
     state: CaptureState,
 ) -> tuple[SocketLike, type[BaseException], list[dict[str, object]]]:
-    socket, timeout_type, pending = connect_and_subscribe()
+    socket, timeout_type, pending = _connect_with_fresh_offset_baseline(state)
     _take_book_snapshot(state, "rest_initial_snapshot")
     _seed_recent_trades(state)
     return socket, timeout_type, pending
@@ -737,7 +753,9 @@ def _reconnect(
             break
         try:
             state.reconnect_attempts += 1
-            replacement, current_timeout, pending = connect_and_subscribe()
+            replacement, current_timeout, pending = (
+                _connect_with_fresh_offset_baseline(state)
+            )
             reconnect_at = utc_now()
             _record_disconnect_gaps(
                 state,

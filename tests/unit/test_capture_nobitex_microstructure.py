@@ -7,7 +7,12 @@ from pathlib import Path
 import pytest
 
 from scripts.capture_nobitex_microstructure import (
+    CaptureState,
     OffsetTracker,
+    SocketLike,
+    _connect_with_fresh_offset_baseline,
+    _process_pushes,
+    _record_disconnect_gaps,
     decode_messages,
     make_book_row,
     make_trade_row,
@@ -318,6 +323,134 @@ def test_push_processor_marks_offset_gap_and_drops_non_monotonic_event() -> None
         "publisher_offset_gap",
         "non_monotonic_publisher_offset",
     ]
+
+
+class _FakeSocket:
+    def send(self, payload: str) -> None:
+        return None
+
+    def recv(self) -> str:
+        return "{}"
+
+    def close(self) -> None:
+        return None
+
+
+def test_reconnect_resets_both_offset_baselines_and_records_disconnect_gap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = CaptureState()
+    initial_book = {
+        "push": {
+            "channel": "public:orderbook-BTCIRT",
+            "pub": {"offset": 1000, "data": valid_book()},
+        }
+    }
+    initial_trade = {
+        "push": {
+            "channel": "public:trades-BTCIRT",
+            "pub": {"offset": 1000, "data": valid_trade()},
+        }
+    }
+    _process_pushes(
+        [initial_book, initial_trade],
+        state.book_rows,
+        state.trade_rows,
+        state.gaps,
+        state.offsets,
+        0,
+    )
+    assert [row["offset"] for row in state.book_rows] == ["1000"]
+    assert [row["offset"] for row in state.trade_rows] == ["1000"]
+
+    _record_disconnect_gaps(
+        state,
+        "2026-11-25T00:00:00+00:00",
+        "2026-11-25T00:00:05+00:00",
+        "websocket_disconnect_no_replay",
+    )
+
+    socket = _FakeSocket()
+    monkeypatch.setattr(
+        "scripts.capture_nobitex_microstructure.connect_and_subscribe",
+        lambda: (socket, TimeoutError, []),
+    )
+    connected_socket, timeout_type, pending = _connect_with_fresh_offset_baseline(state)
+
+    assert connected_socket is socket
+    assert timeout_type is TimeoutError
+    assert pending == []
+
+    post_reconnect: list[dict[str, object]] = []
+    for offset in range(1, 5):
+        post_reconnect.append(
+            {
+                "push": {
+                    "channel": "public:orderbook-BTCIRT",
+                    "pub": {
+                        "offset": offset,
+                        "data": {
+                            **valid_book(),
+                            "lastUpdate": 1_700_000_001_000 + offset,
+                        },
+                    },
+                }
+            }
+        )
+        post_reconnect.append(
+            {
+                "push": {
+                    "channel": "public:trades-BTCIRT",
+                    "pub": {
+                        "offset": offset,
+                        "data": {
+                            **valid_trade(),
+                            "time": 1_700_000_002_000 + offset,
+                        },
+                    },
+                }
+            }
+        )
+
+    _process_pushes(
+        post_reconnect,
+        state.book_rows,
+        state.trade_rows,
+        state.gaps,
+        state.offsets,
+        0,
+    )
+
+    assert [row["offset"] for row in state.book_rows] == [
+        "1000",
+        "1",
+        "2",
+        "3",
+        "4",
+    ]
+    assert [row["offset"] for row in state.trade_rows] == [
+        "1000",
+        "1",
+        "2",
+        "3",
+        "4",
+    ]
+    assert len(state.gaps) == 2
+    assert {gap["stream"] for gap in state.gaps} == {"orderbook", "trades"}
+    assert {
+        gap["reason"] for gap in state.gaps
+    } == {"websocket_disconnect_no_replay"}
+
+
+def test_offset_tracker_reset_can_be_scoped_to_one_stream() -> None:
+    tracker = OffsetTracker()
+    assert tracker.observe("orderbook", 1000, 1_700_000_000_000) is None
+    assert tracker.observe("trades", 2000, 1_700_000_000_100) is None
+
+    tracker.reset_baseline("orderbook")
+
+    assert tracker.observe("orderbook", 1, 1_700_000_000_200) is None
+    assert tracker.observe("trades", 2001, 1_700_000_000_300) is None
 
 
 def test_trade_stream_preserves_identical_public_observations() -> None:
