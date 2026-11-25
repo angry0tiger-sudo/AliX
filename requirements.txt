@@ -42,3 +42,4 @@ baleio @ git+https://github.com/ehsndvr/baleio.git@66be3000af6e62332e1764f227aed
 jsonschema==4.25.1
 pip-tools==7.5.0
 MAPIE==1.6.0
+virtualenv==21.14.13
