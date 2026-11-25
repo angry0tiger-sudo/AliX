@@ -1,6 +1,7 @@
 name: Regime M Public Microstructure Capture
 
 # Manual, bounded long-form segments only. No scheduled capture.
+# M1.6: each successful WebSocket session starts with fresh publisher-offset baselines.
 
 on:
   workflow_dispatch:
