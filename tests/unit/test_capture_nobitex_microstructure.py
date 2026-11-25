@@ -339,13 +339,13 @@ def test_reconnect_resets_both_offset_baselines_and_records_disconnect_gap(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     state = CaptureState()
-    initial_book = {
+    initial_book: dict[str, object] = {
         "push": {
             "channel": "public:orderbook-BTCIRT",
             "pub": {"offset": 1000, "data": valid_book()},
         }
     }
-    initial_trade = {
+    initial_trade: dict[str, object] = {
         "push": {
             "channel": "public:trades-BTCIRT",
             "pub": {"offset": 1000, "data": valid_trade()},
