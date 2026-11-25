@@ -753,8 +753,8 @@ def _reconnect(
             break
         try:
             state.reconnect_attempts += 1
-            replacement, current_timeout, pending = (
-                _connect_with_fresh_offset_baseline(state)
+            replacement, current_timeout, pending = _connect_with_fresh_offset_baseline(
+                state
             )
             reconnect_at = utc_now()
             _record_disconnect_gaps(

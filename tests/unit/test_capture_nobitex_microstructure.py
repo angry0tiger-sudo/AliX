@@ -436,9 +436,7 @@ def test_reconnect_resets_both_offset_baselines_and_records_disconnect_gap(
     ]
     assert len(state.gaps) == 2
     assert {gap["stream"] for gap in state.gaps} == {"orderbook", "trades"}
-    assert {
-        gap["reason"] for gap in state.gaps
-    } == {"websocket_disconnect_no_replay"}
+    assert {gap["reason"] for gap in state.gaps} == {"websocket_disconnect_no_replay"}
 
 
 def test_offset_tracker_reset_can_be_scoped_to_one_stream() -> None:
