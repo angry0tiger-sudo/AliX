@@ -663,3 +663,177 @@ The workflow also set ALIX_DRY_RUN=true and ALIX_ALLOW_LIVE_TRADING=false. This 
 
 At the time of this addendum, repository default_branch was research/nobitex-hf-strategy. The frozen main ref was independently checked at HEAD cd9b13d42ac0cf0edd2df066ff81580e028146d6 and Tree SHA 5761c6c34143f8e6924f53a4e745c48932a5f791. No main-branch commit, ref, or tree mutation is authorized. The default-branch setting must be restored to main after Standard CI for this ADR-only audit commit, and the exact main HEAD and Tree SHA must be rechecked after restoration.
 
+
+
+---
+
+## 11. Owner-directed M1.6 five-segment chained-soak final audit — 2026-11-26
+
+### 11.1 Scope, governing gates, and decision
+
+Repository: `angry0tiger-sudo/AliX`  
+Workflow: `.github/workflows/capture-microstructure.yml` (workflow ID `422952435`)  
+Research branch: `research/nobitex-hf-strategy`  
+Market: BTCIRT public L2 order book and market-wide trades  
+Audit boundary: GitHub Actions workflow/job/step/run logs; exact raw artifact IDs; independent download and byte-level ZIP, manifest, and CSV verification; source/test review on the seed and remediation commits. No Holdout or Post-Hack content was accessed.
+
+**Decision: M1=ACCEPTED for this M1.6 five-segment corpus, subject to the explicit coverage limitations below.** All owner-specified mandatory acceptance checks passed: five successful 350-minute capture segments; independently verified raw artifacts and CSV integrity; 105,020.393 seconds of actual Manifest capture (>24 hours); exactly zero `non_monotonic_publisher_offset` rows; accepted post-reconnect observations for both streams after every successful live reconnect; deterministic test coverage for publisher reset on both streams; explicit preservation of every no-replay disconnect; and all fail-closed safety invariants. The corpus is segmented and contains real uncovered feed intervals. M1 acceptance does not mean uninterrupted or gap-free coverage.
+
+The preferred 72-hour collection target was not met. It remains a preference, not a mandatory gate for this owner-directed M1.6 decision.
+
+### 11.2 Exact run chain, exclusion, and remediation
+
+Five valid capture segments, all with `duration_minutes=350`, `run_number=1..5`, `workflow_dispatch`, `run_attempt=1`, branch `research/nobitex-hf-strategy`, and successful Standard CI, capture, validation, CSV auto-audit, and raw artifact upload:
+
+| Input segment | Display run # | GitHub run ID | Head SHA | Capture input | Raw artifact ID | Result |
+|---:|---:|---:|---|---|---:|---|
+| 1 | 19 | 45553679888 | `274aadbad68aebf5266ebbe7f21d9c2640e6587b` | 1 / 350 min | 15016992581 | success |
+| 2 | 21 | 45620061415 | `b0274fa4b05245a73b3e1e10908dbcdd1f8db19` | 2 / 350 min | 15054886094 | success |
+| 3 | 22 | 45683066882 | `b0274fa4b05245a73b3e1e10908dbcdd1f8db19` | 3 / 350 min | 15077454919 | success |
+| 4 | 23 | 45735110603 | `b0274fa4b05245a73b3e1e10908dbcdd1f8db19` | 4 / 350 min | 15095790023 | success |
+| 5 | 24 | 45775145557 | `b0274fa4b05245a73b3e1e10908dbcdd1f8db19` | 5 / 350 min | 15121226078 | success |
+
+The first seed dispatch (run ID `45553679888`) automatically dispatched input segment 2/5. That attempted successor was display Run #20, ID `45605948895`, input `run_number=2`, on the original SHA. It failed in `standard-ci / quality`, step `Dependency audit`, before capture. The exact audit output was: `virtualenv 21.14.12 PYSEC-2026-4402`, fixed in `21.14.13`. Its `capture` and `chain-next-segment` jobs were skipped. Its only artifacts were Phase 4/5 synthetic CI reports; it uploaded no `regime-m-microstructure` artifact and produced no raw capture segment. **Run #20 is excluded, not a data segment, and was not rerun or retried.** The input number 2 appears once in this pre-capture failed dispatch and once in the valid successful data corpus as Run #21; there is no duplicate successful capture segment or duplicate raw capture artifact for input 2.
+
+The security remediation pinned `virtualenv==21.14.13` in `requirements.txt` and `requirements.lock`, preserving the remaining lock constraints. Remediation commit `b0274fa4b05245a73b3e1e10908dbcdd1f8db19` passed Standard CI run #2575, ID `45618533011`, on that exact SHA; all four Standard CI jobs (quality, postgres integration, four-arm lock bare environment, and Freqtrade runtime smoke) succeeded.
+
+The chain evidence is from the actual `chain-next-segment` job logs:
+- Run #19 dispatched input segment 2/5; the resulting #20 failed before capture at the dependency security gate described above.
+- Run #21 dispatched input segment 3/5.
+- Run #22 dispatched input segment 4/5.
+- Run #23 dispatched input segment 5/5.
+- Run #24 completed `Stop after the fifth successful segment`; the sleep and dispatch steps were skipped and the log stated that no further dispatch would be issued. No sixth segment was dispatched; no display Run #25 is required.
+
+The input values were independently read from each capture job's `RUN_NUMBER` and `CAPTURE_DURATION_MINUTES` environment in its logs, not inferred from display run numbers. No failed/incomplete capture segment, duplicate successful input, missing successor, missing raw artifact, or short segment exists in the accepted five-segment corpus.
+
+### 11.3 Independent raw ZIP and manifest verification
+
+Each exact raw artifact was downloaded independently by its GitHub artifact ID. For all five ZIPs, independently calculated byte size and SHA-256 equal GitHub Artifact metadata; ZIP CRC passed; each archive contained exactly `gaps.csv`, `manifest.json`, `manifest.sha256`, `orderbook.csv`, and `trades.csv`; and the manifest checksum file exactly matched the downloaded `manifest.json`.
+
+| Run ID | Artifact ID | ZIP bytes | ZIP SHA-256 | manifest.json SHA-256 |
+|---:|---:|---:|---|---|
+| 45553679888 | 15016992581 | 1,097,114 | `aafe15ed9da1d6f6e8badf905627665695acfd605e926b242856f43888980ce8` | `c78734e3b0960a538d3cd2e6c32d9bc53fda202e4f98601a847ff645e31cc06b` |
+| 45620061415 | 15054886094 | 1,436,664 | `c25c202e5d556912bc40e6a9fdcf78adb5a23db32f3f760ad3a1024d79cf8961` | `1f5b6dc4085e32949e99e8ab0169684e7ba3ea29904aa05d64dc75c4205a17c3` |
+| 45683066882 | 15077454919 | 1,062,957 | `c7b7ec592cda5fec117976a422d2257a908c2b260d89b4b9b89ef87ab4f20a62` | `a96602e4f73d79a4e4dcd99ec4cc8af7c6c8c1490a17134e7296a60c1bdceeeb` |
+| 45735110603 | 15095790023 | 1,259,100 | `ec4befa0ad6fc96cf1874cec4ba15b2a2dc5ca27e58adf82c33eb62f18393332` | `1d99c9f2fa5d45a9ec03a81e5cbf78b3f5d857d152d740c1a441b64a444249a3` |
+| 45775145557 | 15121226078 | 1,049,976 | `c52cb93bfc345e1ba66104f7f0e4f8ea3664687e87d3dd89e44ea9236279db88` | `ad69c102f44198b6e67e2af1734aece1992a300d1340fec4384d774c75a1920d` |
+
+The exact CSV headers independently confirmed in every archive were:
+
+- `orderbook.csv`: `captured_at_utc,source,exchange_timestamp_ms,offset,best_bid_price,best_bid_size,best_ask_price,best_ask_size,spread,mid_price,bids_top_json,asks_top_json`
+- `trades.csv`: `captured_at_utc,source,exchange_timestamp_ms,side,price,volume,offset`
+- `gaps.csv`: `stream,gap_start_utc,gap_end_utc,gap_start_ms,gap_end_ms,reason,previous_offset,next_offset,replay_attempted,replay_available`
+
+For every CSV, independently parsed data rows, byte length, and SHA-256 equal the metadata in its own manifest. Manifest `record_counts` and `gap_count` also equal the independent CSV row counts. All manifests record `duplicate_trades_dropped=0`.
+
+| Run ID | CSV | Data rows | Bytes | SHA-256 |
+|---:|---|---:|---:|---|
+| 45553679888 | orderbook.csv | 32,122 | 24,696,145 | `befc1e8b508a5838ff0e0228e6b673370fd5f8a8c139d1d1bb712bc9433e9e8d` |
+| 45553679888 | trades.csv | 5,048 | 440,932 | `1392509c02136ac5a792cbf2d24bcf319e880179db32b5e68ad2323b0513d534` |
+| 45553679888 | gaps.csv | 2 | 360 | `874d8c86bdcc82311a19e14a15426af3969d5562540ba2212e1645b0930c2711` |
+| 45620061415 | orderbook.csv | 37,562 | 28,933,396 | `419d7cff8d4d33217fe42e05fb9c1d44e6d63f2f2dbfcda932f023f00a9e8d82` |
+| 45620061415 | trades.csv | 8,201 | 716,560 | `f517b9b68687abfad12aa14914b4ebaa43b298adb6991b1531427f754127a6e2` |
+| 45620061415 | gaps.csv | 0 | 127 | `bbaaea6d0b1a672e8814745f2f0f9c20ca7411e7d41fde18b1d43311f5d604fa` |
+| 45683066882 | orderbook.csv | 34,076 | 26,293,273 | `a6d5a63726b0d8a0b458785f1c238e2c3c701842a2436db3ae8130b21b913269` |
+| 45683066882 | trades.csv | 2,664 | 232,430 | `6f36c3ebed82c75422004619ecab8737ee69a036fec760da58255f9919d7fd42` |
+| 45683066882 | gaps.csv | 2 | 360 | `a11f856ff4aba12f0adc69d8a3e5d21442ab1f2570e49233fcef9e2770980d81` |
+| 45735110603 | orderbook.csv | 35,381 | 27,230,815 | `3a3c62dd3a31dc3571974d3cd830bcd12ded92c7da0e2e6e6c488498cc06ceb5` |
+| 45735110603 | trades.csv | 3,808 | 333,227 | `bbfbd11651c38efc2013e31e5ab15707e6cbd02bfb295bf27bcfc594d5460fac` |
+| 45735110603 | gaps.csv | 4 | 593 | `649bd63e5049196d3296671d9f21642c094501364ebb92623d460a892a6f5bf6` |
+| 45775145557 | orderbook.csv | 32,463 | 24,986,012 | `dc5950421e80f6c390fd18867aa50be1bb0d279ecacaff93c10d9d7f53932b74` |
+| 45775145557 | trades.csv | 5,902 | 515,478 | `6c13f37627c9c96db377c4027b3cfe36fe537ef0a6fa8755aaa6e20bd7ca8d82` |
+| 45775145557 | gaps.csv | 0 | 127 | `bbaaea6d0b1a672e8814745f2f0f9c20ca7411e7d41fde18b1d43311f5d604fa` |
+
+Independent aggregate counts: **171,604 order-book rows**, **25,623 trade rows**, and **8 gap rows**. Of these, order-book rows comprise 171,595 WebSocket observations, 5 initial REST snapshots and 4 reconnect REST snapshots; trades comprise 25,523 WebSocket publications and 100 recent-trade REST seed rows. No CSV/header/byte/hash/manifest/ZIP integrity anomaly was found.
+
+### 11.4 Actual capture time and separately accounted uncovered periods
+
+Only timezone-aware Manifest `finished_at_utc - started_at_utc` values are used for captured time:
+
+| Run ID | Manifest start UTC | Manifest finish UTC | Captured seconds |
+|---:|---|---|---:|
+| 45553679888 | 2026-11-25T05:35:36.583+00:00 | 2026-11-25T11:25:40.363+00:00 | 21,003.780 |
+| 45620061415 | 2026-11-25T13:13:20.594+00:00 | 2026-11-25T19:03:24.153+00:00 | 21,003.559 |
+| 45683066882 | 2026-11-25T19:20:24.424+00:00 | 2026-11-26T01:10:27.649+00:00 | 21,003.225 |
+| 45735110603 | 2026-11-26T01:24:46.741+00:00 | 2026-11-26T07:14:50.858+00:00 | 21,004.117 |
+| 45775145557 | 2026-11-26T07:33:09.480+00:00 | 2026-11-26T13:23:15.192+00:00 | 21,005.712 |
+
+**Total actual captured time: 105,020.393 seconds = 1,750.339883 minutes = 29 hours, 10 minutes, 20.393 seconds.** This exceeds the mandatory 24-hour threshold by 18,620.393 seconds (5 hours, 10 minutes, 20.393 seconds). The 72-hour preference is short by 154,179.607 seconds (42 hours, 49 minutes, 39.607 seconds).
+
+The real uncovered inter-segment intervals are calculated separately as `[previous.finished_at_utc, next.started_at_utc)`; none of this time is included in captured duration:
+
+| Previous → next | Uncovered UTC interval | Uncovered seconds |
+|---|---|---:|
+| 45553679888 → 45620061415 | 2026-11-25T11:25:40.363+00:00 → 2026-11-25T13:13:20.594+00:00 | 6,460.231 |
+| 45620061415 → 45683066882 | 2026-11-25T19:03:24.153+00:00 → 2026-11-25T19:20:24.424+00:00 | 1,020.271 |
+| 45683066882 → 45735110603 | 2026-11-26T01:10:27.649+00:00 → 2026-11-26T01:24:46.741+00:00 | 859.092 |
+| 45735110603 → 45775145557 | 2026-11-26T07:14:50.858+00:00 → 2026-11-26T07:33:09.480+00:00 | 1,098.622 |
+
+Total uncovered inter-segment time: **9,438.216 seconds = 2 hours, 37 minutes, 18.216 seconds**. The first interval includes the excluded pre-capture Run #20 dependency-audit failure and the subsequent remediation/bootstrap period. These five segments are not continuous and must not be concatenated as uninterrupted feed coverage.
+
+### 11.5 Gap and reconnect reconciliation
+
+Independent parsing of every `gaps.csv` found:
+
+- `websocket_disconnect_no_replay`: **8 rows** (four successful socket reconnect windows, represented once per stream).
+- `publisher_offset_gap`: **0 rows**.
+- `non_monotonic_publisher_offset`: **0 rows**.
+- Total: **8 rows**; all eight have `replay_attempted=false` and `replay_available=false`.
+
+Manifest reconnect totals are **52 attempts / 4 successes / 48 failures**:
+- Run 45553679888: 1 / 1 / 0.
+- Run 45620061415: 0 / 0 / 0.
+- Run 45683066882: 49 / 1 / 48.
+- Run 45735110603: 2 / 2 / 0.
+- Run 45775145557: 0 / 0 / 0.
+
+For every Manifest, attempts = successes + failures. The 48 failures are reconnect attempts within Run #22 before its one successful reconnection; they are not additional segments or successful sockets. All four successful disconnect/reconnect windows are preserved as explicit no-replay feed gaps; the two stream rows in each window are not counted as two independent socket reconnects.
+
+### 11.6 OffsetTracker lifecycle, deterministic regression proof, and every live reconnect
+
+Source review confirms `OffsetTracker.reset_baseline(stream=None)` clears both stream baselines, or only the selected stream when a stream name is supplied. `_connect_with_fresh_offset_baseline(state)` first completes `connect_and_subscribe()`, then clears the baselines before returning the newly subscribed socket. Both initial capture and `_reconnect` use this helper. In `_reconnect`, the helper succeeds before the reconnect snapshot, queued-message processing, and subsequent receive-loop publications. The source and test blobs are:
+- `scripts/capture_nobitex_microstructure.py`: `dec3c6ac4189d22183786088dce5fa31468f1559`.
+- `tests/unit/test_capture_nobitex_microstructure.py`: `f8e4936ab4a5baf69bafb297a516bede6dad6582`.
+
+The deterministic test `test_reconnect_resets_both_offset_baselines_and_records_disconnect_gap` initializes both orderbook and trades at publisher offset 1000, successfully establishes a replacement subscribed socket through the production helper, then processes offsets 1, 2, 3, and 4 for both streams. It explicitly asserts that both accepted CSV row sequences are `[1000, 1, 2, 3, 4]`, that exactly two disconnect gap rows remain, and that both are `websocket_disconnect_no_replay`. A separate stream-scoped-reset test confirms resetting orderbook does not erase the independent trades baseline. These mock-only tests passed in the successful Standard CI prerequisite jobs for the five captures and in the remediation Standard CI run #2575.
+
+No live publisher counter reset was observed in this five-segment corpus. Therefore the 1000→1→2→3→4 reset is established by deterministic code/test evidence, not claimed as a runtime reset observation.
+
+Every successful live reconnect was independently checked against the downloaded orderbook and trades CSVs. For each reconnect window, the first five subsequent WebSocket publisher offsets in both streams were accepted as rows and strictly advanced:
+
+| Run ID | Successful reconnect window UTC | First five accepted orderbook offsets | First five accepted trades offsets |
+|---:|---|---|---|
+| 45553679888 | 09:09:41.195 → 09:09:47.427 on 2026-11-25 | 130069, 130070, 130071, 130072, 130073 | 15889, 15890, 15891, 15892, 15893 |
+| 45683066882 | 20:11:30.056 → 20:19:54.392 on 2026-11-25 | 200335, 200336, 200337, 200338, 200339 | 29141, 29142, 29143, 29144, 29145 |
+| 45735110603 | 01:40:22.836 → 01:40:29.456 on 2026-11-26 | 232827, 232828, 232829, 232830, 232831 | 30979, 30980, 30981, 30982, 30983 |
+| 45735110603 | 01:46:19.457 → 01:46:26.128 on 2026-11-26 | 233522, 233523, 233524, 233525, 233526 | 30989, 30990, 30991, 30992, 30993 |
+
+The rows above are the first five accepted WebSocket observations after each successful connection for each stream, not reconstructed or inferred offsets. The first corresponding captures followed each successful connection. No successful reconnect occurred in Runs #21 or #24. Across all five `gaps.csv` files, zero valid post-reconnect observations were rejected as `non_monotonic_publisher_offset`; zero publisher-offset discontinuity rows of either kind exist. Thus no evidence of post-reset/ post-reconnect valid data discarded by a stale baseline remains in the M1.6 corpus. The explicit disconnect windows remain missing/no-replay coverage and are not stitched or filled.
+
+### 11.7 Fail-closed safety and prohibited work
+
+Each of the five independently checked Manifests has the exact required values:
+
+| Safety field | Required value | Five-run corpus |
+|---|---|---|
+| `authorization_header_sent` | `false` | PASS |
+| `websocket_connection_token_sent` | `false` | PASS |
+| `private_api_calls` | `0` | PASS |
+| `holdout_bytes_read` | `false` | PASS |
+| `posthack_data_read` | `false` | PASS |
+| `real_order_attempts` | `0` | PASS |
+| `paper_orders` | `0` | PASS |
+| `Champion` | `null` | PASS |
+| `order_permission` | `false` | PASS |
+| `trading_authorization` | `NO-GO` | PASS |
+
+The capture workflow also set `ALIX_DRY_RUN=true` and `ALIX_ALLOW_LIVE_TRADING=false`. This audit accessed only the five public-feed artifacts and repository source/CI evidence. No Holdout or Post-Hack bytes/content were read; no private endpoint or credential was used; no order was placed or attempted; and no OFI, DeepLOB, or other model was built or trained.
+
+### 11.8 Final M1/M2/M3 disposition and repository boundary
+
+- **M1: ACCEPTED for the M1.6 five-segment public-feed corpus.** The mandatory actual-capture duration and all specified integrity, offset, reconnect-baseline, explicit-gap, and safety gates passed. The corpus remains segmented, with 9,438.216 seconds of uncovered inter-segment time and eight stream-specific no-replay gap records. Acceptance is not a claim of continuous or gap-free feed coverage.
+- **72-hour preference: NOT MET.** The verified capture is 29 hours, 10 minutes, 20.393 seconds; 72 hours was preferred but was not a mandatory M1.6 acceptance threshold.
+- **M2: UNCHANGED.** No documented dependable six-month public historical L2 or market-wide tick archive is established. Historical OHLCV is not a substitute.
+- **M3: NOT AUTHORIZED.** M1 acceptance does not authorize feature engineering, OFI, DeepLOB, model fitting/evaluation, or strategy development. No model work, Holdout/Post-Hack access, paper/real orders, or trading authorization follows from this decision.
+
+At the pre-restoration audit check, the repository default branch was `research/nobitex-hf-strategy`. The frozen `main` ref was verified at HEAD `cd9b13d42ac0cf0edd2df066ff81580e028146d6` and Tree SHA `5761c6c34143f8e6924f53a4e745c48932a5f791`. No `main` commit, ref, or tree change is part of this addendum. Following Standard CI on the exact ADR commit, restore the repository default-branch setting to `main` through GitHub repository Settings and independently re-verify the exact frozen HEAD and Tree SHA above.
