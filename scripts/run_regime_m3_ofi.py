@@ -130,6 +130,8 @@ class Segment:
         return any(item.start <= end and item.end >= start for item in self.gaps)
 
     def state_at(self, timestamp: datetime) -> Book | None:
+        if timestamp < self.started or timestamp > self.finished:
+            return None
         index = bisect_right(self.book_times, timestamp) - 1
         if index < 0:
             return None

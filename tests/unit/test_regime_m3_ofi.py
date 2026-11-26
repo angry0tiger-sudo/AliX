@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 
 import numpy as np
@@ -12,7 +13,6 @@ from scripts.run_regime_m3_ofi import (
     Segment,
     Trade,
     TradeSeries,
-    _book_features,
     _event_ofi,
     _features_at,
     _make_pipeline,
@@ -102,6 +102,13 @@ def test_feature_vector_extracts_exact_eight_registered_columns() -> None:
     assert features[7] == pytest.approx(
         (bid_depth - ask_depth) / (bid_depth + ask_depth)
     )
+
+
+def test_segment_state_does_not_extrapolate_after_capture_end() -> None:
+    segment, decision = _segment_with_synthetic_features()
+
+    assert segment.state_at(segment.finished) is not None
+    assert segment.state_at(segment.finished + timedelta(seconds=1)) is None
 
 
 def test_event_ofi_uses_registered_bid_and_ask_signs_at_all_five_levels() -> None:
