@@ -198,3 +198,6 @@ The collector scripts/capture_nobitex_microstructure.py and preregistration conf
 5. GitHub Actions [quality preflight run #125](https://github.com/angry0tiger-sudo/AliX/actions/runs/45897855197).
 6. GitHub Actions [M3.5 evaluation run #2586](https://github.com/angry0tiger-sudo/AliX/actions/runs/45898505105).
 7. M3.5 result artifact regime-m3-ofi-evaluation-45898505105 (artifact ID 15155002532).
+## 11. Frozen main integrity
+
+At the time ADR-060 was finalized, `refs/heads/main` remained at commit `cd9b13d42ac0cf0edd2df066ff81580e028146d6`. The root Tree SHA of that commit was independently read from the Git commit object as `5761c6c34143f8e6924f53a4e745c48932a5f791`, matching the previously frozen main Tree SHA. This ADR and its supporting documentation remain confined to `research/nobitex-hf-strategy`; no commit or file on `main` was changed.
