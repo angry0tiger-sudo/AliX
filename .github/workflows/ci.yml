@@ -336,6 +336,8 @@ jobs:
     permissions:
       actions: read
       contents: read
+    secrets:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   real-data-diagnostic:
     if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/research/ml-core-rebuild' }}

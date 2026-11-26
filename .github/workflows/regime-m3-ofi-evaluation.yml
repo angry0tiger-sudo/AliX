@@ -2,6 +2,9 @@ name: Regime M3.5 OFI Walk-Forward Evaluation
 
 on:
   workflow_call:
+    secrets:
+      GITHUB_TOKEN:
+        required: true
 
 permissions:
   actions: read
