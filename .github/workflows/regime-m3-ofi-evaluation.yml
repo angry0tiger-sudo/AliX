@@ -1,0 +1,188 @@
+name: Regime M3.5 OFI Walk-Forward Evaluation
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  standard-ci:
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  evaluate-ofi:
+    needs: standard-ci
+    if: github.ref == 'refs/heads/research/nobitex-hf-strategy'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      actions: read
+      contents: read
+    env:
+      ALIX_DRY_RUN: "true"
+      ALIX_ALLOW_LIVE_TRADING: "false"
+      ALIX_M3_OFI_OWNER_DIRECTIVE: "2026-11-27"
+      PYTHONUNBUFFERED: "1"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    steps:
+      - name: Checkout research branch without persisted credentials
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned OFI estimator
+        run: |
+          python -m pip install pip==25.2
+          python -m pip install scikit-learn==1.9.0
+
+      - name: Verify the immutable preregistration and registered artifact digests
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPOSITORY: ${{ github.repository }}
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          from urllib.request import Request, urlopen
+
+          config_path = Path("config/regime_m3/ofi_preregistration.json")
+          digest = hashlib.sha256(config_path.read_bytes()).hexdigest()
+          expected = "c665dc6e3c4320b2315a308d65f198c22b4d47a41402af7d5e1d689b22b856c4"
+          assert digest == expected, "LOCKED_PREREGISTRATION_SHA256_MISMATCH"
+          config = json.loads(config_path.read_text(encoding="utf-8"))
+          repository = os.environ["GH_REPOSITORY"]
+          token = os.environ["GH_TOKEN"]
+
+          for item in config["dataset_manifest"]:
+              run_id = str(item["workflow_run_id"])
+              artifact_id = int(item["artifact_id"])
+              expected_digest = "sha256:" + item["zip_sha256"]
+              url = f"https://api.github.com/repos/{repository}/actions/runs/{run_id}/artifacts?per_page=100"
+              request = Request(url, headers={
+                  "Accept": "application/vnd.github+json",
+                  "Authorization": f"Bearer {token}",
+                  "X-GitHub-Api-Version": "2022-11-28",
+              })
+              with urlopen(request, timeout=30) as response:
+                  payload = json.loads(response.read().decode("utf-8"))
+              matches = [row for row in payload.get("artifacts", []) if int(row.get("id", -1)) == artifact_id]
+              assert len(matches) == 1, f"REGISTERED_ARTIFACT_NOT_UNIQUE:{artifact_id}"
+              artifact = matches[0]
+              assert artifact.get("expired") is False, f"REGISTERED_ARTIFACT_EXPIRED:{artifact_id}"
+              assert artifact.get("digest") == expected_digest, f"REGISTERED_ARTIFACT_DIGEST_MISMATCH:{artifact_id}"
+              assert int(artifact.get("size_in_bytes", 0)) > 0, f"REGISTERED_ARTIFACT_EMPTY:{artifact_id}"
+              print(f"Verified M1.6 segment {item['segment']}: artifact={artifact_id}")
+
+          assert len(config["dataset_manifest"]) == 5
+          print("All five registered M1.6 artifacts match their locked identities.")
+
+      - name: Download registered M1.6 segment 1
+        uses: actions/download-artifact@v4
+        with:
+          pattern: regime-m-microstructure-*
+          run-id: "45553679888"
+          repository: ${{ github.repository }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: .artifacts/m1_6/segment_1
+          merge-multiple: true
+
+      - name: Download registered M1.6 segment 2
+        uses: actions/download-artifact@v4
+        with:
+          pattern: regime-m-microstructure-*
+          run-id: "45620061415"
+          repository: ${{ github.repository }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: .artifacts/m1_6/segment_2
+          merge-multiple: true
+
+      - name: Download registered M1.6 segment 3
+        uses: actions/download-artifact@v4
+        with:
+          pattern: regime-m-microstructure-*
+          run-id: "45683066882"
+          repository: ${{ github.repository }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: .artifacts/m1_6/segment_3
+          merge-multiple: true
+
+      - name: Download registered M1.6 segment 4
+        uses: actions/download-artifact@v4
+        with:
+          pattern: regime-m-microstructure-*
+          run-id: "45735110603"
+          repository: ${{ github.repository }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: .artifacts/m1_6/segment_4
+          merge-multiple: true
+
+      - name: Download registered M1.6 segment 5
+        uses: actions/download-artifact@v4
+        with:
+          pattern: regime-m-microstructure-*
+          run-id: "45775145557"
+          repository: ${{ github.repository }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: .artifacts/m1_6/segment_5
+          merge-multiple: true
+
+      - name: Run locked preflight and four-fold evaluation
+        run: |
+          python -m scripts.run_regime_m3_ofi \
+            --input-root .artifacts/m1_6 \
+            --output .artifacts/m3_ofi/result.json
+
+      - name: Publish economic and safety summary
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          report = Path(".artifacts/m3_ofi/result.json")
+          if not report.is_file():
+              message = "No M3.5 report was produced. Inspect the failed preflight/evaluation step."
+          else:
+              result = json.loads(report.read_text(encoding="utf-8"))
+              lines = [
+                  "## Regime M3.5 OFI evaluation",
+                  f"- Overall verdict: **{result['overall_verdict']}**",
+                  f"- Preregistration SHA-256: {result['preregistration_sha256']}",
+                  f"- Trade-type contract: {result['trade_type_semantics_preflight']['result']}",
+                  "",
+              ]
+              for horizon, item in result["horizons"].items():
+                  pooled = item["pooled_oos"]
+                  lines.extend([
+                      f"### {horizon}h",
+                      f"- Verdict: **{item['verdict']}**",
+                      f"- NetPF: {pooled['net_profit_factor']}",
+                      f"- Completed trades: {pooled['completed_oos_trades']}",
+                      f"- MaxDD: {pooled['max_drawdown']:.6f}",
+                      f"- Stable folds: {item['fold_stability']['stable_folds']}/4",
+                      "",
+                  ])
+              message = "\n".join(lines) + "\n"
+          Path(os.environ["GITHUB_STEP_SUMMARY"]).write_text(message, encoding="utf-8")
+          PY
+
+      - name: Upload M3.5 result report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: regime-m3-ofi-evaluation-${{ github.run_id }}
+          path: .artifacts/m3_ofi/result.json
+          if-no-files-found: warn
+          retention-days: 90
