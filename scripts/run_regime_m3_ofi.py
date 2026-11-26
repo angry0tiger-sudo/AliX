@@ -710,6 +710,37 @@ def _make_trades(
     ]
 
 
+def _enter_due_cohorts(
+    trades: Sequence[Trade],
+    active: list[Trade],
+    cursor: int,
+    timestamp: datetime,
+) -> int:
+    while cursor < len(trades) and trades[cursor].entry_time <= timestamp:
+        active.append(trades[cursor])
+        cursor += 1
+    return cursor
+
+
+def _settle_due_cohorts(
+    active: list[Trade], timestamp: datetime, realized: float
+) -> tuple[list[Trade], float]:
+    still_open: list[Trade] = []
+    for trade in active:
+        if trade.exit_time <= timestamp:
+            realized += trade.pnl
+        else:
+            still_open.append(trade)
+    return still_open, realized
+
+
+def _unrealized_cohort_pnl(active: Sequence[Trade], mid_price: float) -> float:
+    return sum(
+        item.notional * (mid_price / item.entry_mid - 1.0) - item.notional * COST
+        for item in active
+    )
+
+
 def _portfolio_nav(
     segment: Segment, trades: Sequence[Trade], horizon: int
 ) -> tuple[list[float], int]:
@@ -725,21 +756,10 @@ def _portfolio_nav(
         mark = segment.state_at(timestamp)
         if mark is None:
             continue
-        while cursor < len(trades) and trades[cursor].entry_time <= timestamp:
-            active.append(trades[cursor])
-            cursor += 1
-        still_open: list[Trade] = []
-        for trade in active:
-            if trade.exit_time <= timestamp:
-                realized += trade.pnl
-            else:
-                still_open.append(trade)
-        active = still_open
+        cursor = _enter_due_cohorts(trades, active, cursor, timestamp)
+        active, realized = _settle_due_cohorts(active, timestamp, realized)
         maximum = max(maximum, len(active))
-        unrealized = sum(
-            item.notional * (mark.mid / item.entry_mid - 1.0) - item.notional * COST
-            for item in active
-        )
+        unrealized = _unrealized_cohort_pnl(active, mark.mid)
         nav.append(1.0 + realized + unrealized)
     if trades and (active or cursor != len(trades)):
         raise ValueError("TRADE_NOT_CLOSED_INSIDE_TEST_SEGMENT")
