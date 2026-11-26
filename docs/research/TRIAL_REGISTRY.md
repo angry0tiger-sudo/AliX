@@ -668,3 +668,29 @@ The twelve ADR-038 IDs are now recorded as evaluated by this appended event; the
 | `NOBITEX-R1-NGBOOST-24h-09` | 24h | 9 | `HGBQ-CQR-G3` | `PREREGISTERED_LOCKED` | No |
 | `NOBITEX-R1-NGBOOST-24h-10` | 24h | 10 | `HGBQ-CQR-G3` | `PREREGISTERED_LOCKED` | No |
 
+
+
+---
+
+## [APPEND] Regime M3 OFI G1 — Preregistration Lock (2026-11-26)
+
+- Preregistration: `config/regime_m3/ofi_preregistration.json`.
+- Configuration SHA-256: `c665dc6e3c4320b2315a308d65f198c22b4d47a41402af7d5e1d689b22b856c4`.
+- Revision: `M3-OFI-G1`; status of both logical trials: **PREREGISTERED_LOCKED**.
+- Registered horizons: **1h and 4h only**. The 24h horizon is explicitly excluded.
+- Estimator: one fixed `StandardScaler + LogisticRegression` baseline; no model has been trained or evaluated.
+- Registered feature set: best-level OFI, MLOFI levels 2–5, microprice deviation, signed API-type trade-volume ratio, and top-five order-book imbalance (eight numeric columns).
+- Four chronological segment-based walk-forward folds are frozen; at least three of the four must satisfy the registered fold-stability rule.
+- Both horizon trials independently require pooled NetPF >= 1.10, at least 100 completed OOS trades, absolute MaxDD <= 15%, and stability in at least three folds.
+- The two trial IDs are new logical M3 cells; fold fits do not create additional trial variants:
+  - `NOBITEX-M3-OFI-1h-LOGISTIC-BASELINE-01`
+  - `NOBITEX-M3-OFI-4h-LOGISTIC-BASELINE-01`
+- `GLOBAL_N=UNKNOWN` remains unchanged. No previous registry counts are rewritten or reinterpreted.
+- **Evaluated candidates at registration: 0.** Both trials are `PREREGISTERED_LOCKED`; `Evaluated=No`.
+- This append is registry-only evidence. It does not authorize feature/model implementation, model fitting, backtesting, Holdout/Post-Hack access, external data collection, paper trading, or order execution. A separate Owner directive is required before M3.5.
+
+| Trial ID | Horizon | Slot | Implementation revision | Estimator | Status | Evaluated |
+|---|---:|---:|---|---|---|---|
+| `NOBITEX-M3-OFI-1h-LOGISTIC-BASELINE-01` | 1h | 1 | `M3-OFI-G1` | `LogisticRegression` | `PREREGISTERED_LOCKED` | No |
+| `NOBITEX-M3-OFI-4h-LOGISTIC-BASELINE-01` | 4h | 1 | `M3-OFI-G1` | `LogisticRegression` | `PREREGISTERED_LOCKED` | No |
+

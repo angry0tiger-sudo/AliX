@@ -1,0 +1,316 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "schema_version": "1.0.0",
+  "preregistration": {
+    "id": "ALIX-M3-OFI-G1",
+    "phase": "M3",
+    "status": "PREREGISTERED_LOCKED",
+    "preregistered_utc_date": "2026-11-26",
+    "branch": "research/nobitex-hf-strategy",
+    "revision": "M3-OFI-G1",
+    "scope": "Freeze the OFI hypothesis, exact microstructure feature set, 1h/4h targets, one Logistic Regression baseline, four chronological folds, cost model, portfolio simulation and acceptance gates. This registration is documentation/configuration only.",
+    "implementation_authorized": false,
+    "model_training_authorized": false,
+    "empirical_execution_authorized": false,
+    "economic_backtest_authorized": false,
+    "holdout_access_authorized": false,
+    "posthack_data_access_authorized": false,
+    "private_api_access_authorized": false,
+    "network_access_authorized": false,
+    "paper_orders_authorized": false,
+    "real_orders_authorized": false,
+    "post_lock_tuning_allowed": false,
+    "change_control": "Any byte-level change to this file, its features, target, folds, costs, model parameters, signal threshold or acceptance gates requires a new superseding preregistration and a new explicit Owner directive. No silent edits, candidate additions, threshold sweeps, feature ablations or selective reruns are permitted.",
+    "p_hacking_guard": "Exactly two logical trials are registered: one 1h target and one 4h target, each using the same single fixed estimator and feature set. Fold fits are evaluation instances of those two trials, not additional candidates."
+  },
+  "hypothesis": {
+    "statement": "عدم تعادل جریان سفارشات (OFI) در سطوح اول Order Book، قدرت پیش‌بینی‌کننده برای بازده کوتاه‌مدت (1h) و میان‌مدت (4h) دارد.",
+    "english_summary": "Order Flow Imbalance and the registered L2/trade microstructure state contain predictive information for positive BTCIRT mid-price returns over 1h and 4h.",
+    "claim_type": "predictive hypothesis; not yet empirically tested"
+  },
+  "scope": {
+    "venue": "Nobitex",
+    "market": "BTCIRT",
+    "market_type": "Spot public market data",
+    "data_source": "Only the five independently audited public M1.6 capture artifacts listed in dataset_manifest.",
+    "captured_seconds": 105020.393,
+    "captured_time_utc": "29 hours, 10 minutes, 20.393 seconds",
+    "uncovered_intersegment_seconds": 9438.216,
+    "coverage_is_continuous": false,
+    "feed_gap_policy": "Preserve explicit websocket_disconnect_no_replay gaps and the four exact inter-segment uncovered intervals. Never stitch, interpolate, replay, forward-fill across a gap, or treat the five artifacts as a continuous stream.",
+    "excluded_sources": [
+      "Holdout",
+      "Post-Hack",
+      "PRE-HACK legacy data",
+      "private/account endpoints",
+      "unaudited external datasets",
+      "synthetic CI fixtures as empirical observations"
+    ],
+    "dataset_extension_policy": "This G1 registration is bound to the five M1.6 artifacts. Any additional public capture, other market, venue, or data source requires a new data manifest and a superseding preregistration before its outcomes are inspected."
+  },
+  "dataset_manifest": [
+    {
+      "segment": 1,
+      "workflow_run_id": "45553679888",
+      "artifact_id": "15016992581",
+      "zip_sha256": "aafe15ed9da1d6f6e8badf905627665695acfd605e926b242856f43888980ce8"
+    },
+    {
+      "segment": 2,
+      "workflow_run_id": "45620061415",
+      "artifact_id": "15054886094",
+      "zip_sha256": "c25c202e5d556912bc40e6a9fdcf78adb5a23db32f3f760ad3a1024d79cf8961"
+    },
+    {
+      "segment": 3,
+      "workflow_run_id": "45683066882",
+      "artifact_id": "15077454919",
+      "zip_sha256": "c7b7ec592cda5fec117976a422d2257a908c2b260d89b4b9b89ef87ab4f20a62"
+    },
+    {
+      "segment": 4,
+      "workflow_run_id": "45735110603",
+      "artifact_id": "15095790023",
+      "zip_sha256": "ec4befa0ad6fc96cf1874cec4ba15b2a2dc5ca27e58adf82c33eb62f18393332"
+    },
+    {
+      "segment": 5,
+      "workflow_run_id": "45775145557",
+      "artifact_id": "15121226078",
+      "zip_sha256": "c52cb93bfc345e1ba66104f7f0e4f8ea3664687e87d3dd89e44ea9236279db88"
+    }
+  ],
+  "data_contract": {
+    "input_tables": [
+      "orderbook.csv",
+      "trades.csv",
+      "gaps.csv",
+      "manifest.json"
+    ],
+    "time_basis": "captured_at_utc UTC receive time for decision ordering and horizon construction; exchange_timestamp_ms remains a validation/provenance field.",
+    "orderbook_source_policy": "WebSocket observations drive order-flow deltas. REST initial/reconnect snapshots may initialize the current book state but are not counted as order-flow events.",
+    "book_state_policy": "A book state may remain unchanged during a quiet period only while the same socket session is known to remain connected. State is reset from a new snapshot after reconnect. No state is carried across an explicit disconnect or segment boundary.",
+    "sample_exclusion_policy": "Reject a feature or target sample if its trailing feature window or forward target interval intersects an explicit gap, reconnect boundary, inter-segment uncovered interval, malformed/crossed book, missing required level, invalid timestamp or invalid price/quantity.",
+    "deduplication_policy": "Do not deduplicate or synthesize trade events. Preserve source/time provenance; repeated identical prices are not by themselves duplicate trade identities.",
+    "minimum_book_depth_levels": 5
+  },
+  "feature_specification": {
+    "decision_interval_minutes": 1,
+    "lookback_window_minutes": 5,
+    "feature_values_must_be_asof_decision_time": true,
+    "feature_scaler_fit_on_training_fold_only": true,
+    "feature_names": [
+      "best_level_ofi_5m",
+      "mlofi_level_2_5m",
+      "mlofi_level_3_5m",
+      "mlofi_level_4_5m",
+      "mlofi_level_5_5m",
+      "microprice_deviation_bps",
+      "signed_trade_volume_ratio_5m",
+      "order_book_imbalance_top5"
+    ],
+    "definitions": {
+      "best_level_ofi_5m": {
+        "kind": "event_delta",
+        "formula": "For each consecutive valid WebSocket book state: e_bid=q_bid(t) if P_bid(t)>P_bid(t-1); q_bid(t)-q_bid(t-1) if equal; -q_bid(t-1) if lower. e_ask=-q_ask(t) if P_ask(t)>P_ask(t-1); q_ask(t)-q_ask(t-1) if equal; +q_ask(t-1) if lower. OFI=e_bid-e_ask. Sum event contributions over the trailing 5 minutes.",
+        "normalization": "Divide each event contribution by max(epsilon, average of current and previous total best-level displayed depth); sum the normalized contributions over the 5-minute window.",
+        "sign_convention": "Positive means net bid-side pressure; negative means net ask-side pressure."
+      },
+      "mlofi_levels_2_to_5": {
+        "kind": "event_delta_vector",
+        "levels": [
+          2,
+          3,
+          4,
+          5
+        ],
+        "formula": "Apply the same bid and ask event-delta equations as best_level_ofi_5m independently to rank-m bid/ask prices and quantities for each m in [2,3,4,5]. For each level compute OFI_m=e_bid_m-e_ask_m, normalize by the average current/previous total displayed depth at that level, and sum normalized contributions over the trailing 5 minutes.",
+        "rank_semantics": "Level 1 is best price; levels 2 through 5 are the next four price ranks on each side. Rank changes are processed from consecutive complete book states; missing levels invalidate that event/sample rather than being filled."
+      },
+      "microprice_deviation_bps": {
+        "kind": "book_state",
+        "formula": "Microprice=(AskPrice*BidQty + BidPrice*AskQty)/(BidQty+AskQty). Feature=10000*(Microprice-Midprice)/Midprice, with Midprice=(BidPrice+AskPrice)/2.",
+        "state_time": "Latest valid top-of-book state available as of the decision timestamp within the current uninterrupted socket session."
+      },
+      "signed_trade_volume_ratio_5m": {
+        "kind": "trade_flow",
+        "formula": "(sum(volume where public trade type is buy - sum(volume where public trade type is sell))/(sum all eligible volume)) over the trailing 5 minutes; set to zero only when the feed is continuous and no trade occurred in that window.",
+        "mapping": "type=buy maps to +volume; type=sell maps to -volume. Unknown type values invalidate the sample.",
+        "semantic_guard": "This is a signed API-type proxy only. It is not labelled aggressor-initiated buy/sell unless that interpretation is independently validated against the documented venue contract. The M3.5 preflight must record the validation result; failure blocks the feature/model run and cannot be solved by silently dropping or remapping the feature."
+      },
+      "order_book_imbalance_top5": {
+        "kind": "book_state",
+        "formula": "(sum bid quantity at levels 1..5 - sum ask quantity at levels 1..5)/(sum bid quantity at levels 1..5 + sum ask quantity at levels 1..5).",
+        "state_time": "Latest valid complete five-level book state as of the decision timestamp within the current uninterrupted socket session."
+      }
+    },
+    "missing_value_policy": "No imputation, interpolation or cross-gap fill. A sample with any missing required feature is excluded and counted by reason.",
+    "feature_selection_policy": "Use exactly the eight named numeric columns. No additional indicators, interactions, feature selection, PCA, feature ablation, or post-outcome feature changes."
+  },
+  "targets": {
+    "unit": "hours",
+    "horizons": [
+      1,
+      4
+    ],
+    "excluded_horizons": [
+      24
+    ],
+    "target_type": "binary direction derived from fixed-horizon forward mid-price log return",
+    "forward_return_formula_bps": "10000*ln(midprice(t+h)/midprice(t))",
+    "label_rule": "y=1 when forward_return_bps > 0; y=0 when forward_return_bps <= 0.",
+    "midprice_definition": "(best_bid_price+best_ask_price)/2 using a valid book state as-of t and t+h in the same uninterrupted capture segment/socket continuity interval.",
+    "target_purge_rule": "Drop any row whose complete [t,t+h] target interval crosses an explicit feed gap, reconnect boundary, segment boundary, inter-segment gap or missing/malformed state.",
+    "label_maturity": "A training label is usable only after its full horizon has elapsed and its target state is available; no partially observed or immature label is used."
+  },
+  "model": {
+    "estimator": "sklearn.linear_model.LogisticRegression",
+    "scikit_learn_version": "1.9.0",
+    "pipeline": [
+      "sklearn.preprocessing.StandardScaler",
+      "sklearn.linear_model.LogisticRegression"
+    ],
+    "parameters": {
+      "penalty": "l2",
+      "C": 1,
+      "solver": "lbfgs",
+      "fit_intercept": true,
+      "class_weight": null,
+      "max_iter": 1000,
+      "tol": 0.0001,
+      "random_state": 42
+    },
+    "signal": {
+      "long_entry_probability_threshold": 0.5,
+      "entry_rule": "Open one long-only research position when P(y=1)>=0.5; otherwise ABSTAIN/hold cash.",
+      "short_entries": false,
+      "leverage": 1
+    },
+    "fixed_model_policy": "One Logistic Regression model per horizon per fold. No RandomForest, ensemble, additional estimator, hyperparameter search, threshold sweep, calibration or model selection is included in G1."
+  },
+  "walk_forward_protocol": {
+    "scheme": "expanding_train_by_capture_segment_then_test_next_segment",
+    "fold_count": 4,
+    "minimum_valid_folds_for_acceptance": 3,
+    "time_order": "strict chronological order of the five M1.6 capture artifacts",
+    "folds": [
+      {
+        "fold_id": "WF-01",
+        "train_segments": [
+          1
+        ],
+        "test_segment": 2
+      },
+      {
+        "fold_id": "WF-02",
+        "train_segments": [
+          1,
+          2
+        ],
+        "test_segment": 3
+      },
+      {
+        "fold_id": "WF-03",
+        "train_segments": [
+          1,
+          2,
+          3
+        ],
+        "test_segment": 4
+      },
+      {
+        "fold_id": "WF-04",
+        "train_segments": [
+          1,
+          2,
+          3,
+          4
+        ],
+        "test_segment": 5
+      }
+    ],
+    "training_rules": {
+      "only_prior_segments": true,
+      "minimum_training_rows_per_horizon": 100,
+      "minimum_training_rows_per_class": 20,
+      "training_label_must_be_fully_mature": true,
+      "scaler_fit_rows": "training rows for this fold only",
+      "test_data_prohibited_from_fit": true,
+      "no_random_split": true
+    },
+    "test_rules": {
+      "test_fold_is_the_next_single_capture_segment": true,
+      "test_horizon_must_resolve_inside_same_test_segment": true,
+      "test_samples_crossing_any_disconnect_or_gap_are_excluded": true,
+      "no_model_refit_or_threshold_change_inside_test": true
+    },
+    "insufficient_data_rule": "If a fold fails its minimum training rows/class counts or the test fold cannot produce its registered minimum trade count, record INSUFFICIENT_SAMPLE. Do not change fold boundaries, reduce horizon, relax minimums, add data after outcome inspection, or replace the fold."
+  },
+  "portfolio_evaluation": {
+    "decision_interval_minutes": 1,
+    "direction": "long_only_spot_research_simulation",
+    "position_holding_period": "exact registered horizon",
+    "position_sizing": "Each accepted one-minute signal opens a fixed cohort sized at 1/60 of initial equity for 1h or 1/240 for 4h. Cohorts close exactly at their horizon. This caps fully concurrent gross exposure at 1.0x with no leverage; idle slots remain cash.",
+    "price_basis": "midprice-to-midprice; no claim of executable fills",
+    "round_trip_cost_bps": 90,
+    "cost_interpretation": "One fixed all-in 90 bps round-trip friction assumption per completed cohort, applied once to the gross midprice return. It is a conservative research assumption, not a statement of the owner's actual fee tier. Do not add a second spread/slippage charge.",
+    "net_trade_return_formula": "(exit_midprice/entry_midprice - 1) - 0.009",
+    "net_profit_factor_formula": "sum(positive net trade PnL)/abs(sum(negative net trade PnL)); undefined if there are no negative net trades and therefore does not pass automatically.",
+    "max_drawdown_formula": "Peak-to-trough percentage drawdown of the chronological minute-marked portfolio NAV, including open cohort mark-to-market PnL and the fixed cost allocation.",
+    "completed_trade_definition": "One accepted long entry cohort that reaches its fixed horizon and is fully closed inside the same test segment without crossing a feed gap.",
+    "overlap_dependence_note": "The 1-minute rolling forecasts create overlapping fixed-horizon cohorts. Cohort notional is fixed as above and capped at 1.0x; trade count is a count of completed cohorts, not a claim of independent observations. Report the overlap structure and do not claim statistical independence."
+  },
+  "acceptance_gates": {
+    "evaluated_separately_for_each_horizon": true,
+    "net_profit_factor_min": 1.1,
+    "completed_oos_trades_min": 100,
+    "max_drawdown_fraction_max": 0.15,
+    "minimum_stable_folds": 3,
+    "fold_stability_rule": "At least 3 of the 4 fixed test folds must each have at least 20 completed OOS trades, positive net PnL and fold NetPF>1.00. All four fold results must be reported.",
+    "pooled_metrics_rule": "For each horizon, pooled OOS NetPF must be >=1.10, completed OOS trades >=100, and absolute maximum drawdown <=15%.",
+    "overall_pass_rule": "Both the 1h and 4h trials must independently pass every registered gate. One horizon cannot compensate for failure or insufficient sample in the other.",
+    "insufficient_sample_verdict": "INSUFFICIENT_SAMPLE / NO-GO",
+    "failed_gate_verdict": "NO-GO",
+    "baseline_reports": [
+      "always_long_same_horizon_same_cost",
+      "no_trade_cash_baseline",
+      "training_fold_majority_direction"
+    ],
+    "reporting_only_metrics": [
+      "accuracy",
+      "balanced_accuracy",
+      "confusion_matrix",
+      "per_fold_net_profit_factor",
+      "per_fold_net_pnl",
+      "pooled_net_profit_factor",
+      "completed_oos_trades",
+      "maximum_drawdown",
+      "turnover",
+      "cohort_overlap",
+      "sample_exclusion_counts"
+    ]
+  },
+  "trial_family": {
+    "logical_trial_count": 2,
+    "status": "PREREGISTERED_LOCKED",
+    "implementation_revision": "M3-OFI-G1",
+    "evaluated_candidate_count_at_registration": 0,
+    "trial_ids": [
+      "NOBITEX-M3-OFI-1h-LOGISTIC-BASELINE-01",
+      "NOBITEX-M3-OFI-4h-LOGISTIC-BASELINE-01"
+    ],
+    "fold_fits_are_not_new_trial_variants": true
+  },
+  "safety": {
+    "implementation_authorized": false,
+    "model_training_authorized": false,
+    "holdout_bytes_read": false,
+    "posthack_data_read": false,
+    "private_api_calls_allowed": false,
+    "real_order_attempts_allowed": false,
+    "paper_orders_allowed": false,
+    "Champion_must_remain": null,
+    "order_permission_must_remain": false,
+    "trading_authorization_must_remain": "NO-GO"
+  }
+}
