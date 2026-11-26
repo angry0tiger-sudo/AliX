@@ -3,7 +3,7 @@ name: Regime M3.5 OFI Walk-Forward Evaluation
 on:
   workflow_call:
     secrets:
-      GITHUB_TOKEN:
+      ARTIFACTS_READ_TOKEN:
         required: true
 
 permissions:
@@ -43,7 +43,7 @@ jobs:
 
       - name: Verify the immutable preregistration and registered artifact digests
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.ARTIFACTS_READ_TOKEN }}
           GH_REPOSITORY: ${{ github.repository }}
         run: |
           python - <<'PY'
@@ -90,7 +90,7 @@ jobs:
           pattern: regime-m-microstructure-*
           run-id: "45553679888"
           repository: ${{ github.repository }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ secrets.ARTIFACTS_READ_TOKEN }}
           path: .artifacts/m1_6/segment_1
           merge-multiple: true
 
@@ -100,7 +100,7 @@ jobs:
           pattern: regime-m-microstructure-*
           run-id: "45620061415"
           repository: ${{ github.repository }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ secrets.ARTIFACTS_READ_TOKEN }}
           path: .artifacts/m1_6/segment_2
           merge-multiple: true
 
@@ -110,7 +110,7 @@ jobs:
           pattern: regime-m-microstructure-*
           run-id: "45683066882"
           repository: ${{ github.repository }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ secrets.ARTIFACTS_READ_TOKEN }}
           path: .artifacts/m1_6/segment_3
           merge-multiple: true
 
@@ -120,7 +120,7 @@ jobs:
           pattern: regime-m-microstructure-*
           run-id: "45735110603"
           repository: ${{ github.repository }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ secrets.ARTIFACTS_READ_TOKEN }}
           path: .artifacts/m1_6/segment_4
           merge-multiple: true
 
@@ -130,7 +130,7 @@ jobs:
           pattern: regime-m-microstructure-*
           run-id: "45775145557"
           repository: ${{ github.repository }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ secrets.ARTIFACTS_READ_TOKEN }}
           path: .artifacts/m1_6/segment_5
           merge-multiple: true
 
