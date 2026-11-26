@@ -37,11 +37,31 @@ FEATURE_NAMES = (
     "order_book_imbalance_top5",
 )
 ARTIFACTS = {
-    1: ("45553679888", "15016992581", "aafe15ed9da1d6f6e8badf905627665695acfd605e926b242856f43888980ce8"),
-    2: ("45620061415", "15054886094", "c25c202e5d556912bc40e6a9fdcf78adb5a23db32f3f760ad3a1024d79cf8961"),
-    3: ("45683066882", "15077454919", "c7b7ec592cda5fec117976a422d2257a908c2b260d89b4b9b89ef87ab4f20a62"),
-    4: ("45735110603", "15095790023", "ec4befa0ad6fc96cf1874cec4ba15b2a2dc5ca27e58adf82c33eb62f18393332"),
-    5: ("45775145557", "15121226078", "c52cb93bfc345e1ba66104f7f0e4f8ea3664687e87d3dd89e44ea9236279db88"),
+    1: (
+        "45553679888",
+        "15016992581",
+        "aafe15ed9da1d6f6e8badf905627665695acfd605e926b242856f43888980ce8",
+    ),
+    2: (
+        "45620061415",
+        "15054886094",
+        "c25c202e5d556912bc40e6a9fdcf78adb5a23db32f3f760ad3a1024d79cf8961",
+    ),
+    3: (
+        "45683066882",
+        "15077454919",
+        "c7b7ec592cda5fec117976a422d2257a908c2b260d89b4b9b89ef87ab4f20a62",
+    ),
+    4: (
+        "45735110603",
+        "15095790023",
+        "ec4befa0ad6fc96cf1874cec4ba15b2a2dc5ca27e58adf82c33eb62f18393332",
+    ),
+    5: (
+        "45775145557",
+        "15121226078",
+        "c52cb93bfc345e1ba66104f7f0e4f8ea3664687e87d3dd89e44ea9236279db88",
+    ),
 }
 HORIZONS = (1, 4)
 COST = 0.009
@@ -248,7 +268,11 @@ def _verify_capture(root: Path, expected_run: str) -> dict[str, Any]:
     if not isinstance(manifest, dict):
         raise ValueError("CAPTURE_MANIFEST_INVALID")
     checksum_path = root / "manifest.sha256"
-    checksums = checksum_path.read_text(encoding="utf-8").split() if checksum_path.is_file() else []
+    checksums = (
+        checksum_path.read_text(encoding="utf-8").split()
+        if checksum_path.is_file()
+        else []
+    )
     if not checksums or checksums[0] != _digest(payload):
         raise ValueError("CAPTURE_MANIFEST_SHA256_MISMATCH")
     if str(manifest.get("workflow_run_id")) != expected_run:
@@ -360,24 +384,51 @@ def _make_trade_series(events: list[TradeEvent]) -> TradeSeries:
     return TradeSeries(times, buy, sell, total, count)
 
 
-def _read_capture_tables(root: Path) -> tuple[list[dict[str, str]], list[dict[str, str]], list[dict[str, str]]]:
+def _read_capture_tables(
+    root: Path,
+) -> tuple[list[dict[str, str]], list[dict[str, str]], list[dict[str, str]]]:
     orderbook = _read_csv(
         root / "orderbook.csv",
         (
-            "captured_at_utc", "source", "exchange_timestamp_ms", "offset",
-            "best_bid_price", "best_bid_size", "best_ask_price", "best_ask_size",
-            "spread", "mid_price", "bids_top_json", "asks_top_json",
+            "captured_at_utc",
+            "source",
+            "exchange_timestamp_ms",
+            "offset",
+            "best_bid_price",
+            "best_bid_size",
+            "best_ask_price",
+            "best_ask_size",
+            "spread",
+            "mid_price",
+            "bids_top_json",
+            "asks_top_json",
         ),
     )
     trades = _read_csv(
         root / "trades.csv",
-        ("captured_at_utc", "source", "exchange_timestamp_ms", "side", "price", "volume", "offset"),
+        (
+            "captured_at_utc",
+            "source",
+            "exchange_timestamp_ms",
+            "side",
+            "price",
+            "volume",
+            "offset",
+        ),
     )
     gaps = _read_csv(
         root / "gaps.csv",
         (
-            "stream", "gap_start_utc", "gap_end_utc", "gap_start_ms", "gap_end_ms",
-            "reason", "previous_offset", "next_offset", "replay_attempted", "replay_available",
+            "stream",
+            "gap_start_utc",
+            "gap_end_utc",
+            "gap_start_ms",
+            "gap_end_ms",
+            "reason",
+            "previous_offset",
+            "next_offset",
+            "replay_attempted",
+            "replay_available",
         ),
     )
     return orderbook, trades, gaps
@@ -470,9 +521,19 @@ def _load_segment(number: int, root: Path, run_id: str) -> Segment:
     if not type_counts:
         raise ValueError("SIGNED_TRADE_TYPE_PREFLIGHT_NO_WEBSOCKET_EVENTS")
     return Segment(
-        number, run_id, started, finished, all_gaps, gap_ends, books,
-        [item.time for item in books], book_events, trade_events,
-        exclusions, type_counts, rest_seed_count,
+        number,
+        run_id,
+        started,
+        finished,
+        all_gaps,
+        gap_ends,
+        books,
+        [item.time for item in books],
+        book_events,
+        trade_events,
+        exclusions,
+        type_counts,
+        rest_seed_count,
     )
 
 
@@ -495,8 +556,7 @@ def _window_ofi(
     left = bisect_right(series.times, start)
     right = bisect_right(series.times, end)
     values = tuple(
-        series.prefix[right][index] - series.prefix[left][index]
-        for index in range(5)
+        series.prefix[right][index] - series.prefix[left][index] for index in range(5)
     )
     return cast(OfiVector, values)
 
@@ -515,8 +575,7 @@ def _signed_volume_ratio(
     if volume <= EPSILON:
         raise ValueError("TRADE_WINDOW_NONEMPTY_ZERO_VOLUME")
     signed = (
-        series.buy[right] - series.buy[left]
-        - series.sell[right] + series.sell[left]
+        series.buy[right] - series.buy[left] - series.sell[right] + series.sell[left]
     )
     return signed / volume
 
@@ -678,8 +737,7 @@ def _portfolio_nav(
         active = still_open
         maximum = max(maximum, len(active))
         unrealized = sum(
-            item.notional * (mark.mid / item.entry_mid - 1.0)
-            - item.notional * COST
+            item.notional * (mark.mid / item.entry_mid - 1.0) - item.notional * COST
             for item in active
         )
         nav.append(1.0 + realized + unrealized)
@@ -785,11 +843,7 @@ def _predictive_metrics(labels: list[int], predictions: list[int]) -> dict[str, 
 def _training_rows(
     fold: dict[str, Any], rows: dict[int, list[Candidate]]
 ) -> tuple[list[Candidate], list[Candidate]]:
-    train = [
-        row
-        for number in fold["train_segments"]
-        for row in rows[int(number)]
-    ]
+    train = [row for number in fold["train_segments"] for row in rows[int(number)]]
     return train, rows[int(fold["test_segment"])]
 
 
@@ -916,17 +970,24 @@ def _evaluate_fold(
     segment = segments[test_segment]
     always, majority = _baseline_portfolios(segment, test, majority_long, horizon)
     report = _fold_base_report(
-        fold, train, test, counts, sufficient, majority_long,
+        fold,
+        train,
+        test,
+        counts,
+        sufficient,
+        majority_long,
         exclusions[test_segment],
     )
     if not sufficient or not test:
-        return _empty_fold_outcome(
-            report, segment, horizon, always, majority
-        )
+        return _empty_fold_outcome(report, segment, horizon, always, majority)
     result = _fit_test_fold(report, train, test, segment, horizon, config)
     return FoldOutcome(
-        report, result, always, majority,
-        len(result.trades) >= 20, _stable_fold(result),
+        report,
+        result,
+        always,
+        majority,
+        len(result.trades) >= 20,
+        _stable_fold(result),
     )
 
 
@@ -1028,9 +1089,7 @@ def _load_config() -> tuple[dict[str, Any], str]:
     return config, digest
 
 
-def _load_segments(
-    input_root: Path, config: dict[str, Any]
-) -> dict[int, Segment]:
+def _load_segments(input_root: Path, config: dict[str, Any]) -> dict[int, Segment]:
     result: dict[int, Segment] = {}
     for item in config["dataset_manifest"]:
         number = int(item["segment"])
