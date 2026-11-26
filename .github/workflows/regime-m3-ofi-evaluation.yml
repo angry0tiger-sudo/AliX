@@ -1,20 +1,14 @@
 name: Regime M3.5 OFI Walk-Forward Evaluation
 
 on:
-  workflow_dispatch:
+  workflow_call:
 
 permissions:
   actions: read
   contents: read
 
 jobs:
-  standard-ci:
-    uses: ./.github/workflows/ci.yml
-    permissions:
-      contents: read
-
   evaluate-ofi:
-    needs: standard-ci
     if: github.ref == 'refs/heads/research/nobitex-hf-strategy'
     runs-on: ubuntu-latest
     timeout-minutes: 45

@@ -325,6 +325,18 @@ jobs:
       - name: Test Control Plane transactions against disposable PostgreSQL
         run: pytest tests/integration/test_phase9_postgres.py -q
 
+  regime-m3-ofi-evaluation:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/research/nobitex-hf-strategy'
+    needs:
+      - quality
+      - four-arm-lock-bare-env
+      - freqtrade-runtime-smoke
+      - postgres-integration
+    uses: ./.github/workflows/regime-m3-ofi-evaluation.yml
+    permissions:
+      actions: read
+      contents: read
+
   real-data-diagnostic:
     if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/research/ml-core-rebuild' }}
     needs:
