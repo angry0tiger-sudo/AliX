@@ -628,7 +628,10 @@ def _build_trades(
 
 
 def _mark_portfolio(
-    candles: Sequence[Candle], trades: Sequence[Trade], marks: Sequence[int]
+    candles: Sequence[Candle],
+    trades: Sequence[Trade],
+    marks: Sequence[int],
+    cost: float,
 ) -> tuple[list[float], int]:
     cursor = 0
     active: list[Trade] = []
@@ -640,7 +643,7 @@ def _mark_portfolio(
             active.append(trades[cursor])
             cursor += 1
         concurrent = max(concurrent, len(active))
-        remaining, unrealized = _mark_active_trades(candles, active, mark, realized)
+        remaining, unrealized = _mark_active_trades(candles, active, mark, cost)
         realized = sum(row.pnl for row in trades[:cursor] if row.exit_index <= mark)
         active = remaining
         nav.append(1.0 + realized + unrealized)
@@ -653,14 +656,14 @@ def _mark_active_trades(
     candles: Sequence[Candle],
     active: Sequence[Trade],
     mark: int,
-    realized_before_mark: float,
+    cost: float,
 ) -> tuple[list[Trade], float]:
     remaining: list[Trade] = []
     unrealized = 0.0
     for trade in active:
         if trade.exit_index > mark:
             gross_mark = candles[mark].close / candles[trade.entry_index].open - 1.0
-            unrealized += trade.notional * (gross_mark - (0.0))
+            unrealized += trade.notional * (gross_mark - cost)
             remaining.append(trade)
     return remaining, unrealized
 
@@ -678,7 +681,7 @@ def simulate_portfolio(
     if not marks:
         return _empty_portfolio_outcome()
     trades = _build_trades(candles, decisions, signals, horizon, cost, marks[-1])
-    nav, concurrent = _mark_portfolio(candles, trades, marks)
+    nav, concurrent = _mark_portfolio(candles, trades, marks, cost)
     pnl = sum(row.pnl for row in trades)
     metrics = _portfolio_metrics(trades, nav, pnl, concurrent, horizon)
     return PortfolioOutcome(metrics, tuple(nav), float(pnl), tuple(trades))
