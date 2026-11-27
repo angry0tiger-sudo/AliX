@@ -483,8 +483,11 @@ def _load_csv(path: Path) -> pd.DataFrame:
 
 
 def _load_qualification_manifest(data_dir: Path) -> dict[str, Any]:
-    manifest = json.loads(
-        (data_dir / "m7_data_qualification.json").read_text(encoding="utf-8")
+    manifest = cast(
+        dict[str, Any],
+        json.loads(
+            (data_dir / "m7_data_qualification.json").read_text(encoding="utf-8")
+        ),
     )
     if manifest.get("data_scope") != "PRE_HACK_ONLY":
         raise ValueError("m7_data_scope_mismatch")
