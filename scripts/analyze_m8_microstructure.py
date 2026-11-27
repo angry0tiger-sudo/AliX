@@ -156,6 +156,8 @@ def _read_verified_archive(path: Path, inventory: dict[str, Any]) -> tuple[dict[
     if not isinstance(files_meta, dict):
         raise InputError(f"MANIFEST_FILES_MISSING:{path.name}")
 
+    snapshots: list[Snapshot] = []
+    gaps: list[tuple[int, int]] = []
     for filename in ("orderbook.csv", "trades.csv", "gaps.csv"):
         contents = archive.read(filename)
         meta = files_meta.get(filename)
@@ -171,7 +173,6 @@ def _read_verified_archive(path: Path, inventory: dict[str, Any]) -> tuple[dict[
             if filename == "orderbook.csv":
                 if not reader.fieldnames or not BOOK_FIELDS.issubset(set(reader.fieldnames)):
                     raise InputError("ORDERBOOK_SCHEMA_MISMATCH")
-                snapshots: list[Snapshot] = []
                 for row in rows:
                     timestamp = int(row["exchange_timestamp_ms"])
                     mid, features = compute_features(row)
@@ -486,7 +487,7 @@ def analyze_archives(
             "gap_policy": "reject any sample whose feature-to-target interval intersects an explicit orderbook gap",
             "segment_policy": "process each artifact separately; never stitch capture segments",
             "returns": "10,000 * ln(mid[t+h] / mid[t])",
-            "multiple_testing": f"Bonferroni correction across {n_tests} Pearson and {n_tests} Spearman feature-horizon tests",
+            "multiple_testing": f"Bonferroni correction across {n_tests} feature-horizon tests separately for Pearson and Spearman",
         },
         "per_segment": per_segment,
         "excluded_samples": excluded_by_horizon,
