@@ -125,6 +125,47 @@ def _feature_summary(
     }
 
 
+def _collect_symbol_feature_flags(
+    asset_returns: np.ndarray,
+    volume: np.ndarray,
+    btc_returns: np.ndarray,
+    decision_indices: Sequence[int],
+) -> tuple[list[bool], list[bool], Counter[str], Counter[str]]:
+    beta_flags: list[bool] = []
+    volume_flags: list[bool] = []
+    beta_reasons: Counter[str] = Counter()
+    volume_reasons: Counter[str] = Counter()
+    for index in decision_indices:
+        beta_value, beta_reason = inspect_beta_feature(
+            asset_returns, btc_returns, index
+        )
+        volume_value, volume_reason = inspect_volume_feature(volume, index)
+        beta_flags.append(beta_reason is None and beta_value is not None)
+        volume_flags.append(volume_reason is None and volume_value is not None)
+        if beta_reason is not None:
+            beta_reasons[beta_reason] += 1
+        if volume_reason is not None:
+            volume_reasons[volume_reason] += 1
+    return beta_flags, volume_flags, beta_reasons, volume_reasons
+
+
+def _flag_overlap_summary(
+    beta_flags: Sequence[bool], volume_flags: Sequence[bool]
+) -> dict[str, int]:
+    pairs = list(zip(beta_flags, volume_flags, strict=True))
+    return {
+        "both_features_rejected_rows": sum(
+            not beta_ok and not volume_ok for beta_ok, volume_ok in pairs
+        ),
+        "beta_only_rejected_rows": sum(
+            not beta_ok and volume_ok for beta_ok, volume_ok in pairs
+        ),
+        "volume_only_rejected_rows": sum(
+            beta_ok and not volume_ok for beta_ok, volume_ok in pairs
+        ),
+    }
+
+
 def _inspect_symbol(
     symbol: str,
     frame: pd.DataFrame,
@@ -133,61 +174,30 @@ def _inspect_symbol(
 ) -> dict[str, Any]:
     asset_returns = _log_returns(frame["close"].to_numpy(dtype=float))
     volume = frame["volume"].to_numpy(dtype=float)
-
-    beta_flags: list[bool] = []
-    volume_flags: list[bool] = []
-    beta_reasons: Counter[str] = Counter()
-    volume_reasons: Counter[str] = Counter()
-
-    for index in decision_indices:
-        beta_value, beta_reason = inspect_beta_feature(
-            asset_returns, btc_returns, index
+    beta_flags, volume_flags, beta_reasons, volume_reasons = (
+        _collect_symbol_feature_flags(
+            asset_returns, volume, btc_returns, decision_indices
         )
-        volume_value, volume_reason = inspect_volume_feature(volume, index)
-        beta_valid = beta_reason is None and beta_value is not None
-        volume_valid = volume_reason is None and volume_value is not None
-        beta_flags.append(beta_valid)
-        volume_flags.append(volume_valid)
-        if beta_reason is not None:
-            beta_reasons[beta_reason] += 1
-        if volume_reason is not None:
-            volume_reasons[volume_reason] += 1
-
+    )
     total = len(decision_indices)
-    beta_valid_count = sum(beta_flags)
-    volume_valid_count = sum(volume_flags)
-    both_invalid = sum(
-        not beta_ok and not volume_ok
-        for beta_ok, volume_ok in zip(beta_flags, volume_flags, strict=True)
-    )
-    beta_only_invalid = sum(
-        not beta_ok and volume_ok
-        for beta_ok, volume_ok in zip(beta_flags, volume_flags, strict=True)
-    )
-    volume_only_invalid = sum(
-        beta_ok and not volume_ok
-        for beta_ok, volume_ok in zip(beta_flags, volume_flags, strict=True)
-    )
-
+    overlap = _flag_overlap_summary(beta_flags, volume_flags)
     return {
         "report": {
             "symbol": symbol,
             "decision_rows": total,
             "beta_24h_to_btc": _feature_summary(
-                beta_valid_count, total, beta_reasons, BETA_REJECTION_REASONS
+                sum(beta_flags), total, beta_reasons, BETA_REJECTION_REASONS
             ),
             "relative_volume_shock_24h": _feature_summary(
-                volume_valid_count, total, volume_reasons, VOLUME_REJECTION_REASONS
+                sum(volume_flags), total, volume_reasons, VOLUME_REJECTION_REASONS
             ),
-            "suspect_feature_overlap": {
-                "both_features_rejected_rows": both_invalid,
-                "beta_only_rejected_rows": beta_only_invalid,
-                "volume_only_rejected_rows": volume_only_invalid,
-            },
+            "suspect_feature_overlap": overlap,
         },
         "_beta_flags": beta_flags,
         "_volume_flags": volume_flags,
     }
+
+
 
 
 def _other_features_valid(
@@ -279,6 +289,51 @@ def _candidate_panel_summary(
     }
 
 
+def _validate_g2_preregistration(config: Mapping[str, Any]) -> str:
+    preregistration = config["preregistration"]
+    if preregistration.get("revision") != "M7-CS-G2.0":
+        raise ValueError("m7_diagnostic_requires_g2_revision")
+    if preregistration.get("status") != "PREREGISTERED_LOCKED":
+        raise ValueError("m7_diagnostic_requires_locked_preregistration")
+    if preregistration.get("logical_trial_count") != 2:
+        raise ValueError("m7_diagnostic_trial_count_mismatch")
+    return str(preregistration["revision"])
+
+
+def _validate_g2_universes(config: Mapping[str, Any]) -> None:
+    if tuple(config["data"]["candidate_symbol_priority"]) != EXPECTED_SYMBOLS:
+        raise ValueError("m7_diagnostic_unexpected_symbol_priority")
+    registered_trials = {
+        str(trial["trial_id"]): tuple(trial["symbols"]) for trial in config["trials"]
+    }
+    if registered_trials != dict(EXPECTED_TRIALS):
+        raise ValueError("m7_diagnostic_trial_universe_mismatch")
+
+
+def _read_qualified_manifest(data_dir: Path) -> tuple[Path, dict[str, Any]]:
+    manifest_path = data_dir / "m7_data_qualification.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    qualified = tuple(manifest.get("qualified_symbols", ()))
+    if manifest.get("data_scope") != "PRE_HACK_ONLY":
+        raise ValueError("m7_diagnostic_manifest_scope_mismatch")
+    if len(qualified) != len(EXPECTED_SYMBOLS):
+        raise ValueError("m7_diagnostic_manifest_symbol_count_mismatch")
+    if set(qualified) != set(EXPECTED_SYMBOLS):
+        raise ValueError("m7_diagnostic_manifest_universe_mismatch")
+    return manifest_path, manifest
+
+
+def _load_verified_diagnostic_data(
+    data_dir: Path, btc_csv: Path
+) -> dict[str, pd.DataFrame]:
+    data = load_locked_data(data_dir, btc_csv)
+    if set(data) != {BTC_SYMBOL, *EXPECTED_SYMBOLS}:
+        raise ValueError("m7_diagnostic_loaded_universe_mismatch")
+    if len(data[BTC_SYMBOL]["timestamp"]) != EXPECTED_ROWS:
+        raise ValueError("m7_diagnostic_btc_row_count_mismatch")
+    return data
+
+
 def diagnose_m7_features(
     data_dir: Path,
     btc_csv: Path,
@@ -286,64 +341,27 @@ def diagnose_m7_features(
 ) -> dict[str, Any]:
     """Read the locked nine-pair PRE-HACK dataset and report feature availability."""
     config = json.loads(config_path.read_text(encoding="utf-8"))
-    preregistration = config["preregistration"]
-    if (
-        preregistration.get("revision") != "M7-CS-G2.0"
-        or preregistration.get("status") != "PREREGISTERED_LOCKED"
-        or preregistration.get("logical_trial_count") != 2
-    ):
-        raise ValueError("m7_diagnostic_requires_locked_g2_preregistration")
-
-    if tuple(config["data"]["candidate_symbol_priority"]) != EXPECTED_SYMBOLS:
-        raise ValueError("m7_diagnostic_unexpected_symbol_priority")
-
-    registered_trials = {
-        str(trial["trial_id"]): tuple(trial["symbols"]) for trial in config["trials"]
-    }
-    if registered_trials != dict(EXPECTED_TRIALS):
-        raise ValueError("m7_diagnostic_trial_universe_mismatch")
-
-    manifest_path = data_dir / "m7_data_qualification.json"
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    qualified = tuple(manifest.get("qualified_symbols", ()))
-    if (
-        manifest.get("data_scope") != "PRE_HACK_ONLY"
-        or len(qualified) != len(EXPECTED_SYMBOLS)
-        or set(qualified) != set(EXPECTED_SYMBOLS)
-    ):
-        raise ValueError("m7_diagnostic_manifest_scope_or_universe_mismatch")
-
-    data = load_locked_data(data_dir, btc_csv)
-    if set(data) != {BTC_SYMBOL, *EXPECTED_SYMBOLS}:
-        raise ValueError("m7_diagnostic_loaded_universe_mismatch")
-
-    reference_times = data[BTC_SYMBOL]["timestamp"]
-    if len(reference_times) != EXPECTED_ROWS:
-        raise ValueError("m7_diagnostic_btc_row_count_mismatch")
-
+    revision = _validate_g2_preregistration(config)
+    _validate_g2_universes(config)
+    manifest_path, _manifest = _read_qualified_manifest(data_dir)
+    data = _load_verified_diagnostic_data(data_dir, btc_csv)
     btc_returns = _log_returns(data[BTC_SYMBOL]["close"].to_numpy(dtype=float))
     symbol_states = {
         symbol: _inspect_symbol(symbol, data[symbol], btc_returns, DECISION_INDICES)
         for symbol in EXPECTED_SYMBOLS
     }
-
     per_symbol = {symbol: state["report"] for symbol, state in symbol_states.items()}
     candidate_reports = {
         trial_id: _candidate_panel_summary(
-            trial_id,
-            symbols,
-            symbol_states,
-            DECISION_INDICES,
-            data,
+            trial_id, symbols, symbol_states, DECISION_INDICES, data
         )
         for trial_id, symbols in EXPECTED_TRIALS.items()
     }
-
     return {
         "schema_version": "alix.m7.feature-diagnostic.v1",
         "phase": "M7",
         "diagnostic": "FEATURE_AVAILABILITY_PREHACK_ONLY",
-        "preregistration_revision": preregistration["revision"],
+        "preregistration_revision": revision,
         "preregistration_sha256": sha256_file(config_path),
         "qualification_manifest_sha256": sha256_file(manifest_path),
         "btc_source_sha256": sha256_file(btc_csv),
@@ -379,6 +397,8 @@ def diagnose_m7_features(
             "local_execution": False,
         },
     }
+
+
 
 
 def main() -> int:

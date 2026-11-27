@@ -2,3 +2,4 @@ One-shot free GitHub Actions bridge trigger for the workflow_dispatch-only M7 PR
 Temporary bootstrap only; no acquisition, fitting, economic evaluation, or Holdout access.
 Dispatch retry after correcting Actions expression interpolation; diagnostic remains workflow_dispatch-only.
 Retry dispatch after the diagnostic Python file passed formatting correction.
+Retry workflow dispatch after splitting Xenon C-rank diagnostic functions.
