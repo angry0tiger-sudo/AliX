@@ -195,9 +195,7 @@ def _read_csv_rows(
     with io.TextIOWrapper(io.BytesIO(contents), encoding="utf-8", newline="") as stream:
         reader = csv.DictReader(stream)
         rows = cast(list[dict[str, str]], list(reader))
-        fieldnames = (
-            list(reader.fieldnames) if reader.fieldnames is not None else None
-        )
+        fieldnames = list(reader.fieldnames) if reader.fieldnames is not None else None
     if meta.get("records") != len(rows):
         raise InputError(f"CSV_RECORD_COUNT_MISMATCH:{filename}")
     return fieldnames, rows
