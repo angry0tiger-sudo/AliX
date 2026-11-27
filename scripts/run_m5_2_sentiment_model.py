@@ -33,9 +33,15 @@ SENTIMENT_DIR = ROOT / "data/sentiment/alternative_me/fng"
 PREREG_SHA256 = "851d6c4b39c41cacec8ccd712cf17bb40dd42dd45f2bb8813920a7f2ebe481ba"
 DATA_LOCK_SHA256 = "e66616ee3c13e6ce32f94577c4f46480390eea30c774ac6987e8d519d51d4acf"
 OHLCV_SHA256 = "0aa13607d1da68c4720919f233635bb33d34048e5bd67d3ecc2ce9bb7c2b462e"
-OHLCV_MANIFEST_SHA256 = "b50fea25f30d282c2eafcb262751367e11d6490eda0d463de5926b660eaf1a26"
-SENTIMENT_RAW_SHA256 = "4adba36f7dd95792520e078f7578c316c23e80a7b8a0ace81df490bf06c740df"
-SENTIMENT_NORMALIZED_SHA256 = "e0578509cf3f8a6eeac39ddbd2edeab876e47027d759558e120c6f8b3a9f7f61"
+OHLCV_MANIFEST_SHA256 = (
+    "b50fea25f30d282c2eafcb262751367e11d6490eda0d463de5926b660eaf1a26"
+)
+SENTIMENT_RAW_SHA256 = (
+    "4adba36f7dd95792520e078f7578c316c23e80a7b8a0ace81df490bf06c740df"
+)
+SENTIMENT_NORMALIZED_SHA256 = (
+    "e0578509cf3f8a6eeac39ddbd2edeab876e47027d759558e120c6f8b3a9f7f61"
+)
 
 CONTROL_FEATURES = (
     "log_return_1",
@@ -309,7 +315,10 @@ def load_verified_ohlcv() -> tuple[list[Candle], dict[str, Any]]:
     manifest = read_json(OHLCV_MANIFEST_PATH, "m5_2_source_manifest_invalid")
     _check_data_lock(lock)
     _check_ohlcv_manifest(manifest)
-    if lock["start_utc"] != manifest["start_utc"] or lock["end_utc"] != manifest["end_utc"]:
+    if (
+        lock["start_utc"] != manifest["start_utc"]
+        or lock["end_utc"] != manifest["end_utc"]
+    ):
         raise ValueError("m5_2_data_lock_window_mismatch")
     candles: list[Candle] = []
     try:
@@ -333,7 +342,9 @@ def load_verified_ohlcv() -> tuple[list[Candle], dict[str, Any]]:
     return candles, manifest
 
 
-def load_verified_sentiment(config: dict[str, Any]) -> tuple[list[Mapping[str, object]], dict[str, Any]]:
+def load_verified_sentiment(
+    config: dict[str, Any],
+) -> tuple[list[Mapping[str, object]], dict[str, Any]]:
     source = config["sentiment_source"]
     manifest_path = SENTIMENT_DIR / str(source["snapshot_manifest"])
     raw_path = SENTIMENT_DIR / str(source["raw_file"])
@@ -352,7 +363,10 @@ def load_verified_sentiment(config: dict[str, Any]) -> tuple[list[Mapping[str, o
         raise ValueError("m5_2_sentiment_manifest_count_mismatch")
     if manifest["provider_supplies_historical_available_at"] is not False:
         raise ValueError("m5_2_sentiment_historical_availability_mismatch")
-    if manifest["availability_policy"] != "observation_timestamp_plus_24h_conservative_proxy":
+    if (
+        manifest["availability_policy"]
+        != "observation_timestamp_plus_24h_conservative_proxy"
+    ):
         raise ValueError("m5_2_sentiment_availability_policy_mismatch")
     try:
         payload = json.loads(normalized_raw)
@@ -375,7 +389,10 @@ def load_verified_sentiment(config: dict[str, Any]) -> tuple[list[Mapping[str, o
             raise ValueError("m5_2_sentiment_record_invalid")
         if item.get("market_scope") != "global_btc_sentiment_not_nobitex_pair_specific":
             raise ValueError("m5_2_sentiment_market_scope_invalid")
-        if item.get("available_at_basis") != "observation_timestamp_plus_24h_conservative_proxy":
+        if (
+            item.get("available_at_basis")
+            != "observation_timestamp_plus_24h_conservative_proxy"
+        ):
             raise ValueError("m5_2_sentiment_record_availability_invalid")
         records.append(cast(Mapping[str, object], item))
     return records, manifest
@@ -392,7 +409,11 @@ def build_price_features(candles: Sequence[Candle]) -> NDArray[Any]:
     returns[1:] = np.diff(log_close)
     tr = high - low
     tr[1:] = np.maximum.reduce(
-        (high[1:] - low[1:], np.abs(high[1:] - close[:-1]), np.abs(low[1:] - close[:-1]))
+        (
+            high[1:] - low[1:],
+            np.abs(high[1:] - close[:-1]),
+            np.abs(low[1:] - close[:-1]),
+        )
     )
     atr = np.full(count, np.nan, dtype=np.float64)
     if count >= 14:
@@ -404,9 +425,9 @@ def build_price_features(candles: Sequence[Candle]) -> NDArray[Any]:
     matrix[4:, 1] = log_close[4:] - log_close[:-4]
     matrix[24:, 2] = log_close[24:] - log_close[:-24]
     for index in range(5, count):
-        matrix[index, 3] = float(np.std(returns[index - 5:index + 1], ddof=0))
+        matrix[index, 3] = float(np.std(returns[index - 5 : index + 1], ddof=0))
     for index in range(23, count):
-        matrix[index, 4] = float(np.std(returns[index - 23:index + 1], ddof=0))
+        matrix[index, 4] = float(np.std(returns[index - 23 : index + 1], ddof=0))
     matrix[:, 5] = (high - low) / close
     matrix[:, 6] = atr / close
     volume_change = np.full(count, np.nan, dtype=np.float64)
@@ -446,7 +467,9 @@ def align_sentiment(
     return values, available, observations, ages
 
 
-def build_fold_plans(eligible: Sequence[int], label_valid: Sequence[bool], horizon: int) -> tuple[FoldPlan, ...]:
+def build_fold_plans(
+    eligible: Sequence[int], label_valid: Sequence[bool], horizon: int
+) -> tuple[FoldPlan, ...]:
     if horizon not in HORIZONS:
         raise ValueError("m5_2_horizon_not_registered")
     if len(eligible) < 5:
@@ -457,25 +480,33 @@ def build_fold_plans(eligible: Sequence[int], label_valid: Sequence[bool], horiz
     edges = [index * count // 5 for index in range(6)]
     plans: list[FoldPlan] = []
     for fold_index in range(4):
-        train_candidates = eligible[:edges[fold_index + 1]]
-        test_candidates = eligible[edges[fold_index + 1]:edges[fold_index + 2]]
+        train_candidates = eligible[: edges[fold_index + 1]]
+        test_candidates = eligible[edges[fold_index + 1] : edges[fold_index + 2]]
         if not test_candidates:
             raise ValueError("m5_2_empty_test_block")
         first_test = test_candidates[0]
         last_test = test_candidates[-1]
-        train = tuple(i for i in train_candidates if label_valid[i] and i + horizon < first_test)
-        test = tuple(i for i in test_candidates if label_valid[i] and i + horizon <= last_test)
-        purged = sum(1 for i in train_candidates if label_valid[i] and i + horizon >= first_test)
-        plans.append(FoldPlan(
-            fold_id=f"WF-{fold_index + 1:02d}",
-            train_indices=train,
-            test_indices=test,
-            mark_indices=tuple(range(first_test, last_test + 1)),
-            first_test_index=first_test,
-            last_test_index=last_test,
-            purged_train_rows=purged,
-            excluded_test_rows=len(test_candidates) - len(test),
-        ))
+        train = tuple(
+            i for i in train_candidates if label_valid[i] and i + horizon < first_test
+        )
+        test = tuple(
+            i for i in test_candidates if label_valid[i] and i + horizon <= last_test
+        )
+        purged = sum(
+            1 for i in train_candidates if label_valid[i] and i + horizon >= first_test
+        )
+        plans.append(
+            FoldPlan(
+                fold_id=f"WF-{fold_index + 1:02d}",
+                train_indices=train,
+                test_indices=test,
+                mark_indices=tuple(range(first_test, last_test + 1)),
+                first_test_index=first_test,
+                last_test_index=last_test,
+                purged_train_rows=purged,
+                excluded_test_rows=len(test_candidates) - len(test),
+            )
+        )
     return tuple(plans)
 
 
@@ -524,10 +555,17 @@ def simulate_portfolio(
         raise ValueError("m5_2_signal_count_mismatch")
     if not marks:
         return PortfolioOutcome(
-            {"completed_oos_trades": 0, "total_net_pnl_fraction_of_initial_equity": 0.0,
-             "net_profit_factor": None, "max_drawdown": 0.0,
-             "maximum_concurrent_cohorts": 0, "turnover_fraction_of_initial_equity": 0.0},
-            (1.0,), 0.0, ()
+            {
+                "completed_oos_trades": 0,
+                "total_net_pnl_fraction_of_initial_equity": 0.0,
+                "net_profit_factor": None,
+                "max_drawdown": 0.0,
+                "maximum_concurrent_cohorts": 0,
+                "turnover_fraction_of_initial_equity": 0.0,
+            },
+            (1.0,),
+            0.0,
+            (),
         )
     notional = 1.0 / float(horizon)
     trades: list[Trade] = []
@@ -538,7 +576,9 @@ def simulate_portfolio(
             if exit_index > marks[-1]:
                 raise ValueError("m5_2_trade_exit_crosses_test_fold")
             gross = candles[exit_index].close / candles[entry].open - 1.0
-            trades.append(Trade(decision, entry, exit_index, notional, notional * (gross - cost)))
+            trades.append(
+                Trade(decision, entry, exit_index, notional, notional * (gross - cost))
+            )
     trades.sort(key=lambda row: (row.entry_index, row.exit_index))
     cursor = 0
     active: list[Trade] = []
@@ -586,12 +626,17 @@ def aggregate_outcomes(outcomes: Sequence[PortfolioOutcome]) -> dict[str, Any]:
         carried += outcome.pnl
     return {
         "completed_oos_trades": len(trades),
-        "total_net_pnl_fraction_of_initial_equity": float(sum(row.pnl for row in trades)),
+        "total_net_pnl_fraction_of_initial_equity": float(
+            sum(row.pnl for row in trades)
+        ),
         "net_profit_factor": net_profit_factor(trades),
         "max_drawdown": max_drawdown(nav),
-        "turnover_fraction_of_initial_equity": float(sum(row.notional for row in trades)),
+        "turnover_fraction_of_initial_equity": float(
+            sum(row.notional for row in trades)
+        ),
         "maximum_concurrent_cohorts": max(
-            (int(row.metrics["maximum_concurrent_cohorts"]) for row in outcomes), default=0
+            (int(row.metrics["maximum_concurrent_cohorts"]) for row in outcomes),
+            default=0,
         ),
     }
 
@@ -602,7 +647,12 @@ def is_valid_fold(outcome: PortfolioOutcome) -> bool:
 
 def is_stable_fold(outcome: PortfolioOutcome) -> bool:
     pf = outcome.metrics["net_profit_factor"]
-    return is_valid_fold(outcome) and outcome.pnl > 0.0 and pf is not None and float(pf) > 1.0
+    return (
+        is_valid_fold(outcome)
+        and outcome.pnl > 0.0
+        and pf is not None
+        and float(pf) > 1.0
+    )
 
 
 def check_absolute_gates(
@@ -611,22 +661,25 @@ def check_absolute_gates(
     gates = config["acceptance_gates"]
     pf = pooled["net_profit_factor"]
     return {
-        "net_profit_factor_gte_1_10": pf is not None and float(pf) >= float(gates["net_profit_factor_min"]),
-        "completed_oos_trades_gte_100": int(pooled["completed_oos_trades"]) >= int(gates["completed_oos_trades_min"]),
-        "max_drawdown_lte_15_percent": float(pooled["max_drawdown"]) <= float(gates["max_drawdown_fraction_max"]),
+        "net_profit_factor_gte_1_10": pf is not None
+        and float(pf) >= float(gates["net_profit_factor_min"]),
+        "completed_oos_trades_gte_100": int(pooled["completed_oos_trades"])
+        >= int(gates["completed_oos_trades_min"]),
+        "max_drawdown_lte_15_percent": float(pooled["max_drawdown"])
+        <= float(gates["max_drawdown_fraction_max"]),
         "at_least_3_valid_folds": valid_folds >= int(gates["minimum_valid_folds"]),
         "at_least_3_stable_folds": stable_folds >= int(gates["minimum_stable_folds"]),
     }
 
 
-def cost_summary(outcomes: Sequence[PortfolioOutcome], config: dict[str, Any]) -> dict[str, Any]:
+def cost_summary(
+    outcomes: Sequence[PortfolioOutcome], config: dict[str, Any]
+) -> dict[str, Any]:
     pooled = aggregate_outcomes(outcomes)
     valid = sum(1 for row in outcomes if is_valid_fold(row))
     stable = sum(1 for row in outcomes if is_stable_fold(row))
     gates = check_absolute_gates(pooled, valid, stable, config)
-    insufficient = (
-        pooled["completed_oos_trades"] < 100 or valid < 3
-    )
+    insufficient = pooled["completed_oos_trades"] < 100 or valid < 3
     if insufficient:
         verdict = "INSUFFICIENT_SAMPLE / NO-GO"
     elif not all(gates.values()):
@@ -685,7 +738,12 @@ def _evaluate_fold(
     majority = _majority_signal(labels, train)
     arm_outcomes: dict[str, dict[str, PortfolioOutcome]] = {arm: {} for arm in ARMS}
     baseline_outcomes: dict[str, dict[str, PortfolioOutcome]] = {
-        name: {} for name in ("always_long_same_horizon_same_cost", "training_fold_majority_direction", "no_trade_cash_baseline")
+        name: {}
+        for name in (
+            "always_long_same_horizon_same_cost",
+            "training_fold_majority_direction",
+            "no_trade_cash_baseline",
+        )
     }
     predictions: list[dict[str, Any]] = []
     x_control = features[:, :8]
@@ -699,37 +757,62 @@ def _evaluate_fold(
             probs = model.predict_proba(matrix[test])[:, 1]
             trial_id = (
                 f"NOBITEX-M5-2-{horizon}h-OHLCV-LR-BASELINE-01"
-                if arm == "control" else f"NOBITEX-M5-2-{horizon}h-SENTIMENT-LR-AUGMENTED-01"
+                if arm == "control"
+                else f"NOBITEX-M5-2-{horizon}h-SENTIMENT-LR-AUGMENTED-01"
             )
             for offset, row_index in enumerate(test):
                 exit_index = row_index + horizon
                 exit_time = candles[exit_index].start + timedelta(hours=1)
-                predictions.append({
-                    "trial_id": trial_id,
-                    "horizon_hours": horizon,
-                    "arm": arm,
-                    "fold_id": plan.fold_id,
-                    "decision_time_utc": decision_times[row_index],
-                    "entry_time_utc": decision_times[row_index],
-                    "exit_time_utc": exit_time.isoformat().replace("+00:00", "Z"),
-                    "label": int(labels[row_index]),
-                    "gross_return": float(gross[row_index]),
-                    "probability_up": float(probs[offset]),
-                    "long_signal": bool(probs[offset] >= 0.5),
-                    "fear_greed_value": int(fng_values[row_index]),
-                    "sentiment_source_available_at": fng_available[row_index],
-                    "sentiment_source_observation_time_utc": fng_observations[row_index],
-                    "sentiment_source_age_seconds": int(fng_ages[row_index]),
-                })
-        signals = [bool(value >= 0.5) for value in probs] if enough else [False] * len(test)
+                predictions.append(
+                    {
+                        "trial_id": trial_id,
+                        "horizon_hours": horizon,
+                        "arm": arm,
+                        "fold_id": plan.fold_id,
+                        "decision_time_utc": decision_times[row_index],
+                        "entry_time_utc": decision_times[row_index],
+                        "exit_time_utc": exit_time.isoformat().replace("+00:00", "Z"),
+                        "label": int(labels[row_index]),
+                        "gross_return": float(gross[row_index]),
+                        "probability_up": float(probs[offset]),
+                        "long_signal": bool(probs[offset] >= 0.5),
+                        "fear_greed_value": int(fng_values[row_index]),
+                        "sentiment_source_available_at": fng_available[row_index],
+                        "sentiment_source_observation_time_utc": fng_observations[
+                            row_index
+                        ],
+                        "sentiment_source_age_seconds": int(fng_ages[row_index]),
+                    }
+                )
+        signals = (
+            [bool(value >= 0.5) for value in probs] if enough else [False] * len(test)
+        )
         for cost_name in COST_NAMES:
-            fraction = float(config["portfolio_evaluation"]["cost_scenarios"][cost_name]["fraction"])
-            arm_outcomes[arm][cost_name] = simulate_portfolio(candles, test, signals, horizon, fraction, plan.mark_indices)
-            baseline_outcomes["always_long_same_horizon_same_cost"][cost_name] = simulate_portfolio(
-                candles, test, [True] * len(test), horizon, fraction, plan.mark_indices
+            fraction = float(
+                config["portfolio_evaluation"]["cost_scenarios"][cost_name]["fraction"]
             )
-            baseline_outcomes["training_fold_majority_direction"][cost_name] = simulate_portfolio(
-                candles, test, [majority] * len(test), horizon, fraction, plan.mark_indices
+            arm_outcomes[arm][cost_name] = simulate_portfolio(
+                candles, test, signals, horizon, fraction, plan.mark_indices
+            )
+            baseline_outcomes["always_long_same_horizon_same_cost"][cost_name] = (
+                simulate_portfolio(
+                    candles,
+                    test,
+                    [True] * len(test),
+                    horizon,
+                    fraction,
+                    plan.mark_indices,
+                )
+            )
+            baseline_outcomes["training_fold_majority_direction"][cost_name] = (
+                simulate_portfolio(
+                    candles,
+                    test,
+                    [majority] * len(test),
+                    horizon,
+                    fraction,
+                    plan.mark_indices,
+                )
             )
             baseline_outcomes["no_trade_cash_baseline"][cost_name] = _empty_metrics(
                 candles, plan, horizon, fraction
@@ -740,7 +823,10 @@ def _evaluate_fold(
             "first_test_decision_time_utc": decision_times[plan.first_test_index],
             "last_test_decision_time_utc": decision_times[plan.last_test_index],
             "train_rows_after_purge": len(train),
-            "train_class_counts": {"class_0": counts.get(0, 0), "class_1": counts.get(1, 0)},
+            "train_class_counts": {
+                "class_0": counts.get(0, 0),
+                "class_1": counts.get(1, 0),
+            },
             "purged_train_rows": plan.purged_train_rows,
             "test_rows_after_horizon_rule": len(test),
             "excluded_test_rows": plan.excluded_test_rows,
@@ -754,7 +840,9 @@ def _evaluate_fold(
     )
 
 
-def _source_age_summary(ages: NDArray[Any], observations: Sequence[str | None]) -> dict[str, Any]:
+def _source_age_summary(
+    ages: NDArray[Any], observations: Sequence[str | None]
+) -> dict[str, Any]:
     valid = ages[np.isfinite(ages)]
     unique = {item for item in observations if item is not None}
     if valid.size == 0:
@@ -774,13 +862,16 @@ def _build_trial(
 ) -> dict[str, Any]:
     trial_id = (
         f"NOBITEX-M5-2-{horizon}h-OHLCV-LR-BASELINE-01"
-        if arm == "control" else f"NOBITEX-M5-2-{horizon}h-SENTIMENT-LR-AUGMENTED-01"
+        if arm == "control"
+        else f"NOBITEX-M5-2-{horizon}h-SENTIMENT-LR-AUGMENTED-01"
     )
     result: dict[str, Any] = {
         "trial_id": trial_id,
         "arm": arm,
         "horizon_hours": horizon,
-        "feature_names": list(CONTROL_FEATURES if arm == "control" else TREATMENT_FEATURES),
+        "feature_names": list(
+            CONTROL_FEATURES if arm == "control" else TREATMENT_FEATURES
+        ),
         "folds": [],
         "cost_scenarios": {},
     }
@@ -811,15 +902,21 @@ def _paired_comparisons(trials: dict[str, Any]) -> dict[str, Any]:
             sentiment = trials[sentiment_id]["cost_scenarios"][cost_name]["pooled_oos"]
             c_pf = control["net_profit_factor"]
             s_pf = sentiment["net_profit_factor"]
-            higher_pf = c_pf is not None and s_pf is not None and float(s_pf) > float(c_pf)
-            higher_pnl = float(sentiment["total_net_pnl_fraction_of_initial_equity"]) > float(
-                control["total_net_pnl_fraction_of_initial_equity"]
+            higher_pf = (
+                c_pf is not None and s_pf is not None and float(s_pf) > float(c_pf)
             )
+            higher_pnl = float(
+                sentiment["total_net_pnl_fraction_of_initial_equity"]
+            ) > float(control["total_net_pnl_fraction_of_initial_equity"])
             paired[str(horizon)][cost_name] = {
                 "control_net_profit_factor": c_pf,
                 "sentiment_net_profit_factor": s_pf,
-                "control_net_pnl_fraction": control["total_net_pnl_fraction_of_initial_equity"],
-                "sentiment_net_pnl_fraction": sentiment["total_net_pnl_fraction_of_initial_equity"],
+                "control_net_pnl_fraction": control[
+                    "total_net_pnl_fraction_of_initial_equity"
+                ],
+                "sentiment_net_pnl_fraction": sentiment[
+                    "total_net_pnl_fraction_of_initial_equity"
+                ],
                 "sentiment_netpf_strictly_higher": higher_pf,
                 "sentiment_net_pnl_strictly_higher": higher_pnl,
                 "incremental_value_passed": higher_pf and higher_pnl,
@@ -834,9 +931,15 @@ def _overall_verdict(trials: dict[str, Any], paired: dict[str, Any]) -> str:
         trial_id = f"NOBITEX-M5-2-{horizon}h-SENTIMENT-LR-AUGMENTED-01"
         for cost_name in COST_NAMES:
             row = trials[trial_id]["cost_scenarios"][cost_name]
-            insufficient = insufficient or row["verdict_before_dsr"] == "INSUFFICIENT_SAMPLE / NO-GO"
+            insufficient = (
+                insufficient
+                or row["verdict_before_dsr"] == "INSUFFICIENT_SAMPLE / NO-GO"
+            )
             failed = failed or not row["absolute_gates_passed"]
-            failed = failed or not paired[str(horizon)][cost_name]["incremental_value_passed"]
+            failed = (
+                failed
+                or not paired[str(horizon)][cost_name]["incremental_value_passed"]
+            )
     if insufficient:
         return "INSUFFICIENT_SAMPLE / NO-GO"
     if failed:
@@ -845,14 +948,22 @@ def _overall_verdict(trials: dict[str, Any], paired: dict[str, Any]) -> str:
 
 
 def _baseline_report(folds: Sequence[FoldOutput]) -> dict[str, Any]:
-    names = ("always_long_same_horizon_same_cost", "training_fold_majority_direction", "no_trade_cash_baseline")
+    names = (
+        "always_long_same_horizon_same_cost",
+        "training_fold_majority_direction",
+        "no_trade_cash_baseline",
+    )
     report: dict[str, Any] = {}
     for name in names:
         report[name] = {}
         for cost in COST_NAMES:
             report[name][cost] = {
-                "pooled_oos": aggregate_outcomes([fold.baseline_outcomes[name][cost] for fold in folds]),
-                "fold_metrics": [fold.baseline_outcomes[name][cost].metrics for fold in folds],
+                "pooled_oos": aggregate_outcomes(
+                    [fold.baseline_outcomes[name][cost] for fold in folds]
+                ),
+                "fold_metrics": [
+                    fold.baseline_outcomes[name][cost].metrics for fold in folds
+                ],
             }
     return report
 
@@ -867,10 +978,14 @@ def run_evaluation() -> tuple[dict[str, Any], list[dict[str, Any]]]:
         (row.start + timedelta(hours=1)).isoformat().replace("+00:00", "Z")
         for row in candles
     ]
-    sentiment, available, observations, ages = align_sentiment(sentiment_records, decision_times)
+    sentiment, available, observations, ages = align_sentiment(
+        sentiment_records, decision_times
+    )
     price_features = build_price_features(candles)
     features = np.column_stack((price_features, sentiment))
-    eligible = [index for index in range(len(candles)) if np.isfinite(features[index]).all()]
+    eligible = [
+        index for index in range(len(candles)) if np.isfinite(features[index]).all()
+    ]
     if not eligible:
         raise ValueError("m5_2_no_common_paired_samples")
     all_trials: dict[str, Any] = {}
@@ -888,8 +1003,18 @@ def run_evaluation() -> tuple[dict[str, Any], list[dict[str, Any]]]:
         plans = build_fold_plans(eligible, valid_labels.tolist(), horizon)
         fold_outputs = [
             _evaluate_fold(
-                candles, features, labels, returns, plan,
-                horizon, decision_times, sentiment, available, observations, ages, config
+                candles,
+                features,
+                labels,
+                returns,
+                plan,
+                horizon,
+                decision_times,
+                sentiment,
+                available,
+                observations,
+                ages,
+                config,
             )
             for plan in plans
         ]
@@ -912,11 +1037,11 @@ def run_evaluation() -> tuple[dict[str, Any], list[dict[str, Any]]]:
         ]
     paired = _paired_comparisons(all_trials)
     overall = _overall_verdict(all_trials, paired)
-    warmup_excluded = sum(
-        1 for row in price_features if not np.isfinite(row).all()
-    )
+    warmup_excluded = sum(1 for row in price_features if not np.isfinite(row).all())
     no_prior = sum(
-        1 for i in range(len(candles)) if np.isfinite(price_features[i]).all() and not math.isfinite(sentiment[i])
+        1
+        for i in range(len(candles))
+        if np.isfinite(price_features[i]).all() and not math.isfinite(sentiment[i])
     )
     source_lock_sha = sha256_bytes(DATA_LOCK_PATH.read_bytes())
     report = {
@@ -943,7 +1068,11 @@ def run_evaluation() -> tuple[dict[str, Any], list[dict[str, Any]]]:
             "provider": "Alternative.me Fear & Greed",
             "raw_sha256": SENTIMENT_RAW_SHA256,
             "normalized_sha256": SENTIMENT_NORMALIZED_SHA256,
-            "manifest_sha256": sha256_bytes((SENTIMENT_DIR / str(config["sentiment_source"]["snapshot_manifest"])).read_bytes()),
+            "manifest_sha256": sha256_bytes(
+                (
+                    SENTIMENT_DIR / str(config["sentiment_source"]["snapshot_manifest"])
+                ).read_bytes()
+            ),
             "record_count": len(sentiment_records),
             "market_scope": sentiment_manifest["market_scope"],
             "availability_policy": sentiment_manifest["availability_policy"],
@@ -977,8 +1106,10 @@ def run_evaluation() -> tuple[dict[str, Any], list[dict[str, Any]]]:
             "sklearn_version": sklearn.__version__,
             "scaler_fit_on_training_fold_only": True,
             "fit_count": sum(
-                1 for result in all_trials.values()
-                for fold in result["folds"] if fold["fit_status"] == "EVALUATED"
+                1
+                for result in all_trials.values()
+                for fold in result["folds"]
+                if fold["fit_status"] == "EVALUATED"
             ),
         },
         "cost_scenarios": config["portfolio_evaluation"]["cost_scenarios"],
@@ -994,12 +1125,16 @@ def run_evaluation() -> tuple[dict[str, Any], list[dict[str, Any]]]:
         "economic_acceptance": {
             "overall_verdict": overall,
             "sentiment_absolute_gates_passed": all(
-                all_trials[f"NOBITEX-M5-2-{h}h-SENTIMENT-LR-AUGMENTED-01"]["cost_scenarios"][c]["absolute_gates_passed"]
-                for h in HORIZONS for c in COST_NAMES
+                all_trials[f"NOBITEX-M5-2-{h}h-SENTIMENT-LR-AUGMENTED-01"][
+                    "cost_scenarios"
+                ][c]["absolute_gates_passed"]
+                for h in HORIZONS
+                for c in COST_NAMES
             ),
             "paired_incremental_value_passed": all(
                 paired[str(h)][c]["incremental_value_passed"]
-                for h in HORIZONS for c in COST_NAMES
+                for h in HORIZONS
+                for c in COST_NAMES
             ),
             "first_economic_edge_claim_permitted": False,
         },
@@ -1035,23 +1170,38 @@ def main() -> int:
         encoding="utf-8",
     )
     fields = [
-        "trial_id", "horizon_hours", "arm", "fold_id", "decision_time_utc",
-        "entry_time_utc", "exit_time_utc", "label", "gross_return",
-        "probability_up", "long_signal", "fear_greed_value",
-        "sentiment_source_available_at", "sentiment_source_observation_time_utc",
+        "trial_id",
+        "horizon_hours",
+        "arm",
+        "fold_id",
+        "decision_time_utc",
+        "entry_time_utc",
+        "exit_time_utc",
+        "label",
+        "gross_return",
+        "probability_up",
+        "long_signal",
+        "fear_greed_value",
+        "sentiment_source_available_at",
+        "sentiment_source_observation_time_utc",
         "sentiment_source_age_seconds",
     ]
     with args.predictions_out.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
         writer.writerows(predictions)
-    print(json.dumps({
-        "evaluation_status": report["evaluation_status"],
-        "overall_verdict": report["economic_acceptance"]["overall_verdict"],
-        "trial_count": len(report["trial_results"]),
-        "prediction_rows": len(predictions),
-        "preregistration_sha256": report["preregistration_sha256"],
-    }, sort_keys=True))
+    print(
+        json.dumps(
+            {
+                "evaluation_status": report["evaluation_status"],
+                "overall_verdict": report["economic_acceptance"]["overall_verdict"],
+                "trial_count": len(report["trial_results"]),
+                "prediction_rows": len(predictions),
+                "preregistration_sha256": report["preregistration_sha256"],
+            },
+            sort_keys=True,
+        )
+    )
     return 0
 
 
