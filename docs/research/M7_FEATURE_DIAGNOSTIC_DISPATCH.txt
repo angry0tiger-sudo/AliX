@@ -8,3 +8,4 @@ Retry after restoring Ruff's required top-level separation before __main__.
 Retry after restoring standard two-blank-line separation for all module-level definitions.
 Retry after removing one excess EOF blank line per Ruff diff.
 Run read-only feature diagnostics directly in the bridge runner after the matching Standard CI passes.
+Retry after fixing literal backslashes before GitHub Actions expressions.

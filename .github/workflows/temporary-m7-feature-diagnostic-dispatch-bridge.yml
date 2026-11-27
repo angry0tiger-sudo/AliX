@@ -25,8 +25,8 @@ jobs:
     steps:
       - name: Require Standard CI success on this exact commit
         env:
-          GH_TOKEN: \${{ github.token }}
-          SOURCE_SHA: \${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ github.sha }}
         run: |
           python - <<'PY'
           import json
@@ -77,7 +77,7 @@ jobs:
       - name: Checkout exact PRE-HACK source and immutable data
         uses: actions/checkout@v4
         with:
-          ref: \${{ github.sha }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
       - name: Set up Python
