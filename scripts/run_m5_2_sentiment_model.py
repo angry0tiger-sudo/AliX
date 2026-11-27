@@ -635,7 +635,6 @@ def _mark_portfolio(
 ) -> tuple[list[float], int]:
     cursor = 0
     active: list[Trade] = []
-    realized = 0.0
     nav = [1.0]
     concurrent = 0
     for mark in marks:
