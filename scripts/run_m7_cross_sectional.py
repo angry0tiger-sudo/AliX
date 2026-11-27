@@ -753,6 +753,8 @@ def _walk_forward_blocks(panel: pd.DataFrame) -> list[list[int]]:
 
 
 def _fold_test_boundary(
+    blocks: Sequence[Sequence[int]], fold_number: int
+) -> tuple[list[int], int, int] | None:
     test_indices = list(blocks[fold_number])
     if not test_indices:
         return None
