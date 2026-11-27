@@ -27,7 +27,9 @@ def test_select_top_two_ignores_non_finite_scores() -> None:
 
 
 def test_portfolio_interval_return_equal_weights_and_round_trip_cost() -> None:
-    total, trade_pnls = portfolio_interval_return(["ETHUSDT", "ADAUSDT"], {"ETHUSDT": 0.04, "ADAUSDT": 0.02}, 50)
+    total, trade_pnls = portfolio_interval_return(
+        ["ETHUSDT", "ADAUSDT"], {"ETHUSDT": 0.04, "ADAUSDT": 0.02}, 50
+    )
     assert trade_pnls == pytest.approx([0.5 * (0.04 - 0.005), 0.5 * (0.02 - 0.005)])
     assert total == pytest.approx(sum(trade_pnls))
 
