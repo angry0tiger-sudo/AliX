@@ -1,0 +1,195 @@
+name: M5.2 BTCUSDT Sentiment Model Evaluation
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: alix-m5-2-sentiment-evaluation
+  cancel-in-progress: false
+
+jobs:
+  evaluate:
+    if: github.ref == 'refs/heads/research/nobitex-hf-strategy'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      ALIX_M52_OWNER_AUTHORIZATION: "true"
+      ALIx_DRY_RUN: "true"
+      ALIx_ALLOW_LIVE_TRADING: "false"
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Require Standard CI success on this exact commit
+        env:
+          GITHUB_TOKEN: \${{ github.token }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import time
+          from urllib.request import Request, urlopen
+
+          repository = os.environ["GITHUB_REPOSITORY"]
+          target_sha = os.environ["GITHUB_SHA"]
+          target_branch = os.environ["GITHUB_REF_NAME"]
+          if target_branch != "research/nobitex-hf-strategy":
+              raise SystemExit("m5_2_unsupported_branch")
+          url = (
+              f"https://api.github.com/repos/{repository}/actions/workflows/ci.yml/runs"
+              f"?branch={target_branch}&per_page=100"
+          )
+          headers = {
+              "Accept": "application/vnd.github+json",
+              "Authorization": f"Bearer {os.environ['GITHUB_TOKEN']}",
+              "X-GitHub-Api-Version": "2022-11-28",
+          }
+          deadline = time.monotonic() + 45 * 60
+          while time.monotonic() < deadline:
+              request = Request(url, headers=headers)
+              with urlopen(request, timeout=30) as response:
+                  payload = json.load(response)
+              matching = [
+                  run for run in payload.get("workflow_runs", [])
+                  if run.get("head_sha") == target_sha
+                  and run.get("head_branch") == target_branch
+                  and run.get("event") == "push"
+                  and run.get("name") == "AliX Continuous Integration"
+              ]
+              if matching:
+                  latest = max(
+                      matching,
+                      key=lambda run: (run.get("run_number", 0), run.get("run_attempt", 0)),
+                  )
+                  if latest.get("status") == "completed":
+                      if latest.get("conclusion") != "success":
+                          raise SystemExit(
+                              "m5_2_standard_ci_not_green:"
+                              + str(latest.get("conclusion"))
+                              + ":"
+                              + target_sha
+                          )
+                      print(json.dumps({
+                          "gate": "PASS",
+                          "standard_ci_run_id": latest.get("id"),
+                          "standard_ci_url": latest.get("html_url"),
+                          "source_sha": target_sha,
+                      }, sort_keys=True))
+                      break
+              time.sleep(15)
+          else:
+              raise SystemExit("m5_2_standard_ci_gate_timeout:" + target_sha)
+          PY
+      - name: Checkout the exact verified research commit
+        uses: actions/checkout@v4
+        with:
+          ref: \${{ github.sha }}
+          persist-credentials: false
+      - name: Install pinned model runtime
+        run: |
+          python -m pip install pip==25.2
+          python -m pip install numpy==2.5.5 scikit-learn==1.9.0
+      - name: Run locked M5.2 evaluation on existing pre-hack BTCUSDT data
+        run: |
+          mkdir -p .artifacts/m5-2
+          python -m scripts.run_m5_2_sentiment_model \
+            --report-out .artifacts/m5-2/m5_2_evaluation_report.json \
+            --predictions-out .artifacts/m5-2/m5_2_oos_predictions.csv
+      - name: Verify four trials, immutable bindings and safety state; write summary
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          report_path = Path(".artifacts/m5-2/m5_2_evaluation_report.json")
+          report = json.loads(report_path.read_text(encoding="utf-8"))
+          required_ids = {
+              "NOBITEX-M5-2-1h-OHLCV-LR-BASELINE-01",
+              "NOBITEX-M5-2-1h-SENTIMENT-LR-AUGMENTED-01",
+              "NOBITEX-M5-2-4h-OHLCV-LR-BASELINE-01",
+              "NOBITEX-M5-2-4h-SENTIMENT-LR-AUGMENTED-01",
+          }
+          results = report["trial_results"]
+          if set(results) != required_ids:
+              raise SystemExit("m5_2_trial_family_mismatch")
+          if report["dataset_binding"]["market"] != "BTCUSDT":
+              raise SystemExit("m5_2_wrong_market")
+          if report["dataset_binding"]["scope"] != "PRE_HACK_ONLY":
+              raise SystemExit("m5_2_wrong_data_scope")
+          if report["dataset_binding"]["confirmatory_holdout"] is not False:
+              raise SystemExit("m5_2_holdout_scope_invalid")
+          if report["preregistration_sha256"] != (
+              "851d6c4b39c41cacec8ccd712cf17bb40dd42dd45f2bb8813920a7f2ebe481ba"
+          ):
+              raise SystemExit("m5_2_preregistration_commitment_mismatch")
+          safety = report["safety"]
+          if (
+              safety["Champion"] is not None
+              or safety["order_permission"] is not False
+              or safety["trading_authorization"] != "NO-GO"
+              or safety["private_api_calls"] != 0
+              or safety["real_order_attempts"] != 0
+              or safety["holdout_bytes_read"] is not False
+              or safety["posthack_data_read"] is not False
+              or safety["local_execution"] is not False
+          ):
+              raise SystemExit("m5_2_safety_invariant_failed")
+          lines = [
+              "# M5.2 BTCUSDT Sentiment Model Evaluation",
+              "",
+              f"Commit: {os.environ['GITHUB_SHA']}",
+              f"Preregistration SHA-256: {report['preregistration_sha256']}",
+              f"OHLCV SHA-256: {report['dataset_binding']['csv_sha256']}",
+              f"Common paired rows: {report['paired_sample']['common_paired_rows']:,}",
+              "",
+              "| Trial | Cost | NetPF | Trades | MaxDD | Valid folds | Stable folds | Verdict |",
+              "|---|---:|---:|---:|---:|---:|---:|---|",
+          ]
+          for trial_id, trial in results.items():
+              for cost_name, result in trial["cost_scenarios"].items():
+                  pooled = result["pooled_oos"]
+                  pf = pooled["net_profit_factor"]
+                  pf_text = "undefined" if pf is None else f"{float(pf):.6f}"
+                  lines.append(
+                      f"| {trial_id} | {cost_name} | {pf_text} | "
+                      f"{pooled['completed_oos_trades']} | "
+                      f"{float(pooled['max_drawdown']):.4%} | "
+                      f"{result['valid_folds']}/4 | {result['stable_folds']}/4 | "
+                      f"{result['verdict_before_dsr']} |"
+                  )
+          lines.extend(["", "## Paired comparison"])
+          for horizon, costs in report["paired_comparison"].items():
+              for cost_name, comparison in costs.items():
+                  lines.append(
+                      f"- {horizon}h / {cost_name}: control NetPF="
+                      f"{comparison['control_net_profit_factor']}, sentiment NetPF="
+                      f"{comparison['sentiment_net_profit_factor']}, "
+                      f"incremental value={comparison['incremental_value_passed']}"
+                  )
+          lines.extend([
+              "",
+              "## Final adjudication",
+              f"- Overall: **{report['economic_acceptance']['overall_verdict']}**",
+              f"- DSR: {report['dsr']['status']}; GLOBAL_N={report['dsr']['GLOBAL_N']}",
+              "- No GO/Champion/trading authorization is created by this research run.",
+          ])
+          summary = "\n".join(lines)
+          print(summary)
+          with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a", encoding="utf-8") as handle:
+              handle.write(summary + "\n")
+          PY
+      - name: Upload M5.2 report and predictions
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alix-m5-2-btcusdt-sentiment-results
+          path: .artifacts/m5-2/*
+          if-no-files-found: warn
+          retention-days: 90

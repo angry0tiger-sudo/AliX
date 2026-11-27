@@ -1,0 +1,40 @@
+name: M5.2 Source Formatting
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    if: github.ref == 'refs/heads/research/nobitex-hf-strategy'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout research branch
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+          ref: \${{ github.sha }}
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install the pinned Ruff formatter
+        run: python -m pip install ruff==0.14.0
+      - name: Format only the new M5.2 source and tests
+        run: ruff format scripts/run_m5_2_sentiment_model.py tests/unit/test_m5_2_sentiment_model.py
+      - name: Commit formatting changes on the research branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add scripts/run_m5_2_sentiment_model.py tests/unit/test_m5_2_sentiment_model.py
+          if git diff --cached --quiet; then
+            echo "No Ruff formatting changes were required."
+            exit 0
+          fi
+          git commit -m "style(m5): format sentiment evaluator and tests"
+          git push origin "HEAD:refs/heads/$GITHUB_REF_NAME"
