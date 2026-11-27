@@ -791,3 +791,25 @@ The evaluation artifact does **not** report 17 completed trades for either regis
 | `NOBITEX-M5-2-4h-SENTIMENT-LR-AUGMENTED-01` | 4h | OHLCV + Fear & Greed | `StandardScaler + LogisticRegression` | `PREREGISTERED_LOCKED` | No |
 
 The closed M3 OFI trials remain BTCIRT-specific historical evidence and are not incorporated into this BTCUSDT M5.2 family. No historical registry row or global count is rewritten.
+
+
+---
+
+## [APPEND] Regime M6 — Three-Class Triple-Barrier Preregistration (2026-11-27)
+
+- **Preregistration:** `config/m6/triple_barrier_3class_preregistration.json`.
+- **ID / revision:** `ALIX-M6-BTCUSDT-TRIPLE-BARRIER-3CLASS-G1` / `M6-3CLASS-G1`.
+- **Configuration SHA-256:** `f94af9eb6f6003818beb88fcdbfbebe2ac2d7ac8a42281529db2781b44962e42`.
+- **Target:** Nobitex Spot/USDT `BTCUSDT` only, using the existing PRE-HACK 1h OHLCV artifact with CSV SHA-256 `0aa13607d1da68c4720919f233635bb33d34048e5bd67d3ecc2ce9bb7c2b462e`.
+- **Design:** three first-touch outcomes (`TP_FIRST`, `SL_FIRST`, `VERTICAL_TIMEOUT`); fixed 2×Wilder-ATR(14) horizontal barriers; 24-hour vertical barrier; exactly eight frozen OHLCV features; one fixed `RandomForestClassifier`; long signal only when `P(TP_FIRST) > 0.60`.
+- **Decision cadences:** 1h and deterministic aggregation of four consecutive source 1h bars into 4h bars. No external 4h series or pair substitution.
+- **Evaluation:** four expanding purged chronological folds, 24-hour label-window purge plus 24-hour embargo, 50/90 bps round-trip cost scenarios, economic gates NetPF ≥1.10, at least 100 completed OOS trades, MaxDD ≤15%, and at least three stable folds.
+- **Trial accounting:** exactly two logical candidate identities; fold fits and cost replays are not new variants. `GLOBAL_N=UNKNOWN`, `GLOBAL_DSR=NOT_COMPUTABLE` remain unchanged.
+- **Related prior:** ADR-056 binary Triple-Barrier + Logistic Regression remains a distinct CLOSED NO-GO trial; M6 is a new three-class / Random Forest hypothesis and does not overwrite ADR-056.
+- **Execution state at registration:** `PREREGISTERED_LOCKED`; evaluated candidates: 0. Implementation/economic execution remains subject to the preregistered workflow and successful Standard CI.
+- **Safety:** no new data, purchases, On-Chain, sentiment, microstructure, Holdout/Post-Hack, private API, paper or real orders. `Champion=null`, `order_permission=false`, `trading_authorization=NO-GO`.
+
+| Trial ID | Decision cadence | Estimator | Status at registration | Evaluated |
+|---|---:|---|---|---|
+| `NOBITEX-M6-1h-RF-3CLASS-01` | 1h | `RandomForestClassifier` | `PREREGISTERED_LOCKED` | No |
+| `NOBITEX-M6-4h-RF-3CLASS-01` | 4h | `RandomForestClassifier` | `PREREGISTERED_LOCKED` | No |

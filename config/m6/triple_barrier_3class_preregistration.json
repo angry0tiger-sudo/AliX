@@ -1,0 +1,266 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "schema_version": "alix.m6.triple-barrier-3class-preregistration.v1",
+  "preregistration": {
+    "id": "ALIX-M6-BTCUSDT-TRIPLE-BARRIER-3CLASS-G1",
+    "phase": "M6",
+    "revision": "M6-3CLASS-G1",
+    "status": "PREREGISTERED_LOCKED",
+    "preregistered_utc_date": "2026-11-27",
+    "branch": "research/nobitex-hf-strategy",
+    "owner_directive": "Owner-approved M6 three-class Triple-Barrier target redesign; Option A selected; Option B on-chain purchase/data pivot rejected/deferred.",
+    "scope": "Two logical candidates using only the existing Nobitex Spot BTCUSDT PRE-HACK 1h OHLCV artifact: one hourly-decision candidate and one 4h-decision candidate built by deterministic aggregation of four consecutive hourly candles. Both predict 24-hour first-touch event outcomes with exactly three supervised classes. One fixed RandomForestClassifier configuration and one fixed long-entry probability threshold are used; no tuning or alternative model is allowed.",
+    "implementation_authorized": true,
+    "model_training_authorized": true,
+    "fit_authorized": true,
+    "inference_authorized": true,
+    "economic_backtest_authorized": true,
+    "data_acquisition_authorized": false,
+    "paid_data_purchase_authorized": false,
+    "holdout_access_authorized": false,
+    "posthack_data_access_authorized": false,
+    "private_api_access_authorized": false,
+    "paper_orders_authorized": false,
+    "real_orders_authorized": false,
+    "local_execution_authorized": false,
+    "workflow_only_execution": true,
+    "post_lock_tuning_allowed": false,
+    "change_control": "Any change to the market, source artifact/hash, timeframe aggregation, feature names/formulas, ATR method, barrier multiplier, vertical horizon, ambiguous/gap rule, estimator family or parameters, signal threshold, folds, purge/embargo, costs, sizing, economic gates, or trial count requires a new superseding preregistration before outcome inspection. No sweeps, tuning, selective reruns, threshold changes or extra candidates are permitted.",
+    "p_hacking_guard": "Exactly two logical candidates are registered: the fixed three-class Random Forest model at 1h and at 4h decision cadence. Four walk-forward folds, three target outcomes, and two cost scenarios are evaluation/reporting dimensions, not extra candidate variants."
+  },
+  "hypothesis": {
+    "statement": "A three-class first-touch target that distinguishes take-profit-first, stop-loss-first, and vertical-timeout outcomes may be more decision-useful than the previously tested binary first-touch target. A single regularized RandomForestClassifier can identify a subset of Nobitex BTCUSDT decisions with sufficiently high TP_FIRST probability to produce positive post-cost economics under fixed execution assumptions.",
+    "null_hypothesis": "The fixed RandomForestClassifier does not generate at least 100 completed OOS long trades with NetPF >= 1.10, MaxDD <= 15%, and stable profitable outcomes in at least three of four chronological folds at both registered costs for both decision cadences.",
+    "related_prior_trial": "ADR-056 REGIME-T-TB-LOGISTIC-01 is a related but distinct prior experiment: binary upper-first versus lower-first labels, 2x ATR barriers, 24-hour vertical horizon, three folds, and pooled OOF accuracy screen. Its NO-GO result is retained as prior related trial evidence and is not overwritten or pooled as an M6 candidate.",
+    "claim_type": "Prospective exploratory PRE-HACK research hypothesis; not empirically tested by this registration.",
+    "model_rationale": "Random Forest supports nonlinear interactions and multiclass probabilities. It is not intrinsically immune to overfitting; fixed shallow depth, minimum leaf/split sizes, a single frozen configuration, chronological folds, and no hyperparameter search are mandatory controls."
+  },
+  "scope": {
+    "venue": "Nobitex",
+    "market": "BTCUSDT",
+    "pair": "BTC/USDT",
+    "market_type": "Spot",
+    "quote_currency": "USDT",
+    "source_timeframe": "1h",
+    "decision_timeframes": ["1h", "4h"],
+    "target_market_source": "Existing committed Nobitex public Spot BTCUSDT PRE-HACK 1h OHLCV CSV only.",
+    "excluded_markets": ["BTCIRT", "all other Nobitex pairs", "all external exchange pairs"],
+    "excluded_sources": [
+      "Fear & Greed / any sentiment data",
+      "OFI, MLOFI, order-book, trades, tick or other microstructure data",
+      "on-chain data and paid vendor APIs",
+      "BTCIRT or cross-quote conversions",
+      "other exchanges or aggregated market prices",
+      "Holdout",
+      "Post-Hack data",
+      "private/account endpoints",
+      "synthetic CI fixtures as empirical observations"
+    ],
+    "data_binding": {
+      "csv_path": "data/nobitex/prehack/nobitex-btcusdt-1h.csv",
+      "csv_sha256": "0aa13607d1da68c4720919f233635bb33d34048e5bd67d3ecc2ce9bb7c2b462e",
+      "manifest_path": "data/nobitex/prehack/nobitex-btcusdt-1h.manifest.json",
+      "manifest_sha256": "b50fea25f30d282c2eafcb262751367e11d6490eda0d463de5926b660eaf1a26",
+      "data_lock_path": "data/nobitex/prehack/m5_2_btcusdt_1h_data_lock.json",
+      "data_lock_sha256": "e66616ee3c13e6ce32f94577c4f46480390eea30c774ac6987e8d519d51d4acf",
+      "row_count": 31801,
+      "start_utc": "2021-10-31T20:30:00Z",
+      "end_utc": "2025-06-17T20:30:00Z",
+      "missing_intervals": 0,
+      "off_grid_intervals": 0,
+      "data_scope": "PRE_HACK_ONLY_HISTORICALLY_EXPOSED_EXPLORATORY",
+      "new_data_acquisition": false,
+      "required_before_fit": "All three byte-level SHA-256 commitments and the manifest/data-lock scope fields must match exactly. Any mismatch fails closed before feature construction or fitting."
+    },
+    "four_hour_construction": {
+      "input": "The exact hash-verified 1h BTCUSDT candles above.",
+      "aggregation": "Group four consecutive hourly candles from the first committed PRE-HACK timestamp, using non-overlapping fixed groups. 4h open is first open, high is maximum high, low is minimum low, close is final close, and volume is the sum of four hourly volumes.",
+      "anchor": "UTC fixed anchor at the first source candle start (2021-10-31T20:30:00Z); no calendar rebucketing or external 4h source.",
+      "incomplete_group_policy": "Drop and report any trailing group with fewer than four hourly rows. Do not interpolate, fill or splice.",
+      "bar_index_mapping": "Every 4h bar records the base-hour indices of its first and fourth constituent hourly candles. Entry for a 4h decision is the open of the first hourly candle in the next complete 4h group."
+    }
+  },
+  "features": {
+    "feature_count": 8,
+    "feature_names": [
+      "log_return_1",
+      "log_return_4",
+      "log_return_24",
+      "realized_volatility_6",
+      "realized_volatility_24",
+      "range_fraction_1",
+      "atr_fraction_14",
+      "log_volume_change_1"
+    ],
+    "time_unit": "One bar in the selected decision timeframe: 1 hour for the 1h candidate and 4 hours for the 4h candidate.",
+    "definitions": {
+      "log_return_1": "ln(close[t] / close[t-1]) on completed bars of the selected decision timeframe.",
+      "log_return_4": "ln(close[t] / close[t-4]) on completed bars of the selected decision timeframe.",
+      "log_return_24": "ln(close[t] / close[t-24]) on completed bars of the selected decision timeframe.",
+      "realized_volatility_6": "Population standard deviation (ddof=0) of the six most recent selected-timeframe log_return_1 observations, including the return ending at t.",
+      "realized_volatility_24": "Population standard deviation (ddof=0) of the 24 most recent selected-timeframe log_return_1 observations, including the return ending at t.",
+      "range_fraction_1": "(high[t] - low[t]) / close[t] for the completed selected-timeframe candle.",
+      "atr_fraction_14": "Wilder ATR(14) / close[t]. TrueRange[t] = max(high-low, abs(high-prev_close), abs(low-prev_close)); the first row uses high-low. Seed with the arithmetic mean of the first 14 valid TrueRange values, then ATR[t] = (13*ATR[t-1] + TrueRange[t])/14.",
+      "log_volume_change_1": "ln(1 + selected-timeframe base-asset volume[t]) - ln(1 + selected-timeframe base-asset volume[t-1]); 4h volume is the sum of the four constituent hourly volumes."
+    },
+    "availability": "Features are calculated only after the selected-timeframe bar is fully complete. Rolling windows are right-aligned and use data through t only. No centered windows, backfill, interpolation, partial warm-up, label-derived feature, sentiment, time-of-day, order-book or trade-flow field is permitted.",
+    "missing_value_policy": "No imputation or fill. Drop and count rows with insufficient warm-up, non-finite features, invalid OHLCV, or invalid ATR.",
+    "feature_selection_policy": "Exactly these eight columns, in this order. No feature selection, PCA, interaction expansion, extra lag, alternate indicator or ablation is allowed."
+  },
+  "target": {
+    "type": "three_class_long_first_touch_event_classification",
+    "decision_timing": "Decision after the close of a fully completed 1h or 4h candle t. All features are available by this close.",
+    "entry": "Open of the next complete candle in the selected decision timeframe. For 4h decisions, this is the open of the first hourly candle in the next complete four-hour group.",
+    "volatility_scale": "atr_fraction_14 computed on the selected decision timeframe at t; fixed before inspecting any future candle.",
+    "barriers": {
+      "multiplier_k": 2.0,
+      "take_profit_price": "entry_open * (1 + 2.0 * atr_fraction_14[t])",
+      "stop_loss_price": "entry_open * (1 - 2.0 * atr_fraction_14[t])",
+      "symmetric": true,
+      "long_only": true,
+      "invalid_stop_rule": "If the calculated stop price is not strictly positive, mark the event unavailable and exclude it."
+    },
+    "vertical_barrier": {
+      "max_holding_hours": 24,
+      "observation_window": "The 24 underlying hourly candles beginning with the entry candle, including entry hour through the 24th hourly candle.",
+      "one_hour_candidate": "Inspect 24 future 1h candles.",
+      "four_hour_candidate": "Inspect the 24 underlying 1h candles corresponding to six complete future 4h periods; event resolution still uses the original 1h OHLCV bars.",
+      "expiry": "If neither horizontal barrier is touched during the 24-hour observation window, label VERTICAL_TIMEOUT and exit at the close of the 24th hourly candle."
+    },
+    "class_mapping": {
+      "TP_FIRST": 0,
+      "SL_FIRST": 1,
+      "VERTICAL_TIMEOUT": 2
+    },
+    "event_resolution": {
+      "first_touch": "The earliest underlying hourly candle that touches a horizontal barrier determines the outcome.",
+      "opening_gap": "After the entry candle, if a future hourly candle opens at or above TP, resolve TP_FIRST at that candle open; if it opens at or below SL, resolve SL_FIRST at that candle open. This gives favorable TP gaps the open price and adverse SL gaps the worse open price.",
+      "same_hour_dual_touch": "If the same hourly OHLC candle has high >= TP and low <= SL and its open did not already resolve a gap, mark AMBIGUOUS. It is not a fourth class and is excluded from classifier fitting and classification metrics.",
+      "ambiguous_economic_policy": "If an OOS prediction triggered a long trade whose event is AMBIGUOUS, resolve its economic ledger conservatively at the stop-loss price and count the completed trade. Never choose the favorable intrabar ordering.",
+      "timeout": "VERTICAL_TIMEOUT is a genuine third supervised class and is retained in fit, prediction, and evaluation.",
+      "unavailable": "Rows with an incomplete 24-hour future window, invalid features/ATR, or an invalid stop price are unavailable and are excluded from model fit and OOS economic signals.",
+      "no_intrabar_path_inference": true
+    },
+    "label_purge_window_hours": 24,
+    "embargo_hours": 24,
+    "label_end_for_purging": "Conservatively use the maximum possible 24-hour event end even if a horizontal barrier is touched earlier. Training label end must be strictly earlier than the first test entry boundary minus the registered 24-hour embargo."
+  },
+  "model": {
+    "estimator": "sklearn.ensemble.RandomForestClassifier",
+    "scikit_learn_version": "1.9.0",
+    "parameters": {
+      "n_estimators": 300,
+      "criterion": "gini",
+      "max_depth": 5,
+      "min_samples_split": 40,
+      "min_samples_leaf": 20,
+      "max_features": 0.8,
+      "bootstrap": true,
+      "max_samples": 0.8,
+      "class_weight": "balanced_subsample",
+      "random_state": 42,
+      "n_jobs": 1
+    },
+    "fit_policy": "Exactly one fixed RandomForestClassifier fit per horizon and eligible fold. No scaler, model ensemble, class oversampling, probability calibration, class threshold optimization, hyperparameter search, tuning, or candidate variant.",
+    "probability_policy": "Use the uncalibrated RandomForest predict_proba output as a fixed screening score. No calibration or threshold sweep is allowed. Report class-wise probabilities and class counts.",
+    "classes": ["TP_FIRST", "SL_FIRST", "VERTICAL_TIMEOUT"]
+  },
+  "signal": {
+    "direction": "long_only_spot",
+    "tp_first_probability_threshold": 0.60,
+    "comparison": "strictly greater than 0.60; equality does not enter",
+    "entry_rule": "Open a long-only research cohort at the next selected-timeframe candle open only when P(TP_FIRST) > 0.60.",
+    "short_entries": false,
+    "leverage": 1,
+    "no_trade_policy": "If P(TP_FIRST) <= 0.60, hold cash. No short signal is generated from SL_FIRST."
+  },
+  "walk_forward": {
+    "scheme": "expanding_window_on_five_contiguous_chronological_blocks",
+    "fold_count": 4,
+    "block_construction": "Sort feature-eligible UTC decision timestamps independently for 1h and 4h. Split into five contiguous chronological blocks using deterministic boundaries floor(k*N/5), k=1..4. B1 is initial training history; B2..B5 are successive test blocks.",
+    "folds": [
+      {"fold_id": "WF-01", "train_blocks": ["B1"], "test_block": "B2"},
+      {"fold_id": "WF-02", "train_blocks": ["B1", "B2"], "test_block": "B3"},
+      {"fold_id": "WF-03", "train_blocks": ["B1", "B2", "B3"], "test_block": "B4"},
+      {"fold_id": "WF-04", "train_blocks": ["B1", "B2", "B3", "B4"], "test_block": "B5"}
+    ],
+    "training_rules": {
+      "only_prior_blocks": true,
+      "minimum_training_rows": 200,
+      "minimum_training_rows_per_class": 20,
+      "training_labels_must_be_fully_resolved": true,
+      "purge_rule": "For each fold, exclude any training event whose maximum 24-hour event window reaches or overlaps the first test entry boundary.",
+      "embargo_rule": "In addition to purging, require maximum event end < first test entry base-hour index - 24 hours. This fixed 24-hour embargo is applied before the test block for both decision cadences.",
+      "test_rows": "Include only decisions whose full maximum 24-hour event window ends within the same test block. AMBIGUOUS events may be predicted and enter the economic ledger only under the conservative SL rule; they are excluded from supervised metrics.",
+      "test_data_prohibited_from_fit": true,
+      "no_random_split": true,
+      "no_refit_inside_test": true
+    },
+    "insufficient_data_rule": "If any fold lacks 200 mature training rows or 20 rows from each of the three classes, record INSUFFICIENT_SAMPLE and do not fit that fold. Do not alter folds, relax class minimums, shorten the event horizon, or add data. All four folds must be reported."
+  },
+  "economic_evaluation": {
+    "direction": "long_only_spot_research_simulation",
+    "entry_price": "Next selected-timeframe candle open; for 4h, the first constituent hourly open.",
+    "exit_price": "First TP or SL barrier fill under the frozen gap policy, otherwise close of the 24th future hourly candle; ambiguous dual-touch OOS events are charged at SL.",
+    "cost_scenarios": {
+      "Cost-50": {"round_trip_cost_bps": 50, "fraction": 0.005},
+      "Cost-90": {"round_trip_cost_bps": 90, "fraction": 0.009}
+    },
+    "cost_interpretation": "Apply one all-in round-trip friction charge per completed cohort. Subtract the complete cost once from each trade return; do not add a second spread/slippage charge.",
+    "net_trade_return_formula": "(exit_price / entry_price - 1) - round_trip_cost_fraction",
+    "position_sizing": "Fixed notional as a fraction of initial equity per signal: 1/25 for the 1h candidate and 1/7 for the 4h candidate. These include one conservative boundary-overlap slot beyond the maximum 24h concurrency (24 hourly entries or six 4h entries). No leverage, compounding or NAV-based resizing. Maximum planned gross exposure is <=1.0x initial equity.",
+    "mark_to_market": "Mark open positions at each underlying hourly close. Charge the full round-trip cost from entry for conservative NAV marking. Realize the actual barrier/gap/timeout exit price on the event hour. MaxDD is chronological peak-to-trough NAV drawdown across hourly marks.",
+    "completed_trade_definition": "One long signal with a fully observed 24-hour event window that is closed by TP, SL, or vertical timeout inside its own OOS test block. AMBIGUOUS signal trades count and are conservatively resolved at SL.",
+    "net_profit_factor_formula": "Sum of positive net trade PnL divided by the absolute sum of negative net trade PnL. Undefined when there are no negative net trades and therefore does not pass automatically.",
+    "costs_evaluated_separately": true,
+    "no_order_execution": true
+  },
+  "acceptance_gates": {
+    "evaluated_separately_for_each_horizon_and_cost_scenario": true,
+    "net_profit_factor_min": 1.10,
+    "completed_oos_trades_min": 100,
+    "max_drawdown_fraction_max": 0.15,
+    "minimum_valid_folds": 3,
+    "minimum_stable_folds": 3,
+    "fold_validity_rule": "A valid fold has at least 20 completed costed OOS trades.",
+    "fold_stability_rule": "At least 3 of 4 chronological test folds must each contain at least 20 completed OOS trades, positive net PnL, and fold NetPF > 1.00.",
+    "pooled_rule": "For each horizon under each cost scenario, pooled OOS NetPF >= 1.10, completed costed OOS trades >= 100, MaxDD <= 15%, at least 3 valid folds, and at least 3 stable folds are all mandatory.",
+    "overall_pass_rule": "Both the 1h and 4h candidates must independently pass all five gates at both Cost-50 and Cost-90. No metric or fold can be hidden or substituted.",
+    "failed_gate_verdict": "NO-GO",
+    "insufficient_sample_verdict": "INSUFFICIENT_SAMPLE / NO-GO",
+    "no_post_result_threshold_changes": true,
+    "global_trial_accounting": "GLOBAL_N=UNKNOWN remains unchanged. ADR-056 is a related prior Triple-Barrier experiment and must be disclosed in the result. Do not manufacture a global DSR.",
+    "dsr_status": "GLOBAL_DSR=NOT_COMPUTABLE unless the complete historical candidate cohort and required return inputs are independently reconciled. Passing these exploratory economics gates does not itself create confirmatory statistical evidence or trading authority."
+  },
+  "trial_family": {
+    "logical_trial_count": 2,
+    "status": "PREREGISTERED_LOCKED",
+    "implementation_revision": "M6-3CLASS-G1",
+    "evaluated_candidate_count_at_registration": 0,
+    "trial_ids": [
+      "NOBITEX-M6-1h-RF-3CLASS-01",
+      "NOBITEX-M6-4h-RF-3CLASS-01"
+    ],
+    "fold_fits_and_cost_scenarios_are_not_new_trial_variants": true
+  },
+  "safety": {
+    "execution_authorization": "OWNER_AUTHORIZED_M6_PREHACK_RESEARCH_ONLY",
+    "new_data_acquisition": false,
+    "paid_api_or_data_purchase": false,
+    "onchain_data_access": false,
+    "sentiment_data_access": false,
+    "microstructure_data_access": false,
+    "holdout_access": "PROHIBITED",
+    "holdout_bytes_read": false,
+    "posthack_data_access": "PROHIBITED",
+    "posthack_data_read": false,
+    "private_api_calls": 0,
+    "real_order_attempts": 0,
+    "paper_orders": 0,
+    "exchange_network_access": false,
+    "local_execution": false,
+    "Champion": null,
+    "order_permission": false,
+    "trading_authorization": "NO-GO"
+  }
+}
