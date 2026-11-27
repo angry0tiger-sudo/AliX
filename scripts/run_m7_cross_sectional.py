@@ -230,22 +230,44 @@ def _collect_history_pages(symbol: str) -> dict[int, dict[str, Any]]:
     return rows_by_stamp
 
 
-def _validate_history_coverage(
-    symbol: str, rows_by_stamp: Mapping[int, dict[str, Any]]
-) -> list[dict[str, Any]]:
-    expected = list(range(PREHACK_START, PREHACK_END + 1, INTERVAL_SECONDS))
+def _expected_history_timestamps() -> list[int]:
+    return list(range(PREHACK_START, PREHACK_END + 1, INTERVAL_SECONDS))
+
+
+def _history_coverage_gaps(
+    expected: Sequence[int],
+    rows_by_stamp: Mapping[int, dict[str, Any]],
+) -> tuple[list[int], list[int]]:
     expected_set = set(expected)
     missing = [stamp for stamp in expected if stamp not in rows_by_stamp]
     unexpected = [stamp for stamp in rows_by_stamp if stamp not in expected_set]
-    if missing or unexpected or len(rows_by_stamp) != EXPECTED_ROWS:
-        raise ValueError(
-            f"m7_exact_coverage_failed:symbol={symbol}:expected={EXPECTED_ROWS}:"
-            f"actual={len(rows_by_stamp)}:missing={len(missing)}:"
-            f"first_missing={missing[0] if missing else None}:"
-            f"last_missing={missing[-1] if missing else None}:unexpected={len(unexpected)}"
-        )
-    return [rows_by_stamp[stamp] for stamp in expected]
+    return missing, unexpected
 
+
+def _raise_history_coverage_error(
+    symbol: str,
+    rows_by_stamp: Mapping[int, dict[str, Any]],
+    missing: Sequence[int],
+    unexpected: Sequence[int],
+) -> None:
+    first_missing = missing[0] if missing else None
+    last_missing = missing[-1] if missing else None
+    raise ValueError(
+        f"m7_exact_coverage_failed:symbol={symbol}:expected={EXPECTED_ROWS}:"
+        f"actual={len(rows_by_stamp)}:missing={len(missing)}:"
+        f"first_missing={first_missing}:last_missing={last_missing}:"
+        f"unexpected={len(unexpected)}"
+    )
+
+
+def _validate_history_coverage(
+    symbol: str, rows_by_stamp: Mapping[int, dict[str, Any]]
+) -> list[dict[str, Any]]:
+    expected = _expected_history_timestamps()
+    missing, unexpected = _history_coverage_gaps(expected, rows_by_stamp)
+    if missing or unexpected or len(rows_by_stamp) != EXPECTED_ROWS:
+        _raise_history_coverage_error(symbol, rows_by_stamp, missing, unexpected)
+    return [rows_by_stamp[stamp] for stamp in expected]
 
 def fetch_exact_prehack_history(symbol: str) -> list[dict[str, Any]]:
     rows_by_stamp = _collect_history_pages(symbol)
@@ -618,11 +640,16 @@ def _build_panel_row(
     }
 
 
-def build_panel(
+def _panel_source_arrays(
     data: Mapping[str, pd.DataFrame], symbols: Sequence[str]
-) -> pd.DataFrame:
-    if len(symbols) < 2 or any(symbol not in data for symbol in symbols):
-        raise ValueError("m7_unqualified_candidate_universe")
+) -> tuple[
+    np.ndarray,
+    dict[str, np.ndarray],
+    dict[str, np.ndarray],
+    dict[str, np.ndarray],
+    dict[str, np.ndarray],
+    np.ndarray,
+]:
     btc = data[BTC_SYMBOL]
     btc_close = btc["close"].to_numpy(dtype=float)
     btc_returns = _log_returns(btc_close)
@@ -639,33 +666,111 @@ def build_panel(
         symbol: _log_returns(close_by_symbol[symbol]) for symbol in symbols
     }
     dates = btc["date"].astype(str).to_numpy()
+    return (
+        btc_returns,
+        close_by_symbol,
+        open_by_symbol,
+        volume_by_symbol,
+        returns_by_symbol,
+        dates,
+    )
+
+
+def _build_symbol_decision_record(
+    *,
+    symbol: str,
+    decision_index: int,
+    symbols: Sequence[str],
+    btc_close: np.ndarray,
+    btc_returns: np.ndarray,
+    close_by_symbol: Mapping[str, np.ndarray],
+    open_by_symbol: Mapping[str, np.ndarray],
+    volume_by_symbol: Mapping[str, np.ndarray],
+    returns_by_symbol: Mapping[str, np.ndarray],
+    decision_time: str,
+) -> dict[str, Any] | None:
+    btc_return_4h = math.log(
+        btc_close[decision_index] / btc_close[decision_index - 4]
+    )
+    peer_median = _peer_median_return(
+        close_by_symbol, symbols, symbol, decision_index
+    )
+    beta = _beta_24h(
+        returns_by_symbol[symbol], btc_returns, decision_index
+    )
+    volume_shock = _relative_volume_shock(
+        volume_by_symbol[symbol], decision_index
+    )
+    return _build_panel_row(
+        symbol=symbol,
+        decision_index=decision_index,
+        decision_time=decision_time,
+        btc_return_4h=btc_return_4h,
+        peer_median=peer_median,
+        beta=beta,
+        volume_shock=volume_shock,
+        open_values=open_by_symbol[symbol],
+    )
+
+
+def _build_panel_records(
+    symbols: Sequence[str],
+    btc_close: np.ndarray,
+    close_by_symbol: Mapping[str, np.ndarray],
+    open_by_symbol: Mapping[str, np.ndarray],
+    volume_by_symbol: Mapping[str, np.ndarray],
+    returns_by_symbol: Mapping[str, np.ndarray],
+    btc_returns: np.ndarray,
+    dates: np.ndarray,
+) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     for decision_index in range(24, EXPECTED_ROWS - 5, 4):
-        btc_return_4h = math.log(
-            btc_close[decision_index] / btc_close[decision_index - 4]
-        )
         for symbol in symbols:
-            record = _build_panel_row(
+            record = _build_symbol_decision_record(
                 symbol=symbol,
                 decision_index=decision_index,
-                decision_time=dates[decision_index],
-                btc_return_4h=btc_return_4h,
-                peer_median=_peer_median_return(
-                    close_by_symbol, symbols, symbol, decision_index
-                ),
-                beta=_beta_24h(returns_by_symbol[symbol], btc_returns, decision_index),
-                volume_shock=_relative_volume_shock(
-                    volume_by_symbol[symbol], decision_index
-                ),
-                open_values=open_by_symbol[symbol],
+                symbols=symbols,
+                btc_close=btc_close,
+                btc_returns=btc_returns,
+                close_by_symbol=close_by_symbol,
+                open_by_symbol=open_by_symbol,
+                volume_by_symbol=volume_by_symbol,
+                returns_by_symbol=returns_by_symbol,
+                decision_time=str(dates[decision_index]),
             )
             if record is not None:
                 records.append(record)
+    return records
+
+
+def build_panel(
+    data: Mapping[str, pd.DataFrame], symbols: Sequence[str]
+) -> pd.DataFrame:
+    if len(symbols) < 2 or any(symbol not in data for symbol in symbols):
+        raise ValueError("m7_unqualified_candidate_universe")
+    btc_close = data[BTC_SYMBOL]["close"].to_numpy(dtype=float)
+    (
+        btc_returns,
+        close_by_symbol,
+        open_by_symbol,
+        volume_by_symbol,
+        returns_by_symbol,
+        dates,
+    ) = _panel_source_arrays(data, symbols)
+    records = _build_panel_records(
+        symbols,
+        btc_close,
+        close_by_symbol,
+        open_by_symbol,
+        volume_by_symbol,
+        returns_by_symbol,
+        btc_returns,
+        dates,
+    )
     panel = pd.DataFrame.from_records(records)
     if panel.empty:
         raise ValueError("m7_panel_empty_after_feature_qualification")
     return panel
-
 
 def _drawdown(returns: Sequence[float]) -> float:
     nav = 1.0
