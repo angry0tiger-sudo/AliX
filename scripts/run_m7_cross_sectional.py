@@ -902,6 +902,7 @@ def _run_candidate(
         ),
     }
 
+
 def evaluate_m7(data_dir: Path, btc_csv: Path, config_path: Path) -> dict[str, Any]:
     config = json.loads(config_path.read_text(encoding="utf-8"))
     if (
