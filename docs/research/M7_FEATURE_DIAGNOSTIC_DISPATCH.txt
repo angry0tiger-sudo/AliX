@@ -6,3 +6,4 @@ Retry workflow dispatch after splitting Xenon C-rank diagnostic functions.
 Retry dispatch after removing excess blank lines from diagnostic script.
 Retry after restoring Ruff's required top-level separation before __main__.
 Retry after restoring standard two-blank-line separation for all module-level definitions.
+Retry after removing one excess EOF blank line per Ruff diff.
