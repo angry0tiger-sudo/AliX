@@ -76,7 +76,6 @@ def test_portfolio_interval_return_rejects_non_finite_return() -> None:
         portfolio_interval_return(["ETHUSDT"], {"ETHUSDT": math.nan}, 50)
 
 
-
 def test_log_return_24h_uses_close_exactly_24_completed_bars_ago() -> None:
     closes = [100.0] * 25
     closes[24] = 110.0
