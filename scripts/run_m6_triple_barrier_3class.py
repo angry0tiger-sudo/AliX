@@ -128,18 +128,52 @@ def load_preregistration() -> tuple[dict[str, Any], str]:
     config = read_json(CONFIG_PATH, "m6_preregistration_invalid")
     registration = config["preregistration"]
     checks = (
-        (registration["id"] == "ALIX-M6-BTCUSDT-TRIPLE-BARRIER-3CLASS-G1", "m6_preregistration_id_mismatch"),
-        (registration["status"] == "PREREGISTERED_LOCKED", "m6_preregistration_not_locked"),
-        (config["scope"]["market"] == "BTCUSDT" and config["scope"]["venue"] == "Nobitex", "m6_market_scope_mismatch"),
-        (tuple(config["features"]["feature_names"]) == FEATURE_NAMES, "m6_feature_contract_mismatch"),
-        (config["target"]["class_mapping"] == OUTCOME_CLASSES, "m6_class_mapping_mismatch"),
-        (config["target"]["barriers"]["multiplier_k"] == 2.0, "m6_barrier_multiplier_mismatch"),
-        (config["target"]["vertical_barrier"]["max_holding_hours"] == 24, "m6_vertical_horizon_mismatch"),
-        (config["signal"]["tp_first_probability_threshold"] == 0.60, "m6_signal_threshold_mismatch"),
+        (
+            registration["id"] == "ALIX-M6-BTCUSDT-TRIPLE-BARRIER-3CLASS-G1",
+            "m6_preregistration_id_mismatch",
+        ),
+        (
+            registration["status"] == "PREREGISTERED_LOCKED",
+            "m6_preregistration_not_locked",
+        ),
+        (
+            config["scope"]["market"] == "BTCUSDT"
+            and config["scope"]["venue"] == "Nobitex",
+            "m6_market_scope_mismatch",
+        ),
+        (
+            tuple(config["features"]["feature_names"]) == FEATURE_NAMES,
+            "m6_feature_contract_mismatch",
+        ),
+        (
+            config["target"]["class_mapping"] == OUTCOME_CLASSES,
+            "m6_class_mapping_mismatch",
+        ),
+        (
+            config["target"]["barriers"]["multiplier_k"] == 2.0,
+            "m6_barrier_multiplier_mismatch",
+        ),
+        (
+            config["target"]["vertical_barrier"]["max_holding_hours"] == 24,
+            "m6_vertical_horizon_mismatch",
+        ),
+        (
+            config["signal"]["tp_first_probability_threshold"] == 0.60,
+            "m6_signal_threshold_mismatch",
+        ),
         (config["walk_forward"]["fold_count"] == 4, "m6_fold_count_mismatch"),
-        (config["acceptance_gates"]["net_profit_factor_min"] == 1.10, "m6_netpf_gate_mismatch"),
-        (config["acceptance_gates"]["completed_oos_trades_min"] == 100, "m6_trade_count_gate_mismatch"),
-        (config["acceptance_gates"]["max_drawdown_fraction_max"] == 0.15, "m6_maxdd_gate_mismatch"),
+        (
+            config["acceptance_gates"]["net_profit_factor_min"] == 1.10,
+            "m6_netpf_gate_mismatch",
+        ),
+        (
+            config["acceptance_gates"]["completed_oos_trades_min"] == 100,
+            "m6_trade_count_gate_mismatch",
+        ),
+        (
+            config["acceptance_gates"]["max_drawdown_fraction_max"] == 0.15,
+            "m6_maxdd_gate_mismatch",
+        ),
     )
     for valid, error_code in checks:
         if not valid:
@@ -268,7 +302,8 @@ def aggregate_four_hour(hourly: Sequence[Candle]) -> list[Candle]:
         if len(group) != 4:
             continue
         if any(
-            (group[index].timestamp - group[index - 1].timestamp).total_seconds() != 3600
+            (group[index].timestamp - group[index - 1].timestamp).total_seconds()
+            != 3600
             for index in range(1, 4)
         ):
             raise ValueError("m6_four_hour_group_not_contiguous")
@@ -340,9 +375,29 @@ def _opening_gap_event(
     if offset == 0:
         return None
     if candle.open >= take_profit:
-        return Event("TP_FIRST", 0, entry_base_index, max_end, candle.base_start_index, entry_price, candle.open, take_profit, stop_loss)
+        return Event(
+            "TP_FIRST",
+            0,
+            entry_base_index,
+            max_end,
+            candle.base_start_index,
+            entry_price,
+            candle.open,
+            take_profit,
+            stop_loss,
+        )
     if candle.open <= stop_loss:
-        return Event("SL_FIRST", 1, entry_base_index, max_end, candle.base_start_index, entry_price, candle.open, take_profit, stop_loss)
+        return Event(
+            "SL_FIRST",
+            1,
+            entry_base_index,
+            max_end,
+            candle.base_start_index,
+            entry_price,
+            candle.open,
+            take_profit,
+            stop_loss,
+        )
     return None
 
 
@@ -357,11 +412,41 @@ def _intrabar_event(
     hit_tp = candle.high >= take_profit
     hit_sl = candle.low <= stop_loss
     if hit_tp and hit_sl:
-        return Event("AMBIGUOUS", None, entry_base_index, max_end, candle.base_start_index, entry_price, stop_loss, take_profit, stop_loss)
+        return Event(
+            "AMBIGUOUS",
+            None,
+            entry_base_index,
+            max_end,
+            candle.base_start_index,
+            entry_price,
+            stop_loss,
+            take_profit,
+            stop_loss,
+        )
     if hit_tp:
-        return Event("TP_FIRST", 0, entry_base_index, max_end, candle.base_start_index, entry_price, take_profit, take_profit, stop_loss)
+        return Event(
+            "TP_FIRST",
+            0,
+            entry_base_index,
+            max_end,
+            candle.base_start_index,
+            entry_price,
+            take_profit,
+            take_profit,
+            stop_loss,
+        )
     if hit_sl:
-        return Event("SL_FIRST", 1, entry_base_index, max_end, candle.base_start_index, entry_price, stop_loss, take_profit, stop_loss)
+        return Event(
+            "SL_FIRST",
+            1,
+            entry_base_index,
+            max_end,
+            candle.base_start_index,
+            entry_price,
+            stop_loss,
+            take_profit,
+            stop_loss,
+        )
     return None
 
 
@@ -380,7 +465,13 @@ def _resolve_event(
     for offset in range(24):
         candle = hourly[entry_base_index + offset]
         gap_event = _opening_gap_event(
-            candle, offset, entry_base_index, max_end, entry_price, take_profit, stop_loss
+            candle,
+            offset,
+            entry_base_index,
+            max_end,
+            entry_price,
+            take_profit,
+            stop_loss,
         )
         if gap_event is not None:
             return gap_event
@@ -390,8 +481,15 @@ def _resolve_event(
         if touch_event is not None:
             return touch_event
     return Event(
-        "VERTICAL_TIMEOUT", 2, entry_base_index, max_end, max_end,
-        entry_price, hourly[max_end].close, take_profit, stop_loss
+        "VERTICAL_TIMEOUT",
+        2,
+        entry_base_index,
+        max_end,
+        max_end,
+        entry_price,
+        hourly[max_end].close,
+        take_profit,
+        stop_loss,
     )
 
 
@@ -410,7 +508,10 @@ def build_events(
 
 
 def _training_fold_rows(
-    candidates: Sequence[int], events: Sequence[Event | None], first_entry: int, embargo_hours: int
+    candidates: Sequence[int],
+    events: Sequence[Event | None],
+    first_entry: int,
+    embargo_hours: int,
 ) -> tuple[tuple[int, ...], int]:
     rows: list[int] = []
     purged = 0
@@ -429,8 +530,10 @@ def _test_fold_rows(
     candidates: Sequence[int], events: Sequence[Event | None], last_test_base: int
 ) -> tuple[int, ...]:
     return tuple(
-        index for index in candidates
-        if events[index] is not None and events[index].max_end_base_index <= last_test_base
+        index
+        for index in candidates
+        if events[index] is not None
+        and events[index].max_end_base_index <= last_test_base
     )
 
 
@@ -442,13 +545,17 @@ def build_fold_plans(
 ) -> tuple[FoldPlan, ...]:
     if len(eligible_indices) < 5:
         raise ValueError("m6_insufficient_feature_rows_for_walk_forward")
-    if any(left >= right for left, right in zip(eligible_indices, eligible_indices[1:])):
+    if any(
+        left >= right for left, right in zip(eligible_indices, eligible_indices[1:])
+    ):
         raise ValueError("m6_eligible_indices_not_strictly_ordered")
     edges = [index * len(eligible_indices) // 5 for index in range(6)]
     plans: list[FoldPlan] = []
     for fold_index in range(4):
         train_candidates = eligible_indices[: edges[fold_index + 1]]
-        test_candidates = eligible_indices[edges[fold_index + 1] : edges[fold_index + 2]]
+        test_candidates = eligible_indices[
+            edges[fold_index + 1] : edges[fold_index + 2]
+        ]
         if not test_candidates:
             raise ValueError("m6_empty_test_block")
         first_test = test_candidates[0]
@@ -542,11 +649,16 @@ def _trade_list(
                 outcome=event.outcome,
             )
         )
-    return tuple(sorted(trades, key=lambda item: (item.entry_base_index, item.exit_base_index)))
+    return tuple(
+        sorted(trades, key=lambda item: (item.entry_base_index, item.exit_base_index))
+    )
 
 
 def _mark_portfolio(
-    hourly: Sequence[Candle], trades: Sequence[Trade], mark_indices: Sequence[int], cost: float
+    hourly: Sequence[Candle],
+    trades: Sequence[Trade],
+    mark_indices: Sequence[int],
+    cost: float,
 ) -> tuple[list[float], int]:
     nav = [1.0]
     max_concurrent = 0
@@ -559,7 +671,9 @@ def _mark_portfolio(
             if item.entry_base_index <= mark < item.exit_base_index
         )
         active_count = sum(
-            1 for item in trades if item.entry_base_index <= mark <= item.exit_base_index
+            1
+            for item in trades
+            if item.entry_base_index <= mark <= item.exit_base_index
         )
         max_concurrent = max(max_concurrent, active_count)
         nav.append(1.0 + realized + unrealized)
@@ -629,10 +743,13 @@ def aggregate_portfolios(outcomes: Sequence[PortfolioOutcome]) -> dict[str, Any]
     return {
         "completed_oos_trades": len(trades),
         "net_profit_factor": net_profit_factor(trades),
-        "total_net_pnl_fraction_of_initial_equity": float(sum(item.pnl for item in trades)),
+        "total_net_pnl_fraction_of_initial_equity": float(
+            sum(item.pnl for item in trades)
+        ),
         "max_drawdown": max_drawdown(nav),
         "maximum_concurrent_positions": max(
-            (int(item.metrics["maximum_concurrent_positions"]) for item in outcomes), default=0
+            (int(item.metrics["maximum_concurrent_positions"]) for item in outcomes),
+            default=0,
         ),
         "ambiguous_trades_conservatively_charged_as_sl": sum(
             int(item.metrics["ambiguous_trades_conservatively_charged_as_sl"])
@@ -647,7 +764,12 @@ def is_valid_fold(outcome: PortfolioOutcome) -> bool:
 
 def is_stable_fold(outcome: PortfolioOutcome) -> bool:
     pf = outcome.metrics["net_profit_factor"]
-    return is_valid_fold(outcome) and outcome.pnl > 0.0 and pf is not None and float(pf) > 1.0
+    return (
+        is_valid_fold(outcome)
+        and outcome.pnl > 0.0
+        and pf is not None
+        and float(pf) > 1.0
+    )
 
 
 def check_gates(
@@ -656,9 +778,12 @@ def check_gates(
     gates = config["acceptance_gates"]
     pf = pooled["net_profit_factor"]
     return {
-        "netpf_gte_1_10": pf is not None and float(pf) >= float(gates["net_profit_factor_min"]),
-        "trades_gte_100": int(pooled["completed_oos_trades"]) >= int(gates["completed_oos_trades_min"]),
-        "maxdd_lte_15_percent": float(pooled["max_drawdown"]) <= float(gates["max_drawdown_fraction_max"]),
+        "netpf_gte_1_10": pf is not None
+        and float(pf) >= float(gates["net_profit_factor_min"]),
+        "trades_gte_100": int(pooled["completed_oos_trades"])
+        >= int(gates["completed_oos_trades_min"]),
+        "maxdd_lte_15_percent": float(pooled["max_drawdown"])
+        <= float(gates["max_drawdown_fraction_max"]),
         "at_least_3_valid_folds": valid_folds >= int(gates["minimum_valid_folds"]),
         "at_least_3_stable_folds": stable_folds >= int(gates["minimum_stable_folds"]),
     }
@@ -730,8 +855,7 @@ def _training_failure_reason(
     if len(plan.train_indices) < minimum_rows:
         return "minimum_training_rows"
     missing = [
-        name for name in CLASS_NAMES.values()
-        if counts.get(name, 0) < minimum_per_class
+        name for name in CLASS_NAMES.values() if counts.get(name, 0) < minimum_per_class
     ]
     if missing:
         return "minimum_training_class_count:" + ",".join(sorted(missing))
@@ -773,25 +897,35 @@ def _make_prediction_rows(
         event = events[decision]
         if event is None:
             raise ValueError("m6_test_event_missing_after_fold_filter")
-        rows.append({
-            "trial_id": f"NOBITEX-M6-{horizon_name}-RF-3CLASS-01",
-            "horizon": horizon_name,
-            "fold_id": plan.fold_id,
-            "decision_time_utc": decision_bars[decision].timestamp.isoformat().replace("+00:00", "Z"),
-            "entry_time_utc": hourly[event.entry_base_index].timestamp.isoformat().replace("+00:00", "Z"),
-            "event_outcome": event.outcome,
-            "true_class": CLASS_NAMES[event.label] if event.label is not None else None,
-            "predicted_class": CLASS_NAMES[int(predictions[row_index])],
-            "p_tp_first": float(tp_probabilities[row_index]),
-            "p_sl_first": float(probabilities[row_index][columns[1]]),
-            "p_vertical_timeout": float(probabilities[row_index][columns[2]]),
-            "long_signal": is_long_signal(tp_probabilities[row_index]),
-            "entry_price": float(event.entry_price),
-            "exit_price_for_economic_ledger": float(event.exit_price),
-            "exit_outcome_for_economic_ledger": (
-                "SL_FIRST_CONSERVATIVE" if event.outcome == "AMBIGUOUS" else event.outcome
-            ),
-        })
+        rows.append(
+            {
+                "trial_id": f"NOBITEX-M6-{horizon_name}-RF-3CLASS-01",
+                "horizon": horizon_name,
+                "fold_id": plan.fold_id,
+                "decision_time_utc": decision_bars[decision]
+                .timestamp.isoformat()
+                .replace("+00:00", "Z"),
+                "entry_time_utc": hourly[event.entry_base_index]
+                .timestamp.isoformat()
+                .replace("+00:00", "Z"),
+                "event_outcome": event.outcome,
+                "true_class": CLASS_NAMES[event.label]
+                if event.label is not None
+                else None,
+                "predicted_class": CLASS_NAMES[int(predictions[row_index])],
+                "p_tp_first": float(tp_probabilities[row_index]),
+                "p_sl_first": float(probabilities[row_index][columns[1]]),
+                "p_vertical_timeout": float(probabilities[row_index][columns[2]]),
+                "long_signal": is_long_signal(tp_probabilities[row_index]),
+                "entry_price": float(event.entry_price),
+                "exit_price_for_economic_ledger": float(event.exit_price),
+                "exit_outcome_for_economic_ledger": (
+                    "SL_FIRST_CONSERVATIVE"
+                    if event.outcome == "AMBIGUOUS"
+                    else event.outcome
+                ),
+            }
+        )
     return rows
 
 
@@ -846,15 +980,20 @@ def evaluate_fold(
         features, plan, train_labels, config
     )
     prediction_rows = _make_prediction_rows(
-        hourly, decision_bars, events, plan, horizon_name,
-        probabilities, predictions, tp_probabilities, columns
+        hourly,
+        decision_bars,
+        events,
+        plan,
+        horizon_name,
+        probabilities,
+        predictions,
+        tp_probabilities,
+        columns,
     )
     class_metrics = _classification_metrics(
         events, plan.test_indices, [int(item) for item in predictions]
     )
-    outcomes = _fold_cost_outcomes(
-        hourly, events, plan, tp_probabilities, horizon_name
-    )
+    outcomes = _fold_cost_outcomes(hourly, events, plan, tp_probabilities, horizon_name)
     record = {
         "fold_id": plan.fold_id,
         "status": "FITTED",
@@ -886,7 +1025,13 @@ def _summarize_cost(
     stable = sum(1 for item in outcomes if is_stable_fold(item))
     gates = check_gates(pooled, valid, stable, config)
     insufficient = pooled["completed_oos_trades"] < 100 or valid < 3
-    verdict = "PASS" if all(gates.values()) else "INSUFFICIENT_SAMPLE / NO-GO" if insufficient else "NO-GO"
+    verdict = (
+        "PASS"
+        if all(gates.values())
+        else "INSUFFICIENT_SAMPLE / NO-GO"
+        if insufficient
+        else "NO-GO"
+    )
     return {
         "pooled_oos": pooled,
         "valid_folds": valid,
@@ -984,14 +1129,25 @@ def run_evaluation() -> tuple[dict[str, Any], list[dict[str, Any]]]:
         for trial in trial_results.values()
         for summary in trial["cost_scenarios"].values()
     )
-    overall = "ECONOMIC_GATES_PASS_EXPLORATORY_ONLY" if all_passed else "INSUFFICIENT_SAMPLE / NO-GO" if any_insufficient else "NO-GO"
+    overall = (
+        "ECONOMIC_GATES_PASS_EXPLORATORY_ONLY"
+        if all_passed
+        else "INSUFFICIENT_SAMPLE / NO-GO"
+        if any_insufficient
+        else "NO-GO"
+    )
     report = {
         "schema_version": "alix.m6.triple-barrier-3class-evaluation-report.v1",
-        "evaluation_status": "COMPLETED_PREHACK_RESEARCH" if len(prediction_rows) > 0 else "COMPLETED_INSUFFICIENT_OOS",
+        "evaluation_status": "COMPLETED_PREHACK_RESEARCH"
+        if len(prediction_rows) > 0
+        else "COMPLETED_INSUFFICIENT_OOS",
         "commit_sha": os.environ.get("GITHUB_SHA", "UNKNOWN"),
         "preregistration_id": config["preregistration"]["id"],
         "preregistration_sha256": preregistration_sha,
-        "model_runtime": {"scikit_learn": sklearn.__version__, "estimator": "RandomForestClassifier"},
+        "model_runtime": {
+            "scikit_learn": sklearn.__version__,
+            "estimator": "RandomForestClassifier",
+        },
         "dataset_binding": {
             "venue": "Nobitex",
             "market": "BTCUSDT",
@@ -1058,22 +1214,38 @@ def main() -> int:
         encoding="utf-8",
     )
     fields = [
-        "trial_id", "horizon", "fold_id", "decision_time_utc", "entry_time_utc",
-        "event_outcome", "true_class", "predicted_class", "p_tp_first", "p_sl_first",
-        "p_vertical_timeout", "long_signal", "entry_price", "exit_price_for_economic_ledger",
+        "trial_id",
+        "horizon",
+        "fold_id",
+        "decision_time_utc",
+        "entry_time_utc",
+        "event_outcome",
+        "true_class",
+        "predicted_class",
+        "p_tp_first",
+        "p_sl_first",
+        "p_vertical_timeout",
+        "long_signal",
+        "entry_price",
+        "exit_price_for_economic_ledger",
         "exit_outcome_for_economic_ledger",
     ]
     with args.predictions_out.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
         writer.writerows(predictions)
-    print(json.dumps({
-        "evaluation_status": report["evaluation_status"],
-        "overall_verdict": report["economic_acceptance"]["overall_verdict"],
-        "trial_count": report["trial_count"],
-        "prediction_rows": len(predictions),
-        "preregistration_sha256": report["preregistration_sha256"],
-    }, sort_keys=True))
+    print(
+        json.dumps(
+            {
+                "evaluation_status": report["evaluation_status"],
+                "overall_verdict": report["economic_acceptance"]["overall_verdict"],
+                "trial_count": report["trial_count"],
+                "prediction_rows": len(predictions),
+                "preregistration_sha256": report["preregistration_sha256"],
+            },
+            sort_keys=True,
+        )
+    )
     return 0
 
 

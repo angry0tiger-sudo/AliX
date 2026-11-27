@@ -106,8 +106,16 @@ def test_three_class_target_resolves_tp_first_sl_first_and_timeout() -> None:
     sl = _resolve_event(sl_candles, 1, 0.01)
     timeout = _resolve_event(baseline, 1, 0.01)
 
-    assert tp is not None and (tp.outcome, tp.label, tp.exit_price) == ("TP_FIRST", 0, 102.0)
-    assert sl is not None and (sl.outcome, sl.label, sl.exit_price) == ("SL_FIRST", 1, 98.0)
+    assert tp is not None and (tp.outcome, tp.label, tp.exit_price) == (
+        "TP_FIRST",
+        0,
+        102.0,
+    )
+    assert sl is not None and (sl.outcome, sl.label, sl.exit_price) == (
+        "SL_FIRST",
+        1,
+        98.0,
+    )
     assert timeout is not None
     assert timeout.outcome == "VERTICAL_TIMEOUT"
     assert timeout.label == 2
@@ -158,15 +166,30 @@ def test_four_hour_events_enter_at_next_four_hour_group_open() -> None:
 def test_fold_plans_purge_label_windows_and_apply_embargo() -> None:
     bars = [
         Candle(
-            timestamp=datetime(2024, 1, 1, tzinfo=timezone.utc) + timedelta(hours=4 * index),
-            open=100.0, high=101.0, low=99.0, close=100.0, volume=1.0,
-            base_start_index=4 * index, base_end_index=4 * index + 3,
+            timestamp=datetime(2024, 1, 1, tzinfo=timezone.utc)
+            + timedelta(hours=4 * index),
+            open=100.0,
+            high=101.0,
+            low=99.0,
+            close=100.0,
+            volume=1.0,
+            base_start_index=4 * index,
+            base_end_index=4 * index + 3,
         )
         for index in range(1000)
     ]
     events = [
-        Event("TP_FIRST", 0, 4 * (index + 1), 4 * (index + 1) + 23,
-              4 * (index + 1) + 1, 100.0, 102.0, 102.0, 98.0)
+        Event(
+            "TP_FIRST",
+            0,
+            4 * (index + 1),
+            4 * (index + 1) + 23,
+            4 * (index + 1) + 1,
+            100.0,
+            102.0,
+            102.0,
+            98.0,
+        )
         for index in range(len(bars))
     ]
     eligible = list(range(len(bars) - 1))
@@ -253,7 +276,9 @@ def test_costed_portfolio_charges_round_trip_cost_once_and_marks_nav() -> None:
 
     expected_notional = 1.0 / 25.0
     assert result.metrics["completed_oos_trades"] == 1
-    assert result.metrics["position_notional_fraction"] == pytest.approx(expected_notional)
+    assert result.metrics["position_notional_fraction"] == pytest.approx(
+        expected_notional
+    )
     assert result.trades[0].pnl == pytest.approx(expected_notional * (0.02 - 0.005))
     assert result.pnl == pytest.approx(result.trades[0].pnl)
     assert result.nav[-1] == pytest.approx(1.0 + result.pnl)
@@ -290,18 +315,20 @@ def test_profit_factor_is_undefined_without_negative_trades() -> None:
 def test_stable_fold_requires_twenty_trades_positive_pnl_and_pf_above_one() -> None:
     from scripts.run_m6_triple_barrier_3class import PortfolioOutcome, Trade
 
-    trades = tuple(
-        [Trade(i, i + 1, i + 1, 0.04, 0.001, "TP_FIRST") for i in range(20)]
-    )
+    trades = tuple([Trade(i, i + 1, i + 1, 0.04, 0.001, "TP_FIRST") for i in range(20)])
     stable = PortfolioOutcome(
         metrics={"completed_oos_trades": 20, "net_profit_factor": 2.0},
-        nav=(1.0,), pnl=0.02, trades=trades
+        nav=(1.0,),
+        pnl=0.02,
+        trades=trades,
     )
     assert is_stable_fold(stable)
 
     unstable = PortfolioOutcome(
         metrics={"completed_oos_trades": 20, "net_profit_factor": 0.9},
-        nav=(1.0,), pnl=-0.01, trades=trades
+        nav=(1.0,),
+        pnl=-0.01,
+        trades=trades,
     )
     assert not is_stable_fold(unstable)
 
