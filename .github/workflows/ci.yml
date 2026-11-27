@@ -326,7 +326,8 @@ jobs:
         run: pytest tests/integration/test_phase9_postgres.py -q
 
   regime-m3-ofi-evaluation:
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/research/nobitex-hf-strategy'
+    # Permanently disabled after Owner-approved ADR-060 CLOSED_NO_GO.
+    if: false
     needs:
       - quality
       - four-arm-lock-bare-env
