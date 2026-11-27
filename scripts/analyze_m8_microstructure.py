@@ -158,11 +158,16 @@ def _read_verified_archive(
 
     if manifest.get("market") != entry.get("market"):
         raise InputError(f"MANIFEST_MARKET_INVENTORY_MISMATCH:{path.name}")
-    try:
-        run_id_matches = int(manifest.get("workflow_run_id")) == int(
-            entry.get("run_id")
-        )
-    except (TypeError, ValueError):
+    manifest_run_id = manifest.get("workflow_run_id")
+    inventory_run_id = entry.get("run_id")
+    if isinstance(manifest_run_id, (str, int)) and isinstance(
+        inventory_run_id, (str, int)
+    ):
+        try:
+            run_id_matches = int(manifest_run_id) == int(inventory_run_id)
+        except ValueError:
+            run_id_matches = False
+    else:
         run_id_matches = False
     if not run_id_matches:
         raise InputError(f"MANIFEST_RUN_ID_MISMATCH:{path.name}")
@@ -244,7 +249,7 @@ def _samples_for_horizon(
     first = timestamps[0]
     last = timestamps[-1]
     grid = ((first + horizon_ms - 1) // horizon_ms) * horizon_ms
-    pairs = {name: [] for name in FEATURES}
+    pairs: dict[str, list[float]] = {name: [] for name in FEATURES}
     targets: list[float] = []
     excluded = {
         "no_past_snapshot": 0,
