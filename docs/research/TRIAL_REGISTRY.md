@@ -1,6 +1,6 @@
 # AliX Historical Trial Registry
 
-Status: RECONCILED — family-level counts recorded; unresolved historical trial IDs remain UNKNOWN; current M3 OFI and M7 G2.0 lifecycles are CLOSED_NO_GO.
+Status: RECONCILED — family-level counts recorded; unresolved historical trial IDs remain UNKNOWN; current M3 OFI and M7 G2.0/G3.0 lifecycles are CLOSED_NO_GO.
 Last reconciled: 2026-11-27 UTC.
 Registry basis: immutable GitHub Actions run history and retained result artifacts. Counts below distinguish
 workflow executions, candidate variants, actually trained/evaluated candidates, and unique model/genome trials.
@@ -906,3 +906,33 @@ The closed M3 OFI trials remain BTCIRT-specific historical evidence and are not 
 - **Next-step boundary:** any feature-level diagnosis must be read-only and PRE-HACK-only in GitHub Actions. It must retain G1.2 and G2.0 failures, not relax the feature contract, and must not create a Champion or trading permission.
 - **Safety:** `Champion=null`; `order_permission=false`; `trading_authorization=NO-GO`; private API calls 0; paper/real orders 0; Holdout/Post-Hack bytes read 0; no local model or data analysis.
 - **Global accounting:** `GLOBAL_N=UNKNOWN`; `GLOBAL_DSR=NOT_COMPUTABLE`. The four G1.2/G2.0 M7 candidate identities are recorded in their respective revisions; they do not make the full historic AliX experiment inventory known.
+
+
+---
+
+## [APPEND] M7 G3.0 — Feature-Only Supersession and Economic NO-GO (2026-11-27)
+
+- **Decision record:** [ADR-073 — M7 Feature Availability Diagnostic and G3.0 Feature-Only Supersession](../adr/ADR-073-m7-feature-availability-diagnostic.md).
+- **G2.0 diagnostic:** [GitHub Actions Run #10 / ID 46057363991](https://github.com/angry0tiger-sudo/AliX/actions/runs/46057363991); artifact ID 15227458008, ZIP SHA-256 4d2769bf26e5832779c5ba87de34f23d58ee1b57d8f322deea048a8930548aa5.
+- **Root cause:** relative_volume_shock_24h rejected 7,943/7,943 decision rows (100%) on each of the nine qualified symbols because the prior-24h median volume was nonpositive. The validated OHLCV volume is nonnegative, so each of those rolling medians was zero. beta_24h_to_btc rejected 0/7,943 rows (0%) on every symbol. No other feature or target rejection occurred.
+- **G3.0 preregistration:** M7-CS-G3.0; SHA-256 2fe9ae965565c8ee7fc17f6f92bc6d5774566900fc22ef2f09b8d73f00308527.
+- **Feature-only change:** relative_volume_shock_24h replaced with log_return_24h = ln(close[t] / close[t-24]), using the last 24 completed hourly bars. The beta feature, other two features, model, alpha, target, 5/9-pair universes, portfolio mechanics, folds, costs and acceptance gates stayed unchanged.
+- **Candidate identities:** the two existing M7 logical identities remain NOBITEX-M7-5PAIR-RIDGE-TOP2-02 and NOBITEX-M7-9PAIR-RIDGE-TOP2-01; G3.0 is a superseding feature-spec revision of these same fixed universes. G2.0 remains archived as the prior blocked attempt. The G3.0 feature revision is retained as a separate preregistered configuration attempt for future multiple-testing/DSR accounting; it must not be erased or treated as a free retry.
+- **Exact-parent Standard CI:** [Run #2689 / ID 46059360239](https://github.com/angry0tiger-sudo/AliX/actions/runs/46059360239), SHA ba8977e86b2414674fc30e67bdeb6a97b357fa65, SUCCESS.
+- **G3.0 evaluation:** [M7 Evaluation Run #4 / ID 46060086225](https://github.com/angry0tiger-sudo/AliX/actions/runs/46060086225), trigger commit d1fa26fae926fb8d2ac5e4424fe6e6af532fda3f, workflow conclusion SUCCESS.
+- **Artifact:** alix-m7-cross-sectional-results, ID 15229065411, ZIP SHA-256 a1e5a737a7015a58cd6a2c77ed69bf6e3125c3ed4ec04b779d33764148ee23f0.
+- **G3.0 panel/fits:** accepted panel rows 39,715 (5PAIR) and 71,487 (9PAIR); fit count 4 per candidate; 4/4 valid folds and 0/4 stable folds for both.
+- **G3.0 economic outcome:**
+
+| Candidate | Cost | NetPF | MaxDD | OOS trades | Valid / stable folds |
+|---|---:|---:|---:|---:|---|
+| 5PAIR G3.0 | 50 bps | 0.503741 | 99.997453% | 4,565 | 4/4 / 0/4 |
+| 5PAIR G3.0 | 90 bps | 0.262960 | 99.9999997% | 4,565 | 4/4 / 0/4 |
+| 9PAIR G3.0 | 50 bps | 0.424442 | 99.999872% | 5,959 | 4/4 / 0/4 |
+| 9PAIR G3.0 | 90 bps | 0.193591 | 99.999999999% | 5,959 | 4/4 / 0/4 |
+
+- **Gate result:** trade-count and valid-fold minimums passed. All four candidate/cost outcomes failed NetPF >= 1.10, MaxDD <= 15%, and stable folds >= 3/4. Family verdict: NO-GO.
+- **Scientific interpretation:** G3.0 resolved feature availability and enabled actual walk-forward evaluation, but this fixed Ridge/top-two policy showed a measured negative economic result with near-total drawdowns. This is stronger evidence than G2.0's data/feature blockage; it is not live-trading evidence.
+- **Horizon:** 1h is the input candle cadence; the only registered target is 4h forward log return. No 1h prediction-horizon candidate was run.
+- **Safety:** no new data acquisition, no local execution, Holdout/Post-Hack bytes read 0, private API calls 0, paper/real orders 0, Champion=null, order_permission=false, trading_authorization=NO-GO.
+- **Trial accounting:** G2.0 and G3.0 feature-spec revisions must both remain in the M7 family history for future multiple-testing corrections. GLOBAL_N=UNKNOWN; GLOBAL_DSR=NOT_COMPUTABLE.

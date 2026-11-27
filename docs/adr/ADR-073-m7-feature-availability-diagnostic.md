@@ -175,3 +175,49 @@ This is now a measured negative economic result, not an empty-panel or insuffici
 The evaluation report confirms PRE-HACK scope only, with no Holdout or Post-Hack bytes read, zero private API calls, zero paper or real order attempts, Champion = null, order_permission = false, and trading_authorization = NO-GO.
 
 No paid service, wallet, or TinyFish was used. The main branch remained unchanged; its protected tree SHA is still 5761c6c34143f8e6924f53a4e745c48932a5f791. The temporary push-based diagnostic runner is no longer required after the successful diagnostic artifact and is removed from the research branch; the dedicated workflow-dispatch-only diagnostic definition remains retained.
+
+
+## 8. G3.0 feature-only economic evaluation
+
+The feature-only G3.0 preregistration replaced the unavailable volume-shock feature with the natural-log 24-hour close return: log_return_24h = ln(close[t] / close[t-24]). No other model, policy, universe, target, fold, cost, or gate parameter changed.
+
+- **Preregistration revision:** M7-CS-G3.0
+- **Preregistration SHA-256:** 2fe9ae965565c8ee7fc17f6f92bc6d5774566900fc22ef2f09b8d73f00308527
+- **Implementation/config parent:** ba8977e86b2414674fc30e67bdeb6a97b357fa65
+- **Exact-parent Standard CI:** [Run #2689 / ID 46059360239](https://github.com/angry0tiger-sudo/AliX/actions/runs/46059360239), SUCCESS
+- **Evaluation workflow:** [M7 Cross-Sectional Ridge Economic Evaluation Run #4 / ID 46060086225](https://github.com/angry0tiger-sudo/AliX/actions/runs/46060086225), SUCCESS for execution and report validation
+- **Evaluation trigger commit:** d1fa26fae926fb8d2ac5e4424fe6e6af532fda3f
+- **Artifact:** alix-m7-cross-sectional-results, ID 15229065411
+- **Artifact ZIP SHA-256:** a1e5a737a7015a58cd6a2c77ed69bf6e3125c3ed4ec04b779d33764148ee23f0
+- **Artifact URL:** https://github.com/angry0tiger-sudo/AliX/actions/runs/46060086225/artifacts/15229065411
+
+Both candidate panels were fully populated and four fold models were fitted for each candidate. The panel row counts were 39,715 for 5PAIR and 71,487 for 9PAIR; each candidate had fit_count=4. All four folds were valid, but zero folds were stable for either candidate.
+
+### 8.1 Economic metrics
+
+| Candidate | Cost | NetPF | MaxDD | Completed OOS trades | Valid / stable folds | Verdict |
+|---|---:|---:|---:|---:|---:|---|
+| 5PAIR G3.0 | 50 bps | 0.503741 | 99.997453% | 4,565 | 4/4 / 0/4 | NO-GO |
+| 5PAIR G3.0 | 90 bps | 0.262960 | 99.9999997% | 4,565 | 4/4 / 0/4 | NO-GO |
+| 9PAIR G3.0 | 50 bps | 0.424442 | 99.999872% | 5,959 | 4/4 / 0/4 | NO-GO |
+| 9PAIR G3.0 | 90 bps | 0.193591 | 99.999999999% | 5,959 | 4/4 / 0/4 | NO-GO |
+
+### 8.2 Economic gate interpretation
+
+- The minimum trade-count gate (100) passed for both candidates.
+- The minimum valid-fold gate (3/4) passed with 4/4 valid folds.
+- The NetPF gate (>=1.10) failed under both cost scenarios for both candidates.
+- The MaxDD gate (<=15%) failed severely under both cost scenarios.
+- The stable-fold gate (>=3/4) failed with 0/4 stable folds.
+
+The family-level G3.0 verdict is NO-GO. Unlike G2.0, this is a measured economic failure after the panel was populated and the four walk-forward models were fitted. The near-total drawdowns are observed backtest metrics under the preregistered accounting rules; they are not live or paper-trading results.
+
+## 9. Final M7 decision and safety state
+
+**M7 G2.0:** BLOCKED_DATA_OR_FEATURE_QUALITY / NO-GO; retained as the failed feature-availability revision, with no model fit.
+
+**M7 G3.0:** ECONOMIC NO-GO; both candidates were fully evaluated and failed the NetPF, MaxDD and stable-fold gates. The 24h log-return feature resolved the empty-panel problem but did not produce an economic edge.
+
+No further feature or threshold tuning is authorized by this ADR. Any new strategy or feature hypothesis requires a new prospective preregistration before outcomes are inspected.
+
+The evaluation report confirms new_data_acquisition_during_evaluation=false, holdout_bytes_read=false, posthack_data_read=false, private_api_calls=0, paper_orders=0, and real_order_attempts=0. Champion=null, order_permission=false, and trading_authorization=NO-GO remain unchanged. The 1h cadence is the input sampling interval; the only registered prediction target remains the 4h forward return.
