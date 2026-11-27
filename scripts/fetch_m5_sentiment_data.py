@@ -56,6 +56,65 @@ def _parse_integer(value: object, field_name: str) -> int:
     return parsed
 
 
+def _parse_observation_timestamp(
+    item: Mapping[str, object],
+    fetched_at_utc: datetime,
+    seen_timestamps: set[int],
+) -> tuple[int, datetime]:
+    """Validate a provider observation timestamp and enforce uniqueness."""
+    timestamp = _parse_integer(item.get("timestamp"), "timestamp")
+    if timestamp <= 0:
+        raise ValueError("alternative_me_timestamp_out_of_range")
+    if timestamp in seen_timestamps:
+        raise ValueError("alternative_me_duplicate_timestamp")
+    try:
+        observation_time = datetime.fromtimestamp(timestamp, tz=timezone.utc)
+    except (OverflowError, OSError, ValueError):
+        raise ValueError("alternative_me_timestamp_unrepresentable") from None
+    if observation_time > fetched_at_utc + timedelta(minutes=5):
+        raise ValueError("alternative_me_source_timestamp_in_future")
+    seen_timestamps.add(timestamp)
+    return timestamp, observation_time
+
+
+def _parse_sentiment_value(item: Mapping[str, object]) -> tuple[int, str]:
+    """Validate the provider score and its human-readable classification."""
+    value = _parse_integer(item.get("value"), "value")
+    if not 0 <= value <= 100:
+        raise ValueError("alternative_me_value_out_of_range")
+    classification = item.get("value_classification")
+    if not isinstance(classification, str) or not classification.strip():
+        raise ValueError("alternative_me_classification_missing")
+    return value, classification.strip()
+
+
+def _normalize_provider_record(
+    item: object,
+    fetched_at_utc: datetime,
+    seen_timestamps: set[int],
+) -> dict[str, object]:
+    """Normalize one API row after validating its object shape."""
+    if not isinstance(item, dict):
+        raise ValueError("alternative_me_record_not_object")
+    typed_item = cast(Mapping[str, object], item)
+    timestamp, observation_time = _parse_observation_timestamp(
+        typed_item, fetched_at_utc, seen_timestamps
+    )
+    value, classification = _parse_sentiment_value(typed_item)
+    return {
+        "provider_id": PROVIDER_ID,
+        "target_market": TARGET_MARKET,
+        "market_scope": "global_btc_sentiment_not_nobitex_pair_specific",
+        "timestamp": timestamp,
+        "observation_time_utc": _iso_utc(observation_time),
+        "value": value,
+        "value_classification": classification,
+        "fetched_at": _iso_utc(fetched_at_utc),
+        "available_at": _iso_utc(observation_time + timedelta(days=1)),
+        "available_at_basis": AVAILABILITY_POLICY,
+    }
+
+
 def normalize_records(
     payload: Mapping[str, object], fetched_at: datetime
 ) -> list[dict[str, object]]:
@@ -63,59 +122,17 @@ def normalize_records(
     fetched_at_utc = _utc_datetime(fetched_at, "fetched_at")
     if payload.get("name") != "Fear and Greed Index":
         raise ValueError("alternative_me_provider_name_mismatch")
-
     raw_data = payload.get("data")
     if not isinstance(raw_data, list) or not raw_data:
         raise ValueError("alternative_me_data_missing_or_empty")
 
-    records: list[dict[str, object]] = []
     seen_timestamps: set[int] = set()
-    for item in raw_data:
-        if not isinstance(item, dict):
-            raise ValueError("alternative_me_record_not_object")
-
-        timestamp = _parse_integer(item.get("timestamp"), "timestamp")
-        if timestamp <= 0:
-            raise ValueError("alternative_me_timestamp_out_of_range")
-        if timestamp in seen_timestamps:
-            raise ValueError("alternative_me_duplicate_timestamp")
-        seen_timestamps.add(timestamp)
-
-        try:
-            observation_time = datetime.fromtimestamp(timestamp, tz=timezone.utc)
-        except (OverflowError, OSError, ValueError):
-            raise ValueError("alternative_me_timestamp_unrepresentable") from None
-
-        if observation_time > fetched_at_utc + timedelta(minutes=5):
-            raise ValueError("alternative_me_source_timestamp_in_future")
-
-        value = _parse_integer(item.get("value"), "value")
-        if not 0 <= value <= 100:
-            raise ValueError("alternative_me_value_out_of_range")
-
-        classification = item.get("value_classification")
-        if not isinstance(classification, str) or not classification.strip():
-            raise ValueError("alternative_me_classification_missing")
-
-        available_at = observation_time + timedelta(days=1)
-        records.append(
-            {
-                "provider_id": PROVIDER_ID,
-                "target_market": TARGET_MARKET,
-                "market_scope": "global_btc_sentiment_not_nobitex_pair_specific",
-                "timestamp": timestamp,
-                "observation_time_utc": _iso_utc(observation_time),
-                "value": value,
-                "value_classification": classification.strip(),
-                "fetched_at": _iso_utc(fetched_at_utc),
-                "available_at": _iso_utc(available_at),
-                "available_at_basis": AVAILABILITY_POLICY,
-            }
-        )
-
+    records = [
+        _normalize_provider_record(item, fetched_at_utc, seen_timestamps)
+        for item in raw_data
+    ]
     records.sort(key=lambda record: cast(int, record["timestamp"]))
     return records
-
 
 def _json_bytes(payload: object) -> bytes:
     """Serialize JSON deterministically for repeatable content hashes."""

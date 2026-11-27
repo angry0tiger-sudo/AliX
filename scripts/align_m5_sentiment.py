@@ -39,36 +39,116 @@ def _iso_utc(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def _validate_source_record(
+    record: Mapping[str, object], seen_observations: set[str]
+) -> tuple[datetime, Mapping[str, object]]:
+    """Validate one sentiment row and return its availability key."""
+    available_at = parse_aware_timestamp(record.get("available_at"), "available_at")
+    observation_time = record.get("observation_time_utc")
+    if not isinstance(observation_time, str):
+        raise ValueError("sentiment_observation_time_missing")
+    parse_aware_timestamp(observation_time, "observation_time_utc")
+    value = record.get("value")
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or not 0 <= value <= 100
+    ):
+        raise ValueError("sentiment_value_invalid")
+    classification = record.get("value_classification")
+    if not isinstance(classification, str) or not classification.strip():
+        raise ValueError("sentiment_classification_missing")
+    if observation_time in seen_observations:
+        raise ValueError("sentiment_duplicate_observation_time")
+    seen_observations.add(observation_time)
+    return available_at, record
+
+
 def _validate_source_records(
     sentiment_records: Sequence[Mapping[str, object]],
 ) -> list[tuple[datetime, Mapping[str, object]]]:
     """Validate and sort records by their known availability timestamps."""
-    validated: list[tuple[datetime, Mapping[str, object]]] = []
     seen_observations: set[str] = set()
-    for record in sentiment_records:
-        available_at = parse_aware_timestamp(record.get("available_at"), "available_at")
-        observation_time = record.get("observation_time_utc")
-        if not isinstance(observation_time, str):
-            raise ValueError("sentiment_observation_time_missing")
-        parse_aware_timestamp(observation_time, "observation_time_utc")
-
-        value = record.get("value")
-        if (
-            isinstance(value, bool)
-            or not isinstance(value, int)
-            or not 0 <= value <= 100
-        ):
-            raise ValueError("sentiment_value_invalid")
-        classification = record.get("value_classification")
-        if not isinstance(classification, str) or not classification.strip():
-            raise ValueError("sentiment_classification_missing")
-        if observation_time in seen_observations:
-            raise ValueError("sentiment_duplicate_observation_time")
-        seen_observations.add(observation_time)
-        validated.append((available_at, record))
-
+    validated = [
+        _validate_source_record(record, seen_observations)
+        for record in sentiment_records
+    ]
     validated.sort(key=lambda item: item[0])
     return validated
+
+
+def _parse_decision_time(value: str | datetime) -> datetime:
+    """Normalize one decision timestamp to UTC."""
+    if isinstance(value, datetime):
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("decision_time_must_include_timezone")
+        return value.astimezone(timezone.utc)
+    return parse_aware_timestamp(value, "decision_time")
+
+
+def _validate_decision_times(
+    decision_times: Sequence[str | datetime],
+) -> list[datetime]:
+    """Normalize the decision grid and enforce strict chronological order."""
+    decisions = [_parse_decision_time(value) for value in decision_times]
+    for previous, current in zip(decisions, decisions[1:]):
+        if current <= previous:
+            raise ValueError("decision_times_must_be_strictly_increasing")
+    return decisions
+
+
+def _missing_alignment(decision: datetime, timeframe: str) -> dict[str, object]:
+    """Represent a decision with no prior published sentiment value."""
+    return {
+        "target_market": TARGET_MARKET,
+        "timeframe": timeframe,
+        "decision_time": _iso_utc(decision),
+        "feature_value": None,
+        "feature_classification": None,
+        "source_observation_time_utc": None,
+        "source_available_at": None,
+        "source_age_seconds": None,
+        "alignment_policy": ALIGNMENT_POLICY,
+        "status": "no_prior_available_record",
+    }
+
+
+def _matched_alignment(
+    decision: datetime,
+    available_at: datetime,
+    source: Mapping[str, object],
+    timeframe: str,
+) -> dict[str, object]:
+    """Render the latest record that was already available at decision time."""
+    if available_at > decision:
+        raise RuntimeError("future_sentiment_record_selected")
+    observation_time = cast(str, source["observation_time_utc"])
+    return {
+        "target_market": TARGET_MARKET,
+        "timeframe": timeframe,
+        "decision_time": _iso_utc(decision),
+        "feature_value": cast(int, source["value"]),
+        "feature_classification": cast(str, source["value_classification"]),
+        "source_observation_time_utc": observation_time,
+        "source_available_at": _iso_utc(available_at),
+        "source_age_seconds": int((decision - available_at).total_seconds()),
+        "alignment_policy": ALIGNMENT_POLICY,
+        "status": "asof_match_or_forward_fill",
+    }
+
+
+def _align_one_decision(
+    decision: datetime,
+    source_times: Sequence[datetime],
+    sources: Sequence[tuple[datetime, Mapping[str, object]]],
+    timeframe: str,
+) -> dict[str, object]:
+    """Select the latest source row available at or before one decision."""
+    source_index = bisect_right(source_times, decision) - 1
+    if source_index < 0:
+        return _missing_alignment(decision, timeframe)
+    available_at, source = sources[source_index]
+    return _matched_alignment(decision, available_at, source, timeframe)
 
 
 def align_records(
@@ -80,63 +160,13 @@ def align_records(
     """Use only the latest sentiment record available at each decision time."""
     if timeframe not in ALLOWED_TIMEFRAMES:
         raise ValueError("m5_sentiment_timeframe_not_allowed")
-
     sources = _validate_source_records(sentiment_records)
     source_times = [item[0] for item in sources]
-    decisions: list[datetime] = []
-    for value in decision_times:
-        if isinstance(value, datetime):
-            if value.tzinfo is None or value.utcoffset() is None:
-                raise ValueError("decision_time_must_include_timezone")
-            decision = value.astimezone(timezone.utc)
-        else:
-            decision = parse_aware_timestamp(value, "decision_time")
-        if decisions and decision <= decisions[-1]:
-            raise ValueError("decision_times_must_be_strictly_increasing")
-        decisions.append(decision)
-
-    aligned: list[dict[str, object]] = []
-    for decision in decisions:
-        source_index = bisect_right(source_times, decision) - 1
-        if source_index < 0:
-            aligned.append(
-                {
-                    "target_market": TARGET_MARKET,
-                    "timeframe": timeframe,
-                    "decision_time": _iso_utc(decision),
-                    "feature_value": None,
-                    "feature_classification": None,
-                    "source_observation_time_utc": None,
-                    "source_available_at": None,
-                    "source_age_seconds": None,
-                    "alignment_policy": ALIGNMENT_POLICY,
-                    "status": "no_prior_available_record",
-                }
-            )
-            continue
-
-        available_at, source = sources[source_index]
-        if available_at > decision:
-            raise RuntimeError("future_sentiment_record_selected")
-        observation_time = cast(str, source["observation_time_utc"])
-        feature_value = cast(int, source["value"])
-        feature_classification = cast(str, source["value_classification"])
-        aligned.append(
-            {
-                "target_market": TARGET_MARKET,
-                "timeframe": timeframe,
-                "decision_time": _iso_utc(decision),
-                "feature_value": feature_value,
-                "feature_classification": feature_classification,
-                "source_observation_time_utc": observation_time,
-                "source_available_at": _iso_utc(available_at),
-                "source_age_seconds": int((decision - available_at).total_seconds()),
-                "alignment_policy": ALIGNMENT_POLICY,
-                "status": "asof_match_or_forward_fill",
-            }
-        )
-    return aligned
-
+    decisions = _validate_decision_times(decision_times)
+    return [
+        _align_one_decision(decision, source_times, sources, timeframe)
+        for decision in decisions
+    ]
 
 def _load_json(path: Path) -> object:
     """Read one UTF-8 JSON input file."""
