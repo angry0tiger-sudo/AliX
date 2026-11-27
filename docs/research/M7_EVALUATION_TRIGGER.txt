@@ -1,5 +1,14 @@
-Owner-authorized M7 locked evaluation trigger.
+Owner-authorized M7-CS-G2.0 locked PRE-HACK evaluation trigger.
+Superseding preregistration: config/m7/cross_sectional_preregistration.json
+Revision: M7-CS-G2.0
+Prereq commit: 9eb74829336a6b5e65433eb8b6742b66e59ca655
+Trials: NOBITEX-M7-5PAIR-RIDGE-TOP2-02 (ETHUSDT, BNBUSDT, ADAUSDT, XRPUSDT, DOGEUSDT); NOBITEX-M7-9PAIR-RIDGE-TOP2-01 (all nine exact-coverage pairs).
 Data qualification manifest: data/nobitex/prehack/m7/m7_data_qualification.json
-The exact preregistered 5PAIR and 10PAIR candidates remain BLOCKED_DATA because SOLUSDT failed common-window coverage (25,285/31,801 rows; 6,516 missing intervals). Evaluation must preserve both candidates as BLOCKED_DATA and must not fit a model, substitute symbols, shorten dates, or alter the trial universe.
-Exact data-parent Standard CI #2668 passed on 24d1916abba25e280f4cd5804df9a9ae783b3ca2.
-Scope: PRE-HACK exploratory only; no Holdout/Post-Hack; no private API; no paper/real orders. UTC date 2026-11-27.
+Immutable qualified dataset commit: 5cf8f867385b6481bb47c8dc560ab160b39aee5d
+Common BTCUSDT PRE-HACK grid: 31,801 hourly timestamps from 2021-10-31T20:30:00Z through 2025-06-17T20:30:00Z; exact timestamp equality required.
+SOLUSDT is excluded from G2.0 because the prior public acquisition returned 25,285/31,801 rows with 6,516 missing intervals. No interpolation, backfill, resampling, shortened window, or duplicate-symbol substitution.
+Acquisition is not rerun: the nine already-qualified CSVs and SHA-256 manifests are immutable and committed. Evaluation consumes this exact existing dataset.
+Required gate: Standard CI must complete successfully for the exact parent preregistration commit 9eb74829336a6b5e65433eb8b6742b66e59ca655. The workflow must fail closed if that CI does not pass.
+Scope: PRE-HACK exploratory only; no Holdout/Post-Hack, private API, paper/real orders, or local execution. Champion=null; order_permission=false; trading_authorization=NO-GO.
+Only the preregistered next-four-hour target is evaluated. 1h is the candle sampling interval, not a separately registered forecast horizon.
+UTC date: 2026-11-27.
