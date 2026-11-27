@@ -1,0 +1,217 @@
+name: M5.1 Alternative.me Sentiment Capture
+
+on:
+  push:
+    branches:
+      - research/nobitex-hf-strategy
+    paths:
+      - .github/workflows/m5-sentiment-capture.yml
+      - scripts/fetch_m5_sentiment_data.py
+      - scripts/align_m5_sentiment.py
+      - tests/unit/test_m5_sentiment_pipeline.py
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: write
+
+concurrency:
+  group: alix-m5-sentiment-capture
+  cancel-in-progress: false
+
+jobs:
+  capture:
+    if: github.ref == 'refs/heads/research/nobitex-hf-strategy'
+    runs-on: ubuntu-latest
+    timeout-minutes: 110
+    steps:
+      - name: Wait for Standard CI success on this exact source commit
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import time
+          from urllib.request import Request, urlopen
+
+          repository = os.environ["GITHUB_REPOSITORY"]
+          target_sha = os.environ["GITHUB_SHA"]
+          target_branch = os.environ["GITHUB_REF_NAME"]
+          if target_branch != "research/nobitex-hf-strategy":
+              raise SystemExit("unsupported_m5_sentiment_branch")
+
+          url = (
+              f"https://api.github.com/repos/{repository}/actions/workflows/ci.yml/runs"
+              f"?head_sha={target_sha}&per_page=100"
+          )
+          deadline = time.monotonic() + 90 * 60
+          while time.monotonic() < deadline:
+              request = Request(
+                  url,
+                  headers={
+                      "Accept": "application/vnd.github+json",
+                      "Authorization": f"Bearer {os.environ['GITHUB_TOKEN']}",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  },
+              )
+              with urlopen(request, timeout=30) as response:
+                  payload = json.load(response)
+
+              matching = [
+                  item for item in payload.get("workflow_runs", [])
+                  if item.get("head_sha") == target_sha
+                  and item.get("head_branch") == target_branch
+                  and item.get("event") == "push"
+              ]
+              if matching:
+                  latest = max(
+                      matching,
+                      key=lambda item: (
+                          item.get("run_number", 0),
+                          item.get("run_attempt", 0),
+                      ),
+                  )
+                  if latest.get("status") == "completed":
+                      if latest.get("conclusion") != "success":
+                          raise SystemExit(
+                              "standard_ci_not_green:"
+                              + str(latest.get("conclusion"))
+                              + ":"
+                              + target_sha
+                          )
+                      print(json.dumps({
+                          "gate": "PASS",
+                          "standard_ci_run_id": latest.get("id"),
+                          "standard_ci_url": latest.get("html_url"),
+                          "source_sha": target_sha,
+                      }, sort_keys=True))
+                      break
+              time.sleep(15)
+          else:
+              raise SystemExit("standard_ci_green_gate_timeout:" + target_sha)
+          PY
+
+      - name: Checkout the exact research commit
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned HTTP client
+        run: python -m pip install httpx==0.28.1
+
+      - name: Fetch, validate, hash, and store an immutable sentiment snapshot
+        run: python scripts/fetch_m5_sentiment_data.py --output-dir data/sentiment/alternative_me/fng
+
+      - name: Commit the immutable snapshot without overwriting existing history
+        id: persist
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/sentiment/alternative_me/fng
+          if git diff --cached --quiet; then
+            echo "sentiment_snapshot_missing"
+            exit 1
+          fi
+          git fetch origin "$GITHUB_REF_NAME"
+          REMOTE_SHA="$(git rev-parse FETCH_HEAD)"
+          if [ "$REMOTE_SHA" != "$GITHUB_SHA" ]; then
+            echo "research_branch_advanced_during_capture"
+            echo "expected=$GITHUB_SHA actual=$REMOTE_SHA"
+            exit 1
+          fi
+          git commit -m "data(m5): persist immutable Alternative.me sentiment snapshot"
+          CAPTURE_SHA="$(git rev-parse HEAD)"
+          git push origin "HEAD:refs/heads/$GITHUB_REF_NAME"
+          echo "CAPTURE_SHA=$CAPTURE_SHA" >> "$GITHUB_ENV"
+          echo "capture_sha=$CAPTURE_SHA" >> "$GITHUB_OUTPUT"
+          echo "capture_sha=$CAPTURE_SHA"
+
+      - name: Dispatch Standard CI on the snapshot commit and require success
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import time
+          from datetime import datetime, timezone
+          from urllib.error import HTTPError
+          from urllib.request import Request, urlopen
+
+          repository = os.environ["GITHUB_REPOSITORY"]
+          branch = os.environ["GITHUB_REF_NAME"]
+          capture_sha = os.environ["CAPTURE_SHA"]
+          token = os.environ["GITHUB_TOKEN"]
+          if branch != "research/nobitex-hf-strategy" or not capture_sha:
+              raise SystemExit("m5_sentiment_post_capture_identity_invalid")
+
+          headers = {
+              "Accept": "application/vnd.github+json",
+              "Authorization": f"Bearer {token}",
+              "X-GitHub-Api-Version": "2022-11-28",
+          }
+          started_at = datetime.now(timezone.utc)
+          dispatch_request = Request(
+              f"https://api.github.com/repos/{repository}/actions/workflows/ci.yml/dispatches",
+              data=json.dumps({"ref": branch}).encode("utf-8"),
+              headers={**headers, "Content-Type": "application/json"},
+              method="POST",
+          )
+          try:
+              with urlopen(dispatch_request, timeout=30) as response:
+                  if response.status not in (201, 204):
+                      raise SystemExit("standard_ci_dispatch_unexpected_status")
+          except HTTPError as error:
+              raise SystemExit(f"standard_ci_dispatch_failed:{error.code}") from None
+
+          list_url = (
+              f"https://api.github.com/repos/{repository}/actions/workflows/ci.yml/runs"
+              f"?branch={branch}&per_page=100"
+          )
+          deadline = time.monotonic() + 90 * 60
+          while time.monotonic() < deadline:
+              request = Request(list_url, headers=headers)
+              with urlopen(request, timeout=30) as response:
+                  payload = json.load(response)
+              matching = [
+                  item for item in payload.get("workflow_runs", [])
+                  if item.get("head_sha") == capture_sha
+                  and item.get("head_branch") == branch
+                  and item.get("event") == "workflow_dispatch"
+                  and item.get("created_at", "") >= started_at.isoformat()
+              ]
+              if matching:
+                  selected_run = max(
+                      matching,
+                      key=lambda item: (
+                          item.get("run_number", 0),
+                          item.get("run_attempt", 0),
+                      ),
+                  )
+                  if selected_run.get("status") == "completed":
+                      if selected_run.get("conclusion") != "success":
+                          raise SystemExit(
+                              "standard_ci_failed_on_sentiment_snapshot:"
+                              + str(selected_run.get("conclusion"))
+                              + ":"
+                              + capture_sha
+                          )
+                      print(json.dumps({
+                          "gate": "PASS",
+                          "capture_sha": capture_sha,
+                          "standard_ci_run_id": selected_run.get("id"),
+                          "standard_ci_url": selected_run.get("html_url"),
+                          "conclusion": selected_run.get("conclusion"),
+                      }, sort_keys=True))
+                      break
+              time.sleep(15)
+          else:
+              raise SystemExit("standard_ci_snapshot_gate_timeout:" + capture_sha)
+          PY
