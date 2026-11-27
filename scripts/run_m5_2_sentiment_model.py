@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence, cast
 
 import numpy as np
+from numpy.typing import NDArray
 from sklearn.linear_model import LogisticRegression  # type: ignore[import-untyped]
 from sklearn.pipeline import Pipeline  # type: ignore[import-untyped]
 from sklearn.preprocessing import StandardScaler  # type: ignore[import-untyped]
@@ -30,7 +31,7 @@ OHLCV_MANIFEST_PATH = ROOT / "data/nobitex/prehack/nobitex-btcusdt-1h.manifest.j
 SENTIMENT_DIR = ROOT / "data/sentiment/alternative_me/fng"
 
 PREREG_SHA256 = "851d6c4b39c41cacec8ccd712cf17bb40dd42dd45f2bb8813920a7f2ebe481ba"
-DATA_LOCK_SHA256 = "f33ee1c1bf9f265f8c2e3cfbfdf7e5b6a1a76a5a9b7fc3bf4e5c8bb6db7f4c91"
+DATA_LOCK_SHA256 = "e66616ee3c13e6ce32f94577c4f46480390eea30c774ac6987e8d519d51d4acf"
 OHLCV_SHA256 = "0aa13607d1da68c4720919f233635bb33d34048e5bd67d3ecc2ce9bb7c2b462e"
 OHLCV_MANIFEST_SHA256 = "b50fea25f30d282c2eafcb262751367e11d6490eda0d463de5926b660eaf1a26"
 SENTIMENT_RAW_SHA256 = "4adba36f7dd95792520e078f7578c316c23e80a7b8a0ace81df490bf06c740df"
@@ -317,7 +318,7 @@ def load_verified_ohlcv() -> tuple[list[Candle], dict[str, Any]]:
             if tuple(reader.fieldnames or ()) != EXPECTED_COLUMNS:
                 raise ValueError("m5_2_ohlcv_columns_invalid")
             for row in reader:
-                candles.append(_parse_candle(row))
+                candles.append(_parse_candle(cast(dict[str, str], row)))
     except (OSError, csv.Error, KeyError, TypeError, ValueError) as exc:
         raise ValueError(f"m5_2_ohlcv_csv_invalid:{type(exc).__name__}") from None
     if len(candles) != 31801:
@@ -380,7 +381,7 @@ def load_verified_sentiment(config: dict[str, Any]) -> tuple[list[Mapping[str, o
     return records, manifest
 
 
-def build_price_features(candles: Sequence[Candle]) -> np.ndarray:
+def build_price_features(candles: Sequence[Candle]) -> NDArray[Any]:
     count = len(candles)
     close = np.asarray([row.close for row in candles], dtype=np.float64)
     high = np.asarray([row.high for row in candles], dtype=np.float64)
@@ -417,7 +418,7 @@ def build_price_features(candles: Sequence[Candle]) -> np.ndarray:
 def align_sentiment(
     records: Sequence[Mapping[str, object]],
     decision_times: Sequence[str],
-) -> tuple[np.ndarray, list[str | None], list[str | None], np.ndarray]:
+) -> tuple[NDArray[Any], list[str | None], list[str | None], NDArray[Any]]:
     aligned = align_records(records, decision_times, timeframe="1h")
     values = np.full(len(aligned), np.nan, dtype=np.float64)
     available: list[str | None] = []
@@ -643,7 +644,7 @@ def cost_summary(outcomes: Sequence[PortfolioOutcome], config: dict[str, Any]) -
     }
 
 
-def _majority_signal(labels: np.ndarray, train: Sequence[int]) -> bool:
+def _majority_signal(labels: NDArray[Any], train: Sequence[int]) -> bool:
     if not train:
         return False
     counts = Counter(int(labels[index]) for index in train)
@@ -658,17 +659,16 @@ def _empty_metrics(
 
 def _evaluate_fold(
     candles: Sequence[Candle],
-    features: np.ndarray,
-    labels: np.ndarray,
-    gross: np.ndarray,
-    label_valid: Sequence[bool],
+    features: NDArray[Any],
+    labels: NDArray[Any],
+    gross: NDArray[Any],
     plan: FoldPlan,
     horizon: int,
     decision_times: Sequence[str],
-    fng_values: np.ndarray,
+    fng_values: NDArray[Any],
     fng_available: Sequence[str | None],
     fng_observations: Sequence[str | None],
-    fng_ages: np.ndarray,
+    fng_ages: NDArray[Any],
     config: dict[str, Any],
 ) -> FoldOutput:
     train = list(plan.train_indices)
@@ -755,7 +755,7 @@ def _evaluate_fold(
     )
 
 
-def _source_age_summary(ages: np.ndarray, observations: Sequence[str | None]) -> dict[str, Any]:
+def _source_age_summary(ages: NDArray[Any], observations: Sequence[str | None]) -> dict[str, Any]:
     valid = ages[np.isfinite(ages)]
     unique = {item for item in observations if item is not None}
     if valid.size == 0:
@@ -890,7 +890,7 @@ def run_evaluation() -> tuple[dict[str, Any], list[dict[str, Any]]]:
         plans = build_fold_plans(eligible, valid_labels.tolist(), horizon)
         fold_outputs = [
             _evaluate_fold(
-                candles, features, labels, returns, valid_labels.tolist(), plan,
+                candles, features, labels, returns, plan,
                 horizon, decision_times, sentiment, available, observations, ages, config
             )
             for plan in plans
