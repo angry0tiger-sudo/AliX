@@ -28,7 +28,6 @@ CONFIG_PATH = ROOT / "config/m5_2/sentiment_model_preregistration.json"
 DATA_LOCK_PATH = ROOT / "data/nobitex/prehack/m5_2_btcusdt_1h_data_lock.json"
 OHLCV_PATH = ROOT / "data/nobitex/prehack/nobitex-btcusdt-1h.csv"
 OHLCV_MANIFEST_PATH = ROOT / "data/nobitex/prehack/nobitex-btcusdt-1h.manifest.json"
-SENTIMENT_DIR = ROOT / "data/sentiment/alternative_me/fng"
 
 PREREG_SHA256 = "851d6c4b39c41cacec8ccd712cf17bb40dd42dd45f2bb8813920a7f2ebe481ba"
 DATA_LOCK_SHA256 = "e66616ee3c13e6ce32f94577c4f46480390eea30c774ac6987e8d519d51d4acf"
@@ -416,10 +415,23 @@ def _validate_sentiment_records(
 def load_verified_sentiment(
     config: dict[str, Any],
 ) -> tuple[list[Mapping[str, object]], dict[str, Any]]:
+def _resolve_repository_relative_path(value: object) -> Path:
+    relative_path = Path(str(value))
+    if relative_path.is_absolute() or not str(value).strip():
+        raise ValueError("m5_2_sentiment_path_must_be_repository_relative")
+    root = ROOT.resolve()
+    resolved = (root / relative_path).resolve()
+    try:
+        resolved.relative_to(root)
+    except ValueError:
+        raise ValueError("m5_2_sentiment_path_outside_repository") from None
+    return resolved
+
+
     source = config["sentiment_source"]
-    manifest_path = SENTIMENT_DIR / str(source["snapshot_manifest"])
-    raw_path = SENTIMENT_DIR / str(source["raw_file"])
-    normalized_path = SENTIMENT_DIR / str(source["normalized_file"])
+    manifest_path = _resolve_repository_relative_path(source["snapshot_manifest"])
+    raw_path = _resolve_repository_relative_path(source["raw_file"])
+    normalized_path = _resolve_repository_relative_path(source["normalized_file"])
     if sha256_bytes(raw_path.read_bytes()) != SENTIMENT_RAW_SHA256:
         raise ValueError("m5_2_sentiment_raw_sha256_mismatch")
     normalized_raw = normalized_path.read_bytes()

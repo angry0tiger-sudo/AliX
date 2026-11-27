@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import hashlib
+import json
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pytest
 
+from scripts import run_m5_2_sentiment_model as m52
 from scripts.run_m5_2_sentiment_model import (
     CONTROL_FEATURES,
     TREATMENT_FEATURES,
@@ -78,6 +82,73 @@ def test_preregistration_is_read_only_and_sha_locked() -> None:
         == TREATMENT_FEATURES
     )
     assert config["safety"]["holdout_access"] == "PROHIBITED"
+
+
+def test_load_verified_sentiment_resolves_repository_root_relative_paths(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config, _ = load_preregistration()
+    sentiment_dir = tmp_path / "data/sentiment/alternative_me/fng"
+    sentiment_dir.mkdir(parents=True)
+    config["sentiment_source"]["snapshot_manifest"] = (
+        "data/sentiment/alternative_me/fng/sample.manifest.json"
+    )
+    config["sentiment_source"]["raw_file"] = (
+        "data/sentiment/alternative_me/fng/sample.raw.json"
+    )
+    config["sentiment_source"]["normalized_file"] = (
+        "data/sentiment/alternative_me/fng/sample.normalized.json"
+    )
+
+    raw_bytes = b'{"data":[]}'
+    records = [
+        {
+            "market_scope": "global_btc_sentiment_not_nobitex_pair_specific",
+            "available_at_basis": "observation_timestamp_plus_24h_conservative_proxy",
+        }
+        for _ in range(3218)
+    ]
+    normalized_bytes = json.dumps(
+        {
+            "schema_version": "alix.m5.alternative-me-fng.v1",
+            "provider_id": "alternative_me_fear_greed",
+            "target_market": "Nobitex Spot/USDT BTCUSDT",
+            "records": records,
+        },
+        separators=(",", ":"),
+    ).encode("utf-8")
+    raw_hash = hashlib.sha256(raw_bytes).hexdigest()
+    normalized_hash = hashlib.sha256(normalized_bytes).hexdigest()
+    manifest = {
+        "raw_sha256": raw_hash,
+        "normalized_sha256": normalized_hash,
+        "record_count": 3218,
+        "provider_supplies_historical_available_at": False,
+        "availability_policy": "observation_timestamp_plus_24h_conservative_proxy",
+    }
+
+    (sentiment_dir / "sample.raw.json").write_bytes(raw_bytes)
+    (sentiment_dir / "sample.normalized.json").write_bytes(normalized_bytes)
+    (sentiment_dir / "sample.manifest.json").write_text(
+        json.dumps(manifest), encoding="utf-8"
+    )
+    monkeypatch.setattr(m52, "ROOT", tmp_path)
+    monkeypatch.setattr(m52, "SENTIMENT_RAW_SHA256", raw_hash)
+    monkeypatch.setattr(m52, "SENTIMENT_NORMALIZED_SHA256", normalized_hash)
+
+    loaded_records, loaded_manifest = m52.load_verified_sentiment(config)
+
+    assert len(loaded_records) == 3218
+    assert loaded_manifest == manifest
+
+
+def test_repository_relative_sentiment_paths_reject_parent_traversal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(m52, "ROOT", tmp_path)
+
+    with pytest.raises(ValueError, match="path_outside_repository"):
+        m52._resolve_repository_relative_path("../outside.json")
 
 
 def test_sentiment_alignment_is_asof_and_never_backfills() -> None:
