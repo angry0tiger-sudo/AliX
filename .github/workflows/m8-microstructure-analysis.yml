@@ -116,3 +116,4 @@ jobs:
             .artifacts/m1_6/
           if-no-files-found: error
           retention-days: 90
+          include-hidden-files: true
