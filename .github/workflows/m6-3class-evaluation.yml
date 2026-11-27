@@ -85,10 +85,11 @@ jobs:
           else:
               raise SystemExit("m6_standard_ci_gate_timeout:" + source_sha)
           PY
-      - name: Checkout the exact trigger commit
+      - name: Checkout the exact trigger commit with parent history
         uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
+          fetch-depth: 0
           persist-credentials: false
       - name: Verify the trigger commit changes only the M6 evaluation sentinel
         env:
