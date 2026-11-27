@@ -198,12 +198,8 @@ def _other_features_valid(
     close_by_symbol: Mapping[str, np.ndarray],
     open_by_symbol: Mapping[str, np.ndarray],
 ) -> bool:
-    btc_return_4h = math.log(
-        btc_close[decision_index] / btc_close[decision_index - 4]
-    )
-    peer_median = _peer_median_return(
-        close_by_symbol, symbols, symbol, decision_index
-    )
+    btc_return_4h = math.log(btc_close[decision_index] / btc_close[decision_index - 4])
+    peer_median = _peer_median_return(close_by_symbol, symbols, symbol, decision_index)
     entry_open = float(open_by_symbol[symbol][decision_index + 1])
     exit_open = float(open_by_symbol[symbol][decision_index + 5])
     target_log_return = math.log(exit_open / entry_open)
@@ -302,8 +298,7 @@ def diagnose_m7_features(
         raise ValueError("m7_diagnostic_unexpected_symbol_priority")
 
     registered_trials = {
-        str(trial["trial_id"]): tuple(trial["symbols"])
-        for trial in config["trials"]
+        str(trial["trial_id"]): tuple(trial["symbols"]) for trial in config["trials"]
     }
     if registered_trials != dict(EXPECTED_TRIALS):
         raise ValueError("m7_diagnostic_trial_universe_mismatch")
@@ -328,15 +323,11 @@ def diagnose_m7_features(
 
     btc_returns = _log_returns(data[BTC_SYMBOL]["close"].to_numpy(dtype=float))
     symbol_states = {
-        symbol: _inspect_symbol(
-            symbol, data[symbol], btc_returns, DECISION_INDICES
-        )
+        symbol: _inspect_symbol(symbol, data[symbol], btc_returns, DECISION_INDICES)
         for symbol in EXPECTED_SYMBOLS
     }
 
-    per_symbol = {
-        symbol: state["report"] for symbol, state in symbol_states.items()
-    }
+    per_symbol = {symbol: state["report"] for symbol, state in symbol_states.items()}
     candidate_reports = {
         trial_id: _candidate_panel_summary(
             trial_id,
