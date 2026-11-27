@@ -134,6 +134,7 @@ def normalize_records(
     records.sort(key=lambda record: cast(int, record["timestamp"]))
     return records
 
+
 def _json_bytes(payload: object) -> bytes:
     """Serialize JSON deterministically for repeatable content hashes."""
     rendered = json.dumps(

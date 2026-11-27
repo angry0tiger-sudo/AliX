@@ -164,6 +164,7 @@ def align_records(
         for decision in decisions
     ]
 
+
 def _load_json(path: Path) -> object:
     """Read one UTF-8 JSON input file."""
     try:
