@@ -838,3 +838,27 @@ The closed M3 OFI trials remain BTCIRT-specific historical evidence and are not 
 |---|---:|---|---:|---|---|---|
 | `NOBITEX-M6-1h-RF-3CLASS-01` | 1h | **EVALUATED — INSUFFICIENT_SAMPLE / NO-GO** | 1,177 | 0.160856 / 0.013034 | 22.58% / 41.29% | 2/4 / 0/4 |
 | `NOBITEX-M6-4h-RF-3CLASS-01` | 4h | **EVALUATED — INSUFFICIENT_SAMPLE / NO-GO** | 501 | 0.534557 / 0.278479 | 28.18% / 56.06% | 2/4 / 0/4 |
+
+---
+
+## [APPEND] Owner-directed R&D Pivot — Strategy-Family Proposals (2026-11-27)
+
+- **Owner decision:** Stop the current single-asset OHLCV directional-prediction path; keep AliX open and enter a new R&D strategy-selection phase.
+- **Source decision:** [ADR-069 — R&D Strategy Pivot](../adr/ADR-069-rd-strategy-pivot.md).
+- **Current status:** R&D_REVIEW_COMPLETE_OWNER_SELECTION_PENDING.
+- **This appendix is documentation-only.** No strategy, model, configuration, workflow, dataset, fitting, backtest, provider subscription, data capture, order or Holdout access is authorized.
+- **Three proposal tracks** were identified:
+  - **RND-A-L2-PASSIVE-MARKET-MAKING** — true inventory-aware L2 passive quote strategy; proposal only. M1.6 is not eligible input because it was BTCIRT and failed publisher-offset/gap integrity.
+  - **RND-B-CROSS-ASSET-LEAD-LAG** — long-only cross-asset Nobitex USDT rotation; proposal only. Multi-pair historical coverage is not yet qualified.
+  - **RND-C-ONCHAIN-EXCHANGE-FLOWS** — point-in-time USDT netflow / BTC exchange flow / large-transfer features; proposal only. Provider coverage, PIT snapshots, price and license remain unqualified.
+- **Adjacent previously discussed option:** Donchian + TTM-R2 remains a separate Owner-selectable alternative, not counted as a new family. V4-AO had already evaluated a 30m HMM Donchian breakout (Run 42445443790: 94 trades, NetPF 0.5988, MaxDD 22.68%). TTM-R2 improved variance forecast quality, but its previous 480-trade sizing replay remained unprofitable (NetPF 0.3731 fixed vs 0.3748 TTM; MaxDD 21.63% vs 18.26%). See ADR-069.
+- **Historical trial-count clarification:** The 12 identities reconciled in ADR-068 are only the five focused workstreams (HGBQ-CQR 3 + M3 OFI 2 + Regime T 1 + M5.2 4 + M6 2). They are not the total AliX history. V4-AO, V4-AM and Stage-B work remain additional historical evidence outside that focused count. GLOBAL_N=UNKNOWN; GLOBAL_DSR=NOT_COMPUTABLE.
+- **Additional historical evidence:**
+  - V4-AM CUSUM/HMM regime-reactive primary on Binance ETHUSDT: Run 42364732134; 32 trades, NetPF 0.4778, MaxDD 17.91%, win rate 25.00%, net PnL -1,280.52. Its MAKER_FEE_PROXY was not actual passive maker execution; passive_limit_fill_simulation=false.
+  - Stage-B relative order-book workflow: Run 40109476273; orderbook_status=NOT_PROVIDED, liquidity_status=BLOCKED_ZERO_SOURCE_VOLUME, economic_status=NOT_EVALUATED_BLOCKED_INPUT_DATA. It was not a completed order-book strategy evaluation.
+- **Proposal registry semantics:** RND-A/B/C are R&D track labels only, not logical trial identities. They are not PREREGISTERED_LOCKED, have no configuration hash, and must not increment the trial count or GLOBAL_N.
+- **Preregistration rule:** Only after the Owner selects a track may a full candidate-level preregistration be authored, reviewed, SHA-256 locked and separately authorized. No implementation or data acquisition may start before that sequence is complete.
+- **Shared draft economic gates for a future selected track:** NetPF >= 1.10; at least 100 completed OOS trades (for market making, round-trip inventory cycles); MaxDD <= 15%; at least 3/4 stable chronological folds. Cost-50 and Cost-90 remain scenario assumptions until actual Nobitex execution costs are verified.
+- **Anti-overfitting draft controls:** One primary hypothesis and fixed feature/model contract; four chronological purged folds; as-of feature availability; immutable manifests and hashes; failed candidates retained; no threshold/feature sweep; no use of Holdout/Post-Hack; final DSR remains not computable while the complete historical trial inventory is unknown.
+- **Safety remains:** Champion=null; order_permission=false; trading_authorization=NO-GO; private_api_calls=0; real_order_attempts=0; paper_orders=0; Holdout=SEALED; posthack_data_read=false; local_execution=false.
+- No previous trial rows were rewritten. This appendix does not create a new candidate or approve any experiment.
