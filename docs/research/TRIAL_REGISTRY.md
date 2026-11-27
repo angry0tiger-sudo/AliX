@@ -769,3 +769,25 @@ The evaluation artifact does **not** report 17 completed trades for either regis
 - Frozen `main` remains commit `cd9b13d42ac0cf0edd2df066ff81580e028146d6`, Tree SHA `5761c6c34143f8e6924f53a4e745c48932a5f791`.
 - This is a documentation-only lifecycle update. `GLOBAL_N=UNKNOWN` remains unchanged.
 
+---
+
+## [APPEND] Regime M5.2 Fear & Greed Context — Preregistration Lock (2026-11-27)
+
+- **Preregistration:** `config/m5_2/sentiment_model_preregistration.json`.
+- **Preregistration ID:** `ALIX-M5-2-SENTIMENT-G1`.
+- **Revision:** `M5.2-SENTIMENT-G1`.
+- **Configuration SHA-256:** `f658ca73887c33bcd3de0c24417fd88ef96a8092087993cf72f58dc531f86407`.
+- **Target:** Nobitex Spot / USDT `BTCUSDT` only; completed 1h OHLCV decisions; horizons 1h and 4h.
+- **Data context:** immutable Alternative.me daily snapshot; raw SHA-256 `4adba36f7dd95792520e078f7578c316c23e80a7b8a0ace81df490bf06c740df`; normalized SHA-256 `e0578509cf3f8a6eeac39ddbd2edeab876e47027d759558e120c6f8b3a9f7f61`. The sentiment feature is global BTC context and uses the conservative observation-time-plus-24-hour availability proxy.
+- **Design:** paired OHLCV-only control versus identical Logistic Regression with one additional Fear & Greed value; exactly four logical candidates. All four IDs below are `PREREGISTERED_LOCKED`; evaluated candidates at registration: **0**.
+- **Trial accounting:** folds and Cost-50/Cost-90 replays are not new candidate identities. `GLOBAL_N=UNKNOWN` and `GLOBAL_DSR=NOT_COMPUTABLE` remain unchanged.
+- **Execution state:** documentation/configuration only. No implementation, fit, inference, backtest, tuning, market-data acquisition, Holdout/Post-Hack access or orders are authorized.
+
+| Trial ID | Horizon | Arm | Estimator | Status | Evaluated |
+|---|---:|---|---|---|---|
+| `NOBITEX-M5-2-1h-OHLCV-LR-BASELINE-01` | 1h | OHLCV-only control | `StandardScaler + LogisticRegression` | `PREREGISTERED_LOCKED` | No |
+| `NOBITEX-M5-2-1h-SENTIMENT-LR-AUGMENTED-01` | 1h | OHLCV + Fear & Greed | `StandardScaler + LogisticRegression` | `PREREGISTERED_LOCKED` | No |
+| `NOBITEX-M5-2-4h-OHLCV-LR-BASELINE-01` | 4h | OHLCV-only control | `StandardScaler + LogisticRegression` | `PREREGISTERED_LOCKED` | No |
+| `NOBITEX-M5-2-4h-SENTIMENT-LR-AUGMENTED-01` | 4h | OHLCV + Fear & Greed | `StandardScaler + LogisticRegression` | `PREREGISTERED_LOCKED` | No |
+
+The closed M3 OFI trials remain BTCIRT-specific historical evidence and are not incorporated into this BTCUSDT M5.2 family. No historical registry row or global count is rewritten.

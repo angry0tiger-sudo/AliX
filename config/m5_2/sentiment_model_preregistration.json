@@ -1,0 +1,335 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "schema_version": "1.0.0",
+  "preregistration": {
+    "id": "ALIX-M5-2-SENTIMENT-G1",
+    "phase": "M5.2",
+    "status": "PREREGISTERED_LOCKED",
+    "preregistered_utc_date": "2026-11-27",
+    "branch": "research/nobitex-hf-strategy",
+    "revision": "M5.2-SENTIMENT-G1",
+    "scope": "Prospectively compare a fixed OHLCV-only Logistic Regression control with the same fixed Logistic Regression augmented by one lagged Alternative.me Fear & Greed feature. Nobitex Spot BTCUSDT only; hourly completed-candle decisions; 1h and 4h targets. Registration only; no fitting or economic evaluation is authorized.",
+    "implementation_authorized": false,
+    "model_training_authorized": false,
+    "fit_authorized": false,
+    "inference_authorized": false,
+    "economic_backtest_authorized": false,
+    "data_acquisition_authorized": false,
+    "holdout_access_authorized": false,
+    "posthack_data_access_authorized": false,
+    "private_api_access_authorized": false,
+    "paper_orders_authorized": false,
+    "real_orders_authorized": false,
+    "local_execution_authorized": false,
+    "post_lock_tuning_allowed": false,
+    "change_control": "Any change to market, data source, feature names or formulas, target, estimator, model parameters, signal threshold, fold rules, costs, position sizing, acceptance gates or trial count requires a new superseding preregistration and a separate explicit Owner directive. No silent edits, sweeps, feature ablations, selective reruns or threshold changes are permitted.",
+    "p_hacking_guard": "Exactly four logical candidates are registered: OHLCV-only control and OHLCV-plus-sentiment treatment at each of 1h and 4h. The four walk-forward folds, two cost scenarios and repeated hourly observations are evaluation dimensions, not additional candidate variants."
+  },
+  "hypothesis": {
+    "statement": "A point-in-time-safe Alternative.me Fear & Greed context value adds incremental predictive and economic value to a fixed Nobitex BTCUSDT OHLCV Logistic Regression baseline.",
+    "null_hypothesis": "The sentiment-augmented model does not improve paired out-of-sample economic results relative to the OHLCV-only control.",
+    "claim_type": "prospective comparative hypothesis; not empirically tested",
+    "scope_guard": "Alternative.me is a global Bitcoin sentiment composite, not a Nobitex BTCUSDT-specific signal. Any effect must be demonstrated incrementally against the local BTCUSDT OHLCV-only control."
+  },
+  "scope": {
+    "venue": "Nobitex",
+    "market": "BTCUSDT",
+    "market_type": "Spot",
+    "quote_currency": "USDT",
+    "decision_timeframe": "1h completed OHLCV candles",
+    "target_horizons_hours": [
+      1,
+      4
+    ],
+    "excluded_markets": [
+      "BTCIRT",
+      "all non-BTCUSDT Nobitex pairs"
+    ],
+    "excluded_horizons": [
+      24
+    ],
+    "target_market_source": "Nobitex public Spot BTCUSDT OHLCV only",
+    "market_data_binding": {
+      "artifact_status": "NOT_YET_PINNED",
+      "required_before_execution": true,
+      "required_manifest_fields": [
+        "market",
+        "venue",
+        "timeframe",
+        "start_utc",
+        "end_utc",
+        "row_count",
+        "gap_report",
+        "raw_sha256",
+        "normalized_sha256"
+      ],
+      "policy": "A separate immutable BTCUSDT OHLCV data manifest and digest must be committed before any future fit. No OHLCV acquisition is performed by this preregistration commit. Any incomplete/missing/gapped interval is explicitly reported and never filled from another pair or venue."
+    },
+    "excluded_sources": [
+      "BTCIRT candles, returns, features or artifacts",
+      "M3 OFI evaluation dataset and results as predictive evidence",
+      "Holdout",
+      "Post-Hack data",
+      "private/account endpoints",
+      "paid APIs or subscriptions",
+      "unmanifested external market-price series",
+      "synthetic CI fixtures as empirical observations"
+    ],
+    "data_extension_policy": "Any new market, venue, timeframe, sentiment provider, or change to the frozen Alternative.me snapshot requires a new data manifest and superseding preregistration before outcome inspection."
+  },
+  "sentiment_source": {
+    "provider": "Alternative.me Fear & Greed Index",
+    "provider_id": "alternative_me_fear_greed",
+    "api_url": "https://api.alternative.me/fng/?limit=0",
+    "source_kind": "free public daily global Bitcoin sentiment",
+    "snapshot_manifest": "data/sentiment/alternative_me/fng/alternative_me_fng_20261127T092726548110Z_4adba36f7dd9.manifest.json",
+    "raw_file": "data/sentiment/alternative_me/fng/alternative_me_fng_20261127T092726548110Z_4adba36f7dd9.raw.json",
+    "normalized_file": "data/sentiment/alternative_me/fng/alternative_me_fng_20261127T092726548110Z_4adba36f7dd9.normalized.json",
+    "raw_sha256": "4adba36f7dd95792520e078f7578c316c23e80a7b8a0ace81df490bf06c740df",
+    "normalized_sha256": "e0578509cf3f8a6eeac39ddbd2edeab876e47027d759558e120c6f8b3a9f7f61",
+    "record_count": 3218,
+    "observation_start_utc": "2018-02-01T00:00:00Z",
+    "observation_end_utc": "2026-11-27T00:00:00Z",
+    "market_scope": "global_btc_sentiment_not_nobitex_pair_specific",
+    "commercial_use_note": "Preserve prominent Alternative.me attribution in any output displaying or using the sentiment source.",
+    "historical_availability": {
+      "provider_supplies_historical_available_at": false,
+      "availability_policy": "observation_timestamp_plus_24h_conservative_proxy",
+      "availability_notice": "available_at is a conservative observation timestamp plus 24-hour proxy, not a provider-measured historical publication timestamp.",
+      "join_policy": "Use only the latest record with available_at <= the completed-candle decision_time_utc.",
+      "forward_fill_policy": "Reuse the latest previously available record only after its available_at; never backfill before availability, interpolate, or use the next daily observation.",
+      "alignment_implementation": "Use the existing scripts/align_m5_sentiment.py and its latest_available_at_lte_decision_time_forward_fill contract; do not rewrite the fetcher or aligner.",
+      "missing_value_policy": "No imputation, zero-fill, backward-fill or interpolation. Exclude rows with no prior available sentiment record from BOTH paired arms and report exclusions.",
+      "staleness_reporting": "Record source_age_seconds for every aligned row and report its distribution; do not introduce a post hoc age threshold.",
+      "effective_frequency_note": "A daily score repeated across hourly decisions is not a set of independent hourly sentiment observations. Report the number of unique daily sentiment observations and the dependence/overlap explicitly."
+    }
+  },
+  "feature_specification": {
+    "decision_time": "close(t) of a fully completed Nobitex BTCUSDT 1h candle; all inputs must be available by this timestamp.",
+    "feature_scaler_fit_on_training_fold_only": true,
+    "feature_names_ohlcv_only_control": [
+      "log_return_1",
+      "log_return_4",
+      "log_return_24",
+      "realized_volatility_6",
+      "realized_volatility_24",
+      "range_fraction_1",
+      "atr_fraction_14",
+      "log_volume_change_1"
+    ],
+    "feature_names_sentiment_augmented": [
+      "log_return_1",
+      "log_return_4",
+      "log_return_24",
+      "realized_volatility_6",
+      "realized_volatility_24",
+      "range_fraction_1",
+      "atr_fraction_14",
+      "log_volume_change_1",
+      "fear_greed_value"
+    ],
+    "definitions": {
+      "log_return_1": "ln(close[t] / close[t-1]) using completed hourly closes.",
+      "log_return_4": "ln(close[t] / close[t-4]) using completed hourly closes.",
+      "log_return_24": "ln(close[t] / close[t-24]) using completed hourly closes.",
+      "realized_volatility_6": "Population standard deviation (ddof=0) of the six most recent one-hour log returns, including the return ending at t.",
+      "realized_volatility_24": "Population standard deviation (ddof=0) of the 24 most recent one-hour log returns, including the return ending at t.",
+      "range_fraction_1": "(high[t] - low[t]) / close[t] for the completed candle.",
+      "atr_fraction_14": "Wilder ATR(14) divided by close[t]. TrueRange[t] = max(high[t]-low[t], abs(high[t]-close[t-1]), abs(low[t]-close[t-1])). Seed ATR with the arithmetic mean of the first 14 valid TrueRange values, then update ATR[t] = (13*ATR[t-1] + TrueRange[t])/14.",
+      "log_volume_change_1": "ln(1 + base_asset_volume[t]) - ln(1 + base_asset_volume[t-1]); volume must be finite and non-negative.",
+      "fear_greed_value": "The raw integer Alternative.me value in [0,100] from the latest aligned record available by decision_time_utc. The provider classification string is metadata only and is not a model feature."
+    },
+    "feature_count": {
+      "control": 8,
+      "sentiment_augmented": 9,
+      "sentiment_features_added": 1
+    },
+    "feature_selection_policy": "Use exactly the named features for the relevant arm. No volume_zscore_24, time-of-day or weekday encodings, interactions, lags beyond those explicitly defined, feature selection, PCA, alternate indicators or post-outcome additions.",
+    "warmup_policy": "Rows without the full trailing feature history are excluded and counted; no partial-window calculation.",
+    "missing_value_policy": "No imputation, interpolation, cross-gap fill or zero-fill. Exclude a row if any required feature is invalid or missing. The control and treatment must use the exact same paired decision-time rows.",
+    "data_quality_policy": "Use only completed, UTC-indexed Nobitex BTCUSDT candles. Reject duplicate/non-monotonic timestamps, invalid OHLC relationships, non-finite values, negative volume, and samples whose feature or target windows cross a missing candle or data gap."
+  },
+  "targets": {
+    "unit": "hours",
+    "horizons": [
+      1,
+      4
+    ],
+    "target_type": "binary direction of the fixed-horizon forward BTCUSDT candle return",
+    "decision_time": "close(t)",
+    "entry_reference": "open(t+1)",
+    "exit_reference": "close(t+h)",
+    "gross_return_formula": "close[t+h] / open[t+1] - 1",
+    "label_rule": "y=1 when gross_return > 0; y=0 when gross_return <= 0.",
+    "label_maturity": "A training label is usable only after the complete registered horizon has elapsed and close[t+h] is available.",
+    "purge_rule": "Drop any training row whose target interval is not fully mature before the next test block begins. Drop test rows whose exit candle lies outside that test block. A sample may not cross a missing candle or data boundary."
+  },
+  "model": {
+    "estimator": "sklearn.linear_model.LogisticRegression",
+    "scikit_learn_version": "1.9.0",
+    "pipeline": [
+      "sklearn.preprocessing.StandardScaler",
+      "sklearn.linear_model.LogisticRegression"
+    ],
+    "parameters": {
+      "penalty": "l2",
+      "C": 1,
+      "solver": "lbfgs",
+      "fit_intercept": true,
+      "class_weight": null,
+      "max_iter": 1000,
+      "tol": 0.0001,
+      "random_state": 42
+    },
+    "signal": {
+      "long_entry_probability_threshold": 0.5,
+      "entry_rule": "Open one long-only research cohort at open[t+1] when P(y=1) >= 0.5; otherwise hold cash.",
+      "short_entries": false,
+      "leverage": 1
+    },
+    "fixed_model_policy": "One fixed Logistic Regression fit per arm, horizon and fold. No alternate estimator, hyperparameter search, threshold sweep, probability calibration, ensemble, feature selection or refit inside a test fold."
+  },
+  "walk_forward_protocol": {
+    "scheme": "expanding_window_on_five_contiguous_chronological_blocks",
+    "fold_count": 4,
+    "minimum_valid_folds_for_acceptance": 3,
+    "block_construction": "Sort eligible UTC decision timestamps once. Split the ordered timestamps into five contiguous blocks using deterministic index boundaries floor(k*N/5), k=1..4. B1 is the initial training block; B2..B5 are successive test blocks.",
+    "folds": [
+      {
+        "fold_id": "WF-01",
+        "train_blocks": [
+          "B1"
+        ],
+        "test_block": "B2"
+      },
+      {
+        "fold_id": "WF-02",
+        "train_blocks": [
+          "B1",
+          "B2"
+        ],
+        "test_block": "B3"
+      },
+      {
+        "fold_id": "WF-03",
+        "train_blocks": [
+          "B1",
+          "B2",
+          "B3"
+        ],
+        "test_block": "B4"
+      },
+      {
+        "fold_id": "WF-04",
+        "train_blocks": [
+          "B1",
+          "B2",
+          "B3",
+          "B4"
+        ],
+        "test_block": "B5"
+      }
+    ],
+    "training_rules": {
+      "only_prior_blocks": true,
+      "minimum_training_rows_per_horizon": 100,
+      "minimum_training_rows_per_class": 20,
+      "training_labels_must_be_fully_mature": true,
+      "purge_maximum_target_overlap": "At every fold boundary, remove any training observation whose label exit is not strictly earlier than the first test decision timestamp.",
+      "scaler_fit_rows": "training rows for this fold and arm only",
+      "test_data_prohibited_from_fit": true,
+      "no_random_split": true
+    },
+    "test_rules": {
+      "test_fold_is_the_next_single_chronological_block": true,
+      "test_horizon_must_resolve_inside_same_test_block": true,
+      "samples_crossing_missing_candles_or_fold_boundaries_are_excluded": true,
+      "no_model_refit_or_threshold_change_inside_test": true,
+      "all_four_fold_results_must_be_reported": true
+    },
+    "insufficient_data_rule": "If minimum training rows/classes, fold integrity, or minimum OOS trade count is not met, record INSUFFICIENT_SAMPLE. Do not change block boundaries, reduce horizon, relax minimums, substitute a fold, or add data after inspecting outcomes."
+  },
+  "portfolio_evaluation": {
+    "decision_interval": "one completed 1h candle",
+    "direction": "long_only_spot_research_simulation",
+    "position_holding_period": "exact registered horizon h",
+    "position_sizing": "Each accepted hourly signal opens a fixed cohort sized at 1/h of initial equity (100% for 1h, 25% for 4h). Cohorts close after the exact registered horizon. With one entry opportunity per hour this caps fully concurrent gross exposure at 1.0x; no leverage or compounding.",
+    "price_basis": "Nobitex BTCUSDT candle open[t+1] to close[t+h]; this is a research reference, not a claim of executable fills.",
+    "cost_scenarios": {
+      "Cost-50": {
+        "round_trip_cost_bps": 50,
+        "fraction": 0.005
+      },
+      "Cost-90": {
+        "round_trip_cost_bps": 90,
+        "fraction": 0.009
+      }
+    },
+    "cost_interpretation": "Apply one fixed all-in round-trip friction charge per completed cohort under each scenario. Do not add a second spread/slippage charge. Cost-50 and Cost-90 are evaluated separately and neither replaces the other.",
+    "net_trade_return_formula": "((close[t+h] / open[t+1]) - 1) - round_trip_cost_fraction",
+    "net_profit_factor_formula": "sum(positive net trade PnL) / abs(sum(negative net trade PnL)); undefined if there are no negative net trades and therefore does not pass automatically.",
+    "max_drawdown_formula": "Peak-to-trough percentage drawdown of the chronological hourly-marked portfolio NAV, including open cohort mark-to-market PnL and allocated round-trip costs.",
+    "completed_trade_definition": "One accepted long cohort that reaches its fixed horizon and closes fully inside the same test block without crossing a missing candle or data gap.",
+    "overlap_dependence_note": "Hourly forecasts create overlapping fixed-horizon cohorts, particularly at 4h. Cohort notional is fixed as above and capped at 1.0x. Report cohort overlap and do not claim that completed cohorts or repeated daily sentiment values are statistically independent."
+  },
+  "comparison_protocol": {
+    "control_arm": "OHLCV-only Logistic Regression using exactly the eight frozen OHLCV features.",
+    "treatment_arm": "Identical Logistic Regression using the same eight OHLCV features plus exactly one fear_greed_value feature.",
+    "paired_sample_rule": "Both arms must use identical decision timestamps, labels, train/test folds, cost assumptions, position sizing and signal threshold. Restrict both arms to the common eligible rows where all nine treatment features are available; report rows lost to the sentiment availability requirement.",
+    "incremental_value_rule": "For each horizon and each cost scenario, the treatment must have strictly higher pooled OOS NetPF and strictly higher pooled net PnL than the paired control to claim incremental economic value from Fear & Greed. An absolute economic pass without this paired improvement does not establish that sentiment helped.",
+    "baseline_reports": [
+      "no_trade_cash_baseline",
+      "always_long_same_horizon_same_cost",
+      "training_fold_majority_direction"
+    ],
+    "candidate_interpretation": "The four registered arm-by-horizon candidates are evaluated independently. Fold fits and Cost-50/Cost-90 replays do not create additional candidate identities."
+  },
+  "acceptance_gates": {
+    "evaluated_separately_for_each_arm_horizon_and_cost_scenario": true,
+    "net_profit_factor_min": 1.1,
+    "completed_oos_trades_min": 100,
+    "max_drawdown_fraction_max": 0.15,
+    "minimum_valid_folds": 3,
+    "minimum_stable_folds": 3,
+    "fold_stability_rule": "At least 3 of the 4 fixed test folds must each have at least 20 completed OOS trades, positive net PnL and fold NetPF > 1.00. Report every fold, including failed and insufficient folds.",
+    "pooled_metrics_rule": "For each arm and horizon, under both Cost-50 and Cost-90, pooled OOS NetPF must be >=1.10, completed costed OOS trades must be >=100, and absolute MaxDD must be <=15%.",
+    "overall_sentiment_pass_rule": "The sentiment-augmented candidate must independently pass all absolute gates for both horizons and both cost scenarios, and must satisfy the paired incremental_value_rule against the OHLCV-only control.",
+    "control_rule": "Report the OHLCV-only control under the exact same absolute gates; it is the comparator, not a substitute for the treatment gates.",
+    "dsr_rule": "Report DSR only when complete net-return series, candidate multiplicity, skewness/kurtosis and all required trial-history inputs are available. DSR must be positive when computable. If not computable, retain GLOBAL_DSR=NOT_COMPUTABLE and classify economic acceptance as INSUFFICIENT_EVIDENCE; do not manufacture a numeric DSR or infer a pass.",
+    "global_trial_accounting": "GLOBAL_N=UNKNOWN remains unchanged; the four M5.2 logical candidates are an append-only family record and do not repair missing historical trial counts.",
+    "insufficient_sample_verdict": "INSUFFICIENT_SAMPLE / NO-GO",
+    "failed_gate_verdict": "NO-GO",
+    "no_metric_or_fold_may_be_hidden": true,
+    "no_threshold_changes_after_results": true
+  },
+  "trial_family": {
+    "logical_trial_count": 4,
+    "status": "PREREGISTERED_LOCKED",
+    "implementation_revision": "M5.2-SENTIMENT-G1",
+    "evaluated_candidate_count_at_registration": 0,
+    "trial_ids": [
+      "NOBITEX-M5-2-1h-OHLCV-LR-BASELINE-01",
+      "NOBITEX-M5-2-1h-SENTIMENT-LR-AUGMENTED-01",
+      "NOBITEX-M5-2-4h-OHLCV-LR-BASELINE-01",
+      "NOBITEX-M5-2-4h-SENTIMENT-LR-AUGMENTED-01"
+    ],
+    "fold_fits_and_cost_scenarios_are_not_new_trial_variants": true
+  },
+  "safety": {
+    "implementation_authorized": false,
+    "model_training_authorized": false,
+    "fit_authorized": false,
+    "inference_authorized": false,
+    "economic_backtest_authorized": false,
+    "new_data_acquisition_authorized": false,
+    "holdout_access": "PROHIBITED",
+    "posthack_data_access": "PROHIBITED",
+    "private_api_calls": 0,
+    "real_order_attempts": 0,
+    "paper_orders": 0,
+    "local_execution": false,
+    "Champion": null,
+    "order_permission": false,
+    "trading_authorization": "NO-GO"
+  }
+}
