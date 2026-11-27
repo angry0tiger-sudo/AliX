@@ -69,8 +69,14 @@ def test_preregistration_is_read_only_and_sha_locked() -> None:
     assert digest == "851d6c4b39c41cacec8ccd712cf17bb40dd42dd45f2bb8813920a7f2ebe481ba"
     assert config["preregistration"]["status"] == "PREREGISTERED_LOCKED"
     assert config["scope"]["market"] == "BTCUSDT"
-    assert tuple(config["feature_specification"]["feature_names_ohlcv_only_control"]) == CONTROL_FEATURES
-    assert tuple(config["feature_specification"]["feature_names_sentiment_augmented"]) == TREATMENT_FEATURES
+    assert (
+        tuple(config["feature_specification"]["feature_names_ohlcv_only_control"])
+        == CONTROL_FEATURES
+    )
+    assert (
+        tuple(config["feature_specification"]["feature_names_sentiment_augmented"])
+        == TREATMENT_FEATURES
+    )
     assert config["safety"]["holdout_access"] == "PROHIBITED"
 
 
@@ -287,8 +293,8 @@ def test_paired_comparison_requires_both_netpf_and_net_pnl_improvement() -> None
 
     assert paired["1"]["Cost-50"]["incremental_value_passed"]
     assert paired["4"]["Cost-90"]["incremental_value_passed"]
-    trials["NOBITEX-M5-2-4h-SENTIMENT-LR-AUGMENTED-01"]["cost_scenarios"]["Cost-90"]["pooled_oos"][
-        "total_net_pnl_fraction_of_initial_equity"
-    ] = 0.005
+    trials["NOBITEX-M5-2-4h-SENTIMENT-LR-AUGMENTED-01"]["cost_scenarios"]["Cost-90"][
+        "pooled_oos"
+    ]["total_net_pnl_fraction_of_initial_equity"] = 0.005
     paired = _paired_comparisons(trials)
     assert not paired["4"]["Cost-90"]["incremental_value_passed"]
