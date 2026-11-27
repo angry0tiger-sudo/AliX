@@ -153,20 +153,26 @@ def test_market_mismatch_fails_closed_without_computing_correlations(
     assert report["decision"] == "NEW_BTCUSDT_CAPTURE_REQUIRED"
 
 
-def test_market_mismatch_does_not_compute_features(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_market_mismatch_does_not_compute_features(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     archive, inventory = _make_archive(tmp_path, "BTCIRT")
 
     def fail_if_called(_row: dict[str, str]) -> tuple[float, dict[str, float]]:
         raise AssertionError("feature computation must not run for a market mismatch")
 
-    monkeypatch.setattr("scripts.analyze_m8_microstructure.compute_features", fail_if_called)
+    monkeypatch.setattr(
+        "scripts.analyze_m8_microstructure.compute_features", fail_if_called
+    )
     report = analyze_archives([archive], inventory, expected_market="BTCUSDT")
 
     assert report["status"] == "BLOCKED_MARKET_MISMATCH"
     assert report["correlation_status"] == "NOT_COMPUTED"
 
 
-def test_btcusdt_archive_passes_integrity_and_run_id_type_normalization(tmp_path: Path) -> None:
+def test_btcusdt_archive_passes_integrity_and_run_id_type_normalization(
+    tmp_path: Path,
+) -> None:
     archive, inventory = _make_archive(tmp_path, "BTCUSDT")
 
     report = analyze_archives([archive], inventory, expected_market="BTCUSDT")

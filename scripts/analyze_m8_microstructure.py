@@ -364,7 +364,13 @@ def _regularized_beta(x: float, a: float, b: float) -> float:
         return 0.0
     if x >= 1.0:
         return 1.0
-    log_front = math.lgamma(a + b) - math.lgamma(a) - math.lgamma(b) + a * math.log(x) + b * math.log1p(-x)
+    log_front = (
+        math.lgamma(a + b)
+        - math.lgamma(a)
+        - math.lgamma(b)
+        + a * math.log(x)
+        + b * math.log1p(-x)
+    )
     front = math.exp(log_front)
     if x < (a + 1.0) / (a + b + 2.0):
         return front * _betacf(a, b, x) / a
@@ -410,22 +416,28 @@ def analyze_archives(
     loaded: list[tuple[dict[str, Any], list[Snapshot], list[tuple[int, int]]]] = []
     seen_hashes: set[str] = set()
     for path in archive_paths:
-        manifest, snapshots, gaps = _read_verified_archive(path, inventory, expected_market)
+        manifest, snapshots, gaps = _read_verified_archive(
+            path, inventory, expected_market
+        )
         archive_hash = _sha256(path.read_bytes())
         if archive_hash in seen_hashes:
             raise InputError("DUPLICATE_ARCHIVE")
         seen_hashes.add(archive_hash)
         actual_market = str(manifest.get("market", "UNKNOWN"))
         actual_markets.add(actual_market)
-        segments.append({
-            "run_id": manifest.get("workflow_run_id"),
-            "artifact_id": inventory["artifacts_by_sha256"][archive_hash]["artifact_id"],
-            "market": actual_market,
-            "capture_status": manifest.get("capture_status"),
-            "orderbook_rows": manifest.get("record_counts", {}).get("orderbook"),
-            "gap_records": manifest.get("gap_count"),
-            "archive_sha256": archive_hash,
-        })
+        segments.append(
+            {
+                "run_id": manifest.get("workflow_run_id"),
+                "artifact_id": inventory["artifacts_by_sha256"][archive_hash][
+                    "artifact_id"
+                ],
+                "market": actual_market,
+                "capture_status": manifest.get("capture_status"),
+                "orderbook_rows": manifest.get("record_counts", {}).get("orderbook"),
+                "gap_records": manifest.get("gap_count"),
+                "archive_sha256": archive_hash,
+            }
+        )
         loaded.append((manifest, snapshots, gaps))
 
     if len(seen_hashes) != len(inventory.get("artifacts_by_sha256", {})):
@@ -437,7 +449,9 @@ def analyze_archives(
         "actual_markets": sorted(actual_markets),
         "segments": segments,
         "segment_count": len(segments),
-        "total_orderbook_rows": sum(int(item["orderbook_rows"] or 0) for item in segments),
+        "total_orderbook_rows": sum(
+            int(item["orderbook_rows"] or 0) for item in segments
+        ),
         "total_gap_records": sum(int(item["gap_records"] or 0) for item in segments),
         "features": list(FEATURES),
         "horizons": ["5m", "15m"],
@@ -453,16 +467,18 @@ def analyze_archives(
     }
 
     if actual_markets != {expected_market}:
-        base_report.update({
-            "status": "BLOCKED_MARKET_MISMATCH",
-            "correlation_status": "NOT_COMPUTED",
-            "correlations": {},
-            "decision": "NEW_BTCUSDT_CAPTURE_REQUIRED",
-            "decision_note": (
-                f"Input market(s) {sorted(actual_markets)} do not match {expected_market}; "
-                "no cross-market inference or correlation calculation was performed."
-            ),
-        })
+        base_report.update(
+            {
+                "status": "BLOCKED_MARKET_MISMATCH",
+                "correlation_status": "NOT_COMPUTED",
+                "correlations": {},
+                "decision": "NEW_BTCUSDT_CAPTURE_REQUIRED",
+                "decision_note": (
+                    f"Input market(s) {sorted(actual_markets)} do not match {expected_market}; "
+                    "no cross-market inference or correlation calculation was performed."
+                ),
+            }
+        )
         return base_report
 
     pooled: dict[str, dict[str, list[float]]] = {
@@ -478,7 +494,9 @@ def analyze_archives(
             "samples": {},
         }
         for horizon_name, horizon_ms in HORIZONS_MS.items():
-            feature_pairs, targets, excluded = _samples_for_horizon(snapshots, gaps, horizon_ms)
+            feature_pairs, targets, excluded = _samples_for_horizon(
+                snapshots, gaps, horizon_ms
+            )
             segment_report["samples"][horizon_name] = {
                 "n": len(targets),
                 "excluded": excluded,
@@ -497,15 +515,20 @@ def analyze_archives(
     for horizon_name in HORIZONS_MS:
         correlations[horizon_name] = {}
         for feature in FEATURES:
-            result = correlation_summary(pooled[horizon_name][feature], pooled_targets[horizon_name])
-            for method, p_key in (("pearson", "pearson_p_two_sided"), ("spearman", "spearman_p_two_sided")):
+            result = correlation_summary(
+                pooled[horizon_name][feature], pooled_targets[horizon_name]
+            )
+            for method, p_key in (
+                ("pearson", "pearson_p_two_sided"),
+                ("spearman", "spearman_p_two_sided"),
+            ):
                 raw_p = result[p_key]
                 result[f"{method}_p_bonferroni_8_tests"] = (
                     min(1.0, raw_p * n_tests) if raw_p is not None else None
                 )
             adj_p = result["pearson_p_bonferroni_8_tests"]
-            result["pearson_significant_after_bonferroni"] = (
-                bool(adj_p is not None and adj_p < ALPHA)
+            result["pearson_significant_after_bonferroni"] = bool(
+                adj_p is not None and adj_p < ALPHA
             )
             correlations[horizon_name][feature] = result
 
@@ -520,43 +543,61 @@ def analyze_archives(
         )
         for item in obi_results.values()
     )
-    base_report.update({
-        "status": "ANALYZED",
-        "correlation_status": "COMPUTED",
-        "sampling": {
-            "grid": "non-overlapping UTC epoch grid at each target horizon",
-            "feature_snapshot_max_staleness_ms": STALE_MAX_MS,
-            "future_snapshot_max_lag_ms": FUTURE_TOLERANCE_MS,
-            "gap_policy": "reject any sample whose feature-to-target interval intersects an explicit orderbook gap",
-            "segment_policy": "process each artifact separately; never stitch capture segments",
-            "returns": "10,000 * ln(mid[t+h] / mid[t])",
-            "multiple_testing": f"Bonferroni correction across {n_tests} feature-horizon tests separately for Pearson and Spearman",
-        },
-        "per_segment": per_segment,
-        "excluded_samples": excluded_by_horizon,
-        "correlations": correlations,
-        "decision": "OBI_CORRELATION_SIGNAL_FOUND" if any_obi_significant else "NO_SIGNIFICANT_OBI_CORRELATION",
-        "decision_note": (
-            "At least one OBI horizon is significant after the family-wise Bonferroni correction."
-            if any_obi_significant
-            else "Neither OBI horizon is significant after the family-wise Bonferroni correction."
-        ),
-        "caveat": "Exploratory correlation is not evidence of tradable edge, causality, or post-cost profitability.",
-    })
+    base_report.update(
+        {
+            "status": "ANALYZED",
+            "correlation_status": "COMPUTED",
+            "sampling": {
+                "grid": "non-overlapping UTC epoch grid at each target horizon",
+                "feature_snapshot_max_staleness_ms": STALE_MAX_MS,
+                "future_snapshot_max_lag_ms": FUTURE_TOLERANCE_MS,
+                "gap_policy": "reject any sample whose feature-to-target interval intersects an explicit orderbook gap",
+                "segment_policy": "process each artifact separately; never stitch capture segments",
+                "returns": "10,000 * ln(mid[t+h] / mid[t])",
+                "multiple_testing": f"Bonferroni correction across {n_tests} feature-horizon tests separately for Pearson and Spearman",
+            },
+            "per_segment": per_segment,
+            "excluded_samples": excluded_by_horizon,
+            "correlations": correlations,
+            "decision": (
+                "OBI_CORRELATION_SIGNAL_FOUND"
+                if any_obi_significant
+                else "NO_SIGNIFICANT_OBI_CORRELATION"
+            ),
+            "decision_note": (
+                "At least one OBI horizon is significant after the family-wise Bonferroni correction."
+                if any_obi_significant
+                else "Neither OBI horizon is significant after the family-wise Bonferroni correction."
+            ),
+            "caveat": "Exploratory correlation is not evidence of tradable edge, causality, or post-cost profitability.",
+        }
+    )
     return base_report
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Run the hash-pinned M8 L2 microstructure correlation diagnostic.")
-    parser.add_argument("--archives", nargs="+", type=Path, required=True, help="Exactly the five M1.6 ZIP archives.")
+    parser = argparse.ArgumentParser(
+        description="Run the hash-pinned M8 L2 microstructure correlation diagnostic."
+    )
+    parser.add_argument(
+        "--archives",
+        nargs="+",
+        type=Path,
+        required=True,
+        help="Exactly the five M1.6 ZIP archives.",
+    )
     parser.add_argument("--inventory", type=Path, default=DEFAULT_INVENTORY)
     parser.add_argument("--expected-market", default="BTCUSDT")
-    parser.add_argument("--output", type=Path, default=Path("m8_microstructure_report.json"))
+    parser.add_argument(
+        "--output", type=Path, default=Path("m8_microstructure_report.json")
+    )
     args = parser.parse_args()
 
     report = analyze_archives(args.archives, args.inventory, args.expected_market)
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    args.output.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     print(json.dumps(report, indent=2, sort_keys=True))
     if report["status"] == "BLOCKED_MARKET_MISMATCH":
         print(
