@@ -210,6 +210,7 @@ def _fetch_one_page(symbol: str, start: int, end: int) -> dict[int, dict[str, An
         result[stamp] = row
     return result
 
+
 def _collect_history_pages(symbol: str) -> dict[int, dict[str, Any]]:
     rows_by_stamp: dict[int, dict[str, Any]] = {}
     cursor = PREHACK_START
@@ -249,6 +250,7 @@ def _validate_history_coverage(
 def fetch_exact_prehack_history(symbol: str) -> list[dict[str, Any]]:
     rows_by_stamp = _collect_history_pages(symbol)
     return _validate_history_coverage(symbol, rows_by_stamp)
+
 
 def _write_symbol_csv(rows: Sequence[Mapping[str, Any]], path: Path) -> str:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -343,10 +345,14 @@ def _acquire_symbol(
 def _trial_data_status(qualified: Sequence[str]) -> dict[str, str]:
     return {
         "NOBITEX-M7-5PAIR-RIDGE-TOP2-01": (
-            "QUALIFIED" if all(symbol in qualified for symbol in M7_FIVE_SYMBOLS) else "BLOCKED_DATA"
+            "QUALIFIED"
+            if all(symbol in qualified for symbol in M7_FIVE_SYMBOLS)
+            else "BLOCKED_DATA"
         ),
         "NOBITEX-M7-10PAIR-RIDGE-TOP2-01": (
-            "QUALIFIED" if all(symbol in qualified for symbol in M7_TEN_SYMBOLS) else "BLOCKED_DATA"
+            "QUALIFIED"
+            if all(symbol in qualified for symbol in M7_TEN_SYMBOLS)
+            else "BLOCKED_DATA"
         ),
     }
 
@@ -357,7 +363,9 @@ def _build_qualification_report(
     statuses: Mapping[str, Mapping[str, Any]],
 ) -> dict[str, Any]:
     qualified = [
-        symbol for symbol in CANDIDATE_SYMBOLS if statuses[symbol]["status"] == "QUALIFIED"
+        symbol
+        for symbol in CANDIDATE_SYMBOLS
+        if statuses[symbol]["status"] == "QUALIFIED"
     ]
     return {
         "schema_version": "alix.m7.data-qualification.v1",
@@ -408,6 +416,7 @@ def acquire_dataset(output_dir: Path, commit_sha: str) -> dict[str, Any]:
         encoding="utf-8",
     )
     return report
+
 
 def select_top_two(predictions: Mapping[str, float]) -> list[str]:
     """Select at most two strictly positive finite predictions, ties by symbol."""
@@ -524,6 +533,7 @@ def load_locked_data(data_dir: Path, btc_csv: Path) -> dict[str, pd.DataFrame]:
     _validate_common_timestamps(data)
     return data
 
+
 def _log_returns(closes: np.ndarray) -> np.ndarray:
     result = np.full(closes.shape, np.nan, dtype=float)
     result[1:] = np.log(closes[1:] / closes[:-1])
@@ -589,8 +599,7 @@ def _build_panel_row(
     realized_simple_return = exit_open / entry_open - 1.0
     features = (btc_return_4h, peer_median, beta, volume_shock)
     if not all(
-        math.isfinite(value)
-        for value in (*features, target, realized_simple_return)
+        math.isfinite(value) for value in (*features, target, realized_simple_return)
     ):
         return None
     return {
@@ -641,9 +650,7 @@ def build_panel(
                 peer_median=_peer_median_return(
                     close_by_symbol, symbols, symbol, decision_index
                 ),
-                beta=_beta_24h(
-                    returns_by_symbol[symbol], btc_returns, decision_index
-                ),
+                beta=_beta_24h(returns_by_symbol[symbol], btc_returns, decision_index),
                 volume_shock=_relative_volume_shock(
                     volume_by_symbol[symbol], decision_index
                 ),
@@ -655,6 +662,7 @@ def build_panel(
     if panel.empty:
         raise ValueError("m7_panel_empty_after_feature_qualification")
     return panel
+
 
 def _drawdown(returns: Sequence[float]) -> float:
     nav = 1.0
@@ -744,7 +752,7 @@ def _walk_forward_blocks(panel: pd.DataFrame) -> list[list[int]]:
     return [list(map(int, block)) for block in np.array_split(unique_indices, 5)]
 
 
-def _fold_test_boundary(blocks: Sequence[Sequence[int]], fold_number: int) -> tuple[list[int], int, int] | None:
+def _fold_test_boundary(
     test_indices = list(blocks[fold_number])
     if not test_indices:
         return None
