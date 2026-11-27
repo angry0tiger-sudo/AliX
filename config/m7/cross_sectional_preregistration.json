@@ -1,0 +1,243 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "schema_version": "alix.m7.cross-sectional-preregistration.v1",
+  "preregistration": {
+    "id": "ALIX-M7-NOBITEX-CROSS-SECTIONAL-G1",
+    "phase": "M7",
+    "revision": "M7-CS-G1",
+    "status": "PREREGISTERED_LOCKED",
+    "preregistered_utc_date": "2026-11-27",
+    "branch": "research/nobitex-hf-strategy",
+    "owner_directive": "Owner selected R&D path B (cross-sectional multi-asset lead-lag rotation) on 2026-11-27.",
+    "scope": "Two logical candidates are fixed by eligible-universe size: a five-pair candidate using the first five symbols in the immutable priority list, and a ten-pair candidate using all ten symbols. BTCUSDT is a contextual predictor only and is not a target holding. Both use identical StandardScaler + Ridge(alpha=1.0), fixed features, next-four-hour log-return target, positive-score top-two long-only portfolio, fixed folds, costs and gates.",
+    "implementation_authorized": true,
+    "model_training_authorized": true,
+    "fit_authorized": true,
+    "inference_authorized": true,
+    "economic_backtest_authorized": true,
+    "data_acquisition_authorized": true,
+    "public_api_only": true,
+    "paid_data_purchase_authorized": false,
+    "onchain_data_access_authorized": false,
+    "holdout_access_authorized": false,
+    "posthack_data_access_authorized": false,
+    "private_api_access_authorized": false,
+    "paper_orders_authorized": false,
+    "real_orders_authorized": false,
+    "local_execution_authorized": false,
+    "workflow_only_execution": true,
+    "post_lock_tuning_allowed": false,
+    "change_control": "Any change to asset priority, candidate universe, data boundaries or hashes, features, feature formula, model, target horizon, rebalancing, selection rule, weighting, folds, costs, purge/embargo, gate or trial count requires a new superseding preregistration before inspecting economic results. No threshold, universe, model, feature or parameter sweep is allowed.",
+    "p_hacking_guard": "Exactly two logical trials are registered, differentiated only by the predeclared five-symbol versus ten-symbol universe. Four folds, two costs, and multiple assets are evaluation dimensions, not additional candidate variants.",
+    "data_source_policy": "Only Nobitex public Spot UDF hourly OHLCV and the public market-stats endpoint are allowed. No credentials, private endpoint, external venue, synthetic fill, interpolation, backfill or symbol substitution.",
+    "exploratory_status": "The existing PRE-HACK BTCUSDT and newly acquired matching PRE-HACK histories have been exposed for research purposes. These results are exploratory and cannot be presented as a fresh confirmatory holdout test."
+  },
+  "data": {
+    "venue": "Nobitex",
+    "market_type": "Spot",
+    "interval": "1h",
+    "start_utc": "2021-10-31T20:30:00Z",
+    "end_utc": "2025-06-17T20:30:00Z",
+    "start_timestamp": 1635712200,
+    "end_timestamp": 1750192200,
+    "expected_rows_per_symbol": 31801,
+    "btc_context": {
+      "symbol": "BTCUSDT",
+      "csv_path": "data/nobitex/prehack/nobitex-btcusdt-1h.csv",
+      "csv_sha256": "0aa13607d1da68c4720919f233635bb33d34048e5bd67d3ecc2ce9bb7c2b462e",
+      "role": "Context feature source only; never selected as a portfolio holding."
+    },
+    "candidate_symbol_priority": [
+      "ETHUSDT",
+      "BNBUSDT",
+      "ADAUSDT",
+      "SOLUSDT",
+      "XRPUSDT",
+      "DOGEUSDT",
+      "TRXUSDT",
+      "LTCUSDT",
+      "LINKUSDT",
+      "DOTUSDT"
+    ],
+    "source_qualification": {
+      "market_stats_endpoint": "/market/stats",
+      "ohlcv_endpoint": "/market/udf/history",
+      "resolution": "60",
+      "history_must_match_btc_timestamps_exactly": true,
+      "required_rows": 31801,
+      "missing_intervals_allowed": 0,
+      "off_grid_timestamps_allowed": 0,
+      "duplicate_timestamps_allowed": 0,
+      "volume_must_be_finite_and_nonnegative": true,
+      "market_must_be_present_and_not_closed_in_public_stats": true,
+      "no_interpolation_or_resampling": true,
+      "no_partial_history_or_pair_substitution": true,
+      "unqualified_symbol_policy": "Record the exact reason in the acquisition manifest; do not impute or replace it. A candidate whose fixed required universe is incomplete is BLOCKED_DATA.",
+      "immutable_artifacts": "One CSV and one JSON manifest per qualified symbol; each CSV SHA-256 is recorded in the aggregate data-qualification manifest."
+    }
+  },
+  "trials": [
+    {
+      "trial_id": "NOBITEX-M7-5PAIR-RIDGE-TOP2-01",
+      "logical_candidate_number": 1,
+      "description": "Fixed five-pair universe: ETHUSDT, BNBUSDT, ADAUSDT, SOLUSDT, XRPUSDT.",
+      "symbols": [
+        "ETHUSDT",
+        "BNBUSDT",
+        "ADAUSDT",
+        "SOLUSDT",
+        "XRPUSDT"
+      ]
+    },
+    {
+      "trial_id": "NOBITEX-M7-10PAIR-RIDGE-TOP2-01",
+      "logical_candidate_number": 2,
+      "description": "Fixed ten-pair universe: all symbols in the immutable priority list.",
+      "symbols": [
+        "ETHUSDT",
+        "BNBUSDT",
+        "ADAUSDT",
+        "SOLUSDT",
+        "XRPUSDT",
+        "DOGEUSDT",
+        "TRXUSDT",
+        "LTCUSDT",
+        "LINKUSDT",
+        "DOTUSDT"
+      ]
+    }
+  ],
+  "features": {
+    "feature_count": 4,
+    "feature_names": [
+      "btc_return_4h",
+      "cross_sectional_median_return_4h_ex_target",
+      "beta_24h_to_btc",
+      "relative_volume_shock_24h"
+    ],
+    "definitions": {
+      "btc_return_4h": "Natural log of BTCUSDT close at decision hour t divided by its close at t-4 hourly bars.",
+      "cross_sectional_median_return_4h_ex_target": "Median of the four-hour log returns (close[t]/close[t-4]) of all other target symbols in the same fixed candidate universe, excluding the current target symbol. The five-asset candidate therefore uses the other four assets; the ten-asset candidate uses the other nine.",
+      "beta_24h_to_btc": "Sample covariance (ddof=1) of the target symbol's last 24 completed hourly log returns with BTCUSDT's corresponding returns, divided by sample variance of BTCUSDT returns. The window ends at the close of hour t.",
+      "relative_volume_shock_24h": "ln(1 + current completed-hour base-asset volume at t divided by the median of the previous 24 completed-hour base-asset volumes [t-24:t]). If the median is zero or invalid, the row is excluded; no imputation."
+    },
+    "availability": "All features are computed after the close of hour t using data at or before t only. Windows are right-aligned. No future values, centered windows, partial candle, forward-fill, backfill, interpolation, label-derived feature, external source, sentiment, or on-chain fields are allowed.",
+    "missing_policy": "Exclude the affected panel row and report counts. Never impute features. The candidate remains evaluated on the fixed symbol universe; symbols are not removed post hoc to improve performance."
+  },
+  "target": {
+    "type": "next_4h_forward_log_return",
+    "decision_time": "After the close of a completed hourly candle at index i, only at the fixed four-hour decision cadence anchored to the first committed BTCUSDT candle (i modulo 4 equals zero).",
+    "entry_price": "Open of the next hourly candle at index i+1.",
+    "exit_price": "Open of the hourly candle at index i+5, representing four elapsed hourly intervals.",
+    "formula": "ln(open[i+5] / open[i+1])",
+    "label_maturity": "The complete entry and exit window must be inside the same applicable training or test block. Rows whose label window crosses a fold boundary are purged."
+  },
+  "model": {
+    "estimator": "sklearn.pipeline.Pipeline(StandardScaler(), Ridge(alpha=1.0))",
+    "scaler": "StandardScaler",
+    "regressor": "Ridge",
+    "alpha": 1,
+    "fit_policy": "One pipeline fit per logical candidate and eligible chronological fold. Scaler statistics are fit on training rows only. No alternative model, hyperparameter search, target transforms, feature selection or calibration.",
+    "training_unit": "Pooled panel rows across the symbols in the fixed trial universe at each eligible four-hour decision timestamp."
+  },
+  "portfolio": {
+    "rebalance_frequency": "Every four hours on the fixed UTC anchor described in target.decision_time.",
+    "selection_rule": "Sort all finite predictions for the fixed trial universe by descending predicted return; tie-break alphabetically by symbol. Select at most the top two symbols whose prediction is strictly greater than zero. No position is opened for a zero or negative prediction.",
+    "direction": "Long-only Spot",
+    "weights": "Each selected asset receives 0.50 of initial equity. With one selected asset, only 0.50 is invested and the remaining 0.50 stays in USDT. With no selected assets, the portfolio remains entirely in USDT.",
+    "leverage": false,
+    "shorts": false,
+    "overlapping_positions": false,
+    "trade_definition": "One selected asset held from the next hourly open through the open four hourly intervals later is one completed round-trip research trade. Each rebalance closes all previous holdings before opening the next interval's holdings.",
+    "net_return": "Raw four-hour simple holding return minus one registered all-in round-trip cost fraction; multiply by the fixed 0.50 weight. No separate spread/slippage deductions are added on top of the registered all-in scenario."
+  },
+  "walk_forward": {
+    "scheme": "Four expanding chronological walk-forward folds constructed from five contiguous chronological blocks of the common decision timestamps.",
+    "fold_count": 4,
+    "blocks": [
+      {
+        "block": "B1",
+        "role": "Initial training"
+      },
+      {
+        "block": "B2",
+        "role": "WF-01 test"
+      },
+      {
+        "block": "B3",
+        "role": "WF-02 test"
+      },
+      {
+        "block": "B4",
+        "role": "WF-03 test"
+      },
+      {
+        "block": "B5",
+        "role": "WF-04 test"
+      }
+    ],
+    "purge": "A training label must exit no later than the first test decision boundary; any training row with decision_index + 5 greater than the first test decision index is excluded.",
+    "embargo": "Fixed four-hour embargo aligned with the maximum target horizon. Test decisions whose four-hour outcome reaches beyond the next fold boundary or beyond the dataset end are excluded.",
+    "training_minimum_panel_rows": 200,
+    "no_random_split": true,
+    "no_test_fit": true,
+    "no_refit_inside_test": true,
+    "all_folds_reported": true
+  },
+  "economic_evaluation": {
+    "cost_scenarios": {
+      "Cost-50": {
+        "round_trip_cost_bps": 50,
+        "fraction": 0.005
+      },
+      "Cost-90": {
+        "round_trip_cost_bps": 90,
+        "fraction": 0.009
+      }
+    },
+    "trade_count_min": 100,
+    "net_profit_factor_min": 1.1,
+    "max_drawdown_fraction_max": 0.15,
+    "valid_folds_min": 3,
+    "stable_folds_min": 3,
+    "fold_validity": "At least 20 completed asset-level OOS round-trip trades.",
+    "fold_stability": "At least 20 completed OOS trades, positive net PnL and fold NetPF > 1.00.",
+    "net_profit_factor": "Sum of positive weighted net trade PnL divided by absolute sum of negative weighted net trade PnL. Undefined PF never passes.",
+    "max_drawdown": "Peak-to-trough drawdown of the chronological compounded portfolio NAV from four-hour portfolio returns, with unused capital retained as USDT.",
+    "overall_pass": "Each of the two registered candidates must independently pass all economic gates at both Cost-50 and Cost-90. A data-blocked candidate is not a pass and makes the family verdict NO-GO / INSUFFICIENT_DATA."
+  },
+  "risk_controls": {
+    "overfitting": "Only one model and one parameter set. No feature sweeps, alpha sweeps, universe substitutions, threshold tuning, or selecting the better of unregistered variants.",
+    "survivorship": "The eligible symbols are fixed before acquisition. A symbol absent, closed, or without the complete common history blocks the candidate; it is not replaced based on available history.",
+    "lookahead": "All features are point-in-time at candle close. Labels use future opens only as outcomes. Purge and embargo are based on the four-hour label window.",
+    "multiple_testing": "Exactly two preregistered candidate universes. All acquired symbols, failed data requests, missing feature rows and both cost scenarios are reported. GLOBAL_N remains UNKNOWN and GLOBAL_DSR remains NOT_COMPUTABLE unless the complete history is independently reconciled.",
+    "data_integrity": "SHA-256 for all source CSVs, manifests and aggregate data qualification record; timestamp equality must be exact across BTC and each symbol.",
+    "holdout": "The historical terminal BTCUSDT slice is already contaminated by earlier experiments. No existing PRE-HACK observation may be described as a fresh holdout or confirmatory final test."
+  },
+  "acceptance_gates": {
+    "net_profit_factor_min": 1.1,
+    "completed_oos_trades_min": 100,
+    "max_drawdown_fraction_max": 0.15,
+    "valid_folds_min": 3,
+    "stable_folds_min": 3,
+    "applied_independently_to_each_trial_and_cost": true,
+    "failed_gate_verdict": "NO-GO",
+    "insufficient_data_verdict": "INSUFFICIENT_DATA / NO-GO"
+  },
+  "safety": {
+    "data_acquisition_scope": "PUBLIC_READ_ONLY_PREHACK_ONLY",
+    "paid_data_purchase": false,
+    "onchain_data_access": false,
+    "private_api_calls": 0,
+    "real_order_attempts": 0,
+    "paper_orders": 0,
+    "holdout_access": "PROHIBITED",
+    "holdout_bytes_read": false,
+    "posthack_data_access": "PROHIBITED",
+    "posthack_data_read": false,
+    "local_execution": false,
+    "Champion": null,
+    "order_permission": false,
+    "trading_authorization": "NO-GO"
+  }
+}
