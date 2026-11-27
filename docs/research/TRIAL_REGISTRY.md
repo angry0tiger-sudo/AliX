@@ -1,7 +1,7 @@
 # AliX Historical Trial Registry
 
 Status: INITIAL RECONCILIATION — family-level counts recorded; unresolved historical trial IDs remain UNKNOWN.
-Last reconciled: 2026-11-12 UTC.
+Last reconciled: 2026-11-27 UTC.
 Registry basis: immutable GitHub Actions run history and retained result artifacts. Counts below distinguish
 workflow executions, candidate variants, actually trained/evaluated candidates, and unique model/genome trials.
 These are not interchangeable units and MUST NOT be summed into a fictitious global N.
@@ -694,3 +694,52 @@ The twelve ADR-038 IDs are now recorded as evaluated by this appended event; the
 | `NOBITEX-M3-OFI-1h-LOGISTIC-BASELINE-01` | 1h | 1 | `M3-OFI-G1` | `LogisticRegression` | `PREREGISTERED_LOCKED` | No |
 | `NOBITEX-M3-OFI-4h-LOGISTIC-BASELINE-01` | 4h | 1 | `M3-OFI-G1` | `LogisticRegression` | `PREREGISTERED_LOCKED` | No |
 
+
+
+---
+
+## [APPEND] Regime M3 OFI G1 — M3.5 Walk-Forward Evaluation (2026-11-27)
+
+- Evaluation commit: `10c01b7988a87ca3e9ac0510a4f03e0d1260ee6b`.
+- GitHub Actions evaluation: [Run #2586 / 45898505105](https://github.com/angry0tiger-sudo/AliX/actions/runs/45898505105), `workflow_dispatch`, conclusion **success**.
+- Standard CI on the evaluated commit: [Run #2585 / 45897855203](https://github.com/angry0tiger-sudo/AliX/actions/runs/45897855203), **success**; coverage 90.36%, 1,099 passed, 5 skipped.
+- Independent quality preflight: [Run #125 / 45897855197](https://github.com/angry0tiger-sudo/AliX/actions/runs/45897855197), **success**.
+- Result artifact: `regime-m3-ofi-evaluation-45898505105`, Artifact ID `15155002532`, ZIP SHA-256 `78c53dbb6f060b4d22117fb726b49750ace3b035d6bc5079357517a37e63edf7`.
+- Preregistration ID: `ALIX-M3-OFI-G1`; exact locked JSON SHA-256: `c665dc6e3c4320b2315a308d65f198c22b4d47a41402af7d5e1d689b22b856c4`. The evaluator verified the frozen config and all five M1.6 artifact IDs/digests before model fitting.
+- Exactly **two logical M3 trials** were evaluated. The four walk-forward fold fits are evidence within each registered logical trial, not four extra candidates. `GLOBAL_N=UNKNOWN` remains unchanged.
+
+### Final status of the two registered M3 logical trials
+
+| Trial ID | Horizon | Status | Completed OOS cohorts | NetPF | MaxDD | Net PnL / initial equity | Stable folds |
+|---|---:|---|---:|---:|---:|---:|---:|
+| `NOBITEX-M3-OFI-1h-LOGISTIC-BASELINE-01` | 1h | **EVALUATED — NO-GO** | 665 | 0.0734699215 | 8.2759% | -7.9225% | 0/4 |
+| `NOBITEX-M3-OFI-4h-LOGISTIC-BASELINE-01` | 4h | **EVALUATED — INSUFFICIENT_SAMPLE / NO-GO** | 82 | 0.2326940033 | 0.7494% | -0.1214% | 0/4 |
+
+The locked acceptance gates applied independently to each horizon: NetPF >= 1.10, completed OOS cohorts >= 100, MaxDD <= 15%, and at least 3/4 stable folds. Neither trial passed.
+
+### Fold accounting
+
+| Trial | Fold | Training rows | Class 0 / Class 1 | Test rows | Completed cohorts | Fold NetPF | Fold Net PnL / initial equity | Result |
+|---|---|---:|---:|---:|---:|---:|---:|---|
+| 1h | WF-01 | 220 | 131 / 89 | 285 | 90 | 0.6418592726 | -0.2143% | Unstable |
+| 1h | WF-02 | 505 | 208 / 297 | 226 | 171 | 0.0144889973 | -1.8913% | Unstable |
+| 1h | WF-03 | 731 | 277 / 454 | 263 | 209 | 0.0024871425 | -3.5877% | Unstable |
+| 1h | WF-04 | 994 | 447 / 547 | 285 | 195 | 0.0850952660 | -2.2292% | Unstable |
+| 4h | WF-01 | 0 | 0 / 0 | 105 | 0 | — | — | Insufficient; no fit |
+| 4h | WF-02 | 105 | 0 / 105 | 46 | 0 | — | — | Insufficient; single training class |
+| 4h | WF-03 | 151 | 0 / 151 | 83 | 0 | — | — | Insufficient; single training class |
+| 4h | WF-04 | 234 | 83 / 151 | 105 | 82 | 0.2326940033 | -0.1214% | Fitted; unstable |
+
+### Signal-count clarification
+
+The evaluation artifact does **not** report 17 completed trades for either registered M3 trial. The registered completed-cohort count is 665 at 1h and 82 at 4h. With the fixed `P(up) >= 0.5` threshold, the 1h fold confusion matrices imply 665 positive predictions across 1,059 test rows; the only fitted 4h fold implies 82 positive predictions across 105 test rows. These are overlapping one-minute horizon cohorts and must not be interpreted as independent observations. The threshold was not raised or tuned after observing outcomes.
+
+### Registry and safety closeout
+
+- The earlier rows above remain an immutable record of the preregistration-time status `Evaluated=No`; this appendix records their later evaluation outcome rather than rewriting history.
+- No additional model candidate or hyperparameter variant was created. No DeepLOB/Transformer/alternate estimator was evaluated.
+- `Champion=null`; `order_permission=false`; `trading_authorization=NO-GO`.
+- `private_api_calls=0`; `real_order_attempts=0`; `paper_orders=0`.
+- `holdout_bytes_read=false`; `posthack_data_read=false`; `external_data_requests=0`; `local_execution=false`.
+- The five accepted M1.6 public artifacts only were used; the 90 bps registered round-trip friction assumption was preserved.
+- Final economic cohort decision: **INSUFFICIENT_SAMPLE / NO-GO**. Holdout remains sealed. Any later M4 proposal is a new owner-gated decision and is not authorized by this append.
