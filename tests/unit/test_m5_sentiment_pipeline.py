@@ -109,9 +109,10 @@ def test_store_snapshot_writes_raw_normalized_and_manifest_with_hashes(
 
     assert raw_path.read_bytes() == raw
     assert hashlib.sha256(raw).hexdigest() == manifest["raw_sha256"]
-    assert hashlib.sha256(normalized_path.read_bytes()).hexdigest() == manifest[
-        "normalized_sha256"
-    ]
+    assert (
+        hashlib.sha256(normalized_path.read_bytes()).hexdigest()
+        == manifest["normalized_sha256"]
+    )
     assert manifest["record_count"] == 2
     assert manifest["start_observation_time_utc"] == "2026-11-24T00:00:00Z"
     assert manifest["end_observation_time_utc"] == "2026-11-25T00:00:00Z"
