@@ -28,7 +28,7 @@ jobs:
           python-version: "3.12"
       - name: Require Standard CI success on this exact commit
         env:
-          GITHUB_TOKEN: \${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           python - <<'PY'
           import json
@@ -89,7 +89,7 @@ jobs:
       - name: Checkout the exact verified research commit
         uses: actions/checkout@v4
         with:
-          ref: \${{ github.sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
       - name: Install pinned model runtime
         run: |
