@@ -52,7 +52,9 @@ def replace_candle(candles: list[Candle], index: int, **changes: Any) -> list[Ca
         low=cast(float, changes.get("low", base.low)),
         close=cast(float, changes.get("close", base.close)),
         volume=cast(float, changes.get("volume", base.volume)),
-        base_start_index=cast(int, changes.get("base_start_index", base.base_start_index)),
+        base_start_index=cast(
+            int, changes.get("base_start_index", base.base_start_index)
+        ),
         base_end_index=cast(int, changes.get("base_end_index", base.base_end_index)),
     )
     return updated
