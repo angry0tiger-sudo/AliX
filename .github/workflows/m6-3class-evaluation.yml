@@ -1,0 +1,192 @@
+name: M6 BTCUSDT Three-Class Triple-Barrier Evaluation
+
+on:
+  push:
+    branches:
+      - research/nobitex-hf-strategy
+    paths:
+      - docs/research/M6_EVALUATION_TRIGGER.txt
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: alix-m6-btcusdt-three-class-evaluation
+  cancel-in-progress: false
+
+jobs:
+  evaluate:
+    if: github.ref == 'refs/heads/research/nobitex-hf-strategy'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      ALIX_M6_OWNER_AUTHORIZATION: "true"
+      ALIX_DRY_RUN: "true"
+      ALIX_ALLOW_LIVE_TRADING: "false"
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - name: Require Standard CI success on the exact implementation parent
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          IMPLEMENTATION_SHA: ${{ github.event.before }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import re
+          import time
+          from urllib.request import Request, urlopen
+
+          repository = os.environ["GITHUB_REPOSITORY"]
+          branch = os.environ["GITHUB_REF_NAME"]
+          source_sha = os.environ["IMPLEMENTATION_SHA"]
+          if branch != "research/nobitex-hf-strategy":
+              raise SystemExit("m6_unsupported_branch")
+          if not re.fullmatch(r"[0-9a-f]{40}", source_sha):
+              raise SystemExit("m6_invalid_implementation_parent_sha")
+          url = (
+              f"https://api.github.com/repos/{repository}/actions/workflows/ci.yml/runs"
+              f"?branch={branch}&per_page=100"
+          )
+          headers = {
+              "Accept": "application/vnd.github+json",
+              "Authorization": f"Bearer {os.environ['GITHUB_TOKEN']}",
+              "X-GitHub-Api-Version": "2022-11-28",
+          }
+          deadline = time.monotonic() + 20 * 60
+          while time.monotonic() < deadline:
+              request = Request(url, headers=headers)
+              with urlopen(request, timeout=30) as response:
+                  payload = json.load(response)
+              matching = [
+                  item for item in payload.get("workflow_runs", [])
+                  if item.get("head_sha") == source_sha
+                  and item.get("head_branch") == branch
+                  and item.get("event") == "push"
+                  and item.get("name") == "AliX Continuous Integration"
+              ]
+              if matching:
+                  latest = max(
+                      matching,
+                      key=lambda item: (item.get("run_number", 0), item.get("run_attempt", 0)),
+                  )
+                  if latest.get("status") == "completed":
+                      if latest.get("conclusion") != "success":
+                          raise SystemExit("m6_standard_ci_not_green:" + str(latest.get("conclusion")))
+                      print(json.dumps({
+                          "gate": "PASS",
+                          "implementation_sha": source_sha,
+                          "standard_ci_run_id": latest.get("id"),
+                          "standard_ci_url": latest.get("html_url"),
+                      }, sort_keys=True))
+                      break
+              time.sleep(10)
+          else:
+              raise SystemExit("m6_standard_ci_gate_timeout:" + source_sha)
+          PY
+      - name: Checkout the exact trigger commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify the trigger commit changes only the M6 evaluation sentinel
+        env:
+          IMPLEMENTATION_SHA: ${{ github.event.before }}
+          TRIGGER_SHA: ${{ github.sha }}
+        run: |
+          python - <<'PY'
+          import os
+          import subprocess
+
+          changed = subprocess.check_output(
+              ["git", "diff", "--name-only", os.environ["IMPLEMENTATION_SHA"], os.environ["TRIGGER_SHA"]],
+              text=True,
+          ).splitlines()
+          if changed != ["docs/research/M6_EVALUATION_TRIGGER.txt"]:
+              raise SystemExit("m6_trigger_commit_contains_unexpected_changes:" + repr(changed))
+          print("M6_TRIGGER_COMMIT_SCOPE=PASS")
+          PY
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pinned M6 model runtime
+        run: |
+          python -m pip install pip==25.2
+          python -m pip install numpy==2.5.5 scikit-learn==1.9.0
+      - name: Run locked M6 evaluation on the existing PRE-HACK BTCUSDT artifact
+        run: |
+          mkdir -p .artifacts/m6
+          python -m scripts.run_m6_triple_barrier_3class \
+            --report-out .artifacts/m6/m6_evaluation_report.json \
+            --predictions-out .artifacts/m6/m6_oos_predictions.csv
+      - name: Validate report bindings and safety; publish Actions summary
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          report = json.loads(Path(".artifacts/m6/m6_evaluation_report.json").read_text(encoding="utf-8"))
+          assert report["commit_sha"] == os.environ["GITHUB_SHA"]
+          assert report["preregistration_sha256"] == "f94af9eb6f6003818beb88fcdbfbebe2ac2d7ac8a42281529db2781b44962e42"
+          assert report["dataset_binding"]["csv_sha256"] == "0aa13607d1da68c4720919f233635bb33d34048e5bd67d3ecc2ce9bb7c2b462e"
+          assert report["dataset_binding"]["market"] == "BTCUSDT"
+          assert report["trial_count"] == 2
+          assert set(report["trial_results"]) == {
+              "NOBITEX-M6-1h-RF-3CLASS-01",
+              "NOBITEX-M6-4h-RF-3CLASS-01",
+          }
+          safety = report["safety"]
+          assert safety["holdout_bytes_read"] is False
+          assert safety["posthack_data_read"] is False
+          assert safety["new_data_acquisition"] is False
+          assert safety["private_api_calls"] == 0
+          assert safety["real_order_attempts"] == 0
+          assert safety["paper_orders"] == 0
+          assert safety["Champion"] is None
+          assert safety["order_permission"] is False
+          assert safety["trading_authorization"] == "NO-GO"
+          lines = [
+              "# M6 BTCUSDT Three-Class Triple-Barrier Evaluation",
+              "",
+              f"Evaluation commit: {report['commit_sha']}",
+              f"Preregistration SHA-256: {report['preregistration_sha256']}",
+              f"Dataset SHA-256: {report['dataset_binding']['csv_sha256']}",
+              "",
+              "| Horizon | Cost | NetPF | Trades | MaxDD | Valid folds | Stable folds | Verdict |",
+              "|---|---|---:|---:|---:|---:|---:|---|",
+          ]
+          for trial_id, trial in report["trial_results"].items():
+              for cost_name, summary in trial["cost_scenarios"].items():
+                  pooled = summary["pooled_oos"]
+                  pf = pooled["net_profit_factor"]
+                  pf_text = "undefined" if pf is None else f"{float(pf):.6f}"
+                  lines.append(
+                      f"| {trial['horizon']} | {cost_name} | {pf_text} | "
+                      f"{pooled['completed_oos_trades']} | "
+                      f"{float(pooled['max_drawdown']):.4%} | "
+                      f"{summary['valid_folds']}/4 | {summary['stable_folds']}/4 | "
+                      f"{summary['verdict']} |"
+                  )
+          lines.extend([
+              "",
+              "## Final adjudication",
+              f"- Economic gates: **{report['economic_acceptance']['overall_verdict']}**",
+              "- DSR: NOT_COMPUTABLE; GLOBAL_N=UNKNOWN.",
+              "- Champion remains null; trading authorization remains NO-GO.",
+          ])
+          summary_text = "\n".join(lines)
+          print(summary_text)
+          with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a", encoding="utf-8") as handle:
+              handle.write(summary_text + "\n")
+          PY
+      - name: Upload M6 report and OOS predictions
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alix-m6-btcusdt-three-class-results
+          path: .artifacts/m6/*
+          if-no-files-found: warn
+          retention-days: 90
