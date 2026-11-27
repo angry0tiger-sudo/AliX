@@ -1330,7 +1330,7 @@ def _build_dataset_binding(inputs: EvaluationInputs) -> dict[str, Any]:
 
 
 def _build_sentiment_binding(inputs: EvaluationInputs) -> dict[str, Any]:
-    manifest_path = SENTIMENT_DIR / str(
+    manifest_path = _resolve_repository_relative_path(
         inputs.config["sentiment_source"]["snapshot_manifest"]
     )
     return {
