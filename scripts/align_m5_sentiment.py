@@ -49,11 +49,7 @@ def _validate_source_record(
         raise ValueError("sentiment_observation_time_missing")
     parse_aware_timestamp(observation_time, "observation_time_utc")
     value = record.get("value")
-    if (
-        isinstance(value, bool)
-        or not isinstance(value, int)
-        or not 0 <= value <= 100
-    ):
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 100:
         raise ValueError("sentiment_value_invalid")
     classification = record.get("value_classification")
     if not isinstance(classification, str) or not classification.strip():
