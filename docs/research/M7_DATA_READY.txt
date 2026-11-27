@@ -1,0 +1,7 @@
+M7 immutable public PRE-HACK dataset acquisition completed.
+Acquisition workflow: https://github.com/angry0tiger-sudo/AliX/actions/runs/46046806684
+Data commit: 5cf8f867385b6481bb47c8dc560ab160b39aee5d
+Qualification: 9 fixed-universe symbols qualified with 31,801 hourly rows each; SOLUSDT rejected for 6,516 missing intervals.
+The preregistered 5PAIR and 10PAIR candidates remain BLOCKED_DATA; no substitution is authorized.
+This marker exists only to cause Standard CI to run on the exact immutable data tree before the evaluation trigger.
+Holdout/Post-Hack excluded; credentials=false; private_api_calls=0; orders=0; paper_orders=0; Champion=null; order_permission=false; trading_authorization=NO-GO.
