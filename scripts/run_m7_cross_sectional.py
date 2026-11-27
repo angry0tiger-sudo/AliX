@@ -241,6 +241,8 @@ def _write_symbol_csv(rows: Sequence[Mapping[str, Any]], path: Path) -> str:
 
 def acquire_dataset(output_dir: Path, commit_sha: str) -> dict[str, Any]:
     output_dir.mkdir(parents=True, exist_ok=True)
+    if any(output_dir.iterdir()):
+        raise FileExistsError("m7_immutable_output_directory_not_empty")
     market_stats = _market_stats_snapshot()
     statuses: dict[str, dict[str, Any]] = {}
     for symbol in CANDIDATE_SYMBOLS:
@@ -383,7 +385,7 @@ def portfolio_interval_return(
         if symbol not in realized_returns:
             raise ValueError(f"m7_missing_realized_return:{symbol}")
         raw_return = float(realized_returns[symbol])
-        if not math.isfinite(raw_return) or raw_return <= -1.0:
+        if not math.isfinite(raw_return) or raw_return < -1.0:
             raise ValueError(f"m7_invalid_realized_return:{symbol}")
         net_return = max(-1.0, raw_return - cost_fraction)
         trade_pnls.append(0.5 * net_return)
@@ -585,6 +587,8 @@ def _evaluate_fold(
     trades_by_symbol: dict[str, int] = {}
     nav = 1.0
     for _, group in test_panel.groupby("decision_index", sort=True):
+        if nav <= 0.0:
+            break
         predictions = model.predict(group.loc[:, list(FEATURE_NAMES)])
         scores = {
             str(symbol): float(score)

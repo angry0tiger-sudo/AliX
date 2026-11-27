@@ -52,6 +52,11 @@ def test_portfolio_interval_return_caps_loss_at_invested_notional() -> None:
     assert total == pytest.approx(-1.0)
 
 
+def test_portfolio_interval_return_rejects_return_below_total_loss() -> None:
+    with pytest.raises(ValueError, match="m7_invalid_realized_return"):
+        portfolio_interval_return(["ETHUSDT"], {"ETHUSDT": -1.01}, 50)
+
+
 def test_portfolio_interval_return_rejects_more_than_two_assets() -> None:
     with pytest.raises(ValueError, match="m7_invalid_selected_symbol_set"):
         portfolio_interval_return(["A", "B", "C"], {"A": 0.1, "B": 0.1, "C": 0.1}, 50)

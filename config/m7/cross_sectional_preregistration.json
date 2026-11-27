@@ -37,7 +37,7 @@
       "NOBITEX-M7-10PAIR-RIDGE-TOP2-01"
     ],
     "owner_selection_utc_date": "2026-11-27",
-    "pre_evaluation_accounting_clarification": "Before any M7 fitting or economic outcome was observed, implementation review separated the locked log-return training target from simple-return execution PnL. Trading costs are subtracted in simple-return space, each asset loss is capped at 100% of notional, and PnL is compounded against current portfolio NAV. This is a mechanical accounting correction, not an outcome-driven strategy change."
+    "pre_evaluation_accounting_clarification": "Before any M7 fitting or economic outcome was observed, implementation review separated the locked log-return training target from simple-return execution PnL. Trading costs are subtracted in simple-return space, each asset loss is capped at 100% of notional, and PnL is compounded against current portfolio NAV. This is a mechanical accounting correction, not an outcome-driven strategy change. The immutable acquisition workflow also refuses to write into a non-empty M7 data directory; reruns cannot silently overwrite accepted CSVs."
   },
   "data": {
     "venue": "Nobitex",
