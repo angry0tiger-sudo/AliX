@@ -45,7 +45,7 @@ FEATURE_NAMES = (
     "btc_return_4h",
     "cross_sectional_median_return_4h_ex_target",
     "beta_24h_to_btc",
-    "relative_volume_shock_24h",
+    "log_return_24h",
 )
 COST_SCENARIOS_BPS = (50, 90)
 MAX_CANDLES_PER_REQUEST = 400
@@ -566,6 +566,19 @@ def _log_returns(closes: np.ndarray) -> np.ndarray:
     return result
 
 
+def _log_return_24h(closes: Sequence[float], decision_index: int) -> float | None:
+    current_close = float(closes[decision_index])
+    prior_close = float(closes[decision_index - 24])
+    if (
+        not math.isfinite(current_close)
+        or not math.isfinite(prior_close)
+        or current_close <= 0.0
+        or prior_close <= 0.0
+    ):
+        return None
+    return math.log(current_close / prior_close)
+
+
 def _peer_median_return(
     close_by_symbol: Mapping[str, np.ndarray],
     symbols: Sequence[str],
@@ -614,16 +627,16 @@ def _build_panel_row(
     btc_return_4h: float,
     peer_median: float,
     beta: float | None,
-    volume_shock: float | None,
+    log_return_24h: float | None,
     open_values: np.ndarray,
 ) -> dict[str, Any] | None:
-    if beta is None or volume_shock is None:
+    if beta is None or log_return_24h is None:
         return None
     entry_open = float(open_values[decision_index + 1])
     exit_open = float(open_values[decision_index + 5])
     target = math.log(exit_open / entry_open)
     realized_simple_return = exit_open / entry_open - 1.0
-    features = (btc_return_4h, peer_median, beta, volume_shock)
+    features = (btc_return_4h, peer_median, beta, log_return_24h)
     if not all(
         math.isfinite(value) for value in (*features, target, realized_simple_return)
     ):
@@ -635,7 +648,7 @@ def _build_panel_row(
         "btc_return_4h": btc_return_4h,
         "cross_sectional_median_return_4h_ex_target": peer_median,
         "beta_24h_to_btc": beta,
-        "relative_volume_shock_24h": volume_shock,
+        "log_return_24h": log_return_24h,
         "target_return_4h": target,
         "realized_simple_return_4h": realized_simple_return,
     }
@@ -645,7 +658,6 @@ def _panel_source_arrays(
     data: Mapping[str, pd.DataFrame], symbols: Sequence[str]
 ) -> tuple[
     np.ndarray,
-    dict[str, np.ndarray],
     dict[str, np.ndarray],
     dict[str, np.ndarray],
     dict[str, np.ndarray],
@@ -660,21 +672,11 @@ def _panel_source_arrays(
     open_by_symbol = {
         symbol: data[symbol]["open"].to_numpy(dtype=float) for symbol in symbols
     }
-    volume_by_symbol = {
-        symbol: data[symbol]["volume"].to_numpy(dtype=float) for symbol in symbols
-    }
     returns_by_symbol = {
         symbol: _log_returns(close_by_symbol[symbol]) for symbol in symbols
     }
     dates = btc["date"].astype(str).to_numpy()
-    return (
-        btc_returns,
-        close_by_symbol,
-        open_by_symbol,
-        volume_by_symbol,
-        returns_by_symbol,
-        dates,
-    )
+    return btc_returns, close_by_symbol, open_by_symbol, returns_by_symbol, dates
 
 
 def _build_symbol_decision_record(
@@ -686,14 +688,13 @@ def _build_symbol_decision_record(
     btc_returns: np.ndarray,
     close_by_symbol: Mapping[str, np.ndarray],
     open_by_symbol: Mapping[str, np.ndarray],
-    volume_by_symbol: Mapping[str, np.ndarray],
     returns_by_symbol: Mapping[str, np.ndarray],
     decision_time: str,
 ) -> dict[str, Any] | None:
     btc_return_4h = math.log(btc_close[decision_index] / btc_close[decision_index - 4])
     peer_median = _peer_median_return(close_by_symbol, symbols, symbol, decision_index)
     beta = _beta_24h(returns_by_symbol[symbol], btc_returns, decision_index)
-    volume_shock = _relative_volume_shock(volume_by_symbol[symbol], decision_index)
+    log_return_24h = _log_return_24h(close_by_symbol[symbol], decision_index)
     return _build_panel_row(
         symbol=symbol,
         decision_index=decision_index,
@@ -701,7 +702,7 @@ def _build_symbol_decision_record(
         btc_return_4h=btc_return_4h,
         peer_median=peer_median,
         beta=beta,
-        volume_shock=volume_shock,
+        log_return_24h=log_return_24h,
         open_values=open_by_symbol[symbol],
     )
 
@@ -711,7 +712,6 @@ def _build_panel_records(
     btc_close: np.ndarray,
     close_by_symbol: Mapping[str, np.ndarray],
     open_by_symbol: Mapping[str, np.ndarray],
-    volume_by_symbol: Mapping[str, np.ndarray],
     returns_by_symbol: Mapping[str, np.ndarray],
     btc_returns: np.ndarray,
     dates: np.ndarray,
@@ -727,7 +727,6 @@ def _build_panel_records(
                 btc_returns=btc_returns,
                 close_by_symbol=close_by_symbol,
                 open_by_symbol=open_by_symbol,
-                volume_by_symbol=volume_by_symbol,
                 returns_by_symbol=returns_by_symbol,
                 decision_time=str(dates[decision_index]),
             )
@@ -746,7 +745,6 @@ def build_panel(
         btc_returns,
         close_by_symbol,
         open_by_symbol,
-        volume_by_symbol,
         returns_by_symbol,
         dates,
     ) = _panel_source_arrays(data, symbols)
@@ -755,7 +753,6 @@ def build_panel(
         btc_close,
         close_by_symbol,
         open_by_symbol,
-        volume_by_symbol,
         returns_by_symbol,
         btc_returns,
         dates,

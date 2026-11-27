@@ -4,11 +4,11 @@
   "preregistration": {
     "id": "ALIX-M7-NOBITEX-CROSS-SECTIONAL-G1",
     "phase": "M7",
-    "revision": "M7-CS-G2.0",
+    "revision": "M7-CS-G3.0",
     "status": "PREREGISTERED_LOCKED",
     "preregistered_utc_date": "2026-11-27",
     "branch": "research/nobitex-hf-strategy",
-    "owner_directive": "Superseding project-lead decision under the Owner's M7 directive: proceed with the nine exact-history-qualified Nobitex USDT pairs; no duplicate symbol is introduced. Existing G1.2 runs remain archived as BLOCKED_DATA.",
+    "owner_directive": "Superseding feature-only preregistration under the Owner's diagnostic directive: retain the nine exact-history-qualified Nobitex USDT pairs and two existing universe-size candidates; replace only the volume-shock feature identified as 100% unavailable by the PRE-HACK feature diagnostic. No other model or strategy parameter changes.",
     "scope": "Two logical candidates are fixed by eligible-universe size: a five-pair candidate using the first five symbols in the immutable G2.0 priority list, and a nine-pair candidate using all nine symbols. BTCUSDT is a contextual predictor only and is never a target holding. Both candidates use identical StandardScaler + Ridge(alpha=1.0), fixed features, a next-four-hour log-return target, positive-score top-two long-only portfolio, fixed folds, costs and gates. Input candles are 1h; the sole forecast/holding horizon is 4h. No separate 1h forecast-horizon trial is registered.",
     "implementation_authorized": true,
     "model_training_authorized": true,
@@ -28,7 +28,7 @@
     "workflow_only_execution": true,
     "post_lock_tuning_allowed": false,
     "change_control": "Any change to asset priority, candidate universe, data boundaries or hashes, features, feature formula, model, target horizon, rebalancing, selection rule, weighting, folds, costs, purge/embargo, gate or trial count requires a new superseding preregistration before inspecting economic results. No threshold, universe, model, feature or parameter sweep is allowed.",
-    "p_hacking_guard": "Exactly two G2.0 logical trials are registered, differentiated only by the predeclared five-symbol versus nine-symbol universe. G1.2 identities were blocked before model fitting/economic scoring and are retained as a separate archived execution. Four folds, two costs, and multiple assets are evaluation dimensions, not additional candidate variants.",
+    "p_hacking_guard": "Exactly the same two logical candidates and fixed universes as G2.0 remain registered. G2.0 was blocked before fitting or economic scoring. G3.0 supersedes only the defective fourth feature definition based on a read-only PRE-HACK availability diagnostic, before any G3.0 economic results. No universe, model, alpha, target, portfolio, fold, cost, gate or threshold sweep is permitted.",
     "data_source_policy": "Only Nobitex public Spot UDF hourly OHLCV and the public market-stats endpoint are allowed. No credentials, private endpoint, external venue, synthetic fill, interpolation, backfill or symbol substitution.",
     "exploratory_status": "The existing PRE-HACK BTCUSDT and newly acquired matching PRE-HACK histories have been exposed for research purposes. These results are exploratory and cannot be presented as a fresh confirmatory holdout test.",
     "logical_trial_count": 2,
@@ -39,9 +39,9 @@
     "owner_selection_utc_date": "2026-11-27",
     "pre_evaluation_accounting_clarification": "Before any M7 fitting or economic outcome was observed, implementation review separated the locked log-return training target from simple-return execution PnL. Trading costs are subtracted in simple-return space, each asset loss is capped at 100% of notional, and PnL is compounded against current portfolio NAV. This is a mechanical accounting correction, not an outcome-driven strategy change. The immutable acquisition workflow also refuses to write into a non-empty M7 data directory; reruns cannot silently overwrite accepted CSVs.",
     "pre_evaluation_nav_clarification": "Before any M7 fitting or economic output was observed, the continuous OOS portfolio NAV was specified to carry forward chronologically across the four expanding walk-forward test blocks; fold metrics use the NAV at the start of each fold and pooled OOS metrics compound the single sequential path. This prevents restarting capital at the beginning of each fold. It does not change the model, features, labels, universe, selection, costs or gates.",
-    "supersedes_revision": "M7-CS-G1.2",
-    "supersedes_preregistration_sha256": "44d6b9bd01c5c163f4e4f448a68c8cc91d060bd1a182c8e841c8a939a018f6b0",
-    "superseding_reason": "G1.2 was closed BLOCKED_DATA before any fitting or economic scoring because SOLUSDT supplied only 25,285/31,801 required hourly candles. XRPUSDT and DOGEUSDT were already members of the original universe and both fully qualify; duplicating either would reduce the number of unique assets. Under the owner-authorized nine-pair minimum, G2.0 removes only SOLUSDT and preregisters the exact nine complete assets."
+    "supersedes_revision": "M7-CS-G2.0",
+    "supersedes_preregistration_sha256": "e5a1dfdfa92912635c6949934f353f2aff89c9a26cbc5e384de89a5d0d488817",
+    "superseding_reason": "The read-only PRE-HACK feature diagnostic (GitHub Actions Runner #10, Run ID 46057363991) found beta_24h_to_btc valid on all 7,943 decision rows for each of nine symbols, while relative_volume_shock_24h rejected all 7,943 rows per symbol because the prior-24h volume median was nonpositive. This emptied both G2.0 panels before any model fitting. G3.0 changes only this feature formula/name to log_return_24h = ln(close[t] / close[t-24]); all other feature definitions, candidate universes and identities, model, target, portfolio, folds, costs and acceptance gates remain unchanged. G2.0 remains archived as BLOCKED_DATA_OR_FEATURE_QUALITY / NO-GO."
   },
   "data": {
     "venue": "Nobitex",
@@ -150,16 +150,17 @@
       "btc_return_4h",
       "cross_sectional_median_return_4h_ex_target",
       "beta_24h_to_btc",
-      "relative_volume_shock_24h"
+      "log_return_24h"
     ],
     "definitions": {
       "btc_return_4h": "Natural log of BTCUSDT close at decision hour t divided by its close at t-4 hourly bars.",
       "cross_sectional_median_return_4h_ex_target": "Median of the four-hour log returns (close[t]/close[t-4]) of all other target symbols in the same fixed candidate universe, excluding the current target symbol. The five-asset candidate therefore uses the other four assets; the ten-asset candidate uses the other nine.",
       "beta_24h_to_btc": "Sample covariance (ddof=1) of the target symbol's last 24 completed hourly log returns with BTCUSDT's corresponding returns, divided by sample variance of BTCUSDT returns. The window ends at the close of hour t.",
-      "relative_volume_shock_24h": "ln(1 + current completed-hour base-asset volume at t divided by the median of the previous 24 completed-hour base-asset volumes [t-24:t]). If the median is zero or invalid, the row is excluded; no imputation."
+      "log_return_24h": "Natural log of the target symbol close at completed decision hour t divided by its close at t-24 hourly bars (24 completed hourly intervals). Uses the last 24 completed bars only; the value is computed after the close of hour t. The row is excluded only if either close is non-finite or non-positive; no volume dependency and no imputation."
     },
-    "availability": "All features are computed after the close of hour t using data at or before t only. Windows are right-aligned. No future values, centered windows, partial candle, forward-fill, backfill, interpolation, label-derived feature, external source, sentiment, or on-chain fields are allowed.",
-    "missing_policy": "Exclude the affected panel row and report counts. Never impute features. The candidate remains evaluated on the fixed symbol universe; symbols are not removed post hoc to improve performance."
+    "availability": "All features are computed after the close of hour t using data at or before t only. Windows are right-aligned. log_return_24h uses close[t] and close[t-24] only. No future values, centered windows, partial candle, forward-fill, backfill, interpolation, label-derived feature, external source, sentiment, or on-chain fields are allowed.",
+    "missing_policy": "Exclude the affected panel row and report counts. Never impute features. The candidate remains evaluated on the fixed symbol universe; symbols are not removed post hoc to improve performance.",
+    "diagnostic_supersession": "G2.0 PRE-HACK diagnostic measured 0.0000% beta rejection and 100.0000% relative-volume-shock rejection on each of the nine qualified symbols; the volume failure reason was nonpositive prior-24h median base volume on every decision row. G3.0 replaces only that feature with log_return_24h."
   },
   "target": {
     "type": "next_4h_forward_log_return",

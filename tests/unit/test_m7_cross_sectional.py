@@ -6,7 +6,11 @@ import math
 
 import pytest
 
-from scripts.run_m7_cross_sectional import portfolio_interval_return, select_top_two
+from scripts.run_m7_cross_sectional import (
+    _log_return_24h,
+    portfolio_interval_return,
+    select_top_two,
+)
 
 
 def test_select_top_two_uses_only_positive_predictions_and_stable_ties() -> None:
@@ -70,3 +74,14 @@ def test_portfolio_interval_return_rejects_missing_realized_return() -> None:
 def test_portfolio_interval_return_rejects_non_finite_return() -> None:
     with pytest.raises(ValueError, match="m7_invalid_realized_return"):
         portfolio_interval_return(["ETHUSDT"], {"ETHUSDT": math.nan}, 50)
+
+def test_log_return_24h_uses_close_exactly_24_completed_bars_ago() -> None:
+    closes = [100.0] * 25
+    closes[24] = 110.0
+    assert _log_return_24h(closes, 24) == pytest.approx(math.log(1.1))
+
+
+def test_log_return_24h_rejects_nonpositive_reference_close() -> None:
+    closes = [100.0] * 25
+    closes[0] = 0.0
+    assert _log_return_24h(closes, 24) is None
