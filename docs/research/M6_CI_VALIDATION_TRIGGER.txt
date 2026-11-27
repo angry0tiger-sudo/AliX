@@ -1,3 +1,4 @@
 M6_CI_VALIDATION_TRIGGER=2026-11-27
 Purpose: Trigger Standard CI on the formatted M6 implementation snapshot after the GitHub Actions formatter commit.
 This file is inert documentation metadata. It authorizes no model execution, no data access, and no trading activity.
+Revalidation: formatted M6 fixture and evaluator strict-typing correction included; run CI on this exact snapshot.
