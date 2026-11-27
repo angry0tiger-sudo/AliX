@@ -4,3 +4,5 @@ Date: 2026-11-27.
 This trigger authorizes public read-only GET requests only. No credentials, private APIs, orders, Holdout or Post-Hack.
 
 Resume trigger after Standard CI #2664 SUCCESS on parent bbd5ac75c699544aa28eabadd8d5eb09dba21454. This single push requests only the locked public PRE-HACK acquisition workflow. UTC date: 2026-11-27.
+
+Retry after pinned runtime dependency correction. Parent Standard CI #2666 SUCCESS on f99342a0feddaae67c7c6f8217975492320df1df. Runtime pins: numpy==2.5.5, pandas==2.3.3, scikit-learn==1.9.0. No other research or preregistration change. UTC: 2026-11-27.
