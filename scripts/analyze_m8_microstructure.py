@@ -20,7 +20,7 @@ import zipfile
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Sequence, cast
 
 DEFAULT_INVENTORY = (
     Path(__file__).resolve().parents[1]
@@ -194,8 +194,10 @@ def _read_csv_rows(
         raise InputError(f"CSV_INTEGRITY_MISMATCH:{filename}")
     with io.TextIOWrapper(io.BytesIO(contents), encoding="utf-8", newline="") as stream:
         reader = csv.DictReader(stream)
-        rows = list(reader)
-        fieldnames = reader.fieldnames
+        rows = cast(list[dict[str, str]], list(reader))
+        fieldnames = (
+            list(reader.fieldnames) if reader.fieldnames is not None else None
+        )
     if meta.get("records") != len(rows):
         raise InputError(f"CSV_RECORD_COUNT_MISMATCH:{filename}")
     return fieldnames, rows
