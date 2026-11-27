@@ -1178,7 +1178,6 @@ def _baseline_report(folds: Sequence[FoldOutput]) -> dict[str, Any]:
     return report
 
 
-
 @dataclass(frozen=True)
 class EvaluationInputs:
     config: dict[str, Any]
@@ -1220,9 +1219,7 @@ def _prepare_evaluation_inputs() -> EvaluationInputs:
     price_features = build_price_features(candles)
     features = np.column_stack((price_features, sentiment))
     eligible = tuple(
-        index
-        for index in range(len(candles))
-        if np.isfinite(features[index]).all()
+        index for index in range(len(candles)) if np.isfinite(features[index]).all()
     )
     if not eligible:
         raise ValueError("m5_2_no_common_paired_samples")
@@ -1269,15 +1266,9 @@ def _fold_plan_record(plan: FoldPlan) -> dict[str, Any]:
     }
 
 
-def _evaluate_horizon(
-    inputs: EvaluationInputs, horizon: int
-) -> HorizonOutput:
-    returns, labels, valid_labels = _build_horizon_targets(
-        inputs.candles, horizon
-    )
-    plans = build_fold_plans(
-        inputs.eligible_indices, valid_labels, horizon
-    )
+def _evaluate_horizon(inputs: EvaluationInputs, horizon: int) -> HorizonOutput:
+    returns, labels, valid_labels = _build_horizon_targets(inputs.candles, horizon)
+    plans = build_fold_plans(inputs.eligible_indices, valid_labels, horizon)
     fold_outputs = [
         _evaluate_fold(
             inputs.candles,
@@ -1298,13 +1289,10 @@ def _evaluate_horizon(
     trial_results = {
         trial["trial_id"]: trial
         for trial in (
-            _build_trial(arm, horizon, fold_outputs, inputs.config)
-            for arm in ARMS
+            _build_trial(arm, horizon, fold_outputs, inputs.config) for arm in ARMS
         )
     }
-    predictions = tuple(
-        row for fold in fold_outputs for row in fold.predictions
-    )
+    predictions = tuple(row for fold in fold_outputs for row in fold.predictions)
     return HorizonOutput(
         trials=trial_results,
         baselines=_baseline_report(fold_outputs),
@@ -1331,9 +1319,8 @@ def _build_dataset_binding(inputs: EvaluationInputs) -> dict[str, Any]:
 
 
 def _build_sentiment_binding(inputs: EvaluationInputs) -> dict[str, Any]:
-    manifest_path = (
-        SENTIMENT_DIR
-        / str(inputs.config["sentiment_source"]["snapshot_manifest"])
+    manifest_path = SENTIMENT_DIR / str(
+        inputs.config["sentiment_source"]["snapshot_manifest"]
     )
     return {
         "provider": "Alternative.me Fear & Greed",
@@ -1379,7 +1366,9 @@ def _build_fold_protocol_report(
 ) -> dict[str, Any]:
     return {
         "scheme": inputs.config["walk_forward_protocol"]["scheme"],
-        "block_construction": inputs.config["walk_forward_protocol"]["block_construction"],
+        "block_construction": inputs.config["walk_forward_protocol"][
+            "block_construction"
+        ],
         "folds": fold_records,
         "train_purge": "label exit close must be strictly before first test decision timestamp",
         "test_boundary": "label exit close must be inside the same test block",
@@ -1412,9 +1401,7 @@ def _build_model_report(
 
 def _sentiment_absolute_gates_passed(trials: dict[str, Any]) -> bool:
     for horizon in HORIZONS:
-        trial_id = (
-            f"NOBITEX-M5-2-{horizon}h-SENTIMENT-LR-AUGMENTED-01"
-        )
+        trial_id = f"NOBITEX-M5-2-{horizon}h-SENTIMENT-LR-AUGMENTED-01"
         for cost_name in COST_NAMES:
             result = trials[trial_id]["cost_scenarios"][cost_name]
             if not result["absolute_gates_passed"]:
@@ -1435,12 +1422,8 @@ def _build_economic_acceptance(
 ) -> dict[str, Any]:
     return {
         "overall_verdict": _overall_verdict(trials, paired),
-        "sentiment_absolute_gates_passed": _sentiment_absolute_gates_passed(
-            trials
-        ),
-        "paired_incremental_value_passed": _paired_incremental_value_passed(
-            paired
-        ),
+        "sentiment_absolute_gates_passed": _sentiment_absolute_gates_passed(trials),
+        "paired_incremental_value_passed": _paired_incremental_value_passed(paired),
         "first_economic_edge_claim_permitted": False,
     }
 
@@ -1513,9 +1496,7 @@ def run_evaluation() -> tuple[dict[str, Any], list[dict[str, Any]]]:
         predictions.extend(result.predictions)
         fold_records[str(horizon)] = list(result.fold_plan_records)
     paired = _paired_comparisons(trials)
-    report = _build_evaluation_report(
-        inputs, trials, paired, baselines, fold_records
-    )
+    report = _build_evaluation_report(inputs, trials, paired, baselines, fold_records)
     return report, predictions
 
 
