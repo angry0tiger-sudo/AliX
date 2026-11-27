@@ -16,10 +16,9 @@ import hashlib
 import io
 import json
 import math
-import re
 import zipfile
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Sequence
 
