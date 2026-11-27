@@ -966,3 +966,20 @@ The closed M3 OFI trials remain BTCIRT-specific historical evidence and are not 
 - **Horizon:** 1h is the input candle cadence; the only registered target is 4h forward log return. No 1h prediction-horizon candidate was run.
 - **Safety:** no new data acquisition, no local execution, Holdout/Post-Hack bytes read 0, private API calls 0, paper/real orders 0, Champion=null, order_permission=false, trading_authorization=NO-GO.
 - **Trial accounting:** G2.0 and G3.0 feature-spec revisions must both remain in the M7 family history for future multiple-testing corrections. GLOBAL_N=UNKNOWN; GLOBAL_DSR=NOT_COMPUTABLE.
+
+
+---
+
+## [APPEND] M7 Lifecycle Closure and M8 Data Eligibility Gate (2026-11-27)
+
+- **M7 closure:** [ADR-074 — Formal Closure of M7 Cross-Sectional Ridge](../adr/ADR-074-m7-cross-sectional-lifecycle-closure.md). Status: `CLOSED_NO_GO`.
+- **G2.0:** retained as feature-quality / empty-panel NO-GO. The volume-dependent feature caused the complete feature-qualification collapse; no G2.0 model was fitted.
+- **G3.0:** retained as economic NO-GO. Both 5PAIR and 9PAIR failed all family economic/stability gates at both 50 and 90 bps. Exact metrics remain in ADR-073; no further M7 sweep or retry is authorized.
+- **M7 CI:** final branch cleanup [Standard CI #2693 / ID 46060402042](https://github.com/angry0tiger-sudo/AliX/actions/runs/46060402042), SHA `eb0948754fba7167e9a6751c9a3e86f3fc75a930`, SUCCESS.
+- **M8 source gate:** [ADR-075 — M8 Microstructure: M1.6 Data Market Mismatch](../adr/ADR-075-m8-microstructure-data-market-eligibility.md).
+- **M1.6 archive:** five SHA-verified public L2 artifacts, all manifest-identified as BTCIRT; 171,604 order-book rows, 25,623 trade rows, and 8 explicit gap records. Exact artifact IDs and SHA-256 digests are in `docs/research/m1_6_artifact_inventory.json`. Byte-identical copies were verified in Library folder `/AliX_M1.6_Immutable_Archive/`.
+- **M8 status:** no M8 candidate/trial result is registered yet. BTCIRT data is not eligible for the requested BTCUSDT test. Correlations are `NOT_COMPUTED`; do not count the block as a zero-correlation trial or a NO-GO.
+- **M8 implementation:** a hash-pinned, fail-closed statistical analyzer and a `workflow_dispatch`-only workflow are staged on the research branch. The workflow remains undispatchable while absent from the frozen default branch. No push-trigger workaround was added.
+- **Next gate:** acquire independently captured BTCUSDT L2 data with verified market identity and full provenance before registering or running an M8 correlation experiment.
+- **Global accounting:** `GLOBAL_N=UNKNOWN`; `GLOBAL_DSR=NOT_COMPUTABLE`. This closure and data-eligibility gate do not erase or relabel any earlier trial.
+
