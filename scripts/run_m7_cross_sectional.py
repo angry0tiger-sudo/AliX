@@ -269,6 +269,7 @@ def _validate_history_coverage(
         _raise_history_coverage_error(symbol, rows_by_stamp, missing, unexpected)
     return [rows_by_stamp[stamp] for stamp in expected]
 
+
 def fetch_exact_prehack_history(symbol: str) -> list[dict[str, Any]]:
     rows_by_stamp = _collect_history_pages(symbol)
     return _validate_history_coverage(symbol, rows_by_stamp)
@@ -689,18 +690,10 @@ def _build_symbol_decision_record(
     returns_by_symbol: Mapping[str, np.ndarray],
     decision_time: str,
 ) -> dict[str, Any] | None:
-    btc_return_4h = math.log(
-        btc_close[decision_index] / btc_close[decision_index - 4]
-    )
-    peer_median = _peer_median_return(
-        close_by_symbol, symbols, symbol, decision_index
-    )
-    beta = _beta_24h(
-        returns_by_symbol[symbol], btc_returns, decision_index
-    )
-    volume_shock = _relative_volume_shock(
-        volume_by_symbol[symbol], decision_index
-    )
+    btc_return_4h = math.log(btc_close[decision_index] / btc_close[decision_index - 4])
+    peer_median = _peer_median_return(close_by_symbol, symbols, symbol, decision_index)
+    beta = _beta_24h(returns_by_symbol[symbol], btc_returns, decision_index)
+    volume_shock = _relative_volume_shock(volume_by_symbol[symbol], decision_index)
     return _build_panel_row(
         symbol=symbol,
         decision_index=decision_index,
@@ -771,6 +764,7 @@ def build_panel(
     if panel.empty:
         raise ValueError("m7_panel_empty_after_feature_qualification")
     return panel
+
 
 def _drawdown(returns: Sequence[float]) -> float:
     nav = 1.0
