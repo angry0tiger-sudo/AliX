@@ -816,6 +816,190 @@ def _empty_metrics(
     return simulate_portfolio(candles, (), (), horizon, cost, plan.mark_indices)
 
 
+def _fold_training_state(
+    labels: NDArray[Any], plan: FoldPlan, config: dict[str, Any]
+) -> tuple[list[int], list[int], NDArray[Any], Counter[int], bool, bool]:
+    train = list(plan.train_indices)
+    test = list(plan.test_indices)
+    y_train = labels[train]
+    counts = Counter(int(value) for value in y_train.tolist())
+    rules = config["walk_forward_protocol"]["training_rules"]
+    enough = (
+        len(train) >= int(rules["minimum_training_rows_per_horizon"])
+        and counts.get(0, 0) >= int(rules["minimum_training_rows_per_class"])
+        and counts.get(1, 0) >= int(rules["minimum_training_rows_per_class"])
+        and bool(test)
+    )
+    majority = _majority_signal(labels, train)
+    return train, test, y_train, counts, enough, majority
+
+
+def _trial_id_for_arm(arm: str, horizon: int) -> str:
+    if arm == "control":
+        return f"NOBITEX-M5-2-{horizon}h-OHLCV-LR-BASELINE-01"
+    return f"NOBITEX-M5-2-{horizon}h-SENTIMENT-LR-AUGMENTED-01"
+
+
+def _prediction_row(
+    trial_id: str,
+    arm: str,
+    horizon: int,
+    fold_id: str,
+    row_index: int,
+    probability: float,
+    candles: Sequence[Candle],
+    labels: NDArray[Any],
+    gross: NDArray[Any],
+    decision_times: Sequence[str],
+    fng_values: NDArray[Any],
+    fng_available: Sequence[str | None],
+    fng_observations: Sequence[str | None],
+    fng_ages: NDArray[Any],
+) -> dict[str, Any]:
+    exit_time = candles[row_index + horizon].start + timedelta(hours=1)
+    return {
+        "trial_id": trial_id,
+        "horizon_hours": horizon,
+        "arm": arm,
+        "fold_id": fold_id,
+        "decision_time_utc": decision_times[row_index],
+        "entry_time_utc": decision_times[row_index],
+        "exit_time_utc": exit_time.isoformat().replace("+00:00", "Z"),
+        "label": int(labels[row_index]),
+        "gross_return": float(gross[row_index]),
+        "probability_up": float(probability),
+        "long_signal": bool(probability >= 0.5),
+        "fear_greed_value": int(fng_values[row_index]),
+        "sentiment_source_available_at": fng_available[row_index],
+        "sentiment_source_observation_time_utc": fng_observations[row_index],
+        "sentiment_source_age_seconds": int(fng_ages[row_index]),
+    }
+
+
+def _fit_arm_predictions(
+    arm: str,
+    horizon: int,
+    plan: FoldPlan,
+    enough: bool,
+    train: Sequence[int],
+    test: Sequence[int],
+    y_train: NDArray[Any],
+    features: NDArray[Any],
+    candles: Sequence[Candle],
+    labels: NDArray[Any],
+    gross: NDArray[Any],
+    decision_times: Sequence[str],
+    fng_values: NDArray[Any],
+    fng_available: Sequence[str | None],
+    fng_observations: Sequence[str | None],
+    fng_ages: NDArray[Any],
+    config: dict[str, Any],
+) -> tuple[list[bool], list[dict[str, Any]]]:
+    if not enough:
+        return [False] * len(test), []
+    matrix = features[:, :8] if arm == "control" else features[:, :9]
+    model = build_model(config)
+    model.fit(matrix[list(train)], y_train)
+    probabilities = model.predict_proba(matrix[list(test)])[:, 1]
+    trial_id = _trial_id_for_arm(arm, horizon)
+    prediction_rows = [
+        _prediction_row(
+            trial_id,
+            arm,
+            horizon,
+            plan.fold_id,
+            row_index,
+            float(probabilities[offset]),
+            candles,
+            labels,
+            gross,
+            decision_times,
+            fng_values,
+            fng_available,
+            fng_observations,
+            fng_ages,
+        )
+        for offset, row_index in enumerate(test)
+    ]
+    signals = [bool(value >= 0.5) for value in probabilities]
+    return signals, prediction_rows
+
+
+def _arm_portfolios(
+    candles: Sequence[Candle],
+    test: Sequence[int],
+    signals: Sequence[bool],
+    horizon: int,
+    marks: Sequence[int],
+    config: dict[str, Any],
+) -> dict[str, PortfolioOutcome]:
+    outcomes: dict[str, PortfolioOutcome] = {}
+    for cost_name in COST_NAMES:
+        fraction = float(
+            config["portfolio_evaluation"]["cost_scenarios"][cost_name]["fraction"]
+        )
+        outcomes[cost_name] = simulate_portfolio(
+            candles, test, signals, horizon, fraction, marks
+        )
+    return outcomes
+
+
+def _baseline_portfolios(
+    candles: Sequence[Candle],
+    plan: FoldPlan,
+    test: Sequence[int],
+    majority: bool,
+    horizon: int,
+    config: dict[str, Any],
+) -> dict[str, dict[str, PortfolioOutcome]]:
+    baselines: dict[str, dict[str, PortfolioOutcome]] = {
+        "always_long_same_horizon_same_cost": {},
+        "training_fold_majority_direction": {},
+        "no_trade_cash_baseline": {},
+    }
+    for cost_name in COST_NAMES:
+        fraction = float(
+            config["portfolio_evaluation"]["cost_scenarios"][cost_name]["fraction"]
+        )
+        baselines["always_long_same_horizon_same_cost"][cost_name] = simulate_portfolio(
+            candles, test, [True] * len(test), horizon, fraction, plan.mark_indices
+        )
+        baselines["training_fold_majority_direction"][cost_name] = simulate_portfolio(
+            candles, test, [majority] * len(test), horizon, fraction, plan.mark_indices
+        )
+        baselines["no_trade_cash_baseline"][cost_name] = _empty_metrics(
+            candles, plan, horizon, fraction
+        )
+    return baselines
+
+
+def _fold_summary(
+    plan: FoldPlan,
+    decision_times: Sequence[str],
+    train: Sequence[int],
+    test: Sequence[int],
+    counts: Counter[int],
+    enough: bool,
+    majority: bool,
+) -> dict[str, Any]:
+    return {
+        "fold_id": plan.fold_id,
+        "first_test_decision_time_utc": decision_times[plan.first_test_index],
+        "last_test_decision_time_utc": decision_times[plan.last_test_index],
+        "train_rows_after_purge": len(train),
+        "train_class_counts": {
+            "class_0": counts.get(0, 0),
+            "class_1": counts.get(1, 0),
+        },
+        "purged_train_rows": plan.purged_train_rows,
+        "test_rows_after_horizon_rule": len(test),
+        "excluded_test_rows": plan.excluded_test_rows,
+        "training_preflight": "PASS" if enough else "INSUFFICIENT_SAMPLE",
+        "fit_status": "EVALUATED" if enough else "INSUFFICIENT_SAMPLE",
+        "majority_direction": "LONG" if majority else "CASH",
+    }
+
+
 def _evaluate_fold(
     candles: Sequence[Candle],
     features: NDArray[Any],
@@ -830,121 +1014,44 @@ def _evaluate_fold(
     fng_ages: NDArray[Any],
     config: dict[str, Any],
 ) -> FoldOutput:
-    train = list(plan.train_indices)
-    test = list(plan.test_indices)
-    y_train = labels[train]
-    counts = Counter(int(value) for value in y_train.tolist())
-    rule = config["walk_forward_protocol"]["training_rules"]
-    enough = (
-        len(train) >= int(rule["minimum_training_rows_per_horizon"])
-        and counts.get(0, 0) >= int(rule["minimum_training_rows_per_class"])
-        and counts.get(1, 0) >= int(rule["minimum_training_rows_per_class"])
-        and bool(test)
+    train, test, y_train, counts, enough, majority = _fold_training_state(
+        labels, plan, config
     )
-    majority = _majority_signal(labels, train)
-    arm_outcomes: dict[str, dict[str, PortfolioOutcome]] = {arm: {} for arm in ARMS}
-    baseline_outcomes: dict[str, dict[str, PortfolioOutcome]] = {
-        name: {}
-        for name in (
-            "always_long_same_horizon_same_cost",
-            "training_fold_majority_direction",
-            "no_trade_cash_baseline",
-        )
-    }
+    arm_outcomes: dict[str, dict[str, PortfolioOutcome]] = {}
     predictions: list[dict[str, Any]] = []
-    x_control = features[:, :8]
-    x_treatment = features[:, :9]
     for arm in ARMS:
-        probs = np.zeros(len(test), dtype=np.float64)
-        if enough:
-            model = build_model(config)
-            matrix = x_control if arm == "control" else x_treatment
-            model.fit(matrix[train], y_train)
-            probs = model.predict_proba(matrix[test])[:, 1]
-            trial_id = (
-                f"NOBITEX-M5-2-{horizon}h-OHLCV-LR-BASELINE-01"
-                if arm == "control"
-                else f"NOBITEX-M5-2-{horizon}h-SENTIMENT-LR-AUGMENTED-01"
-            )
-            for offset, row_index in enumerate(test):
-                exit_index = row_index + horizon
-                exit_time = candles[exit_index].start + timedelta(hours=1)
-                predictions.append(
-                    {
-                        "trial_id": trial_id,
-                        "horizon_hours": horizon,
-                        "arm": arm,
-                        "fold_id": plan.fold_id,
-                        "decision_time_utc": decision_times[row_index],
-                        "entry_time_utc": decision_times[row_index],
-                        "exit_time_utc": exit_time.isoformat().replace("+00:00", "Z"),
-                        "label": int(labels[row_index]),
-                        "gross_return": float(gross[row_index]),
-                        "probability_up": float(probs[offset]),
-                        "long_signal": bool(probs[offset] >= 0.5),
-                        "fear_greed_value": int(fng_values[row_index]),
-                        "sentiment_source_available_at": fng_available[row_index],
-                        "sentiment_source_observation_time_utc": fng_observations[
-                            row_index
-                        ],
-                        "sentiment_source_age_seconds": int(fng_ages[row_index]),
-                    }
-                )
-        signals = (
-            [bool(value >= 0.5) for value in probs] if enough else [False] * len(test)
+        signals, arm_predictions = _fit_arm_predictions(
+            arm,
+            horizon,
+            plan,
+            enough,
+            train,
+            test,
+            y_train,
+            features,
+            candles,
+            labels,
+            gross,
+            decision_times,
+            fng_values,
+            fng_available,
+            fng_observations,
+            fng_ages,
+            config,
         )
-        for cost_name in COST_NAMES:
-            fraction = float(
-                config["portfolio_evaluation"]["cost_scenarios"][cost_name]["fraction"]
-            )
-            arm_outcomes[arm][cost_name] = simulate_portfolio(
-                candles, test, signals, horizon, fraction, plan.mark_indices
-            )
-            baseline_outcomes["always_long_same_horizon_same_cost"][cost_name] = (
-                simulate_portfolio(
-                    candles,
-                    test,
-                    [True] * len(test),
-                    horizon,
-                    fraction,
-                    plan.mark_indices,
-                )
-            )
-            baseline_outcomes["training_fold_majority_direction"][cost_name] = (
-                simulate_portfolio(
-                    candles,
-                    test,
-                    [majority] * len(test),
-                    horizon,
-                    fraction,
-                    plan.mark_indices,
-                )
-            )
-            baseline_outcomes["no_trade_cash_baseline"][cost_name] = _empty_metrics(
-                candles, plan, horizon, fraction
-            )
-    return FoldOutput(
-        {
-            "fold_id": plan.fold_id,
-            "first_test_decision_time_utc": decision_times[plan.first_test_index],
-            "last_test_decision_time_utc": decision_times[plan.last_test_index],
-            "train_rows_after_purge": len(train),
-            "train_class_counts": {
-                "class_0": counts.get(0, 0),
-                "class_1": counts.get(1, 0),
-            },
-            "purged_train_rows": plan.purged_train_rows,
-            "test_rows_after_horizon_rule": len(test),
-            "excluded_test_rows": plan.excluded_test_rows,
-            "training_preflight": "PASS" if enough else "INSUFFICIENT_SAMPLE",
-            "fit_status": "EVALUATED" if enough else "INSUFFICIENT_SAMPLE",
-            "majority_direction": "LONG" if majority else "CASH",
-        },
-        arm_outcomes,
-        baseline_outcomes,
-        tuple(predictions),
+        predictions.extend(arm_predictions)
+        arm_outcomes[arm] = _arm_portfolios(
+            candles, test, signals, horizon, plan.mark_indices, config
+        )
+    baseline_outcomes = _baseline_portfolios(
+        candles, plan, test, majority, horizon, config
     )
-
+    summary = _fold_summary(
+        plan, decision_times, train, test, counts, enough, majority
+    )
+    return FoldOutput(
+        summary, arm_outcomes, baseline_outcomes, tuple(predictions)
+    )
 
 def _source_age_summary(
     ages: NDArray[Any], observations: Sequence[str | None]
