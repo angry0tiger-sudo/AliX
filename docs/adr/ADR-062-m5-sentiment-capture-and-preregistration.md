@@ -61,7 +61,7 @@ The locked configuration is:
 - File: `config/m5_2/sentiment_model_preregistration.json`.
 - Preregistration ID: `ALIX-M5-2-SENTIMENT-G1`.
 - Revision: `M5.2-SENTIMENT-G1`.
-- SHA-256: `f658ca73887c33bcd3de0c24417fd88ef96a8092087993cf72f58dc531f86407`.
+- SHA-256: `851d6c4b39c41cacec8ccd712cf17bb40dd42dd45f2bb8813920a7f2ebe481ba`.
 - Trial Registry: four logical candidates, zero evaluated at registration.
 
 The paired design is deliberately explicit:

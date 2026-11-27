@@ -776,7 +776,7 @@ The evaluation artifact does **not** report 17 completed trades for either regis
 - **Preregistration:** `config/m5_2/sentiment_model_preregistration.json`.
 - **Preregistration ID:** `ALIX-M5-2-SENTIMENT-G1`.
 - **Revision:** `M5.2-SENTIMENT-G1`.
-- **Configuration SHA-256:** `f658ca73887c33bcd3de0c24417fd88ef96a8092087993cf72f58dc531f86407`.
+- **Configuration SHA-256:** `851d6c4b39c41cacec8ccd712cf17bb40dd42dd45f2bb8813920a7f2ebe481ba`.
 - **Target:** Nobitex Spot / USDT `BTCUSDT` only; completed 1h OHLCV decisions; horizons 1h and 4h.
 - **Data context:** immutable Alternative.me daily snapshot; raw SHA-256 `4adba36f7dd95792520e078f7578c316c23e80a7b8a0ace81df490bf06c740df`; normalized SHA-256 `e0578509cf3f8a6eeac39ddbd2edeab876e47027d759558e120c6f8b3a9f7f61`. The sentiment feature is global BTC context and uses the conservative observation-time-plus-24-hour availability proxy.
 - **Design:** paired OHLCV-only control versus identical Logistic Regression with one additional Fear & Greed value; exactly four logical candidates. All four IDs below are `PREREGISTERED_LOCKED`; evaluated candidates at registration: **0**.
