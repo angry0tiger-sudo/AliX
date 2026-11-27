@@ -702,7 +702,6 @@ def _evaluate_fold(
                 if arm == "control" else f"NOBITEX-M5-2-{horizon}h-SENTIMENT-LR-AUGMENTED-01"
             )
             for offset, row_index in enumerate(test):
-                entry_index = row_index + 1
                 exit_index = row_index + horizon
                 exit_time = candles[exit_index].start + timedelta(hours=1)
                 predictions.append({
