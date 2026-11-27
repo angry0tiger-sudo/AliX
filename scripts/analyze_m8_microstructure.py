@@ -178,7 +178,6 @@ def _read_verified_archive(path: Path, inventory: dict[str, Any]) -> tuple[dict[
                     mid, features = compute_features(row)
                     snapshots.append(Snapshot(timestamp, mid, features))
             elif filename == "gaps.csv":
-                gaps: list[tuple[int, int]] = []
                 for row in rows:
                     if row.get("stream") != "orderbook":
                         continue
