@@ -1,15 +1,16 @@
-Owner-authorized M7-CS-G2.0 locked PRE-HACK evaluation trigger.
+Owner-authorized M7-CS-G3.0 locked PRE-HACK economic evaluation trigger.
 Superseding preregistration: config/m7/cross_sectional_preregistration.json
-Revision: M7-CS-G2.0
-Prereq commit: 9eb74829336a6b5e65433eb8b6742b66e59ca655
-Trials: NOBITEX-M7-5PAIR-RIDGE-TOP2-02 (ETHUSDT, BNBUSDT, ADAUSDT, XRPUSDT, DOGEUSDT); NOBITEX-M7-9PAIR-RIDGE-TOP2-01 (all nine exact-coverage pairs).
+Revision: M7-CS-G3.0
+Exact implementation/config parent commit: ba8977e86b2414674fc30e67bdeb6a97b357fa65
+Exact-parent Standard CI: #2689 / Run ID 46059360239 / SUCCESS.
+Trial identities and universes are unchanged from G2.0: NOBITEX-M7-5PAIR-RIDGE-TOP2-02 (ETHUSDT, BNBUSDT, ADAUSDT, XRPUSDT, DOGEUSDT); NOBITEX-M7-9PAIR-RIDGE-TOP2-01 (all nine qualified pairs).
+Feature-only change: beta_24h_to_btc remains unchanged; relative_volume_shock_24h is replaced by log_return_24h = ln(close[t] / close[t-24]) using 24 completed 1h bars. No other feature, model, alpha, target, portfolio, fold, cost, gate or universe change.
+Pre-fit diagnostic evidence: M7 Feature Availability Diagnostic Run #10 / ID 46057363991, artifact ID 15227458008. Beta rejection 0/7,943 per symbol; relative-volume rejection 7,943/7,943 per symbol on all nine symbols due to nonpositive prior-24h median volume.
 Data qualification manifest: data/nobitex/prehack/m7/m7_data_qualification.json
 Immutable qualified dataset commit: 5cf8f867385b6481bb47c8dc560ab160b39aee5d
 Common BTCUSDT PRE-HACK grid: 31,801 hourly timestamps from 2021-10-31T20:30:00Z through 2025-06-17T20:30:00Z; exact timestamp equality required.
-SOLUSDT is excluded from G2.0 because the prior public acquisition returned 25,285/31,801 rows with 6,516 missing intervals. No interpolation, backfill, resampling, shortened window, or duplicate-symbol substitution.
-Acquisition is not rerun: the nine already-qualified CSVs and SHA-256 manifests are immutable and committed. Evaluation consumes this exact existing dataset.
-Required gate: Standard CI must complete successfully for the exact parent preregistration commit 9eb74829336a6b5e65433eb8b6742b66e59ca655. The workflow must fail closed if that CI does not pass.
+Acquisition is not rerun. Existing nine CSVs and SHA-256 manifests are immutable. No interpolation, backfill, resampling, shortened window, or new data source.
+Workflow must fail closed unless Standard CI is successful on the exact implementation/config parent SHA above.
 Scope: PRE-HACK exploratory only; no Holdout/Post-Hack, private API, paper/real orders, or local execution. Champion=null; order_permission=false; trading_authorization=NO-GO.
-Only the preregistered next-four-hour target is evaluated. 1h is the candle sampling interval, not a separately registered forecast horizon.
+Only the preregistered next-four-hour target is evaluated. 1h is the input candle cadence, not a separate forecast horizon.
 UTC date: 2026-11-27.
-G3.0 feature-only evaluation will be triggered after exact-parent Standard CI passes.
