@@ -412,9 +412,6 @@ def _validate_sentiment_records(
     return records
 
 
-def load_verified_sentiment(
-    config: dict[str, Any],
-) -> tuple[list[Mapping[str, object]], dict[str, Any]]:
 def _resolve_repository_relative_path(value: object) -> Path:
     relative_path = Path(str(value))
     if relative_path.is_absolute() or not str(value).strip():
@@ -428,6 +425,9 @@ def _resolve_repository_relative_path(value: object) -> Path:
     return resolved
 
 
+def load_verified_sentiment(
+    config: dict[str, Any],
+) -> tuple[list[Mapping[str, object]], dict[str, Any]]:
     source = config["sentiment_source"]
     manifest_path = _resolve_repository_relative_path(source["snapshot_manifest"])
     raw_path = _resolve_repository_relative_path(source["raw_file"])
