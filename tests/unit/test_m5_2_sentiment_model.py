@@ -201,6 +201,28 @@ def test_portfolio_simulation_applies_round_trip_cost_once_and_closes_cohorts() 
     assert result.nav[-1] == pytest.approx(1.0 + result.pnl)
 
 
+def test_portfolio_mark_to_market_includes_round_trip_cost() -> None:
+    candles = _candles(8)
+    result = simulate_portfolio(
+        candles=candles,
+        decisions=[0],
+        signals=[True],
+        horizon=4,
+        cost=0.005,
+        marks=[0, 1, 2, 3, 4],
+    )
+
+    expected_unrealized = 0.25 * (
+        candles[1].close / candles[1].open - 1.0 - 0.005
+    )
+    expected_realized = 0.25 * (
+        candles[4].close / candles[1].open - 1.0 - 0.005
+    )
+    assert result.nav[2] == pytest.approx(1.0 + expected_unrealized)
+    assert result.pnl == pytest.approx(expected_realized)
+    assert result.nav[-1] == pytest.approx(1.0 + expected_realized)
+
+
 def test_portfolio_rejects_open_cohorts_at_fold_end() -> None:
     candles = _candles(8)
     with pytest.raises(ValueError, match="crosses_test_fold"):
