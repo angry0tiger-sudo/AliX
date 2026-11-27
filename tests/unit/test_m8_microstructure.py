@@ -49,13 +49,25 @@ def _make_archive(tmp_path: Path, market: str) -> tuple[Path, Path]:
     row = _book_row()
     book_fields = list(row)
     trade_fields = [
-        "captured_at_utc", "source", "exchange_timestamp_ms",
-        "side", "price", "volume", "offset",
+        "captured_at_utc",
+        "source",
+        "exchange_timestamp_ms",
+        "side",
+        "price",
+        "volume",
+        "offset",
     ]
     gap_fields = [
-        "stream", "gap_start_utc", "gap_end_utc", "gap_start_ms",
-        "gap_end_ms", "reason", "previous_offset", "next_offset",
-        "replay_attempted", "replay_available",
+        "stream",
+        "gap_start_utc",
+        "gap_end_utc",
+        "gap_start_ms",
+        "gap_end_ms",
+        "reason",
+        "previous_offset",
+        "next_offset",
+        "replay_attempted",
+        "replay_available",
     ]
     files = {
         "orderbook.csv": _write_csv([row], book_fields),
@@ -80,7 +92,9 @@ def _make_archive(tmp_path: Path, market: str) -> tuple[Path, Path]:
     }
     manifest_bytes = (json.dumps(manifest, sort_keys=True) + "\n").encode("utf-8")
     archive_path = tmp_path / "m8-test.zip"
-    with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+    with zipfile.ZipFile(
+        archive_path, "w", compression=zipfile.ZIP_DEFLATED
+    ) as archive:
         for name, contents in files.items():
             archive.writestr(name, contents)
         archive.writestr("manifest.json", manifest_bytes)
@@ -126,7 +140,9 @@ def test_correlation_summary_reports_perfect_rank_and_linear_relationship() -> N
     assert result["pearson_p_two_sided"] == 0.0
 
 
-def test_market_mismatch_fails_closed_without_computing_correlations(tmp_path: Path) -> None:
+def test_market_mismatch_fails_closed_without_computing_correlations(
+    tmp_path: Path,
+) -> None:
     archive, inventory = _make_archive(tmp_path, "BTCIRT")
 
     report = analyze_archives([archive], inventory, expected_market="BTCUSDT")

@@ -80,7 +80,9 @@ def _levels(raw: str, field: str) -> list[tuple[float, float]]:
         if not isinstance(item, list) or len(item) != 2:
             raise InputError(f"{field}_LEVEL_INVALID")
         price, size = float(item[0]), float(item[1])
-        if not (math.isfinite(price) and math.isfinite(size) and price > 0 and size >= 0):
+        if not (
+            math.isfinite(price) and math.isfinite(size) and price > 0 and size >= 0
+        ):
             raise InputError(f"{field}_LEVEL_OUT_OF_RANGE")
         parsed.append((price, size))
     return parsed
@@ -124,7 +126,9 @@ def compute_features(row: dict[str, str]) -> tuple[float, dict[str, float]]:
     }
 
 
-def _read_verified_archive(path: Path, inventory: dict[str, Any], expected_market: str) -> tuple[dict[str, Any], list[Snapshot], list[tuple[int, int]]]:
+def _read_verified_archive(
+    path: Path, inventory: dict[str, Any], expected_market: str
+) -> tuple[dict[str, Any], list[Snapshot], list[tuple[int, int]]]:
     raw_archive = path.read_bytes()
     archive_sha = _sha256(raw_archive)
     entry = inventory.get("artifacts_by_sha256", {}).get(archive_sha)
@@ -136,7 +140,13 @@ def _read_verified_archive(path: Path, inventory: dict[str, Any], expected_marke
     except zipfile.BadZipFile as exc:
         raise InputError(f"ARCHIVE_NOT_VALID_ZIP:{path.name}") from exc
 
-    required = {"manifest.json", "manifest.sha256", "orderbook.csv", "trades.csv", "gaps.csv"}
+    required = {
+        "manifest.json",
+        "manifest.sha256",
+        "orderbook.csv",
+        "trades.csv",
+        "gaps.csv",
+    }
     if set(archive.namelist()) != required:
         raise InputError(f"ARCHIVE_FILE_SET_MISMATCH:{path.name}")
 
@@ -149,7 +159,9 @@ def _read_verified_archive(path: Path, inventory: dict[str, Any], expected_marke
     if manifest.get("market") != entry.get("market"):
         raise InputError(f"MANIFEST_MARKET_INVENTORY_MISMATCH:{path.name}")
     try:
-        run_id_matches = int(manifest.get("workflow_run_id")) == int(entry.get("run_id"))
+        run_id_matches = int(manifest.get("workflow_run_id")) == int(
+            entry.get("run_id")
+        )
     except (TypeError, ValueError):
         run_id_matches = False
     if not run_id_matches:
@@ -169,15 +181,21 @@ def _read_verified_archive(path: Path, inventory: dict[str, Any], expected_marke
         meta = files_meta.get(filename)
         if not isinstance(meta, dict):
             raise InputError(f"MANIFEST_FILE_METADATA_MISSING:{filename}")
-        if meta.get("sha256") != _sha256(contents) or meta.get("bytes") != len(contents):
+        if meta.get("sha256") != _sha256(contents) or meta.get("bytes") != len(
+            contents
+        ):
             raise InputError(f"CSV_INTEGRITY_MISMATCH:{filename}")
-        with io.TextIOWrapper(io.BytesIO(contents), encoding="utf-8", newline="") as stream:
+        with io.TextIOWrapper(
+            io.BytesIO(contents), encoding="utf-8", newline=""
+        ) as stream:
             reader = csv.DictReader(stream)
             rows = list(reader)
             if meta.get("records") != len(rows):
                 raise InputError(f"CSV_RECORD_COUNT_MISMATCH:{filename}")
             if filename == "orderbook.csv":
-                if not reader.fieldnames or not BOOK_FIELDS.issubset(set(reader.fieldnames)):
+                if not reader.fieldnames or not BOOK_FIELDS.issubset(
+                    set(reader.fieldnames)
+                ):
                     raise InputError("ORDERBOOK_SCHEMA_MISMATCH")
                 for row in rows:
                     timestamp = int(row["exchange_timestamp_ms"])
@@ -187,8 +205,16 @@ def _read_verified_archive(path: Path, inventory: dict[str, Any], expected_marke
                 for row in rows:
                     if row.get("stream") != "orderbook":
                         continue
-                    start = int(row["gap_start_ms"]) if row.get("gap_start_ms") else _parse_utc_ms(row["gap_start_utc"])
-                    end = int(row["gap_end_ms"]) if row.get("gap_end_ms") else _parse_utc_ms(row["gap_end_utc"])
+                    start = (
+                        int(row["gap_start_ms"])
+                        if row.get("gap_start_ms")
+                        else _parse_utc_ms(row["gap_start_utc"])
+                    )
+                    end = (
+                        int(row["gap_end_ms"])
+                        if row.get("gap_end_ms")
+                        else _parse_utc_ms(row["gap_end_utc"])
+                    )
                     if end < start:
                         raise InputError("GAP_INTERVAL_REVERSED")
                     gaps.append((start, end))
@@ -201,8 +227,12 @@ def _read_verified_archive(path: Path, inventory: dict[str, Any], expected_marke
     return manifest, snapshots, gaps
 
 
-def _window_crosses_gap(start_ms: int, end_ms: int, gaps: Sequence[tuple[int, int]]) -> bool:
-    return any(gap_start <= end_ms and gap_end >= start_ms for gap_start, gap_end in gaps)
+def _window_crosses_gap(
+    start_ms: int, end_ms: int, gaps: Sequence[tuple[int, int]]
+) -> bool:
+    return any(
+        gap_start <= end_ms and gap_end >= start_ms for gap_start, gap_end in gaps
+    )
 
 
 def _samples_for_horizon(
@@ -216,7 +246,13 @@ def _samples_for_horizon(
     grid = ((first + horizon_ms - 1) // horizon_ms) * horizon_ms
     pairs = {name: [] for name in FEATURES}
     targets: list[float] = []
-    excluded = {"no_past_snapshot": 0, "stale_feature_snapshot": 0, "no_future_snapshot": 0, "future_lag": 0, "gap_crossing": 0}
+    excluded = {
+        "no_past_snapshot": 0,
+        "stale_feature_snapshot": 0,
+        "no_future_snapshot": 0,
+        "future_lag": 0,
+        "gap_crossing": 0,
+    }
 
     while grid + horizon_ms <= last + FUTURE_TOLERANCE_MS:
         past_index = bisect.bisect_right(timestamps, grid) - 1
@@ -279,7 +315,9 @@ def _pearson(x: Sequence[float], y: Sequence[float]) -> float | None:
     mean_y = sum(y) / len(y)
     dx = [value - mean_x for value in x]
     dy = [value - mean_y for value in y]
-    denominator = math.sqrt(sum(value * value for value in dx) * sum(value * value for value in dy))
+    denominator = math.sqrt(
+        sum(value * value for value in dx) * sum(value * value for value in dy)
+    )
     if denominator == 0:
         return None
     return max(-1.0, min(1.0, sum(a * b for a, b in zip(dx, dy)) / denominator))
@@ -521,7 +559,9 @@ def main() -> int:
     args.output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(json.dumps(report, indent=2, sort_keys=True))
     if report["status"] == "BLOCKED_MARKET_MISMATCH":
-        print("M8_PREFLIGHT_BLOCKED: BTCUSDT data required; correlations were NOT computed.")
+        print(
+            "M8_PREFLIGHT_BLOCKED: BTCUSDT data required; correlations were NOT computed."
+        )
     return 0
 
 
