@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -117,17 +116,17 @@ def test_price_features_match_registered_eight_column_contract() -> None:
     )
     assert np.isnan(matrix[0, 0])
     assert matrix[1, 0] == pytest.approx(np.log(frame[1].close / frame[0].close))
-    assert matrix[5, 3] == pytest.approx(
+    assert matrix[6, 3] == pytest.approx(
         np.std(
             [
                 np.log(frame[index].close / frame[index - 1].close)
-                for index in range(1, 6)
+                for index in range(1, 7)
             ],
             ddof=0,
         )
     )
-    assert np.isnan(matrix[22, 4])
-    assert np.isfinite(matrix[23, 4])
+    assert np.isnan(matrix[23, 4])
+    assert np.isfinite(matrix[24, 4])
     assert np.isfinite(matrix[13, 6])
     assert matrix[2, 7] == pytest.approx(
         np.log1p(frame[2].volume) - np.log1p(frame[1].volume)
