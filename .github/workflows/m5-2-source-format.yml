@@ -2,6 +2,13 @@ name: M5.2 Source Formatting
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - research/nobitex-hf-strategy
+    paths:
+      - scripts/run_m5_2_sentiment_model.py
+      - tests/unit/test_m5_2_sentiment_model.py
+      - .github/workflows/m5-2-source-format.yml
 
 permissions:
   contents: write
