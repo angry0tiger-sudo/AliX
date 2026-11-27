@@ -1,0 +1,4 @@
+M6_EVALUATION_TRIGGER=OWNER_AUTHORIZED_2026-11-27
+Prerequisite Standard CI success: 0c8c333254484224eadb28c184d1f0cfe5054299
+Preregistration: f94af9eb6f6003818beb88fcdbfbebe2ac2d7ac8a42281529db2781b44962e42
+Market: Nobitex Spot BTCUSDT PRE-HACK only. No Holdout/Post-Hack, no new data, no paid data, no private API, no paper/live orders.
