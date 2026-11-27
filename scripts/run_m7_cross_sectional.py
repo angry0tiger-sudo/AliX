@@ -566,7 +566,9 @@ def _log_returns(closes: np.ndarray) -> np.ndarray:
     return result
 
 
-def _log_return_24h(closes: Sequence[float], decision_index: int) -> float | None:
+def _log_return_24h(
+    closes: Sequence[float] | np.ndarray, decision_index: int
+) -> float | None:
     current_close = float(closes[decision_index])
     prior_close = float(closes[decision_index - 24])
     if (
