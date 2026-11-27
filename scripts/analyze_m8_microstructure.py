@@ -75,9 +75,7 @@ def _parse_level(item: Any, field: str) -> tuple[float, float]:
         price, size = float(item[0]), float(item[1])
     except (TypeError, ValueError, OverflowError) as exc:
         raise InputError(f"{field}_LEVEL_INVALID") from exc
-    if not (
-        math.isfinite(price) and math.isfinite(size) and price > 0 and size >= 0
-    ):
+    if not (math.isfinite(price) and math.isfinite(size) and price > 0 and size >= 0):
         raise InputError(f"{field}_LEVEL_OUT_OF_RANGE")
     return price, size
 
@@ -92,7 +90,9 @@ def _levels(raw: str, field: str) -> list[tuple[float, float]]:
     return [_parse_level(item, field) for item in values[:5]]
 
 
-def _parse_top_of_book(row: dict[str, str]) -> tuple[float, float, float, float, float, float]:
+def _parse_top_of_book(
+    row: dict[str, str],
+) -> tuple[float, float, float, float, float, float]:
     try:
         values = (
             float(row["best_bid_price"]),
@@ -538,7 +538,7 @@ def _base_report(
 
 
 def _aggregate_segment_samples(
-    loaded: list[tuple[dict[str, Any], list[Snapshot], list[tuple[int, int]]]]
+    loaded: list[tuple[dict[str, Any], list[Snapshot], list[tuple[int, int]]]],
 ) -> tuple[
     dict[str, dict[str, list[float]]],
     dict[str, list[float]],
@@ -548,12 +548,9 @@ def _aggregate_segment_samples(
     pooled: dict[str, dict[str, list[float]]] = {
         horizon: {feature: [] for feature in FEATURES} for horizon in HORIZONS_MS
     }
-    pooled_targets: dict[str, list[float]] = {
-        horizon: [] for horizon in HORIZONS_MS
-    }
+    pooled_targets: dict[str, list[float]] = {horizon: [] for horizon in HORIZONS_MS}
     excluded_by_horizon = {
-        horizon: {reason: 0 for reason in EXCLUSION_REASONS}
-        for horizon in HORIZONS_MS
+        horizon: {reason: 0 for reason in EXCLUSION_REASONS} for horizon in HORIZONS_MS
     }
     per_segment: list[dict[str, Any]] = []
     for manifest, snapshots, gaps in loaded:
