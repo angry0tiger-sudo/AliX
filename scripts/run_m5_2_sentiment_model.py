@@ -359,6 +359,7 @@ def load_verified_ohlcv() -> tuple[list[Candle], dict[str, Any]]:
     _validate_ohlcv_timeline(candles, manifest)
     return candles, manifest
 
+
 def _validate_sentiment_manifest(
     manifest: dict[str, Any], raw_hash: str, normalized_hash: str
 ) -> None:
@@ -430,6 +431,7 @@ def load_verified_sentiment(
     )
     records = _parse_sentiment_records(normalized_raw)
     return records, manifest
+
 
 def build_price_features(candles: Sequence[Candle]) -> NDArray[Any]:
     count = len(candles)
@@ -567,6 +569,7 @@ def build_fold_plans(
         )
     return tuple(plans)
 
+
 def build_model(config: dict[str, Any]) -> Pipeline:
     params = config["model"]["parameters"]
     classifier = LogisticRegression(
@@ -638,11 +641,7 @@ def _mark_portfolio(
             cursor += 1
         concurrent = max(concurrent, len(active))
         remaining, unrealized = _mark_active_trades(candles, active, mark, realized)
-        realized = sum(
-            row.pnl
-            for row in trades[:cursor]
-            if row.exit_index <= mark
-        )
+        realized = sum(row.pnl for row in trades[:cursor] if row.exit_index <= mark)
         active = remaining
         nav.append(1.0 + realized + unrealized)
     if active or cursor != len(trades):
@@ -719,6 +718,7 @@ def _portfolio_metrics(
         "maximum_concurrent_cohorts": concurrent,
         "turnover_fraction_of_initial_equity": float(len(trades) * notional),
     }
+
 
 def aggregate_outcomes(outcomes: Sequence[PortfolioOutcome]) -> dict[str, Any]:
     trades = tuple(trade for outcome in outcomes for trade in outcome.trades)
