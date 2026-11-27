@@ -30,7 +30,13 @@
     "change_control": "Any change to asset priority, candidate universe, data boundaries or hashes, features, feature formula, model, target horizon, rebalancing, selection rule, weighting, folds, costs, purge/embargo, gate or trial count requires a new superseding preregistration before inspecting economic results. No threshold, universe, model, feature or parameter sweep is allowed.",
     "p_hacking_guard": "Exactly two logical trials are registered, differentiated only by the predeclared five-symbol versus ten-symbol universe. Four folds, two costs, and multiple assets are evaluation dimensions, not additional candidate variants.",
     "data_source_policy": "Only Nobitex public Spot UDF hourly OHLCV and the public market-stats endpoint are allowed. No credentials, private endpoint, external venue, synthetic fill, interpolation, backfill or symbol substitution.",
-    "exploratory_status": "The existing PRE-HACK BTCUSDT and newly acquired matching PRE-HACK histories have been exposed for research purposes. These results are exploratory and cannot be presented as a fresh confirmatory holdout test."
+    "exploratory_status": "The existing PRE-HACK BTCUSDT and newly acquired matching PRE-HACK histories have been exposed for research purposes. These results are exploratory and cannot be presented as a fresh confirmatory holdout test.",
+    "logical_trial_count": 2,
+    "trial_ids": [
+      "NOBITEX-M7-5PAIR-RIDGE-TOP2-01",
+      "NOBITEX-M7-10PAIR-RIDGE-TOP2-01"
+    ],
+    "owner_selection_utc_date": "2026-11-27"
   },
   "data": {
     "venue": "Nobitex",

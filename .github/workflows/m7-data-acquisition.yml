@@ -1,0 +1,115 @@
+name: M7 Nobitex PRE-HACK Cross-Asset Data Acquisition
+
+on:
+  push:
+    branches: [research/nobitex-hf-strategy]
+    paths: [docs/research/M7_DATA_TRIGGER.txt]
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: alix-m7-public-prehack-acquisition
+  cancel-in-progress: false
+
+jobs:
+  acquire:
+    if: github.ref == 'refs/heads/research/nobitex-hf-strategy'
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      ALIX_DRY_RUN: "true"
+      ALIX_ALLOW_LIVE_TRADING: "false"
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - name: Require Standard CI success on the exact implementation parent
+        env:
+          GH_TOKEN: \${{ github.token }}
+          SOURCE_SHA: \${{ github.event.before }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import time
+          from urllib.request import Request, urlopen
+
+          repository = os.environ["GITHUB_REPOSITORY"]
+          branch = os.environ["GITHUB_REF_NAME"]
+          source_sha = os.environ["SOURCE_SHA"]
+          if branch != "research/nobitex-hf-strategy":
+              raise SystemExit("m7_unsupported_branch")
+          url = f"https://api.github.com/repos/{repository}/actions/workflows/ci.yml/runs?branch={branch}&per_page=100"
+          headers = {
+              "Accept": "application/vnd.github+json",
+              "Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+              "X-GitHub-Api-Version": "2022-11-28",
+          }
+          deadline = time.monotonic() + 20 * 60
+          while time.monotonic() < deadline:
+              with urlopen(Request(url, headers=headers), timeout=30) as response:
+                  payload = json.load(response)
+              matching = [
+                  item for item in payload.get("workflow_runs", [])
+                  if item.get("head_sha") == source_sha
+                  and item.get("head_branch") == branch
+                  and item.get("name") == "AliX Continuous Integration"
+                  and item.get("event") == "push"
+              ]
+              if matching:
+                  latest = max(matching, key=lambda item: item.get("run_number", 0))
+                  if latest.get("status") == "completed":
+                      if latest.get("conclusion") != "success":
+                          raise SystemExit("m7_standard_ci_not_green")
+                      print(json.dumps({"gate": "PASS", "source_sha": source_sha, "ci_run_id": latest.get("id")}))
+                      break
+              time.sleep(10)
+          else:
+              raise SystemExit("m7_standard_ci_timeout")
+          PY
+      - name: Checkout implementation commit
+        uses: actions/checkout@v4
+        with:
+          ref: \${{ github.sha }}
+          fetch-depth: 0
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Acquire fixed-universe public PRE-HACK hourly histories
+        run: |
+          python -m scripts.run_m7_cross_sectional --acquire --output-dir data/nobitex/prehack/m7 --commit-sha "$GITHUB_SHA"
+      - name: Validate acquisition safety and fixed data window
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          report = json.loads(Path("data/nobitex/prehack/m7/m7_data_qualification.json").read_text())
+          assert report["data_scope"] == "PRE_HACK_ONLY"
+          assert report["expected_rows_per_symbol"] == 31801
+          assert report["private_api_calls"] == 0
+          assert report["holdout_bytes_read"] is False
+          assert report["posthack_data_read"] is False
+          assert report["paper_orders"] == 0 and report["real_order_attempts"] == 0
+          assert report["Champion"] is None and report["order_permission"] is False
+          assert report["trading_authorization"] == "NO-GO"
+          print(json.dumps(report["trial_data_status"], sort_keys=True))
+          PY
+      - name: Upload immutable dataset and acquisition report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alix-m7-nobitex-prehack-data
+          path: data/nobitex/prehack/m7/
+          if-no-files-found: warn
+          retention-days: 90
+      - name: Commit acquired public data on the research branch
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/nobitex/prehack/m7/
+          if ! git diff --cached --quiet; then
+            git commit -m "data(m7): retain public Nobitex prehack multi-asset panel"
+            git push origin HEAD:refs/heads/research/nobitex-hf-strategy
+          fi
