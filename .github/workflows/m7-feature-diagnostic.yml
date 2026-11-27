@@ -1,0 +1,172 @@
+name: M7 PRE-HACK Feature Availability Diagnostic
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: alix-m7-feature-availability-diagnostic
+  cancel-in-progress: false
+
+jobs:
+  diagnose:
+    if: github.ref == 'refs/heads/research/nobitex-hf-strategy'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      ALIX_DRY_RUN: "true"
+      ALIX_ALLOW_LIVE_TRADING: "false"
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - name: Require Standard CI success on the exact diagnostic parent
+        env:
+          GH_TOKEN: \${{ github.token }}
+          SOURCE_SHA: \${{ github.sha }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import time
+          from urllib.request import Request, urlopen
+
+          repository = os.environ["GITHUB_REPOSITORY"]
+          branch = os.environ["GITHUB_REF_NAME"]
+          source_sha = os.environ["SOURCE_SHA"]
+          if branch != "research/nobitex-hf-strategy":
+              raise SystemExit("m7_feature_diagnostic_unsupported_branch")
+          url = (
+              f"https://api.github.com/repos/{repository}/actions/workflows/ci.yml/runs"
+              f"?branch={branch}&per_page=100"
+          )
+          headers = {
+              "Accept": "application/vnd.github+json",
+              "Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+              "X-GitHub-Api-Version": "2022-11-28",
+          }
+          deadline = time.monotonic() + 20 * 60
+          while time.monotonic() < deadline:
+              with urlopen(Request(url, headers=headers), timeout=30) as response:
+                  payload = json.load(response)
+              matches = [
+                  item for item in payload.get("workflow_runs", [])
+                  if item.get("head_sha") == source_sha
+                  and item.get("head_branch") == branch
+                  and item.get("name") == "AliX Continuous Integration"
+                  and item.get("event") == "push"
+              ]
+              if matches:
+                  latest = max(matches, key=lambda item: item.get("run_number", 0))
+                  if latest.get("status") == "completed":
+                      if latest.get("conclusion") != "success":
+                          raise SystemExit("m7_feature_diagnostic_standard_ci_not_green")
+                      print(json.dumps({
+                          "gate": "PASS",
+                          "source_sha": source_sha,
+                          "ci_run_id": latest.get("id"),
+                      }))
+                      break
+              time.sleep(10)
+          else:
+              raise SystemExit("m7_feature_diagnostic_standard_ci_timeout")
+          PY
+      - name: Checkout exact PRE-HACK source and data
+        uses: actions/checkout@v4
+        with:
+          ref: \${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pinned diagnostic runtime
+        run: |
+          python -m pip install pip==25.2
+          python -m pip install numpy==2.5.5 pandas==2.3.3 scikit-learn==1.9.0
+      - name: Verify PRE-HACK scope and safety configuration
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          config = json.loads(Path("config/m7/cross_sectional_preregistration.json").read_text())
+          manifest = json.loads(Path("data/nobitex/prehack/m7/m7_data_qualification.json").read_text())
+          assert config["preregistration"]["revision"] == "M7-CS-G2.0"
+          assert config["preregistration"]["status"] == "PREREGISTERED_LOCKED"
+          assert config["safety"]["holdout_access"] == "PROHIBITED"
+          assert config["safety"]["posthack_data_access"] == "PROHIBITED"
+          assert config["safety"]["Champion"] is None
+          assert config["safety"]["order_permission"] is False
+          assert config["safety"]["trading_authorization"] == "NO-GO"
+          assert manifest["data_scope"] == "PRE_HACK_ONLY"
+          assert len(manifest["qualified_symbols"]) == 9
+          PY
+      - name: Run read-only M7 feature diagnostic
+        run: |
+          python -m scripts.diagnose_m7_features \
+            --data-dir data/nobitex/prehack/m7 \
+            --btc-csv data/nobitex/prehack/nobitex-btcusdt-1h.csv \
+            --config config/m7/cross_sectional_preregistration.json \
+            --report-out .artifacts/m7/m7_feature_diagnostic.json
+      - name: Validate and publish diagnostic summary
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          report = json.loads(Path(".artifacts/m7/m7_feature_diagnostic.json").read_text())
+          assert report["data_scope"] == "PRE_HACK_ONLY"
+          assert len(report["symbols"]) == 9
+          assert len(report["candidate_panels"]) == 2
+          safety = report["safety"]
+          assert safety["new_data_acquisition"] is False
+          assert safety["model_fitting"] is False
+          assert safety["economic_backtest"] is False
+          assert safety["holdout_bytes_read"] is False
+          assert safety["posthack_data_read"] is False
+          assert safety["private_api_calls"] == 0
+          assert safety["paper_orders"] == 0 and safety["real_order_attempts"] == 0
+          assert safety["Champion"] is None and safety["order_permission"] is False
+          assert safety["trading_authorization"] == "NO-GO"
+
+          lines = [
+              "# M7 Feature Availability Diagnostic",
+              "",
+              "| Symbol | Beta rejected | Beta rate | Volume rejected | Volume rate |",
+              "|---|---:|---:|---:|---:|",
+          ]
+          for symbol, item in report["symbols"].items():
+              beta = item["beta_24h_to_btc"]
+              volume = item["relative_volume_shock_24h"]
+              lines.append(
+                  f"| {symbol} | {beta['rejected_rows']} | {beta['rejection_rate_pct']:.4f}% "
+                  f"| {volume['rejected_rows']} | {volume['rejection_rate_pct']:.4f}% |"
+              )
+          lines.extend([
+              "",
+              "| Candidate | Input rows | Accepted panel rows | Rejected rows | Rejection rate |",
+              "|---|---:|---:|---:|---:|",
+          ])
+          for trial_id, item in report["candidate_panels"].items():
+              lines.append(
+                  f"| {trial_id} | {item['candidate_rows_before_feature_qualification']} "
+                  f"| {item['accepted_panel_rows']} | {item['total_panel_rejected_rows']} "
+                  f"| {item['total_panel_rejection_rate_pct']:.4f}% |"
+              )
+          Path("m7_feature_diagnostic_summary.md").write_text(
+              "\\n".join(lines) + "\\n", encoding="utf-8"
+          )
+          print("\\n".join(lines))
+          PY
+          cat m7_feature_diagnostic_summary.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload M7 feature diagnostic report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alix-m7-feature-availability-diagnostic
+          path: .artifacts/m7/
+          if-no-files-found: warn
+          retention-days: 90
