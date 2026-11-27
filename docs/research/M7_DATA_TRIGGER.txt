@@ -2,3 +2,5 @@ Owner-authorized M7 public PRE-HACK Nobitex multi-asset data acquisition dispatc
 Parent commit Standard CI #2662 passed on 263321a5832954aa2c16650760d209ae650a5b3e.
 Date: 2026-11-27.
 This trigger authorizes public read-only GET requests only. No credentials, private APIs, orders, Holdout or Post-Hack.
+
+Resume trigger after Standard CI #2664 SUCCESS on parent bbd5ac75c699544aa28eabadd8d5eb09dba21454. This single push requests only the locked public PRE-HACK acquisition workflow. UTC date: 2026-11-27.
