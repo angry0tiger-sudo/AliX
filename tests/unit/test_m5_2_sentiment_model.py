@@ -212,12 +212,8 @@ def test_portfolio_mark_to_market_includes_round_trip_cost() -> None:
         marks=[0, 1, 2, 3, 4],
     )
 
-    expected_unrealized = 0.25 * (
-        candles[1].close / candles[1].open - 1.0 - 0.005
-    )
-    expected_realized = 0.25 * (
-        candles[4].close / candles[1].open - 1.0 - 0.005
-    )
+    expected_unrealized = 0.25 * (candles[1].close / candles[1].open - 1.0 - 0.005)
+    expected_realized = 0.25 * (candles[4].close / candles[1].open - 1.0 - 0.005)
     assert result.nav[2] == pytest.approx(1.0 + expected_unrealized)
     assert result.pnl == pytest.approx(expected_realized)
     assert result.nav[-1] == pytest.approx(1.0 + expected_realized)
