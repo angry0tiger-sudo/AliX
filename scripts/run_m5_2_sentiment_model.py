@@ -1046,12 +1046,9 @@ def _evaluate_fold(
     baseline_outcomes = _baseline_portfolios(
         candles, plan, test, majority, horizon, config
     )
-    summary = _fold_summary(
-        plan, decision_times, train, test, counts, enough, majority
-    )
-    return FoldOutput(
-        summary, arm_outcomes, baseline_outcomes, tuple(predictions)
-    )
+    summary = _fold_summary(plan, decision_times, train, test, counts, enough, majority)
+    return FoldOutput(summary, arm_outcomes, baseline_outcomes, tuple(predictions))
+
 
 def _source_age_summary(
     ages: NDArray[Any], observations: Sequence[str | None]
