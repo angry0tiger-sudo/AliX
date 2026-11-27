@@ -4,7 +4,7 @@
   "preregistration": {
     "id": "ALIX-M7-NOBITEX-CROSS-SECTIONAL-G1",
     "phase": "M7",
-    "revision": "M7-CS-G1.1",
+    "revision": "M7-CS-G1.2",
     "status": "PREREGISTERED_LOCKED",
     "preregistered_utc_date": "2026-11-27",
     "branch": "research/nobitex-hf-strategy",
@@ -37,7 +37,8 @@
       "NOBITEX-M7-10PAIR-RIDGE-TOP2-01"
     ],
     "owner_selection_utc_date": "2026-11-27",
-    "pre_evaluation_accounting_clarification": "Before any M7 fitting or economic outcome was observed, implementation review separated the locked log-return training target from simple-return execution PnL. Trading costs are subtracted in simple-return space, each asset loss is capped at 100% of notional, and PnL is compounded against current portfolio NAV. This is a mechanical accounting correction, not an outcome-driven strategy change. The immutable acquisition workflow also refuses to write into a non-empty M7 data directory; reruns cannot silently overwrite accepted CSVs."
+    "pre_evaluation_accounting_clarification": "Before any M7 fitting or economic outcome was observed, implementation review separated the locked log-return training target from simple-return execution PnL. Trading costs are subtracted in simple-return space, each asset loss is capped at 100% of notional, and PnL is compounded against current portfolio NAV. This is a mechanical accounting correction, not an outcome-driven strategy change. The immutable acquisition workflow also refuses to write into a non-empty M7 data directory; reruns cannot silently overwrite accepted CSVs.",
+    "pre_evaluation_nav_clarification": "Before any M7 fitting or economic output was observed, the continuous OOS portfolio NAV was specified to carry forward chronologically across the four expanding walk-forward test blocks; fold metrics use the NAV at the start of each fold and pooled OOS metrics compound the single sequential path. This prevents restarting capital at the beginning of each fold. It does not change the model, features, labels, universe, selection, costs or gates."
   },
   "data": {
     "venue": "Nobitex",
@@ -212,7 +213,9 @@
     "fold_stability": "At least 20 completed OOS trades, positive net PnL and fold NetPF > 1.00.",
     "net_profit_factor": "Sum of positive compounded-PnL contributions (each interval contribution multiplied by NAV before that interval) divided by the absolute sum of negative compounded-PnL contributions. Undefined PF never passes.",
     "max_drawdown": "Peak-to-trough drawdown of chronological NAV compounded from the four-hour portfolio simple-return series, with unused capital retained as USDT.",
-    "overall_pass": "Each of the two registered candidates must independently pass all economic gates at both Cost-50 and Cost-90. A data-blocked candidate is not a pass and makes the family verdict NO-GO / INSUFFICIENT_DATA."
+    "overall_pass": "Each of the two registered candidates must independently pass all economic gates at both Cost-50 and Cost-90. A data-blocked candidate is not a pass and makes the family verdict NO-GO / INSUFFICIENT_DATA.",
+    "nav_carry_forward_across_test_folds": true,
+    "pooled_oos_path": "The four chronological OOS test blocks are concatenated as one sequential capital path. The starting NAV at WF-01 is 1.0; each later fold begins at the ending NAV of the preceding chronological OOS fold. No reset of NAV between folds."
   },
   "risk_controls": {
     "overfitting": "Only one model and one parameter set. No feature sweeps, alpha sweeps, universe substitutions, threshold tuning, or selecting the better of unregistered variants.",

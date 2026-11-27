@@ -88,3 +88,8 @@ Any material deviation from the two fixed candidate universes, exact data interv
 ## 8. Pre-evaluation accounting clarification (M7-CS-G1.1)
 
 During implementation review and before any fitting or economic output was observed, the return contract was clarified to maintain dimensional consistency: Ridge trains on the preregistered four-hour forward **log return**, while realized portfolio PnL and the 50/90 bps costs are calculated in **simple-return space**. Each asset's loss is floored at -100% of its own notional. The selected positions each use 50% of current NAV; NAV compounds every non-overlapping four-hour interval and trade-level PF contributions are measured in initial-equity terms using NAV immediately before the interval. This is a mechanical accounting correction, not a model, feature, threshold, universe, target-horizon, fold, or trial change. It was made before the first M7 outcome was inspected.
+
+
+## 9. Pre-evaluation NAV continuity clarification (M7-CS-G1.2)
+
+Before any M7 fitting or economic output was observed, the pooled OOS accounting was clarified: the portfolio NAV must carry chronologically from WF-01 through WF-04 rather than reset to 1.0 at each fold. Per-fold stability metrics use the NAV at that fold's start, while pooled OOS NetPF and drawdown use the continuous sequential OOS path. This is an accounting/aggregation clarification only; it does not alter the registered feature, model, universe, target, selection, costs or gates.

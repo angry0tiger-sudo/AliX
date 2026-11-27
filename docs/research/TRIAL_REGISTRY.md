@@ -881,3 +881,5 @@ The closed M3 OFI trials remain BTCIRT-specific historical evidence and are not 
 
 - **M7 pre-evaluation revision M7-CS-G1.1:** clarified that Ridge training target remains the four-hour forward log return while realized PnL/costs use simple open-to-open returns; individual losses capped at 100% of notional; trade PnL compounded against current NAV. This clarification occurred before any M7 fit or economic outcome was inspected. See ADR-070 Section 8.
 - Acquisition writes fail closed if the target immutable dataset directory is already non-empty; reruns cannot silently overwrite or replace accepted CSVs.
+
+- **M7 pre-evaluation revision M7-CS-G1.2:** the portfolio NAV carries forward across the four chronological OOS test folds; per-fold metrics are computed from fold-start NAV and pooled metrics from the continuous compounded path. This correction preceded all M7 fits and outcomes. See ADR-070 Section 9.

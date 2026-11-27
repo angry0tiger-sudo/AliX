@@ -697,12 +697,16 @@ def _metrics(
 
 
 def _evaluate_fold(
-    model: Pipeline, test_panel: pd.DataFrame, cost_bps: int, fold_id: str
-) -> tuple[dict[str, Any], list[float], list[float]]:
+    model: Pipeline,
+    test_panel: pd.DataFrame,
+    cost_bps: int,
+    fold_id: str,
+    initial_nav: float,
+) -> tuple[dict[str, Any], list[float], list[float], float]:
     trade_pnls: list[float] = []
     portfolio_returns: list[float] = []
     trades_by_symbol: dict[str, int] = {}
-    nav = 1.0
+    nav = initial_nav
     for _, group in test_panel.groupby("decision_index", sort=True):
         if nav <= 0.0:
             break
@@ -744,6 +748,7 @@ def _evaluate_fold(
         },
         trade_pnls,
         portfolio_returns,
+        nav,
     )
 
 
@@ -825,6 +830,7 @@ def _evaluate_cost_scenario(
     fold_results: list[dict[str, Any]] = []
     pooled_trades: list[float] = []
     pooled_returns: list[float] = []
+    continuous_nav = 1.0
     for fold_id in ("WF-01", "WF-02", "WF-03", "WF-04"):
         if fold_id not in models:
             fold_results.append(
@@ -836,8 +842,8 @@ def _evaluate_cost_scenario(
                 }
             )
             continue
-        result, trades, returns = _evaluate_fold(
-            models[fold_id], tests[fold_id], cost_bps, fold_id
+        result, trades, returns, continuous_nav = _evaluate_fold(
+            models[fold_id], tests[fold_id], cost_bps, fold_id, continuous_nav
         )
         fold_results.append(result)
         pooled_trades.extend(trades)
