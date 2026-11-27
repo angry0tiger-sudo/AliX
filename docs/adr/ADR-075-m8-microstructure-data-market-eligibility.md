@@ -76,3 +76,12 @@ Only public capture artifacts and their manifests were inspected. No Holdout or 
 ## 7. Next admissible step
 
 Acquire a fresh BTCUSDT L2 capture through the approved public exchange feed, preserving raw snapshots, timestamps, offsets, reconnect baselines, explicit gap records, capture manifests, and cryptographic hashes. The capture must identify the instrument as BTCUSDT in every manifest. Only after this source gate is satisfied should M8 correlations be run. No DeepLOB or complex ML model is authorized by this ADR.
+
+## 8. Final implementation validation (2026-11-27)
+
+- Final analyzer implementation commit: `79146571b61fcc61a35b870b725d182124d7f7e8`.
+- Standard CI: [Run #2716 / ID 46064531868](https://github.com/angry0tiger-sudo/AliX/actions/runs/46064531868), conclusion **SUCCESS**. Quality (including Ruff lint/format, strict Mypy, security, dependency, architecture, complexity, and unit-test/coverage steps), PostgreSQL integration, Freqtrade runtime smoke, and bare-environment lock checks all completed successfully. Unrelated regime/ensemble/real-data jobs were skipped by the CI policy.
+- M8 unit tests: **6 passed** locally; the full repository CI unit-test/coverage job also completed successfully.
+- An actual-data preflight was run locally against the five byte-identical, SHA-pinned M1.6 ZIPs. Output: `status=BLOCKED_MARKET_MISMATCH`, `actual_markets=["BTCIRT"]`, `correlation_status=NOT_COMPUTED`, `correlations={}`, `decision=NEW_BTCUSDT_CAPTURE_REQUIRED`, `total_orderbook_rows=171604`, `total_gap_records=8`. This preflight read only the five public M1.6 artifacts and verified their ZIP/manifest provenance; it did not compute features or correlations after detecting the symbol mismatch.
+- The GitHub Actions M8 `workflow_dispatch` itself remains **NOT RUN** because the workflow exists only on the research branch while the default branch is frozen. The local preflight and CI success must not be represented as an Actions dispatch or as a BTCUSDT statistical result.
+
