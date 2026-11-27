@@ -68,6 +68,20 @@ def _parse_utc_ms(value: str) -> int:
     return int(parsed.timestamp() * 1000)
 
 
+def _parse_level(item: Any, field: str) -> tuple[float, float]:
+    if not isinstance(item, list) or len(item) != 2:
+        raise InputError(f"{field}_LEVEL_INVALID")
+    try:
+        price, size = float(item[0]), float(item[1])
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise InputError(f"{field}_LEVEL_INVALID") from exc
+    if not (
+        math.isfinite(price) and math.isfinite(size) and price > 0 and size >= 0
+    ):
+        raise InputError(f"{field}_LEVEL_OUT_OF_RANGE")
+    return price, size
+
+
 def _levels(raw: str, field: str) -> list[tuple[float, float]]:
     try:
         values = json.loads(raw)
@@ -75,48 +89,45 @@ def _levels(raw: str, field: str) -> list[tuple[float, float]]:
         raise InputError(f"{field}_JSON_INVALID") from exc
     if not isinstance(values, list) or len(values) < 5:
         raise InputError(f"{field}_MUST_HAVE_AT_LEAST_FIVE_LEVELS")
-    parsed: list[tuple[float, float]] = []
-    for item in values[:5]:
-        if not isinstance(item, list) or len(item) != 2:
-            raise InputError(f"{field}_LEVEL_INVALID")
-        price, size = float(item[0]), float(item[1])
-        if not (
-            math.isfinite(price) and math.isfinite(size) and price > 0 and size >= 0
-        ):
-            raise InputError(f"{field}_LEVEL_OUT_OF_RANGE")
-        parsed.append((price, size))
-    return parsed
+    return [_parse_level(item, field) for item in values[:5]]
+
+
+def _parse_top_of_book(row: dict[str, str]) -> tuple[float, float, float, float, float, float]:
+    try:
+        values = (
+            float(row["best_bid_price"]),
+            float(row["best_ask_price"]),
+            float(row["best_bid_size"]),
+            float(row["best_ask_size"]),
+            float(row["mid_price"]),
+            float(row["spread"]),
+        )
+    except (KeyError, ValueError, TypeError) as exc:
+        raise InputError("TOP_OF_BOOK_NUMERIC_FIELD_INVALID") from exc
+    if not all(math.isfinite(value) for value in values):
+        raise InputError("TOP_OF_BOOK_NONFINITE")
+    bid, ask, bid_size, ask_size, mid, spread = values
+    if bid <= 0 or ask <= 0 or mid <= 0 or ask < bid or bid_size < 0 or ask_size < 0:
+        raise InputError("TOP_OF_BOOK_OUT_OF_RANGE")
+    return values
+
+
+def _top_five_depths(row: dict[str, str]) -> tuple[float, float]:
+    bids = _levels(row["bids_top_json"], "bids_top_json")
+    asks = _levels(row["asks_top_json"], "asks_top_json")
+    return sum(size for _, size in bids), sum(size for _, size in asks)
 
 
 def compute_features(row: dict[str, str]) -> tuple[float, dict[str, float]]:
     """Compute top-five OBI, microprice edge, relative spread, and depth."""
-    try:
-        bid = float(row["best_bid_price"])
-        ask = float(row["best_ask_price"])
-        bid_size = float(row["best_bid_size"])
-        ask_size = float(row["best_ask_size"])
-        mid = float(row["mid_price"])
-        spread = float(row["spread"])
-    except (KeyError, ValueError) as exc:
-        raise InputError("TOP_OF_BOOK_NUMERIC_FIELD_INVALID") from exc
-
-    if not all(math.isfinite(x) for x in (bid, ask, bid_size, ask_size, mid, spread)):
-        raise InputError("TOP_OF_BOOK_NONFINITE")
-    if bid <= 0 or ask <= 0 or mid <= 0 or ask < bid or bid_size < 0 or ask_size < 0:
-        raise InputError("TOP_OF_BOOK_OUT_OF_RANGE")
-
-    bids = _levels(row["bids_top_json"], "bids_top_json")
-    asks = _levels(row["asks_top_json"], "asks_top_json")
-    bid_depth = sum(size for _, size in bids)
-    ask_depth = sum(size for _, size in asks)
+    bid, ask, bid_size, ask_size, mid, spread = _parse_top_of_book(row)
+    bid_depth, ask_depth = _top_five_depths(row)
     total_depth = bid_depth + ask_depth
     if total_depth <= 0:
         raise InputError("TOP5_DEPTH_NONPOSITIVE")
-
     top_size = bid_size + ask_size
     if top_size <= 0:
         raise InputError("TOP_OF_BOOK_SIZE_NONPOSITIVE")
-
     microprice = (ask * bid_size + bid * ask_size) / top_size
     return mid, {
         "obi_top5": (bid_depth - ask_depth) / total_depth,
@@ -125,21 +136,27 @@ def compute_features(row: dict[str, str]) -> tuple[float, dict[str, float]]:
         "depth_top5": total_depth,
     }
 
-
-def _read_verified_archive(
-    path: Path, inventory: dict[str, Any], expected_market: str
-) -> tuple[dict[str, Any], list[Snapshot], list[tuple[int, int]]]:
-    raw_archive = path.read_bytes()
-    archive_sha = _sha256(raw_archive)
-    entry = inventory.get("artifacts_by_sha256", {}).get(archive_sha)
-    if not isinstance(entry, dict):
-        raise InputError(f"UNREGISTERED_ARCHIVE_SHA256:{path.name}")
-
+def _normalize_run_id(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, (str, int)):
+        return None
     try:
-        archive = zipfile.ZipFile(io.BytesIO(raw_archive))
-    except zipfile.BadZipFile as exc:
-        raise InputError(f"ARCHIVE_NOT_VALID_ZIP:{path.name}") from exc
+        return int(value)
+    except ValueError:
+        return None
 
+
+def _validate_manifest_identity(
+    manifest: dict[str, Any], entry: dict[str, Any], path: Path
+) -> None:
+    if manifest.get("market") != entry.get("market"):
+        raise InputError(f"MANIFEST_MARKET_INVENTORY_MISMATCH:{path.name}")
+    manifest_run_id = _normalize_run_id(manifest.get("workflow_run_id"))
+    inventory_run_id = _normalize_run_id(entry.get("run_id"))
+    if manifest_run_id is None or manifest_run_id != inventory_run_id:
+        raise InputError(f"MANIFEST_RUN_ID_MISMATCH:{path.name}")
+
+
+def _validate_archive_layout(archive: zipfile.ZipFile, path: Path) -> None:
     required = {
         "manifest.json",
         "manifest.sha256",
@@ -150,87 +167,111 @@ def _read_verified_archive(
     if set(archive.namelist()) != required:
         raise InputError(f"ARCHIVE_FILE_SET_MISMATCH:{path.name}")
 
+
+def _read_manifest(archive: zipfile.ZipFile, path: Path) -> dict[str, Any]:
     manifest_bytes = archive.read("manifest.json")
-    manifest = json.loads(manifest_bytes.decode("utf-8"))
     checksum_line = archive.read("manifest.sha256").decode("utf-8").strip().split()
     if checksum_line != [_sha256(manifest_bytes), "manifest.json"]:
         raise InputError(f"MANIFEST_SHA256_MISMATCH:{path.name}")
+    try:
+        manifest = json.loads(manifest_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise InputError(f"MANIFEST_JSON_INVALID:{path.name}") from exc
+    if not isinstance(manifest, dict):
+        raise InputError(f"MANIFEST_OBJECT_REQUIRED:{path.name}")
+    return manifest
 
-    if manifest.get("market") != entry.get("market"):
-        raise InputError(f"MANIFEST_MARKET_INVENTORY_MISMATCH:{path.name}")
-    manifest_run_id = manifest.get("workflow_run_id")
-    inventory_run_id = entry.get("run_id")
-    if isinstance(manifest_run_id, (str, int)) and isinstance(
-        inventory_run_id, (str, int)
-    ):
-        try:
-            run_id_matches = int(manifest_run_id) == int(inventory_run_id)
-        except ValueError:
-            run_id_matches = False
-    else:
-        run_id_matches = False
-    if not run_id_matches:
-        raise InputError(f"MANIFEST_RUN_ID_MISMATCH:{path.name}")
 
-    if manifest.get("market") != expected_market:
-        return manifest, [], []
+def _read_csv_rows(
+    archive: zipfile.ZipFile, files_meta: dict[str, Any], filename: str
+) -> tuple[list[str] | None, list[dict[str, str]]]:
+    contents = archive.read(filename)
+    meta = files_meta.get(filename)
+    if not isinstance(meta, dict):
+        raise InputError(f"MANIFEST_FILE_METADATA_MISSING:{filename}")
+    if meta.get("sha256") != _sha256(contents) or meta.get("bytes") != len(contents):
+        raise InputError(f"CSV_INTEGRITY_MISMATCH:{filename}")
+    with io.TextIOWrapper(io.BytesIO(contents), encoding="utf-8", newline="") as stream:
+        reader = csv.DictReader(stream)
+        rows = list(reader)
+        fieldnames = reader.fieldnames
+    if meta.get("records") != len(rows):
+        raise InputError(f"CSV_RECORD_COUNT_MISMATCH:{filename}")
+    return fieldnames, rows
 
-    files_meta = manifest.get("files")
-    if not isinstance(files_meta, dict):
-        raise InputError(f"MANIFEST_FILES_MISSING:{path.name}")
 
+def _parse_orderbook_rows(
+    rows: list[dict[str, str]], fieldnames: list[str] | None, path: Path
+) -> list[Snapshot]:
+    if not fieldnames or not BOOK_FIELDS.issubset(set(fieldnames)):
+        raise InputError("ORDERBOOK_SCHEMA_MISMATCH")
     snapshots: list[Snapshot] = []
-    gaps: list[tuple[int, int]] = []
-    for filename in ("orderbook.csv", "trades.csv", "gaps.csv"):
-        contents = archive.read(filename)
-        meta = files_meta.get(filename)
-        if not isinstance(meta, dict):
-            raise InputError(f"MANIFEST_FILE_METADATA_MISSING:{filename}")
-        if meta.get("sha256") != _sha256(contents) or meta.get("bytes") != len(
-            contents
-        ):
-            raise InputError(f"CSV_INTEGRITY_MISMATCH:{filename}")
-        with io.TextIOWrapper(
-            io.BytesIO(contents), encoding="utf-8", newline=""
-        ) as stream:
-            reader = csv.DictReader(stream)
-            rows = list(reader)
-            if meta.get("records") != len(rows):
-                raise InputError(f"CSV_RECORD_COUNT_MISMATCH:{filename}")
-            if filename == "orderbook.csv":
-                if not reader.fieldnames or not BOOK_FIELDS.issubset(
-                    set(reader.fieldnames)
-                ):
-                    raise InputError("ORDERBOOK_SCHEMA_MISMATCH")
-                for row in rows:
-                    timestamp = int(row["exchange_timestamp_ms"])
-                    mid, features = compute_features(row)
-                    snapshots.append(Snapshot(timestamp, mid, features))
-            elif filename == "gaps.csv":
-                for row in rows:
-                    if row.get("stream") != "orderbook":
-                        continue
-                    start = (
-                        int(row["gap_start_ms"])
-                        if row.get("gap_start_ms")
-                        else _parse_utc_ms(row["gap_start_utc"])
-                    )
-                    end = (
-                        int(row["gap_end_ms"])
-                        if row.get("gap_end_ms")
-                        else _parse_utc_ms(row["gap_end_utc"])
-                    )
-                    if end < start:
-                        raise InputError("GAP_INTERVAL_REVERSED")
-                    gaps.append((start, end))
+    for row in rows:
+        try:
+            timestamp = int(row["exchange_timestamp_ms"])
+        except (KeyError, ValueError, TypeError) as exc:
+            raise InputError("ORDERBOOK_TIMESTAMP_INVALID") from exc
+        mid, features = compute_features(row)
+        snapshots.append(Snapshot(timestamp, mid, features))
+    _validate_orderbook_timestamps(snapshots, path)
+    return snapshots
 
+
+def _validate_orderbook_timestamps(snapshots: list[Snapshot], path: Path) -> None:
     if not snapshots:
         raise InputError(f"ORDERBOOK_EMPTY:{path.name}")
     timestamps = [item.timestamp_ms for item in snapshots]
     if timestamps != sorted(timestamps) or len(set(timestamps)) != len(timestamps):
         raise InputError(f"ORDERBOOK_TIMESTAMPS_NOT_STRICTLY_INCREASING:{path.name}")
-    return manifest, snapshots, gaps
 
+
+def _gap_timestamp(row: dict[str, str], ms_field: str, utc_field: str) -> int:
+    if row.get(ms_field):
+        return int(row[ms_field])
+    return _parse_utc_ms(row[utc_field])
+
+
+def _parse_gap_rows(rows: list[dict[str, str]]) -> list[tuple[int, int]]:
+    gaps: list[tuple[int, int]] = []
+    for row in rows:
+        if row.get("stream") != "orderbook":
+            continue
+        start = _gap_timestamp(row, "gap_start_ms", "gap_start_utc")
+        end = _gap_timestamp(row, "gap_end_ms", "gap_end_utc")
+        if end < start:
+            raise InputError("GAP_INTERVAL_REVERSED")
+        gaps.append((start, end))
+    return gaps
+
+
+def _read_verified_archive(
+    path: Path, inventory: dict[str, Any], expected_market: str
+) -> tuple[dict[str, Any], list[Snapshot], list[tuple[int, int]]]:
+    raw_archive = path.read_bytes()
+    archive_sha = _sha256(raw_archive)
+    entry = inventory.get("artifacts_by_sha256", {}).get(archive_sha)
+    if not isinstance(entry, dict):
+        raise InputError(f"UNREGISTERED_ARCHIVE_SHA256:{path.name}")
+    try:
+        with zipfile.ZipFile(io.BytesIO(raw_archive)) as archive:
+            _validate_archive_layout(archive, path)
+            manifest = _read_manifest(archive, path)
+            _validate_manifest_identity(manifest, entry, path)
+            if manifest.get("market") != expected_market:
+                return manifest, [], []
+            files_meta = manifest.get("files")
+            if not isinstance(files_meta, dict):
+                raise InputError(f"MANIFEST_FILES_MISSING:{path.name}")
+            _read_csv_rows(archive, files_meta, "trades.csv")
+            book_fields, book_rows = _read_csv_rows(
+                archive, files_meta, "orderbook.csv"
+            )
+            _, gap_rows = _read_csv_rows(archive, files_meta, "gaps.csv")
+            snapshots = _parse_orderbook_rows(book_rows, book_fields, path)
+            gaps = _parse_gap_rows(gap_rows)
+    except zipfile.BadZipFile as exc:
+        raise InputError(f"ARCHIVE_NOT_VALID_ZIP:{path.name}") from exc
+    return manifest, snapshots, gaps
 
 def _window_crosses_gap(
     start_ms: int, end_ms: int, gaps: Sequence[tuple[int, int]]
@@ -240,63 +281,85 @@ def _window_crosses_gap(
     )
 
 
+EXCLUSION_REASONS = (
+    "no_past_snapshot",
+    "stale_feature_snapshot",
+    "no_future_snapshot",
+    "future_lag",
+    "gap_crossing",
+)
+
+
+def _past_snapshot(
+    timestamps: Sequence[int], snapshots: Sequence[Snapshot], grid: int
+) -> tuple[Snapshot | None, str | None]:
+    index = bisect.bisect_right(timestamps, grid) - 1
+    if index < 0:
+        return None, "no_past_snapshot"
+    past = snapshots[index]
+    if grid - past.timestamp_ms > STALE_MAX_MS:
+        return None, "stale_feature_snapshot"
+    return past, None
+
+
+def _future_snapshot(
+    timestamps: Sequence[int], snapshots: Sequence[Snapshot], target_time: int
+) -> tuple[Snapshot | None, str | None]:
+    index = bisect.bisect_left(timestamps, target_time)
+    if index >= len(snapshots):
+        return None, "no_future_snapshot"
+    future = snapshots[index]
+    if future.timestamp_ms - target_time > FUTURE_TOLERANCE_MS:
+        return None, "future_lag"
+    return future, None
+
+
+def _candidate_sample(
+    timestamps: Sequence[int],
+    snapshots: Sequence[Snapshot],
+    gaps: Sequence[tuple[int, int]],
+    grid: int,
+    horizon_ms: int,
+) -> tuple[Snapshot | None, Snapshot | None, str | None]:
+    past, reason = _past_snapshot(timestamps, snapshots, grid)
+    if reason is not None:
+        return None, None, reason
+    future, reason = _future_snapshot(timestamps, snapshots, grid + horizon_ms)
+    if reason is not None:
+        return None, None, reason
+    assert past is not None and future is not None
+    if _window_crosses_gap(past.timestamp_ms, future.timestamp_ms, gaps):
+        return None, None, "gap_crossing"
+    return past, future, None
+
+
 def _samples_for_horizon(
     snapshots: Sequence[Snapshot],
     gaps: Sequence[tuple[int, int]],
     horizon_ms: int,
 ) -> tuple[dict[str, list[float]], list[float], dict[str, int]]:
     timestamps = [item.timestamp_ms for item in snapshots]
-    first = timestamps[0]
-    last = timestamps[-1]
+    first, last = timestamps[0], timestamps[-1]
     grid = ((first + horizon_ms - 1) // horizon_ms) * horizon_ms
     pairs: dict[str, list[float]] = {name: [] for name in FEATURES}
     targets: list[float] = []
-    excluded = {
-        "no_past_snapshot": 0,
-        "stale_feature_snapshot": 0,
-        "no_future_snapshot": 0,
-        "future_lag": 0,
-        "gap_crossing": 0,
-    }
-
+    excluded = {reason: 0 for reason in EXCLUSION_REASONS}
     while grid + horizon_ms <= last + FUTURE_TOLERANCE_MS:
-        past_index = bisect.bisect_right(timestamps, grid) - 1
-        if past_index < 0:
-            excluded["no_past_snapshot"] += 1
-            grid += horizon_ms
-            continue
-        past = snapshots[past_index]
-        if grid - past.timestamp_ms > STALE_MAX_MS:
-            excluded["stale_feature_snapshot"] += 1
-            grid += horizon_ms
-            continue
-
-        target_time = grid + horizon_ms
-        future_index = bisect.bisect_left(timestamps, target_time)
-        if future_index >= len(snapshots):
-            excluded["no_future_snapshot"] += 1
-            grid += horizon_ms
-            continue
-        future = snapshots[future_index]
-        if future.timestamp_ms - target_time > FUTURE_TOLERANCE_MS:
-            excluded["future_lag"] += 1
-            grid += horizon_ms
-            continue
-        if _window_crosses_gap(past.timestamp_ms, future.timestamp_ms, gaps):
-            excluded["gap_crossing"] += 1
-            grid += horizon_ms
-            continue
-
-        target = math.log(future.mid / past.mid) * 10_000.0
-        if not math.isfinite(target):
-            raise InputError("NONFINITE_FORWARD_RETURN")
-        targets.append(target)
-        for name in FEATURES:
-            pairs[name].append(past.features[name])
+        past, future, reason = _candidate_sample(
+            timestamps, snapshots, gaps, grid, horizon_ms
+        )
+        if reason is not None:
+            excluded[reason] += 1
+        else:
+            assert past is not None and future is not None
+            target = math.log(future.mid / past.mid) * 10_000.0
+            if not math.isfinite(target):
+                raise InputError("NONFINITE_FORWARD_RETURN")
+            targets.append(target)
+            for name in FEATURES:
+                pairs[name].append(past.features[name])
         grid += horizon_ms
-
     return pairs, targets, excluded
-
 
 def _rank(values: Sequence[float]) -> list[float]:
     order = sorted(range(len(values)), key=lambda index: values[index])
@@ -406,16 +469,15 @@ def correlation_summary(x: Sequence[float], y: Sequence[float]) -> dict[str, Any
     }
 
 
-def analyze_archives(
+def _collect_verified_segments(
     archive_paths: Sequence[Path],
-    inventory_path: Path = DEFAULT_INVENTORY,
-    expected_market: str = "BTCUSDT",
-) -> dict[str, Any]:
-    inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
-    expected = inventory.get("expected_archive_count")
-    if len(archive_paths) != expected:
-        raise InputError(f"EXPECTED_{expected}_ARCHIVES_GOT_{len(archive_paths)}")
-
+    inventory: dict[str, Any],
+    expected_market: str,
+) -> tuple[
+    list[dict[str, Any]],
+    set[str],
+    list[tuple[dict[str, Any], list[Snapshot], list[tuple[int, int]]]],
+]:
     segments: list[dict[str, Any]] = []
     actual_markets: set[str] = set()
     loaded: list[tuple[dict[str, Any], list[Snapshot], list[tuple[int, int]]]] = []
@@ -430,12 +492,11 @@ def analyze_archives(
         seen_hashes.add(archive_hash)
         actual_market = str(manifest.get("market", "UNKNOWN"))
         actual_markets.add(actual_market)
+        entry = inventory["artifacts_by_sha256"][archive_hash]
         segments.append(
             {
                 "run_id": manifest.get("workflow_run_id"),
-                "artifact_id": inventory["artifacts_by_sha256"][archive_hash][
-                    "artifact_id"
-                ],
+                "artifact_id": entry["artifact_id"],
                 "market": actual_market,
                 "capture_status": manifest.get("capture_status"),
                 "orderbook_rows": manifest.get("record_counts", {}).get("orderbook"),
@@ -444,11 +505,15 @@ def analyze_archives(
             }
         )
         loaded.append((manifest, snapshots, gaps))
-
     if len(seen_hashes) != len(inventory.get("artifacts_by_sha256", {})):
         raise InputError("ARCHIVE_INVENTORY_SET_MISMATCH")
+    return segments, actual_markets, loaded
 
-    base_report: dict[str, Any] = {
+
+def _base_report(
+    expected_market: str, segments: list[dict[str, Any]], actual_markets: set[str]
+) -> dict[str, Any]:
+    return {
         "study": "M8_ORDER_BOOK_MICROSTRUCTURE_CORRELATION",
         "expected_market": expected_market,
         "actual_markets": sorted(actual_markets),
@@ -471,28 +536,26 @@ def analyze_archives(
         },
     }
 
-    if actual_markets != {expected_market}:
-        base_report.update(
-            {
-                "status": "BLOCKED_MARKET_MISMATCH",
-                "correlation_status": "NOT_COMPUTED",
-                "correlations": {},
-                "decision": "NEW_BTCUSDT_CAPTURE_REQUIRED",
-                "decision_note": (
-                    f"Input market(s) {sorted(actual_markets)} do not match {expected_market}; "
-                    "no cross-market inference or correlation calculation was performed."
-                ),
-            }
-        )
-        return base_report
 
+def _aggregate_segment_samples(
+    loaded: list[tuple[dict[str, Any], list[Snapshot], list[tuple[int, int]]]]
+) -> tuple[
+    dict[str, dict[str, list[float]]],
+    dict[str, list[float]],
+    dict[str, dict[str, int]],
+    list[dict[str, Any]],
+]:
     pooled: dict[str, dict[str, list[float]]] = {
         horizon: {feature: [] for feature in FEATURES} for horizon in HORIZONS_MS
     }
-    pooled_targets: dict[str, list[float]] = {horizon: [] for horizon in HORIZONS_MS}
-    excluded_by_horizon: dict[str, dict[str, int]] = {}
+    pooled_targets: dict[str, list[float]] = {
+        horizon: [] for horizon in HORIZONS_MS
+    }
+    excluded_by_horizon = {
+        horizon: {reason: 0 for reason in EXCLUSION_REASONS}
+        for horizon in HORIZONS_MS
+    }
     per_segment: list[dict[str, Any]] = []
-
     for manifest, snapshots, gaps in loaded:
         segment_report: dict[str, Any] = {
             "run_id": manifest.get("workflow_run_id"),
@@ -509,46 +572,83 @@ def analyze_archives(
             for feature in FEATURES:
                 pooled[horizon_name][feature].extend(feature_pairs[feature])
             pooled_targets[horizon_name].extend(targets)
-            if horizon_name not in excluded_by_horizon:
-                excluded_by_horizon[horizon_name] = {key: 0 for key in excluded}
-            for key, value in excluded.items():
-                excluded_by_horizon[horizon_name][key] += value
+            for reason, count in excluded.items():
+                excluded_by_horizon[horizon_name][reason] += count
         per_segment.append(segment_report)
+    return pooled, pooled_targets, excluded_by_horizon, per_segment
 
+
+def _feature_correlation_result(
+    feature_values: list[float], targets: list[float], n_tests: int
+) -> dict[str, Any]:
+    result = correlation_summary(feature_values, targets)
+    for method, p_key in (
+        ("pearson", "pearson_p_two_sided"),
+        ("spearman", "spearman_p_two_sided"),
+    ):
+        raw_p = result[p_key]
+        result[f"{method}_p_bonferroni_8_tests"] = (
+            min(1.0, raw_p * n_tests) if raw_p is not None else None
+        )
+    adjusted_pearson = result["pearson_p_bonferroni_8_tests"]
+    result["pearson_significant_after_bonferroni"] = bool(
+        adjusted_pearson is not None and adjusted_pearson < ALPHA
+    )
+    return result
+
+
+def _all_correlations(
+    pooled: dict[str, dict[str, list[float]]],
+    pooled_targets: dict[str, list[float]],
+) -> dict[str, Any]:
     correlations: dict[str, Any] = {}
     n_tests = len(FEATURES) * len(HORIZONS_MS)
     for horizon_name in HORIZONS_MS:
         correlations[horizon_name] = {}
         for feature in FEATURES:
-            result = correlation_summary(
-                pooled[horizon_name][feature], pooled_targets[horizon_name]
+            correlations[horizon_name][feature] = _feature_correlation_result(
+                pooled[horizon_name][feature], pooled_targets[horizon_name], n_tests
             )
-            for method, p_key in (
-                ("pearson", "pearson_p_two_sided"),
-                ("spearman", "spearman_p_two_sided"),
-            ):
-                raw_p = result[p_key]
-                result[f"{method}_p_bonferroni_8_tests"] = (
-                    min(1.0, raw_p * n_tests) if raw_p is not None else None
-                )
-            adj_p = result["pearson_p_bonferroni_8_tests"]
-            result["pearson_significant_after_bonferroni"] = bool(
-                adj_p is not None and adj_p < ALPHA
-            )
-            correlations[horizon_name][feature] = result
+    return correlations
 
-    obi_results = {
-        horizon: correlations[horizon]["obi_top5"] for horizon in HORIZONS_MS
-    }
-    any_obi_significant = any(
+
+def _obi_signal_found(correlations: dict[str, Any]) -> bool:
+    return any(
         item["pearson_significant_after_bonferroni"]
         or (
             item["spearman_p_bonferroni_8_tests"] is not None
             and item["spearman_p_bonferroni_8_tests"] < ALPHA
         )
-        for item in obi_results.values()
+        for item in (correlations[horizon]["obi_top5"] for horizon in HORIZONS_MS)
     )
-    base_report.update(
+
+
+def _blocked_market_report(
+    report: dict[str, Any], actual_markets: set[str], expected_market: str
+) -> dict[str, Any]:
+    report.update(
+        {
+            "status": "BLOCKED_MARKET_MISMATCH",
+            "correlation_status": "NOT_COMPUTED",
+            "correlations": {},
+            "decision": "NEW_BTCUSDT_CAPTURE_REQUIRED",
+            "decision_note": (
+                f"Input market(s) {sorted(actual_markets)} do not match {expected_market}; "
+                "no cross-market inference or correlation calculation was performed."
+            ),
+        }
+    )
+    return report
+
+
+def _completed_market_report(
+    report: dict[str, Any],
+    correlations: dict[str, Any],
+    per_segment: list[dict[str, Any]],
+    excluded: dict[str, dict[str, int]],
+) -> dict[str, Any]:
+    signal_found = _obi_signal_found(correlations)
+    report.update(
         {
             "status": "ANALYZED",
             "correlation_status": "COMPUTED",
@@ -559,26 +659,45 @@ def analyze_archives(
                 "gap_policy": "reject any sample whose feature-to-target interval intersects an explicit orderbook gap",
                 "segment_policy": "process each artifact separately; never stitch capture segments",
                 "returns": "10,000 * ln(mid[t+h] / mid[t])",
-                "multiple_testing": f"Bonferroni correction across {n_tests} feature-horizon tests separately for Pearson and Spearman",
+                "multiple_testing": "Bonferroni correction across eight feature-horizon tests separately for Pearson and Spearman",
             },
             "per_segment": per_segment,
-            "excluded_samples": excluded_by_horizon,
+            "excluded_samples": excluded,
             "correlations": correlations,
             "decision": (
                 "OBI_CORRELATION_SIGNAL_FOUND"
-                if any_obi_significant
+                if signal_found
                 else "NO_SIGNIFICANT_OBI_CORRELATION"
             ),
             "decision_note": (
                 "At least one OBI horizon is significant after the family-wise Bonferroni correction."
-                if any_obi_significant
+                if signal_found
                 else "Neither OBI horizon is significant after the family-wise Bonferroni correction."
             ),
             "caveat": "Exploratory correlation is not evidence of tradable edge, causality, or post-cost profitability.",
         }
     )
-    return base_report
+    return report
 
+
+def analyze_archives(
+    archive_paths: Sequence[Path],
+    inventory_path: Path = DEFAULT_INVENTORY,
+    expected_market: str = "BTCUSDT",
+) -> dict[str, Any]:
+    inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
+    expected_count = inventory.get("expected_archive_count")
+    if len(archive_paths) != expected_count:
+        raise InputError(f"EXPECTED_{expected_count}_ARCHIVES_GOT_{len(archive_paths)}")
+    segments, actual_markets, loaded = _collect_verified_segments(
+        archive_paths, inventory, expected_market
+    )
+    report = _base_report(expected_market, segments, actual_markets)
+    if actual_markets != {expected_market}:
+        return _blocked_market_report(report, actual_markets, expected_market)
+    pooled, pooled_targets, excluded, per_segment = _aggregate_segment_samples(loaded)
+    correlations = _all_correlations(pooled, pooled_targets)
+    return _completed_market_report(report, correlations, per_segment, excluded)
 
 def main() -> int:
     parser = argparse.ArgumentParser(
