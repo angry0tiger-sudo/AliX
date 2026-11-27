@@ -1178,7 +1178,34 @@ def _baseline_report(folds: Sequence[FoldOutput]) -> dict[str, Any]:
     return report
 
 
-def run_evaluation() -> tuple[dict[str, Any], list[dict[str, Any]]]:
+
+@dataclass(frozen=True)
+class EvaluationInputs:
+    config: dict[str, Any]
+    prereg_sha: str
+    candles: list[Candle]
+    source_manifest: dict[str, Any]
+    sentiment_records: list[Mapping[str, object]]
+    sentiment_manifest: dict[str, Any]
+    decision_times: list[str]
+    sentiment_values: NDArray[Any]
+    sentiment_available: list[str | None]
+    sentiment_observations: list[str | None]
+    sentiment_ages: NDArray[Any]
+    price_features: NDArray[Any]
+    features: NDArray[Any]
+    eligible_indices: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class HorizonOutput:
+    trials: dict[str, Any]
+    baselines: dict[str, Any]
+    predictions: tuple[dict[str, Any], ...]
+    fold_plan_records: tuple[dict[str, Any], ...]
+
+
+def _prepare_evaluation_inputs() -> EvaluationInputs:
     config, prereg_sha = load_preregistration()
     if sklearn.__version__ != "1.9.0":
         raise RuntimeError("m5_2_sklearn_version_mismatch")
@@ -1188,182 +1215,308 @@ def run_evaluation() -> tuple[dict[str, Any], list[dict[str, Any]]]:
         (row.start + timedelta(hours=1)).isoformat().replace("+00:00", "Z")
         for row in candles
     ]
-    sentiment, available, observations, ages = align_sentiment(
-        sentiment_records, decision_times
-    )
+    aligned = align_sentiment(sentiment_records, decision_times)
+    sentiment, available, observations, ages = aligned
     price_features = build_price_features(candles)
     features = np.column_stack((price_features, sentiment))
-    eligible = [
-        index for index in range(len(candles)) if np.isfinite(features[index]).all()
-    ]
+    eligible = tuple(
+        index
+        for index in range(len(candles))
+        if np.isfinite(features[index]).all()
+    )
     if not eligible:
         raise ValueError("m5_2_no_common_paired_samples")
-    all_trials: dict[str, Any] = {}
-    baselines: dict[str, Any] = {}
-    prediction_rows: list[dict[str, Any]] = []
-    fold_plan_report: dict[str, Any] = {}
-    for horizon in HORIZONS:
-        returns = np.full(len(candles), np.nan, dtype=np.float64)
-        labels = np.zeros(len(candles), dtype=np.int64)
-        for index in range(len(candles) - horizon):
-            gross = candles[index + horizon].close / candles[index + 1].open - 1.0
-            returns[index] = gross
-            labels[index] = int(gross > 0.0)
-        valid_labels = np.isfinite(returns)
-        plans = build_fold_plans(eligible, valid_labels.tolist(), horizon)
-        fold_outputs = [
-            _evaluate_fold(
-                candles,
-                features,
-                labels,
-                returns,
-                plan,
-                horizon,
-                decision_times,
-                sentiment,
-                available,
-                observations,
-                ages,
-                config,
-            )
-            for plan in plans
-        ]
-        prediction_rows.extend(row for fold in fold_outputs for row in fold.predictions)
-        for arm in ARMS:
-            trial = _build_trial(arm, horizon, fold_outputs, config)
-            all_trials[trial["trial_id"]] = trial
-        baselines[str(horizon)] = _baseline_report(fold_outputs)
-        fold_plan_report[str(horizon)] = [
-            {
-                "fold_id": plan.fold_id,
-                "first_test_index": plan.first_test_index,
-                "last_test_index": plan.last_test_index,
-                "train_rows_after_purge": len(plan.train_indices),
-                "test_rows_after_horizon_rule": len(plan.test_indices),
-                "purged_train_rows": plan.purged_train_rows,
-                "excluded_test_rows": plan.excluded_test_rows,
-            }
-            for plan in plans
-        ]
-    paired = _paired_comparisons(all_trials)
-    overall = _overall_verdict(all_trials, paired)
-    warmup_excluded = sum(1 for row in price_features if not np.isfinite(row).all())
-    no_prior = sum(
-        1
-        for i in range(len(candles))
-        if np.isfinite(price_features[i]).all() and not math.isfinite(sentiment[i])
+    return EvaluationInputs(
+        config=config,
+        prereg_sha=prereg_sha,
+        candles=candles,
+        source_manifest=source_manifest,
+        sentiment_records=sentiment_records,
+        sentiment_manifest=sentiment_manifest,
+        decision_times=decision_times,
+        sentiment_values=sentiment,
+        sentiment_available=available,
+        sentiment_observations=observations,
+        sentiment_ages=ages,
+        price_features=price_features,
+        features=features,
+        eligible_indices=eligible,
     )
-    source_lock_sha = sha256_bytes(DATA_LOCK_PATH.read_bytes())
-    report = {
+
+
+def _build_horizon_targets(
+    candles: Sequence[Candle], horizon: int
+) -> tuple[NDArray[Any], NDArray[Any], list[bool]]:
+    returns = np.full(len(candles), np.nan, dtype=np.float64)
+    labels = np.zeros(len(candles), dtype=np.int64)
+    for index in range(len(candles) - horizon):
+        gross = candles[index + horizon].close / candles[index + 1].open - 1.0
+        returns[index] = gross
+        labels[index] = int(gross > 0.0)
+    valid_labels = np.isfinite(returns).tolist()
+    return returns, labels, valid_labels
+
+
+def _fold_plan_record(plan: FoldPlan) -> dict[str, Any]:
+    return {
+        "fold_id": plan.fold_id,
+        "first_test_index": plan.first_test_index,
+        "last_test_index": plan.last_test_index,
+        "train_rows_after_purge": len(plan.train_indices),
+        "test_rows_after_horizon_rule": len(plan.test_indices),
+        "purged_train_rows": plan.purged_train_rows,
+        "excluded_test_rows": plan.excluded_test_rows,
+    }
+
+
+def _evaluate_horizon(
+    inputs: EvaluationInputs, horizon: int
+) -> HorizonOutput:
+    returns, labels, valid_labels = _build_horizon_targets(
+        inputs.candles, horizon
+    )
+    plans = build_fold_plans(
+        inputs.eligible_indices, valid_labels, horizon
+    )
+    fold_outputs = [
+        _evaluate_fold(
+            inputs.candles,
+            inputs.features,
+            labels,
+            returns,
+            plan,
+            horizon,
+            inputs.decision_times,
+            inputs.sentiment_values,
+            inputs.sentiment_available,
+            inputs.sentiment_observations,
+            inputs.sentiment_ages,
+            inputs.config,
+        )
+        for plan in plans
+    ]
+    trial_results = {
+        trial["trial_id"]: trial
+        for trial in (
+            _build_trial(arm, horizon, fold_outputs, inputs.config)
+            for arm in ARMS
+        )
+    }
+    predictions = tuple(
+        row for fold in fold_outputs for row in fold.predictions
+    )
+    return HorizonOutput(
+        trials=trial_results,
+        baselines=_baseline_report(fold_outputs),
+        predictions=predictions,
+        fold_plan_records=tuple(_fold_plan_record(plan) for plan in plans),
+    )
+
+
+def _build_dataset_binding(inputs: EvaluationInputs) -> dict[str, Any]:
+    return {
+        "market": "BTCUSDT",
+        "venue": "Nobitex",
+        "timeframe": "1h",
+        "scope": "PRE_HACK_ONLY",
+        "row_count": len(inputs.candles),
+        "start_utc": inputs.source_manifest["start_utc"],
+        "end_utc": inputs.source_manifest["end_utc"],
+        "csv_sha256": OHLCV_SHA256,
+        "source_manifest_sha256": OHLCV_MANIFEST_SHA256,
+        "data_lock_sha256": sha256_bytes(DATA_LOCK_PATH.read_bytes()),
+        "missing_intervals": 0,
+        "confirmatory_holdout": False,
+    }
+
+
+def _build_sentiment_binding(inputs: EvaluationInputs) -> dict[str, Any]:
+    manifest_path = (
+        SENTIMENT_DIR
+        / str(inputs.config["sentiment_source"]["snapshot_manifest"])
+    )
+    return {
+        "provider": "Alternative.me Fear & Greed",
+        "raw_sha256": SENTIMENT_RAW_SHA256,
+        "normalized_sha256": SENTIMENT_NORMALIZED_SHA256,
+        "manifest_sha256": sha256_bytes(manifest_path.read_bytes()),
+        "record_count": len(inputs.sentiment_records),
+        "market_scope": inputs.sentiment_manifest["market_scope"],
+        "availability_policy": inputs.sentiment_manifest["availability_policy"],
+        "provider_supplies_historical_available_at": False,
+        "alignment": "latest_available_at_lte_decision_time_forward_fill",
+        "source_age_seconds": _source_age_summary(
+            inputs.sentiment_ages, inputs.sentiment_observations
+        ),
+        "effective_frequency": "daily, hourly repetitions are dependent observations",
+    }
+
+
+def _build_paired_sample_report(inputs: EvaluationInputs) -> dict[str, Any]:
+    warmup_excluded = sum(
+        1 for row in inputs.price_features if not np.isfinite(row).all()
+    )
+    no_prior_sentiment = sum(
+        1
+        for index in range(len(inputs.candles))
+        if np.isfinite(inputs.price_features[index]).all()
+        and not math.isfinite(inputs.sentiment_values[index])
+    )
+    return {
+        "raw_ohlcv_rows": len(inputs.candles),
+        "ohlcv_warmup_rows_excluded": warmup_excluded,
+        "rows_without_prior_available_sentiment_excluded_from_both_arms": no_prior_sentiment,
+        "common_paired_rows": len(inputs.eligible_indices),
+        "same_rows_labels_folds_costs_and_position_sizing": True,
+        "decision": "completed candle close(t)",
+        "entry": "open(t+1)",
+        "exit": "close(t+h)",
+    }
+
+
+def _build_fold_protocol_report(
+    inputs: EvaluationInputs, fold_records: dict[str, list[dict[str, Any]]]
+) -> dict[str, Any]:
+    return {
+        "scheme": inputs.config["walk_forward_protocol"]["scheme"],
+        "block_construction": inputs.config["walk_forward_protocol"]["block_construction"],
+        "folds": fold_records,
+        "train_purge": "label exit close must be strictly before first test decision timestamp",
+        "test_boundary": "label exit close must be inside the same test block",
+    }
+
+
+def _count_successful_fits(trials: dict[str, Any]) -> int:
+    return sum(
+        1
+        for trial in trials.values()
+        for fold in trial["folds"]
+        if fold["fit_status"] == "EVALUATED"
+    )
+
+
+def _build_model_report(
+    inputs: EvaluationInputs, trials: dict[str, Any]
+) -> dict[str, Any]:
+    config = inputs.config
+    return {
+        "estimator": config["model"]["estimator"],
+        "pipeline": config["model"]["pipeline"],
+        "parameters": config["model"]["parameters"],
+        "threshold": 0.5,
+        "sklearn_version": sklearn.__version__,
+        "scaler_fit_on_training_fold_only": True,
+        "fit_count": _count_successful_fits(trials),
+    }
+
+
+def _sentiment_absolute_gates_passed(trials: dict[str, Any]) -> bool:
+    for horizon in HORIZONS:
+        trial_id = (
+            f"NOBITEX-M5-2-{horizon}h-SENTIMENT-LR-AUGMENTED-01"
+        )
+        for cost_name in COST_NAMES:
+            result = trials[trial_id]["cost_scenarios"][cost_name]
+            if not result["absolute_gates_passed"]:
+                return False
+    return True
+
+
+def _paired_incremental_value_passed(paired: dict[str, Any]) -> bool:
+    return all(
+        paired[str(horizon)][cost_name]["incremental_value_passed"]
+        for horizon in HORIZONS
+        for cost_name in COST_NAMES
+    )
+
+
+def _build_economic_acceptance(
+    trials: dict[str, Any], paired: dict[str, Any]
+) -> dict[str, Any]:
+    return {
+        "overall_verdict": _overall_verdict(trials, paired),
+        "sentiment_absolute_gates_passed": _sentiment_absolute_gates_passed(
+            trials
+        ),
+        "paired_incremental_value_passed": _paired_incremental_value_passed(
+            paired
+        ),
+        "first_economic_edge_claim_permitted": False,
+    }
+
+
+def _build_dsr_report() -> dict[str, str]:
+    return {
+        "status": "NOT_COMPUTABLE",
+        "GLOBAL_N": "UNKNOWN",
+        "GLOBAL_DSR": "NOT_COMPUTABLE",
+        "reason": "Complete historical hypothesis-family accounting and full distribution inputs are unavailable.",
+    }
+
+
+def _build_safety_report() -> dict[str, Any]:
+    return {
+        "new_data_acquisition": False,
+        "external_market_data_requests": 0,
+        "private_api_calls": 0,
+        "real_order_attempts": 0,
+        "paper_orders": 0,
+        "holdout_bytes_read": False,
+        "posthack_data_read": False,
+        "local_execution": False,
+        "exchange_network_access": False,
+        "Champion": None,
+        "order_permission": False,
+        "trading_authorization": "NO-GO",
+    }
+
+
+def _build_evaluation_report(
+    inputs: EvaluationInputs,
+    trials: dict[str, Any],
+    paired: dict[str, Any],
+    baselines: dict[str, Any],
+    fold_records: dict[str, list[dict[str, Any]]],
+) -> dict[str, Any]:
+    config = inputs.config
+    return {
         "schema_version": "alix.m5_2.evaluation-report.v1",
         "evaluation_status": "COMPLETED_REAL_PREHACK_RESEARCH",
         "phase": "M5.2",
         "preregistration_id": config["preregistration"]["id"],
-        "preregistration_sha256": prereg_sha,
-        "dataset_binding": {
-            "market": "BTCUSDT",
-            "venue": "Nobitex",
-            "timeframe": "1h",
-            "scope": "PRE_HACK_ONLY",
-            "row_count": len(candles),
-            "start_utc": source_manifest["start_utc"],
-            "end_utc": source_manifest["end_utc"],
-            "csv_sha256": OHLCV_SHA256,
-            "source_manifest_sha256": OHLCV_MANIFEST_SHA256,
-            "data_lock_sha256": source_lock_sha,
-            "missing_intervals": 0,
-            "confirmatory_holdout": False,
-        },
-        "sentiment_binding": {
-            "provider": "Alternative.me Fear & Greed",
-            "raw_sha256": SENTIMENT_RAW_SHA256,
-            "normalized_sha256": SENTIMENT_NORMALIZED_SHA256,
-            "manifest_sha256": sha256_bytes(
-                (
-                    SENTIMENT_DIR / str(config["sentiment_source"]["snapshot_manifest"])
-                ).read_bytes()
-            ),
-            "record_count": len(sentiment_records),
-            "market_scope": sentiment_manifest["market_scope"],
-            "availability_policy": sentiment_manifest["availability_policy"],
-            "provider_supplies_historical_available_at": False,
-            "alignment": "latest_available_at_lte_decision_time_forward_fill",
-            "source_age_seconds": _source_age_summary(ages, observations),
-            "effective_frequency": "daily, hourly repetitions are dependent observations",
-        },
-        "paired_sample": {
-            "raw_ohlcv_rows": len(candles),
-            "ohlcv_warmup_rows_excluded": warmup_excluded,
-            "rows_without_prior_available_sentiment_excluded_from_both_arms": no_prior,
-            "common_paired_rows": len(eligible),
-            "same_rows_labels_folds_costs_and_position_sizing": True,
-            "decision": "completed candle close(t)",
-            "entry": "open(t+1)",
-            "exit": "close(t+h)",
-        },
-        "fold_protocol": {
-            "scheme": config["walk_forward_protocol"]["scheme"],
-            "block_construction": config["walk_forward_protocol"]["block_construction"],
-            "folds": fold_plan_report,
-            "train_purge": "label exit close must be strictly before first test decision timestamp",
-            "test_boundary": "label exit close must be inside the same test block",
-        },
-        "model": {
-            "estimator": config["model"]["estimator"],
-            "pipeline": config["model"]["pipeline"],
-            "parameters": config["model"]["parameters"],
-            "threshold": 0.5,
-            "sklearn_version": sklearn.__version__,
-            "scaler_fit_on_training_fold_only": True,
-            "fit_count": sum(
-                1
-                for result in all_trials.values()
-                for fold in result["folds"]
-                if fold["fit_status"] == "EVALUATED"
-            ),
-        },
+        "preregistration_sha256": inputs.prereg_sha,
+        "dataset_binding": _build_dataset_binding(inputs),
+        "sentiment_binding": _build_sentiment_binding(inputs),
+        "paired_sample": _build_paired_sample_report(inputs),
+        "fold_protocol": _build_fold_protocol_report(inputs, fold_records),
+        "model": _build_model_report(inputs, trials),
         "cost_scenarios": config["portfolio_evaluation"]["cost_scenarios"],
-        "trial_results": all_trials,
+        "trial_results": trials,
         "paired_comparison": paired,
         "baselines_by_horizon": baselines,
-        "dsr": {
-            "status": "NOT_COMPUTABLE",
-            "GLOBAL_N": "UNKNOWN",
-            "GLOBAL_DSR": "NOT_COMPUTABLE",
-            "reason": "Complete historical hypothesis-family accounting and full distribution inputs are unavailable.",
-        },
-        "economic_acceptance": {
-            "overall_verdict": overall,
-            "sentiment_absolute_gates_passed": all(
-                all_trials[f"NOBITEX-M5-2-{h}h-SENTIMENT-LR-AUGMENTED-01"][
-                    "cost_scenarios"
-                ][c]["absolute_gates_passed"]
-                for h in HORIZONS
-                for c in COST_NAMES
-            ),
-            "paired_incremental_value_passed": all(
-                paired[str(h)][c]["incremental_value_passed"]
-                for h in HORIZONS
-                for c in COST_NAMES
-            ),
-            "first_economic_edge_claim_permitted": False,
-        },
-        "safety": {
-            "new_data_acquisition": False,
-            "external_market_data_requests": 0,
-            "private_api_calls": 0,
-            "real_order_attempts": 0,
-            "paper_orders": 0,
-            "holdout_bytes_read": False,
-            "posthack_data_read": False,
-            "local_execution": False,
-            "exchange_network_access": False,
-            "Champion": None,
-            "order_permission": False,
-            "trading_authorization": "NO-GO",
-        },
+        "dsr": _build_dsr_report(),
+        "economic_acceptance": _build_economic_acceptance(trials, paired),
+        "safety": _build_safety_report(),
     }
-    return report, prediction_rows
+
+
+def run_evaluation() -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    inputs = _prepare_evaluation_inputs()
+    trials: dict[str, Any] = {}
+    baselines: dict[str, Any] = {}
+    predictions: list[dict[str, Any]] = []
+    fold_records: dict[str, list[dict[str, Any]]] = {}
+    for horizon in HORIZONS:
+        result = _evaluate_horizon(inputs, horizon)
+        trials.update(result.trials)
+        baselines[str(horizon)] = result.baselines
+        predictions.extend(result.predictions)
+        fold_records[str(horizon)] = list(result.fold_plan_records)
+    paired = _paired_comparisons(trials)
+    report = _build_evaluation_report(
+        inputs, trials, paired, baselines, fold_records
+    )
+    return report, predictions
 
 
 def main() -> int:
