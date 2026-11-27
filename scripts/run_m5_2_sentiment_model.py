@@ -124,7 +124,7 @@ def _validate_market_scope(config: dict[str, Any]) -> None:
         raise ValueError("m5_2_quote_scope_mismatch")
     if tuple(targets["horizons"]) != HORIZONS:
         raise ValueError("m5_2_horizon_lock_mismatch")
-    if scope["decision_timeframe"] != "1h":
+    if scope["decision_timeframe"] != "1h completed OHLCV candles":
         raise ValueError("m5_2_decision_timeframe_mismatch")
 
 
@@ -876,7 +876,6 @@ def run_evaluation() -> tuple[dict[str, Any], list[dict[str, Any]]]:
         raise ValueError("m5_2_no_common_paired_samples")
     all_trials: dict[str, Any] = {}
     baselines: dict[str, Any] = {}
-    paired_folds: dict[int, list[FoldOutput]] = {}
     prediction_rows: list[dict[str, Any]] = []
     fold_plan_report: dict[str, Any] = {}
     for horizon in HORIZONS:
@@ -895,7 +894,6 @@ def run_evaluation() -> tuple[dict[str, Any], list[dict[str, Any]]]:
             )
             for plan in plans
         ]
-        paired_folds[horizon] = fold_outputs
         prediction_rows.extend(row for fold in fold_outputs for row in fold.predictions)
         for arm in ARMS:
             trial = _build_trial(arm, horizon, fold_outputs, config)
