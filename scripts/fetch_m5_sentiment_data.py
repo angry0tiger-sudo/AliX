@@ -216,9 +216,6 @@ def fetch_and_store(
     fetched_at: datetime | None = None,
 ) -> dict[str, object]:
     """Fetch all public observations and store one immutable snapshot."""
-    retrieval_time = fetched_at or datetime.now(timezone.utc)
-    _utc_datetime(retrieval_time, "fetched_at")
-
     if client is None:
         with httpx.Client(timeout=REQUEST_TIMEOUT, headers=REQUEST_HEADERS) as owned:
             response = owned.get(API_URL, params={"limit": 0})
@@ -233,6 +230,8 @@ def fetch_and_store(
     if not isinstance(payload_object, dict):
         raise ValueError("alternative_me_payload_not_object")
     payload = cast(Mapping[str, object], payload_object)
+    retrieval_time = fetched_at or datetime.now(timezone.utc)
+    _utc_datetime(retrieval_time, "fetched_at")
     return store_snapshot(response.content, payload, output_dir, retrieval_time)
 
 

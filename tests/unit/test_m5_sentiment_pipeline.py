@@ -9,7 +9,7 @@ from typing import Any
 import httpx
 import pytest
 
-from scripts.align_m5_sentiment import align_records
+from scripts.align_m5_sentiment import align_records, parse_aware_timestamp
 from scripts.fetch_m5_sentiment_data import (
     AVAILABILITY_POLICY,
     fetch_and_store,
@@ -174,8 +174,12 @@ def test_alignment_does_not_use_value_available_at_noon_for_ten_am_decision() ->
     assert aligned[0]["source_available_at"] == "2026-11-26T00:00:00Z"
     assert aligned[1]["feature_value"] == 70
     assert aligned[1]["source_available_at"] == "2026-11-27T12:00:00Z"
-    assert aligned[0]["source_available_at"] <= aligned[0]["decision_time"]
-    assert aligned[1]["source_available_at"] <= aligned[1]["decision_time"]
+    assert parse_aware_timestamp(
+        aligned[0]["source_available_at"], "source_available_at"
+    ) <= parse_aware_timestamp(aligned[0]["decision_time"], "decision_time")
+    assert parse_aware_timestamp(
+        aligned[1]["source_available_at"], "source_available_at"
+    ) <= parse_aware_timestamp(aligned[1]["decision_time"], "decision_time")
 
 
 @pytest.mark.parametrize("timeframe", ["1h", "4h"])
