@@ -17,11 +17,11 @@ from typing import Any, Sequence, cast
 import numpy as np
 from numpy.typing import NDArray
 from sklearn.ensemble import RandomForestClassifier  # type: ignore[import-untyped]
-from sklearn.metrics import (
+from sklearn.metrics import (  # type: ignore[import-untyped]
     accuracy_score,
     balanced_accuracy_score,
     confusion_matrix,
-)  # type: ignore[import-untyped]
+)
 import sklearn  # type: ignore[import-untyped]
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -496,7 +496,7 @@ def _resolve_event(
 def build_events(
     hourly: Sequence[Candle],
     decision_bars: Sequence[Candle],
-    atr_fraction: Sequence[float],
+    atr_fraction: NDArray[Any],
 ) -> list[Event | None]:
     events: list[Event | None] = [None] * len(decision_bars)
     for index in range(len(decision_bars) - 1):
@@ -529,12 +529,12 @@ def _training_fold_rows(
 def _test_fold_rows(
     candidates: Sequence[int], events: Sequence[Event | None], last_test_base: int
 ) -> tuple[int, ...]:
-    return tuple(
-        index
-        for index in candidates
-        if events[index] is not None
-        and events[index].max_end_base_index <= last_test_base
-    )
+    rows: list[int] = []
+    for index in candidates:
+        event = events[index]
+        if event is not None and event.max_end_base_index <= last_test_base:
+            rows.append(index)
+    return tuple(rows)
 
 
 def build_fold_plans(
