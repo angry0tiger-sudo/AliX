@@ -55,10 +55,12 @@ VOLUME_REJECTION_REASONS = (
     "volume_helper_returned_none",
 )
 
+
 def _rate_pct(count: int, denominator: int) -> float:
     if denominator <= 0:
         return 0.0
     return round(100.0 * count / denominator, 6)
+
 
 def inspect_beta_feature(
     asset_returns: np.ndarray,
@@ -82,6 +84,7 @@ def inspect_beta_feature(
         return None, "beta_output_nonfinite"
     return value, None
 
+
 def inspect_volume_feature(
     volume: np.ndarray,
     decision_index: int,
@@ -103,6 +106,7 @@ def inspect_volume_feature(
         return None, "volume_shock_output_nonfinite"
     return value, None
 
+
 def _feature_summary(
     valid_count: int,
     total_count: int,
@@ -119,6 +123,7 @@ def _feature_summary(
             reason: reasons.get(reason, 0) for reason in known_reasons
         },
     }
+
 
 def _collect_symbol_feature_flags(
     asset_returns: np.ndarray,
@@ -143,6 +148,7 @@ def _collect_symbol_feature_flags(
             volume_reasons[volume_reason] += 1
     return beta_flags, volume_flags, beta_reasons, volume_reasons
 
+
 def _flag_overlap_summary(
     beta_flags: Sequence[bool], volume_flags: Sequence[bool]
 ) -> dict[str, int]:
@@ -158,6 +164,7 @@ def _flag_overlap_summary(
             beta_ok and not volume_ok for beta_ok, volume_ok in pairs
         ),
     }
+
 
 def _inspect_symbol(
     symbol: str,
@@ -190,6 +197,7 @@ def _inspect_symbol(
         "_volume_flags": volume_flags,
     }
 
+
 def _other_features_valid(
     symbol: str,
     decision_index: int,
@@ -213,6 +221,7 @@ def _other_features_valid(
             target_simple_return,
         )
     )
+
 
 def _candidate_panel_summary(
     trial_id: str,
@@ -277,6 +286,7 @@ def _candidate_panel_summary(
         "total_panel_rejection_rate_pct": _rate_pct(rejected_rows, total_rows),
     }
 
+
 def _validate_g2_preregistration(config: Mapping[str, Any]) -> str:
     preregistration = config["preregistration"]
     if preregistration.get("revision") != "M7-CS-G2.0":
@@ -287,6 +297,7 @@ def _validate_g2_preregistration(config: Mapping[str, Any]) -> str:
         raise ValueError("m7_diagnostic_trial_count_mismatch")
     return str(preregistration["revision"])
 
+
 def _validate_g2_universes(config: Mapping[str, Any]) -> None:
     if tuple(config["data"]["candidate_symbol_priority"]) != EXPECTED_SYMBOLS:
         raise ValueError("m7_diagnostic_unexpected_symbol_priority")
@@ -295,6 +306,7 @@ def _validate_g2_universes(config: Mapping[str, Any]) -> None:
     }
     if registered_trials != dict(EXPECTED_TRIALS):
         raise ValueError("m7_diagnostic_trial_universe_mismatch")
+
 
 def _read_qualified_manifest(data_dir: Path) -> tuple[Path, dict[str, Any]]:
     manifest_path = data_dir / "m7_data_qualification.json"
@@ -308,6 +320,7 @@ def _read_qualified_manifest(data_dir: Path) -> tuple[Path, dict[str, Any]]:
         raise ValueError("m7_diagnostic_manifest_universe_mismatch")
     return manifest_path, manifest
 
+
 def _load_verified_diagnostic_data(
     data_dir: Path, btc_csv: Path
 ) -> dict[str, pd.DataFrame]:
@@ -317,6 +330,7 @@ def _load_verified_diagnostic_data(
     if len(data[BTC_SYMBOL]["timestamp"]) != EXPECTED_ROWS:
         raise ValueError("m7_diagnostic_btc_row_count_mismatch")
     return data
+
 
 def diagnose_m7_features(
     data_dir: Path,
@@ -382,6 +396,7 @@ def diagnose_m7_features(
         },
     }
 
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Diagnose M7 feature availability using immutable PRE-HACK data."
@@ -414,6 +429,7 @@ def main() -> int:
     )
     print(json.dumps(report, sort_keys=True, allow_nan=False))
     return 0
+
 
 
 if __name__ == "__main__":
