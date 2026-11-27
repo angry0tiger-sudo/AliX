@@ -12,3 +12,4 @@ Required gate: Standard CI must complete successfully for the exact parent prere
 Scope: PRE-HACK exploratory only; no Holdout/Post-Hack, private API, paper/real orders, or local execution. Champion=null; order_permission=false; trading_authorization=NO-GO.
 Only the preregistered next-four-hour target is evaluated. 1h is the candle sampling interval, not a separately registered forecast horizon.
 UTC date: 2026-11-27.
+G3.0 feature-only evaluation will be triggered after exact-parent Standard CI passes.
