@@ -137,7 +137,7 @@ def _inspect_symbol(
     beta_flags: list[bool] = []
     volume_flags: list[bool] = []
     beta_reasons: Counter[str] = Counter()
-    volume_reasons: Counter[str] = []
+    volume_reasons: Counter[str] = Counter()
 
     for index in decision_indices:
         beta_value, beta_reason = inspect_beta_feature(
