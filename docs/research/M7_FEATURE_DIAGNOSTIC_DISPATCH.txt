@@ -1,2 +1,3 @@
 One-shot free GitHub Actions bridge trigger for the workflow_dispatch-only M7 PRE-HACK feature diagnostic.
 Temporary bootstrap only; no acquisition, fitting, economic evaluation, or Holdout access.
+Dispatch retry after correcting Actions expression interpolation; diagnostic remains workflow_dispatch-only.
