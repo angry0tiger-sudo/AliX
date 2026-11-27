@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pytest
@@ -44,18 +44,17 @@ def make_hourly(count: int = 60) -> list[Candle]:
 
 def replace_candle(candles: list[Candle], index: int, **changes: Any) -> list[Candle]:
     updated = list(candles)
-    values = {
-        "timestamp": updated[index].timestamp,
-        "open": updated[index].open,
-        "high": updated[index].high,
-        "low": updated[index].low,
-        "close": updated[index].close,
-        "volume": updated[index].volume,
-        "base_start_index": updated[index].base_start_index,
-        "base_end_index": updated[index].base_end_index,
-    }
-    values.update(changes)
-    updated[index] = Candle(**values)
+    base = updated[index]
+    updated[index] = Candle(
+        timestamp=cast(datetime, changes.get("timestamp", base.timestamp)),
+        open=cast(float, changes.get("open", base.open)),
+        high=cast(float, changes.get("high", base.high)),
+        low=cast(float, changes.get("low", base.low)),
+        close=cast(float, changes.get("close", base.close)),
+        volume=cast(float, changes.get("volume", base.volume)),
+        base_start_index=cast(int, changes.get("base_start_index", base.base_start_index)),
+        base_end_index=cast(int, changes.get("base_end_index", base.base_end_index)),
+    )
     return updated
 
 
