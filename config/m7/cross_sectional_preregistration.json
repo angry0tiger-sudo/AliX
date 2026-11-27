@@ -4,12 +4,12 @@
   "preregistration": {
     "id": "ALIX-M7-NOBITEX-CROSS-SECTIONAL-G1",
     "phase": "M7",
-    "revision": "M7-CS-G1.2",
+    "revision": "M7-CS-G2.0",
     "status": "PREREGISTERED_LOCKED",
     "preregistered_utc_date": "2026-11-27",
     "branch": "research/nobitex-hf-strategy",
-    "owner_directive": "Owner selected R&D path B (cross-sectional multi-asset lead-lag rotation) on 2026-11-27.",
-    "scope": "Two logical candidates are fixed by eligible-universe size: a five-pair candidate using the first five symbols in the immutable priority list, and a ten-pair candidate using all ten symbols. BTCUSDT is a contextual predictor only and is not a target holding. Both use identical StandardScaler + Ridge(alpha=1.0), fixed features, next-four-hour log-return target, positive-score top-two long-only portfolio, fixed folds, costs and gates.",
+    "owner_directive": "Superseding project-lead decision under the Owner's M7 directive: proceed with the nine exact-history-qualified Nobitex USDT pairs; no duplicate symbol is introduced. Existing G1.2 runs remain archived as BLOCKED_DATA.",
+    "scope": "Two logical candidates are fixed by eligible-universe size: a five-pair candidate using the first five symbols in the immutable G2.0 priority list, and a nine-pair candidate using all nine symbols. BTCUSDT is a contextual predictor only and is never a target holding. Both candidates use identical StandardScaler + Ridge(alpha=1.0), fixed features, a next-four-hour log-return target, positive-score top-two long-only portfolio, fixed folds, costs and gates. Input candles are 1h; the sole forecast/holding horizon is 4h. No separate 1h forecast-horizon trial is registered.",
     "implementation_authorized": true,
     "model_training_authorized": true,
     "fit_authorized": true,
@@ -28,17 +28,20 @@
     "workflow_only_execution": true,
     "post_lock_tuning_allowed": false,
     "change_control": "Any change to asset priority, candidate universe, data boundaries or hashes, features, feature formula, model, target horizon, rebalancing, selection rule, weighting, folds, costs, purge/embargo, gate or trial count requires a new superseding preregistration before inspecting economic results. No threshold, universe, model, feature or parameter sweep is allowed.",
-    "p_hacking_guard": "Exactly two logical trials are registered, differentiated only by the predeclared five-symbol versus ten-symbol universe. Four folds, two costs, and multiple assets are evaluation dimensions, not additional candidate variants.",
+    "p_hacking_guard": "Exactly two G2.0 logical trials are registered, differentiated only by the predeclared five-symbol versus nine-symbol universe. G1.2 identities were blocked before model fitting/economic scoring and are retained as a separate archived execution. Four folds, two costs, and multiple assets are evaluation dimensions, not additional candidate variants.",
     "data_source_policy": "Only Nobitex public Spot UDF hourly OHLCV and the public market-stats endpoint are allowed. No credentials, private endpoint, external venue, synthetic fill, interpolation, backfill or symbol substitution.",
     "exploratory_status": "The existing PRE-HACK BTCUSDT and newly acquired matching PRE-HACK histories have been exposed for research purposes. These results are exploratory and cannot be presented as a fresh confirmatory holdout test.",
     "logical_trial_count": 2,
     "trial_ids": [
-      "NOBITEX-M7-5PAIR-RIDGE-TOP2-01",
-      "NOBITEX-M7-10PAIR-RIDGE-TOP2-01"
+      "NOBITEX-M7-5PAIR-RIDGE-TOP2-02",
+      "NOBITEX-M7-9PAIR-RIDGE-TOP2-01"
     ],
     "owner_selection_utc_date": "2026-11-27",
     "pre_evaluation_accounting_clarification": "Before any M7 fitting or economic outcome was observed, implementation review separated the locked log-return training target from simple-return execution PnL. Trading costs are subtracted in simple-return space, each asset loss is capped at 100% of notional, and PnL is compounded against current portfolio NAV. This is a mechanical accounting correction, not an outcome-driven strategy change. The immutable acquisition workflow also refuses to write into a non-empty M7 data directory; reruns cannot silently overwrite accepted CSVs.",
-    "pre_evaluation_nav_clarification": "Before any M7 fitting or economic output was observed, the continuous OOS portfolio NAV was specified to carry forward chronologically across the four expanding walk-forward test blocks; fold metrics use the NAV at the start of each fold and pooled OOS metrics compound the single sequential path. This prevents restarting capital at the beginning of each fold. It does not change the model, features, labels, universe, selection, costs or gates."
+    "pre_evaluation_nav_clarification": "Before any M7 fitting or economic output was observed, the continuous OOS portfolio NAV was specified to carry forward chronologically across the four expanding walk-forward test blocks; fold metrics use the NAV at the start of each fold and pooled OOS metrics compound the single sequential path. This prevents restarting capital at the beginning of each fold. It does not change the model, features, labels, universe, selection, costs or gates.",
+    "supersedes_revision": "M7-CS-G1.2",
+    "supersedes_preregistration_sha256": "44d6b9bd01c5c163f4e4f448a68c8cc91d060bd1a182c8e841c8a939a018f6b0",
+    "superseding_reason": "G1.2 was closed BLOCKED_DATA before any fitting or economic scoring because SOLUSDT supplied only 25,285/31,801 required hourly candles. XRPUSDT and DOGEUSDT were already members of the original universe and both fully qualify; duplicating either would reduce the number of unique assets. Under the owner-authorized nine-pair minimum, G2.0 removes only SOLUSDT and preregisters the exact nine complete assets."
   },
   "data": {
     "venue": "Nobitex",
@@ -59,7 +62,6 @@
       "ETHUSDT",
       "BNBUSDT",
       "ADAUSDT",
-      "SOLUSDT",
       "XRPUSDT",
       "DOGEUSDT",
       "TRXUSDT",
@@ -82,30 +84,57 @@
       "no_partial_history_or_pair_substitution": true,
       "unqualified_symbol_policy": "Record the exact reason in the acquisition manifest; do not impute or replace it. A candidate whose fixed required universe is incomplete is BLOCKED_DATA.",
       "immutable_artifacts": "One CSV and one JSON manifest per qualified symbol; each CSV SHA-256 is recorded in the aggregate data-qualification manifest."
+    },
+    "excluded_symbols": [
+      {
+        "symbol": "SOLUSDT",
+        "status": "REJECTED_DATA_QUALITY_OR_API",
+        "row_count": 25285,
+        "expected_rows": 31801,
+        "missing_intervals": 6516,
+        "first_missing_timestamp": 1635712200,
+        "last_missing_timestamp": 1659166200,
+        "disposition": "Excluded from G2.0 fixed universe; no interpolation, shortening, resampling, or backfill."
+      }
+    ],
+    "prior_qualification_manifest": {
+      "path": "data/nobitex/prehack/m7/m7_data_qualification.json",
+      "git_blob_sha": "f47a6968ab42dc9f578aeca1cd7aae4c7e555624",
+      "qualified_symbols": [
+        "ETHUSDT",
+        "BNBUSDT",
+        "ADAUSDT",
+        "XRPUSDT",
+        "DOGEUSDT",
+        "TRXUSDT",
+        "LTCUSDT",
+        "LINKUSDT",
+        "DOTUSDT"
+      ],
+      "common_grid": "Exact BTCUSDT PRE-HACK hourly timestamps; 31,801 rows per qualified symbol."
     }
   },
   "trials": [
     {
-      "trial_id": "NOBITEX-M7-5PAIR-RIDGE-TOP2-01",
+      "trial_id": "NOBITEX-M7-5PAIR-RIDGE-TOP2-02",
       "logical_candidate_number": 1,
-      "description": "Fixed five-pair universe: ETHUSDT, BNBUSDT, ADAUSDT, SOLUSDT, XRPUSDT.",
+      "description": "Fixed five-pair universe after removing only data-blocked SOLUSDT: ETHUSDT, BNBUSDT, ADAUSDT, XRPUSDT, DOGEUSDT.",
       "symbols": [
         "ETHUSDT",
         "BNBUSDT",
         "ADAUSDT",
-        "SOLUSDT",
-        "XRPUSDT"
+        "XRPUSDT",
+        "DOGEUSDT"
       ]
     },
     {
-      "trial_id": "NOBITEX-M7-10PAIR-RIDGE-TOP2-01",
+      "trial_id": "NOBITEX-M7-9PAIR-RIDGE-TOP2-01",
       "logical_candidate_number": 2,
-      "description": "Fixed ten-pair universe: all symbols in the immutable priority list.",
+      "description": "Fixed nine-pair universe containing every exact-history-qualified target symbol; all nine members of the G2.0 priority list.",
       "symbols": [
         "ETHUSDT",
         "BNBUSDT",
         "ADAUSDT",
-        "SOLUSDT",
         "XRPUSDT",
         "DOGEUSDT",
         "TRXUSDT",
@@ -219,7 +248,7 @@
   },
   "risk_controls": {
     "overfitting": "Only one model and one parameter set. No feature sweeps, alpha sweeps, universe substitutions, threshold tuning, or selecting the better of unregistered variants.",
-    "survivorship": "The eligible symbols are fixed before acquisition. A symbol absent, closed, or without the complete common history blocks the candidate; it is not replaced based on available history.",
+    "survivorship": "The nine eligible symbols are fixed before G2.0 fitting. SOLUSDT is excluded solely because the immutable public acquisition returned 25,285/31,801 rows with 6,516 missing intervals. No symbol is removed or added after economic outcomes; no replacement, partial history, or shortened window is allowed.",
     "lookahead": "All features are point-in-time at candle close. Labels use future opens only as outcomes. Purge and embargo are based on the four-hour label window.",
     "multiple_testing": "Exactly two preregistered candidate universes. All acquired symbols, failed data requests, missing feature rows and both cost scenarios are reported. GLOBAL_N remains UNKNOWN and GLOBAL_DSR remains NOT_COMPUTABLE unless the complete history is independently reconciled.",
     "data_integrity": "SHA-256 for all source CSVs, manifests and aggregate data qualification record; timestamp equality must be exact across BTC and each symbol.",
