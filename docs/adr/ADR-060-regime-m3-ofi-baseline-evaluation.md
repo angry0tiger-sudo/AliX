@@ -1,7 +1,7 @@
 
 # ADR-060 — Regime M3.5 OFI Baseline Walk-Forward Evaluation
 
-- **Status:** **NO-GO** — overall verdict **INSUFFICIENT_SAMPLE / NO-GO**
+- **Status:** **CLOSED — CLOSED_NO_GO (Owner-approved 2026-11-27)** — evaluation verdict **INSUFFICIENT_SAMPLE / NO-GO**
 - **Date:** 2026-11-27
 - **Branch:** research/nobitex-hf-strategy
 - **Evaluation commit:** 10c01b7988a87ca3e9ac0510a4f03e0d1260ee6b
@@ -201,3 +201,27 @@ The collector scripts/capture_nobitex_microstructure.py and preregistration conf
 ## 11. Frozen main integrity
 
 At the time ADR-060 was finalized, `refs/heads/main` remained at commit `cd9b13d42ac0cf0edd2df066ff81580e028146d6`. The root Tree SHA of that commit was independently read from the Git commit object as `5761c6c34143f8e6924f53a4e745c48932a5f791`, matching the previously frozen main Tree SHA. This ADR and its supporting documentation remain confined to `research/nobitex-hf-strategy`; no commit or file on `main` was changed.
+
+
+## 12. Owner-approved closure — 2026-11-27
+
+**Lifecycle decision: CLOSED. Canonical status: `CLOSED_NO_GO`.** The Owner explicitly approved Option A and closed the M3 OFI baseline path. This is a consensual project decision, not merely an automated evaluator label.
+
+The closure rationale is horizon-specific and must not be collapsed into a generic “17 trades” claim:
+
+- **1h:** 665 completed out-of-sample one-minute cohorts cleared the registered 100-cohort minimum, but NetPF was only 0.0734699215, net PnL was -7.9225%, and fold stability was 0/4. The evidence demonstrates no economic edge for this registered baseline; the 1h failure was not caused by low signal count.
+- **4h:** only WF-04 could be fitted; WF-01 had no training rows and WF-02/WF-03 each had a single training class. The trial completed 82 OOS cohorts, NetPF 0.2326940033, net PnL -0.1214%, and stability 0/4. This horizon is both economically unsuccessful and sample/training-data insufficient under the locked protocol.
+
+Accordingly, both registered M3 logical trials are now **`CLOSED_NO_GO`**. The M3 OFI path is closed on the existing 29h 10m 20.393s five-segment M1.6 dataset. No DeepLOB, Transformer, larger model, alternative estimator, feature expansion, threshold search, or other model complexity may be trained or tested on this dataset. No further M3 data collection is authorized by this closure. A materially new future research proposal would require a separate Owner decision and prospective preregistration; this ADR grants no such permission.
+
+The Owner-approved closure does **not** claim that all conceivable microstructure strategies are impossible. It records that these two registered OFI trials did not meet their economic gates and that this dataset cannot support the proposed higher-capacity follow-on work without unacceptable overfitting risk.
+
+### Final CI and repository integrity
+
+- Standard CI [Run #2591](https://github.com/angry0tiger-sudo/AliX/actions/runs/45942283970), head `a2eb76bbc0e083994df5d185eea348cb5eeb0231`: **SUCCESS**. All four jobs passed: `quality`, `four-arm-lock-bare-env`, `postgres-integration`, and `freqtrade-runtime-smoke`. The Quality job completed strict Mypy, Bandit, dependency/lock/audit checks, architecture and complexity gates, unit/coverage tests, synthetic E2E and fault-injection, and safety/documentation checks successfully.
+- Frozen `main` remains commit `cd9b13d42ac0cf0edd2df066ff81580e028146d6`, Tree SHA `5761c6c34143f8e6924f53a4e745c48932a5f791`.
+- Only this research branch's documentation is changed by the closure record. No source code, workflow, model, capture data, or `main` content is changed.
+
+### Safety closeout
+
+`Champion=null`; `order_permission=false`; `trading_authorization=NO-GO`; `private_api_calls=0`; `real_order_attempts=0`; `paper_orders=0`; `holdout_bytes_read=false`; `posthack_data_read=false`; `local_execution=false`. Holdout remains sealed.

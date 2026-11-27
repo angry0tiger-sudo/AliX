@@ -1,6 +1,6 @@
 # AliX Historical Trial Registry
 
-Status: INITIAL RECONCILIATION — family-level counts recorded; unresolved historical trial IDs remain UNKNOWN.
+Status: RECONCILED — family-level counts recorded; unresolved historical trial IDs remain UNKNOWN; current M3 OFI lifecycle is CLOSED_NO_GO.
 Last reconciled: 2026-11-27 UTC.
 Registry basis: immutable GitHub Actions run history and retained result artifacts. Counts below distinguish
 workflow executions, candidate variants, actually trained/evaluated candidates, and unique model/genome trials.
@@ -743,3 +743,29 @@ The evaluation artifact does **not** report 17 completed trades for either regis
 - `holdout_bytes_read=false`; `posthack_data_read=false`; `external_data_requests=0`; `local_execution=false`.
 - The five accepted M1.6 public artifacts only were used; the 90 bps registered round-trip friction assumption was preserved.
 - Final economic cohort decision: **INSUFFICIENT_SAMPLE / NO-GO**. Holdout remains sealed. Any later M4 proposal is a new owner-gated decision and is not authorized by this append.
+
+
+---
+
+## [APPEND] Regime M3 OFI G1 — Owner-approved lifecycle closure (2026-11-27)
+
+- **Owner decision:** Option A approved; the M3 OFI baseline family is formally closed.
+- **Current lifecycle status for both registered M3 logical trials: `CLOSED_NO_GO`.**
+- This closure supersedes the prior M3.5 evaluation labels for current lifecycle status. The preregistration rows above remain historical snapshots of the registration-time state; no earlier trial accounting or preregistration history is deleted.
+- **Reason:** no economic edge in the 1h registered baseline, plus inadequate fit/training sample and no economic pass at 4h. The two horizons failed their independent acceptance gates.
+
+| Trial ID | Horizon | Current status | Evaluation evidence | Closure basis |
+|---|---:|---|---|---|
+| `NOBITEX-M3-OFI-1h-LOGISTIC-BASELINE-01` | 1h | **CLOSED_NO_GO** | 665 cohorts; NetPF 0.0734699215; MaxDD 8.2759%; net PnL -7.9225%; stable folds 0/4 | Adequate cohort count, but no economic edge and no stable fold |
+| `NOBITEX-M3-OFI-4h-LOGISTIC-BASELINE-01` | 4h | **CLOSED_NO_GO** | 82 cohorts; NetPF 0.2326940033; MaxDD 0.7494%; net PnL -0.1214%; stable folds 0/4 | Insufficient training/evaluation sample under locked folds; only one fold fitted |
+
+### Scope and safety
+
+- M3 OFI is **CLOSED** on the existing five-segment M1.6 capture (29h 10m 20.393s). No DeepLOB, Transformer, higher-capacity model, alternate estimator, feature expansion, threshold optimization, or repeat attempt is permitted on this dataset.
+- No additional data collection is authorized by this closure. Any materially new research family or data-acquisition phase requires a separate prospective Owner decision and preregistration.
+- Holdout and Post-Hack remain sealed and unread. No access is granted.
+- `Champion=null`; `order_permission=false`; `trading_authorization=NO-GO`; `private_api_calls=0`; `real_order_attempts=0`; `paper_orders=0`; `local_execution=false`.
+- Standard CI [Run #2591 / 45942283970](https://github.com/angry0tiger-sudo/AliX/actions/runs/45942283970) completed **SUCCESS** on branch head `a2eb76bbc0e083994df5d185eea348cb5eeb0231`; all four jobs and all recorded steps passed.
+- Frozen `main` remains commit `cd9b13d42ac0cf0edd2df066ff81580e028146d6`, Tree SHA `5761c6c34143f8e6924f53a4e745c48932a5f791`.
+- This is a documentation-only lifecycle update. `GLOBAL_N=UNKNOWN` remains unchanged.
+
