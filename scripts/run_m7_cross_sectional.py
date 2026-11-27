@@ -12,14 +12,14 @@ from pathlib import Path
 import ssl
 import time
 from http.client import HTTPSConnection, HTTPException
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping, Sequence, cast
 from urllib.parse import urlencode
 
 import numpy as np
 import pandas as pd
-from sklearn.linear_model import Ridge
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import Ridge  # type: ignore[import-untyped]
+from sklearn.pipeline import Pipeline  # type: ignore[import-untyped]
+from sklearn.preprocessing import StandardScaler  # type: ignore[import-untyped]
 
 HOST = "apiv2.nobitex.ir"
 PREHACK_START = 1_635_712_200
@@ -134,7 +134,14 @@ def _candle_arrays(payload: Mapping[str, Any]) -> tuple[list[Any], ...]:
     sizes = {len(value) for value in arrays if isinstance(value, list)}
     if len(sizes) != 1:
         raise ValueError("m7_udf_array_length_mismatch")
-    return tuple(arrays)  # type: ignore[return-value]
+    return (
+        cast(list[Any], arrays[0]),
+        cast(list[Any], arrays[1]),
+        cast(list[Any], arrays[2]),
+        cast(list[Any], arrays[3]),
+        cast(list[Any], arrays[4]),
+        cast(list[Any], arrays[5]),
+    )
 
 
 def _fetch_one_page(symbol: str, start: int, end: int) -> dict[int, dict[str, Any]]:
@@ -378,7 +385,8 @@ def portfolio_interval_return(
         raw_return = float(realized_returns[symbol])
         if not math.isfinite(raw_return) or raw_return <= -1.0:
             raise ValueError(f"m7_invalid_realized_return:{symbol}")
-        trade_pnls.append(0.5 * (raw_return - cost_fraction))
+        net_return = max(-1.0, raw_return - cost_fraction)
+        trade_pnls.append(0.5 * net_return)
     return float(sum(trade_pnls)), trade_pnls
 
 
@@ -508,12 +516,15 @@ def build_panel(
                 continue
             relative_volume_shock = math.log1p(current_volume / median_volume)
             peer_median = float(np.median(peer_returns))
-            target = math.log(
-                open_by_symbol[symbol][decision_index + 5]
-                / open_by_symbol[symbol][decision_index + 1]
-            )
+            entry_open = float(open_by_symbol[symbol][decision_index + 1])
+            exit_open = float(open_by_symbol[symbol][decision_index + 5])
+            target = math.log(exit_open / entry_open)
+            realized_simple_return = exit_open / entry_open - 1.0
             features = (btc_return_4h, peer_median, beta, relative_volume_shock)
-            if not all(math.isfinite(value) for value in (*features, target)):
+            if not all(
+                math.isfinite(value)
+                for value in (*features, target, realized_simple_return)
+            ):
                 continue
             records.append(
                 {
@@ -525,6 +536,7 @@ def build_panel(
                     "beta_24h_to_btc": beta,
                     "relative_volume_shock_24h": relative_volume_shock,
                     "target_return_4h": target,
+                    "realized_simple_return_4h": realized_simple_return,
                 }
             )
     panel = pd.DataFrame.from_records(records)
@@ -571,22 +583,26 @@ def _evaluate_fold(
     trade_pnls: list[float] = []
     portfolio_returns: list[float] = []
     trades_by_symbol: dict[str, int] = {}
+    nav = 1.0
     for _, group in test_panel.groupby("decision_index", sort=True):
-        predictions = model.predict(group.loc[:, FEATURE_NAMES])
+        predictions = model.predict(group.loc[:, list(FEATURE_NAMES)])
         scores = {
             str(symbol): float(score)
             for symbol, score in zip(group["symbol"], predictions, strict=True)
         }
         selected = select_top_two(scores)
+        realized_symbols = group["symbol"].astype(str).to_numpy()
+        realized_values = group["realized_simple_return_4h"].to_numpy(dtype=float)
         realized = {
-            str(row.symbol): float(row.target_return_4h)
-            for row in group.itertuples(index=False)
+            str(symbol): float(value)
+            for symbol, value in zip(realized_symbols, realized_values, strict=True)
         }
         interval_return, contributions = portfolio_interval_return(
             selected, realized, cost_bps
         )
         portfolio_returns.append(interval_return)
-        trade_pnls.extend(contributions)
+        trade_pnls.extend(nav * contribution for contribution in contributions)
+        nav = max(0.0, nav * (1.0 + interval_return))
         for symbol in selected:
             trades_by_symbol[symbol] = trades_by_symbol.get(symbol, 0) + 1
     metrics = _metrics(trade_pnls, portfolio_returns)
@@ -647,7 +663,7 @@ def _run_candidate(
         model = Pipeline(
             [("standard_scaler", StandardScaler()), ("ridge", Ridge(alpha=1.0))]
         )
-        model.fit(train.loc[:, FEATURE_NAMES], train["target_return_4h"])
+        model.fit(train.loc[:, list(FEATURE_NAMES)], train["target_return_4h"])
         models[fold_id] = model
         tests[fold_id] = test.copy()
     if not models:

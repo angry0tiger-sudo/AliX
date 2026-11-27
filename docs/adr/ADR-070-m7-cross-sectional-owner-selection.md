@@ -83,3 +83,8 @@ main remains frozen and must not be modified.
 Any material deviation from the two fixed candidate universes, exact data interval, model, alpha, features, target, decision frequency, long-only selection, sizing, folds, cost scenarios, acceptance gates, or logical trial count requires a superseding preregistration before results are examined.
 
 **Decision: R&D Path B selected; M7 research execution is authorized within the exact scope above. No Champion or Paper/Live permission is created.**
+
+
+## 8. Pre-evaluation accounting clarification (M7-CS-G1.1)
+
+During implementation review and before any fitting or economic output was observed, the return contract was clarified to maintain dimensional consistency: Ridge trains on the preregistered four-hour forward **log return**, while realized portfolio PnL and the 50/90 bps costs are calculated in **simple-return space**. Each asset's loss is floored at -100% of its own notional. The selected positions each use 50% of current NAV; NAV compounds every non-overlapping four-hour interval and trade-level PF contributions are measured in initial-equity terms using NAV immediately before the interval. This is a mechanical accounting correction, not a model, feature, threshold, universe, target-horizon, fold, or trial change. It was made before the first M7 outcome was inspected.

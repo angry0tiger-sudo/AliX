@@ -44,6 +44,14 @@ def test_portfolio_interval_return_empty_selection_is_cash() -> None:
     assert portfolio_interval_return([], {}, 90) == (0.0, [])
 
 
+def test_portfolio_interval_return_caps_loss_at_invested_notional() -> None:
+    total, trade_pnls = portfolio_interval_return(
+        ["ETHUSDT", "ADAUSDT"], {"ETHUSDT": -1.0, "ADAUSDT": -1.0}, 90
+    )
+    assert trade_pnls == pytest.approx([-0.5, -0.5])
+    assert total == pytest.approx(-1.0)
+
+
 def test_portfolio_interval_return_rejects_more_than_two_assets() -> None:
     with pytest.raises(ValueError, match="m7_invalid_selected_symbol_set"):
         portfolio_interval_return(["A", "B", "C"], {"A": 0.1, "B": 0.1, "C": 0.1}, 50)

@@ -878,3 +878,5 @@ The closed M3 OFI trials remain BTCIRT-specific historical evidence and are not 
 - **Economic gates:** NetPF >= 1.10; completed OOS trades >= 100; MaxDD <= 15%; at least 3 valid folds and 3 stable folds of 4; Cost-50 and Cost-90 separately. A stable fold requires >=20 completed trades, positive net PnL and fold PF >1.
 - **Holdout:** the historical PRE-HACK terminal range is already contaminated by earlier AI-6/DEAP use. M7 remains exploratory. Holdout stays sealed and Post-Hack remains unread.
 - **Safety:** Champion=null; order_permission=false; trading_authorization=NO-GO; private_api_calls=0; real_order_attempts=0; paper_orders=0; local_execution=false.
+
+- **M7 pre-evaluation revision M7-CS-G1.1:** clarified that Ridge training target remains the four-hour forward log return while realized PnL/costs use simple open-to-open returns; individual losses capped at 100% of notional; trade PnL compounded against current NAV. This clarification occurred before any M7 fit or economic outcome was inspected. See ADR-070 Section 8.

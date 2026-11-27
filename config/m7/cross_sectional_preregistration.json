@@ -4,7 +4,7 @@
   "preregistration": {
     "id": "ALIX-M7-NOBITEX-CROSS-SECTIONAL-G1",
     "phase": "M7",
-    "revision": "M7-CS-G1",
+    "revision": "M7-CS-G1.1",
     "status": "PREREGISTERED_LOCKED",
     "preregistered_utc_date": "2026-11-27",
     "branch": "research/nobitex-hf-strategy",
@@ -36,7 +36,8 @@
       "NOBITEX-M7-5PAIR-RIDGE-TOP2-01",
       "NOBITEX-M7-10PAIR-RIDGE-TOP2-01"
     ],
-    "owner_selection_utc_date": "2026-11-27"
+    "owner_selection_utc_date": "2026-11-27",
+    "pre_evaluation_accounting_clarification": "Before any M7 fitting or economic outcome was observed, implementation review separated the locked log-return training target from simple-return execution PnL. Trading costs are subtracted in simple-return space, each asset loss is capped at 100% of notional, and PnL is compounded against current portfolio NAV. This is a mechanical accounting correction, not an outcome-driven strategy change."
   },
   "data": {
     "venue": "Nobitex",
@@ -136,7 +137,8 @@
     "entry_price": "Open of the next hourly candle at index i+1.",
     "exit_price": "Open of the hourly candle at index i+5, representing four elapsed hourly intervals.",
     "formula": "ln(open[i+5] / open[i+1])",
-    "label_maturity": "The complete entry and exit window must be inside the same applicable training or test block. Rows whose label window crosses a fold boundary are purged."
+    "label_maturity": "The complete entry and exit window must be inside the same applicable training or test block. Rows whose label window crosses a fold boundary are purged.",
+    "realized_pnl_formula": "Simple open-to-open return = open[i+5] / open[i+1] - 1.0. Keep the registered log return ln(open[i+5] / open[i+1]) as the Ridge regression target; do not subtract simple round-trip costs from the log target."
   },
   "model": {
     "estimator": "sklearn.pipeline.Pipeline(StandardScaler(), Ridge(alpha=1.0))",
@@ -150,12 +152,12 @@
     "rebalance_frequency": "Every four hours on the fixed UTC anchor described in target.decision_time.",
     "selection_rule": "Sort all finite predictions for the fixed trial universe by descending predicted return; tie-break alphabetically by symbol. Select at most the top two symbols whose prediction is strictly greater than zero. No position is opened for a zero or negative prediction.",
     "direction": "Long-only Spot",
-    "weights": "Each selected asset receives 0.50 of initial equity. With one selected asset, only 0.50 is invested and the remaining 0.50 stays in USDT. With no selected assets, the portfolio remains entirely in USDT.",
+    "weights": "Each selected asset receives 0.50 of current portfolio NAV. With one selected asset, only 0.50 is invested and the remaining 0.50 stays in USDT. With no selected assets, the portfolio remains entirely in USDT. NAV is compounded once per non-overlapping four-hour interval.",
     "leverage": false,
     "shorts": false,
     "overlapping_positions": false,
     "trade_definition": "One selected asset held from the next hourly open through the open four hourly intervals later is one completed round-trip research trade. Each rebalance closes all previous holdings before opening the next interval's holdings.",
-    "net_return": "Raw four-hour simple holding return minus one registered all-in round-trip cost fraction; multiply by the fixed 0.50 weight. No separate spread/slippage deductions are added on top of the registered all-in scenario."
+    "net_return": "For each selected asset, simple holding return is reduced by one registered all-in round-trip cost fraction, floored at -100% of that asset's notional. The resulting contribution is multiplied by 0.50 of current NAV. Unused capital stays in USDT. No separate spread/slippage deductions are added on top of the registered all-in scenario."
   },
   "walk_forward": {
     "scheme": "Four expanding chronological walk-forward folds constructed from five contiguous chronological blocks of the common decision timestamps.",
@@ -208,8 +210,8 @@
     "stable_folds_min": 3,
     "fold_validity": "At least 20 completed asset-level OOS round-trip trades.",
     "fold_stability": "At least 20 completed OOS trades, positive net PnL and fold NetPF > 1.00.",
-    "net_profit_factor": "Sum of positive weighted net trade PnL divided by absolute sum of negative weighted net trade PnL. Undefined PF never passes.",
-    "max_drawdown": "Peak-to-trough drawdown of the chronological compounded portfolio NAV from four-hour portfolio returns, with unused capital retained as USDT.",
+    "net_profit_factor": "Sum of positive compounded-PnL contributions (each interval contribution multiplied by NAV before that interval) divided by the absolute sum of negative compounded-PnL contributions. Undefined PF never passes.",
+    "max_drawdown": "Peak-to-trough drawdown of chronological NAV compounded from the four-hour portfolio simple-return series, with unused capital retained as USDT.",
     "overall_pass": "Each of the two registered candidates must independently pass all economic gates at both Cost-50 and Cost-90. A data-blocked candidate is not a pass and makes the family verdict NO-GO / INSUFFICIENT_DATA."
   },
   "risk_controls": {
