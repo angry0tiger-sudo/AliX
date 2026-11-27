@@ -1,6 +1,6 @@
 # AliX Historical Trial Registry
 
-Status: RECONCILED — family-level counts recorded; unresolved historical trial IDs remain UNKNOWN; current M3 OFI lifecycle is CLOSED_NO_GO.
+Status: RECONCILED — family-level counts recorded; unresolved historical trial IDs remain UNKNOWN; current M3 OFI and M7 G2.0 lifecycles are CLOSED_NO_GO.
 Last reconciled: 2026-11-27 UTC.
 Registry basis: immutable GitHub Actions run history and retained result artifacts. Counts below distinguish
 workflow executions, candidate variants, actually trained/evaluated candidates, and unique model/genome trials.
@@ -883,3 +883,26 @@ The closed M3 OFI trials remain BTCIRT-specific historical evidence and are not 
 - Acquisition writes fail closed if the target immutable dataset directory is already non-empty; reruns cannot silently overwrite or replace accepted CSVs.
 
 - **M7 pre-evaluation revision M7-CS-G1.2:** the portfolio NAV carries forward across the four chronological OOS test folds; per-fold metrics are computed from fold-start NAV and pooled metrics from the continuous compounded path. This correction preceded all M7 fits and outcomes. See ADR-070 Section 9.
+
+
+---
+
+## [APPEND] M7 G2.0 — Nine-Pair Superseding Evaluation (2026-11-27)
+
+- **Superseding preregistration:** `M7-CS-G2.0`, committed as `9eb74829336a6b5e65433eb8b6742b66e59ca655`.
+- **Decision record:** [ADR-072 — M7 G2.0 Cross-Sectional Feature-Quality NO-GO](../adr/ADR-072-m7-cross-sectional-feature-quality-no-go.md).
+- **Data acquisition diagnosis:** SOLUSDT was present in public Nobitex market stats but returned only 25,285/31,801 required 1h rows (6,516 missing intervals; 2021-10-31T20:30:00Z through 2022-07-30T07:30:00Z missing boundary observations). It is rejected for incomplete history, not because the market symbol is unlisted.
+- **Nine immutable qualified symbols:** ETHUSDT, BNBUSDT, ADAUSDT, XRPUSDT, DOGEUSDT, TRXUSDT, LTCUSDT, LINKUSDT, DOTUSDT. Each has 31,801 rows and exact equality with the BTCUSDT timestamp grid. No acquisition rerun or data overwrite occurred.
+- **Current G2.0 identities:** exactly two candidates were registered before any G2.0 economic output:
+  - `NOBITEX-M7-5PAIR-RIDGE-TOP2-02`: ETHUSDT, BNBUSDT, ADAUSDT, XRPUSDT, DOGEUSDT.
+  - `NOBITEX-M7-9PAIR-RIDGE-TOP2-01`: all nine qualified symbols.
+- **Historical G1.2 identities:** `NOBITEX-M7-5PAIR-RIDGE-TOP2-01` and `NOBITEX-M7-10PAIR-RIDGE-TOP2-01` remain separately recorded in ADR-071 as `BLOCKED_DATA`. They were not rewritten or silently relabelled.
+- **M7 identity accounting:** two G1.2 identities plus two superseding G2.0 identities = **four recorded M7 candidate identities across preregistration revisions**. The active G2.0 preregistration contains exactly two logical trials. Folds and cost scenarios do not add candidate identities. The prior G1.2 execution never fit a model; neither G2.0 candidate reached model fitting.
+- **Standard CI prerequisite:** [Run #2671 / ID 46053156707](https://github.com/angry0tiger-sudo/AliX/actions/runs/46053156707), exact parent SHA `9eb74829336a6b5e65433eb8b6742b66e59ca655`, conclusion `success`.
+- **Evaluation:** [M7 Cross-Sectional Ridge Economic Evaluation Run #2 / ID 46053508162](https://github.com/angry0tiger-sudo/AliX/actions/runs/46053508162), conclusion `success` for workflow/report validation. Artifact ID `15225039615`, artifact ZIP SHA-256 `cd30aa83281d63e1ccb3a06413ddf1155a6afda1ac007c800eaa58b726da8467`.
+- **G2.0 result:** both candidates `BLOCKED_DATA_OR_FEATURE_QUALITY`, exact reason `m7_panel_empty_after_feature_qualification`; overall verdict `NO-GO`. The fixed universe symbols loaded, but `build_panel()` created zero accepted rows. The evaluator does not record per-feature rejection counts, so whether `beta_24h_to_btc`, `relative_volume_shock_24h`, or both caused all rows to be rejected is unresolved. Do not infer or fabricate a more specific cause.
+- **Model and PnL accounting:** no Ridge model was fitted, no walk-forward fold was scored, and no cost scenario ran. NetPF, MaxDD and completed OOS trades are **N/A**, not zero, for both candidates and both 50/90 bps scenarios.
+- **Horizon:** 1h is the candle input cadence; the only preregistered target is the 4h forward log return. No separate 1h forecast-horizon trial was run. 1h forecast metrics are N/A.
+- **Next-step boundary:** any feature-level diagnosis must be read-only and PRE-HACK-only in GitHub Actions. It must retain G1.2 and G2.0 failures, not relax the feature contract, and must not create a Champion or trading permission.
+- **Safety:** `Champion=null`; `order_permission=false`; `trading_authorization=NO-GO`; private API calls 0; paper/real orders 0; Holdout/Post-Hack bytes read 0; no local model or data analysis.
+- **Global accounting:** `GLOBAL_N=UNKNOWN`; `GLOBAL_DSR=NOT_COMPUTABLE`. The four G1.2/G2.0 M7 candidate identities are recorded in their respective revisions; they do not make the full historic AliX experiment inventory known.
