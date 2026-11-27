@@ -787,7 +787,9 @@ def _fold_train_test(
 
 def _fit_walk_forward_models(
     panel: pd.DataFrame, blocks: Sequence[Sequence[int]]
-) -> tuple[dict[str, Pipeline], dict[str, pd.DataFrame], dict[str, int], dict[str, int]]:
+) -> tuple[
+    dict[str, Pipeline], dict[str, pd.DataFrame], dict[str, int], dict[str, int]
+]:
     models: dict[str, Pipeline] = {}
     tests: dict[str, pd.DataFrame] = {}
     train_counts: dict[str, int] = {}
@@ -798,9 +800,7 @@ def _fit_walk_forward_models(
             continue
         test_indices, test_start, next_start = boundaries
         fold_id = f"WF-0{fold_number}"
-        prior_indices = [
-            value for block in blocks[:fold_number] for value in block
-        ]
+        prior_indices = [value for block in blocks[:fold_number] for value in block]
         train, test = _fold_train_test(
             panel, prior_indices, test_indices, test_start, next_start
         )
@@ -883,9 +883,7 @@ def _run_candidate(
         f"Cost-{cost_bps}": _evaluate_cost_scenario(models, tests, cost_bps)
         for cost_bps in COST_SCENARIOS_BPS
     }
-    passed = all(
-        result["economic_gates_passed"] for result in cost_results.values()
-    )
+    passed = all(result["economic_gates_passed"] for result in cost_results.values())
     status = "ECONOMIC_PASS" if passed else "NO-GO"
     return {
         **base_result,
