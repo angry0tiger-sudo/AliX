@@ -1,0 +1,18 @@
+{
+  "api_url": "https://api.alternative.me/fng/?limit=0",
+  "availability_notice": "available_at is a conservative timestamp+24h proxy, not a provider-measured historical publication timestamp",
+  "availability_policy": "observation_timestamp_plus_24h_conservative_proxy",
+  "end_observation_time_utc": "2026-11-27T00:00:00Z",
+  "fetched_at": "2026-11-27T09:27:26.548110Z",
+  "market_scope": "global_btc_sentiment_not_nobitex_pair_specific",
+  "normalized_file": "alternative_me_fng_20261127T092726548110Z_4adba36f7dd9.normalized.json",
+  "normalized_sha256": "e0578509cf3f8a6eeac39ddbd2edeab876e47027d759558e120c6f8b3a9f7f61",
+  "provider_id": "alternative_me_fear_greed",
+  "provider_supplies_historical_available_at": false,
+  "raw_file": "alternative_me_fng_20261127T092726548110Z_4adba36f7dd9.raw.json",
+  "raw_sha256": "4adba36f7dd95792520e078f7578c316c23e80a7b8a0ace81df490bf06c740df",
+  "record_count": 3218,
+  "schema_version": "alix.m5.alternative-me-fng.v1",
+  "start_observation_time_utc": "2018-02-01T00:00:00Z",
+  "target_market": "Nobitex Spot/USDT BTCUSDT"
+}
