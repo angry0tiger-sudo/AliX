@@ -83,6 +83,7 @@ jobs:
             --output .artifacts/m8/m8_microstructure_report.json
           python - <<'PY'
           import json
+          import os
           from pathlib import Path
 
           report = json.loads(
