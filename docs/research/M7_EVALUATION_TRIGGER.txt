@@ -1,0 +1,5 @@
+Owner-authorized M7 locked evaluation trigger.
+Data qualification manifest: data/nobitex/prehack/m7/m7_data_qualification.json
+The exact preregistered 5PAIR and 10PAIR candidates remain BLOCKED_DATA because SOLUSDT failed common-window coverage (25,285/31,801 rows; 6,516 missing intervals). Evaluation must preserve both candidates as BLOCKED_DATA and must not fit a model, substitute symbols, shorten dates, or alter the trial universe.
+Exact data-parent Standard CI #2668 passed on 24d1916abba25e280f4cd5804df9a9ae783b3ca2.
+Scope: PRE-HACK exploratory only; no Holdout/Post-Hack; no private API; no paper/real orders. UTC date 2026-11-27.
