@@ -304,7 +304,7 @@ def _parse_candle(row: dict[str, str]) -> Candle:
     return Candle(start, opened, high, low, close, volume)
 
 
-def load_verified_ohlcv() -> tuple[list[Candle], dict[str, Any]]:
+def _load_ohlcv_bindings() -> tuple[dict[str, Any], dict[str, Any]]:
     if sha256_bytes(DATA_LOCK_PATH.read_bytes()) != DATA_LOCK_SHA256:
         raise ValueError("m5_2_data_lock_sha256_mismatch")
     if sha256_bytes(OHLCV_PATH.read_bytes()) != OHLCV_SHA256:
@@ -320,6 +320,10 @@ def load_verified_ohlcv() -> tuple[list[Candle], dict[str, Any]]:
         or lock["end_utc"] != manifest["end_utc"]
     ):
         raise ValueError("m5_2_data_lock_window_mismatch")
+    return lock, manifest
+
+
+def _read_ohlcv_candles() -> list[Candle]:
     candles: list[Candle] = []
     try:
         with OHLCV_PATH.open("r", encoding="utf-8", newline="") as handle:
@@ -332,42 +336,47 @@ def load_verified_ohlcv() -> tuple[list[Candle], dict[str, Any]]:
         raise ValueError(f"m5_2_ohlcv_csv_invalid:{type(exc).__name__}") from None
     if len(candles) != 31801:
         raise ValueError("m5_2_ohlcv_row_count_invalid")
+    return candles
+
+
+def _validate_ohlcv_timeline(
+    candles: Sequence[Candle], manifest: dict[str, Any]
+) -> None:
     for previous, current in zip(candles, candles[1:]):
         if (current.start - previous.start).total_seconds() != 3600:
             raise ValueError("m5_2_ohlcv_hourly_grid_or_gap_invalid")
-    if candles[0].start.isoformat().replace("+00:00", "Z") != manifest["start_utc"]:
+    first = candles[0].start.isoformat().replace("+00:00", "Z")
+    last = candles[-1].start.isoformat().replace("+00:00", "Z")
+    if first != manifest["start_utc"]:
         raise ValueError("m5_2_ohlcv_start_mismatch")
-    if candles[-1].start.isoformat().replace("+00:00", "Z") != manifest["end_utc"]:
+    if last != manifest["end_utc"]:
         raise ValueError("m5_2_ohlcv_end_mismatch")
+
+
+def load_verified_ohlcv() -> tuple[list[Candle], dict[str, Any]]:
+    _lock, manifest = _load_ohlcv_bindings()
+    candles = _read_ohlcv_candles()
+    _validate_ohlcv_timeline(candles, manifest)
     return candles, manifest
 
-
-def load_verified_sentiment(
-    config: dict[str, Any],
-) -> tuple[list[Mapping[str, object]], dict[str, Any]]:
-    source = config["sentiment_source"]
-    manifest_path = SENTIMENT_DIR / str(source["snapshot_manifest"])
-    raw_path = SENTIMENT_DIR / str(source["raw_file"])
-    normalized_path = SENTIMENT_DIR / str(source["normalized_file"])
-    if sha256_bytes(raw_path.read_bytes()) != SENTIMENT_RAW_SHA256:
-        raise ValueError("m5_2_sentiment_raw_sha256_mismatch")
-    normalized_raw = normalized_path.read_bytes()
-    if sha256_bytes(normalized_raw) != SENTIMENT_NORMALIZED_SHA256:
-        raise ValueError("m5_2_sentiment_normalized_sha256_mismatch")
-    manifest = read_json(manifest_path, "m5_2_sentiment_manifest_invalid")
-    if manifest["raw_sha256"] != SENTIMENT_RAW_SHA256:
-        raise ValueError("m5_2_sentiment_manifest_raw_sha_mismatch")
-    if manifest["normalized_sha256"] != SENTIMENT_NORMALIZED_SHA256:
-        raise ValueError("m5_2_sentiment_manifest_normalized_sha_mismatch")
-    if manifest["record_count"] != 3218:
-        raise ValueError("m5_2_sentiment_manifest_count_mismatch")
-    if manifest["provider_supplies_historical_available_at"] is not False:
-        raise ValueError("m5_2_sentiment_historical_availability_mismatch")
-    if (
+def _validate_sentiment_manifest(
+    manifest: dict[str, Any], raw_hash: str, normalized_hash: str
+) -> None:
+    expected = (
+        manifest["raw_sha256"] == raw_hash,
+        manifest["normalized_sha256"] == normalized_hash,
+        manifest["record_count"] == 3218,
+        manifest["provider_supplies_historical_available_at"] is False,
         manifest["availability_policy"]
-        != "observation_timestamp_plus_24h_conservative_proxy"
-    ):
-        raise ValueError("m5_2_sentiment_availability_policy_mismatch")
+        == "observation_timestamp_plus_24h_conservative_proxy",
+    )
+    if not all(expected):
+        raise ValueError("m5_2_sentiment_manifest_contract_invalid")
+
+
+def _parse_sentiment_records(
+    normalized_raw: bytes,
+) -> list[Mapping[str, object]]:
     try:
         payload = json.loads(normalized_raw)
     except json.JSONDecodeError:
@@ -383,20 +392,44 @@ def load_verified_sentiment(
     raw_records = payload.get("records")
     if not isinstance(raw_records, list) or len(raw_records) != 3218:
         raise ValueError("m5_2_sentiment_record_count_invalid")
+    return _validate_sentiment_records(raw_records)
+
+
+def _validate_sentiment_records(
+    raw_records: list[object],
+) -> list[Mapping[str, object]]:
     records: list[Mapping[str, object]] = []
     for item in raw_records:
         if not isinstance(item, dict):
             raise ValueError("m5_2_sentiment_record_invalid")
-        if item.get("market_scope") != "global_btc_sentiment_not_nobitex_pair_specific":
+        scope = item.get("market_scope")
+        availability = item.get("available_at_basis")
+        if scope != "global_btc_sentiment_not_nobitex_pair_specific":
             raise ValueError("m5_2_sentiment_market_scope_invalid")
-        if (
-            item.get("available_at_basis")
-            != "observation_timestamp_plus_24h_conservative_proxy"
-        ):
+        if availability != "observation_timestamp_plus_24h_conservative_proxy":
             raise ValueError("m5_2_sentiment_record_availability_invalid")
         records.append(cast(Mapping[str, object], item))
-    return records, manifest
+    return records
 
+
+def load_verified_sentiment(
+    config: dict[str, Any],
+) -> tuple[list[Mapping[str, object]], dict[str, Any]]:
+    source = config["sentiment_source"]
+    manifest_path = SENTIMENT_DIR / str(source["snapshot_manifest"])
+    raw_path = SENTIMENT_DIR / str(source["raw_file"])
+    normalized_path = SENTIMENT_DIR / str(source["normalized_file"])
+    if sha256_bytes(raw_path.read_bytes()) != SENTIMENT_RAW_SHA256:
+        raise ValueError("m5_2_sentiment_raw_sha256_mismatch")
+    normalized_raw = normalized_path.read_bytes()
+    if sha256_bytes(normalized_raw) != SENTIMENT_NORMALIZED_SHA256:
+        raise ValueError("m5_2_sentiment_normalized_sha256_mismatch")
+    manifest = read_json(manifest_path, "m5_2_sentiment_manifest_invalid")
+    _validate_sentiment_manifest(
+        manifest, SENTIMENT_RAW_SHA256, SENTIMENT_NORMALIZED_SHA256
+    )
+    records = _parse_sentiment_records(normalized_raw)
+    return records, manifest
 
 def build_price_features(candles: Sequence[Candle]) -> NDArray[Any]:
     count = len(candles)
@@ -470,6 +503,42 @@ def align_sentiment(
     return values, available, observations, ages
 
 
+def _make_fold_plan(
+    fold_index: int,
+    train_candidates: Sequence[int],
+    test_candidates: Sequence[int],
+    label_valid: Sequence[bool],
+    horizon: int,
+) -> FoldPlan:
+    first_test = test_candidates[0]
+    last_test = test_candidates[-1]
+    train = tuple(
+        index
+        for index in train_candidates
+        if label_valid[index] and index + horizon < first_test
+    )
+    test = tuple(
+        index
+        for index in test_candidates
+        if label_valid[index] and index + horizon <= last_test
+    )
+    purged = sum(
+        1
+        for index in train_candidates
+        if label_valid[index] and index + horizon >= first_test
+    )
+    return FoldPlan(
+        fold_id=f"WF-{fold_index + 1:02d}",
+        train_indices=train,
+        test_indices=test,
+        mark_indices=tuple(range(first_test, last_test + 1)),
+        first_test_index=first_test,
+        last_test_index=last_test,
+        purged_train_rows=purged,
+        excluded_test_rows=len(test_candidates) - len(test),
+    )
+
+
 def build_fold_plans(
     eligible: Sequence[int], label_valid: Sequence[bool], horizon: int
 ) -> tuple[FoldPlan, ...]:
@@ -487,31 +556,16 @@ def build_fold_plans(
         test_candidates = eligible[edges[fold_index + 1] : edges[fold_index + 2]]
         if not test_candidates:
             raise ValueError("m5_2_empty_test_block")
-        first_test = test_candidates[0]
-        last_test = test_candidates[-1]
-        train = tuple(
-            i for i in train_candidates if label_valid[i] and i + horizon < first_test
-        )
-        test = tuple(
-            i for i in test_candidates if label_valid[i] and i + horizon <= last_test
-        )
-        purged = sum(
-            1 for i in train_candidates if label_valid[i] and i + horizon >= first_test
-        )
         plans.append(
-            FoldPlan(
-                fold_id=f"WF-{fold_index + 1:02d}",
-                train_indices=train,
-                test_indices=test,
-                mark_indices=tuple(range(first_test, last_test + 1)),
-                first_test_index=first_test,
-                last_test_index=last_test,
-                purged_train_rows=purged,
-                excluded_test_rows=len(test_candidates) - len(test),
+            _make_fold_plan(
+                fold_index,
+                train_candidates,
+                test_candidates,
+                label_valid,
+                horizon,
             )
         )
     return tuple(plans)
-
 
 def build_model(config: dict[str, Any]) -> Pipeline:
     params = config["model"]["parameters"]
@@ -546,6 +600,72 @@ def max_drawdown(nav: Sequence[float]) -> float:
     return float(worst)
 
 
+def _build_trades(
+    candles: Sequence[Candle],
+    decisions: Sequence[int],
+    signals: Sequence[bool],
+    horizon: int,
+    cost: float,
+    last_mark: int,
+) -> list[Trade]:
+    notional = 1.0 / float(horizon)
+    trades: list[Trade] = []
+    for decision, signal in zip(decisions, signals):
+        if signal:
+            entry = decision + 1
+            exit_index = decision + horizon
+            if exit_index > last_mark:
+                raise ValueError("m5_2_trade_exit_crosses_test_fold")
+            gross = candles[exit_index].close / candles[entry].open - 1.0
+            trades.append(
+                Trade(decision, entry, exit_index, notional, notional * (gross - cost))
+            )
+    trades.sort(key=lambda row: (row.entry_index, row.exit_index))
+    return trades
+
+
+def _mark_portfolio(
+    candles: Sequence[Candle], trades: Sequence[Trade], marks: Sequence[int]
+) -> tuple[list[float], int]:
+    cursor = 0
+    active: list[Trade] = []
+    realized = 0.0
+    nav = [1.0]
+    concurrent = 0
+    for mark in marks:
+        while cursor < len(trades) and trades[cursor].entry_index <= mark:
+            active.append(trades[cursor])
+            cursor += 1
+        concurrent = max(concurrent, len(active))
+        remaining, unrealized = _mark_active_trades(candles, active, mark, realized)
+        realized = sum(
+            row.pnl
+            for row in trades[:cursor]
+            if row.exit_index <= mark
+        )
+        active = remaining
+        nav.append(1.0 + realized + unrealized)
+    if active or cursor != len(trades):
+        raise ValueError("m5_2_unclosed_fold_position")
+    return nav, concurrent
+
+
+def _mark_active_trades(
+    candles: Sequence[Candle],
+    active: Sequence[Trade],
+    mark: int,
+    realized_before_mark: float,
+) -> tuple[list[Trade], float]:
+    remaining: list[Trade] = []
+    unrealized = 0.0
+    for trade in active:
+        if trade.exit_index > mark:
+            gross_mark = candles[mark].close / candles[trade.entry_index].open - 1.0
+            unrealized += trade.notional * (gross_mark - (0.0))
+            remaining.append(trade)
+    return remaining, unrealized
+
+
 def simulate_portfolio(
     candles: Sequence[Candle],
     decisions: Sequence[int],
@@ -557,57 +677,41 @@ def simulate_portfolio(
     if len(decisions) != len(signals):
         raise ValueError("m5_2_signal_count_mismatch")
     if not marks:
-        return PortfolioOutcome(
-            {
-                "completed_oos_trades": 0,
-                "total_net_pnl_fraction_of_initial_equity": 0.0,
-                "net_profit_factor": None,
-                "max_drawdown": 0.0,
-                "maximum_concurrent_cohorts": 0,
-                "turnover_fraction_of_initial_equity": 0.0,
-            },
-            (1.0,),
-            0.0,
-            (),
-        )
-    notional = 1.0 / float(horizon)
-    trades: list[Trade] = []
-    for decision, signal in zip(decisions, signals):
-        if signal:
-            entry = decision + 1
-            exit_index = decision + horizon
-            if exit_index > marks[-1]:
-                raise ValueError("m5_2_trade_exit_crosses_test_fold")
-            gross = candles[exit_index].close / candles[entry].open - 1.0
-            trades.append(
-                Trade(decision, entry, exit_index, notional, notional * (gross - cost))
-            )
-    trades.sort(key=lambda row: (row.entry_index, row.exit_index))
-    cursor = 0
-    active: list[Trade] = []
-    realized = 0.0
-    nav = [1.0]
-    concurrent = 0
-    for mark in marks:
-        while cursor < len(trades) and trades[cursor].entry_index <= mark:
-            active.append(trades[cursor])
-            cursor += 1
-        concurrent = max(concurrent, len(active))
-        remaining: list[Trade] = []
-        unrealized = 0.0
-        for trade in active:
-            if trade.exit_index <= mark:
-                realized += trade.pnl
-            else:
-                gross_mark = candles[mark].close / candles[trade.entry_index].open - 1.0
-                unrealized += trade.notional * (gross_mark - cost)
-                remaining.append(trade)
-        active = remaining
-        nav.append(1.0 + realized + unrealized)
-    if active or cursor != len(trades):
-        raise ValueError("m5_2_unclosed_fold_position")
+        return _empty_portfolio_outcome()
+    trades = _build_trades(candles, decisions, signals, horizon, cost, marks[-1])
+    nav, concurrent = _mark_portfolio(candles, trades, marks)
     pnl = sum(row.pnl for row in trades)
-    metrics = {
+    metrics = _portfolio_metrics(trades, nav, pnl, concurrent, horizon)
+    return PortfolioOutcome(metrics, tuple(nav), float(pnl), tuple(trades))
+
+
+def _empty_portfolio_outcome() -> PortfolioOutcome:
+    return PortfolioOutcome(
+        {
+            "completed_oos_trades": 0,
+            "total_net_pnl_fraction_of_initial_equity": 0.0,
+            "net_profit_factor": None,
+            "max_drawdown": 0.0,
+            "maximum_concurrent_cohorts": 0,
+            "turnover_fraction_of_initial_equity": 0.0,
+        },
+        (1.0,),
+        0.0,
+        (),
+    )
+
+
+def _portfolio_metrics(
+    trades: Sequence[Trade],
+    nav: Sequence[float],
+    pnl: float,
+    concurrent: int,
+    horizon: int,
+) -> dict[str, Any]:
+    if concurrent > horizon:
+        raise ValueError("m5_2_position_concurrency_cap_breached")
+    notional = 1.0 / float(horizon)
+    return {
         "completed_oos_trades": len(trades),
         "total_net_pnl_fraction_of_initial_equity": float(pnl),
         "net_profit_factor": net_profit_factor(trades),
@@ -615,10 +719,6 @@ def simulate_portfolio(
         "maximum_concurrent_cohorts": concurrent,
         "turnover_fraction_of_initial_equity": float(len(trades) * notional),
     }
-    if concurrent > horizon:
-        raise ValueError("m5_2_position_concurrency_cap_breached")
-    return PortfolioOutcome(metrics, tuple(nav), float(pnl), tuple(trades))
-
 
 def aggregate_outcomes(outcomes: Sequence[PortfolioOutcome]) -> dict[str, Any]:
     trades = tuple(trade for outcome in outcomes for trade in outcome.trades)
