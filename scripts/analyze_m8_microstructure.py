@@ -136,6 +136,7 @@ def compute_features(row: dict[str, str]) -> tuple[float, dict[str, float]]:
         "depth_top5": total_depth,
     }
 
+
 def _normalize_run_id(value: Any) -> int | None:
     if isinstance(value, bool) or not isinstance(value, (str, int)):
         return None
@@ -273,6 +274,7 @@ def _read_verified_archive(
         raise InputError(f"ARCHIVE_NOT_VALID_ZIP:{path.name}") from exc
     return manifest, snapshots, gaps
 
+
 def _window_crosses_gap(
     start_ms: int, end_ms: int, gaps: Sequence[tuple[int, int]]
 ) -> bool:
@@ -360,6 +362,7 @@ def _samples_for_horizon(
                 pairs[name].append(past.features[name])
         grid += horizon_ms
     return pairs, targets, excluded
+
 
 def _rank(values: Sequence[float]) -> list[float]:
     order = sorted(range(len(values)), key=lambda index: values[index])
@@ -695,6 +698,7 @@ def analyze_archives(
     pooled, pooled_targets, excluded, per_segment = _aggregate_segment_samples(loaded)
     correlations = _all_correlations(pooled, pooled_targets)
     return _completed_market_report(report, correlations, per_segment, excluded)
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(
