@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "collection": "Nobitex M1.6 public L2 capture",
+  "dataset_market": "BTCIRT",
+  "expected_archive_count": 5,
+  "immutable_copy": {
+    "location": "/AliX_M1.6_Immutable_Archive",
+    "policy": "write-once naming; do not overwrite or normalize original ZIP bytes",
+    "repository_binary_copy": false
+  },
+  "total_orderbook_rows": 171604,
+  "total_trade_rows": 25623,
+  "total_gap_records": 8,
+  "artifacts_by_sha256": {
+    "aafe15ed9da1d6f6e8badf905627665695acfd605e926b242856f43888980ce8": {
+      "run_id": 45553679888,
+      "artifact_id": 15016992581,
+      "market": "BTCIRT",
+      "orderbook_rows": 32122,
+      "trade_rows": 5048,
+      "gap_records": 2,
+      "zip_size_bytes": 1097114,
+      "expires_at_utc": "2026-12-25T11:25:41Z"
+    },
+    "c25c202e5d556912bc40e6a9fdcf78adb5a23db32f3f760ad3a1024d79cf8961": {
+      "run_id": 45620061415,
+      "artifact_id": 15054886094,
+      "market": "BTCIRT",
+      "orderbook_rows": 37562,
+      "trade_rows": 8201,
+      "gap_records": 0,
+      "zip_size_bytes": 1436664,
+      "expires_at_utc": "2026-12-25T19:03:25Z"
+    },
+    "c7b7ec592cda5fec117976a422d2257a908c2b260d89b4b9b89ef87ab4f20a62": {
+      "run_id": 45683066882,
+      "artifact_id": 15077454919,
+      "market": "BTCIRT",
+      "orderbook_rows": 34076,
+      "trade_rows": 2664,
+      "gap_records": 2,
+      "zip_size_bytes": 1062957,
+      "expires_at_utc": "2026-12-26T01:10:28Z"
+    },
+    "ec4befa0ad6fc96cf1874cec4ba15b2a2dc5ca27e58adf82c33eb62f18393332": {
+      "run_id": 45735110603,
+      "artifact_id": 15095790023,
+      "market": "BTCIRT",
+      "orderbook_rows": 35381,
+      "trade_rows": 3808,
+      "gap_records": 4,
+      "zip_size_bytes": 1259100,
+      "expires_at_utc": "2026-12-26T07:14:51Z"
+    },
+    "c52cb93bfc345e1ba66104f7f0e4f8ea3664687e87d3dd89e44ea9236279db88": {
+      "run_id": 45775145557,
+      "artifact_id": 15121226078,
+      "market": "BTCIRT",
+      "orderbook_rows": 32463,
+      "trade_rows": 5902,
+      "gap_records": 0,
+      "zip_size_bytes": 1049976,
+      "expires_at_utc": "2026-12-26T13:23:15Z"
+    }
+  }
+}
