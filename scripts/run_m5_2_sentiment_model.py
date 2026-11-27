@@ -19,7 +19,7 @@ from numpy.typing import NDArray
 from sklearn.linear_model import LogisticRegression  # type: ignore[import-untyped]
 from sklearn.pipeline import Pipeline  # type: ignore[import-untyped]
 from sklearn.preprocessing import StandardScaler  # type: ignore[import-untyped]
-import sklearn
+import sklearn  # type: ignore[import-untyped]
 
 from scripts.align_m5_sentiment import align_records
 
@@ -458,7 +458,10 @@ def align_sentiment(
             raise ValueError("m5_2_aligned_sentiment_invalid")
         if not isinstance(observation, str) or not isinstance(age, int) or age < 0:
             raise ValueError("m5_2_aligned_sentiment_provenance_invalid")
-        if available_at > item["decision_time"]:
+        decision_time = item["decision_time"]
+        if not isinstance(decision_time, str):
+            raise ValueError("m5_2_aligned_decision_time_invalid")
+        if available_at > decision_time:
             raise ValueError("m5_2_future_sentiment_leakage")
         values[index] = float(value)
         available.append(available_at)
