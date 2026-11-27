@@ -125,7 +125,7 @@ def compute_features(row: dict[str, str]) -> tuple[float, dict[str, float]]:
     }
 
 
-def _read_verified_archive(path: Path, inventory: dict[str, Any]) -> tuple[dict[str, Any], list[Snapshot], list[tuple[int, int]]]:
+def _read_verified_archive(path: Path, inventory: dict[str, Any], expected_market: str) -> tuple[dict[str, Any], list[Snapshot], list[tuple[int, int]]]:
     raw_archive = path.read_bytes()
     archive_sha = _sha256(raw_archive)
     entry = inventory.get("artifacts_by_sha256", {}).get(archive_sha)
@@ -149,8 +149,15 @@ def _read_verified_archive(path: Path, inventory: dict[str, Any]) -> tuple[dict[
 
     if manifest.get("market") != entry.get("market"):
         raise InputError(f"MANIFEST_MARKET_INVENTORY_MISMATCH:{path.name}")
-    if manifest.get("workflow_run_id") != entry.get("run_id"):
+    try:
+        run_id_matches = int(manifest.get("workflow_run_id")) == int(entry.get("run_id"))
+    except (TypeError, ValueError):
+        run_id_matches = False
+    if not run_id_matches:
         raise InputError(f"MANIFEST_RUN_ID_MISMATCH:{path.name}")
+
+    if manifest.get("market") != expected_market:
+        return manifest, [], []
 
     files_meta = manifest.get("files")
     if not isinstance(files_meta, dict):
@@ -366,7 +373,7 @@ def analyze_archives(
     loaded: list[tuple[dict[str, Any], list[Snapshot], list[tuple[int, int]]]] = []
     seen_hashes: set[str] = set()
     for path in archive_paths:
-        manifest, snapshots, gaps = _read_verified_archive(path, inventory)
+        manifest, snapshots, gaps = _read_verified_archive(path, inventory, expected_market)
         archive_hash = _sha256(path.read_bytes())
         if archive_hash in seen_hashes:
             raise InputError("DUPLICATE_ARCHIVE")
