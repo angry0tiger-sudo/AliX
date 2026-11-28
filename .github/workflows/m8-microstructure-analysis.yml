@@ -2,11 +2,6 @@ name: M8.1 BTCUSDT One-Hour Public Capture and M8 Correlation
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - research/nobitex-hf-strategy
-    paths:
-      - TRIGGER_M8
 
 permissions:
   actions: read
