@@ -6,13 +6,17 @@ Master Reference Document | نسخهٔ ۱٫۳
 
 به‌روزرسانی بر مبنای ADR-050 تا ADR-076، Trial Registry تاریخی و شواهد GitHub تا ۲۸ نوامبر ۲۰۲۶؛ M7 رسماً CLOSED_NO_GO و M8.1 Capture و تحلیل اکتشافی BTCUSDT تکمیل شده است.
 
-وضعیت جاری در MRD v1.3: M7 Cross-Sectional = CLOSED_NO_GO؛ corpus قدیمی M1.6 برای BTCUSDT همچنان BLOCKED_DATA_MARKET_MISMATCH است؛ M8.1 یک Capture عمومی BTCUSDT به مدت ۶۰٫۰۸۸ دقیقه انجام داده و تحلیل اکتشافی آن طبق ADR-076 با نتیجهٔ NO_SIGNIFICANT_OBI_CORRELATION تکمیل شده است. Trial Registry متمرکز: ۱۶ candidate identity و ۴۳ رکورد slot/identity در سطح خانواده‌های ثبت‌شده؛ M8.1 Capture یک Trial اقتصادی نیست؛ GLOBAL_N همچنان UNKNOWN. main دست‌نخورده مانده؛ HEAD=a1c1a658906cd79be62796885e3ed782b66a267d و Tree SHA=5761c6c34143f8e6924f53a4e745c48932a5f791. Holdout=SEALED و trading_authorization=NO-GO.
+وضعیت جاری در MRD v1.3: **M7 Cross-Sectional = CLOSED_NO_GO** طبق ADR-074. آرشیو M1.6 فقط شامل داده‌های BTCIRT است و برای فرضیهٔ BTCUSDT واجد صلاحیت نیست؛ بنابراین M8 baseline مبتنی بر آن آرشیو با وضعیت `BLOCKED_DATA_MARKET_MISMATCH` و همبستگی `NOT_COMPUTED` باقی می‌ماند. این محدودیت داده مستقل از تصمیم بسته‌شدن M7 است. در مسیر جداگانهٔ M8.1، Capture عمومی BTCUSDT به مدت ۶۰.۰۸۸ دقیقه انجام و تحلیل اکتشافی آن طبق ADR-076 با نتیجهٔ `NO_SIGNIFICANT_OBI_CORRELATION` ثبت شده است. Trial Registry متمرکز شامل ۱۶ candidate identity و ۴۳ رکورد inventory در workstreamهای متمرکز است؛ Capture/تحلیل M8.1 یک Trial اقتصادی جدید نیست؛ `GLOBAL_N=UNKNOWN`. وضعیت `main` و SHAهای آن در بند ۱ ثبت شده‌اند و در این به‌روزرسانی تغییر نکرده است. `Holdout=SEALED` و `trading_authorization=NO-GO` باقی می‌مانند.
 
 Champion = null   |   order_permission = false   |   trading_authorization = NO-GO
 
 private_api_calls = 0   |   real_order_attempts = 0   |   Holdout = SEALED
 
 مبنای حاکمیتی: آزادی در کشف، محدودیت در اختیار؛ هیچ‌یک از نتایج NO-GO یا سبز بودن CI مجوز معامله ایجاد نمی‌کند.
+
+## هویت و دامنه پروژه
+
+نسخهٔ اولیهٔ پروژه AliX برای اسپات صرافی نوبیتکس (Nobitex Spot) طراحی شده است؛ بازار هدف BTCUSDT و قابلیت‌های Live/Paper در وضعیت NO-GO باقی می‌مانند.
 
 # بخش افزودهٔ نسخهٔ ۱٫۳ — وضعیت مرجع جاری، بسته‌شدن M7 و مسیر فعال M8.1
 
@@ -21,11 +25,11 @@ private_api_calls = 0   |   real_order_attempts = 0   |   Holdout = SEALED
 ## ۱. وضعیت اجرایی و مرجعیت مخزن
 
 - شاخهٔ پژوهشی فعال: `research/nobitex-hf-strategy`.
-- HEAD شاخه پیش از commit نهایی MRD v1.3: `2cfc327eaf5c1a66fa922152a99db3e7c6484717` (پس از تکمیل M8.1، ثبت ADR-076 و حذف marker موقت).
+- HEAD شاخه در snapshot اولیهٔ v1.3، پیش از اصلاحات مستنداتی حاضر: `2cfc327eaf5c1a66fa922152a99db3e7c6484717`. این مقدار صرفاً برای حفظ provenance آن snapshot است و HEAD نهایی این ویرایش نیست.
 - `main` همچنان FROZEN است: HEAD=`a1c1a658906cd79be62796885e3ed782b66a267d`؛ Tree SHA=`5761c6c34143f8e6924f53a4e745c48932a5f791`. در این به‌روزرسانی هیچ تغییر یا commit روی `main` انجام نشده است.
 - Standard CI روی commit اجرایی M8.1 با SHA=`a0b550f23071f8bf920b866771eb75cba30d8bf6`: Run #2721 / ID `46106438112`، completed / success. این نتیجه فقط سلامت مهندسی همان SHA را اثبات می‌کند و شاهد Edge اقتصادی نیست.
 - Workflow Capture با Run ID `46106438168` روی همان SHA از مسیر موقت `push` و فایل `TRIGGER_M8` ایجاد شد. Job دریافت داده، اعتبارسنجی، ممیزی و آپلود Artifact همگی `SUCCESS` شدند؛ Workflow کلی در مرحلهٔ ساخت ADR-076 به‌علت import ناقص `os` در اسکریپت گزارش‌نویسی شکست خورد. این نقص در مسیر بازتحلیل مستقل اصلاح شد. marker و تریگر موقت حذف شدند؛ Workflowهای جاری فقط `workflow_dispatch` را حفظ می‌کنند.
-- Preflight عمومی و بدون احراز هویت `/v3/orderbook/BTCUSDT` موفق شد. Capture نهایی `BTCUSDT` را در manifest و کانال‌های WebSocket ثبت کرده است: ۲٬۵۷۹ snapshot دفتر سفارش، ۹۳ معامله، صفر gap؛ مدت واقعی ۶۰٫۰۸۸ دقیقه. Artifact خام ID `15249319923` و digest آن `sha256:bc16983be51490cafebff11c5de06360d6668633bd3a75ea1afbe0defd3837c0` است.
+- Preflight عمومی و بدون احراز هویت `/v3/orderbook/BTCUSDT` موفق شد. Capture نهایی `BTCUSDT` را در manifest و کانال‌های WebSocket ثبت کرده است: ۲٬۵۷۹ snapshot دفتر سفارش، ۹۳ معامله، صفر gap؛ مدت واقعی ۶۰.۰۸۸ دقیقه. Artifact خام ID `15249319923` و digest آن `sha256:bc16983be51490cafebff11c5de06360d6668633bd3a75ea1afbe0defd3837c0` است.
 
 ## ۲. وضعیت مسیرهای پژوهشی
 
@@ -36,13 +40,13 @@ private_api_calls = 0   |   real_order_attempts = 0   |   Holdout = SEALED
 | Regime T Triple-Barrier | CLOSED — NO-GO | ADR-056؛ Accuracy=51.09% در برابر آستانهٔ >55%. |
 | M5.2 Sentiment | CLOSED — NO-GO | ۴ candidate؛ Sentiment در هر چهار paired comparison از Control بدتر بود. |
 | M6 Three-Class Triple-Barrier | CLOSED — INSUFFICIENT_SAMPLE / NO-GO | ۲ candidate؛ هر دو ۰/۴ fold پایدار داشتند و NetPF هر دو افق زیر ۱ بود. |
-| M7 Cross-Sectional Ridge | CLOSED_NO_GO | G2.0 به‌دلیل panel خالی و G3.0 به‌دلیل شکست Gateهای اقتصادی/پایداری بسته شدند؛ هیچ retry یا sweep دیگری مجاز نیست. |
-| M8 Microstructure baseline | BLOCKED | پنج Artifact قدیمی M1.6 همگی BTCIRT هستند؛ برای فرضیه BTCUSDT قابل استفاده نیستند؛ همبستگی‌ها در آن corpus `NOT_COMPUTED` باقی می‌مانند. |
+| M7 Cross-Sectional | CLOSED_NO_GO | طبق ADR-074؛ G2.0 به‌دلیل panel خالی و G3.0 به‌دلیل شکست Gateهای اقتصادی/پایداری بسته شدند؛ هیچ retry یا sweep دیگری مجاز نیست. |
+| M8 Microstructure baseline | BLOCKED_DATA_MARKET_MISMATCH | پنج Artifact قدیمی M1.6 همگی BTCIRT هستند و برای فرضیه BTCUSDT واجد صلاحیت نیستند؛ همبستگی‌های این corpus `NOT_COMPUTED` باقی می‌مانند (ADR-075). |
 | M8.1 BTCUSDT Capture + correlation | COMPLETE — EXPLORATORY / NO_SIGNIFICANT_OBI_CORRELATION | Capture و hash audit موفق؛ تحلیل دوباره از Artifact immutable در Run `46113673381` موفق؛ OBI در ۵m معنادار نشد (N=8)، در ۱۵m فقط N=2 و correlation estimable نیست. این نتیجه NO-GO اقتصادی نیست. |
 
 ## ۳. M7 — تصمیم نهایی و Trial Registry
 
-- حکم رسمی: `CLOSED_NO_GO` طبق ADR-074. هیچ feature sweep، تغییر مدل، تغییر universe، threshold search یا اجرای مجدد M7 زیر همین lineage مجاز نیست.
+- **M7 Cross-Sectional = CLOSED_NO_GO** طبق ADR-074. هیچ feature sweep، تغییر مدل، تغییر universe، threshold search یا اجرای مجدد M7 زیر همین lineage مجاز نیست.
 - G1.2: دو identity تاریخی `NOBITEX-M7-5PAIR-RIDGE-TOP2-01` و `NOBITEX-M7-10PAIR-RIDGE-TOP2-01` به علت `BLOCKED_DATA` پیش از Fit باقی مانده‌اند.
 - G2.0: دو identity superseding عبارت‌اند از `NOBITEX-M7-5PAIR-RIDGE-TOP2-02` و `NOBITEX-M7-9PAIR-RIDGE-TOP2-01`. هر دو به `BLOCKED_DATA_OR_FEATURE_QUALITY` با علت `m7_panel_empty_after_feature_qualification` رسیدند؛ هیچ Ridge fit یا economic fold انجام نشد.
 - G3.0: همان دو identity G2.0 با revision ویژگی `log_return_24h` به‌جای `relative_volume_shock_24h` ارزیابی شدند؛ این تغییر feature به‌عنوان configuration revision مستقل برای multiple-testing حفظ می‌شود، نه یک candidate identity جدید.
@@ -53,7 +57,7 @@ private_api_calls = 0   |   real_order_attempts = 0   |   Holdout = SEALED
 | 5PAIR G3.0 | 50 | 4,565 | 0.503741 | 99.997453% | 0/4 | FAIL |
 | 5PAIR G3.0 | 90 | 4,565 | 0.262960 | 99.9999997% | 0/4 | FAIL |
 | 9PAIR G3.0 | 50 | 5,959 | 0.424442 | 99.999872% | 0/4 | FAIL |
-| 9PAIR G3.0 | 90 | 5,959 | 0.193591 | 99.999999999% | 0/4 | FAIL |
+| 9PAIR G3.0 | 90 | 5,959 | 0.193591 | 99.9999999992% | 0/4 | FAIL |
 - حسابداری M7: چهار هویت candidate ثبت‌شده در G1.2/G2.0؛ دو identity از آن‌ها در G3.0 با revision پیکربندی دوباره ارزیابی شدند. G3.0 یک نسخهٔ رایگان یا حذف‌شدنی از سابقه نیست و باید در multiple-testing lineage بماند.
 
 ## ۴. Trial Registry — شمارش اصلاح‌شده
@@ -76,7 +80,7 @@ private_api_calls = 0   |   real_order_attempts = 0   |   Holdout = SEALED
 
 ### ۵. نقشهٔ راه جاری — M8.1 به‌عنوان تنها مسیر فعال
 
-۱) Capture عمومی BTCUSDT به مدت واقعی ۶۰٫۰۸۸ دقیقه در GitHub Actions تکمیل شد؛ هیچ هزینه، TinyFish، private API، credential یا سفارش استفاده نشد.
+۱) Capture عمومی BTCUSDT به مدت واقعی ۶۰.۰۸۸ دقیقه در GitHub Actions تکمیل شد؛ هیچ هزینه، TinyFish، private API، credential یا سفارش استفاده نشد.
 ۲) `market=BTCUSDT`، کانال‌های عمومی REST/WebSocket، timestamps، manifest و وضعیت gap ممیزی شدند؛ ۲٬۵۷۹ snapshot دفتر سفارش، ۹۳ معامله و صفر gap ثبت شد.
 ۳) Artifact خام ID `15249319923` با digest `sha256:bc16983be51490cafebff11c5de06360d6668633bd3a75ea1afbe0defd3837c0` immutable آپلود شد؛ Artifact در Job جدا دانلود و manifest/CSV SHAها دوباره ممیزی شدند.
 ۴) Analyzer سبک `analyze_m8_microstructure.py` اجرا شد؛ OBI top-5 در gridهای UTC غیرهمپوشان، بازده آتی mid-price در ۵ و ۱۵ دقیقه، Pearson/Spearman و اصلاح Bonferroni بررسی شدند.
@@ -116,7 +120,7 @@ private_api_calls = 0   |   real_order_attempts = 0   |   Holdout = SEALED
 # بخش تاریخی نسخهٔ ۱٫۲ — برای حفظ provenance؛ وضعیت جاری توسط نسخهٔ ۱٫۳ جایگزین شده است
 
 
-این متن snapshot تاریخی v1.2 در ۲۸ نوامبر ۲۰۲۶ است. برای حفظ provenance بدون بازنویسی تاریخچه نگهداری شده و از تاریخ ۲۸ نوامبر ۲۰۲۶، افزودهٔ نسخهٔ ۱٫۳ در ابتدای سند مرجع جاری است.
+این متن snapshot تاریخی v1.2 در ۲۷ نوامبر ۲۰۲۶ است. برای حفظ provenance بدون بازنویسی تاریخچه نگهداری شده و وضعیت جاری M8.1 از ۲۸ نوامبر ۲۰۲۶ در افزودهٔ نسخهٔ ۱٫۳ ابتدای سند ثبت شده است.
 
 ### ۱. وضعیت مخزن و شواهد کیفیت در snapshot تاریخی v1.2
 
@@ -300,7 +304,7 @@ HEAD پایهٔ تأییدشده
 
 شاخهٔ main
 
-a1c1a658906cd79be62796885e3ed782b66a267d — main HEAD فعلی؛ Tree SHA=5761c6c34143f8e6924f53a4e745c48932a5f791 (در این به‌روزرسانی تغییر نکرده)
+SHA و Tree مربوط به main در جدول مرجعیت تاریخی بند ۱ آمده‌اند؛ در این snapshot تغییر داده نشد.
 
 آخرین Standard CI روی HEAD پایه
 
@@ -552,7 +556,7 @@ research/nobitex-hf-strategy
 
 main
 
-a1c1a658906cd79be62796885e3ed782b66a267d / Tree 5761c6c34143f8e6924f53a4e745c48932a5f791
+SHA و Tree مرجع main در بند «وضعیت تاریخی main» در ابتدای این snapshot ثبت شده‌اند.
 
 Protected؛ در این نوبت تغییر داده نشده است. Tree SHA دقیقاً برابر مقدار baseline ثبت‌شده است.
 
@@ -1530,7 +1534,7 @@ authorization_status = NOT_AUTHORIZED
 EXECUTION_TRIGGER = NOT VERIFIED IN LIVE TREE AUDIT (MRD v1.0 historically recorded PROBE)
 ACQUISITION_TRIGGER = NOT VERIFIED IN LIVE TREE AUDIT (MRD v1.0 historically recorded PROBE)
 Four-arm execution lock = NOT_AUTHORIZED
-main = FROZEN @ 44bcaeae7eefd358cf063394b0e7f4f0b83af8eb
+main = FROZEN @ 44bcaeae7eefd358cf063394b0e7f4f0b83af8eb (مقدار تاریخی ثبت‌شده در MRD v1.0؛ این SHA، HEAD فعلی main نیست و فقط برای حفظ provenance تاریخی نگهداری شده است.)
 HOLDOUT_ACCESS = FORBIDDEN
 GLOBAL_N = UNKNOWN
 GLOBAL_DSR = NOT_COMPUTABLE
@@ -1727,7 +1731,7 @@ DSR / multiplicity
 
 پیش از هر Commit یا اجرای Workflow، وضعیت زنده از GitHub بررسی شود. هیچ‌یک از مقادیر این سند به‌عنوان HEAD آینده یا مجوز اجرای آینده تلقی نشود.
 
-HEAD پایهٔ این MRD با GitHub تطبیق داده شده است: 95133203e70265ac96f7d4dd7c14ed213fadaf38. main در این نوبت دست‌نخورده است و Tree SHA مبنای آن 5761c6c34143f8e6924f53a4e745c48932a5f791 باقی می‌ماند.
+HEAD پایهٔ این MRD با GitHub تطبیق داده شده است: 95133203e70265ac96f7d4dd7c14ed213fadaf38. SHA و Tree مربوط به main در جدول مرجعیت تاریخی این snapshot ثبت شده‌اند.
 
 ADR-053 تا ADR-065، Trial Registry append-only و Holdout Commitment را بررسی کن. مسیرهای اقتصادی ثبت‌شده NO-GO هستند؛ هیچ وضعیت تاریخی نباید مسیر فعال تلقی شود.
 
@@ -1755,8 +1759,7 @@ Holdout=SEALED؛ هیچ دسترسی Post-Hack، تغییر main، Paper/Live ی
 
 ACTIVE_BRANCH = research/nobitex-hf-strategy
 VERIFIED_BASE_HEAD = 95133203e70265ac96f7d4dd7c14ed213fadaf38 (pre-documentation commit)
-MAIN_HEAD = a1c1a658906cd79be62796885e3ed782b66a267d
-MAIN_TREE = 5761c6c34143f8e6924f53a4e745c48932a5f791 (baseline tree restored; unchanged in this turn)
+MAIN = FROZEN؛ HEAD و Tree در جدول مرجعیت تاریخی این snapshot ثبت شده‌اند.
 STANDARD_CI = #46001067175 / SUCCESS on VERIFIED_BASE_HEAD / 1,127 passed / 5 skipped / 90.36% coverage
 PATHS = HGBQ-CQR CLOSED_NO_GO | M3_OFI CLOSED_NO_GO | M5.2_SENTIMENT CLOSED_NO_GO | REGIME_T_TRIPLE_BARRIER CLOSED_NO_GO
 TRIALS = HGBQ 3 unique horizons (30 slots incl. 27 duplicates) | OFI 2 | Triple-Barrier 1 | M5.2 4
