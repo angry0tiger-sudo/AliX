@@ -2,11 +2,6 @@ name: M8.1 Reanalysis of Immutable BTCUSDT Capture
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - research/nobitex-hf-strategy
-    paths:
-      - TRIGGER_M8_ANALYSIS
 
 permissions:
   actions: read
