@@ -16,7 +16,7 @@ import httpx
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from scripts.audit_microstructure_capture import audit_capture
 
