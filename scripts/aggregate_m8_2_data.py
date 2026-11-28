@@ -12,8 +12,7 @@ import hashlib
 import io
 import json
 import re
-import urllib.error
-import urllib.request
+import httpx
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -122,59 +121,57 @@ def inter_segment_gap_rows(
     ]
 
 
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(
-        self,
-        req: urllib.request.Request,
-        fp: Any,
-        code: int,
-        msg: str,
-        headers: Any,
-        newurl: str,
-    ) -> urllib.request.Request | None:
-        return None
+def _github_headers(token: str) -> dict[str, str]:
+    return {
+        "Accept": "application/vnd.github+json",
+        "Authorization": f"Bearer {token}",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "AliX-M8.2-Free-GitHub-Actions",
+    }
 
 
 def _api_get(url: str, token: str) -> bytes:
-    request = urllib.request.Request(
+    response = httpx.get(
         url,
-        headers={
-            "Accept": "application/vnd.github+json",
-            "Authorization": f"Bearer {token}",
-            "X-GitHub-Api-Version": "2022-11-28",
-            "User-Agent": "AliX-M8.2-Free-GitHub-Actions",
-        },
+        headers=_github_headers(token),
+        timeout=90,
+        follow_redirects=False,
+        verify=True,
     )
-    with urllib.request.urlopen(request, timeout=90) as response:
-        return cast(bytes, response.read())
+    if not response.is_success:
+        raise AggregateError(f"GITHUB_API_HTTP_{response.status_code}")
+    return response.content
 
 
 def _download_artifact_zip(repo: str, artifact_id: int, token: str) -> bytes:
     url = f"https://api.github.com/repos/{repo}/actions/artifacts/{artifact_id}/zip"
-    request = urllib.request.Request(
+    response = httpx.get(
         url,
-        headers={
-            "Accept": "application/vnd.github+json",
-            "Authorization": f"Bearer {token}",
-            "X-GitHub-Api-Version": "2022-11-28",
-            "User-Agent": "AliX-M8.2-Free-GitHub-Actions",
-        },
+        headers=_github_headers(token),
+        timeout=90,
+        follow_redirects=False,
+        verify=True,
     )
-    opener = urllib.request.build_opener(_NoRedirect())
-    try:
-        with opener.open(request, timeout=90) as response:
-            return cast(bytes, response.read())
-    except urllib.error.HTTPError as exc:
-        if exc.code not in {301, 302, 303, 307, 308}:
-            raise
-        location = exc.headers.get("Location")
+    if response.status_code in {301, 302, 303, 307, 308}:
+        location = response.headers.get("location")
         if not location:
-            raise AggregateError("ARTIFACT_REDIRECT_WITHOUT_LOCATION") from exc
-    # The signed redirect is fetched without forwarding the GitHub token.
-    with urllib.request.urlopen(location, timeout=180) as response:
-        return cast(bytes, response.read())
-
-
+            raise AggregateError("ARTIFACT_REDIRECT_WITHOUT_LOCATION")
+        signed_url = httpx.URL(location)
+        if signed_url.scheme != "https" or not signed_url.host:
+            raise AggregateError("ARTIFACT_SIGNED_URL_MUST_USE_HTTPS")
+        # Fetch the signed URL in a fresh request, with no GitHub authorization header.
+        blob = httpx.get(
+            signed_url,
+            timeout=180,
+            follow_redirects=False,
+            verify=True,
+        )
+        if not blob.is_success:
+            raise AggregateError(f"SIGNED_ARTIFACT_HTTP_{blob.status_code}")
+        return blob.content
+    if not response.is_success:
+        raise AggregateError(f"ARTIFACT_DOWNLOAD_HTTP_{response.status_code}")
+    return response.content
 def _list_artifacts(repo: str, token: str) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
     for page in range(1, 11):
