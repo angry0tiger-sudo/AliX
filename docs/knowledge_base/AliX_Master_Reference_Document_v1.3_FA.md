@@ -46,14 +46,30 @@ private_api_calls = 0   |   real_order_attempts = 0   |   Holdout = SEALED
 - G1.2: دو identity تاریخی `NOBITEX-M7-5PAIR-RIDGE-TOP2-01` و `NOBITEX-M7-10PAIR-RIDGE-TOP2-01` به علت `BLOCKED_DATA` پیش از Fit باقی مانده‌اند.
 - G2.0: دو identity superseding عبارت‌اند از `NOBITEX-M7-5PAIR-RIDGE-TOP2-02` و `NOBITEX-M7-9PAIR-RIDGE-TOP2-01`. هر دو به `BLOCKED_DATA_OR_FEATURE_QUALITY` با علت `m7_panel_empty_after_feature_qualification` رسیدند؛ هیچ Ridge fit یا economic fold انجام نشد.
 - G3.0: همان دو identity G2.0 با revision ویژگی `log_return_24h` به‌جای `relative_volume_shock_24h` ارزیابی شدند؛ این تغییر feature به‌عنوان configuration revision مستقل برای multiple-testing حفظ می‌شود، نه یک candidate identity جدید.
-- G3.0 نتیجه: هر دو candidate و هر دو سناریوی 50/90 bps، NetPF<1 و MaxDD نزدیک 100% داشتند؛ هر دو ۰/۴ fold پایدار. 5PAIR: NetPF=0.503741 / 0.262960 و MaxDD=99.997453% / 99.9999997%؛ 9PAIR: NetPF=0.424442 / 0.193591 و MaxDD=99.999872% / 99.999999999%. هیچ Gate اقتصادی عبور نکرد.
+- G3.0 نتیجه: هر دو candidate و هر دو سناریوی 50/90 bps، NetPF<1 و MaxDD نزدیک 100% داشتند؛ هر دو ۰/۴ fold پایدار. هیچ Gate اقتصادی عبور نکرد.
+
+| Candidate | Cost (bps) | OOS trades | NetPF | MaxDD | Stable folds | Gate |
+|---|---:|---:|---:|---:|---:|---|
+| 5PAIR G3.0 | 50 | 4,565 | 0.503741 | 99.997453% | 0/4 | FAIL |
+| 5PAIR G3.0 | 90 | 4,565 | 0.262960 | 99.9999997% | 0/4 | FAIL |
+| 9PAIR G3.0 | 50 | 5,959 | 0.424442 | 99.999872% | 0/4 | FAIL |
+| 9PAIR G3.0 | 90 | 5,959 | 0.193591 | 99.999999999% | 0/4 | FAIL |
 - حسابداری M7: چهار هویت candidate ثبت‌شده در G1.2/G2.0؛ دو identity از آن‌ها در G3.0 با revision پیکربندی دوباره ارزیابی شدند. G3.0 یک نسخهٔ رایگان یا حذف‌شدنی از سابقه نیست و باید در multiple-testing lineage بماند.
 
 ## ۴. Trial Registry — شمارش اصلاح‌شده
 
-- دوازده identity منطقی متمرکز پیش از M7 در پنج workstream ثبت شده‌اند: HGBQ-CQR=3، M3 OFI=2، Regime T=1، M5.2=4، M6=2.
-- M7 چهار identity دیگر در revisions G1.2/G2.0 ثبت کرده است. بنابراین شمارش متمرکز candidate identityهای متمایز ثبت‌شده و ردشده برابر **۱۶** است، نه ۱۰ نسخهٔ قبلی.
-- شمارش رکوردهای slot/identity در inventory متمرکز: ۳۰ slot تاریخی HGBQ (شامل ۲۷ duplicate) + ۲ OFI + ۱ Regime T + ۴ M5.2 + ۲ M6 + ۴ M7 = **۴۳ رکورد**. این جمع فقط برای inventory توصیفی است و معادل GLOBAL_N نیست.
+- دوازده identity منطقی متمرکز پیش از M7 در پنج workstream ثبت شده‌اند و M7 چهار identity دیگر در revisions G1.2/G2.0 ثبت کرده است؛ مجموع هویت‌های یکتای متمرکز **۱۶** است.
+- رکوردهای slot/identity در inventory متمرکز **۴۳** موردند؛ این inventory توصیفی است و معادل GLOBAL_N نیست.
+
+| Workstream | Candidate identities | Slot / inventory records | وضعیت |
+|---|---:|---:|---|
+| HGBQ-CQR | 3 | 30 (27 duplicate) | CLOSED NO-GO |
+| M3 OFI | 2 | 2 | CLOSED NO-GO |
+| Regime T Triple-Barrier | 1 | 1 | CLOSED NO-GO |
+| M5.2 Sentiment | 4 | 4 | CLOSED NO-GO |
+| M6 Three-Class | 2 | 2 | INSUFFICIENT_SAMPLE / NO-GO |
+| M7 Cross-Sectional | 4 | 4 | CLOSED NO-GO |
+| **Total focused inventory** | **16** | **43** | **GLOBAL_N=UNKNOWN** |
 - G3.0 M7 یک configuration revision روی همان دو identity G2.0 است و در multiple-testing lineage حفظ می‌شود؛ اما به‌عنوان دو identity منطقی تازه به شمارش یکتا اضافه نمی‌شود.
 - `GLOBAL_N=UNKNOWN` و `GLOBAL_DSR=NOT_COMPUTABLE` بدون تغییر باقی می‌مانند. تعداد اجرای Workflow، attempt، candidate identity و config revision نباید با یکدیگر جمع یا یکسان فرض شوند.
 - M8/M8.1 هنوز candidate اقتصادی ثبت‌شده ندارند. Capture داده، Trial اقتصادی نیست؛ تا عبور Source Gate و ثبت فرضیه/تحلیل، M8.1 به شمارش ۱۶ هویت افزوده نمی‌شود.
@@ -2030,10 +2046,27 @@ C.3. M8 source gate و M8.1 run snapshot
 
 - M1.6 قدیمی: پنج Artifact عمومی، تماماً `BTCIRT`؛ 171,604 order-book rows، 25,623 trade rows و 8 gap record. برای فرضیه BTCUSDT واجد صلاحیت نیست.
 - M8: `BLOCKED`؛ همبستگی‌های OBI برای BTCUSDT از داده‌های M1.6 محاسبه نشده‌اند و باید `NOT_COMPUTED` باقی بمانند.
-- M8.1 Capture: Run `46106438168` روی SHA `a0b550f23071f8bf920b866771eb75cba30d8bf6`؛ Job Capture موفق؛ مدت واقعی ۶۰٫۰۸۸ دقیقه؛ ۲٬۵۷۹ book / ۹۳ trades / صفر gap.
+- M8.1 Capture: Run `46106438168` روی SHA `a0b550f23071f8bf920b866771eb75cba30d8bf6`؛ Job Capture موفق.
 - Raw Artifact: ID `15249319923`؛ digest `sha256:bc16983be51490cafebff11c5de06360d6668633bd3a75ea1afbe0defd3837c0`؛ Manifest SHA `29fe9d3a556d810fc441da9401f529d8efae0c8c507dce88b4a861c69e2a8107`.
 - Analyzer Run `46113673381` با نتیجهٔ `SUCCESS`؛ Artifact تحلیل ID `15250428572`؛ ADR-076 ثبت شد.
-- OBI top-5: ۵m N=8، Pearson r=0.47108390، p دوطرفه=0.23869631، Bonferroni p=1.0؛ Spearman rho=0.26190476، Bonferroni p=1.0. افق ۱۵m: N=2 و correlation estimable نیست.
+
+| Capture metric | Verified value |
+|---|---|
+| Market | BTCUSDT |
+| Actual duration | 60.088 minutes |
+| Order-book snapshots | 2,579 |
+| Trade rows | 93 |
+| Gap records | 0 |
+| Raw GitHub Artifact | 15249319923 |
+| Raw artifact SHA-256 | `bc16983be51490cafebff11c5de06360d6668633bd3a75ea1afbe0defd3837c0` |
+| Manifest SHA-256 | `29fe9d3a556d810fc441da9401f529d8efae0c8c507dce88b4a861c69e2a8107` |
+
+- OBI top-5: ۵m N=8 و ۱۵m N=2؛ نتایج دقیق در جدول زیر آمده است.
+| Horizon | N | Pearson r | Pearson p | Pearson p (Bonferroni ×8) | Spearman rho | Spearman p | Spearman p (Bonferroni ×8) |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 5m | 8 | 0.47108390 | 0.23869631 | 1.00000000 | 0.26190476 | 0.53092286 | 1.00000000 |
+| 15m | 2 | N/A | N/A | N/A | N/A | N/A | N/A |
+
 - تصمیم تشخیصی `NO_SIGNIFICANT_OBI_CORRELATION` است؛ نه صفر همبستگی اثبات شده و نه حکم اقتصادی NO-GO. یک ساعت داده به‌دلیل N بسیار کوچک فقط اکتشافی است.
 - `TRIGGER_M8`، `TRIGGER_M8_ANALYSIS` و Push triggerهای موقت حذف شده‌اند؛ Workflowهای باقی‌مانده فقط `workflow_dispatch` را حفظ می‌کنند.
 
