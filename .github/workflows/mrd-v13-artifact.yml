@@ -2,11 +2,6 @@ name: MRD v1.3 Word artifact and repository publication
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - research/nobitex-hf-strategy
-    paths:
-      - TRIGGER_MRD_V13
 
 permissions:
   contents: write
