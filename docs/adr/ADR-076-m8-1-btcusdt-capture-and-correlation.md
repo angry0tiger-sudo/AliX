@@ -1,4 +1,3 @@
-\
 # ADR-076 — M8.1 BTCUSDT One-Hour Public L2 Capture and Correlation
 
 - **Date:** 2026-11-28
