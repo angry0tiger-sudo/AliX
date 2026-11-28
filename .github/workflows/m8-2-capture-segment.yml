@@ -1,0 +1,189 @@
+name: M8.2 Reusable BTCUSDT Capture Segment
+
+on:
+  workflow_call:
+    inputs:
+      segment_number:
+        required: true
+        type: number
+      soak_id:
+        required: true
+        type: string
+      expected_code_sha:
+        required: true
+        type: string
+      previous_finished_at:
+        required: false
+        default: ""
+        type: string
+      wait_before_capture:
+        required: true
+        type: boolean
+    outputs:
+      capture_started_at:
+        value: ${{{ jobs.capture.outputs.capture_started_at }}
+      capture_finished_at:
+        value: ${{{ jobs.capture.outputs.capture_finished_at }}
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 125
+    permissions:
+      contents: read
+    outputs:
+      capture_started_at: ${{{ steps.metadata.outputs.capture_started_at }}
+      capture_finished_at: ${{{ steps.metadata.outputs.capture_finished_at }}
+    env:
+      PYTHONUNBUFFERED: "1"
+      ALIX_DRY_RUN: "true"
+      ALIX_ALLOW_LIVE_TRADING: "false"
+      ALIX_MARKET: "BTCUSDT"
+      ALIX_CAPTURE_SEGMENT_INTERVAL_MINUTES: "120"
+      CAPTURE_DURATION_MINUTES: "110"
+      RUN_NUMBER: ${{{ inputs.segment_number }}
+      SOAK_ID: ${{{ inputs.soak_id }}
+      EXPECTED_CODE_SHA: ${{{ inputs.expected_code_sha }}
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    steps:
+      - name: Checkout exact research commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{{ inputs.expected_code_sha }}
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned public-capture dependencies
+        run: |
+          python -m pip install pip==25.2
+          python -m pip install websocket-client==1.9.2 httpx==0.28.1
+
+      - name: Validate segment arguments
+        run: |
+          python - <<'PY'
+          import os
+          assert 1 <= int(os.environ["RUN_NUMBER"]) <= 14
+          assert os.environ["CAPTURE_DURATION_MINUTES"] == "110"
+          assert os.environ["ALIX_MARKET"] == "BTCUSDT"
+          assert os.environ["ALIX_CAPTURE_SEGMENT_INTERVAL_MINUTES"] == "120"
+          assert len(os.environ["EXPECTED_CODE_SHA"]) == 40
+          PY
+
+      - name: Wait until ten minutes after previous capture ended
+        if: ${{{ inputs.wait_before_capture }}
+        env:
+          PREVIOUS_FINISHED_AT: ${{{ inputs.previous_finished_at }}
+        run: |
+          python - <<'PY'
+          import os
+          import time
+          from datetime import datetime, timedelta, timezone
+          previous = datetime.fromisoformat(
+              os.environ["PREVIOUS_FINISHED_AT"].replace("Z", "+00:00")
+          )
+          target = previous + timedelta(minutes=10)
+          while True:
+              remaining = (target - datetime.now(timezone.utc)).total_seconds()
+              if remaining <= 0:
+                  break
+              print(f"WAIT_SECONDS_TO_GAP_BOUNDARY={remaining:.1f}")
+              time.sleep(min(remaining, 30))
+          PY
+
+      - name: Capture 110 minutes of public BTCUSDT L2 and trades
+        run: |
+          python -m scripts.capture_nobitex_microstructure \
+            --duration-minutes "$CAPTURE_DURATION_MINUTES" \
+            --output-dir .artifacts/m8_2_btcusdt_capture
+
+      - name: Pin soak metadata and verify safety invariants
+        id: metadata
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from datetime import datetime
+          from pathlib import Path
+          root = Path(".artifacts/m8_2_btcusdt_capture")
+          path = root / "manifest.json"
+          manifest = json.loads(path.read_text(encoding="utf-8"))
+          number = int(os.environ["RUN_NUMBER"])
+          coverage = manifest["coverage_segment"]
+          assert manifest["market"] == "BTCUSDT"
+          assert manifest["code_commit_sha"] == os.environ["EXPECTED_CODE_SHA"]
+          assert manifest["workflow_run_id"] == os.environ["GITHUB_RUN_ID"]
+          assert manifest["requested_duration_minutes"] == 110
+          assert coverage["segment_interval_minutes"] == 120
+          assert coverage["nominal_inter_segment_missing_minutes"] == 10
+          started = datetime.fromisoformat(manifest["started_at_utc"].replace("Z", "+00:00"))
+          finished = datetime.fromisoformat(manifest["finished_at_utc"].replace("Z", "+00:00"))
+          seconds = (finished - started).total_seconds()
+          assert 6600 <= seconds <= 6900, seconds
+          coverage.update({
+              "kind": "M8_2_SOAK_SEGMENT",
+              "soak_id": os.environ["SOAK_ID"],
+              "segment_number": number,
+              "expected_segment_count": 14,
+              "target_cadence_minutes": 120,
+              "inter_segment_coverage_status": "MISSING_COVERAGE",
+              "capture_segments_must_not_be_joined_as_continuous": True,
+          })
+          manifest.update({
+              "soak_id": os.environ["SOAK_ID"],
+              "segment_number": number,
+              "expected_segment_count": 14,
+              "target_cadence_minutes": 120,
+              "nominal_inter_segment_missing_minutes": 10,
+          })
+          raw = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode()
+          path.write_bytes(raw)
+          digest = hashlib.sha256(raw).hexdigest()
+          (root / "manifest.sha256").write_text(
+              f"{digest}  manifest.json\n", encoding="utf-8"
+          )
+          invariants = {
+              "authorization_header_sent": False,
+              "websocket_connection_token_sent": False,
+              "private_api_calls": 0,
+              "holdout_bytes_read": False,
+              "posthack_data_read": False,
+              "real_order_attempts": 0,
+              "paper_orders": 0,
+              "Champion": None,
+              "order_permission": False,
+              "trading_authorization": "NO-GO",
+          }
+          for key, value in invariants.items():
+              assert manifest.get(key) == value, (key, manifest.get(key))
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"capture_started_at={manifest['started_at_utc']}\n")
+              output.write(f"capture_finished_at={manifest['finished_at_utc']}\n")
+          print(json.dumps({
+              "segment": number,
+              "capture_seconds": round(seconds, 3),
+              "orderbook_records": manifest["record_counts"]["orderbook"],
+              "trade_records": manifest["record_counts"]["trades"],
+              "manifest_sha256": digest,
+          }, sort_keys=True))
+          PY
+
+      - name: Independently audit segment artifact
+        run: |
+          python -m scripts.audit_microstructure_capture \
+            --artifact-dir .artifacts/m8_2_btcusdt_capture
+
+      - name: Upload immutable raw segment artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: alix-m8-2-btcusdt-${{{ env.SOAK_ID }}-segment-${{{ env.RUN_NUMBER }}-run-${{{ github.run_id }}
+          path: .artifacts/m8_2_btcusdt_capture/*
+          if-no-files-found: error
+          retention-days: 90
