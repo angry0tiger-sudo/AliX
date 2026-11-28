@@ -172,6 +172,8 @@ def _download_artifact_zip(repo: str, artifact_id: int, token: str) -> bytes:
     if not response.is_success:
         raise AggregateError(f"ARTIFACT_DOWNLOAD_HTTP_{response.status_code}")
     return response.content
+
+
 def _list_artifacts(repo: str, token: str) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
     for page in range(1, 11):

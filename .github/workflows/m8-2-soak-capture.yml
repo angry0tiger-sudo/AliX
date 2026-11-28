@@ -303,6 +303,11 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install pinned HTTPS artifact downloader
+        run: |
+          python -m pip install pip==25.2
+          python -m pip install httpx==0.28.1
+
       - name: Download, verify and merge all 14 raw segment artifacts
         run: |
           python -m scripts.aggregate_m8_2_data \
