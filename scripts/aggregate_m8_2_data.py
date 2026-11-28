@@ -22,21 +22,48 @@ from typing import Any
 from scripts.audit_microstructure_capture import audit_capture
 
 ARTIFACT_PREFIX = "alix-m8-2-btcusdt-"
-RAW_FILES = {"manifest.json", "manifest.sha256", "orderbook.csv", "trades.csv", "gaps.csv"}
+RAW_FILES = {
+    "manifest.json",
+    "manifest.sha256",
+    "orderbook.csv",
+    "trades.csv",
+    "gaps.csv",
+}
 CSV_SCHEMAS = {
     "orderbook.csv": (
-        "captured_at_utc", "source", "exchange_timestamp_ms", "offset",
-        "best_bid_price", "best_bid_size", "best_ask_price", "best_ask_size",
-        "spread", "mid_price", "bids_top_json", "asks_top_json",
+        "captured_at_utc",
+        "source",
+        "exchange_timestamp_ms",
+        "offset",
+        "best_bid_price",
+        "best_bid_size",
+        "best_ask_price",
+        "best_ask_size",
+        "spread",
+        "mid_price",
+        "bids_top_json",
+        "asks_top_json",
     ),
     "trades.csv": (
-        "captured_at_utc", "source", "exchange_timestamp_ms", "side",
-        "price", "volume", "offset",
+        "captured_at_utc",
+        "source",
+        "exchange_timestamp_ms",
+        "side",
+        "price",
+        "volume",
+        "offset",
     ),
     "gaps.csv": (
-        "stream", "gap_start_utc", "gap_end_utc", "gap_start_ms",
-        "gap_end_ms", "reason", "previous_offset", "next_offset",
-        "replay_attempted", "replay_available",
+        "stream",
+        "gap_start_utc",
+        "gap_end_utc",
+        "gap_start_ms",
+        "gap_end_ms",
+        "reason",
+        "previous_offset",
+        "next_offset",
+        "replay_attempted",
+        "replay_available",
     ),
 }
 
@@ -185,7 +212,10 @@ def _load_segment(
     content = _download_artifact_zip(repo, artifact_id, token)
     downloaded_sha = sha256(content)
     api_digest = str(artifact.get("digest") or "")
-    if api_digest.startswith("sha256:") and api_digest.removeprefix("sha256:") != downloaded_sha:
+    if (
+        api_digest.startswith("sha256:")
+        and api_digest.removeprefix("sha256:") != downloaded_sha
+    ):
         raise AggregateError(f"ARTIFACT_API_DIGEST_MISMATCH:{segment_number}")
     _extract_raw_artifact(content, destination)
     manifest = json.loads((destination / "manifest.json").read_text(encoding="utf-8"))
@@ -263,9 +293,9 @@ def aggregate(
     artifacts = _list_artifacts(repo, token)
     prefix = f"{ARTIFACT_PREFIX}{soak_id}-segment-"
     candidates = [
-        item for item in artifacts
-        if str(item.get("name", "")).startswith(prefix)
-        and item.get("expired") is False
+        item
+        for item in artifacts
+        if str(item.get("name", "")).startswith(prefix) and item.get("expired") is False
     ]
     by_segment: dict[int, dict[str, Any]] = {}
     for item in candidates:
@@ -277,7 +307,10 @@ def aggregate(
             raise AggregateError(f"UNEXPECTED_SOAK_ARTIFACT_NAME:{item.get('name')}")
         number, run_id = int(match.group(1)), int(match.group(2))
         workflow_run = item.get("workflow_run", {})
-        if not isinstance(workflow_run, dict) or int(workflow_run.get("id", -1)) != run_id:
+        if (
+            not isinstance(workflow_run, dict)
+            or int(workflow_run.get("id", -1)) != run_id
+        ):
             raise AggregateError(f"ARTIFACT_NAME_RUN_ID_MISMATCH:{number}")
         if number in by_segment:
             raise AggregateError(f"DUPLICATE_SEGMENT_ARTIFACT:{number}")
@@ -312,17 +345,19 @@ def aggregate(
     inter_gaps: list[dict[str, Any]] = []
     for previous, following in zip(segment_meta, segment_meta[1:]):
         generated = inter_segment_gap_rows(previous, following)
-        inter_gaps.append({
-            "after_segment": previous["segment_number"],
-            "before_segment": following["segment_number"],
-            "start_utc": generated[0]["gap_start_utc"],
-            "end_utc": generated[0]["gap_end_utc"],
-            "missing_seconds": (
-                parse_time(generated[0]["gap_end_utc"])
-                - parse_time(generated[0]["gap_start_utc"])
-            ).total_seconds(),
-            "nominal_missing_seconds": 600,
-        })
+        inter_gaps.append(
+            {
+                "after_segment": previous["segment_number"],
+                "before_segment": following["segment_number"],
+                "start_utc": generated[0]["gap_start_utc"],
+                "end_utc": generated[0]["gap_end_utc"],
+                "missing_seconds": (
+                    parse_time(generated[0]["gap_end_utc"])
+                    - parse_time(generated[0]["gap_start_utc"])
+                ).total_seconds(),
+                "nominal_missing_seconds": 600,
+            }
+        )
 
     merged_rows: dict[str, list[dict[str, str]]] = {}
     for filename in ("orderbook.csv", "trades.csv"):
@@ -410,7 +445,9 @@ def aggregate(
             "tfi_aggressor_semantics": "PROXY_NOT_EXPLICITLY_DEFINED_BY_OFFICIAL_SCHEMA",
         },
     }
-    manifest_bytes = (json.dumps(aggregate_manifest, indent=2, sort_keys=True) + "\n").encode()
+    manifest_bytes = (
+        json.dumps(aggregate_manifest, indent=2, sort_keys=True) + "\n"
+    ).encode()
     (output_dir / "manifest.json").write_bytes(manifest_bytes)
     manifest_digest = sha256(manifest_bytes)
     (output_dir / "manifest.sha256").write_text(
@@ -418,9 +455,15 @@ def aggregate(
     )
 
     archive_path = output_dir / "analysis_archive.zip"
-    with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+    with zipfile.ZipFile(
+        archive_path, "w", compression=zipfile.ZIP_DEFLATED
+    ) as archive:
         for filename in (
-            "manifest.json", "manifest.sha256", "orderbook.csv", "trades.csv", "gaps.csv"
+            "manifest.json",
+            "manifest.sha256",
+            "orderbook.csv",
+            "trades.csv",
+            "gaps.csv",
         ):
             archive.write(output_dir / filename, arcname=filename)
     archive_digest = sha256(archive_path.read_bytes())
@@ -483,8 +526,13 @@ def main() -> int:
     if not token or not repo or not expected_sha or final_run_id <= 0:
         raise SystemExit("GITHUB_ACTIONS_CONTEXT_MISSING")
     result = aggregate(
-        args.soak_id, args.expected_segments, args.output_dir,
-        repo, token, expected_sha, final_run_id,
+        args.soak_id,
+        args.expected_segments,
+        args.output_dir,
+        repo,
+        token,
+        expected_sha,
+        final_run_id,
     )
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0

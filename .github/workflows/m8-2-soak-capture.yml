@@ -23,7 +23,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: alix-m8-2-btcusdt-soak-${{{ github.run_id }}
+  group: alix-m8-2-btcusdt-soak-${{ github.run_id }}
   cancel-in-progress: false
 
 jobs:
@@ -38,7 +38,7 @@ jobs:
       - name: Checkout exact research source commit
         uses: actions/checkout@v4
         with:
-          ref: ${{{ github.sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Set up Python
@@ -63,9 +63,9 @@ jobs:
 
       - name: Wait for Standard CI on this exact source commit
         env:
-          GITHUB_TOKEN: ${{{ github.token }}
-          GITHUB_REPOSITORY: ${{{ github.repository }}
-          EXPECTED_SHA: ${{{ github.sha }}
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          EXPECTED_SHA: ${{ github.sha }}
         run: |
           python - <<'PY'
           import json
@@ -138,8 +138,8 @@ jobs:
     uses: ./.github/workflows/m8-2-capture-segment.yml
     with:
       segment_number: 1
-      soak_id: ${{{ github.run_id }}
-      expected_code_sha: ${{{ github.sha }}
+      soak_id: ${{ github.run_id }}
+      expected_code_sha: ${{ github.sha }}
       previous_finished_at: ""
       wait_before_capture: false
 
@@ -148,9 +148,9 @@ jobs:
     uses: ./.github/workflows/m8-2-capture-segment.yml
     with:
       segment_number: 2
-      soak_id: ${{{ github.run_id }}
-      expected_code_sha: ${{{ github.sha }}
-      previous_finished_at: ${{{ needs.capture_01.outputs.capture_finished_at }}
+      soak_id: ${{ github.run_id }}
+      expected_code_sha: ${{ github.sha }}
+      previous_finished_at: ${{ needs.capture_01.outputs.capture_finished_at }}
       wait_before_capture: true
 
   capture_03:
@@ -158,9 +158,9 @@ jobs:
     uses: ./.github/workflows/m8-2-capture-segment.yml
     with:
       segment_number: 3
-      soak_id: ${{{ github.run_id }}
-      expected_code_sha: ${{{ github.sha }}
-      previous_finished_at: ${{{ needs.capture_02.outputs.capture_finished_at }}
+      soak_id: ${{ github.run_id }}
+      expected_code_sha: ${{ github.sha }}
+      previous_finished_at: ${{ needs.capture_02.outputs.capture_finished_at }}
       wait_before_capture: true
 
   capture_04:
@@ -168,9 +168,9 @@ jobs:
     uses: ./.github/workflows/m8-2-capture-segment.yml
     with:
       segment_number: 4
-      soak_id: ${{{ github.run_id }}
-      expected_code_sha: ${{{ github.sha }}
-      previous_finished_at: ${{{ needs.capture_03.outputs.capture_finished_at }}
+      soak_id: ${{ github.run_id }}
+      expected_code_sha: ${{ github.sha }}
+      previous_finished_at: ${{ needs.capture_03.outputs.capture_finished_at }}
       wait_before_capture: true
 
   capture_05:
@@ -178,9 +178,9 @@ jobs:
     uses: ./.github/workflows/m8-2-capture-segment.yml
     with:
       segment_number: 5
-      soak_id: ${{{ github.run_id }}
-      expected_code_sha: ${{{ github.sha }}
-      previous_finished_at: ${{{ needs.capture_04.outputs.capture_finished_at }}
+      soak_id: ${{ github.run_id }}
+      expected_code_sha: ${{ github.sha }}
+      previous_finished_at: ${{ needs.capture_04.outputs.capture_finished_at }}
       wait_before_capture: true
 
   capture_06:
@@ -188,9 +188,9 @@ jobs:
     uses: ./.github/workflows/m8-2-capture-segment.yml
     with:
       segment_number: 6
-      soak_id: ${{{ github.run_id }}
-      expected_code_sha: ${{{ github.sha }}
-      previous_finished_at: ${{{ needs.capture_05.outputs.capture_finished_at }}
+      soak_id: ${{ github.run_id }}
+      expected_code_sha: ${{ github.sha }}
+      previous_finished_at: ${{ needs.capture_05.outputs.capture_finished_at }}
       wait_before_capture: true
 
   capture_07:
@@ -198,9 +198,9 @@ jobs:
     uses: ./.github/workflows/m8-2-capture-segment.yml
     with:
       segment_number: 7
-      soak_id: ${{{ github.run_id }}
-      expected_code_sha: ${{{ github.sha }}
-      previous_finished_at: ${{{ needs.capture_06.outputs.capture_finished_at }}
+      soak_id: ${{ github.run_id }}
+      expected_code_sha: ${{ github.sha }}
+      previous_finished_at: ${{ needs.capture_06.outputs.capture_finished_at }}
       wait_before_capture: true
 
   capture_08:
@@ -208,9 +208,9 @@ jobs:
     uses: ./.github/workflows/m8-2-capture-segment.yml
     with:
       segment_number: 8
-      soak_id: ${{{ github.run_id }}
-      expected_code_sha: ${{{ github.sha }}
-      previous_finished_at: ${{{ needs.capture_07.outputs.capture_finished_at }}
+      soak_id: ${{ github.run_id }}
+      expected_code_sha: ${{ github.sha }}
+      previous_finished_at: ${{ needs.capture_07.outputs.capture_finished_at }}
       wait_before_capture: true
 
   capture_09:
@@ -218,9 +218,9 @@ jobs:
     uses: ./.github/workflows/m8-2-capture-segment.yml
     with:
       segment_number: 9
-      soak_id: ${{{ github.run_id }}
-      expected_code_sha: ${{{ github.sha }}
-      previous_finished_at: ${{{ needs.capture_08.outputs.capture_finished_at }}
+      soak_id: ${{ github.run_id }}
+      expected_code_sha: ${{ github.sha }}
+      previous_finished_at: ${{ needs.capture_08.outputs.capture_finished_at }}
       wait_before_capture: true
 
   capture_10:
@@ -228,9 +228,9 @@ jobs:
     uses: ./.github/workflows/m8-2-capture-segment.yml
     with:
       segment_number: 10
-      soak_id: ${{{ github.run_id }}
-      expected_code_sha: ${{{ github.sha }}
-      previous_finished_at: ${{{ needs.capture_09.outputs.capture_finished_at }}
+      soak_id: ${{ github.run_id }}
+      expected_code_sha: ${{ github.sha }}
+      previous_finished_at: ${{ needs.capture_09.outputs.capture_finished_at }}
       wait_before_capture: true
 
   capture_11:
@@ -238,9 +238,9 @@ jobs:
     uses: ./.github/workflows/m8-2-capture-segment.yml
     with:
       segment_number: 11
-      soak_id: ${{{ github.run_id }}
-      expected_code_sha: ${{{ github.sha }}
-      previous_finished_at: ${{{ needs.capture_10.outputs.capture_finished_at }}
+      soak_id: ${{ github.run_id }}
+      expected_code_sha: ${{ github.sha }}
+      previous_finished_at: ${{ needs.capture_10.outputs.capture_finished_at }}
       wait_before_capture: true
 
   capture_12:
@@ -248,9 +248,9 @@ jobs:
     uses: ./.github/workflows/m8-2-capture-segment.yml
     with:
       segment_number: 12
-      soak_id: ${{{ github.run_id }}
-      expected_code_sha: ${{{ github.sha }}
-      previous_finished_at: ${{{ needs.capture_11.outputs.capture_finished_at }}
+      soak_id: ${{ github.run_id }}
+      expected_code_sha: ${{ github.sha }}
+      previous_finished_at: ${{ needs.capture_11.outputs.capture_finished_at }}
       wait_before_capture: true
 
   capture_13:
@@ -258,9 +258,9 @@ jobs:
     uses: ./.github/workflows/m8-2-capture-segment.yml
     with:
       segment_number: 13
-      soak_id: ${{{ github.run_id }}
-      expected_code_sha: ${{{ github.sha }}
-      previous_finished_at: ${{{ needs.capture_12.outputs.capture_finished_at }}
+      soak_id: ${{ github.run_id }}
+      expected_code_sha: ${{ github.sha }}
+      previous_finished_at: ${{ needs.capture_12.outputs.capture_finished_at }}
       wait_before_capture: true
 
   capture_14:
@@ -268,9 +268,9 @@ jobs:
     uses: ./.github/workflows/m8-2-capture-segment.yml
     with:
       segment_number: 14
-      soak_id: ${{{ github.run_id }}
-      expected_code_sha: ${{{ github.sha }}
-      previous_finished_at: ${{{ needs.capture_13.outputs.capture_finished_at }}
+      soak_id: ${{ github.run_id }}
+      expected_code_sha: ${{ github.sha }}
+      previous_finished_at: ${{ needs.capture_13.outputs.capture_finished_at }}
       wait_before_capture: true
 
 
@@ -284,10 +284,10 @@ jobs:
       actions: read
       contents: write
     env:
-      GITHUB_TOKEN: ${{{ github.token }}
-      GITHUB_REPOSITORY: ${{{ github.repository }}
-      EXPECTED_CODE_SHA: ${{{ github.sha }}
-      SOAK_ID: ${{{ github.run_id }}
+      GITHUB_TOKEN: ${{ github.token }}
+      GITHUB_REPOSITORY: ${{ github.repository }}
+      EXPECTED_CODE_SHA: ${{ github.sha }}
+      SOAK_ID: ${{ github.run_id }}
       ALIX_DRY_RUN: "true"
       ALIX_ALLOW_LIVE_TRADING: "false"
       PYTHONUNBUFFERED: "1"
@@ -295,7 +295,7 @@ jobs:
       - name: Checkout exact source commit
         uses: actions/checkout@v4
         with:
-          ref: ${{{ github.sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Set up Python
@@ -452,7 +452,7 @@ jobs:
       - name: Commit ADR-077 to research branch only
         uses: actions/github-script@v7
         with:
-          github-token: ${{{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const fs = require("fs");
             const path = "docs/adr/ADR-077-m8-2-btcusdt-public-microstructure-results.md";
@@ -487,7 +487,7 @@ jobs:
       - name: Upload aggregate data, checksums, report and ADR-077
         uses: actions/upload-artifact@v4
         with:
-          name: alix-m8-2-btcusdt-${{{ env.SOAK_ID }}-aggregate-analysis
+          name: alix-m8-2-btcusdt-${{ env.SOAK_ID }}-aggregate-analysis
           path: |
             .artifacts/m8_2_aggregate/manifest.json
             .artifacts/m8_2_aggregate/manifest.sha256

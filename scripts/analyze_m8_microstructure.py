@@ -314,11 +314,12 @@ def _read_verified_archive(
             files_meta = manifest.get("files")
             if not isinstance(files_meta, dict):
                 raise InputError(f"MANIFEST_FILES_MISSING:{path.name}")
-            trade_fields, trade_rows = _read_csv_rows(
-                archive, files_meta, "trades.csv"
-            )
+            trade_fields, trade_rows = _read_csv_rows(archive, files_meta, "trades.csv")
             if not trade_fields or not {
-                "source", "exchange_timestamp_ms", "side", "volume"
+                "source",
+                "exchange_timestamp_ms",
+                "side",
+                "volume",
             }.issubset(set(trade_fields)):
                 raise InputError("TRADE_SCHEMA_MISMATCH")
             book_fields, book_rows = _read_csv_rows(
@@ -680,9 +681,8 @@ def _microstructure_signal_found(correlations: dict[str, Any]) -> bool:
     for horizon in HORIZONS_MS:
         for feature in FEATURES:
             item = correlations[horizon][feature]
-            if (
-                item.get("pearson_significant_after_bonferroni")
-                or item.get("spearman_significant_after_bonferroni")
+            if item.get("pearson_significant_after_bonferroni") or item.get(
+                "spearman_significant_after_bonferroni"
             ):
                 return True
     return False

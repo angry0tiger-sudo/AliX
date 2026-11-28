@@ -21,9 +21,9 @@ on:
         type: boolean
     outputs:
       capture_started_at:
-        value: ${{{ jobs.capture.outputs.capture_started_at }}
+        value: ${{ jobs.capture.outputs.capture_started_at }}
       capture_finished_at:
-        value: ${{{ jobs.capture.outputs.capture_finished_at }}
+        value: ${{ jobs.capture.outputs.capture_finished_at }}
 
 permissions:
   contents: read
@@ -35,8 +35,8 @@ jobs:
     permissions:
       contents: read
     outputs:
-      capture_started_at: ${{{ steps.metadata.outputs.capture_started_at }}
-      capture_finished_at: ${{{ steps.metadata.outputs.capture_finished_at }}
+      capture_started_at: ${{ steps.metadata.outputs.capture_started_at }}
+      capture_finished_at: ${{ steps.metadata.outputs.capture_finished_at }}
     env:
       PYTHONUNBUFFERED: "1"
       ALIX_DRY_RUN: "true"
@@ -44,15 +44,15 @@ jobs:
       ALIX_MARKET: "BTCUSDT"
       ALIX_CAPTURE_SEGMENT_INTERVAL_MINUTES: "120"
       CAPTURE_DURATION_MINUTES: "110"
-      RUN_NUMBER: ${{{ inputs.segment_number }}
-      SOAK_ID: ${{{ inputs.soak_id }}
-      EXPECTED_CODE_SHA: ${{{ inputs.expected_code_sha }}
+      RUN_NUMBER: ${{ inputs.segment_number }}
+      SOAK_ID: ${{ inputs.soak_id }}
+      EXPECTED_CODE_SHA: ${{ inputs.expected_code_sha }}
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
     steps:
       - name: Checkout exact research commit
         uses: actions/checkout@v4
         with:
-          ref: ${{{ inputs.expected_code_sha }}
+          ref: ${{ inputs.expected_code_sha }}
           persist-credentials: false
 
       - name: Set up Python
@@ -77,9 +77,9 @@ jobs:
           PY
 
       - name: Wait until ten minutes after previous capture ended
-        if: ${{{ inputs.wait_before_capture }}
+        if: ${{ inputs.wait_before_capture }}
         env:
-          PREVIOUS_FINISHED_AT: ${{{ inputs.previous_finished_at }}
+          PREVIOUS_FINISHED_AT: ${{ inputs.previous_finished_at }}
         run: |
           python - <<'PY'
           import os
@@ -183,7 +183,7 @@ jobs:
       - name: Upload immutable raw segment artifact
         uses: actions/upload-artifact@v4
         with:
-          name: alix-m8-2-btcusdt-${{{ env.SOAK_ID }}-segment-${{{ env.RUN_NUMBER }}-run-${{{ github.run_id }}
+          name: alix-m8-2-btcusdt-${{ env.SOAK_ID }}-segment-${{ env.RUN_NUMBER }}-run-${{ github.run_id }}
           path: .artifacts/m8_2_btcusdt_capture/*
           if-no-files-found: error
           retention-days: 90

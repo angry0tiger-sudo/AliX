@@ -195,10 +195,30 @@ def test_attach_trade_flow_imbalance_uses_websocket_rows_and_trailing_window() -
 
     snapshots = [Snapshot(100_000, 100.0, {})]
     trade_rows = [
-        {"source": "websocket", "exchange_timestamp_ms": "41000", "side": "buy", "volume": "3"},
-        {"source": "websocket", "exchange_timestamp_ms": "50000", "side": "sell", "volume": "1"},
-        {"source": "websocket", "exchange_timestamp_ms": "39000", "side": "buy", "volume": "100"},
-        {"source": "rest_recent_seed", "exchange_timestamp_ms": "99000", "side": "sell", "volume": "500"},
+        {
+            "source": "websocket",
+            "exchange_timestamp_ms": "41000",
+            "side": "buy",
+            "volume": "3",
+        },
+        {
+            "source": "websocket",
+            "exchange_timestamp_ms": "50000",
+            "side": "sell",
+            "volume": "1",
+        },
+        {
+            "source": "websocket",
+            "exchange_timestamp_ms": "39000",
+            "side": "buy",
+            "volume": "100",
+        },
+        {
+            "source": "rest_recent_seed",
+            "exchange_timestamp_ms": "99000",
+            "side": "sell",
+            "volume": "500",
+        },
     ]
 
     _attach_trade_flow_imbalance(snapshots, trade_rows)
