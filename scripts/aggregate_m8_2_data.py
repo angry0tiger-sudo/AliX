@@ -172,7 +172,7 @@ def _download_artifact_zip(repo: str, artifact_id: int, token: str) -> bytes:
             raise AggregateError("ARTIFACT_REDIRECT_WITHOUT_LOCATION") from exc
     # The signed redirect is fetched without forwarding the GitHub token.
     with urllib.request.urlopen(location, timeout=180) as response:
-        return response.read()
+        return cast(bytes, response.read())
 
 
 def _list_artifacts(repo: str, token: str) -> list[dict[str, Any]]:
