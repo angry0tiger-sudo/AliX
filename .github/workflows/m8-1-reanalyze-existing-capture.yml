@@ -1,0 +1,372 @@
+name: M8.1 Reanalysis of Immutable BTCUSDT Capture
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - research/nobitex-hf-strategy
+    paths:
+      - TRIGGER_M8_ANALYSIS
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: alix-m8-1-btcusdt-reanalysis
+  cancel-in-progress: false
+
+jobs:
+  reanalyze:
+    if: github.ref == 'refs/heads/research/nobitex-hf-strategy'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: write
+    env:
+      ALIX_DRY_RUN: "true"
+      ALIX_ALLOW_LIVE_TRADING: "false"
+      PYTHONUNBUFFERED: "1"
+      CAPTURE_RUN_ID: "46106438168"
+      CAPTURE_ARTIFACT_ID: "15249319923"
+      CAPTURE_ARTIFACT_NAME: "alix-m8-1-btcusdt-raw-46106438168"
+      CAPTURE_ARTIFACT_DIGEST: "sha256:bc16983be51490cafebff11c5de06360d6668633bd3a75ea1afbe0defd3837c0"
+      CAPTURE_COMMIT_SHA: "a0b550f23071f8bf920b866771eb75cba30d8bf6"
+    steps:
+      - name: Checkout exact reanalysis source commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned test dependencies
+        run: |
+          python -m pip install pip==25.2
+          python -m pip install websocket-client==1.9.2 httpx==0.28.1 pytest==9.0.3
+
+      - name: Run microstructure analyzer and audit unit tests
+        run: |
+          pytest tests/unit/test_audit_microstructure_capture.py tests/unit/test_m8_microstructure.py -q
+
+      - name: Download the original immutable BTCUSDT capture artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.CAPTURE_ARTIFACT_NAME }}
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ env.CAPTURE_RUN_ID }}
+          path: .artifacts/m8_1_downloaded
+
+      - name: Re-audit original capture and verify pinned hashes
+        run: |
+          python -m scripts.audit_microstructure_capture --artifact-dir .artifacts/m8_1_downloaded
+          python - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+
+          root = Path(".artifacts/m8_1_downloaded")
+          required = {"manifest.json", "manifest.sha256", "orderbook.csv", "trades.csv", "gaps.csv"}
+          actual = {p.name for p in root.iterdir() if p.is_file()}
+          if actual != required:
+              raise SystemExit(f"RAW_ARTIFACT_FILE_SET_MISMATCH:{sorted(actual)}")
+          manifest_bytes = (root / "manifest.json").read_bytes()
+          manifest = json.loads(manifest_bytes)
+          expected_manifest_sha = "29fe9d3a556d810fc441da9401f529d8efae0c8c507dce88b4a861c69e2a8107"
+          if hashlib.sha256(manifest_bytes).hexdigest() != expected_manifest_sha:
+              raise SystemExit("RAW_MANIFEST_SHA256_MISMATCH")
+          if manifest.get("market") != "BTCUSDT" or str(manifest.get("workflow_run_id")) != "46106438168":
+              raise SystemExit("RAW_MANIFEST_IDENTITY_MISMATCH")
+          expected_files = {
+              "orderbook.csv": "bd044a3f49bd03c98ff0939d0f61c46cdc1c6ede063e338023259941a2014171",
+              "trades.csv": "d76d85e6a87cd23dabd88a07c53fd649ace31ee17d7e3c0445444293e9d53eca",
+              "gaps.csv": "bbaaea6d0b1a672e8814745f2f0f9c20ca7411e7d41fde18b1d43311f5d604fa",
+          }
+          for name, expected in expected_files.items():
+              actual_sha = hashlib.sha256((root / name).read_bytes()).hexdigest()
+              if actual_sha != expected or manifest["files"][name]["sha256"] != expected:
+                  raise SystemExit(f"RAW_FILE_SHA256_MISMATCH:{name}")
+          if manifest["record_counts"] != {"orderbook": 2579, "trades": 93, "gaps": 0, "duplicate_trades_dropped": 0}:
+              raise SystemExit("RAW_RECORD_COUNTS_MISMATCH")
+          if manifest["private_api_calls"] != 0 or manifest["holdout_bytes_read"] or manifest["posthack_data_read"]:
+              raise SystemExit("SAFETY_INVARIANT_VIOLATION")
+          if manifest["real_order_attempts"] != 0 or manifest["paper_orders"] != 0:
+              raise SystemExit("ORDER_INVARIANT_VIOLATION")
+          if manifest["Champion"] is not None or manifest["order_permission"] is not False or manifest["trading_authorization"] != "NO-GO":
+              raise SystemExit("TRADING_AUTHORIZATION_INVARIANT_VIOLATION")
+          print(json.dumps({
+              "market": manifest["market"],
+              "manifest_sha256": expected_manifest_sha,
+              "orderbook_rows": manifest["record_counts"]["orderbook"],
+              "trade_rows": manifest["record_counts"]["trades"],
+              "gap_rows": manifest["record_counts"]["gaps"],
+              "safety": "PASS"
+          }, sort_keys=True))
+          PY
+
+      - name: Package the exact original capture bytes and build inventory
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          import zipfile
+          from pathlib import Path
+
+          root = Path(".artifacts/m8_1_downloaded")
+          output = Path(".artifacts/m8_1_analysis")
+          output.mkdir(parents=True, exist_ok=True)
+          names = ["manifest.json", "manifest.sha256", "orderbook.csv", "trades.csv", "gaps.csv"]
+          archive_path = output / "m8_1_btcusdt_capture.zip"
+          with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+              for name in names:
+                  archive.write(root / name, arcname=name)
+          archive_sha = hashlib.sha256(archive_path.read_bytes()).hexdigest()
+          manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+          inventory = {
+              "schema_version": 1,
+              "collection": "M8.1 one-hour public BTCUSDT L2 capture",
+              "dataset_market": "BTCUSDT",
+              "expected_archive_count": 1,
+              "artifacts_by_sha256": {
+                  archive_sha: {
+                      "run_id": int(os.environ["CAPTURE_RUN_ID"]),
+                      "artifact_id": int(os.environ["CAPTURE_ARTIFACT_ID"]),
+                      "market": "BTCUSDT",
+                      "orderbook_rows": manifest["record_counts"]["orderbook"],
+                      "trade_rows": manifest["record_counts"]["trades"],
+                      "gap_records": manifest["record_counts"]["gaps"]
+                  }
+              }
+          }
+          (output / "inventory.json").write_text(json.dumps(inventory, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+          receipt = {
+              "market": "BTCUSDT",
+              "capture_workflow_run_id": int(os.environ["CAPTURE_RUN_ID"]),
+              "reanalyze_workflow_run_id": int(os.environ["GITHUB_RUN_ID"]),
+              "capture_commit_sha": os.environ["CAPTURE_COMMIT_SHA"],
+              "github_artifact_id": int(os.environ["CAPTURE_ARTIFACT_ID"]),
+              "github_artifact_name": os.environ["CAPTURE_ARTIFACT_NAME"],
+              "github_artifact_digest": os.environ["CAPTURE_ARTIFACT_DIGEST"],
+              "github_artifact_retention_days": 90,
+              "internal_archive_sha256": archive_sha,
+              "manifest_sha256": hashlib.sha256((root / "manifest.json").read_bytes()).hexdigest(),
+              "source_file_sha256": {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in names},
+              "raw_capture_artifact_downloaded_before_analysis": True,
+              "raw_artifact_content_modified": False
+          }
+          (output / "capture_receipt.json").write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+          print(json.dumps(receipt, sort_keys=True))
+          PY
+
+      - name: Run M8 OBI correlations on the pinned BTCUSDT artifact
+        run: |
+          python scripts/analyze_m8_microstructure.py \
+            --archives .artifacts/m8_1_analysis/m8_1_btcusdt_capture.zip \
+            --inventory .artifacts/m8_1_analysis/inventory.json \
+            --expected-market BTCUSDT \
+            --output .artifacts/m8_1_analysis/m8_microstructure_report.json
+
+      - name: Write ADR-076, GitHub summary, and report integrity hashes
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from datetime import datetime
+          from pathlib import Path
+          from textwrap import dedent
+
+          root = Path(".artifacts/m8_1_downloaded")
+          output = Path(".artifacts/m8_1_analysis")
+          manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+          report_path = output / "m8_microstructure_report.json"
+          report = json.loads(report_path.read_text(encoding="utf-8"))
+          receipt = json.loads((output / "capture_receipt.json").read_text(encoding="utf-8"))
+          if report.get("status") != "ANALYZED" or report.get("correlation_status") != "COMPUTED" or report.get("actual_markets") != ["BTCUSDT"]:
+              raise SystemExit("M8_ANALYSIS_DID_NOT_VERIFY_BTCUSDT")
+          started = datetime.fromisoformat(manifest["started_at_utc"].replace("Z", "+00:00"))
+          finished = datetime.fromisoformat(manifest["finished_at_utc"].replace("Z", "+00:00"))
+          actual_minutes = (finished - started).total_seconds() / 60.0
+
+          def show(value):
+              return "N/A" if value is None else f"{float(value):.8f}"
+
+          table_rows = []
+          for horizon in ("5m", "15m"):
+              item = report["correlations"][horizon]["obi_top5"]
+              table_rows.append(
+                  f"| {horizon} | {item['n']} | {show(item['pearson_r'])} | "
+                  f"{show(item['pearson_p_two_sided'])} | {show(item['pearson_p_bonferroni_8_tests'])} | "
+                  f"{show(item['spearman_rho'])} | {show(item['spearman_p_two_sided'])} | "
+                  f"{show(item['spearman_p_bonferroni_8_tests'])} |"
+              )
+
+          counts = manifest["record_counts"]
+          coverage = manifest["coverage_segment"]
+          report_digest = hashlib.sha256(report_path.read_bytes()).hexdigest()
+          adr = dedent(f"""\\
+          # ADR-076 — M8.1 BTCUSDT One-Hour Public L2 Capture and Correlation
+
+          - **Date:** {manifest["finished_at_utc"][:10]}
+          - **Status:** ACCEPTED — {report["decision"]}
+          - **Branch:** `research/nobitex-hf-strategy`
+          - **Capture commit:** `{manifest["code_commit_sha"]}`
+          - **Capture workflow:** [Run {manifest["workflow_run_id"]}](https://github.com/angry0tiger-sudo/AliX/actions/runs/{manifest["workflow_run_id"]})
+          - **Reanalysis workflow:** [Run ${{github.run_id}}](https://github.com/angry0tiger-sudo/AliX/actions/runs/${{github.run_id}})
+
+          ## 1. Decision
+
+          The earlier M1.6 BTCIRT corpus remains ineligible for the BTCUSDT hypothesis under ADR-075. This ADR records a new, independent, public BTCUSDT capture and the pre-existing lightweight M8 statistical analysis executed against its immutable artifact.
+
+          **M8.1 result:** `{report["decision"]}`. {report["decision_note"]}
+
+          This is an exploratory one-hour correlation diagnostic, not evidence of causality, a durable trading edge, execution profitability, or authorization to trade. Non-significance is not evidence that the true relationship is zero. The 15-minute horizon has too few usable samples to estimate correlation.
+
+          ## 2. Capture provenance and market identity
+
+          - Market: **{manifest["market"]}**
+          - Source: `NOBITEX_PUBLIC_REST_AND_WEBSOCKET`
+          - Public REST preflight: `https://apiv2.nobitex.ir/v3/orderbook/BTCUSDT` (no authorization header)
+          - Public WebSocket channels: `{", ".join(manifest["websocket_channels"])}`
+          - Capture start / finish UTC: `{manifest["started_at_utc"]}` / `{manifest["finished_at_utc"]}`
+          - Requested / actual duration: {manifest["requested_duration_minutes"]} minutes / {actual_minutes:.3f} minutes
+          - Capture status: `{manifest["capture_status"]}`
+          - Order-book / trade / gap rows: {counts["orderbook"]} / {counts["trades"]} / {counts["gaps"]}
+          - WebSocket order-book / trade messages: {manifest["websocket_orderbook_records"]} / {manifest["websocket_trade_records"]}
+          - Coverage type: `{coverage["kind"]}`
+          - Capture code SHA: `{manifest["code_commit_sha"]}`
+
+          ## 3. Immutable artifact and integrity
+
+          - GitHub raw Artifact ID: `{receipt["github_artifact_id"]}`
+          - Raw Artifact name: `{receipt["github_artifact_name"]}`
+          - GitHub raw Artifact digest: `{receipt["github_artifact_digest"]}`
+          - Raw retention: {receipt["github_artifact_retention_days"]} days
+          - Internal analysis ZIP SHA-256: `{receipt["internal_archive_sha256"]}`
+          - Manifest SHA-256: `{receipt["manifest_sha256"]}`
+          - Analysis JSON SHA-256: `{report_digest}`
+
+          The original GitHub Actions artifact was downloaded in a separate run, its manifest and each CSV were checked against the previously recorded SHA-256 values, and the audit script passed before the analyzer ran. The original capture files were not rewritten.
+
+          ## 4. OBI top-five versus forward mid-price returns
+
+          Returns are `10,000 * ln(mid[t+h] / mid[t])` on non-overlapping UTC grids. The OBI feature is top-five displayed depth imbalance. Samples crossing explicit gaps, stale feature snapshots, or late/missing future snapshots are excluded. P-values are two-sided; Bonferroni adjustment is applied across eight feature-horizon combinations.
+
+          | Horizon | N | Pearson r | Pearson p | Pearson p (Bonferroni x8) | Spearman rho | Spearman p | Spearman p (Bonferroni x8) |
+          |---|---:|---:|---:|---:|---:|---:|---:|
+          {chr(10).join(table_rows)}
+
+          **Interpretation:** neither OBI horizon is significant after family-wise Bonferroni correction. At 5m, N=8 is exploratory and underpowered. At 15m, N=2 and both Pearson and Spearman correlations are not estimable. The result must not be described as zero correlation or a NO-GO conclusion for a tradable strategy.
+
+          ## 5. Limitations
+
+          One hour yields at most about twelve non-overlapping 5-minute and four 15-minute observations before exclusions. Serial dependence and very small N undermine conventional p-value interpretation. Longer, independently preregistered sampling would be required for any confirmatory claim.
+
+          ## 6. Safety invariants
+
+          - `Champion = null`
+          - `order_permission = false`
+          - `trading_authorization = NO-GO`
+          - Private API calls: **0**
+          - Holdout / Post-Hack bytes read: **false / false**
+          - Paper orders / real order attempts: **0 / 0**
+          - No model fitting, DeepLOB, or trading execution was performed.
+          - `main` was not modified.
+
+          ## 7. Reproducibility
+
+          - Capture Run ID: `{manifest["workflow_run_id"]}`
+          - Capture Artifact ID: `{receipt["github_artifact_id"]}`
+          - Analyzer: `scripts/analyze_m8_microstructure.py`
+          - Reanalysis Run ID: `${{github.run_id}}`
+          - Analysis report SHA-256: `{report_digest}`
+          """)
+          adr_path = output / "ADR-076-m8-1-btcusdt-capture-and-correlation.md"
+          adr_path.write_text(adr, encoding="utf-8")
+
+          summary = [
+              "# M8.1 BTCUSDT reanalysis",
+              f"- Raw capture artifact: **{receipt['github_artifact_name']} / {receipt['github_artifact_id']}**",
+              f"- Capture window: **{actual_minutes:.3f} minutes**",
+              f"- Market rows: **{counts['orderbook']} order-book / {counts['trades']} trades / {counts['gaps']} gaps**",
+              f"- Decision: **{report['decision']}**",
+              "",
+              "| Horizon | N | Pearson r | p (Bonferroni x8) | Spearman rho | p (Bonferroni x8) |",
+              "|---|---:|---:|---:|---:|---:|",
+          ]
+          for horizon in ("5m", "15m"):
+              item = report["correlations"][horizon]["obi_top5"]
+              summary.append(
+                  f"| {horizon} | {item['n']} | {show(item['pearson_r'])} | "
+                  f"{show(item['pearson_p_bonferroni_8_tests'])} | {show(item['spearman_rho'])} | "
+                  f"{show(item['spearman_p_bonferroni_8_tests'])} |"
+              )
+          summary.append("")
+          summary.append("Results are exploratory; 15m N=2 is not sufficient for correlation estimation.")
+          with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a", encoding="utf-8") as stream:
+              stream.write("\n".join(summary) + "\n")
+          print(json.dumps({"decision": report["decision"], "report_sha256": report_digest, "adr_path": str(adr_path)}, sort_keys=True))
+          PY
+
+      - name: Commit ADR-076 to the research branch
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          TARGET_BRANCH: ${{ github.ref_name }}
+        run: |
+          python - <<'PY'
+          import base64
+          import json
+          import os
+          from pathlib import Path
+          from urllib.error import HTTPError
+          from urllib.request import Request, urlopen
+
+          repository = os.environ["GITHUB_REPOSITORY"]
+          branch = os.environ["TARGET_BRANCH"]
+          token = os.environ["GITHUB_TOKEN"]
+          path = "docs/adr/ADR-076-m8-1-btcusdt-capture-and-correlation.md"
+          content = Path(".artifacts/m8_1_analysis/ADR-076-m8-1-btcusdt-capture-and-correlation.md").read_bytes()
+          url = f"https://api.github.com/repos/{repository}/contents/{path}"
+          headers = {
+              "Accept": "application/vnd.github+json",
+              "Authorization": f"Bearer {token}",
+              "X-GitHub-Api-Version": "2022-11-28",
+          }
+          payload = {
+              "message": "docs(m8): record M8.1 BTCUSDT capture and correlation",
+              "content": base64.b64encode(content).decode("ascii"),
+              "branch": branch,
+          }
+          try:
+              request = Request(f"{url}?ref={branch}", headers=headers)
+              with urlopen(request, timeout=30) as response:
+                  payload["sha"] = json.load(response)["sha"]
+          except HTTPError as exc:
+              if exc.code != 404:
+                  raise
+          request = Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="PUT")
+          with urlopen(request, timeout=60) as response:
+              result = json.load(response)
+          print(json.dumps({
+              "commit_sha": result["commit"]["sha"],
+              "path": result["content"]["path"],
+              "html_url": result["content"]["html_url"]
+          }, sort_keys=True))
+          PY
+
+      - name: Upload M8 analysis, integrity receipts, and ADR-076
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alix-m8-1-btcusdt-analysis-${{ github.run_id }}
+          path: .artifacts/m8_1_analysis/*
+          if-no-files-found: error
+          retention-days: 90

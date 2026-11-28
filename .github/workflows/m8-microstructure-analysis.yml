@@ -353,6 +353,7 @@ jobs:
           python - <<'PY'
           import hashlib
           import json
+          import os
           from datetime import datetime
           from pathlib import Path
           from textwrap import dedent
