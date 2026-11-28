@@ -216,6 +216,77 @@ def _parse_orderbook_rows(
     return snapshots
 
 
+def _parse_websocket_trade(
+    row: dict[str, str]
+) -> tuple[int, str, float]:
+    try:
+        timestamp = int(row["exchange_timestamp_ms"])
+        side = row["side"]
+        volume = float(row["volume"])
+    except (KeyError, TypeError, ValueError, OverflowError) as exc:
+        raise InputError("TRADE_FLOW_ROW_INVALID") from exc
+    if side not in {"buy", "sell"}:
+        raise InputError("TRADE_FLOW_SIDE_INVALID")
+    if timestamp <= 0 or not math.isfinite(volume) or volume < 0:
+        raise InputError("TRADE_FLOW_VALUE_OUT_OF_RANGE")
+    return timestamp, side, volume
+
+
+def _websocket_trade_tape(
+    trade_rows: list[dict[str, str]]
+) -> list[tuple[int, str, float]]:
+    trades = [
+        _parse_websocket_trade(row)
+        for row in trade_rows
+        if row.get("source") == "websocket"
+    ]
+    return sorted(trades, key=lambda item: item[0])
+
+
+def _adjust_side_volume(
+    buy_volume: float,
+    sell_volume: float,
+    side: str,
+    volume: float,
+    direction: float,
+) -> tuple[float, float]:
+    signed_volume = volume * direction
+    if side == "buy":
+        return buy_volume + signed_volume, sell_volume
+    return buy_volume, sell_volume + signed_volume
+
+
+def _trailing_trade_flow(
+    snapshots: list[Snapshot], trades: list[tuple[int, str, float]]
+) -> list[float]:
+    left = 0
+    right = 0
+    buy_volume = 0.0
+    sell_volume = 0.0
+    values: list[float] = []
+    for snapshot in snapshots:
+        while right < len(trades) and trades[right][0] <= snapshot.timestamp_ms:
+            _, side, volume = trades[right]
+            buy_volume, sell_volume = _adjust_side_volume(
+                buy_volume, sell_volume, side, volume, 1.0
+            )
+            right += 1
+
+        cutoff = snapshot.timestamp_ms - 60_000
+        while left < right and trades[left][0] <= cutoff:
+            _, side, volume = trades[left]
+            buy_volume, sell_volume = _adjust_side_volume(
+                buy_volume, sell_volume, side, volume, -1.0
+            )
+            left += 1
+
+        total_volume = buy_volume + sell_volume
+        values.append(
+            (buy_volume - sell_volume) / total_volume if total_volume > 0 else 0.0
+        )
+    return values
+
+
 def _attach_trade_flow_imbalance(
     snapshots: list[Snapshot], trade_rows: list[dict[str, str]]
 ) -> None:
@@ -224,49 +295,10 @@ def _attach_trade_flow_imbalance(
     REST seed observations are excluded because the public capture has no stable
     trade identifier with which to prove that seed rows do not duplicate WebSocket rows.
     """
-    trades: list[tuple[int, str, float]] = []
-    for row in trade_rows:
-        if row.get("source") != "websocket":
-            continue
-        try:
-            timestamp = int(row["exchange_timestamp_ms"])
-            side = row["side"]
-            volume = float(row["volume"])
-        except (KeyError, TypeError, ValueError, OverflowError) as exc:
-            raise InputError("TRADE_FLOW_ROW_INVALID") from exc
-        if side not in {"buy", "sell"}:
-            raise InputError("TRADE_FLOW_SIDE_INVALID")
-        if timestamp <= 0 or not math.isfinite(volume) or volume < 0:
-            raise InputError("TRADE_FLOW_VALUE_OUT_OF_RANGE")
-        trades.append((timestamp, side, volume))
-
-    trades.sort(key=lambda item: item[0])
-    left = 0
-    right = 0
-    buy_volume = 0.0
-    sell_volume = 0.0
-    for snapshot in snapshots:
-        while right < len(trades) and trades[right][0] <= snapshot.timestamp_ms:
-            _, side, volume = trades[right]
-            if side == "buy":
-                buy_volume += volume
-            else:
-                sell_volume += volume
-            right += 1
-
-        cutoff = snapshot.timestamp_ms - 60_000
-        while left < right and trades[left][0] <= cutoff:
-            _, side, volume = trades[left]
-            if side == "buy":
-                buy_volume -= volume
-            else:
-                sell_volume -= volume
-            left += 1
-
-        total_volume = buy_volume + sell_volume
-        snapshot.features["trade_flow_imbalance_60s"] = (
-            (buy_volume - sell_volume) / total_volume if total_volume > 0 else 0.0
-        )
+    trades = _websocket_trade_tape(trade_rows)
+    values = _trailing_trade_flow(snapshots, trades)
+    for snapshot, value in zip(snapshots, values):
+        snapshot.features["trade_flow_imbalance_60s"] = value
 
 
 def _validate_orderbook_timestamps(snapshots: list[Snapshot], path: Path) -> None:

@@ -206,26 +206,24 @@ def _extract_raw_artifact(data: bytes, destination: Path) -> None:
     audit_capture(destination)
 
 
-def _load_segment(
-    artifact: dict[str, Any],
-    segment_number: int,
-    destination: Path,
-    repo: str,
-    token: str,
-    soak_id: str,
-    expected_sha: str,
-) -> dict[str, Any]:
-    artifact_id = int(artifact["id"])
-    content = _download_artifact_zip(repo, artifact_id, token)
-    downloaded_sha = sha256(content)
+def _verify_artifact_digest(
+    artifact: dict[str, Any], downloaded_sha: str, segment_number: int
+) -> None:
     api_digest = str(artifact.get("digest") or "")
     if (
         api_digest.startswith("sha256:")
         and api_digest.removeprefix("sha256:") != downloaded_sha
     ):
         raise AggregateError(f"ARTIFACT_API_DIGEST_MISMATCH:{segment_number}")
-    _extract_raw_artifact(content, destination)
-    manifest = json.loads((destination / "manifest.json").read_text(encoding="utf-8"))
+
+
+def _validate_segment_manifest(
+    manifest: dict[str, Any],
+    artifact: dict[str, Any],
+    segment_number: int,
+    soak_id: str,
+    expected_sha: str,
+) -> float:
     expected_fields = {
         "market": "BTCUSDT",
         "soak_id": soak_id,
@@ -237,21 +235,38 @@ def _load_segment(
     for key, expected in expected_fields.items():
         if manifest.get(key) != expected:
             raise AggregateError(f"MANIFEST_{key.upper()}_MISMATCH:{segment_number}")
+
     artifact_run = artifact.get("workflow_run", {})
     if not isinstance(artifact_run, dict):
         raise AggregateError(f"ARTIFACT_WORKFLOW_RUN_MISSING:{segment_number}")
-    if int(manifest.get("workflow_run_id", 0)) != int(artifact_run.get("id", -1)):
+    manifest_run = int(manifest.get("workflow_run_id", 0))
+    artifact_run_id = int(artifact_run.get("id", -1))
+    if manifest_run != artifact_run_id:
         raise AggregateError(f"WORKFLOW_RUN_ID_MISMATCH:{segment_number}")
+
     started = parse_time(str(manifest["started_at_utc"]))
     finished = parse_time(str(manifest["finished_at_utc"]))
     captured_seconds = (finished - started).total_seconds()
     if not 6600 <= captured_seconds <= 6900:
         raise AggregateError(f"CAPTURE_DURATION_OUT_OF_RANGE:{segment_number}")
+
     coverage = manifest.get("coverage_segment", {})
     if coverage.get("segment_interval_minutes") != 120:
         raise AggregateError(f"SEGMENT_CADENCE_MISMATCH:{segment_number}")
     if coverage.get("nominal_inter_segment_missing_minutes") != 10:
         raise AggregateError(f"SEGMENT_GAP_DECLARATION_MISMATCH:{segment_number}")
+    return captured_seconds
+
+
+def _build_segment_metadata(
+    artifact: dict[str, Any],
+    artifact_id: int,
+    destination: Path,
+    manifest: dict[str, Any],
+    downloaded_sha: str,
+    captured_seconds: float,
+    segment_number: int,
+) -> dict[str, Any]:
     return {
         "segment_number": segment_number,
         "run_id": int(manifest["workflow_run_id"]),
@@ -267,6 +282,35 @@ def _load_segment(
         "gap_records": int(manifest["record_counts"]["gaps"]),
         "capture_status": manifest["capture_status"],
     }
+
+
+def _load_segment(
+    artifact: dict[str, Any],
+    segment_number: int,
+    destination: Path,
+    repo: str,
+    token: str,
+    soak_id: str,
+    expected_sha: str,
+) -> dict[str, Any]:
+    artifact_id = int(artifact["id"])
+    content = _download_artifact_zip(repo, artifact_id, token)
+    downloaded_sha = sha256(content)
+    _verify_artifact_digest(artifact, downloaded_sha, segment_number)
+    _extract_raw_artifact(content, destination)
+    manifest = json.loads((destination / "manifest.json").read_text(encoding="utf-8"))
+    captured_seconds = _validate_segment_manifest(
+        manifest, artifact, segment_number, soak_id, expected_sha
+    )
+    return _build_segment_metadata(
+        artifact,
+        artifact_id,
+        destination,
+        manifest,
+        downloaded_sha,
+        captured_seconds,
+        segment_number,
+    )
 
 
 def _read_rows(path: Path, filename: str) -> list[dict[str, str]]:
@@ -286,23 +330,15 @@ def _write_csv(path: Path, filename: str, rows: list[dict[str, str]]) -> dict[st
     return {"sha256": sha256(raw), "bytes": len(raw), "records": len(rows)}
 
 
-def aggregate(
-    soak_id: str,
-    expected_segments: int,
-    output_dir: Path,
-    repo: str,
-    token: str,
-    expected_sha: str,
-    final_run_id: int,
-) -> dict[str, Any]:
-    if expected_segments != 14:
-        raise AggregateError("M8_2_REQUIRES_14_SEGMENTS_FOR_AT_LEAST_24H_CAPTURE")
-    artifacts = _list_artifacts(repo, token)
+def _select_segment_artifacts(
+    artifacts: list[dict[str, Any]], soak_id: str, expected_segments: int
+) -> dict[int, dict[str, Any]]:
     prefix = f"{ARTIFACT_PREFIX}{soak_id}-segment-"
     candidates = [
         item
         for item in artifacts
-        if str(item.get("name", "")).startswith(prefix) and item.get("expired") is False
+        if str(item.get("name", "")).startswith(prefix)
+        and item.get("expired") is False
     ]
     by_segment: dict[int, dict[str, Any]] = {}
     for item in candidates:
@@ -322,50 +358,71 @@ def aggregate(
         if number in by_segment:
             raise AggregateError(f"DUPLICATE_SEGMENT_ARTIFACT:{number}")
         by_segment[number] = item
+
     expected_numbers = set(range(1, expected_segments + 1))
     if set(by_segment) != expected_numbers:
         raise AggregateError(
             f"SOAK_ARTIFACT_SET_MISMATCH:expected={sorted(expected_numbers)} "
             f"actual={sorted(by_segment)}"
         )
+    return by_segment
 
-    output_dir.mkdir(parents=True, exist_ok=True)
+
+def _load_all_segments(
+    by_segment: dict[int, dict[str, Any]],
+    expected_segments: int,
+    output_dir: Path,
+    repo: str,
+    token: str,
+    soak_id: str,
+    expected_sha: str,
+) -> tuple[list[dict[str, Any]], list[Path]]:
     raw_root = output_dir / "raw_segments"
     raw_root.mkdir(parents=True, exist_ok=True)
     segment_meta: list[dict[str, Any]] = []
     segment_dirs: list[Path] = []
     for number in range(1, expected_segments + 1):
         segment_dir = raw_root / f"segment_{number:02d}"
-        segment_meta.append(
-            _load_segment(
-                by_segment[number],
-                number,
-                segment_dir,
-                repo,
-                token,
-                soak_id,
-                expected_sha,
-            )
+        loaded = _load_segment(
+            by_segment[number],
+            number,
+            segment_dir,
+            repo,
+            token,
+            soak_id,
+            expected_sha,
         )
+        segment_meta.append(loaded)
         segment_dirs.append(segment_dir)
+    return segment_meta, segment_dirs
 
-    inter_gaps: list[dict[str, Any]] = []
+
+def _build_inter_segment_gap_inventory(
+    segment_meta: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
     for previous, following in zip(segment_meta, segment_meta[1:]):
         generated = inter_segment_gap_rows(previous, following)
-        inter_gaps.append(
+        missing_seconds = (
+            parse_time(generated[0]["gap_end_utc"])
+            - parse_time(generated[0]["gap_start_utc"])
+        ).total_seconds()
+        result.append(
             {
                 "after_segment": previous["segment_number"],
                 "before_segment": following["segment_number"],
                 "start_utc": generated[0]["gap_start_utc"],
                 "end_utc": generated[0]["gap_end_utc"],
-                "missing_seconds": (
-                    parse_time(generated[0]["gap_end_utc"])
-                    - parse_time(generated[0]["gap_start_utc"])
-                ).total_seconds(),
+                "missing_seconds": missing_seconds,
                 "nominal_missing_seconds": 600,
             }
         )
+    return result
 
+
+def _merge_segment_rows(
+    segment_dirs: list[Path], segment_meta: list[dict[str, Any]]
+) -> tuple[dict[str, list[dict[str, str]]], list[dict[str, str]]]:
     merged_rows: dict[str, list[dict[str, str]]] = {}
     for filename in ("orderbook.csv", "trades.csv"):
         combined: list[dict[str, str]] = []
@@ -385,24 +442,41 @@ def aggregate(
             row["reason"],
         )
     )
+    return merged_rows, gaps
 
-    file_meta: dict[str, Any] = {}
-    for filename, rows in (
-        ("orderbook.csv", merged_rows["orderbook.csv"]),
-        ("trades.csv", merged_rows["trades.csv"]),
-        ("gaps.csv", gaps),
-    ):
-        file_meta[filename] = _write_csv(output_dir / filename, filename, rows)
 
-    actual_seconds = round(sum(item["capture_seconds"] for item in segment_meta), 3)
-    if actual_seconds < 24 * 60 * 60:
-        raise AggregateError("LESS_THAN_24_HOURS_OF_ACTUAL_CAPTURE")
-    first_started = segment_meta[0]["started_at_utc"]
-    last_finished = segment_meta[-1]["finished_at_utc"]
+def _write_merged_csvs(
+    output_dir: Path,
+    merged_rows: dict[str, list[dict[str, str]]],
+    gaps: list[dict[str, str]],
+) -> dict[str, Any]:
+    return {
+        "orderbook.csv": _write_csv(
+            output_dir / "orderbook.csv", "orderbook.csv", merged_rows["orderbook.csv"]
+        ),
+        "trades.csv": _write_csv(
+            output_dir / "trades.csv", "trades.csv", merged_rows["trades.csv"]
+        ),
+        "gaps.csv": _write_csv(output_dir / "gaps.csv", "gaps.csv", gaps),
+    }
+
+
+def _build_aggregate_manifest(
+    soak_id: str,
+    final_run_id: int,
+    expected_sha: str,
+    expected_segments: int,
+    segment_meta: list[dict[str, Any]],
+    inter_gaps: list[dict[str, Any]],
+    actual_seconds: float,
+    merged_rows: dict[str, list[dict[str, str]]],
+    gaps: list[dict[str, str]],
+    file_meta: dict[str, Any],
+) -> dict[str, Any]:
     total_orderbook = len(merged_rows["orderbook.csv"])
     total_trades = len(merged_rows["trades.csv"])
     total_gaps = len(gaps)
-    aggregate_manifest: dict[str, Any] = {
+    return {
         "schema_version": "alix.m8_2.aggregate.v1",
         "study": "M8.2_PUBLIC_BTCUSDT_24H_CAPTURE_AGGREGATE",
         "soak_id": soak_id,
@@ -415,8 +489,8 @@ def aggregate(
         "requested_capture_minutes_per_segment": 110,
         "total_requested_capture_minutes": 110 * expected_segments,
         "total_actual_capture_seconds": actual_seconds,
-        "started_at_utc": first_started,
-        "finished_at_utc": last_finished,
+        "started_at_utc": segment_meta[0]["started_at_utc"],
+        "finished_at_utc": segment_meta[-1]["finished_at_utc"],
         "record_counts": {
             "orderbook": total_orderbook,
             "trades": total_trades,
@@ -452,8 +526,13 @@ def aggregate(
             "tfi_aggressor_semantics": "PROXY_NOT_EXPLICITLY_DEFINED_BY_OFFICIAL_SCHEMA",
         },
     }
+
+
+def _write_manifest_and_archive(
+    output_dir: Path, manifest: dict[str, Any]
+) -> tuple[str, str]:
     manifest_bytes = (
-        json.dumps(aggregate_manifest, indent=2, sort_keys=True) + "\n"
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n"
     ).encode()
     (output_dir / "manifest.json").write_bytes(manifest_bytes)
     manifest_digest = sha256(manifest_bytes)
@@ -473,7 +552,16 @@ def aggregate(
             "gaps.csv",
         ):
             archive.write(output_dir / filename, arcname=filename)
-    archive_digest = sha256(archive_path.read_bytes())
+    return manifest_digest, sha256(archive_path.read_bytes())
+
+
+def _write_analysis_inventory(
+    output_dir: Path,
+    final_run_id: int,
+    archive_digest: str,
+    orderbook_records: int,
+    expected_segments: int,
+) -> None:
     inventory = {
         "schema_version": 1,
         "collection": "M8.2 aggregate BTCUSDT at least 24h public microstructure capture",
@@ -484,7 +572,7 @@ def aggregate(
                 "run_id": final_run_id,
                 "artifact_id": None,
                 "market": "BTCUSDT",
-                "orderbook_rows": total_orderbook,
+                "orderbook_rows": orderbook_records,
                 "source_segment_count": expected_segments,
             }
         },
@@ -493,16 +581,29 @@ def aggregate(
         json.dumps(inventory, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
-    summary = {
+
+
+def _build_aggregate_summary(
+    soak_id: str,
+    segment_meta: list[dict[str, Any]],
+    actual_seconds: float,
+    merged_rows: dict[str, list[dict[str, str]]],
+    gaps: list[dict[str, str]],
+    file_meta: dict[str, Any],
+    manifest_digest: str,
+    archive_digest: str,
+    output_dir: Path,
+) -> dict[str, Any]:
+    return {
         "soak_id": soak_id,
         "segment_count": len(segment_meta),
         "actual_capture_minutes": round(actual_seconds / 60, 3),
-        "wall_clock_start_utc": first_started,
-        "wall_clock_end_utc": last_finished,
-        "orderbook_records": total_orderbook,
-        "trade_records": total_trades,
-        "gap_records": total_gaps,
-        "inter_segment_gap_count": len(inter_gaps),
+        "wall_clock_start_utc": segment_meta[0]["started_at_utc"],
+        "wall_clock_end_utc": segment_meta[-1]["finished_at_utc"],
+        "orderbook_records": len(merged_rows["orderbook.csv"]),
+        "trade_records": len(merged_rows["trades.csv"]),
+        "gap_records": len(gaps),
+        "inter_segment_gap_count": len(segment_meta) - 1,
         "merged_orderbook_sha256": file_meta["orderbook.csv"]["sha256"],
         "merged_trades_sha256": file_meta["trades.csv"]["sha256"],
         "merged_gaps_sha256": file_meta["gaps.csv"]["sha256"],
@@ -510,6 +611,72 @@ def aggregate(
         "analysis_archive_sha256": archive_digest,
         "analysis_inventory": str(output_dir / "analysis_inventory.json"),
     }
+
+
+def aggregate(
+    soak_id: str,
+    expected_segments: int,
+    output_dir: Path,
+    repo: str,
+    token: str,
+    expected_sha: str,
+    final_run_id: int,
+) -> dict[str, Any]:
+    if expected_segments != 14:
+        raise AggregateError("M8_2_REQUIRES_14_SEGMENTS_FOR_AT_LEAST_24H_CAPTURE")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    by_segment = _select_segment_artifacts(
+        _list_artifacts(repo, token), soak_id, expected_segments
+    )
+    segment_meta, segment_dirs = _load_all_segments(
+        by_segment,
+        expected_segments,
+        output_dir,
+        repo,
+        token,
+        soak_id,
+        expected_sha,
+    )
+    inter_gaps = _build_inter_segment_gap_inventory(segment_meta)
+    merged_rows, gaps = _merge_segment_rows(segment_dirs, segment_meta)
+    file_meta = _write_merged_csvs(output_dir, merged_rows, gaps)
+
+    actual_seconds = round(
+        sum(item["capture_seconds"] for item in segment_meta), 3
+    )
+    if actual_seconds < 24 * 60 * 60:
+        raise AggregateError("LESS_THAN_24_HOURS_OF_ACTUAL_CAPTURE")
+    manifest = _build_aggregate_manifest(
+        soak_id,
+        final_run_id,
+        expected_sha,
+        expected_segments,
+        segment_meta,
+        inter_gaps,
+        actual_seconds,
+        merged_rows,
+        gaps,
+        file_meta,
+    )
+    manifest_digest, archive_digest = _write_manifest_and_archive(output_dir, manifest)
+    _write_analysis_inventory(
+        output_dir,
+        final_run_id,
+        archive_digest,
+        len(merged_rows["orderbook.csv"]),
+        expected_segments,
+    )
+    summary = _build_aggregate_summary(
+        soak_id,
+        segment_meta,
+        actual_seconds,
+        merged_rows,
+        gaps,
+        file_meta,
+        manifest_digest,
+        archive_digest,
+        output_dir,
+    )
     (output_dir / "aggregate_summary.json").write_text(
         json.dumps(summary, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",

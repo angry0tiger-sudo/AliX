@@ -31,7 +31,7 @@ permissions:
 jobs:
   capture:
     runs-on: ubuntu-latest
-    timeout-minutes: 125
+    timeout-minutes: 150
     permissions:
       contents: read
     outputs:
