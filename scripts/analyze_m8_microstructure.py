@@ -1,10 +1,8 @@
-"""Fail-closed M8 order-book microstructure correlation study.
+"""Fail-closed M8 BTCUSDT microstructure correlation study.
 
-The evaluator accepts only the exact, hash-pinned M1.6 artifact inventory.
-Each capture segment is analysed independently. It never joins segment boundaries,
-interpolates gaps, reads Holdout/Post-Hack, performs model fitting, or places orders.
-
-Expected raw CSV schema is the schema emitted by scripts.capture_nobitex_microstructure.
+The evaluator accepts only hash-pinned M8.2 aggregate artifacts. Explicit inter-segment
+gaps remain in gaps.csv and any forward-return window crossing a gap is rejected.
+It never reads Holdout/Post-Hack, fits a model, or places orders.
 """
 
 from __future__ import annotations
@@ -39,7 +37,7 @@ BOOK_FIELDS = {
     "bids_top_json",
     "asks_top_json",
 }
-FEATURES = ("obi_top5", "microprice_edge_bps", "spread_bps", "depth_top5")
+FEATURES = ("obi_top5", "microprice_edge_bps", "trade_flow_imbalance_60s")
 HORIZONS_MS = {"5m": 5 * 60_000, "15m": 15 * 60_000}
 STALE_MAX_MS = 5_000
 FUTURE_TOLERANCE_MS = 30_000
@@ -218,6 +216,59 @@ def _parse_orderbook_rows(
     return snapshots
 
 
+def _attach_trade_flow_imbalance(
+    snapshots: list[Snapshot], trade_rows: list[dict[str, str]]
+) -> None:
+    """Attach trailing-60s signed-volume imbalance from WebSocket trades only.
+
+    REST seed observations are excluded because the public capture has no stable
+    trade identifier with which to prove that seed rows do not duplicate WebSocket rows.
+    """
+    trades: list[tuple[int, str, float]] = []
+    for row in trade_rows:
+        if row.get("source") != "websocket":
+            continue
+        try:
+            timestamp = int(row["exchange_timestamp_ms"])
+            side = row["side"]
+            volume = float(row["volume"])
+        except (KeyError, TypeError, ValueError, OverflowError) as exc:
+            raise InputError("TRADE_FLOW_ROW_INVALID") from exc
+        if side not in {"buy", "sell"}:
+            raise InputError("TRADE_FLOW_SIDE_INVALID")
+        if timestamp <= 0 or not math.isfinite(volume) or volume < 0:
+            raise InputError("TRADE_FLOW_VALUE_OUT_OF_RANGE")
+        trades.append((timestamp, side, volume))
+
+    trades.sort(key=lambda item: item[0])
+    left = 0
+    right = 0
+    buy_volume = 0.0
+    sell_volume = 0.0
+    for snapshot in snapshots:
+        while right < len(trades) and trades[right][0] <= snapshot.timestamp_ms:
+            _, side, volume = trades[right]
+            if side == "buy":
+                buy_volume += volume
+            else:
+                sell_volume += volume
+            right += 1
+
+        cutoff = snapshot.timestamp_ms - 60_000
+        while left < right and trades[left][0] <= cutoff:
+            _, side, volume = trades[left]
+            if side == "buy":
+                buy_volume -= volume
+            else:
+                sell_volume -= volume
+            left += 1
+
+        total_volume = buy_volume + sell_volume
+        snapshot.features["trade_flow_imbalance_60s"] = (
+            (buy_volume - sell_volume) / total_volume if total_volume > 0 else 0.0
+        )
+
+
 def _validate_orderbook_timestamps(snapshots: list[Snapshot], path: Path) -> None:
     if not snapshots:
         raise InputError(f"ORDERBOOK_EMPTY:{path.name}")
@@ -263,12 +314,19 @@ def _read_verified_archive(
             files_meta = manifest.get("files")
             if not isinstance(files_meta, dict):
                 raise InputError(f"MANIFEST_FILES_MISSING:{path.name}")
-            _read_csv_rows(archive, files_meta, "trades.csv")
+            trade_fields, trade_rows = _read_csv_rows(
+                archive, files_meta, "trades.csv"
+            )
+            if not trade_fields or not {
+                "source", "exchange_timestamp_ms", "side", "volume"
+            }.issubset(set(trade_fields)):
+                raise InputError("TRADE_SCHEMA_MISMATCH")
             book_fields, book_rows = _read_csv_rows(
                 archive, files_meta, "orderbook.csv"
             )
             _, gap_rows = _read_csv_rows(archive, files_meta, "gaps.csv")
             snapshots = _parse_orderbook_rows(book_rows, book_fields, path)
+            _attach_trade_flow_imbalance(snapshots, trade_rows)
             gaps = _parse_gap_rows(gap_rows)
     except zipfile.BadZipFile as exc:
         raise InputError(f"ARCHIVE_NOT_VALID_ZIP:{path.name}") from exc
@@ -527,6 +585,11 @@ def _base_report(
         ),
         "total_gap_records": sum(int(item["gap_records"] or 0) for item in segments),
         "features": list(FEATURES),
+        "feature_definitions": {
+            "obi_top5": "Top-five bid depth minus ask depth divided by total top-five depth.",
+            "microprice_edge_bps": "Queue-size-weighted microprice deviation from bid/ask midpoint, in basis points.",
+            "trade_flow_imbalance_60s": "Trailing-60-second (buy volume minus sell volume) divided by total volume, using WebSocket trade rows only.",
+        },
         "horizons": ["5m", "15m"],
         "safety": {
             "holdout_bytes_read": False,
@@ -587,13 +650,13 @@ def _feature_correlation_result(
         ("spearman", "spearman_p_two_sided"),
     ):
         raw_p = result[p_key]
-        result[f"{method}_p_bonferroni_8_tests"] = (
+        result[f"{method}_p_bonferroni_{n_tests}_tests"] = (
             min(1.0, raw_p * n_tests) if raw_p is not None else None
         )
-    adjusted_pearson = result["pearson_p_bonferroni_8_tests"]
-    result["pearson_significant_after_bonferroni"] = bool(
-        adjusted_pearson is not None and adjusted_pearson < ALPHA
-    )
+        adjusted_p = result[f"{method}_p_bonferroni_{n_tests}_tests"]
+        result[f"{method}_significant_after_bonferroni"] = bool(
+            adjusted_p is not None and adjusted_p < ALPHA
+        )
     return result
 
 
@@ -602,7 +665,8 @@ def _all_correlations(
     pooled_targets: dict[str, list[float]],
 ) -> dict[str, Any]:
     correlations: dict[str, Any] = {}
-    n_tests = len(FEATURES) * len(HORIZONS_MS)
+    # One family: 3 features x 2 horizons x 2 statistics = 12 tests.
+    n_tests = len(FEATURES) * len(HORIZONS_MS) * 2
     for horizon_name in HORIZONS_MS:
         correlations[horizon_name] = {}
         for feature in FEATURES:
@@ -612,15 +676,16 @@ def _all_correlations(
     return correlations
 
 
-def _obi_signal_found(correlations: dict[str, Any]) -> bool:
-    return any(
-        item["pearson_significant_after_bonferroni"]
-        or (
-            item["spearman_p_bonferroni_8_tests"] is not None
-            and item["spearman_p_bonferroni_8_tests"] < ALPHA
-        )
-        for item in (correlations[horizon]["obi_top5"] for horizon in HORIZONS_MS)
-    )
+def _microstructure_signal_found(correlations: dict[str, Any]) -> bool:
+    for horizon in HORIZONS_MS:
+        for feature in FEATURES:
+            item = correlations[horizon][feature]
+            if (
+                item.get("pearson_significant_after_bonferroni")
+                or item.get("spearman_significant_after_bonferroni")
+            ):
+                return True
+    return False
 
 
 def _blocked_market_report(
@@ -647,7 +712,7 @@ def _completed_market_report(
     per_segment: list[dict[str, Any]],
     excluded: dict[str, dict[str, int]],
 ) -> dict[str, Any]:
-    signal_found = _obi_signal_found(correlations)
+    signal_found = _microstructure_signal_found(correlations)
     report.update(
         {
             "status": "ANALYZED",
@@ -659,22 +724,22 @@ def _completed_market_report(
                 "gap_policy": "reject any sample whose feature-to-target interval intersects an explicit orderbook gap",
                 "segment_policy": "process each artifact separately; never stitch capture segments",
                 "returns": "10,000 * ln(mid[t+h] / mid[t])",
-                "multiple_testing": "Bonferroni correction across eight feature-horizon tests separately for Pearson and Spearman",
+                "multiple_testing": "Joint Bonferroni correction across 12 tests (3 features x 2 horizons x Pearson/Spearman), family-wise alpha=0.05.",
             },
             "per_segment": per_segment,
             "excluded_samples": excluded,
             "correlations": correlations,
             "decision": (
-                "OBI_CORRELATION_SIGNAL_FOUND"
+                "MICROSTRUCTURE_FEATURE_SIGNAL_FOUND"
                 if signal_found
-                else "NO_SIGNIFICANT_OBI_CORRELATION"
+                else "NO_SIGNIFICANT_MICROSTRUCTURE_CORRELATION"
             ),
             "decision_note": (
-                "At least one OBI horizon is significant after the family-wise Bonferroni correction."
+                "At least one of OBI, microprice deviation, or 60-second trade-flow imbalance is significant after the joint 12-test Bonferroni correction."
                 if signal_found
-                else "Neither OBI horizon is significant after the family-wise Bonferroni correction."
+                else "None of OBI, microprice deviation, or 60-second trade-flow imbalance is significant after the joint 12-test Bonferroni correction."
             ),
-            "caveat": "Exploratory correlation is not evidence of tradable edge, causality, or post-cost profitability.",
+            "caveat": "Exploratory correlation is not evidence of tradable edge, causality, or post-cost profitability. TFI uses public trade type buy/sell as a side proxy; the official schema does not explicitly define it as aggressor/taker side. REST seed rows are excluded to avoid possible duplicates. Serial dependence is not removed by Bonferroni, so effective sample size may be lower than raw N.",
         }
     )
     return report
@@ -709,7 +774,7 @@ def main() -> int:
         nargs="+",
         type=Path,
         required=True,
-        help="Exactly the five M1.6 ZIP archives.",
+        help="Hash-registered M8.2 aggregate ZIP archive(s).",
     )
     parser.add_argument("--inventory", type=Path, default=DEFAULT_INVENTORY)
     parser.add_argument("--expected-market", default="BTCUSDT")
