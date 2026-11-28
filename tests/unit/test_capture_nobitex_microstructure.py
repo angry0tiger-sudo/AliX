@@ -487,7 +487,6 @@ def test_trade_stream_preserves_identical_public_observations() -> None:
     assert gaps == []
 
 
-
 def test_btcusdt_market_drives_public_rest_and_websocket_capture(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
