@@ -997,7 +997,6 @@ h=24 یعنی بازده هدف طی ۲۴ کندل یک‌ساعته؛ این ب
 1h
 
 یک کندل ۱ساعته تا close[t+1]
-
 ۱۰
 
 4h
@@ -1997,7 +1996,6 @@ PASS در Standard CI #46001067175 روی SHA 95133203…؛ 1,127 passed، 5 ski
 Dependency resolution / lock / pip-audit
 
 PASS در Standard CI #46001067175؛ فقط وضعیت سلامت مهندسی dependency set فعلی را نشان می‌دهد.
-
 PostgreSQL / Freqtrade smoke / four-arm lock
 
 PASS در Standard CI #46001067175.
@@ -2064,11 +2062,21 @@ C.3. M8 source gate و M8.1 run snapshot
 | Raw artifact SHA-256 | `bc16983be51490cafebff11c5de06360d6668633bd3a75ea1afbe0defd3837c0` |
 | Manifest SHA-256 | `29fe9d3a556d810fc441da9401f529d8efae0c8c507dce88b4a861c69e2a8107` |
 
-- OBI top-5: ۵m N=8 و ۱۵m N=2؛ نتایج دقیق در جدول زیر آمده است.
-| Horizon | N | Pearson r | Pearson p | Pearson p (Bonferroni ×8) | Spearman rho | Spearman p | Spearman p (Bonferroni ×8) |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| 5m | 8 | 0.47108390 | 0.23869631 | 1.00000000 | 0.26190476 | 0.53092286 | 1.00000000 |
-| 15m | 2 | N/A | N/A | N/A | N/A | N/A | N/A |
+- OBI top-5: ۵m N=8 و ۱۵m N=2؛ نتایج دقیق به تفکیک Pearson و Spearman در جدول‌های زیر آمده‌اند.
+
+**Pearson correlation**
+
+| Horizon | N | Pearson r | Pearson p | Bonferroni p (×8) |
+|---|---:|---:|---:|---:|
+| 5m | 8 | 0.47108390 | 0.23869631 | 1.00000000 |
+| 15m | 2 | N/A | N/A | N/A |
+
+**Spearman rank correlation**
+
+| Horizon | N | Spearman rho | Spearman p | Bonferroni p (×8) |
+|---|---:|---:|---:|---:|
+| 5m | 8 | 0.26190476 | 0.53092286 | 1.00000000 |
+| 15m | 2 | N/A | N/A | N/A |
 
 - تصمیم تشخیصی `NO_SIGNIFICANT_OBI_CORRELATION` است؛ نه صفر همبستگی اثبات شده و نه حکم اقتصادی NO-GO. یک ساعت داده به‌دلیل N بسیار کوچک فقط اکتشافی است.
 - `TRIGGER_M8`، `TRIGGER_M8_ANALYSIS` و Push triggerهای موقت حذف شده‌اند؛ Workflowهای باقی‌مانده فقط `workflow_dispatch` را حفظ می‌کنند.

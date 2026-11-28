@@ -2,6 +2,11 @@ name: MRD v1.3 Word artifact and repository publication
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - research/nobitex-hf-strategy
+    paths:
+      - TRIGGER_MRD_V13
 
 permissions:
   contents: write
@@ -95,6 +100,8 @@ jobs:
               "۱۶ candidate identity",
               "۴۳ رکورد",
               "در ۲۷ نوامبر ۲۰۲۶",
+              "**Pearson correlation**",
+              "**Spearman rank correlation**",
           ]
           missing = [item for item in required if item not in text]
           stale = [
@@ -104,7 +111,7 @@ jobs:
               "M8 Microstructure baseline | BLOCKED |",
           ]
           stale = [item for item in stale if item in text]
-          if len(lines) < 2000 or missing or stale or "IN PROGRESS" in text or "در حال اجراست" in text:
+          if len(lines) < 2000 or missing or stale or text.count("|---") < 6 or "IN PROGRESS" in text or "در حال اجراست" in text:
               raise SystemExit(f"MRD_SOURCE_QA_FAILED:lines={len(lines)}:missing={missing}:stale={stale}")
           if text.count("a1c1a658906cd79be62796885e3ed782b66a267d") != 2:
               raise SystemExit("MAIN_HEAD_REPETITION_OR_MISSING")
@@ -156,7 +163,7 @@ jobs:
 
       - name: Convert Markdown to DOCX and enforce RTL on paragraphs and tables
         run: |
-          pandoc "docs/knowledge_base/AliX_Master_Reference_Document_v1.3_FA.md" --from=gfm --to=docx --standalone --toc --toc-depth=3 --reference-doc=mrd_reference.docx -o "docs/knowledge_base/AliX_Master_Reference_Document_v1.3_FA.docx"
+          pandoc "docs/knowledge_base/AliX_Master_Reference_Document_v1.3_FA.md" --from=gfm --to=docx --standalone --reference-doc=mrd_reference.docx -o "docs/knowledge_base/AliX_Master_Reference_Document_v1.3_FA.docx"
           python - <<'PY'
           import json
           import zipfile
@@ -229,7 +236,7 @@ jobs:
           table_count = len(checked.xpath(".//w:tbl", namespaces=ns))
           if "نسخهٔ ۱٫۳" not in text or "ADR-076" not in text or "NO_SIGNIFICANT_OBI_CORRELATION" not in text:
               raise SystemExit("DOCX_REQUIRED_CONTENT_MISSING")
-          if rtl_count < 1000 or table_count < 4:
+          if rtl_count < 1000 or table_count < 6:
               raise SystemExit(f"DOCX_RTL_OR_TABLE_QA_FAILED:{rtl_count}:{table_count}")
           print(json.dumps({
               "docx": str(path), "bytes": path.stat().st_size,
@@ -239,6 +246,205 @@ jobs:
           }, sort_keys=True))
           PY
 
+      - name: Rebuild six fixed-width RTL tables and verify Word layout
+        run: |
+          python - <<'PY'
+          import json
+          import zipfile
+          from pathlib import Path
+          from docx import Document
+          from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT, WD_TABLE_ALIGNMENT
+          from docx.enum.text import WD_ALIGN_PARAGRAPH
+          from docx.shared import Inches, Pt, RGBColor
+          from docx.oxml import OxmlElement
+          from docx.oxml.ns import qn
+          from lxml import etree
+
+          path = Path("docs/knowledge_base/AliX_Master_Reference_Document_v1.3_FA.docx")
+          doc = Document(path)
+          old_tables = list(doc.tables)
+          widths_by_columns = {
+              2: [Inches(2.25), Inches(4.55)],
+              3: [Inches(3.05), Inches(1.85), Inches(1.90)],
+              4: [Inches(2.05), Inches(1.20), Inches(1.70), Inches(1.85)],
+              5: [Inches(1.55), Inches(1.00), Inches(1.25), Inches(1.45), Inches(1.55)],
+              7: [Inches(.55), Inches(.65), Inches(1.65), Inches(.90), Inches(.90), Inches(.80), Inches(1.35)],
+          }
+          font_sizes = {2: 9.0, 3: 8.4, 4: 8.0, 5: 7.8, 7: 7.3}
+
+          def get_or_add(parent, tag):
+              node = parent.find(qn(tag))
+              if node is None:
+                  node = OxmlElement(tag)
+                  parent.append(node)
+              return node
+
+          def set_cell_borders(cell):
+              tcpr = cell._tc.get_or_add_tcPr()
+              borders = get_or_add(tcpr, "w:tcBorders")
+              for side in ("top", "left", "bottom", "right", "insideH", "insideV"):
+                  edge = borders.find(qn("w:" + side))
+                  if edge is None:
+                      edge = OxmlElement("w:" + side)
+                      borders.append(edge)
+                  edge.set(qn("w:val"), "single")
+                  edge.set(qn("w:sz"), "4")
+                  edge.set(qn("w:space"), "0")
+                  edge.set(qn("w:color"), "B7C1CC")
+              margins = get_or_add(tcpr, "w:tcMar")
+              for side, value in (("top", "65"), ("bottom", "65"), ("start", "85"), ("end", "85")):
+                  margin = margins.find(qn("w:" + side))
+                  if margin is None:
+                      margin = OxmlElement("w:" + side)
+                      margins.append(margin)
+                  margin.set(qn("w:w"), value)
+                  margin.set(qn("w:type"), "dxa")
+
+          def configure_paragraph(paragraph, size, bold=False):
+              paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+              paragraph.paragraph_format.space_before = Pt(0)
+              paragraph.paragraph_format.space_after = Pt(0)
+              paragraph.paragraph_format.line_spacing = 1.0
+              ppr = paragraph._p.get_or_add_pPr()
+              if ppr.find(qn("w:bidi")) is None:
+                  ppr.append(OxmlElement("w:bidi"))
+              jc = ppr.find(qn("w:jc"))
+              if jc is None:
+                  jc = OxmlElement("w:jc")
+                  ppr.append(jc)
+              jc.set(qn("w:val"), "right")
+              for run in paragraph.runs:
+                  run.font.name = "Noto Naskh Arabic"
+                  run.font.size = Pt(size)
+                  run.font.bold = bold
+                  run.font.color.rgb = RGBColor(31, 41, 55)
+                  rpr = run._r.get_or_add_rPr()
+                  if rpr.find(qn("w:rtl")) is None:
+                      rpr.append(OxmlElement("w:rtl"))
+                  rfonts = rpr.find(qn("w:rFonts"))
+                  if rfonts is None:
+                      rfonts = OxmlElement("w:rFonts")
+                      rpr.insert(0, rfonts)
+                  for attr in ("ascii", "hAnsi", "cs", "eastAsia"):
+                      rfonts.set(qn("w:" + attr), "Noto Naskh Arabic")
+
+          expected_shapes = {(9, 3), (5, 7), (8, 4), (9, 2), (3, 5)}
+          observed_shapes = {(len(t.rows), len(t.columns)) for t in old_tables}
+          if len(old_tables) != 6 or observed_shapes != expected_shapes:
+              raise SystemExit(f"DOCX_TABLE_SHAPES_MISMATCH:{len(old_tables)}:{observed_shapes}")
+
+          for table_index, old_table in enumerate(old_tables):
+              rows = [[cell.text.strip() for cell in row.cells] for row in old_table.rows]
+              if not rows:
+                  raise SystemExit(f"EMPTY_TABLE:{table_index}")
+              columns = len(rows[0])
+              if columns not in widths_by_columns or any(len(row) != columns for row in rows):
+                  raise SystemExit(f"TABLE_SHAPE_INVALID:{table_index}")
+              widths = widths_by_columns[columns]
+              new_table = doc.add_table(rows=len(rows), cols=columns)
+              new_table.style = "Table Grid"
+              new_table.alignment = WD_TABLE_ALIGNMENT.CENTER
+              new_table.autofit = False
+              font_size = font_sizes[columns]
+              for col_index, width in enumerate(widths):
+                  new_table.columns[col_index].width = width
+              for row_index, row_values in enumerate(rows):
+                  row = new_table.rows[row_index]
+                  trpr = row._tr.get_or_add_trPr()
+                  if trpr.find(qn("w:cantSplit")) is None:
+                      trpr.append(OxmlElement("w:cantSplit"))
+                  if row_index == 0 and trpr.find(qn("w:tblHeader")) is None:
+                      trpr.append(OxmlElement("w:tblHeader"))
+                  for physical_col, value in enumerate(reversed(row_values)):
+                      cell = row.cells[physical_col]
+                      cell.text = value
+                      cell.width = widths[physical_col]
+                      cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+                      set_cell_borders(cell)
+                      for paragraph in cell.paragraphs:
+                          configure_paragraph(paragraph, font_size, bold=(row_index == 0))
+                      if row_index == 0:
+                          tcpr = cell._tc.get_or_add_tcPr()
+                          shade = get_or_add(tcpr, "w:shd")
+                          shade.set(qn("w:fill"), "EAF0F6")
+                          shade.set(qn("w:val"), "clear")
+
+              tblpr = new_table._tbl.tblPr
+              tblw = tblpr.find(qn("w:tblW"))
+              if tblw is None:
+                  tblw = OxmlElement("w:tblW")
+                  tblpr.append(tblw)
+              total_twips = sum(int(round(width.twips)) for width in widths)
+              tblw.set(qn("w:type"), "dxa")
+              tblw.set(qn("w:w"), str(total_twips))
+              layout = tblpr.find(qn("w:tblLayout"))
+              if layout is None:
+                  layout = OxmlElement("w:tblLayout")
+                  tblpr.append(layout)
+              layout.set(qn("w:type"), "fixed")
+              bidi_visual = tblpr.find(qn("w:bidiVisual"))
+              if bidi_visual is not None:
+                  tblpr.remove(bidi_visual)
+              old_element = old_table._tbl
+              new_element = new_table._tbl
+              old_element.addprevious(new_element)
+              old_element.getparent().remove(old_element)
+
+          for paragraph in doc.paragraphs:
+              if "۳. M7 — تصمیم نهایی و Trial Registry" in paragraph.text:
+                  paragraph.style = doc.styles["Heading 1"]
+                  paragraph.paragraph_format.left_indent = Inches(0)
+                  paragraph.paragraph_format.right_indent = Inches(0)
+                  paragraph.paragraph_format.first_line_indent = Inches(0)
+                  paragraph.paragraph_format.keep_with_next = True
+                  paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+                  ppr = paragraph._p.get_or_add_pPr()
+                  if ppr.find(qn("w:bidi")) is None:
+                      ppr.append(OxmlElement("w:bidi"))
+
+          for section in doc.sections:
+              section.page_width = Inches(8.27)
+              section.page_height = Inches(11.69)
+              section.left_margin = Inches(.70)
+              section.right_margin = Inches(.70)
+              section.top_margin = Inches(.68)
+              section.bottom_margin = Inches(.68)
+          doc.save(path)
+
+          with zipfile.ZipFile(path, "r") as archive:
+              if archive.testzip() is not None:
+                  raise SystemExit("DOCX_ZIP_INTEGRITY_FAILED_AFTER_TABLE_REBUILD")
+              root = etree.fromstring(archive.read("word/document.xml"))
+          ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+          tables = root.xpath(".//w:tbl", namespaces=ns)
+          paragraphs = root.xpath(".//w:p", namespaces=ns)
+          rtl_paragraphs = len(root.xpath(".//w:pPr/w:bidi", namespaces=ns))
+          rtl_runs = len(root.xpath(".//w:rPr/w:rtl", namespaces=ns))
+          if len(tables) != 6 or rtl_paragraphs < 1000 or rtl_runs < 1000:
+              raise SystemExit(f"DOCX_RTL_OR_TABLE_QA_FAILED:{len(tables)}:{rtl_paragraphs}:{rtl_runs}")
+          for index, table in enumerate(tables):
+              tblpr = table.find("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}tblPr")
+              tblw = tblpr.find("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}tblW")
+              layout = tblpr.find("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}tblLayout")
+              if tblw is None or tblw.get("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}w") != "9792":
+                  raise SystemExit(f"DOCX_TABLE_WIDTH_NOT_FIXED:{index}")
+              if layout is None or layout.get("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}type") != "fixed":
+                  raise SystemExit(f"DOCX_TABLE_LAYOUT_NOT_FIXED:{index}")
+              if tblpr.find("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}bidiVisual") is not None:
+                  raise SystemExit(f"DOCX_TABLE_BIDI_VISUAL_UNEXPECTED:{index}")
+          doc_text = "".join(root.xpath(".//w:t/text()", namespaces=ns))
+          if "ADR-076" not in doc_text or "NO_SIGNIFICANT_OBI_CORRELATION" not in doc_text or "99.9999999992%" not in doc_text:
+              raise SystemExit("DOCX_REQUIRED_FINAL_TEXT_MISSING")
+          print(json.dumps({
+              "bytes": path.stat().st_size,
+              "paragraphs": len(paragraphs),
+              "rtl_paragraphs": rtl_paragraphs,
+              "rtl_runs": rtl_runs,
+              "tables": len(tables),
+              "table_shapes": [[len(t.xpath("./w:tr", namespaces=ns)), len(t.xpath("./w:tr[1]/w:tc", namespaces=ns))] for t in tables],
+              "fixed_width_tables": len(tables),
+          }, sort_keys=True))
+          PY
       - name: Upload MRD v1.3 Word and Markdown artifact
         uses: actions/upload-artifact@v4
         with:
