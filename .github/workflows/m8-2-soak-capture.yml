@@ -1,0 +1,503 @@
+name: M8.2 BTCUSDT 24h Public Microstructure Soak
+
+on:
+  # Requested cadence. GitHub schedule only runs from the default branch.
+  # main is frozen, so this branch run is push-started and internally orchestrated.
+  push:
+    branches:
+      - research/nobitex-hf-strategy
+    paths:
+      - .github/workflows/m8-2-soak-capture.yml
+      - .github/workflows/m8-2-capture-segment.yml
+      - scripts/aggregate_m8_2_data.py
+      - scripts/analyze_m8_microstructure.py
+      - tests/unit/test_m8_microstructure.py
+      - tests/unit/test_aggregate_m8_2_data.py
+  schedule:
+    - cron: "0 */2 * * *"
+  # Manual dispatch is available only after the workflow exists on the default branch.
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: alix-m8-2-btcusdt-soak-${{{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    if: github.ref == 'refs/heads/research/nobitex-hf-strategy'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Checkout exact research source commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned capture and test dependencies
+        run: |
+          python -m pip install pip==25.2
+          python -m pip install websocket-client==1.9.2 httpx==0.28.1 pytest==9.0.3
+
+      - name: Run capture, audit, aggregation and three-feature analysis tests
+        env:
+          ALIX_DRY_RUN: "true"
+          ALIX_ALLOW_LIVE_TRADING: "false"
+        run: |
+          pytest tests/unit/test_capture_nobitex_microstructure.py \
+            tests/unit/test_audit_microstructure_capture.py \
+            tests/unit/test_m8_microstructure.py \
+            tests/unit/test_aggregate_m8_2_data.py -q
+
+      - name: Wait for Standard CI on this exact source commit
+        env:
+          GITHUB_TOKEN: ${{{ github.token }}
+          GITHUB_REPOSITORY: ${{{ github.repository }}
+          EXPECTED_SHA: ${{{ github.sha }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import time
+          from urllib.request import Request, urlopen
+
+          repository = os.environ["GITHUB_REPOSITORY"]
+          expected_sha = os.environ["EXPECTED_SHA"]
+          token = os.environ["GITHUB_TOKEN"]
+          url = (
+              f"https://api.github.com/repos/{repository}/actions/runs"
+              f"?head_sha={expected_sha}&per_page=100"
+          )
+          deadline = time.monotonic() + 30 * 60
+          while time.monotonic() < deadline:
+              request = Request(url, headers={
+                  "Accept": "application/vnd.github+json",
+                  "Authorization": f"Bearer {token}",
+                  "X-GitHub-Api-Version": "2022-11-28",
+              })
+              with urlopen(request, timeout=30) as response:
+                  payload = json.load(response)
+              candidates = [
+                  run for run in payload.get("workflow_runs", [])
+                  if run.get("head_sha") == expected_sha
+                  and run.get("path") == ".github/workflows/ci.yml"
+                  and run.get("name") == "AliX Continuous Integration"
+              ]
+              if candidates:
+                  selected = max(candidates, key=lambda item: item.get("created_at", ""))
+                  if selected.get("status") == "completed":
+                      if selected.get("conclusion") != "success":
+                          raise SystemExit(
+                              f"STANDARD_CI_NOT_GREEN run_id={selected.get('id')} "
+                              f"conclusion={selected.get('conclusion')}"
+                          )
+                      print(
+                          f"STANDARD_CI_GREEN run_id={selected.get('id')} "
+                          f"sha={expected_sha}"
+                      )
+                      break
+              time.sleep(20)
+          else:
+              raise SystemExit("STANDARD_CI_DID_NOT_COMPLETE_SUCCESSFULLY")
+          PY
+
+      - name: Verify public BTCUSDT L2 endpoint without authentication
+        run: |
+          python - <<'PY'
+          import json
+          from urllib.request import Request, urlopen
+
+          url = "https://apiv2.nobitex.ir/v3/orderbook/BTCUSDT"
+          request = Request(url, headers={
+              "Accept": "application/json",
+              "User-Agent": "AliX-M8.2-Public-Capture/1.0",
+          })
+          with urlopen(request, timeout=30) as response:
+              payload = json.load(response)
+          if payload.get("status") != "ok":
+              raise SystemExit("BTCUSDT_PUBLIC_ORDERBOOK_NOT_OK")
+          if len(payload.get("bids", [])) < 5 or len(payload.get("asks", [])) < 5:
+              raise SystemExit("BTCUSDT_PUBLIC_ORDERBOOK_DEPTH_INSUFFICIENT")
+          print("BTCUSDT_PUBLIC_PREFLIGHT=PASS; authorization_header_sent=false")
+          PY
+
+  capture_01:
+    needs: preflight
+    uses: ./.github/workflows/m8-2-capture-segment.yml
+    with:
+      segment_number: 1
+      soak_id: ${{{ github.run_id }}
+      expected_code_sha: ${{{ github.sha }}
+      previous_finished_at: ""
+      wait_before_capture: false
+
+  capture_02:
+    needs: [preflight, capture_01]
+    uses: ./.github/workflows/m8-2-capture-segment.yml
+    with:
+      segment_number: 2
+      soak_id: ${{{ github.run_id }}
+      expected_code_sha: ${{{ github.sha }}
+      previous_finished_at: ${{{ needs.capture_01.outputs.capture_finished_at }}
+      wait_before_capture: true
+
+  capture_03:
+    needs: [preflight, capture_02]
+    uses: ./.github/workflows/m8-2-capture-segment.yml
+    with:
+      segment_number: 3
+      soak_id: ${{{ github.run_id }}
+      expected_code_sha: ${{{ github.sha }}
+      previous_finished_at: ${{{ needs.capture_02.outputs.capture_finished_at }}
+      wait_before_capture: true
+
+  capture_04:
+    needs: [preflight, capture_03]
+    uses: ./.github/workflows/m8-2-capture-segment.yml
+    with:
+      segment_number: 4
+      soak_id: ${{{ github.run_id }}
+      expected_code_sha: ${{{ github.sha }}
+      previous_finished_at: ${{{ needs.capture_03.outputs.capture_finished_at }}
+      wait_before_capture: true
+
+  capture_05:
+    needs: [preflight, capture_04]
+    uses: ./.github/workflows/m8-2-capture-segment.yml
+    with:
+      segment_number: 5
+      soak_id: ${{{ github.run_id }}
+      expected_code_sha: ${{{ github.sha }}
+      previous_finished_at: ${{{ needs.capture_04.outputs.capture_finished_at }}
+      wait_before_capture: true
+
+  capture_06:
+    needs: [preflight, capture_05]
+    uses: ./.github/workflows/m8-2-capture-segment.yml
+    with:
+      segment_number: 6
+      soak_id: ${{{ github.run_id }}
+      expected_code_sha: ${{{ github.sha }}
+      previous_finished_at: ${{{ needs.capture_05.outputs.capture_finished_at }}
+      wait_before_capture: true
+
+  capture_07:
+    needs: [preflight, capture_06]
+    uses: ./.github/workflows/m8-2-capture-segment.yml
+    with:
+      segment_number: 7
+      soak_id: ${{{ github.run_id }}
+      expected_code_sha: ${{{ github.sha }}
+      previous_finished_at: ${{{ needs.capture_06.outputs.capture_finished_at }}
+      wait_before_capture: true
+
+  capture_08:
+    needs: [preflight, capture_07]
+    uses: ./.github/workflows/m8-2-capture-segment.yml
+    with:
+      segment_number: 8
+      soak_id: ${{{ github.run_id }}
+      expected_code_sha: ${{{ github.sha }}
+      previous_finished_at: ${{{ needs.capture_07.outputs.capture_finished_at }}
+      wait_before_capture: true
+
+  capture_09:
+    needs: [preflight, capture_08]
+    uses: ./.github/workflows/m8-2-capture-segment.yml
+    with:
+      segment_number: 9
+      soak_id: ${{{ github.run_id }}
+      expected_code_sha: ${{{ github.sha }}
+      previous_finished_at: ${{{ needs.capture_08.outputs.capture_finished_at }}
+      wait_before_capture: true
+
+  capture_10:
+    needs: [preflight, capture_09]
+    uses: ./.github/workflows/m8-2-capture-segment.yml
+    with:
+      segment_number: 10
+      soak_id: ${{{ github.run_id }}
+      expected_code_sha: ${{{ github.sha }}
+      previous_finished_at: ${{{ needs.capture_09.outputs.capture_finished_at }}
+      wait_before_capture: true
+
+  capture_11:
+    needs: [preflight, capture_10]
+    uses: ./.github/workflows/m8-2-capture-segment.yml
+    with:
+      segment_number: 11
+      soak_id: ${{{ github.run_id }}
+      expected_code_sha: ${{{ github.sha }}
+      previous_finished_at: ${{{ needs.capture_10.outputs.capture_finished_at }}
+      wait_before_capture: true
+
+  capture_12:
+    needs: [preflight, capture_11]
+    uses: ./.github/workflows/m8-2-capture-segment.yml
+    with:
+      segment_number: 12
+      soak_id: ${{{ github.run_id }}
+      expected_code_sha: ${{{ github.sha }}
+      previous_finished_at: ${{{ needs.capture_11.outputs.capture_finished_at }}
+      wait_before_capture: true
+
+  capture_13:
+    needs: [preflight, capture_12]
+    uses: ./.github/workflows/m8-2-capture-segment.yml
+    with:
+      segment_number: 13
+      soak_id: ${{{ github.run_id }}
+      expected_code_sha: ${{{ github.sha }}
+      previous_finished_at: ${{{ needs.capture_12.outputs.capture_finished_at }}
+      wait_before_capture: true
+
+  capture_14:
+    needs: [preflight, capture_13]
+    uses: ./.github/workflows/m8-2-capture-segment.yml
+    with:
+      segment_number: 14
+      soak_id: ${{{ github.run_id }}
+      expected_code_sha: ${{{ github.sha }}
+      previous_finished_at: ${{{ needs.capture_13.outputs.capture_finished_at }}
+      wait_before_capture: true
+
+
+
+  aggregate_analyze_adr:
+    needs: capture_14
+    if: needs.capture_14.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      actions: read
+      contents: write
+    env:
+      GITHUB_TOKEN: ${{{ github.token }}
+      GITHUB_REPOSITORY: ${{{ github.repository }}
+      EXPECTED_CODE_SHA: ${{{ github.sha }}
+      SOAK_ID: ${{{ github.run_id }}
+      ALIX_DRY_RUN: "true"
+      ALIX_ALLOW_LIVE_TRADING: "false"
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - name: Checkout exact source commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download, verify and merge all 14 raw segment artifacts
+        run: |
+          python -m scripts.aggregate_m8_2_data \
+            --soak-id "$SOAK_ID" \
+            --expected-segments 14 \
+            --output-dir .artifacts/m8_2_aggregate
+
+      - name: Compute OBI, microprice deviation, TFI and corrected p-values
+        run: |
+          python -m scripts.analyze_m8_microstructure \
+            --archives .artifacts/m8_2_aggregate/analysis_archive.zip \
+            --inventory .artifacts/m8_2_aggregate/analysis_inventory.json \
+            --expected-market BTCUSDT \
+            --output .artifacts/m8_2_aggregate/m8_microstructure_report.json
+
+      - name: Generate ADR-077 exclusively from verified measurements
+        run: |
+          python - <<'PY'
+          import json
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          root = Path(".artifacts/m8_2_aggregate")
+          aggregate = json.loads((root / "aggregate_summary.json").read_text())
+          report = json.loads((root / "m8_microstructure_report.json").read_text())
+          if report.get("status") != "ANALYZED":
+              raise SystemExit(f"ANALYSIS_NOT_COMPLETE:{report.get('status')}")
+          if report.get("correlation_status") != "COMPUTED":
+              raise SystemExit("CORRELATIONS_NOT_COMPUTED")
+
+          features = [
+              "obi_top5", "microprice_edge_bps", "trade_flow_imbalance_60s"
+          ]
+          horizons = ["5m", "15m"]
+          rows = []
+          significant = []
+          for horizon in horizons:
+              for feature in features:
+                  result = report["correlations"][horizon][feature]
+                  pearson_adjusted = result["pearson_p_bonferroni_12_tests"]
+                  spearman_adjusted = result["spearman_p_bonferroni_12_tests"]
+                  rows.append(
+                      f"| {horizon} | {feature} | {result['n']} | "
+                      f"{result['pearson_r']} | {result['pearson_p_two_sided']} | "
+                      f"{pearson_adjusted} | {result['spearman_rho']} | "
+                      f"{result['spearman_p_two_sided']} | {spearman_adjusted} |"
+                  )
+                  if (
+                      result.get("pearson_significant_after_bonferroni")
+                      or result.get("spearman_significant_after_bonferroni")
+                  ):
+                      significant.append({"horizon": horizon, "feature": feature})
+
+          no_go = not significant
+          decision = (
+              "NO-GO: no feature has a statistically significant correlation after "
+              "the joint 12-test Bonferroni correction."
+              if no_go else
+              "CONDITIONAL RESEARCH CONTINUATION: at least one feature passed the "
+              "joint Bonferroni test; next step is a preregistered cost-aware backtest."
+          )
+          status = (
+              "ACCEPTED / NO-GO" if no_go
+              else "ACCEPTED / CONDITIONAL RESEARCH CONTINUATION"
+          )
+          next_step = (
+              "Close M8 with NO-GO. No further microstructure strategy development is "
+              "supported by this dataset."
+              if no_go else
+              "Preregister a minimal strategy using only significant feature(s), then "
+              "run a gap-aware, cost-aware out-of-sample backtest. Trading remains NO-GO."
+          )
+
+          body = f"""# ADR-077: M8.2 BTCUSDT public microstructure study
+
+          **Date:** {datetime.now(timezone.utc).date().isoformat()}
+          **Status:** {status}
+          **Soak ID:** {aggregate['soak_id']}
+          **Source commit:** {aggregate['code_commit_sha']}
+          **Market:** BTCUSDT, public Nobitex Spot feeds only
+
+          ## Decision
+
+          {decision}
+
+          {'**ریزساختار بازار در این سطح داده، لبه قابل اثباتی ندارد.**' if no_go else '**Statistical significance does not grant trading authorization.**'}
+
+          ## Capture and integrity
+
+          - Segments: {aggregate['segment_count']} / 14
+          - Requested capture per segment: 110 minutes
+          - Target start-to-start cadence: 120 minutes
+          - Actual captured data: {aggregate['actual_capture_minutes']} minutes
+          - Wall-clock interval: {aggregate['wall_clock_start_utc']} to {aggregate['wall_clock_end_utc']}
+          - Order-book records: {aggregate['orderbook_records']}
+          - Trade records: {aggregate['trade_records']}
+          - Gap records including scheduled inter-segment intervals: {aggregate['gap_records']}
+          - Inter-segment gaps: {aggregate['inter_segment_gap_count']}
+          - Merged orderbook SHA-256: {aggregate['merged_orderbook_sha256']}
+          - Merged trades SHA-256: {aggregate['merged_trades_sha256']}
+          - Merged gaps SHA-256: {aggregate['merged_gaps_sha256']}
+          - Aggregate manifest SHA-256: {aggregate['aggregate_manifest_sha256']}
+          - Analysis archive SHA-256: {aggregate['analysis_archive_sha256']}
+
+          ## Method
+
+          - Forward targets: 5-minute and 15-minute log-mid returns in basis points.
+          - OBI: normalized imbalance between top-five bid and ask depth.
+          - Microprice deviation: queue-size-weighted microprice minus bid/ask midpoint, in basis points.
+          - TFI: trailing 60-second signed-volume imbalance computed from public WebSocket trade rows with type buy/sell.
+          - Sampling: non-overlapping UTC epoch grid. Stale feature snapshots, future-snapshot lag and windows crossing explicit gaps are excluded.
+          - Multiple testing: joint Bonferroni correction across 12 tests (3 features × 2 horizons × Pearson/Spearman), family-wise alpha=0.05.
+
+          ## Correlation results
+
+          | Horizon | Feature | N | Pearson r | Pearson raw p | Pearson adjusted p | Spearman rho | Spearman raw p | Spearman adjusted p |
+          |---|---|---:|---:|---:|---:|---:|---:|---:|
+          {chr(10).join(rows)}
+
+          ## TFI semantics limitation
+
+          The official public trade schema documents type as buy or sell but does not explicitly define that field as aggressor/taker side. TFI is therefore a side-based proxy, not a verified aggressor-flow measure. REST seed rows are excluded because the public feed does not supply a stable trade identifier for safe deduplication. Trailing windows with no observed volume are encoded as neutral zero.
+
+          ## Statistical and operational limitations
+
+          - Bonferroni correction controls the 12 stated tests but does not remove serial dependence; effective sample size may be lower than raw N.
+          - Significant correlation does not prove causality, tradability, or post-cost profitability.
+          - The capture is discontinuous by design: exact gaps are preserved in gaps.csv and any target window crossing a gap is excluded.
+          - No Holdout or Post-Hack data was read. No private API, Paper order or real order was used.
+          - Champion=null; order_permission=false; trading_authorization=NO-GO.
+
+          ## Official data references
+
+          - https://apidocs.nobitex.ir/
+          - https://github.com/nobitex/docs-api/blob/master/source/includes/_market_data.md
+          - https://github.com/nobitex/docs-api/blob/master/source/includes/_websocket.md
+
+          ## Next step
+
+          {next_step}
+          """
+          (root / "ADR-077.md").write_text(body, encoding="utf-8")
+          print(f"ADR077_DECISION={'NO_GO' if no_go else 'CONDITIONAL_RESEARCH_CONTINUATION'}")
+          print(f"ADR077_SIGNIFICANT_TESTS={significant}")
+          PY
+
+      - name: Commit ADR-077 to research branch only
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require("fs");
+            const path = "docs/adr/ADR-077-m8-2-btcusdt-public-microstructure-results.md";
+            const branch = "research/nobitex-hf-strategy";
+            const content = fs.readFileSync(".artifacts/m8_2_aggregate/ADR-077.md", "utf8");
+            let existingSha;
+            try {
+              const existing = await github.rest.repos.getContent({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                path,
+                ref: branch,
+              });
+              if (Array.isArray(existing.data)) {
+                throw new Error("ADR-077 path unexpectedly resolved to a directory");
+              }
+              existingSha = existing.data.sha;
+            } catch (error) {
+              if (error.status !== 404) throw error;
+            }
+            const payload = {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              path,
+              branch,
+              message: "docs(m8): record measured M8.2 BTCUSDT results (ADR-077)",
+              content: Buffer.from(content, "utf8").toString("base64"),
+            };
+            if (existingSha) payload.sha = existingSha;
+            await github.rest.repos.createOrUpdateFileContents(payload);
+
+      - name: Upload aggregate data, checksums, report and ADR-077
+        uses: actions/upload-artifact@v4
+        with:
+          name: alix-m8-2-btcusdt-${{{ env.SOAK_ID }}-aggregate-analysis
+          path: |
+            .artifacts/m8_2_aggregate/manifest.json
+            .artifacts/m8_2_aggregate/manifest.sha256
+            .artifacts/m8_2_aggregate/orderbook.csv
+            .artifacts/m8_2_aggregate/trades.csv
+            .artifacts/m8_2_aggregate/gaps.csv
+            .artifacts/m8_2_aggregate/analysis_archive.zip
+            .artifacts/m8_2_aggregate/analysis_inventory.json
+            .artifacts/m8_2_aggregate/aggregate_summary.json
+            .artifacts/m8_2_aggregate/m8_microstructure_report.json
+            .artifacts/m8_2_aggregate/ADR-077.md
+          if-no-files-found: error
+          retention-days: 90
