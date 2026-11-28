@@ -1,0 +1,374 @@
+name: MRD v1.3 Word artifact and repository publication
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - research/nobitex-hf-strategy
+    paths:
+      - TRIGGER_MRD_V13
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: alix-mrd-v13-publication
+  cancel-in-progress: false
+
+jobs:
+  build-publish:
+    if: github.ref == 'refs/heads/research/nobitex-hf-strategy'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Checkout exact MRD source commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Wait for Standard CI on this exact commit
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import time
+          from urllib.request import Request, urlopen
+
+          repository = os.environ["GITHUB_REPOSITORY"]
+          expected = os.environ["EXPECTED_SHA"]
+          token = os.environ["GITHUB_TOKEN"]
+          url = f"https://api.github.com/repos/{repository}/actions/runs?head_sha={expected}&per_page=100"
+          deadline = time.monotonic() + 25 * 60
+          while time.monotonic() < deadline:
+              request = Request(url, headers={
+                  "Accept": "application/vnd.github+json",
+                  "Authorization": f"Bearer {token}",
+                  "X-GitHub-Api-Version": "2022-11-28",
+              })
+              with urlopen(request, timeout=30) as response:
+                  runs = json.load(response).get("workflow_runs", [])
+              candidates = [run for run in runs if
+                  run.get("head_sha") == expected
+                  and run.get("path") == ".github/workflows/ci.yml"
+                  and run.get("name") == "AliX Continuous Integration"]
+              if candidates:
+                  latest = max(candidates, key=lambda run: run.get("created_at", ""))
+                  if latest.get("status") == "completed":
+                      if latest.get("conclusion") != "success":
+                          raise SystemExit(f"STANDARD_CI_NOT_GREEN:{latest.get('id')}:{latest.get('conclusion')}")
+                      print(f"STANDARD_CI_GREEN:{latest.get('id')}:{expected}")
+                      break
+              time.sleep(20)
+          else:
+              raise SystemExit("STANDARD_CI_DID_NOT_COMPLETE_SUCCESSFULLY")
+          PY
+
+      - name: Install pinned document build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pandoc fonts-noto-core
+          python -m pip install --disable-pip-version-check python-docx==1.2.0
+
+      - name: Verify complete MRD source
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          source = Path("docs/knowledge_base/AliX_Master_Reference_Document_v1.3_FA.md")
+          text = source.read_text(encoding="utf-8")
+          lines = text.splitlines()
+          required = [
+              "Master Reference Document | نسخهٔ ۱٫۳",
+              "ADR-076",
+              "NO_SIGNIFICANT_OBI_CORRELATION",
+              "Champion = null",
+              "order_permission = false",
+              "Holdout = SEALED",
+              "۱۶ candidate identity",
+              "۴۳ رکورد",
+          ]
+          missing = [item for item in required if item not in text]
+          if len(lines) < 2000 or missing or "IN PROGRESS" in text or "در حال اجراست" in text:
+              raise SystemExit(f"MRD_SOURCE_QA_FAILED:lines={len(lines)}:missing={missing}")
+          print(f"MRD_SOURCE_VERIFIED lines={len(lines)} chars={len(text)}")
+          PY
+
+      - name: Build Persian A4 RTL reference template
+        run: |
+          python - <<'PY'
+          from docx import Document
+          from docx.shared import Cm, Pt, RGBColor
+          from docx.oxml import OxmlElement
+          from docx.oxml.ns import qn
+
+          font_name = "Noto Naskh Arabic"
+          document = Document()
+          section = document.sections[0]
+          section.page_width = Cm(21)
+          section.page_height = Cm(29.7)
+          section.top_margin = Cm(1.7)
+          section.bottom_margin = Cm(1.7)
+          section.left_margin = Cm(1.8)
+          section.right_margin = Cm(1.8)
+          for name in ("Normal", "Body Text", "Title", "Subtitle", "Heading 1", "Heading 2", "Heading 3"):
+              style = document.styles[name]
+              style.font.name = font_name
+              style.font.size = Pt(10.5 if name in ("Normal", "Body Text") else 17 if name == "Title" else 12 if name.startswith("Heading") else 11)
+              style.font.color.rgb = RGBColor(31, 41, 55)
+              rpr = style.element.get_or_add_rPr()
+              rfonts = rpr.rFonts
+              if rfonts is None:
+                  rfonts = OxmlElement("w:rFonts")
+                  rpr.insert(0, rfonts)
+              for attr in ("ascii", "hAnsi", "cs", "eastAsia"):
+                  rfonts.set(qn(f"w:{attr}"), font_name)
+              if rpr.find(qn("w:rtl")) is None:
+                  rpr.append(OxmlElement("w:rtl"))
+              ppr = style.element.get_or_add_pPr()
+              if ppr.find(qn("w:bidi")) is None:
+                  ppr.append(OxmlElement("w:bidi"))
+          document.styles["Normal"].paragraph_format.space_after = Pt(5)
+          document.styles["Normal"].paragraph_format.line_spacing = 1.1
+          for name in ("Heading 1", "Heading 2", "Heading 3"):
+              document.styles[name].paragraph_format.keep_with_next = True
+          document.save("mrd_reference.docx")
+          PY
+
+      - name: Convert Markdown to DOCX and enforce RTL on paragraphs and tables
+        run: |
+          pandoc "docs/knowledge_base/AliX_Master_Reference_Document_v1.3_FA.md" --from=gfm --to=docx --standalone --toc --toc-depth=3 --reference-doc=mrd_reference.docx -o "docs/knowledge_base/AliX_Master_Reference_Document_v1.3_FA.docx"
+          python - <<'PY'
+          import json
+          import zipfile
+          from pathlib import Path
+          from lxml import etree
+
+          path = Path("docs/knowledge_base/AliX_Master_Reference_Document_v1.3_FA.docx")
+          temp = path.with_suffix(".rtl.docx")
+          ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+          w = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+          with zipfile.ZipFile(path, "r") as source:
+              files = {name: source.read(name) for name in source.namelist()}
+          if "word/document.xml" not in files:
+              raise SystemExit("DOCX_DOCUMENT_XML_MISSING")
+          root = etree.fromstring(files["word/document.xml"])
+          paragraphs = root.xpath(".//w:p", namespaces=ns)
+          tables = root.xpath(".//w:tbl", namespaces=ns)
+          for paragraph in paragraphs:
+              ppr = paragraph.find(w + "pPr")
+              if ppr is None:
+                  ppr = etree.Element(w + "pPr")
+                  paragraph.insert(0, ppr)
+              if ppr.find(w + "bidi") is None:
+                  ppr.append(etree.Element(w + "bidi"))
+              jc = ppr.find(w + "jc")
+              if jc is None:
+                  jc = etree.SubElement(ppr, w + "jc")
+              jc.set(w + "val", "right")
+              for run in paragraph.xpath(".//w:r", namespaces=ns):
+                  rpr = run.find(w + "rPr")
+                  if rpr is None:
+                      rpr = etree.Element(w + "rPr")
+                      run.insert(0, rpr)
+                  if rpr.find(w + "rtl") is None:
+                      rpr.append(etree.Element(w + "rtl"))
+                  rfonts = rpr.find(w + "rFonts")
+                  if rfonts is None:
+                      rfonts = etree.SubElement(rpr, w + "rFonts")
+                  for key in ("ascii", "hAnsi", "cs", "eastAsia"):
+                      rfonts.set(w + key, "Noto Naskh Arabic")
+          for table in tables:
+              tblpr = table.find(w + "tblPr")
+              if tblpr is None:
+                  tblpr = etree.Element(w + "tblPr")
+                  table.insert(0, tblpr)
+              if tblpr.find(w + "bidiVisual") is None:
+                  tblpr.append(etree.Element(w + "bidiVisual"))
+              tbljc = tblpr.find(w + "jc")
+              if tbljc is None:
+                  tbljc = etree.SubElement(tblpr, w + "jc")
+              tbljc.set(w + "val", "right")
+              for row in table.findall(w + "tr"):
+                  trpr = row.find(w + "trPr")
+                  if trpr is None:
+                      trpr = etree.Element(w + "trPr")
+                      row.insert(0, trpr)
+                  if trpr.find(w + "cantSplit") is None:
+                      trpr.append(etree.Element(w + "cantSplit"))
+          files["word/document.xml"] = etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone="yes")
+          with zipfile.ZipFile(temp, "w", compression=zipfile.ZIP_DEFLATED) as target:
+              for name, data in files.items():
+                  target.writestr(name, data)
+          temp.replace(path)
+          with zipfile.ZipFile(path, "r") as archive:
+              if archive.testzip() is not None:
+                  raise SystemExit("DOCX_ZIP_INTEGRITY_FAILED")
+              checked = etree.fromstring(archive.read("word/document.xml"))
+          text = "".join(checked.xpath(".//w:t/text()", namespaces=ns))
+          rtl_count = len(checked.xpath(".//w:pPr/w:bidi", namespaces=ns))
+          table_count = len(checked.xpath(".//w:tbl", namespaces=ns))
+          if "نسخهٔ ۱٫۳" not in text or "ADR-076" not in text or "NO_SIGNIFICANT_OBI_CORRELATION" not in text:
+              raise SystemExit("DOCX_REQUIRED_CONTENT_MISSING")
+          if rtl_count < 1000 or table_count < 4:
+              raise SystemExit(f"DOCX_RTL_OR_TABLE_QA_FAILED:{rtl_count}:{table_count}")
+          print(json.dumps({
+              "docx": str(path), "bytes": path.stat().st_size,
+              "paragraphs": len(checked.xpath(".//w:p", namespaces=ns)),
+              "rtl_paragraphs": rtl_count, "tables": table_count,
+              "rtl_tables": len(checked.xpath(".//w:tblPr/w:bidiVisual", namespaces=ns))
+          }, sort_keys=True))
+          PY
+
+      - name: Upload MRD v1.3 Word and Markdown artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: alix-mrd-v1.3-fa-${{ github.run_id }}
+          path: |
+            docs/knowledge_base/AliX_Master_Reference_Document_v1.3_FA.docx
+            docs/knowledge_base/AliX_Master_Reference_Document_v1.3_FA.md
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Commit Markdown and generated Word to the research branch
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          TARGET_BRANCH: ${{ github.ref_name }}
+        run: |
+          python - <<'PY'
+          import base64
+          import json
+          import os
+          from pathlib import Path
+          from urllib.request import Request, urlopen
+
+          repository = os.environ["GITHUB_REPOSITORY"]
+          branch = os.environ["TARGET_BRANCH"]
+          token = os.environ["GITHUB_TOKEN"]
+          files = {
+              "docs/knowledge_base/AliX_Master_Reference_Document_v1.3_FA.md": (Path("docs/knowledge_base/AliX_Master_Reference_Document_v1.3_FA.md").read_bytes(), "utf-8"),
+              "docs/knowledge_base/AliX_Master_Reference_Document_v1.3_FA.docx": (Path("docs/knowledge_base/AliX_Master_Reference_Document_v1.3_FA.docx").read_bytes(), "base64"),
+          }
+          headers = {
+              "Accept": "application/vnd.github+json",
+              "Authorization": f"Bearer {token}",
+              "X-GitHub-Api-Version": "2022-11-28",
+          }
+          def api(method, path, payload=None):
+              request = Request(
+                  f"https://api.github.com/repos/{repository}/{path}",
+                  data=None if payload is None else json.dumps(payload).encode("utf-8"),
+                  headers=headers,
+                  method=method,
+              )
+              with urlopen(request, timeout=60) as response:
+                  raw = response.read()
+              return json.loads(raw) if raw else {}
+          ref = api("GET", f"git/ref/heads/{branch}")
+          parent = ref["object"]["sha"]
+          base_commit = api("GET", f"git/commits/{parent}")
+          entries = []
+          for path, (data, encoding) in files.items():
+              payload_content = base64.b64encode(data).decode("ascii") if encoding == "base64" else data.decode("utf-8")
+              blob = api("POST", "git/blobs", {"content": payload_content, "encoding": encoding})
+              entries.append({"path": path, "mode": "100644", "type": "blob", "sha": blob["sha"]})
+          tree = api("POST", "git/trees", {"base_tree": base_commit["tree"]["sha"], "tree": entries})
+          new_commit = api("POST", "git/commits", {
+              "message": "docs(mrd): publish AliX Master Reference Document v1.3",
+              "tree": tree["sha"], "parents": [parent],
+          })
+          updated = api("PATCH", f"git/refs/heads/{branch}", {"sha": new_commit["sha"], "force": False})
+          if updated.get("object", {}).get("sha") != new_commit["sha"]:
+              raise SystemExit("MRD_BRANCH_UPDATE_NOT_CONFIRMED")
+          print(json.dumps({
+              "commit_sha": new_commit["sha"], "branch_updated": True,
+              "files": {path: {"bytes": len(data)} for path, (data, _) in files.items()}
+          }, sort_keys=True))
+          PY
+
+      - name: Remove the temporary push trigger before deleting the marker
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          TARGET_BRANCH: ${{ github.ref_name }}
+        run: |
+          python - <<'PY'
+          import base64
+          import json
+          import os
+          from urllib.request import Request, urlopen
+
+          repository = os.environ["GITHUB_REPOSITORY"]
+          branch = os.environ["TARGET_BRANCH"]
+          token = os.environ["GITHUB_TOKEN"]
+          path = ".github/workflows/mrd-v13-artifact.yml"
+          url = f"https://api.github.com/repos/{repository}/contents/{path}"
+          headers = {
+              "Accept": "application/vnd.github+json",
+              "Authorization": f"Bearer {token}",
+              "X-GitHub-Api-Version": "2022-11-28",
+          }
+          request = Request(f"{url}?ref={branch}", headers=headers)
+          with urlopen(request, timeout=30) as response:
+              current = json.load(response)
+          source = base64.b64decode(current["content"]).decode("utf-8")
+          trigger = (
+              "  push:\n"
+              "    branches:\n"
+              "      - research/nobitex-hf-strategy\n"
+              "    paths:\n"
+              "      - TRIGGER_MRD_V13\n"
+          )
+          if trigger not in source:
+              raise SystemExit("TEMPORARY_PUSH_TRIGGER_BLOCK_NOT_FOUND")
+          updated_source = source.replace(trigger, "", 1)
+          payload = {
+              "message": "chore(mrd): disable temporary push trigger",
+              "content": base64.b64encode(updated_source.encode("utf-8")).decode("ascii"),
+              "sha": current["sha"], "branch": branch,
+          }
+          put = Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="PUT")
+          with urlopen(put, timeout=60) as response:
+              result = json.load(response)
+          print(json.dumps({"workflow_commit": result["commit"]["sha"], "push_trigger_removed": True}))
+          PY
+
+      - name: Delete the one-time MRD publication marker
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          TARGET_BRANCH: ${{ github.ref_name }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from urllib.request import Request, urlopen
+
+          repository = os.environ["GITHUB_REPOSITORY"]
+          branch = os.environ["TARGET_BRANCH"]
+          token = os.environ["GITHUB_TOKEN"]
+          path = "TRIGGER_MRD_V13"
+          url = f"https://api.github.com/repos/{repository}/contents/{path}"
+          headers = {
+              "Accept": "application/vnd.github+json",
+              "Authorization": f"Bearer {token}",
+              "X-GitHub-Api-Version": "2022-11-28",
+          }
+          request = Request(f"{url}?ref={branch}", headers=headers)
+          with urlopen(request, timeout=30) as response:
+              current = json.load(response)
+          payload = {"message": "chore(mrd): remove temporary publication marker", "sha": current["sha"], "branch": branch}
+          delete = Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="DELETE")
+          with urlopen(delete, timeout=60) as response:
+              result = json.load(response)
+          print(json.dumps({"marker_deleted_commit": result["commit"]["sha"], "marker_removed": True}))
+          PY
