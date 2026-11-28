@@ -273,8 +273,8 @@ def _validate_orderbook_timestamps(snapshots: list[Snapshot], path: Path) -> Non
     if not snapshots:
         raise InputError(f"ORDERBOOK_EMPTY:{path.name}")
     timestamps = [item.timestamp_ms for item in snapshots]
-    if timestamps != sorted(timestamps) or len(set(timestamps)) != len(timestamps):
-        raise InputError(f"ORDERBOOK_TIMESTAMPS_NOT_STRICTLY_INCREASING:{path.name}")
+    if timestamps != sorted(timestamps):
+        raise InputError(f"ORDERBOOK_TIMESTAMPS_NOT_NONDECREASING:{path.name}")
 
 
 def _gap_timestamp(row: dict[str, str], ms_field: str, utc_field: str) -> int:

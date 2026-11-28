@@ -200,7 +200,10 @@ def _load_segment(
     for key, expected in expected_fields.items():
         if manifest.get(key) != expected:
             raise AggregateError(f"MANIFEST_{key.upper()}_MISMATCH:{segment_number}")
-    if int(manifest.get("workflow_run_id", 0)) != int(artifact.get("workflow_run_id", -1)):
+    artifact_run = artifact.get("workflow_run", {})
+    if not isinstance(artifact_run, dict):
+        raise AggregateError(f"ARTIFACT_WORKFLOW_RUN_MISSING:{segment_number}")
+    if int(manifest.get("workflow_run_id", 0)) != int(artifact_run.get("id", -1)):
         raise AggregateError(f"WORKFLOW_RUN_ID_MISMATCH:{segment_number}")
     started = parse_time(str(manifest["started_at_utc"]))
     finished = parse_time(str(manifest["finished_at_utc"]))
@@ -273,7 +276,8 @@ def aggregate(
         if not match:
             raise AggregateError(f"UNEXPECTED_SOAK_ARTIFACT_NAME:{item.get('name')}")
         number, run_id = int(match.group(1)), int(match.group(2))
-        if int(item.get("workflow_run_id", -1)) != run_id:
+        workflow_run = item.get("workflow_run", {})
+        if not isinstance(workflow_run, dict) or int(workflow_run.get("id", -1)) != run_id:
             raise AggregateError(f"ARTIFACT_NAME_RUN_ID_MISMATCH:{number}")
         if number in by_segment:
             raise AggregateError(f"DUPLICATE_SEGMENT_ARTIFACT:{number}")
