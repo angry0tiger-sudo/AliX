@@ -27,7 +27,6 @@ jobs:
       artifact_name: alix-m8-1-btcusdt-raw-${{ github.run_id }}
     env:
       PYTHONUNBUFFERED: "1"
-      ALIX_MARKET: "BTCUSDT"
       ALIX_DRY_RUN: "true"
       ALIX_ALLOW_LIVE_TRADING: "false"
       CAPTURE_DURATION_MINUTES: "60"
@@ -50,6 +49,8 @@ jobs:
           python -m pip install websocket-client==1.9.2 httpx==0.28.1 pytest==9.0.3
 
       - name: Run capture, audit, and M8 analyzer unit tests
+        env:
+          ALIX_MARKET: "BTCIRT"
         run: |
           pytest tests/unit/test_capture_nobitex_microstructure.py \
             tests/unit/test_audit_microstructure_capture.py \
@@ -150,6 +151,8 @@ jobs:
           PY
 
       - name: Capture exactly one hour of public BTCUSDT L2 and trades
+        env:
+          ALIX_MARKET: "BTCUSDT"
         run: |
           python -m scripts.capture_nobitex_microstructure \
             --duration-minutes "$CAPTURE_DURATION_MINUTES" \
