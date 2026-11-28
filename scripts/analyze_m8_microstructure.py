@@ -216,9 +216,7 @@ def _parse_orderbook_rows(
     return snapshots
 
 
-def _parse_websocket_trade(
-    row: dict[str, str]
-) -> tuple[int, str, float]:
+def _parse_websocket_trade(row: dict[str, str]) -> tuple[int, str, float]:
     try:
         timestamp = int(row["exchange_timestamp_ms"])
         side = row["side"]
@@ -233,7 +231,7 @@ def _parse_websocket_trade(
 
 
 def _websocket_trade_tape(
-    trade_rows: list[dict[str, str]]
+    trade_rows: list[dict[str, str]],
 ) -> list[tuple[int, str, float]]:
     trades = [
         _parse_websocket_trade(row)

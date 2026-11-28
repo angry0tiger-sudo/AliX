@@ -337,8 +337,7 @@ def _select_segment_artifacts(
     candidates = [
         item
         for item in artifacts
-        if str(item.get("name", "")).startswith(prefix)
-        and item.get("expired") is False
+        if str(item.get("name", "")).startswith(prefix) and item.get("expired") is False
     ]
     by_segment: dict[int, dict[str, Any]] = {}
     for item in candidates:
@@ -531,9 +530,7 @@ def _build_aggregate_manifest(
 def _write_manifest_and_archive(
     output_dir: Path, manifest: dict[str, Any]
 ) -> tuple[str, str]:
-    manifest_bytes = (
-        json.dumps(manifest, indent=2, sort_keys=True) + "\n"
-    ).encode()
+    manifest_bytes = (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode()
     (output_dir / "manifest.json").write_bytes(manifest_bytes)
     manifest_digest = sha256(manifest_bytes)
     (output_dir / "manifest.sha256").write_text(
@@ -641,9 +638,7 @@ def aggregate(
     merged_rows, gaps = _merge_segment_rows(segment_dirs, segment_meta)
     file_meta = _write_merged_csvs(output_dir, merged_rows, gaps)
 
-    actual_seconds = round(
-        sum(item["capture_seconds"] for item in segment_meta), 3
-    )
+    actual_seconds = round(sum(item["capture_seconds"] for item in segment_meta), 3)
     if actual_seconds < 24 * 60 * 60:
         raise AggregateError("LESS_THAN_24_HOURS_OF_ACTUAL_CAPTURE")
     manifest = _build_aggregate_manifest(
