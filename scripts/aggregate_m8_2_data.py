@@ -17,7 +17,7 @@ import urllib.request
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from scripts.audit_microstructure_capture import audit_capture
 
@@ -123,7 +123,15 @@ def inter_segment_gap_rows(
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[override]
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> urllib.request.Request | None:
         return None
 
 
@@ -138,7 +146,7 @@ def _api_get(url: str, token: str) -> bytes:
         },
     )
     with urllib.request.urlopen(request, timeout=90) as response:
-        return response.read()
+        return cast(bytes, response.read())
 
 
 def _download_artifact_zip(repo: str, artifact_id: int, token: str) -> bytes:
@@ -155,7 +163,7 @@ def _download_artifact_zip(repo: str, artifact_id: int, token: str) -> bytes:
     opener = urllib.request.build_opener(_NoRedirect())
     try:
         with opener.open(request, timeout=90) as response:
-            return response.read()
+            return cast(bytes, response.read())
     except urllib.error.HTTPError as exc:
         if exc.code not in {301, 302, 303, 307, 308}:
             raise
