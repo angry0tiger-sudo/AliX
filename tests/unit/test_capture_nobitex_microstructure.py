@@ -13,6 +13,8 @@ from scripts.capture_nobitex_microstructure import (
     _connect_with_fresh_offset_baseline,
     _process_pushes,
     _record_disconnect_gaps,
+    _seed_recent_trades,
+    _take_book_snapshot,
     decode_messages,
     make_book_row,
     make_trade_row,
@@ -483,3 +485,86 @@ def test_trade_stream_preserves_identical_public_observations() -> None:
         trade_rows[0]["exchange_timestamp_ms"] == trade_rows[1]["exchange_timestamp_ms"]
     )
     assert gaps == []
+
+
+
+def test_btcusdt_market_drives_public_rest_and_websocket_capture(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ALIX_MARKET", "BTCUSDT")
+    requested_paths: list[str] = []
+
+    def fake_fetch_public_json(path: str) -> dict[str, object]:
+        requested_paths.append(path)
+        if path == "/v3/orderbook/BTCUSDT":
+            return valid_book()
+        if path == "/v2/trades/BTCUSDT":
+            return {"trades": [valid_trade()]}
+        raise AssertionError(f"Unexpected public market path: {path}")
+
+    monkeypatch.setattr(
+        "scripts.capture_nobitex_microstructure.fetch_public_json",
+        fake_fetch_public_json,
+    )
+    state = CaptureState()
+    _take_book_snapshot(state, "rest_initial_snapshot")
+    _seed_recent_trades(state)
+
+    book_push: dict[str, object] = {
+        "push": {
+            "channel": "public:orderbook-BTCUSDT",
+            "pub": {
+                "offset": 1,
+                "data": {**valid_book(), "lastUpdate": 1_700_000_000_001},
+            },
+        }
+    }
+    trade_push: dict[str, object] = {
+        "push": {
+            "channel": "public:trades-BTCUSDT",
+            "pub": {
+                "offset": 1,
+                "data": {**valid_trade(), "time": 1_700_000_000_100},
+            },
+        }
+    }
+    _process_pushes(
+        [book_push, trade_push],
+        state.book_rows,
+        state.trade_rows,
+        state.gaps,
+        state.offsets,
+        state.snapshot_cutoff_ms,
+    )
+
+    assert requested_paths == ["/v3/orderbook/BTCUSDT", "/v2/trades/BTCUSDT"]
+    assert len(state.book_rows) == 2
+    assert state.book_rows[1]["source"] == "websocket"
+    assert state.trade_rows[0]["source"] == "rest_recent_seed"
+    assert state.trade_rows[1]["source"] == "websocket"
+
+    manifest = write_capture_artifacts(
+        tmp_path,
+        state.book_rows,
+        state.trade_rows,
+        state.gaps,
+        "2026-11-28T00:00:00+00:00",
+        "2026-11-28T00:01:00+00:00",
+        1,
+        [],
+    )
+    assert manifest["market"] == "BTCUSDT"
+    assert manifest["websocket_channels"] == [
+        "public:orderbook-BTCUSDT",
+        "public:trades-BTCUSDT",
+    ]
+
+
+def test_capture_rejects_unapproved_market_symbol(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ALIX_MARKET", "BTCUSDT-PERP")
+    from scripts.capture_nobitex_microstructure import _market_symbol
+
+    with pytest.raises(ValueError, match="UNSUPPORTED_PUBLIC_CAPTURE_MARKET"):
+        _market_symbol()

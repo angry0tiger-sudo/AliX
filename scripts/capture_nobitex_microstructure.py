@@ -64,6 +64,17 @@ GAP_FIELDS = (
 MAX_CAPTURE_DURATION_MINUTES = 350
 
 
+SUPPORTED_MARKETS = frozenset({"BTCIRT", "BTCUSDT"})
+
+
+def _market_symbol() -> str:
+    """Return the explicitly selected public Nobitex market symbol."""
+    market = os.environ.get("ALIX_MARKET", "BTCIRT").strip().upper()
+    if market not in SUPPORTED_MARKETS:
+        raise ValueError("UNSUPPORTED_PUBLIC_CAPTURE_MARKET")
+    return market
+
+
 class SocketLike(Protocol):
     def send(self, payload: str) -> None: ...
     def recv(self) -> str | bytes: ...
@@ -349,9 +360,10 @@ def connect_and_subscribe() -> tuple[
     pending: list[dict[str, object]] = []
     socket.send(json.dumps({"connect": {}, "id": 1}, separators=(",", ":")))
     _await_ack(socket, timeout_type, 1, "connect", pending)
+    market = _market_symbol()
     for command_id, channel in (
-        (2, "public:orderbook-BTCIRT"),
-        (3, "public:trades-BTCIRT"),
+        (2, f"public:orderbook-{market}"),
+        (3, f"public:trades-{market}"),
     ):
         socket.send(
             json.dumps(
@@ -478,7 +490,8 @@ def _process_pushes(
             continue
         channel, payload, offset = publication
         captured_at = utc_now()
-        if channel == "public:orderbook-BTCIRT":
+        market = _market_symbol()
+        if channel == f"public:orderbook-{market}":
             _process_book_publication(
                 payload,
                 captured_at,
@@ -488,7 +501,7 @@ def _process_pushes(
                 offsets,
                 snapshot_cutoff_ms,
             )
-        elif channel == "public:trades-BTCIRT":
+        elif channel == f"public:trades-{market}":
             _process_trade_publication(
                 payload, captured_at, offset, trade_rows, gaps, offsets
             )
@@ -631,7 +644,11 @@ def write_capture_artifacts(
         "schema_version": "alix.regime-m.capture.v1",
         "code_commit_sha": os.environ.get("GITHUB_SHA", "LOCAL_UNSET"),
         "workflow_run_id": os.environ.get("GITHUB_RUN_ID", "LOCAL_UNSET"),
-        "market": "BTCIRT",
+        "market": _market_symbol(),
+        "websocket_channels": [
+            f"public:orderbook-{_market_symbol()}",
+            f"public:trades-{_market_symbol()}",
+        ],
         "source": "NOBITEX_PUBLIC_REST_AND_WEBSOCKET",
         "authorization_header_sent": False,
         "websocket_connection_token_sent": False,
@@ -687,7 +704,7 @@ def write_capture_artifacts(
 
 
 def _take_book_snapshot(state: CaptureState, source: str) -> None:
-    snapshot = fetch_public_json("/v3/orderbook/BTCIRT")
+    snapshot = fetch_public_json(f"/v3/orderbook/{_market_symbol()}")
     row = make_book_row(snapshot, utc_now(), source, None)
     state.snapshot_cutoff_ms = int(str(row["exchange_timestamp_ms"]))
     state.book_rows.append(row)
@@ -695,7 +712,7 @@ def _take_book_snapshot(state: CaptureState, source: str) -> None:
 
 def _seed_recent_trades(state: CaptureState) -> None:
     try:
-        recent = fetch_public_json("/v2/trades/BTCIRT")
+        recent = fetch_public_json(f"/v2/trades/{_market_symbol()}")
         trades_value = recent.get("trades")
         if isinstance(trades_value, list):
             for item in trades_value:
@@ -875,7 +892,11 @@ def main() -> int:
     counts = cast(dict[str, object], manifest["record_counts"])
     print(
         json.dumps(
-            {"capture_status": manifest["capture_status"], "record_counts": counts},
+            {
+                "market": manifest["market"],
+                "capture_status": manifest["capture_status"],
+                "record_counts": counts,
+            },
             sort_keys=True,
         )
     )
